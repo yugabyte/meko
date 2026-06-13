@@ -144,7 +144,7 @@ fn parse_args() -> Result<Args, String> {
 
 async fn run(args: Args) -> anyhow::Result<()> {
     let Args { mode, repeat, mut fail_fast } = args;
-    // tasks/34: stop at the FIRST failing iteration while still running
+    // #57: stop at the FIRST failing iteration while still running
     // multiple iterations for churn. `-n` normally disables fail_fast
     // (run-all + tally); this env flips it back so the failing
     // iteration's cluster state is preserved uncontaminated (pair with

@@ -3,7 +3,7 @@
 //! same-named table on each holds only that timeline's rows) and
 //! independent lifecycle (dropping one leaves the other intact and
 //! serving). Doubles as coverage for concurrent pending Bootstrap inits
-//! across tenants (task 29).
+//! across tenants (#23).
 
 use anyhow::bail;
 

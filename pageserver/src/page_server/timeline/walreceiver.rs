@@ -222,7 +222,7 @@ impl<E: Clone> TaskHandle<E> {
                                 // served reads" timeout). Bump a correctness
                                 // counter so the suite's metric gate
                                 // (`final_verdict`) fails loudly and names it
-                                // (tasks/34).
+                                // (#57).
                                 crate::metrics::CORRECTNESS_ERRORS
                                     .with_label_values(&["walreceiver_worker_panic"])
                                     .inc();

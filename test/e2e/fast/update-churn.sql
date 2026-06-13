@@ -28,7 +28,7 @@ END $$;
 SELECT count(*), sum(cnt) FROM churn;
 SELECT count(*) FROM churn WHERE cnt = 8;
 
--- Deterministic verification (task 25): after 8 passes every row's cnt
+-- Deterministic verification (#19): after 8 passes every row's cnt
 -- must be exactly 8. A lost or stale delta in any chain shows up as a
 -- changed digest or a cnt != 8 row.
 SELECT md5(string_agg(id || ':' || cnt, ',' ORDER BY id)) AS digest FROM churn;

@@ -10,7 +10,7 @@
 //! Phase 2 reduction stored the same bincode blob in
 //! `GenericRemoteStorage` (the `YbStore` backend) at the key
 //! `safekeeper-control/<tenant>/<timeline>`. Both representations are
-//! gone — see commit history and `tasks/19_*.md` for the migration.
+//! gone — see commit history and #10 for the migration.
 
 use std::future::Future;
 use std::ops::Deref;

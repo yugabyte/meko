@@ -1048,7 +1048,7 @@ impl Timeline {
         self.remote_state.consistent_lsn.load()
     }
 
-    /// tasks/34: flush the `PageWriter` so every write with LSN ≤ the
+    /// #57: flush the `PageWriter` so every write with LSN ≤ the
     /// applied frontier is durable in `pageserver.{pages,slru_pages,meta}`
     /// before a basebackup reads at `backup_lsn`.
     ///

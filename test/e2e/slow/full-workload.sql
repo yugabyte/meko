@@ -5,7 +5,7 @@
 -- ~100k UPDATEs (chain growth on existing pages), then two range SELECTs
 -- (zero-page reads would surface here).
 --
--- Output-validated (task 25): `indexed_val` is a deterministic Knuth
+-- Output-validated (#19): `indexed_val` is a deterministic Knuth
 -- multiplicative hash of the serial `g` (was `random()`), and the
 -- UPDATE pass hits a fixed `id % 20` (5%) slice (was TABLESAMPLE), so
 -- the aggregate/checksum footers below reproduce run-to-run and a

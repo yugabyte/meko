@@ -29,7 +29,7 @@ in the same `yb_storage` DB.
 | `tenants` | Each tenant → pageserver assignment, generation, scheduling policy, splitting state, opaque config JSON |
 | `nodes` | Pageserver identities: node_id, listen addrs (PG/HTTP/HTTPS/gRPC), lifecycle, scheduling policy |
 | `safekeepers` | Safekeeper identities: id, region_id, version, host/port (PG + HTTP/HTTPS), AZ, scheduling policy |
-| `timelines` | Per-timeline cluster-side bookkeeping: start LSN, generation, safekeeper set, deleted_at, branch_name. A non-NULL `deleted_at` marks a timeline as deleting/dropped — it's filtered out of the live branch listing (`/control/v1/timeline_branch_names`) and left for a later data GC (`timeline drop`; see task 37) |
+| `timelines` | Per-timeline cluster-side bookkeeping: start LSN, generation, safekeeper set, deleted_at, branch_name. A non-NULL `deleted_at` marks a timeline as deleting/dropped — it's filtered out of the live branch listing (`/control/v1/timeline_branch_names`) and left for a later data GC (`timeline drop`; see #38) |
 | `pending_timeline_inits` | Init recipe for a timeline whose ids + branch name are allocated (at `tenant create` / `timeline branch`) but whose PS+SK aren't provisioned yet: branch_name, pg_version, ancestor_timeline_id (NULL ⇒ Bootstrap, non-NULL ⇒ Branch), start_lsn. `endpoint create` reads it to materialize the pair, then deletes the row; driven by the `/control/v1/.../pending_init` + `/control/v1/tenant/:id/pending_timeline_inits` APIs |
 | `metadata_health` | Per-shard health markers (last successful scrub timestamps) |
 | `timeline_imports` | In-progress imports (e.g., from pg_dump) |
@@ -54,9 +54,9 @@ in the same `yb_storage` DB.
 
 ### Diverges from Neon
 
-The pageserver-facing control path is launcher-managed (task 22):
+The pageserver-facing control path is launcher-managed (#16):
 
-- **Pageserver reconciler deleted wholesale** (task 22): the
+- **Pageserver reconciler deleted wholesale** (#16): the
   `Reconciler`, background reconcile loop, schedule optimiser, node
   drain/fill/delete operations, tenant-shard migration APIs,
   multi-controller leadership (leader election, step-down,
@@ -76,9 +76,9 @@ The pageserver-facing control path is launcher-managed (task 22):
 
 The safekeeper reconciler path is no longer upstream-parity:
 
-- **Storage broker removed** (task 20): SC no longer pushes membership
+- **Storage broker removed** (#14): SC no longer pushes membership
   through `storage_broker`; safekeepers learn membership over plain HTTP.
-- **SK control-file in YB** (task 19): per-timeline safekeeper state lives
+- **SK control-file in YB** (#10): per-timeline safekeeper state lives
   in `safekeeper.timeline_state` (one row per timeline) instead of an
   on-disk control file blob, so SC reconciles against DB rows rather than
   the legacy filesystem path.

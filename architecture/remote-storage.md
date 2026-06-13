@@ -7,7 +7,7 @@ were removed in lane E (commit `f26243aaa`) along with their SDK
 dependencies and integration tests, and the dev-only LocalFs backend
 was dropped subsequently — `YbStore` is now the only real backend,
 alongside the `Unreliable` test wrapper. The safekeeper no longer uses
-`RemoteStorage`: its `--remote-storage` flag was removed (task 19) and
+`RemoteStorage`: its `--remote-storage` flag was removed (#10) and
 it now talks to YB directly via `YsqlClient` (see below).
 
 ## The trait (inherited from Neon)

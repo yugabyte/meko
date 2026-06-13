@@ -262,7 +262,7 @@ CREATE TABLE pageserver.timeline_state (
   snapshot provably contains every unflushed row ≤ frontier). It is
   NOT max(lsn) of the flushed rows: the snapshot races concurrent puts
   and can hold a row at lsn X while missing a sibling at lsn < X —
-  deriving the checkpoint from the max is how task 28's bug B silently
+  deriving the checkpoint from the max is how #22's bug B silently
   lost records across a crash (`flush_horizon_lsn`, the materialiser's
   durable-read bound, follows the same frontier rule for the same
   reason). Drives both safekeeper WAL truncation and ingest resume on
@@ -405,7 +405,7 @@ committed state **strictly below** the record's LSN
 `Version::at(lsn-1)`), while same-record pending writes stay visible
 through the modification's pending map and the rel-size cache. An
 inclusive read is identical on the first pass but makes replay see its
-own prior-pass effects and take different decisions — the task-28
+own prior-pass effects and take different decisions — the #22
 corruption: `put_rel_extend` no-opped, the rel-size cache pinned at
 the replay-start size, and the gap-fill zero-filled
 `[pinned_size, blkno)` on every record, stamping all-zero page images
@@ -641,7 +641,7 @@ Per-phase task records live under [`../tasks/`](../tasks/). See
 > backstop: it runs scenario tests + golden `.sql` workloads against a
 > real `yb_light_local` + YB and scans the pageserver log for corruption
 > markers after every test. The `.sql` workloads diff their result sets
-> against checked-in `.out` goldens (task 25), so silently-wrong reads
+> against checked-in `.out` goldens (#19), so silently-wrong reads
 > no longer pass as long as no statement errors out. Run it with
 > `test/e2e/run.sh fast|slow|all` before claiming a corruption-class fix
 > (the `e2e-before-corruption-claim` skill enforces this).
@@ -659,7 +659,7 @@ Per-phase task records live under [`../tasks/`](../tasks/). See
 - `storage_controller/migrations/00000000000001_initial_schema/up.sql`
   — diesel-managed DDL for the `pageserver` schema (`pages`,
   `slru_pages`, `meta`, `timeline_state`) and the
-  rest of `yb_storage` (task 10). Replaces the earlier
+  rest of `yb_storage` (#2). Replaces the earlier
   `control_plane/src/storage_controller.rs::ensure_yb_storage_schema`
   bootstrap, which has been removed.
 - `architecture/yugabyte.md` — full DDL reference for

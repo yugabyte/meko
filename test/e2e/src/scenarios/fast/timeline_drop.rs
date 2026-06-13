@@ -4,7 +4,7 @@
 //! removed), its record is deleted from the storage controller, and the
 //! timeline is marked dropped (`deleted_at` set) so it no longer counts as a
 //! live branch and isn't brought back on restart. The underlying timeline
-//! data is intentionally left for a later GC pass (see tasks/35).
+//! data is intentionally left for a later GC pass (see #36).
 
 use anyhow::bail;
 

@@ -3353,7 +3353,7 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// Regression (task 22 branch debugging): a materialiser copy-up
+    /// Regression (#16 branch debugging): a materialiser copy-up
     /// image lands in the DESCENDANT at its chain-head LSN, which can
     /// be BELOW the ancestor's head at the branch cap. The walk must
     /// still descend and layer the ancestor deltas in

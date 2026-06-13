@@ -1,4 +1,4 @@
-//! Task-28 regression: rel-size cache pin during WAL replay must not
+//! #22 regression: rel-size cache pin during WAL replay must not
 //! zero-shadow live blocks. Insert-heavy load extends a relation while
 //! the PS flushes rows to YB continuously; an immediate PS stop leaves
 //! the persisted checkpoint behind YB's durable horizon, so the restart
@@ -134,7 +134,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     if shadowing > 0 || dup_zeros > 0 {
         bail!(
             "zero-image shadowing detected: {shadowing} zero image(s) above live rows, \
-             {dup_zeros} block(s) with duplicate zero images (task 28 regression)"
+             {dup_zeros} block(s) with duplicate zero images (#22 regression)"
         );
     }
     tee_println!("  ok — no shadowing zero images, no duplicate zeros");

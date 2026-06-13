@@ -4,7 +4,7 @@
 -- 2026-06-02 walredo PANIC; this finishes in ~30 s and is the
 -- regression check for the materialiser flush-horizon invariant.
 --
--- Output-validated (task 25): every value below is a deterministic
+-- Output-validated (#19): every value below is a deterministic
 -- function of the row's serial id, so a golden `.expected` capture
 -- diffs cleanly run-to-run. `indexed_val` uses a Knuth multiplicative
 -- hash of `g` instead of `random()` — it still scatters keys across

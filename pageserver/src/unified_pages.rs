@@ -196,7 +196,7 @@ impl UnifiedPages {
     /// only the safekeeper restarts (the pageserver stays up), the
     /// walreceiver reconnects and replays from the durable
     /// `consistent_lsn` over rows still buffered from the first pass
-    /// (tasks/34). A WAL record at a given LSN is deterministic, so a
+    /// (#57). A WAL record at a given LSN is deterministic, so a
     /// pre-existing slot at the same `(key, lsn)` already represents
     /// this row — `insert_entry` keeps it and reports back that nothing
     /// new was added, so we don't double-record it in the FIFO.
@@ -441,7 +441,7 @@ impl UnifiedPages {
     /// walreceiver's replay, which re-puts rows that are already
     /// durable in YB from the first pass as fresh (unflushed) cache
     /// entries the cache can't tell apart — or (b) a real horizon
-    /// violation at a dispatch site (task 28 bug B family). Both are
+    /// violation at a dispatch site (#22 bug B family). Both are
     /// answered the same way: bail out of the fast path and let
     /// `read_chain_durable` consult YB, which holds the durable
     /// truth in case (a) and surfaces the violation as a retryable
@@ -542,7 +542,7 @@ impl UnifiedPages {
         };
         let mut out = Vec::with_capacity(pairs.len());
         for (key, lsn) in &pairs {
-            // tasks/34 probe: every FIFO pair MUST resolve to a live,
+            // #57 probe: every FIFO pair MUST resolve to a live,
             // non-durable slot. `flush_serialize` means no concurrent
             // flush/`mark_flushed`, and an unflushed entry pins its key
             // against eviction/trim — so a missing slot, a missing key,
@@ -575,7 +575,7 @@ impl UnifiedPages {
                     %lsn,
                     why,
                     "snapshot_unflushed: FIFO entry has no flushable unflushed slot \
-                     — pending write will be dropped from this flush (tasks/34)"
+                     — pending write will be dropped from this flush (#57)"
                 );
             }
         }
@@ -619,7 +619,7 @@ impl UnifiedPages {
         // A slot may already exist at this (key, lsn):
         //   - `push()` (walreceiver, durable=false): the connection
         //     re-streamed an already-ingested record — the cache is not
-        //     empty across a safekeeper-only restart (tasks/34). The WAL
+        //     empty across a safekeeper-only restart (#57). The WAL
         //     record at a given LSN is deterministic, so the existing
         //     slot already represents this row, whether it's still
         //     unflushed (pending the same flush, and already in the
@@ -1102,7 +1102,7 @@ mod tests {
     }
 
     /// `push_durable` landing on a still-unflushed slot is the benign
-    /// reconnect-replay re-push (tasks/34): the walreceiver replayed an
+    /// reconnect-replay re-push (#57): the walreceiver replayed an
     /// already-durable-in-YB row as a fresh unflushed entry, and the
     /// materialiser's image — folded from that same durable row — collides
     /// on the same `(key, lsn)`. Overwriting with the image is safe; the
@@ -1135,7 +1135,7 @@ mod tests {
         );
     }
 
-    /// Regression (tasks/34): a safekeeper-only restart makes the
+    /// Regression (#57): a safekeeper-only restart makes the
     /// walreceiver reconnect and replay records that are still buffered
     /// as unflushed cache rows (the pageserver never restarted, so the
     /// cache isn't empty). Re-`push`ing the same `(key, lsn)` must be
@@ -1186,7 +1186,7 @@ mod tests {
         u.push(mk(b"k", 10, false, b"DIFFERENT"));
     }
 
-    /// tasks/34 part 2: the materialiser installs an image at a record's
+    /// #57 part 2: the materialiser installs an image at a record's
     /// max LSN, which collides with that record's own delta LSN. When the
     /// walreceiver later re-streams the record (SK-only restart replay),
     /// `push` of the raw delta lands on the existing image at the same
@@ -1210,7 +1210,7 @@ mod tests {
     }
 
     /// Regression for the AWS BTREE walredo PANIC on 2026-06-02,
-    /// updated for the always-on tripwire (task 28 hardening): a
+    /// updated for the always-on tripwire (#22 hardening): a
     /// target_lsn covering an unflushed row no longer panics (the old
     /// `debug_assert!` was compiled out of release builds anyway) —
     /// the durable fast path bails with None in every build profile

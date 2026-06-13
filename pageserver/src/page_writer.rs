@@ -1011,7 +1011,7 @@ impl PageWriter {
             merged.truncate(idx + 1);
         } else if !merged.is_empty() {
             // No `will_init` anchor in the merged cache+YB chain ≤
-            // target_lsn (tasks/34 part 2). `parse_chain` would set
+            // target_lsn (#57 part 2). `parse_chain` would set
             // `base_img=None` and walredo would fold these deltas onto a
             // ZERO page; the materialiser would then `install` +
             // `trim_key_up_to` that wrong/zero image, making the
@@ -1093,7 +1093,7 @@ impl PageWriter {
         // captured only partially (sharded-map iteration races the
         // put), so no durability watermark may be derived from them:
         // computing `flush_horizon_lsn` / `disk_consistent_lsn` from
-        // max(snapshot lsns) is how task 28's bug B lost rows — the
+        // max(snapshot lsns) is how #22's bug B lost rows — the
         // checkpoint passed a row that had missed the snapshot, and
         // replay never re-ingested it.
         let ingest_frontier: Option<Lsn> = self
@@ -1168,13 +1168,13 @@ impl PageWriter {
             // same-record siblings, so the horizon must not pass it
             // (the pre-frontier horizon was the source of the
             // transient walredo failures / unified_pages durability
-            // invariant panics in task 28).
+            // invariant panics in #22).
             if let Some(frontier) = ingest_frontier {
                 let cur = self.flush_horizon_lsn.load(Ordering::Relaxed);
                 if frontier.0 > cur {
                     self.flush_horizon_lsn.store(frontier.0, Ordering::Relaxed);
                 }
-                // NB (tasks/34 part 2): the rel FIFO may legitimately hold
+                // NB (#57 part 2): the rel FIFO may legitimately hold
                 // an unflushed row at lsn ≤ `frontier` here, and that is
                 // benign — not a data-losing over-advance. On a walreceiver
                 // reconnect the stream rewinds to the durable
@@ -1275,7 +1275,7 @@ impl PageWriter {
                 aux.bytes_in_aux_buffers = aux.bytes_in_aux_buffers.saturating_sub(aux_drop_bytes);
                 aux.slru_buffer.drain(0..slru_count);
                 aux.meta_buffer.drain(0..meta_count);
-                // NB (tasks/34 part 2): as on the rel FIFO above, a
+                // NB (#57 part 2): as on the rel FIFO above, a
                 // meta/SLRU row ≤ frontier remaining after the drain is the
                 // benign reconnect-replay re-push of an already-durable row,
                 // not a data-losing over-advance — see the rel-path comment
@@ -2276,7 +2276,7 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// tasks/34 part 2: deterministic repro of the materialiser's
+    /// #57 part 2: deterministic repro of the materialiser's
     /// anchorless-fold hazard. A key whose `will_init` anchor is absent
     /// from YB (its init record was lost upstream) leaves only non-init
     /// deltas. `read_chain_durable` must NOT hand that chain to the
@@ -3050,7 +3050,7 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// Bug-B regression (task 28): rows at LSNs beyond the noted
+    /// Bug-B regression (#22): rows at LSNs beyond the noted
     /// ingest frontier may belong to records whose sibling rows are
     /// still being put — the flush snapshot can capture them while
     /// missing a lower-LSN sibling. Neither `flush_horizon_lsn` nor
@@ -3422,7 +3422,7 @@ mod tests {
     /// durability frontier and the flush must not advance the
     /// checkpoint: rows in the snapshot may have same-record siblings
     /// that are still being put, and a checkpoint past them is how
-    /// task 28's bug B lost records across a crash.
+    /// #22's bug B lost records across a crash.
     #[tokio::test]
     async fn flush_without_noted_record_does_not_advance_consistent_lsn() {
         let (store, schema) = make_store("flush_null_prev").await;

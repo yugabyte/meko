@@ -2664,7 +2664,7 @@ impl PageServerHandler {
             timeline
                 .check_lsn_is_in_scope(lsn, &latest_gc_cutoff_lsn)
                 .context("invalid basebackup lsn")?;
-            // tasks/34: `wait_lsn` only waits on the applied frontier, not
+            // #57: `wait_lsn` only waits on the applied frontier, not
             // the durable watermark. Flush the PageWriter so every write at
             // LSN ≤ `lsn` is durable in YB before we read the tarball —
             // otherwise a `lsn > consistent_lsn` basebackup can serve a
@@ -3629,7 +3629,7 @@ impl proto::PageService for GrpcPageServiceHandler {
                 .map_err(|err| {
                     tonic::Status::invalid_argument(format!("invalid basebackup LSN: {err}"))
                 })?;
-            // tasks/34: flush so everything ≤ `lsn` is durable before the
+            // #57: flush so everything ≤ `lsn` is durable before the
             // read (see `Timeline::flush_for_basebackup` and the libpq
             // basebackup path for the rationale).
             timeline

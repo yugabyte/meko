@@ -918,7 +918,7 @@ impl PageServer {
 
         // Before activation, seed the timeline's GcInfo. Branch children
         // live in other processes, so there are no in-process branchpoints
-        // to track; cross-process ancestor pins are GC future work (task 7).
+        // to track; cross-process ancestor pins are GC future work (#54).
         self.initialize_gc_info();
 
         // Resume-deletion path is dead in yb-mode: synth never produces
@@ -1417,7 +1417,7 @@ impl PageServer {
 
     /// Seeds the timeline's `GcInfo`. Branch children live in other
     /// processes, so there are no in-process branchpoints; cross-process
-    /// ancestor pins are GC future work (task 7). The PITR cutoff is set
+    /// ancestor pins are GC future work (#54). The PITR cutoff is set
     /// later, before GC, by [`Self::refresh_gc_info_internal`].
     fn initialize_gc_info(&self) {
         let horizon = self.get_gc_horizon();

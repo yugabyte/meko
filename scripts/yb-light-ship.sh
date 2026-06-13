@@ -69,7 +69,7 @@ done
 # top-level lib/ for the daemons (yb_light_local passes LD_LIBRARY_PATH
 # via the child-env allowlist) and, below, into pg_install/v17/lib/ for
 # the walredo postgres child (the PS spawns it with env_clear() and
-# LD_LIBRARY_PATH=pg_install/v17/lib only — see task 31).
+# LD_LIBRARY_PATH=pg_install/v17/lib only — see #33).
 RUNTIME_LIBS=(libssl.so.1.1 libcrypto.so.1.1 libicui18n.so.60 libicuuc.so.60 libicudata.so.60)
 for lib in "${RUNTIME_LIBS[@]}"; do
     cp -v "/usr/lib64/${lib}" "${BUNDLE}/lib/${lib}"
@@ -86,7 +86,7 @@ mkdir -p "${BUNDLE}/pg_install"
 rsync -a pg_install/v17 "${BUNDLE}/pg_install/"
 
 # Same runtime libs into pg_install/v17/lib/ so the walredo postgres
-# child can load them; its LD_LIBRARY_PATH is only this dir (task 31).
+# child can load them; its LD_LIBRARY_PATH is only this dir (#33).
 for lib in "${RUNTIME_LIBS[@]}"; do
     cp -v "/usr/lib64/${lib}" "${BUNDLE}/pg_install/v17/lib/${lib}"
 done

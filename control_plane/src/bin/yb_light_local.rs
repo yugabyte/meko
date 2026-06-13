@@ -183,7 +183,7 @@ struct StartCmdArgs {
     // take ~60-90s end-to-end. The previous 10s default fired before
     // migrations finished and the pageserver's first call to
     // storage_ctl saw "relation storage_controller.timelines does not
-    // exist". See tasks/4.k_yb-light-local-start-wedge.md.
+    // exist". See #49
     #[clap(long = "start-timeout", default_value = "120s")]
     timeout: humantime::Duration,
 }

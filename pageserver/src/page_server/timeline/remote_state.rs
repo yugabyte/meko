@@ -1,6 +1,6 @@
 //! Lightweight per-timeline state that's currently owned by
 //! `RemoteTimelineClient` (RTC). Step 1 of the RTC unwind (see
-//! `tasks/4.d`): introduce this struct alongside the existing
+//! #42): introduce this struct alongside the existing
 //! `Timeline.remote_client` field. Subsequent steps migrate each
 //! caller of the LIVE RTC methods to read from here, then delete
 //! the RTC field + module.

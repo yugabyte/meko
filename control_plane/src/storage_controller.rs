@@ -469,7 +469,7 @@ impl StorageController {
     /// this barrier, a fresh `yb_light_local start` races storage_controller's
     /// own database provisioning against the pageserver's first connect
     /// and the pageserver crashes with `database "yb_storage" does not
-    /// exist`. See `tasks/4.k_yb-light-local-start-wedge.md`.
+    /// exist`. See #49.
     pub async fn prepare_database_if_external(&self) -> anyhow::Result<()> {
         if let Some(url) = self.config.database_url.clone() {
             self.ensure_external_database(&url).await?;

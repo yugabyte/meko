@@ -20,7 +20,7 @@ SELECT count(*) FROM smoke WHERE id BETWEEN 100 AND 200;
 UPDATE smoke SET label = 'updated-' || id WHERE id <= 50;
 SELECT count(*) FROM smoke WHERE label LIKE 'updated-%';
 
--- Deterministic verification (task 25): count + a digest over the
+-- Deterministic verification (#19): count + a digest over the
 -- ordered (id, label) pairs. Every label is a fixed function of id, so
 -- a stale page or a lost UPDATE delta moves the digest.
 SELECT count(*) AS n, sum(id) AS id_sum FROM smoke;

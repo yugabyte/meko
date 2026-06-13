@@ -17,7 +17,7 @@
 //! top, and the suite Final verdict checks the correctness counter.
 //!
 //! KNOWN BUG: scenario A (safekeeper crash, surviving compute) reproduces
-//! an open data-loss bug (tasks/34) — the SK kill-9 loses early acked
+//! an open data-loss bug (#57) — the SK kill-9 loses early acked
 //! commits and trips the `durable_walk_unflushed_row` correctness counter
 //! caught by the Final verdict. The loss is specific to crashing *only* the
 //! safekeeper with a live compute; the pairs/triple that also restart the
@@ -242,7 +242,7 @@ async fn verify(c: &Cluster, conn: &str, table: &str, label: &str) -> anyhow::Re
 }
 
 /// Catch durable *catalog* tears that the user-data counter misses
-/// (tasks/34 part 2): a committed multi-page catalog transaction whose
+/// (#57 part 2): a committed multi-page catalog transaction whose
 /// pages didn't all survive recovery leaves the system catalogs
 /// internally inconsistent. The sharpest signal seen so far is an orphan
 /// composite rowtype — a `pg_type` (typtype='c') whose backing relation
@@ -347,7 +347,7 @@ fn recycle_compute(c: &Cluster) -> anyhow::Result<()> {
     c.yb(&["endpoint", "start", "main"])
 }
 
-/// Fail loudly on the task-23 "YB WAL hole" signature in either the SK or
+/// Fail loudly on the #17 "YB WAL hole" signature in either the SK or
 /// PS log — the cold-cache mid-chunk resume bug that wedged the
 /// walreceiver and deadlocked basebackup.
 fn scan_for_wal_hole(c: &Cluster, label: &str) -> anyhow::Result<()> {

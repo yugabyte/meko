@@ -1081,7 +1081,7 @@ mod throttle_config_tests {
 ///
 /// `tenant_conf` is intentionally *not* on the wire — the
 /// authoritative copy lives in `pageserver.tenant_config`
-/// (task 17.c). storage_controller writes the row before sending
+/// (#8). storage_controller writes the row before sending
 /// this PUT; the pageserver re-reads from YB on receipt.
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct LocationConfig {

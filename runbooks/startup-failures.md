@@ -29,7 +29,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 1. **storage_controller** → checkpoint: `curl $SC_BASE/control/v1/node` returns (even if `[]`).
 2. **safekeeper** → checkpoint: its HTTP `/v1/status` (or process up + port listening).
 3. **endpoint_storage** (if used) → checkpoint: process up, no TLS errors in its log.
-4. **pageserver** — *single-timeline model (task 22)*: the process refuses to start unless
+4. **pageserver** — *single-timeline model (#16)*: the process refuses to start unless
    `pageserver.toml` carries `tenant_id`/`timeline_id`/`generation`. On a fresh repo this is
    normal: `yb_light_local start` prints `Skipping pageserver …: no timeline identity yet` and
    `tenant create` bakes the identity in, bumps the generation via the SC attach-hook, and starts

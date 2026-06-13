@@ -98,7 +98,7 @@ CREATE TABLE safekeeper.timeline_state (
 ```
 
 The `commit_lsn` / `backup_lsn` / `peer_horizon_lsn` / `partial_backup` /
-`eviction_state` columns from the original task-19 design were dropped
+`eviction_state` columns from the original #10 design were dropped
 once their in-memory counterparts went away (`a8fe507cb`, plus the
 `commit_lsn` / `peer_horizon_lsn` removals in earlier sessions).
 

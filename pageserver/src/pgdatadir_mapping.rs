@@ -571,7 +571,7 @@ impl Timeline {
         let key = rel_size_to_key(tag);
         let mut buf = match version.get(self, key, ctx).await {
             Ok(buf) => buf,
-            // tasks/35: the rel-directory can list an FSM/VM fork while its
+            // #36: the rel-directory can list an FSM/VM fork while its
             // rel-size key is absent at this LSN — e.g. crash-recovery
             // replay resuming at a `consistent_lsn` that fell between the
             // directory write and the first size write. FSM/VM are advisory
@@ -1660,7 +1660,7 @@ impl DatadirModification<'_> {
         // horizon it sees this record's own effects from the previous
         // pass and replays the wrong decision (skips the creation /
         // re-extension and the gap-fill that must be re-applied
-        // idempotently — task 28).
+        // idempotently — #22).
         //
         // Same-modification writes from earlier records are not
         // visible through `before`, but every rel-size-affecting put
@@ -2285,7 +2285,7 @@ impl DatadirModification<'_> {
         // Put size. The committed read is strictly below the current
         // record so a replayed extension re-takes the first pass's
         // decision instead of seeing its own prior-pass write
-        // (see get_committed_before; task 28).
+        // (see get_committed_before; #22).
         let size_key = rel_size_to_key(rel);
         let old_size = self.get_committed_before(size_key, ctx).await?.get_u32_le();
 
@@ -2804,7 +2804,7 @@ impl DatadirModification<'_> {
     /// pass — nothing committed at the record's own LSN yet — but
     /// during WAL replay below YB's durable horizon it sees this very
     /// record's effects from the previous pass, and replay then takes
-    /// different decisions than the first pass took (task 28: the
+    /// different decisions than the first pass took (#22: the
     /// rel-size cache pin and the skipped gap-fill both came from
     /// inclusive reads at the record LSN).
     async fn get_committed_before(
@@ -2927,7 +2927,7 @@ pub(crate) struct RelExtendPlan {
 /// every subsequent record look like an extension, and
 /// `handle_rel_extend` then re-zero-fills `[pinned_size, blkno)` on
 /// every record — shadowing live blocks with zero page images
-/// (task 28).
+/// (#22).
 pub(crate) fn rel_extend_plan(old_size: BlockNumber, nblocks: BlockNumber) -> RelExtendPlan {
     RelExtendPlan {
         write_size: (nblocks > old_size).then_some(nblocks),
@@ -3069,7 +3069,7 @@ mod tests {
 
     /// Replay below the durable horizon: storage already knows a size
     /// >= nblocks. No size-key rewrite, but the cache MUST advance to
-    /// the storage value — a cache left untouched here is the task-28
+    /// the storage value — a cache left untouched here is the #22
     /// pin that re-zero-fills live blocks on every record.
     #[test]
     fn rel_extend_replay_advances_cache_without_write() {

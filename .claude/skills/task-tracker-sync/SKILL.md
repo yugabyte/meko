@@ -145,14 +145,15 @@ GitHub auto-links the commit on the issue. Use `Closes #<num>` /
 From this repo's file-tracker era (same failure modes apply to
 issues):
 
-1. Tasks 19, 20, 21 shipped `done` but never got their index entry —
-   invisible until a human asked "what's left?". The issue equivalent:
-   closing without a label/milestone, so it never shows in a filtered
-   list.
+1. The safekeeper trio (now #10 / #14 / #15) shipped but never got a
+   tracker index entry — invisible until a human asked "what's left?".
+   The issue equivalent: closing without a label/milestone, so it never
+   shows in a filtered view.
 
-2. Task 9 had `status: done` but a body still leading with "Wave 1
-   leftovers (not blocking)" listing three already-landed items. The
-   body lied until someone read it carefully. The issue equivalent:
-   closing without editing the stale plan out of the body.
+2. The Paxos-removal work (now #56) was marked done but its write-up
+   still led with "Wave 1 leftovers (not blocking)", listing three
+   already-landed items. The record lied until someone read it
+   carefully. The issue equivalent: closing without editing the stale
+   plan out of the body.
 
 This skill exists so issue closures don't repeat either.
