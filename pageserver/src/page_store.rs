@@ -65,12 +65,14 @@ use utils::lsn::Lsn;
 use yb_tokio_postgres as tokio_postgres;
 use yb_tokio_postgres::types::ToSql;
 
-/// One row in `pageserver.pages`. `key` is the 18-byte BYTEA encoding
-/// of a `pageserver_api::key::Key` for a relation page; it must satisfy
-/// `Key::is_rel_block_key()` or `put_pages` returns an error.
+/// One row in `pageserver.pages`. `key` is the relation-page
+/// `pageserver_api::key::Key`; it must satisfy `Key::is_rel_block_key()`
+/// or `put_pages` returns an error. Held as the fixed-size `Key` (not a
+/// `Bytes` encoding) so the page cache keys on a `Copy` value — no
+/// per-row heap alloc / refcount churn and integer-compare ordering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageRow {
-    pub key: Bytes,
+    pub key: Key,
     pub lsn: Lsn,
     pub is_image: bool,
     pub will_init: bool,
@@ -191,7 +193,11 @@ pub(crate) fn dedup_page_chain_by_lsn(chain: &mut Vec<Arc<PageRow>>) {
                  metric correctness_errors{{chain_dedup_dropped_delta}})\n\
                  backtrace:\n{bt}",
                 lsn = dropped.lsn,
-                key_hex = hex(&dropped.key),
+                key_hex = {
+                    let mut kb = [0u8; KEY_SIZE];
+                    dropped.key.write_to_byte_slice(&mut kb);
+                    hex(&kb)
+                },
                 survivor_row = row(survivor),
                 dropped_row = row(dropped),
             );
@@ -385,15 +391,7 @@ pub struct PageStore {
 /// Decompose an 18-byte relation-page Key into the typed columns.
 /// Returns `Err` if the bytes don't parse as `field1 = 0` (the
 /// relation-page namespace).
-fn key_columns(key_bytes: &[u8]) -> Result<(i64, i64, i64, i16, i64)> {
-    if key_bytes.len() != KEY_SIZE {
-        bail!(
-            "PageStore: key bytes wrong length ({}, expected {})",
-            key_bytes.len(),
-            KEY_SIZE
-        );
-    }
-    let key = Key::from_slice(key_bytes);
+fn key_columns(key: &Key) -> Result<(i64, i64, i64, i16, i64)> {
     if !key.is_rel_block_key() {
         bail!(
             "PageStore: key {key} is not a relation block (field1=0x{:02x}, field4={}, field6=0x{:x}); \
@@ -734,13 +732,13 @@ impl PageStore {
             // Per-traced-row pre-INSERT event for the env-gated trace,
             // plus first/last (key, lsn) capture for the CRITICAL log if
             // YB's affected-row count comes back short.
-            let traced_in_chunk: Vec<(Bytes, Lsn)> = chunk
+            let traced_in_chunk: Vec<(Key, Lsn)> = chunk
                 .iter()
-                .filter(|row| pageserver_api::write_trace::is_traced_bytes(&row.key))
+                .filter(|row| pageserver_api::write_trace::is_traced(&row.key))
                 .map(|row| (row.key.clone(), row.lsn))
                 .collect();
             for (k, l) in &traced_in_chunk {
-                pageserver_api::write_trace::trace_stage_bytes("put_pages_in", k, *l);
+                pageserver_api::write_trace::trace_stage("put_pages_in", k, *l);
             }
             let chunk_first = chunk.first().map(|r| (r.key.clone(), r.lsn));
             let chunk_last = chunk.last().map(|r| (r.key.clone(), r.lsn));
@@ -790,7 +788,7 @@ impl PageStore {
                     );
                 }
                 for (k, l) in &traced_in_chunk {
-                    pageserver_api::write_trace::trace_stage_bytes("put_pages_ok", k, *l);
+                    pageserver_api::write_trace::trace_stage("put_pages_ok", k, *l);
                 }
                 Ok(())
             }));
@@ -825,7 +823,7 @@ impl PageStore {
         key: &[u8],
         target_lsn: Lsn,
     ) -> Result<Vec<Arc<PageRow>>> {
-        let (sp, db, rel, fork, blk) = key_columns(key)?;
+        let (sp, db, rel, fork, blk) = key_columns(&Key::from_slice(key))?;
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
         let target = target_lsn.0 as i64;
@@ -894,7 +892,7 @@ impl PageStore {
         timeline: TimelineId,
         range: Range<Key>,
         target_lsn: Lsn,
-    ) -> Result<HashMap<Bytes, Vec<Arc<PageRow>>>> {
+    ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
         if range.start.field1 != 0 || range.end.field1 > 1 {
             bail!(
                 "PageStore::scan_range: range [{}, {}) extends outside the relation-page \
@@ -921,7 +919,7 @@ impl PageStore {
                 .await?;
             let mut out = HashMap::with_capacity(1);
             if !chain.is_empty() {
-                out.insert(Bytes::from(key_bytes), chain);
+                out.insert(range.start, chain);
             }
             return Ok(out);
         }
@@ -1000,8 +998,8 @@ impl PageStore {
         // an image, this kicks in at the image row (always will_init).
         // For blocks without an image, it finds the latest will_init
         // delta and trims older rows.
-        let mut by_key: HashMap<Bytes, Vec<Arc<PageRow>>> = HashMap::new();
-        let mut order_check: HashMap<Bytes, Vec<(Lsn, bool, bool)>> = HashMap::new();
+        let mut by_key: HashMap<Key, Vec<Arc<PageRow>>> = HashMap::new();
+        let mut order_check: HashMap<Key, Vec<(Lsn, bool, bool)>> = HashMap::new();
         for r in rows {
             let row = row_to_page(r)?;
             let key = row.key.clone();
@@ -1577,7 +1575,7 @@ impl PageStore {
         lineage: &[LineageSegment],
         range: Range<Key>,
         target_lsn: Lsn,
-    ) -> Result<HashMap<Bytes, Vec<Arc<PageRow>>>> {
+    ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
         let Some((first, rest)) = lineage.split_first() else {
             bail!("scan_range_lineage: empty lineage");
         };
@@ -2428,7 +2426,7 @@ fn row_to_page(r: tokio_postgres::Row) -> Result<PageRow> {
     let will_init: bool = r.try_get(7)?;
     let payload: Vec<u8> = r.try_get(8)?;
     Ok(PageRow {
-        key: columns_to_key_bytes(sp, db, rel, fork, blk),
+        key: Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk)),
         lsn: Lsn(lsn as u64),
         is_image,
         will_init,
@@ -2676,7 +2674,7 @@ mod tests {
         payload: &[u8],
     ) -> Arc<PageRow> {
         Arc::new(PageRow {
-            key,
+            key: Key::from_slice(&key),
             lsn: Lsn(lsn),
             is_image,
             will_init,
@@ -3064,7 +3062,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(got.len(), 1);
-        let chain = &got[&k_bytes];
+        let chain = &got[&Key::from_slice(&k_bytes)];
         let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
         assert_eq!(lsns, vec![30, 20, 10]);
         assert!(chain.last().unwrap().is_image);
@@ -3144,19 +3142,19 @@ mod tests {
         assert_eq!(got.len(), 4);
 
         // k0: image at 50 + deltas 60, 70 => LSNs 70, 60, 50.
-        let c0 = &got[&k0];
+        let c0 = &got[&Key::from_slice(&k0)];
         let lsns0: Vec<u64> = c0.iter().map(|r| r.lsn.0).collect();
         assert_eq!(lsns0, vec![70, 60, 50], "k0 should anchor on image @ 50");
         assert!(c0.last().unwrap().is_image);
 
         // k1: just the image.
-        let c1 = &got[&k1];
+        let c1 = &got[&Key::from_slice(&k1)];
         assert_eq!(c1.len(), 1);
         assert_eq!(c1[0].lsn, Lsn(30));
         assert!(c1[0].is_image);
 
         // k2: slow path — no image — full chain to the will_init delta.
-        let c2 = &got[&k2];
+        let c2 = &got[&Key::from_slice(&k2)];
         let lsns2: Vec<u64> = c2.iter().map(|r| r.lsn.0).collect();
         assert_eq!(lsns2, vec![40, 30, 20]);
         assert!(c2.last().unwrap().will_init);
@@ -3164,7 +3162,7 @@ mod tests {
 
         // k3: full chain returned; no anchor (would be a walredo error
         // upstream, but the store call itself succeeds).
-        let c3 = &got[&k3];
+        let c3 = &got[&Key::from_slice(&k3)];
         let lsns3: Vec<u64> = c3.iter().map(|r| r.lsn.0).collect();
         assert_eq!(lsns3, vec![40, 30]);
 
@@ -3820,7 +3818,7 @@ mod tests {
             .unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(
-            out[&k_anc_only]
+            out[&Key::from_slice(&k_anc_only)]
                 .iter()
                 .map(|r| r.lsn.0)
                 .collect::<Vec<_>>(),
@@ -3828,7 +3826,7 @@ mod tests {
             "ancestor-only key must be discovered"
         );
         assert_eq!(
-            out[&k_shared].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            out[&Key::from_slice(&k_shared)].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
             vec![30, 10],
             "shared key blends child delta over ancestor image"
         );

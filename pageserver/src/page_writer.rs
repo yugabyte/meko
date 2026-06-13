@@ -77,7 +77,7 @@ impl Default for FlushPolicy {
 /// more cycle.
 #[derive(Debug, Clone)]
 pub struct MaterializeJob {
-    pub key: bytes::Bytes,
+    pub key: Key,
     /// Always durable by construction. The post-flush trigger uses
     /// `max(snapshot.lsn for key)` (every snapshot row is in YB AND
     /// marked durable in cache by the time the trigger fires); the
@@ -121,7 +121,7 @@ pub struct MaterializerHandle {
     /// (success OR failure — on failure the next trigger needs to be
     /// able to fire). Task panics leak entries; pageserver restart
     /// clears all timeline state including this set.
-    pub in_flight: Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
+    pub in_flight: Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
 }
 
 /// Running per-key delta tally — count, payload bytes, and the LSN
@@ -215,7 +215,7 @@ pub struct PageWriter {
     /// the entry. Shared with the flush path (post-flush trigger),
     /// which walks the map looking for keys that crossed the
     /// threshold during the flushed-window.
-    delta_counts: DashMap<Bytes, DeltaTally>,
+    delta_counts: DashMap<Key, DeltaTally>,
     /// Keys whose `delta_counts` tally has *crossed* a materialize
     /// threshold and are awaiting dispatch — the put loop inserts a key
     /// here on the transition into "hit", so the flush trigger walks
@@ -225,7 +225,7 @@ pub struct PageWriter {
     /// `lookup_range` O(N) cache walk (#21). Treated as an
     /// over-approximation: the flush walk re-checks the tally and drops
     /// stale entries, so a spurious member is harmless.
-    delta_ready: DashSet<Bytes>,
+    delta_ready: DashSet<Key>,
     materializer: Option<MaterializerHandle>,
     /// Highest LSN successfully reported as durable to
     /// `pageserver.timeline_state.consistent_lsn`. Advances only
@@ -614,7 +614,7 @@ impl PageWriter {
             let lsn = row.lsn;
             let resets_chain = row.is_image || row.will_init;
             let payload_len = row.payload.len() as u32;
-            pageserver_api::write_trace::trace_stage_bytes("put", &key, lsn);
+            pageserver_api::write_trace::trace_stage("put", &key, lsn);
             self.pages.push(row);
             self.rows_written.fetch_add(1, Ordering::Relaxed);
 
@@ -767,8 +767,8 @@ impl PageWriter {
             return Vec::new();
         }
         let mut to_dispatch = Vec::new();
-        let mut dispatched: Vec<bytes::Bytes> = Vec::new();
-        let mut stale: Vec<bytes::Bytes> = Vec::new();
+        let mut dispatched: Vec<Key> = Vec::new();
+        let mut stale: Vec<Key> = Vec::new();
         // Walk only the keys that crossed a threshold (the ready set),
         // not all of `delta_counts`. The ready set is a hint: re-check the
         // live tally and drop any entry that was since reset or dispatched.
@@ -842,24 +842,20 @@ impl PageWriter {
             .scan_range_lineage(self.tenant_id, &self.lineage, range.clone(), target_lsn)
             .await?;
         let t_yb = t0.elapsed();
-        let start_bytes = key_to_bytes(range.start);
-        let end_bytes = key_to_bytes(range.end);
         let t_lock_start = Instant::now();
-        let cached: std::collections::HashMap<bytes::Bytes, Vec<Arc<PageRow>>> = self
+        let cached: std::collections::HashMap<Key, Vec<Arc<PageRow>>> = self
             .pages
-            .lookup_range(&start_bytes, &end_bytes, target_lsn);
+            .lookup_range(&range.start, &range.end, target_lsn);
         let t_cache = t_lock_start.elapsed();
         let persisted_rows: usize = persisted.values().map(|v| v.len()).sum();
         let cached_rows: usize = cached.values().map(|v| v.len()).sum();
         let t_merge_start = Instant::now();
         let mut out: std::collections::HashMap<Key, Vec<Arc<PageRow>>> =
             std::collections::HashMap::with_capacity(persisted.len() + cached.len());
-        for (key_bytes, chain) in persisted {
-            let k = Key::from_slice(&key_bytes);
+        for (k, chain) in persisted {
             out.insert(k, chain);
         }
-        for (key_bytes, chain) in cached {
-            let k = Key::from_slice(&key_bytes);
+        for (k, chain) in cached {
             out.entry(k).or_default().extend(chain);
         }
         for (key, chain) in out.iter_mut() {
@@ -874,9 +870,8 @@ impl PageWriter {
             // count_limit means the write trigger lost a job (PS
             // crash, queue overflow). Enqueue a fresh materialise so
             // the next read of the same key is fast.
-            let key_bytes = key_to_bytes(*key);
             let crossed = self.chain_crossed_segment(chain);
-            self.maybe_dispatch_read_side_materialize(&key_bytes, target_lsn, chain.len(), crossed);
+            self.maybe_dispatch_read_side_materialize(*key, target_lsn, chain.len(), crossed);
         }
         let t_merge = t_merge_start.elapsed();
         let total = t0.elapsed();
@@ -906,7 +901,7 @@ impl PageWriter {
     /// fresh materialise job here so the slow read self-heals.
     fn maybe_dispatch_read_side_materialize(
         &self,
-        key_bytes: &bytes::Bytes,
+        key: Key,
         target_lsn: Lsn,
         chain_len: usize,
         crossed_segment: bool,
@@ -938,7 +933,7 @@ impl PageWriter {
             chain_len
         };
         if try_dispatch_read_side(
-            key_bytes,
+            key,
             bounded_target,
             effective_len,
             m.count_limit,
@@ -988,12 +983,12 @@ impl PageWriter {
         // installed at its chain-head LSN) does not cover ancestor
         // deltas in (anchor_lsn, cap] — fall through to the lineage
         // walk in that case.
-        if let Some(chain) = self.pages.lookup_chain_if_complete(&key_bytes, target_lsn) {
+        if let Some(chain) = self.pages.lookup_chain_if_complete(&key, target_lsn) {
             if self.cache_anchor_covers_lineage(&chain) {
                 return Ok(chain);
             }
         }
-        let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain(&key_bytes, target_lsn);
+        let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain(&key, target_lsn);
         let persisted = self
             .compute_page_store
             .read_chain_lineage(self.tenant_id, &self.lineage, &key_bytes, target_lsn)
@@ -1010,7 +1005,7 @@ impl PageWriter {
             merged.truncate(idx + 1);
         }
         let crossed = self.chain_crossed_segment(&merged);
-        self.maybe_dispatch_read_side_materialize(&key_bytes, target_lsn, merged.len(), crossed);
+        self.maybe_dispatch_read_side_materialize(key, target_lsn, merged.len(), crossed);
         Ok(merged)
     }
 
@@ -1036,13 +1031,13 @@ impl PageWriter {
         // including the lineage caveat on sub-cap anchors.
         if let Some(chain) = self
             .pages
-            .lookup_chain_durable_if_complete(&key_bytes, target_lsn)
+            .lookup_chain_durable_if_complete(&key, target_lsn)
         {
             if self.cache_anchor_covers_lineage(&chain) {
                 return Ok(chain);
             }
         }
-        let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain_durable(&key_bytes, target_lsn);
+        let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain_durable(&key, target_lsn);
         // Materialiser-side cache miss → the internal conn (same one
         // the materialiser's write path uses). Keeping this off
         // `compute_page_store` is the whole point of the split: a
@@ -1167,7 +1162,7 @@ impl PageWriter {
         let rel_rows: Vec<Arc<PageRow>> =
             rel_snapshot.iter().map(|e| e.row_arc()).collect();
         for row in &rel_rows {
-            pageserver_api::write_trace::trace_stage_bytes("snapshot", &row.key, row.lsn);
+            pageserver_api::write_trace::trace_stage("snapshot", &row.key, row.lsn);
         }
         let (slru_rows, meta_rows) = {
             let aux = self.aux.lock();
@@ -1262,7 +1257,7 @@ impl PageWriter {
             if let Some(m) = self.materializer.as_ref()
                 && (m.count_limit > 0 || m.payload_bytes_limit > 0)
             {
-                let mut max_lsn_per_key: HashMap<bytes::Bytes, Lsn> = HashMap::new();
+                let mut max_lsn_per_key: HashMap<Key, Lsn> = HashMap::new();
                 for row in &rel_rows {
                     let entry = max_lsn_per_key.entry(row.key.clone()).or_insert(Lsn(0));
                     if row.lsn > *entry {
@@ -1270,8 +1265,8 @@ impl PageWriter {
                     }
                 }
                 let horizon = Lsn(self.flush_horizon_lsn.load(Ordering::Relaxed));
-                let mut dispatched: Vec<bytes::Bytes> = Vec::new();
-                let mut stale: Vec<bytes::Bytes> = Vec::new();
+                let mut dispatched: Vec<Key> = Vec::new();
+                let mut stale: Vec<Key> = Vec::new();
                 // Only the threshold-crossers (ready set) can produce a job —
                 // walk it instead of sweeping all of `delta_counts`. Keys that
                 // crossed during this flush's puts are already in the set (the
@@ -1900,7 +1895,7 @@ fn build_page_row(key: Key, lsn: Lsn, value: &Value) -> Result<PageRow> {
         }
     };
     Ok(PageRow {
-        key: key_to_bytes(key),
+        key,
         lsn,
         is_image,
         will_init,
@@ -1990,28 +1985,28 @@ fn meta_row_size(r: &MetaRow) -> usize {
 ///     retry — otherwise the key would be permanently blocked from
 ///     re-dispatch.
 fn try_dispatch_read_side(
-    key_bytes: &bytes::Bytes,
+    key: Key,
     target_lsn: Lsn,
     chain_len: usize,
     count_limit: u32,
-    in_flight: &std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>,
+    in_flight: &std::sync::Mutex<std::collections::HashSet<Key>>,
     tx: &tokio::sync::mpsc::Sender<MaterializeJob>,
 ) -> bool {
     if count_limit == 0 || chain_len <= count_limit as usize {
         return false;
     }
-    let inserted = in_flight.lock().unwrap().insert(key_bytes.clone());
+    let inserted = in_flight.lock().unwrap().insert(key);
     if !inserted {
         return false;
     }
     if tx
         .try_send(MaterializeJob {
-            key: key_bytes.clone(),
+            key,
             target_lsn,
         })
         .is_err()
     {
-        in_flight.lock().unwrap().remove(key_bytes);
+        in_flight.lock().unwrap().remove(&key);
         return false;
     }
     true
@@ -2174,7 +2169,7 @@ mod tests {
         TenantId,
         TimelineId,
         tokio::sync::mpsc::Receiver<MaterializeJob>,
-        Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
+        Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
     ) {
         // Default fixture: count-only trigger (payload-bytes disabled)
         // so existing tests stay deterministic on count-based thresholds.
@@ -2196,7 +2191,7 @@ mod tests {
         TenantId,
         TimelineId,
         tokio::sync::mpsc::Receiver<MaterializeJob>,
-        Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
+        Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
     ) {
         let t = TenantId::generate();
         let tl = TimelineId::generate();
@@ -2767,7 +2762,7 @@ mod tests {
             .try_recv()
             .expect("dispatched after flush hits threshold");
         assert_eq!(job.target_lsn, Lsn(10 + LIMIT as u64));
-        assert_eq!(job.key.as_ref(), key_to_bytes(k(1)).as_ref());
+        assert_eq!(job.key, k(1));
         // Simulate the materialiser finishing this batch.
         in_flight.lock().unwrap().remove(&job.key);
 
@@ -3263,8 +3258,8 @@ mod tests {
         // Block dispatch by pre-loading in_flight with this key; the
         // first flush will see the threshold but skip dispatch. The
         // tally stays in delta_counts.
-        let key_bytes = key_to_bytes(k(1));
-        in_flight.lock().unwrap().insert(key_bytes.clone());
+        let key_bytes = k(1);
+        in_flight.lock().unwrap().insert(key_bytes);
 
         // Cross the threshold. After flush, last_lsn = 30 (max put
         // LSN) and that LSN is durable.
@@ -3726,7 +3721,7 @@ mod tests {
         use std::sync::Mutex;
 
         fn setup() -> (
-            Mutex<HashSet<bytes::Bytes>>,
+            Mutex<HashSet<Key>>,
             tokio::sync::mpsc::Sender<MaterializeJob>,
             tokio::sync::mpsc::Receiver<MaterializeJob>,
         ) {
@@ -3734,14 +3729,14 @@ mod tests {
             (Mutex::new(HashSet::new()), tx, rx)
         }
 
-        fn kb() -> bytes::Bytes {
-            key_to_bytes(k(1))
+        fn kb() -> Key {
+            k(1)
         }
 
         #[test]
         fn dispatches_when_chain_exceeds_count_limit() {
             let (in_flight, tx, mut rx) = setup();
-            let dispatched = try_dispatch_read_side(&kb(), Lsn(100), 21, 20, &in_flight, &tx);
+            let dispatched = try_dispatch_read_side(kb(), Lsn(100), 21, 20, &in_flight, &tx);
             assert!(dispatched);
             let job = rx.try_recv().unwrap();
             assert_eq!(job.key, kb());
@@ -3754,7 +3749,7 @@ mod tests {
             let (in_flight, tx, mut rx) = setup();
             for chain_len in 0..=20 {
                 assert!(!try_dispatch_read_side(
-                    &kb(),
+                    kb(),
                     Lsn(100),
                     chain_len,
                     20,
@@ -3770,7 +3765,7 @@ mod tests {
         fn skips_when_count_limit_zero_disabled() {
             let (in_flight, tx, mut rx) = setup();
             assert!(!try_dispatch_read_side(
-                &kb(),
+                kb(),
                 Lsn(100),
                 9999,
                 0,
@@ -3786,7 +3781,7 @@ mod tests {
             let (in_flight, tx, mut rx) = setup();
             in_flight.lock().unwrap().insert(kb());
             assert!(!try_dispatch_read_side(
-                &kb(),
+                kb(),
                 Lsn(100),
                 50,
                 20,
@@ -3803,14 +3798,14 @@ mod tests {
             // Channel capacity 1, fill it, then try to dispatch.
             let (tx, mut rx) = tokio::sync::mpsc::channel::<MaterializeJob>(1);
             tx.try_send(MaterializeJob {
-                key: key_to_bytes(k(99)),
+                key: k(99),
                 target_lsn: Lsn(1),
             })
             .unwrap();
             let in_flight = Mutex::new(HashSet::new());
             // Dispatch should fail and NOT leave the key in in_flight.
             assert!(!try_dispatch_read_side(
-                &kb(),
+                kb(),
                 Lsn(100),
                 50,
                 20,
@@ -3823,7 +3818,7 @@ mod tests {
             );
             // The pre-filled job is still there; only it should drain.
             let pre = rx.try_recv().unwrap();
-            assert_eq!(pre.key, key_to_bytes(k(99)));
+            assert_eq!(pre.key, k(99));
             assert!(rx.try_recv().is_err());
         }
     }

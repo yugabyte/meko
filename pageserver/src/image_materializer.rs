@@ -124,7 +124,7 @@ pub struct ImageMaterializer {
     /// failure) the materialiser removes every key it pulled from the
     /// queue so the next delta past the per-key threshold can re-fire
     /// at the current LSN.
-    in_flight: Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
+    in_flight: Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
     /// `BASE_REDO_CONCURRENCY` scaled by `PageServerConf::scale_factor`.
     redo_concurrency: usize,
     /// `BASE_MAX_INFLIGHT_INSERTS` scaled by `PageServerConf::scale_factor`.
@@ -154,7 +154,7 @@ impl ImageMaterializer {
         walredo_mgr: Arc<WalRedoManager>,
         pg_version: PgMajorVersion,
         mut rx: mpsc::Receiver<MaterializeJob>,
-        in_flight: Arc<std::sync::Mutex<std::collections::HashSet<bytes::Bytes>>>,
+        in_flight: Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
         scale_factor: f64,
     ) -> MaterializerTask {
         let cancel = CancellationToken::new();
@@ -373,7 +373,7 @@ impl ImageMaterializer {
                         self.tenant_id,
                         self.timeline_id,
                         job.target_lsn,
-                        bytes::Bytes::copy_from_slice(&job.key),
+                        job.key,
                         e,
                     ));
                 }
@@ -525,7 +525,7 @@ impl ImageMaterializer {
         // place; reads still serve them, and a later trigger retries.
         let chain = match self
             .page_writer
-            .read_chain_durable(Key::from_slice(&job.key), job.target_lsn)
+            .read_chain_durable(job.key, job.target_lsn)
             .await
         {
             Ok(chain) => chain,
@@ -534,7 +534,7 @@ impl ImageMaterializer {
                     tenant_id = %self.tenant_id,
                     timeline_id = %self.timeline_id,
                     target_lsn = %job.target_lsn,
-                    key = ?bytes::Bytes::copy_from_slice(&job.key),
+                    key = %job.key,
                     "read_chain_durable failed; skipping materialise of this page: {e:#}"
                 );
                 return Ok(None);
@@ -544,7 +544,7 @@ impl ImageMaterializer {
             tenant_id = %self.tenant_id,
             timeline_id = %self.timeline_id,
             target_lsn = %job.target_lsn,
-            key = ?bytes::Bytes::copy_from_slice(&job.key),
+            key = %job.key,
             chain_len = chain.len(),
             "materialize_chain"
         );
@@ -574,7 +574,7 @@ impl ImageMaterializer {
         }
 
         let actual_lsn = chain.first().expect("chain non-empty").lsn;
-        let key = Key::from_slice(&job.key);
+        let key = job.key;
         let chain_len = chain.len();
         let n_records = chain_len.saturating_sub(if base_img.is_some() { 1 } else { 0 });
         let image_bytes = if records.is_empty() {

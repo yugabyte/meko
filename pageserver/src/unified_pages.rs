@@ -74,9 +74,9 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use hashlink::LinkedHashMap;
+use pageserver_api::key::{KEY_SIZE, Key};
 use parking_lot::Mutex;
 use utils::lsn::Lsn;
 
@@ -156,16 +156,16 @@ pub struct UnifiedPages {
     /// (`push*`, `trim`, `mark_flushed`) only contend when they hit the
     /// same key's mutex. The ordering powers `lookup_range`'s native
     /// key-range walk.
-    by_key: SkipMap<Bytes, Mutex<KeyState>>,
+    by_key: SkipMap<Key, Mutex<KeyState>>,
     /// LRU sidecar: just the key set, in promotion order. Back =
     /// most recently inserted / promoted, front = coldest. Only
     /// `push*` / `evict_to_capacity` / `trim_key_up_to` touch this;
     /// reads do not. Holds are O(1).
-    lru: Mutex<LinkedHashMap<Bytes, ()>>,
+    lru: Mutex<LinkedHashMap<Key, ()>>,
     /// Insertion-ordered list of (key, lsn) pairs for unflushed
     /// entries. Drives `snapshot_unflushed` + `mark_flushed`
     /// so flushes hit YB in monotonic put-order.
-    unflushed_fifo: Mutex<VecDeque<(Bytes, Lsn)>>,
+    unflushed_fifo: Mutex<VecDeque<(Key, Lsn)>>,
     total_bytes: AtomicUsize,
     unflushed_bytes: AtomicUsize,
     capacity_bytes: usize,
@@ -248,17 +248,13 @@ impl UnifiedPages {
     pub(crate) fn mark_flushed(&self, snapshot: &[Arc<PageEntry>]) {
         // Per-key list of promoted lsns, so we drop their stale FIFO
         // refs in one pass at the end instead of scanning per row.
-        let mut promoted_by_key: HashMap<Bytes, Vec<Lsn>> = HashMap::new();
+        let mut promoted_by_key: HashMap<Key, Vec<Lsn>> = HashMap::new();
 
         for entry in snapshot {
             if !entry.try_promote() {
                 continue; // insert_entry already claimed this entry.
             }
-            pageserver_api::write_trace::trace_stage_bytes(
-                "durable",
-                &entry.row.key,
-                entry.row.lsn,
-            );
+            pageserver_api::write_trace::trace_stage("durable", &entry.row.key, entry.row.lsn);
             let size = row_size(&entry.row);
             self.unflushed_bytes.fetch_sub(size, Ordering::Relaxed);
             if let Some(node) = self.by_key.get(&entry.row.key) {
@@ -359,7 +355,7 @@ impl UnifiedPages {
     /// Remove all durable entries for `key` with `lsn <= max_lsn`.
     /// Used by the materialiser to drop deltas the new image
     /// supersedes. Newer deltas and unflushed entries are untouched.
-    pub fn trim_key_up_to(&self, key: &Bytes, max_lsn: Lsn) {
+    pub fn trim_key_up_to(&self, key: &Key, max_lsn: Lsn) {
         let mut total_freed = 0usize;
         let key_empty = {
             let Some(node) = self.by_key.get(key) else {
@@ -404,7 +400,7 @@ impl UnifiedPages {
     /// Includes unflushed. Does NOT touch the LRU position — LRU
     /// order tracks write recency only, which is sufficient: hot
     /// keys keep getting written.
-    pub fn lookup_chain(&self, key: &Bytes, target_lsn: Lsn) -> Vec<Arc<PageRow>> {
+    pub fn lookup_chain(&self, key: &Key, target_lsn: Lsn) -> Vec<Arc<PageRow>> {
         let Some(node) = self.by_key.get(key) else {
             return Vec::new();
         };
@@ -417,7 +413,7 @@ impl UnifiedPages {
     }
 
     /// Like `lookup_chain` but only durable rows.
-    pub fn lookup_chain_durable(&self, key: &Bytes, target_lsn: Lsn) -> Vec<Arc<PageRow>> {
+    pub fn lookup_chain_durable(&self, key: &Key, target_lsn: Lsn) -> Vec<Arc<PageRow>> {
         let Some(node) = self.by_key.get(key) else {
             return Vec::new();
         };
@@ -440,7 +436,7 @@ impl UnifiedPages {
     /// presence is therefore both necessary and sufficient.
     pub fn lookup_chain_if_complete(
         &self,
-        key: &Bytes,
+        key: &Key,
         target_lsn: Lsn,
     ) -> Option<Vec<Arc<PageRow>>> {
         let node = self.by_key.get(key)?;
@@ -481,7 +477,7 @@ impl UnifiedPages {
     /// at all.
     pub fn lookup_chain_durable_if_complete(
         &self,
-        key: &Bytes,
+        key: &Key,
         target_lsn: Lsn,
     ) -> Option<Vec<Arc<PageRow>>> {
         let node = self.by_key.get(key)?;
@@ -530,11 +526,11 @@ impl UnifiedPages {
     /// scan_range is called for vectored reads, which are rare.
     pub fn lookup_range(
         &self,
-        start_key: &Bytes,
-        end_key: &Bytes,
+        start_key: &Key,
+        end_key: &Key,
         target_lsn: Lsn,
-    ) -> HashMap<Bytes, Vec<Arc<PageRow>>> {
-        let mut out: HashMap<Bytes, Vec<Arc<PageRow>>> = HashMap::new();
+    ) -> HashMap<Key, Vec<Arc<PageRow>>> {
+        let mut out: HashMap<Key, Vec<Arc<PageRow>>> = HashMap::new();
         for node in self.by_key.range(start_key.clone()..end_key.clone()) {
             let rows: Vec<Arc<PageRow>> = node
                 .value()
@@ -563,7 +559,7 @@ impl UnifiedPages {
         // Clone the FIFO order so we can release the lock before
         // walking it. The FIFO is small (one entry per unflushed
         // row), and snapshot is called once per flush — cheap.
-        let pairs: Vec<(Bytes, Lsn)> = {
+        let pairs: Vec<(Key, Lsn)> = {
             let fifo = self.unflushed_fifo.lock();
             let cap = max.unwrap_or(fifo.len()).min(fifo.len());
             fifo.iter().take(cap).cloned().collect()
@@ -596,8 +592,10 @@ impl UnifiedPages {
                 crate::metrics::CORRECTNESS_ERRORS
                     .with_label_values(&["snapshot_fifo_orphan"])
                     .inc();
+                let mut kb = [0u8; KEY_SIZE];
+                key.write_to_byte_slice(&mut kb);
                 let prefix: String =
-                    key.iter().take(18).map(|b| format!("{b:02x}")).collect();
+                    kb.iter().map(|b| format!("{b:02x}")).collect();
                 tracing::error!(
                     key = %prefix,
                     %lsn,
@@ -623,11 +621,11 @@ impl UnifiedPages {
     /// Returns `true` iff a brand-new **unflushed** entry was added, so
     /// the caller (`push`) knows to record it in `unflushed_fifo`.
     /// Durable inserts and idempotent re-pushes return `false`.
-    fn insert_entry(&self, key: Bytes, lsn: Lsn, row: PageRow, durable: bool) -> bool {
+    fn insert_entry(&self, key: Key, lsn: Lsn, row: PageRow, durable: bool) -> bool {
         self.insert_arc_entry(key, lsn, Arc::new(row), durable)
     }
 
-    fn insert_arc_entry(&self, key: Bytes, lsn: Lsn, row: Arc<PageRow>, durable: bool) -> bool {
+    fn insert_arc_entry(&self, key: Key, lsn: Lsn, row: Arc<PageRow>, durable: bool) -> bool {
         use std::collections::btree_map::Entry;
 
         let size = row_size(&row);
@@ -786,16 +784,27 @@ impl UnifiedPages {
 }
 
 fn row_size(r: &PageRow) -> usize {
-    r.payload.len() + r.key.len() + 16
+    r.payload.len() + KEY_SIZE + 16
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
+
+    /// Build a `Key` from a short test byte string, order-preserving:
+    /// zero-pad to KEY_SIZE and decode. Lexicographic byte order maps
+    /// to the same `Key` ordering, so range/ordering assertions hold.
+    fn tkey(b: &[u8]) -> Key {
+        let mut a = [0u8; KEY_SIZE];
+        let n = b.len().min(KEY_SIZE);
+        a[..n].copy_from_slice(&b[..n]);
+        Key::from_slice(&a)
+    }
 
     fn mk(key: &[u8], lsn: u64, is_image: bool, payload: &[u8]) -> PageRow {
         PageRow {
-            key: Bytes::copy_from_slice(key),
+            key: tkey(key),
             lsn: Lsn(lsn),
             is_image,
             will_init: is_image,
@@ -818,7 +827,7 @@ mod tests {
         u.push(mk(b"k", 10, false, b"a"));
         u.push(mk(b"k", 20, false, b"b"));
         u.push(mk(b"k", 5, true, b"c"));
-        let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
+        let chain = u.lookup_chain(&tkey(b"k"), Lsn(100));
         let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
         assert_eq!(lsns, vec![20, 10, 5]);
     }
@@ -835,7 +844,7 @@ mod tests {
         assert!(u.unflushed_bytes() > 0);
         assert!(u.unflushed_bytes() < unflushed_before);
 
-        let all = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
+        let all = u.lookup_chain(&tkey(b"k"), Lsn(100));
         assert_eq!(all.len(), 3, "all rows still visible after flush");
     }
 
@@ -847,8 +856,8 @@ mod tests {
         flush_first_n(&u, 1);
         u.push(mk(b"k", 3, false, b"d3"));
 
-        let all = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
-        let durable = u.lookup_chain_durable(&Bytes::from_static(b"k"), Lsn(100));
+        let all = u.lookup_chain(&tkey(b"k"), Lsn(100));
+        let durable = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
         assert_eq!(all.len(), 3);
         assert_eq!(durable.len(), 1);
         assert_eq!(durable[0].lsn, Lsn(1));
@@ -868,19 +877,19 @@ mod tests {
         flush_first_n(&u, 2);
         // Complete durable chain below the target: fast path serves it.
         assert!(
-            u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(100))
+            u.lookup_chain_durable_if_complete(&tkey(b"k"), Lsn(100))
                 .is_some()
         );
         // An unflushed row enters at lsn 3 ≤ target: fast path must
         // bail rather than serve a chain it can't prove durable.
         u.push(mk(b"k", 3, false, b"d3"));
         assert!(
-            u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(100))
+            u.lookup_chain_durable_if_complete(&tkey(b"k"), Lsn(100))
                 .is_none()
         );
         // A target below the unflushed row keeps the fast path.
         assert!(
-            u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(2))
+            u.lookup_chain_durable_if_complete(&tkey(b"k"), Lsn(2))
                 .is_some()
         );
     }
@@ -914,7 +923,7 @@ mod tests {
         u.evict_to_capacity();
         // k1 was inserted first → at the front → evicted first.
         assert!(
-            u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100))
+            u.lookup_chain(&tkey(b"k1"), Lsn(100))
                 .is_empty()
         );
     }
@@ -940,11 +949,11 @@ mod tests {
         u.push(mk(b"k2", 2, true, b"BBBBBBBBBBBBBBBB"));
         u.evict_to_capacity();
         assert!(
-            u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100))
+            u.lookup_chain(&tkey(b"k1"), Lsn(100))
                 .is_empty()
         );
         assert!(
-            !u.lookup_chain(&Bytes::from_static(b"k2"), Lsn(100))
+            !u.lookup_chain(&tkey(b"k2"), Lsn(100))
                 .is_empty()
         );
     }
@@ -956,8 +965,8 @@ mod tests {
         u.push(mk(b"k", 20, false, b"d20"));
         u.push(mk(b"k", 30, false, b"d30"));
         flush_first_n(&u, 2);
-        u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(25));
-        let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
+        u.trim_key_up_to(&tkey(b"k"), Lsn(25));
+        let chain = u.lookup_chain(&tkey(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].lsn, Lsn(30));
     }
@@ -968,8 +977,8 @@ mod tests {
         u.push(mk(b"k", 10, false, b"d10"));
         flush_first_n(&u, 1);
         u.push(mk(b"k", 20, false, b"d20"));
-        u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(50));
-        let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
+        u.trim_key_up_to(&tkey(b"k"), Lsn(50));
+        let chain = u.lookup_chain(&tkey(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].lsn, Lsn(20));
     }
@@ -981,9 +990,9 @@ mod tests {
             u.push(mk(b"k", i * 10, false, &[i as u8; 4]));
         }
         flush_first_n(&u, 5);
-        u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(50));
+        u.trim_key_up_to(&tkey(b"k"), Lsn(50));
         u.push_durable(mk(b"k", 50, true, b"full-page-image"));
-        let chain = u.lookup_chain_durable(&Bytes::from_static(b"k"), Lsn(100));
+        let chain = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1, "only the new image remains");
         assert!(chain[0].is_image);
         assert_eq!(chain[0].lsn, Lsn(50));
@@ -1009,7 +1018,7 @@ mod tests {
         u.push(mk(b"k", 60, false, b"d60"));
         u.push(mk(b"k", 70, false, b"d70"));
         let chain = u
-            .lookup_chain_if_complete(&Bytes::from_static(b"k"), Lsn(100))
+            .lookup_chain_if_complete(&tkey(b"k"), Lsn(100))
             .expect("anchor in cache");
         let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
         assert_eq!(lsns, vec![70, 60, 50]);
@@ -1021,7 +1030,7 @@ mod tests {
         u.push(mk(b"k", 60, false, b"d60"));
         u.push(mk(b"k", 70, false, b"d70"));
         assert!(
-            u.lookup_chain_if_complete(&Bytes::from_static(b"k"), Lsn(100))
+            u.lookup_chain_if_complete(&tkey(b"k"), Lsn(100))
                 .is_none(),
             "no will_init → must consult YB"
         );
@@ -1046,7 +1055,7 @@ mod tests {
         u.push_durable(mk(b"cold", 1, true, b"EEEEEEEEEEEEEEEE"));
         u.evict_to_capacity();
 
-        let r = u.lookup_chain_durable_if_complete(&Bytes::from_static(b"hot"), Lsn(200));
+        let r = u.lookup_chain_durable_if_complete(&tkey(b"hot"), Lsn(200));
         match r {
             Some(chain) => {
                 // If hot is still cached, it must have the anchor and
@@ -1057,7 +1066,7 @@ mod tests {
             None => {
                 // Acceptable: hot got evicted whole.
                 assert!(
-                    u.lookup_chain(&Bytes::from_static(b"hot"), Lsn(200))
+                    u.lookup_chain(&tkey(b"hot"), Lsn(200))
                         .is_empty(),
                     "key absent ⇒ no rows at all (no partial cache state)"
                 );
@@ -1078,7 +1087,7 @@ mod tests {
         let b1 = u.total_bytes();
         u.push_durable(mk(b"k", 10, true, b"larger-replacement"));
         assert!(u.total_bytes() > b1);
-        let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
+        let chain = u.lookup_chain(&tkey(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1);
         assert!(chain[0].is_image);
     }
@@ -1087,10 +1096,11 @@ mod tests {
     fn lru_order_is_insertion_order_with_promotion_on_write() {
         // k1 then k2 then update k1 → k2 becomes the LRU front, but
         // the cap is sized so that only ONE key needs to be evicted
-        // to fit. Per-key sizes: ~34 B each (16 payload + 2 key + 16
-        // overhead). After 3 pushes, total ≈ 102 B (k1 = 68, k2 = 34).
-        // Cap = 80 forces evicting one key — the LRU front.
-        let u = UnifiedPages::new(80);
+        // to fit. Per-row size: 50 B (16 payload + KEY_SIZE=18 key + 16
+        // overhead). After 3 pushes, total = 150 B (k1 = 2 rows = 100,
+        // k2 = 1 row = 50). Cap = 120 evicts just the LRU front (k2):
+        // dropping it leaves 100 ≤ 120, so k1 survives.
+        let u = UnifiedPages::new(120);
         u.push_durable(mk(b"k1", 1, true, b"AAAAAAAAAAAAAAAA"));
         u.push_durable(mk(b"k2", 2, true, b"BBBBBBBBBBBBBBBB"));
         // Write to k1 again — promotes it to the back of the LRU.
@@ -1098,11 +1108,11 @@ mod tests {
         u.evict_to_capacity();
         // k2 was at the front after the k1 promotion → evicted.
         assert!(
-            u.lookup_chain(&Bytes::from_static(b"k2"), Lsn(100))
+            u.lookup_chain(&tkey(b"k2"), Lsn(100))
                 .is_empty()
         );
         assert!(
-            !u.lookup_chain(&Bytes::from_static(b"k1"), Lsn(100))
+            !u.lookup_chain(&tkey(b"k1"), Lsn(100))
                 .is_empty()
         );
     }
@@ -1117,12 +1127,12 @@ mod tests {
         u.push(mk(b"b", 30, false, b"z"));
         u.push(mk(b"c", 40, true, b"w"));
         let out = u.lookup_range(
-            &Bytes::from_static(b"b"),
-            &Bytes::from_static(b"c"),
+            &tkey(b"b"),
+            &tkey(b"c"),
             Lsn(100),
         );
         assert_eq!(out.len(), 1, "only 'b' falls in [b, c)");
-        let b_chain = &out[&Bytes::from_static(b"b")];
+        let b_chain = &out[&tkey(b"b")];
         let lsns: Vec<u64> = b_chain.iter().map(|r| r.lsn.0).collect();
         assert_eq!(lsns, vec![30, 20], "per-key chain is LSN-desc");
     }
@@ -1170,7 +1180,7 @@ mod tests {
 
         // The slot holds the durable image, and a flush finds nothing to
         // snapshot (no phantom pending row left behind).
-        let chain = u.lookup_chain_durable(&Bytes::from_static(b"k"), Lsn(100));
+        let chain = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1, "durable image present at (k, 10)");
         assert!(chain[0].is_image, "slot replaced by the materialiser image");
         assert_eq!(
@@ -1203,7 +1213,7 @@ mod tests {
             "byte counters unchanged on idempotent re-push"
         );
         assert_eq!(
-            u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100)).len(),
+            u.lookup_chain(&tkey(b"k"), Lsn(100)).len(),
             1,
             "still a single slot at (k, 10)"
         );
@@ -1248,7 +1258,7 @@ mod tests {
         // Walreceiver re-streams that record's raw delta at the same lsn.
         // Must NOT panic and must keep the image.
         u.push(mk(b"k", 10, false, b"raw-delta-record"));
-        let chain = u.lookup_chain(&Bytes::from_static(b"k"), Lsn(100));
+        let chain = u.lookup_chain(&tkey(b"k"), Lsn(100));
         assert_eq!(chain.len(), 1, "single slot at (k, 10)");
         assert!(chain[0].is_image, "image kept over the same-lsn delta");
         assert_eq!(chain[0].payload.as_ref(), b"folded-image");
@@ -1273,12 +1283,12 @@ mod tests {
         u.push_durable(mk(b"k", 40, false, b"d40")); // already durable
         // target_lsn=100 covers the unflushed d30: bail.
         assert!(
-            u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(100))
+            u.lookup_chain_durable_if_complete(&tkey(b"k"), Lsn(100))
                 .is_none()
         );
         // target_lsn=20 walks only durable rows: fast path serves.
         assert!(
-            u.lookup_chain_durable_if_complete(&Bytes::from_static(b"k"), Lsn(20))
+            u.lookup_chain_durable_if_complete(&tkey(b"k"), Lsn(20))
                 .is_some()
         );
     }
@@ -1296,9 +1306,9 @@ mod tests {
         u.push(mk(b"k", 30, false, b"d30"));
         flush_first_n(&u, 3);
         // Install fresh image at lsn 25.
-        u.trim_key_up_to(&Bytes::from_static(b"k"), Lsn(25));
+        u.trim_key_up_to(&tkey(b"k"), Lsn(25));
         u.push_durable(mk(b"k", 25, true, b"materialised"));
-        let chain = u.lookup_chain_durable(&Bytes::from_static(b"k"), Lsn(100));
+        let chain = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
         let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
         // The deltas/image ≤ 25 are gone; d30 stays because it's above
         // the new image.
@@ -1320,7 +1330,7 @@ mod tests {
                 let u = u.clone();
                 std::thread::spawn(move || {
                     for _ in 0..1000 {
-                        let _ = u.lookup_chain(&Bytes::from_static(b"hot"), Lsn(100));
+                        let _ = u.lookup_chain(&tkey(b"hot"), Lsn(100));
                     }
                 })
             })
@@ -1403,7 +1413,7 @@ mod tests {
             for i in 0..PER_THREAD {
                 let key = ((t as u64) << 32) | i as u64;
                 assert_eq!(
-                    u.lookup_chain(&Bytes::copy_from_slice(&key.to_be_bytes()), Lsn(key))
+                    u.lookup_chain(&tkey(&key.to_be_bytes()), Lsn(key))
                         .len(),
                     1,
                     "missing unflushed row for key {key}"

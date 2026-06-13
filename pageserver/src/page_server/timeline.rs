@@ -944,7 +944,7 @@ impl Timeline {
                         .into_iter()
                         .map(|sr| {
                             std::sync::Arc::new(crate::page_store::PageRow {
-                                key: slru_key_bytes(&sr),
+                                key: pageserver_api::key::Key::from_slice(&slru_key_bytes(&sr)),
                                 lsn: sr.lsn,
                                 is_image: sr.is_image,
                                 will_init: sr.will_init,
