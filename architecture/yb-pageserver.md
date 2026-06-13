@@ -339,14 +339,18 @@ Replaces `InMemoryLayer` + `flush_loop` + L0/L1 compaction.
    indexes both pre-flush (pinned in RAM until durable) and post-flush
    (LRU-ish cache for read-latency) entries. SLRU and meta entries
    stay in their own simpler `Vec` buffers for now. There is no
-   monolithic `RwLock<WriterState>` anymore: per-key state lives in
-   sharded `DashMap`s inside `UnifiedPages` (writes hit only the
-   target shard), aux (SLRU/meta) buffers sit behind a small
+   monolithic `RwLock<WriterState>` anymore: per-key state lives in a
+   lock-free ordered `SkipMap<Key, Mutex<KeyState>>` inside
+   `UnifiedPages`, keyed on the relation `Key` itself — a `Copy`
+   fixed-size struct, not a `Bytes` byte-encoding, so cache-key clones
+   are register copies and ordering is integer field-compares (no
+   per-row heap alloc, no `memcmp`); the skiplist's ordered `range()`
+   backs `lookup_range`. Aux (SLRU/meta) buffers sit behind a small
    `parking_lot::Mutex<AuxBuffers>`, and counters like `rows_written`
    / `consistent_lsn_watermark` are atomics
-   (`page_writer.rs:175-199`, `unified_pages.rs`). Phase 3.f / 4.f
-   killed the single-RwLock model so the writer fan-in goes straight
-   to DashMap shards instead of serialising on a global lock.
+   (`page_writer.rs:175-199`, `unified_pages.rs`). The writer fan-in
+   and the 300-backend get_page reads go straight to per-key mutexes
+   instead of serialising on a global lock.
    Concurrent get_page handlers filter the cache in parallel. Flushes
    fire when either trigger crosses threshold (default 5 s / 25 MiB).
 5. Flush snapshots the unflushed prefix of `UnifiedPages` (no copy of
@@ -359,7 +363,8 @@ Replaces `InMemoryLayer` + `flush_loop` + L0/L1 compaction.
    partial-flush failure can't PK-conflict. On success, `UnifiedPages`
    flips the snapshot's rows from unflushed → durable in one cursor
    pass (the rows do NOT move; they stay in the cache for reads) and
-   then evicts durable entries FIFO if `total_bytes > read_cache_bytes`.
+   then evicts whole cold keys (LRU order, keys with unflushed rows
+   pinned) if `total_bytes > read_cache_bytes`.
    SLRU / meta drain as before.
 6. Reads between flushes (and DURING a flush) see all in-RAM rows —
    both pre-flush and durable cache — blended with PageStore via
@@ -439,7 +444,7 @@ Default knobs (configurable via `pageserver.toml` under the
 | `image_chain_limit` | 20 | Deltas-since-anchor before a key is queued for materialisation (`0` disables count trigger) |
 | `image_chain_payload_bytes_limit` | 4 KiB | Combined-delta-payload trigger for materialisation (`0` disables size trigger) |
 | `materialize_queue_capacity` | 2000 | Bounded mpsc depth; the write-side dispatch uses **blocking** send (backpressures walreceiver); the read-side dispatch uses `try_send` (drops on overflow — the next read of the same key re-evaluates) |
-| `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes`. Durable entries are evicted FIFO when crossed; pre-flush entries are pinned regardless |
+| `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes`. Whole cold keys are evicted in LRU order when crossed; keys with unflushed (pre-flush) rows are pinned regardless |
 
 ## Backpressure
 
