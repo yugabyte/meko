@@ -40,6 +40,7 @@ fail.workspace = true
 futures.workspace = true
 hashlink.workspace = true
 dashmap.workspace = true
+crossbeam-skiplist.workspace = true
 parking_lot.workspace = true
 hex.workspace = true
 http.workspace = true

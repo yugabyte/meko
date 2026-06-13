@@ -7,15 +7,26 @@
 //! ## Concurrency
 //!
 //! `UnifiedPages` is internally thread-safe — every method takes
-//! `&self`. Per-key state lives in a `DashMap`, which shards locks so
-//! reads and writes on different keys never contend. Aggregate
-//! counters (`total_bytes`, `unflushed_bytes`) are atomics. The
-//! eviction LRU and the flush FIFO each live behind their own
-//! `parking_lot::Mutex` — both are touched in O(1) on every push, but
-//! the holds are nanosecond-scale and only contested by put + flush +
-//! materialiser-install (single-digit task count), not by the read
-//! path. The 300-backend getpage fan-in goes straight to DashMap
-//! shards and never touches LRU / FIFO.
+//! `&self`. Per-key state lives in a lock-free ordered `SkipMap`
+//! keyed by the page key; each value is a `parking_lot::Mutex<KeyState>`,
+//! so reads and writes on different keys never contend (the map itself
+//! is never globally locked). Aggregate counters (`total_bytes`,
+//! `unflushed_bytes`) are atomics. The eviction LRU and the flush FIFO
+//! each live behind their own `parking_lot::Mutex` — both are touched
+//! in O(1) on every push, but the holds are nanosecond-scale and only
+//! contested by put + flush + materialiser-install (single-digit task
+//! count), not by the read path. The 300-backend getpage fan-in goes
+//! straight to per-key mutexes and never touches LRU / FIFO.
+//!
+//! Map membership and per-key contents are kept consistent without a
+//! global lock by a single rule: a node is only ever **removed** while
+//! its own `KeyState` mutex is held (`evict_to_capacity` /
+//! `trim_key_up_to`), and every mutator re-checks `Entry::is_removed`
+//! after taking that mutex. A writer that raced an eviction onto a
+//! now-detached node simply retries onto a fresh one, so no accepted
+//! row is ever stranded on a removed node. The skiplist's ordered
+//! `range()` is what makes [`UnifiedPages::lookup_range`] a real
+//! key-range walk instead of a full-map scan.
 //!
 //! ## Per-key whole-eviction
 //!
@@ -64,7 +75,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use bytes::Bytes;
-use dashmap::DashMap;
+use crossbeam_skiplist::SkipMap;
 use hashlink::LinkedHashMap;
 use parking_lot::Mutex;
 use utils::lsn::Lsn;
@@ -114,10 +125,10 @@ impl PageEntry {
     }
 }
 
-/// Per-key bookkeeping stored as the DashMap value. DashMap gives us
-/// per-shard locking for free, so this struct itself does not need a
-/// lock — accessing it goes through a DashMap guard which already
-/// serialises mutations to the same key.
+/// Per-key bookkeeping stored as the `SkipMap` value, wrapped in a
+/// `parking_lot::Mutex` so mutations to one key serialise without
+/// locking the whole map. The skiplist node holds the mutex; callers
+/// take `Entry::value().lock()` to read or mutate this struct.
 struct KeyState {
     chain: BTreeMap<Lsn, Arc<PageEntry>>,
     /// Count of `PageEntry`s in `chain` with `durable == false`.
@@ -140,11 +151,12 @@ impl KeyState {
 }
 
 pub struct UnifiedPages {
-    /// Per-key state, sharded for concurrent access. Reads
-    /// (`lookup_chain*`) on different keys proceed in parallel;
-    /// writes (`push*`, `trim`, `mark_flushed`) only contend
-    /// when they hit the same shard.
-    by_key: DashMap<Bytes, KeyState>,
+    /// Per-key state in a lock-free ordered map. Reads
+    /// (`lookup_chain*`) on different keys proceed in parallel; writes
+    /// (`push*`, `trim`, `mark_flushed`) only contend when they hit the
+    /// same key's mutex. The ordering powers `lookup_range`'s native
+    /// key-range walk.
+    by_key: SkipMap<Bytes, Mutex<KeyState>>,
     /// LRU sidecar: just the key set, in promotion order. Back =
     /// most recently inserted / promoted, front = coldest. Only
     /// `push*` / `evict_to_capacity` / `trim_key_up_to` touch this;
@@ -162,7 +174,7 @@ pub struct UnifiedPages {
 impl UnifiedPages {
     pub fn new(capacity_bytes: usize) -> Self {
         Self {
-            by_key: DashMap::new(),
+            by_key: SkipMap::new(),
             lru: Mutex::new(LinkedHashMap::new()),
             unflushed_fifo: Mutex::new(VecDeque::new()),
             total_bytes: AtomicUsize::new(0),
@@ -249,8 +261,8 @@ impl UnifiedPages {
             );
             let size = row_size(&entry.row);
             self.unflushed_bytes.fetch_sub(size, Ordering::Relaxed);
-            if let Some(mut ks_guard) = self.by_key.get_mut(&entry.row.key) {
-                let ks = ks_guard.value_mut();
+            if let Some(node) = self.by_key.get(&entry.row.key) {
+                let mut ks = node.value().lock();
                 ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
             }
             promoted_by_key
@@ -296,23 +308,28 @@ impl UnifiedPages {
                 key.clone()
             };
 
-            // Atomically check pinned + remove if evictable. Holding
-            // a DashMap entry guard pins the shard for one key only,
-            // so other shards stay free.
-            let removed = match self.by_key.entry(candidate.clone()) {
-                dashmap::mapref::entry::Entry::Occupied(o) => {
-                    if o.get().unflushed_count > 0 {
+            // Check pinned + remove if evictable, holding the key's
+            // own mutex across the decision so a concurrent `push` onto
+            // this node either lands before the removal (bumping
+            // `unflushed_count`, which pins it) or retries onto a fresh
+            // node after seeing `is_removed`. Removing the node *under*
+            // its mutex is the rule the whole map relies on.
+            let removed = match self.by_key.get(&candidate) {
+                None => Some(0),
+                Some(node) => {
+                    let ks = node.value().lock();
+                    if ks.unflushed_count > 0 {
                         // Pinned — leave in the map; we'll rotate
                         // the LRU below.
-                        drop(o);
+                        drop(ks);
                         None
                     } else {
-                        let bytes = o.get().bytes;
-                        o.remove();
+                        let bytes = ks.bytes;
+                        node.remove();
+                        drop(ks);
                         Some(bytes)
                     }
                 }
-                dashmap::mapref::entry::Entry::Vacant(_) => Some(0),
             };
 
             match removed {
@@ -345,10 +362,15 @@ impl UnifiedPages {
     pub fn trim_key_up_to(&self, key: &Bytes, max_lsn: Lsn) {
         let mut total_freed = 0usize;
         let key_empty = {
-            let Some(mut entry) = self.by_key.get_mut(key) else {
+            let Some(node) = self.by_key.get(key) else {
                 return;
             };
-            let ks = entry.value_mut();
+            let mut ks_guard = node.value().lock();
+            if node.is_removed() {
+                // Raced with an eviction that already dropped this node.
+                return;
+            }
+            let ks = &mut *ks_guard;
             let to_remove: Vec<Lsn> = ks
                 .chain
                 .range(..=max_lsn)
@@ -362,13 +384,18 @@ impl UnifiedPages {
                     total_freed += size;
                 }
             }
-            ks.chain.is_empty()
+            let empty = ks.chain.is_empty();
+            // Remove the node under its own mutex (the map's removal rule)
+            // so a racing `push` retries onto a fresh node.
+            if empty {
+                node.remove();
+            }
+            empty
         };
         if total_freed > 0 {
             self.total_bytes.fetch_sub(total_freed, Ordering::Relaxed);
         }
         if key_empty {
-            self.by_key.remove(key);
             self.lru.lock().remove(key);
         }
     }
@@ -378,9 +405,10 @@ impl UnifiedPages {
     /// order tracks write recency only, which is sufficient: hot
     /// keys keep getting written.
     pub fn lookup_chain(&self, key: &Bytes, target_lsn: Lsn) -> Vec<Arc<PageRow>> {
-        let Some(ks) = self.by_key.get(key) else {
+        let Some(node) = self.by_key.get(key) else {
             return Vec::new();
         };
+        let ks = node.value().lock();
         ks.chain
             .range(..=target_lsn)
             .rev()
@@ -390,9 +418,10 @@ impl UnifiedPages {
 
     /// Like `lookup_chain` but only durable rows.
     pub fn lookup_chain_durable(&self, key: &Bytes, target_lsn: Lsn) -> Vec<Arc<PageRow>> {
-        let Some(ks) = self.by_key.get(key) else {
+        let Some(node) = self.by_key.get(key) else {
             return Vec::new();
         };
+        let ks = node.value().lock();
         ks.chain
             .range(..=target_lsn)
             .rev()
@@ -414,7 +443,8 @@ impl UnifiedPages {
         key: &Bytes,
         target_lsn: Lsn,
     ) -> Option<Vec<Arc<PageRow>>> {
-        let ks = self.by_key.get(key)?;
+        let node = self.by_key.get(key)?;
+        let ks = node.value().lock();
         let mut out = Vec::new();
         let mut has_anchor = false;
         for (_, e) in ks.chain.range(..=target_lsn).rev() {
@@ -454,7 +484,8 @@ impl UnifiedPages {
         key: &Bytes,
         target_lsn: Lsn,
     ) -> Option<Vec<Arc<PageRow>>> {
-        let ks = self.by_key.get(key)?;
+        let node = self.by_key.get(key)?;
+        let ks = node.value().lock();
         let mut out = Vec::new();
         for (_, e) in ks.chain.range(..=target_lsn).rev() {
             if !e.is_durable() {
@@ -493,9 +524,10 @@ impl UnifiedPages {
     /// Range scan: rows for keys in `[start_key, end_key)` at `lsn ≤
     /// target_lsn`. Each per-key inner Vec is LSN-descending.
     ///
-    /// Iterates the full DashMap, briefly read-locking each shard.
-    /// Not on the getpage hot path — scan_range is called for
-    /// vectored reads, which are rare.
+    /// Walks only the keys in `[start_key, end_key)` via the skiplist's
+    /// ordered `range()` — O(log n + k) in the number of matching keys,
+    /// not O(n) over the whole map. Not on the getpage hot path —
+    /// scan_range is called for vectored reads, which are rare.
     pub fn lookup_range(
         &self,
         start_key: &Bytes,
@@ -503,21 +535,17 @@ impl UnifiedPages {
         target_lsn: Lsn,
     ) -> HashMap<Bytes, Vec<Arc<PageRow>>> {
         let mut out: HashMap<Bytes, Vec<Arc<PageRow>>> = HashMap::new();
-        for entry in self.by_key.iter() {
-            let k = entry.key();
-            if k.as_ref() < start_key.as_ref() || k.as_ref() >= end_key.as_ref() {
-                continue;
-            }
-            let rows: Vec<Arc<PageRow>> = entry
+        for node in self.by_key.range(start_key.clone()..end_key.clone()) {
+            let rows: Vec<Arc<PageRow>> = node
                 .value()
+                .lock()
                 .chain
                 .range(..=target_lsn)
                 .rev()
                 .map(|(_, e)| e.row_arc())
-                .collect()
-                ;
+                .collect();
             if !rows.is_empty() {
-                out.insert(k.clone(), rows);
+                out.insert(node.key().clone(), rows);
             }
         }
         out
@@ -551,7 +579,7 @@ impl UnifiedPages {
             // record advanced `ingest_frontier`) → durable write loss.
             let anomaly: Option<&'static str> = match self.by_key.get(key) {
                 None => Some("key-gone"),
-                Some(ks) => match ks.chain.get(lsn) {
+                Some(node) => match node.value().lock().chain.get(lsn) {
                     None => Some("slot-gone"),
                     Some(entry) if entry.is_durable() => Some("already-durable"),
                     Some(entry) => {
@@ -590,8 +618,8 @@ impl UnifiedPages {
     /// new keys land at the back via `insert`, existing keys are
     /// moved with `to_back`.
     ///
-    /// Lock order: LRU lock → DashMap shard lock. `evict_to_capacity`
-    /// follows the same order, so no deadlock.
+    /// LRU and the per-key mutex are never held at the same time, so
+    /// there is no lock-order edge between them to deadlock on.
     /// Returns `true` iff a brand-new **unflushed** entry was added, so
     /// the caller (`push`) knows to record it in `unflushed_fifo`.
     /// Durable inserts and idempotent re-pushes return `false`.
@@ -600,48 +628,64 @@ impl UnifiedPages {
     }
 
     fn insert_arc_entry(&self, key: Bytes, lsn: Lsn, row: Arc<PageRow>, durable: bool) -> bool {
-        let size = row_size(&row);
-
-        // Step 1: ensure the key is at the back of the LRU.
-        {
-            let mut lru = self.lru.lock();
-            if lru.contains_key(&key) {
-                lru.to_back(&key);
-            } else {
-                lru.insert(key.clone(), ());
-            }
-        }
-
-        // Step 2: insert into the DashMap shard via the BTreeMap `entry`
-        // API — a single tree traversal that covers both the existence
-        // check and the insert (no separate `get` + `insert`).
-        //
-        // A slot may already exist at this (key, lsn):
-        //   - `push()` (walreceiver, durable=false): the connection
-        //     re-streamed an already-ingested record — the cache is not
-        //     empty across a safekeeper-only restart (#57). The WAL
-        //     record at a given LSN is deterministic, so the existing
-        //     slot already represents this row, whether it's still
-        //     unflushed (pending the same flush, and already in the
-        //     FIFO) or already durable. Keep it untouched and report
-        //     "nothing added": re-inserting would double-count the
-        //     unflushed FIFO / pin, and overwriting could drop a row
-        //     that isn't yet in YB.
-        //   - `push_durable()` (materialiser, durable=true): bounds its
-        //     target_lsn ≤ flush_horizon_lsn (only advanced after
-        //     `mark_flushed`), so a same-LSN slot is normally already
-        //     durable. It can also be a still-UNFLUSHED slot from a benign
-        //     reconnect-replay re-push (see the durable arm below); in that
-        //     case we overwrite it with the image and reverse the unflushed
-        //     accounting + drop the stale FIFO entry.
         use std::collections::btree_map::Entry;
+
+        let size = row_size(&row);
+        // Wrapped in an Option so the (rare) `is_removed` retry below can
+        // re-take ownership; it is consumed exactly once, on the iteration
+        // that lands on a live node.
+        let mut row = Some(row);
+
         // Set when a durable image overwrites a still-unflushed slot. Acted
-        // on after the shard guard drops so the FIFO lock never nests under
-        // the shard lock (lock order: shard → FIFO).
+        // on after the per-key mutex drops so the FIFO lock never nests under
+        // it (lock order: per-key mutex → FIFO).
         let mut overwrote_unflushed = false;
-        let added_unflushed = {
-            let mut shard = self.by_key.entry(key.clone()).or_insert_with(KeyState::new);
-            let ks = shard.value_mut();
+        let added_unflushed = loop {
+            // Step 1: ensure the key is at the back of the LRU.
+            {
+                let mut lru = self.lru.lock();
+                if lru.contains_key(&key) {
+                    lru.to_back(&key);
+                } else {
+                    lru.insert(key.clone(), ());
+                }
+            }
+
+            // Step 2: get-or-create this key's node and lock its mutex. The
+            // BTreeMap `entry` API below is one tree traversal covering both
+            // the existence check and the insert (no separate `get` + `insert`).
+            //
+            // A slot may already exist at this (key, lsn):
+            //   - `push()` (walreceiver, durable=false): the connection
+            //     re-streamed an already-ingested record — the cache is not
+            //     empty across a safekeeper-only restart (#57). The WAL
+            //     record at a given LSN is deterministic, so the existing
+            //     slot already represents this row, whether it's still
+            //     unflushed (pending the same flush, and already in the
+            //     FIFO) or already durable. Keep it untouched and report
+            //     "nothing added": re-inserting would double-count the
+            //     unflushed FIFO / pin, and overwriting could drop a row
+            //     that isn't yet in YB.
+            //   - `push_durable()` (materialiser, durable=true): bounds its
+            //     target_lsn ≤ flush_horizon_lsn (only advanced after
+            //     `mark_flushed`), so a same-LSN slot is normally already
+            //     durable. It can also be a still-UNFLUSHED slot from a benign
+            //     reconnect-replay re-push (see the durable arm below); in that
+            //     case we overwrite it with the image and reverse the unflushed
+            //     accounting + drop the stale FIFO entry.
+            let node = self
+                .by_key
+                .get_or_insert(key.clone(), Mutex::new(KeyState::new()));
+            let mut ks_guard = node.value().lock();
+            if node.is_removed() {
+                // Raced an eviction/trim that removed this node between
+                // `get_or_insert` and the lock. It's detached; retry to land
+                // on (or create) a live node. The LRU re-insert at the top of
+                // the loop restores the key if the eviction also dropped it.
+                drop(ks_guard);
+                continue;
+            }
+            let ks = &mut *ks_guard;
 
             // Returns (added_unflushed, add_bytes, sub_bytes); bookkeeping is
             // applied after the chain borrow ends.
@@ -662,8 +706,9 @@ impl UnifiedPages {
                             //       is correct even though it differs.
                             // Only assert determinism in case (a); never panic
                             // on (b) and never overwrite an image with a delta.
+                            let new_row = row.as_ref().unwrap();
                             debug_assert!(
-                                o.get().row.is_image || *o.get().row == *row,
+                                o.get().row.is_image || *o.get().row == **new_row,
                                 "re-push at lsn={lsn} differs from the buffered delta \
                                  (WAL replay not deterministic / LSN collision): \
                                  existing=(is_image={} will_init={} {}B) \
@@ -671,9 +716,9 @@ impl UnifiedPages {
                                 o.get().row.is_image,
                                 o.get().row.will_init,
                                 o.get().row.payload.len(),
-                                row.is_image,
-                                row.will_init,
-                                row.payload.len(),
+                                new_row.is_image,
+                                new_row.will_init,
+                                new_row.payload.len(),
                             );
                             return false;
                         }
@@ -694,11 +739,11 @@ impl UnifiedPages {
                         // accounting (count + bytes below, FIFO entry after
                         // the guard drops).
                         overwrote_unflushed = !o.get().is_durable();
-                        o.insert(PageEntry::from_arc_row(row, durable));
+                        o.insert(PageEntry::from_arc_row(row.take().unwrap(), durable));
                         (false, size, prev_size)
                     }
                     Entry::Vacant(v) => {
-                        v.insert(PageEntry::from_arc_row(row, durable));
+                        v.insert(PageEntry::from_arc_row(row.take().unwrap(), durable));
                         (!durable, size, 0)
                     }
                 };
@@ -722,7 +767,7 @@ impl UnifiedPages {
                 // is durable, so remove them.
                 self.unflushed_bytes.fetch_sub(sub_bytes, Ordering::Relaxed);
             }
-            added_unflushed
+            break added_unflushed;
         };
 
         if overwrote_unflushed {
@@ -1282,6 +1327,88 @@ mod tests {
             .collect();
         for h in handles {
             h.join().unwrap();
+        }
+    }
+
+    /// Concurrency regression for the SkipMap rewrite: a writer adding
+    /// an **unflushed** row must never lose it to a racing eviction. An
+    /// unflushed row pins its key, so a correct cache evicts nothing
+    /// here regardless of how the `push` / `evict_to_capacity` calls
+    /// interleave. The `is_removed` retry in `insert_arc_entry` is what
+    /// guarantees a `push` that raced an eviction onto a now-detached
+    /// node retries onto a live one instead of stranding the row.
+    ///
+    /// The cache is sized far below the working set so eviction is
+    /// constantly trying to run; every key is pinned, so a buggy
+    /// removal-vs-insert race would surface as a missing row or a
+    /// miscounted pin at the end.
+    #[test]
+    fn concurrent_push_unflushed_never_lost_under_eviction() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        const THREADS: u32 = 8;
+        const PER_THREAD: u32 = 2000;
+
+        // Tiny cap → eviction runs aggressively and keeps colliding with
+        // the writers on the skiplist.
+        let u = Arc::new(UnifiedPages::new(64));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        // Background evictor: hammers eviction the whole time.
+        let evictor = {
+            let u = u.clone();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    u.evict_to_capacity();
+                }
+            })
+        };
+
+        let writers: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let u = u.clone();
+                std::thread::spawn(move || {
+                    for i in 0..PER_THREAD {
+                        // Disjoint key space per thread so each push is a
+                        // fresh unflushed key (which pins itself).
+                        let key = ((t as u64) << 32) | i as u64;
+                        u.push(mk(&key.to_be_bytes(), key, false, b"x"));
+                    }
+                })
+            })
+            .collect();
+
+        for w in writers {
+            w.join().unwrap();
+        }
+        stop.store(true, Ordering::Relaxed);
+        evictor.join().unwrap();
+
+        // Every unflushed row pinned its key, so none could be evicted:
+        // all of them must still be present and counted as pending.
+        let total = (THREADS * PER_THREAD) as usize;
+        assert_eq!(
+            u.by_key_entries(),
+            total,
+            "an unflushed-pinned key was evicted (row lost)"
+        );
+        assert_eq!(
+            u.unflushed_count(),
+            total,
+            "unflushed FIFO count diverged from the rows actually buffered"
+        );
+        for t in 0..THREADS {
+            for i in 0..PER_THREAD {
+                let key = ((t as u64) << 32) | i as u64;
+                assert_eq!(
+                    u.lookup_chain(&Bytes::copy_from_slice(&key.to_be_bytes()), Lsn(key))
+                        .len(),
+                    1,
+                    "missing unflushed row for key {key}"
+                );
+            }
         }
     }
 }
