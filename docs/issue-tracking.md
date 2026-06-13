@@ -54,13 +54,18 @@ delivery phases:
 
 ## Commit subjects
 
-Commit subjects reference the same areas:
-
 ```
 [#<issue>] <area>: <sub-component>: <title>
 ```
 
-`<area>` is `storage` or `control_plane`; `[#<issue>]` and
-`<sub-component>` are optional. See the `commit-sync` skill's
-"Subject format" for the full spec and examples. Close issues with
-`Closes #<num>` / `Fixes #<num>` when the work ships.
+`<area>` is either a **subsystem** — `storage` / `control_plane`,
+mirroring the issue labels above (`control plane` written
+`control_plane` in a subject) — or a **meta token** for work that
+touches neither subsystem: `pm` (project management: tracker, issues,
+planning), `docs`, `ci`, `build`, `tools`. The meta tokens are
+commit-subject-only; they are not issue labels. `[#<issue>]` and
+`<sub-component>` are optional.
+
+See the `commit-sync` skill's "Subject format" for the full spec and
+examples. Close issues with `Closes #<num>` / `Fixes #<num>` when the
+work ships.

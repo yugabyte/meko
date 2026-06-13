@@ -110,8 +110,9 @@ reminds you to reference and close issues at commit time.
 
 When a commit is work on an issue, lead the subject with the `[#<num>]`
 tag — the full format is `[#<issue>] <area>: <sub-component>: <title>`,
-where `<area>` is `storage` or `control_plane` (see the `commit-sync`
-skill's "Subject format"). Example:
+where `<area>` is a subsystem (`storage` / `control_plane`) or a meta
+token (`pm` / `docs` / `ci` / `build` / `tools`); see the `commit-sync`
+skill's "Subject format". Example:
 `[#42] storage: pageserver: strip multi-timeline machinery`. This lets
 `git log --oneline` be cross-referenced against the issue list, and
 GitHub auto-links the commit on the issue. Use `Closes #<num>` /

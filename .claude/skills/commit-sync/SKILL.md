@@ -199,18 +199,21 @@ The commit subject follows:
   advances a tracked GitHub issue (e.g. `[#42]`). Put it first so
   `git log --oneline` is greppable by issue and GitHub auto-links the
   commit on the issue. Omit it for work with no issue.
-- **`<area>`** — *required*. Exactly one of **`storage`** or
-  **`control_plane`** — the same two area labels the issues use
-  (`control_plane` underscored in the subject; the label itself is
-  `control plane`). The authoritative area/milestone taxonomy lives in
-  [`docs/issue-tracking.md`](../../../docs/issue-tracking.md).
+- **`<area>`** — *required*. Either a **subsystem** — **`storage`** or
+  **`control_plane`**, mirroring the issue area labels (`control_plane`
+  underscored in the subject; the label itself is `control plane`) — or
+  a **meta token** for work that touches neither subsystem: **`pm`**
+  (project management: tracker, issues, planning), **`docs`**, **`ci`**,
+  **`build`**, **`tools`**. Pick a subsystem when the commit changes
+  product code; pick a meta token otherwise. The authoritative taxonomy
+  lives in [`docs/issue-tracking.md`](../../../docs/issue-tracking.md).
 - **`<sub-component>:`** — *optional* second segment naming the
   subsystem within the area: `pageserver`, `safekeeper`, `walredo`,
   `materialiser`, `walreceiver`, `page_service`, `e2e` (under
   `storage`); `storage_ctl`, `yb_light_local`, `cluster-ui` (under
   `control_plane`); … Drop it when the area alone is precise enough.
 - **`<title>`** — *required*. Concise, imperative description of the
-  **code** change.
+  change.
 
 Examples:
 
@@ -220,7 +223,9 @@ Examples:
 storage: materialiser: pace background image compaction
 storage: e2e: add E2E_STOP_ON_FAIL to halt at the first failing iteration
 control_plane: yb_light_local: retry HTTP bind on EADDRINUSE during recycle
-control_plane: migrate task tracker to GitHub issues
+pm: migrate task tracker to GitHub issues
+docs: clarify the YB idempotency contract
+ci: pin protoc to 3.21
 ```
 
 For staged work on one issue, note the stage in the title:
