@@ -99,6 +99,57 @@ pub struct SlruPageRow {
     pub payload: Bytes,
 }
 
+/// Dedup an LSN-descending, image-first-on-ties page chain by LSN.
+///
+/// The chain MUST already be sorted descending by LSN with images sorting
+/// before deltas on a tie (`b.lsn.cmp(&a.lsn).then(b.is_image.cmp(&a.is_image))`).
+/// Like `Vec::dedup_by`, the first row of each equal-LSN run is kept and the
+/// rest dropped.
+///
+/// The ONLY legitimate same-LSN collision is a materialised image stamped at
+/// the LSN of the delta it folded: the image sorts first, is kept, and the
+/// now-superseded delta is dropped. Any other collision — two deltas sharing
+/// an LSN, i.e. a *non-image* survivor over another row — means we are
+/// silently dropping a real record. That reads back as a hole in the chain
+/// and surfaces downstream as a walredo `invalid max offset number` /
+/// `failed to add new item` PANIC (issue #22, the "catch me if you can"
+/// corruption, which only repros under concurrent load — exactly when a
+/// non-atomic chain merge could momentarily collide two distinct rows on one
+/// LSN). Trip a counter + rate-limited warn so the silent drop is observable
+/// instead of corrupting a materialised image; the dedup still runs (we don't
+/// want to amplify by aborting), but now it leaves a fingerprint.
+pub(crate) fn dedup_page_chain_by_lsn(chain: &mut Vec<Arc<PageRow>>) {
+    let mut prev: Option<(Lsn, bool)> = None;
+    for r in chain.iter() {
+        if let Some((plsn, p_is_image)) = prev {
+            if plsn == r.lsn && !p_is_image {
+                crate::metrics::CORRECTNESS_ERRORS
+                    .with_label_values(&["chain_dedup_dropped_delta"])
+                    .inc();
+                use std::sync::Mutex;
+
+                use once_cell::sync::Lazy;
+                use utils::rate_limit::RateLimit;
+                static LOGGED: Lazy<Mutex<RateLimit>> =
+                    Lazy::new(|| Mutex::new(RateLimit::new(std::time::Duration::from_secs(10))));
+                if let Ok(mut limiter) = LOGGED.try_lock() {
+                    let (lsn, key) = (r.lsn, r.key.clone());
+                    limiter.call(|| {
+                        tracing::warn!(
+                            "chain dedup dropping a non-superseded row at lsn={lsn} key={key:?}: \
+                             two non-image rows share an LSN, so a real record is being lost \
+                             (reads back as a chain gap → walredo invalid-max-offset PANIC, #22; \
+                             metric correctness_errors{{chain_dedup_dropped_delta}})"
+                        );
+                    });
+                }
+            }
+        }
+        prev = Some((r.lsn, r.is_image));
+    }
+    chain.dedup_by(|a, b| a.lsn == b.lsn);
+}
+
 fn slru_kind_to_i16(kind: SlruKind) -> i16 {
     match kind {
         SlruKind::Clog => 0,
@@ -1456,7 +1507,7 @@ impl PageStore {
             // and trim at the first anchor — same blend rules as
             // PageWriter's in-RAM merge.
             chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
-            chain.dedup_by(|a, b| a.lsn == b.lsn);
+            dedup_page_chain_by_lsn(&mut chain);
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
                 chain.truncate(idx + 1);
             }
@@ -1501,7 +1552,7 @@ impl PageStore {
         }
         for chain in out.values_mut() {
             chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
-            chain.dedup_by(|a, b| a.lsn == b.lsn);
+            dedup_page_chain_by_lsn(chain);
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
                 chain.truncate(idx + 1);
             }
@@ -2580,6 +2631,43 @@ mod tests {
             will_init,
             payload: Bytes::copy_from_slice(payload),
         })
+    }
+
+    #[test]
+    fn dedup_keeps_image_on_collision_and_flags_dropped_delta() {
+        let k = page_key(1663, 5, 16384, 0, 7);
+        let label = ["chain_dedup_dropped_delta"];
+        let count = || crate::metrics::CORRECTNESS_ERRORS.with_label_values(&label).get();
+
+        // Legit same-LSN collision: a materialised image stamped at the LSN
+        // of the delta it folded. Pre-sorted descending, image-first on ties
+        // (as every caller does before calling the helper). Dedup must keep
+        // the image, drop the superseded delta, and NOT trip the counter.
+        let before = count();
+        let mut chain = vec![
+            page_row(k.clone(), 0x30, false, false, b"d30"), // newer delta
+            page_row(k.clone(), 0x20, true, true, b"img20"), // image @0x20 (kept)
+            page_row(k.clone(), 0x20, false, false, b"d20"), // folded delta (dropped)
+            page_row(k.clone(), 0x10, false, true, b"d10init"),
+        ];
+        dedup_page_chain_by_lsn(&mut chain);
+        let shape: Vec<(u64, bool)> = chain.iter().map(|r| (r.lsn.0, r.is_image)).collect();
+        assert_eq!(shape, vec![(0x30, false), (0x20, true), (0x10, false)]);
+        assert_eq!(count(), before, "image/delta collision is legitimate; must not trip");
+
+        // Dangerous same-LSN collision: two distinct deltas on one LSN, no
+        // image. The survivor is a delta, so a real record is being dropped —
+        // the silent chain gap that surfaces as a walredo PANIC (#22). The
+        // dedup still collapses the run, but the tripwire counter fires.
+        let before = count();
+        let mut bad = vec![
+            page_row(k.clone(), 0x20, false, false, b"d20a"),
+            page_row(k.clone(), 0x20, false, false, b"d20b"),
+            page_row(k.clone(), 0x10, false, true, b"d10init"),
+        ];
+        dedup_page_chain_by_lsn(&mut bad);
+        assert_eq!(bad.len(), 2, "dedup still collapses the equal-LSN run");
+        assert_eq!(count(), before + 1, "dropping a non-superseded delta must trip the counter");
     }
 
     #[tokio::test]

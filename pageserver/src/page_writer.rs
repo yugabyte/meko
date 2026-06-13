@@ -40,7 +40,9 @@ use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 
 use pageserver_api::reltag::SlruKind;
 
-use crate::page_store::{LineageSegment, MetaRow, PageRow, PageStore, SlruPageRow};
+use crate::page_store::{
+    LineageSegment, MetaRow, PageRow, PageStore, SlruPageRow, dedup_page_chain_by_lsn,
+};
 
 /// Flush triggers (whichever fires first). Override via
 /// `YbPageWriterConfig` in `pageserver.toml`.
@@ -814,7 +816,7 @@ impl PageWriter {
             // Descending LSN; on ties prefer the image (see `read_chain`
             // for the rationale).
             chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
-            chain.dedup_by(|a, b| a.lsn == b.lsn);
+            dedup_page_chain_by_lsn(chain);
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
                 chain.truncate(idx + 1);
             }
@@ -953,7 +955,7 @@ impl PageWriter {
         // first so dedup keeps it and discards the now-superseded
         // delta. Otherwise the chain can lose its anchor.
         merged.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
-        merged.dedup_by(|a, b| a.lsn == b.lsn);
+        dedup_page_chain_by_lsn(&mut merged);
         if let Some(idx) = merged.iter().position(|r| r.will_init) {
             merged.truncate(idx + 1);
         }
@@ -1006,7 +1008,7 @@ impl PageWriter {
         // first so dedup keeps it and discards the now-superseded
         // delta. Otherwise the chain can lose its anchor.
         merged.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
-        merged.dedup_by(|a, b| a.lsn == b.lsn);
+        dedup_page_chain_by_lsn(&mut merged);
         if let Some(idx) = merged.iter().position(|r| r.will_init) {
             merged.truncate(idx + 1);
         } else if !merged.is_empty() {
