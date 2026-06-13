@@ -4032,6 +4032,30 @@ impl Service {
         Ok(())
     }
 
+    /// Drop a branch: delete every compute endpoint record for the timeline,
+    /// discard any un-materialized init recipe, and mark the timeline as
+    /// dropped (sets `deleted_at`) so it no longer surfaces as a live branch
+    /// and is not brought back on restart. The actual pageserver/safekeeper
+    /// data + the `timelines` row itself are left for a later GC pass. Compute
+    /// processes are stopped by `yb_light_local` before it calls this; the
+    /// durable cleanup here is idempotent and order-independent.
+    pub(crate) async fn timeline_drop(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+    ) -> Result<(), ApiError> {
+        self.persistence
+            .delete_endpoints_for_timeline(&tenant_id.to_string(), &timeline_id.to_string())
+            .await?;
+        self.persistence
+            .delete_pending_timeline_init(tenant_id, timeline_id)
+            .await?;
+        self.persistence
+            .timeline_set_deleted_at(tenant_id, timeline_id)
+            .await?;
+        Ok(())
+    }
+
     pub(crate) async fn tombstone_list(&self) -> Result<Vec<Node>, ApiError> {
         self.persistence
             .list_tombstones()

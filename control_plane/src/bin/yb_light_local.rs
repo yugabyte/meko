@@ -70,17 +70,28 @@ const DEFAULT_YB_DBNAME: &str = "yb_storage";
 /// Build a `YbStoreConfig` TOML inline table targeting `table_name` in the
 /// dev cluster's YB. Consumed verbatim as the pageserver `remote_storage`
 /// override and the safekeeper `--wal-yb-config` argument.
-fn default_yb_store_inline_table(table_name: &str) -> String {
+fn default_yb_store_inline_table(target: &YbStoreTarget, table_name: &str) -> String {
+    let YbStoreTarget { host, port, dbname } = target;
     format!(
-        "{{ host = '{DEFAULT_YB_HOST}', port = {DEFAULT_YB_PORT}, \
-         user = '{DEFAULT_YB_USER}', dbname = '{DEFAULT_YB_DBNAME}', \
+        "{{ host = '{host}', port = {port}, \
+         user = '{DEFAULT_YB_USER}', dbname = '{dbname}', \
          table_name = '{table_name}' }}"
     )
 }
 
 /// `storage_controller.database_url` for the dev cluster's YB.
-fn default_storage_controller_database_url() -> String {
-    format!("postgresql://{DEFAULT_YB_USER}@{DEFAULT_YB_HOST}:{DEFAULT_YB_PORT}/{DEFAULT_YB_DBNAME}")
+fn default_storage_controller_database_url(target: &YbStoreTarget) -> String {
+    let YbStoreTarget { host, port, dbname } = target;
+    format!("postgresql://{DEFAULT_YB_USER}@{host}:{port}/{dbname}")
+}
+
+/// Which YugabyteDB the default (no `--config`) init config points at.
+/// Each field falls back to its `DEFAULT_YB_*` constant; `init` overrides
+/// them from `--yb-host` / `--yb-port` / `--yb-dbname`.
+struct YbStoreTarget {
+    host: String,
+    port: u16,
+    dbname: String,
 }
 
 /// ybLight CLI.
@@ -126,6 +137,37 @@ struct InitCmdArgs {
 
     #[clap(long)]
     config: Option<PathBuf>,
+
+    /// YugabyteDB database name baked into the default (no `--config`)
+    /// config: the storage controller's `database_url` and the pageserver
+    /// `remote_storage` / safekeeper `wal_yb_config` inline tables all point
+    /// at it. Defaults to `yb_storage`. Lets callers (e.g. the e2e harness)
+    /// target an ephemeral per-run database without templating a base TOML.
+    /// Ignored when `--config` is given.
+    #[clap(long)]
+    yb_dbname: Option<String>,
+
+    /// YugabyteDB host for the default (no `--config`) config. Defaults to
+    /// `127.0.0.1`. Ignored when `--config` is given.
+    #[clap(long)]
+    yb_host: Option<String>,
+
+    /// YugabyteDB port for the default (no `--config`) config. Defaults to
+    /// `5433`. Ignored when `--config` is given.
+    #[clap(long)]
+    yb_port: Option<u16>,
+
+    /// Relocate the whole default (no `--config`) cluster into a free port
+    /// block starting at this base, so it can run alongside another cluster
+    /// (e.g. a developer's on the defaults). Each service family gets its
+    /// own 100-port lane off the base: control_plane_api = B,
+    /// safekeeper pg = B+100 / http = B+200, pageserver pg = B+300 /
+    /// http = B+400 / grpc = B+500, endpoint_storage = B+600 (per-instance
+    /// deltas stay within the lane). When unset, the usual defaults
+    /// (1234 / 5454 / 64000 / 9993 / …) are used. Ignored when `--config`
+    /// is given.
+    #[clap(long)]
+    port_base: Option<u16>,
 
     /// Force initialization even if the repository is not empty.
     #[clap(long, default_value = "must-not-exist")]
@@ -242,6 +284,7 @@ struct TenantImportCmdArgs {
 enum TimelineCmd {
     List(TimelineListCmdArgs),
     Branch(TimelineBranchCmdArgs),
+    Drop(TimelineDropCmdArgs),
     Create(TimelineCreateCmdArgs),
     Import(TimelineImportCmdArgs),
 }
@@ -252,6 +295,20 @@ struct TimelineListCmdArgs {
     /// Tenant ID, as a 32-byte hexadecimal string.
     #[clap(long = "tenant-id")]
     tenant_shard_id: Option<TenantId>,
+}
+
+/// Drop a branch and all of its endpoints: stop the endpoints' compute
+/// processes, delete their records, and mark the timeline dropped in the
+/// storage controller. The underlying pageserver/safekeeper data is left for a
+/// later GC pass.
+#[derive(clap::Args)]
+struct TimelineDropCmdArgs {
+    /// Tenant ID, as a 32-byte hexadecimal string.
+    #[clap(long = "tenant-id")]
+    tenant_id: Option<TenantId>,
+    /// Timeline ID of the branch to drop, as a 32-byte hexadecimal string.
+    #[clap(long)]
+    timeline_id: TimelineId,
 }
 
 /// Create a new timeline, branching off from another timeline.
@@ -993,22 +1050,44 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
         toml_edit::de::from_str(&contents)?
     } else {
         // User (likely interactive) did not provide a description of the environment, give them the default
+        let yb_target = YbStoreTarget {
+            host: args.yb_host.clone().unwrap_or_else(|| DEFAULT_YB_HOST.to_string()),
+            port: args.yb_port.unwrap_or(DEFAULT_YB_PORT),
+            dbname: args.yb_dbname.clone().unwrap_or_else(|| DEFAULT_YB_DBNAME.to_string()),
+        };
+        // Port layout. With `--port-base B` the whole cluster moves into a
+        // free block — one 100-port lane per service family — so it can run
+        // alongside another cluster on the defaults. Without it, each family
+        // keeps its usual default. Per-instance deltas (added by allocate_*
+        // at `endpoint create`) stay inside the lane.
+        let pb = args.port_base;
+        let sk_pg_port = pb.map_or(DEFAULT_SAFEKEEPER_PG_PORT, |b| b + 100);
+        let sk_http_port = pb.map_or(DEFAULT_SAFEKEEPER_HTTP_PORT, |b| b + 200);
+        let ps_pg_port = pb.map_or(DEFAULT_PAGESERVER_PG_PORT, |b| b + 300);
+        let ps_http_port = pb.map_or(DEFAULT_PAGESERVER_HTTP_PORT, |b| b + 400);
+        let ps_grpc_port = pb.map_or(DEFAULT_PAGESERVER_GRPC_PORT, |b| b + 500);
+        let es_port = pb.map_or(ENDPOINT_STORAGE_DEFAULT_ADDR.port(), |b| b + 600);
+        // control_plane_api lives at the base (B); default keeps :1234.
+        let control_plane_api = match pb {
+            Some(b) => format!("http://127.0.0.1:{b}/upcall/v1/").parse().unwrap(),
+            None => DEFAULT_PAGESERVER_CONTROL_PLANE_API.parse().unwrap(),
+        };
         YbLightLocalInitConf {
-            control_plane_api: Some(DEFAULT_PAGESERVER_CONTROL_PLANE_API.parse().unwrap()),
+            control_plane_api: Some(control_plane_api),
             safekeepers: vec![SafekeeperConf {
                 id: DEFAULT_SAFEKEEPER_ID,
-                pg_port: DEFAULT_SAFEKEEPER_PG_PORT,
-                http_port: DEFAULT_SAFEKEEPER_HTTP_PORT,
-                // Mirror live WAL into yb_storage.public.wals.
-                wal_yb_config: Some(default_yb_store_inline_table("wals")),
+                pg_port: sk_pg_port,
+                http_port: sk_http_port,
+                // Mirror live WAL into <db>.public.wals.
+                wal_yb_config: Some(default_yb_store_inline_table(&yb_target, "wals")),
                 ..Default::default()
             }],
             pageservers: (0..args.num_pageservers.unwrap_or(1))
                 .map(|i| {
                     let pageserver_id = NodeId(DEFAULT_PAGESERVER_ID.0 + i as u64);
-                    let pg_port = DEFAULT_PAGESERVER_PG_PORT + i;
-                    let http_port = DEFAULT_PAGESERVER_HTTP_PORT + i;
-                    let grpc_port = DEFAULT_PAGESERVER_GRPC_PORT + i;
+                    let pg_port = ps_pg_port + i;
+                    let http_port = ps_http_port + i;
+                    let grpc_port = ps_grpc_port + i;
                     YbLightLocalInitPageserverConf {
                         id: pageserver_id,
                         listen_pg_addr: format!("127.0.0.1:{pg_port}"),
@@ -1018,8 +1097,8 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                         pg_auth_type: AuthType::Trust,
                         http_auth_type: AuthType::Trust,
                         grpc_auth_type: AuthType::Trust,
-                        // Relfile/layer objects live in yb_storage.public.blobs.
-                        remote_storage: Some(default_yb_store_inline_table("blobs")),
+                        // Relfile/layer objects live in <db>.public.blobs.
+                        remote_storage: Some(default_yb_store_inline_table(&yb_target, "blobs")),
                         other: Default::default(),
                         // Typical developer machines use disks with slow fsync, and we don't care
                         // about data integrity: disable disk syncs.
@@ -1028,7 +1107,11 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                 })
                 .collect(),
             endpoint_storage: EndpointStorageConf {
-                listen_addr: ENDPOINT_STORAGE_DEFAULT_ADDR,
+                listen_addr: {
+                    let mut addr = ENDPOINT_STORAGE_DEFAULT_ADDR;
+                    addr.set_port(es_port);
+                    addr
+                },
                 remote_storage_json: None,
                 endpoint_id: String::new(),
             },
@@ -1036,8 +1119,8 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
             yb_light_distrib_dir: None,
             default_tenant_id: TenantId::from_array(std::array::from_fn(|_| 0)),
             storage_controller: Some(YbLightStorageControllerConf {
-                // Provision the storage_controller + yb_storage DBs in YB.
-                database_url: Some(default_storage_controller_database_url()),
+                // Provision the storage_controller + storage DBs in YB.
+                database_url: Some(default_storage_controller_database_url(&yb_target)),
                 ..Default::default()
             }),
             control_plane_hooks_api: None,
@@ -1477,6 +1560,44 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
                 "Created branch '{new_branch_name}' (timeline {new_timeline_id}) at {start_lsn} \
                  from '{ancestor_branch_name}'; its pageserver + safekeeper come up at \
                  `endpoint create`",
+            );
+        }
+        TimelineCmd::Drop(args) => {
+            let tenant_id = get_tenant_id(args.tenant_id, env)?;
+            let timeline_id = args.timeline_id;
+
+            // Stop + tear down every endpoint sitting on this branch. With
+            // `destroy`, `stop` halts the compute process, deprovisions the
+            // co-located pageserver/safekeeper/endpoint_storage, removes the
+            // local endpoint dir, and deletes the endpoint's record from the
+            // storage controller.
+            let cplane = ComputeControlPlane::load(env.clone()).await?;
+            let to_drop: Vec<_> = cplane
+                .endpoints
+                .iter()
+                .filter(|(_, ep)| ep.tenant_id == tenant_id && ep.timeline_id == timeline_id)
+                .map(|(id, ep)| (id.clone(), ep.clone()))
+                .collect();
+
+            for (endpoint_id, endpoint) in &to_drop {
+                endpoint
+                    .stop(EndpointTerminateMode::Fast, /* destroy */ true)
+                    .await
+                    .with_context(|| format!("stopping endpoint {endpoint_id}"))?;
+            }
+
+            // Durable cleanup in the storage controller: delete any endpoint
+            // records still present, discard an un-materialized init recipe,
+            // and mark the timeline dropped so it no longer surfaces as a live
+            // branch and isn't brought back on restart. Idempotent.
+            StorageController::from_env(env)
+                .timeline_drop(tenant_id, timeline_id)
+                .await?;
+
+            println!(
+                "Dropped branch (timeline {timeline_id}) and {} endpoint(s); the timeline is \
+                 marked dropped — its pageserver/safekeeper data is left for a later GC pass",
+                to_drop.len(),
             );
         }
     }
@@ -2874,5 +2995,44 @@ mod tests {
         assert_eq!(init_conf.listen_pg_addr, allocated.listen_pg_addr);
         assert_eq!(init_conf.remote_storage.as_deref(), Some("{ host = 'h' }"));
         assert!(init_conf.no_sync);
+    }
+
+    #[test]
+    fn timeline_drop_parses_tenant_and_timeline_ids() {
+        let cli = Cli::try_parse_from([
+            "yb_light_local",
+            "timeline",
+            "drop",
+            "--tenant-id",
+            "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0",
+            "--timeline-id",
+            "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+        ])
+        .expect("`timeline drop` with both ids should parse");
+
+        let YbLightLocalCmd::Timeline(TimelineCmd::Drop(args)) = cli.command else {
+            panic!("expected `timeline drop` to parse into Timeline(Drop)");
+        };
+        let want_tenant: TenantId = "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0".parse().unwrap();
+        let want_timeline: TimelineId = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0".parse().unwrap();
+        assert_eq!(args.tenant_id, Some(want_tenant));
+        assert_eq!(args.timeline_id, want_timeline);
+    }
+
+    #[test]
+    fn timeline_drop_requires_timeline_id() {
+        // `--timeline-id` is mandatory: dropping a branch must name the
+        // exact timeline, never fall back to a default.
+        let res = Cli::try_parse_from([
+            "yb_light_local",
+            "timeline",
+            "drop",
+            "--tenant-id",
+            "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0",
+        ]);
+        assert!(
+            res.is_err(),
+            "`timeline drop` without --timeline-id should fail to parse"
+        );
     }
 }

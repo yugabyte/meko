@@ -9,13 +9,13 @@ use anyhow::bail;
 use crate::cluster::{Cluster, step};
 use crate::db;
 
-const B1_PORT: u16 = 55590;
-const B2_PORT: u16 = 55600;
-
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
+    // Two branch endpoints in the compute lane, above `main`.
+    let b1_port = c.compute_port() + 158;
+    let b2_port = c.compute_port() + 168;
     let main = db::compute_conn(c.compute_port());
-    let b1 = db::compute_conn(B1_PORT);
-    let b2 = db::compute_conn(B2_PORT);
+    let b1 = db::compute_conn(b1_port);
+    let b2 = db::compute_conn(b2_port);
     let tid = c.tid();
 
     step("Seed ancestor data on main (known values + whole-table checksum)");
@@ -41,7 +41,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     c.yb(&["timeline", "branch", "--tenant-id", tid, "--branch-name", "anc_b1"])?;
     c.yb(&[
         "endpoint", "create", "ep_anc_b1", "--tenant-id", tid, "--branch-name", "anc_b1",
-        "--pg-version", "17", "--pg-port", &B1_PORT.to_string(),
+        "--pg-version", "17", "--pg-port", &b1_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_anc_b1"])?;
 
@@ -76,7 +76,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     ])?;
     c.yb(&[
         "endpoint", "create", "ep_anc_b2", "--tenant-id", tid, "--branch-name", "anc_b2",
-        "--pg-version", "17", "--pg-port", &B2_PORT.to_string(),
+        "--pg-version", "17", "--pg-port", &b2_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_anc_b2"])?;
 

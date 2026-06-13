@@ -11,10 +11,10 @@ use crate::cluster::{Cluster, step};
 use crate::tee_println;
 use crate::db;
 
-const A_PORT: u16 = 55570;
-const B_PORT: u16 = 55580;
-
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
+    // Two endpoints in the compute lane, above `main`.
+    let a_port = c.compute_port() + 138;
+    let b_port = c.compute_port() + 148;
     step("Create two independent timelines (tenant A, tenant B)");
     let ta = c.tenant_create()?;
     if ta.is_empty() {
@@ -33,17 +33,17 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     step("Provision + start an endpoint on each (one co-located PS+SK pair per timeline)");
     c.yb(&[
         "endpoint", "create", "ep_a", "--tenant-id", &ta, "--branch-name", "main",
-        "--pg-version", "17", "--pg-port", &A_PORT.to_string(),
+        "--pg-version", "17", "--pg-port", &a_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_a"])?;
     c.yb(&[
         "endpoint", "create", "ep_b", "--tenant-id", &tb, "--branch-name", "main",
-        "--pg-version", "17", "--pg-port", &B_PORT.to_string(),
+        "--pg-version", "17", "--pg-port", &b_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_b"])?;
 
-    let a = db::compute_conn(A_PORT);
-    let b = db::compute_conn(B_PORT);
+    let a = db::compute_conn(a_port);
+    let b = db::compute_conn(b_port);
 
     step("Write distinct data into the same-named table on each timeline");
     db::batch(

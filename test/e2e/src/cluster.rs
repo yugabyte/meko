@@ -50,10 +50,19 @@ pub struct Cluster {
     repo_dir: PathBuf,
     /// Ephemeral YugabyteDB database name for this run.
     db_name: String,
-    /// Per-run init TOML derived from `/tmp/neon-init.toml`.
-    init_toml: PathBuf,
+    /// Per-run init TOML derived from a developer-provided
+    /// `/tmp/neon-init.toml`, if that base file exists. `None` means the
+    /// suite let `yb_light_local init` synthesize the default config
+    /// (`init --yb-dbname <ephemeral>`), so there's no base file to depend
+    /// on and no derived TOML to clean up.
+    init_toml: Option<PathBuf>,
     yb_host: String,
     yb_port: u16,
+    /// Free port-block base for the synthesized-config path (`init
+    /// --port-base`), relocating the whole cluster off the defaults so it
+    /// can run alongside another (e.g. a developer's). `None` on the
+    /// base-file path, where the file owns the ports.
+    port_base: Option<u16>,
     /// Compute port of the shared `main` endpoint.
     compute_port: u16,
     /// The shared tenant id, set by [`Cluster::setup`].
@@ -125,9 +134,6 @@ impl Cluster {
 
         let yb_host = env_or(&["YB_HOST"], "127.0.0.1");
         let yb_port: u16 = env_or(&["YB_PORT"], "5433").parse().context("YB_PORT")?;
-        let compute_port: u16 = env_or(&["COMPUTE_PORT"], "55432")
-            .parse()
-            .context("COMPUTE_PORT")?;
 
         let db_name = match std::env::var("YB_DBNAME") {
             Ok(d) if !d.is_empty() => d,
@@ -141,10 +147,38 @@ impl Cluster {
             }
         };
 
-        // Lives outside repo_dir: clean.sh wipes repo_dir on every run,
-        // so the derived init TOML must survive that.
-        let init_toml = std::env::temp_dir().join(format!("neon-init-e2e-{}.toml", std::process::id()));
-        write_init_toml(&init_toml, &db_name)?;
+        // If a developer dropped a base config at `/tmp/neon-init.toml`,
+        // derive this run's config from it (swapping in the ephemeral db
+        // name). Otherwise let `yb_light_local init` synthesize the default
+        // config and just point it at the ephemeral db via `--yb-dbname`
+        // (see the init invocation below) — no base file required.
+        //
+        // The derived TOML lives outside repo_dir: clean.sh wipes repo_dir
+        // on every run, so it must survive that.
+        let init_toml = if Path::new(BASE_INIT_TOML).exists() {
+            let dest =
+                std::env::temp_dir().join(format!("neon-init-e2e-{}.toml", std::process::id()));
+            write_init_toml(&dest, &db_name)?;
+            Some(dest)
+        } else {
+            None
+        };
+
+        // On the synthesized-config path, relocate the whole cluster into a
+        // free port block (`init --port-base`) so it can run alongside
+        // another cluster on the defaults; the base-file path lets the file
+        // own the ports. `main` lives in the compute lane at base + COMPUTE_LANE.
+        let port_base = if init_toml.is_none() {
+            Some(pick_port_base())
+        } else {
+            None
+        };
+        let compute_port: u16 = match port_base {
+            Some(b) => b + COMPUTE_LANE,
+            None => env_or(&["COMPUTE_PORT"], "55432")
+                .parse()
+                .context("COMPUTE_PORT")?,
+        };
 
         let yb_light = match std::env::var("YB_LIGHT") {
             Ok(p) if !p.is_empty() => PathBuf::from(p),
@@ -165,6 +199,7 @@ impl Cluster {
             init_toml,
             yb_host,
             yb_port,
+            port_base,
             compute_port,
             tid: String::new(),
             markers: Regex::new(MARKERS).expect("static marker regex"),
@@ -179,11 +214,29 @@ impl Cluster {
             "yb_light_local init + start (db={})",
             cluster.db_name
         ));
-        cluster.yb(&[
-            "init",
-            "--config",
-            &cluster.init_toml.to_string_lossy(),
-        ])?;
+        match &cluster.init_toml {
+            Some(path) => cluster.yb(&["init", "--config", &path.to_string_lossy()])?,
+            None => {
+                let yb_port = cluster.yb_port.to_string();
+                let port_base = cluster
+                    .port_base
+                    .expect("synthesized-config path always picks a port base")
+                    .to_string();
+                cluster.yb(&[
+                    "init",
+                    "--yb-dbname",
+                    &cluster.db_name,
+                    "--yb-host",
+                    &cluster.yb_host,
+                    "--yb-port",
+                    &yb_port,
+                    // Relocate the whole cluster off the defaults so the suite
+                    // doesn't collide with a developer's local cluster.
+                    "--port-base",
+                    &port_base,
+                ])?
+            }
+        }
         cluster.yb(&["start"])?;
 
         step("tenant + endpoint");
@@ -194,13 +247,20 @@ impl Cluster {
         tee_println!("tenant: {tid}");
         cluster.tid = tid;
 
-        // Default port allocation gives the first endpoint pg=55432
-        // (== COMPUTE_PORT default).
+        // Pin `main` to `compute_port` so the harness knows where to
+        // connect. On the synthesized path that's the compute lane
+        // (base + COMPUTE_LANE), passed explicitly; on the base-file path
+        // it's the default 55432 the first endpoint auto-allocates.
         let tid = cluster.tid.clone();
-        cluster.yb(&[
+        let pg_port = cluster.compute_port.to_string();
+        let mut create = vec![
             "endpoint", "create", "main", "--tenant-id", &tid, "--branch-name", "main",
             "--pg-version", "17",
-        ])?;
+        ];
+        if cluster.port_base.is_some() {
+            create.extend(["--pg-port", &pg_port]);
+        }
+        cluster.yb(&create)?;
         cluster.yb(&["endpoint", "start", "main"])?;
 
         Ok(cluster)
@@ -513,7 +573,9 @@ impl Drop for Cluster {
             }
             self.teardown();
         }
-        let _ = std::fs::remove_file(&self.init_toml);
+        if let Some(init_toml) = &self.init_toml {
+            let _ = std::fs::remove_file(init_toml);
+        }
     }
 }
 
@@ -544,15 +606,33 @@ fn env_or(keys: &[&str], default: &str) -> String {
 }
 
 /// Is the process named in `pidfile` alive? (Linux `/proc/<pid>` check.)
+/// Is the component that owns `pidfile` still running?
+///
+/// Each component (pageserver, safekeeper, endpoint_storage,
+/// storage_controller) holds an exclusive advisory `flock` on its pidfile
+/// for its entire lifetime (see `utils::pid_file` / `utils::lock_file`).
+/// So liveness == "the lock is still held": we probe by trying to take it
+/// non-blocking. If we get it, nobody holds it → not running; if it's
+/// contended, a live process holds it → running.
+///
+/// This deliberately does NOT look at the pidfile's *content*: `pid_file`
+/// documents the content as racy, and the storage controller in particular
+/// is observed to leave its content empty while running fine — a
+/// PID/`/proc` check (the previous implementation) both mis-fired on that
+/// and didn't work off Linux at all.
 fn is_running(pidfile: &Path) -> bool {
-    let Ok(s) = std::fs::read_to_string(pidfile) else {
-        return false;
+    use nix::fcntl::{Flock, FlockArg};
+
+    let Ok(file) = std::fs::File::open(pidfile) else {
+        return false; // no pidfile → never started, or already cleaned up
     };
-    let pid = s.trim();
-    if pid.is_empty() {
-        return false;
+    match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+        // Acquired the lock → nobody was holding it → not running.
+        // The guard drops here, releasing the lock immediately.
+        Ok(_guard) => false,
+        // Contended → a live process holds the lock → running.
+        Err(_) => true,
     }
-    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// A run id derived from wall-clock seconds + pid — enough to keep
@@ -596,12 +676,45 @@ fn gc_old_runs(test_dir: &Path) {
     }
 }
 
-/// Derive the per-run init TOML from `/tmp/neon-init.toml`, swapping the
+/// Optional developer-provided base init config. When present, the suite
+/// derives this run's config from it (see [`write_init_toml`]); when absent,
+/// `yb_light_local init --yb-dbname <ephemeral>` synthesizes the default
+/// config instead, so the suite is self-sufficient.
+const BASE_INIT_TOML: &str = "/tmp/neon-init.toml";
+
+/// Offset of the compute (`main`) lane from the cluster's port base. The
+/// storage stack occupies base+0..base+600 (one 100-port lane per family;
+/// see `yb_light_local init --port-base`); compute sits above it, and
+/// scenario branch endpoints live just above `main` at `compute_port + N`.
+const COMPUTE_LANE: u16 = 700;
+
+/// Pick a base for a free port block (base+0 .. base+900) so the
+/// synthesized-config cluster can coexist with another cluster on the
+/// default ports. Probes candidate bases (one per service-family lane) and
+/// returns the first all-free one; override with `E2E_PORT_BASE`.
+fn pick_port_base() -> u16 {
+    if let Ok(b) = env_or(&["E2E_PORT_BASE"], "").parse::<u16>() {
+        return b;
+    }
+    for base in (20000u16..=60000).step_by(1000) {
+        if (0..=900).step_by(100).all(|d| port_free(base + d)) {
+            return base;
+        }
+    }
+    20000 // best-effort: the bind-probe is advisory anyway
+}
+
+/// Is `port` bindable on loopback right now? (Advisory free-port check.)
+fn port_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// Derive the per-run init TOML from [`BASE_INIT_TOML`], swapping the
 /// YB dbname into every place that references it: the storage
 /// controller's `database_url` path and the inline `user = 'yugabyte'`
 /// tables on the PS `remote_storage` / SK `wal_yb_config` lines.
 fn write_init_toml(dest: &Path, db_name: &str) -> anyhow::Result<()> {
-    let src = "/tmp/neon-init.toml";
+    let src = BASE_INIT_TOML;
     let base = std::fs::read_to_string(src).with_context(|| {
         format!("reading {src} (the base init TOML the e2e suite derives its config from)")
     })?;

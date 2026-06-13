@@ -9,11 +9,12 @@ use anyhow::bail;
 use crate::cluster::{Cluster, step};
 use crate::db;
 
-const BRANCH_PG_PORT: u16 = 55532;
-
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
+    // Branch endpoint sits in the compute lane just above `main`, so the
+    // whole cluster stays inside its picked port block.
+    let branch_pg_port = c.compute_port() + 100;
     let main = db::compute_conn(c.compute_port());
-    let branch = db::compute_conn(BRANCH_PG_PORT);
+    let branch = db::compute_conn(branch_pg_port);
     let tid = c.tid();
 
     step("Seed pre-branch data on main");
@@ -46,7 +47,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     step("Create + start endpoint on b1 (provisions pageserver 2 + safekeeper 2)");
     c.yb(&[
         "endpoint", "create", "ep_b1", "--tenant-id", tid, "--branch-name", "b1",
-        "--pg-version", "17", "--pg-port", &BRANCH_PG_PORT.to_string(),
+        "--pg-version", "17", "--pg-port", &branch_pg_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_b1"])?;
 

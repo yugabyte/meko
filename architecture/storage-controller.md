@@ -29,7 +29,7 @@ in the same `yb_storage` DB.
 | `tenants` | Each tenant → pageserver assignment, generation, scheduling policy, splitting state, opaque config JSON |
 | `nodes` | Pageserver identities: node_id, listen addrs (PG/HTTP/HTTPS/gRPC), lifecycle, scheduling policy |
 | `safekeepers` | Safekeeper identities: id, region_id, version, host/port (PG + HTTP/HTTPS), AZ, scheduling policy |
-| `timelines` | Per-timeline cluster-side bookkeeping: start LSN, generation, safekeeper set, deleted_at, branch_name |
+| `timelines` | Per-timeline cluster-side bookkeeping: start LSN, generation, safekeeper set, deleted_at, branch_name. A non-NULL `deleted_at` marks a timeline as deleting/dropped — it's filtered out of the live branch listing (`/control/v1/timeline_branch_names`) and left for a later data GC (`timeline drop`; see task 37) |
 | `pending_timeline_inits` | Init recipe for a timeline whose ids + branch name are allocated (at `tenant create` / `timeline branch`) but whose PS+SK aren't provisioned yet: branch_name, pg_version, ancestor_timeline_id (NULL ⇒ Bootstrap, non-NULL ⇒ Branch), start_lsn. `endpoint create` reads it to materialize the pair, then deletes the row; driven by the `/control/v1/.../pending_init` + `/control/v1/tenant/:id/pending_timeline_inits` APIs |
 | `metadata_health` | Per-shard health markers (last successful scrub timestamps) |
 | `timeline_imports` | In-progress imports (e.g., from pg_dump) |
@@ -102,6 +102,12 @@ The controller exposes an HTTP API on `--listen` for:
   their pageserver/safekeepers from per-timeline config in
   `.yb_light/config` + `pageserver.toml`, not from the controller
   (`tenant_locate` survives as a debug API only).
+- Dropping a branch and all its endpoints
+  (`PUT /control/v1/tenant/:tenant_id/timeline/:timeline_id/drop`, behind
+  `yb_light_local timeline drop`): deletes the timeline's `endpoints` rows,
+  discards any `pending_timeline_inits` recipe, and marks the timeline
+  `deleted_at` so it stops surfacing as a live branch and isn't restarted.
+  Idempotent; the underlying PS/SK data is left for a later GC pass.
 - Legacy upcall handlers (re-attach / validate) remain but the yb
   pageserver no longer calls them.
 

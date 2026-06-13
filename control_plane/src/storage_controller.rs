@@ -1231,6 +1231,23 @@ impl StorageController {
         .await
     }
 
+    /// Drop a branch: delete all of the timeline's endpoint records, discard
+    /// any un-materialized init recipe, and mark the timeline dropped. The
+    /// caller (`yb_light_local timeline drop`) stops the compute processes
+    /// first. Idempotent.
+    pub async fn timeline_drop(
+        &self,
+        tenant_id: TenantId,
+        timeline_id: TimelineId,
+    ) -> anyhow::Result<()> {
+        self.dispatch::<(), ()>(
+            Method::PUT,
+            format!("control/v1/tenant/{tenant_id}/timeline/{timeline_id}/drop"),
+            None,
+        )
+        .await
+    }
+
     /// Persist a compute endpoint record. Backs `ComputeControlPlane::new_endpoint`,
     /// replacing the old `endpoint.json` file write.
     #[instrument(skip(self, req), fields(endpoint_id = %req.endpoint_id))]

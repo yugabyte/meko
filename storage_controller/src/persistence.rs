@@ -471,6 +471,31 @@ impl Persistence {
         .await
     }
 
+    /// Delete every compute endpoint record belonging to a single timeline.
+    /// Used by `timeline drop` to tear down all of a branch's endpoints at
+    /// once. Returns the number of rows removed. Idempotent.
+    pub(crate) async fn delete_endpoints_for_timeline(
+        &self,
+        tid: &str,
+        tlid: &str,
+    ) -> DatabaseResult<usize> {
+        use crate::schema::endpoints::dsl::*;
+
+        self.with_measured_conn(DatabaseOperation::DeleteEndpoint, move |conn| {
+            Box::pin(async move {
+                let deleted = diesel::delete(
+                    endpoints
+                        .filter(tenant_id.eq(tid))
+                        .filter(timeline_id.eq(tlid)),
+                )
+                .execute(conn)
+                .await?;
+                Ok(deleted)
+            })
+        })
+        .await
+    }
+
     pub(crate) async fn list_tombstones(&self) -> DatabaseResult<Vec<NodePersistence>> {
         use crate::schema::nodes::dsl::*;
 
@@ -1472,6 +1497,7 @@ impl Persistence {
             Box::pin(async move {
                 let rows: Vec<(String, String, Option<String>)> = dsl::timelines
                     .filter(dsl::branch_name.is_not_null())
+                    .filter(dsl::deleted_at.is_null())
                     .select((dsl::tenant_id, dsl::timeline_id, dsl::branch_name))
                     .load(conn)
                     .await?;

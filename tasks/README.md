@@ -49,6 +49,7 @@ Use one of these in the `area:` frontmatter field:
   libpagestore, communicator.
 - `yb_light_local` — local-dev orchestrator; CLI + child-process
   management.
+- `e2e` — end-to-end test harness + scenarios (`test/e2e/`).
 
 Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 
@@ -110,3 +111,6 @@ Multi-area tasks: `area: storage_ctl / yb_light_local` is fine.
 | 32 | [`yb-dump-pages` LSN sort uses rendered text](32_yb-dump-pages-lsn-sort.md) | ✅ done | medium | yb-pageserver |
 | 33 | [Skip or optimize zero-page writes to YB](33_skip-or-compress-zero-page-writes.md) | ⏳ pending | medium | yb-pageserver |
 | 34 | [Torn WAL write: crash-recovery loses acked data (heap fixed; catalog/index open)](34_torn-wal-write-sk-kill9-data-loss.md) | 🚧 in_progress | highest | yb-pageserver / safekeeper |
+| 35 | [Walreceiver wedges re-ingesting `SMGR_TRUNCATE_FSM` during recovery](35_fsm-truncation-recovery-ingest-wedge.md) | ⏳ pending | high | yb-pageserver |
+| 36 | [Compute startup times out in Init when the safekeeper is mid-restart](36_sk-restart-recovery-race-compute-init-timeout.md) | ⏳ pending | medium | e2e |
+| 37 | [GC the data behind dropped branches](37_gc-dropped-branch-data.md) | ⏳ pending | medium | storage_ctl / yb_light_local |

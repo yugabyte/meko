@@ -15,7 +15,6 @@ use crate::cluster::{Cluster, step};
 
 const LAYOUT_BRANCH: &str = "layout_b";
 const LAYOUT_EP: &str = "ep_layout";
-const LAYOUT_PG_PORT: u16 = 55560;
 
 fn must_exist(p: &Path, what: &str) -> anyhow::Result<()> {
     if !p.exists() {
@@ -35,6 +34,8 @@ fn identity_id(path: &Path) -> anyhow::Result<String> {
 }
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
+    // Layout-test endpoint sits in the compute lane, above `main`.
+    let layout_pg_port = c.compute_port() + 128;
     let r = c.repo_dir();
     let tid = c.tid();
 
@@ -86,7 +87,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     ));
     c.yb(&[
         "endpoint", "create", LAYOUT_EP, "--tenant-id", tid, "--branch-name", LAYOUT_BRANCH,
-        "--pg-version", "17", "--pg-port", &LAYOUT_PG_PORT.to_string(),
+        "--pg-version", "17", "--pg-port", &layout_pg_port.to_string(),
     ])?;
     let ep_dir = r.join("endpoints").join(LAYOUT_EP);
     must_exist(

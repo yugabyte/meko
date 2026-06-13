@@ -649,6 +649,23 @@ async fn handle_set_timeline_branch_name(
     json_response(StatusCode::OK, ())
 }
 
+/// Drop a branch and all its endpoints: delete the timeline's compute endpoint
+/// records, discard any un-materialized init recipe, and mark the timeline
+/// dropped. Idempotent. Compute processes are stopped by `yb_light_local`
+/// before this is called.
+async fn handle_timeline_drop(
+    service: Arc<Service>,
+    req: Request<Body>,
+) -> Result<Response<Body>, ApiError> {
+    check_permissions(&req, Scope::Admin)?;
+
+    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+
+    service.timeline_drop(tenant_id, timeline_id).await?;
+    json_response(StatusCode::OK, ())
+}
+
 async fn handle_timeline_register(
     service: Arc<Service>,
     req: Request<Body>,
@@ -1548,6 +1565,12 @@ pub fn make_router(
                     handle_timeline_register,
                     RequestName("v1_timeline_register"),
                 )
+            },
+        )
+        .put(
+            "/control/v1/tenant/:tenant_id/timeline/:timeline_id/drop",
+            |r| {
+                tenant_service_handler(r, handle_timeline_drop, RequestName("v1_timeline_drop"))
             },
         )
         .get("/control/v1/timeline_branch_names", |r| {
