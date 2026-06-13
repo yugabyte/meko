@@ -42,10 +42,11 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
+use dashmap::DashMap;
 use futures::stream::{StreamExt, TryStreamExt};
 use pageserver_api::key::{KEY_SIZE, Key};
 use pageserver_api::models::RelSizeMigration;
@@ -372,9 +373,13 @@ pub struct PageStore {
     ysql_client: Arc<YsqlClient>,
     schema: Arc<str>,
     scale_factor: f64,
-    /// Full-chunk INSERT SQL with the process's `(tenant, timeline)`
-    /// baked in, memoized on first flush. Shared across clones.
-    baked: Arc<OnceLock<BakedSql>>,
+    /// Full-chunk INSERT SQL with the `(tenant, timeline)` baked in as
+    /// literals, memoized per `(tenant, timeline)` on first flush and
+    /// shared across clones. In production this holds exactly one entry
+    /// (a process serves a single tenant/timeline, #16); keying the map
+    /// rather than asserting a single slot also lets the shared-store
+    /// test harness drive many tenant/timelines through one `PageStore`.
+    baked: Arc<DashMap<(TenantId, TimelineId), Arc<BakedSql>>>,
 }
 
 /// Decompose an 18-byte relation-page Key into the typed columns.
@@ -578,15 +583,12 @@ fn build_scan_cross_fork_sql(schema: &str) -> String {
     )
 }
 
-/// Memoized full-chunk INSERT SQL for the process's single
-/// `(tenant, timeline)`, with the ids baked in as literals. Writes only
-/// ever target the primary timeline, so baking is safe here (unlike the
-/// read path, where lineage spans ancestor timelines). Built once on
-/// first flush; the ids are kept alongside to assert that invariant in
-/// debug builds.
+/// Memoized full-chunk INSERT SQL for a `(tenant, timeline)`, with the
+/// ids baked in as literals. Writes only ever target the primary
+/// timeline, so baking is safe here (unlike the read path, where lineage
+/// spans ancestor timelines). Built once on first flush, keyed by
+/// `(tenant, timeline)` in `PageStore::baked`.
 struct BakedSql {
-    tenant: TenantId,
-    timeline: TimelineId,
     /// Full-chunk `pages` / `slru_pages` INSERTs (see `build_insert_sql`).
     pages_full: Arc<str>,
     slru_full: Arc<str>,
@@ -632,42 +634,42 @@ impl PageStore {
             ysql_client: Arc::new(ysql_client),
             schema: Arc::from(config.schema),
             scale_factor: config.scale_factor,
-            baked: Arc::new(OnceLock::new()),
+            baked: Arc::new(DashMap::new()),
         })
     }
 
     /// Memoized per-`(tenant, timeline)` SQL with the ids baked in as
-    /// literals. Built once on first use; later calls reuse it and (in
-    /// debug) assert the ids haven't changed.
-    fn baked_sql(&self, tenant: TenantId, timeline: TimelineId) -> &BakedSql {
-        let b = self.baked.get_or_init(|| BakedSql {
-            tenant,
-            timeline,
-            pages_full: Arc::from(build_insert_sql(
-                &self.schema,
-                "pages",
-                PAGES_COLUMNS,
-                tenant,
-                timeline,
-                PAGES_PER_ROW,
-                ROWS_PER_INSERT,
-            )),
-            slru_full: Arc::from(build_insert_sql(
-                &self.schema,
-                "slru_pages",
-                SLRU_COLUMNS,
-                tenant,
-                timeline,
-                SLRU_PER_ROW,
-                ROWS_PER_INSERT,
-            )),
-        });
-        debug_assert_eq!(
-            (b.tenant, b.timeline),
-            (tenant, timeline),
-            "PageStore baked SQL assumes a single (tenant,timeline) per process"
-        );
-        b
+    /// literals. Built once per `(tenant, timeline)` on first use; later
+    /// calls reuse the cached `Arc`. In production the map holds a single
+    /// entry (#16).
+    fn baked_sql(&self, tenant: TenantId, timeline: TimelineId) -> Arc<BakedSql> {
+        Arc::clone(
+            self.baked
+                .entry((tenant, timeline))
+                .or_insert_with(|| {
+                    Arc::new(BakedSql {
+                        pages_full: Arc::from(build_insert_sql(
+                            &self.schema,
+                            "pages",
+                            PAGES_COLUMNS,
+                            tenant,
+                            timeline,
+                            PAGES_PER_ROW,
+                            ROWS_PER_INSERT,
+                        )),
+                        slru_full: Arc::from(build_insert_sql(
+                            &self.schema,
+                            "slru_pages",
+                            SLRU_COLUMNS,
+                            tenant,
+                            timeline,
+                            SLRU_PER_ROW,
+                            ROWS_PER_INSERT,
+                        )),
+                    })
+                })
+                .value(),
+        )
     }
 
     // ------------------- pages ---------------------------------------------
