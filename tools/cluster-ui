@@ -35,7 +35,6 @@ import os
 import random
 import re
 import socket
-import string
 import subprocess
 import sys
 import urllib.request
@@ -528,7 +527,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <main>
   <div class="banner" id="banner"></div>
   <section><h2>Services</h2><div class="cards" id="services"></div></section>
-  <section><h2>Tenants, Timelines &amp; Endpoints</h2><div id="unified"></div></section>
+  <section>
+    <h2>Tenants, Timelines &amp; Endpoints
+      <button onclick="createTenant(this)"
+        style="margin-left:10px;font-size:11px;padding:2px 8px;cursor:pointer;background:#1e222b;color:#9fb3d1;border:1px solid #2a2f3a;border-radius:4px;vertical-align:middle;"
+        title="Create a new tenant and start an endpoint on its main branch">+ tenant</button>
+    </h2>
+    <div id="unified"></div>
+  </section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -650,6 +656,24 @@ function renderTlNode(node, ctx) {
   </div>`;
 }
 
+// Tenant ids the user has collapsed. Kept across the periodic re-render so a
+// collapsed tenant stays collapsed when auto-refresh rebuilds the view.
+const collapsedTenants = new Set();
+
+function toggleTenant(tid) {
+  const body = document.getElementById('tl-body-' + tid);
+  const btn = document.getElementById('tl-toggle-' + tid);
+  if (collapsedTenants.has(tid)) {
+    collapsedTenants.delete(tid);
+    if (body) body.style.display = '';
+    if (btn) btn.textContent = '▾';
+  } else {
+    collapsedTenants.add(tid);
+    if (body) body.style.display = 'none';
+    if (btn) btn.textContent = '▸';
+  }
+}
+
 function renderUnified(d) {
   const branchNames = d.topology.branch_names || {};
 
@@ -676,51 +700,31 @@ function renderUnified(d) {
                  esById: d.topology.endpoint_storage_by_id || {}};
     const roots = buildTlTree(entry.timelines || []);
     const tlsHtml = roots.map(r => renderTlNode(r, ctx)).join('');
+    const collapsed = collapsedTenants.has(tid);
 
     return `<div class="tenant">
       <div class="head">
+        <button id="tl-toggle-${esc(tid)}" onclick='toggleTenant(${JSON.stringify(tid)})'
+          style="font-size:11px;padding:0 6px;cursor:pointer;background:#1e222b;color:#9fb3d1;border:1px solid #2a2f3a;border-radius:4px;"
+          title="Collapse/expand this tenant">${collapsed ? '▸' : '▾'}</button>
         <span class="tl-label">Tenant:</span> <span class="tid">${esc(tid)}</span>
         <span class="pill ${/active/i.test(state)?'ok':'warn'}">${esc(state)}</span>
         <span class="pill">${entry.timelines.length} branches(s)</span>
       </div>
-      ${tlsHtml}
+      <div id="tl-body-${esc(tid)}" ${collapsed ? 'style="display:none"' : ''}>${tlsHtml}</div>
     </div>`;
   }).join('');
 }
 
 // Open this endpoint's libpq connection in pgweb (localhost:8081).
 //
-// pgweb runs in --sessions mode and derives its session id from its own
-// per-tab sessionStorage, and it lives on a different origin than this page —
-// so we can neither script its window nor reuse a backend-established session.
-// The reliable path is therefore: copy the connection string to the clipboard
-// (one paste into pgweb's connect form) and open pgweb. The DOM auto-fill below
-// is best-effort and only succeeds if pgweb is served same-origin (e.g. behind
-// a reverse proxy).
-async function openSqlTool(pgPort) {
-  const url = 'postgresql://cloud_admin@127.0.0.1:' + pgPort + '/postgres?sslmode=disable';
-  try { await navigator.clipboard.writeText(url); } catch (e) { /* non-secure ctx */ }
-  const w = window.open('http://localhost:8081/');
-  if (!w) { alert('Popup blocked — allow popups; the connection string is on your clipboard.'); return; }
-  let tries = 0;
-  const checkLoad = setInterval(function () {
-    tries++;
-    try {
-      if (w.document.readyState === 'complete') {
-        const field = w.document.querySelector('textarea[name="url"]')
-                   || w.document.querySelector('input[placeholder*="postgresql://"]');
-        if (field) {
-          clearInterval(checkLoad);
-          field.value = url;
-          field.dispatchEvent(new Event('input', {bubbles: true}));
-          const btn = w.document.querySelector('button[type="submit"]')
-                   || w.document.querySelector('.btn-primary');
-          if (btn) btn.click();
-        }
-      }
-    } catch (e) { /* cross-origin: can't script pgweb; clipboard paste is the path */ }
-    if (tries > 50) clearInterval(checkLoad);  // give up after ~5s
-  }, 100);
+// pgweb's `/open/<connection-string>` route connects to the given URL and drops
+// you straight into the query view — no clipboard paste or connect-form fiddling
+// needed. The connection string is passed raw in the path (pgweb takes the rest
+// of the path, query string included, as the URL).
+function openSqlTool(pgPort) {
+  const conn = 'postgresql://cloud_admin@127.0.0.1:' + pgPort + '/postgres?sslmode=disable';
+  window.open('http://localhost:8081/open/' + conn);
 }
 
 async function createBranch(tid, ancestor, ancestorTlid, btn) {
@@ -747,7 +751,30 @@ async function createBranch(tid, ancestor, ancestorTlid, btn) {
   } finally {
     btn.disabled = false;
     btn.textContent = old;
-    load();
+    burstRefresh();
+  }
+}
+
+async function createTenant(btn) {
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "…creating";
+  try {
+    const r = await fetch("/api/tenant", {method: "POST"});
+    const d = await r.json();
+    // No prompts on success — just refresh and the new tenant appears.
+    // Surface failures only, so a click that does nothing isn't a mystery.
+    if (!(r.ok && d.ok)) {
+      const detail = d.error
+        || (d.steps || []).map(s => `${s.ok ? "✓" : "✗"} ${s.cmd}\n${s.output}`).join("\n\n");
+      alert("Tenant creation failed:\n\n" + detail);
+    }
+  } catch (e) {
+    alert("Tenant creation failed: " + e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+    burstRefresh();
   }
 }
 
@@ -767,9 +794,22 @@ async function load() {
 }
 
 let timer = null;
+let fastRefreshUntil = 0;
+
+// After a mutating action, poll every 1s for 5s so the new branch/endpoint
+// shows up promptly (provisioning lags the click), then fall back to 4s. The
+// burst refreshes regardless of the auto-refresh checkbox, since the user just
+// asked for something and expects to see it appear.
+function burstRefresh() {
+  fastRefreshUntil = Date.now() + 5000;
+  clearTimeout(timer);
+  tick();  // load now and start the 1s cadence
+}
+
 function tick() {
-  if ($("auto").checked) load();
-  timer = setTimeout(tick, 4000);
+  const fast = Date.now() < fastRefreshUntil;
+  if ($("auto").checked || fast) load();
+  timer = setTimeout(tick, fast ? 1000 : 4000);
 }
 load(); tick();
 </script>
@@ -782,9 +822,41 @@ load(); tick();
 # Mutating action: branch + endpoint create/start via the yb_light_local CLI.
 # --------------------------------------------------------------------------
 
+# Friendly "adjective-noun" names (e.g. "brave-otter") for branches and
+# endpoints, instead of opaque random tokens. The two lists give 60 x 60 = 3600
+# combinations, so accidental collisions are rare; if one does occur the CLI
+# rejects the duplicate name and the failure surfaces in the UI, so a retry
+# (which draws a fresh name) fixes it.
+_ADJECTIVES = [
+    "amber", "bold", "brave", "bright", "calm", "clever", "cosmic", "crisp",
+    "daring", "deep", "eager", "early", "fancy", "fast", "gentle", "glad",
+    "golden", "happy", "hidden", "humble", "icy", "jolly", "keen", "kind",
+    "lively", "loud", "lucky", "lunar", "merry", "mighty", "misty", "neat",
+    "noble", "nimble", "polished", "proud", "quick", "quiet", "rapid", "royal",
+    "rustic", "sharp", "shiny", "silent", "sleek", "smooth", "snowy", "solar",
+    "spry", "steady", "stormy", "sunny", "swift", "tidy", "vivid", "warm",
+    "wise", "witty", "young", "zesty",
+]
+_NOUNS = [
+    "otter", "falcon", "maple", "river", "comet", "ember", "harbor", "willow",
+    "badger", "cedar", "lynx", "heron", "meadow", "raven", "summit", "thistle",
+    "walrus", "beacon", "canyon", "dolphin", "elm", "fjord", "glacier", "hawk",
+    "ibis", "juniper", "koala", "lagoon", "marten", "nectar", "oak", "panther",
+    "quartz", "robin", "spruce", "tiger", "urchin", "vortex", "wombat", "yak",
+    "zephyr", "alder", "bison", "coral", "delta", "eagle", "ferret", "grove",
+    "hollow", "island", "jaguar", "kestrel", "lotus", "mesa", "nimbus", "orchid",
+    "pine", "reef", "sparrow", "tundra",
+]
+
+
+def english_name():
+    """Return a friendly "adjective-noun" identifier, e.g. "brave-otter"."""
+    return f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}"
+
+
 def create_branch_with_endpoint(repo_dir, tenant_id, ancestor_branch, ancestor_timeline_id):
     """Branch off `ancestor_branch`, then create and start an endpoint on the
-    new branch. Branch name and endpoint id are a shared random 6-char token.
+    new branch. The new branch and its endpoint share one friendly name.
 
     yb_light_local resolves `--ancestor-branch-name` through its local branch
     mappings, which can be missing or out of sync with the durable controller
@@ -792,7 +864,7 @@ def create_branch_with_endpoint(repo_dir, tenant_id, ancestor_branch, ancestor_t
     controller), we first register that mapping (`mappings map`) so the branch
     resolves regardless. Shells out to the repo's `target/debug/yb_light_local`
     (args passed as a list, never via a shell). Returns
-    {ok, token, branch, endpoint, steps:[{cmd, ok, output}]} or {ok: False, error}.
+    {ok, branch, endpoint, steps:[{cmd, ok, output}]} or {ok: False, error}.
     """
     if not tenant_id or not re.fullmatch(r"[0-9a-fA-F]{32}", str(tenant_id)):
         return {"ok": False, "error": f"invalid tenant_id {tenant_id!r}"}
@@ -808,7 +880,8 @@ def create_branch_with_endpoint(repo_dir, tenant_id, ancestor_branch, ancestor_t
     if not os.path.exists(binary):
         return {"ok": False, "error": f"yb_light_local binary not found at {binary}"}
 
-    token = "".join(random.choices(string.ascii_lowercase, k=6))
+    # The new branch and its endpoint share one friendly name.
+    name = english_name()
 
     def run(args, timeout=180):
         try:
@@ -831,18 +904,79 @@ def create_branch_with_endpoint(repo_dir, tenant_id, ancestor_branch, ancestor_t
 
     for c in [
         ["timeline", "branch", "--tenant-id", tenant_id,
-         "--branch-name", token, "--ancestor-branch-name", ancestor_branch],
-        ["endpoint", "create", token, "--tenant-id", tenant_id, "--branch-name", token],
-        ["endpoint", "start", token],
+         "--branch-name", name, "--ancestor-branch-name", ancestor_branch],
+        ["endpoint", "create", name, "--tenant-id", tenant_id, "--branch-name", name],
+        ["endpoint", "start", name],
     ]:
         rc, out = run(c)
         steps.append({"cmd": " ".join(c), "ok": rc == 0, "output": out[-2000:]})
         if rc != 0:
-            return {"ok": False, "token": token, "branch": token,
-                    "endpoint": token, "steps": steps}
+            return {"ok": False, "branch": name, "endpoint": name, "steps": steps}
 
-    return {"ok": True, "token": token, "branch": token, "endpoint": token,
-            "steps": steps}
+    return {"ok": True, "branch": name, "endpoint": name, "steps": steps}
+
+
+def create_tenant_with_endpoint(repo_dir):
+    """Create a fresh tenant, then create and start an endpoint on its `main`
+    branch so it's immediately usable. The tenant id is generated by the CLI;
+    the endpoint gets a friendly name.
+
+    The main-branch endpoint can't simply be called "main": endpoint ids are
+    globally unique across the cluster, so every tenant's "main" would collide.
+    It therefore gets its own friendly name (the "non-main endpoint == branch
+    name" convention only applies to branches, whose names we control).
+
+    `tenant create` only allocates ids and records the pending bootstrap
+    recipe — the tenant's PS+SK pair isn't provisioned until the first endpoint
+    is created on the `main` branch (co-located topology), so we do that here to
+    mirror the branch flow's "leaves you with a running endpoint" behaviour.
+    Shells out to the repo's `target/debug/yb_light_local` (args passed as a
+    list, never via a shell). Returns
+    {ok, tenant_id, branch, endpoint, steps:[{cmd, ok, output}]} or
+    {ok: False, error}.
+    """
+    repo_root = os.path.dirname(os.path.abspath(repo_dir)) if repo_dir else os.getcwd()
+    binary = os.path.join(repo_root, "target", "debug", "yb_light_local")
+    if not os.path.exists(binary):
+        return {"ok": False, "error": f"yb_light_local binary not found at {binary}"}
+
+    name = english_name()
+
+    def run(args, timeout=180):
+        try:
+            p = subprocess.run([binary, *args], cwd=repo_root,
+                               capture_output=True, text=True, timeout=timeout)
+            return p.returncode, (p.stdout + p.stderr).strip()
+        except subprocess.TimeoutExpired:
+            return 124, "timed out"
+
+    steps = []
+
+    rc, out = run(["tenant", "create"])
+    steps.append({"cmd": "tenant create", "ok": rc == 0, "output": out[-2000:]})
+    if rc != 0:
+        return {"ok": False, "steps": steps}
+
+    # `tenant create` prints "tenant <id> successfully created"; pull the id out
+    # so we can attach the endpoint to it.
+    m = re.search(r"tenant ([0-9a-fA-F]{32}) successfully created", out)
+    if not m:
+        return {"ok": False, "error": "could not parse tenant id from output",
+                "steps": steps}
+    tenant_id = m.group(1)
+
+    for c in [
+        ["endpoint", "create", name, "--tenant-id", tenant_id, "--branch-name", "main"],
+        ["endpoint", "start", name],
+    ]:
+        rc, out = run(c)
+        steps.append({"cmd": " ".join(c), "ok": rc == 0, "output": out[-2000:]})
+        if rc != 0:
+            return {"ok": False, "tenant_id": tenant_id, "branch": "main",
+                    "endpoint": name, "steps": steps}
+
+    return {"ok": True, "tenant_id": tenant_id, "branch": "main",
+            "endpoint": name, "steps": steps}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -882,6 +1016,10 @@ class Handler(BaseHTTPRequestHandler):
             result = create_branch_with_endpoint(
                 self.repo_dir, payload.get("tenant_id"), payload.get("ancestor_branch"),
                 payload.get("ancestor_timeline_id"))
+            code = 200 if result.get("ok") else 500
+            self._send(code, json.dumps(result).encode("utf-8"), "application/json")
+        elif self.path.rstrip("/") == "/api/tenant":
+            result = create_tenant_with_endpoint(self.repo_dir)
             code = 200 if result.get("ok") else 500
             self._send(code, json.dumps(result).encode("utf-8"), "application/json")
         else:

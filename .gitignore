@@ -34,6 +34,9 @@ docker-compose/docker-compose-parallel.yml
 # pgindent typedef lists
 *.list
 
+# macOS
+.DS_Store
+
 # Node
 **/node_modules/
 
