@@ -42,7 +42,7 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
@@ -272,6 +272,9 @@ pub struct PageStore {
     ysql_client: Arc<YsqlClient>,
     schema: Arc<str>,
     scale_factor: f64,
+    /// Full-chunk INSERT SQL with the process's `(tenant, timeline)`
+    /// baked in, memoized on first flush. Shared across clones.
+    baked: Arc<OnceLock<BakedSql>>,
 }
 
 /// Decompose an 18-byte relation-page Key into the typed columns.
@@ -317,6 +320,178 @@ fn columns_to_key_bytes(sp: i64, db: i64, rel: i64, fork: i16, blk: i64) -> Byte
     Bytes::copy_from_slice(&buf)
 }
 
+/// Rows per multi-row INSERT in `put_pages` / `put_slru_pages`.
+/// PostgreSQL caps a query at 65535 parameters; with `tenant_id` /
+/// `timeline_id` baked into the SQL as literals (this is a
+/// single-(tenant,timeline) pageserver — see #16), the largest fan-out
+/// is `pages` at 9 params/row → 500×9 = 4500 params, well under.
+/// Chunks dispatch in parallel — tokio-postgres pipelines them on the
+/// shared connection so YB absorbs them concurrently.
+const ROWS_PER_INSERT: usize = 500;
+
+const PAGES_COLUMNS: &str =
+    "tenant_id, timeline_id, spcnode, dbnode, relnode, forknum, blknum, lsn, is_image, will_init, payload";
+/// Per-row bound columns for `pages` (everything after the baked
+/// `tenant_id`/`timeline_id` literals): spcnode, dbnode, relnode,
+/// forknum, blknum, lsn, is_image, will_init, payload.
+const PAGES_PER_ROW: usize = 9;
+
+const SLRU_COLUMNS: &str =
+    "tenant_id, timeline_id, kind, segno, blknum, is_image, lsn, will_init, payload";
+/// Per-row bound columns for `slru_pages`: kind, segno, blknum,
+/// is_image, lsn, will_init, payload.
+const SLRU_PER_ROW: usize = 7;
+
+/// Build a multi-row `INSERT ... VALUES`. `tenant`/`timeline` are baked
+/// into every row tuple as quoted literals — they are fixed for the
+/// process lifetime (single-(tenant,timeline) pageserver, #16), so
+/// there is no point round-tripping them as bind params. Both render as
+/// fixed-width hex (`TenantId`/`TimelineId` `Display`), so the literals
+/// are injection-safe. The `per_row` per-row columns bind `$1..`.
+///
+/// The result is a pure function of its inputs and stable across
+/// flushes, so the common full-chunk shape is built once (memoized on
+/// the `PageStore`) and `ysql_client` caches the prepared statement by
+/// this exact text.
+fn build_insert_sql(
+    schema: &str,
+    table: &str,
+    columns: &str,
+    tenant: TenantId,
+    timeline: TimelineId,
+    per_row: usize,
+    n_rows: usize,
+) -> String {
+    use std::fmt::Write as _;
+    // ~6 chars per "$NNNN," placeholder + the baked id literals.
+    let mut sql = String::with_capacity(64 + columns.len() + n_rows * (per_row * 6 + 80));
+    write!(sql, "INSERT INTO \"{schema}\".{table} ({columns}) VALUES ").unwrap();
+    for i in 0..n_rows {
+        if i > 0 {
+            sql.push(',');
+        }
+        write!(sql, "('{tenant}','{timeline}'").unwrap();
+        let base = i * per_row + 1;
+        for j in 0..per_row {
+            write!(sql, ",${}", base + j).unwrap();
+        }
+        sql.push(')');
+    }
+    sql
+}
+
+/// Single-key chain read (`read_chain`). `$1`=tenant_id, `$2`=timeline_id;
+/// `$3..$8` = spcnode, dbnode, relnode, forknum, blknum, target_lsn.
+fn build_read_chain_sql(schema: &str) -> String {
+    format!(
+        "SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
+                p.lsn, p.is_image, p.will_init, p.payload \
+         FROM \"{schema}\".pages p \
+         WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
+           AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
+           AND p.forknum=$6 AND p.blknum=$7 \
+           AND p.lsn <= $8 \
+           AND p.lsn >= COALESCE(( \
+                 SELECT a.lsn FROM \"{schema}\".pages a \
+                 WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
+                   AND a.spcnode=$3 AND a.dbnode=$4 AND a.relnode=$5 \
+                   AND a.forknum=$6 AND a.blknum=$7 \
+                   AND a.is_image=TRUE AND a.lsn <= $8 \
+                 ORDER BY a.lsn DESC LIMIT 1), 0) \
+         ORDER BY p.lsn DESC, p.is_image DESC"
+    )
+}
+
+/// One-fork range scan (`scan_range`). `$1`=tenant_id, `$2`=timeline_id;
+/// `$3..$9` = spcnode, dbnode, relnode, forknum, blknum_lo, blknum_hi,
+/// target_lsn.
+fn build_scan_one_fork_sql(schema: &str) -> String {
+    format!(
+        "WITH blocks AS ( \
+             SELECT DISTINCT blknum FROM \"{schema}\".pages \
+             WHERE tenant_id=$1 AND timeline_id=$2 \
+               AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
+               AND forknum=$6 \
+               AND blknum >= $7 AND blknum < $8 \
+               AND lsn <= $9 \
+         ) \
+         SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
+                p.lsn, p.is_image, p.will_init, p.payload \
+         FROM blocks b \
+         CROSS JOIN LATERAL ( \
+             SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
+                    p.lsn, p.is_image, p.will_init, p.payload \
+             FROM \"{schema}\".pages p \
+             WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
+               AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
+               AND p.forknum=$6 AND p.blknum = b.blknum \
+               AND p.lsn <= $9 \
+               AND p.lsn >= COALESCE(( \
+                     SELECT a.lsn FROM \"{schema}\".pages a \
+                     WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
+                       AND a.spcnode=$3 AND a.dbnode=$4 AND a.relnode=$5 \
+                       AND a.forknum=$6 AND a.blknum = b.blknum \
+                       AND a.is_image=TRUE AND a.lsn <= $9 \
+                     ORDER BY a.lsn DESC LIMIT 1), 0) \
+             ORDER BY p.lsn DESC, p.is_image DESC \
+         ) p \
+         ORDER BY p.blknum, p.lsn DESC, p.is_image DESC"
+    )
+}
+
+/// Cross-fork range scan (`scan_range`). `$1`=tenant_id, `$2`=timeline_id;
+/// `$3..$13` = (spc,db,rel,fork,blk)_lo, (spc,db,rel,fork,blk)_hi,
+/// target_lsn.
+fn build_scan_cross_fork_sql(schema: &str) -> String {
+    format!(
+        "WITH blocks AS ( \
+             SELECT DISTINCT spcnode, dbnode, relnode, forknum, blknum \
+             FROM \"{schema}\".pages \
+             WHERE tenant_id=$1 AND timeline_id=$2 \
+               AND (spcnode, dbnode, relnode, forknum, blknum) >= ($3, $4, $5, $6, $7) \
+               AND (spcnode, dbnode, relnode, forknum, blknum) <  ($8, $9, $10, $11, $12) \
+               AND lsn <= $13 \
+         ) \
+         SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
+                p.lsn, p.is_image, p.will_init, p.payload \
+         FROM blocks b \
+         CROSS JOIN LATERAL ( \
+             SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
+                    p.lsn, p.is_image, p.will_init, p.payload \
+             FROM \"{schema}\".pages p \
+             WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
+               AND p.spcnode = b.spcnode AND p.dbnode = b.dbnode \
+               AND p.relnode = b.relnode AND p.forknum = b.forknum \
+               AND p.blknum = b.blknum \
+               AND p.lsn <= $13 \
+               AND p.lsn >= COALESCE(( \
+                     SELECT a.lsn FROM \"{schema}\".pages a \
+                     WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
+                       AND a.spcnode = b.spcnode AND a.dbnode = b.dbnode \
+                       AND a.relnode = b.relnode AND a.forknum = b.forknum \
+                       AND a.blknum = b.blknum \
+                       AND a.is_image=TRUE AND a.lsn <= $13 \
+                     ORDER BY a.lsn DESC LIMIT 1), 0) \
+             ORDER BY p.lsn DESC, p.is_image DESC \
+         ) p \
+         ORDER BY p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, p.lsn DESC, p.is_image DESC"
+    )
+}
+
+/// Memoized full-chunk INSERT SQL for the process's single
+/// `(tenant, timeline)`, with the ids baked in as literals. Writes only
+/// ever target the primary timeline, so baking is safe here (unlike the
+/// read path, where lineage spans ancestor timelines). Built once on
+/// first flush; the ids are kept alongside to assert that invariant in
+/// debug builds.
+struct BakedSql {
+    tenant: TenantId,
+    timeline: TimelineId,
+    /// Full-chunk `pages` / `slru_pages` INSERTs (see `build_insert_sql`).
+    pages_full: Arc<str>,
+    slru_full: Arc<str>,
+}
+
 impl PageStore {
     /// Open a `PageStore` with a single YSQL connection. Equivalent to
     /// `connect_pooled(config, app, 1, set_fast_path_upsert)`.
@@ -357,7 +532,42 @@ impl PageStore {
             ysql_client: Arc::new(ysql_client),
             schema: Arc::from(config.schema),
             scale_factor: config.scale_factor,
+            baked: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// Memoized per-`(tenant, timeline)` SQL with the ids baked in as
+    /// literals. Built once on first use; later calls reuse it and (in
+    /// debug) assert the ids haven't changed.
+    fn baked_sql(&self, tenant: TenantId, timeline: TimelineId) -> &BakedSql {
+        let b = self.baked.get_or_init(|| BakedSql {
+            tenant,
+            timeline,
+            pages_full: Arc::from(build_insert_sql(
+                &self.schema,
+                "pages",
+                PAGES_COLUMNS,
+                tenant,
+                timeline,
+                PAGES_PER_ROW,
+                ROWS_PER_INSERT,
+            )),
+            slru_full: Arc::from(build_insert_sql(
+                &self.schema,
+                "slru_pages",
+                SLRU_COLUMNS,
+                tenant,
+                timeline,
+                SLRU_PER_ROW,
+                ROWS_PER_INSERT,
+            )),
+        });
+        debug_assert_eq!(
+            (b.tenant, b.timeline),
+            (tenant, timeline),
+            "PageStore baked SQL assumes a single (tenant,timeline) per process"
+        );
+        b
     }
 
     // ------------------- pages ---------------------------------------------
@@ -368,63 +578,56 @@ impl PageStore {
         timeline: TimelineId,
         rows: &[Arc<PageRow>],
     ) -> Result<()> {
-        // PostgreSQL caps a query at 65535 parameters; chunk to stay
-        // well below it. 11 columns/row × 4000 rows = 44k params.
         // Chunks dispatch in parallel — tokio-postgres pipelines them
         // on the shared connection so YB can absorb them concurrently.
-        const COLS: usize = 11;
-        const ROWS_PER_INSERT: usize = 500;
         let parallelism = pageserver_api::config::scale_count(4, self.scale_factor);
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let pages_full = Arc::clone(&self.baked_sql(tenant, timeline).pages_full);
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for chunk in rows.chunks(ROWS_PER_INSERT) {
             if chunk.is_empty() {
                 continue;
             }
-            let mut sql = format!(
-                "INSERT INTO \"{}\".pages \
-                 (tenant_id, timeline_id, spcnode, dbnode, relnode, forknum, blknum, \
-                  lsn, is_image, will_init, payload) VALUES ",
-                self.schema
-            );
-            let mut params: Vec<Box<dyn ToSql + Sync + Send + 'static>> =
-                Vec::with_capacity(chunk.len() * COLS);
+            let n = chunk.len();
+            // Decode + validate keys up front: a bad key fails the whole
+            // flush before any chunk is sent (fail-fast), and the per-row
+            // scalar columns land in owned storage we can bind by
+            // reference — no per-cell `Box<dyn ToSql>`.
+            let mut spc = Vec::with_capacity(n);
+            let mut dbn = Vec::with_capacity(n);
+            let mut rel = Vec::with_capacity(n);
+            let mut fork = Vec::with_capacity(n);
+            let mut blk = Vec::with_capacity(n);
+            let mut lsn = Vec::with_capacity(n);
             for (i, row) in chunk.iter().enumerate() {
-                if i > 0 {
-                    sql.push(',');
-                }
-                let base = i * COLS + 1;
-                sql.push_str(&format!(
-                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
-                    base,
-                    base + 1,
-                    base + 2,
-                    base + 3,
-                    base + 4,
-                    base + 5,
-                    base + 6,
-                    base + 7,
-                    base + 8,
-                    base + 9,
-                    base + 10,
-                ));
-                let (sp, db, rel, fork, blk) =
+                let (s, d, r, f, b) =
                     key_columns(&row.key).with_context(|| format!("put_pages row {i}: bad key"))?;
-                params.push(Box::new(tenant_s.clone()));
-                params.push(Box::new(timeline_s.clone()));
-                params.push(Box::new(sp));
-                params.push(Box::new(db));
-                params.push(Box::new(rel));
-                params.push(Box::new(fork));
-                params.push(Box::new(blk));
-                params.push(Box::new(row.lsn.0 as i64));
-                params.push(Box::new(row.is_image));
-                params.push(Box::new(row.will_init));
-                params.push(Box::new(row.payload.to_vec()));
+                spc.push(s);
+                dbn.push(d);
+                rel.push(r);
+                fork.push(f);
+                blk.push(b);
+                lsn.push(row.lsn.0 as i64);
             }
-            let chunk_rows = chunk.len();
+            // Cheap Arc-clone per row keeps its `payload` alive so we can
+            // bind `&[u8]` slices below without copying the page bytes.
+            let arcs: Vec<Arc<PageRow>> = chunk.iter().cloned().collect();
+            // Common full chunk reuses the memoized SQL; the rare short
+            // final chunk rebuilds (one alloc, ids baked in).
+            let sql: Arc<str> = if n == ROWS_PER_INSERT {
+                Arc::clone(&pages_full)
+            } else {
+                Arc::from(build_insert_sql(
+                    &self.schema,
+                    "pages",
+                    PAGES_COLUMNS,
+                    tenant,
+                    timeline,
+                    PAGES_PER_ROW,
+                    n,
+                ))
+            };
+            let chunk_rows = n;
             let ysql_client = Arc::clone(&self.ysql_client);
             // Per-traced-row pre-INSERT event for the env-gated trace,
             // plus first/last (key, lsn) capture for the CRITICAL log if
@@ -440,12 +643,21 @@ impl PageStore {
             let chunk_first = chunk.first().map(|r| (r.key.clone(), r.lsn));
             let chunk_last = chunk.last().map(|r| (r.key.clone(), r.lsn));
             futs.push(Box::pin(async move {
-                let params_ref: Vec<&(dyn ToSql + Sync)> = params
-                    .iter()
-                    .map(|p| p.as_ref() as &(dyn ToSql + Sync))
-                    .collect();
+                let payloads: Vec<&[u8]> = arcs.iter().map(|r| r.payload.as_ref()).collect();
+                let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * PAGES_PER_ROW);
+                for i in 0..n {
+                    params.push(&spc[i]);
+                    params.push(&dbn[i]);
+                    params.push(&rel[i]);
+                    params.push(&fork[i]);
+                    params.push(&blk[i]);
+                    params.push(&lsn[i]);
+                    params.push(&arcs[i].is_image);
+                    params.push(&arcs[i].will_init);
+                    params.push(&payloads[i]);
+                }
                 let affected = ysql_client
-                    .execute(&sql, &params_ref)
+                    .execute(&sql, &params)
                     .await
                     .with_context(|| {
                         format!(
@@ -516,34 +728,16 @@ impl PageStore {
         let timeline_s = timeline.to_string();
         let target = target_lsn.0 as i64;
 
-        // Scalar-subquery anchor + COALESCE(..., 0) lower bound so
-        // both ends of the lsn range are pushed into the DocDB scan
-        // (rows scanned = rows returned). `lsn >= 0` covers the
-        // no-image case.
-        //
-        // The Rust-side trim below still truncates at the first
-        // `will_init=true` row walking LSN-desc — same as before, so
-        // (a) the no-image case keeps the original full-chain
-        // semantics and (b) an init-delta between the image and
-        // target_lsn correctly shortens the chain.
-        let sql = format!(
-            "SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
-                    p.lsn, p.is_image, p.will_init, p.payload \
-             FROM \"{schema}\".pages p \
-             WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
-               AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
-               AND p.forknum=$6 AND p.blknum=$7 \
-               AND p.lsn <= $8 \
-               AND p.lsn >= COALESCE(( \
-                     SELECT a.lsn FROM \"{schema}\".pages a \
-                     WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
-                       AND a.spcnode=$3 AND a.dbnode=$4 AND a.relnode=$5 \
-                       AND a.forknum=$6 AND a.blknum=$7 \
-                       AND a.is_image=TRUE AND a.lsn <= $8 \
-                     ORDER BY a.lsn DESC LIMIT 1), 0) \
-             ORDER BY p.lsn DESC, p.is_image DESC",
-            schema = self.schema
-        );
+        // tenant/timeline stay bound ($1/$2), NOT baked: lineage reads call
+        // this with ANCESTOR timeline_ids (a branch reads its ancestors'
+        // pages), so the timeline is not fixed on the read path even though
+        // it is on the write path. The scalar-subquery anchor +
+        // COALESCE(..., 0) lower bound push both ends of the lsn range into
+        // the DocDB scan; `lsn >= 0` covers the no-image case. The Rust-side
+        // trim below truncates at the first `will_init=true` row walking
+        // LSN-desc, so the no-image case keeps full-chain semantics and an
+        // init-delta between image and target_lsn shortens the chain.
+        let sql = build_read_chain_sql(&self.schema);
         let rows = self
             .ysql_client
             .query(
@@ -630,6 +824,8 @@ impl PageStore {
             return Ok(out);
         }
 
+        // tenant/timeline stay bound ($1/$2), NOT baked — same lineage
+        // reason as `read_chain` (ancestor timelines hit this path).
         let tenant_s = tenant.to_string();
         let timeline_s = timeline.to_string();
         let target = target_lsn.0 as i64;
@@ -647,58 +843,19 @@ impl PageStore {
             let fork = range.start.field5 as i16;
             let blk_lo = range.start.field6 as i64;
             let blk_hi = range.end.field6 as i64;
-            // DISTINCT-driven LATERAL form: iterate the blocks that
-            // actually exist (`SELECT DISTINCT blknum`, a Distinct
-            // Index Scan ⇒ one row per block) and run the read_chain
-            // pushdown per block via CROSS JOIN LATERAL. The
-            // per-block InitPlan anchor becomes a pushable lower
-            // bound so both ends of the lsn range are pushed into
-            // the DocDB scan, same as the single-block case.
-            let sql = format!(
-                "WITH blocks AS ( \
-                     SELECT DISTINCT blknum FROM \"{schema}\".pages \
-                     WHERE tenant_id=$1 AND timeline_id=$2 \
-                       AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
-                       AND forknum=$6 \
-                       AND blknum >= $7 AND blknum < $8 \
-                       AND lsn <= $9 \
-                 ) \
-                 SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
-                        p.lsn, p.is_image, p.will_init, p.payload \
-                 FROM blocks b \
-                 CROSS JOIN LATERAL ( \
-                     SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
-                            p.lsn, p.is_image, p.will_init, p.payload \
-                     FROM \"{schema}\".pages p \
-                     WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
-                       AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
-                       AND p.forknum=$6 AND p.blknum = b.blknum \
-                       AND p.lsn <= $9 \
-                       AND p.lsn >= COALESCE(( \
-                             SELECT a.lsn FROM \"{schema}\".pages a \
-                             WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
-                               AND a.spcnode=$3 AND a.dbnode=$4 AND a.relnode=$5 \
-                               AND a.forknum=$6 AND a.blknum = b.blknum \
-                               AND a.is_image=TRUE AND a.lsn <= $9 \
-                             ORDER BY a.lsn DESC LIMIT 1), 0) \
-                     ORDER BY p.lsn DESC, p.is_image DESC \
-                 ) p \
-                 ORDER BY p.blknum, p.lsn DESC, p.is_image DESC",
-                schema = self.schema
-            );
+            // DISTINCT-driven LATERAL form (memoized, ids baked — see
+            // `build_scan_one_fork_sql`): iterate the blocks that actually
+            // exist (`SELECT DISTINCT blknum`, a Distinct Index Scan ⇒ one
+            // row per block) and run the read_chain pushdown per block via
+            // CROSS JOIN LATERAL. The per-block InitPlan anchor becomes a
+            // pushable lower bound so both ends of the lsn range are pushed
+            // into the DocDB scan, same as the single-block case.
+            let sql = build_scan_one_fork_sql(&self.schema);
             self.ysql_client
                 .query(
                     &sql,
                     &[
-                        &tenant_s,
-                        &timeline_s,
-                        &sp,
-                        &db,
-                        &rel,
-                        &fork,
-                        &blk_lo,
-                        &blk_hi,
-                        &target,
+                        &tenant_s, &timeline_s, &sp, &db, &rel, &fork, &blk_lo, &blk_hi, &target,
                     ],
                 )
                 .await
@@ -718,61 +875,17 @@ impl PageStore {
             let rel_hi = range.end.field4 as i64;
             let fork_hi = range.end.field5 as i16;
             let blk_hi = range.end.field6 as i64;
-            // Cross-fork variant of the DISTINCT-driven LATERAL,
-            // keyed on the full (spcnode, dbnode, relnode, forknum,
-            // blknum) tuple so anchors stay paired with the right
-            // block.
-            let sql = format!(
-                "WITH blocks AS ( \
-                     SELECT DISTINCT spcnode, dbnode, relnode, forknum, blknum \
-                     FROM \"{schema}\".pages \
-                     WHERE tenant_id=$1 AND timeline_id=$2 \
-                       AND (spcnode, dbnode, relnode, forknum, blknum) >= ($3, $4, $5, $6, $7) \
-                       AND (spcnode, dbnode, relnode, forknum, blknum) <  ($8, $9, $10, $11, $12) \
-                       AND lsn <= $13 \
-                 ) \
-                 SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
-                        p.lsn, p.is_image, p.will_init, p.payload \
-                 FROM blocks b \
-                 CROSS JOIN LATERAL ( \
-                     SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
-                            p.lsn, p.is_image, p.will_init, p.payload \
-                     FROM \"{schema}\".pages p \
-                     WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
-                       AND p.spcnode = b.spcnode AND p.dbnode = b.dbnode \
-                       AND p.relnode = b.relnode AND p.forknum = b.forknum \
-                       AND p.blknum = b.blknum \
-                       AND p.lsn <= $13 \
-                       AND p.lsn >= COALESCE(( \
-                             SELECT a.lsn FROM \"{schema}\".pages a \
-                             WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
-                               AND a.spcnode = b.spcnode AND a.dbnode = b.dbnode \
-                               AND a.relnode = b.relnode AND a.forknum = b.forknum \
-                               AND a.blknum = b.blknum \
-                               AND a.is_image=TRUE AND a.lsn <= $13 \
-                             ORDER BY a.lsn DESC LIMIT 1), 0) \
-                     ORDER BY p.lsn DESC, p.is_image DESC \
-                 ) p \
-                 ORDER BY p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, p.lsn DESC, p.is_image DESC",
-                schema = self.schema
-            );
+            // Cross-fork variant of the DISTINCT-driven LATERAL (memoized,
+            // ids baked — see `build_scan_cross_fork_sql`), keyed on the
+            // full (spcnode, dbnode, relnode, forknum, blknum) tuple so
+            // anchors stay paired with the right block.
+            let sql = build_scan_cross_fork_sql(&self.schema);
             self.ysql_client
                 .query(
                     &sql,
                     &[
-                        &tenant_s,
-                        &timeline_s,
-                        &sp_lo,
-                        &db_lo,
-                        &rel_lo,
-                        &fork_lo,
-                        &blk_lo,
-                        &sp_hi,
-                        &db_hi,
-                        &rel_hi,
-                        &fork_hi,
-                        &blk_hi,
-                        &target,
+                        &tenant_s, &timeline_s, &sp_lo, &db_lo, &rel_lo, &fork_lo, &blk_lo, &sp_hi,
+                        &db_hi, &rel_hi, &fork_hi, &blk_hi, &target,
                     ],
                 )
                 .await
@@ -825,59 +938,63 @@ impl PageStore {
         timeline: TimelineId,
         rows: &[SlruPageRow],
     ) -> Result<()> {
-        const COLS: usize = 9;
-        const ROWS_PER_INSERT: usize = 500;
         let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let slru_full = Arc::clone(&self.baked_sql(tenant, timeline).slru_full);
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for chunk in rows.chunks(ROWS_PER_INSERT) {
             if chunk.is_empty() {
                 continue;
             }
-            let mut sql = format!(
-                "INSERT INTO \"{}\".slru_pages \
-                 (tenant_id, timeline_id, kind, segno, blknum, \
-                  is_image, lsn, will_init, payload) VALUES ",
-                self.schema
-            );
-            let mut params: Vec<Box<dyn ToSql + Sync + Send + 'static>> =
-                Vec::with_capacity(chunk.len() * COLS);
-            for (i, row) in chunk.iter().enumerate() {
-                if i > 0 {
-                    sql.push(',');
-                }
-                let base = i * COLS + 1;
-                sql.push_str(&format!(
-                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
-                    base,
-                    base + 1,
-                    base + 2,
-                    base + 3,
-                    base + 4,
-                    base + 5,
-                    base + 6,
-                    base + 7,
-                    base + 8,
-                ));
-                params.push(Box::new(tenant_s.clone()));
-                params.push(Box::new(timeline_s.clone()));
-                params.push(Box::new(slru_kind_to_i16(row.kind)));
-                params.push(Box::new(row.segno as i64));
-                params.push(Box::new(row.blknum as i64));
-                params.push(Box::new(row.is_image));
-                params.push(Box::new(row.lsn.0 as i64));
-                params.push(Box::new(row.will_init));
-                params.push(Box::new(row.payload.to_vec()));
+            let n = chunk.len();
+            // Owned per-row columns, bound by reference below (no per-cell
+            // `Box<dyn ToSql>`); payloads are cheap `Bytes` clones so the
+            // `&[u8]` binds avoid copying the page bytes.
+            let mut kind = Vec::with_capacity(n);
+            let mut segno = Vec::with_capacity(n);
+            let mut blknum = Vec::with_capacity(n);
+            let mut is_image = Vec::with_capacity(n);
+            let mut lsn = Vec::with_capacity(n);
+            let mut will_init = Vec::with_capacity(n);
+            let mut payloads_owned: Vec<Bytes> = Vec::with_capacity(n);
+            for row in chunk {
+                kind.push(slru_kind_to_i16(row.kind));
+                segno.push(row.segno as i64);
+                blknum.push(row.blknum as i64);
+                is_image.push(row.is_image);
+                lsn.push(row.lsn.0 as i64);
+                will_init.push(row.will_init);
+                payloads_owned.push(row.payload.clone());
             }
-            let chunk_rows = chunk.len();
+            let sql: Arc<str> = if n == ROWS_PER_INSERT {
+                Arc::clone(&slru_full)
+            } else {
+                Arc::from(build_insert_sql(
+                    &self.schema,
+                    "slru_pages",
+                    SLRU_COLUMNS,
+                    tenant,
+                    timeline,
+                    SLRU_PER_ROW,
+                    n,
+                ))
+            };
+            let chunk_rows = n;
             let ysql_client = Arc::clone(&self.ysql_client);
             futs.push(Box::pin(async move {
-                let params_ref: Vec<&(dyn ToSql + Sync)> =
-                    params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)).collect();
+                let payloads: Vec<&[u8]> = payloads_owned.iter().map(|b| b.as_ref()).collect();
+                let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * SLRU_PER_ROW);
+                for i in 0..n {
+                    params.push(&kind[i]);
+                    params.push(&segno[i]);
+                    params.push(&blknum[i]);
+                    params.push(&is_image[i]);
+                    params.push(&lsn[i]);
+                    params.push(&will_init[i]);
+                    params.push(&payloads[i]);
+                }
                 ysql_client
-                    .execute(&sql, &params_ref)
+                    .execute(&sql, &params)
                     .await
                     .with_context(|| {
                         format!(
@@ -2390,6 +2507,50 @@ mod tests {
 
     fn rand_timeline() -> TimelineId {
         TimelineId::generate()
+    }
+
+    /// `build_insert_sql` bakes the (tenant, timeline) literals into
+    /// every row tuple and numbers the per-row bind params `$1..` with
+    /// no gaps — no live YB needed. Locks the placeholder math that the
+    /// column order in `put_pages` / `put_slru_pages` depends on.
+    #[test]
+    fn build_insert_sql_bakes_ids_and_numbers_params() {
+        let tenant = rand_tenant();
+        let timeline = rand_timeline();
+        let ids = format!("'{tenant}','{timeline}'");
+
+        // pages: 9 per-row params; 2 rows → $1..$18, ids baked per row.
+        let pages = build_insert_sql(
+            "pageserver",
+            "pages",
+            PAGES_COLUMNS,
+            tenant,
+            timeline,
+            PAGES_PER_ROW,
+            2,
+        );
+        let expected_pages = format!(
+            "INSERT INTO \"pageserver\".pages ({PAGES_COLUMNS}) VALUES \
+             ({ids},$1,$2,$3,$4,$5,$6,$7,$8,$9),\
+             ({ids},$10,$11,$12,$13,$14,$15,$16,$17,$18)"
+        );
+        assert_eq!(pages, expected_pages);
+
+        // slru: 7 per-row params; 1 row → $1..$7.
+        let slru = build_insert_sql(
+            "pageserver",
+            "slru_pages",
+            SLRU_COLUMNS,
+            tenant,
+            timeline,
+            SLRU_PER_ROW,
+            1,
+        );
+        let expected_slru = format!(
+            "INSERT INTO \"pageserver\".slru_pages ({SLRU_COLUMNS}) VALUES \
+             ({ids},$1,$2,$3,$4,$5,$6,$7)"
+        );
+        assert_eq!(slru, expected_slru);
     }
 
     /// Build a synthetic relation-page Key:
