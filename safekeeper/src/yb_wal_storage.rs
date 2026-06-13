@@ -357,7 +357,7 @@ impl YbWalStorage {
         // the highest `chunk_offset + chunk_size` across all segnos for this
         // (tenant, timeline) as the end-of-WAL position. Startup work →
         // system lane so it doesn't share the streaming-read connection.
-        let write_lsn = Self::load_write_lsn(
+        let max_offset = Self::load_write_lsn(
             &system_client,
             &table_name,
             &tenant_id_str,
@@ -366,6 +366,91 @@ impl YbWalStorage {
             state.timeline_start_lsn,
         )
         .await?;
+
+        // `load_write_lsn` returns the max BYTE offset persisted, which
+        // lands mid-record when an ungraceful compute shutdown left a torn
+        // trailing page (#61). Treating that as the durable end-of-WAL
+        // makes the interpreted reader decode into the torn page and panic.
+        // Replay the decoder to the last complete record boundary <=
+        // max_offset — where Postgres crash recovery also stops — and use
+        // THAT as write_lsn, discarding the torn tail (the compute
+        // re-streams from here and overwrites it). On scan failure, fall
+        // back to the raw offset so startup is never worse than before.
+        let write_lsn = {
+            let pg_version = postgres_ffi::PgMajorVersion::try_from(state.server.pg_version)
+                .unwrap_or(postgres_ffi::PgMajorVersion::PG17);
+            let src = YbWalSource {
+                client: &system_client,
+                table: &table_name,
+                tenant_id: &tenant_id_str,
+                timeline_id: &timeline_id_str,
+                seg: wal_seg_size as u64,
+            };
+            // YB keeps no persisted record-boundary flush_lsn to start from
+            // (the upstream safekeeper read it from the control file), so
+            // anchor on a recent fresh-record page at or below the raw end,
+            // then scan forward to the true end of WAL via `find_end_of_wal`
+            // (the same scan Neon ran over local segments). On any scan
+            // failure, fall back to the raw offset so startup is never worse.
+            use postgres_ffi::wal_record_boundary::{find_anchor, find_end_of_wal};
+            let scanned = if max_offset <= state.timeline_start_lsn {
+                Ok(max_offset)
+            } else {
+                match find_anchor(&src, max_offset).await {
+                    Ok(anchor) => find_end_of_wal(&src, anchor, pg_version).await,
+                    Err(e) => Err(e),
+                }
+            };
+            match scanned {
+                Ok(end) if end < max_offset => {
+                    tracing::warn!(
+                        tenant_id = %tenant_id_str,
+                        timeline_id = %timeline_id_str,
+                        torn_end = %max_offset,
+                        valid_end = %end,
+                        "YbWalStorage::new — truncated torn WAL tail to the last valid record boundary",
+                    );
+                    end
+                }
+                Ok(_) => max_offset,
+                Err(e) => {
+                    tracing::warn!(
+                        tenant_id = %tenant_id_str,
+                        timeline_id = %timeline_id_str,
+                        %max_offset,
+                        "YbWalStorage::new — end-of-WAL record-boundary scan failed, using raw max offset: {e:#}",
+                    );
+                    max_offset
+                }
+            }
+        };
+        // Physically discard the torn tail so the table ends exactly at the
+        // valid boundary — otherwise the dropped rows linger past
+        // `durable_lsn` (violating `truncate_wal`'s "no rows past end_pos"
+        // invariant) and would be re-counted by `load_write_lsn` on the
+        // next restart. Best-effort: the reader is already bounded by
+        // `write_lsn`, so a failed cleanup is harmless and retried next
+        // restart.
+        if write_lsn < max_offset {
+            if let Err(e) = truncate_wals_above(
+                &system_client,
+                &table_name,
+                &tenant_id_str,
+                &timeline_id_str,
+                wal_seg_size,
+                write_lsn,
+            )
+            .await
+            {
+                tracing::warn!(
+                    tenant_id = %tenant_id_str,
+                    timeline_id = %timeline_id_str,
+                    %write_lsn,
+                    %max_offset,
+                    "YbWalStorage::new — failed to delete torn WAL tail (harmless; retried next restart): {e:#}",
+                );
+            }
+        }
         tracing::info!(
             tenant_id = %tenant_id_str,
             timeline_id = %timeline_id_str,
@@ -373,7 +458,7 @@ impl YbWalStorage {
             cfile_local_start_lsn = %state.local_start_lsn,
             cfile_timeline_start_lsn = %state.timeline_start_lsn,
             "YbWalStorage::new — rehydrated write_lsn from yb_storage.wals \
-             (falls back to timeline_start_lsn on empty)",
+             (last valid record boundary; falls back to timeline_start_lsn on empty)",
         );
 
         // PhysicalStorage holds the LSN tracker + WAL decoder for this
@@ -685,10 +770,22 @@ impl Storage for YbWalStorage {
                 self.submitted_max_lsn,
             );
         }
-        // No DELETE in yb-mode: with single-SK quorum, `end_pos` is
-        // always exactly the SK's confirmed durable LSN on election,
-        // so there are no rows past `end_pos` to drop. Only the
-        // in-memory watermarks need resetting.
+        // Physically drop any WAL past `end_pos` before resetting the
+        // in-memory watermarks. In the steady single-SK case `end_pos ==
+        // durable` and there's nothing past it (no-op), but after a torn
+        // tail (find_end_of_wal capped flush_lsn below the raw max on
+        // restart) or a multi-SK divergence, rows can sit past `end_pos`;
+        // leaving them would let `load_write_lsn` re-count them on the
+        // next restart and could resurface a partial chunk to a reader.
+        truncate_wals_above(
+            &self.ysql_system_client,
+            &self.table_name,
+            &self.tenant_id,
+            &self.timeline_id,
+            self.wal_seg_size,
+            end_pos,
+        )
+        .await?;
         self.inner.truncate_wal(end_pos).await
     }
 
@@ -766,6 +863,52 @@ fn quote_ident(ident: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// `WalSource` over the `wals` table, for the end-of-WAL record-boundary
+/// scan run once at [`YbWalStorage::new`]. Plain binds on the system lane
+/// — not a hot path.
+struct YbWalSource<'a> {
+    client: &'a YsqlClient,
+    table: &'a str,
+    tenant_id: &'a str,
+    timeline_id: &'a str,
+    seg: u64,
+}
+
+impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
+    fn seg(&self) -> u64 {
+        self.seg
+    }
+
+    async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
+        let segno = (lsn.0 / self.seg) as i64;
+        let off = (lsn.0 % self.seg) as i64;
+        let sql = format!(
+            "SELECT chunk_offset, data FROM {} \
+             WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 AND chunk_offset <= $4 \
+             ORDER BY chunk_offset DESC LIMIT 1",
+            quote_ident(self.table)
+        );
+        let params: [&(dyn ToSql + Sync); 4] = [&self.tenant_id, &self.timeline_id, &segno, &off];
+        let row = self
+            .client
+            .query_opt(&sql, &params)
+            .await
+            .context("end-of-WAL scan: reading wals")?
+            .with_context(|| format!("WAL hole at {lsn}: no covering chunk in wals"))?;
+        let chunk_offset = row.get::<_, i64>(0) as u64;
+        let data: Vec<u8> = row.get::<_, Vec<u8>>(1);
+        let chunk_start = segno as u64 * self.seg + chunk_offset;
+        if lsn.0 >= chunk_start + data.len() as u64 {
+            anyhow::bail!(
+                "WAL hole at {lsn}: nearest chunk covers [{}, {}) only",
+                Lsn(chunk_start),
+                Lsn(chunk_start + data.len() as u64)
+            );
+        }
+        Ok((Lsn(chunk_start), data))
+    }
+}
+
 /// Bake the per-instance `(tenant_id, timeline_id)` into a `wals` query
 /// whose `$1` is `tenant_id` and `$2` is `timeline_id` (the convention
 /// here): replace those two binds with quoted literals and shift every
@@ -790,6 +933,54 @@ fn bake_ttid(sql: &str, tenant_id: &str, timeline_id: &str) -> String {
             format!("${shifted}")
         })
         .into_owned()
+}
+
+/// Discard all WAL strictly beyond `end_pos`: drop chunks that start at
+/// or after it, and truncate the chunk straddling it down to `end_pos`.
+/// After this, `max(chunk_offset + chunk_size)` for the timeline is
+/// exactly `end_pos` — the YB equivalent of truncating a local WAL
+/// segment file. Used to discard a torn tail on safekeeper restart and to
+/// honor a walproposer truncation on election. Both statements are
+/// idempotent (keyed DELETE; absolute-`SET` UPDATE whose predicate stops
+/// matching once the chunk has been truncated).
+async fn truncate_wals_above(
+    client: &YsqlClient,
+    table: &str,
+    tenant_id: &str,
+    timeline_id: &str,
+    wal_seg_size: usize,
+    end_pos: Lsn,
+) -> Result<()> {
+    let table = quote_ident(table);
+    let seg = wal_seg_size as i64;
+    let end = end_pos.0 as i64;
+    let params: [&(dyn ToSql + Sync); 3] = [&tenant_id, &timeline_id, &end];
+
+    // Chunks that begin at or after end_pos are entirely torn — drop them.
+    let del = format!(
+        "DELETE FROM {table} WHERE tenant_id = $1 AND timeline_id = $2 \
+         AND segno * {seg} + chunk_offset >= $3"
+    );
+    client
+        .execute(&del, &params)
+        .await
+        .context("truncate_wals_above: delete chunks past end_pos")?;
+
+    // The chunk straddling end_pos keeps its bytes up to end_pos; trim the
+    // torn remainder so its end aligns exactly with end_pos.
+    let upd = format!(
+        "UPDATE {table} SET \
+           data = substring(data FROM 1 FOR ($3 - (segno * {seg} + chunk_offset))::int), \
+           chunk_size = ($3 - (segno * {seg} + chunk_offset))::int \
+         WHERE tenant_id = $1 AND timeline_id = $2 \
+           AND segno * {seg} + chunk_offset < $3 \
+           AND segno * {seg} + chunk_offset + chunk_size > $3"
+    );
+    client
+        .execute(&upd, &params)
+        .await
+        .context("truncate_wals_above: trim straddling chunk")?;
+    Ok(())
 }
 
 /// Consumer task body. Builds batches by:
@@ -1689,6 +1880,91 @@ mod tests {
             .await
             .expect("load_min_segno via system_client");
         assert_eq!(min_segno, 0, "min(segno) across lanes");
+
+        drop_wals_table(&fpu, &table).await;
+    }
+
+    /// `truncate_wals_above` drops chunks past the cut, trims the chunk
+    /// straddling it, and leaves `max(chunk_offset + chunk_size)` exactly
+    /// at the cut — the durability-side half of the torn-tail fix (#61).
+    /// Idempotent on re-run.
+    #[tokio::test]
+    async fn truncate_wals_above_deletes_and_trims() {
+        let table = format!("wals_test_trunc_above_{}", rand_suffix());
+        let (fpu, _read, system) = open_three_lanes().await;
+        make_wals_table(&fpu, &table).await;
+        let tenant = TenantId::generate().to_string();
+        let timeline = TimelineId::generate().to_string();
+
+        // Three chunks in segno 0 spanning [0, 20480): two full pages + a
+        // partial. Cut at 10000 — mid the second chunk [8192, 16384).
+        let chunks: &[(i64, i64, i32)] = &[(0, 0, 8192), (0, 8192, 8192), (0, 16384, 4096)];
+        for (segno, offset, size) in chunks {
+            let blob = vec![0x5au8; *size as usize];
+            fpu.execute(
+                &format!(
+                    "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+                                     chunk_size, data, last_modified_us) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    quote_ident(&table)
+                ),
+                &[&tenant, &timeline, segno, offset, size, &blob, &0i64],
+            )
+            .await
+            .expect("insert chunk");
+        }
+
+        truncate_wals_above(&system, &table, &tenant, &timeline, SEG_SIZE as usize, Lsn(10000))
+            .await
+            .expect("truncate_wals_above");
+
+        // End of WAL is now exactly the cut.
+        let lsn =
+            YbWalStorage::load_write_lsn(&system, &table, &tenant, &timeline, SEG_SIZE as usize, Lsn(0))
+                .await
+                .expect("load_write_lsn");
+        assert_eq!(lsn, Lsn(10000), "end of WAL must equal the truncation point");
+
+        // The chunk past the cut is gone; only two rows remain.
+        let count: i64 = system
+            .query_opt(
+                &format!(
+                    "SELECT count(*) FROM {} WHERE tenant_id=$1 AND timeline_id=$2",
+                    quote_ident(&table)
+                ),
+                &[&tenant, &timeline],
+            )
+            .await
+            .expect("count")
+            .map(|r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "the chunk entirely past the cut must be deleted");
+
+        // The straddling chunk is trimmed to 10000 - 8192 = 1808 bytes.
+        let row = system
+            .query_opt(
+                &format!(
+                    "SELECT chunk_size, octet_length(data) FROM {} \
+                     WHERE tenant_id=$1 AND timeline_id=$2 AND chunk_offset=8192",
+                    quote_ident(&table)
+                ),
+                &[&tenant, &timeline],
+            )
+            .await
+            .expect("straddling chunk")
+            .expect("straddling chunk exists");
+        assert_eq!(row.get::<_, i32>(0), 1808, "chunk_size trimmed to the cut");
+        assert_eq!(row.get::<_, i32>(1), 1808, "data trimmed to the cut");
+
+        // Idempotent: a second call is a no-op.
+        truncate_wals_above(&system, &table, &tenant, &timeline, SEG_SIZE as usize, Lsn(10000))
+            .await
+            .expect("truncate_wals_above (idempotent)");
+        let lsn2 =
+            YbWalStorage::load_write_lsn(&system, &table, &tenant, &timeline, SEG_SIZE as usize, Lsn(0))
+                .await
+                .expect("load_write_lsn after re-run");
+        assert_eq!(lsn2, Lsn(10000), "re-run must not change the end of WAL");
 
         drop_wals_table(&fpu, &table).await;
     }

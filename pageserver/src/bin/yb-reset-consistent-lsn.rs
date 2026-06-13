@@ -24,27 +24,14 @@
 //! first — a running one will overwrite this on its next flush, and may
 //! be generation-fenced against this write).
 
-use std::cmp::min;
-
 use anyhow::{Context, bail};
 use clap::Parser;
-use postgres_ffi::waldecoder::WalStreamDecoder;
-use postgres_ffi::v17::xlog_utils::XLP_FIRST_IS_CONTRECORD;
-use postgres_ffi::{
-    PgMajorVersion, WAL_SEGMENT_SIZE, XLOG_BLCKSZ, XLOG_SIZE_OF_XLOG_LONG_PHD,
-    XLOG_SIZE_OF_XLOG_SHORT_PHD,
-};
+use postgres_ffi::wal_record_boundary::{WalSource, decode_forward, find_anchor};
+use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE};
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 use ysql_client::tokio_postgres::types::ToSql;
 use ysql_client::{YbConnConfig, YsqlClient};
-
-/// How far below `target` we are willing to scan, page by page, looking
-/// for a WAL page that begins a fresh record (no continuation). One real
-/// WAL record almost never exceeds a few MiB; 64 MiB is a generous bound
-/// past which we'd rather fail loudly than scan into the next tenant's
-/// history.
-const MAX_ANCHOR_SCAN_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Parser)]
 #[command(
@@ -286,34 +273,6 @@ async fn write_timeline_state(
     }
 }
 
-/// A source of raw WAL bytes addressed by LSN. The DB-backed
-/// [`WalReader`] resolves chunks from `public.wals`; tests supply an
-/// in-memory buffer. `find_anchor` / `decode_forward` are generic over
-/// this so they can run without a database.
-trait WalSource {
-    /// WAL segment size, for LSN ↔ `(segno, offset)` mapping.
-    fn seg(&self) -> u64;
-
-    /// Fetch the chunk covering `lsn`: its absolute start LSN and raw
-    /// bytes. Errors if no chunk covers `lsn` (a WAL hole).
-    async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)>;
-
-    /// Read exactly `len` bytes starting at `lsn`, assembling across
-    /// chunk (and segment) boundaries. Errors on a hole.
-    async fn read_exact(&self, lsn: Lsn, len: usize) -> anyhow::Result<Vec<u8>> {
-        let mut out = Vec::with_capacity(len);
-        let mut pos = lsn;
-        while out.len() < len {
-            let (chunk_start, data) = self.chunk_at(pos).await?;
-            let from = (pos.0 - chunk_start.0) as usize;
-            let take = min(data.len() - from, len - out.len());
-            out.extend_from_slice(&data[from..from + take]);
-            pos = Lsn(pos.0 + take as u64);
-        }
-        Ok(out)
-    }
-}
-
 /// Reads raw WAL bytes by LSN from `public.wals`, mapping each LSN to
 /// `(segno, chunk_offset)` and resolving the chunk that covers it.
 struct WalReader<'a> {
@@ -357,101 +316,11 @@ impl WalSource for WalReader<'_> {
     }
 }
 
-/// The size of the page header at a page-aligned `lsn`: long header at a
-/// segment boundary, short header otherwise.
-fn page_header_size(lsn: Lsn, seg: u64) -> usize {
-    if lsn.0 % seg == 0 {
-        XLOG_SIZE_OF_XLOG_LONG_PHD
-    } else {
-        XLOG_SIZE_OF_XLOG_SHORT_PHD
-    }
-}
-
-/// Walk back from `target`'s page to the first page that begins a fresh
-/// record (i.e. `XLP_FIRST_IS_CONTRECORD` is clear, so the page is not a
-/// record continuation). That page boundary is itself a guaranteed
-/// record boundary `<= target`: seeding the decoder there makes it
-/// consume the page header and the first record exactly as the
-/// pageserver does, so the boundaries it then reports use the same
-/// (page-boundary) representation the pageserver persists.
-async fn find_anchor<S: WalSource>(reader: &S, target: Lsn) -> anyhow::Result<Lsn> {
-    let blk = XLOG_BLCKSZ as u64;
-    let mut page = Lsn(target.0 - target.0 % blk);
-    let scan_floor = target.0.saturating_sub(MAX_ANCHOR_SCAN_BYTES);
-    loop {
-        let hdr_size = page_header_size(page, reader.seg());
-        let hdr = reader
-            .read_exact(page, hdr_size)
-            .await
-            .with_context(|| format!("reading WAL page header at {page}"))?;
-        // xlp_info is the u16 right after xlp_magic (offset 2). See
-        // XLogPageHeaderData layout in postgres_ffi.
-        let xlp_info = u16::from_le_bytes([hdr[2], hdr[3]]);
-        if xlp_info & XLP_FIRST_IS_CONTRECORD == 0 {
-            return Ok(page);
-        }
-        if page.0 == 0 || page.0 <= scan_floor {
-            bail!(
-                "no fresh-record WAL page found within {} MiB below {target}; target may sit inside \
-                 an unusually large record or outside the persisted WAL range",
-                MAX_ANCHOR_SCAN_BYTES / (1024 * 1024)
-            );
-        }
-        page = Lsn(page.0 - blk);
-    }
-}
-
-/// Seed the real `WalStreamDecoder` at `anchor` and replay forward over
-/// `public.wals` bytes, collecting record boundaries until one exceeds
-/// `target` (or the WAL runs out / a hole / a decode error stops us).
-/// Returns the boundaries (ascending, starting with `anchor`) and, if the
-/// walk stopped before passing `target`, a human-readable reason.
-async fn decode_forward<S: WalSource>(
-    reader: &S,
-    anchor: Lsn,
-    target: Lsn,
-    pg_version: PgMajorVersion,
-) -> anyhow::Result<(Vec<Lsn>, Option<String>)> {
-    let mut decoder = WalStreamDecoder::new(anchor, pg_version);
-    let mut boundaries = vec![anchor];
-    let mut pos = anchor;
-    let mut stop: Option<String> = None;
-
-    'outer: loop {
-        loop {
-            match decoder.poll_decode() {
-                Ok(Some((next_lsn, _rec))) => {
-                    boundaries.push(next_lsn);
-                    if next_lsn > target {
-                        break 'outer;
-                    }
-                }
-                Ok(None) => break, // need more bytes
-                Err(e) => {
-                    stop = Some(format!("decode error: {e}"));
-                    break 'outer;
-                }
-            }
-        }
-        // Feed the next chunk of WAL bytes.
-        match reader.chunk_at(pos).await {
-            Ok((chunk_start, data)) => {
-                let from = (pos.0 - chunk_start.0) as usize;
-                decoder.feed_bytes(&data[from..]);
-                pos = Lsn(chunk_start.0 + data.len() as u64);
-            }
-            Err(e) => {
-                stop = Some(format!("WAL ended before reaching target: {e}"));
-                break 'outer;
-            }
-        }
-    }
-    Ok((boundaries, stop))
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use postgres_ffi::XLOG_BLCKSZ;
     use postgres_ffi::v17::wal_generator::{LogicalMessageGenerator, WalGenerator};
 
     /// In-memory WAL: a single contiguous byte buffer covering
