@@ -184,9 +184,35 @@ impl Server {
 
     async fn listener(&self) -> Result<TcpListener> {
         let addr = SocketAddr::new(self.ip(), self.port());
-        let listener = TcpListener::bind(&addr).await?;
-
-        Ok(listener)
+        // Retry the bind for a bounded window instead of failing on the
+        // first `EADDRINUSE`. During a fast compute recycle (e.g. the e2e
+        // harness's `endpoint stop`/`endpoint start`, or a `start` retry),
+        // a predecessor compute_ctl may still be releasing this port when we
+        // come up; without the retry we panic and the whole startup aborts,
+        // turning a transient port hand-off into a hard failure. ~10s at
+        // 200ms intervals comfortably covers the hand-off.
+        const MAX_ATTEMPTS: u32 = 50;
+        const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match TcpListener::bind(&addr).await {
+                Ok(listener) => return Ok(listener),
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::AddrInUse && attempt < MAX_ATTEMPTS =>
+                {
+                    if attempt == 1 {
+                        info!(
+                            "compute_ctl {self} HTTP server: {addr} in use \
+                             (predecessor still releasing it?), retrying for up to {}s",
+                            (MAX_ATTEMPTS as u64 * RETRY_INTERVAL.as_millis() as u64) / 1000,
+                        );
+                    }
+                    tokio::time::sleep(RETRY_INTERVAL).await;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 
     fn ip(&self) -> IpAddr {
