@@ -119,33 +119,70 @@ pub struct SlruPageRow {
 /// instead of corrupting a materialised image; the dedup still runs (we don't
 /// want to amplify by aborting), but now it leaves a fingerprint.
 pub(crate) fn dedup_page_chain_by_lsn(chain: &mut Vec<Arc<PageRow>>) {
-    let mut prev: Option<(Lsn, bool)> = None;
-    for r in chain.iter() {
-        if let Some((plsn, p_is_image)) = prev {
-            if plsn == r.lsn && !p_is_image {
-                crate::metrics::CORRECTNESS_ERRORS
-                    .with_label_values(&["chain_dedup_dropped_delta"])
-                    .inc();
-                use std::sync::Mutex;
-
-                use once_cell::sync::Lazy;
-                use utils::rate_limit::RateLimit;
-                static LOGGED: Lazy<Mutex<RateLimit>> =
-                    Lazy::new(|| Mutex::new(RateLimit::new(std::time::Duration::from_secs(10))));
-                if let Ok(mut limiter) = LOGGED.try_lock() {
-                    let (lsn, key) = (r.lsn, r.key.clone());
-                    limiter.call(|| {
-                        tracing::warn!(
-                            "chain dedup dropping a non-superseded row at lsn={lsn} key={key:?}: \
-                             two non-image rows share an LSN, so a real record is being lost \
-                             (reads back as a chain gap → walredo invalid-max-offset PANIC, #22; \
-                             metric correctness_errors{{chain_dedup_dropped_delta}})"
-                        );
-                    });
-                }
-            }
+    // A collision is `chain[i].lsn == chain[i-1].lsn` where the survivor
+    // (chain[i-1], which the dedup keeps) is a *delta*, not an image — so
+    // chain[i] is a real record about to be silently dropped. Walk pairs so
+    // both rows are in hand for the diagnostic dump.
+    for i in 1..chain.len() {
+        let survivor = &chain[i - 1];
+        let dropped = &chain[i];
+        if survivor.lsn != dropped.lsn || survivor.is_image {
+            continue;
         }
-        prev = Some((r.lsn, r.is_image));
+        crate::metrics::CORRECTNESS_ERRORS
+            .with_label_values(&["chain_dedup_dropped_delta"])
+            .inc();
+        // Dump full detail for the first N collisions (capture the attach
+        // burst), then rate-limit. The backtrace pins which read path built
+        // the colliding chain (materialiser vs getpage vs scan).
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        use once_cell::sync::Lazy;
+        use utils::rate_limit::RateLimit;
+        static DETAILED: AtomicU64 = AtomicU64::new(0);
+        static LOGGED: Lazy<Mutex<RateLimit>> =
+            Lazy::new(|| Mutex::new(RateLimit::new(std::time::Duration::from_secs(5))));
+        let in_burst = DETAILED.fetch_add(1, Ordering::Relaxed) < 64;
+        let throttled_ok = LOGGED.try_lock().is_ok_and(|mut l| {
+            let mut fired = false;
+            l.call(|| fired = true);
+            fired
+        });
+        if in_burst || throttled_ok {
+            let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+            let human = match key_columns(&dropped.key) {
+                Ok((spc, db, rel, fork, blk)) => {
+                    format!("rel={rel} fork={fork} blk={blk} (spc={spc} db={db})")
+                }
+                Err(e) => format!("<non-page key: {e}>"),
+            };
+            let row = |r: &Arc<PageRow>| {
+                format!(
+                    "is_image={} will_init={} pl={} payload_head={}",
+                    r.is_image,
+                    r.will_init,
+                    r.payload.len(),
+                    hex(&r.payload[..r.payload.len().min(48)]),
+                )
+            };
+            let bt = std::backtrace::Backtrace::force_capture();
+            tracing::warn!(
+                "chain dedup dropping a non-superseded row at lsn={lsn}\n\
+                 key={human}\n\
+                 key_hex={key_hex}\n\
+                 survivor (kept):   {survivor_row}\n\
+                 dropped  (lost):   {dropped_row}\n\
+                 two non-image rows share an LSN, so a real record is being lost \
+                 (reads back as a chain gap → walredo invalid-max-offset PANIC, #22; \
+                 metric correctness_errors{{chain_dedup_dropped_delta}})\n\
+                 backtrace:\n{bt}",
+                lsn = dropped.lsn,
+                key_hex = hex(&dropped.key),
+                survivor_row = row(survivor),
+                dropped_row = row(dropped),
+            );
+        }
     }
     chain.dedup_by(|a, b| a.lsn == b.lsn);
 }
