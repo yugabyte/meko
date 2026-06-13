@@ -10,6 +10,7 @@
 // back to the summary's last_file_uploaded_at while the log loads.
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { FileText, Search, Sparkles } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -83,6 +84,23 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
   // tab component (files filter by document_name, promoted memories
   // filter by content).
   const [search, setSearch] = useState("");
+
+  // Deep-link params (e.g. from the trace drawer's "Promoted to KB"):
+  // `tab` selects the active tab, `promotedMemoryId` is the entry to
+  // scroll to + shimmer inside the Promoted memories tab.
+  const [searchParams] = useSearchParams();
+  const promotedMemoryId = searchParams.get("promotedMemoryId") ?? "";
+  const initialTab =
+    searchParams.get("tab") === "promoted-memories" || promotedMemoryId
+      ? "promoted-memories"
+      : "files";
+  const [activeTab, setActiveTab] = useState(initialTab);
+  // Re-apply when the deep-link changes while the page is already mounted.
+  useEffect(() => {
+    if (searchParams.get("tab") === "promoted-memories" || promotedMemoryId) {
+      setActiveTab("promoted-memories");
+    }
+  }, [searchParams, promotedMemoryId]);
 
   // Caller identity — used by KnowledgeFilesTab for per-row Delete
   // visibility. Lives on the page (not deeper) so the children get a
@@ -217,7 +235,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
         />
 
         {resolvedDatapackId ? (
-          <Tabs defaultValue="files" className="w-full">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             {/* Shared search bar above the tab strip — same query
                 drives the files-tab filter and the promoted-memories
                 filter. Bordered input matches the rest of the app. */}
@@ -300,6 +318,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
                 embeddingModel={summary?.embedding_model ?? null}
                 embeddingDimensions={summary?.embedding_dimensions ?? null}
                 aiProvider={summary?.ai_provider ?? null}
+                highlightMemoryId={promotedMemoryId || undefined}
               />
             </TabsContent>
           </Tabs>

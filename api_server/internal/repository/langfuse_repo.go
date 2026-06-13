@@ -143,7 +143,14 @@ type ThreadMessage struct {
 	// MemoryIDs lists the mem0 row IDs attributed to this message window.
 	// Nil/empty when the message has no associated memories.
 	MemoryIDs []string `json:"memory_ids,omitempty"`
-	LLMCalls  int64    `json:"llm_calls"`
+	// MemoryTexts are the current mem0 memory texts, aligned with MemoryIDs.
+	MemoryTexts []string `json:"memory_texts,omitempty"`
+	// PromotedMemoryIDs / PromotedMemoryTexts: memories from this turn now
+	// promoted to the KB (in promoted_collection). Excluded from the count;
+	// surfaced separately as "Promoted to KB" and used for deep-link match.
+	PromotedMemoryIDs   []string `json:"promoted_memory_ids,omitempty"`
+	PromotedMemoryTexts []string `json:"promoted_memory_texts,omitempty"`
+	LLMCalls            int64    `json:"llm_calls"`
 	// TotalTokens is the sum of usage_details.total across every
 	// GENERATION span in this turn's window — primarily mem0's nested
 	// fact-extraction LLM calls for Conversations (the external agent's
@@ -163,11 +170,17 @@ type MemoryHit struct {
 }
 
 type KBHit struct {
-	DocumentID string   `json:"document_id"`
-	ChunkText  string   `json:"chunk_text"`
-	Score      *float64 `json:"score,omitempty"`
-	Distance   *float64 `json:"distance,omitempty"`
-	CharCount  int      `json:"char_count,omitempty"`
+	DocumentID string `json:"document_id"`
+	// DocumentName is the resolved file basename for document-sourced hits
+	// (empty when unresolved or for promoted-memory hits).
+	DocumentName string `json:"document_name,omitempty"`
+	ChunkText    string `json:"chunk_text"`
+	// Source is "memory" when the hit is a promoted memory living in the KB
+	// (as opposed to a chunk from an uploaded document).
+	Source    string   `json:"source,omitempty"`
+	Score     *float64 `json:"score,omitempty"`
+	Distance  *float64 `json:"distance,omitempty"`
+	CharCount int      `json:"char_count,omitempty"`
 }
 
 type ProcessingStep struct {
@@ -240,11 +253,17 @@ type TraceSpan struct {
 }
 
 type TraceMemoryItem struct {
-	MemoryID  string `json:"memory_id,omitempty"`
-	Text      string `json:"text"`
-	Vector    int64  `json:"vector"`
-	Entities  int64  `json:"entities"`
-	Relations int64  `json:"relations"`
+	MemoryID string `json:"memory_id,omitempty"`
+	Text     string `json:"text"`
+	// Promoted is true when this memory has been promoted to the KB and
+	// evicted from mem0 (it now lives in datapacks.promoted_collection).
+	// The vector/entity/relation counts below are meaningless for promoted
+	// items (the mem0 anchor row is gone), so the UI shows just the text
+	// plus a "Promoted to KB" tag instead of the count badges.
+	Promoted  bool  `json:"promoted,omitempty"`
+	Vector    int64 `json:"vector"`
+	Entities  int64 `json:"entities"`
+	Relations int64 `json:"relations"`
 	// EntityNames are sampled graph-node names linked to this memory (if present).
 	EntityNames []string `json:"entity_names,omitempty"`
 	// RelationNames are sampled relation labels/types linked to those nodes (if present).
@@ -1118,6 +1137,9 @@ LIMIT  $3 OFFSET $4`
 			messageID := header.Thread[i].MessageID
 			header.Thread[i].MemoriesExtracted = memRes.counts[messageID]
 			header.Thread[i].MemoryIDs = memRes.memoryIDs[messageID]
+			header.Thread[i].MemoryTexts = memRes.memoryTexts[messageID]
+			header.Thread[i].PromotedMemoryIDs = memRes.promotedMemoryIDs[messageID]
+			header.Thread[i].PromotedMemoryTexts = memRes.promotedMemoryTexts[messageID]
 			header.Thread[i].MemoryHits = agentRes.memoryHits[messageID]
 			header.Thread[i].KBHits = agentRes.kbHits[messageID]
 			header.Thread[i].ProcessingSteps = ensureLLMInvokeStep(agentRes.processingSteps[messageID], header.Thread[i].LLMCalls)
@@ -1128,8 +1150,16 @@ LIMIT  $3 OFFSET $4`
 }
 
 type memoryWindowResult struct {
-	counts    map[string]int64
-	memoryIDs map[string][]string // messageID → []memoryID (real mem0 UUIDs)
+	counts      map[string]int64
+	memoryIDs   map[string][]string // messageID → []memoryID (real mem0 UUIDs)
+	memoryTexts map[string][]string // messageID → []memory text (payload->>'data')
+	// promoted* mirror the above for rows that have been promoted to the KB
+	// (now living in datapacks.promoted_collection, evicted from mem0). Kept
+	// separate so the live count stays "current memories only" while the
+	// UI can still surface + deep-link promoted memories on the originating
+	// turn, tagged as "Promoted to KB".
+	promotedMemoryIDs   map[string][]string
+	promotedMemoryTexts map[string][]string
 }
 
 // attributeTimeToMessageWindow walks the ordered bookmark windows in
@@ -1172,60 +1202,122 @@ func attributeTimeToMessageWindow(windows []messageWindow, winIdx *int, at time.
 // `meko_promotion_user_action` is not `keep_as_memory` (matches the
 // filter in MemoriesRepo.ListByFilter, so the deep-link from a row
 // the user can actually see always resolves).
+// canonicalUUID normalizes a UUID that may arrive with or without dashes
+// (Langfuse session ids are the conversation UUID with dashes stripped)
+// into the canonical lowercase 8-4-4-4-12 dashed form. Returns "" when the
+// input isn't a valid UUID, so callers can treat it as "no match" rather
+// than feeding an invalid value into a ::uuid cast. uuid.Parse accepts both
+// dashed and 32-char hex forms.
+func canonicalUUID(s string) string {
+	parsed, err := uuid.Parse(strings.TrimSpace(s))
+	if err != nil {
+		return ""
+	}
+	return parsed.String()
+}
+
 func (r *LangfuseRepo) mem0PerMessageWindow(
 	datapackID, sessionID string,
 	windows []messageWindow,
 ) (memoryWindowResult, error) {
 	empty := memoryWindowResult{
-		counts:    map[string]int64{},
-		memoryIDs: map[string][]string{},
+		counts:              map[string]int64{},
+		memoryIDs:           map[string][]string{},
+		memoryTexts:         map[string][]string{},
+		promotedMemoryIDs:   map[string][]string{},
+		promotedMemoryTexts: map[string][]string{},
 	}
 	if len(windows) == 0 {
 		return empty, nil
 	}
-	datapackID = strings.TrimSpace(datapackID)
-	sessionID = strings.ReplaceAll(strings.TrimSpace(sessionID), "-", "")
-	if datapackID == "" || sessionID == "" {
+	// Compare conversation ids as native uuid = uuid. The previous
+	// `REPLACE(meko_conversation_id::text,'-','') = $2` was non-sargable:
+	// it cast + REPLACE'd the column for every scanned row and could never
+	// use an index. Reconstructing the dashed UUID once here lets the
+	// planner do a plain 16-byte uuid compare (and use an index on
+	// meko_conversation_id if one is added).
+	convUUID := canonicalUUID(sessionID)
+	// Validate/canonicalize datapackID before binding it as a uuid: a
+	// malformed value would otherwise fail the query at the DB layer.
+	dpUUID := canonicalUUID(datapackID)
+	if dpUUID == "" || convUUID == "" {
 		return empty, nil
 	}
 
+	// Current mem0 memories + promoted-to-KB memories in one query via
+	// UNION ALL. Each table is scanned exactly once and the DB concatenates
+	// the two result sets (no dedup — that's the "ALL"), then a single
+	// ORDER BY interleaves them so the lockstep window attribution below
+	// walks every memory oldest-first. `promoted` tags which side a row
+	// came from.
+	//
+	// e.g. mem0 yields [A@10:00 (promoted=false)] and promoted_collection
+	// yields [B@10:05 (promoted=true)]; UNION ALL stacks them and ORDER BY
+	// returns [A@10:00 false, B@10:05 true] — one pass over each table.
 	const q = `
-SELECT id::text AS memory_id, meko_created_at
+SELECT id::text AS memory_id,
+       COALESCE(payload->>'data', '') AS memory_text,
+       meko_created_at,
+       false AS promoted
 FROM   datapacks.meko_mem0_collection
 WHERE  meko_datapack_id = $1::uuid
-  AND  meko_conversation_id IS NOT NULL
-  AND  REPLACE(meko_conversation_id::text, '-', '') = $2
+  AND  meko_conversation_id = $2::uuid
   AND  meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action
-ORDER  BY meko_created_at ASC, id ASC`
+UNION ALL
+SELECT id::text AS memory_id,
+       COALESCE(payload->>'data', '') AS memory_text,
+       meko_created_at,
+       true AS promoted
+FROM   datapacks.promoted_collection
+WHERE  meko_datapack_id = $1::uuid
+  AND  meko_conversation_id = $2::uuid
+ORDER  BY meko_created_at ASC, memory_id ASC`
 
-	rows, err := r.dataDB.Query(q, datapackID, sessionID)
+	rows, err := r.dataDB.Query(q, dpUUID, convUUID)
 	if err != nil {
 		return empty, fmt.Errorf("meta db: list mem0 rows for message windows: %w", err)
 	}
 	defer rows.Close()
 
 	res := memoryWindowResult{
-		counts:    make(map[string]int64, len(windows)),
-		memoryIDs: make(map[string][]string, len(windows)),
+		counts:              make(map[string]int64, len(windows)),
+		memoryIDs:           make(map[string][]string, len(windows)),
+		memoryTexts:         make(map[string][]string, len(windows)),
+		promotedMemoryIDs:   make(map[string][]string, len(windows)),
+		promotedMemoryTexts: make(map[string][]string, len(windows)),
 	}
 	for _, w := range windows {
 		res.counts[w.MessageID] = 0
 		res.memoryIDs[w.MessageID] = nil
+		res.memoryTexts[w.MessageID] = nil
+		res.promotedMemoryIDs[w.MessageID] = nil
+		res.promotedMemoryTexts[w.MessageID] = nil
 	}
 
 	winIdx := 0
 	for rows.Next() {
-		var memID string
+		var memID, memText string
 		var createdAt time.Time
-		if err := rows.Scan(&memID, &createdAt); err != nil {
+		var promoted bool
+		if err := rows.Scan(&memID, &memText, &createdAt, &promoted); err != nil {
 			return empty, fmt.Errorf("meta db: scan mem0 row: %w", err)
 		}
 		messageID := attributeTimeToMessageWindow(windows, &winIdx, createdAt)
 		if messageID == "" {
 			continue
 		}
+		if promoted {
+			res.promotedMemoryIDs[messageID] = append(res.promotedMemoryIDs[messageID], memID)
+			if memText != "" {
+				res.promotedMemoryTexts[messageID] = append(res.promotedMemoryTexts[messageID], memText)
+			}
+			continue
+		}
 		res.counts[messageID]++
 		res.memoryIDs[messageID] = append(res.memoryIDs[messageID], memID)
+		if memText != "" {
+			res.memoryTexts[messageID] = append(res.memoryTexts[messageID], memText)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return empty, fmt.Errorf("meta db: iterate mem0 rows: %w", err)
@@ -1463,7 +1555,50 @@ ORDER  BY start_time ASC`
 	if err := rows.Err(); err != nil {
 		return emptyResult, fmt.Errorf("langfuse db: iterate agent reasoning observations: %w", err)
 	}
+	r.resolveKBDocumentNames(res.kbHits)
 	return res, nil
+}
+
+func (r *LangfuseRepo) resolveKBDocumentNames(kbHits map[string][]KBHit) {
+	if r == nil || r.dataDB == nil || len(kbHits) == 0 {
+		return
+	}
+
+	// Collect the distinct document ids of document-sourced hits. A single
+	// document yields many chunks across many messages, so dedup here to keep
+	// the IN-list (and the lookup query) small.
+	uniqueIDs := make(map[string]struct{})
+	for _, hits := range kbHits {
+		for _, h := range hits {
+			if h.Source == "memory" || h.DocumentID == "" {
+				continue
+			}
+			uniqueIDs[h.DocumentID] = struct{}{}
+		}
+	}
+	if len(uniqueIDs) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(uniqueIDs))
+	for id := range uniqueIDs {
+		ids = append(ids, id)
+	}
+
+	names := documentBasenamesByIDs(r.dataDB, ids)
+	if len(names) == 0 {
+		return
+	}
+
+	for msg := range kbHits {
+		for i := range kbHits[msg] {
+			if kbHits[msg][i].Source == "memory" {
+				continue
+			}
+			if name, ok := names[kbHits[msg][i].DocumentID]; ok {
+				kbHits[msg][i].DocumentName = name
+			}
+		}
+	}
 }
 
 const (
@@ -1696,11 +1831,19 @@ func extractAgentKBHits(v interface{}) []KBHit {
 			if text == "" {
 				continue
 			}
-			source := firstStringField(x, "document_name", "source", "source_uri", "document_id")
-			if source != "" {
-				source = path.Base(source)
+			docRef := firstStringField(x, "document_name", "source", "source_uri", "document_id")
+			if docRef != "" {
+				docRef = path.Base(docRef)
 			}
-			hit := KBHit{DocumentID: source, ChunkText: text, CharCount: utf8.RuneCountInString(text)}
+			hit := KBHit{DocumentID: docRef, ChunkText: text, CharCount: utf8.RuneCountInString(text)}
+			// metadata_filters distinguishes promoted-memory hits (source ==
+			// "memory") from document chunks (no source). The UI labels them
+			// differently.
+			if mf, ok := x["metadata_filters"].(map[string]interface{}); ok {
+				if s, ok := mf["source"].(string); ok {
+					hit.Source = s
+				}
+			}
 			if hasDistance {
 				d := distance
 				score := 1 - distance
@@ -2354,13 +2497,31 @@ func (r *LangfuseRepo) EnrichTraceMemoryItems(
 		if err != nil {
 			return spans, err
 		}
+		// IDs absent from mem0 may have been promoted to the KB — flag those
+		// so the UI renders them as "Promoted to KB" instead of showing
+		// misleading 0/0/0 counts (the mem0 anchor row no longer exists).
+		missingIDs := make([]string, 0)
+		for id := range refsByID {
+			if metricsByID[id] == nil {
+				missingIDs = append(missingIDs, id)
+			}
+		}
+		promotedSet, err := r.batchLookupPromotedMemoryIDs(datapackID, convID, missingIDs)
+		if err != nil {
+			return spans, err
+		}
 		for id, addrs := range refsByID {
-			m := metricsByID[id]
-			if m == nil {
+			if m := metricsByID[id]; m != nil {
+				for _, a := range addrs {
+					applyTraceMemoryMetrics(&perSpanItems[a.span][a.item], m)
+				}
 				continue
 			}
-			for _, a := range addrs {
-				applyTraceMemoryMetrics(&perSpanItems[a.span][a.item], m)
+			if promotedSet[id] {
+				for _, a := range addrs {
+					perSpanItems[a.span][a.item].Promoted = true
+					perSpanItems[a.span][a.item].MemoryID = id
+				}
 			}
 		}
 	}
@@ -2391,6 +2552,57 @@ func (r *LangfuseRepo) EnrichTraceMemoryItems(
 		if perSpanItems[i] != nil {
 			out[i].MemoryItems = perSpanItems[i]
 		}
+	}
+	return out, nil
+}
+
+// batchLookupPromotedMemoryIDs returns the subset of `ids` that exist in
+// datapacks.promoted_collection for this datapack + conversation (i.e. were
+// promoted to the KB and evicted from mem0). Used to tag trace memory items
+// as "Promoted to KB" so the side panel renders text without misleading
+// 0/0/0 counts. Empty input → empty result, no query.
+func (r *LangfuseRepo) batchLookupPromotedMemoryIDs(
+	datapackID, conversationID string,
+	ids []string,
+) (map[string]bool, error) {
+	out := make(map[string]bool, len(ids))
+	convUUID := canonicalUUID(conversationID)
+	dpUUID := canonicalUUID(datapackID)
+	if len(ids) == 0 || convUUID == "" || dpUUID == "" {
+		return out, nil
+	}
+	// Compare against the native uuid `id` (sargable, uses the PK) instead of
+	// casting it to text. That requires a uuid[] bind, so drop any malformed
+	// ids up front — otherwise one bad value would error the whole query.
+	validIDs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if canonical := canonicalUUID(id); canonical != "" {
+			validIDs = append(validIDs, canonical)
+		}
+	}
+	if len(validIDs) == 0 {
+		return out, nil
+	}
+	const q = `
+SELECT id::text
+FROM   datapacks.promoted_collection
+WHERE  meko_datapack_id = $1::uuid
+  AND  meko_conversation_id = $2::uuid
+  AND  id = ANY($3::uuid[])`
+	rows, err := r.dataDB.Query(q, dpUUID, convUUID, pq.Array(validIDs))
+	if err != nil {
+		return nil, fmt.Errorf("meta db: batch lookup promoted memory ids: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("meta db: scan promoted memory id: %w", err)
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("meta db: iterate promoted memory ids: %w", err)
 	}
 	return out, nil
 }
@@ -2487,12 +2699,12 @@ edges AS (
     LEFT JOIN meko_multi_tenant_graph."Entity" es
            ON (es.id::text)::bigint = (e.start_id::text)::bigint
           AND es.meko_datapack_id = $1::uuid
-          AND REPLACE(es.meko_conversation_id::text, '-', '') = $2
+          AND es.meko_conversation_id = $2::uuid
     LEFT JOIN LATERAL (SELECT es.properties::text::jsonb) AS esp_lat(esp) ON TRUE
     LEFT JOIN meko_multi_tenant_graph."Entity" ee
            ON (ee.id::text)::bigint = (e.end_id::text)::bigint
           AND ee.meko_datapack_id = $1::uuid
-          AND REPLACE(ee.meko_conversation_id::text, '-', '') = $2
+          AND ee.meko_conversation_id = $2::uuid
     LEFT JOIN LATERAL (SELECT ee.properties::text::jsonb) AS eep_lat(eep) ON TRUE
     WHERE  e.properties::text ILIKE $%d
       AND  e.properties::text ILIKE $%d
@@ -2546,7 +2758,11 @@ func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByIDs(
 	ids []string,
 ) (map[string]*traceMemoryMetrics, error) {
 	out := make(map[string]*traceMemoryMetrics, len(ids))
-	if len(ids) == 0 {
+	// $2 is matched as a plain uuid so the planner can use an index instead
+	// of stripping dashes off every row; the JSON ILIKE patterns below still
+	// use the dashless form the graph properties are written with.
+	convUUID := canonicalUUID(conversationID)
+	if len(ids) == 0 || convUUID == "" {
 		return out, nil
 	}
 
@@ -2556,8 +2772,7 @@ func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByIDs(
            CASE WHEN embeddings IS NOT NULL THEN 1 ELSE 0 END AS vector
     FROM   datapacks.meko_mem0_collection
     WHERE  meko_datapack_id = $1::uuid
-      AND  meko_conversation_id IS NOT NULL
-      AND  REPLACE(meko_conversation_id::text, '-', '') = $2
+      AND  meko_conversation_id = $2::uuid
       AND  id::text = ANY($3::text[])
 )`
 
@@ -2566,7 +2781,7 @@ func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByIDs(
 	datapackPattern := fmt.Sprintf("%%\"meko_datapack_id\": \"%s\"%%", datapackID)
 	conversationPattern := fmt.Sprintf("%%\"meko_conversation_id\": \"%s\"%%", conversationID)
 
-	rows, err := r.dataDB.Query(q, datapackID, conversationID, pq.Array(ids), datapackPattern, conversationPattern)
+	rows, err := r.dataDB.Query(q, datapackID, convUUID, pq.Array(ids), datapackPattern, conversationPattern)
 	if err != nil {
 		return nil, fmt.Errorf("meta db: batch lookup trace memory metrics by id: %w", err)
 	}
@@ -2605,7 +2820,11 @@ func (r *LangfuseRepo) batchLookupTraceMemoryMetricsByTexts(
 	offsets []int,
 ) (map[traceMemoryTextRefKey]*traceMemoryMetrics, error) {
 	out := make(map[traceMemoryTextRefKey]*traceMemoryMetrics, len(keys))
-	if len(keys) == 0 {
+	// See batchLookupTraceMemoryMetricsByIDs: $2 is a sargable uuid compare;
+	// the JSON ILIKE patterns keep the dashless form.
+	convUUID := canonicalUUID(conversationID)
+	dpUUID := canonicalUUID(datapackID)
+	if len(keys) == 0 || convUUID == "" || dpUUID == "" {
 		return out, nil
 	}
 	if len(keys) != len(offsets) {
@@ -2630,8 +2849,7 @@ candidates AS (
            btrim(regexp_replace(lower(COALESCE(payload->>'data', payload->>'memory', payload->>'text', payload->>'content', '')), '[^a-z0-9]+', ' ', 'g')) AS normalized
     FROM   datapacks.meko_mem0_collection
     WHERE  meko_datapack_id = $1::uuid
-      AND  meko_conversation_id IS NOT NULL
-      AND  REPLACE(meko_conversation_id::text, '-', '') = $2
+      AND  meko_conversation_id = $2::uuid
 ),
 ranked AS (
     SELECT id, payload, embeddings, normalized,
@@ -2654,7 +2872,7 @@ matched AS (
 	datapackPattern := fmt.Sprintf("%%\"meko_datapack_id\": \"%s\"%%", datapackID)
 	conversationPattern := fmt.Sprintf("%%\"meko_conversation_id\": \"%s\"%%", conversationID)
 
-	rows, err := r.dataDB.Query(q, datapackID, conversationID, pq.Array(keys), pq.Array(offsets), datapackPattern, conversationPattern)
+	rows, err := r.dataDB.Query(q, dpUUID, convUUID, pq.Array(keys), pq.Array(offsets), datapackPattern, conversationPattern)
 	if err != nil {
 		return nil, fmt.Errorf("meta db: batch lookup trace memory metrics by text: %w", err)
 	}

@@ -1011,6 +1011,16 @@ export type DatapackThreadMessage = {
    *  when memories_extracted > 0. Used to deep-link from the Memories tab
    *  to the specific message that extracted a given memory. */
   memory_ids?: string[];
+  /** Surviving mem0 memory texts for this message window, in the same
+   *  order as `memory_ids`. Excludes promoted/evicted rows, so it stays
+   *  in lockstep with `memories_extracted` — used by the hover card. */
+  memory_texts?: string[];
+  /** Memories extracted on this turn that were since promoted to the KB
+   *  (now in promoted_collection, evicted from mem0). Kept out of
+   *  `memories_extracted`/`memory_ids`/`memory_texts`; surfaced separately
+   *  tagged "Promoted to KB" and matched for Collective-Memory deep-links. */
+  promoted_memory_ids?: string[];
+  promoted_memory_texts?: string[];
   llm_calls: number;
   /** Sum of `usage_details.total` across every GENERATION span in this
    *  turn's window. Always present; 0 when no usage was reported. */
@@ -1097,6 +1107,11 @@ export type DatapackTraceSpan = {
   memory_items?: Array<{
     memory_id?: string;
     text: string;
+    /** True when this memory was promoted to the KB and evicted from mem0.
+     *  The vector/entities/relations counts are meaningless in that case
+     *  (the mem0 anchor row is gone) — render text + a "Promoted to KB"
+     *  tag instead of the count badges. */
+    promoted?: boolean;
     vector: number;
     entities: number;
     relations: number;

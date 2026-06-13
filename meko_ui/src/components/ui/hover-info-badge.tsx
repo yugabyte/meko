@@ -44,7 +44,7 @@ export function HoverInfoBadge({
         align="start"
         collisionPadding={12}
         className={cn(
-          "z-[90] w-[280px] rounded-lg border border-blue-400/20 bg-[#0A1222]/95 px-2.5 py-2 text-left text-[10px] text-blue-100 shadow-lg",
+          "z-[90] w-[280px] rounded-lg border border-border bg-popover px-2.5 py-2 text-left text-[10px] text-popover-foreground shadow-lg",
           contentClassName,
         )}
       >

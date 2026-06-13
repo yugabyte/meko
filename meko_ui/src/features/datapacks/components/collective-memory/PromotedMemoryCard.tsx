@@ -41,6 +41,11 @@ import type { PromotedMemory } from "@/lib/mekoApi";
 type Props = {
   memory: PromotedMemory;
   datapackName: string;
+  /** Prebuilt deep-link to the originating conversation (with source +
+   *  memoryId + datapack_id already applied by the parent). When set, an
+   *  explicit "Open conversation" button is rendered; the card itself is
+   *  no longer a link, so the Source memory dropdown stays clickable. */
+  conversationHref?: string;
   /** Envelope-level constants from /knowledge-bases/summary. All
    *  nullable; when null the footer chip is omitted instead of
    *  showing an empty value. */
@@ -52,6 +57,7 @@ type Props = {
 export function PromotedMemoryCard({
   memory,
   datapackName,
+  conversationHref,
   embeddingModel,
   embeddingDimensions,
   aiProvider,
@@ -187,12 +193,15 @@ export function PromotedMemoryCard({
               {conversationId ? (
                 <div className="space-y-1">
                   <Link
-                    to={datapackConversationsPathWithSource(
-                      datapackName,
-                      conversationId,
-                      CONVERSATION_SOURCE.collectiveMemorySummary,
-                      { memoryId: memory.id },
-                    )}
+                    to={
+                      conversationHref ??
+                      datapackConversationsPathWithSource(
+                        datapackName,
+                        conversationId,
+                        CONVERSATION_SOURCE.collectiveMemorySummary,
+                        { memoryId: memory.id },
+                      )
+                    }
                     title={`Open conversation ${conversationId}`}
                     className="inline-flex items-center gap-1.5 text-sky-700 dark:text-sky-300 hover:underline"
                   >
@@ -245,6 +254,17 @@ export function PromotedMemoryCard({
             <Cpu className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" aria-hidden />
             <span className="text-foreground/85">{embeddingModel}</span>
           </span>
+        ) : null}
+        {conversationHref ? (
+          <Link
+            to={conversationHref}
+            title="Open conversation"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-[11px] font-medium text-sky-700 transition-colors hover:bg-sky-500/15 hover:border-sky-500/45 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-400/50 dark:text-sky-300"
+          >
+            <MessageSquare className="h-3.5 w-3.5" aria-hidden />
+            Open conversation
+            <SquareArrowOutUpRight className="h-3 w-3" aria-hidden />
+          </Link>
         ) : null}
       </footer>
     </article>

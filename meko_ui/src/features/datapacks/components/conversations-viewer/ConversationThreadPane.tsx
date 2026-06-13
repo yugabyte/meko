@@ -47,10 +47,12 @@ type Props = {
    *  parent owns the drawer state so the trace panel can persist
    *  across re-renders. */
   onOpenTrace: (messageId: string) => void;
-  /** Variant of `onOpenTrace` that also briefly shimmers the source
-   *  bubble — used by the memoryId deep-link flow so the user can spot
-   *  which turn produced their target memory. */
+  /** Variant of `onOpenTrace` used by manual memory-badge clicks: opens the
+   *  trace and runs the white sweep over the memories panel (no card flash). */
   onOpenTraceWithMemoryShimmer?: (messageId: string) => void;
+  /** Opens the trace for the `?memoryId=` deep-link: flashes the target
+   *  memory card amber (no white sweep). Distinct from a manual badge click. */
+  onOpenTraceFromDeepLink?: (messageId: string) => void;
   /** Opens the trace drawer for `messageId` and focuses `spanId` — fired
    *  by "View Trace" on a Decision Trace step. */
   onViewTraceSpan?: (messageId: string, spanId: string) => void;
@@ -63,6 +65,7 @@ export function ConversationThreadPane({
   userEmail,
   onOpenTrace,
   onOpenTraceWithMemoryShimmer,
+  onOpenTraceFromDeepLink,
   onViewTraceSpan,
 }: Props) {
   const [detail, setDetail] = useState<DatapackConversationDetail | null>(null);
@@ -172,16 +175,26 @@ export function ConversationThreadPane({
           block: "center",
         });
         setShimmeringMessageId(messageId);
-        onOpenTraceWithMemoryShimmer?.(messageId);
+        // Deep-link opens the trace WITHOUT the white panel sweep: the yellow
+        // bubble pulse + the drawer's amber card flash already signal the
+        // deep-linked memory. The white sweep is reserved exclusively for
+        // manual badge clicks (onOpenTraceWithMemoryShimmer), so clicking a
+        // badge never produces the yellow card flash even while ?memoryId=
+        // lingers in the URL.
+        onOpenTraceFromDeepLink?.(messageId);
         window.setTimeout(() => setShimmeringMessageId(""), 2800);
       }, 150);
     },
-    [onOpenTraceWithMemoryShimmer],
+    [onOpenTraceFromDeepLink],
   );
 
   useEffect(() => {
     if (!deepLinkPending || !targetMemoryId || loading) return;
-    const target = messages.find((m) => m.memory_ids?.includes(targetMemoryId));
+    const target = messages.find(
+      (m) =>
+        m.memory_ids?.includes(targetMemoryId) ||
+        m.promoted_memory_ids?.includes(targetMemoryId),
+    );
     if (target) {
       revealDeepLinkTarget(target.message_id);
       return;

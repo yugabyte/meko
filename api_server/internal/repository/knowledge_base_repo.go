@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 
 	"meko/api_server/internal/models"
@@ -28,6 +29,56 @@ func documentBasename(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+func documentBasenamesByIDs(db *sql.DB, ids []string) map[string]string {
+	out := map[string]string{}
+	if db == nil || len(ids) == 0 {
+		return out
+	}
+
+	valid := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		if _, err := uuid.Parse(id); err != nil {
+			continue
+		}
+		seen[id] = struct{}{}
+		valid = append(valid, id)
+	}
+	if len(valid) == 0 {
+		return out
+	}
+
+	rows, err := db.Query(
+		`SELECT document_id::text, document_name
+		   FROM   dist_rag.documents
+		   WHERE  document_id = ANY($1::uuid[])`,
+		pq.Array(valid),
+	)
+	if err != nil {
+		slog.Error("failed to query document basenames", "error", err)
+		return out
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			slog.Error("failed to scan document row", "error", err)
+			return out
+		}
+		if base := documentBasename(name); base != "" {
+			out[id] = base
+		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("error during document rows iteration", "error", err)
+	}
+	return out
 }
 
 // ErrKnowledgeBaseExists is returned by Insert when a row with the same

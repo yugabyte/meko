@@ -147,13 +147,13 @@ export function ThreadTurn({
               <Clock className="h-2.5 w-2.5" aria-hidden />
               {latencyLabel}
             </span>
-            {(message.memories_extracted ?? 0) > 0 ? (
+            {(message.memories_extracted ?? 0) > 0 ||
+            (message.promoted_memory_ids?.length ?? 0) > 0 ? (
               <MemoryHoverCard
-                count={message.memories_extracted}
-                messageId={message.message_id}
-                datapackName={datapackName}
-                datapackId={datapackId}
-                conversationId={conversationId}
+                count={message.memories_extracted ?? 0}
+                memories={message.memory_texts ?? []}
+                promotedCount={message.promoted_memory_ids?.length ?? 0}
+                promotedMemories={message.promoted_memory_texts ?? []}
                 onClickOpenTrace={onOpenTraceWithMemoryShimmer ?? onOpenTrace}
               />
             ) : null}

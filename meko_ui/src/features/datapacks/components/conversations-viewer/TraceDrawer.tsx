@@ -20,9 +20,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  BookUp,
   Bot,
   Brain,
   BrainCircuit,
+  SquareArrowOutUpRight,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -43,7 +45,8 @@ import {
   getDatapackMessageTrace,
   type DatapackTraceSpan,
 } from "@/lib/mekoApi";
-import { ROUTES } from "@/app/routes/paths";
+import { Link } from "react-router-dom";
+import { ROUTES, datapackKnowledgePath } from "@/app/routes/paths";
 import { parseMemoryOutput } from "./parseMemoryOutput";
 import { beautifyStatement } from "./sqlBeautify";
 import { MemoryIcon } from "@/components/conversation-telemetry";
@@ -115,24 +118,6 @@ export function TraceDrawer({
   // memory bubble always asks for a shimmer, so without this guard the
   // panel re-sweeps every time the same trace is reopened.
   const shimmeredMessageIdRef = useRef<string | null>(null);
-
-  // When the parent signals a shimmer, run the sweep then report done —
-  // but only the first time for a given message. Reopening the same trace
-  // acknowledges the request without replaying the animation.
-  useEffect(() => {
-    if (!shimmerMemories) return;
-    if (shimmeredMessageIdRef.current === messageId) {
-      onShimmerMemoriesDone?.();
-      return;
-    }
-    shimmeredMessageIdRef.current = messageId ?? null;
-    setShimmering(true);
-    const t = setTimeout(() => {
-      setShimmering(false);
-      onShimmerMemoriesDone?.();
-    }, 1600);
-    return () => clearTimeout(t);
-  }, [shimmerMemories, onShimmerMemoriesDone, messageId]);
 
   useEffect(() => {
     if (!open || !messageId) return;
@@ -274,6 +259,7 @@ export function TraceDrawer({
               span,
               memoryId: item.memory_id,
               text: item.text,
+              promoted: item.promoted ?? false,
               entityNames: item.entity_names ?? [],
               relationNames: item.relation_names ?? [],
               signals: {
@@ -287,6 +273,7 @@ export function TraceDrawer({
               span,
               memoryId: undefined,
               text,
+              promoted: false,
               entityNames: [],
               relationNames: [],
               signals: { vector: 0, entities: 0, relations: 0 },
@@ -295,6 +282,31 @@ export function TraceDrawer({
     [memorySpans],
   );
   const hasMemories = memoryItems.length > 0;
+  const normalMemoryItems = memoryItems.filter((item) => !item.promoted);
+  const promotedMemoryItems = memoryItems.filter((item) => item.promoted);
+
+  // When the parent signals a shimmer, run the sweep then report done — but
+  // only the first time for a given message (reopening the same trace just
+  // acknowledges the request). The sweep is gated on `hasMemories` so it
+  // doesn't start until the memories panel is actually mounted: with a
+  // `?memoryId=` deep-link the trace can finish loading after the click, and
+  // starting the fixed-duration sweep before the panel exists would let the
+  // animation elapse off-screen (the bug where no white shimmer showed).
+  useEffect(() => {
+    if (!shimmerMemories) return;
+    if (shimmeredMessageIdRef.current === messageId) {
+      onShimmerMemoriesDone?.();
+      return;
+    }
+    if (!hasMemories) return;
+    shimmeredMessageIdRef.current = messageId ?? null;
+    setShimmering(true);
+    const t = setTimeout(() => {
+      setShimmering(false);
+      onShimmerMemoriesDone?.();
+    }, 1600);
+    return () => clearTimeout(t);
+  }, [shimmerMemories, onShimmerMemoriesDone, messageId, hasMemories]);
 
   // "View execution trace" (a step's span focus) flashes ONLY the span row
   // in the left tree — it must not flash the memory cards on the right.
@@ -305,16 +317,21 @@ export function TraceDrawer({
 
   // Deep-link (`?memoryId=`) memory flash — fire ONCE per target.
   //
-  // `highlightMemoryId` rides along on the URL and therefore stays set for
-  // the whole visit, so binding the card flash straight to it replays the
-  // animation every time the drawer is reopened. Instead we convert it into
-  // a transient `flashMemoryId` that is set once (guarded by a ref keyed on
-  // the id) and cleared after the animation. Reopening the drawer with the
-  // same id is a no-op; navigating to a new id flashes again.
+  // `highlightMemoryId` is set by the parent ONLY for the deep-link reveal;
+  // manual opens (badge click, "View Trace") pass it as undefined so they
+  // never flash a card. We convert it into a transient `flashMemoryId` set
+  // once (guarded by a ref keyed on the id) and cleared after the animation.
+  // When it goes falsy (a manual open after a deep-link) we cancel any
+  // in-progress flash so a manual click is strictly the white sweep.
   const [flashMemoryId, setFlashMemoryId] = useState<string | null>(null);
   const flashedMemoryIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!open || !highlightMemoryId || memoryItems.length === 0) return;
+    if (!highlightMemoryId) {
+      setFlashMemoryId(null);
+      flashedMemoryIdRef.current = null;
+      return;
+    }
+    if (!open || memoryItems.length === 0) return;
     if (flashedMemoryIdRef.current === highlightMemoryId) return;
     if (!memoryItems.some((it) => it.memoryId === highlightMemoryId)) return;
     flashedMemoryIdRef.current = highlightMemoryId;
@@ -340,16 +357,26 @@ export function TraceDrawer({
           0%   { transform: translateX(-100%); }
           100% { transform: translateX(100%); }
         }
+        /* Diagonal sweep over the memories panel. White reads on the dark
+           drawer but vanishes on a light background, so light mode uses a
+           visible blue tint (matching the memories accent) instead. */
+        .meko-memory-shimmer {
+          animation: memory-shimmer 1.6s ease-in-out forwards;
+          background: linear-gradient(105deg, transparent 30%, rgba(37,99,235,0.22) 50%, rgba(37,99,235,0.10) 58%, transparent 70%);
+        }
+        .dark .meko-memory-shimmer {
+          background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.08) 58%, transparent 70%);
+        }
         @keyframes meko-memory-flash {
           0%, 100% {
             border-color: rgb(251 191 36 / 0.75);
             background-color: rgb(245 158 11 / 0.18);
-            box-shadow: 0 0 0 2px rgb(251 191 36 / 0.55), 0 0 18px 0 rgb(251 191 36 / 0.25);
+            box-shadow: 0 0 0 1px rgb(251 191 36 / 0.55), 0 0 10px 0 rgb(251 191 36 / 0.25);
           }
           50% {
             border-color: rgb(251 191 36 / 0.95);
             background-color: rgb(245 158 11 / 0.3);
-            box-shadow: 0 0 0 3px rgb(251 191 36 / 0.85), 0 0 28px 6px rgb(251 191 36 / 0.4);
+            box-shadow: 0 0 0 2px rgb(251 191 36 / 0.85), 0 0 14px 0 rgb(251 191 36 / 0.4);
           }
         }
       `}</style>
@@ -454,16 +481,13 @@ export function TraceDrawer({
 
           {/* Right: extracted memories — shown only when present */}
           {hasMemories ? (
-            <div className="relative w-[320px] shrink-0 overflow-hidden px-4 py-4">
+            <div className="relative w-[320px] shrink-0 overflow-hidden py-4">
               {/* Diagonal shimmer sweep: bottom-left → top-right */}
               {shimmering ? (
                 <div
                   aria-hidden
-                  className="pointer-events-none absolute inset-0 z-10"
+                  className="meko-memory-shimmer pointer-events-none absolute inset-0 z-10"
                   style={{
-                    animation: "memory-shimmer 1.6s ease-in-out forwards",
-                    background:
-                      "linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.08) 58%, transparent 70%)",
                     width: "200%",
                     height: "100%",
                     top: "0",
@@ -471,23 +495,29 @@ export function TraceDrawer({
                   }}
                 />
               ) : null}
-              <div className="overflow-y-auto h-full">
+              {/* Horizontal padding lives on this scroll container (not the
+                  outer panel) so the targeted card's amber glow has room
+                  inside the clip box instead of being cut at the edges. */}
+              <div className="overflow-y-auto h-full px-4">
                 <div className="mb-3 flex items-center gap-2">
-                  <BrainCircuit className="h-4 w-4 text-blue-600 dark:text-blue-300" aria-hidden />
+                  <BrainCircuit className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-300" aria-hidden />
                   <h4 className="text-[13px] font-medium text-foreground">
                     Extracted memories
                   </h4>
-                  <span className="ml-auto rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] text-blue-700 dark:text-blue-300">
+                  <span className="ml-auto shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] text-blue-700 dark:text-blue-300">
                     {memoryItems.length}
                   </span>
                 </div>
                 <ul className="space-y-2">
-                  {memoryItems.map((item, idx) => (
+                  {normalMemoryItems.map((item, idx) => (
                     <MemoryCard
                       key={item.id}
                       span={item.span}
                       memoryId={item.memoryId}
                       memoryText={item.text}
+                      datapackName={datapackName}
+                      datapackId={datapackId}
+                      promoted={item.promoted}
                       entityNames={item.entityNames}
                       relationNames={item.relationNames}
                       signals={item.signals}
@@ -499,6 +529,41 @@ export function TraceDrawer({
                     />
                   ))}
                 </ul>
+
+                {promotedMemoryItems.length > 0 ? (
+                  <>
+                    <div className="mb-2 mt-5 flex items-center gap-2">
+                      <BookUp className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-300" aria-hidden />
+                      <h4 className="text-[13px] font-medium text-emerald-700 dark:text-emerald-300">
+                        Promoted memories
+                      </h4>
+                      <span className="ml-auto shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-300">
+                        {promotedMemoryItems.length}
+                      </span>
+                    </div>
+                    <ul className="space-y-2">
+                      {promotedMemoryItems.map((item, idx) => (
+                        <MemoryCard
+                          key={item.id}
+                          span={item.span}
+                          memoryId={item.memoryId}
+                          memoryText={item.text}
+                          datapackName={datapackName}
+                          datapackId={datapackId}
+                          promoted={item.promoted}
+                          entityNames={item.entityNames}
+                          relationNames={item.relationNames}
+                          signals={item.signals}
+                          ordinal={normalMemoryItems.length + idx + 1}
+                          highlighted={hoveredSpanId === item.span.id}
+                          targeted={!!flashMemoryId && item.memoryId === flashMemoryId}
+                          hoverSource={hoverSource}
+                          onHoverSpan={handleHoverSpan}
+                        />
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -540,10 +605,31 @@ export function TraceDrawer({
 // or plain text; we try to parse it and pull out human-readable strings.
 // ---------------------------------------------------------------------------
 
+// Deep-link to the knowledge page's Promoted memories tab, targeting a
+// specific promoted memory so the page can scroll to + shimmer it.
+function buildPromotedKBHref(
+  datapackName: string,
+  datapackId: string | undefined,
+  memoryId: string | undefined,
+): string {
+  const base = datapackKnowledgePath(datapackName, datapackId);
+  const sep = base.includes("?") ? "&" : "?";
+  const params = new URLSearchParams({ tab: "promoted-memories" });
+  if (memoryId) params.set("promotedMemoryId", memoryId);
+  return `${base}${sep}${params.toString()}`;
+}
+
 type MemoryCardProps = {
   span: DatapackTraceSpan;
   memoryId?: string;
   memoryText: string;
+  /** Datapack identity for the "Promoted to KB" deep-link to the knowledge page. */
+  datapackName: string;
+  datapackId?: string;
+  /** True when this memory was promoted to the KB and evicted from mem0.
+   *  vector/entities/relations counts are meaningless then, so the card
+   *  shows just the text + a "Promoted to KB" tag. */
+  promoted?: boolean;
   entityNames: string[];
   relationNames: string[];
   signals: MemorySignals;
@@ -562,6 +648,9 @@ function MemoryCard({
   span,
   memoryId,
   memoryText,
+  datapackName,
+  datapackId,
+  promoted = false,
   entityNames,
   relationNames,
   signals,
@@ -642,42 +731,70 @@ function MemoryCard({
       <p className="text-[12.5px] leading-relaxed text-foreground/85">
         {memoryText}
       </p>
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 overflow-visible">
-        <MemoryMetaBadge
-          label={`vector ${signals.vector}`}
-          metricName="Vector"
-          metricValue={signals.vector}
-          description="Vector rows linked to this memory (1 means it is embedded)."
-          detail="Stored embedding row in mem0 vector collection for this memory."
-          memoryId={memoryId}
-          spanDurationMs={span.duration_ms}
-          entityNames={entityNames}
-          relationNames={relationNames}
-        />
-        <MemoryMetaBadge
-          label={`entities ${signals.entities}`}
-          metricName="Entities"
-          metricValue={signals.entities}
-          description="Unique graph entities (nodes) referenced by this memory."
-          detail="Counted from unique graph_nodes attached to this persisted memory."
-          memoryId={memoryId}
-          spanDurationMs={span.duration_ms}
-          entityNames={entityNames}
-          relationNames={relationNames}
-        />
-        <MemoryMetaBadge
-          label={`relations ${signals.relations}`}
-          metricName="Relations"
-          metricValue={signals.relations}
-          description="Unique graph relations (edges) connected to this memory's entities."
-          detail="Edges touching those entities within this datapack and conversation."
-          memoryId={memoryId}
-          spanDurationMs={span.duration_ms}
-          entityNames={entityNames}
-          relationNames={relationNames}
-        />
-      </div>
-      {hasPreview ? (
+      {promoted ? (
+        // Promoted memories live in the KB now (evicted from mem0), so the
+        // vector/entity/relation counts no longer apply. The status row links
+        // to the knowledge page's Promoted memories tab, deep-linking to this
+        // entry so the user can inspect its shared-knowledge record.
+        <Link
+          to={buildPromotedKBHref(datapackName, datapackId, memoryId)}
+          title="View in knowledge base"
+          className="group mt-2.5 flex items-center gap-2 rounded-md border border-emerald-500/25 bg-emerald-500/[0.07] px-2.5 py-1.5 transition-colors hover:border-emerald-500/45 hover:bg-emerald-500/[0.12] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/50"
+        >
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-300">
+            <BookUp className="h-3.5 w-3.5" aria-hidden />
+          </span>
+          <div className="min-w-0 leading-tight">
+            <div className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">
+              Promoted to knowledge base
+            </div>
+            <div className="text-[10px] text-muted-foreground">
+              Now a shared knowledge entry
+            </div>
+          </div>
+          <SquareArrowOutUpRight
+            className="ml-auto h-3 w-3 shrink-0 text-emerald-600/70 transition-colors group-hover:text-emerald-600 dark:text-emerald-300/70 dark:group-hover:text-emerald-300"
+            aria-hidden
+          />
+        </Link>
+      ) : (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 overflow-visible">
+          <MemoryMetaBadge
+            label={`vector ${signals.vector}`}
+            metricName="Vector"
+            metricValue={signals.vector}
+            description="Vector rows linked to this memory (1 means it is embedded)."
+            detail="Stored embedding row in mem0 vector collection for this memory."
+            memoryId={memoryId}
+            spanDurationMs={span.duration_ms}
+            entityNames={entityNames}
+            relationNames={relationNames}
+          />
+          <MemoryMetaBadge
+            label={`entities ${signals.entities}`}
+            metricName="Entities"
+            metricValue={signals.entities}
+            description="Unique graph entities (nodes) referenced by this memory."
+            detail="Counted from unique graph_nodes attached to this persisted memory."
+            memoryId={memoryId}
+            spanDurationMs={span.duration_ms}
+            entityNames={entityNames}
+            relationNames={relationNames}
+          />
+          <MemoryMetaBadge
+            label={`relations ${signals.relations}`}
+            metricName="Relations"
+            metricValue={signals.relations}
+            description="Unique graph relations (edges) connected to this memory's entities."
+            detail="Edges touching those entities within this datapack and conversation."
+            memoryId={memoryId}
+            spanDurationMs={span.duration_ms}
+            entityNames={entityNames}
+            relationNames={relationNames}
+          />
+        </div>
+      )}
+      {!promoted && hasPreview ? (
         <div className="mt-1.5 space-y-1">
           {topNodes.length > 0 ? (
             <div className="flex min-w-0 items-start gap-1 text-[10px] text-blue-700 dark:text-blue-100/65">
@@ -765,23 +882,23 @@ function MemoryMetaBadge({
       label={label}
       ariaLabel={`${label}: ${description}`}
     >
-        <span className="mb-1 block text-[11px] font-medium text-blue-200">
+        <span className="mb-1 block text-[11px] font-medium text-foreground">
           {metricName}: {metricValue}
         </span>
-        <span className="block text-[10px] text-blue-100/85">{description}</span>
-        <span className="mt-1 block text-[10px] text-blue-100/65">{detail}</span>
-        <span className="mt-1 block text-[10px] text-blue-100/75">{dynamicSummary}</span>
-        <span className="mt-1 block text-[10px] text-blue-100/60">
+        <span className="block text-[10px] text-foreground/85">{description}</span>
+        <span className="mt-1 block text-[10px] text-muted-foreground">{detail}</span>
+        <span className="mt-1 block text-[10px] text-foreground/75">{dynamicSummary}</span>
+        <span className="mt-1 block text-[10px] text-muted-foreground">
           Span latency: {formatDuration(spanDurationMs)} · Source: persisted mem0 + graph DB
         </span>
         {sampledNames.length > 0 ? (
-          <span className="mt-1 block text-[10px] text-blue-100/75">
+          <span className="mt-1 block text-[10px] text-foreground/75">
             {sampledLabel}
             <span className="mt-1 flex flex-wrap gap-1">
               {sampledNames.slice(0, 4).map((name) => (
                 <span
                   key={name}
-                  className="rounded border border-blue-300/25 bg-blue-500/10 px-1.5 py-0.5 font-mono text-[10px] text-blue-100/90"
+                  className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground/90"
                 >
                   {name}
                 </span>
@@ -790,7 +907,7 @@ function MemoryMetaBadge({
           </span>
         ) : null}
         {memoryId ? (
-          <span className="mt-1 block font-mono text-[10px] text-blue-100/60">
+          <span className="mt-1 block font-mono text-[10px] text-muted-foreground">
             Memory ID: {compactTraceMemoryID(memoryId)}
           </span>
         ) : null}

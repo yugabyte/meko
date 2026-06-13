@@ -4,7 +4,7 @@
 // deep-links the row's `span_id` back into Observe Hub.
 
 import { useMemo, useState } from "react";
-import { ChartSpline, ChevronDown, ChevronRight, ExternalLink, FileText } from "lucide-react";
+import { ChartSpline, ChevronDown, ChevronRight, ExternalLink, FileText, Sparkles } from "lucide-react";
 import { ROUTES, datapackConversationsPath } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
 import type { KbHit, MemoryHit, ProcessingStep } from "@/lib/inferenceGateway";
@@ -23,9 +23,6 @@ import {
   stepSummary,
   truncateMiddle,
 } from "./helpers";
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function DecisionTraceStep({
   step,
@@ -205,16 +202,22 @@ function MatchedHits({
     ? total === 1 ? "matched chunk" : "matched chunks"
     : total === 1 ? "matched memory" : "matched memories";
 
-  // Group KB chunks by source document so each document shows once with
-  // its chunks nested underneath.
-  const kbGroups = useMemo(() => {
+  // Split KB hits: document chunks (grouped by source document) vs.
+  // promoted-memory hits (memories elevated into the KB — shown together
+  // under one "Promoted memory" group, not as fake documents).
+  const { docGroups, promotedHits } = useMemo(() => {
     const m = new Map<string, KbHit[]>();
-    for (const h of kbHits) {
+    const promoted: KbHit[] = [];
+    for (const h of kbHits ?? []) {
+      if (h.source === "memory") {
+        promoted.push(h);
+        continue;
+      }
       const arr = m.get(h.document_id) ?? [];
       arr.push(h);
       m.set(h.document_id, arr);
     }
-    return Array.from(m.entries());
+    return { docGroups: Array.from(m.entries()), promotedHits: promoted };
   }, [kbHits]);
 
   return (
@@ -238,61 +241,66 @@ function MatchedHits({
 
       {open ? (
         <div className="space-y-2">
-          {isKb
-            ? kbGroups.map(([docId, chunks], gi) => {
-                // When the backend supplies a real document name/filename it
-                // arrives here as `docId` (it prefers document_name/source over
-                // the raw id). A bare UUID has no provenance value to the user,
-                // so fall back to a friendly "Document N" + short id instead.
-                const isUuid = UUID_RE.test(docId);
+          {isKb ? (
+            <>
+              {docGroups.map(([docId, chunks]) => {
+                const docName = chunks[0]?.document_name ?? "";
                 return (
-                <div
-                  key={docId}
-                  className="overflow-hidden rounded-md border border-border/50 bg-background/30"
-                >
+                  <div
+                    key={docId}
+                    className="overflow-hidden rounded-md border border-border/50 bg-background/30"
+                  >
+                    <div className="flex items-center gap-1.5 border-b border-border/40 bg-muted/30 px-2.5 py-1.5">
+                      <FileText className={cn("h-3.5 w-3.5 shrink-0", ACCENT_TEXT[accent])} aria-hidden />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[11px] font-medium text-foreground/90" title={docName || docId}>
+                          {docName || docId}
+                        </div>
+                        {docName ? (
+                          <div className="break-all font-mono text-[9.5px] text-muted-foreground">
+                            {docId}
+                          </div>
+                        ) : null}
+                      </div>
+                      <span className="ml-auto shrink-0 rounded-full border border-border/50 px-1.5 py-[1px] text-[9.5px] tabular-nums text-muted-foreground">
+                        {chunks.length} chunk{chunks.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <ul className="space-y-1.5 px-2.5 py-2">
+                      {chunks.map((c, i) => (
+                        <HitRow key={i} text={c.chunk_text} score={c.score} accent={accent} />
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+
+              {promotedHits.length > 0 ? (
+                <div className="overflow-hidden rounded-md border border-border/50 bg-background/30">
                   <div className="flex items-center gap-1.5 border-b border-border/40 bg-muted/30 px-2.5 py-1.5">
-                    <FileText className={cn("h-3.5 w-3.5 shrink-0", ACCENT_TEXT[accent])} aria-hidden />
-                    <span className="min-w-0 shrink truncate text-[11px] font-medium text-foreground/90" title={docId}>
-                      {isUuid ? `Document ${gi + 1}` : docId}
+                    <Sparkles className={cn("h-3.5 w-3.5 shrink-0", ACCENT_TEXT[accent])} aria-hidden />
+                    <span className="min-w-0 shrink truncate text-[11px] font-medium text-foreground/90">
+                      Promoted memories
                     </span>
-                    {isUuid ? (
-                      <code
-                        className="shrink-0 font-mono text-[9.5px] text-muted-foreground"
-                        title={docId}
-                      >
-                        {docId.slice(0, 8)}
-                      </code>
-                    ) : null}
                     <span className="ml-auto shrink-0 rounded-full border border-border/50 px-1.5 py-[1px] text-[9.5px] tabular-nums text-muted-foreground">
-                      {chunks.length} chunk{chunks.length === 1 ? "" : "s"}
+                      {promotedHits.length} chunk{promotedHits.length === 1 ? "" : "s"}
                     </span>
                   </div>
                   <ul className="space-y-1.5 px-2.5 py-2">
-                    {chunks.map((c, i) => (
-                      <HitRow
-                        key={i}
-                        text={c.chunk_text}
-                        score={c.score}
-                        accent={accent}
-                      />
+                    {promotedHits.map((c, i) => (
+                      <HitRow key={i} text={c.chunk_text} badge="promoted" accent={accent} />
                     ))}
                   </ul>
                 </div>
-                );
-              })
-            : (
-              <ul className="space-y-1.5">
-                {memoryHits.map((h, i) => (
-                  <HitRow
-                    key={i}
-                    text={h.text}
-                    score={h.score}
-                    badge={h.kind}
-                    accent={accent}
-                  />
-                ))}
-              </ul>
-            )}
+              ) : null}
+            </>
+          ) : (
+            <ul className="space-y-1.5">
+              {memoryHits.map((h, i) => (
+                <HitRow key={i} text={h.text} score={h.score} badge={h.kind} accent={accent} />
+              ))}
+            </ul>
+          )}
         </div>
       ) : null}
     </div>

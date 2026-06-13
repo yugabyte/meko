@@ -59,6 +59,12 @@ export type KbHit = {
   /** `document_id` (UUID) or its basename when the source carried a path.
    *  The UI groups chunks by this value so each document shows up once. */
   document_id: string;
+  /** Resolved file basename for document-sourced hits (empty for promoted
+   *  memory hits or when the id couldn't be resolved). */
+  document_name?: string;
+  /** "memory" when this hit is a promoted memory living in the KB rather
+   *  than a chunk from an uploaded document. */
+  source?: string;
   chunk_text: string;
   /** Normalized [0..1] similarity (1 - cosine_distance, clamped) so it
    *  sorts the same way as memory scores. */

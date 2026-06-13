@@ -746,4 +746,3 @@ func (r *PromoteMemoriesRepo) ListPromoted(
 
 	return out, total, nil
 }
-

@@ -1,76 +1,50 @@
-// Floating popover above the "N memories extracted" badge that lazily
-// fetches the trace spans for this message and surfaces the extracted
-// memory texts. Hover to peek; click anywhere on the badge or popover to
-// open the full trace drawer.
+// Floating popover above the "N memories extracted" badge that surfaces
+// the extracted memory texts. Hover to peek; click anywhere on the badge
+// or popover to open the full trace drawer.
 //
-// Lazy by design — no network call until the cursor enters the badge.
-// `fetchedRef` makes sure repeated hover-in/out cycles only hit the API
-// once per mount.
+// The memory texts come straight from the thread message (`memory_texts` /
+// `promoted_memory_texts`), which the backend sources from the same DB
+// queries as the badge counts — so the preview list and the counts stay in
+// lockstep. Surviving memories render normally; promoted ones are listed
+// separately under a "Promoted to KB" heading.
 
 import { useCallback, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { BookUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MemoryIcon } from "@/components/conversation-telemetry";
-import { getDatapackMessageTrace } from "@/lib/mekoApi";
-import { parseMemoryOutput } from "./parseMemoryOutput";
 
 const MEMORY_PREVIEW_CHARS = 120;
 
 type Props = {
+  /** Surviving (non-promoted) memory count + texts. */
   count: number;
-  messageId: string;
-  datapackName: string;
-  datapackId?: string;
-  conversationId: string;
+  memories: string[];
+  /** Promoted-to-KB memory count + texts (extracted here, now in the KB). */
+  promotedCount: number;
+  promotedMemories: string[];
   onClickOpenTrace: () => void;
 };
 
+function preview(text: string): string {
+  return text.length > MEMORY_PREVIEW_CHARS
+    ? `${text.slice(0, MEMORY_PREVIEW_CHARS)}…`
+    : text;
+}
+
 export function MemoryHoverCard({
   count,
-  messageId,
-  datapackName,
-  datapackId,
-  conversationId,
+  memories,
+  promotedCount,
+  promotedMemories,
   onClickOpenTrace,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const [memories, setMemories] = useState<string[] | null>(null);
-  const [fetching, setFetching] = useState(false);
-  const fetchedRef = useRef(false);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const fetchMemories = useCallback(() => {
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
-    setFetching(true);
-    getDatapackMessageTrace(datapackName, conversationId, messageId, {
-      datapackId,
-    })
-      .then((resp) => {
-        const spans = resp.spans ?? [];
-        // Top-level memory spans only — Mem0 emits nested spans (one per
-        // extracted fact) under a parent "memory_add" span, and we want
-        // the parent's aggregated output, not each leaf.
-        const memoryIds = new Set(
-          spans.filter((s) => /memor/i.test(s.name) && s.output).map((s) => s.id),
-        );
-        const topLevel = spans.filter(
-          (s) =>
-            /memor/i.test(s.name) &&
-            s.output &&
-            (!s.parent_observation_id || !memoryIds.has(s.parent_observation_id)),
-        );
-        setMemories(topLevel.flatMap((s) => parseMemoryOutput(s.output ?? "")));
-      })
-      .catch(() => setMemories([]))
-      .finally(() => setFetching(false));
-  }, [datapackName, conversationId, messageId, datapackId]);
 
   const openPopover = useCallback(() => {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
     setOpen(true);
-    fetchMemories();
-  }, [fetchMemories]);
+  }, []);
 
   // Short close delay so the cursor can travel from badge → popover
   // without the popover dismissing in between.
@@ -78,7 +52,14 @@ export function MemoryHoverCard({
     closeTimerRef.current = setTimeout(() => setOpen(false), 150);
   }, []);
 
-  const label = `${count.toLocaleString()} ${count === 1 ? "memory" : "memories"} extracted`;
+  const survivingLabel =
+    count > 0
+      ? `${count.toLocaleString()} ${count === 1 ? "memory" : "memories"} extracted`
+      : "";
+  const promotedLabel =
+    promotedCount > 0
+      ? `${promotedCount.toLocaleString()} ${promotedCount === 1 ? "memory" : "memories"} promoted to KB`
+      : "";
 
   return (
     <span className="relative inline-flex items-center">
@@ -94,8 +75,17 @@ export function MemoryHoverCard({
         onClick={onClickOpenTrace}
         onKeyDown={(e) => e.key === "Enter" && onClickOpenTrace()}
       >
-        <MemoryIcon className="text-[13px]" />
-        {label}
+        {survivingLabel ? <MemoryIcon className="text-[13px]" /> : null}
+        {survivingLabel}
+        {survivingLabel && promotedLabel ? (
+          <span className="text-muted-foreground/60">·</span>
+        ) : null}
+        {promotedLabel ? (
+          <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
+            <BookUp className="h-3 w-3" aria-hidden />
+            {promotedLabel}
+          </span>
+        ) : null}
       </span>
 
       {open ? (
@@ -117,29 +107,46 @@ export function MemoryHoverCard({
               </span>
             </p>
 
-            {fetching ? (
-              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-                Loading…
-              </div>
-            ) : !memories || memories.length === 0 ? (
+            {memories.length === 0 && promotedMemories.length === 0 ? (
               <p className="text-[11px] italic text-muted-foreground">
                 No memory text captured in trace.
               </p>
             ) : (
-              <ul className="space-y-2">
-                {memories.map((text, i) => (
-                  // eslint-disable-next-line react/no-array-index-key
-                  <li key={i} className="flex items-start gap-2">
-                    <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-blue-400/70" />
-                    <span className="text-[12px] leading-relaxed text-foreground/85">
-                      {text.length > MEMORY_PREVIEW_CHARS
-                        ? `${text.slice(0, MEMORY_PREVIEW_CHARS)}…`
-                        : text}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <>
+                {memories.length > 0 ? (
+                  <ul className="space-y-2">
+                    {memories.map((text, i) => (
+                      // eslint-disable-next-line react/no-array-index-key
+                      <li key={i} className="flex items-start gap-2">
+                        <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-blue-400/70" />
+                        <span className="text-[12px] leading-relaxed text-foreground/85">
+                          {preview(text)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+
+                {promotedMemories.length > 0 ? (
+                  <div className={cn(memories.length > 0 && "mt-3 border-t border-border/60 pt-2.5")}>
+                    <p className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
+                      <BookUp className="h-3 w-3" aria-hidden />
+                      Promoted to KB
+                    </p>
+                    <ul className="space-y-2">
+                      {promotedMemories.map((text, i) => (
+                        // eslint-disable-next-line react/no-array-index-key
+                        <li key={i} className="flex items-start gap-2">
+                          <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400/70" />
+                          <span className="text-[12px] leading-relaxed text-foreground/85">
+                            {preview(text)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </>
             )}
           </div>
         </div>

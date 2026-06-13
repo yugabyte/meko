@@ -85,6 +85,11 @@ export default function DatapackConversationsViewerPage({
   /** When true, the TraceDrawer shimmers its memories panel to draw
    *  the user's eye after opening via the memory hover card. */
   const [shimmerMemories, setShimmerMemories] = useState(false);
+  /** mem0 row id whose card the drawer should flash amber. Set ONLY by the
+   *  `?memoryId=` deep-link reveal — manual opens (badge click, "View Trace")
+   *  clear it so a manual click only ever runs the white sweep, never the
+   *  yellow card flash, regardless of what's in the URL. */
+  const [cardFlashMemoryId, setCardFlashMemoryId] = useState<string | null>(null);
   /** Author email of the selected conversation, sourced from the rail's
    *  list rows (the thread detail endpoint omits it). Forwarded to the
    *  header so it can render the author chip. */
@@ -156,15 +161,24 @@ export default function DatapackConversationsViewerPage({
                 userEmail={selectedEmail}
                 onOpenTrace={(messageId) => {
                   setTraceFocusSpanId(undefined);
+                  setCardFlashMemoryId(null);
                   setTraceMessageId(messageId);
                 }}
                 onOpenTraceWithMemoryShimmer={(messageId) => {
                   setTraceFocusSpanId(undefined);
+                  setCardFlashMemoryId(null);
                   setTraceMessageId(messageId);
                   setShimmerMemories(true);
                 }}
+                onOpenTraceFromDeepLink={(messageId) => {
+                  setTraceFocusSpanId(undefined);
+                  setShimmerMemories(false);
+                  setCardFlashMemoryId(targetMemoryId || null);
+                  setTraceMessageId(messageId);
+                }}
                 onViewTraceSpan={(messageId, spanId) => {
                   setTraceFocusSpanId(spanId);
+                  setCardFlashMemoryId(null);
                   setTraceMessageId(messageId);
                 }}
               />
@@ -190,7 +204,7 @@ export default function DatapackConversationsViewerPage({
         }}
         shimmerMemories={shimmerMemories}
         onShimmerMemoriesDone={() => setShimmerMemories(false)}
-        highlightMemoryId={targetMemoryId || undefined}
+        highlightMemoryId={cardFlashMemoryId || undefined}
         focusSpanId={traceFocusSpanId}
       />
     </div>
