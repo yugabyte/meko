@@ -405,15 +405,37 @@ pub(crate) mod modern_serde {
 
     #[test]
     fn deserializes_bytes_as_well_as_equivalent_body_v2() {
+        use super::{Lsn, METADATA_MAX_SIZE, PgMajorVersion};
+
         #[derive(serde::Deserialize, serde::Serialize)]
         struct Wrapper(
             #[serde(deserialize_with = "deserialize", serialize_with = "serialize")]
             TimelineMetadata,
         );
 
-        let too_many_bytes = "[216,111,252,208,0,54,0,4,0,0,0,0,1,73,253,144,1,0,0,0,0,1,73,253,24,0,0,0,0,0,0,0,0,0,0,0,0,0,1,73,253,24,0,0,0,0,1,73,253,24,0,0,0,15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]";
+        // Build the blob the fork-native way rather than hardcoding an
+        // upstream PG15 byte array: this is a v17-only fork (PgMajorVersion
+        // has no PG15 variant), so a 15-tagged blob can't round-trip. The
+        // 512-byte buffer `to_bytes` emits dwarfs the ~54-byte body — the
+        // trailing-padding ("too many bytes") case this test guards — and
+        // carries a real header + checksum, exercising the same BeSer path
+        // on-disk metadata used.
+        let bytes = TimelineMetadata::new(
+            Lsn(0x149FD90),       // disk_consistent_lsn (8-aligned)
+            Some(Lsn(0x149FD18)), // prev_record_lsn
+            None,                 // ancestor_timeline
+            Lsn(0),               // ancestor_lsn
+            Lsn(0x149FD18),       // latest_gc_cutoff_lsn
+            Lsn(0x149FD18),       // initdb_lsn
+            PgMajorVersion::PG17,
+        )
+        .to_bytes()
+        .unwrap();
+        assert_eq!(bytes.len(), METADATA_MAX_SIZE, "to_bytes pads to the max size");
 
-        let wrapper_from_bytes = serde_json::from_str::<Wrapper>(too_many_bytes).unwrap();
+        // Legacy form: TimelineMetadata serialized as a `Vec<u8>` (visit_seq).
+        let as_seq = serde_json::to_string(&bytes).unwrap();
+        let wrapper_from_bytes = serde_json::from_str::<Wrapper>(&as_seq).unwrap();
 
         let serialized = serde_json::to_value(&wrapper_from_bytes).unwrap();
 
@@ -426,7 +448,7 @@ pub(crate) mod modern_serde {
                 "ancestor_lsn": "0/0",
                 "latest_gc_cutoff_lsn": "0/149FD18",
                 "initdb_lsn": "0/149FD18",
-                "pg_version": 15
+                "pg_version": 17
             }}
         );
 

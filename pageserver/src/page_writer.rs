@@ -2526,9 +2526,27 @@ mod tests {
         ));
         let task = w.spawn_flusher(Duration::from_millis(15));
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        let stats = w.stats().await;
-        assert_eq!(stats.buffered_rows, 0, "stats: {stats:?}");
+        // Give the flusher long enough to drain on the common path (40ms
+        // age + 15ms tick), then poll rather than asserting after a single
+        // fixed sleep. The behavior under test is "the periodic flusher
+        // eventually drains on the age trigger"; the *latency* of that drain
+        // depends on the YB INSERT round-trip, which under full-suite
+        // parallelism (shared connection, busy runtime) can exceed any fixed
+        // budget — that one-shot assert is what made this flaky. Wait for
+        // buffered_rows to reach 0 with a generous ceiling.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let start = std::time::Instant::now();
+        loop {
+            let stats = w.stats().await;
+            if stats.buffered_rows == 0 {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "periodic flusher did not drain on age within 10s: {stats:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         let chain = store
             .read_chain(t, tl, &key_to_bytes(k(1)), Lsn(100))
             .await
