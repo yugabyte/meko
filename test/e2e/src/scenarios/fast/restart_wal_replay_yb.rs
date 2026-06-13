@@ -77,9 +77,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let http = reqwest::Client::new();
     let deadline = Instant::now() + Duration::from_secs(http_timeout);
     let mut last_record_lsn = String::new();
+    let ps_http = c.ps_http_port();
     while Instant::now() < deadline {
-        if let Some(tl) = first_timeline_id(&http, tid).await {
-            if let Some(lsn) = last_record_lsn_of(&http, tid, &tl).await {
+        if let Some(tl) = first_timeline_id(&http, ps_http, tid).await {
+            if let Some(lsn) = last_record_lsn_of(&http, ps_http, tid, &tl).await {
                 if !lsn.is_empty() && lsn != "0/0" && lsn != ts_start_lsn {
                     last_record_lsn = lsn;
                     break;
@@ -130,15 +131,20 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 }
 
 /// First timeline id from the PS `/v1/tenant/<id>/timeline` list.
-async fn first_timeline_id(http: &reqwest::Client, tid: &str) -> Option<String> {
-    let url = format!("http://127.0.0.1:9989/v1/tenant/{tid}/timeline");
+async fn first_timeline_id(http: &reqwest::Client, ps_http: u16, tid: &str) -> Option<String> {
+    let url = format!("http://127.0.0.1:{ps_http}/v1/tenant/{tid}/timeline");
     let v: serde_json::Value = http.get(&url).send().await.ok()?.json().await.ok()?;
     v.get(0)?.get("timeline_id")?.as_str().map(str::to_string)
 }
 
 /// `last_record_lsn` from the PS timeline-detail endpoint.
-async fn last_record_lsn_of(http: &reqwest::Client, tid: &str, tl: &str) -> Option<String> {
-    let url = format!("http://127.0.0.1:9989/v1/tenant/{tid}/timeline/{tl}");
+async fn last_record_lsn_of(
+    http: &reqwest::Client,
+    ps_http: u16,
+    tid: &str,
+    tl: &str,
+) -> Option<String> {
+    let url = format!("http://127.0.0.1:{ps_http}/v1/tenant/{tid}/timeline/{tl}");
     let v: serde_json::Value = http.get(&url).send().await.ok()?.json().await.ok()?;
     v.get("last_record_lsn")?.as_str().map(str::to_string)
 }

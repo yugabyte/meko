@@ -121,3 +121,12 @@ test/e2e/
 `YB_HOST`/`YB_PORT`/`COMPUTE_PORT`, `YB_DBNAME`/`YB_LIGHT_REPO_DIR`/`TEST_DIR`
 (override the ephemeral DB / run dir), `YB_LIGHT` (path to the binary),
 `YB_PS_VERIFY_WAL_ROUNDTRIP` (defaults to 1).
+
+**Concurrency:** every run is isolated by construction — it synthesizes
+its own config on a free port block (auto-picked in 20000..60000, pin
+with `E2E_PORT_BASE=<n>`), uses an ephemeral DB
+(`yb_storage_e2e_<pid>_<rand>`) and a unique `run_<id>/` dir, and scopes
+its teardown to exactly those. So suites can run concurrently and never
+tear down each other (or a developer's local cluster). (The shared
+`target/debug` still serializes concurrent `cargo build`s on the cargo
+lock — harmless, just waits.)

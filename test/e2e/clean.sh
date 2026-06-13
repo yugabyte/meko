@@ -5,10 +5,10 @@
 #
 # - Kill the e2e cluster's neon-stack processes (yb-pageserver,
 #   safekeeper, endpoint_storage, storage_controller, compute_ctl). Kills
-#   are SCOPED to the e2e cluster — anchored on `$YB_LIGHT_REPO_DIR` / the
-#   `.e2e-tests` tree (services) and the ephemeral `yb_storage_e2e_*` db
-#   (controller) — so a developer's concurrently-running `.yb_light`
-#   cluster is left untouched.
+#   are SCOPED to THIS run — anchored on `$YB_LIGHT_REPO_DIR` (a unique
+#   `run_<id>/`, services) and the ephemeral `$YB_DBNAME` (controller) —
+#   so a concurrently-running e2e cluster (its own port block + run dir +
+#   db) and a developer's `.yb_light` cluster are left untouched.
 # - Kill any leftover compute postgres processes anchored under
 #   YB_LIGHT_REPO_DIR (compute_ctl spawns postgres as a child; if a prior
 #   test's `endpoint stop` hung on pg_ctl, the postgres process can
@@ -34,35 +34,26 @@ YB_DBNAME=${YB_DBNAME:-yb_storage}
 step() { echo; printf '%(%H:%M:%S)T === %s ===\n' -1 "$*"; }
 
 step "Stop e2e cluster processes (scoped — leaves a developer's .yb_light cluster alone)"
-# Every kill below is anchored to the e2e cluster so this never touches a
-# developer's concurrently-running `.yb_light` cluster. Two anchors: this
-# run's repo dir (`$YB_LIGHT_REPO_DIR`) and the shared `.e2e-tests` tree —
-# a failed / `--no-fail-clean` prior run leaves a cluster under a
-# *different* `run_*` dir, and the harness owns every `.e2e-tests` cluster
-# (one at a time), so anything there is stale.
+# Every kill is anchored to THIS run's repo dir (`$YB_LIGHT_REPO_DIR`, a
+# unique `run_<id>/`) and THIS run's ephemeral db, so it never touches a
+# concurrently-running e2e cluster (each run gets its own port block, run
+# dir, and db) or a developer's `.yb_light` cluster. A stale crashed prior
+# run can't interfere either — it lives on a different port block — and its
+# dir is reaped by the 7-day GC.
 #
 # The storage-stack services carry their data dir in argv (`-D <dir>` /
 # `--pgdata <dir>` / the endpoint_storage json path), so the path anchor
 # matches them directly.
-for anchor in "${YB_LIGHT_REPO_DIR}" "/\.e2e-tests/"; do
-    pkill -9 -f "(yb-pageserver|safekeeper|endpoint_storage|compute_ctl).*${anchor}" 2>/dev/null || true
-done
+pkill -9 -f "(yb-pageserver|safekeeper|endpoint_storage|compute_ctl).*${YB_LIGHT_REPO_DIR}" 2>/dev/null || true
 
 # The storage controller has no data dir in argv, but its --database-url
-# carries the YB database name. The harness always points it at an
-# ephemeral `yb_storage_e2e_*` db (never a developer's default
-# `yb_storage`), so match the db being cleaned (this run) plus that prefix
-# (any stale prior-run controller) — and nothing of the developer's.
+# carries this run's ephemeral db name.
 pkill -9 -f "storage_controller.*/${YB_DBNAME} " 2>/dev/null || true
-pkill -9 -f "storage_controller.*/yb_storage_e2e_" 2>/dev/null || true
 
 # Compute postgres (a compute_ctl child) survives a hung pg_ctl shutdown
 # and squats on COMPUTE_PORT. It runs as
-# `postgres -D <run_dir>/endpoints/<id>/pgdata`, so anchor on the run dir
-# and the `.e2e-tests` tree — never the YugabyteDB backend or a developer's
-# compute under `.yb_light`.
+# `postgres -D <run_dir>/endpoints/<id>/pgdata`, so anchor on the run dir.
 pkill -9 -f "postgres .*${YB_LIGHT_REPO_DIR}/endpoints" 2>/dev/null || true
-pkill -9 -f "postgres .*/\.e2e-tests/.*/endpoints" 2>/dev/null || true
 sleep 2
 # pkill -9 is async w.r.t. the kernel releasing the listen sockets; wait
 # for COMPUTE_PORT to actually free so `endpoint start` doesn't race a
