@@ -786,6 +786,21 @@ impl Storage for YbWalStorage {
             end_pos,
         )
         .await?;
+        // Drop any cached chunks past `end_pos`. Without this the in-memory
+        // `WalCache` keeps the pre-truncation (now-torn) bytes for that
+        // region, and `YbSegmentReader` would serve them to a reader even
+        // after the YB rows were deleted above — so when the next term
+        // rewrites WAL forward from `end_pos`, the interpreted-WAL reader
+        // decodes a stale page and trips `critical_timeline!` (the
+        // `invalid xlog page header` going_away flake). Done after the YB
+        // delete so a concurrent reader re-populating on a cache miss reads
+        // the already-trimmed table, not the stale rows. Symmetric to the
+        // cache drop `remove_up_to` does for its DELETE.
+        if let Some(cache) = &self.cache {
+            let segno_end = end_pos.segment_number(self.wal_seg_size);
+            let end_offset = end_pos.segment_offset(self.wal_seg_size) as u64;
+            cache.lock().unwrap().truncate_after(segno_end, end_offset);
+        }
         self.inner.truncate_wal(end_pos).await
     }
 
@@ -1669,6 +1684,89 @@ mod tests {
     }
 
     const SEG_SIZE: u64 = 16 * 1024 * 1024;
+
+    /// Like [`make_storage`] but with a populated `WalCache` and a real
+    /// `wal_seg_size`, so tests can assert how `truncate_wal` interacts
+    /// with the in-memory cache.
+    async fn make_storage_with_cache(table: &str, start_lsn: Lsn) -> (YbWalStorage, Utf8TempDir) {
+        let client = Arc::new(
+            YsqlClient::connect_no_tls(pgcfg(), true)
+                .await
+                .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
+        );
+        make_wals_table(&client, table).await;
+
+        let tenant = TenantId::generate();
+        let timeline = TimelineId::generate();
+        let ttid = TenantTimelineId::new(tenant, timeline);
+        let mut state = TimelinePersistentState::empty();
+        state.tenant_id = ttid.tenant_id;
+        state.timeline_id = ttid.timeline_id;
+        state.timeline_start_lsn = start_lsn;
+        state.local_start_lsn = start_lsn;
+        // truncate_wal decomposes end_pos with this, so it must be real.
+        state.server.wal_seg_size = SEG_SIZE as u32;
+
+        let tmp = camino_tempfile::tempdir().expect("tempdir");
+        let yb_wal = Arc::new(YbWalConn {
+            fpu_client: client.clone(),
+            read_client: client.clone(),
+            system_client: client,
+            table: table.to_string(),
+            cache: Some(Arc::new(std::sync::Mutex::new(WalCache::new(64 * 1024 * 1024)))),
+        });
+        let storage = YbWalStorage::new(&ttid, &state, yb_wal)
+            .await
+            .expect("YbWalStorage::new");
+        (storage, tmp)
+    }
+
+    /// Regression for the `going_away` torn-tail decode panic: `truncate_wal`
+    /// must invalidate cached chunks at/above `end_pos`. Otherwise the
+    /// in-memory `WalCache` keeps the pre-truncation (now-torn) bytes for
+    /// that region, and `YbSegmentReader` serves them to the interpreted-WAL
+    /// reader after the next walproposer term rewrites WAL forward — which
+    /// decodes a stale page (`invalid xlog page header`) and trips
+    /// `critical_timeline!`. Mirrors the cache drop `remove_up_to` does for
+    /// its DELETE.
+    #[tokio::test]
+    async fn truncate_wal_invalidates_cache_past_end_pos() {
+        let table = format!("wals_test_trunc_cache_{}", rand_suffix());
+        // start == durable tail; segno 1, offset 0. truncate back to it is
+        // the "election truncates to the durable tail" case.
+        let start = Lsn(SEG_SIZE);
+        let (mut storage, _tmp) = make_storage_with_cache(&table, start).await;
+
+        // Seed the cache: one chunk below the cut (must survive) and two
+        // past it — a later offset in the cut's segment and a higher
+        // segment — standing in for the stale pre-truncation bytes a reader
+        // must never serve.
+        {
+            let cache = storage.cache.as_ref().expect("cache enabled").clone();
+            let mut c = cache.lock().unwrap();
+            c.insert(0, 0, Arc::new(vec![1u8; 8192])); // below cut  → keep
+            c.insert(1, 8192, Arc::new(vec![2u8; 8192])); // past cut   → drop
+            c.insert(2, 0, Arc::new(vec![3u8; 8192])); // higher seg → drop
+        }
+
+        storage.truncate_wal(start).await.expect("truncate_wal");
+
+        {
+            let cache = storage.cache.as_ref().unwrap().clone();
+            let mut c = cache.lock().unwrap();
+            assert!(c.lookup(0, 0).is_some(), "chunk below the cut must survive");
+            assert!(
+                c.lookup(1, 8192).is_none(),
+                "stale chunk past the cut must be invalidated"
+            );
+            assert!(
+                c.lookup(2, 0).is_none(),
+                "stale chunk in a higher segment must be invalidated"
+            );
+        }
+
+        drop_wals_table(&storage.ysql_system_client, &table).await;
+    }
 
     /// Regression: when the consumer's confirmed `durable_lsn` is at X
     /// and a caller asks to truncate to Y > X, `truncate_wal` must bail
