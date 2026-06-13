@@ -24,6 +24,7 @@ use remote_storage::{DownloadError, RemotePath};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -35,9 +36,6 @@ use tokio::{spawn, sync::watch, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info, instrument, warn};
 use url::Url;
-use utils::backoff::{
-    DEFAULT_BASE_BACKOFF_SECONDS, DEFAULT_MAX_BACKOFF_SECONDS, exponential_backoff_duration,
-};
 use utils::id::{ShardIndex, ShardNumber, ShardStripeSize};
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
@@ -64,7 +62,6 @@ use crate::sync_sk::{check_if_synced, ping_safekeeper};
 use crate::tls::watch_cert_for_changes;
 use crate::{config, extension_server, local_proxy};
 
-pub static SYNC_SAFEKEEPERS_PID: AtomicU32 = AtomicU32::new(0);
 pub static PG_PID: AtomicU32 = AtomicU32::new(0);
 // This is an arbitrary build tag. Fine as a default / for testing purposes
 // in-case of not-set environment var
@@ -1125,22 +1122,7 @@ impl ComputeNode {
     }
 
     fn cleanup_after_postgres_exit(&self) -> Result<bool> {
-        // Maybe sync safekeepers again, to speed up next startup
-        let compute_state = self.state.lock().unwrap().clone();
-        let pspec = compute_state.pspec.as_ref().expect("spec must be set");
-        let lsn = if matches!(pspec.spec.mode, compute_api::spec::ComputeMode::Primary) {
-            info!("syncing safekeepers on shutdown");
-            let storage_auth_token = pspec.storage_auth_token.clone();
-            let lsn = self.sync_safekeepers(storage_auth_token)?;
-            info!(%lsn, "synced safekeepers");
-            Some(lsn)
-        } else {
-            info!("not primary, not syncing safekeepers");
-            None
-        };
-
         let mut state = self.state.lock().unwrap();
-        state.terminate_flush_lsn = lsn;
 
         let delay_exit = state.status == ComputeStatus::TerminationPendingFast;
         if state.status == ComputeStatus::TerminationPendingFast
@@ -1500,100 +1482,6 @@ impl ComputeNode {
         result
     }
 
-    // Run `postgres` in a special mode with `--sync-safekeepers` argument
-    // and return the reported LSN back to the caller.
-    #[instrument(skip_all)]
-    pub fn sync_safekeepers(&self, storage_auth_token: Option<String>) -> Result<Lsn> {
-        let start_time = Utc::now();
-
-        let mut sync_handle = maybe_cgexec(&self.params.pgbin)
-            .args(["--sync-safekeepers"])
-            .env("PGDATA", &self.params.pgdata) // we cannot use -D in this mode
-            .envs(if let Some(storage_auth_token) = &storage_auth_token {
-                vec![("NEON_AUTH_TOKEN", storage_auth_token)]
-            } else {
-                vec![]
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("postgres --sync-safekeepers failed to start");
-        SYNC_SAFEKEEPERS_PID.store(sync_handle.id(), Ordering::SeqCst);
-
-        // `postgres --sync-safekeepers` will print all log output to stderr and
-        // final LSN to stdout. So we leave stdout to collect LSN, while stderr logs
-        // will be collected in a child thread.
-        let stderr = sync_handle
-            .stderr
-            .take()
-            .expect("stderr should be captured");
-        let logs_handle = handle_postgres_logs(stderr);
-
-        let sync_output = sync_handle
-            .wait_with_output()
-            .expect("postgres --sync-safekeepers failed");
-        SYNC_SAFEKEEPERS_PID.store(0, Ordering::SeqCst);
-
-        // Process has exited, so we can join the logs thread.
-        let _ = tokio::runtime::Handle::current()
-            .block_on(logs_handle)
-            .map_err(|e| tracing::error!("log task panicked: {:?}", e));
-
-        if !sync_output.status.success() {
-            anyhow::bail!(
-                "postgres --sync-safekeepers exited with non-zero status: {}. stdout: {}",
-                sync_output.status,
-                String::from_utf8(sync_output.stdout)
-                    .expect("postgres --sync-safekeepers exited, and stdout is not utf-8"),
-            );
-        }
-
-        self.state.lock().unwrap().metrics.sync_safekeepers_ms = Utc::now()
-            .signed_duration_since(start_time)
-            .to_std()
-            .unwrap()
-            .as_millis() as u64;
-
-        let lsn = Lsn::from_str(String::from_utf8(sync_output.stdout)?.trim())?;
-
-        Ok(lsn)
-    }
-
-    fn sync_safekeepers_with_retries(&self, storage_auth_token: Option<String>) -> Result<Lsn> {
-        let max_retries = 5;
-        let mut attempts = 0;
-        loop {
-            let result = self.sync_safekeepers(storage_auth_token.clone());
-            match &result {
-                Ok(_) => {
-                    if attempts > 0 {
-                        tracing::info!("sync_safekeepers succeeded after {attempts} retries");
-                    }
-                    return result;
-                }
-                Err(e) if attempts < max_retries => {
-                    tracing::info!(
-                        "sync_safekeepers failed, will retry (attempt {attempts}): {e:#}"
-                    );
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        "sync_safekeepers still failed after {attempts} retries, giving up: {err:?}"
-                    );
-                    return result;
-                }
-            }
-            // sleep and retry
-            let backoff = exponential_backoff_duration(
-                attempts,
-                DEFAULT_BASE_BACKOFF_SECONDS,
-                DEFAULT_MAX_BACKOFF_SECONDS,
-            );
-            std::thread::sleep(backoff);
-            attempts += 1;
-        }
-    }
-
     /// Do all the preparations like PGDATA directory creation, configuration,
     /// safekeepers sync, basebackup, etc.
     #[instrument(skip_all)]
@@ -1619,20 +1507,17 @@ impl ComputeNode {
             self.params.lakebase_mode,
         )?;
 
-        // Syncing safekeepers is only safe with primary nodes: if a primary
-        // is already connected it will be kicked out, so a secondary (standby)
-        // cannot sync safekeepers.
         let lsn = match spec.mode {
             ComputeMode::Primary => {
-                info!("checking if safekeepers are synced");
-                let lsn = if let Ok(Some(lsn)) = self.check_safekeepers_synced(compute_state) {
-                    lsn
-                } else {
-                    info!("starting safekeepers syncing");
-                    self.sync_safekeepers_with_retries(pspec.storage_auth_token.clone())
-                        .with_context(|| "failed to sync safekeepers")?
-                };
-                info!("safekeepers synced at LSN {}", lsn);
+                // yb-mode: a single safekeeper reports commit_lsn == flush_lsn
+                // (quorum of one, every flush is committed), so the lightweight
+                // TIMELINE_STATUS check always yields the durable LSN. There is
+                // no multi-safekeeper consensus to drive, so we never run
+                // `postgres --sync-safekeepers`.
+                let lsn = self
+                    .check_safekeepers_synced(compute_state)?
+                    .context("safekeeper did not report a flush LSN")?;
+                info!("safekeeper at LSN {}", lsn);
                 lsn
             }
             ComputeMode::Static(lsn) => {
@@ -1813,11 +1698,17 @@ impl ComputeNode {
             vec![]
         };
 
-        // Run postgres as a child process.
+        // Run postgres as a child process. Put it in its own process group
+        // (the postmaster becomes the group leader, pgid == its pid) so that on
+        // shutdown we can reap the whole tree — including backends that
+        // reparent away when the postmaster exits but linger holding the
+        // client port (e.g. one stuck on a crashed pageserver). See the killpg
+        // in `wait_postgres`.
         let mut pg = maybe_cgexec(&self.params.pgbin)
             .args(["-D", &self.params.pgdata])
             .envs(env_vars)
             .stderr(Stdio::piped())
+            .process_group(0)
             .spawn()
             .expect("cannot start postgres process");
         PG_PID.store(pg.id(), Ordering::SeqCst);
@@ -1837,13 +1728,27 @@ impl ComputeNode {
     /// Wait for the child Postgres process forever. In this state Ctrl+C will
     /// propagate to Postgres and it will be shut down as well.
     fn wait_postgres(&self, mut pg_handle: PostgresHandle) -> std::process::ExitStatus {
-        info!(postmaster_pid = %pg_handle.postgres.id(), "Waiting for Postgres to exit");
+        let postmaster_pid = pg_handle.postgres.id();
+        info!(postmaster_pid, "Waiting for Postgres to exit");
 
         let ecode = pg_handle
             .postgres
             .wait()
             .expect("failed to start waiting on Postgres process");
         PG_PID.store(0, Ordering::SeqCst);
+
+        // The postmaster has been reaped, but a backend can outlive it —
+        // notably one wedged in a read against a crashed pageserver — and keep
+        // the client port bound after reparenting to init, which makes the next
+        // compute fail to bind it. The postmaster leads its own process group
+        // (see `start_postgres`), so SIGKILL the whole group to reap any such
+        // straggler before we let compute_ctl exit. ESRCH (group already empty)
+        // is the normal case and is ignored.
+        kill(
+            Pid::from_raw(-(postmaster_pid as i32)),
+            Signal::SIGKILL,
+        )
+        .ok();
 
         // Process has exited. Wait for the log collecting task to finish.
         let _ = tokio::runtime::Handle::current()
@@ -2855,12 +2760,6 @@ pub async fn installed_extensions(conf: tokio_postgres::Config) -> Result<()> {
 }
 
 pub fn forward_termination_signal(dev_mode: bool) {
-    let ss_pid = SYNC_SAFEKEEPERS_PID.load(Ordering::SeqCst);
-    if ss_pid != 0 {
-        let ss_pid = nix::unistd::Pid::from_raw(ss_pid as i32);
-        kill(ss_pid, Signal::SIGTERM).ok();
-    }
-
     if !dev_mode {
         //  Terminate pgbouncer with SIGKILL
         match pid_file::read(PGBOUNCER_PIDFILE.into()) {

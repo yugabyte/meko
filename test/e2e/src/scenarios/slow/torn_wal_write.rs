@@ -16,13 +16,13 @@
 //! corruption gate (`run_scenario`) scans the PS log for the marker set on
 //! top, and the suite Final verdict checks the correctness counter.
 //!
-//! KNOWN BUG: scenario A (safekeeper crash, surviving compute) reproduces
-//! an open data-loss bug (#57) — the SK kill-9 loses early acked
-//! commits and trips the `durable_walk_unflushed_row` correctness counter
-//! caught by the Final verdict. The loss is specific to crashing *only* the
-//! safekeeper with a live compute; the pairs/triple that also restart the
-//! compute or PS (D–G) recover cleanly. Expect this test to fail until 34
-//! is fixed.
+//! This is a **slow-suite** test: the failures in this family
+//! (torn-WAL/catalog corruption #57, the FSM-truncation walreceiver wedge
+//! #36, the compute-Init recycle race #37) are timing- and churn-dependent
+//! — a single matrix pass reliably passes, and they only surface once
+//! several iterations accumulate catalog/clog/rel state. `run` therefore
+//! repeats the whole matrix `TORN_ITERATIONS` times (default 6). All of
+//! #57/#36/#37 are fixed; this stays in `slow/` as their regression guard.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -71,17 +71,42 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         Mode { label: "G all three", table: "torn_g", sk: true, ps: true, compute: true },
     ];
 
-    // Stop at the first failed mode: a single losing mode is enough to
-    // condemn the build, and leaving the cluster at the point of failure
-    // (with `--no-fail-clean`) keeps the forensics for that exact mode.
-    for m in &modes {
-        match crash_scenario(c, m).await {
-            Ok(()) => tee_println!("  PASS — {}", m.label),
-            Err(e) => {
-                tee_println!("  FAIL — {}: {e:#}", m.label);
-                return Err(e)
-                    .with_context(|| format!("torn-write mode {} lost committed data", m.label));
+    // Slow-suite test: the torn-WAL / catalog corruption (and the
+    // FSM-truncation wedge + recycle races in its family) are timing- and
+    // churn-dependent — a single pass over the modes reliably passes; the
+    // failures only surface once several iterations accumulate
+    // catalog/clog/rel state. Repeat the matrix `iterations` times
+    // (default 6, env-overridable for deeper hunts), recycling the compute
+    // between iterations exactly as the suite runner does between
+    // scenarios. Stop at the first failed mode: one losing mode condemns
+    // the build, and `--no-fail-clean` leaves the cluster at that point for
+    // forensics.
+    let iterations: u32 = std::env::var("TORN_ITERATIONS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(6);
+
+    for iter in 1..=iterations {
+        step(&format!("torn_wal_write iteration {iter}/{iterations}"));
+        for m in &modes {
+            match crash_scenario(c, m).await {
+                Ok(()) => tee_println!("  PASS — {}", m.label),
+                Err(e) => {
+                    tee_println!("  FAIL — {}: {e:#}", m.label);
+                    return Err(e).with_context(|| {
+                        format!(
+                            "torn-write iter {iter}/{iterations} mode {} lost committed data",
+                            m.label
+                        )
+                    });
+                }
             }
+        }
+        // Recycle between iterations so the accumulated cross-iteration
+        // churn (compute restart) matches a `-n` run of the matrix.
+        if iter < iterations {
+            c.prep_for_next_test()?;
         }
     }
     Ok(())

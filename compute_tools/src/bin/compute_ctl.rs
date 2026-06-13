@@ -353,9 +353,10 @@ fn deinit_and_exit(tracing_provider: Option<tracing_utils::Provider>, exit_code:
     exit(exit_code.unwrap_or(1))
 }
 
-/// When compute_ctl is killed, send also termination signal to sync-safekeepers
-/// to prevent leakage. TODO: it is better to convert compute_ctl to async and
-/// wait for termination which would be easy then.
+/// When compute_ctl is killed, forward the termination signal to Postgres (and
+/// the pgbouncer/local_proxy sidecars) so they don't leak. TODO: it is better
+/// to convert compute_ctl to async and wait for termination which would be easy
+/// then.
 fn handle_exit_signal(sig: i32, dev_mode: bool) {
     info!("received {sig} termination signal");
     forward_termination_signal(dev_mode);

@@ -1217,14 +1217,12 @@ impl Endpoint {
             TerminateResponse { lsn: None }
         };
 
-        // Also wait for the compute_ctl process to die. It might have some
-        // cleanup work to do after postgres stops, like syncing safekeepers,
-        // etc.
+        // Also wait for the compute_ctl process to die. It reaps the postgres
+        // process tree (postmaster + any straggler backends) before exiting, so
+        // by the time it is gone the client port is free for the next compute.
         //
         // If destroying or stop mode is immediate, send it SIGTERM before
-        // waiting. Sometimes we do *not* want this cleanup: tests intentionally
-        // do stop when majority of safekeepers is down, so sync-safekeepers
-        // would hang otherwise. This could be a separate flag though.
+        // waiting.
         if started {
             let send_sigterm = destroy || !matches!(mode, EndpointTerminateMode::Fast);
             self.wait_for_compute_ctl_to_exit(send_sigterm)?;

@@ -79,7 +79,7 @@ main()
          │    ├─ download preload extensions (if shared_preload_libraries needs them)
          │    ├─ prepare_pgdata()      ← critical path
          │    │    ├─ create fresh pgdata/
-         │    │    ├─ sync_safekeepers()  — get flush/commit LSN (Primary)
+         │    │    ├─ check_safekeepers_synced()  — TIMELINE_STATUS flush LSN (Primary)
          │    │    └─ get_basebackup()    — from pageserver at that LSN (gRPC or libpq)
          │    ├─ resize swap / set disk quota
          │    ├─ tune pgbouncer / configure local_proxy
@@ -90,12 +90,22 @@ main()
          ├─ status: running
          └─ background: extension-stats, LFC auto-prewarm, LFC offload loop
      ├─ wait_postgres()               — block until the child exits
-     └─ cleanup_after_postgres_exit() — sync_safekeepers() on Primary shutdown
+     └─ cleanup_after_postgres_exit() — core-dump check, flip status to Terminated
 ```
 
 The basebackup path (gRPC vs. libpq) is chosen from the pageserver connection scheme in
 the spec (`compute.rs`); this is the same fork in the road described in
 [`compute.md`](compute.md).
+
+yb-light runs a single safekeeper, which reports `commit_lsn == flush_lsn` (a quorum of
+one — every flush is durably committed). The startup LSN therefore comes straight from the
+`TIMELINE_STATUS` query in `check_safekeepers_synced()`; there is no multi-safekeeper
+consensus to drive, so compute_ctl never spawns `postgres --sync-safekeepers` at startup or
+shutdown. (Upstream Neon ran a full `sync_safekeepers()` walproposer pass here; that spawned
+a second postgres binding the client port and racing the next compute on shutdown — see
+[#58].) `cleanup_after_postgres_exit()` no longer reports a `terminate_flush_lsn`.
+
+[#58]: https://github.com/yugabyte/yb-light/issues/58
 
 ### The compute spec
 
@@ -148,7 +158,7 @@ ordered, partly per-database-parallel set of phases, each idempotent:
 
 | Mode | Role | `compute_ctl` behavior |
 |---|---|---|
-| `Primary` | read-write | applies the full spec; uses `safekeeper_connstrings`; `sync_safekeepers()` on shutdown and returns a `terminate_flush_lsn` |
+| `Primary` | read-write | applies the full spec; uses `safekeeper_connstrings`; reads the startup LSN from the safekeeper's `TIMELINE_STATUS` |
 | `Static(Lsn)` | read-only, pinned | skips spec application; runs the LSN-lease renewal task so the pageserver won't GC the pinned LSN |
 | `Replica` | read-only, hot standby | follows the primary; can be promoted to Primary via `/promote` |
 
@@ -212,7 +222,7 @@ internal `POST /refresh_configuration`, which the configurator turns into a re-f
 | Module | What it does |
 |---|---|
 | `compute_prewarm.rs` | LFC **prewarm** (load cache state before/at startup) and **offload** (periodically save it). State is read/written to **endpoint_storage** at `{addr}/{tenant}/{timeline}/{endpoint}/lfc_state` (zstd). Auto-prewarm if `spec.autoprewarm`; offload loop if `offload_lfc_interval_seconds` set. |
-| `compute_promote.rs` | Replica→Primary: wait for the standby to catch up to the primary's LSN, `pg_promote()`, reconfigure as Primary, finalize WAL via `sync_safekeepers()`. |
+| `compute_promote.rs` | Replica→Primary: wait for the standby to catch up to the primary's flush LSN, set `neon.safekeepers` + `synchronous_standby_names`, `pg_promote()`, then reconfigure as Primary. |
 | `sync_sk.rs` | Query each safekeeper's `TIMELINE_STATUS` for flush/commit LSN and confirm a quorum agrees, before basebackup and on shutdown. |
 | `lsn_lease.rs` | Static mode: renew the pageserver LSN lease (`GET /lsn_lease`) so the pinned LSN survives GC. |
 | `extension_server.rs` | Download remote extensions from the proxy gateway (`--remote-ext-base-url`), unpack into PG's `lib`/`share`. |
