@@ -26,7 +26,7 @@ use hashlink::LruCache;
 
 use anyhow::Result;
 use bytes::Bytes;
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use pageserver_api::key::{KEY_SIZE, Key};
 use parking_lot::Mutex as PlMutex;
 use tokio_util::sync::CancellationToken;
@@ -144,6 +144,15 @@ struct DeltaTally {
     last_lsn: Lsn,
 }
 
+impl DeltaTally {
+    /// Whether this tally has reached either materialize threshold. A
+    /// limit of 0 disables that dimension.
+    fn hits(&self, count_limit: u32, payload_bytes_limit: u32) -> bool {
+        (count_limit > 0 && self.count >= count_limit)
+            || (payload_bytes_limit > 0 && self.payload_bytes >= payload_bytes_limit)
+    }
+}
+
 /// Top-level write buffer + flusher for one timeline.
 ///
 /// Two `PageStore` handles, each on its own YSQL connection:
@@ -207,6 +216,16 @@ pub struct PageWriter {
     /// which walks the map looking for keys that crossed the
     /// threshold during the flushed-window.
     delta_counts: DashMap<Bytes, DeltaTally>,
+    /// Keys whose `delta_counts` tally has *crossed* a materialize
+    /// threshold and are awaiting dispatch — the put loop inserts a key
+    /// here on the transition into "hit", so the flush trigger walks
+    /// only this set instead of sweeping all of `delta_counts`. Without
+    /// it, every flush iterated the whole map (O(all cached keys)) to
+    /// find the few threshold-crossers — the write-path twin of the
+    /// `lookup_range` O(N) cache walk (#21). Treated as an
+    /// over-approximation: the flush walk re-checks the tally and drops
+    /// stale entries, so a spurious member is harmless.
+    delta_ready: DashSet<Bytes>,
     materializer: Option<MaterializerHandle>,
     /// Highest LSN successfully reported as durable to
     /// `pageserver.timeline_state.consistent_lsn`. Advances only
@@ -369,6 +388,7 @@ impl PageWriter {
             rows_written: AtomicU64::new(0),
             meta_cache_hits: AtomicU64::new(0),
             delta_counts: DashMap::new(),
+            delta_ready: DashSet::new(),
             materializer: None,
             consistent_lsn_watermark: std::sync::atomic::AtomicU64::new(0),
             consistent_lsn_observed: std::sync::atomic::AtomicU64::new(0),
@@ -583,12 +603,11 @@ impl PageWriter {
         // advances `flush_horizon_lsn`), not from this put loop. That
         // way every job's `target_lsn` is durable by construction —
         // see `flush()` for the trigger site.
-        let counting = self
+        let limits = self
             .materializer
             .as_ref()
             .map(|m| (m.count_limit, m.payload_bytes_limit))
-            .filter(|(c, b)| *c > 0 || *b > 0)
-            .is_some();
+            .filter(|(c, b)| *c > 0 || *b > 0);
         // Rel rows: per-key DashMap shards; no global lock.
         for row in rel_rows {
             let key = row.key.clone();
@@ -600,13 +619,29 @@ impl PageWriter {
             self.rows_written.fetch_add(1, Ordering::Relaxed);
 
             if resets_chain {
+                // Anchor resets the chain: the key no longer needs
+                // materializing. Drop it from both the tally map and the
+                // ready set.
                 self.delta_counts.remove(&key);
-            } else if counting {
-                let mut tally = self.delta_counts.entry(key).or_default();
-                tally.count = tally.count.saturating_add(1);
-                tally.payload_bytes = tally.payload_bytes.saturating_add(payload_len);
-                if lsn > tally.last_lsn {
-                    tally.last_lsn = lsn;
+                self.delta_ready.remove(&key);
+            } else if let Some((count_limit, payload_bytes_limit)) = limits {
+                let crossed = {
+                    let mut tally = self.delta_counts.entry(key.clone()).or_default();
+                    let was_hit = tally.hits(count_limit, payload_bytes_limit);
+                    tally.count = tally.count.saturating_add(1);
+                    tally.payload_bytes = tally.payload_bytes.saturating_add(payload_len);
+                    if lsn > tally.last_lsn {
+                        tally.last_lsn = lsn;
+                    }
+                    // Crossed iff this put pushed the tally from below the
+                    // threshold to at/above it — record once per crossing so
+                    // the flush trigger can find this key without sweeping the
+                    // whole map. (Shard guard drops here, before the ready-set
+                    // insert: shard lock → DashSet, never nested.)
+                    tally.hits(count_limit, payload_bytes_limit) && !was_hit
+                };
+                if crossed {
+                    self.delta_ready.insert(key);
                 }
             }
         }
@@ -732,29 +767,44 @@ impl PageWriter {
             return Vec::new();
         }
         let mut to_dispatch = Vec::new();
-        let mut keys_to_clear: Vec<bytes::Bytes> = Vec::new();
-        for kv in self.delta_counts.iter() {
-            let (key, tally) = (kv.key(), kv.value());
-            let count_hit = m.count_limit > 0 && tally.count >= m.count_limit;
-            let bytes_hit =
-                m.payload_bytes_limit > 0 && tally.payload_bytes >= m.payload_bytes_limit;
-            if !(count_hit || bytes_hit) {
+        let mut dispatched: Vec<bytes::Bytes> = Vec::new();
+        let mut stale: Vec<bytes::Bytes> = Vec::new();
+        // Walk only the keys that crossed a threshold (the ready set),
+        // not all of `delta_counts`. The ready set is a hint: re-check the
+        // live tally and drop any entry that was since reset or dispatched.
+        for entry in self.delta_ready.iter() {
+            let key = entry.key();
+            let Some(tally) = self.delta_counts.get(key).map(|t| *t) else {
+                // Tally gone (anchor reset it) — stale hint.
+                stale.push(key.clone());
+                continue;
+            };
+            if !tally.hits(m.count_limit, m.payload_bytes_limit) {
+                stale.push(key.clone());
                 continue;
             }
             if tally.last_lsn == Lsn(0) || tally.last_lsn > horizon {
+                // Crossed but not yet durable — keep queued for a later
+                // flush once the horizon advances.
                 continue;
             }
             let inserted = m.in_flight.lock().unwrap().insert(key.clone());
             if inserted {
-                keys_to_clear.push(key.clone());
+                dispatched.push(key.clone());
                 to_dispatch.push(MaterializeJob {
                     key: key.clone(),
                     target_lsn: tally.last_lsn,
                 });
             }
         }
-        for k in keys_to_clear {
-            self.delta_counts.remove(&k);
+        // Dispatched keys leave both maps; stale hints leave only the ready
+        // set (their tally, if any, keeps accumulating).
+        for k in &dispatched {
+            self.delta_counts.remove(k);
+            self.delta_ready.remove(k);
+        }
+        for k in &stale {
+            self.delta_ready.remove(k);
         }
         to_dispatch
     }
@@ -1220,13 +1270,21 @@ impl PageWriter {
                     }
                 }
                 let horizon = Lsn(self.flush_horizon_lsn.load(Ordering::Relaxed));
-                let mut keys_to_clear: Vec<bytes::Bytes> = Vec::new();
-                for kv in self.delta_counts.iter() {
-                    let (key, tally) = (kv.key(), kv.value());
-                    let count_hit = m.count_limit > 0 && tally.count >= m.count_limit;
-                    let bytes_hit =
-                        m.payload_bytes_limit > 0 && tally.payload_bytes >= m.payload_bytes_limit;
-                    if !(count_hit || bytes_hit) {
+                let mut dispatched: Vec<bytes::Bytes> = Vec::new();
+                let mut stale: Vec<bytes::Bytes> = Vec::new();
+                // Only the threshold-crossers (ready set) can produce a job —
+                // walk it instead of sweeping all of `delta_counts`. Keys that
+                // crossed during this flush's puts are already in the set (the
+                // put loop records the crossing). The ready set is a hint:
+                // re-check the live tally and drop stale entries.
+                for entry in self.delta_ready.iter() {
+                    let key = entry.key();
+                    let Some(tally) = self.delta_counts.get(key).map(|t| *t) else {
+                        stale.push(key.clone());
+                        continue;
+                    };
+                    if !tally.hits(m.count_limit, m.payload_bytes_limit) {
+                        stale.push(key.clone());
                         continue;
                     }
                     let target_lsn = match max_lsn_per_key.get(key) {
@@ -1248,15 +1306,19 @@ impl PageWriter {
                     };
                     let inserted = m.in_flight.lock().unwrap().insert(key.clone());
                     if inserted {
-                        keys_to_clear.push(key.clone());
+                        dispatched.push(key.clone());
                         to_materialize.push(MaterializeJob {
                             key: key.clone(),
                             target_lsn,
                         });
                     }
                 }
-                for k in keys_to_clear {
-                    self.delta_counts.remove(&k);
+                for k in &dispatched {
+                    self.delta_counts.remove(k);
+                    self.delta_ready.remove(k);
+                }
+                for k in &stale {
+                    self.delta_ready.remove(k);
                 }
             }
             // Aux buffers drain under their small mutex.
@@ -2758,6 +2820,37 @@ mod tests {
         w.flush().await.unwrap();
         let job = rx.try_recv().expect("dispatch after 10 post-image deltas");
         assert_eq!(job.target_lsn, Lsn(200));
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// A key that crosses the threshold (entering the ready set) and is
+    /// then reset by an anchor *before any flush* must NOT dispatch: the
+    /// anchor clears both the tally and the ready-set hint. Guards the
+    /// ready-set ↔ `delta_counts` sync introduced with the per-flush
+    /// walk optimization (#21) — the trigger walks only the ready set, so
+    /// a crossing that's since been cancelled must not linger there.
+    #[tokio::test]
+    async fn anchor_after_crossing_cancels_dispatch() {
+        let (store, schema) = make_store("mat_cross_then_reset").await;
+        const LIMIT: u32 = 3;
+        let (w, _t, _tl, mut rx, _in_flight) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+
+        // Cross the threshold — k(1) enters the ready set.
+        for i in 0..LIMIT {
+            w.put(&[(k(1), Lsn(10 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        // Anchor at a higher LSN resets the chain before the flush fires.
+        w.put(&[(k(1), Lsn(100), image())]).await.unwrap();
+        w.note_record_lsn(Lsn(100), Lsn(99));
+        w.flush().await.unwrap();
+        assert!(
+            rx.try_recv().is_err(),
+            "anchor after crossing must cancel the queued dispatch",
+        );
 
         drop_schema(&store, &schema).await;
     }
