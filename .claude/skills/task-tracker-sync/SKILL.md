@@ -1,152 +1,158 @@
 ---
 name: task-tracker-sync
 description: >-
-  Before staging any change to a file under `tasks/` (new task file,
-  status flip, frontmatter edit, body rewrite), verify the file's
-  frontmatter is well-formed, that `tasks/README.md`'s index row
-  matches what the frontmatter says, and that the body reflects the
-  final landed state — not the planning state, not the
-  "almost-done-with-leftovers" state. Also fires when creating a new
-  task file or marking one done. Same commit, no follow-ups.
+  Before creating or updating a GitHub issue on yugabyte/yb-light (new
+  issue, status/label/milestone change, closing one out), verify it has
+  an area label AND a milestone, that the title/body reflect the final
+  landed state — not the planning state, not the "almost-done-with-leftovers"
+  state — and that issues whose work has shipped get closed (with the
+  landing commit/PR referenced). Fires when opening a new issue, editing
+  one, or declaring a tracked piece of work done.
 ---
 
 # task-tracker-sync
 
-`tasks/` is this repo's lightweight Jira. The contract is simple but
-easy to violate by accident:
+This repo's tracker is **GitHub issues** on `yugabyte/yb-light`, driven
+via the `gh` CLI. (The old `tasks/*.md` files were migrated to issues
+and deleted; `tasks/README.md` is now just a pointer.) The contract is
+simple but easy to violate by accident:
 
-- Every task file has frontmatter that says what state it's in.
-- `tasks/README.md` has an index table that mirrors the frontmatter.
-- The task body describes what *actually landed*, with commit
+- Every issue has an **area label** and a **milestone**.
+- The title/body describe what *actually landed*, with commit/PR
   anchors — not the original plan, not what's still pending.
+- When the work ships, the issue is **closed**, referencing the
+  landing commit or PR.
 
-When those three drift apart, future-you (and the next agent that
-opens the repo) can't tell what's done. This skill keeps them in sync.
+When those drift, nobody can tell from the issue list what's done or
+where it belongs. This skill keeps them in sync.
 
 ## When to fire
 
-- You're editing the frontmatter of a `tasks/*.md` file (any field).
-- You're creating a new `tasks/<id>_*.md` file.
-- You're marking a task done (`status: pending|in_progress` → `done`).
-- You're closing the loop on a task in conversation ("OK, that's
-  task 9 done") even if you haven't touched the file yet — touch it
-  now, don't defer.
+- You're creating a new issue (`gh issue create`).
+- You're editing an issue's labels, milestone, title, or body
+  (`gh issue edit`).
+- You're marking work done — closing an issue, or saying in
+  conversation "OK, that's #34 done" even before you've touched it.
+  Close it now, don't defer.
 
-## Step 1 — frontmatter sanity
+## Step 1 — label + milestone present
 
-Open the affected file. Confirm:
+The authoritative area/milestone taxonomy and contract live in
+[`docs/issue-tracking.md`](../../../docs/issue-tracking.md); the summary
+below must stay consistent with it. Every issue MUST carry:
 
-```yaml
----
-status: pending|in_progress|blocked|done|deferred
-severity: highest|high|medium|low
-area: yb-pageserver|safekeeper|storage_ctl|page_service / compute|yb_light_local|...
-opened: YYYY-MM-DD
-closed: YYYY-MM-DD     # only when status=done or deferred
----
+- **An area label**, one (or both) of:
+  - `storage` — pageserver / safekeeper / storage_controller, page
+    store, WAL, read/write paths, page-service wire protocol, e2e.
+  - `control plane` — `storage_controller` orchestration,
+    `yb_light_local`, endpoint/branch lifecycle.
+  Stock labels (`bug`, `enhancement`, …) are optional extras, not a
+  substitute for the area label.
+- **A milestone**, one of: `POC` · `Early Access` · `K8 Deploy`.
+
+On create, pass both:
+
+```
+gh issue create --title "..." --body "..." \
+  --label storage --milestone POC
 ```
 
-- `area:` is one of the values listed in `tasks/README.md` "Areas",
-  or a `/`-joined pair for multi-area tasks. New areas need a README
-  update.
-- `closed:` is present iff `status` is `done` or `deferred`. If you
-  set `status: done` you MUST set `closed:` to today's date in the
-  current-day format (e.g. 2026-06-08). Don't leave it stamped to
-  whenever the work actually finished if you don't know the exact
-  date — today is fine.
-- Dates are absolute. Convert any "Thursday" / "last week" in user
-  messages to the actual ISO date before persisting.
+On an existing issue missing either, fix it:
 
-## Step 2 — README index row
+```
+gh issue edit <num> --add-label "control plane" --milestone "Early Access"
+```
 
-Open `tasks/README.md`. Find the row for this task's `<id>`.
+A new area or milestone needs agreement first — don't invent label
+names. Check what exists with `gh label list` /
+`gh api repos/:owner/:repo/milestones`.
 
-- If no row exists: add one. Columns are `ID | Title | Status | Severity | Area`.
-- Status emoji: `✅ done` · `🚧 in_progress` · `⏳ pending` · `🚫 blocked` · `💤 deferred`.
-- Severity / area cells must match the frontmatter.
-- Title is concise; use backticks for code/file references.
-
-Rows must be in `<id>` order (the natural sort: `4.a` before `4.a.1`
-before `4.b`).
-
-If you renamed a task or changed its severity, the README row must
-follow.
-
-## Step 3 — body matches reality
+## Step 2 — title + body match reality
 
 This is the step that gets skipped and the one that matters most.
 
-A task body usually has two layers:
+- **Title** is a concise, imperative summary; backticks for
+  code/file references. If the work's scope changed, retitle.
+- **Body** usually has two layers:
+  - **Plan / sketch** — what you intended when the issue opened.
+    Dates fast.
+  - **Landed** — what actually shipped, with commit hashes / PR refs.
 
-- **Plan / sketch** — what you intended to do when the file was
-  opened. This dates fast.
-- **Landed** — what actually shipped, with commit hashes.
+When you close an issue:
 
-When you mark a task done:
+- The body (or a closing comment) must say what landed, with the
+  landing-commit anchor(s) or `Closes #<num>` PR reference.
+- "Leftovers / not blocking" or "Pending follow-ups" notes must be
+  revisited:
+  - If they landed: note it with the landing commit.
+  - If genuinely deferred: split them into a **new issue** and link
+    it (`#<num>`), rather than closing with silent loose ends.
 
-- The top of the body must clearly say "done" (a `## Status: DONE`
-  header, or equivalent) with the landing-commit anchor(s).
-- "Wave 1 leftovers / not blocking" or "Pending follow-ups" sections
-  must be revisited:
-  - If those leftovers landed: replace with a one-line note citing
-    the landing commit.
-  - If they were genuinely deferred: keep them, with a pointer to
-    the follow-up task (if any) or a note saying why deferred.
-- Old planning prose can stay below a `---` separator as historical
-  context. Don't delete it unless it's actively misleading; just
-  don't lead with it.
+An issue body that still leads with "Plan: do X, Y, Z" after the work
+landed is a lie by omission. Edit it (`gh issue edit <num> --body ...`)
+or leave a closing comment that supersedes it.
 
-A task body that still leads with "Plan: do X, Y, Z" after the work
-landed is a lie by omission. Fix it.
+## Step 3 — close when it ships
 
-## Step 4 — same commit
+When the work lands, close the issue as part of the same flow that
+ships it — ideally via `Closes #<num>` in the PR/commit, or
+explicitly:
 
-The frontmatter flip, the README index row, and the body refresh all
-travel in one commit. Don't ship `status: done` in one commit and
-the README update in another — the gap is when search/agent context
-sees inconsistent state.
+```
+gh issue close <num> --comment "Landed in <commit/PR>. <one-line what shipped>."
+```
 
-Naming: when the commit is work on a `tasks/` task, the subject line
-names it — `(task <id>)` appended, per the commit-sync skill. If the
-task closeout is a side-effect of bigger work, the task id still goes
-in that commit's subject; details fold into the body.
+Don't leave shipped work open "to close later" — the gap is exactly
+when the issue list misleads. See the `commit-sync` skill, which
+reminds you to reference and close issues at commit time.
+
+## Cross-referencing commits
+
+When a commit is work on an issue, lead the subject with the `[#<num>]`
+tag — the full format is `[#<issue>] <area>: <sub-component>: <title>`,
+where `<area>` is `storage` or `control_plane` (see the `commit-sync`
+skill's "Subject format"). Example:
+`[#42] storage: pageserver: strip multi-timeline machinery`. This lets
+`git log --oneline` be cross-referenced against the issue list, and
+GitHub auto-links the commit on the issue. Use `Closes #<num>` /
+`Fixes #<num>` in the PR body or final commit to auto-close on merge.
 
 ## When NOT to fire
 
-- Editing a task's body to clarify wording or fix typos without
-  changing status — README row doesn't need re-checking, only
-  frontmatter↔body consistency.
-- Reading a task file as research — read-only, no sync needed.
-- Adding a new section to a still-pending task's body (e.g. updating
-  a hypothesis as you learn more) — only fire if frontmatter changes
-  or the body starts contradicting the README row.
+- Reading an issue as research — read-only, no sync needed.
+- Adding a clarifying comment to a still-open issue without changing
+  its status — fine, no label/milestone re-check needed.
+- Appending a new hypothesis to an open investigation — only fire if
+  you're changing status, labels, milestone, or the body now
+  contradicts itself.
 
 ## Anti-patterns
 
-- **"I'll update the README in a moment"** — no. The README index
-  is the load-bearing surface; it's how anyone sees the task list at
-  a glance. Same commit.
-- **Marking done without setting `closed:`** — the closed-date is
-  how you know which work shipped when, which is the only thing the
-  index is good for as a historical record.
-- **Renumbering**: don't reuse `<id>`s when a file is deleted. The
-  README convention is explicit about this.
-- **Phantom progress** — appending "Wave 2 — pending" to a body that
-  also says "## Status: DONE". Pick one.
+- **Creating an issue with no label or no milestone.** Both are
+  required — an unlabelled, unmilestoned issue is invisible to every
+  filtered view the team uses.
+- **Closing without a reference.** "Closed" with no commit/PR anchor
+  loses the one thing the tracker is good for as a historical record:
+  what shipped when.
+- **Phantom progress.** A body that says "DONE" up top and "Wave 2 —
+  pending" below. Pick one; split the pending part into its own issue.
+- **Inventing labels/milestones** on the fly instead of using the
+  agreed `storage` / `control plane` and `POC` / `Early Access` /
+  `K8 Deploy`.
 
 ## Failure modes this prevents
 
-Real examples from this repo:
+From this repo's file-tracker era (same failure modes apply to
+issues):
 
-1. Tasks 19, 20, 21 (all safekeeper, all `status: done` since
-   2026-06-05) shipped without their README index entries — invisible
-   in the table until someone explicitly went looking. Caught only
-   because a human asked "what's left?" and noticed the gap.
+1. Tasks 19, 20, 21 shipped `done` but never got their index entry —
+   invisible until a human asked "what's left?". The issue equivalent:
+   closing without a label/milestone, so it never shows in a filtered
+   list.
 
-2. Task 9 (`9_safekeeper-paxos-removal.md`) had `status: done` in
-   frontmatter but a body that led with "Wave 1 leftovers (not
-   blocking; cleanup-only)" listing three items as TODO. All three
-   had actually landed weeks earlier. The body lied for as long as
-   it took someone to read it carefully and compare to git log.
+2. Task 9 had `status: done` but a body still leading with "Wave 1
+   leftovers (not blocking)" listing three already-landed items. The
+   body lied until someone read it carefully. The issue equivalent:
+   closing without editing the stale plan out of the body.
 
-This skill exists so future task closures don't repeat either.
+This skill exists so issue closures don't repeat either.

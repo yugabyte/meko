@@ -26,8 +26,9 @@ must keep that companion accurate, **in the same commit**. Not "follow-up", not
 "TODO" — same commit. If the change doesn't affect a given companion, that's
 fine; you still have to look.
 
-(Note: changes under `tasks/` are handled by the separate `task-tracker-sync`
-skill, not this one.)
+(Note: the GitHub-issue tracker is handled by the separate
+`task-tracker-sync` skill. This skill's Step 4 still reminds you to
+reference and close the relevant issue at commit time — they work together.)
 
 ## When to fire
 
@@ -46,8 +47,8 @@ moment.
 git diff --cached --name-only
 ```
 
-If the only staged files are themselves under `architecture/`, `tasks/`,
-`docs/`, `runbooks/`, or top-level READMEs, you can skip the doc/runbook arms —
+If the only staged files are themselves under `architecture/`, `docs/`,
+`runbooks/`, or top-level READMEs, you can skip the doc/runbook arms —
 but still ask whether the change needed a test that isn't staged.
 
 ## Step 2 — walk the four companions
@@ -186,18 +187,69 @@ git add <code files> <architecture/*.md, tests, tools/scripts, runbooks/*.md you
 git commit -m "..."
 ```
 
-Naming: the commit subject describes the **code** change. The companion updates
-are part of the same change, not separate concerns, so don't enumerate them in
-the subject. Call out a companion in the body only if it's large or load-bearing
-(e.g. a substantial doc rewrite or a new test suite).
+### Subject format
 
-When the commit is work on a task from `tasks/`, the subject must name the
-task: append `(task <id>)` — or `(task <id>, stage X)` for staged work — using
-the task's `<id>` from its filename / the `tasks/README.md` index. Examples
-from history: `Strip multi-tenant/multi-timeline machinery from the pageserver
-(task 22, stage C)`, `840e56aae … (task 19)`. This is what lets `git log
---oneline` be cross-referenced against the task index without opening each
-commit.
+The commit subject follows:
+
+```
+[#<issue>] <area>: <sub-component>: <title>
+```
+
+- **`[#<issue>]`** — *optional* leading tag, present when the commit
+  advances a tracked GitHub issue (e.g. `[#42]`). Put it first so
+  `git log --oneline` is greppable by issue and GitHub auto-links the
+  commit on the issue. Omit it for work with no issue.
+- **`<area>`** — *required*. Exactly one of **`storage`** or
+  **`control_plane`** — the same two area labels the issues use
+  (`control_plane` underscored in the subject; the label itself is
+  `control plane`). The authoritative area/milestone taxonomy lives in
+  [`docs/issue-tracking.md`](../../../docs/issue-tracking.md).
+- **`<sub-component>:`** — *optional* second segment naming the
+  subsystem within the area: `pageserver`, `safekeeper`, `walredo`,
+  `materialiser`, `walreceiver`, `page_service`, `e2e` (under
+  `storage`); `storage_ctl`, `yb_light_local`, `cluster-ui` (under
+  `control_plane`); … Drop it when the area alone is precise enough.
+- **`<title>`** — *required*. Concise, imperative description of the
+  **code** change.
+
+Examples:
+
+```
+[#34] storage: walreceiver: fix torn WAL write on kill -9
+[#33] storage: pageserver: skip zero-page writes to YB
+storage: materialiser: pace background image compaction
+storage: e2e: add E2E_STOP_ON_FAIL to halt at the first failing iteration
+control_plane: yb_light_local: retry HTTP bind on EADDRINUSE during recycle
+control_plane: migrate task tracker to GitHub issues
+```
+
+For staged work on one issue, note the stage in the title:
+`[#42] storage: pageserver: strip multi-timeline machinery (stage C)`.
+
+The subject describes the **code** change; companion updates (docs,
+tests, tools, runbooks) ride along silently — don't enumerate them in
+the subject. Call out a companion in the body only if it's large or
+load-bearing (e.g. a substantial doc rewrite or a new test suite).
+
+## Step 4 — reference and close the tracked issue
+
+If this commit advances or completes a GitHub issue (see the
+`task-tracker-sync` skill for the full tracker contract):
+
+- **Reference it** with the `[#<num>]` subject tag (see Subject format
+  above) so the work is linked.
+- **Close it when the work ships.** Either put `Closes #<num>` /
+  `Fixes #<num>` in the PR body (or the final commit message) so merge
+  auto-closes it, or close it explicitly once merged:
+
+  ```
+  gh issue close <num> --comment "Landed in <commit/PR>. <what shipped>."
+  ```
+
+Don't leave a shipped fix's issue open "to close later" — that gap is
+exactly when the issue list misleads. If the commit only partially
+advances the issue, leave it open and say what's left (a comment, or an
+edit to the body), don't close prematurely.
 
 ## When you genuinely don't need to update
 

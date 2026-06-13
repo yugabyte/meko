@@ -536,6 +536,19 @@ Upstream-Neon material that's still mostly accurate for the shell:
 
 `cargo doc --no-deps --open` for rustdoc.
 
+## Issue tracking
+
+Cross-session work is tracked as **GitHub issues** on
+[`yugabyte/yb-light`](https://github.com/yugabyte/yb-light/issues).
+(The old file-based `tasks/` tracker has been retired and migrated to
+issues.) Every issue carries an **area label** (`storage` /
+`control plane`) and a **milestone** (`POC` / `Early Access` /
+`K8 Deploy`).
+
+See [`docs/issue-tracking.md`](docs/issue-tracking.md) for the
+authoritative area + milestone definitions, the create/filter
+contract, and how commit subjects reference them.
+
 ## Contributing
 
 - Read [`AGENTS.md`](AGENTS.md) — applies to humans too.

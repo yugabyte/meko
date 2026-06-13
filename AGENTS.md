@@ -83,6 +83,12 @@ Code anchors:
   rot.
 - **Architecture changes go in `architecture/*.md`.** Code change without
   doc change usually means the doc is stale.
+- **Work is tracked as GitHub issues**, not files. Every issue has an
+  area label (`storage` / `control plane`) and a milestone (`POC` /
+  `Early Access` / `K8 Deploy`); commit subjects are
+  `[#<issue>] <area>: <sub-component>: <title>`. See
+  [`docs/issue-tracking.md`](docs/issue-tracking.md) for the
+  authoritative taxonomy and contract.
 - **Every YB query must be idempotent.** `YsqlClient` retries
   connection drops internally and can replay an in-flight write whose
   commit status is unknown. New write paths must use `INSERT ... ON
