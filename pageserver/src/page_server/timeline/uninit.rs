@@ -264,10 +264,8 @@ impl TimelineCreateGuard {
             .enter()
             .map_err(|_| TimelineExclusionError::ShuttingDown)?;
 
-        let mut creating_timelines: std::sync::MutexGuard<
-            '_,
-            std::collections::HashSet<TimelineId>,
-        > = owning_tenant.timelines_creating.lock().unwrap();
+        let mut creating_timeline: std::sync::MutexGuard<'_, Option<TimelineId>> =
+            owning_tenant.timelines_creating.lock().unwrap();
 
         if let Some(existing) = owning_tenant
             .timeline
@@ -279,11 +277,11 @@ impl TimelineCreateGuard {
                 arg: idempotency,
             });
         }
-        if creating_timelines.contains(&timeline_id) {
+        if *creating_timeline == Some(timeline_id) {
             return Err(TimelineExclusionError::AlreadyCreating);
         }
-        creating_timelines.insert(timeline_id);
-        drop(creating_timelines);
+        *creating_timeline = Some(timeline_id);
+        drop(creating_timeline);
         Ok(Self {
             _tenant_gate_guard,
             owning_tenant: Arc::clone(owning_tenant),
@@ -296,10 +294,9 @@ impl TimelineCreateGuard {
 
 impl Drop for TimelineCreateGuard {
     fn drop(&mut self) {
-        self.owning_tenant
-            .timelines_creating
-            .lock()
-            .unwrap()
-            .remove(&self.timeline_id);
+        let mut creating = self.owning_tenant.timelines_creating.lock().unwrap();
+        if *creating == Some(self.timeline_id) {
+            *creating = None;
+        }
     }
 }

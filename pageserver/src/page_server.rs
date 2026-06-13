@@ -12,7 +12,7 @@
 //! parent timeline, and the last LSN that has been written to disk.
 //!
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs;
 use std::sync::{Arc, Mutex, Weak};
@@ -213,7 +213,10 @@ pub struct PageServer {
     /// Guards the bootstrap-time timeline creation (crash-retry runs it
     /// again on the same id). Held as a set for the `TimelineCreateGuard`
     /// release-on-drop protocol.
-    timelines_creating: std::sync::Mutex<HashSet<TimelineId>>,
+    /// The timeline currently being created, if any. Single-timeline
+    /// pageserver: at most one create is in flight, so this is an
+    /// `Option` rather than a set of ids.
+    timelines_creating: std::sync::Mutex<Option<TimelineId>>,
 
     // This mutex prevents creation of new timelines during GC.
     gc_cs: tokio::sync::Mutex<()>,
@@ -886,11 +889,6 @@ impl PageServer {
         }
         let _ = bootstrapped_timeline;
 
-        // gc_blocking lived on index_part.json; yb-mode has no source for
-        // it yet, so initialise empty.
-        let gc_blocks: HashMap<TimelineId, enumset::EnumSet<gc_block::GcBlockingReason>> =
-            HashMap::new();
-
         // Single-timeline pageserver: at most one timeline loads here,
         // and a branch's ancestor is served by a DIFFERENT process —
         // no in-process ancestor ordering to respect.
@@ -932,7 +930,9 @@ impl PageServer {
         // offloaded-timeline tracking; offload isn't supported here
         // so there's nothing to write.
 
-        self.gc_block.set_scanned(gc_blocks);
+        // gc_blocking lived on index_part.json; yb-mode has no source for it
+        // yet, so initialise empty.
+        self.gc_block.set_scanned(enumset::EnumSet::empty());
 
         fail::fail_point!("attach-before-activate", |_| {
             anyhow::bail!("attach-before-activate");
@@ -1311,7 +1311,7 @@ impl PageServer {
             generation: attached_conf.generation,
             conf,
             timeline: std::sync::OnceLock::new(),
-            timelines_creating: Mutex::new(HashSet::new()),
+            timelines_creating: Mutex::new(None),
             gc_cs: tokio::sync::Mutex::new(()),
             walredo_mgr,
             remote_storage,
