@@ -15,7 +15,7 @@
 //! each live behind their own `parking_lot::Mutex` — both are touched
 //! in O(1) on every push, but the holds are nanosecond-scale and only
 //! contested by put + flush + materialiser-install (single-digit task
-//! count), not by the read path. The 300-backend getpage fan-in goes
+//! count), not by the read path. The concurrent getpage fan-in goes
 //! straight to per-key mutexes and never touches LRU / FIFO.
 //!
 //! Map membership and per-key contents are kept consistent without a

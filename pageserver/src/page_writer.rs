@@ -185,14 +185,14 @@ pub struct PageWriter {
     fpu_page_store: Arc<PageStore>,
     policy: FlushPolicy,
     /// Per-key page cache + pre-flush buffer. Internally thread-safe
-    /// — every method takes `&self`. Per-key state lives in a sharded
-    /// DashMap; aggregate counters are atomics; LRU + FIFO each have
-    /// their own small `parking_lot::Mutex`. The 300-backend getpage
-    /// fan-in goes straight to DashMap shards and never serializes on
-    /// a global lock — that was the bottleneck the per-key sharding
-    /// was introduced to fix (writer-starvation when the materialiser
-    /// was waiting hundreds of ms behind 300 concurrent read holders
-    /// on a single `RwLock<WriterState>`).
+    /// — every method takes `&self`. Per-key state lives in a lock-free
+    /// ordered `SkipMap` (one `Mutex<KeyState>` per key); aggregate
+    /// counters are atomics; the eviction LRU and flush FIFO each have
+    /// their own small `parking_lot::Mutex`. Concurrent getpage reads go
+    /// straight to the per-key mutexes and never serialize on a global
+    /// lock — that was the bottleneck the per-key state was introduced
+    /// to fix (writer-starvation when the materialiser waited behind
+    /// many concurrent read holders on a single `RwLock<WriterState>`).
     pages: crate::unified_pages::UnifiedPages,
     /// Aux (non-rel) flush buffers + the "any unflushed work?"
     /// timestamp. Touched by put/flush plus the rare meta/SLRU reads

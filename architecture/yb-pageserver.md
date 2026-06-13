@@ -349,7 +349,7 @@ Replaces `InMemoryLayer` + `flush_loop` + L0/L1 compaction.
    `parking_lot::Mutex<AuxBuffers>`, and counters like `rows_written`
    / `consistent_lsn_watermark` are atomics
    (`page_writer.rs:175-199`, `unified_pages.rs`). The writer fan-in
-   and the 300-backend get_page reads go straight to per-key mutexes
+   and concurrent get_page reads go straight to per-key mutexes
    instead of serialising on a global lock.
    Concurrent get_page handlers filter the cache in parallel. Flushes
    fire when either trigger crosses threshold (default 5 s / 25 MiB).
