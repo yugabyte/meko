@@ -78,12 +78,15 @@ done
 # Build the harness and the cluster binary it drives. Debug by default
 # (per project convention for the dev/e2e loop); --release for release
 # verification.
+# The diagnostic tools are compiled bins too; the `tools` scenario shells
+# out to them, so build them in the same step.
+TOOL_BINS=(--bin yb-dump-pages --bin yb-dump-wals --bin yb-reset-consistent-lsn)
 if [[ $PROFILE == release ]]; then
-    cargo build --release --bin e2e_tests --bin yb_light_local
+    cargo build --release --bin e2e_tests --bin yb_light_local "${TOOL_BINS[@]}"
     export YB_LIGHT=${YB_LIGHT:-$REPO/target/release/yb_light_local}
     BIN=$REPO/target/release/e2e_tests
 else
-    cargo build --bin e2e_tests --bin yb_light_local
+    cargo build --bin e2e_tests --bin yb_light_local "${TOOL_BINS[@]}"
     BIN=$REPO/target/debug/e2e_tests
 fi
 

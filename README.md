@@ -399,72 +399,71 @@ reconstruction, and the materialiser.
 
 ## Operator tools
 
-Diagnostic helpers under [`tools/`](tools/) that wrap `psql` against
-the YB cluster and render the row-store tables in a human-readable
-form, plus one compiled repair binary. They're staged into
-`${BUNDLE}/tools/` by `scripts/yb-light-ship.sh` so they ship to deploy
-hosts alongside the binaries.
+Three compiled `pageserver` bins (`cargo build -p pageserver`) that read
+the row-store tables and render them in a human-readable form. They share
+one connection-args struct ([`ysql_client::YbConnArgs`](libs/ysql_client/src/lib.rs)),
+so the flags are identical across all three and can't drift — and all work
+against both a local no-TLS cluster (default) and a TLS-required one
+(`--sslmode require`). `scripts/yb-light-ship.sh` stages them into
+`${BUNDLE}/tools/` so they ship to deploy hosts alongside the daemons.
 
-- [`tools/yb-dump-pages`](tools/yb-dump-pages) — dump or decode
-  `pageserver.pages` rows for one (rel, fork) tuple. Renders the
-  LSN bigint as `H/L` hex, forknum as `main`/`fsm`/`vm`/`init`, and
-  the payload as `<bytes>; <16-byte hex sample>`. Required hash
-  columns: `--tenant --timeline --spc --db --rel --fork`. Range
-  filters: `--blknum` (or `--blknum-from/--blknum-to`),
-  `--lsn-from`/`--lsn-to` (PG `X/Y` hex). Add `--raw` for the wide
-  table form, `--no-payload` to drop the byte preview,
-  `--limit 0` for unbounded. `--decode` switches to a single-block
-  chain decoder: it walks the chain LSN-ascending (the order walredo
-  applies it), prints each image's line-pointer `max_off` and each
-  delta's WAL resource-manager + op + target `offnum`, and flags a
-  GAP when a delta's `offnum` exceeds the running max+1 — the
-  signature of a chain walredo can't fold and of a base image too
-  small for the deltas above it (see issue #22).
-- [`tools/yb-dump-wals`](tools/yb-dump-wals) — dump
-  `public.wals` rows (the safekeeper's WAL-in-YB chunks). Required
-  hash columns: `--tenant --timeline`. Range filters: `--segno`
-  (or `--segno-from/--segno-to`), `--chunk-offset` (or its
-  `-from/-to` variants), `--lsn-from`/`--lsn-to` (mapped to
-  segno+offset via `--wal-seg-size`, default 16 MiB). `--summary`
-  swaps the row dump for a per-segno health view
-  (`(min/max chunk_offset, total_bytes, gap_bytes)`) which is the
-  fastest way to spot a WAL hole during an incident.
+- [`yb-dump-pages`](pageserver/src/bin/yb-dump-pages.rs) — dump or decode
+  `pageserver.pages` rows for one (rel, fork) tuple. Renders the LSN as
+  `H/L` hex and forknum as `main`/`fsm`/`vm`/`init`. Required hash columns:
+  `--tenant --timeline --spc --db --rel --fork`. Range filters: `--blknum`
+  (or `--blknum-from/--blknum-to`), `--lsn-from`/`--lsn-to` (PG `X/Y` hex).
+  `--no-payload` drops the byte preview, `--limit 0` is unbounded.
+  `--decode` switches to a single-block chain decoder: it walks the chain
+  LSN-ascending (the order walredo applies it), prints each image's
+  line-pointer `max_off` and each delta's WAL resource-manager + op + target
+  `offnum`, and flags a GAP when a delta's `offnum` exceeds the running
+  max+1 — the signature of a chain walredo can't fold and of a base image
+  too small for the deltas above it (see issue #22).
+- [`yb-dump-wals`](pageserver/src/bin/yb-dump-wals.rs) — dump `public.wals`
+  rows (the safekeeper's WAL-in-YB chunks). Required hash columns:
+  `--tenant --timeline`. Range filters: `--segno` (or
+  `--segno-from/--segno-to`), `--chunk-offset` (or its `-from/-to`
+  variants), `--lsn-from`/`--lsn-to` (mapped to segno+offset via
+  `--wal-seg-size`, default 16 MiB). `--no-data` drops the byte preview.
+  `--summary` swaps the row dump for a per-segno health view
+  (`min/max LSN, total_bytes, gap_bytes`) — the fastest way to spot a WAL
+  hole during an incident.
 - [`yb-reset-consistent-lsn`](pageserver/src/bin/yb-reset-consistent-lsn.rs)
   — find (and optionally rewind) `pageserver.timeline_state.consistent_lsn`
-  to a real WAL record boundary. Unlike the `yb-dump-*` scripts this is a
-  compiled binary (built by `cargo build -p pageserver`; ships to
-  `${BUNDLE}/tools/`). Given `--tenant --timeline --target-lsn X/Y` it
-  anchors on a fresh-record WAL page, replays the real WAL decoder over
-  `public.wals`, and reports the largest record boundary `<= target` plus
-  its matching `prev_record_lsn`. Defaults to a dry run; `--set` writes the
-  pair back (`--expect-generation N` to generation-fence the write,
-  `--null-prev` to let the walreceiver re-derive prev). Use it to rewind
-  past a bad replay point — picking an arbitrary segment/page-aligned LSN
-  instead makes PS loop forever on `YB WAL hole` or `invalid xlog page
+  to a real WAL record boundary. Given `--tenant --timeline --target-lsn
+  X/Y` it anchors on a fresh-record WAL page, replays the real WAL decoder
+  over `public.wals`, and reports the largest record boundary `<= target`
+  plus its matching `prev_record_lsn`. Defaults to a dry run; `--set`
+  writes the pair back (`--expect-generation N` to generation-fence the
+  write, `--null-prev` to let the walreceiver re-derive prev). Use it to
+  rewind past a bad replay point — picking an arbitrary segment/page-aligned
+  LSN instead makes PS loop forever on `YB WAL hole` or `invalid xlog page
   header: xlp_rem_len`.
 
-Sample invocations:
+Sample invocations (use the bundle's `tools/` copy on a deploy host, or
+`cargo run --bin <tool> --` locally):
 
 ```sh
-tools/yb-dump-wals  --tenant <hex> --timeline <hex> --summary
-tools/yb-dump-wals  --tenant <hex> --timeline <hex> \
-                    --lsn-from 0/1545000 --lsn-to 0/15A0000 --limit 5
-tools/yb-dump-pages --tenant <hex> --timeline <hex> \
-                    --spc 1663 --db 5 --rel 16384 --fork 0 \
-                    --blknum 0 --limit 3 --raw
+yb-dump-wals  --tenant <hex> --timeline <hex> --summary
+yb-dump-wals  --tenant <hex> --timeline <hex> \
+              --lsn-from 0/1545000 --lsn-to 0/15A0000 --limit 5
+yb-dump-pages --tenant <hex> --timeline <hex> \
+              --spc 1663 --db 5 --rel 16384 --fork 0 --blknum 0 --limit 3
 # decode one block's chain and check it folds (offnum gaps = landmine)
-tools/yb-dump-pages --decode --tenant <hex> --timeline <hex> \
-                    --spc 1663 --db 16384 --rel 16414 --fork 0 --blknum 1456384
+yb-dump-pages --decode --tenant <hex> --timeline <hex> \
+              --spc 1663 --db 16384 --rel 16414 --fork 0 --blknum 1456384
 # dry run: print the max valid consistent_lsn <= target, then rewind to it
-tools/yb-reset-consistent-lsn --tenant <hex> --timeline <hex> \
-                    --target-lsn 22/63000000
-tools/yb-reset-consistent-lsn --tenant <hex> --timeline <hex> \
-                    --target-lsn 22/63000000 --set
+yb-reset-consistent-lsn --tenant <hex> --timeline <hex> --target-lsn 22/63000000
+yb-reset-consistent-lsn --tenant <hex> --timeline <hex> --target-lsn 22/63000000 --set
+# remote TLS cluster (e.g. AWS): add --sslmode (and --sslrootcert to verify)
+yb-dump-wals  --host <yb-host> --sslmode require --password-env PGPASSWORD \
+              --tenant <hex> --timeline <hex> --summary
 ```
 
 All three default to a local `yb_light_local` cluster (`127.0.0.1:5433`,
-`yugabyte`/`yb_storage`) and accept `--host`/`--port`/`--user`/
-`--db-name`/`--password-env` overrides for remote clusters.
+`yugabyte`/`yb_storage`, no TLS) and accept the shared
+`--host`/`--port`/`--user`/`--db-name`/`--password-env`/`--sslmode`/`--sslrootcert`
+overrides for remote clusters.
 
 ## Operational runbooks
 

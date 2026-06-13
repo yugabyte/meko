@@ -84,6 +84,101 @@ pub struct YbConnConfig {
     pub sslrootcert: Option<String>,
 }
 
+/// Shared connection CLI args for the `yb_storage` diagnostic tools
+/// (`yb-dump-pages`, `yb-dump-wals`, `yb-reset-consistent-lsn`).
+///
+/// This is the SINGLE source of truth for those flags — every tool
+/// `#[command(flatten)]`s it, so the connection surface (and TLS support)
+/// can't drift between tools. `--sslmode` makes them work against both a
+/// local no-TLS dev cluster (default) and a TLS-required cluster (AWS):
+/// `disable`/unset → NoTls; any other value → TLS (rustls), verifying
+/// against `--sslrootcert` if given, else accept-all.
+#[cfg(feature = "cli")]
+#[derive(clap::Args, Clone, Debug)]
+pub struct YbConnArgs {
+    /// YB host (or comma-separated tserver list).
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+    #[arg(long, default_value_t = 5433)]
+    pub port: u16,
+    #[arg(long, default_value = "yugabyte")]
+    pub user: String,
+    #[arg(long = "db-name", default_value = "yb_storage")]
+    pub db_name: String,
+    /// Name of an env var holding the password. Unset → no password
+    /// (trust, matching a local dev cluster).
+    #[arg(long)]
+    pub password_env: Option<String>,
+    /// `disable` (default, NoTls) | `require` | `verify-ca` | `verify-full`.
+    /// Any value other than `disable` enables TLS.
+    #[arg(long)]
+    pub sslmode: Option<String>,
+    /// PEM CA bundle for TLS verification (`verify-*`); omit for
+    /// encrypt-without-verify (`require`).
+    #[arg(long)]
+    pub sslrootcert: Option<String>,
+}
+
+#[cfg(feature = "cli")]
+impl YbConnArgs {
+    /// Build the [`YbConnConfig`] these flags describe.
+    pub fn into_config(&self) -> YbConnConfig {
+        YbConnConfig {
+            host: self.host.clone(),
+            port: self.port,
+            user: self.user.clone(),
+            dbname: self.db_name.clone(),
+            password_env: self.password_env.clone(),
+            sslmode: self.sslmode.clone(),
+            sslrootcert: self.sslrootcert.clone(),
+        }
+    }
+}
+
+#[cfg(all(test, feature = "cli"))]
+mod cli_tests {
+    use super::YbConnArgs;
+
+    fn args() -> YbConnArgs {
+        YbConnArgs {
+            host: "10.0.0.1,10.0.0.2".into(),
+            port: 5433,
+            user: "yugabyte".into(),
+            db_name: "yb_storage".into(),
+            password_env: Some("PW".into()),
+            sslmode: None,
+            sslrootcert: None,
+        }
+    }
+
+    #[test]
+    fn into_config_maps_fields() {
+        let c = args().into_config();
+        assert_eq!(c.host, "10.0.0.1,10.0.0.2");
+        assert_eq!(c.port, 5433);
+        assert_eq!(c.user, "yugabyte");
+        assert_eq!(c.dbname, "yb_storage");
+        assert_eq!(c.password_env.as_deref(), Some("PW"));
+    }
+
+    #[test]
+    fn sslmode_none_is_notls_other_is_tls() {
+        // The drift this guards: from_yb_config dispatches NoTls vs rustls
+        // purely on `sslmode` (None/"disable" -> NoTls, else TLS). Keep the
+        // arg -> config passthrough exact so all three tools agree.
+        assert!(args().into_config().sslmode.is_none());
+
+        let tls = YbConnArgs {
+            sslmode: Some("require".into()),
+            sslrootcert: Some("/etc/ca.pem".into()),
+            ..args()
+        }
+        .into_config();
+        assert_eq!(tls.sslmode.as_deref(), Some("require"));
+        assert_eq!(tls.sslrootcert.as_deref(), Some("/etc/ca.pem"));
+    }
+}
+
 /// Future returned by the reconnect closure.
 type OpenFut = BoxFuture<'static, Result<tokio_postgres::Client>>;
 

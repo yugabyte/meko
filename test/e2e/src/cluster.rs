@@ -331,6 +331,58 @@ impl Cluster {
         Ok(tid)
     }
 
+    /// Run a diagnostic tool binary (built next to `yb_light_local` in
+    /// `target/<profile>/`) with this run's YB connection flags + `extra`.
+    /// Returns stdout; fails on a non-zero exit. Exercises the shared
+    /// `YbConnArgs` no-TLS connection path end-to-end.
+    pub fn run_tool(&self, bin: &str, extra: &[&str]) -> anyhow::Result<String> {
+        let path = self
+            .yb_light
+            .parent()
+            .map(|d| d.join(bin))
+            .unwrap_or_else(|| PathBuf::from(bin));
+        let port = self.yb_port.to_string();
+        let mut args: Vec<&str> = vec!["--host", &self.yb_host, "--port", &port, "--db-name", &self.db_name];
+        args.extend_from_slice(extra);
+        let out = Command::new(&path)
+            .args(&args)
+            .output()
+            .with_context(|| format!("spawning {}", path.display()))?;
+        if !out.status.success() {
+            bail!(
+                "{bin} {} failed (exit {}): {}",
+                extra.join(" "),
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// Like [`Self::run_tool`] but tolerates a non-zero exit: returns
+    /// `(success, stdout, stderr)`. For tools whose *success* depends on
+    /// cluster data (e.g. WAL coverage) but whose *connection* is still
+    /// worth asserting.
+    pub fn run_tool_capture(&self, bin: &str, extra: &[&str]) -> anyhow::Result<(bool, String, String)> {
+        let path = self
+            .yb_light
+            .parent()
+            .map(|d| d.join(bin))
+            .unwrap_or_else(|| PathBuf::from(bin));
+        let port = self.yb_port.to_string();
+        let mut args: Vec<&str> = vec!["--host", &self.yb_host, "--port", &port, "--db-name", &self.db_name];
+        args.extend_from_slice(extra);
+        let out = Command::new(&path)
+            .args(&args)
+            .output()
+            .with_context(|| format!("spawning {}", path.display()))?;
+        Ok((
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ))
+    }
+
     // ---- scenario / workload drivers -------------------------------
 
     /// Run one scenario: recycle the cluster, run the scenario future,

@@ -48,19 +48,15 @@ for bin in yb-pageserver yb_light_local safekeeper storage_controller compute_ct
     cp -v "target/release/${bin}" "${BUNDLE}/${bin}"
 done
 
-# Operator-side diagnostic tools (live under tools/ in the repo).
-# Currently the `yb-dump-*` helpers for inspecting the row-store
-# tables during an incident; add to this list when new operator
-# tools are introduced.
-for tool in yb-dump-pages yb-dump-wals; do
-    cp -v "tools/${tool}" "${BUNDLE}/tools/${tool}"
-done
-
-# Compiled operator tools (built above by `-p pageserver`, so they
-# already exist in target/release/). yb-reset-consistent-lsn finds and
-# optionally rewinds pageserver.timeline_state.consistent_lsn to a real
-# WAL record boundary during a replay-repair.
-for tool in yb-reset-consistent-lsn; do
+# Operator-side diagnostic tools. All compiled pageserver bins (built
+# above by `-p pageserver`, so they already exist in target/release/) that
+# share the connection flags via `ysql_client::YbConnArgs` and work against
+# both no-TLS and TLS clusters (`--sslmode`):
+#   - yb-dump-pages          dump / decode pageserver.pages chains
+#   - yb-dump-wals           dump / summarise public.wals chunks
+#   - yb-reset-consistent-lsn  rewind timeline_state.consistent_lsn to a
+#                              real WAL record boundary during replay-repair
+for tool in yb-dump-pages yb-dump-wals yb-reset-consistent-lsn; do
     cp -v "target/release/${tool}" "${BUNDLE}/tools/${tool}"
 done
 

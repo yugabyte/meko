@@ -31,7 +31,7 @@ use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE};
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 use ysql_client::tokio_postgres::types::ToSql;
-use ysql_client::{YbConnConfig, YsqlClient};
+use ysql_client::YsqlClient;
 
 #[derive(Parser)]
 #[command(
@@ -63,18 +63,8 @@ struct Args {
     #[arg(long)]
     expect_generation: Option<i32>,
 
-    #[arg(long, default_value = "127.0.0.1")]
-    host: String,
-    #[arg(long, default_value_t = 5433)]
-    port: u16,
-    #[arg(long, default_value = "yugabyte")]
-    user: String,
-    #[arg(long, default_value = "yb_storage")]
-    db_name: String,
-    /// Name of an env var holding the password (default connection is
-    /// trust/no-TLS, matching a local dev cluster).
-    #[arg(long)]
-    password_env: Option<String>,
+    #[command(flatten)]
+    conn: ysql_client::YbConnArgs,
 }
 
 /// The subset of `pageserver.timeline_state` this tool reads.
@@ -91,15 +81,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let seg = WAL_SEGMENT_SIZE as u64;
 
-    let cfg = YbConnConfig {
-        host: args.host.clone(),
-        port: args.port,
-        user: args.user.clone(),
-        dbname: args.db_name.clone(),
-        password_env: args.password_env.clone(),
-        sslmode: None,
-        sslrootcert: None,
-    };
+    let cfg = args.conn.into_config();
     let client = YsqlClient::from_yb_config(&cfg, "yb-reset-consistent-lsn", false)
         .await
         .context("connecting to yb_storage")?;

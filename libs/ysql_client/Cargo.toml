@@ -4,8 +4,14 @@ version = "0.1.0"
 edition = "2024"
 license.workspace = true
 
+[features]
+# Opt-in CLI helpers (shared `YbConnArgs` clap struct) for the diagnostic
+# binaries. Off by default so core consumers don't pull in clap.
+cli = ["dep:clap"]
+
 [dependencies]
 anyhow.workspace = true
+clap = { workspace = true, optional = true }
 futures.workspace = true
 metrics.workspace = true
 once_cell.workspace = true

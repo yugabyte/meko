@@ -7126,6 +7126,7 @@ name = "ysql_client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "futures",
  "metrics",
  "once_cell",
