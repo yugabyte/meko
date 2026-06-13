@@ -106,11 +106,15 @@ pub struct SlruPageRow {
 /// Like `Vec::dedup_by`, the first row of each equal-LSN run is kept and the
 /// rest dropped.
 ///
-/// The ONLY legitimate same-LSN collision is a materialised image stamped at
-/// the LSN of the delta it folded: the image sorts first, is kept, and the
-/// now-superseded delta is dropped. Any other collision — two deltas sharing
-/// an LSN, i.e. a *non-image* survivor over another row — means we are
-/// silently dropping a real record. That reads back as a hole in the chain
+/// Two same-LSN collisions are legitimate and NOT flagged:
+///   1. a materialised image stamped at the LSN of the delta it folded — the
+///      image sorts first, is kept, and the now-superseded delta is dropped;
+///   2. the same flushed delta listed twice because the cache+YB merge found
+///      it in both sources — byte-identical, so dropping the duplicate is
+///      lossless.
+/// What IS flagged: two non-image rows at one LSN whose CONTENT differs — a
+/// *non-image* survivor over a row with a different payload. That means we are
+/// silently dropping a real, distinct record. It reads back as a hole in the chain
 /// and surfaces downstream as a walredo `invalid max offset number` /
 /// `failed to add new item` PANIC (issue #22, the "catch me if you can"
 /// corruption, which only repros under concurrent load — exactly when a
@@ -127,6 +131,14 @@ pub(crate) fn dedup_page_chain_by_lsn(chain: &mut Vec<Arc<PageRow>>) {
         let survivor = &chain[i - 1];
         let dropped = &chain[i];
         if survivor.lsn != dropped.lsn || survivor.is_image {
+            continue;
+        }
+        // Benign and common: the SAME flushed delta is present in BOTH the
+        // in-RAM cache (lookup_chain*) and YB (read_chain*), so the cache+YB
+        // merge lists it twice. Byte-identical rows → dropping the duplicate
+        // loses nothing; do not flag it. Only a genuine content divergence at
+        // one LSN is a real record loss (the #22 signature).
+        if survivor.will_init == dropped.will_init && survivor.payload == dropped.payload {
             continue;
         }
         crate::metrics::CORRECTNESS_ERRORS
@@ -2692,10 +2704,22 @@ mod tests {
         assert_eq!(shape, vec![(0x30, false), (0x20, true), (0x10, false)]);
         assert_eq!(count(), before, "image/delta collision is legitimate; must not trip");
 
-        // Dangerous same-LSN collision: two distinct deltas on one LSN, no
-        // image. The survivor is a delta, so a real record is being dropped —
-        // the silent chain gap that surfaces as a walredo PANIC (#22). The
-        // dedup still collapses the run, but the tripwire counter fires.
+        // Benign same-LSN duplicate: the SAME delta in both cache and YB
+        // (byte-identical). Dropping it is lossless — must NOT trip.
+        let before = count();
+        let mut dup = vec![
+            page_row(k.clone(), 0x20, false, false, b"d20"),
+            page_row(k.clone(), 0x20, false, false, b"d20"),
+            page_row(k.clone(), 0x10, false, true, b"d10init"),
+        ];
+        dedup_page_chain_by_lsn(&mut dup);
+        assert_eq!(dup.len(), 2, "dedup collapses the identical duplicate");
+        assert_eq!(count(), before, "an identical cache/YB duplicate must not trip");
+
+        // Dangerous same-LSN collision: two distinct deltas (different
+        // payloads) on one LSN, no image. The survivor is a delta, so a real
+        // record is dropped — the silent chain gap that surfaces as a walredo
+        // PANIC (#22). The dedup still collapses the run, but the counter fires.
         let before = count();
         let mut bad = vec![
             page_row(k.clone(), 0x20, false, false, b"d20a"),
@@ -2704,7 +2728,7 @@ mod tests {
         ];
         dedup_page_chain_by_lsn(&mut bad);
         assert_eq!(bad.len(), 2, "dedup still collapses the equal-LSN run");
-        assert_eq!(count(), before + 1, "dropping a non-superseded delta must trip the counter");
+        assert_eq!(count(), before + 1, "dropping a DISTINCT non-superseded delta must trip");
     }
 
     #[tokio::test]
