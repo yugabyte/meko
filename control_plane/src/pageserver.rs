@@ -27,6 +27,7 @@ use postgres_backend::AuthType;
 use postgres_connection::{PgConnectionConfig, parse_host_port};
 use utils::auth::{Claims, Scope};
 use utils::id::{NodeId, TenantId, TimelineId};
+use utils::lsn::Lsn;
 
 use crate::background_process;
 use crate::local_env::{LocalEnv, YbLightLocalInitPageserverConf, PageServerConf};
@@ -689,5 +690,19 @@ impl PageServerNode {
             .timeline_info(tenant_shard_id, timeline_id, force_await_logical_size)
             .await?;
         Ok(timeline_info)
+    }
+
+    /// Flush the timeline's pages to YB, advancing `consistent_lsn`. With
+    /// `wait_lsn`, the pageserver waits for ingest to reach that LSN first.
+    pub async fn flush(
+        &self,
+        tenant_shard_id: TenantId,
+        timeline_id: TimelineId,
+        wait_lsn: Option<Lsn>,
+    ) -> anyhow::Result<()> {
+        self.http_client
+            .timeline_flush(tenant_shard_id, timeline_id, wait_lsn)
+            .await?;
+        Ok(())
     }
 }

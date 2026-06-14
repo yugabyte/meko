@@ -67,8 +67,10 @@ enforces the fence at open regardless of how the number arrived.
 The management HTTP surface is correspondingly small: status /
 metrics / profile / utilization, the single timeline's list + detail
 (`GET /v1/tenant/:t/timeline[/:tl]`), `get_lsn_by_timestamp`,
-`get_timestamp_of_lsn`, `lsn_lease`, `do_gc`, `checkpoint`, and test
-plumbing (failpoints, panic, tracing/event,
+`get_timestamp_of_lsn`, `lsn_lease`, `do_gc`, `flush` (`PUT
+…/timeline/:tl/flush?lsn=` — `freeze_and_flush` to YB, optionally waiting
+for ingest to reach `lsn` first; used to flush an ancestor at branch time,
+see below), and test plumbing (failpoints, panic, tracing/event,
 reload_auth_validation_keys). Inbound page-service requests (libpq
 query string / gRPC metadata) are validated against the configured
 identity and rejected as misrouted on mismatch.
@@ -94,7 +96,12 @@ Consequences elsewhere:
   not the ancestor pageserver's `last_record_lsn` — the latter is an
   ingest position that can lag a just-committed transaction; the
   branch pageserver's startup retry waits for the ancestor's
-  `consistent_lsn` to catch up before writing the branch row. Endpoints resolve
+  `consistent_lsn` to catch up before writing the branch row. To avoid
+  paying a full ancestor flush interval (~5 s) on that retry, the launcher
+  first issues a best-effort `flush?lsn=<branch_lsn>` to the **ancestor**
+  pageserver (wait-for-ingest then `freeze_and_flush`), so the durability
+  barrier clears on the first try (~5 s → ~0.1 s); the retry stays as the
+  correctness guarantee. Endpoints resolve
   their pageserver and safekeeper from the timeline they sit on
   (`LocalEnv::pageserver_conf_for_timeline` /
   `safekeepers_for_timeline`) — the storage_ctl `tenant_locate` path

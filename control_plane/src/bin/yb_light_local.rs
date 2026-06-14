@@ -1908,6 +1908,20 @@ async fn provision_branch(
             ancestor_lsn: start_lsn,
         }),
     )?;
+    // Best-effort: flush the ancestor's pages to YB up to the branch point
+    // *now* (waiting for ingest to reach `start_lsn` first), so the branch
+    // pageserver's `create_branch_row` durability barrier (which refuses
+    // while `ancestor.consistent_lsn < branch_lsn`) clears on its first try
+    // instead of waiting up to one ancestor flush interval (~5s). The
+    // branch-PS startup retry remains the correctness guarantee, so a
+    // failed/partial flush only costs latency, never safety.
+    if let Err(e) = ancestor_ps
+        .flush(TenantId::unsharded(tenant_id), ancestor_timeline_id, Some(start_lsn))
+        .await
+    {
+        println!("branch: best-effort ancestor flush failed (relying on startup retry): {e:#}");
+    }
+
     pageserver
         .start(&std::time::Duration::from_secs(60))
         .await

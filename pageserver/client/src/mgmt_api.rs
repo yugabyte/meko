@@ -550,6 +550,28 @@ impl Client {
         self.request(Method::POST, &uri, ()).await.map(|_| ())
     }
 
+    /// Flush the timeline's pages to YB, advancing its durable
+    /// `consistent_lsn`. With `wait_lsn`, the pageserver first waits for WAL
+    /// ingest to reach that LSN so the post-flush `consistent_lsn` covers it —
+    /// used to flush an ancestor at branch time so the branch's durability
+    /// barrier clears without waiting for the periodic flush.
+    pub async fn timeline_flush(
+        &self,
+        tenant_shard_id: TenantId,
+        timeline_id: TimelineId,
+        wait_lsn: Option<Lsn>,
+    ) -> Result<()> {
+        let mut url = reqwest::Url::parse(&format!(
+            "{}/v1/tenant/{tenant_shard_id}/timeline/{timeline_id}/flush",
+            self.mgmt_api_endpoint,
+        ))
+        .expect("Cannot build URL");
+        if let Some(lsn) = wait_lsn {
+            url.query_pairs_mut().append_pair("lsn", &lsn.to_string());
+        }
+        self.request(Method::PUT, url, ()).await.map(|_| ())
+    }
+
     pub async fn timeline_download_heatmap_layers(
         &self,
         tenant_shard_id: TenantId,

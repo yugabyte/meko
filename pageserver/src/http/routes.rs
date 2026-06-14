@@ -553,62 +553,52 @@ async fn timeline_gc_handler(
 
     json_response(StatusCode::OK, gc_result)
 }
-// Run checkpoint immediately on given timeline.
-async fn timeline_checkpoint_handler(
+// Flush the timeline's pages to YB, advancing its durable `consistent_lsn`.
+// With `?lsn=<lsn>`, first wait for WAL ingest to reach that LSN, so the
+// post-flush `consistent_lsn` is `>= lsn` (used at branch time to clear the
+// ancestor's `create_branch_row` durability barrier without waiting for the
+// periodic flush). In yb-mode "freeze" is a no-op (no in-memory layers) — this
+// is just a flush to YB; named accordingly.
+async fn timeline_flush_handler(
     request: Request<Body>,
-    cancel: CancellationToken,
+    _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
     let tenant_id: TenantId = parse_request_param(&request, "tenant_id")?;
     let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
     check_permission(&request, Some(tenant_id))?;
 
+    let wait_lsn: Option<Lsn> = parse_query_param(&request, "lsn")?;
+
     let state = get_state(&request);
-
-    // yb-pageserver: compaction is gone; force_* flags are ignored.
-    let _ = parse_query_param::<_, bool>(&request, "force_l0_compaction")?;
-    let _ = parse_query_param::<_, bool>(&request, "force_repartition")?;
-    let _ = parse_query_param::<_, bool>(&request, "force_image_layer_creation")?;
-    let _ = parse_query_param::<_, bool>(&request, "compact")?;
-
-    let wait_until_flushed: bool =
-        parse_query_param(&request, "wait_until_flushed")?.unwrap_or(true);
-
-    let wait_until_uploaded =
-        parse_query_param::<_, bool>(&request, "wait_until_uploaded")?.unwrap_or(false);
 
     async {
         let timeline =
             active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
         let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
             .with_scope_timeline(&timeline);
-        if wait_until_flushed {
-            timeline.freeze_and_flush().await
-        } else {
-            timeline.freeze().await.and(Ok(()))
+
+        // Wait for ingest to catch up to the requested LSN before flushing,
+        // so the resulting durable `consistent_lsn` covers it.
+        if let Some(lsn) = wait_lsn {
+            timeline
+                .wait_lsn(
+                    lsn,
+                    page_server::timeline::WaitLsnWaiter::PageService,
+                    page_server::timeline::WaitLsnTimeout::Default,
+                    &ctx,
+                )
+                .await
+                .map_err(|e| ApiError::InternalServerError(e.into()))?;
         }
-        .map_err(|e| match e {
+
+        timeline.freeze_and_flush().await.map_err(|e| match e {
             page_server::timeline::FlushLayerError::Cancelled => ApiError::ShuttingDown,
             other => ApiError::InternalServerError(other.into()),
         })?;
-        // Compaction removed in phase 4d.2 (compaction.rs deletion).
-        let _ = (ctx, &cancel);
-
-        if wait_until_uploaded {
-            // yb-mode: flush is synchronous against YB; there's
-            // nothing to wait on. The "uploaded up to" line stays so
-            // the manual-checkpoint endpoint's response shape
-            // doesn't change for callers.
-            tracing::info!(
-                "Uploads completed up to {}",
-                timeline
-                    .get_remote_consistent_lsn_projected()
-                    .unwrap_or(Lsn(0))
-            );
-        }
 
         json_response(StatusCode::OK, ())
     }
-    .instrument(info_span!("manual_checkpoint", tenant_id = %tenant_id, %timeline_id))
+    .instrument(info_span!("flush", tenant_id = %tenant_id, %timeline_id))
     .await
 }
 
@@ -912,8 +902,12 @@ pub fn make_router(
             api_handler(r, timeline_gc_handler)
         })
         .put(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/checkpoint",
-            |r| testing_api_handler("run timeline checkpoint", r, timeline_checkpoint_handler),
+            "/v1/tenant/:tenant_id/timeline/:timeline_id/flush",
+            // Not testing-gated: the launcher calls this on the ancestor at
+            // branch time (with `?lsn=`) to flush its pages to YB so the
+            // branch's `create_branch_row` durability barrier clears
+            // immediately (otherwise it waits up to one flush interval).
+            |r| api_handler(r, timeline_flush_handler),
         )
         .get("/v1/panic", |r| api_handler(r, always_panic_handler))
         .post("/v1/tracing/event", |r| {
