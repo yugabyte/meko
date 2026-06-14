@@ -2,24 +2,18 @@
 //!
 //! # Motivation
 //!
-//! On a single page service connection, we're typically serving a single TenantTimelineId.
+//! On a single page service connection, we're serving a single TenantTimelineId.
 //!
-//! Without sharding, there is a single Timeline object to which we dispatch
-//! all requests. For example, a getpage request gets dispatched to the
-//! Timeline::get method of the Timeline object that represents the
-//! (tenant,timeline) of that connection.
+//! There is a single Timeline object to which we dispatch all requests. For
+//! example, a getpage request gets dispatched to the Timeline::get method of
+//! the Timeline object that represents the (tenant,timeline) of that
+//! connection.
 //!
-//! With sharding, for each request that comes in on the connection,
-//! we first have to perform shard routing based on the requested key (=~ page number).
-//! The result of shard routing is a Timeline object.
-//! We then dispatch the request to that Timeline object.
-//!
-//! Regardless of whether the tenant is sharded or not, we want to ensure that
-//! we hold the Timeline gate open while we're invoking the method on the
-//! Timeline object.
+//! We want to ensure that we hold the Timeline gate open while we're invoking
+//! the method on the Timeline object.
 //!
 //! We want to avoid the overhead of doing, for each incoming request,
-//! - tenant manager lookup (global rwlock + btreemap lookup for shard routing)
+//! - tenant manager lookup (global rwlock + btreemap lookup)
 //! - cloning the `Arc<Timeline>` out of the tenant manager so we can
 //!   release the mgr rwlock before doing any request processing work
 //! - re-entering the Timeline gate for each Timeline method invocation.
@@ -35,7 +29,7 @@
 //! There are two concepts expressed as associated types in the `Types` trait:
 //! - `TenantManager`: the thing that performs the expensive work. It produces
 //!   a `Timeline` object, which is the other associated type.
-//! - `Timeline`: the item that we cache for fast (TenantTimelineId,ShardSelector) lookup.
+//! - `Timeline`: the item that we cache for fast TimelineId lookup.
 //!
 //! There are three user-facing data structures exposed by this module:
 //! - `PerTimelineState`: a struct embedded into each Timeline struct. Lifetime == Timeline lifetime.
@@ -57,7 +51,7 @@
 //! - The `Handle` is a strong ref.
 //! - The `WeakHandle` is a weak ref.
 //! - The `PerTimelineState` contains a `HashMap<CacheId, strong ref>`.
-//! - The `Cache` is a `HashMap<unique identifier for the shard, weak ref>`.
+//! - The `Cache` is a `HashMap<TimelineId, weak ref>`.
 //!
 //! Lifetimes:
 //! - `WeakHandle` and `Handle`: single pagestream request.
@@ -68,7 +62,7 @@
 //!
 //! To dispatch a request, the page service connection calls `Cache::get`.
 //!
-//! A cache miss means we call Types::TenantManager::resolve for shard routing,
+//! A cache miss means we call Types::TenantManager::resolve,
 //! cloning the `Arc<Timeline>` out of it, and entering the gate. The result of
 //! resolve() is the object we want to cache, and return `Handle`s to for subseqent `Cache::get` calls.
 //!
@@ -77,8 +71,7 @@
 //! and a strong ref in the `PerTimelineState`.
 //! Another strong ref is returned wrapped in a `Handle`.
 //!
-//! For subsequent requests, `Cache::get` will perform a "fast path" shard routing
-//! and find the weak ref in the cache.
+//! For subsequent requests, `Cache::get` will find the weak ref in the cache.
 //! We upgrade the weak ref to a strong ref and return it wrapped in a `Handle`.
 //!
 //! The pagestream processing is pipelined and involves a batching step.
@@ -92,12 +85,12 @@
 //! Remember from the introductory section:
 //!
 //! > We want to avoid the overhead of doing, for each incoming request,
-//! > - tenant manager lookup (global rwlock + btreemap lookup for shard routing)
+//! > - tenant manager lookup (global rwlock + btreemap lookup)
 //! > - cloning the `Arc<Timeline>` out of the tenant manager so we can
 //! >   release the mgr rwlock before doing any request processing work
 //! > - re-entering the Timeline gate for each Timeline method invocation.
 //!
-//! All of these boil down to some state that is either globally shared among all shards
+//! All of these boil down to some state that is either globally shared
 //! or state shared among all tasks that serve a particular timeline.
 //! It is either protected by RwLock or manipulated via atomics.
 //! Even atomics are costly when shared across multiple cores.
@@ -181,36 +174,21 @@
 //!
 //! As per (2), that impl is in `Drop for Cache`.
 //!
-//! # Fast Path for Shard Routing
+//! # Cache lookup
 //!
-//! The `Cache` has a fast path for shard routing to avoid calling into
-//! the tenant manager for every request.
-//!
-//! The `Cache` maintains a hash map of `ShardTimelineId` to `WeakHandle`s.
-//!
-//! The current implementation uses the first entry in the hash map
-//! to determine the `ShardParameters` and derive the correct
-//! `ShardIndex` for the requested key.
-//!
-//! It then looks up the hash map for that `ShardTimelineId := {ShardIndex,TimelineId}`.
-//!
-//! If the lookup is successful and the `WeakHandle` can be upgraded,
-//! it's a hit.
+//! The `Cache` maintains a hash map of `TimelineId` to `WeakHandle`s, so a
+//! repeat request for a timeline served on this connection avoids calling
+//! into the tenant manager. It looks up the requested `TimelineId`; if the
+//! `WeakHandle` is present and can be upgraded, it's a hit.
 //!
 //! ## Cache invalidation
 //!
 //! The insight is that cache invalidation is sufficient and most efficiently if done lazily.
-//! The only reasons why an entry in the cache can become stale are:
-//! 1. The `PerTimelineState` / Timeline is shutting down e.g. because the shard is
-//!    being detached, timeline or shard deleted, or pageserver is shutting down.
-//! 2. We're doing a shard split and new traffic should be routed to the child shards.
-//!
-//! Regarding (1), we will eventually fail to upgrade the `WeakHandle` once the
-//! timeline has shut down, and when that happens, we remove the entry from the cache.
-//!
-//! Regarding (2), the insight is that it is toally fine to keep dispatching requests
-//! to the parent shard during a shard split. Eventually, the shard split task will
-//! shut down the parent => case (1).
+//! The only reason an entry in the cache can become stale is that the
+//! `PerTimelineState` / Timeline is shutting down (timeline deleted, or
+//! pageserver is shutting down). We will eventually fail to upgrade the
+//! `WeakHandle` once the timeline has shut down, and when that happens, we
+//! remove the entry from the cache.
 
 use std::collections::HashMap;
 use std::collections::hash_map;
@@ -218,14 +196,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Weak;
 
-use pageserver_api::models::ShardIdentity;
 use tracing::{instrument, trace};
 use utils::id::TimelineId;
-use utils::id::{ShardIndex, ShardNumber};
 
 use crate::page_service::GetActiveTimelineError;
 use crate::page_server::GetTimelineError;
-use crate::page_server::mgr::ShardSelector;
 
 pub(crate) trait Types: Sized {
     type TenantManager: TenantManager<Self> + Sized;
@@ -255,7 +230,7 @@ pub(crate) struct Cache<T: Types> {
     map: Map<T>,
 }
 
-type Map<T> = HashMap<ShardTimelineId, WeakHandle<T>>;
+type Map<T> = HashMap<TimelineId, WeakHandle<T>>;
 
 impl<T: Types> Default for Cache<T> {
     fn default() -> Self {
@@ -264,12 +239,6 @@ impl<T: Types> Default for Cache<T> {
             map: Default::default(),
         }
     }
-}
-
-#[derive(PartialEq, Eq, Debug, Hash, Clone, Copy)]
-pub(crate) struct ShardTimelineId {
-    pub(crate) shard_index: ShardIndex,
-    pub(crate) timeline_id: TimelineId,
 }
 
 /// See module-level comment.
@@ -305,42 +274,30 @@ impl<T: Types> Default for PerTimelineState<T> {
 
 /// Abstract view of [`crate::page_server::mgr`], for testability.
 pub(crate) trait TenantManager<T: Types> {
-    /// Invoked by [`Cache::get`] to resolve a [`ShardTimelineId`] to a [`Types::Timeline`].
+    /// Invoked by [`Cache::get`] to resolve a [`TimelineId`] to a [`Types::Timeline`].
     async fn resolve(
         &self,
         timeline_id: TimelineId,
-        shard_selector: ShardSelector,
     ) -> Result<T::Timeline, GetActiveTimelineError>;
 }
 
 /// Abstract view of an [`Arc<Timeline>`], for testability.
 pub(crate) trait Timeline<T: Types> {
-    fn shard_timeline_id(&self) -> ShardTimelineId;
-    #[allow(dead_code)]
-    fn get_shard_identity(&self) -> &ShardIdentity;
+    fn timeline_id(&self) -> TimelineId;
     fn per_timeline_state(&self) -> &PerTimelineState<T>;
 }
 
-/// Internal type used in [`Cache::get`].
-enum RoutingResult<T: Types> {
-    FastPath(Handle<T>),
-    SlowPath(ShardTimelineId),
-    NeedConsultTenantManager,
-}
-
 impl<T: Types> Cache<T> {
-    /// A wrapper of do_get to resolve the tenant shard for a get page request.
+    /// A wrapper of do_get to resolve a timeline for a get page request.
     /// The timeline is open before listeners start, so there is no
     /// wait-for-active retry: resolution either succeeds or fails fast.
     #[instrument(level = "trace", skip_all)]
     pub(crate) async fn get(
         &mut self,
         timeline_id: TimelineId,
-        shard_selector: ShardSelector,
         tenant_manager: &T::TenantManager,
     ) -> Result<Handle<T>, GetActiveTimelineError> {
-        self.do_get(timeline_id, shard_selector, tenant_manager)
-            .await
+        self.do_get(timeline_id, tenant_manager).await
     }
 
     /// See module-level comment for details.
@@ -354,71 +311,18 @@ impl<T: Types> Cache<T> {
     async fn do_get(
         &mut self,
         timeline_id: TimelineId,
-        shard_selector: ShardSelector,
         tenant_manager: &T::TenantManager,
     ) -> Result<Handle<T>, GetActiveTimelineError> {
-        // terminates because when every iteration we remove an element from the map
-        let miss: ShardSelector = loop {
-            let routing_state = self.shard_routing(timeline_id, shard_selector);
-            match routing_state {
-                RoutingResult::FastPath(handle) => return Ok(handle),
-                RoutingResult::SlowPath(key) => match self.map.get(&key) {
-                    Some(cached) => match cached.upgrade() {
-                        Ok(upgraded) => return Ok(upgraded),
-                        Err(HandleUpgradeError::ShutDown) => {
-                            // TODO: dedup with shard_routing()
-                            trace!("handle cache stale");
-                            self.map.remove(&key).unwrap();
-                            continue;
-                        }
-                    },
-                    None => break ShardSelector::Known(key.shard_index),
-                },
-                RoutingResult::NeedConsultTenantManager => break shard_selector,
-            }
-        };
-        self.get_miss(timeline_id, miss, tenant_manager).await
-    }
-
-    #[inline(always)]
-    fn shard_routing(
-        &mut self,
-        timeline_id: TimelineId,
-        shard_selector: ShardSelector,
-    ) -> RoutingResult<T> {
-        loop {
-            // terminates because when every iteration we remove an element from the map
-            let Some((first_key, first_handle)) = self.map.iter().next() else {
-                return RoutingResult::NeedConsultTenantManager;
-            };
-            let Ok(first_handle) = first_handle.upgrade() else {
-                // TODO: dedup with get()
-                trace!("handle cache stale");
-                let first_key_owned = *first_key;
-                self.map.remove(&first_key_owned).unwrap();
-                continue;
-            };
-
-            // yb-mode: tenants are single-shard; any selector resolves to the unsharded index.
-            let need_idx = match shard_selector {
-                ShardSelector::Known(shard_idx) => shard_idx,
-                _ => ShardIndex::unsharded(),
-            };
-            let need_shard_timeline_id = ShardTimelineId {
-                shard_index: need_idx,
-                timeline_id,
-            };
-            let first_handle_shard_timeline_id = ShardTimelineId {
-                shard_index: ShardIndex::unsharded(),
-                timeline_id: first_handle.shard_timeline_id().timeline_id,
-            };
-
-            if need_shard_timeline_id == first_handle_shard_timeline_id {
-                return RoutingResult::FastPath(first_handle);
-            } else {
-                return RoutingResult::SlowPath(need_shard_timeline_id);
+        if let Some(cached) = self.map.get(&timeline_id) {
+            match cached.upgrade() {
+                Ok(upgraded) => return Ok(upgraded),
+                Err(HandleUpgradeError::ShutDown) => {
+                    trace!("handle cache stale");
+                    self.map.remove(&timeline_id);
+                }
             }
         }
+        self.get_miss(timeline_id, tenant_manager).await
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -426,16 +330,10 @@ impl<T: Types> Cache<T> {
     async fn get_miss(
         &mut self,
         timeline_id: TimelineId,
-        shard_selector: ShardSelector,
         tenant_manager: &T::TenantManager,
     ) -> Result<Handle<T>, GetActiveTimelineError> {
-        let timeline = tenant_manager.resolve(timeline_id, shard_selector).await?;
-        let key = timeline.shard_timeline_id();
-        match &shard_selector {
-            ShardSelector::Zero => assert_eq!(key.shard_index.shard_number, ShardNumber(0)),
-            ShardSelector::Page(_) => (), // gotta trust tenant_manager
-            ShardSelector::Known(idx) => assert_eq!(idx, &key.shard_index),
-        }
+        let timeline = tenant_manager.resolve(timeline_id).await?;
+        let key = timeline.timeline_id();
 
         trace!("creating new HandleInner");
         let timeline = Arc::new(timeline);

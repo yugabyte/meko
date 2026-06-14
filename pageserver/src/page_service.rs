@@ -52,7 +52,6 @@ use tonic::service::Interceptor as _;
 use tonic::transport::server::TcpConnectInfo;
 use tracing::*;
 use utils::auth::{Claims, Scope, SwappableJwtAuth};
-use utils::id::ShardIndex;
 use utils::id::{TenantId, TenantTimelineId, TimelineId};
 use utils::logging::log_slow;
 use utils::lsn::Lsn;
@@ -74,7 +73,7 @@ use crate::metrics::{
 use crate::pgdatadir_mapping::{LsnRange, Version};
 use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
 use crate::task_mgr::{self, COMPUTE_REQUEST_RUNTIME, TaskKind};
-use crate::page_server::mgr::{GetTenantError, ShardSelector, TenantManager};
+use crate::page_server::mgr::{GetTenantError, TenantManager};
 use crate::page_server::timeline::handle::{Handle, HandleUpgradeError, WeakHandle};
 use crate::page_server::timeline::{self, WaitLsnError, WaitLsnTimeout, WaitLsnWaiter};
 use crate::page_server::{GetTimelineError, PageReconstructError, Timeline};
@@ -450,14 +449,11 @@ impl TimelineHandles {
         &mut self,
         tenant_id: TenantId,
         timeline_id: TimelineId,
-        shard_selector: ShardSelector,
     ) -> Result<Handle<TenantManagerTypes>, GetActiveTimelineError> {
         if *self.wrapper.tenant_id.get_or_init(|| tenant_id) != tenant_id {
             return Err(GetActiveTimelineError::SwitchedTenant);
         }
-        self.handles
-            .get(timeline_id, shard_selector, &self.wrapper)
-            .await
+        self.handles.get(timeline_id, &self.wrapper).await
     }
 
     fn tenant_id(&self) -> Option<TenantId> {
@@ -497,16 +493,12 @@ impl std::ops::Deref for TenantManagerCacheItem {
 }
 
 impl timeline::handle::Timeline<TenantManagerTypes> for TenantManagerCacheItem {
-    fn shard_timeline_id(&self) -> timeline::handle::ShardTimelineId {
-        Timeline::shard_timeline_id(&self.timeline)
+    fn timeline_id(&self) -> TimelineId {
+        self.timeline.timeline_id
     }
 
     fn per_timeline_state(&self) -> &timeline::handle::PerTimelineState<TenantManagerTypes> {
         &self.timeline.handles
-    }
-
-    fn get_shard_identity(&self) -> &pageserver_api::models::ShardIdentity {
-        Timeline::get_shard_identity(&self.timeline)
     }
 }
 
@@ -514,7 +506,6 @@ impl timeline::handle::TenantManager<TenantManagerTypes> for TenantManagerWrappe
     async fn resolve(
         &self,
         timeline_id: TimelineId,
-        shard_selector: ShardSelector,
     ) -> Result<TenantManagerCacheItem, GetActiveTimelineError> {
         let tenant_id = self.tenant_id.get().expect("we set this in get()");
 
@@ -532,7 +523,6 @@ impl timeline::handle::TenantManager<TenantManagerTypes> for TenantManagerWrappe
                 *tenant_id,
             )));
         }
-        let _ = shard_selector;
         let tenant_shard = self
             .tenant_manager
             .get_attached_tenant_shard(*tenant_id)
@@ -1005,7 +995,7 @@ impl PageServerHandler {
         let batched_msg = match neon_fe_msg {
             PagestreamFeMessage::Exists(req) => {
                 let shard = timeline_handles
-                    .get(tenant_id, timeline_id, ShardSelector::Zero)
+                    .get(tenant_id, timeline_id)
                     .await?;
                 debug_assert_current_span_has_tenant_and_timeline_id();
                 let span = tracing::info_span!(parent: &parent_span, "handle_get_rel_exists_request", rel = %req.rel, req_lsn = %req.hdr.request_lsn);
@@ -1024,7 +1014,7 @@ impl PageServerHandler {
             }
             PagestreamFeMessage::Nblocks(req) => {
                 let shard = timeline_handles
-                    .get(tenant_id, timeline_id, ShardSelector::Zero)
+                    .get(tenant_id, timeline_id)
                     .await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_get_nblocks_request", rel = %req.rel, req_lsn = %req.hdr.request_lsn);
                 let timer = Self::record_op_start_and_throttle(
@@ -1042,7 +1032,7 @@ impl PageServerHandler {
             }
             PagestreamFeMessage::DbSize(req) => {
                 let shard = timeline_handles
-                    .get(tenant_id, timeline_id, ShardSelector::Zero)
+                    .get(tenant_id, timeline_id)
                     .await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_db_size_request", dbnode = %req.dbnode, req_lsn = %req.hdr.request_lsn);
                 let timer = Self::record_op_start_and_throttle(
@@ -1060,7 +1050,7 @@ impl PageServerHandler {
             }
             PagestreamFeMessage::GetSlruSegment(req) => {
                 let shard = timeline_handles
-                    .get(tenant_id, timeline_id, ShardSelector::Zero)
+                    .get(tenant_id, timeline_id)
                     .await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_get_slru_segment_request", kind = %req.kind, segno = %req.segno, req_lsn = %req.hdr.request_lsn);
                 let timer = Self::record_op_start_and_throttle(
@@ -1107,9 +1097,7 @@ impl PageServerHandler {
 
                 let key = rel_block_to_key(req.rel, req.blkno);
 
-                let res = timeline_handles
-                    .get(tenant_id, timeline_id, ShardSelector::Page(key))
-                    .await;
+                let res = timeline_handles.get(tenant_id, timeline_id).await;
 
                 let shard = match res {
                     Ok(tl) => tl,
@@ -1246,7 +1234,7 @@ impl PageServerHandler {
             #[cfg(feature = "testing")]
             PagestreamFeMessage::Test(req) => {
                 let shard = timeline_handles
-                    .get(tenant_id, timeline_id, ShardSelector::Zero)
+                    .get(tenant_id, timeline_id)
                     .await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_test_request");
                 let timer = Self::record_op_start_and_throttle(
@@ -2267,11 +2255,7 @@ impl PageServerHandler {
             .timeline_handles
             .as_mut()
             .unwrap()
-            .get(
-                tenant_id,
-                timeline_id,
-                ShardSelector::Known(tenant_id.to_index()),
-            )
+            .get(tenant_id, timeline_id)
             .await?;
 
         let lease = timeline
@@ -2638,7 +2622,7 @@ impl PageServerHandler {
             .timeline_handles
             .as_mut()
             .unwrap()
-            .get(tenant_id, timeline_id, ShardSelector::Zero)
+            .get(tenant_id, timeline_id)
             .await?;
         let ctx = ctx.with_scope_timeline(&timeline);
 
@@ -3412,17 +3396,15 @@ impl GrpcPageServiceHandler {
             tenant_id,
             timeline_id,
         } = *extract::<TenantTimelineId>(req);
-        let shard_index = *extract::<ShardIndex>(req);
 
         // TODO: untangle acquisition from TenantManagerWrapper::resolve() and Cache::get(), to
         // avoid the unnecessary overhead.
         TimelineHandles::new(self.tenant_manager.clone())
-            .get(tenant_id, timeline_id, ShardSelector::Known(shard_index))
+            .get(tenant_id, timeline_id)
             .await
     }
 
-    /// Acquires a timeline handle for the given request, which must be for shard zero. Most
-    /// metadata requests are only valid on shard zero.
+    /// Acquires a timeline handle for the given request.
     async fn get_request_timeline_shard_zero(
         &self,
         req: &tonic::Request<impl Any>,
@@ -3431,16 +3413,9 @@ impl GrpcPageServiceHandler {
             tenant_id,
             timeline_id,
         } = *extract::<TenantTimelineId>(req);
-        let shard_index = *extract::<ShardIndex>(req);
-
-        if shard_index.shard_number.0 != 0 {
-            return Err(tonic::Status::invalid_argument(format!(
-                "request only valid on shard zero (requested shard {shard_index})",
-            )));
-        }
 
         TimelineHandles::new(self.tenant_manager.clone())
-            .get(tenant_id, timeline_id, ShardSelector::Known(shard_index))
+            .get(tenant_id, timeline_id)
             .await
             .map_err(Into::into)
     }
@@ -3488,19 +3463,6 @@ impl GrpcPageServiceHandler {
         received_at: Instant,
     ) -> Result<page_api::GetPageResponse, tonic::Status> {
         let ctx = ctx.with_scope_page_service_pagestream(&timeline);
-
-        for &blkno in &req.block_numbers {
-            let shard = timeline.get_shard_identity();
-            let key = rel_block_to_key(req.rel, blkno);
-            if !shard.is_key_local(&key) {
-                return Err(tonic::Status::invalid_argument(format!(
-                    "block {blkno} of relation {} requested on wrong shard {} (is on {})",
-                    req.rel,
-                    timeline.get_shard_index(),
-                    ShardIndex::new(shard.get_shard_number(&key), shard.count),
-                )));
-            }
-        }
 
         let latest_gc_cutoff_lsn = timeline.get_applied_gc_cutoff_lsn(); // hold guard
         let effective_lsn = PageServerHandler::effective_request_lsn(
@@ -3767,11 +3729,10 @@ impl proto::PageService for GrpcPageServiceHandler {
             tenant_id,
             timeline_id,
         } = *extract::<TenantTimelineId>(&req);
-        let shard_index = *extract::<ShardIndex>(&req);
 
         let mut handles = TimelineHandles::new(self.tenant_manager.clone());
         let timeline = handles
-            .get(tenant_id, timeline_id, ShardSelector::Known(shard_index))
+            .get(tenant_id, timeline_id)
             .await
             .map_err(|err| tonic::Status::from(err))?
             .downgrade();
@@ -4056,8 +4017,8 @@ where
     }
 }
 
-/// gRPC interceptor that decodes tenant metadata and stores it as request extensions of type
-/// TenantTimelineId and ShardIndex.
+/// gRPC interceptor that decodes tenant metadata and stores it as a
+/// TenantTimelineId request extension.
 #[derive(Clone)]
 struct TenantMetadataInterceptor;
 
@@ -4083,23 +4044,12 @@ impl tonic::service::Interceptor for TenantMetadataInterceptor {
         let timeline_id = TimelineId::from_str(timeline_id)
             .map_err(|_| tonic::Status::invalid_argument("invalid neon-timeline-id"))?;
 
-        // Decode the shard ID.
-        let shard_id = req
-            .metadata()
-            .get("neon-shard-id")
-            .ok_or_else(|| tonic::Status::invalid_argument("missing neon-shard-id"))?
-            .to_str()
-            .map_err(|_| tonic::Status::invalid_argument("invalid neon-shard-id"))?;
-        let shard_id = ShardIndex::from_str(shard_id)
-            .map_err(|_| tonic::Status::invalid_argument("invalid neon-shard-id"))?;
-
-        // Stash them in the request.
+        // Stash it in the request.
         let extensions = req.extensions_mut();
         extensions.insert(TenantTimelineId::new(tenant_id, timeline_id));
-        extensions.insert(shard_id);
 
         // Decorate the tracing span.
-        span_record!(%tenant_id, %timeline_id, %shard_id);
+        span_record!(%tenant_id, %timeline_id);
 
         Ok(req)
     }
@@ -4242,8 +4192,6 @@ impl From<WaitedForLsn> for Lsn {
 
 #[cfg(test)]
 mod tests {
-    use utils::id::ShardCount;
-
     use super::*;
 
     #[test]

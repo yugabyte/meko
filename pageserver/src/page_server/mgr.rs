@@ -9,8 +9,7 @@ use std::sync::Arc;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use http_utils::error::ApiError;
-use pageserver_api::key::Key;
-use pageserver_api::models::{ShardIndex, TimelineGcRequest};
+use pageserver_api::models::TimelineGcRequest;
 use rand::Rng;
 use rand::distr::Alphanumeric;
 use tokio::fs;
@@ -29,20 +28,6 @@ use crate::page_server::timeline::ShutdownMode;
 use crate::page_server::{AttachedTenantConf, GcError, GcResult, PageServer};
 use crate::virtual_file::MaybeFatalIo;
 use crate::TEMP_FILE_SUFFIX;
-
-/// When resolving a TenantId to a shard, we may be looking for the 0th
-/// shard, or we might be looking for whichever shard holds a particular page.
-/// yb-mode is always unsharded; every selector matches the one shard.
-#[derive(Copy, Clone)]
-pub(crate) enum ShardSelector {
-    /// Only return the 0th shard, if it is present.  If a non-0th shard is present,
-    /// ignore it.
-    Zero,
-    /// Pick the shard that holds this key
-    Page(#[allow(dead_code)] Key),
-    /// The shard ID is known: pick the given shard
-    Known(#[allow(dead_code)] ShardIndex),
-}
 
 /// Precursor to deletion of a tenant dir: we do a fast rename to a tmp path, and then
 /// the slower actual deletion in the background.

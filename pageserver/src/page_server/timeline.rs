@@ -17,13 +17,12 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use arc_swap::{ArcSwap, ArcSwapOption};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use handle::ShardTimelineId;
 
 use once_cell::sync::Lazy;
 use pageserver_api::config::tenant_conf_defaults::DEFAULT_PITR_INTERVAL;
 use pageserver_api::key::{Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFIX};
 use pageserver_api::models::{LsnLease, PageTraceEvent, RelSizeMigration, TimelineState};
-use pageserver_api::models::{ShardIdentity, ShardIndex, ShardNumber};
+use pageserver_api::models::{ShardIdentity, ShardNumber};
 use pageserver_api::reltag::{BlockNumber, RelTag};
 use postgres_connection::PgConnectionConfig;
 use postgres_ffi::v17::xlog_utils;
@@ -2698,14 +2697,6 @@ impl Timeline {
         &self.shard_identity
     }
 
-    #[inline(always)]
-    pub(crate) fn shard_timeline_id(&self) -> ShardTimelineId {
-        ShardTimelineId {
-            shard_index: ShardIndex::unsharded(),
-            timeline_id: self.timeline_id,
-        }
-    }
-
     pub(crate) fn finish_write(&self, new_lsn: Lsn) {
         assert!(new_lsn.is_aligned());
 
@@ -3018,14 +3009,6 @@ impl Timeline {
     pub(crate) async fn compute_image_consistent_lsn(&self) -> anyhow::Result<Lsn> {
         Ok(self.get_applied_lsn())
     }
-}
-
-impl Timeline {
-    pub(crate) fn get_shard_index(&self) -> ShardIndex {
-        // yb-mode: always single-shard.
-        ShardIndex::unsharded()
-    }
-
 }
 
 /// yb-mode placeholder. The original Neon TimelineWriter tracked the
