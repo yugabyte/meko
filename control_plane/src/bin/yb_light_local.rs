@@ -233,14 +233,6 @@ struct TenantCreateCmdArgs {
     #[clap(long)]
     set_default: bool,
 
-    /// Number of shards in the new tenant.
-    #[clap(long)]
-    #[arg(default_value_t = 0)]
-    shard_count: u8,
-    /// Sharding stripe size in pages.
-    #[clap(long)]
-    shard_stripe_size: Option<u32>,
-
     /// Placement policy shards in this tenant.
     #[clap(long)]
     #[arg(value_parser = parse_placement_policy)]
