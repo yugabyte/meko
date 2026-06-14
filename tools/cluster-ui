@@ -122,6 +122,32 @@ def _norm_id(v):
     return (v or "").replace("-", "").lower()
 
 
+def _database_url_from_config(cfg_text):
+    """Build a psql connection URL from the `[storage_controller.yb]` block.
+
+    The storage controller's connection lives in the repo config as the
+    shared YB block (`host_ports = "host:port[,host:port,...]"`, `user`,
+    `dbname`) — the same block the pageserver/safekeeper/endpoint_storage
+    consume. We read the first host:port (enough for read-only queries) and
+    assemble `postgresql://user@host:port/dbname`. Returns None when no
+    `[storage_controller.yb]` block is present.
+    """
+    m = re.search(r'\[storage_controller\.yb\](.*?)(?:\n\[|\Z)', cfg_text, re.DOTALL)
+    if not m:
+        return None
+    block = m.group(1)
+    hp = re.search(r'host_ports\s*=\s*"([^"]+)"', block)
+    if not hp:
+        return None
+    first = hp.group(1).split(",")[0].strip()
+    host_port = first if ":" in first else f"{first}:5433"
+    um = re.search(r'\buser\s*=\s*"([^"]+)"', block)
+    dm = re.search(r'\bdbname\s*=\s*"([^"]+)"', block)
+    user = um.group(1) if um else "yugabyte"
+    dbname = dm.group(1) if dm else "yb_storage"
+    return f"postgresql://{user}@{host_port}/{dbname}"
+
+
 def discover(repo_dir, database_url=None):
     """Build a topology dict.
 
@@ -155,11 +181,11 @@ def discover(repo_dir, database_url=None):
     if em:
         es_url = f"http://{em.group(1)}"
 
-    # Database URL: explicit flag wins, else the controller's database_url
-    # from the repo config, else the dev default.
+    # Database URL: explicit flag wins, else build it from the controller's
+    # shared YB connection block (`[storage_controller.yb]`: host_ports /
+    # user / dbname), else the dev default.
     if not database_url:
-        dm = re.search(r'database_url\s*=\s*"([^"]+)"', cfg_text)
-        database_url = dm.group(1) if dm else DEFAULT_DATABASE_URL
+        database_url = _database_url_from_config(cfg_text) or DEFAULT_DATABASE_URL
 
     db_error = None
 
@@ -1036,8 +1062,9 @@ def main():
                          "(optional — topology is read from the database)")
     ap.add_argument("--database-url",
                     default=os.environ.get("YB_STORAGE_DATABASE_URL"),
-                    help="storage_controller database (default: the repo config's "
-                         f"database_url, else {DEFAULT_DATABASE_URL})")
+                    help="storage_controller database (default: derived from the "
+                         "repo config's [storage_controller.yb] block, else "
+                         f"{DEFAULT_DATABASE_URL})")
     ap.add_argument("--host", default="127.0.0.1")
     # 9099 by default: 9000 is YugabyteDB's tserver web UI, 7000 the master UI.
     ap.add_argument("--port", type=int, default=9099)

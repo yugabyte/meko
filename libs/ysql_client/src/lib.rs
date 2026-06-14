@@ -60,29 +60,197 @@ use metrics::{YB_CLIENT_ERRORS, YB_QUERY_SECONDS, YB_RETRIES_EXHAUSTED};
 use yb_tokio_postgres::Statement;
 use yb_tokio_postgres::types::ToSql;
 
-/// Minimal YugabyteDB connection configuration consumed by
-/// [`YsqlClient::from_yb_config`] / [`YsqlClient::from_yb_config_pooled`].
-/// Higher-level configs (e.g. `remote_storage::YbStoreConfig`) carry
-/// extra fields (table name, key prefix, …) that aren't relevant to
-/// the connection itself; they convert to this struct at the
-/// connection site.
-#[derive(Clone, Debug)]
-pub struct YbConnConfig {
+/// A single YB tserver endpoint, `host` + YSQL `port`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostPort {
     pub host: String,
     pub port: u16,
+}
+
+/// One-or-more YB tserver endpoints. The wire form (TOML config and CLI
+/// args) is a single CSV string `host:port[,host:port,...]` (port
+/// defaults to 5433 if omitted); internally it's a parsed list, in
+/// libpq-failover order. Serde de/serializes via the CSV string, and the
+/// `FromStr` impl is the clap value parser.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostPorts(pub Vec<HostPort>);
+
+impl std::str::FromStr for HostPorts {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        let mut out = Vec::new();
+        for entry in s.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            let (host, port) = match entry.rsplit_once(':') {
+                Some((h, p)) => (
+                    h.to_string(),
+                    p.parse::<u16>()
+                        .with_context(|| format!("invalid port in YB endpoint {entry:?}"))?,
+                ),
+                None => (entry.to_string(), DEFAULT_YB_PORT),
+            };
+            anyhow::ensure!(!host.is_empty(), "empty host in YB endpoint {entry:?}");
+            out.push(HostPort { host, port });
+        }
+        anyhow::ensure!(
+            !out.is_empty(),
+            "host_ports must contain at least one host:port (got {s:?})"
+        );
+        Ok(HostPorts(out))
+    }
+}
+
+impl std::fmt::Display for HostPorts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let csv = self
+            .0
+            .iter()
+            .map(|hp| format!("{}:{}", hp.host, hp.port))
+            .collect::<Vec<_>>()
+            .join(",");
+        f.write_str(&csv)
+    }
+}
+
+impl serde::Serialize for HostPorts {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for HostPorts {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// The one canonical YugabyteDB connection config — the TOML
+/// `[*.yb]` block every yb-light daemon (pageserver, safekeeper,
+/// endpoint_storage, storage_controller) deserializes, and what the
+/// diagnostic tools build from their CLI flags. Connection only: which
+/// YB to talk to, as whom, over what TLS. It deliberately carries NO
+/// table/schema — each component hardcodes the table(s) it owns
+/// (pageserver → pageserver.pages/slru_pages/meta, safekeeper →
+/// public.wals, endpoint_storage → public.blobs).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct YbConnConfig {
+    /// YB tserver endpoints. Wire form is the CSV string
+    /// `host:port[,host:port,...]`; stored parsed (see [`HostPorts`]).
+    pub host_ports: HostPorts,
+    #[serde(default = "default_yb_user")]
     pub user: String,
+    #[serde(default = "default_yb_dbname")]
     pub dbname: String,
     /// Name of an environment variable that holds the password. If
     /// `Some` and unset, the connection fails at construction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_env: Option<String>,
     /// `None` or `Some("disable")` → NoTls. Any other value → rustls
     /// via [`build_yb_rustls_connector`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sslmode: Option<String>,
     /// Path to a PEM-encoded CA bundle. Required when `sslmode` calls
     /// for strict verification (`verify-ca` / `verify-full`); when
     /// `None` the verifier falls back to AcceptAll (logged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sslrootcert: Option<String>,
 }
+
+impl YbConnConfig {
+    /// Render this connection config as a libpq/diesel `postgresql://` URL.
+    ///
+    /// The storage_controller's persistence layer (diesel-async) takes a
+    /// URL string rather than a parsed config, so it consumes the shared
+    /// `[storage_controller.yb]` block by building the URL here. All
+    /// `host:port` pairs are emitted as a libpq multi-host authority;
+    /// `password_env` is resolved to the live password and percent-encoded.
+    pub fn to_database_url(&self) -> anyhow::Result<String> {
+        use anyhow::Context;
+        let mut url = String::from("postgresql://");
+        url.push_str(&percent_encode(&self.user));
+        if let Some(env_name) = &self.password_env {
+            let pw = std::env::var(env_name)
+                .with_context(|| format!("password env var `{env_name}` is not set"))?;
+            url.push(':');
+            url.push_str(&percent_encode(&pw));
+        }
+        url.push('@');
+        let hosts = self
+            .host_ports
+            .0
+            .iter()
+            .map(|hp| format!("{}:{}", hp.host, hp.port))
+            .collect::<Vec<_>>()
+            .join(",");
+        url.push_str(&hosts);
+        url.push('/');
+        url.push_str(&percent_encode(&self.dbname));
+        let mut params = Vec::new();
+        if let Some(sslmode) = &self.sslmode {
+            params.push(format!("sslmode={}", percent_encode(sslmode)));
+        }
+        if let Some(cert) = &self.sslrootcert {
+            params.push(format!("sslrootcert={}", percent_encode(cert)));
+        }
+        if !params.is_empty() {
+            url.push('?');
+            url.push_str(&params.join("&"));
+        }
+        Ok(url)
+    }
+
+    /// Render as a TOML inline table (`{ key = "val", ... }`) — the wire
+    /// form the safekeeper (`--wal-yb-config`) and storage_controller
+    /// (`--yb-config`) accept on the command line, and the block the
+    /// pageserver `remote_storage` / endpoint_storage configs embed. The
+    /// inverse of the `Deserialize` impl; identical across all consumers.
+    pub fn to_inline_toml(&self) -> String {
+        fn q(s: &str) -> String {
+            format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+        }
+        let mut parts = vec![
+            format!("host_ports = {}", q(&self.host_ports.to_string())),
+            format!("user = {}", q(&self.user)),
+            format!("dbname = {}", q(&self.dbname)),
+        ];
+        if let Some(p) = &self.password_env {
+            parts.push(format!("password_env = {}", q(p)));
+        }
+        if let Some(s) = &self.sslmode {
+            parts.push(format!("sslmode = {}", q(s)));
+        }
+        if let Some(c) = &self.sslrootcert {
+            parts.push(format!("sslrootcert = {}", q(c)));
+        }
+        format!("{{ {} }}", parts.join(", "))
+    }
+}
+
+/// Percent-encode a URL component, escaping everything outside the
+/// unreserved set (RFC 3986 `ALPHA / DIGIT / - . _ ~`). Used for the
+/// userinfo and query values of [`YbConnConfig::to_database_url`].
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn default_yb_user() -> String {
+    "yugabyte".to_string()
+}
+
+fn default_yb_dbname() -> String {
+    "yb_storage".to_string()
+}
+
+/// Default YSQL port applied to a `hosts` entry that omits `:port`.
+pub const DEFAULT_YB_PORT: u16 = 5433;
 
 /// Shared connection CLI args for the `yb_storage` diagnostic tools
 /// (`yb-dump-pages`, `yb-dump-wals`, `yb-reset-consistent-lsn`).
@@ -96,11 +264,10 @@ pub struct YbConnConfig {
 #[cfg(feature = "cli")]
 #[derive(clap::Args, Clone, Debug)]
 pub struct YbConnArgs {
-    /// YB host (or comma-separated tserver list).
-    #[arg(long, default_value = "127.0.0.1")]
-    pub host: String,
-    #[arg(long, default_value_t = 5433)]
-    pub port: u16,
+    /// YB tserver endpoints: `host:port[,host:port,...]` (port defaults
+    /// to 5433). Same CSV form as the daemons' `host_ports` TOML key.
+    #[arg(long, default_value = "127.0.0.1:5433")]
+    pub host_ports: HostPorts,
     #[arg(long, default_value = "yugabyte")]
     pub user: String,
     #[arg(long = "db-name", default_value = "yb_storage")]
@@ -124,8 +291,7 @@ impl YbConnArgs {
     /// Build the [`YbConnConfig`] these flags describe.
     pub fn into_config(&self) -> YbConnConfig {
         YbConnConfig {
-            host: self.host.clone(),
-            port: self.port,
+            host_ports: self.host_ports.clone(),
             user: self.user.clone(),
             dbname: self.db_name.clone(),
             password_env: self.password_env.clone(),
@@ -137,12 +303,11 @@ impl YbConnArgs {
 
 #[cfg(all(test, feature = "cli"))]
 mod cli_tests {
-    use super::YbConnArgs;
+    use super::{HostPorts, YbConnArgs};
 
     fn args() -> YbConnArgs {
         YbConnArgs {
-            host: "10.0.0.1,10.0.0.2".into(),
-            port: 5433,
+            host_ports: "10.0.0.1:5433,10.0.0.2:5440".parse().unwrap(),
             user: "yugabyte".into(),
             db_name: "yb_storage".into(),
             password_env: Some("PW".into()),
@@ -152,10 +317,21 @@ mod cli_tests {
     }
 
     #[test]
+    fn host_ports_parse_and_render() {
+        // Default port filled in; explicit port kept; round-trips to CSV.
+        let hp: HostPorts = "a,b:5440".parse().unwrap();
+        assert_eq!(hp.0.len(), 2);
+        assert_eq!((hp.0[0].host.as_str(), hp.0[0].port), ("a", 5433));
+        assert_eq!((hp.0[1].host.as_str(), hp.0[1].port), ("b", 5440));
+        assert_eq!(hp.to_string(), "a:5433,b:5440");
+        assert!("".parse::<HostPorts>().is_err());
+        assert!("h:notaport".parse::<HostPorts>().is_err());
+    }
+
+    #[test]
     fn into_config_maps_fields() {
         let c = args().into_config();
-        assert_eq!(c.host, "10.0.0.1,10.0.0.2");
-        assert_eq!(c.port, 5433);
+        assert_eq!(c.host_ports.to_string(), "10.0.0.1:5433,10.0.0.2:5440");
         assert_eq!(c.user, "yugabyte");
         assert_eq!(c.dbname, "yb_storage");
         assert_eq!(c.password_env.as_deref(), Some("PW"));
@@ -176,6 +352,77 @@ mod cli_tests {
         .into_config();
         assert_eq!(tls.sslmode.as_deref(), Some("require"));
         assert_eq!(tls.sslrootcert.as_deref(), Some("/etc/ca.pem"));
+    }
+}
+
+#[cfg(test)]
+mod database_url_tests {
+    use super::YbConnConfig;
+
+    fn cfg(host_ports: &str) -> YbConnConfig {
+        YbConnConfig {
+            host_ports: host_ports.parse().unwrap(),
+            user: "yugabyte".into(),
+            dbname: "yb_storage".into(),
+            password_env: None,
+            sslmode: None,
+            sslrootcert: None,
+        }
+    }
+
+    #[test]
+    fn plain_single_host() {
+        let url = cfg("127.0.0.1:5433").to_database_url().unwrap();
+        assert_eq!(url, "postgresql://yugabyte@127.0.0.1:5433/yb_storage");
+    }
+
+    #[test]
+    fn multi_host_and_sslmode() {
+        let mut c = cfg("10.0.0.1:5433,10.0.0.2:5440");
+        c.sslmode = Some("require".into());
+        let url = c.to_database_url().unwrap();
+        assert_eq!(
+            url,
+            "postgresql://yugabyte@10.0.0.1:5433,10.0.0.2:5440/yb_storage?sslmode=require"
+        );
+    }
+
+    #[test]
+    fn password_env_is_resolved_and_encoded() {
+        // SAFETY: single-threaded test; no other thread reads this var.
+        unsafe { std::env::set_var("YB_URL_TEST_PW", "Yugabyte!1") };
+        let mut c = cfg("h:5433");
+        c.password_env = Some("YB_URL_TEST_PW".into());
+        let url = c.to_database_url().unwrap();
+        assert_eq!(url, "postgresql://yugabyte:Yugabyte%211@h:5433/yb_storage");
+        unsafe { std::env::remove_var("YB_URL_TEST_PW") };
+    }
+
+    #[test]
+    fn missing_password_env_errors() {
+        let mut c = cfg("h:5433");
+        c.password_env = Some("YB_URL_TEST_DEFINITELY_UNSET".into());
+        assert!(c.to_database_url().is_err());
+    }
+
+    #[test]
+    fn inline_toml_omits_unset_optionals() {
+        let t = cfg("127.0.0.1:5433").to_inline_toml();
+        assert_eq!(
+            t,
+            "{ host_ports = \"127.0.0.1:5433\", user = \"yugabyte\", dbname = \"yb_storage\" }"
+        );
+    }
+
+    #[test]
+    fn inline_toml_includes_set_optionals() {
+        let mut c = cfg("a:5433,b:5440");
+        c.sslmode = Some("require".into());
+        c.password_env = Some("YB_PW".into());
+        let t = c.to_inline_toml();
+        assert!(t.contains("host_ports = \"a:5433,b:5440\""));
+        assert!(t.contains("sslmode = \"require\""));
+        assert!(t.contains("password_env = \"YB_PW\""));
     }
 }
 
@@ -887,27 +1134,18 @@ pub fn build_yb_rustls_connector(
 /// GUC drift that bites under load).
 fn build_pg_config(cfg: &YbConnConfig, application_name: &str) -> Result<tokio_postgres::Config> {
     let mut pg_config = tokio_postgres::Config::new();
-    // YbConnConfig.host accepts a comma-separated list of YB tservers
-    // (e.g. "10.0.0.1,10.0.0.2,10.0.0.3"). Add each as its own host on
-    // pg_config — tokio_postgres tries them in order on connect (libpq
-    // failover semantics). Trailing/leading whitespace is tolerated so
-    // operators can write `"a, b, c"` if they prefer.
-    let hosts: Vec<&str> = cfg
-        .host
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
+    // `hosts` is a list of YB tserver endpoints, each `host` or
+    // `host:port` (default 5433). Add each as its own (host, port) pair;
+    // tokio_postgres tries them in order on connect (libpq failover).
     anyhow::ensure!(
-        !hosts.is_empty(),
-        "YbConnConfig.host must contain at least one host (got {:?})",
-        cfg.host
+        !cfg.host_ports.0.is_empty(),
+        "YbConnConfig.host_ports must contain at least one host:port"
     );
-    for h in &hosts {
-        pg_config.host(h);
+    for hp in &cfg.host_ports.0 {
+        pg_config.host(&hp.host);
+        pg_config.port(hp.port);
     }
     pg_config
-        .port(cfg.port)
         .user(&cfg.user)
         .dbname(&cfg.dbname)
         .application_name(application_name);

@@ -37,6 +37,7 @@ tokio-postgres.workspace = true
 yb-tokio-postgres.workspace = true
 tokio-util.workspace = true
 remote_storage.workspace = true
+ysql_client.workspace = true
 url.workspace = true
 pageserver_api.workspace = true
 pageserver_client.workspace = true

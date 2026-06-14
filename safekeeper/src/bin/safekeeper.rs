@@ -125,12 +125,13 @@ struct Args {
     #[arg(long, value_parser= humantime::parse_duration, default_value = DEFAULT_HEARTBEAT_TIMEOUT, verbatim_doc_comment)]
     heartbeat_timeout: Duration,
     /// Optional YugabyteDB connection for mirroring live WAL writes. TOML
-    /// inline-table format, same fields as a `YbStore` `remote_storage`
-    /// entry (host, port, user, dbname, table_name, prefix?). When set,
-    /// each `write_wal` is INSERT'd into the named table in addition to
-    /// being written to local FS. Reads still use local FS (Phase 1).
-    #[arg(long, value_parser = parse_yb_store_config, verbatim_doc_comment)]
-    wal_yb_config: Option<remote_storage::YbStoreConfig>,
+    /// inline-table format with the shared YB connection fields
+    /// (host_ports, user, dbname, sslmode?, password_env?). When set,
+    /// each `write_wal` is INSERT'd into the (hardcoded) `public.wals`
+    /// table in addition to being written to local FS. Reads still use
+    /// local FS (Phase 1).
+    #[arg(long, value_parser = parse_yb_conn_config, verbatim_doc_comment)]
+    wal_yb_config: Option<ysql_client::YbConnConfig>,
     /// The single (tenant_id, timeline_id) this safekeeper process serves
     /// for its lifetime. Required in YB-WAL mode: `safekeeper.timeline_state`
     /// is shared across the cluster, so the process scopes its load and
@@ -686,13 +687,11 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
     std::process::exit(0);
 }
 
-fn parse_yb_store_config(s: &str) -> anyhow::Result<remote_storage::YbStoreConfig> {
-    // Reuse the same TOML-parsing path the pageserver uses for its remote
-    // storage config: deserialize as a single RemoteStorageConfig and pull
-    // out the YbStore variant (the only one).
-    let cfg = remote_storage::RemoteStorageConfig::from_toml(&s.parse()?)?;
-    let remote_storage::RemoteStorageKind::YbStore(yb) = cfg.storage;
-    Ok(yb)
+fn parse_yb_conn_config(s: &str) -> anyhow::Result<ysql_client::YbConnConfig> {
+    // The shared YB connection config (host_ports, user, dbname, ...) as a
+    // TOML inline table — identical to the `[*.yb]` blocks the other
+    // components consume.
+    Ok(utils::toml_edit_ext::deserialize_item(&s.parse()?)?)
 }
 
 #[test]

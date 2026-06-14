@@ -52,7 +52,7 @@ Compute backend  --(cache miss)-->  shared_buffers  --(miss)-->  LFC  --(miss)--
                                             \
                                              v
                                        fetch layer from YbStore
-                                         (yb_storage.blobs, prefix pageserver-yb/...)
+                                         (yb_storage public.blobs, namespace='pageserver')
                                              |
                                        write to local layer cache
                                              v
@@ -104,8 +104,11 @@ These subsystems run unmodified upstream Neon code in yb-light:
   GC, and tenant attach logic.
 - The safekeeper's Raft acceptor logic, WAL stream decoder, walproposer wire
   protocol.
-- The storage controller's Rust code: not a single line was changed when we
-  pointed it at YB; the swap was purely the DB connection URL.
+- The storage controller's Rust code: nearly untouched when we pointed it
+  at YB. The only addition is a `--yb-config` flag that takes the shared
+  `YbConnConfig` block and builds the DB connection URL internally via
+  `YbConnConfig::to_database_url()`; everything else (diesel, migrations,
+  queries) runs unchanged against YB's Postgres-compatible YSQL frontend.
 
 ## Topology in our current dev cluster
 
@@ -140,9 +143,9 @@ yugabyted                       :7100 (master), :5433 (ysql)
         +-- schema `safekeeper`          incl. `timeline_state` (typed control-file rows)
 
 yb-light binaries (target/debug/)
-  storage_controller --database-url postgresql://yugabyte@127.0.0.1:5433/yb_storage --listen 127.0.0.1:<port>
+  storage_controller --yb-config "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage' }" --listen 127.0.0.1:<port>
   yb-pageserver   (config from on-disk pageserver.toml; yb_light_local defaults :64100 pg, :9988 http, :51151 grpc — base ports 64000/9898/51051 + i offset)
-  safekeeper --id 1 --wal-yb-config <YbStore TOML>   (yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
+  safekeeper --id 1 --wal-yb-config <YbConnConfig TOML>   (yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
   endpoint_storage   (config from endpoints/<name>/endpoint_storage/endpoint_storage.json; one per endpoint, base port 9993 + 2*k)
   compute_ctl --pgdata .yb_light/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
     +-- postgres (v17.5 + Neon patches)  :55440

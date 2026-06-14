@@ -218,11 +218,14 @@ Both pass all arguments straight through and resolve the repo root
 from their own location, so they work from any working directory.
 
 The pageserver expects to find a YB cluster reachable from the host;
-configure host/port/user/dbname/sslmode in `config.toml` under the
-`remote_storage` and `wal_yb_config` sections. `host` accepts a single
-hostname/IP or a comma-separated list of YB tservers
-(`"10.0.0.1,10.0.0.2,10.0.0.3"`) — the client tries them in order on
-connect, giving libpq-style failover across the cluster. Smart-driver
+configure host_ports/user/dbname/sslmode in `config.toml` under the
+`remote_storage` and `wal_yb_config` sections. `host_ports` is a single
+CSV key of the form `host:port[,host:port,...]` (default port 5433);
+a bare host with no `:port` defaults to 5433 and a comma-separated list
+of YB tservers (`"10.0.0.1:5433,10.0.0.2:5433,10.0.0.3:5433"`) — the
+client tries them in order on connect, giving libpq-style failover
+across the cluster. Table names are not configurable: each component
+hardcodes the table(s) it owns. Smart-driver
 load-balancing (`yb_servers()`-based fanout) is currently disabled
 pending an upstream `yb-tokio-postgres` fix; see the comment in
 `libs/ysql_client/src/lib.rs::build_pg_config` for the state of that
@@ -456,13 +459,13 @@ yb-dump-pages --decode --tenant <hex> --timeline <hex> \
 yb-reset-consistent-lsn --tenant <hex> --timeline <hex> --target-lsn 22/63000000
 yb-reset-consistent-lsn --tenant <hex> --timeline <hex> --target-lsn 22/63000000 --set
 # remote TLS cluster (e.g. AWS): add --sslmode (and --sslrootcert to verify)
-yb-dump-wals  --host <yb-host> --sslmode require --password-env PGPASSWORD \
+yb-dump-wals  --host-ports <host:port> --sslmode require --password-env PGPASSWORD \
               --tenant <hex> --timeline <hex> --summary
 ```
 
 All three default to a local `yb_light_local` cluster (`127.0.0.1:5433`,
 `yugabyte`/`yb_storage`, no TLS) and accept the shared
-`--host`/`--port`/`--user`/`--db-name`/`--password-env`/`--sslmode`/`--sslrootcert`
+`--host-ports`/`--user`/`--db-name`/`--password-env`/`--sslmode`/`--sslrootcert`
 overrides for remote clusters.
 
 ## Operational runbooks

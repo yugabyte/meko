@@ -68,12 +68,13 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 `yb_light_local init --config <file>` is strict about its TOML. Common cascade of failures, each fixed
 by adding the missing/retyped key:
 - `remote_storage` under `[[pageservers]]` must be a **string-encoded inline table**, not a native
-  TOML map — i.e. `remote_storage='{host="…", port=…, …}'` (quoted string), not `remote_storage={…}`.
+  TOML map — i.e. `remote_storage='{ host_ports="…:5433", user="…", dbname="…" }'` (quoted string),
+  not `remote_storage={…}`. It carries no `table_name` (each component hardcodes its tables).
 - Missing top-level keys it requires: `default_tenant_id`, `generate_local_ssl_certs`,
   `control_plane_api`. A panic at `local_env.rs:…` on init usually means `control_plane_api` is absent.
 - `[endpoint_storage]` stanza must be present.
-- endpoint_storage `YbStore` derivation needs `[storage_controller] database_url` to be a **full**
-  `postgresql://…` URL (not `host:port`).
+- endpoint_storage `YbStore` derivation needs the `[storage_controller.yb]` block (the shared
+  `host_ports`/`user`/`dbname` connection block) to be present.
 
 Fix by adding each missing key and re-running init. After a successful init, the generated
 `.yb_light/config` may **drop the `[[pageservers]]` stanza** when the PS is off-box / self-registering —

@@ -2017,27 +2017,22 @@ mod tests {
     use super::*;
 
     use bytes::Bytes;
-    use remote_storage::YbStoreConfig;
+    use remote_storage::YbConnConfig;
     use utils::id::{TenantId, TimelineId};
     use wal_decoder::models::record::NeonWalRecord;
 
     use crate::page_store::{PageStore, PageStoreConfig};
 
-    fn test_yb_config() -> YbStoreConfig {
-        YbStoreConfig {
-            host: std::env::var("YB_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
-            port: std::env::var("YB_TEST_PORT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(5433),
+    fn test_yb_config() -> YbConnConfig {
+        let host = std::env::var("YB_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = std::env::var("YB_TEST_PORT").unwrap_or_else(|_| "5433".to_string());
+        YbConnConfig {
+            host_ports: format!("{host}:{port}").parse().unwrap(),
             user: std::env::var("YB_TEST_USER").unwrap_or_else(|_| "yugabyte".to_string()),
             password_env: None,
             dbname: std::env::var("YB_TEST_DB").unwrap_or_else(|_| "yb_storage".to_string()),
-            table_name: "pages".to_string(),
-            prefix: Some("test/".to_string()),
             sslmode: None,
             sslrootcert: None,
-            concurrency_limit: std::num::NonZeroUsize::new(8).unwrap(),
         }
     }
 

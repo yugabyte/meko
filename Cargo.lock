@@ -854,6 +854,7 @@ dependencies = [
  "whoami",
  "workspace_hack",
  "yb-tokio-postgres",
+ "ysql_client",
 ]
 
 [[package]]
@@ -5336,6 +5337,7 @@ dependencies = [
  "utils",
  "uuid",
  "workspace_hack",
+ "ysql_client",
 ]
 
 [[package]]
@@ -7134,6 +7136,7 @@ dependencies = [
  "rustls 0.23.29",
  "rustls-native-certs 0.8.0",
  "rustls-pemfile",
+ "serde",
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",

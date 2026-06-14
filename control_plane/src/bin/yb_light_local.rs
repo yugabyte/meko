@@ -67,22 +67,20 @@ const DEFAULT_YB_PORT: u16 = 5433;
 const DEFAULT_YB_USER: &str = "yugabyte";
 const DEFAULT_YB_DBNAME: &str = "yb_storage";
 
-/// Build a `YbStoreConfig` TOML inline table targeting `table_name` in the
-/// dev cluster's YB. Consumed verbatim as the pageserver `remote_storage`
-/// override and the safekeeper `--wal-yb-config` argument.
-fn default_yb_store_inline_table(target: &YbStoreTarget, table_name: &str) -> String {
+/// The shared `[*.yb]` connection config for the dev cluster's YB. The
+/// pageserver (`remote_storage`), safekeeper (`--wal-yb-config`),
+/// endpoint_storage and storage_controller (`--yb-config`) all consume this
+/// same block — each hardcodes the table(s) it owns, so it carries none.
+fn default_yb_conn_config(target: &YbStoreTarget) -> ysql_client::YbConnConfig {
     let YbStoreTarget { host, port, dbname } = target;
-    format!(
-        "{{ host = '{host}', port = {port}, \
-         user = '{DEFAULT_YB_USER}', dbname = '{dbname}', \
-         table_name = '{table_name}' }}"
-    )
-}
-
-/// `storage_controller.database_url` for the dev cluster's YB.
-fn default_storage_controller_database_url(target: &YbStoreTarget) -> String {
-    let YbStoreTarget { host, port, dbname } = target;
-    format!("postgresql://{DEFAULT_YB_USER}@{host}:{port}/{dbname}")
+    ysql_client::YbConnConfig {
+        host_ports: format!("{host}:{port}").parse().expect("valid host:port"),
+        user: DEFAULT_YB_USER.to_string(),
+        dbname: dbname.clone(),
+        password_env: None,
+        sslmode: None,
+        sslrootcert: None,
+    }
 }
 
 /// Which YugabyteDB the default (no `--config`) init config points at.
@@ -139,9 +137,10 @@ struct InitCmdArgs {
     config: Option<PathBuf>,
 
     /// YugabyteDB database name baked into the default (no `--config`)
-    /// config: the storage controller's `database_url` and the pageserver
-    /// `remote_storage` / safekeeper `wal_yb_config` inline tables all point
-    /// at it. Defaults to `yb_storage`. Lets callers (e.g. the e2e harness)
+    /// config: the shared `[*.yb]` block consumed by the storage controller
+    /// (`--yb-config`), pageserver (`remote_storage`), safekeeper
+    /// (`wal_yb_config`) and endpoint_storage all point at it. Defaults to
+    /// `yb_storage`. Lets callers (e.g. the e2e harness)
     /// target an ephemeral per-run database without templating a base TOML.
     /// Ignored when `--config` is given.
     #[clap(long)]
@@ -1072,6 +1071,9 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
             Some(b) => format!("http://127.0.0.1:{b}/upcall/v1/").parse().unwrap(),
             None => DEFAULT_PAGESERVER_CONTROL_PLANE_API.parse().unwrap(),
         };
+        // One shared YB connection block, emitted identically for every
+        // component (the table each owns is hardcoded, not in the config).
+        let yb_conn = default_yb_conn_config(&yb_target);
         YbLightLocalInitConf {
             control_plane_api: Some(control_plane_api),
             safekeepers: vec![SafekeeperConf {
@@ -1079,7 +1081,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                 pg_port: sk_pg_port,
                 http_port: sk_http_port,
                 // Mirror live WAL into <db>.public.wals.
-                wal_yb_config: Some(default_yb_store_inline_table(&yb_target, "wals")),
+                wal_yb_config: Some(yb_conn.to_inline_toml()),
                 ..Default::default()
             }],
             pageservers: (0..args.num_pageservers.unwrap_or(1))
@@ -1097,8 +1099,9 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                         pg_auth_type: AuthType::Trust,
                         http_auth_type: AuthType::Trust,
                         grpc_auth_type: AuthType::Trust,
-                        // Relfile/layer objects live in <db>.public.blobs.
-                        remote_storage: Some(default_yb_store_inline_table(&yb_target, "blobs")),
+                        // Pages live in <db>.pageserver.*; relfile/layer
+                        // objects in <db>.public.blobs (both tables hardcoded).
+                        remote_storage: Some(yb_conn.to_inline_toml()),
                         other: Default::default(),
                         // Typical developer machines use disks with slow fsync, and we don't care
                         // about data integrity: disable disk syncs.
@@ -1120,7 +1123,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
             default_tenant_id: TenantId::from_array(std::array::from_fn(|_| 0)),
             storage_controller: Some(YbLightStorageControllerConf {
                 // Provision the storage_controller + storage DBs in YB.
-                database_url: Some(default_storage_controller_database_url(&yb_target)),
+                yb: Some(yb_conn.clone()),
                 ..Default::default()
             }),
             control_plane_hooks_api: None,

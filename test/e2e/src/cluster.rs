@@ -341,8 +341,8 @@ impl Cluster {
             .parent()
             .map(|d| d.join(bin))
             .unwrap_or_else(|| PathBuf::from(bin));
-        let port = self.yb_port.to_string();
-        let mut args: Vec<&str> = vec!["--host", &self.yb_host, "--port", &port, "--db-name", &self.db_name];
+        let host_ports = format!("{}:{}", self.yb_host, self.yb_port);
+        let mut args: Vec<&str> = vec!["--host-ports", &host_ports, "--db-name", &self.db_name];
         args.extend_from_slice(extra);
         let out = Command::new(&path)
             .args(&args)
@@ -369,8 +369,8 @@ impl Cluster {
             .parent()
             .map(|d| d.join(bin))
             .unwrap_or_else(|| PathBuf::from(bin));
-        let port = self.yb_port.to_string();
-        let mut args: Vec<&str> = vec!["--host", &self.yb_host, "--port", &port, "--db-name", &self.db_name];
+        let host_ports = format!("{}:{}", self.yb_host, self.yb_port);
+        let mut args: Vec<&str> = vec!["--host-ports", &host_ports, "--db-name", &self.db_name];
         args.extend_from_slice(extra);
         let out = Command::new(&path)
             .args(&args)

@@ -104,10 +104,10 @@ pub struct SafeKeeperConf {
     pub availability_zone: Option<String>,
     pub heartbeat_timeout: Duration,
     /// Optional YB connection for mirroring live WAL writes. When `Some`,
-    /// every `write_wal` is INSERT'd into the YB table named here in
-    /// addition to being written to the local-FS shadow. When `None`,
-    /// WAL only lives on local FS (default).
-    pub wal_yb_config: Option<remote_storage::YbStoreConfig>,
+    /// every `write_wal` is INSERT'd into the (hardcoded) `public.wals`
+    /// table in addition to being written to the local-FS shadow. When
+    /// `None`, WAL only lives on local FS (default).
+    pub wal_yb_config: Option<ysql_client::YbConnConfig>,
     /// The single (tenant_id, timeline_id) this process serves for its
     /// lifetime. Set from `--tenant-id`/`--timeline-id`; required in
     /// YB-WAL mode (see [`Self::yb_ttid`]). `safekeeper.timeline_state`

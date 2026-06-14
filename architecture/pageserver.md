@@ -301,8 +301,9 @@ table. The trait stays unchanged; this is *additive*. See
 [`remote-storage.md`](remote-storage.md) for the full design.
 
 - `libs/remote_storage/src/yb_store.rs` — the impl.
-- `libs/remote_storage/src/config.rs` — adds `YbStoreConfig` struct +
-  `RemoteStorageKind::YbStore(YbStoreConfig)`.
+- `libs/remote_storage/src/config.rs` — adds
+  `RemoteStorageKind::YbStore(ysql_client::YbConnConfig)` (the shared
+  connection block; no separate `YbStoreConfig` struct).
 - `libs/remote_storage/src/lib.rs` — adds the `YbStore(Arc<YbStore>)`
   variant to `GenericRemoteStorage` and the dispatch arms.
 
@@ -349,14 +350,15 @@ listen_pg_addr = "127.0.0.1:64100"
 listen_http_addr = "127.0.0.1:9988"
 listen_grpc_addr = "127.0.0.1:51151"
 remote_storage = {
-    host = "127.0.0.1",
-    port = 5433,
+    host_ports = "127.0.0.1:5433",
     user = "yugabyte",
-    dbname = "yb_storage",
-    table_name = "blobs",
-    prefix = "pageserver-yb/"
+    dbname = "yb_storage"
 }
 ```
+
+Table names are not configured: this one block serves both the page
+store (`pageserver.pages` / `slru_pages` / `meta`) and the object store
+(`public.blobs`), each hardcoded by the component.
 
 `yb_light_local init` accepts a top-level config with this `remote_storage`
 inline table; the generated `pageserver.toml` carries it through.

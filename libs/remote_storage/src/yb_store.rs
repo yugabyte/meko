@@ -51,7 +51,12 @@ use tokio_util::sync::CancellationToken;
 use yb_tokio_postgres as tokio_postgres;
 use yb_tokio_postgres::types::ToSql;
 
-use crate::config::YbStoreConfig;
+use ysql_client::YbConnConfig;
+
+/// The YB table the endpoint_storage blob store lives in. Hardcoded — the
+/// connection config carries no table name (every yb-light component owns
+/// a fixed table).
+const BLOBS_TABLE: &str = "blobs";
 use crate::error::{Cancelled, TimeoutOrCancel};
 use crate::metrics::RequestKind;
 use crate::{
@@ -93,7 +98,7 @@ impl std::fmt::Debug for YbStore {
 }
 
 impl YbStore {
-    pub async fn new(config: &YbStoreConfig, timeout: Duration) -> anyhow::Result<Self> {
+    pub async fn new(config: &YbConnConfig, timeout: Duration) -> anyhow::Result<Self> {
         // YsqlClient owns reconnect logic, runs `SET yb_enable_upsert_mode`
         // on every reopen, and dispatches sslmode + sslrootcert internally.
         // Same factory used by the safekeeper's WAL-mirror connection so
@@ -104,33 +109,22 @@ impl YbStore {
         // blob key rely on YB's upsert mode to skip the
         // read-before-write check. Without the GUC, the second PUT
         // would PK-conflict.
-        let ysql_fpu_client = ysql_client::YsqlClient::from_yb_config(
-            &config.conn_config(),
-            "pageserver:yb_store",
-            true,
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "failed to connect to YugabyteDB at {}:{} as user `{}` (sslmode={:?})",
-                config.host, config.port, config.user, config.sslmode
-            )
-        })?;
-
-        let prefix = config.prefix.as_ref().map(|p| {
-            if p.is_empty() || p.ends_with(REMOTE_STORAGE_PREFIX_SEPARATOR) {
-                p.clone()
-            } else {
-                format!("{p}/")
-            }
-        });
+        let ysql_fpu_client =
+            ysql_client::YsqlClient::from_yb_config(config, "pageserver:yb_store", true)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to connect to YugabyteDB at {} as user `{}` (sslmode={:?})",
+                        config.host_ports, config.user, config.sslmode
+                    )
+                })?;
 
         Ok(Self {
             ysql_fpu_client: Arc::new(ysql_fpu_client),
-            table_name: config.table_name.clone(),
-            prefix,
+            table_name: BLOBS_TABLE.to_string(),
+            prefix: None,
             timeout,
-            concurrency_limiter: ConcurrencyLimiter::new(config.concurrency_limit.get()),
+            concurrency_limiter: ConcurrencyLimiter::new(crate::DEFAULT_REMOTE_STORAGE_CONCURRENCY_LIMIT),
         })
     }
 
