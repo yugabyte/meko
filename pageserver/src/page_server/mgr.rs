@@ -279,7 +279,7 @@ impl TenantManager {
 
         let tenant = Arc::clone(&self.tenant);
         tenant
-            .shutdown(ShutdownMode::FreezeAndFlush)
+            .shutdown(ShutdownMode::Flush)
             .instrument(info_span!("shutdown", tenant_id = %tenant.tenant_id()))
             .await;
         info!("tenant successfully stopped");

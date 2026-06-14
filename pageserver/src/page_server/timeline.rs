@@ -642,13 +642,13 @@ pub(crate) enum WaitLsnWaiter {
 /// Argument to [`Timeline::shutdown`].
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ShutdownMode {
-    /// Graceful shutdown, may do a lot of I/O as we flush any open layers to disk. This method can
-    /// take multiple seconds for a busy timeline.
+    /// Graceful shutdown: drain the `PageWriter` row buffer to YB
+    /// ([`Timeline::flush`]) before stopping, so pending writes are durable.
     ///
     /// While we are flushing, we continue to accept read I/O for LSNs ingested before
     /// the call to [`Timeline::shutdown`].
-    FreezeAndFlush,
-    /// Shut down immediately, without waiting for any open layers to flush.
+    Flush,
+    /// Shut down immediately, without flushing the pending row buffer.
     Hard,
 }
 
@@ -1524,7 +1524,7 @@ impl Timeline {
     pub(crate) async fn shutdown(&self, mode: ShutdownMode) {
         debug_assert_current_span_has_tenant_and_timeline_id();
 
-        // Regardless of whether we're going to flush (FreezeAndFlush mode),
+        // Regardless of whether we're going to flush (Flush mode),
         // cancel walreceiver to stop ingesting more data asap.
         //
         // Note that we're accepting a race condition here where we may
@@ -1579,7 +1579,7 @@ impl Timeline {
             task.shutdown().await;
         }
 
-        if let ShutdownMode::FreezeAndFlush = mode {
+        if let ShutdownMode::Flush = mode {
             // yb-mode: no in-memory layers to inspect; always issue the
             // flush so PageWriter has a chance to drain its pending row
             // buffer before shutdown.
