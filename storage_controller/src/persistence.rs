@@ -22,7 +22,6 @@ use pageserver_api::controller_api::{
     ComputeEndpoint, MetadataHealthRecord, NodeLifecycle, NodeSchedulingPolicy, PlacementPolicy,
     SafekeeperDescribeResponse, ShardSchedulingPolicy, SkSchedulingPolicy,
 };
-use pageserver_api::models::{ShardConfigError, ShardCount, ShardIdentity, ShardNumber};
 use pageserver_api::models::{ShardImportStatus, TenantConfig};
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
@@ -796,10 +795,8 @@ impl Persistence {
 
         let mut result = HashMap::new();
         for tsp in updated {
-            let tenant_shard_id = TenantId::unsharded(
-                TenantId::from_str(tsp.tenant_id.as_str())
-                    .map_err(|e| DatabaseError::Logical(format!("Malformed tenant id: {e}")))?,
-            );
+            let tenant_shard_id = TenantId::from_str(tsp.tenant_id.as_str())
+                .map_err(|e| DatabaseError::Logical(format!("Malformed tenant id: {e}")))?;
 
             let Some(g) = tsp.generation else {
                 // If the generation_pageserver column was non-NULL, then the generation column should also be non-NULL:
@@ -912,7 +909,7 @@ impl Persistence {
 
             // Compose a comma separated list of tuples for matching on (tenant_id, shard_number, shard_count)
             let in_clause = chunk_ids
-                .map(|tsid| format!("('{}', {}, {})", tsid, ShardNumber(0).0, ShardCount(0).0))
+                .map(|tsid| format!("('{}', {}, {})", tsid, 0, 0))
                 .join(",");
 
             // We are done when our iterator gives us nothing to filter on
@@ -1723,7 +1720,7 @@ impl Persistence {
                     };
 
                     // Perform the update in-memory
-                    let follow_up = match status.update(tenant_shard_id.to_index(), shard_status) {
+                    let follow_up = match status.update(shard_status) {
                         Ok(ok) => ok,
                         Err(err) => {
                             return Ok(Err(err));
@@ -2006,14 +2003,8 @@ pub(crate) struct TenantShardPersistence {
 }
 
 impl TenantShardPersistence {
-    pub(crate) fn get_shard_identity(&self) -> Result<ShardIdentity, ShardConfigError> {
-        Ok(ShardIdentity::unsharded())
-    }
-
     pub(crate) fn get_tenant_shard_id(&self) -> anyhow::Result<TenantId> {
-        Ok(TenantId::unsharded(TenantId::from_str(
-            self.tenant_id.as_str(),
-        )?))
+        Ok(TenantId::from_str(self.tenant_id.as_str())?)
     }
 }
 
@@ -2059,9 +2050,7 @@ impl MetadataHealthPersistence {
 
     #[allow(dead_code)]
     pub(crate) fn get_tenant_shard_id(&self) -> Result<TenantId, hex::FromHexError> {
-        Ok(TenantId::unsharded(TenantId::from_str(
-            self.tenant_id.as_str(),
-        )?))
+        TenantId::from_str(self.tenant_id.as_str())
     }
 }
 

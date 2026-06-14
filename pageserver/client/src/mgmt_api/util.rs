@@ -16,12 +16,6 @@ pub async fn get_pageserver_tenant_timelines_unsharded(
     let mut timelines: Vec<TenantTimelineId> = Vec::new();
     let mut tenants: Vec<TenantId> = Vec::new();
     for ti in api_client.list_tenants().await? {
-        if !ti.id.is_unsharded() {
-            anyhow::bail!(
-                "only unsharded tenants are supported at this time: {}",
-                ti.id
-            );
-        }
         tenants.push(ti.id)
     }
     let mut js = JoinSet::new();
@@ -32,7 +26,7 @@ pub async fn get_pageserver_tenant_timelines_unsharded(
                 (
                     tenant_id,
                     mgmt_api_client
-                        .tenant_details(TenantId::unsharded(tenant_id))
+                        .tenant_details(tenant_id)
                         .await
                         .unwrap(),
                 )

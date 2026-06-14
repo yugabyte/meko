@@ -20,7 +20,7 @@ use tokio_util::io::StreamReader;
 use tonic::async_trait;
 use tracing::{info, instrument};
 use url::Url;
-use utils::id::{TenantId, TenantTimelineId};
+use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
 
 use crate::util::tokio_thread_local_stats::AllThreadLocalStats;
@@ -103,7 +103,7 @@ async fn main_impl(
             let timeline = *timeline;
             let info = mgmt_api_client
                 .timeline_info(
-                    TenantId::unsharded(timeline.tenant_id),
+                    timeline.tenant_id,
                     timeline.timeline_id,
                     ForceAwaitLogicalSize::No,
                 )

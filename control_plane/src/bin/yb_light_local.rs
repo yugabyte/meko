@@ -1016,7 +1016,7 @@ fn get_tenant_shard_id(
     if let Some(tenant_id_from_arguments) = tenant_shard_id_arg {
         Ok(tenant_id_from_arguments)
     } else if let Some(default_id) = env.default_tenant_id {
-        Ok(TenantId::unsharded(default_id))
+        Ok(default_id)
     } else {
         anyhow::bail!("No tenant shard id. Use --tenant-id, or set a default tenant");
     }
@@ -1514,7 +1514,7 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             let ancestor_ps = PageServerNode::from_env(env, &ancestor_ps_conf);
             let ancestor_info = ancestor_ps
                 .timeline_info(
-                    TenantId::unsharded(tenant_id),
+                    tenant_id,
                     ancestor_timeline_id,
                     pageserver_client::mgmt_api::ForceAwaitLogicalSize::No,
                 )
@@ -1734,7 +1734,7 @@ async fn provision_bootstrap(
     let start_lsn = loop {
         match pageserver
             .timeline_info(
-                TenantId::unsharded(tenant_id),
+                tenant_id,
                 timeline_id,
                 pageserver_client::mgmt_api::ForceAwaitLogicalSize::No,
             )
@@ -1908,7 +1908,7 @@ async fn provision_branch(
     // branch-PS startup retry remains the correctness guarantee, so a
     // failed/partial flush only costs latency, never safety.
     if let Err(e) = ancestor_ps
-        .flush(TenantId::unsharded(tenant_id), ancestor_timeline_id, Some(start_lsn))
+        .flush(tenant_id, ancestor_timeline_id, Some(start_lsn))
         .await
     {
         println!("branch: best-effort ancestor flush failed (relying on startup retry): {e:#}");
@@ -1924,7 +1924,7 @@ async fn provision_branch(
     loop {
         match pageserver
             .timeline_info(
-                TenantId::unsharded(tenant_id),
+                tenant_id,
                 timeline_id,
                 pageserver_client::mgmt_api::ForceAwaitLogicalSize::No,
             )
@@ -2178,7 +2178,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                     pageserver
                         .http_client
                         .timeline_init_lsn_lease(
-                            TenantId::unsharded(endpoint.tenant_id),
+                            endpoint.tenant_id,
                             endpoint.timeline_id,
                             lsn,
                         )

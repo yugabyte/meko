@@ -13,9 +13,7 @@ use pageserver_api::controller_api::{
     SkSchedulingPolicy, TenantCreateRequest, TenantDescribeResponse, TenantPolicyRequest,
     TenantShardMigrateRequest, TenantShardMigrateResponse, TimelineSafekeeperMigrateRequest,
 };
-use pageserver_api::models::{
-    ShardParameters, TenantConfig, TenantConfigPatchRequest, TenantConfigRequest,
-};
+use pageserver_api::models::{TenantConfig, TenantConfigPatchRequest, TenantConfigRequest};
 use pageserver_client::mgmt_api::{self};
 use reqwest::{Certificate, Method, StatusCode, Url};
 use safekeeper_api::models::TimelineLocateResponse;
@@ -468,9 +466,8 @@ async fn main() -> anyhow::Result<()> {
                     Method::POST,
                     "v1/tenant".to_string(),
                     Some(TenantCreateRequest {
-                        new_tenant_id: TenantId::unsharded(tenant_id),
+                        new_tenant_id: tenant_id,
                         generation: None,
-                        shard_parameters: ShardParameters::default(),
                         placement_policy: Some(PlacementPolicy::Attached(1)),
                         config: TenantConfig::default(),
                     }),
@@ -479,7 +476,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::TenantDelete { tenant_id } => {
             let status = vps_client
-                .tenant_delete(TenantId::unsharded(tenant_id))
+                .tenant_delete(tenant_id)
                 .await?;
             tracing::info!("Delete status: {}", status);
         }
@@ -561,13 +558,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Tenants { node_id: None } => {
             // Set up output formatting
             let mut table = comfy_table::Table::new();
-            table.set_header([
-                "TenantId",
-                "ShardCount",
-                "StripeSize",
-                "Placement",
-                "Scheduling",
-            ]);
+            table.set_header(["TenantId", "ShardCount", "Placement", "Scheduling"]);
 
             // Pagination loop over listing API
             let mut start_after = None;
@@ -603,7 +594,6 @@ async fn main() -> anyhow::Result<()> {
                         format!("{}", tenant.tenant_id),
                         // yb-mode: always single-shard (count = 1).
                         "1".to_string(),
-                        format!("{:?}", tenant.stripe_size),
                         format!("{:?}", tenant.policy),
                         format!("{:?}", shard_zero.scheduling_policy),
                     ]);
@@ -726,7 +716,6 @@ async fn main() -> anyhow::Result<()> {
             let TenantDescribeResponse {
                 tenant_id,
                 shards,
-                stripe_size,
                 policy,
                 config,
             } = storcon_client
@@ -752,7 +741,6 @@ async fn main() -> anyhow::Result<()> {
             println!("Tenant {tenant_id}");
             let mut table = comfy_table::Table::new();
             table.add_row(["Policy", &format!("{policy:?}")]);
-            table.add_row(["Stripe size", &format!("{stripe_size:?}")]);
             table.add_row(["Config", &serde_json::to_string_pretty(&config).unwrap()]);
             println!("{table}");
             println!("Shards:");

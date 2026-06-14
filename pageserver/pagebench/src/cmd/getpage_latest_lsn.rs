@@ -23,7 +23,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use url::Url;
-use utils::id::{TenantId, TenantTimelineId};
+use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
 
 use crate::util::tokio_thread_local_stats::AllThreadLocalStats;
@@ -205,7 +205,7 @@ async fn main_impl(
                 async move {
                     let partitioning = mgmt_api_client
                         .keyspace(
-                            TenantId::unsharded(timeline.tenant_id),
+                            timeline.tenant_id,
                             timeline.timeline_id,
                         )
                         .await?;

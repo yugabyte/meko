@@ -8,10 +8,10 @@ use std::time::{Duration, Instant};
 /// in [`storage_controller::http`]
 use postgres_versioninfo::PgMajorVersion;
 use serde::{Deserialize, Serialize};
-use utils::id::{NodeId, ShardStripeSize, TenantId, TimelineId};
+use utils::id::{NodeId, TenantId, TimelineId};
 use utils::lsn::Lsn;
 
-use crate::models::{PageserverUtilization, ShardParameters, TenantConfig, TimelineInfo};
+use crate::models::{PageserverUtilization, TenantConfig, TimelineInfo};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -20,11 +20,6 @@ pub struct TenantCreateRequest {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<u32>,
-
-    // If omitted, create a single shard with TenantId::unsharded()
-    #[serde(default)]
-    #[serde(skip_serializing_if = "ShardParameters::is_unsharded")]
-    pub shard_parameters: ShardParameters,
 
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,14 +107,12 @@ pub struct TenantLocateResponseShard {
 #[derive(Serialize, Deserialize)]
 pub struct TenantLocateResponse {
     pub shards: Vec<TenantLocateResponseShard>,
-    pub shard_params: ShardParameters,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TenantDescribeResponse {
     pub tenant_id: TenantId,
     pub shards: Vec<TenantDescribeResponseShard>,
-    pub stripe_size: ShardStripeSize,
     pub policy: PlacementPolicy,
     pub config: TenantConfig,
 }

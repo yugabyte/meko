@@ -495,13 +495,8 @@ async fn handle_tenant_timeline_passthrough(
         path
     );
 
-    let tenant_shard_id = if tenant_or_shard_id.is_unsharded() {
-        // If the request contains only tenant ID, find the node that holds shard zero
-        let (_, shard_id) = service.tenant_shard0_node(tenant_or_shard_id).await?;
-        shard_id
-    } else {
-        tenant_or_shard_id
-    };
+    // yb-mode: a tenant has a single shard; find the node that holds it.
+    let (_, tenant_shard_id) = service.tenant_shard0_node(tenant_or_shard_id).await?;
 
     let service_inner = service.clone();
 

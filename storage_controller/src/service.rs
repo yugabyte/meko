@@ -27,12 +27,9 @@ use pageserver_api::controller_api::{
 };
 use pageserver_api::models::{
     self, DetachBehavior, LsnLease,
-    PageserverUtilization, ShardImportStatus, ShardParameters, TenantConfig, TenantTimeTravelRequest,
+    PageserverUtilization, ShardImportStatus, TenantConfig, TenantTimeTravelRequest,
     TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateResponseStorcon,
     TimelineInfo,
-};
-use pageserver_api::models::{
-    ShardCount, ShardIdentity, ShardNumber, ShardStripeSize,
 };
 use pageserver_api::upcall_api::{
     PutTimelineImportStatusRequest, ReAttachRequest, ReAttachResponse, ReAttachResponseTenant,
@@ -43,10 +40,9 @@ use reqwest::{Certificate, StatusCode};
 use safekeeper_api::PgMajorVersion;
 use safekeeper_api::models::SafekeeperUtilization;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, instrument, warn};
+use tracing::{Instrument, instrument};
 use utils::completion::Barrier;
 use utils::generation::Generation;
-use utils::id::ShardIndex;
 use utils::id::{NodeId, TenantId, TimelineId};
 use utils::lsn::Lsn;
 use utils::sync::gate::Gate;
@@ -454,7 +450,7 @@ impl Service {
                     for import in &imports {
                         locked
                             .tenants
-                            .range_mut(TenantId::tenant_range(import.tenant_id))
+                            .range_mut(import.tenant_id..=import.tenant_id)
                             .for_each(|(_id, shard)| {
                                 shard.importing = TimelineImportState::Importing
                             });
@@ -1025,7 +1021,6 @@ impl Service {
 
                     let mut shard = TenantShard::new(
                         attach_req.tenant_shard_id,
-                        ShardIdentity::unsharded(),
                         PlacementPolicy::Attached(0),
                     );
                     shard.config = config;
@@ -1220,7 +1215,6 @@ impl Service {
                 response.tenants.push(ReAttachResponseTenant {
                     id: *tenant_shard_id,
                     r#gen: Some(new_gen.into().unwrap()),
-                    stripe_size: shard.shard.stripe_size,
                 });
 
                 shard.generation = std::cmp::max(shard.generation, Some(new_gen));
@@ -1248,7 +1242,6 @@ impl Service {
                 response.tenants.push(ReAttachResponseTenant {
                     id: *tenant_shard_id,
                     r#gen: None,
-                    stripe_size: shard.shard.stripe_size,
                 });
 
                 // We must not update observed, because we have no guarantee that our
@@ -1387,24 +1380,12 @@ impl Service {
             // As a default, zero secondaries is convenient for tests that don't choose a policy.
             .unwrap_or(PlacementPolicy::Attached(0));
 
-        // This service expects to handle sharding itself: it is an error to try and directly create
-        // a particular shard here.
-        let tenant_id = if !create_req.new_tenant_id.is_unsharded() {
-            return Err(ApiError::BadRequest(anyhow::anyhow!(
-                "Attempted to create a specific shard, this API is for creating the whole tenant"
-            )));
-        } else {
-            create_req.new_tenant_id
-        };
+        let tenant_id = create_req.new_tenant_id;
 
-        tracing::info!(
-            "Creating tenant {}, shard_count={:?}",
-            create_req.new_tenant_id,
-            create_req.shard_parameters.count,
-        );
+        tracing::info!("Creating tenant {}", create_req.new_tenant_id);
 
         // yb-mode: always single shard regardless of requested count.
-        let create_ids = vec![TenantId::unsharded(tenant_id)];
+        let create_ids = vec![tenant_id];
 
         // If the caller specifies a None generation, it means "start from default".
         let initial_generation = if matches!(placement_policy, PlacementPolicy::Secondary) {
@@ -1475,7 +1456,6 @@ impl Service {
                 .do_initial_shard_scheduling(
                     tenant_shard_id,
                     initial_generation,
-                    create_req.shard_parameters,
                     create_req.config.clone(),
                     placement_policy.clone(),
                     &mut schedule_context,
@@ -1514,7 +1494,6 @@ impl Service {
         &self,
         tenant_shard_id: TenantId,
         initial_generation: Option<Generation>,
-        shard_params: ShardParameters,
         config: TenantConfig,
         placement_policy: PlacementPolicy,
         schedule_context: &mut ScheduleContext,
@@ -1548,7 +1527,6 @@ impl Service {
             Entry::Vacant(entry) => {
                 let state = entry.insert(TenantShard::new(
                     tenant_shard_id,
-                    ShardIdentity::from_params(ShardNumber(0), shard_params),
                     placement_policy,
                 ));
 
@@ -1593,7 +1571,7 @@ impl Service {
             let locked = self.inner.read().unwrap();
             let existing = locked
                 .tenants
-                .range(TenantId::tenant_range(tenant_id))
+                .range(tenant_id..=tenant_id)
                 .next();
 
             if existing.is_some() {
@@ -1663,7 +1641,7 @@ impl Service {
             // detached everywhere, and nothing writes to S3 storage. Here, we verify that,
             // but only at the start of the process, so it's really just to prevent operator
             // mistakes.
-            for (shard_id, shard) in locked.tenants.range(TenantId::tenant_range(tenant_id)) {
+            for (shard_id, shard) in locked.tenants.range(tenant_id..=tenant_id) {
                 if shard.intent.get_attached().is_some() || !shard.intent.get_secondary().is_empty()
                 {
                     return Err(ApiError::InternalServerError(anyhow::anyhow!(
@@ -1711,7 +1689,7 @@ impl Service {
         for count in counts {
             // yb-mode: always single shard regardless of the historical shard counts.
             let _ = count;
-            let shard_ids = vec![TenantId::unsharded(tenant_id)];
+            let shard_ids = vec![tenant_id];
             for tenant_shard_id in shard_ids {
                 let client = PageserverClient::new(
                     node.get_id(),
@@ -1753,7 +1731,7 @@ impl Service {
         let node = {
             let mut locked = self.inner.write().unwrap();
             let (nodes, tenants, scheduler) = locked.parts_mut();
-            for (_, shard) in tenants.range_mut(TenantId::tenant_range(tenant_id)) {
+            for (_, shard) in tenants.range_mut(tenant_id..=tenant_id) {
                 shard.policy = PlacementPolicy::Detached;
                 shard
                     .schedule(scheduler, &mut ScheduleContext::default())
@@ -1776,7 +1754,7 @@ impl Service {
         // the tenant ID prefix, including all shards (even possibly stale ones).
         match node
             .with_client_retries(
-                |client| async move { client.tenant_delete(TenantId::unsharded(tenant_id)).await },
+                |client| async move { client.tenant_delete(tenant_id).await },
                 &self.http_client,
                 &self.config.pageserver_jwt_token,
                 1,
@@ -1814,7 +1792,7 @@ impl Service {
             let (_nodes, tenants, scheduler) = locked.parts_mut();
 
             // Dereference Scheduler from shards before dropping them
-            for (_tenant_shard_id, shard) in tenants.range_mut(TenantId::tenant_range(tenant_id)) {
+            for (_tenant_shard_id, shard) in tenants.range_mut(tenant_id..=tenant_id) {
                 shard.intent.clear(scheduler);
             }
 
@@ -1879,7 +1857,7 @@ impl Service {
         let mut schedule_context = ScheduleContext::default();
         let mut locked = self.inner.write().unwrap();
         let (_nodes, tenants, scheduler) = locked.parts_mut();
-        for (shard_id, shard) in tenants.range_mut(TenantId::tenant_range(tenant_id)) {
+        for (shard_id, shard) in tenants.range_mut(tenant_id..=tenant_id) {
             if let Some(placement) = &placement {
                 shard.policy = placement.clone();
 
@@ -1932,7 +1910,6 @@ impl Service {
 
             let (shard_zero_tid, shard_zero_locations) =
                 targets.0.pop_first().expect("Must have at least one shard");
-            assert!(shard_zero_tid.is_shard_zero());
 
             let node = shard_zero_locations.latest.node;
             let client = PageserverClient::new(
@@ -2027,7 +2004,7 @@ impl Service {
             let locked = self.inner.read().unwrap();
             let splitting = locked
                 .tenants
-                .range(TenantId::tenant_range(tenant_id))
+                .range(tenant_id..=tenant_id)
                 .any(|(_id, shard)| shard.splitting != SplitState::Idle);
 
             if splitting {
@@ -2040,29 +2017,10 @@ impl Service {
             .await?;
 
         let selected_safekeepers = if is_import {
-            let shards = {
-                let locked = self.inner.read().unwrap();
-                locked
-                    .tenants
-                    .range(TenantId::tenant_range(tenant_id))
-                    .map(|(ts_id, _)| ts_id.to_index())
-                    .collect::<Vec<_>>()
-            };
-
-            if !shards
-                .iter()
-                .map(|shard_index| shard_index.shard_count)
-                .all_equal()
-            {
-                return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                    "Inconsistent shard count"
-                )));
-            }
-
             let import = TimelineImport {
                 tenant_id,
                 timeline_id,
-                shard_statuses: ShardImportStatuses::new(shards),
+                shard_statuses: ShardImportStatuses::new(),
             };
 
             let inserted = self
@@ -2077,7 +2035,7 @@ impl Service {
                 .write()
                 .unwrap()
                 .tenants
-                .range_mut(TenantId::tenant_range(tenant_id))
+                .range_mut(tenant_id..=tenant_id)
                 .for_each(|(_id, shard)| shard.importing = TimelineImportState::Importing);
 
             match inserted {
@@ -2151,16 +2109,7 @@ impl Service {
             )
         })?;
 
-        import
-            .shard_statuses
-            .0
-            .get(&req.tenant_shard_id.to_index())
-            .cloned()
-            .ok_or_else(|| {
-                ApiError::NotFound(
-                    format!("shard {} not found", req.tenant_shard_id.shard_slug()).into(),
-                )
-            })
+        Ok(import.shard_statuses.0.clone())
     }
 
     #[instrument(skip_all, fields(
@@ -2417,7 +2366,7 @@ impl Service {
             .write()
             .unwrap()
             .tenants
-            .range_mut(TenantId::tenant_range(tenant_id))
+            .range_mut(tenant_id..=tenant_id)
             .for_each(|(_id, shard)| shard.importing = TimelineImportState::Idle);
 
         Ok(())
@@ -2431,11 +2380,9 @@ impl Service {
     ) -> Result<TimelineInfo, TimelineImportFinalizeError> {
         const TIMELINE_ACTIVATE_TIMEOUT: Duration = Duration::from_millis(128);
 
-        let mut shards_to_activate: HashSet<ShardIndex> =
-            import.shard_statuses.0.keys().cloned().collect();
         let mut shard_zero_timeline_info = None;
 
-        while !shards_to_activate.is_empty() {
+        while shard_zero_timeline_info.is_none() {
             if self.cancel.is_cancelled() {
                 return Err(TimelineImportFinalizeError::ShuttingDown);
             }
@@ -2444,20 +2391,9 @@ impl Service {
                 let locked = self.inner.read().unwrap();
                 let mut targets = Vec::new();
 
-                for (tenant_shard_id, shard) in locked
-                    .tenants
-                    .range(TenantId::tenant_range(import.tenant_id))
+                for (tenant_shard_id, shard) in
+                    locked.tenants.range(import.tenant_id..=import.tenant_id)
                 {
-                    if !import
-                        .shard_statuses
-                        .0
-                        .contains_key(&tenant_shard_id.to_index())
-                    {
-                        return Err(TimelineImportFinalizeError::MismatchedShards(
-                            tenant_shard_id.to_index(),
-                        ));
-                    }
-
                     if let Some(node_id) = shard.intent.get_attached() {
                         let node = locked
                             .nodes
@@ -2469,8 +2405,6 @@ impl Service {
 
                 targets
             };
-
-            let targeted_tenant_shards: Vec<_> = targets.iter().map(|(tid, _node)| *tid).collect();
 
             let results = self
                 .tenant_for_shards_api(
@@ -2492,14 +2426,10 @@ impl Service {
                 .await;
 
             let mut failed = 0;
-            for (tid, (_, result)) in targeted_tenant_shards.iter().zip(results.into_iter()) {
+            for (_, result) in results.into_iter() {
                 match result {
                     Ok(ok) => {
-                        if tid.is_shard_zero() {
-                            shard_zero_timeline_info = Some(ok);
-                        }
-
-                        shards_to_activate.remove(&tid.to_index());
+                        shard_zero_timeline_info = Some(ok);
                     }
                     Err(_err) => {
                         failed += 1;
@@ -2548,7 +2478,7 @@ impl Service {
             let locked = self.inner.read().unwrap();
             locked
                 .tenants
-                .range(TenantId::tenant_range(tenant_id))
+                .range(tenant_id..=tenant_id)
                 .any(|(_tid, shard)| shard.importing == TimelineImportState::Importing)
         };
 
@@ -2672,7 +2602,7 @@ impl Service {
                 http_client: reqwest::Client,
                 jwt: Option<String>,
                 behavior: Option<DetachBehavior>,
-            ) -> Result<(ShardNumber, models::detach_ancestor::AncestorDetached), ApiError> {
+            ) -> Result<models::detach_ancestor::AncestorDetached, ApiError> {
                 tracing::info!(
                     "Detaching timeline on shard {tenant_shard_id}/{timeline_id}, attached to node {node}",
                 );
@@ -2705,7 +2635,6 @@ impl Service {
                             other => passthrough_api_error(&node, other),
                         }
                     })
-                    .map(|res| (ShardNumber(0), res))
             }
 
             // no shard needs to go first/last; the operation should be idempotent
@@ -2727,7 +2656,7 @@ impl Service {
 
             let mismatching = results
                 .iter()
-                .filter(|(_, res)| res != &any.1)
+                .filter(|res| *res != &any)
                 .collect::<Vec<_>>();
             if !mismatching.is_empty() {
                 // this can be hit by races which should not happen because operation lock on cplane
@@ -2742,7 +2671,7 @@ impl Service {
                 return Err(ApiError::InternalServerError(anyhow::anyhow!("pageservers returned mixed results for ancestor detach; manual intervention is required.")));
             }
 
-            Ok(any.1)
+            Ok(any)
         }).await?
     }
 
@@ -3045,7 +2974,7 @@ impl Service {
                 let locked = self.inner.read().unwrap();
                 let tenant_shards = locked
                     .tenants
-                    .range(TenantId::tenant_range(tenant_id_or_shard_id.tenant_id()))
+                    .range({ let t = tenant_id_or_shard_id.tenant_id(); t..=t })
                     .filter(|(shard_id, _)| tenant_id_or_shard_id.matches(shard_id))
                     .collect::<Vec<_>>();
                 for (shard_id, shard) in tenant_shards {
@@ -3187,7 +3116,6 @@ impl Service {
             }
 
             let (shard_zero_tid, shard_zero_locations) = targets.0.pop_first().expect("Must have at least one shard");
-            assert!(shard_zero_tid.is_shard_zero());
 
             async fn delete_one(
                 tenant_shard_id: TenantId,
@@ -3275,7 +3203,7 @@ impl Service {
             let locked = self.inner.read().unwrap();
             let Some((tenant_shard_id, _shard)) = locked
                 .tenants
-                .range(TenantId::tenant_range(tenant_id))
+                .range(tenant_id..=tenant_id)
                 .next()
             else {
                 return Err(ApiError::NotFound(
@@ -3338,9 +3266,8 @@ impl Service {
         tracing::info!("Locating shards for tenant {tenant_id}");
 
         let mut result = Vec::new();
-        let mut shard_params: Option<ShardParameters> = None;
 
-        for (tenant_shard_id, shard) in locked.tenants.range(TenantId::tenant_range(tenant_id)) {
+        for (tenant_shard_id, shard) in locked.tenants.range(tenant_id..=tenant_id) {
             let node_id =
                 shard
                     .intent
@@ -3355,24 +3282,6 @@ impl Service {
                 .expect("Pageservers may not be deleted while referenced");
 
             result.push(node.shard_location(*tenant_shard_id));
-
-            match &shard_params {
-                None => {
-                    shard_params = Some(ShardParameters {
-                        stripe_size: shard.shard.stripe_size,
-                        count: shard.shard.count,
-                    });
-                }
-                Some(params) => {
-                    if params.stripe_size != shard.shard.stripe_size {
-                        // This should never happen.  We enforce at runtime because it's simpler than
-                        // adding an extra per-tenant data structure to store the things that should be the same
-                        return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                            "Inconsistent shard stripe size parameters!"
-                        )));
-                    }
-                }
-            }
         }
 
         if result.is_empty() {
@@ -3380,11 +3289,9 @@ impl Service {
                 anyhow::anyhow!("No shards for this tenant ID found").into(),
             ));
         }
-        let shard_params = shard_params.expect("result is non-empty, therefore this is set");
         tracing::info!(
-            "Located tenant {} with params {:?} on shards {}",
+            "Located tenant {} on shards {}",
             tenant_id,
-            shard_params,
             result
                 .iter()
                 .map(|s| format!("{s:?}"))
@@ -3392,10 +3299,7 @@ impl Service {
                 .join(",")
         );
 
-        Ok(TenantLocateResponse {
-            shards: result,
-            shard_params,
-        })
+        Ok(TenantLocateResponse { shards: result })
     }
 
     /// Returns None if the input iterator of shards does not include a shard with number=0
@@ -3407,9 +3311,8 @@ impl Service {
         let mut describe_shards = Vec::new();
 
         for shard in shards {
-            if shard.tenant_shard_id.is_shard_zero() {
-                shard_zero = Some(shard);
-            }
+            // yb-mode: every tenant has exactly one shard, which is shard zero.
+            shard_zero = Some(shard);
 
             describe_shards.push(TenantDescribeResponseShard {
                 tenant_shard_id: shard.tenant_shard_id,
@@ -3429,7 +3332,6 @@ impl Service {
         Some(TenantDescribeResponse {
             tenant_id: shard_zero.tenant_shard_id,
             shards: describe_shards,
-            stripe_size: shard_zero.shard.stripe_size,
             policy: shard_zero.policy.clone(),
             config: shard_zero.config.clone(),
         })
@@ -3444,7 +3346,7 @@ impl Service {
         self.tenant_describe_impl(
             locked
                 .tenants
-                .range(TenantId::tenant_range(tenant_id))
+                .range(tenant_id..=tenant_id)
                 .map(|(_k, v)| v),
         )
         .ok_or_else(|| ApiError::NotFound(anyhow::anyhow!("Tenant {tenant_id} not found").into()))
@@ -3669,7 +3571,7 @@ impl Service {
         let shard_range = match start_after {
             None => locked.tenants.range(..),
             Some(tenant_id) => locked.tenants.range((
-                std::ops::Bound::Excluded(TenantId::unsharded(tenant_id)),
+                std::ops::Bound::Excluded(tenant_id),
                 std::ops::Bound::Unbounded,
             )),
         };
@@ -3700,7 +3602,7 @@ impl Service {
         let mut locked = self.inner.write().unwrap();
         let (_nodes, tenants, scheduler) = locked.parts_mut();
         let mut shards = Vec::new();
-        for (tenant_shard_id, _) in tenants.range(TenantId::tenant_range(tenant_id)) {
+        for (tenant_shard_id, _) in tenants.range(tenant_id..=tenant_id) {
             shards.push(*tenant_shard_id);
         }
 
@@ -3747,12 +3649,11 @@ impl Service {
             .await
             .map_err(|e| passthrough_api_error(&node, e))?;
 
-        // A post-split tenant may contain a mixture of shard counts in remote storage: pick the highest count.
-        let Some(shard_count) = scan_result.shards.iter().map(|_s| ShardCount(0)).max() else {
+        if scan_result.shards.is_empty() {
             return Err(ApiError::NotFound(
                 anyhow::anyhow!("No shards found").into(),
             ));
-        };
+        }
 
         // Ideally we would set each newly imported shard's generation independently, but for correctness it is sufficient
         // to
@@ -3763,31 +3664,11 @@ impl Service {
             .max()
             .expect("We already validated >0 shards");
 
-        // Find the tenant's stripe size. This wasn't always persisted in the tenant manifest, so
-        // fall back to the original default stripe size of 32768 (256 MB) if it's not specified.
-        const ORIGINAL_STRIPE_SIZE: ShardStripeSize = ShardStripeSize(32768);
-        let stripe_size = scan_result
-            .shards
-            .iter()
-            .find(|s| ShardCount(0) == shard_count && s.generation == generation)
-            .expect("we validated >0 shards above")
-            .stripe_size
-            .unwrap_or_else(|| {
-                if ShardCount::unsharded().count() > 1 {
-                    warn!("unknown stripe size, assuming {ORIGINAL_STRIPE_SIZE}");
-                }
-                ORIGINAL_STRIPE_SIZE
-            });
-
         let response = self
             .do_tenant_create(TenantCreateRequest {
-                new_tenant_id: TenantId::unsharded(tenant_id),
+                new_tenant_id: tenant_id,
                 generation,
 
-                shard_parameters: ShardParameters {
-                    count: shard_count,
-                    stripe_size,
-                },
                 placement_policy: Some(PlacementPolicy::Attached(0)), // No secondaries, for convenient debug/hacking
                 config: TenantConfig::default(),
             })

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use pageserver_api::controller_api::{PlacementPolicy, ShardSchedulingPolicy};
-use pageserver_api::models::ShardIdentity;
 use pageserver_api::models::{LocationConfig, TenantConfig};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -23,8 +22,6 @@ use crate::timeline_import::TimelineImportState;
 #[derive(Serialize)]
 pub(crate) struct TenantShard {
     pub(crate) tenant_shard_id: TenantId,
-
-    pub(crate) shard: ShardIdentity,
 
     // Latest generation number: next time we attach, increment this
     // and use the incremented number when attaching.
@@ -241,7 +238,6 @@ impl ObservedState {
 impl TenantShard {
     pub(crate) fn new(
         tenant_shard_id: TenantId,
-        shard: ShardIdentity,
         policy: PlacementPolicy,
     ) -> Self {
         metrics::METRICS_REGISTRY
@@ -254,7 +250,6 @@ impl TenantShard {
             policy,
             intent: IntentState::new(),
             generation: Some(Generation::new(0)),
-            shard,
             observed: ObservedState::default(),
             config: TenantConfig::default(),
             splitting: SplitState::Idle,
@@ -424,7 +419,6 @@ impl TenantShard {
         intent: IntentState,
     ) -> anyhow::Result<Self> {
         let tenant_shard_id = tsp.get_tenant_shard_id()?;
-        let shard_identity = tsp.get_shard_identity()?;
 
         metrics::METRICS_REGISTRY
             .metrics_group
@@ -433,7 +427,6 @@ impl TenantShard {
 
         Ok(Self {
             tenant_shard_id,
-            shard: shard_identity,
             generation: tsp.generation.map(|g| Generation::new(g as u32)),
             policy: serde_json::from_str(&tsp.placement_policy).unwrap(),
             intent,
@@ -477,7 +470,7 @@ pub(crate) mod tests {
     use crate::scheduler::test_utils::make_test_nodes;
 
     fn make_test_tenant_shard(policy: PlacementPolicy) -> TenantShard {
-        TenantShard::new(TenantId::generate(), ShardIdentity::unsharded(), policy)
+        TenantShard::new(TenantId::generate(), policy)
     }
 
     /// Test the scheduling behaviors used when a tenant configured for HA is subject

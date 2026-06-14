@@ -3,7 +3,7 @@ use std::sync::Arc;
 use humantime::Duration;
 use pageserver_client::mgmt_api::ForceAwaitLogicalSize;
 use tokio::task::JoinSet;
-use utils::id::{TenantId, TenantTimelineId};
+use utils::id::TenantTimelineId;
 
 #[derive(clap::Parser)]
 pub(crate) struct Args {
@@ -60,7 +60,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
         js.spawn(async move {
             let info = mgmt_api_client
                 .timeline_info(
-                    TenantId::unsharded(tl.tenant_id),
+                    tl.tenant_id,
                     tl.timeline_id,
                     ForceAwaitLogicalSize::Yes,
                 )
@@ -79,7 +79,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
                     ticker.tick().await;
                     info = mgmt_api_client
                         .timeline_info(
-                            TenantId::unsharded(tl.tenant_id),
+                            tl.tenant_id,
                             tl.timeline_id,
                             ForceAwaitLogicalSize::Yes,
                         )

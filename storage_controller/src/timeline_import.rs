@@ -1,5 +1,5 @@
+use std::str::FromStr;
 use std::time::Duration;
-use std::{collections::HashMap, str::FromStr};
 
 use http_utils::error::ApiError;
 use reqwest::Method;
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use pageserver_api::models::{ShardImportProgress, ShardImportStatus};
 use tokio_util::sync::CancellationToken;
-use utils::id::{ShardIndex, TenantId, TimelineId};
+use utils::id::{TenantId, TimelineId};
 use utils::sync::gate::Gate;
 
 use crate::{persistence::TimelineImportPersistence, service::Config};
@@ -18,22 +18,14 @@ pub(crate) enum TimelineImportState {
     Idle,
 }
 
+/// yb-mode: a tenant has exactly one shard, so the per-shard import status
+/// map collapses to a single status.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub(crate) struct ShardImportStatuses(pub(crate) HashMap<ShardIndex, ShardImportStatus>);
+pub(crate) struct ShardImportStatuses(pub(crate) ShardImportStatus);
 
 impl ShardImportStatuses {
-    pub(crate) fn new(shards: Vec<ShardIndex>) -> Self {
-        ShardImportStatuses(
-            shards
-                .into_iter()
-                .map(|ts_id| {
-                    (
-                        ts_id,
-                        ShardImportStatus::InProgress(None::<ShardImportProgress>),
-                    )
-                })
-                .collect(),
-        )
+    pub(crate) fn new() -> Self {
+        ShardImportStatuses(ShardImportStatus::InProgress(None::<ShardImportProgress>))
     }
 }
 
@@ -55,8 +47,6 @@ pub(crate) enum TimelineImportFinalizeError {
     ShuttingDown,
     #[error("Import finalization was cancelled")]
     Cancelled,
-    #[error("Mismatched shard detected during import finalize: {0}")]
-    MismatchedShards(ShardIndex),
 }
 
 pub(crate) enum TimelineImportUpdateError {
@@ -64,7 +54,6 @@ pub(crate) enum TimelineImportUpdateError {
         tenant_id: TenantId,
         timeline_id: TimelineId,
     },
-    MismatchedShards,
     UnexpectedUpdate,
 }
 
@@ -77,11 +66,6 @@ impl From<TimelineImportUpdateError> for ApiError {
             } => ApiError::NotFound(
                 anyhow::anyhow!("Import for {tenant_id}/{timeline_id} not found").into(),
             ),
-            TimelineImportUpdateError::MismatchedShards => {
-                ApiError::InternalServerError(anyhow::anyhow!(
-                    "Import shards do not match update request, likely a shard split happened during import, this is a bug"
-                ))
-            }
             TimelineImportUpdateError::UnexpectedUpdate => {
                 ApiError::InternalServerError(anyhow::anyhow!("Update request is unexpected"))
             }
@@ -112,54 +96,29 @@ impl TimelineImport {
 
     pub(crate) fn update(
         &mut self,
-        shard: ShardIndex,
         status: ShardImportStatus,
     ) -> Result<TimelineImportUpdateFollowUp, TimelineImportUpdateError> {
-        use std::collections::hash_map::Entry::*;
-
-        match self.shard_statuses.0.entry(shard) {
-            Occupied(mut occ) => {
-                let crnt = occ.get_mut();
-                if *crnt == status {
-                    Ok(TimelineImportUpdateFollowUp::None)
-                } else if crnt.is_terminal() && *crnt != status {
-                    Err(TimelineImportUpdateError::UnexpectedUpdate)
-                } else {
-                    *crnt = status;
-                    Ok(TimelineImportUpdateFollowUp::Persist)
-                }
-            }
-            Vacant(_) => Err(TimelineImportUpdateError::MismatchedShards),
+        let crnt = &mut self.shard_statuses.0;
+        if *crnt == status {
+            Ok(TimelineImportUpdateFollowUp::None)
+        } else if crnt.is_terminal() && *crnt != status {
+            Err(TimelineImportUpdateError::UnexpectedUpdate)
+        } else {
+            *crnt = status;
+            Ok(TimelineImportUpdateFollowUp::Persist)
         }
     }
 
     pub(crate) fn is_complete(&self) -> bool {
-        self.shard_statuses
-            .0
-            .values()
-            .all(|status| status.is_terminal())
+        self.shard_statuses.0.is_terminal()
     }
 
     pub(crate) fn completion_error(&self) -> Option<String> {
         assert!(self.is_complete());
 
-        let shard_errors: HashMap<_, _> = self
-            .shard_statuses
-            .0
-            .iter()
-            .filter_map(|(shard, status)| {
-                if let ShardImportStatus::Error(err) = status {
-                    Some((*shard, err.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if shard_errors.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_string(&shard_errors).unwrap())
+        match &self.shard_statuses.0 {
+            ShardImportStatus::Error(err) => Some(err.clone()),
+            _ => None,
         }
     }
 }

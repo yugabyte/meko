@@ -13,31 +13,19 @@ design (PageStore, PageWriter, image_materializer, per-key LRU).
 
 ## Inherited from Neon
 
-### Sharding (tenants vs shards)
+### No sharding
 
-A **tenant** can be horizontally striped across multiple pageservers
-for scaling. The unit of striping is a **shard**: each tenant has
-`ShardCount` shards, identified by `(TenantId, ShardNumber, ShardCount)`
-(`libs/pageserver_api/src/shard.rs::TenantShardId`). The
-`ShardIdentity` carries the `stripe_size`; keys are mapped to shard
-numbers by hashing `(spcnode, dbnode, relnode)` and indexing by
-`stripe_size`. The storage controller's `tenants` table is the
-source of truth for "which pageserver owns shard N of tenant T".
-
-On-disk directory layout reflects shards:
-
-```
-pageserver_*/tenants/<tenant_id>-<shard_count>-<shard_number>/
-                     timelines/<timeline_id>/<layer-files…>
-```
-
-In yb-light only single-shard tenants are supported, and the notion of
-shards is being removed entirely (epic #73). Keyspace partitioning
-(`KeyspaceRange` / `KeySpace::partition`, was `ShardedRange`) no longer
-consults a shard identity — it chunks purely by size. The residual
-`ShardCount` / `ShardIdentity` types still exist in
-`libs/pageserver_api/src/models.rs` + `libs/utils/src/id.rs` and a few
-wire/DB signatures, pending their removal in later stages of #73.
+Upstream Neon horizontally stripes a tenant across multiple pageservers
+("shards"). **yb-light has no sharding**: one pageserver serves a whole
+tenant, and the shard concept was removed entirely (epic #73) — the
+`ShardIdentity` / `ShardIndex` / `ShardCount` / `ShardNumber` /
+`ShardStripeSize` types and `TenantShardId` are gone, and a `TenantId`
+identifies a tenant directly (no `(number, count)` suffix). Keyspace
+partitioning (`KeyspaceRange` / `KeySpace::partition`) chunks purely by
+size. The storage controller's `tenants` table retains vestigial
+`shard_number` / `shard_count` / `stripe_size` columns (always `0`/`0`/
+default), read as plain ints — dropping the columns is a deferred
+migration, not a code dependency.
 
 ### Tenant / timeline layout
 

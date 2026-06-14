@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use utils::generation::Generation;
 use utils::id::{NodeId, TimelineId};
 
-use utils::id::{ShardStripeSize, TenantId};
+use utils::id::TenantId;
 
 use crate::controller_api::NodeRegisterRequest;
 use crate::models::ShardImportStatus;
@@ -29,7 +29,6 @@ pub struct ReAttachResponseTenant {
     pub id: TenantId,
     /// `Some(g)` → re-attach in generation `g`; `None` → not attached.
     pub r#gen: Option<u32>,
-    pub stripe_size: ShardStripeSize,
 }
 #[derive(Serialize, Deserialize)]
 pub struct ReAttachResponse {
