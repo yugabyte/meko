@@ -186,7 +186,7 @@ impl GlobalTimelines {
             let state = self.state.lock().unwrap();
             (state.yb_wal.clone(), state.conf.yb_ttid()?)
         };
-        let yb_wal = yb_wal.context("safekeeper init requires --wal-yb-config")?;
+        let yb_wal = yb_wal.context("safekeeper init requires yb_storage_conn")?;
 
         // `safekeeper.timeline_state` is shared across the whole cluster, so
         // load ONLY our own timeline — never every row. Its row is absent on
@@ -273,7 +273,7 @@ impl GlobalTimelines {
         let state = TimelinePersistentState::new(&ttid, mconf, server_info, start_lsn)?;
         let yb_wal = yb_wal
             .clone()
-            .context("control-file create requires --wal-yb-config")?;
+            .context("control-file create requires yb_storage_conn")?;
         control_file::ControlFileStorage::create_new(yb_wal.fpu_client.clone(), &ttid, state)
             .await?;
         let timeline = self
@@ -603,7 +603,7 @@ pub async fn validate_temp_timeline(
 ) -> Result<(Lsn, Lsn)> {
     let yb_wal = yb_wal
         .cloned()
-        .context("control-file validate requires --wal-yb-config")?;
+        .context("control-file validate requires yb_storage_conn")?;
     let control_store =
         control_file::ControlFileStorage::restore_new(yb_wal.system_client.clone(), &ttid).await?;
     if control_store.server.wal_seg_size == 0 {

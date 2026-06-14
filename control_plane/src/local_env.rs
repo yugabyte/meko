@@ -388,7 +388,7 @@ pub struct SafekeeperConf {
     /// If `Some`, mirrors every live WAL write into YugabyteDB's `public.wals`
     /// table (table hardcoded). Value is the shared `[*.yb]` connection block
     /// as a TOML inline string that the safekeeper accepts as
-    /// `--wal-yb-config`. Single-safekeeper constraint applies (see
+    /// `yb_storage_conn`. Single-safekeeper constraint applies (see
     /// architecture/safekeeper.md §5).
     pub yb_storage_conn: Option<String>,
     /// Capacity (MiB) of the in-memory cache of recent WAL chunks used in

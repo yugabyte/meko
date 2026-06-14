@@ -168,7 +168,7 @@ pub struct YbWalConn {
 
 impl YbWalConn {
     /// Build from the SK config. Returns `None` when
-    /// `--wal-yb-config` isn't set (which yb-light shouldn't be
+    /// `yb_storage_conn` isn't set (which yb-light shouldn't be
     /// running without — every persistence path needs this).
     pub async fn from_conf(conf: &crate::SafeKeeperConf) -> anyhow::Result<Option<Arc<YbWalConn>>> {
         use anyhow::Context;

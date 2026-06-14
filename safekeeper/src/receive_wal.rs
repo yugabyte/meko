@@ -500,7 +500,7 @@ async fn network_write<IO: AsyncRead + AsyncWrite + Unpin>(
 /// walproposer, even when it's writing a steady stream of messages.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Flush cadence used in YB-WAL mode (`--wal-yb-config` is set). Each
+/// Flush cadence used in YB-WAL mode (`yb_storage_conn` is set). Each
 /// `flush_wal()` in YB-WAL mode drains the `YbWalStorage` batch buffer
 /// with a multi-row `INSERT VALUES`. The per-statement DocDB write +
 /// Raft append cost dominates over network RTT, so amortizing N writes

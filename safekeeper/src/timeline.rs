@@ -242,7 +242,7 @@ impl SharedState {
     ) -> Result<Self> {
         let yb_wal = yb_wal
             .cloned()
-            .context("control-file restore requires --wal-yb-config")?;
+            .context("control-file restore requires yb_storage_conn")?;
         let control_store =
             control_file::ControlFileStorage::restore_new(yb_wal.system_client.clone(), ttid).await?;
         if control_store.server.wal_seg_size == 0 {
@@ -633,7 +633,7 @@ impl Timeline {
                     control_file::YbControlFileStorage::delete(&yb_wal.system_client, &ttid).await
                 } else {
                     tracing::info!(
-                        "skipping remote deletion because --wal-yb-config is not set; this effectively leaks the control-file row"
+                        "skipping remote deletion because yb_storage_conn is not set; this effectively leaks the control-file row"
                     );
                     Ok(())
                 };
@@ -659,7 +659,7 @@ impl Timeline {
         self.cancel.is_cancelled()
     }
 
-    /// True when this safekeeper is running with `--wal-yb-config`, i.e.
+    /// True when this safekeeper is running with `yb_storage_conn`, i.e.
     /// live-WAL writes go through `YbWalStorage` rather than only the
     /// local-FS `PhysicalStorage`. Used by the WAL acceptor loop to pick a
     /// flush cadence tuned for YB's per-statement cost model (where

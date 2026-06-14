@@ -430,7 +430,7 @@ impl WalReader {
         }
 
         // Phase 2: try the live-WAL YB mirror (`yb_storage.wals`). When the
-        // safekeeper writes WAL with `--wal-yb-config`, every byte is
+        // safekeeper writes WAL with `yb_storage_conn`, every byte is
         // synchronously INSERT'd into that table — so an absent local file is
         // not a data-loss event.
         //

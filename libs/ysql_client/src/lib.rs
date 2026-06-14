@@ -200,7 +200,7 @@ impl YbConnConfig {
     }
 
     /// Render as a TOML inline table (`{ key = "val", ... }`) — the wire
-    /// form the safekeeper (`--wal-yb-config`) and storage_controller
+    /// form the safekeeper (`yb_storage_conn`) and storage_controller
     /// (`--yb-config`) accept on the command line, and the block the
     /// pageserver `remote_storage` / endpoint_storage configs embed. The
     /// inverse of the `Deserialize` impl; identical across all consumers.
