@@ -36,7 +36,6 @@ use tokio::{spawn, sync::watch, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info, instrument, warn};
 use url::Url;
-use utils::id::ShardIndex;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 use utils::measured_stream::MeasuredReader;
@@ -1236,8 +1235,6 @@ impl ComputeNode {
     /// Fetches a basebackup via gRPC. The connstring must use grpc://. Returns the timestamp when
     /// the connection was established, and the (compressed) size of the basebackup.
     fn try_get_basebackup_grpc(&self, spec: &ParsedSpec, lsn: Lsn) -> Result<(Instant, usize)> {
-        // yb-light is single-shard; the gRPC client still wants a shard id.
-        let shard_index = ShardIndex::unsharded();
         let ps_url = spec
             .pageserver_conninfo
             .pageserver_url(PageserverProtocol::Grpc)?
@@ -1247,7 +1244,6 @@ impl ComputeNode {
                 ps_url,
                 spec.tenant_id,
                 spec.timeline_id,
-                shard_index,
                 spec.storage_auth_token.clone(),
                 None, // NB: base backups use payload compression
             )

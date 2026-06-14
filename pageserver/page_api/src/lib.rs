@@ -20,8 +20,6 @@ pub mod proto {
 
 mod client;
 mod model;
-mod split;
 
 pub use client::Client;
 pub use model::*;
-pub use split::{GetPageSplitter, SplitError};

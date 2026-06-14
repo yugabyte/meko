@@ -16,14 +16,13 @@ use pageserver_api::key::Key;
 use pageserver_api::keyspace::KeySpaceAccum;
 use pageserver_api::pagestream_api::{PagestreamGetPageRequest, PagestreamRequest};
 use pageserver_api::reltag::RelTag;
-use pageserver_client_grpc::{self as client_grpc, ShardSpec};
+use pageserver_client_grpc as client_grpc;
 use pageserver_page_api as page_api;
 use rand::prelude::*;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use url::Url;
-use utils::id::ShardIndex;
 use utils::id::{TenantId, TenantTimelineId};
 use utils::lsn::Lsn;
 
@@ -627,7 +626,6 @@ impl GrpcClient {
             connstring.to_string(),
             ttid.tenant_id,
             ttid.timeline_id,
-            ShardIndex::unsharded(),
             None,
             compression.then_some(tonic::codec::CompressionEncoding::Zstd),
         )
@@ -699,10 +697,7 @@ impl RichGrpcClient {
         let inner = Arc::new(client_grpc::PageserverClient::new(
             ttid.tenant_id,
             ttid.timeline_id,
-            ShardSpec::new(
-                [(ShardIndex::unsharded(), connstring.to_string())].into(),
-                None,
-            )?,
+            connstring.to_string(),
             None,
             compression.then_some(tonic::codec::CompressionEncoding::Zstd),
         )?);

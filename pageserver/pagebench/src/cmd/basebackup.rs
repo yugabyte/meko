@@ -20,7 +20,6 @@ use tokio_util::io::StreamReader;
 use tonic::async_trait;
 use tracing::{info, instrument};
 use url::Url;
-use utils::id::ShardIndex;
 use utils::id::{TenantId, TenantTimelineId};
 use utils::lsn::Lsn;
 
@@ -329,7 +328,6 @@ impl GrpcClient {
             connstring.to_string(),
             ttid.tenant_id,
             ttid.timeline_id,
-            ShardIndex::unsharded(),
             None,
             None, // NB: uses payload compression
         )

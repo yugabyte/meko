@@ -6,7 +6,6 @@ use tonic::transport::Endpoint;
 use tracing::info;
 
 use pageserver_page_api::{GetPageClass, GetPageRequest, GetPageStatusCode, ReadLsn, RelTag};
-use utils::id::ShardIndex;
 use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
 
@@ -65,7 +64,6 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
             endpoint.connect().await?,
             ttid.tenant_id,
             ttid.timeline_id,
-            ShardIndex::unsharded(),
             None,
             None,
         )

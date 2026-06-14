@@ -192,7 +192,6 @@ fn acquire_lsn_lease_grpc(
             connstring.to_string(),
             tenant_shard_id,
             timeline_id,
-            tenant_shard_id.to_index(),
             auth.map(String::from),
             None,
         )

@@ -62,7 +62,6 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::{Channel, Endpoint};
 
 use pageserver_page_api as page_api;
-use utils::id::ShardIndex;
 use utils::id::{TenantId, TimelineId};
 
 /// Reap clients/streams that have been idle for this long. Channels are reaped immediately when
@@ -217,9 +216,9 @@ impl Drop for ChannelGuard {
     }
 }
 
-/// A pool of gRPC clients for a single tenant shard. Each client acquires a channel from the inner
-/// `ChannelPool`. A client is only given out to single caller at a time. The pool limits the total
-/// number of concurrent clients to `max_clients` via semaphore.
+/// A pool of gRPC clients for a single tenant timeline. Each client acquires a channel from the
+/// inner `ChannelPool`. A client is only given out to single caller at a time. The pool limits the
+/// total number of concurrent clients to `max_clients` via semaphore.
 ///
 /// The pool is always wrapped in an outer `Arc`, to allow long-lived guards across tasks/threads.
 pub struct ClientPool {
@@ -227,8 +226,6 @@ pub struct ClientPool {
     tenant_id: TenantId,
     /// Timeline ID.
     timeline_id: TimelineId,
-    /// Shard ID.
-    shard_id: ShardIndex,
     /// Authentication token, if any.
     auth_token: Option<String>,
     /// Compression to use.
@@ -262,14 +259,13 @@ struct ClientEntry {
 }
 
 impl ClientPool {
-    /// Creates a new client pool for the given tenant shard. Channels are acquired from the given
-    /// `ChannelPool`, which must point to a Pageserver that hosts the tenant shard. Allows up to
+    /// Creates a new client pool for the given tenant timeline. Channels are acquired from the given
+    /// `ChannelPool`, which must point to the Pageserver that hosts the timeline. Allows up to
     /// `max_clients` concurrent clients, or unbounded if None.
     pub fn new(
         channel_pool: Arc<ChannelPool>,
         tenant_id: TenantId,
         timeline_id: TimelineId,
-        shard_id: ShardIndex,
         auth_token: Option<String>,
         compression: Option<CompressionEncoding>,
         max_clients: Option<NonZero<usize>>,
@@ -277,7 +273,6 @@ impl ClientPool {
         let pool = Arc::new(Self {
             tenant_id,
             timeline_id,
-            shard_id,
             auth_token,
             compression,
             channel_pool,
@@ -321,7 +316,6 @@ impl ClientPool {
             channel_guard.take(),
             self.tenant_id,
             self.timeline_id,
-            self.shard_id,
             self.auth_token.clone(),
             self.compression,
         )
