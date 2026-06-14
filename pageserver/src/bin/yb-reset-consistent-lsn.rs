@@ -8,14 +8,14 @@
 //! `consistent_lsn` and fails (looping forever) if that byte is mid-record
 //! or in a WAL hole:
 //!
-//!   - `YB WAL hole at segno N offset O` — no `public.wals` chunk covers it.
+//!   - `YB WAL hole at segno N offset O` — no `safekeeper.wals` chunk covers it.
 //!   - `invalid xlog page header: xlp_rem_len=X, expected Y` — chunk exists
 //!     but the LSN is in the middle of a multi-page record.
 //!
 //! So you cannot just pick a segment- or page-aligned LSN to rewind to.
 //! This tool derives a guaranteed-good boundary the only reliable way: it
 //! anchors on a nearby WAL page that starts a fresh record, replays the
-//! real `WalStreamDecoder` forward across the `public.wals` bytes, and
+//! real `WalStreamDecoder` forward across the `safekeeper.wals` bytes, and
 //! reports the largest record boundary that is `<= target`. The boundary
 //! just before it is reported as the matching `prev_record_lsn`.
 //!
@@ -255,7 +255,7 @@ async fn write_timeline_state(
     }
 }
 
-/// Reads raw WAL bytes by LSN from `public.wals`, mapping each LSN to
+/// Reads raw WAL bytes by LSN from `safekeeper.wals`, mapping each LSN to
 /// `(segno, chunk_offset)` and resolving the chunk that covers it.
 struct WalReader<'a> {
     client: &'a YsqlClient,
@@ -272,7 +272,7 @@ impl WalSource for WalReader<'_> {
     async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
         let segno = (lsn.0 / self.seg) as i64;
         let off = (lsn.0 % self.seg) as i64;
-        let sql = "SELECT chunk_offset, data FROM public.wals \
+        let sql = "SELECT chunk_offset, data FROM safekeeper.wals \
                    WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 AND chunk_offset <= $4 \
                    ORDER BY chunk_offset DESC LIMIT 1";
         let params: [&(dyn ToSql + Sync); 4] = [&self.tenant, &self.timeline, &segno, &off];
@@ -280,9 +280,9 @@ impl WalSource for WalReader<'_> {
             .client
             .query_opt(sql, &params)
             .await
-            .context("reading public.wals")?
+            .context("reading safekeeper.wals")?
             .with_context(|| {
-                format!("WAL hole at {lsn} (segno {segno} offset {off}): no covering chunk in public.wals")
+                format!("WAL hole at {lsn} (segno {segno} offset {off}): no covering chunk in safekeeper.wals")
             })?;
         let chunk_offset = row.get::<_, i64>(0) as u64;
         let data: Vec<u8> = row.get::<_, Vec<u8>>(1);

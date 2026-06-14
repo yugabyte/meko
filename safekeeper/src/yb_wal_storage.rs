@@ -1,7 +1,7 @@
 //! YugabyteDB-mirrored WAL storage.
 //!
 //! Wraps [`PhysicalStorage`] so that every WAL write is also persisted to a
-//! YB table (`yb_storage.wals` by default). YB becomes the durable copy;
+//! YB table (`safekeeper.wals`). YB becomes the durable copy;
 //! the local FS remains the read path (used by `WalReader`) and a hot cache
 //! for re-reads of recent WAL.
 //!
@@ -15,7 +15,7 @@
 //! across a segment boundary):
 //!
 //! ```sql
-//! CREATE TABLE wals (
+//! CREATE TABLE safekeeper.wals (
 //!     tenant_id        TEXT    NOT NULL,
 //!     timeline_id      TEXT    NOT NULL,
 //!     segno            BIGINT  NOT NULL,
@@ -109,11 +109,13 @@ pub use ysql_client::YsqlClient;
 
 /// The single YB table the safekeeper mirrors WAL into. Hardcoded —
 /// the connection config carries only host/port/credentials, never a
-/// table name.
-const WALS_TABLE: &str = "wals";
+/// table name. Schema-qualified (`safekeeper.wals`); every query
+/// references it fully so it doesn't depend on the connection's
+/// `search_path`.
+const WALS_TABLE: &str = "safekeeper.wals";
 
 /// Handles to the YB connections that mirror live WAL into
-/// `yb_storage.wals`. Constructed at safekeeper boot via
+/// `safekeeper.wals`. Constructed at safekeeper boot via
 /// [`YbWalConn::from_conf`] and shared across timelines via
 /// `Arc<YbWalConn>`. Used by the WAL writer ([`YbWalStorage::new`]),
 /// the WAL reader ([`YbSegmentReader::new`]), and the control-file
@@ -139,7 +141,7 @@ const WALS_TABLE: &str = "wals";
 pub struct YbWalConn {
     /// Fast Path Upsert lane (`yb_enable_upsert_mode = true`). Used by
     /// the per-timeline consumer task in [`consumer_main`] for
-    /// batched chunk INSERTs into `yb_storage.wals` and by
+    /// batched chunk INSERTs into `safekeeper.wals` and by
     /// `control_file::create_new` for the one-shot
     /// `safekeeper.timeline_state` INSERT.
     pub fpu_client: Arc<YsqlClient>,
@@ -155,7 +157,7 @@ pub struct YbWalConn {
     /// `create_new` INSERT runs on the FPU lane.
     pub system_client: Arc<YsqlClient>,
     /// Name of the YB table that backs the WAL mirror. Always
-    /// [`WALS_TABLE`] (`public.wals`); the field stays so the SQL
+    /// [`WALS_TABLE`] (`safekeeper.wals`); the field stays so the SQL
     /// builders below can interpolate it.
     pub table: String,
     /// In-memory cache of recent WAL chunks, shared between the
@@ -461,7 +463,7 @@ impl YbWalStorage {
             %write_lsn,
             cfile_local_start_lsn = %state.local_start_lsn,
             cfile_timeline_start_lsn = %state.timeline_start_lsn,
-            "YbWalStorage::new — rehydrated write_lsn from yb_storage.wals \
+            "YbWalStorage::new — rehydrated write_lsn from safekeeper.wals \
              (last valid record boundary; falls back to timeline_start_lsn on empty)",
         );
 
@@ -541,7 +543,7 @@ impl YbWalStorage {
                 "SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM {} \
                  WHERE tenant_id = $1 AND timeline_id = $2 \
                  GROUP BY segno ORDER BY segno DESC LIMIT 1",
-                quote_ident(table)
+                quote_relation(table)
             ),
             tenant_id,
             timeline_id,
@@ -575,7 +577,7 @@ impl YbWalStorage {
             &format!(
                 "SELECT min(segno) AS m FROM {} \
                  WHERE tenant_id = $1 AND timeline_id = $2",
-                quote_ident(table)
+                quote_relation(table)
             ),
             tenant_id,
             timeline_id,
@@ -622,7 +624,7 @@ impl YbWalStorage {
             // NB: do NOT populate the read-side cache here. The cache
             // is durability-aware now: it's only populated by
             // `consumer_main` *after* the chunk has been successfully
-            // INSERT'd into `yb_storage.wals`. Populating it here
+            // INSERT'd into `safekeeper.wals`. Populating it here
             // pre-INSERT (the previous behaviour) let the WAL sender
             // stream chunks to the pageserver that the safekeeper had
             // not yet flushed to YB — and on safekeeper crash before
@@ -830,7 +832,7 @@ impl Storage for YbWalStorage {
         let delete_lower_bound = self.delete_lower_bound.clone();
         async move {
             // Drop cached chunks for segnos that are about to be DELETE'd
-            // out of `yb_storage.wals`. Done before the DB delete so a
+            // out of `safekeeper.wals`. Done before the DB delete so a
             // concurrent reader can't pick up a cached chunk that is no
             // longer durable. Reads that beat us here race against the
             // existing chunks just as they always would.
@@ -850,7 +852,7 @@ impl Storage for YbWalStorage {
                 &format!(
                     "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
                      AND segno >= $3 AND segno < $4",
-                    quote_ident(&table)
+                    quote_relation(&table)
                 ),
                 &tenant_id,
                 &timeline_id,
@@ -877,7 +879,18 @@ impl Storage for YbWalStorage {
     }
 }
 
-fn quote_ident(ident: &str) -> String {
+/// Quote a (possibly schema-qualified) relation name for safe SQL
+/// interpolation. A `schema.table` input is split on the first `.` and
+/// each part quoted independently (`"schema"."table"`); an unqualified
+/// name (the per-test scratch tables) is quoted as a single identifier.
+fn quote_relation(relation: &str) -> String {
+    match relation.split_once('.') {
+        Some((schema, table)) => format!("{}.{}", quote_one(schema), quote_one(table)),
+        None => quote_one(relation),
+    }
+}
+
+fn quote_one(ident: &str) -> String {
     let escaped = ident.replace('"', "\"\"");
     format!("\"{escaped}\"")
 }
@@ -905,7 +918,7 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
             "SELECT chunk_offset, data FROM {} \
              WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 AND chunk_offset <= $4 \
              ORDER BY chunk_offset DESC LIMIT 1",
-            quote_ident(self.table)
+            quote_relation(self.table)
         );
         let params: [&(dyn ToSql + Sync); 4] = [&self.tenant_id, &self.timeline_id, &segno, &off];
         let row = self
@@ -970,7 +983,7 @@ async fn truncate_wals_above(
     wal_seg_size: usize,
     end_pos: Lsn,
 ) -> Result<()> {
-    let table = quote_ident(table);
+    let table = quote_relation(table);
     let seg = wal_seg_size as i64;
     let end = end_pos.0 as i64;
     let params: [&(dyn ToSql + Sync); 3] = [&tenant_id, &timeline_id, &end];
@@ -1096,7 +1109,7 @@ async fn consumer_main(
                 // WAL sender's fast path; we only insert chunks here
                 // (after a successful INSERT) so the cache never
                 // serves bytes that aren't durable in
-                // `yb_storage.wals`. See findings-ps-wal-replay-
+                // `safekeeper.wals`. See findings-ps-wal-replay-
                 // restart-bug-2026-06-04 for the failure mode that
                 // earlier pre-INSERT cache population caused.
                 if let Some(c) = &cache {
@@ -1150,7 +1163,7 @@ async fn flush_batch(
 
     let mut sql = String::with_capacity(128 + n * 96);
     sql.push_str("INSERT INTO ");
-    sql.push_str(&quote_ident(table_name));
+    sql.push_str(&quote_relation(table_name));
     sql.push_str(
         " (tenant_id, timeline_id, segno, chunk_offset, \
           chunk_size, data, last_modified_us) VALUES ",
@@ -1198,7 +1211,7 @@ async fn flush_batch(
     Ok(())
 }
 
-/// Lazy chunk-streaming reader over `yb_storage.wals`, replacing the old
+/// Lazy chunk-streaming reader over `safekeeper.wals`, replacing the old
 /// snapshot-at-open `VecAsyncRead`.
 ///
 /// The previous design reassembled the entire 16 MiB segment from a single
@@ -1426,7 +1439,7 @@ const FETCH_FORWARD_CHUNKS: usize = 64;
 const FETCH_FORWARD_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Fetch the chunk covering `(segno, byte_offset)` plus a forward
-/// prefetch window from `yb_storage.wals`.
+/// prefetch window from `safekeeper.wals`.
 ///
 /// The common case is `byte_offset` exactly equal to an existing
 /// `chunk_offset`: the WAL sender consumes whole chunks and re-enters
@@ -1464,7 +1477,7 @@ async fn fetch_chunks_from_yb(
                AND chunk_offset >= $4 AND chunk_offset < $5 \
              ORDER BY chunk_offset ASC \
              LIMIT $6",
-            quote_ident(table)
+            quote_relation(table)
         ),
         tenant_id,
         timeline_id,
@@ -1511,7 +1524,7 @@ async fn fetch_chunks_from_yb(
                    AND chunk_offset <= $4 \
                  ORDER BY chunk_offset DESC \
                  LIMIT 1",
-                quote_ident(table)
+                quote_relation(table)
             ),
             tenant_id,
             timeline_id,
@@ -1578,6 +1591,19 @@ mod tests {
     /// remaining params down by two — no live YB needed. Locks the
     /// numbering the `wals` query call sites depend on.
     #[test]
+    fn quote_relation_splits_schema_qualified_names() {
+        // Production uses the schema-qualified `WALS_TABLE`; each part
+        // must be quoted independently so it resolves regardless of the
+        // connection's search_path (a bare `"safekeeper.wals"` would be
+        // a single — nonexistent — identifier).
+        assert_eq!(quote_relation("safekeeper.wals"), "\"safekeeper\".\"wals\"");
+        // Per-test scratch tables are unqualified → one quoted ident.
+        assert_eq!(quote_relation("wals_test_abc"), "\"wals_test_abc\"");
+        // Embedded quotes are doubled in every segment.
+        assert_eq!(quote_relation("a\"b.c\"d"), "\"a\"\"b\".\"c\"\"d\"");
+    }
+
+    #[test]
     fn bake_ttid_bakes_and_shifts() {
         let t = "00112233445566778899aabbccddeeff";
         let tl = "ffeeddccbbaa99887766554433221100";
@@ -1616,7 +1642,7 @@ mod tests {
     /// One-off `wals`-shaped table per test so concurrent runs and dirty
     /// state from prior failures can't interfere.
     async fn make_wals_table(client: &YsqlClient, table: &str) {
-        let q = quote_ident(table);
+        let q = quote_relation(table);
         client
             .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
             .await
@@ -1642,7 +1668,7 @@ mod tests {
     }
 
     async fn drop_wals_table(client: &YsqlClient, table: &str) {
-        let q = quote_ident(table);
+        let q = quote_relation(table);
         let _ = client
             .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
             .await;
@@ -1950,7 +1976,7 @@ mod tests {
                     "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                    quote_ident(&table)
+                    quote_relation(&table)
                 ),
                 &[&tenant, &timeline, segno, offset, size, &blob, &now_us],
             )
@@ -2008,7 +2034,7 @@ mod tests {
                     "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                    quote_ident(&table)
+                    quote_relation(&table)
                 ),
                 &[&tenant, &timeline, segno, offset, size, &blob, &0i64],
             )
@@ -2032,7 +2058,7 @@ mod tests {
             .query_opt(
                 &format!(
                     "SELECT count(*) FROM {} WHERE tenant_id=$1 AND timeline_id=$2",
-                    quote_ident(&table)
+                    quote_relation(&table)
                 ),
                 &[&tenant, &timeline],
             )
@@ -2048,7 +2074,7 @@ mod tests {
                 &format!(
                     "SELECT chunk_size, octet_length(data) FROM {} \
                      WHERE tenant_id=$1 AND timeline_id=$2 AND chunk_offset=8192",
-                    quote_ident(&table)
+                    quote_relation(&table)
                 ),
                 &[&tenant, &timeline],
             )
@@ -2105,7 +2131,7 @@ mod tests {
                     "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                    quote_ident(&table)
+                    quote_relation(&table)
                 ),
                 &[
                     &tenant_s,

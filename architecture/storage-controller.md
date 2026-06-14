@@ -20,8 +20,8 @@ fresh-schema apply of the collapsed Diesel migration, not a
 
 A single collapsed migration (`storage_controller/migrations/00000000000001_initial_schema/up.sql`)
 creates the storage_controller tables below plus the pageserver, safekeeper,
-and public schemas (blobs / wals / blob_namespace, pageserver.pages /
-slru_pages / meta / timeline_state, safekeeper.timeline_state)
+and public schemas (blobs / blob_namespace, pageserver.pages /
+slru_pages / meta / timeline_state, safekeeper.timeline_state / wals)
 in the same `yb_storage` DB.
 
 | Table | What it tracks |
@@ -183,8 +183,9 @@ credentials and provisions the one DB yb-light needs:
   (`storage_controller/migrations/00000000000001_initial_schema/up.sql`)
   creates everything inside it: the `storage_controller.*` tables, the
   `pageserver.*` tables (pages, slru_pages, meta, tenant_config,
-  timeline_state), `safekeeper.timeline_state`, and the `public.*`
-  blob-store (`blob_namespace` ENUM + `blobs` + `wals`). See
+  timeline_state), the `safekeeper.*` tables (timeline_state + the
+  live-WAL `wals` mirror), and the `public.*` blob-store
+  (`blob_namespace` ENUM + `blobs`). See
   [`yugabyte.md`](yugabyte.md) for the blob/WAL schemas.
 
 The step is idempotent. A fresh YB cluster needs no operator DDL beyond

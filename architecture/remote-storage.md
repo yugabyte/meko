@@ -315,9 +315,9 @@ yb_storage_conn = {
 
 The safekeeper no longer takes `--remote-storage`. Its control file lives
 in typed columns in `safekeeper.timeline_state` (commit `840e56aae`) and
-its live-WAL mirror lives in `public.wals` (commit `7ffb8b4d6`). Both go
+its live-WAL mirror lives in `safekeeper.wals` (commit `7ffb8b4d6`). Both go
 through `YsqlClient` directly — the safekeeper consumes a `YbConnConfig`
-purely to address the YB cluster (the `public.wals` table is hardcoded),
+purely to address the YB cluster (the `safekeeper.wals` table is hardcoded),
 but its writes do **not** flow through the `RemoteStorage` trait. See
 [`safekeeper.md`](safekeeper.md).
 

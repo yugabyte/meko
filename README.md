@@ -116,7 +116,7 @@ flowchart LR
         direction LR
         tblPages[("pageserver.pages<br/>pageserver.slru_pages<br/>pageserver.meta")]
         tblConf[("pageserver.tenant_config<br/>pageserver.timeline_state")]
-        tblWal[("yb_storage.wals<br/>safekeeper WAL rows")]
+        tblWal[("safekeeper.wals<br/>safekeeper WAL rows")]
         tblBlob[("blobs<br/>basebackup tar, initdb")]
         tblSc[("storage_controller schema")]
     end
@@ -165,7 +165,7 @@ A ybLight install is:
 - **YugabyteDB cluster**: holds `pageserver.pages`, `pageserver.slru_pages`,
   `pageserver.meta`, `pageserver.tenant_config`,
   `pageserver.timeline_state`, the safekeeper WAL rows
-  (`yb_storage.wals`), the storage_controller schema, and the blob
+  (`safekeeper.wals`), the storage_controller schema, and the blob
   table. This is the durable storage tier.
 
 > **YB query contract**: every SQL statement issued through
@@ -422,7 +422,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   `offnum`, and flags a GAP when a delta's `offnum` exceeds the running
   max+1 — the signature of a chain walredo can't fold and of a base image
   too small for the deltas above it (see issue #22).
-- [`yb-dump-wals`](pageserver/src/bin/yb-dump-wals.rs) — dump `public.wals`
+- [`yb-dump-wals`](pageserver/src/bin/yb-dump-wals.rs) — dump `safekeeper.wals`
   rows (the safekeeper's WAL-in-YB chunks). Required hash columns:
   `--tenant --timeline`. Range filters: `--segno` (or
   `--segno-from/--segno-to`), `--chunk-offset` (or its `-from/-to`
@@ -435,7 +435,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   — find (and optionally rewind) `pageserver.timeline_state.consistent_lsn`
   to a real WAL record boundary. Given `--tenant --timeline --target-lsn
   X/Y` it anchors on a fresh-record WAL page, replays the real WAL decoder
-  over `public.wals`, and reports the largest record boundary `<= target`
+  over `safekeeper.wals`, and reports the largest record boundary `<= target`
   plus its matching `prev_record_lsn`. Defaults to a dry run; `--set`
   writes the pair back (`--expect-generation N` to generation-fence the
   write, `--null-prev` to let the walreceiver re-derive prev). Use it to

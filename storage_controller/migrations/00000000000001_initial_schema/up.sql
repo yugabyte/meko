@@ -122,10 +122,11 @@ CREATE TABLE storage_controller.endpoints (
 );
 
 -- =====================================================================
--- public.* — blob namespace + blobs/wals storage tables.
+-- public.* — blob namespace + blobs storage table.
 --
 -- Shared by pageserver and safekeeper. The `blob_namespace` ENUM
--- discriminates between which service a row belongs to.
+-- discriminates between which service a row belongs to. (Live WAL
+-- chunks live in `safekeeper.wals`, defined in the safekeeper section.)
 -- =====================================================================
 
 CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper');
@@ -143,22 +144,6 @@ CREATE TABLE public.blobs (
     last_modified_us BIGINT                NOT NULL,
     metadata_json    TEXT,
     PRIMARY KEY ((tenant_id, timeline_id, key) HASH, namespace, chunk_idx)
-);
-
-CREATE TABLE public.wals (
-    tenant_id        TEXT    NOT NULL,
-    timeline_id      TEXT    NOT NULL,
-    segno            BIGINT  NOT NULL,
-    chunk_offset     BIGINT  NOT NULL,
-    chunk_size       INT     NOT NULL,
-    data             BYTEA   NOT NULL,
-    last_modified_us BIGINT  NOT NULL,
-    -- PK is the chunk's natural identity within a segment. The
-    -- writer never produces overlapping chunks (truncate_wal aligns
-    -- the next write at exactly the truncation point), so the
-    -- chunk_offset alone uniquely identifies a chunk and a same-PK
-    -- INSERT is necessarily an idempotent retry of the same bytes.
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_offset)
 );
 
 -- =====================================================================
@@ -277,4 +262,24 @@ CREATE TABLE safekeeper.timeline_state (
     mconf                  JSONB       NOT NULL,
     creation_ts            TIMESTAMPTZ NOT NULL,
     PRIMARY KEY ((tenant_id, timeline_id) HASH)
+);
+
+-- Live WAL chunks the safekeeper mirrors into YB — the durable copy of
+-- the WAL stream (replaces upstream Neon's local-FS segment files).
+-- Hash-partitioned on `(tenant_id, timeline_id)` so a timeline's WAL
+-- lives on one tablet; `segno`/`chunk_offset` range within it.
+CREATE TABLE safekeeper.wals (
+    tenant_id        TEXT    NOT NULL,
+    timeline_id      TEXT    NOT NULL,
+    segno            BIGINT  NOT NULL,
+    chunk_offset     BIGINT  NOT NULL,
+    chunk_size       INT     NOT NULL,
+    data             BYTEA   NOT NULL,
+    last_modified_us BIGINT  NOT NULL,
+    -- PK is the chunk's natural identity within a segment. The
+    -- writer never produces overlapping chunks (truncate_wal aligns
+    -- the next write at exactly the truncation point), so the
+    -- chunk_offset alone uniquely identifies a chunk and a same-PK
+    -- INSERT is necessarily an idempotent retry of the same bytes.
+    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_offset)
 );

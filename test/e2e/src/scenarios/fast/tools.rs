@@ -34,7 +34,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     c.yb(&["endpoint", "start", ENDPOINT_ID])?;
 
     let compute = db::compute_conn(tools_port);
-    step("seed a table so pageserver.pages + public.wals have data");
+    step("seed a table so pageserver.pages + safekeeper.wals have data");
     db::batch(
         &compute,
         "DROP TABLE IF EXISTS tools_probe;\n\

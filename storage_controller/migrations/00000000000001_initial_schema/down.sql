@@ -2,6 +2,7 @@
 -- references unwind cleanly.
 
 -- safekeeper.* and its schema.
+DROP TABLE IF EXISTS safekeeper.wals;
 DROP TABLE IF EXISTS safekeeper.timeline_state;
 DROP SCHEMA IF EXISTS safekeeper;
 
@@ -13,8 +14,7 @@ DROP TABLE IF EXISTS pageserver.slru_pages;
 DROP TABLE IF EXISTS pageserver.pages;
 DROP SCHEMA IF EXISTS pageserver;
 
--- public.* blob/wal store.
-DROP TABLE IF EXISTS public.wals;
+-- public.* blob store.
 DROP TABLE IF EXISTS public.blobs;
 DROP TYPE IF EXISTS public.blob_namespace;
 

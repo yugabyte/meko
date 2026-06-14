@@ -80,7 +80,7 @@ pub struct SafeKeeperConf {
     pub availability_zone: Option<String>,
     pub heartbeat_timeout: Duration,
     /// Optional YB connection for mirroring live WAL writes. When `Some`,
-    /// every `write_wal` is INSERT'd into the (hardcoded) `public.wals`
+    /// every `write_wal` is INSERT'd into the (hardcoded) `safekeeper.wals`
     /// table in addition to being written to the local-FS shadow. When
     /// `None`, WAL only lives on local FS (default).
     pub yb_storage_conn: Option<ysql_client::YbConnConfig>,

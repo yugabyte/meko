@@ -131,7 +131,7 @@ impl<'de> serde::Deserialize<'de> for HostPorts {
 /// YB to talk to, as whom, over what TLS. It deliberately carries NO
 /// table/schema — each component hardcodes the table(s) it owns
 /// (pageserver → pageserver.pages/slru_pages/meta, safekeeper →
-/// public.wals, endpoint_storage → public.blobs).
+/// safekeeper.wals, endpoint_storage → public.blobs).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct YbConnConfig {
     /// YB tserver endpoints. Wire form is the CSV string
@@ -1198,7 +1198,7 @@ async fn set_fast_path_upsert_gucs(client: &tokio_postgres::Client) -> Result<()
     // investigate a 500-conn-workload WAL-durability incident: under
     // tablet rebalancing / RPC retries, batch INSERTs reported as
     // success appear to lose individual rows, leaving holes in
-    // `yb_storage.wals` that wedge pageserver restart. With the GUC
+    // `safekeeper.wals` that wedge pageserver restart. With the GUC
     // off, INSERTs go through the standard transactional path on
     // this connection — slower, atomic.
     // client

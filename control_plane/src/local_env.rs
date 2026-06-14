@@ -385,7 +385,7 @@ pub struct SafekeeperConf {
     pub backup_threads: Option<u32>,
     pub auth_enabled: bool,
     pub listen_addr: Option<String>,
-    /// If `Some`, mirrors every live WAL write into YugabyteDB's `public.wals`
+    /// If `Some`, mirrors every live WAL write into YugabyteDB's `safekeeper.wals`
     /// table (table hardcoded). Value is the shared `[*.yb]` connection block
     /// as a TOML inline string that the safekeeper accepts as
     /// `yb_storage_conn`. Single-safekeeper constraint applies (see

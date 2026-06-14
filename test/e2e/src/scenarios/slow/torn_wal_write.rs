@@ -2,7 +2,7 @@
 //! hammers a counter table with `INSERT id=i; COMMIT;` (so the durable
 //! survivors must be a contiguous prefix `1..k`), then SIGKILLs one or
 //! more components mid-flush — leaving WAL chunks queued in the producer
-//! channel / mid-batch, never landed in `public.wals`. The full crash
+//! channel / mid-batch, never landed in `safekeeper.wals`. The full crash
 //! matrix over {safekeeper (SK), pageserver (PS), compute}:
 //!
 //!   A. SK            B. compute        C. PS              (singles)

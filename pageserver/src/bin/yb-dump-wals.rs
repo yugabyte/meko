@@ -1,4 +1,4 @@
-//! Dump `public.wals` rows (the safekeeper's WAL-in-YB chunks) in a
+//! Dump `safekeeper.wals` rows (the safekeeper's WAL-in-YB chunks) in a
 //! human-readable form.
 //!
 //! Shares the connection flags (`--host/--port/--user/--db-name/
@@ -18,7 +18,7 @@ use utils::lsn::Lsn;
 use ysql_client::{YbConnArgs, YsqlClient};
 
 #[derive(Parser)]
-#[command(about = "Dump public.wals (safekeeper WAL-in-YB chunks)")]
+#[command(about = "Dump safekeeper.wals (safekeeper WAL-in-YB chunks)")]
 struct Args {
     /// Tenant id (32 hex chars).
     #[arg(long)]
@@ -124,7 +124,7 @@ async fn main() -> Result<()> {
                         max(chunk_offset + chunk_size)::text, {min_lsn}, {max_lsn}, \
                         sum(chunk_size)::text, \
                         (max(chunk_offset + chunk_size) - min(chunk_offset) - sum(chunk_size))::text \
-                 FROM public.wals {w} GROUP BY segno ORDER BY segno"
+                 FROM safekeeper.wals {w} GROUP BY segno ORDER BY segno"
             ),
             vec![
                 "segno", "chunks", "min_off", "max_end", "min_lsn", "max_lsn", "total_bytes",
@@ -152,13 +152,13 @@ async fn main() -> Result<()> {
             format!(
                 "SELECT segno::text, chunk_offset::text, chunk_size::text, {start_lsn}, \
                         to_char(to_timestamp(last_modified_us/1000000.0),'YYYY-MM-DD HH24:MI:SS'){data_cols} \
-                 FROM public.wals {w} ORDER BY segno ASC, chunk_offset ASC {lim}"
+                 FROM safekeeper.wals {w} ORDER BY segno ASC, chunk_offset ASC {lim}"
             ),
             h,
         )
     };
 
-    let rows = client.query(&sql, &[]).await.context("query public.wals")?;
+    let rows = client.query(&sql, &[]).await.context("query safekeeper.wals")?;
     print_table(&headers, &rows);
     Ok(())
 }

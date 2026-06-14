@@ -35,7 +35,7 @@ timeline (single-SK), keeping cardinality low.
 
 ## WAL cache / YB mirror (global)
 
-The WalCache fronts `yb_storage.wals`; misses fall through to YB. These are
+The WalCache fronts `safekeeper.wals`; misses fall through to YB. These are
 yb-light-specific.
 
 | Metric | Type | Labels | Meaning |
@@ -44,9 +44,9 @@ yb-light-specific.
 | `safekeeper_wal_cache_misses_total` | IntCounter | — | WalCache lookups that fell through to YB. |
 | `safekeeper_wal_cache_evictions_total` | IntCounter | — | Chunks evicted by the FIFO over-capacity policy. |
 | `safekeeper_wal_cache_bytes` | IntGauge | — | Current WalCache occupancy in bytes (sum across instances). |
-| `safekeeper_wal_cache_yb_fetch_seconds` | Histogram | — | Latency of `YbSegmentReader` fetches that fell through to `yb_storage.wals`. |
-| `safekeeper_wal_cache_yb_fetch_chunks` | Histogram | — | Chunks returned per `yb_storage.wals` fetch (>1 = range-fetch amortizing round trips). |
-| `safekeeper_wal_cache_yb_fetch_bytes` | Histogram | — | Bytes returned per `yb_storage.wals` fetch. |
+| `safekeeper_wal_cache_yb_fetch_seconds` | Histogram | — | Latency of `YbSegmentReader` fetches that fell through to `safekeeper.wals`. |
+| `safekeeper_wal_cache_yb_fetch_chunks` | Histogram | — | Chunks returned per `safekeeper.wals` fetch (>1 = range-fetch amortizing round trips). |
+| `safekeeper_wal_cache_yb_fetch_bytes` | Histogram | — | Bytes returned per `safekeeper.wals` fetch. |
 
 ## WAL senders / receivers / connections (global)
 

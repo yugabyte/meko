@@ -1,7 +1,7 @@
 //! WAL bookkeeping + reader.
 //!
 //! Historically this module wrote WAL to a local pg_wal-style directory.
-//! yb-light keeps WAL only in YB (`public.wals`); `PhysicalStorage` is
+//! yb-light keeps WAL only in YB (`safekeeper.wals`); `PhysicalStorage` is
 //! now a pure bookkeeping helper used by `YbWalStorage` to track LSN
 //! watermarks and feed the `WalStreamDecoder`. `WalReader` continues to
 //! serve WAL bytes to the WAL sender — locally from the in-memory
@@ -100,7 +100,7 @@ pub struct PhysicalStorage {
 
 impl PhysicalStorage {
     /// Build the bookkeeping helper. `write_lsn` is supplied by the caller
-    /// (`YbWalStorage` rehydrates it from `public.wals`); all watermarks
+    /// (`YbWalStorage` rehydrates it from `safekeeper.wals`); all watermarks
     /// start there.
     pub fn new(
         ttid: &TenantTimelineId,
@@ -174,7 +174,7 @@ impl Storage for PhysicalStorage {
     }
 
     /// Advance bookkeeping for `buf` bytes starting at `startpos`. Durability is
-    /// the caller's responsibility (`YbWalStorage` INSERTs into `public.wals`).
+    /// the caller's responsibility (`YbWalStorage` INSERTs into `safekeeper.wals`).
     async fn write_wal(&mut self, startpos: Lsn, buf: &[u8]) -> Result<()> {
         if self.write_lsn > startpos {
             bail!(
@@ -429,7 +429,7 @@ impl WalReader {
             }
         }
 
-        // Phase 2: try the live-WAL YB mirror (`yb_storage.wals`). When the
+        // Phase 2: try the live-WAL YB mirror (`safekeeper.wals`). When the
         // safekeeper writes WAL with `yb_storage_conn`, every byte is
         // synchronously INSERT'd into that table — so an absent local file is
         // not a data-loss event.
@@ -459,7 +459,7 @@ impl WalReader {
         }
 
         // yb-light's single-SK mode keeps every WAL byte in YB
-        // (yb_storage.wals) — the YB branch above is the only valid
+        // (safekeeper.wals) — the YB branch above is the only valid
         // path. The legacy S3 WAL-segment fallback was deleted along
         // with the S3 upload offloader; reaching here means the
         // requested LSN really is missing.

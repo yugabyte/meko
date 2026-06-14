@@ -61,7 +61,8 @@ const STORAGE_CONTROLLER_POSTGRES_VERSION: PgMajorVersion = PgMajorVersion::PG17
 // safekeeper for wals) share `yb_storage` on the YB cluster by default.
 // The controller's tables live in a dedicated `storage_controller` schema
 // inside this DB (see `storage_controller::persistence::SC_SCHEMA`); blobs
-// and wals are top-level tables in the same DB.
+// sit in `public`, and the safekeeper's wals in its `safekeeper` schema —
+// all in the same DB.
 const DB_NAME: &str = "yb_storage";
 
 pub struct YbLightStorageControllerStartArgs {

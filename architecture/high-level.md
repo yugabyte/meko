@@ -22,7 +22,7 @@ Compute (PG backend)
   |  WAL record buffer-flushed by walwriter / commit
   v
 walproposer  ────────────►  single Safekeeper
-                              |  write_wal()  →  INSERT into yb_storage.wals
+                              |  write_wal()  →  INSERT into safekeeper.wals
                               |                  (synchronous, one row per call)
                               |  flush_wal()  → mark flush_lsn (YB is durable)
                               v
@@ -79,7 +79,7 @@ key the pageserver/safekeeper use. In YB the path is split across the
 | Pageserver `initdb.tar.zst` | YB `yb_storage.blobs` | `pageserver-yb/tenants/<id>/timelines/<id>/initdb.tar.zst` |
 | Pageserver tenant manifest | YB `yb_storage.blobs` | `pageserver-yb/tenants/<id>/tenant-manifest-<gen>.json` |
 | Safekeeper control file | YB `safekeeper.timeline_state` schema | one row per timeline, typed columns |
-| Safekeeper live WAL | YB `yb_storage.wals` | `((tenant_id, timeline_id) HASH, segno, chunk_offset)` |
+| Safekeeper live WAL | YB `safekeeper.wals` | `((tenant_id, timeline_id) HASH, segno, chunk_offset)` |
 | Storage controller relational state | YB `yb_storage` DB, `storage_controller` schema | 8 Diesel-managed tables (alongside pageserver/safekeeper/public schemas) |
 | Compute endpoint registry | YB `yb_storage` DB, `storage_controller.endpoints` | one row per endpoint: endpoint_id, tenant_id, timeline_id + opaque `EndpointConf` JSON (`spec`). Replaces the old per-endpoint `endpoint.json` folder |
 | Pageserver local FS | local FS | `.yb_light/endpoints/<endpoint>/pageserver/` — `pageserver.toml`, `identity.toml`, `metadata.json`, log + pidfile (no layer files; pages live in YB) |
@@ -131,16 +131,16 @@ yugabyted                       :7100 (master), :5433 (ysql)
         +-- schema `public`
         |     +-- type `blob_namespace` ENUM ('pageserver', 'safekeeper')
         |     +-- table `blobs`        chunked BYTEA + denormalized metadata,
-        |     |                        PK ((tenant_id, timeline_id, key) HASH,
-        |     |                            namespace, chunk_idx)
-        |     |                        key column holds the bare filename — tenants/
-        |     |                        and timelines/ literals + the UUID values are
-        |     |                        not stored, they live in their own columns
-        |     +-- table `wals`         per-write rows,
-        |                              PK ((tenant_id, timeline_id) HASH, segno, chunk_offset)
+        |                              PK ((tenant_id, timeline_id, key) HASH,
+        |                                  namespace, chunk_idx)
+        |                              key column holds the bare filename — tenants/
+        |                              and timelines/ literals + the UUID values are
+        |                              not stored, they live in their own columns
         +-- schema `storage_controller`  Diesel-managed; 7 tables
         +-- schema `pageserver`
-        +-- schema `safekeeper`          incl. `timeline_state` (typed control-file rows)
+        +-- schema `safekeeper`          `timeline_state` (typed control-file rows)
+                                         + `wals` (per-write WAL chunks,
+                                         PK ((tenant_id, timeline_id) HASH, segno, chunk_offset))
 
 yb-light binaries (target/debug/)
   storage_controller --yb-config "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage' }" --listen 127.0.0.1:<port>

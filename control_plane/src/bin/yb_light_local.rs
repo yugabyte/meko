@@ -1057,7 +1057,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                 id: DEFAULT_SAFEKEEPER_ID,
                 pg_port: sk_pg_port,
                 http_port: sk_http_port,
-                // Mirror live WAL into <db>.public.wals.
+                // Mirror live WAL into <db>.safekeeper.wals.
                 yb_storage_conn: Some(yb_conn.to_inline_toml()),
                 ..Default::default()
             }],

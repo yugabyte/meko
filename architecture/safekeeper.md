@@ -47,7 +47,7 @@ acceptor:
 
 In yb-light both are replaced — see "Changes in yb-light" §1
 (control file → typed columns in `safekeeper.timeline_state`) and §2
-(WAL chunks mirrored row-by-row into `public.wals`). The local FS holds
+(WAL chunks mirrored row-by-row into `safekeeper.wals`). The local FS holds
 nothing per-timeline.
 
 ### Background tasks
@@ -55,7 +55,7 @@ nothing per-timeline.
 Upstream Neon also ran `wal_backup` (sealed-segment S3 offload via
 `GenericRemoteStorage`) and `wal_backup_partial` (in-flight last-segment
 upload). Both modules are deleted in yb-light — durability is the
-`yb_storage.wals` mirror, not S3 — see "Changes in yb-light" §8 below.
+`safekeeper.wals` mirror, not S3 — see "Changes in yb-light" §8 below.
 
 Surviving background work:
 - Periodic control-file flush every `control_file_save_interval`
@@ -65,7 +65,7 @@ Surviving background work:
 
 - `safekeeper/src/control_file.rs` — control-file `Storage` trait + impls.
 - `safekeeper/src/wal_storage.rs` — WAL `Storage` trait + `PhysicalStorage` impl + `WalReader`.
-- `safekeeper/src/yb_wal_storage.rs` — YB mirror (`yb_storage.wals`),
+- `safekeeper/src/yb_wal_storage.rs` — YB mirror (`safekeeper.wals`),
   producer/consumer writer, `load_write_lsn` restart rehydrate.
 - `safekeeper/src/timeline.rs` — `SharedState`, `Timeline::load_timeline`.
 - `safekeeper/src/timelines_global_map.rs` — `GlobalTimelines`. One process
@@ -129,14 +129,14 @@ New `yb_wal_storage.rs` module with `YbWalStorage` (a wrapper) and a
 ```
 +- enum WalStore
    +- Physical(PhysicalStorage)  <-- unchanged path; no YB
-   +- Yb(YbWalStorage)           <-- writes every WAL chunk into yb_storage.wals
+   +- Yb(YbWalStorage)           <-- writes every WAL chunk into safekeeper.wals
                                      inside a wrapped PhysicalStorage
 ```
 
 Schema (operator-provisioned in `yb_storage` DB):
 
 ```sql
-CREATE TABLE wals (
+CREATE TABLE safekeeper.wals (
     tenant_id        TEXT    NOT NULL,
     timeline_id      TEXT    NOT NULL,
     segno            BIGINT  NOT NULL,
@@ -179,7 +179,7 @@ return                              │
                                 │    — see "force drain" below
                                 │
                                 │    build one
-                                │    INSERT INTO wals
+                                │    INSERT INTO safekeeper.wals
                                 │      VALUES (...), (...), ...   ───►
                                 │                                       │
                                 │    watch_tx.send(DurableState::         │ atomic
@@ -256,7 +256,7 @@ after the snapshot were invisible, so the leading zeros from
 `vec![0u8; 16 MiB]` were served instead. On the pageserver side this
 decoded as `xlp_magic=0` / `xl_tot_len=0`, hundreds of KB into each
 session. (Found by query (C) of `cell_db<table>` during the TPC-C run:
-the bytes were correct *in* `yb_storage.wals` but stale *in the
+the bytes were correct *in* `safekeeper.wals` but stale *in the
 in-memory segment buffer*.)
 
 Replaced with two pieces, both in `safekeeper/src/yb_wal_storage.rs` +
@@ -290,7 +290,7 @@ Replaced with two pieces, both in `safekeeper/src/yb_wal_storage.rs` +
    3. Otherwise spawn a YB fetch task and `tokio::sync::oneshot`-await
       it. The fetch issues:
       ```sql
-      SELECT chunk_offset, chunk_size, data FROM wals
+      SELECT chunk_offset, chunk_size, data FROM safekeeper.wals
       WHERE tenant_id=$1 AND timeline_id=$2 AND segno=$3
         AND chunk_offset <= $4 AND chunk_offset + chunk_size > $4
       ORDER BY chunk_seq DESC LIMIT 1
@@ -331,7 +331,7 @@ A new constructor, `PhysicalStorage::new_no_local_writes`, skips
 `write_lsn` from YB:
 
 ```sql
-SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM wals
+SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM safekeeper.wals
 WHERE tenant_id = $1 AND timeline_id = $2
 GROUP BY segno ORDER BY segno DESC LIMIT 1;
 ```
@@ -425,7 +425,7 @@ Result: flushes are driven by the 2 ms ticker, so multiple
 
 ### 8. `wal_backup*` and `backup_lsn` removed (commits `1a32d69b4`, `a8fe507cb`)
 
-Durability in yb-light is the `yb_storage.wals` mirror written
+Durability in yb-light is the `safekeeper.wals` mirror written
 synchronously by `flush_wal()` — there is no S3 offload tier.
 Consequently:
 
@@ -533,9 +533,9 @@ yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 
 
 `yb_storage_conn` is the single YB connection (a string-encoded inline table,
 like `pageserver.toml`'s `yb_storage_conn`) used for both the
-`safekeeper.timeline_state` row (control file) and the `public.wals` chunk
+`safekeeper.timeline_state` row (control file) and the `safekeeper.wals` chunk
 stream — same DB, two tables. The WAL chunk table is hardcoded to
-`public.wals` (not configurable); `safekeeper.timeline_state` is reached
+`safekeeper.wals` (not configurable); `safekeeper.timeline_state` is reached
 via the same `YsqlClient`.
 
 `tenant_id`/`timeline_id` bake this process's single timeline identity

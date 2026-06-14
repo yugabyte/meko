@@ -17,7 +17,7 @@ the replication link (what LSN the pageserver sends in
 1. **Timeline control state** — consensus metadata + truncation horizon
    (`safekeeper.timeline_state` in YB).
 2. **WAL storage watermarks** — in-memory bookkeeping + YB mirror
-   (`public.wals` chunks).
+   (`safekeeper.wals` chunks).
 3. **Streaming protocol** — walsender positions, interpreted-WAL batch
    bounds, standby feedback.
 4. **Ephemeral / derived** — term switches, GC horizon, broker activity.
@@ -25,7 +25,7 @@ the replication link (what LSN the pageserver sends in
 ```mermaid
 flowchart LR
     COMP[Compute / walproposer] -->|AppendRequest + flush| SK_ING[SafeKeeper ingest]
-    SK_ING -->|write_wal| YB_WAL[(public.wals)]
+    SK_ING -->|write_wal| YB_WAL[(safekeeper.wals)]
     SK_ING -->|flush_wal| FL[flush_lsn]
     FL -->|yb-mode: ≡ commit_lsn| COMM[commit_lsn watch]
     PS[Pageserver] -->|START_REPLICATION start_pos| WS[walsender]
@@ -116,7 +116,7 @@ max(self.wal_store.flush_lsn(), self.state.timeline_start_lsn)
 
 Avoids reporting zero before timeline is initialized.
 
-### YB mirror (`public.wals`)
+### YB mirror (`safekeeper.wals`)
 
 Each `write_wal()` chunk gets an `end_lsn`. Durability sync point is
 `flush_wal()` — waits for the background consumer's watermark to catch
@@ -229,7 +229,7 @@ horizon_lsn = min(
 ```
 
 Segments with `segno < horizon.segment_number() - 1` are deleted from
-**both** local bookkeeping and `public.wals` (`YbWalStorage::remove_up_to`).
+**both** local bookkeeping and `safekeeper.wals` (`YbWalStorage::remove_up_to`).
 
 **Critical:** `remote_consistent_lsn` in the horizon uses the
 **persisted** control-file value (`cfile_remote_consistent_lsn`), not
@@ -314,7 +314,7 @@ interval), SK retains extra WAL — safe, not data loss.
 
 ## Persistence cheat sheet
 
-| Field | YB `safekeeper.timeline_state` | YB `public.wals` | In memory only |
+| Field | YB `safekeeper.timeline_state` | YB `safekeeper.wals` | In memory only |
 |-------|-------------------------------|------------------|----------------|
 | `timeline_start_lsn` | Yes | — | — |
 | `local_start_lsn` | Yes | — | — |

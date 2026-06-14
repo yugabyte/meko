@@ -10,9 +10,9 @@ All three subsystems share **one** database, `yb_storage`. Within it:
 
 | Schema | Tables | Owner | Provisioned by |
 |---|---|---|---|
-| `public` | `blobs`, `wals`, `blob_namespace` ENUM | yugabyte | controller migrations |
+| `public` | `blobs`, `blob_namespace` ENUM | yugabyte | controller migrations |
 | `pageserver` | `pages`, `slru_pages`, `meta`, `timeline_state` | yugabyte | controller migrations |
-| `safekeeper` | `timeline_state` | yugabyte | controller migrations |
+| `safekeeper` | `timeline_state`, `wals` | yugabyte | controller migrations |
 | `storage_controller` | 7 Diesel-managed tables (`tenants`, `nodes`, `safekeepers`, `metadata_health`, `controllers`, `timelines`, `timeline_imports`) | yugabyte | controller migrations |
 
 `yb_light_local` only `CREATE DATABASE`s `yb_storage`
@@ -53,7 +53,7 @@ Generic chunked blob store used by:
 
 The safekeeper has no consumer of `blobs` today — control-file state
 moved to `safekeeper.timeline_state` (one row per timeline) and live
-WAL goes to `public.wals`. Subsystems are segregated by the **`namespace`
+WAL goes to `safekeeper.wals`. Subsystems are segregated by the **`namespace`
 column** (derived from the blob's key/path), not by separate tables.
 
 ```sql
@@ -107,7 +107,7 @@ A row in this schema looks like:
 
 The `safekeeper` ENUM variant is reserved but currently unused —
 safekeeper state lives in `safekeeper.timeline_state` and live WAL in
-`public.wals`.
+`safekeeper.wals`.
 
 The PK puts `(tenant_id, timeline_id, key)` in the hash partition so
 every key has its own hash tablet (no hot tablet on big tenants).
@@ -159,7 +159,7 @@ ORDER BY max(size_bytes) DESC
 LIMIT 10;
 ```
 
-## `yb_storage.wals`
+## `safekeeper.wals`
 
 Per-write log used by the safekeeper's live-WAL mirror (when
 `yb_storage_conn` is configured). Schema is *different* from `blobs` — keyed by
@@ -170,7 +170,7 @@ point), so `chunk_offset` alone identifies a chunk within a segment
 and a same-PK INSERT is an idempotent retry of the same bytes.
 
 ```sql
-CREATE TABLE public.wals (
+CREATE TABLE safekeeper.wals (
     tenant_id        TEXT    NOT NULL,
     timeline_id      TEXT    NOT NULL,
     segno            BIGINT  NOT NULL,
@@ -191,7 +191,7 @@ Schema documented in detail in [`safekeeper.md`](safekeeper.md).
 SELECT segno, count(*) AS chunks,
        max(chunk_offset + chunk_size) AS end_offset,
        pg_size_pretty(sum(chunk_size)::bigint) AS bytes
-FROM wals
+FROM safekeeper.wals
 WHERE tenant_id = '...' AND timeline_id = '...'
 GROUP BY segno
 ORDER BY segno;
@@ -202,7 +202,7 @@ ORDER BY segno;
 Holds the page store that replaces the upstream layer-file machinery
 with row-per-version storage; see
 [`yb-pageserver.md`](yb-pageserver.md) for the design. Provisioned
-alongside `public.blobs` / `public.wals` by `yb_light_local` on first
+alongside `public.blobs` / `safekeeper.wals` by `yb_light_local` on first
 start.
 
 ### `pageserver.pages`
@@ -435,12 +435,12 @@ by hand.
 |---|---|---|
 | `public` | `blob_namespace` ENUM | `pageserver` / `safekeeper` discriminator on `blobs`. |
 | `public` | `blobs` | Chunked blob store (pageserver yb_storage_conn). |
-| `public` | `wals` | Live-WAL chunks; PK `((tenant, timeline) HASH, segno, chunk_offset)`. |
 | `pageserver` | `pages` | Relation pages, one row per (block, LSN); PK `((tenant, timeline, spc, db, rel, fork) HASH, blknum, lsn DESC, is_image)`. |
 | `pageserver` | `slru_pages` | SLRU blocks (pg_xact, pg_multixact_*); same shape as `pages`, keyed by `(kind, segno)`. |
 | `pageserver` | `meta` | Metadata blobs (relsize sentinels, dir listings, aux, two-phase, repl origins); full-overwrite semantics. |
 | `pageserver` | `timeline_state` | Per-timeline state (replaces `metadata` + `index_part.json` + `tenant-manifest.json`); generation-fenced via `current_generation`. |
 | `safekeeper` | `timeline_state` | Per-timeline safekeeper control file (replaces upstream's local-FS `safekeeper.control` blob). |
+| `safekeeper` | `wals` | Live-WAL chunks; PK `((tenant, timeline) HASH, segno, chunk_offset)`. |
 | `storage_controller` | 7 tables | `tenants`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `timeline_imports`, `endpoints`. |
 
 See `up.sql` for the exact column lists, PK ordering, and FK
