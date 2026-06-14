@@ -86,6 +86,15 @@ struct Cli {
     #[arg(long)]
     database_url: Option<String>,
 
+    /// Structured YugabyteDB connection config as a TOML inline table —
+    /// identical to the `[*.yb]` block the pageserver / safekeeper /
+    /// endpoint_storage consume (`host_ports`, `user`, `dbname`,
+    /// `sslmode?`, `password_env?`). An alternative to `--database-url`:
+    /// when set, the diesel connection URL is built from it internally.
+    /// Takes precedence over `--database-url` / `DATABASE_URL`.
+    #[arg(long, value_parser = parse_yb_conn_config)]
+    yb_config: Option<ysql_client::YbConnConfig>,
+
     /// Flag to enable dev mode, which permits running without auth
     #[arg(long, default_value = "false")]
     dev: bool,
@@ -143,6 +152,12 @@ struct Cli {
     timeline_safekeeper_count: usize,
 }
 
+/// Parse the `--yb-config` value: a TOML inline table holding the shared
+/// [`ysql_client::YbConnConfig`] fields.
+fn parse_yb_conn_config(s: &str) -> anyhow::Result<ysql_client::YbConnConfig> {
+    Ok(utils::toml_edit_ext::deserialize_item(&s.parse()?)?)
+}
+
 enum StrictMode {
     /// In strict mode, we will require that all secrets are loaded, i.e. security features
     /// may not be implicitly turned off by omitting secrets in the environment.
@@ -180,10 +195,17 @@ impl Secrets {
     /// - CLI args if database URL is provided on the CLI
     /// - Environment variables if DATABASE_URL is set.
     async fn load(args: &Cli) -> anyhow::Result<Self> {
-        let Some(database_url) = Self::load_secret(&args.database_url, Self::DATABASE_URL_ENV)
-        else {
+        // The structured `--yb-config` block (when given) is the source of
+        // truth and is converted to a diesel URL here; otherwise fall back
+        // to a raw `--database-url` / `DATABASE_URL`.
+        let database_url = if let Some(yb) = &args.yb_config {
+            yb.to_database_url()
+                .context("building database URL from --yb-config")?
+        } else if let Some(url) = Self::load_secret(&args.database_url, Self::DATABASE_URL_ENV) {
+            url
+        } else {
             anyhow::bail!(
-                "Database URL is not set (set `--database-url`, or `DATABASE_URL` environment)"
+                "Database connection is not set (set `--yb-config`, `--database-url`, or `DATABASE_URL` environment)"
             )
         };
 

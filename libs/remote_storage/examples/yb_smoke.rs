@@ -1,55 +1,46 @@
 //! Smoke test for `YbStore`. Run with:
 //!
 //!   cargo run -p remote_storage --example yb_smoke -- \
-//!       --host 127.0.0.1 --port 5433 --user yugabyte \
-//!       --dbname neon_storage --table pageserver_objects
+//!       --host-ports 127.0.0.1:5433 --user yugabyte --dbname neon_storage
 //!
 //! Exercises upload -> head -> download -> list -> copy -> delete against a
-//! live YB/Postgres instance. Exits 0 on success, 1 on failure.
+//! live YB/Postgres instance. Writes to the hardcoded `blobs` table. Exits 0
+//! on success, 1 on failure.
 
-use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use bytes::Bytes;
 use remote_storage::{
     DownloadOpts, GenericRemoteStorage, ListingMode, RemotePath, RemoteStorageConfig,
-    RemoteStorageKind, YbStoreConfig,
+    RemoteStorageKind, YbConnConfig,
 };
 use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
-    let mut host = "127.0.0.1".to_string();
-    let mut port: u16 = 5433;
+    let mut host_ports = "127.0.0.1:5433".to_string();
     let mut user = "yugabyte".to_string();
     let mut dbname = "neon_storage".to_string();
-    let mut table = "pageserver_objects".to_string();
-    let mut prefix: Option<String> = Some(format!("smoke-{}/", uuid::Uuid::new_v4()));
+    let mut sslmode: Option<String> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--host" => host = args.next().unwrap(),
-            "--port" => port = args.next().unwrap().parse().unwrap(),
+            "--host-ports" => host_ports = args.next().unwrap(),
             "--user" => user = args.next().unwrap(),
             "--dbname" => dbname = args.next().unwrap(),
-            "--table" => table = args.next().unwrap(),
-            "--prefix" => prefix = Some(args.next().unwrap()),
+            "--sslmode" => sslmode = Some(args.next().unwrap()),
             other => anyhow::bail!("unknown arg: {other}"),
         }
     }
 
     let config = RemoteStorageConfig {
-        storage: RemoteStorageKind::YbStore(YbStoreConfig {
-            host,
-            port,
+        storage: RemoteStorageKind::YbStore(YbConnConfig {
+            host_ports: host_ports.parse()?,
             user,
             password_env: None,
             dbname,
-            table_name: table,
-            prefix,
-            concurrency_limit: NonZeroUsize::new(16).unwrap(),
-            sslmode: None,
+            sslmode,
             sslrootcert: None,
         }),
         timeout: Duration::from_secs(60),

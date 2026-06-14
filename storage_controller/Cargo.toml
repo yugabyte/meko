@@ -71,6 +71,7 @@ scoped-futures = "0.1.4"
 
 http-utils = { path = "../libs/http-utils/" }
 utils = { path = "../libs/utils/" }
+ysql_client = { path = "../libs/ysql_client" }
 metrics = { path = "../libs/metrics/" }
 control_plane = { path = "../control_plane" }
 workspace_hack = { version = "0.1", path = "../workspace_hack" }

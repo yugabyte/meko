@@ -215,7 +215,8 @@ return                              │
   next `tx.send` then fails, `write_wal` propagates the captured error,
   the walproposer reconnects.
 
-CLI: `--wal-yb-config <YbStoreConfig TOML>` (optional). When absent, the
+CLI: `--wal-yb-config <YbConnConfig TOML>` (optional, the shared YB
+connection block). When absent, the
 safekeeper uses `WalStore::Physical(...)` and the wals table is untouched.
 
 ### 3. WalReader falls back to YB (Phase 2, commit `77553419b`, lazy/cached in `d7eef8275`+)
@@ -428,14 +429,14 @@ Plus `current()` exposes the live `Arc<Client>` for streaming reads /
 `execute_raw` / `query_raw` paths that don't auto-retry cleanly; the
 next `current()` call after a failed stream picks up a fresh connection.
 
-`YsqlClient::from_yb_config(&YbStoreConfig, application_name)` is the
+`YsqlClient::from_yb_config(&YbConnConfig, application_name, ...)` is the
 shared factory used by `YbStore::new`, `WalBackup::new` (the live-WAL
 mirror), and any other YB-Postgres connection in yb-light. It handles
 `password_env` lookup and the sslmode / sslrootcert dispatch.
 
 ### 10. TLS support (commit `7a424639e`)
 
-`YbStoreConfig` carries an optional `sslmode` field (`"disable"` /
+`YbConnConfig` carries an optional `sslmode` field (`"disable"` /
 `"require"` / `"verify-ca"` / etc.) and `sslrootcert` (path to a PEM-
 encoded CA bundle). The safekeeper's WAL-mirror connection honours
 both via the shared `YsqlClient::from_yb_config` factory:
@@ -476,13 +477,14 @@ safekeeper \
     --listen-pg 127.0.0.1:5474 \
     --listen-http 127.0.0.1:7686 \
     --availability-zone sk-1 \
-    --wal-yb-config    "{host = '127.0.0.1', port = 5433, user = 'yugabyte', dbname = 'yb_storage', table_name = 'wals', sslmode = 'require'}"
+    --wal-yb-config    "{host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage', sslmode = 'require'}"
 ```
 
 `--wal-yb-config` is the single YB connection used for both the
 `safekeeper.timeline_state` row (control file) and the `public.wals` chunk
-stream — same DB, two tables. `table_name` names the WAL chunk table;
-`safekeeper.timeline_state` is reached via the same `YsqlClient`.
+stream — same DB, two tables. The WAL chunk table is hardcoded to
+`public.wals` (not configurable); `safekeeper.timeline_state` is reached
+via the same `YsqlClient`.
 
 `sslmode = "require"` is needed against YBA-managed universes (they
 default to TLS-mandatory `hostssl` rules). Add

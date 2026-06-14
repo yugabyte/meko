@@ -107,6 +107,11 @@ use crate::wal_storage::{PhysicalStorage, Storage};
 // reconnect / retry-once semantics.
 pub use ysql_client::YsqlClient;
 
+/// The single YB table the safekeeper mirrors WAL into. Hardcoded —
+/// the connection config carries only host/port/credentials, never a
+/// table name.
+const WALS_TABLE: &str = "wals";
+
 /// Handles to the YB connections that mirror live WAL into
 /// `yb_storage.wals`. Constructed at safekeeper boot via
 /// [`YbWalConn::from_conf`] and shared across timelines via
@@ -149,9 +154,9 @@ pub struct YbWalConn {
     /// `delete` DELETE, `list_all_ttids` SELECT). The non-idempotent
     /// `create_new` INSERT runs on the FPU lane.
     pub system_client: Arc<YsqlClient>,
-    /// Name of the YB table that backs the WAL mirror
-    /// (`public.wals` by default, configurable via `--wal-yb-config
-    /// table_name='...'`).
+    /// Name of the YB table that backs the WAL mirror. Always
+    /// [`WALS_TABLE`] (`public.wals`); the field stays so the SQL
+    /// builders below can interpolate it.
     pub table: String,
     /// In-memory cache of recent WAL chunks, shared between the
     /// writer ([`YbWalStorage::upsert_writes`]) and the reader
@@ -170,8 +175,7 @@ impl YbWalConn {
         let Some(yb) = conf.wal_yb_config.as_ref() else {
             return Ok(None);
         };
-        let cfg = yb.conn_config();
-        let endpoint = format!("{}:{} (sslmode={:?})", yb.host, yb.port, yb.sslmode);
+        let endpoint = format!("{} (sslmode={:?})", yb.host_ports, yb.sslmode);
         // Three independent connections, each with a distinct
         // application_name so they're attributable in YB's
         // pg_stat_activity. The FPU lane is the only one with
@@ -196,17 +200,17 @@ impl YbWalConn {
         //   (`remove_up_to`), and idempotent control-file ops
         //   (`restore_new` SELECT, `persist` UPDATE, `delete` DELETE).
         let fpu_client = Arc::new(
-            ysql_client::YsqlClient::from_yb_config(&cfg, "safekeeper:yb_wal_fpu", true)
+            ysql_client::YsqlClient::from_yb_config(yb, "safekeeper:yb_wal_fpu", true)
                 .await
                 .with_context(|| format!("connect WAL FPU lane at {endpoint}"))?,
         );
         let read_client = Arc::new(
-            ysql_client::YsqlClient::from_yb_config(&cfg, "safekeeper:yb_wal_reads", false)
+            ysql_client::YsqlClient::from_yb_config(yb, "safekeeper:yb_wal_reads", false)
                 .await
                 .with_context(|| format!("connect WAL read lane at {endpoint}"))?,
         );
         let system_client = Arc::new(
-            ysql_client::YsqlClient::from_yb_config(&cfg, "safekeeper:yb_wal_system", false)
+            ysql_client::YsqlClient::from_yb_config(yb, "safekeeper:yb_wal_system", false)
                 .await
                 .with_context(|| format!("connect WAL system lane at {endpoint}"))?,
         );
@@ -221,7 +225,7 @@ impl YbWalConn {
             fpu_client,
             read_client,
             system_client,
-            table: yb.table_name.clone(),
+            table: WALS_TABLE.to_string(),
             cache,
         })))
     }

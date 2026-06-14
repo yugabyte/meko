@@ -44,7 +44,7 @@ pub enum GenericRemoteStorage<Other: Clone = Arc<UnreliableWrapper>> {
 Construction goes through `GenericRemoteStorage::from_config(&RemoteStorageConfig)`
 which deserializes a TOML and picks the variant. `RemoteStorageKind` is
 now effectively a unit choice — its only non-test variant is
-`YbStore(YbStoreConfig)` (`config.rs:74-77`).
+`YbStore(ysql_client::YbConnConfig)` (`config.rs:74-77`).
 
 ## YbStore: design (new in yb-light)
 
@@ -86,21 +86,24 @@ its own column rather than appended to `key` so that:
 `YbStore::parse_key` splits each incoming `RemotePath` into the four
 storage columns + the chunk index:
 
-- **`namespace`**: derived from `YbStoreConfig::prefix`. If the prefix
-  contains `safekeeper` → `safekeeper`; everything else → `pageserver`.
-  Must match one of the variants of the `blob_namespace` ENUM. Stored
+- **`namespace`**: derived from the blob's key/path (pageserver vs
+  safekeeper), not from any config field — the shared connection block
+  carries no prefix. Must match one of the variants of the
+  `blob_namespace` ENUM. Stored
   via a `text::blob_namespace` cast in SQL (tokio_postgres can't bind
   Rust `&str` directly to a custom ENUM type, so the cast happens
   server-side).
 - **`tenant_id`** / **`timeline_id`**: first two Neon-id-shaped tokens
-  in the path *after* stripping the configured prefix. A Neon id is
+  in the path *after* stripping the leading path prefix (e.g.
+  `pageserver-yb/`; it is part of the `RemotePath`, not a config field).
+  A Neon id is
   32 hex characters, optionally followed by `-<count>-<num>` for
   sharded tenants. The extractor is heuristic but covers every key the
   pageserver and safekeeper write. Empty strings when a level is absent
   (tenant manifests have no `timeline_id`; future generic blobs may
   have neither).
 - **`key`**: the **discriminating filename only**. `parse_key` strips
-  the configured prefix *plus* the literal segments `tenants` and
+  the leading path prefix *plus* the literal segments `tenants` and
   `timelines`, *plus* the tenant_id and timeline_id values themselves.
   Then `split_key_generation` strips the trailing or pre-extension
   `-<8hex>` generation marker into the separate `generation` column —
@@ -214,26 +217,28 @@ These match the posture of `LocalFs`.
 
 ## Config
 
-The `YbStoreConfig` struct (`libs/remote_storage/src/config.rs`):
+The shared `YbConnConfig` struct (`libs/ysql_client/src/lib.rs`,
+re-exported as `remote_storage::YbConnConfig`):
 
 ```rust
-pub struct YbStoreConfig {
-    pub host: String,
-    pub port: u16,                       // default 5433
-    pub user: String,
-    pub password_env: Option<String>,    // optional env-var name
-    pub dbname: String,
-    pub table_name: String,
-    pub prefix: Option<String>,          // namespacing prefix
-    pub concurrency_limit: NonZeroUsize, // default 100
-    pub sslmode: Option<String>,         // "disable" (default) | "require" | "verify-ca" | ...
+pub struct YbConnConfig {
+    pub host_ports: HostPorts,           // CSV "host:port[,host:port,...]"; default port 5433
+    pub user: String,                    // default "yugabyte"
+    pub dbname: String,                  // default "yb_storage"
+    pub password_env: Option<String>,    // name of env var holding the password
+    pub sslmode: Option<String>,         // None / "disable" => NoTls, else rustls
     pub sslrootcert: Option<String>,     // path to PEM CA bundle (sslmode = verify-ca)
 }
 ```
 
-Selected via the existing `RemoteStorageKind` enum (untagged TOML), which
-picks `YbStore` automatically when the TOML has `host`/`user`/`dbname`/
-`table_name` keys (they don't clash with the other variants' field sets).
+This is the single connection block shared by all four storage
+components (pageserver `remote_storage`, safekeeper `--wal-yb-config`,
+endpoint_storage, storage_controller `--yb-config`). It carries no
+`table_name` (each component hardcodes its own table) and no `prefix` or
+`concurrency_limit`. Selected via the existing `RemoteStorageKind` enum
+(untagged TOML), which picks `YbStore` automatically from the
+`host_ports`/`user`/`dbname` keys (they don't clash with the other
+variants' field sets).
 
 ### Connection handling — `YsqlClient`
 
@@ -302,26 +307,24 @@ For the pageserver:
 
 ```toml
 remote_storage = {
-    host = "127.0.0.1",
-    port = 5433,
+    host_ports = "127.0.0.1:5433",
     user = "yugabyte",
-    dbname = "yb_storage",
-    table_name = "blobs",
-    prefix = "pageserver-yb/"
+    dbname = "yb_storage"
 }
 ```
 
 The safekeeper no longer takes `--remote-storage`. Its control file lives
 in typed columns in `safekeeper.timeline_state` (commit `840e56aae`) and
 its live-WAL mirror lives in `public.wals` (commit `7ffb8b4d6`). Both go
-through `YsqlClient` directly — the safekeeper consumes a `YbStoreConfig`
-purely to address the YB cluster + `wals` table, but its writes do **not**
-flow through the `RemoteStorage` trait. See [`safekeeper.md`](safekeeper.md).
+through `YsqlClient` directly — the safekeeper consumes a `YbConnConfig`
+purely to address the YB cluster (the `public.wals` table is hardcoded),
+but its writes do **not** flow through the `RemoteStorage` trait. See
+[`safekeeper.md`](safekeeper.md).
 
 With TLS against a YBA-managed universe:
 
 ```toml
-{host = 'yb-host', port = 5433, user = 'yugabyte', password_env = 'YB_STORAGE_PASSWORD', dbname = 'yb_storage', table_name = 'blobs', prefix = 'pageserver-yb/', sslmode = 'require'}
+{host_ports = 'yb-host:5433', user = 'yugabyte', password_env = 'YB_STORAGE_PASSWORD', dbname = 'yb_storage', sslmode = 'require'}
 ```
 
 ## Smoke test
@@ -332,7 +335,7 @@ download → delete → delete_objects against a live YB instance. Run:
 
 ```
 cargo run --example yb_smoke -- \
-    --host 127.0.0.1 --port 5433 --user yugabyte \
+    --host-ports 127.0.0.1:5433 --user yugabyte \
     --dbname yb_storage --table blobs
 ```
 
@@ -344,9 +347,11 @@ pageserver / safekeeper through it.
 - `GenericRemoteStorage` is dispatch-by-enum, not trait object. All match
   arms must enumerate `YbStore` — adding a new variant is a `grep`-able
   refactor.
-- `RemotePath` is rooted at the prefix configured on the backend, not at
-  the system root. Within `YbStore` the actual key stored is
-  `<prefix><relative-path>`.
+- `RemotePath` is a relative path the caller builds (rooted at a leading
+  prefix segment such as `pageserver-yb/`, baked into the path — not a
+  backend config field), not an absolute filesystem path. Within `YbStore`
+  the path is split into the storage columns by `parse_key` rather than
+  stored verbatim.
 - `Cancellation tokens` propagate through every pageserver-side
   `RemoteStorage` method. The `YbStore` impl uses `tokio::select!` on
   `cancel.cancelled()` to bail out of in-flight queries.

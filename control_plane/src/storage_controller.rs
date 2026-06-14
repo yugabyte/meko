@@ -313,13 +313,13 @@ impl StorageController {
     /// We connect to YugabyteDB's `yugabyte` admin database with the same
     /// host/user/credentials as the controller URL to issue
     /// `CREATE DATABASE`.
-    async fn ensure_external_database(&self, url: &str) -> anyhow::Result<()> {
-        let target = tokio_postgres::Config::from_str(url)
-            .context("parsing storage_controller.database_url")?;
-        let controller_db = target
-            .get_dbname()
-            .context("storage_controller.database_url must include a database name")?
-            .to_string();
+    async fn ensure_external_database(&self, yb: &ysql_client::YbConnConfig) -> anyhow::Result<()> {
+        let url = yb
+            .to_database_url()
+            .context("building database URL from storage_controller.yb")?;
+        let target = tokio_postgres::Config::from_str(&url)
+            .context("parsing storage_controller.yb database URL")?;
+        let controller_db = yb.dbname.clone();
 
         // The controller's tables live in the `storage_controller`
         // schema inside `yb_storage`; `blobs`/`wals` and the
@@ -333,9 +333,9 @@ impl StorageController {
         // so the controller can connect to it.
         if controller_db != "yb_storage" {
             tracing::warn!(
-                "storage_controller.database_url names db {controller_db:?} \
+                "storage_controller.yb names db {controller_db:?} \
                  (not the default `yb_storage`); blobs/wals colocation \
-                 assumes yb_storage — override deliberately or update the URL"
+                 assumes yb_storage — override deliberately or update the config"
             );
         }
         Self::create_database(&target, &controller_db).await?;
@@ -471,8 +471,8 @@ impl StorageController {
     /// and the pageserver crashes with `database "yb_storage" does not
     /// exist`. See #49.
     pub async fn prepare_database_if_external(&self) -> anyhow::Result<()> {
-        if let Some(url) = self.config.database_url.clone() {
-            self.ensure_external_database(&url).await?;
+        if let Some(yb) = self.config.yb.clone() {
+            self.ensure_external_database(&yb).await?;
         }
         Ok(())
     }
@@ -497,25 +497,29 @@ impl StorageController {
         let scheme = listen_url.scheme();
         let host = listen_url.host_str().unwrap();
 
-        // If `database_url` is set in YbLightStorageControllerConf, the operator
+        // If `yb` is set in YbLightStorageControllerConf, the operator
         // is pointing the controller at an externally-managed Postgres (in
-        // yb-neon: a YugabyteDB cluster). In that case we skip the local-PG
+        // yb-light: a YugabyteDB cluster). In that case we skip the local-PG
         // bootstrap entirely.
-        let external_database_url = self.config.database_url.clone();
+        let external_yb = self.config.yb.clone();
 
-        let (listen_port, postgres_port) = match (start_args.base_port, &external_database_url) {
-            (Some(base_port), Some(url)) => {
+        let (listen_port, postgres_port) = match (start_args.base_port, &external_yb) {
+            (Some(base_port), Some(yb)) => {
                 // HA / multi-instance mode against an external DB: derive
-                // postgres_port from the URL so the connect_to_database()
-                // path below (used only for the startup script) still works
-                // when external_database_url is None at some sites. The port
-                // here is otherwise unused on the external path.
-                let parsed = Url::parse(url).context("parsing storage_controller.database_url")?;
-                let port = parsed.port().unwrap_or(5432);
+                // postgres_port from the first YB endpoint so the
+                // connect_to_database() path below (used only for the startup
+                // script) still works when external_yb is None at some sites.
+                // The port here is otherwise unused on the external path.
+                let port = yb
+                    .host_ports
+                    .0
+                    .first()
+                    .map(|hp| hp.port)
+                    .unwrap_or(5433);
                 (base_port, port)
             }
             (Some(_), None) => {
-                anyhow::bail!("--base-port requires YbLightStorageControllerConf::database_url");
+                anyhow::bail!("--base-port requires YbLightStorageControllerConf::yb");
             }
             (None, _) => {
                 let port = listen_url.port().unwrap();
@@ -535,12 +539,12 @@ impl StorageController {
         // target database itself exists before pointing the controller at
         // it. The controller's Diesel migrations create the schema inside
         // the DB, but they don't create the DB container.
-        if let Some(url) = &external_database_url {
-            self.ensure_external_database(url).await?;
+        if let Some(yb) = &external_yb {
+            self.ensure_external_database(yb).await?;
         }
 
-        // Local-PG bootstrap, skipped when an external database URL is configured.
-        let pg_started = if external_database_url.is_none() {
+        // Local-PG bootstrap, skipped when an external database is configured.
+        let pg_started = if external_yb.is_none() {
             self.is_postgres_running().await?
         } else {
             true
@@ -645,14 +649,15 @@ impl StorageController {
             self.setup_database(postgres_port).await?;
         }
 
-        let database_url = match &external_database_url {
-            Some(url) => url.clone(),
-            None => format!("postgresql://localhost:{postgres_port}/{DB_NAME}"),
-        };
+        // The connection is passed to the storage_controller binary as either
+        // the structured `--yb-config` block (external YB; the binary builds
+        // its diesel URL from it) or a `--database-url` URL (local-PG
+        // bootstrap). Built just before the arg vector below.
+        let local_database_url = format!("postgresql://localhost:{postgres_port}/{DB_NAME}");
 
         // We support running a startup SQL script to fiddle with the database before we launch storcon.
         // This is used by the test suite — only meaningful against the local-PG bootstrap path.
-        if external_database_url.is_none() {
+        if external_yb.is_none() {
             let startup_script_path = self
                 .env
                 .base_data_dir
@@ -682,10 +687,16 @@ impl StorageController {
         }
 
         let addr = format!("{host}:{listen_port}");
+        // External YB → pass the shared `[*.yb]` block as `--yb-config`;
+        // local-PG bootstrap → pass the diesel URL as `--database-url`.
+        let (db_flag, db_value) = match &external_yb {
+            Some(yb) => ("--yb-config", yb.to_inline_toml()),
+            None => ("--database-url", local_database_url),
+        };
         let mut args = vec![
             "--dev",
-            "--database-url",
-            &database_url,
+            db_flag,
+            &db_value,
             "--max-offline-interval",
             &humantime::Duration::from(self.config.max_offline).to_string(),
             "--max-warming-up-interval",
@@ -830,7 +841,7 @@ impl StorageController {
 
         // When pointed at an external database (e.g. YugabyteDB), yb_light_local
         // never started a local Postgres, so there's nothing to stop here.
-        if self.config.database_url.is_some() {
+        if self.config.yb.is_some() {
             return Ok(());
         }
 

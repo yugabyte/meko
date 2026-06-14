@@ -46,7 +46,7 @@ use tracing::info;
 
 pub use self::simulate_failures::UnreliableWrapper;
 pub use self::yb_store::YbStore;
-pub use crate::config::{RemoteStorageConfig, RemoteStorageKind, YbStoreConfig};
+pub use crate::config::{RemoteStorageConfig, RemoteStorageKind};
 
 /// Entity tag — opaque string identifying a particular object
 /// version, returned with downloads and head responses. We used to
@@ -724,8 +724,8 @@ impl GenericRemoteStorage {
         Ok(match &storage_config.storage {
             RemoteStorageKind::YbStore(yb_config) => {
                 info!(
-                    "Using YugabyteDB table '{}' at {}:{} as a remote storage, prefix: '{:?}'",
-                    yb_config.table_name, yb_config.host, yb_config.port, yb_config.prefix
+                    "Using YugabyteDB blob store at {} (db {}) as remote storage",
+                    yb_config.host_ports, yb_config.dbname
                 );
                 Self::YbStore(Arc::new(YbStore::new(yb_config, timeout).await?))
             }

@@ -1,5 +1,3 @@
-use std::fmt::Debug;
-use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -35,7 +33,9 @@ pub struct RemoteStorageConfig {
 impl RemoteStorageKind {
     pub fn bucket_name(&self) -> Option<&str> {
         match self {
-            RemoteStorageKind::YbStore(config) => Some(&config.table_name),
+            // The blob store's table is hardcoded (see yb_store::BLOBS_TABLE);
+            // the connection config carries no table name.
+            RemoteStorageKind::YbStore(_) => Some("blobs"),
         }
     }
 }
@@ -44,7 +44,7 @@ impl RemoteStorageConfig {
     /// Helper to fetch the configured concurrency limit.
     pub fn concurrency_limit(&self) -> usize {
         match &self.storage {
-            RemoteStorageKind::YbStore(c) => c.concurrency_limit.into(),
+            RemoteStorageKind::YbStore(_) => DEFAULT_REMOTE_STORAGE_CONCURRENCY_LIMIT,
         }
     }
 }
@@ -73,8 +73,10 @@ fn is_default_small_timeout(d: &Duration) -> bool {
 #[serde(untagged)]
 pub enum RemoteStorageKind {
     /// YugabyteDB-based storage, storing all files as rows in a YB
-    /// table over a Postgres-wire-compatible SQL connection.
-    YbStore(YbStoreConfig),
+    /// table over a Postgres-wire-compatible SQL connection. The config
+    /// is the shared [`ysql_client::YbConnConfig`] (connection only); the
+    /// table is hardcoded (see `yb_store::BLOBS_TABLE`).
+    YbStore(ysql_client::YbConnConfig),
 }
 
 /// Version of `RemoteStorageKind` that deserializes via an external
@@ -83,110 +85,13 @@ pub enum RemoteStorageKind {
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 pub enum TypedRemoteStorageKind {
-    YbStore(YbStoreConfig),
+    YbStore(ysql_client::YbConnConfig),
 }
 
 impl From<TypedRemoteStorageKind> for RemoteStorageKind {
     fn from(value: TypedRemoteStorageKind) -> Self {
         match value {
             TypedRemoteStorageKind::YbStore(v) => RemoteStorageKind::YbStore(v),
-        }
-    }
-}
-
-/// YugabyteDB-backed storage configuration.
-///
-/// The pageserver connects to a YB cluster over the Postgres wire protocol and
-/// stores objects as rows in a single user-managed table. The table itself must
-/// already exist; the schema this code expects is documented on `YbStore`.
-#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct YbStoreConfig {
-    /// Host (or comma-separated host list) for the YB cluster's YSQL endpoint.
-    pub host: String,
-    /// YSQL port (default 5433).
-    #[serde(default = "default_yb_port")]
-    pub port: u16,
-    /// Database user.
-    pub user: String,
-    /// Name of an environment variable holding the password. If unset, no
-    /// password is sent (suitable for trust-auth dev clusters).
-    pub password_env: Option<String>,
-    /// Database name to connect to. Defaults to `yb_storage` — the shared
-    /// DB that yb_light_local provisions for pageserver/safekeeper/storage_controller
-    /// to colocate `blobs`, `wals`, and the `storage_controller` schema.
-    /// Override per-component if you need a different layout.
-    #[serde(default = "default_yb_dbname")]
-    pub dbname: String,
-    /// Name of the table that holds the objects. Defaults to `blobs` —
-    /// the table yb_light_local provisions in `yb_storage.public`.
-    #[serde(default = "default_yb_table_name")]
-    pub table_name: String,
-    /// Optional "subfolder" prefix that's prepended to every key, allowing
-    /// multiple tenants to share a single backing table.
-    pub prefix: Option<String>,
-    /// Maximum number of concurrent in-flight DB requests.
-    #[serde(default = "default_yb_concurrency_limit")]
-    pub concurrency_limit: NonZeroUsize,
-    /// `"disable"` (default) → plain TCP, no TLS. Anything else (`"require"`,
-    /// `"prefer"`, `"verify-ca"`, `"verify-full"`) → rustls. With
-    /// `sslrootcert` unset the verifier is AcceptAll (suitable for YBA
-    /// universes with self-signed CAs not in the system trust store).
-    /// With `sslrootcert` set the cert chain is verified against the
-    /// supplied CA bundle (sslmode = verify-ca semantics).
-    #[serde(default)]
-    pub sslmode: Option<String>,
-    /// Optional path to a PEM-encoded CA bundle for sslmode = "verify-ca"
-    /// / "verify-full". When `Some`, the server cert is verified against
-    /// this CA; otherwise the AcceptAll verifier is used.
-    #[serde(default)]
-    pub sslrootcert: Option<String>,
-}
-
-fn default_yb_port() -> u16 {
-    5433
-}
-
-fn default_yb_dbname() -> String {
-    "yb_storage".to_string()
-}
-
-fn default_yb_table_name() -> String {
-    "blobs".to_string()
-}
-
-fn default_yb_concurrency_limit() -> NonZeroUsize {
-    NonZeroUsize::new(DEFAULT_REMOTE_STORAGE_CONCURRENCY_LIMIT).unwrap()
-}
-
-impl Debug for YbStoreConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("YbStoreConfig")
-            .field("host", &self.host)
-            .field("port", &self.port)
-            .field("user", &self.user)
-            .field("dbname", &self.dbname)
-            .field("table_name", &self.table_name)
-            .field("prefix", &self.prefix)
-            .field("concurrency_limit", &self.concurrency_limit)
-            .field("sslmode", &self.sslmode)
-            .field("sslrootcert", &self.sslrootcert)
-            .finish()
-    }
-}
-
-impl YbStoreConfig {
-    /// Strip the table / prefix / concurrency fields and project to
-    /// the minimal connection config the `ysql_client` crate
-    /// understands.
-    pub fn conn_config(&self) -> ysql_client::YbConnConfig {
-        ysql_client::YbConnConfig {
-            host: self.host.clone(),
-            port: self.port,
-            user: self.user.clone(),
-            dbname: self.dbname.clone(),
-            password_env: self.password_env.clone(),
-            sslmode: self.sslmode.clone(),
-            sslrootcert: self.sslrootcert.clone(),
         }
     }
 }
@@ -219,35 +124,31 @@ mod tests {
     #[test]
     fn test_yb_store_parsing() {
         let toml = "\
-    host = 'yb-cluster.example.com'
-    port = 5433
+    host_ports = '10.0.0.1:5433,10.0.0.2:5440'
     user = 'yugabyte'
     password_env = 'YB_STORAGE_PASSWORD'
     dbname = 'neon_storage'
-    table_name = 'pageserver_objects'
-    prefix = 'tenant-a/'
+    sslmode = 'require'
     ";
 
         let config = parse(toml).unwrap();
+        let RemoteStorageKind::YbStore(yb) = &config.storage;
+        assert_eq!(yb.host_ports.to_string(), "10.0.0.1:5433,10.0.0.2:5440");
+        assert_eq!(yb.user, "yugabyte");
+        assert_eq!(yb.dbname, "neon_storage");
+        assert_eq!(yb.password_env.as_deref(), Some("YB_STORAGE_PASSWORD"));
+        assert_eq!(yb.sslmode.as_deref(), Some("require"));
+        assert_eq!(config.timeout, RemoteStorageConfig::DEFAULT_TIMEOUT);
+    }
 
-        assert_eq!(
-            config,
-            RemoteStorageConfig {
-                storage: RemoteStorageKind::YbStore(YbStoreConfig {
-                    host: "yb-cluster.example.com".into(),
-                    port: 5433,
-                    user: "yugabyte".into(),
-                    password_env: Some("YB_STORAGE_PASSWORD".into()),
-                    dbname: "neon_storage".into(),
-                    table_name: "pageserver_objects".into(),
-                    prefix: Some("tenant-a/".into()),
-                    concurrency_limit: default_yb_concurrency_limit(),
-                    sslmode: None,
-                    sslrootcert: None,
-                }),
-                timeout: RemoteStorageConfig::DEFAULT_TIMEOUT,
-                small_timeout: RemoteStorageConfig::DEFAULT_SMALL_TIMEOUT,
-            }
-        );
+    #[test]
+    fn test_yb_store_defaults() {
+        // user/dbname default; sslmode unset → NoTls; single host gets :5433.
+        let config = parse("host_ports = 'localhost'").unwrap();
+        let RemoteStorageKind::YbStore(yb) = &config.storage;
+        assert_eq!(yb.host_ports.to_string(), "localhost:5433");
+        assert_eq!(yb.user, "yugabyte");
+        assert_eq!(yb.dbname, "yb_storage");
+        assert!(yb.sslmode.is_none());
     }
 }

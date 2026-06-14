@@ -46,12 +46,15 @@ fails). No operator DDL is required on a fresh YB cluster.
 
 Generic chunked blob store used by:
 
-- The pageserver (`remote_storage` config: `prefix = 'pageserver-yb/'`).
+- The pageserver. Its `remote_storage` block is the shared `YbConnConfig`
+  (`host_ports` / `user` / `dbname` / …) — there is no configured `prefix`
+  or `table_name`; the table (`public.blobs`) and the namespace are
+  hardcoded / derived, not configured.
 
 The safekeeper has no consumer of `blobs` today — control-file state
 moved to `safekeeper.timeline_state` (one row per timeline) and live
-WAL goes to `public.wals`. Subsystems are segregated by **key
-prefix**, not by separate tables.
+WAL goes to `public.wals`. Subsystems are segregated by the **`namespace`
+column** (derived from the blob's key/path), not by separate tables.
 
 ```sql
 CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper');
@@ -76,14 +79,14 @@ The four-way split (`namespace` + `tenant_id` + `timeline_id` + `key`) is
 populated at write time by `YbStore::parse_key`:
 
 - **`namespace`** is the typed `blob_namespace` ENUM. Today only
-  `pageserver` and `safekeeper`. Derived from the configured `prefix`:
+  `pageserver` and `safekeeper`. Derived from the blob's key/path:
   if it contains `safekeeper` → `safekeeper`; else → `pageserver`.
 - **`tenant_id`** and **`timeline_id`** are the first two Neon-id-shaped
   tokens in the path (32 hex chars, optionally with a `-<count>-<num>`
   shard suffix). Empty strings when absent.
 - **`key`** is the **discriminating filename only** — the path with
-  the configured prefix stripped *and* with `tenants`, `timelines`,
-  the tenant_id, and the timeline_id removed. `split_key_generation`
+  `tenants`, `timelines`, the tenant_id, and the timeline_id removed
+  (no configured prefix is involved). `split_key_generation`
   then peels the trailing or pre-extension `-<8hex>` generation marker
   into the separate `generation` column. `YbStore::reconstruct_key` +
   `rejoin_key_generation` rebuild the original `RemotePath` for

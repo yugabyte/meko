@@ -175,7 +175,7 @@ pub struct EndpointStorageConf {
     pub listen_addr: SocketAddr,
     /// If `Some`, written verbatim as the `storage_kind` block of
     /// `endpoint_storage.json`. Otherwise yb_light_local derives a default
-    /// `YbStore` config from `storage_controller.database_url`,
+    /// `YbStore` config from `storage_controller.yb`,
     /// colocating endpoint_storage with the pageserver in the same
     /// `yb_storage.public.blobs` table. Value must be a JSON object
     /// including the `type` discriminator, e.g.
@@ -205,14 +205,16 @@ pub struct YbLightStorageControllerConf {
     pub max_warming_up: Duration,
 
 
-    /// Database connection string for the storage controller's persistence
-    /// layer. When `Some`, yb_light_local skips the local Postgres bootstrap
-    /// (initdb / pg_ctl / createdb / startup-script tx) and passes this URL
-    /// straight through to the storage controller as `--database-url`. This
-    /// is how yb-neon points the controller at YugabyteDB; it's also useful
+    /// YugabyteDB connection for the storage controller's persistence
+    /// layer — the same `[*.yb]` block the pageserver / safekeeper /
+    /// endpoint_storage consume (host_ports, user, dbname, sslmode?,
+    /// password_env?). When `Some`, yb_light_local skips the local Postgres
+    /// bootstrap (initdb / pg_ctl / createdb / startup-script tx) and passes
+    /// this config straight through to the storage controller as
+    /// `--yb-config`, which builds its diesel URL from it internally. This
+    /// is how yb-light points the controller at YugabyteDB; it's also useful
     /// for running multiple controller instances against a shared DB.
-    /// Example: `postgresql://yugabyte@127.0.0.1:5433/storage_controller`.
-    pub database_url: Option<String>,
+    pub yb: Option<ysql_client::YbConnConfig>,
 
     #[serde(with = "humantime_serde")]
     pub heartbeat_interval: Duration,
@@ -243,7 +245,7 @@ impl Default for YbLightStorageControllerConf {
         Self {
             max_offline: Self::DEFAULT_MAX_OFFLINE_INTERVAL,
             max_warming_up: Self::DEFAULT_MAX_WARMING_UP_INTERVAL,
-            database_url: None,
+            yb: None,
             heartbeat_interval: Self::DEFAULT_HEARTBEAT_INTERVAL,
             use_https_pageserver_api: false,
             timelines_onto_safekeepers: true,
@@ -383,10 +385,11 @@ pub struct SafekeeperConf {
     pub backup_threads: Option<u32>,
     pub auth_enabled: bool,
     pub listen_addr: Option<String>,
-    /// If `Some`, mirrors every live WAL write into YugabyteDB via the
-    /// `wals` table. Value is the full `YbStoreConfig` TOML inline string
-    /// that the safekeeper accepts as `--wal-yb-config`. Single-safekeeper
-    /// constraint applies (see architecture/safekeeper.md §5).
+    /// If `Some`, mirrors every live WAL write into YugabyteDB's `public.wals`
+    /// table (table hardcoded). Value is the shared `[*.yb]` connection block
+    /// as a TOML inline string that the safekeeper accepts as
+    /// `--wal-yb-config`. Single-safekeeper constraint applies (see
+    /// architecture/safekeeper.md §5).
     pub wal_yb_config: Option<String>,
     /// Capacity (MiB) of the in-memory cache of recent WAL chunks used in
     /// YB-WAL mode. Maps to `--wal-cache-size-mib`. Ignored without

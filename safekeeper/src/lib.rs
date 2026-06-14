@@ -104,10 +104,10 @@ pub struct SafeKeeperConf {
     pub availability_zone: Option<String>,
     pub heartbeat_timeout: Duration,
     /// Optional YB connection for mirroring live WAL writes. When `Some`,
-    /// every `write_wal` is INSERT'd into the YB table named here in
-    /// addition to being written to the local-FS shadow. When `None`,
-    /// WAL only lives on local FS (default).
-    pub wal_yb_config: Option<remote_storage::YbStoreConfig>,
+    /// every `write_wal` is INSERT'd into the (hardcoded) `public.wals`
+    /// table in addition to being written to the local-FS shadow. When
+    /// `None`, WAL only lives on local FS (default).
+    pub wal_yb_config: Option<ysql_client::YbConnConfig>,
     /// In-memory cache capacity (MiB) for recent WAL chunks in YB-WAL
     /// mode. See [`crate::wal_cache`]. Ignored when
     /// [`Self::wal_yb_config`] is `None`. Set to 0 to disable the cache.

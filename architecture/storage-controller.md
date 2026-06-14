@@ -127,17 +127,21 @@ Upstream Neon (and `yb_light_local` in particular) launches a local Postgres
 v16 server alongside the controller and uses it as the controller's DB.
 yb-light replaces this with the same YB cluster that holds everything else.
 
-**There is no Rust code change for this.** The controller's
-`--database-url` flag accepts any Postgres-compatible URI; pointing it at
-`postgresql://yugabyte@127.0.0.1:5433/yb_storage` is sufficient. (The
-SC binary in fact rejects any other DB name — see the validation in
+**This added a small Rust code change.** The controller gained a
+`--yb-config` flag that takes the same shared `YbConnConfig` block as the
+other components (the `[storage_controller.yb]` block); it builds its own
+diesel/libpq connection URL internally via `YbConnConfig::to_database_url()`.
+yb-light passes this block instead of a pre-formed URI. (The SC binary
+still rejects any DB name other than `yb_storage` — see the validation in
 `control_plane/src/storage_controller.rs` around the `DB_NAME` constant.)
+The legacy `--database-url` / `DATABASE_URL` inputs remain only as a
+fallback for the local-Postgres bootstrap path.
 
 What we do at runtime:
 
 1. `CREATE DATABASE yb_storage` on YB (if not present).
 2. Spawn the `storage_controller` binary with
-   `--database-url postgresql://yugabyte@127.0.0.1:5433/yb_storage`.
+   `--yb-config "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage' }"`.
    It then runs the collapsed Diesel migration, which creates the
    `storage_controller`, `pageserver`, `safekeeper`, and `public` schemas
    and all their tables.
@@ -162,11 +166,12 @@ YSQL frontend is Postgres-protocol-compatible.
 (none)
 ```
 
-`yb_light_local` looks at `storage_controller.database_url` in `.yb_light/config`:
-when it's set (e.g. to a YugabyteDB URL — local or remote), the wrapper
-**skips the entire local-Postgres bootstrap** (`initdb`, `pg_ctl start`,
-the startup-script transaction) and passes the URL straight through to
-the controller as `--database-url`. `yb_light_local stop` likewise skips
+`yb_light_local` looks at the `[storage_controller.yb]` block in
+`.yb_light/config`: when it's set (pointing at a YugabyteDB cluster —
+local or remote), the wrapper **skips the entire local-Postgres
+bootstrap** (`initdb`, `pg_ctl start`, the startup-script transaction)
+and passes the block straight through to the controller as
+`--yb-config <inline TOML>`. `yb_light_local stop` likewise skips
 `pg_ctl stop`. No `storage_controller_db/` directory is created.
 
 Before pointing the controller at the URL, yb_light_local **connects to
@@ -188,13 +193,23 @@ The step is idempotent. A fresh YB cluster needs no operator DDL beyond
 Set it via the init TOML (`yb_light_local init --config <file>`):
 
 ```toml
-[storage_controller]
-database_url = "postgresql://yugabyte@127.0.0.1:5433/yb_storage"
-# or against a remote YB cluster:
-# database_url = "postgresql://yugabyte@yb-host.example.com:5433/yb_storage"
+[storage_controller.yb]
+host_ports = "127.0.0.1:5433"
+user = "yugabyte"
+dbname = "yb_storage"
+# password_env = "YB_STORAGE_PASSWORD"
+# sslmode = "require"
+# against a remote YB cluster:
+# host_ports = "yb-host.example.com:5433"
 # TLS against a YBA-managed universe:
-# database_url = "postgresql://yugabyte:PW@yb-host.example.com:5433/yb_storage?sslmode=require"
+# host_ports = "yb-host.example.com:5433"
+# sslmode = "require"
+# password_env = "YB_STORAGE_PASSWORD"
 ```
+
+This `[storage_controller.yb]` block is the same shared YB connection
+block (`YbConnConfig`) used by the pageserver `remote_storage`, the
+safekeeper `--wal-yb-config`, and endpoint_storage — identical field set.
 
 The controller itself still links against `libpq`, so the Postgres v17
 libs must exist locally — but no Postgres *server* runs.
@@ -210,22 +225,27 @@ are routed through a small `connect_external` helper in
 - `Disable` → `tokio_postgres::NoTls` (local-PG style).
 - Anything else → the shared `remote_storage::build_yb_rustls_connector(None)`
   with the AcceptAll verifier. Same TLS posture the SC binary itself
-  uses for its main `--database-url` connection.
+  uses for its main YB connection.
 
-So a `database_url` like
-`postgresql://yugabyte:PW@yb-host:5433/yb_storage?sslmode=require`
-brings up cleanly against a TLS-only YB universe with no proxy. The
-SC binary's own connection (via `establish_connection_rustls` in
-`storage_controller/src/persistence.rs`) was always TLS-capable; this
-fix removes the corresponding `NoTls` hardcode in the *provisioning*
-path that runs once at first start.
+So a `[storage_controller.yb]` block with `host_ports = "yb-host:5433"`,
+`sslmode = "require"`, `password_env = "..."` brings up cleanly against a
+TLS-only YB universe with no proxy. The SC binary now receives this block
+as `--yb-config <inline TOML>` and builds its diesel/libpq connection URL
+internally (via `YbConnConfig::to_database_url()`), rather than being
+handed a `--database-url` URI; its own connection (via
+`establish_connection_rustls` in `storage_controller/src/persistence.rs`)
+was always TLS-capable. This fix removes the corresponding `NoTls`
+hardcode in the *provisioning* path that runs once at first start.
+
+`--database-url` / `DATABASE_URL` still exist as a fallback for the
+local-Postgres bootstrap path, but the yb-light path no longer uses them.
 
 ## Run / configure
 
 ```
 storage_controller \
     --dev \
-    --database-url 'postgresql://yugabyte@127.0.0.1:5433/yb_storage' \
+    --yb-config "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage' }" \
     --max-offline-interval     10s \
     --max-warming-up-interval  30s \
     --heartbeat-interval       1s \

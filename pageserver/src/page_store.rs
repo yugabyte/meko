@@ -53,7 +53,7 @@ use pageserver_api::models::RelSizeMigration;
 use pageserver_api::reltag::SlruKind;
 
 use crate::page_server::metadata::Lineage;
-use remote_storage::{YbStoreConfig, YsqlClient};
+use remote_storage::{YbConnConfig, YsqlClient};
 // We talk to YugabyteDB through the YB smart-driver fork of
 // tokio-postgres; alias it so the type names below (`tokio_postgres::Row`,
 // `tokio_postgres::types::ToSql`, etc.) keep working without
@@ -351,7 +351,7 @@ pub enum CasBumpOutcome {
 
 #[derive(Debug, Clone)]
 pub struct PageStoreConfig {
-    pub yb: YbStoreConfig,
+    pub yb: YbConnConfig,
     pub schema: String,
     /// Multiplier applied to the per-statement INSERT fan-out
     /// (`put_pages` / `put_slru_pages` / `put_meta`). Plumbed through
@@ -360,7 +360,7 @@ pub struct PageStoreConfig {
 }
 
 impl PageStoreConfig {
-    pub fn new(yb: YbStoreConfig) -> Self {
+    pub fn new(yb: YbConnConfig) -> Self {
         Self {
             yb,
             schema: DEFAULT_SCHEMA.to_string(),
@@ -621,7 +621,7 @@ impl PageStore {
         set_fast_path_upsert: bool,
     ) -> Result<Self> {
         let ysql_client = ysql_client::YsqlClient::from_yb_config_pooled(
-            &config.yb.conn_config(),
+            &config.yb,
             application_name,
             pool_size,
             set_fast_path_upsert,
@@ -2545,21 +2545,16 @@ fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
 mod tests {
     use super::*;
 
-    fn test_yb_config() -> YbStoreConfig {
-        YbStoreConfig {
-            host: std::env::var("YB_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
-            port: std::env::var("YB_TEST_PORT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(5433),
+    fn test_yb_config() -> YbConnConfig {
+        let host = std::env::var("YB_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = std::env::var("YB_TEST_PORT").unwrap_or_else(|_| "5433".to_string());
+        YbConnConfig {
+            host_ports: format!("{host}:{port}").parse().unwrap(),
             user: std::env::var("YB_TEST_USER").unwrap_or_else(|_| "yugabyte".to_string()),
             password_env: None,
             dbname: std::env::var("YB_TEST_DB").unwrap_or_else(|_| "yb_storage".to_string()),
-            table_name: "pages".to_string(),
-            prefix: Some("test/".to_string()),
             sslmode: None,
             sslrootcert: None,
-            concurrency_limit: std::num::NonZeroUsize::new(8).unwrap(),
         }
     }
 

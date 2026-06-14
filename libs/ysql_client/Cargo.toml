@@ -13,6 +13,7 @@ cli = ["dep:clap"]
 anyhow.workspace = true
 clap = { workspace = true, optional = true }
 futures.workspace = true
+serde = { workspace = true, features = ["derive"] }
 metrics.workspace = true
 once_cell.workspace = true
 rand.workspace = true
