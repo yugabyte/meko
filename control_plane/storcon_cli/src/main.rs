@@ -126,7 +126,7 @@ enum Command {
     /// Migrate the attached location for a tenant shard to a specific pageserver.
     TenantShardMigrate {
         #[arg(long)]
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         #[arg(long)]
         node: NodeId,
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
@@ -137,19 +137,19 @@ enum Command {
     /// Watch the location of a tenant shard evolve, e.g. while expecting it to migrate
     TenantShardWatch {
         #[arg(long)]
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
     },
     /// Migrate the secondary location for a tenant shard to a specific pageserver.
     TenantShardMigrateSecondary {
         #[arg(long)]
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         #[arg(long)]
         node: NodeId,
     },
     /// Cancel any ongoing reconciliation for this shard
     TenantShardCancelReconcile {
         #[arg(long)]
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
     },
     /// Set the pageserver tenant configuration of a tenant: this is the configuration structure
     /// that is passed through to pageservers, and does not affect storage controller behavior.
@@ -247,7 +247,7 @@ enum Command {
         /// the operation is performed on all shards. When a sharded tenant ID is
         /// specified, the operation is only performed on the specified shard.
         #[arg(long)]
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         #[arg(long)]
         timeline_id: TimelineId,
         /// Optional: Maximum download concurrency (default is 16)
@@ -540,7 +540,7 @@ async fn main() -> anyhow::Result<()> {
             ]);
             for shard in shards {
                 table.add_row([
-                    format!("{}", shard.tenant_shard_id),
+                    format!("{}", shard.tenant_id),
                     match shard.is_intended_secondary {
                         None => "".to_string(),
                         Some(true) => "Secondary".to_string(),
@@ -623,7 +623,7 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
         }
         Command::TenantShardMigrate {
-            tenant_shard_id,
+            tenant_id,
             node,
             prewarm,
             override_scheduler,
@@ -643,7 +643,7 @@ async fn main() -> anyhow::Result<()> {
             match storcon_client
                 .dispatch::<TenantShardMigrateRequest, TenantShardMigrateResponse>(
                     Method::PUT,
-                    format!("control/v1/tenant/{tenant_shard_id}/migrate"),
+                    format!("control/v1/tenant/{tenant_id}/migrate"),
                     Some(req),
                 )
                 .await
@@ -658,13 +658,13 @@ async fn main() -> anyhow::Result<()> {
                 Ok(_) => {}
             }
 
-            watch_tenant_shard(storcon_client, tenant_shard_id, Some(node)).await?;
+            watch_tenant_shard(storcon_client, tenant_id, Some(node)).await?;
         }
-        Command::TenantShardWatch { tenant_shard_id } => {
-            watch_tenant_shard(storcon_client, tenant_shard_id, None).await?;
+        Command::TenantShardWatch { tenant_id } => {
+            watch_tenant_shard(storcon_client, tenant_id, None).await?;
         }
         Command::TenantShardMigrateSecondary {
-            tenant_shard_id,
+            tenant_id,
             node,
         } => {
             let req = TenantShardMigrateRequest {
@@ -676,16 +676,16 @@ async fn main() -> anyhow::Result<()> {
             storcon_client
                 .dispatch::<TenantShardMigrateRequest, TenantShardMigrateResponse>(
                     Method::PUT,
-                    format!("control/v1/tenant/{tenant_shard_id}/migrate_secondary"),
+                    format!("control/v1/tenant/{tenant_id}/migrate_secondary"),
                     Some(req),
                 )
                 .await?;
         }
-        Command::TenantShardCancelReconcile { tenant_shard_id } => {
+        Command::TenantShardCancelReconcile { tenant_id } => {
             storcon_client
                 .dispatch::<(), ()>(
                     Method::PUT,
-                    format!("control/v1/tenant/{tenant_shard_id}/cancel_reconcile"),
+                    format!("control/v1/tenant/{tenant_id}/cancel_reconcile"),
                     None,
                 )
                 .await?;
@@ -772,7 +772,7 @@ async fn main() -> anyhow::Result<()> {
                     .map(|id| nodes.get(id).expect("Shard references nonexistent node"));
 
                 table.add_row([
-                    format!("{}", shard.tenant_shard_id),
+                    format!("{}", shard.tenant_id),
                     attached_node
                         .map(|n| format!("{} ({})", n.listen_http_addr, n.id))
                         .unwrap_or(String::new()),
@@ -954,7 +954,7 @@ async fn main() -> anyhow::Result<()> {
             let mut selected_node_idx = 0;
 
             struct MigrationMove {
-                tenant_shard_id: TenantId,
+                tenant_id: TenantId,
                 from: NodeId,
                 to: NodeId,
             }
@@ -990,10 +990,10 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 moves.push(MigrationMove {
-                    tenant_shard_id: shard.tenant_shard_id,
+                    tenant_id: shard.tenant_id,
                     from: shard
                         .node_attached
-                        .expect("We only migrate attached tenant shards"),
+                        .expect("We only migrate attached tenants"),
                     to: node_to_fill_descs[selected_node_idx].id,
                 });
                 selected_node_idx = (selected_node_idx + 1) % node_to_fill_descs.len();
@@ -1004,7 +1004,7 @@ async fn main() -> anyhow::Result<()> {
             if dry_run == Some(true) {
                 println!("Dryrun requested. Planned {total_moves} moves:");
                 for mv in &moves {
-                    println!("{}: {} -> {}", mv.tenant_shard_id, mv.from, mv.to)
+                    println!("{}: {} -> {}", mv.tenant_id, mv.from, mv.to)
                 }
 
                 return Ok(());
@@ -1018,7 +1018,7 @@ async fn main() -> anyhow::Result<()> {
                         client
                             .dispatch::<TenantShardMigrateRequest, TenantShardMigrateResponse>(
                                 Method::PUT,
-                                format!("control/v1/tenant/{}/migrate", mv.tenant_shard_id),
+                                format!("control/v1/tenant/{}/migrate", mv.tenant_id),
                                 Some(TenantShardMigrateRequest {
                                     node_id: mv.to,
                                     origin_node_id: Some(mv.from),
@@ -1026,7 +1026,7 @@ async fn main() -> anyhow::Result<()> {
                                 }),
                             )
                             .await
-                            .map_err(|e| (mv.tenant_shard_id, mv.from, mv.to, e))
+                            .map_err(|e| (mv.tenant_id, mv.from, mv.to, e))
                     }
                 })
                 .buffered(concurrency.unwrap_or(DEFAULT_MIGRATE_CONCURRENCY));
@@ -1039,10 +1039,10 @@ async fn main() -> anyhow::Result<()> {
                     Ok(_) => {
                         success += 1;
                     }
-                    Err((tenant_shard_id, from, to, error)) => {
+                    Err((tenant_id, from, to, error)) => {
                         failure += 1;
                         println!(
-                            "Failed to migrate {tenant_shard_id} from node {from} to node {to}: {error}"
+                            "Failed to migrate {tenant_id} from node {from} to node {to}: {error}"
                         );
                     }
                 }
@@ -1179,12 +1179,12 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         Command::DownloadHeatmapLayers {
-            tenant_shard_id,
+            tenant_id,
             timeline_id,
             concurrency,
         } => {
             let mut path = format!(
-                "v1/tenant/{tenant_shard_id}/timeline/{timeline_id}/download_heatmap_layers",
+                "v1/tenant/{tenant_id}/timeline/{timeline_id}/download_heatmap_layers",
             );
 
             if let Some(c) = concurrency {
@@ -1250,12 +1250,12 @@ static WATCH_INTERVAL: Duration = Duration::from_secs(5);
 
 async fn watch_tenant_shard(
     storcon_client: Client,
-    tenant_shard_id: TenantId,
+    tenant_id: TenantId,
     until_migrated_to: Option<NodeId>,
 ) -> anyhow::Result<()> {
     if let Some(until_migrated_to) = until_migrated_to {
         println!(
-            "Waiting for tenant shard {tenant_shard_id} to be migrated to node {until_migrated_to}"
+            "Waiting for tenant {tenant_id} to be migrated to node {until_migrated_to}"
         );
     }
 
@@ -1263,7 +1263,7 @@ async fn watch_tenant_shard(
         let desc = storcon_client
             .dispatch::<(), TenantDescribeResponse>(
                 Method::GET,
-                format!("control/v1/tenant/{}", tenant_shard_id),
+                format!("control/v1/tenant/{}", tenant_id),
                 None,
             )
             .await?;
@@ -1272,8 +1272,8 @@ async fn watch_tenant_shard(
         let shard = desc
             .shards
             .iter()
-            .find(|s| s.tenant_shard_id == tenant_shard_id)
-            .ok_or(anyhow::anyhow!("Tenant shard not found"))?;
+            .find(|s| s.tenant_id == tenant_id)
+            .ok_or(anyhow::anyhow!("Tenant not found"))?;
         let summary = format!(
             "attached: {} secondary: {} {}",
             shard
@@ -1297,7 +1297,7 @@ async fn watch_tenant_shard(
         // Maybe drop out if we finished migration
         if let Some(until_migrated_to) = until_migrated_to {
             if shard.node_attached == Some(until_migrated_to) && !shard.is_reconciling {
-                println!("Tenant shard {tenant_shard_id} is now on node {until_migrated_to}");
+                println!("Tenant {tenant_id} is now on node {until_migrated_to}");
                 break;
             }
         }

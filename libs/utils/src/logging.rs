@@ -34,19 +34,19 @@ macro_rules! critical {
 
 #[macro_export]
 macro_rules! critical_timeline {
-    ($tenant_shard_id:expr, $timeline_id:expr, $corruption_detected:expr, $($arg:tt)*) => {{
+    ($tenant_id:expr, $timeline_id:expr, $corruption_detected:expr, $($arg:tt)*) => {{
         if cfg!(debug_assertions) {
             panic!($($arg)*);
         }
         // Increment both metrics
         $crate::logging::TRACING_EVENT_COUNT_METRIC.inc_critical();
-        $crate::logging::CRITICAL_STORAGE_EVENT_COUNT_METRIC.inc(&$tenant_shard_id.to_string(), &$timeline_id.to_string());
+        $crate::logging::CRITICAL_STORAGE_EVENT_COUNT_METRIC.inc(&$tenant_id.to_string(), &$timeline_id.to_string());
         if let Some(c) = $corruption_detected.as_ref() {
             c.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         let backtrace = std::backtrace::Backtrace::capture();
-        tracing::error!("CRITICAL: [tenant_shard_id: {}, timeline_id: {}] {}\n{backtrace}",
-                       $tenant_shard_id, $timeline_id, format!($($arg)*));
+        tracing::error!("CRITICAL: [tenant_id: {}, timeline_id: {}] {}\n{backtrace}",
+                       $tenant_id, $timeline_id, format!($($arg)*));
     }};
 }
 
@@ -90,7 +90,7 @@ pub static CRITICAL_STORAGE_EVENT_COUNT_METRIC: Lazy<CriticalStorageEventCountMe
         let vec = metrics::register_int_counter_vec!(
             "critical_storage_event_count",
             "Number of critical storage events, by tenant_id and timeline_id",
-            &["tenant_shard_id", "timeline_id"]
+            &["tenant_id", "timeline_id"]
         )
         .expect("failed to define metric");
         CriticalStorageEventCountMetric::new(vec)
@@ -101,9 +101,9 @@ impl CriticalStorageEventCountMetric {
         Self { critical: vec }
     }
 
-    pub fn inc(&self, tenant_shard_id: &str, timeline_id: &str) {
+    pub fn inc(&self, tenant_id: &str, timeline_id: &str) {
         self.critical
-            .with_label_values(&[tenant_shard_id, timeline_id])
+            .with_label_values(&[tenant_id, timeline_id])
             .inc();
     }
 }

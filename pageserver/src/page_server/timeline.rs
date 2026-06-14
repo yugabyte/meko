@@ -1131,7 +1131,7 @@ impl Timeline {
     /// path's `WHERE current_generation = $our_gen` predicate is
     /// strict, so the invariant "YB column == our_gen at all times
     /// after attach" must hold from the first flush onwards. The
-    /// controller bumps its `tenant_shards.generation` on every
+    /// controller bumps its `tenants.generation` on every
     /// attach but doesn't propagate to YB; this CAS is where the new
     /// value lands.
     ///

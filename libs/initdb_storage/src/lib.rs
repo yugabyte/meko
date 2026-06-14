@@ -42,18 +42,18 @@ const TIMELINES_SEGMENT_NAME: &str = "timelines";
 
 /// Prefix of all objects belonging to a tenant in remote storage. Used by
 /// the tenant-delete path to wipe `tenants/<tenant_id>/*` in one shot.
-pub fn remote_tenant_path(tenant_shard_id: &TenantId) -> RemotePath {
-    let path = format!("tenants/{tenant_shard_id}");
+pub fn remote_tenant_path(tenant_id: &TenantId) -> RemotePath {
+    let path = format!("tenants/{tenant_id}");
     RemotePath::from_string(&path).expect("Failed to construct path")
 }
 
-pub fn remote_timelines_path(tenant_shard_id: &TenantId) -> RemotePath {
-    let path = format!("tenants/{tenant_shard_id}/{TIMELINES_SEGMENT_NAME}");
+pub fn remote_timelines_path(tenant_id: &TenantId) -> RemotePath {
+    let path = format!("tenants/{tenant_id}/{TIMELINES_SEGMENT_NAME}");
     RemotePath::from_string(&path).expect("Failed to construct path")
 }
 
-pub fn remote_timeline_path(tenant_shard_id: &TenantId, timeline_id: &TimelineId) -> RemotePath {
-    remote_timelines_path(tenant_shard_id).join(Utf8Path::new(&timeline_id.to_string()))
+pub fn remote_timeline_path(tenant_id: &TenantId, timeline_id: &TimelineId) -> RemotePath {
+    remote_timelines_path(tenant_id).join(Utf8Path::new(&timeline_id.to_string()))
 }
 
 pub fn remote_initdb_archive_path(tenant_id: &TenantId, timeline_id: &TimelineId) -> RemotePath {

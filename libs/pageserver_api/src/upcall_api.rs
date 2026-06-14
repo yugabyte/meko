@@ -59,14 +59,14 @@ pub struct ValidateResponseTenant {
 
 #[derive(Serialize, Deserialize)]
 pub struct TimelineImportStatusRequest {
-    pub tenant_shard_id: TenantId,
+    pub tenant_id: TenantId,
     pub timeline_id: TimelineId,
     pub generation: Generation,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct PutTimelineImportStatusRequest {
-    pub tenant_shard_id: TenantId,
+    pub tenant_id: TenantId,
     pub timeline_id: TimelineId,
     pub status: ShardImportStatus,
     pub generation: Generation,

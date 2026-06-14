@@ -132,7 +132,7 @@ pub struct NodeShardResponse {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NodeShard {
-    pub tenant_shard_id: TenantId,
+    pub tenant_id: TenantId,
     /// Whether the shard is observed secondary on a specific node. True = yes, False = no, None = not on this node.
     pub is_observed_secondary: Option<bool>,
     /// Whether the shard is intended to be a secondary on a specific node. True = yes, False = no, None = not on this node.
@@ -158,7 +158,7 @@ pub struct NodeDescribeResponse {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TenantDescribeResponseShard {
-    pub tenant_shard_id: TenantId,
+    pub tenant_id: TenantId,
 
     pub node_attached: Option<NodeId>,
     pub node_secondary: Vec<NodeId>,
@@ -485,15 +485,15 @@ pub struct TenantShardMigrateResponse {}
 /// Metadata health record posted from scrubber.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MetadataHealthRecord {
-    pub tenant_shard_id: TenantId,
+    pub tenant_id: TenantId,
     pub healthy: bool,
     pub last_scrubbed_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MetadataHealthUpdateRequest {
-    pub healthy_tenant_shards: HashSet<TenantId>,
-    pub unhealthy_tenant_shards: HashSet<TenantId>,
+    pub healthy_tenants: HashSet<TenantId>,
+    pub unhealthy_tenants: HashSet<TenantId>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -501,7 +501,7 @@ pub struct MetadataHealthUpdateResponse {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MetadataHealthListUnhealthyResponse {
-    pub unhealthy_tenant_shards: Vec<TenantId>,
+    pub unhealthy_tenants: Vec<TenantId>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

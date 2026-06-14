@@ -132,7 +132,7 @@ where
 
     let conf = PageServerConf::dummy_conf(repo_dir.path().to_path_buf());
     let conf = Box::leak(Box::new(conf));
-    let tenant_shard_id = TenantId::generate();
+    let tenant_id = TenantId::generate();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -143,7 +143,7 @@ where
 
     let mut tasks = JoinSet::new();
 
-    let manager = PostgresRedoManager::new(conf, tenant_shard_id);
+    let manager = PostgresRedoManager::new(conf, tenant_id);
     let manager = Arc::new(manager);
 
     // divide the amount of work equally among the clients.

@@ -147,7 +147,7 @@ fn try_acquire_lsn_lease(
 fn acquire_lsn_lease_libpq(
     connstring: &str,
     auth: Option<&str>,
-    tenant_shard_id: TenantId,
+    tenant_id: TenantId,
     timeline_id: TimelineId,
     lsn: Lsn,
 ) -> Result<Option<SystemTime>> {
@@ -156,7 +156,7 @@ fn acquire_lsn_lease_libpq(
         config.password(auth);
     }
     let mut client = config.connect(NoTls)?;
-    let cmd = format!("lease lsn {tenant_shard_id} {timeline_id} {lsn} ");
+    let cmd = format!("lease lsn {tenant_id} {timeline_id} {lsn} ");
     let res = client.simple_query(&cmd)?;
     let msg = match res.first() {
         Some(msg) => msg,
@@ -183,14 +183,14 @@ fn acquire_lsn_lease_libpq(
 fn acquire_lsn_lease_grpc(
     connstring: &str,
     auth: Option<&str>,
-    tenant_shard_id: TenantId,
+    tenant_id: TenantId,
     timeline_id: TimelineId,
     lsn: Lsn,
 ) -> Result<Option<SystemTime>> {
     tokio::runtime::Handle::current().block_on(async move {
         let mut client = page_api::Client::connect(
             connstring.to_string(),
-            tenant_shard_id,
+            tenant_id,
             timeline_id,
             auth.map(String::from),
             None,

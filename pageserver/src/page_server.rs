@@ -557,7 +557,7 @@ impl PageServer {
         }
 
         // Eager push of the controller-issued generation to YB. The
-        // storage controller bumps `tenant_shards.generation` on
+        // storage controller bumps `tenants.generation` on
         // every attach (including re-attach to the same PS after a
         // restart) but doesn't propagate the new value to YB itself
         // — this is where it lands. The flush path's

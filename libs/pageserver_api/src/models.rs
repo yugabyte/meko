@@ -911,7 +911,7 @@ pub struct LocationConfig {
 
 #[derive(Serialize, Deserialize)]
 pub struct LocationConfigListResponse {
-    pub tenant_shards: Vec<(TenantId, Option<LocationConfig>)>,
+    pub tenants: Vec<(TenantId, Option<LocationConfig>)>,
 }
 
 #[derive(Serialize)]
@@ -1317,7 +1317,7 @@ pub struct SecondaryProgress {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TenantScanRemoteStorageShard {
-    pub tenant_shard_id: TenantId,
+    pub tenant_id: TenantId,
     pub generation: Option<u32>,
     pub stripe_size: Option<u32>,
 }

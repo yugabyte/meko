@@ -13,5 +13,5 @@ mod safekeeper_client;
 mod scheduler;
 mod schema;
 pub mod service;
-mod tenant_shard;
+mod tenant;
 mod timeline_import;

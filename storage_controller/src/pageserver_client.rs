@@ -59,18 +59,18 @@ impl PageserverClient {
         }
     }
 
-    pub(crate) async fn tenant_delete(&self, tenant_shard_id: TenantId) -> Result<StatusCode> {
+    pub(crate) async fn tenant_delete(&self, tenant_id: TenantId) -> Result<StatusCode> {
         measured_request!(
             "tenant",
             crate::metrics::Method::Delete,
             &self.node_id_label,
-            self.inner.tenant_delete(tenant_shard_id).await
+            self.inner.tenant_delete(tenant_id).await
         )
     }
 
     pub(crate) async fn tenant_time_travel_remote_storage(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timestamp: &str,
         done_if_after: &str,
     ) -> Result<()> {
@@ -79,7 +79,7 @@ impl PageserverClient {
             crate::metrics::Method::Put,
             &self.node_id_label,
             self.inner
-                .tenant_time_travel_remote_storage(tenant_shard_id, timestamp, done_if_after)
+                .tenant_time_travel_remote_storage(tenant_id, timestamp, done_if_after)
                 .await
         )
     }
@@ -87,7 +87,7 @@ impl PageserverClient {
     #[expect(dead_code)]
     pub(crate) async fn tenant_timeline_compact(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         force_image_layer_creation: bool,
         wait_until_done: bool,
@@ -98,7 +98,7 @@ impl PageserverClient {
             &self.node_id_label,
             self.inner
                 .tenant_timeline_compact(
-                    tenant_shard_id,
+                    tenant_id,
                     timeline_id,
                     force_image_layer_creation,
                     true,
@@ -111,7 +111,7 @@ impl PageserverClient {
 
     pub(crate) async fn tenant_timeline_describe(
         &self,
-        tenant_shard_id: &TenantId,
+        tenant_id: &TenantId,
         timeline_id: &TimelineId,
     ) -> Result<TimelineInfo> {
         measured_request!(
@@ -119,7 +119,7 @@ impl PageserverClient {
             crate::metrics::Method::Get,
             &self.node_id_label,
             self.inner
-                .tenant_timeline_describe(tenant_shard_id, timeline_id,)
+                .tenant_timeline_describe(tenant_id, timeline_id,)
                 .await
         )
     }
@@ -138,7 +138,7 @@ impl PageserverClient {
 
     pub(crate) async fn timeline_delete(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
     ) -> Result<StatusCode> {
         measured_request!(
@@ -146,14 +146,14 @@ impl PageserverClient {
             crate::metrics::Method::Delete,
             &self.node_id_label,
             self.inner
-                .timeline_delete(tenant_shard_id, timeline_id)
+                .timeline_delete(tenant_id, timeline_id)
                 .await
         )
     }
 
     pub(crate) async fn timeline_lease_lsn(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         lsn: Lsn,
     ) -> Result<LsnLease> {
@@ -162,7 +162,7 @@ impl PageserverClient {
             crate::metrics::Method::Post,
             &self.node_id_label,
             self.inner
-                .timeline_init_lsn_lease(tenant_shard_id, timeline_id, lsn)
+                .timeline_init_lsn_lease(tenant_id, timeline_id, lsn)
                 .await
         )
     }
@@ -170,7 +170,7 @@ impl PageserverClient {
     #[allow(unused)]
     pub(crate) async fn timeline_detail(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
     ) -> Result<TimelineInfo> {
         measured_request!(
@@ -178,14 +178,14 @@ impl PageserverClient {
             crate::metrics::Method::Get,
             &self.node_id_label,
             self.inner
-                .timeline_detail(tenant_shard_id, timeline_id)
+                .timeline_detail(tenant_id, timeline_id)
                 .await
         )
     }
 
     pub(crate) async fn timeline_archival_config(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         req: &TimelineArchivalConfigRequest,
     ) -> Result<()> {
@@ -194,14 +194,14 @@ impl PageserverClient {
             crate::metrics::Method::Put,
             &self.node_id_label,
             self.inner
-                .timeline_archival_config(tenant_shard_id, timeline_id, req)
+                .timeline_archival_config(tenant_id, timeline_id, req)
                 .await
         )
     }
 
     pub(crate) async fn timeline_detach_ancestor(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         behavior: Option<DetachBehavior>,
     ) -> Result<AncestorDetached> {
@@ -210,14 +210,14 @@ impl PageserverClient {
             crate::metrics::Method::Put,
             &self.node_id_label,
             self.inner
-                .timeline_detach_ancestor(tenant_shard_id, timeline_id, behavior)
+                .timeline_detach_ancestor(tenant_id, timeline_id, behavior)
                 .await
         )
     }
 
     pub(crate) async fn timeline_block_unblock_gc(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         dir: BlockUnblock,
     ) -> Result<()> {
@@ -228,7 +228,7 @@ impl PageserverClient {
             crate::metrics::Method::Post,
             &self.node_id_label,
             self.inner
-                .timeline_block_unblock_gc(tenant_shard_id, timeline_id, dir)
+                .timeline_block_unblock_gc(tenant_id, timeline_id, dir)
                 .await
         )
     }
@@ -243,7 +243,7 @@ impl PageserverClient {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn top_tenant_shards(
+    pub(crate) async fn top_tenants(
         &self,
         request: TopTenantShardsRequest,
     ) -> Result<TopTenantShardsResponse> {
@@ -251,13 +251,13 @@ impl PageserverClient {
             "top_tenants",
             crate::metrics::Method::Post,
             &self.node_id_label,
-            self.inner.top_tenant_shards(request).await
+            self.inner.top_tenants(request).await
         )
     }
 
     pub(crate) async fn activate_post_import(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         timeline_activate_timeout: Duration,
     ) -> Result<TimelineInfo> {
@@ -266,7 +266,7 @@ impl PageserverClient {
             crate::metrics::Method::Put,
             &self.node_id_label,
             self.inner
-                .activate_post_import(tenant_shard_id, timeline_id, timeline_activate_timeout)
+                .activate_post_import(tenant_id, timeline_id, timeline_activate_timeout)
                 .await
         )
     }

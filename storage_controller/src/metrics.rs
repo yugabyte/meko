@@ -32,8 +32,8 @@ pub(crate) struct StorageControllerMetrics {
 #[derive(measured::MetricGroup)]
 #[metric(new())]
 pub(crate) struct StorageControllerMetricGroup {
-    /// Size of the in-memory map of tenant shards
-    pub(crate) storage_controller_tenant_shards: measured::Gauge,
+    /// Size of the in-memory map of tenants
+    pub(crate) storage_controller_tenants: measured::Gauge,
 
     /// Size of the in-memory map of pageserver_nodes
     pub(crate) storage_controller_pageserver_nodes: measured::Gauge,

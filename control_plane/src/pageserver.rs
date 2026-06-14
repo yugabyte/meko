@@ -674,20 +674,20 @@ impl PageServerNode {
 
     pub async fn timeline_list(
         &self,
-        tenant_shard_id: &TenantId,
+        tenant_id: &TenantId,
     ) -> anyhow::Result<Vec<TimelineInfo>> {
-        Ok(self.http_client.list_timelines(*tenant_shard_id).await?)
+        Ok(self.http_client.list_timelines(*tenant_id).await?)
     }
 
     pub async fn timeline_info(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         force_await_logical_size: mgmt_api::ForceAwaitLogicalSize,
     ) -> anyhow::Result<TimelineInfo> {
         let timeline_info = self
             .http_client
-            .timeline_info(tenant_shard_id, timeline_id, force_await_logical_size)
+            .timeline_info(tenant_id, timeline_id, force_await_logical_size)
             .await?;
         Ok(timeline_info)
     }
@@ -696,12 +696,12 @@ impl PageServerNode {
     /// `wait_lsn`, the pageserver waits for ingest to reach that LSN first.
     pub async fn flush(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         wait_lsn: Option<Lsn>,
     ) -> anyhow::Result<()> {
         self.http_client
-            .timeline_flush(tenant_shard_id, timeline_id, wait_lsn)
+            .timeline_flush(tenant_id, timeline_id, wait_lsn)
             .await?;
         Ok(())
     }

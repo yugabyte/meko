@@ -9,19 +9,19 @@ use utils::id::{NodeId, TenantId};
 
 use crate::metrics;
 use crate::persistence::split_state::SplitState;
-use crate::persistence::TenantShardPersistence;
+use crate::persistence::TenantPersistence;
 use crate::scheduler::{
     AttachedShardTag, RefCountUpdate, ScheduleContext, ScheduleError, Scheduler, SecondaryShardTag,
 };
 use crate::timeline_import::TimelineImportState;
 
-/// In-memory state for a particular tenant shard.
+/// In-memory state for a particular tenant.
 ///
 /// This struct implement Serialize for debugging purposes, but is _not_ persisted
-/// itself: see [`crate::persistence`] for the subset of tenant shard state that is persisted.
+/// itself: see [`crate::persistence`] for the subset of tenant state that is persisted.
 #[derive(Serialize)]
-pub(crate) struct TenantShard {
-    pub(crate) tenant_shard_id: TenantId,
+pub(crate) struct Tenant {
+    pub(crate) tenant_id: TenantId,
 
     // Latest generation number: next time we attach, increment this
     // and use the incremented number when attaching.
@@ -235,18 +235,18 @@ impl ObservedState {
 
 }
 
-impl TenantShard {
+impl Tenant {
     pub(crate) fn new(
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         policy: PlacementPolicy,
     ) -> Self {
         metrics::METRICS_REGISTRY
             .metrics_group
-            .storage_controller_tenant_shards
+            .storage_controller_tenants
             .inc();
 
         Self {
-            tenant_shard_id,
+            tenant_id,
             policy,
             intent: IntentState::new(),
             generation: Some(Generation::new(0)),
@@ -288,7 +288,7 @@ impl TenantShard {
     }
 
     #[instrument(skip_all, fields(
-        tenant_id=%self.tenant_shard_id,
+        tenant_id=%self.tenant_id,
     ))]
     pub(crate) fn schedule(
         &mut self,
@@ -318,7 +318,7 @@ impl TenantShard {
             ShardSchedulingPolicy::Active | ShardSchedulingPolicy::Essential => {}
             ShardSchedulingPolicy::Pause | ShardSchedulingPolicy::Stop => {
                 // Warn to make it obvious why other things aren't happening/working, if we skip scheduling
-                tracing::warn!(tenant_id=%self.tenant_shard_id,
+                tracing::warn!(tenant_id=%self.tenant_id,
                     "Scheduling is disabled by policy {:?}", self.scheduling_policy);
                 return Ok(());
             }
@@ -415,18 +415,18 @@ impl TenantShard {
     }
 
     pub(crate) fn from_persistent(
-        tsp: TenantShardPersistence,
+        tsp: TenantPersistence,
         intent: IntentState,
     ) -> anyhow::Result<Self> {
-        let tenant_shard_id = tsp.get_tenant_shard_id()?;
+        let tenant_id = tsp.get_tenant_id()?;
 
         metrics::METRICS_REGISTRY
             .metrics_group
-            .storage_controller_tenant_shards
+            .storage_controller_tenants
             .inc();
 
         Ok(Self {
-            tenant_shard_id,
+            tenant_id,
             generation: tsp.generation.map(|g| Generation::new(g as u32)),
             policy: serde_json::from_str(&tsp.placement_policy).unwrap(),
             intent,
@@ -439,9 +439,9 @@ impl TenantShard {
         })
     }
 
-    pub(crate) fn to_persistent(&self) -> TenantShardPersistence {
-        TenantShardPersistence {
-            tenant_id: self.tenant_shard_id.to_string(),
+    pub(crate) fn to_persistent(&self) -> TenantPersistence {
+        TenantPersistence {
+            tenant_id: self.tenant_id.to_string(),
             generation: self.generation.map(|g| g.into().unwrap_or(0) as i32),
             generation_pageserver: self.intent.get_attached().map(|n| n.0 as i64),
             placement_policy: serde_json::to_string(&self.policy).unwrap(),
@@ -452,11 +452,11 @@ impl TenantShard {
 
 }
 
-impl Drop for TenantShard {
+impl Drop for Tenant {
     fn drop(&mut self) {
         metrics::METRICS_REGISTRY
             .metrics_group
-            .storage_controller_tenant_shards
+            .storage_controller_tenants
             .dec();
     }
 }
@@ -469,8 +469,8 @@ pub(crate) mod tests {
     use super::*;
     use crate::scheduler::test_utils::make_test_nodes;
 
-    fn make_test_tenant_shard(policy: PlacementPolicy) -> TenantShard {
-        TenantShard::new(TenantId::generate(), policy)
+    fn make_test_tenant(policy: PlacementPolicy) -> Tenant {
+        Tenant::new(TenantId::generate(), policy)
     }
 
     /// Test the scheduling behaviors used when a tenant configured for HA is subject
@@ -484,26 +484,26 @@ pub(crate) mod tests {
         let mut scheduler = Scheduler::new(nodes.values());
         let mut context = ScheduleContext::default();
 
-        let mut tenant_shard = make_test_tenant_shard(PlacementPolicy::Attached(1));
-        tenant_shard
+        let mut tenant = make_test_tenant(PlacementPolicy::Attached(1));
+        tenant
             .schedule(&mut scheduler, &mut context)
             .expect("we have enough nodes, scheduling should work");
 
         // Expect to initially be schedule on to different nodes
-        assert_eq!(tenant_shard.intent.secondary.len(), 1);
-        assert!(tenant_shard.intent.attached.is_some());
+        assert_eq!(tenant.intent.secondary.len(), 1);
+        assert!(tenant.intent.attached.is_some());
 
-        let attached_node_id = tenant_shard.intent.attached.unwrap();
-        let secondary_node_id = *tenant_shard.intent.secondary.iter().last().unwrap();
+        let attached_node_id = tenant.intent.attached.unwrap();
+        let secondary_node_id = *tenant.intent.secondary.iter().last().unwrap();
         assert_ne!(attached_node_id, secondary_node_id);
 
         // Notifying the attached node is offline should demote it to a secondary
-        let changed = tenant_shard
+        let changed = tenant
             .intent
             .demote_attached(&mut scheduler, attached_node_id);
         assert!(changed);
-        assert!(tenant_shard.intent.attached.is_none());
-        assert_eq!(tenant_shard.intent.secondary.len(), 2);
+        assert!(tenant.intent.attached.is_none());
+        assert_eq!(tenant.intent.secondary.len(), 2);
 
         // Update the scheduler state to indicate the node is offline
         nodes
@@ -513,18 +513,18 @@ pub(crate) mod tests {
         scheduler.node_upsert(nodes.get(&attached_node_id).unwrap());
 
         // Scheduling the node should promote the still-available secondary node to attached
-        tenant_shard
+        tenant
             .schedule(&mut scheduler, &mut context)
             .expect("active nodes are available");
-        assert_eq!(tenant_shard.intent.attached.unwrap(), secondary_node_id);
+        assert_eq!(tenant.intent.attached.unwrap(), secondary_node_id);
 
         // The original attached node should have been retained as a secondary
         assert_eq!(
-            *tenant_shard.intent.secondary.iter().last().unwrap(),
+            *tenant.intent.secondary.iter().last().unwrap(),
             attached_node_id
         );
 
-        tenant_shard.intent.clear(&mut scheduler);
+        tenant.intent.clear(&mut scheduler);
 
         Ok(())
     }
@@ -534,27 +534,27 @@ pub(crate) mod tests {
         let nodes = make_test_nodes(3);
         let mut scheduler = Scheduler::new(nodes.values());
 
-        let mut tenant_shard = make_test_tenant_shard(PlacementPolicy::Attached(1));
+        let mut tenant = make_test_tenant(PlacementPolicy::Attached(1));
 
         // In pause mode, schedule() shouldn't do anything
-        tenant_shard.scheduling_policy = ShardSchedulingPolicy::Pause;
+        tenant.scheduling_policy = ShardSchedulingPolicy::Pause;
         assert!(
-            tenant_shard
+            tenant
                 .schedule(&mut scheduler, &mut ScheduleContext::default())
                 .is_ok()
         );
-        assert!(tenant_shard.intent.all_pageservers().is_empty());
+        assert!(tenant.intent.all_pageservers().is_empty());
 
         // In active mode, schedule() works
-        tenant_shard.scheduling_policy = ShardSchedulingPolicy::Active;
+        tenant.scheduling_policy = ShardSchedulingPolicy::Active;
         assert!(
-            tenant_shard
+            tenant
                 .schedule(&mut scheduler, &mut ScheduleContext::default())
                 .is_ok()
         );
-        assert!(!tenant_shard.intent.all_pageservers().is_empty());
+        assert!(!tenant.intent.all_pageservers().is_empty());
 
-        tenant_shard.intent.clear(&mut scheduler);
+        tenant.intent.clear(&mut scheduler);
         Ok(())
     }
 
@@ -566,35 +566,35 @@ pub(crate) mod tests {
         let mut scheduler = Scheduler::new(nodes.values());
         let mut context = ScheduleContext::default();
 
-        let mut tenant_shard = make_test_tenant_shard(PlacementPolicy::Secondary);
-        tenant_shard
+        let mut tenant = make_test_tenant(PlacementPolicy::Secondary);
+        tenant
             .schedule(&mut scheduler, &mut context)
             .expect("we have enough nodes, scheduling should work");
-        assert_eq!(tenant_shard.intent.secondary.len(), 1);
-        assert!(tenant_shard.intent.attached.is_none());
+        assert_eq!(tenant.intent.secondary.len(), 1);
+        assert!(tenant.intent.attached.is_none());
 
         // Switch to PlacementPolicy::Attached
-        tenant_shard.policy = PlacementPolicy::Attached(1);
-        tenant_shard
+        tenant.policy = PlacementPolicy::Attached(1);
+        tenant
             .schedule(&mut scheduler, &mut context)
             .expect("we have enough nodes, scheduling should work");
-        assert_eq!(tenant_shard.intent.secondary.len(), 1);
-        assert!(tenant_shard.intent.attached.is_some());
+        assert_eq!(tenant.intent.secondary.len(), 1);
+        assert!(tenant.intent.attached.is_some());
         // Attached and secondary should be on different nodes
         assert_ne!(
-            Some(tenant_shard.intent.secondary[0]),
-            tenant_shard.intent.attached
+            Some(tenant.intent.secondary[0]),
+            tenant.intent.attached
         );
 
         // Switch back to PlacementPolicy::Secondary
-        tenant_shard.policy = PlacementPolicy::Secondary;
-        tenant_shard
+        tenant.policy = PlacementPolicy::Secondary;
+        tenant
             .schedule(&mut scheduler, &mut context)
             .expect("we have enough nodes, scheduling should work");
-        assert_eq!(tenant_shard.intent.secondary.len(), 1);
-        assert!(tenant_shard.intent.attached.is_none());
+        assert_eq!(tenant.intent.secondary.len(), 1);
+        assert!(tenant.intent.attached.is_none());
 
-        tenant_shard.intent.clear(&mut scheduler);
+        tenant.intent.clear(&mut scheduler);
 
         Ok(())
     }

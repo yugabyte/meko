@@ -471,9 +471,9 @@ async fn handle_tenant_timeline_passthrough(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_or_shard_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_or_shard_id).await;
+    maybe_rate_limit(&req, tenant_id).await;
 
     let Some(path) = req.uri().path_and_query() else {
         // This should never happen, our request router only calls us if there is a path
@@ -489,32 +489,23 @@ async fn handle_tenant_timeline_passthrough(
         _ => return Err(ApiError::BadRequest(anyhow::anyhow!("Unsupported method"))),
     };
 
-    tracing::info!(
-        "Proxying request for tenant {} ({})",
-        tenant_or_shard_id,
-        path
-    );
+    tracing::info!("Proxying request for tenant {} ({})", tenant_id, path);
 
-    // yb-mode: a tenant has a single shard; find the node that holds it.
-    let (_, tenant_shard_id) = service.tenant_shard0_node(tenant_or_shard_id).await?;
+    // yb-mode: find the node that holds the tenant.
+    let (_, tenant_id) = service.tenant0_node(tenant_id).await?;
 
     let service_inner = service.clone();
 
-    service.tenant_shard_remote_mutation(tenant_shard_id, |locations| async move {
+    service.tenant_remote_mutation(tenant_id, |locations| async move {
         let TenantMutationLocations(locations) = locations;
         if locations.is_empty() {
-            return Err(ApiError::NotFound(anyhow::anyhow!("Tenant {} not found", tenant_or_shard_id).into()));
+            return Err(ApiError::NotFound(anyhow::anyhow!("Tenant {} not found", tenant_id).into()));
         }
 
-        let (tenant_or_shard_id, locations) = locations.into_iter().next().unwrap();
+        let (_tenant_id, locations) = locations.into_iter().next().unwrap();
         let node = locations.latest.node;
 
-        // Callers will always pass an unsharded tenant ID.  Before proxying, we must
-        // rewrite this to a shard-aware shard zero ID.
         let path = format!("{path}");
-        let tenant_str = tenant_or_shard_id.to_string();
-        let tenant_shard_str = format!("{tenant_shard_id}");
-        let path = path.replace(&tenant_str, &tenant_shard_str);
 
         let latency = &METRICS_REGISTRY
             .metrics_group
@@ -562,15 +553,15 @@ async fn handle_tenant_timeline_passthrough(
             .map_err(|e| ApiError::InternalServerError(e.into()))?;
         // Inspect 404 errors: at this point, we know that the tenant exists, but the pageserver we route
         // the request to might not yet be ready. Therefore, if it is a _tenant_ not found error, we can
-        // convert it into a 503. TODO: we should make this part of the check in `tenant_shard_remote_mutation`.
-        // However, `tenant_shard_remote_mutation` currently cannot inspect the HTTP error response body,
+        // convert it into a 503. TODO: we should make this part of the check in `tenant_remote_mutation`.
+        // However, `tenant_remote_mutation` currently cannot inspect the HTTP error response body,
         // so we have to do it here instead.
         if resp_staus == reqwest::StatusCode::NOT_FOUND {
             let resp_str = std::str::from_utf8(&resp_bytes)
                 .map_err(|e| ApiError::InternalServerError(e.into()))?;
             // We only handle "tenant not found" errors; other 404s like timeline not found should
             // be forwarded as-is.
-            if Service::is_tenant_not_found_error(resp_str, tenant_or_shard_id) {
+            if Service::is_tenant_not_found_error(resp_str, tenant_id) {
                 // Rather than retry here, send the client a 503 to prompt a retry: this matches
                 // the pageserver's use of 503, and all clients calling this API should retry on 503.
                 return Err(ApiError::ResourceUnavailable(
@@ -895,12 +886,12 @@ async fn handle_metadata_health_list_unhealthy(
     check_permissions(&req, Scope::Admin)?;
 
     let state = get_state(&req);
-    let unhealthy_tenant_shards = state.service.metadata_health_list_unhealthy().await?;
+    let unhealthy_tenants = state.service.metadata_health_list_unhealthy().await?;
 
     json_response(
         StatusCode::OK,
         MetadataHealthListUnhealthyResponse {
-            unhealthy_tenant_shards,
+            unhealthy_tenants,
         },
     )
 }

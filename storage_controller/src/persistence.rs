@@ -82,7 +82,7 @@ pub(crate) const SC_SCHEMA: &str = "storage_controller";
 /// Legacy format, for use in JSON compat objects in test environment
 #[derive(Serialize, Deserialize)]
 struct JsonPersistence {
-    tenants: HashMap<TenantId, TenantShardPersistence>,
+    tenants: HashMap<TenantId, TenantPersistence>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -114,7 +114,7 @@ pub(crate) enum DatabaseOperation {
     ListTenantShards,
     LoadTenant,
     InsertTenantShards,
-    UpdateTenantShard,
+    UpdateTenant,
     DeleteTenant,
     UpdateTenantConfig,
     UpdateMetadataHealth,
@@ -149,7 +149,7 @@ pub(crate) enum TenantFilter {
 
 /// Represents the results of looking up generation+pageserver for the shards of a tenant
 pub(crate) struct ShardGenerationState {
-    pub(crate) tenant_shard_id: TenantId,
+    pub(crate) tenant_id: TenantId,
     pub(crate) generation: Option<Generation>,
     pub(crate) generation_pageserver: Option<NodeId>,
 }
@@ -634,16 +634,16 @@ impl Persistence {
     ///
     /// We exclude shards configured to be detached.  During startup, if we see any attached locations
     /// for such shards, they will automatically be detached as 'orphans'.
-    pub(crate) async fn load_active_tenant_shards(
+    pub(crate) async fn load_active_tenants(
         &self,
-    ) -> DatabaseResult<Vec<TenantShardPersistence>> {
+    ) -> DatabaseResult<Vec<TenantPersistence>> {
         use crate::schema::tenants::dsl::*;
         self.with_measured_conn(DatabaseOperation::ListTenantShards, move |conn| {
             Box::pin(async move {
                 let query = tenants.filter(
                     placement_policy.ne(serde_json::to_string(&PlacementPolicy::Detached).unwrap()),
                 );
-                let result = query.load::<TenantShardPersistence>(conn).await?;
+                let result = query.load::<TenantPersistence>(conn).await?;
 
                 Ok(result)
             })
@@ -655,12 +655,12 @@ impl Persistence {
     pub(crate) async fn load_tenant(
         &self,
         filter_tenant_id: TenantId,
-    ) -> DatabaseResult<Vec<TenantShardPersistence>> {
+    ) -> DatabaseResult<Vec<TenantPersistence>> {
         use crate::schema::tenants::dsl::*;
         self.with_measured_conn(DatabaseOperation::LoadTenant, move |conn| {
             Box::pin(async move {
                 let query = tenants.filter(tenant_id.eq(filter_tenant_id.to_string()));
-                let result = query.load::<TenantShardPersistence>(conn).await?;
+                let result = query.load::<TenantPersistence>(conn).await?;
 
                 Ok(result)
             })
@@ -670,9 +670,9 @@ impl Persistence {
 
     /// Tenants must be persisted before we schedule them for the first time.  This enables us
     /// to correctly retain generation monotonicity, and the externally provided placement policy & config.
-    pub(crate) async fn insert_tenant_shards(
+    pub(crate) async fn insert_tenants(
         &self,
-        shards: Vec<TenantShardPersistence>,
+        shards: Vec<TenantPersistence>,
     ) -> DatabaseResult<()> {
         use crate::schema::{metadata_health, tenants};
 
@@ -766,7 +766,7 @@ impl Persistence {
 
                     let updated = tenants
                         .filter(generation_pageserver.eq(input_node_id.0 as i64))
-                        .select(TenantShardPersistence::as_select())
+                        .select(TenantPersistence::as_select())
                         .load(conn)
                         .await?;
 
@@ -795,7 +795,7 @@ impl Persistence {
 
         let mut result = HashMap::new();
         for tsp in updated {
-            let tenant_shard_id = TenantId::from_str(tsp.tenant_id.as_str())
+            let parsed_tenant_id = TenantId::from_str(tsp.tenant_id.as_str())
                 .map_err(|e| DatabaseError::Logical(format!("Malformed tenant id: {e}")))?;
 
             let Some(g) = tsp.generation else {
@@ -805,7 +805,7 @@ impl Persistence {
                     "Generation should always be set after incrementing".to_string(),
                 ));
             };
-            result.insert(tenant_shard_id, Generation::new(g as u32));
+            result.insert(parsed_tenant_id, Generation::new(g as u32));
         }
 
         Ok(result)
@@ -816,7 +816,7 @@ impl Persistence {
     /// so that in [`Self::re_attach`] we can do a bulk UPDATE on the generations for that node.
     pub(crate) async fn increment_generation(
         &self,
-        tenant_shard_id: TenantId,
+        input_tenant_id: TenantId,
         node_id: NodeId,
     ) -> anyhow::Result<Generation> {
         use crate::schema::tenants::dsl::*;
@@ -824,13 +824,13 @@ impl Persistence {
             .with_measured_conn(DatabaseOperation::IncrementGeneration, move |conn| {
                 Box::pin(async move {
                     let updated = diesel::update(tenants)
-                        .filter(tenant_id.eq(tenant_shard_id.to_string()))
+                        .filter(tenant_id.eq(input_tenant_id.to_string()))
                         .set((
                             generation.eq(generation + 1),
                             generation_pageserver.eq(node_id.0 as i64),
                         ))
                         // TODO: only returning() the generation column
-                        .returning(TenantShardPersistence::as_returning())
+                        .returning(TenantPersistence::as_returning())
                         .get_result(conn)
                         .await?;
 
@@ -870,7 +870,7 @@ impl Persistence {
                 Box::pin(async move {
                     let result = tenants
                         .filter(tenant_id.eq(filter_tenant_id.to_string()))
-                        .select(TenantShardPersistence::as_select())
+                        .select(TenantPersistence::as_select())
                         .load(conn)
                         .await?;
                     Ok(result)
@@ -881,9 +881,9 @@ impl Persistence {
         Ok(rows
             .into_iter()
             .map(|p| ShardGenerationState {
-                tenant_shard_id: p
-                    .get_tenant_shard_id()
-                    .expect("Corrupt tenant shard id in database"),
+                tenant_id: p
+                    .get_tenant_id()
+                    .expect("Corrupt tenant id in database"),
                 generation: p.generation.map(|g| Generation::new(g as u32)),
                 generation_pageserver: p.generation_pageserver.map(|n| NodeId(n as u64)),
             })
@@ -895,9 +895,9 @@ impl Persistence {
     /// Output is unsorted.  Output may not include values for all inputs, if they are missing in the database.
     pub(crate) async fn shard_generations(
         &self,
-        mut tenant_shard_ids: impl Iterator<Item = &TenantId>,
+        mut tenant_ids: impl Iterator<Item = &TenantId>,
     ) -> Result<Vec<(TenantId, Option<Generation>)>, DatabaseError> {
-        let mut rows = Vec::with_capacity(tenant_shard_ids.size_hint().0);
+        let mut rows = Vec::with_capacity(tenant_ids.size_hint().0);
 
         // We will chunk our input to avoid composing arbitrarily long `IN` clauses.  Typically we are
         // called with a single digit number of IDs, but in principle we could be called with tens
@@ -905,7 +905,7 @@ impl Persistence {
         loop {
             // A modest hardcoded chunk size to handle typical cases in a single query but never generate particularly
             // large query strings.
-            let chunk_ids = tenant_shard_ids.by_ref().take(32);
+            let chunk_ids = tenant_ids.by_ref().take(32);
 
             // Compose a comma separated list of tenant ids to match on. The
             // `tenants` table is keyed by `tenant_id` alone (no shards in yb-light).
@@ -922,7 +922,7 @@ impl Persistence {
             let chunk_rows = self
                 .with_measured_conn(DatabaseOperation::ShardGenerations, move |conn| {
                     Box::pin(async move {
-                        let result : Vec<TenantShardPersistence> = diesel::sql_query(
+                        let result : Vec<TenantPersistence> = diesel::sql_query(
                             format!("SELECT * from tenants where tenant_id in ({in_clause});").as_str()
                         ).load(conn).await?;
 
@@ -937,7 +937,7 @@ impl Persistence {
             .into_iter()
             .map(|tsp| {
                 (
-                    tsp.get_tenant_shard_id()
+                    tsp.get_tenant_id()
                         .expect("Bad tenant ID in database"),
                     tsp.generation.map(|g| Generation::new(g as u32)),
                 )
@@ -951,7 +951,7 @@ impl Persistence {
     /// Do not use this for settting generation, unless in the special onboarding code path (/location_config)
     /// API: use [`Self::increment_generation`] instead.  Setting the generation via this route is a one-time thing
     /// that we only do the first time a tenant is set to an attached policy via /location_config.
-    pub(crate) async fn update_tenant_shard(
+    pub(crate) async fn update_tenant(
         &self,
         tenant: TenantFilter,
         input_placement_policy: Option<PlacementPolicy>,
@@ -966,11 +966,11 @@ impl Persistence {
         let input_config = &input_config;
         let input_generation = &input_generation;
         let input_scheduling_policy = &input_scheduling_policy;
-        self.with_measured_conn(DatabaseOperation::UpdateTenantShard, move |conn| {
+        self.with_measured_conn(DatabaseOperation::UpdateTenant, move |conn| {
             Box::pin(async move {
                 let query = match tenant {
-                    TenantFilter::Shard(tenant_shard_id) => diesel::update(tenants)
-                        .filter(tenant_id.eq(tenant_shard_id.to_string()))
+                    TenantFilter::Shard(input_tenant_id) => diesel::update(tenants)
+                        .filter(tenant_id.eq(input_tenant_id.to_string()))
                         .into_boxed(),
                     TenantFilter::Tenant(input_tenant_id) => diesel::update(tenants)
                         .filter(tenant_id.eq(input_tenant_id.to_string()))
@@ -1017,12 +1017,12 @@ impl Persistence {
         Ok(())
     }
 
-    pub(crate) async fn detach(&self, tenant_shard_id: TenantId) -> anyhow::Result<()> {
+    pub(crate) async fn detach(&self, input_tenant_id: TenantId) -> anyhow::Result<()> {
         use crate::schema::tenants::dsl::*;
         self.with_measured_conn(DatabaseOperation::Detach, move |conn| {
             Box::pin(async move {
                 let updated = diesel::update(tenants)
-                    .filter(tenant_id.eq(tenant_shard_id.to_string()))
+                    .filter(tenant_id.eq(input_tenant_id.to_string()))
                     .set((
                         generation_pageserver.eq(Option::<i64>::None),
                         placement_policy
@@ -1686,7 +1686,7 @@ impl Persistence {
     /// are covered by the outer [`DatabaseError`].
     pub(crate) async fn update_timeline_import(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         shard_status: ShardImportStatus,
     ) -> DatabaseResult<Result<Option<TimelineImport>, TimelineImportUpdateError>> {
@@ -1700,7 +1700,7 @@ impl Persistence {
                     let mut from_db: Vec<TimelineImportPersistence> = dsl::timeline_imports
                         .filter(
                             dsl::tenant_id
-                                .eq(tenant_shard_id.to_string())
+                                .eq(tenant_id.to_string())
                                 .and(dsl::timeline_id.eq(timeline_id.to_string())),
                         )
                         .load(conn)
@@ -1712,7 +1712,7 @@ impl Persistence {
                         Some(some) => TimelineImport::from_persistent(some).unwrap(),
                         None => {
                             return Ok(Err(TimelineImportUpdateError::ImportNotFound {
-                                tenant_id: tenant_shard_id,
+                                tenant_id: tenant_id,
                                 timeline_id,
                             }));
                         }
@@ -1734,7 +1734,7 @@ impl Persistence {
                             let updated = diesel::update(dsl::timeline_imports)
                                 .filter(
                                     dsl::tenant_id
-                                        .eq(tenant_shard_id.to_string())
+                                        .eq(tenant_id.to_string())
                                         .and(dsl::timeline_id.eq(timeline_id.to_string())),
                                 )
                                 .set(dsl::shard_statuses.eq(new_persistent.shard_statuses))
@@ -1743,7 +1743,7 @@ impl Persistence {
 
                             if updated != 1 {
                                 return Ok(Err(TimelineImportUpdateError::ImportNotFound {
-                                    tenant_id: tenant_shard_id,
+                                    tenant_id: tenant_id,
                                     timeline_id,
                                 }));
                             }
@@ -1968,7 +1968,7 @@ fn log_postgres_connstr_info(config_str: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Parts of [`crate::tenant_shard::TenantShard`] that are stored durably
+/// Parts of [`crate::tenant::Tenant`] that are stored durably
 ///
 /// No `Eq`: `config` is a `serde_json::Value` (JSONB column), which is only
 /// `PartialEq`.
@@ -1976,7 +1976,7 @@ fn log_postgres_connstr_info(config_str: &str) -> anyhow::Result<()> {
     QueryableByName, Queryable, Selectable, Insertable, Serialize, Deserialize, Clone, PartialEq,
 )]
 #[diesel(table_name = crate::schema::tenants)]
-pub(crate) struct TenantShardPersistence {
+pub(crate) struct TenantPersistence {
     #[serde(default)]
     pub(crate) tenant_id: String,
 
@@ -1994,15 +1994,15 @@ pub(crate) struct TenantShardPersistence {
     #[serde(default)]
     pub(crate) placement_policy: String,
     /// JSON-encoded `TenantConfig`, stored in a JSONB column. Opaque to the
-    /// controller's relational logic — encoded/decoded by `TenantShard`.
+    /// controller's relational logic — encoded/decoded by `Tenant`.
     #[serde(default)]
     pub(crate) config: serde_json::Value,
     #[serde(default)]
     pub(crate) scheduling_policy: String,
 }
 
-impl TenantShardPersistence {
-    pub(crate) fn get_tenant_shard_id(&self) -> anyhow::Result<TenantId> {
+impl TenantPersistence {
+    pub(crate) fn get_tenant_id(&self) -> anyhow::Result<TenantId> {
         Ok(TenantId::from_str(self.tenant_id.as_str())?)
     }
 }
@@ -2036,19 +2036,19 @@ pub(crate) struct MetadataHealthPersistence {
 
 impl MetadataHealthPersistence {
     pub fn new(
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         healthy: bool,
         last_scrubbed_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         MetadataHealthPersistence {
-            tenant_id: tenant_shard_id.to_string(),
+            tenant_id: tenant_id.to_string(),
             healthy,
             last_scrubbed_at,
         }
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get_tenant_shard_id(&self) -> Result<TenantId, hex::FromHexError> {
+    pub(crate) fn get_tenant_id(&self) -> Result<TenantId, hex::FromHexError> {
         TenantId::from_str(self.tenant_id.as_str())
     }
 }
@@ -2056,8 +2056,8 @@ impl MetadataHealthPersistence {
 impl From<MetadataHealthPersistence> for MetadataHealthRecord {
     fn from(value: MetadataHealthPersistence) -> Self {
         MetadataHealthRecord {
-            tenant_shard_id: value
-                .get_tenant_shard_id()
+            tenant_id: value
+                .get_tenant_id()
                 .expect("stored tenant id should be valid"),
             healthy: value.healthy,
             last_scrubbed_at: value.last_scrubbed_at,

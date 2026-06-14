@@ -26,12 +26,12 @@ use crate::{
 pub async fn download_initdb_tar_zst(
     timeline_path: &Utf8Path,
     storage: &GenericRemoteStorage,
-    tenant_shard_id: &TenantId,
+    tenant_id: &TenantId,
     timeline_id: &TimelineId,
     cancel: &CancellationToken,
 ) -> Result<(Utf8PathBuf, File), DownloadError> {
-    let remote_path = remote_initdb_archive_path(tenant_shard_id, timeline_id);
-    let remote_preserved_path = remote_initdb_preserved_archive_path(tenant_shard_id, timeline_id);
+    let remote_path = remote_initdb_archive_path(tenant_id, timeline_id);
+    let remote_preserved_path = remote_initdb_preserved_archive_path(tenant_id, timeline_id);
 
     if !timeline_path.exists() {
         tokio::fs::create_dir_all(&timeline_path)

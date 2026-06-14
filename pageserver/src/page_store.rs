@@ -3356,7 +3356,7 @@ mod tests {
         assert_eq!(got.current_generation, 2);
 
         // Bumped again: stored gen=2, attach at gen=5 → succeeds, YB now 5.
-        // (Mirrors the user's report: SC's tenant_shards.generation
+        // (Mirrors the user's report: SC's tenants.generation
         // moved 1→2→3 over restarts; this is the third restart
         // arriving at the PS, which must heal the lagging YB column.)
         let res = store

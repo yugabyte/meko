@@ -285,7 +285,7 @@ enum TimelineCmd {
 struct TimelineListCmdArgs {
     /// Tenant ID, as a 32-byte hexadecimal string.
     #[clap(long = "tenant-id")]
-    tenant_shard_id: Option<TenantId>,
+    tenant_id: Option<TenantId>,
 }
 
 /// Drop a branch and all of its endpoints: stop the endpoints' compute
@@ -566,7 +566,7 @@ enum EndpointCmd {
 struct EndpointListCmdArgs {
     /// Tenant ID, as a 32-byte hexadecimal string.
     #[clap(long = "tenant-id")]
-    tenant_shard_id: Option<TenantId>,
+    tenant_id: Option<TenantId>,
 }
 
 /// Create a compute endpoint.
@@ -1004,21 +1004,6 @@ fn get_tenant_id(
         Ok(default_id)
     } else {
         anyhow::bail!("No tenant id. Use --tenant-id, or set a default tenant");
-    }
-}
-
-/// Helper function to get tenant-shard ID from an optional --tenant_id option or from the config file,
-/// for commands that accept a shard suffix
-fn get_tenant_shard_id(
-    tenant_shard_id_arg: Option<TenantId>,
-    env: &local_env::LocalEnv,
-) -> anyhow::Result<TenantId> {
-    if let Some(tenant_id_from_arguments) = tenant_shard_id_arg {
-        Ok(tenant_id_from_arguments)
-    } else if let Some(default_id) = env.default_tenant_id {
-        Ok(default_id)
-    } else {
-        anyhow::bail!("No tenant shard id. Use --tenant-id, or set a default tenant");
     }
 }
 
@@ -1465,8 +1450,8 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             // TODO(sharding): this command shouldn't have to specify a shard ID: we should ask the storage controller
             // where shard 0 is attached, and query there.
             let pageserver = get_default_pageserver(env)?;
-            let tenant_shard_id = get_tenant_shard_id(args.tenant_shard_id, env)?;
-            let timelines = pageserver.timeline_list(&tenant_shard_id).await?;
+            let tenant_id = get_tenant_id(args.tenant_id, env)?;
+            let timelines = pageserver.timeline_list(&tenant_id).await?;
             print_timelines_tree(timelines, env.timeline_name_mappings().await?)?;
         }
         TimelineCmd::Create(_) => {
@@ -1974,7 +1959,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
         EndpointCmd::List(args) => {
             // TODO(sharding): this command shouldn't have to specify a shard ID: we should ask the storage controller
             // where shard 0 is attached, and query there.
-            let tenant_shard_id = get_tenant_shard_id(args.tenant_shard_id, env)?;
+            let tenant_id = get_tenant_id(args.tenant_id, env)?;
 
             let timeline_name_mappings = env.timeline_name_mappings().await?;
 
@@ -1994,7 +1979,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             for (endpoint_id, endpoint) in cplane
                 .endpoints
                 .iter()
-                .filter(|(_, endpoint)| endpoint.tenant_id == tenant_shard_id)
+                .filter(|(_, endpoint)| endpoint.tenant_id == tenant_id)
             {
                 let lsn_str = match endpoint.mode {
                     ComputeMode::Static(lsn) => {
@@ -2011,7 +1996,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
 
                 let branch_name = timeline_name_mappings
                     .get(&TenantTimelineId::new(
-                        tenant_shard_id,
+                        tenant_id,
                         endpoint.timeline_id,
                     ))
                     .map(|name| name.as_str())

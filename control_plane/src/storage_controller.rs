@@ -96,7 +96,7 @@ impl YbLightStorageControllerStopArgs {
 
 #[derive(Serialize, Deserialize)]
 pub struct AttachHookRequest {
-    pub tenant_shard_id: TenantId,
+    pub tenant_id: TenantId,
     pub node_id: Option<NodeId>,
     pub generation_override: Option<i32>, // only new tenants
     pub config: Option<TenantConfig>,     // only new tenants
@@ -110,7 +110,7 @@ pub struct AttachHookResponse {
 
 #[derive(Serialize, Deserialize)]
 pub struct InspectRequest {
-    pub tenant_shard_id: TenantId,
+    pub tenant_id: TenantId,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1017,11 +1017,11 @@ impl StorageController {
     #[instrument(skip(self))]
     pub async fn attach_hook(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         pageserver_id: NodeId,
     ) -> anyhow::Result<Option<u32>> {
         let request = AttachHookRequest {
-            tenant_shard_id,
+            tenant_id,
             node_id: Some(pageserver_id),
             generation_override: None,
             config: None,
@@ -1077,9 +1077,9 @@ impl StorageController {
     #[instrument(skip(self))]
     pub async fn inspect(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
     ) -> anyhow::Result<Option<(u32, NodeId)>> {
-        let request = InspectRequest { tenant_shard_id };
+        let request = InspectRequest { tenant_id };
 
         let response = self
             .dispatch::<_, InspectResponse>(

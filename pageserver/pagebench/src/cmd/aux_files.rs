@@ -58,7 +58,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
     .await?;
 
     let timeline = timelines[0];
-    let tenant_shard_id = timeline.tenant_id;
+    let tenant_id = timeline.tenant_id;
     let timeline_id = timeline.timeline_id;
 
     println!("operating on timeline {timeline}");
@@ -81,7 +81,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
             .collect::<HashMap<_, _>>();
         let file_cnt = items.len();
         mgmt_api_client
-            .ingest_aux_files(tenant_shard_id, timeline_id, items)
+            .ingest_aux_files(tenant_id, timeline_id, items)
             .await?;
         println!("ingested {file_cnt} files");
     }
@@ -89,7 +89,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
     for _ in 0..100 {
         let start = Instant::now();
         let files = mgmt_api_client
-            .list_aux_files(tenant_shard_id, timeline_id, Lsn(Lsn::MAX.0 - 1))
+            .list_aux_files(tenant_id, timeline_id, Lsn(Lsn::MAX.0 - 1))
             .await?;
         println!(
             "{} files found in {}s",
