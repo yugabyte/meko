@@ -596,6 +596,18 @@ async fn timeline_flush_handler(
             other => ApiError::InternalServerError(other.into()),
         })?;
 
+        // This endpoint (unlike the throttled periodic/bootstrap flushes)
+        // forces the durable consistent_lsn UPDATE through immediately, so a
+        // branching descendant's durability barrier clears without waiting
+        // out the per-`max_age` upsert throttle.
+        timeline
+            .force_advance_consistent_lsn()
+            .await
+            .map_err(|e| match e {
+                page_server::timeline::FlushLayerError::Cancelled => ApiError::ShuttingDown,
+                other => ApiError::InternalServerError(other.into()),
+            })?;
+
         json_response(StatusCode::OK, ())
     }
     .instrument(info_span!("flush", tenant_id = %tenant_id, %timeline_id))

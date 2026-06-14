@@ -1465,6 +1465,21 @@ impl Timeline {
         Ok(())
     }
 
+    /// Persist the durable `consistent_lsn` up to whatever the last flush
+    /// made durable, **bypassing the periodic UPDATE throttle**. The normal
+    /// `flush()` only writes the `timeline_state` row once per `max_age`; this
+    /// forces it through immediately. Used by the branch-time flush endpoint
+    /// so a freshly-branching descendant sees the ancestor's advance at once
+    /// instead of waiting out the throttle window.
+    pub(crate) async fn force_advance_consistent_lsn(&self) -> Result<(), FlushLayerError> {
+        if let Some(pw) = &self.page_writer {
+            pw.force_upsert_consistent_lsn_if_advanced()
+                .await
+                .map_err(|e| FlushLayerError::Other(Arc::new(e)))?;
+        }
+        Ok(())
+    }
+
     /// yb-mode: no-op. In Neon this background task closes open
     /// ephemeral InMemoryLayers when idle / oversized. yb-pageserver
     /// never opens an InMemoryLayer (writes go straight into
