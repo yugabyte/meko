@@ -591,7 +591,7 @@ async fn timeline_flush_handler(
                 .map_err(|e| ApiError::InternalServerError(e.into()))?;
         }
 
-        timeline.freeze_and_flush().await.map_err(|e| match e {
+        timeline.flush().await.map_err(|e| match e {
             page_server::timeline::FlushLayerError::Cancelled => ApiError::ShuttingDown,
             other => ApiError::InternalServerError(other.into()),
         })?;

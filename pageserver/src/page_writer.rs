@@ -294,7 +294,7 @@ pub struct PageWriter {
     /// — see `read_chain_durable` for the use site.
     flush_horizon_lsn: std::sync::atomic::AtomicU64,
     /// Serializes the whole of `flush()`. The periodic flusher
-    /// (`spawn_flusher`) and every `freeze_and_flush` caller
+    /// (`spawn_flusher`) and every `flush` caller
     /// (checkpoints, basebackup, bootstrap import-finish, HTTP, the
     /// shutdown drain) all invoke `flush()` from independent tasks.
     /// `flush()` snapshots the aux buffer in one critical section and

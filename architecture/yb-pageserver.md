@@ -68,7 +68,7 @@ The management HTTP surface is correspondingly small: status /
 metrics / profile / utilization, the single timeline's list + detail
 (`GET /v1/tenant/:t/timeline[/:tl]`), `get_lsn_by_timestamp`,
 `get_timestamp_of_lsn`, `lsn_lease`, `do_gc`, `flush` (`PUT
-…/timeline/:tl/flush?lsn=` — `freeze_and_flush` to YB, optionally waiting
+…/timeline/:tl/flush?lsn=` — flushes pages to YB, optionally waiting
 for ingest to reach `lsn` first, then forces the durable `consistent_lsn`
 UPDATE through immediately (bypassing the per-`max_age` upsert throttle that
 the periodic/bootstrap flushes use); used to flush an ancestor at branch
@@ -101,7 +101,7 @@ Consequences elsewhere:
   `consistent_lsn` to catch up before writing the branch row. To avoid
   paying a full ancestor flush interval (~5 s) on that retry, the launcher
   first issues a best-effort `flush?lsn=<branch_lsn>` to the **ancestor**
-  pageserver (wait-for-ingest then `freeze_and_flush`), so the durability
+  pageserver (wait-for-ingest then flush), so the durability
   barrier clears on the first try (~5 s → ~0.1 s); the retry stays as the
   correctness guarantee. Endpoints resolve
   their pageserver and safekeeper from the timeline they sit on

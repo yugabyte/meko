@@ -1939,7 +1939,7 @@ impl PageServer {
     pub(crate) async fn flush_remote(&self) -> anyhow::Result<()> {
         async fn flush_timeline(_gate: GateGuard, timeline: Arc<Timeline>) -> anyhow::Result<()> {
             tracing::info!(timeline_id=%timeline.timeline_id, "Flushing...");
-            timeline.freeze_and_flush().await?;
+            timeline.flush().await?;
             // yb-mode: no asynchronous uploads to wait on; flush is
             // synchronous against YB.
             Ok(())

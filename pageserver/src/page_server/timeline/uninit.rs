@@ -69,7 +69,7 @@ impl<'t> UninitializedTimeline<'t> {
 
         // Flush the underlying timeline's ephemeral layers to disk
         if let Err(e) = timeline
-            .freeze_and_flush()
+            .flush()
             .await
             .context("Failed to flush after timeline creation writes")
         {

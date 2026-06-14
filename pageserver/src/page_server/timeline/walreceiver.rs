@@ -46,7 +46,7 @@ pub struct WalReceiverConf {
 pub struct WalReceiver {
     manager_status: Arc<std::sync::RwLock<Option<ConnectionManagerStatus>>>,
     /// All task spawned by [`WalReceiver::start`] and its children are sensitive to this token.
-    /// It's a child token of [`Timeline`] so that timeline shutdown can cancel WalReceiver tasks early for `freeze_and_flush=true`.
+    /// It's a child token of [`Timeline`] so that timeline shutdown can cancel WalReceiver tasks early for the `ShutdownMode::FreezeAndFlush` path.
     cancel: CancellationToken,
 }
 

@@ -1431,32 +1431,18 @@ impl Timeline {
         Ok(lease)
     }
 
-    /// yb-mode: equivalent to `freeze_and_flush` (drain `PageWriter`
-    /// row buffer into YB). The `u64` return is a legacy flush-token
-    /// from the Neon flush_loop machinery — always 0 in yb-mode.
-    #[instrument(skip(self), fields(tenant_id=%self.tenant_id, timeline_id=%self.timeline_id))]
-    pub(crate) async fn freeze(&self) -> Result<u64, FlushLayerError> {
-        self.freeze_and_flush0().await?;
-        Ok(0)
-    }
-
-    /// Freeze and flush the open in-memory layer, waiting for it to be written to disk.
-    #[instrument(skip(self), fields(tenant_id=%self.tenant_id, timeline_id=%self.timeline_id))]
     /// yb-pageserver durability checkpoint: drain the `PageWriter`
     /// row-INSERT buffer into YugabyteDB.
     ///
     /// Replaces the original Neon freeze-inmem-layer → flush-to-disk
-    /// pipeline (which produced delta + image layer files). In yb-mode
-    /// the equivalent of "make pending writes durable" is to flush the
-    /// pending row buffer; YB's Raft replication takes it from there.
-    /// No-op if there's no `PageWriter` (a yb-pageserver running with
-    /// no compute_page_store + fpu_page_store wouldn't accept
-    /// writes in the first place).
-    pub(crate) async fn freeze_and_flush(&self) -> Result<(), FlushLayerError> {
-        self.freeze_and_flush0().await
-    }
-
-    pub(crate) async fn freeze_and_flush0(&self) -> Result<(), FlushLayerError> {
+    /// pipeline (delta + image layer files). yb-pageserver never opens an
+    /// in-memory layer — writes go straight into the `PageWriter` row
+    /// buffer — so there is nothing to *freeze*; "make pending writes
+    /// durable" is just flushing that buffer, and YB's Raft replication
+    /// takes it from there. No-op if there's no `PageWriter` (a
+    /// yb-pageserver with no page stores wouldn't accept writes anyway).
+    #[instrument(skip(self), fields(tenant_id=%self.tenant_id, timeline_id=%self.timeline_id))]
+    pub(crate) async fn flush(&self) -> Result<(), FlushLayerError> {
         if let Some(pw) = &self.page_writer {
             pw.flush()
                 .await
@@ -1538,7 +1524,7 @@ impl Timeline {
     pub(crate) async fn shutdown(&self, mode: ShutdownMode) {
         debug_assert_current_span_has_tenant_and_timeline_id();
 
-        // Regardless of whether we're going to try_freeze_and_flush
+        // Regardless of whether we're going to flush (FreezeAndFlush mode),
         // cancel walreceiver to stop ingesting more data asap.
         //
         // Note that we're accepting a race condition here where we may
@@ -1595,20 +1581,18 @@ impl Timeline {
 
         if let ShutdownMode::FreezeAndFlush = mode {
             // yb-mode: no in-memory layers to inspect; always issue the
-            // freeze_and_flush call so PageWriter has a chance to flush
-            // its pending row buffer before shutdown.
+            // flush so PageWriter has a chance to drain its pending row
+            // buffer before shutdown.
             let do_flush = !self
                 .remote_state
                 .archived
                 .load(std::sync::atomic::Ordering::Relaxed);
 
             if do_flush {
-                match self.freeze_and_flush().await {
+                match self.flush().await {
                     Ok(_) => {
-                        // yb-mode: nothing to drain. The upload queue is
-                        // empty by design — `PageWriter::flush()` already
-                        // persisted via YB INSERTs as part of
-                        // `freeze_and_flush`.
+                        // yb-mode: nothing more to drain — `PageWriter::flush()`
+                        // already persisted via YB INSERTs.
                     }
                     Err(FlushLayerError::Cancelled) => {
                         debug_assert!(self.cancel.is_cancelled());
