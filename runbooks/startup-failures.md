@@ -95,7 +95,7 @@ if a `pageserver` schema is expected and missing.
 Build drift removes/renames flags. The safekeeper's whole config surface now lives in
 `<datadir>/safekeeper.toml` (written by the launcher; the analogue of `pageserver.toml`), so the
 binary accepts only `-D <datadir>`, `--init`, and `--dump-control-file`. A start script still passing
-`--id`/`--listen-pg`/`--wal-yb-config`/etc. will fail — move those settings into `safekeeper.toml`
+`--id`/`--listen-pg`/etc. will fail — move those settings into `safekeeper.toml`
 (see `architecture/safekeeper.md` "Run / configure"). Earlier drift also removed `--broker-endpoint`
 and `--control-file-backend`. Run `<build>/safekeeper --help` and diff against the start script.
 
