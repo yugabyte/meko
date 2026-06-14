@@ -22,7 +22,6 @@ use once_cell::sync::Lazy;
 use pageserver_api::config::tenant_conf_defaults::DEFAULT_PITR_INTERVAL;
 use pageserver_api::key::{Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFIX};
 use pageserver_api::models::{LsnLease, PageTraceEvent, RelSizeMigration, TimelineState};
-use pageserver_api::models::{ShardIdentity, ShardNumber};
 use pageserver_api::reltag::{BlockNumber, RelTag};
 use postgres_connection::PgConnectionConfig;
 use postgres_ffi::v17::xlog_utils;
@@ -99,10 +98,6 @@ pub struct Timeline {
     /// This duplicates the generation in AttachedTenantConf, but that structure is mutable:
     /// this copy enforces the invariant that generatio doesn't change during a Tenant's lifetime.
     pub(crate) generation: Generation,
-
-    /// The detailed sharding information from our parent Tenant.  This enables us to map keys
-    /// to shards, and is constant through the lifetime of this Timeline.
-    shard_identity: ShardIdentity,
 
     pub pg_version: PgMajorVersion,
 
@@ -403,7 +398,6 @@ impl From<utils::bin_ser::DeserializeError> for PageReconstructError {
 #[derive(thiserror::Error)]
 pub struct MissingKeyError {
     keyspace: KeySpace,
-    shard: ShardNumber,
     query: Option<VersionedKeySpaceQuery>,
     // This is largest request LSN from the get page request batch
     original_hwm_lsn: Lsn,
@@ -421,8 +415,8 @@ impl std::fmt::Display for MissingKeyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "could not find data for key {} (shard {:?}), original HWM LSN {}",
-            self.keyspace, self.shard, self.original_hwm_lsn
+            "could not find data for key {}, original HWM LSN {}",
+            self.keyspace, self.original_hwm_lsn
         )?;
 
         if let Some(ref ancestor_lsn) = self.ancestor_lsn {
@@ -749,7 +743,6 @@ impl Timeline {
             None => Err(PageReconstructError::MissingKey(Box::new(
                 MissingKeyError {
                     keyspace: KeySpace::single(key..key.next()),
-                    shard: ShardNumber(0),
                     original_hwm_lsn: lsn,
                     ancestor_lsn: None,
                     backtrace: None,
@@ -1866,7 +1859,6 @@ impl Timeline {
         timeline_id: TimelineId,
         tenant_id: TenantId,
         generation: Generation,
-        shard_identity: ShardIdentity,
         walredo_mgr: Option<Arc<super::WalRedoManager>>,
         resources: TimelineResources,
         pg_version: PgMajorVersion,
@@ -1995,7 +1987,6 @@ impl Timeline {
                 timeline_id,
                 tenant_id: tenant_id,
                 generation,
-                shard_identity,
                 pg_version,
 
                 walredo_mgr,
@@ -2693,10 +2684,6 @@ impl std::fmt::Display for VersionedKeySpaceQuery {
 }
 
 impl Timeline {
-    pub(crate) fn get_shard_identity(&self) -> &ShardIdentity {
-        &self.shard_identity
-    }
-
     pub(crate) fn finish_write(&self, new_lsn: Lsn) {
         assert!(new_lsn.is_aligned());
 

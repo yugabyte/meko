@@ -24,7 +24,6 @@ use camino::{Utf8Path, Utf8PathBuf};
 use once_cell::sync::Lazy;
 pub use pageserver_api::models::TenantState;
 use pageserver_api::models::RelSizeMigration;
-use pageserver_api::models::ShardIdentity;
 use pageserver_api::models::TimelineState;
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeoutOrCancel};
@@ -199,9 +198,6 @@ pub struct PageServer {
     tenant_conf: Arc<ArcSwap<AttachedTenantConf>>,
 
     id: TenantId,
-
-    // The detailed sharding information, beyond the number/count in id
-    shard_identity: ShardIdentity,
 
     /// The launcher-assigned generation, used to fence YB writes against
     /// stale pageservers. Does not change over the lifetime of the process.
@@ -600,7 +596,6 @@ impl PageServer {
         tenant_id: TenantId,
         resources: TenantSharedResources,
         attached_conf: AttachedTenantConf,
-        shard_identity: ShardIdentity,
         ctx: &RequestContext,
     ) -> anyhow::Result<Arc<PageServer>> {
         let wal_redo_manager =
@@ -619,7 +614,6 @@ impl PageServer {
         let tenant = Arc::new(PageServer::new(
             conf,
             attached_conf,
-            shard_identity,
             Some(wal_redo_manager),
             tenant_id,
             remote_storage.clone(),
@@ -1154,11 +1148,6 @@ impl PageServer {
         remove_tenant_metrics(&self.id);
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn get_shard_identity(&self) -> ShardIdentity {
-        self.shard_identity
-    }
-
 }
 
 impl PageServer {
@@ -1267,7 +1256,6 @@ impl PageServer {
             new_timeline_id,
             self.id,
             self.generation,
-            self.shard_identity,
             self.walredo_mgr.clone(),
             resources,
             pg_version,
@@ -1295,7 +1283,6 @@ impl PageServer {
     fn new(
         conf: &'static PageServerConf,
         attached_conf: AttachedTenantConf,
-        shard_identity: ShardIdentity,
         walredo_mgr: Option<Arc<WalRedoManager>>,
         id: TenantId,
         remote_storage: GenericRemoteStorage,
@@ -1307,7 +1294,6 @@ impl PageServer {
 
         PageServer {
             id,
-            shard_identity,
             generation: attached_conf.generation,
             conf,
             timeline: std::sync::OnceLock::new(),

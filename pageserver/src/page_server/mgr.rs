@@ -221,7 +221,6 @@ pub async fn init_tenant_mgr(
         .await
         .fatal_err("create timelines/ dir");
 
-    let shard_identity = pageserver_api::models::ShardIdentity::unsharded();
     let tenant_conf = pageserver_api::models::TenantConfig::default();
 
     let tenant = PageServer::open(
@@ -229,7 +228,6 @@ pub async fn init_tenant_mgr(
         tenant_id,
         resources,
         AttachedTenantConf::new(conf, tenant_conf, generation),
-        shard_identity,
         &ctx,
     )
     .await?;
