@@ -11,11 +11,32 @@ use anyhow::bail;
 use crate::cluster::{Cluster, step};
 use crate::{db, tee_println};
 
+const ENDPOINT_ID: &str = "ep_tools";
+
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    let main = db::compute_conn(c.compute_port());
+    // Provision a dedicated tenant + timeline for this test rather than reusing
+    // the shared `main` timeline. The fast suite runs branch scenarios first,
+    // which leave several (and dropped) timelines under `main`'s tenant — so a
+    // tenant-scoped timeline lookup is ambiguous and can land on a branch whose
+    // pre-branch-point pages live under its ancestor's timeline_id (i.e. it has
+    // no page rows of its own). A fresh tenant has exactly one timeline, so the
+    // lookup below is unambiguous and the data we load here is the data we read.
+    let tools_port = c.compute_port() + 120;
+    step("create a dedicated tenant + endpoint for this test");
+    let tenant = c.tenant_create()?;
+    if tenant.is_empty() {
+        bail!("tenant create failed");
+    }
+    c.yb(&[
+        "endpoint", "create", ENDPOINT_ID, "--tenant-id", &tenant, "--branch-name", "main",
+        "--pg-version", "17", "--pg-port", &tools_port.to_string(),
+    ])?;
+    c.yb(&["endpoint", "start", ENDPOINT_ID])?;
+
+    let compute = db::compute_conn(tools_port);
     step("seed a table so pageserver.pages + public.wals have data");
     db::batch(
-        &main,
+        &compute,
         "DROP TABLE IF EXISTS tools_probe;\n\
          CREATE TABLE tools_probe (id int primary key, v text);\n\
          INSERT INTO tools_probe SELECT g, 'r'||g FROM generate_series(1,200) g;\n\
@@ -24,7 +45,6 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     .await?;
 
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
-    let tenant = c.tid().to_string();
 
     step("discover the timeline from pageserver.timeline_state");
     let timeline = db::query_text(
@@ -126,5 +146,9 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         "  yb-dump-wals + yb-dump-pages (list & decode) + yb-reset-consistent-lsn \
          all ran against the no-TLS cluster"
     );
+
+    step("cleanup: deprovision this test's endpoint");
+    c.yb_quiet(&["endpoint", "stop", ENDPOINT_ID, "--destroy"]);
+
     Ok(())
 }
