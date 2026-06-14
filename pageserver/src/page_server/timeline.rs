@@ -1591,8 +1591,16 @@ impl Timeline {
             if do_flush {
                 match self.flush().await {
                     Ok(_) => {
-                        // yb-mode: nothing more to drain — `PageWriter::flush()`
-                        // already persisted via YB INSERTs.
+                        // Pages are durable in YB. Force the durable
+                        // `consistent_lsn` UPDATE through too, bypassing the
+                        // per-`max_age` upsert throttle — otherwise a clean
+                        // shutdown could leave the persisted
+                        // `disk_consistent_lsn` up to one throttle window
+                        // behind what's actually durable, costing extra WAL
+                        // replay (and log noise) on the next attach.
+                        if let Err(e) = self.force_advance_consistent_lsn().await {
+                            warn!("failed to force-advance consistent_lsn on shutdown: {e:#}");
+                        }
                     }
                     Err(FlushLayerError::Cancelled) => {
                         debug_assert!(self.cancel.is_cancelled());
@@ -1600,7 +1608,7 @@ impl Timeline {
                     Err(e) => {
                         // Non-fatal.  Shutdown is infallible.  Failures to flush just mean that
                         // we have some extra WAL replay to do next time the timeline starts.
-                        warn!("failed to freeze and flush: {e:#}");
+                        warn!("failed to flush: {e:#}");
                     }
                 }
             }
