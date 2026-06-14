@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
+use bytes::BytesMut;
 use futures::StreamExt;
 use futures::future::Either;
 use postgres_backend::{CopyStreamHandlerEnd, PostgresBackend};
@@ -19,7 +20,6 @@ use utils::critical_timeline;
 use utils::lsn::Lsn;
 use utils::postgres_client::{Compression, InterpretedFormat};
 use wal_decoder::models::{InterpretedWalRecord, InterpretedWalRecords};
-use wal_decoder::wire_format::ToWireFormat;
 
 use crate::metrics::WAL_READERS;
 use crate::send_wal::{EndWatchView, WalSenderGuard};
@@ -608,6 +608,9 @@ pub(crate) struct InterpretedWalSender<'a, IO> {
     pub(crate) end_watch_view: EndWatchView,
     pub(crate) wal_sender_guard: Arc<WalSenderGuard>,
     pub(crate) rx: tokio::sync::mpsc::Receiver<Batch>,
+
+    /// Reused across batches to avoid a fresh wire-buffer allocation per send.
+    pub(crate) wire_buf: BytesMut,
 }
 
 impl<IO: AsyncRead + AsyncWrite + Unpin> InterpretedWalSender<'_, IO> {
@@ -634,9 +637,9 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> InterpretedWalSender<'_, IO> {
 
                     wal_position = batch.wal_end_lsn;
 
-                    let buf = batch
+                    batch
                         .records
-                        .to_wire(self.format, self.compression)
+                        .encode_to_wire(self.format, self.compression, &mut self.wire_buf)
                         .await
                         .with_context(|| "Failed to serialize interpreted WAL")
                         .map_err(CopyStreamHandlerEnd::from)?;
@@ -649,7 +652,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> InterpretedWalSender<'_, IO> {
                         .write_message(&BeMessage::InterpretedWalRecords(InterpretedWalRecordsBody {
                             streaming_lsn: batch.wal_end_lsn.0,
                             commit_lsn: batch.available_wal_end_lsn.0,
-                            data: &buf,
+                            data: &self.wire_buf,
                         })).await?;
                 }
                 // Send a periodic keep alive when the connection has been idle for a while.

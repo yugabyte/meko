@@ -119,6 +119,52 @@ impl ToWireFormat for InterpretedWalRecords {
     }
 }
 
+impl InterpretedWalRecords {
+    /// Encode the records into a caller-owned buffer that is reused across
+    /// batches, avoiding a fresh per-batch allocation (and the `Bytes`
+    /// reference-count churn that `to_wire`'s `freeze()` incurs). The buffer is
+    /// cleared first and the wire bytes are appended.
+    ///
+    /// The output is **byte-identical** to [`ToWireFormat::to_wire`], so it
+    /// stays version-portable across mismatched SK/PS builds — see #69. Only the
+    /// allocation is elided, not the framing.
+    pub async fn encode_to_wire(
+        self,
+        format: InterpretedFormat,
+        compression: Option<Compression>,
+        buf: &mut BytesMut,
+    ) -> Result<(), ToWireFormatError> {
+        buf.clear();
+
+        match compression {
+            None => match format {
+                InterpretedFormat::Bincode => {
+                    // `BytesMut::writer()` consumes the buffer; move it out so the
+                    // reused capacity is preserved, then store it back.
+                    let mut writer = std::mem::take(buf).writer();
+                    self.ser_into(&mut writer)?;
+                    *buf = writer.into_inner();
+                    Ok(())
+                }
+                InterpretedFormat::Protobuf => {
+                    let proto: proto::InterpretedWalRecords = self.try_into()?;
+                    proto
+                        .encode(buf)
+                        .map_err(|e| ToWireFormatError::Protobuf(e.into()))?;
+                    Ok(())
+                }
+            },
+            // Compression is unused in yb-light; fall back to the allocating path
+            // for correctness rather than duplicating the zstd plumbing.
+            Some(_) => {
+                let bytes = self.to_wire(format, compression).await?;
+                buf.extend_from_slice(&bytes);
+                Ok(())
+            }
+        }
+    }
+}
+
 impl FromWireFormat for InterpretedWalRecords {
     type T = Self;
 
@@ -354,6 +400,54 @@ impl TryFrom<proto::ValueMeta> for ValueMeta {
 impl From<proto::CompactKey> for CompactKey {
     fn from(value: proto::CompactKey) -> Self {
         (((value.high as i128) << 64) | (value.low as i128)).into()
+    }
+}
+
+/// Drive a future that is known not to await (the no-compression encode paths)
+/// to completion without a runtime, so these stay plain `#[test]`s.
+#[cfg(test)]
+fn poll_ready<F: std::future::Future>(fut: F) -> F::Output {
+    use std::task::{Context, Poll};
+    let mut fut = std::pin::pin!(fut);
+    let mut cx = Context::from_waker(std::task::Waker::noop());
+    match fut.as_mut().poll(&mut cx) {
+        Poll::Ready(out) => out,
+        Poll::Pending => panic!("future unexpectedly awaited"),
+    }
+}
+
+/// `encode_to_wire` must produce bytes identical to `to_wire` — that byte
+/// identity is what keeps the SK→PS link version-portable across mismatched
+/// builds (#69). Also exercises buffer reuse across two calls to catch a stale
+/// `clear()` bug (batch N's bytes leaking into batch N+1).
+#[test]
+fn test_encode_to_wire_matches_to_wire() {
+    // Both encode methods consume `self`, so rebuild each fixture per call.
+    let make = |i: usize| match i {
+        0 => InterpretedWalRecords {
+            records: Vec::new(),
+            next_record_lsn: Lsn(0x1A2B3C4D),
+            raw_wal_start_lsn: Some(Lsn(0x1A2B0000)),
+        },
+        _ => InterpretedWalRecords {
+            records: Vec::new(),
+            next_record_lsn: Lsn(0xDEADBEEF),
+            raw_wal_start_lsn: None,
+        },
+    };
+
+    for format in [InterpretedFormat::Bincode, InterpretedFormat::Protobuf] {
+        // One buffer reused across both inputs, mirroring the sender's hot loop.
+        let mut buf = BytesMut::new();
+        for i in 0..2 {
+            let expected = poll_ready(make(i).to_wire(format, None)).unwrap();
+            poll_ready(make(i).encode_to_wire(format, None, &mut buf)).unwrap();
+            assert_eq!(
+                &buf[..],
+                &expected[..],
+                "encode_to_wire diverged from to_wire for {format:?}"
+            );
+        }
     }
 }
 

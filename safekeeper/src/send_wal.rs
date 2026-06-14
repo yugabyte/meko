@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context as AnyhowContext, bail};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::FutureExt;
 use itertools::Itertools;
 use parking_lot::Mutex;
@@ -574,6 +574,7 @@ impl SafekeeperPostgresHandler {
                         end_watch_view,
                         wal_sender_guard: ws_guard.clone(),
                         rx,
+                        wire_buf: BytesMut::new(),
                     };
 
                     FutureExt::boxed(sender.run())
@@ -601,6 +602,7 @@ impl SafekeeperPostgresHandler {
                         end_watch_view,
                         wal_sender_guard: ws_guard.clone(),
                         rx,
+                        wire_buf: BytesMut::new(),
                     };
 
                     FutureExt::boxed(async move {
