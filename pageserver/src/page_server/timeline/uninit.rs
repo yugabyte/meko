@@ -93,13 +93,13 @@ impl<'t> UninitializedTimeline<'t> {
     /// The caller is responsible for activating the timeline (function `.activate()`).
     pub(crate) async fn finish_creation(mut self) -> anyhow::Result<Arc<Timeline>> {
         let timeline_id = self.timeline_id;
-        let tenant_shard_id = self.owning_tenant.id;
+        let tenant_id = self.owning_tenant.id;
 
         if self.raw_timeline.is_none() {
             self.abort().await;
 
             return Err(anyhow::anyhow!(
-                "No timeline for initialization found for {tenant_shard_id}/{timeline_id}"
+                "No timeline for initialization found for {tenant_id}/{timeline_id}"
             ));
         }
 
@@ -115,7 +115,7 @@ impl<'t> UninitializedTimeline<'t> {
             self.abort().await;
 
             return Err(anyhow::anyhow!(
-                "new timeline {tenant_shard_id}/{timeline_id} has invalid consistent_lsn seed"
+                "new timeline {tenant_id}/{timeline_id} has invalid consistent_lsn seed"
             ));
         }
 
@@ -165,7 +165,7 @@ impl<'t> UninitializedTimeline<'t> {
             // We do not call Self::abort here.  Because we don't cleanly shut down our Timeline, [`Self::drop`] should
             // skip trying to delete the timeline directory too.
             anyhow::bail!(
-                "Found freshly initialized timeline {tenant_shard_id}/{timeline_id} in the tenant slot"
+                "Found freshly initialized timeline {tenant_id}/{timeline_id} in the tenant slot"
             )
         }
 

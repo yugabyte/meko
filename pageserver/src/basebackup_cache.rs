@@ -26,7 +26,7 @@ use crate::{
 };
 
 pub struct BasebackupPrepareRequest {
-    pub tenant_shard_id: TenantId,
+    pub tenant_id: TenantId,
     pub timeline_id: TimelineId,
     pub lsn: Lsn,
 }
@@ -134,9 +134,9 @@ impl BasebackupCache {
     /// Send a basebackup prepare request to the background task.
     /// The basebackup will be prepared asynchronously, it does not block the caller.
     /// The request will be skipped if any cache limits are exceeded.
-    pub fn send_prepare(&self, tenant_shard_id: TenantId, timeline_id: TimelineId, lsn: Lsn) {
+    pub fn send_prepare(&self, tenant_id: TenantId, timeline_id: TimelineId, lsn: Lsn) {
         let req = BasebackupPrepareRequest {
-            tenant_shard_id,
+            tenant_id,
             timeline_id,
             lsn,
         };
@@ -151,7 +151,7 @@ impl BasebackupCache {
                 TrySendError::Full(_) => {
                     // Basebackup prepares are pretty rare, normally we should not hit this.
                     tracing::info!(
-                        tenant_id = %tenant_shard_id,
+                        tenant_id = %tenant_id,
                         %timeline_id,
                         %lsn,
                         "Basebackup prepare channel is full, skipping the request"
@@ -160,7 +160,7 @@ impl BasebackupCache {
                 TrySendError::Closed(_) => {
                     // Normal during shutdown, not critical.
                     tracing::info!(
-                        tenant_id = %tenant_shard_id,
+                        tenant_id = %tenant_id,
                         %timeline_id,
                         %lsn,
                         "Basebackup prepare channel is closed, skipping the request"
@@ -314,9 +314,7 @@ impl BackgroundTask {
         // Leave only up-to-date entries.
         let entries_old = self.c.entries.lock().unwrap().clone();
         let mut entries_new = None;
-        for (tenant_shard_id, tenant) in self.tenant_manager.list() {
-            let tenant_id = tenant_shard_id;
-
+        for (tenant_id, tenant) in self.tenant_manager.list() {
             for timeline in tenant.list_timelines() {
                 let tti = TenantTimelineId::new(tenant_id, timeline.timeline_id);
                 if let Some((old_tti, entry)) = &entries_old {
@@ -438,7 +436,7 @@ impl BackgroundTask {
                 Some(req) = prepare_receiver.recv() => {
                     BASEBACKUP_CACHE_PREPARE_QUEUE_SIZE.dec();
                     if let Err(err) = self.prepare_basebackup(
-                        req.tenant_shard_id,
+                        req.tenant_id,
                         req.timeline_id,
                         req.lsn,
                     ).await {
@@ -530,24 +528,24 @@ impl BackgroundTask {
     /// location to make the operation atomic.
     async fn prepare_basebackup(
         &mut self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         req_lsn: Lsn,
     ) -> anyhow::Result<()> {
         tracing::info!(
-            tenant_id = %tenant_shard_id,
+            tenant_id = %tenant_id,
             %timeline_id,
             %req_lsn,
             "Preparing basebackup for timeline",
         );
 
-        let tti = TenantTimelineId::new(tenant_shard_id, timeline_id);
+        let tti = TenantTimelineId::new(tenant_id, timeline_id);
 
         // TODO(diko): I don't think we will hit the limit,
         // but if we do, it makes sense to try to evict oldest entries. here
         if self.entry_count >= self.config.max_size_entries {
             tracing::info!(
-                %tenant_shard_id,
+                %tenant_id,
                 %timeline_id,
                 %req_lsn,
                 "Basebackup cache is full (max_size_entries), skipping basebackup",
@@ -558,7 +556,7 @@ impl BackgroundTask {
 
         if self.total_size_bytes >= self.config.max_total_size_bytes {
             tracing::info!(
-                %tenant_shard_id,
+                %tenant_id,
                 %timeline_id,
                 %req_lsn,
                 "Basebackup cache is full (max_total_size_bytes), skipping basebackup",
@@ -585,7 +583,7 @@ impl BackgroundTask {
 
         let tenant = self
             .tenant_manager
-            .get_attached_tenant_shard(tenant_shard_id)?;
+            .get_attached_tenant_shard(tenant_id)?;
 
         let timeline = tenant.get_timeline(timeline_id, true)?;
 
@@ -601,7 +599,7 @@ impl BackgroundTask {
             return Ok(());
         }
 
-        let entry_tmp_path = self.entry_tmp_path(tenant_shard_id, timeline_id, req_lsn);
+        let entry_tmp_path = self.entry_tmp_path(tenant_id, timeline_id, req_lsn);
 
         let res = self
             .prepare_basebackup_tmp(&entry_tmp_path, &timeline, req_lsn)
@@ -629,10 +627,10 @@ impl BackgroundTask {
         // It's not necessary to fsync the inode after renaming, because the worst case is that
         // the rename operation will be rolled back on the disk failure, the entry will disappear
         // from the main directory, and the entry access will cause a cache miss.
-        let entry_path = self.c.entry_path(tenant_shard_id, timeline_id, req_lsn);
+        let entry_path = self.c.entry_path(tenant_id, timeline_id, req_lsn);
         tokio::fs::rename(&entry_tmp_path, &entry_path).await?;
 
-        self.upsert_entry(tenant_shard_id, timeline_id, entry).await;
+        self.upsert_entry(tenant_id, timeline_id, entry).await;
 
         self.prepare_ok_count.inc();
         Ok(())

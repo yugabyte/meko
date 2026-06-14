@@ -52,7 +52,7 @@ pub struct WalReceiver {
 
 impl WalReceiver {
     pub fn start(timeline: Arc<Timeline>, conf: WalReceiverConf, ctx: &RequestContext) -> Self {
-        let tenant_shard_id = timeline.tenant_id;
+        let tenant_id = timeline.tenant_id;
         let timeline_id = timeline.timeline_id;
         let walreceiver_ctx =
             ctx.detached_child(TaskKind::WalReceiverManager, DownloadBehavior::Error);
@@ -118,7 +118,7 @@ impl WalReceiver {
                 *loop_status.write().unwrap() = None;
                 info!("task exits");
             }
-            .instrument(info_span!(parent: None, "wal_connection_manager", tenant_id = %tenant_shard_id, timeline_id = %timeline_id))
+            .instrument(info_span!(parent: None, "wal_connection_manager", tenant_id = %tenant_id, timeline_id = %timeline_id))
         });
 
         Self {

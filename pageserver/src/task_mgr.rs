@@ -377,7 +377,7 @@ struct PageServerTask {
 
     /// Tasks may optionally be launched for a particular tenant/timeline, enabling
     /// later cancelling tasks for that tenant/timeline in [`shutdown_tasks`]
-    tenant_shard_id: TenantId,
+    tenant_id: TenantId,
     timeline_id: Option<TimelineId>,
 
     mutable: Mutex<MutableTaskState>,
@@ -389,7 +389,7 @@ struct PageServerTask {
 pub fn spawn<F>(
     runtime: &tokio::runtime::Handle,
     kind: TaskKind,
-    tenant_shard_id: TenantId,
+    tenant_id: TenantId,
     timeline_id: Option<TimelineId>,
     name: &str,
     future: F,
@@ -404,7 +404,7 @@ where
         kind,
         name: name.to_string(),
         cancel: cancel.clone(),
-        tenant_shard_id,
+        tenant_id,
         timeline_id,
         mutable: Mutex::new(MutableTaskState { join_handle: None }),
     });
@@ -443,7 +443,7 @@ async fn task_wrapper<F>(
     debug!("Starting task '{}'", task_name);
 
     // wrap the future so we log panics and errors
-    let tenant_shard_id = task.tenant_shard_id;
+    let tenant_id = task.tenant_id;
     let timeline_id = task.timeline_id;
     let fut = async move {
         // We use AssertUnwindSafe here so that the payload function
@@ -456,14 +456,14 @@ async fn task_wrapper<F>(
             }
             Ok(Err(err)) => {
                 error!(
-                    "Task '{}' tenant_shard_id: {:?}, timeline_id: {:?} exited with error: {:?}",
-                    task_name, tenant_shard_id, timeline_id, err
+                    "Task '{}' tenant_id: {:?}, timeline_id: {:?} exited with error: {:?}",
+                    task_name, tenant_id, timeline_id, err
                 );
             }
             Err(err) => {
                 error!(
-                    "Task '{}' tenant_shard_id: {:?}, timeline_id: {:?} panicked: {:?}",
-                    task_name, tenant_shard_id, timeline_id, err
+                    "Task '{}' tenant_id: {:?}, timeline_id: {:?} panicked: {:?}",
+                    task_name, tenant_id, timeline_id, err
                 );
             }
         }
@@ -521,11 +521,11 @@ where
 ///
 /// Or to shut down all tasks for given timeline:
 ///
-///   shutdown_tasks(None, Some(tenant_shard_id), Some(timeline_id))
+///   shutdown_tasks(None, Some(tenant_id), Some(timeline_id))
 ///
 pub async fn shutdown_tasks(
     kind: Option<TaskKind>,
-    tenant_shard_id: Option<TenantId>,
+    tenant_id: Option<TenantId>,
     timeline_id: Option<TimelineId>,
 ) {
     let mut victim_tasks = Vec::new();
@@ -534,23 +534,23 @@ pub async fn shutdown_tasks(
         let tasks = TASKS.lock().unwrap();
         for task in tasks.values() {
             if (kind.is_none() || Some(task.kind) == kind)
-                && (tenant_shard_id.is_none() || Some(task.tenant_shard_id) == tenant_shard_id)
+                && (tenant_id.is_none() || Some(task.tenant_id) == tenant_id)
                 && (timeline_id.is_none() || task.timeline_id == timeline_id)
             {
                 task.cancel.cancel();
                 victim_tasks.push((
                     Arc::clone(task),
                     task.kind,
-                    task.tenant_shard_id,
+                    task.tenant_id,
                     task.timeline_id,
                 ));
             }
         }
     }
 
-    let log_all = kind.is_none() && tenant_shard_id.is_none() && timeline_id.is_none();
+    let log_all = kind.is_none() && tenant_id.is_none() && timeline_id.is_none();
 
-    for (task, task_kind, tenant_shard_id, timeline_id) in victim_tasks {
+    for (task, task_kind, tenant_id, timeline_id) in victim_tasks {
         let join_handle = {
             let mut task_mut = task.mutable.lock().unwrap();
             task_mut.join_handle.take()
@@ -558,7 +558,7 @@ pub async fn shutdown_tasks(
         if let Some(mut join_handle) = join_handle {
             if log_all {
                 // warn to catch these in tests; there shouldn't be any
-                warn!(name = task.name, tenant_shard_id = ?tenant_shard_id, timeline_id = ?timeline_id, kind = ?task_kind, "stopping left-over");
+                warn!(name = task.name, tenant_id = ?tenant_id, timeline_id = ?timeline_id, kind = ?task_kind, "stopping left-over");
             }
             const INITIAL_COMPLAIN_TIMEOUT: Duration = Duration::from_secs(1);
             const PERIODIC_COMPLAIN_TIMEOUT: Duration = Duration::from_secs(60);

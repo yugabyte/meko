@@ -1663,11 +1663,11 @@ static PAGE_SERVICE_SMGR_BATCH_WAIT_TIME_GLOBAL: Lazy<Histogram> = Lazy::new(|| 
 
 impl SmgrQueryTimePerTimeline {
     pub(crate) fn new(
-        tenant_shard_id: &TenantId,
+        tenant_id: &TenantId,
         timeline_id: &TimelineId,
         pagestream_throttle_metrics: Arc<tenant_throttling::Pagestream>,
     ) -> Self {
-        let tenant_id = tenant_shard_id.to_string();
+        let tenant_id = tenant_id.to_string();
         let timeline_id = timeline_id.to_string();
         let global_started = std::array::from_fn(|i| {
             let op = SmgrQueryType::from_repr(i).unwrap();
@@ -2763,8 +2763,8 @@ impl TimelineMetrics {
     }
 }
 
-pub(crate) fn remove_tenant_metrics(tenant_shard_id: &TenantId) {
-    tenant_throttling::remove_tenant_metrics(tenant_shard_id);
+pub(crate) fn remove_tenant_metrics(tenant_id: &TenantId) {
+    tenant_throttling::remove_tenant_metrics(tenant_id);
 }
 
 /// Maintain a per timeline gauge in addition to the global gauge.
@@ -2804,8 +2804,8 @@ pub(crate) struct RemoteTimelineClientMetrics {
 
 impl RemoteTimelineClientMetrics {
     #[allow(dead_code)]
-    pub fn new(tenant_shard_id: &TenantId, timeline_id: &TimelineId) -> Self {
-        let tenant_id_str = tenant_shard_id.to_string();
+    pub fn new(tenant_id: &TenantId, timeline_id: &TimelineId) -> Self {
+        let tenant_id_str = tenant_id.to_string();
         let timeline_id_str = timeline_id.to_string();
 
         let remote_physical_size_gauge = PerTimelineRemotePhysicalSizeGauge::new();
@@ -3360,8 +3360,8 @@ pub(crate) mod tenant_throttling {
     pub type Pagestream = Metrics<0>;
 
     impl<const KIND: usize> Metrics<KIND> {
-        pub(crate) fn new(tenant_shard_id: &TenantId) -> Self {
-            let per_tenant_label_values = &[KINDS[KIND], &tenant_shard_id.to_string()];
+        pub(crate) fn new(tenant_id: &TenantId) -> Self {
+            let per_tenant_label_values = &[KINDS[KIND], &tenant_id.to_string()];
             Metrics {
                 count_accounted_start: {
                     GlobalAndPerTenantIntCounter {
@@ -3402,7 +3402,7 @@ pub(crate) mod tenant_throttling {
         Lazy::force(&WAIT_COUNT);
     }
 
-    pub(crate) fn remove_tenant_metrics(tenant_shard_id: &TenantId) {
+    pub(crate) fn remove_tenant_metrics(tenant_id: &TenantId) {
         for m in &[
             &COUNT_ACCOUNTED_START_PER_TENANT,
             &COUNT_ACCOUNTED_FINISH_PER_TENANT,
@@ -3410,7 +3410,7 @@ pub(crate) mod tenant_throttling {
             &WAIT_COUNT_PER_TENANT,
         ] {
             for kind in KINDS {
-                let _ = m.remove_label_values(&[kind, &tenant_shard_id.to_string()]);
+                let _ = m.remove_label_values(&[kind, &tenant_id.to_string()]);
             }
         }
     }

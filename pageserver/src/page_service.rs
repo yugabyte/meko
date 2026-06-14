@@ -2255,7 +2255,7 @@ impl PageServerHandler {
     async fn handle_make_lsn_lease<IO>(
         &mut self,
         pgb: &mut PostgresBackend<IO>,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         lsn: Lsn,
         ctx: &RequestContext,
@@ -2268,9 +2268,9 @@ impl PageServerHandler {
             .as_mut()
             .unwrap()
             .get(
-                tenant_shard_id,
+                tenant_id,
                 timeline_id,
-                ShardSelector::Known(tenant_shard_id.to_index()),
+                ShardSelector::Known(tenant_id.to_index()),
             )
             .await?;
 
@@ -2805,7 +2805,7 @@ struct PageStreamCmd {
 /// `lease lsn tenant timeline lsn`
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct LeaseLsnCmd {
-    tenant_shard_id: TenantId,
+    tenant_id: TenantId,
     timeline_id: TimelineId,
     lsn: Lsn,
 }
@@ -2952,14 +2952,14 @@ impl LeaseLsnCmd {
                 query
             );
         }
-        let tenant_shard_id = TenantId::from_str(parameters[0])
+        let tenant_id = TenantId::from_str(parameters[0])
             .with_context(|| format!("Failed to parse tenant id from {}", parameters[0]))?;
         let timeline_id = TimelineId::from_str(parameters[1])
             .with_context(|| format!("Failed to parse timeline id from {}", parameters[1]))?;
         let lsn = Lsn::from_str(parameters[2])
             .with_context(|| format!("Failed to parse lsn from {}", parameters[2]))?;
         Ok(Self {
-            tenant_shard_id,
+            tenant_id,
             timeline_id,
             lsn,
         })
@@ -3223,22 +3223,22 @@ where
                 pgb.write_message_noflush(&BeMessage::CommandComplete(b"SELECT 1"))?;
             }
             PageServiceCmd::LeaseLsn(LeaseLsnCmd {
-                tenant_shard_id,
+                tenant_id,
                 timeline_id,
                 lsn,
             }) => {
                 tracing::Span::current()
-                    .record("tenant_id", field::display(tenant_shard_id))
+                    .record("tenant_id", field::display(tenant_id))
                     .record("timeline_id", field::display(timeline_id));
 
-                self.check_permission(Some(tenant_shard_id))?;
+                self.check_permission(Some(tenant_id))?;
 
                 COMPUTE_COMMANDS_COUNTERS
                     .for_command(ComputeCommandKind::LeaseLsn)
                     .inc();
 
                 match self
-                    .handle_make_lsn_lease(pgb, tenant_shard_id, timeline_id, lsn, &ctx)
+                    .handle_make_lsn_lease(pgb, tenant_id, timeline_id, lsn, &ctx)
                     .await
                 {
                     Ok(()) => {
@@ -4358,15 +4358,14 @@ mod tests {
                 prev_lsn: Some(Lsn::from_str("0/16ABCDF").unwrap()),
             })
         );
-        let tenant_shard_id = TenantId::unsharded(tenant_id);
         let cmd = PageServiceCmd::parse(&format!(
-            "lease lsn {tenant_shard_id} {timeline_id} 0/16ABCDE"
+            "lease lsn {tenant_id} {timeline_id} 0/16ABCDE"
         ))
         .unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::LeaseLsn(LeaseLsnCmd {
-                tenant_shard_id,
+                tenant_id,
                 timeline_id,
                 lsn: Lsn::from_str("0/16ABCDE").unwrap(),
             })

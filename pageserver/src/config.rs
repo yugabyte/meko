@@ -289,21 +289,21 @@ impl PageServerConf {
         self.deletion_prefix().join(format!("header-{VERSION:02x}"))
     }
 
-    pub fn tenant_path(&self, tenant_shard_id: &TenantId) -> Utf8PathBuf {
-        self.tenants_path().join(tenant_shard_id.to_string())
+    pub fn tenant_path(&self, tenant_id: &TenantId) -> Utf8PathBuf {
+        self.tenants_path().join(tenant_id.to_string())
     }
 
-    pub fn timelines_path(&self, tenant_shard_id: &TenantId) -> Utf8PathBuf {
-        self.tenant_path(tenant_shard_id)
+    pub fn timelines_path(&self, tenant_id: &TenantId) -> Utf8PathBuf {
+        self.tenant_path(tenant_id)
             .join(TIMELINES_SEGMENT_NAME)
     }
 
     pub fn timeline_path(
         &self,
-        tenant_shard_id: &TenantId,
+        tenant_id: &TenantId,
         timeline_id: &TimelineId,
     ) -> Utf8PathBuf {
-        self.timelines_path(tenant_shard_id)
+        self.timelines_path(tenant_id)
             .join(timeline_id.to_string())
     }
 

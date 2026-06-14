@@ -597,14 +597,14 @@ impl PageServer {
     /// listener accepts traffic; failure is fatal to the process.
     pub(crate) async fn open(
         conf: &'static PageServerConf,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         resources: TenantSharedResources,
         attached_conf: AttachedTenantConf,
         shard_identity: ShardIdentity,
         ctx: &RequestContext,
     ) -> anyhow::Result<Arc<PageServer>> {
         let wal_redo_manager =
-            WalRedoManager::new(PostgresRedoManager::new(conf, tenant_shard_id))
+            WalRedoManager::new(PostgresRedoManager::new(conf, tenant_id))
                 .map_err(|GlobalShutDown| anyhow::anyhow!("pageserver is shutting down"))?;
 
         let TenantSharedResources {
@@ -621,7 +621,7 @@ impl PageServer {
             attached_conf,
             shard_identity,
             Some(wal_redo_manager),
-            tenant_shard_id,
+            tenant_id,
             remote_storage.clone(),
             basebackup_cache,
             compute_page_store,
@@ -655,7 +655,7 @@ impl PageServer {
             anyhow::Ok(())
         }
         .instrument(
-            tracing::info_span!(parent: None, "attach", tenant_id=%tenant_shard_id, gen=?generation),
+            tracing::info_span!(parent: None, "attach", tenant_id=%tenant_id, gen=?generation),
         )
         .await?;
         Ok(tenant)
@@ -977,7 +977,7 @@ impl PageServer {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn tenant_shard_id(&self) -> TenantId {
+    pub(crate) fn tenant_id(&self) -> TenantId {
         self.id
     }
 
@@ -1784,7 +1784,7 @@ impl PageServer {
             )
             .await?;
 
-        let tenant_shard_id = raw_timeline.owning_tenant.id;
+        let tenant_id = raw_timeline.owning_tenant.id;
         raw_timeline
             .write(|unfinished_timeline| async move {
                 import_datadir::import_timeline_from_postgres_datadir(
@@ -1796,7 +1796,7 @@ impl PageServer {
                 .await
                 .with_context(|| {
                     format!(
-                        "Failed to import pgdatadir for timeline {tenant_shard_id}/{timeline_id}"
+                        "Failed to import pgdatadir for timeline {tenant_id}/{timeline_id}"
                     )
                 })?;
 
@@ -1847,7 +1847,7 @@ impl PageServer {
         rel_size_migrated_at: Option<Lsn>,
         ctx: &RequestContext,
     ) -> anyhow::Result<(UninitializedTimeline<'a>, RequestContext)> {
-        let tenant_shard_id = self.id;
+        let tenant_id = self.id;
 
         let resources = self.build_timeline_resources(new_timeline_id);
         let _ = (new_metadata, &rel_size_v2_status, rel_size_migrated_at);
@@ -1872,14 +1872,14 @@ impl PageServer {
             .await
         {
             error!(
-                "Failed to create initial files for timeline {tenant_shard_id}/{new_timeline_id}, cleaning up: {e:?}"
+                "Failed to create initial files for timeline {tenant_id}/{new_timeline_id}, cleaning up: {e:?}"
             );
             cleanup_timeline_directory(create_guard);
             return Err(e);
         }
 
         debug!(
-            "Successfully created initial files for timeline {tenant_shard_id}/{new_timeline_id}"
+            "Successfully created initial files for timeline {tenant_id}/{new_timeline_id}"
         );
 
         Ok((
@@ -1913,9 +1913,9 @@ impl PageServer {
         idempotency: CreateTimelineIdempotency,
         allow_offloaded: bool,
     ) -> Result<TimelineCreateGuard, TimelineExclusionError> {
-        let tenant_shard_id = self.id;
+        let tenant_id = self.id;
 
-        let timeline_path = self.conf.timeline_path(&tenant_shard_id, &timeline_id);
+        let timeline_path = self.conf.timeline_path(&tenant_id, &timeline_id);
 
         let create_guard = TimelineCreateGuard::new(
             self,

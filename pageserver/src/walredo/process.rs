@@ -29,7 +29,7 @@ pub struct WalRedoProcess {
     #[allow(dead_code)]
     conf: &'static PageServerConf,
     #[cfg(feature = "testing")]
-    tenant_shard_id: TenantId,
+    tenant_id: TenantId,
     // Some() on construction, only becomes None on Drop.
     child: Option<NoLeakChild>,
     stdout: tokio::sync::Mutex<Poison<ProcessOutput>>,
@@ -57,7 +57,7 @@ impl WalRedoProcess {
     #[instrument(skip_all,fields(pg_version=pg_version.major_version_num()))]
     pub(crate) fn launch(
         conf: &'static PageServerConf,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         pg_version: PgMajorVersion,
     ) -> anyhow::Result<Self> {
         crate::span::debug_assert_current_span_has_tenant_id();
@@ -72,7 +72,7 @@ impl WalRedoProcess {
             .arg("--wal-redo")
             // the child doesn't process this arg, but, having it in the argv helps indentify the
             // walredo process for a particular tenant when debugging a pagserver
-            .args(["--tenant-shard-id", &format!("{tenant_shard_id}")])
+            .args(["--tenant-shard-id", &format!("{tenant_id}")])
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
             .stdout(Stdio::piped())
@@ -95,7 +95,7 @@ impl WalRedoProcess {
             //    the files it opens, and
             // 2. to use seccomp to sandbox itself before processing the first
             //    walredo request.
-            .spawn_no_leak_child(tenant_shard_id)
+            .spawn_no_leak_child(tenant_id)
             .context("spawn process")?;
         WAL_REDO_PROCESS_COUNTERS.started.inc();
         let mut child = scopeguard::guard(child, |child| {
@@ -151,13 +151,13 @@ impl WalRedoProcess {
                         error!(error=?e, "failed to read from walredo stderr");
                     }
                 }
-            }.instrument(tracing::info_span!(parent: None, "wal-redo-postgres-stderr", pid = child.id(), tenant_id = %tenant_shard_id, %pg_version))
+            }.instrument(tracing::info_span!(parent: None, "wal-redo-postgres-stderr", pid = child.id(), tenant_id = %tenant_id, %pg_version))
         );
 
         Ok(Self {
             conf,
             #[cfg(feature = "testing")]
-            tenant_shard_id,
+            tenant_id,
             child: Some(child),
             stdin: tokio::sync::Mutex::new(Poison::new(
                 "stdin",
@@ -380,7 +380,7 @@ impl WalRedoProcess {
         // these files will be collected to an allure report
         let filename = format!("walredo-{millis}-{}-{seq}.walredo", writebuf.len());
 
-        let path = self.conf.tenant_path(&self.tenant_shard_id).join(&filename);
+        let path = self.conf.tenant_path(&self.tenant_id).join(&filename);
 
         use std::io::Write;
         let res = std::fs::OpenOptions::new()

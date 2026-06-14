@@ -228,8 +228,8 @@ pub async fn init_tenant_mgr(
 
     TENANT.startup_scheduled.inc();
 
-    let (tenant_shard_id, generation) = (identity.tenant_id, identity.generation);
-    let timelines_path = conf.timelines_path(&tenant_shard_id);
+    let (tenant_id, generation) = (identity.tenant_id, identity.generation);
+    let timelines_path = conf.timelines_path(&tenant_id);
     // tenant/timelines dir is just a cache (initdb.tar.zst, basebackup_cache).
     // Doesn't need crash-safe sync.
     tokio::fs::create_dir_all(&timelines_path)
@@ -241,7 +241,7 @@ pub async fn init_tenant_mgr(
 
     let tenant = PageServer::open(
         conf,
-        tenant_shard_id,
+        tenant_id,
         resources,
         AttachedTenantConf::new(conf, tenant_conf, generation),
         shard_identity,
@@ -250,7 +250,7 @@ pub async fn init_tenant_mgr(
     .await?;
     TENANT.startup_complete.inc();
 
-    info!(tenant_id = %tenant_shard_id, "tenant opened at startup");
+    info!(tenant_id = %tenant_id, "tenant opened at startup");
 
     Ok(TenantManager {
         conf,
@@ -268,22 +268,22 @@ impl TenantManager {
             .expect("identity is required at startup")
     }
 
-    /// Gets the attached tenant, erroring if `tenant_shard_id` doesn't match the
+    /// Gets the attached tenant, erroring if `tenant_id` doesn't match the
     /// configured identity. The tenant is open and active for the whole process
     /// lifetime (it transitions its timeline to Stopping during shutdown).
     pub(crate) fn get_attached_tenant_shard(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
     ) -> Result<Arc<PageServer>, GetTenantError> {
-        if tenant_shard_id != self.timeline_identity().tenant_id {
-            return Err(GetTenantError::NotFound(tenant_shard_id));
+        if tenant_id != self.timeline_identity().tenant_id {
+            return Err(GetTenantError::NotFound(tenant_id));
         }
         Ok(Arc::clone(&self.tenant))
     }
 
     /// The attached tenant.
     pub(crate) fn list(&self) -> Vec<(TenantId, Arc<PageServer>)> {
-        vec![(self.tenant.tenant_shard_id(), Arc::clone(&self.tenant))]
+        vec![(self.tenant.tenant_id(), Arc::clone(&self.tenant))]
     }
 
     /// Shut down the tenant. This runs as part of pageserver shutdown.
@@ -297,7 +297,7 @@ impl TenantManager {
         let tenant = Arc::clone(&self.tenant);
         tenant
             .shutdown(ShutdownMode::FreezeAndFlush)
-            .instrument(info_span!("shutdown", tenant_id = %tenant.tenant_shard_id()))
+            .instrument(info_span!("shutdown", tenant_id = %tenant.tenant_id()))
             .await;
         info!("tenant successfully stopped");
     }
@@ -308,17 +308,17 @@ impl TenantManager {
         (self.tenant.local_storage_wanted(), 1)
     }
 
-    #[instrument(skip_all, fields(tenant_id=%tenant_shard_id, %timeline_id))]
+    #[instrument(skip_all, fields(tenant_id=%tenant_id, %timeline_id))]
     pub(crate) async fn immediate_gc(
         &self,
-        tenant_shard_id: TenantId,
+        tenant_id: TenantId,
         timeline_id: TimelineId,
         gc_req: TimelineGcRequest,
         cancel: CancellationToken,
         ctx: &RequestContext,
     ) -> Result<GcResult, ApiError> {
         let tenant = self
-            .get_attached_tenant_shard(tenant_shard_id)
+            .get_attached_tenant_shard(tenant_id)
             .map_err(|e| ApiError::NotFound(anyhow::anyhow!(e).into()))?;
 
         let gc_horizon = gc_req.gc_horizon.unwrap_or_else(|| tenant.get_gc_horizon());
