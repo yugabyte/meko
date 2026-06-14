@@ -27,7 +27,13 @@ acceptor:
   `--listen-pg`; uses the `START_WAL_PUSH` extended query plus a custom
   binary stream of WAL records framed by message type.
 - **Out**: pageservers (and any read replica) connect via the same port and
-  issue `START_REPLICATION PHYSICAL <lsn>` to stream WAL forward.
+  issue `START_REPLICATION PHYSICAL <lsn>` to stream WAL forward. The
+  consuming pageserver(s) may be on a different node and a different build
+  than this safekeeper (read endpoints especially — see
+  [`high-level.md`](high-level.md) "PS/SK co-location is NOT an invariant"),
+  so the WAL the SK sends out is the version-portable **interpreted-WAL**
+  protocol (`send_interpreted_wal`); no same-host/same-build fast-path may be
+  assumed on this link without a negotiated capability (see #69).
 
 ### Per-timeline state (upstream Neon)
 
@@ -490,8 +496,11 @@ universes through a TLS-bridging proxy.
     └── (empty — no control file, no segments, no .partial file)
 ```
 
-The safekeeper is co-located under the endpoint that owns its timeline
-(provisioned at `endpoint create`). Delete the entire
+In the dev cluster the safekeeper is co-located under the endpoint that owns
+its timeline (provisioned at `endpoint create`) — a launcher convenience,
+not a design invariant; the consuming pageserver(s) may live elsewhere (see
+[`high-level.md`](high-level.md) "PS/SK co-location is NOT an invariant").
+Delete the entire
 `endpoints/<endpoint_id>/safekeeper` dir and the safekeeper rebuilds from
 YB on next start. Logs and pidfile are recreated.
 

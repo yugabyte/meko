@@ -157,3 +157,25 @@ when `--wal-yb-config` is set — YB already provides the quorum durability
 that a multi-safekeeper Raft would. Running two protocols (YB's Raft + the
 safekeeper's Paxos) on top of each other is rejected at boot and at
 runtime; see [`safekeeper.md`](safekeeper.md) §5.
+
+### PS/SK co-location is NOT an invariant
+
+The dev cluster above co-locates each timeline's pageserver and safekeeper
+on one host, same build, provisioned together — but that is a dev-cluster
+convenience, **not** something the design or the wire protocol may assume. A
+pageserver and the safekeeper it streams WAL from can run on **different
+nodes** and at **different versions** (e.g. during a rolling upgrade). This
+is most visible with **read endpoints**: a read-only / hot-standby replica
+can be served by a *separate* pageserver — potentially on another node and a
+different build — that streams interpreted WAL from a safekeeper elsewhere.
+A given safekeeper may also fan its WAL out to more than one such
+pageserver. (The current `yb_light_local` launcher happens to point a read
+endpoint at the primary's pair via `127.0.0.1`, but nothing downstream may
+rely on that.)
+
+Consequence: the **SK→PS interpreted-WAL wire format must stay
+version-portable** — no encoding fast-path may assume the two ends are the
+same build or the same host. There is currently no version/capability
+handshake on that link beyond the `protocol=` format selector, so any
+leaner-but-version-sensitive framing (see #69) must be negotiated, with the
+portable protobuf encoding remaining the default/fallback.

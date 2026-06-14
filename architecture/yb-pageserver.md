@@ -18,8 +18,12 @@ WAL ingest, getpage RPC).
 
 One yb-pageserver process serves exactly **one (tenant_id,
 timeline_id) for its entire lifetime** (the long-term topology gives
-each compute endpoint its own pageserver + safekeeper). The identity
-is baked into `pageserver.toml` by the launcher before spawn:
+each compute endpoint its own pageserver + safekeeper). That safekeeper
+is not necessarily on this node or at this build — the walreceiver streams
+the version-portable interpreted-WAL protocol and must tolerate a
+remote/older/newer safekeeper (read endpoints especially; see
+[`high-level.md`](high-level.md) "PS/SK co-location is NOT an invariant").
+The identity is baked into `pageserver.toml` by the launcher before spawn:
 
 ```toml
 tenant_id   = "c8178f5e..."   # required
