@@ -386,7 +386,6 @@ where
                 .get_slru_keyspace(Version::at(self.lsn), self.ctx)
                 .await?
                 .partition(
-                    self.timeline.get_shard_identity(),
                     self.timeline.conf.max_get_vectored_keys.get() as u64 * BLCKSZ as u64,
                     BLCKSZ as u64,
                 );

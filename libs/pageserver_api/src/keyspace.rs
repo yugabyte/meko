@@ -3,7 +3,6 @@ use std::ops::Range;
 use itertools::Itertools;
 
 use crate::key::Key;
-use crate::models::ShardIdentity;
 
 ///
 /// Represents a set of Keys, in a compact form.
@@ -29,23 +28,13 @@ impl std::fmt::Display for KeySpace {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SparseKeySpace(pub KeySpace);
 
-/// Represents a contiguous half-open range of the keyspace, masked according to a particular
-/// ShardNumber's stripes: within this range of keys, only some "belong" to the current
-/// shard.
-///
-/// When we iterate over keys within this object, we will skip any keys that don't belong
-/// to this shard.
-///
-/// The start + end keys may not belong to the shard: these specify where layer files should
-/// start  + end, but we will never actually read/write those keys.
-/// yb-mode: shard-awareness is gone, so this is just a thin wrapper
-/// around a `Range<Key>` whose methods compute unsharded
-/// fragment/size answers. Kept as a struct so the `'a` lifetime in
-/// the public API stays unchanged for upstream-API parity.
+/// A contiguous half-open range of the keyspace, with helpers to chunk it
+/// by size. (Was `ShardedRange` upstream, where it masked keys by shard;
+/// yb-light is single-shard, so every key is present and the methods are
+/// purely size-based.)
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ShardedRange<'a> {
+pub struct KeyspaceRange {
     pub range: Range<Key>,
-    _phantom: std::marker::PhantomData<&'a ()>,
 }
 
 // Calculate the size of a range within the blocks of the same relation, or spanning only the
@@ -63,8 +52,7 @@ pub fn contiguous_range_len(range: &Range<Key>) -> u32 {
 /// just spanning one relation and the logical size (0xffffffff) block of the relation before it.
 ///
 /// Contiguous in this context means we know the keys are in use _somewhere_, but it might not
-/// be on our shard.  Later in ShardedRange we do the extra work to figure out how much
-/// of a given contiguous range is present on one shard.
+/// be on our shard.
 ///
 /// This matters, because:
 /// - Within such ranges, keys are used contiguously.  Outside such ranges it is sparse.
@@ -78,17 +66,13 @@ pub fn is_contiguous_range(range: &Range<Key>) -> bool {
             || (range.start.field6 == 0xffffffff && range.start.field5 + 1 == range.end.field5))
 }
 
-impl<'a> ShardedRange<'a> {
-    pub fn new(range: Range<Key>, _shard_identity: &'a ShardIdentity) -> Self {
-        Self {
-            range,
-            _phantom: std::marker::PhantomData,
-        }
+impl KeyspaceRange {
+    pub fn new(range: Range<Key>) -> Self {
+        Self { range }
     }
 
     /// Break up this range into chunks of at most `target_nblocks`.
-    /// yb-mode: no key is disposable (single-shard), so every block
-    /// counts and the chunking is purely size-based.
+    /// Every block counts; the chunking is purely size-based.
     pub fn fragment(self, target_nblocks: u32) -> Vec<(u32, Range<Key>)> {
         if self.range.end == self.range.start.add(1) {
             return vec![(1, self.range)];
@@ -123,9 +107,8 @@ impl<'a> ShardedRange<'a> {
         fragments
     }
 
-    /// Estimate the physical pages that are within this range.
-    /// yb-mode: single-shard, so this is just the contiguous range
-    /// length (or `u32::MAX` for non-contiguous ranges).
+    /// Estimate the physical pages that are within this range: the
+    /// contiguous range length (or `u32::MAX` for non-contiguous ranges).
     pub fn page_count(&self) -> u32 {
         if self.range.end == self.range.start.add(1) {
             return 1;
@@ -161,21 +144,14 @@ impl KeySpace {
     /// Partition a key space into roughly chunks of roughly 'target_size' bytes
     /// in each partition.
     ///
-    pub fn partition(
-        &self,
-        shard_identity: &ShardIdentity,
-        target_size: u64,
-        block_size: u64,
-    ) -> KeyPartitioning {
+    pub fn partition(&self, target_size: u64, block_size: u64) -> KeyPartitioning {
         let target_nblocks = (target_size / block_size) as u32;
 
         let mut parts = Vec::new();
         let mut current_part = Vec::new();
         let mut current_part_size: usize = 0;
         for range in &self.ranges {
-            // While doing partitioning, wrap the range in ShardedRange so that our size calculations
-            // will respect shard striping rather than assuming all keys within a range are present.
-            let range = ShardedRange::new(range.clone(), shard_identity);
+            let range = KeyspaceRange::new(range.clone());
 
             // Chunk up the range into parts that each contain up to target_size local blocks
             for (frag_on_shard_size, frag_range) in range.fragment(target_nblocks) {
@@ -304,7 +280,7 @@ impl KeySpace {
     pub fn total_raw_size(&self) -> usize {
         self.ranges
             .iter()
-            .map(|range| ShardedRange::raw_size(range) as usize)
+            .map(|range| KeyspaceRange::raw_size(range) as usize)
             .sum()
     }
 
@@ -401,7 +377,7 @@ impl KeySpaceAccum {
 
     #[inline(always)]
     pub fn add_range(&mut self, range: Range<Key>) {
-        self.size += ShardedRange::raw_size(&range) as u64;
+        self.size += KeyspaceRange::raw_size(&range) as u64;
 
         match self.accum.as_mut() {
             Some(accum) => {
@@ -508,7 +484,6 @@ mod tests {
     use rand::{RngCore, SeedableRng};
 
     use super::*;
-    use crate::models::{DEFAULT_STRIPE_SIZE, ShardCount, ShardNumber, ShardStripeSize};
 
     // Helper function to create a key range.
     //
@@ -551,7 +526,7 @@ mod tests {
 
         let expected_size: u64 = ranges
             .iter()
-            .map(|r| ShardedRange::raw_size(r) as u64)
+            .map(|r| KeyspaceRange::raw_size(r) as u64)
             .sum();
         assert_eq!(accum.raw_size(), expected_size);
 
@@ -857,36 +832,22 @@ mod tests {
         );
     }
     #[test]
-    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
-    fn sharded_range_relation_gap() {
-        let shard_identity =
-            ShardIdentity::new(ShardNumber(0), ShardCount::new(4), DEFAULT_STRIPE_SIZE).unwrap();
-
-        let range = ShardedRange::new(
-            Range {
-                start: Key::from_hex("000000067F00000005000040100300000000").unwrap(),
-                end: Key::from_hex("000000067F00000005000040130000004000").unwrap(),
-            },
-            &shard_identity,
-        );
+    fn range_relation_gap() {
+        let range = KeyspaceRange::new(Range {
+            start: Key::from_hex("000000067F00000005000040100300000000").unwrap(),
+            end: Key::from_hex("000000067F00000005000040130000004000").unwrap(),
+        });
 
         // Key range spans relations, expect MAX
         assert_eq!(range.page_count(), u32::MAX);
     }
 
     #[test]
-    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
-    fn shard_identity_keyspaces_single_key() {
-        let shard_identity =
-            ShardIdentity::new(ShardNumber(1), ShardCount::new(4), DEFAULT_STRIPE_SIZE).unwrap();
-
-        let range = ShardedRange::new(
-            Range {
-                start: Key::from_hex("000000067f000000010000007000ffffffff").unwrap(),
-                end: Key::from_hex("000000067f00000001000000700100000000").unwrap(),
-            },
-            &shard_identity,
-        );
+    fn range_single_logical_size_key() {
+        let range = KeyspaceRange::new(Range {
+            start: Key::from_hex("000000067f000000010000007000ffffffff").unwrap(),
+            end: Key::from_hex("000000067f00000001000000700100000000").unwrap(),
+        });
         // Single-key range on logical size key
         assert_eq!(range.page_count(), 1);
     }
@@ -921,18 +882,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
-    fn shard_identity_keyspaces_forkno_gap() {
-        let shard_identity =
-            ShardIdentity::new(ShardNumber(1), ShardCount::new(4), DEFAULT_STRIPE_SIZE).unwrap();
-
-        let range = ShardedRange::new(
-            Range {
-                start: Key::from_hex("000000067f00000001000004df00fffffffe").unwrap(),
-                end: Key::from_hex("000000067f00000001000004df0100000003").unwrap(),
-            },
-            &shard_identity,
-        );
+    fn range_forkno_gap() {
+        let range = KeyspaceRange::new(Range {
+            start: Key::from_hex("000000067f00000001000004df00fffffffe").unwrap(),
+            end: Key::from_hex("000000067f00000001000004df0100000003").unwrap(),
+        });
 
         // Range spanning the end of one forkno and the start of the next: we do not attempt to
         // calculate a valid size, because we have no way to know if they keys between start
@@ -940,50 +894,17 @@ mod tests {
         assert_eq!(range.page_count(), u32::MAX);
     }
 
-    #[test]
-    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
-    fn shard_identity_keyspaces_one_relation() {
-        for shard_number in 0..4 {
-            let shard_identity = ShardIdentity::new(
-                ShardNumber(shard_number),
-                ShardCount::new(4),
-                DEFAULT_STRIPE_SIZE,
-            )
-            .unwrap();
-
-            let range = ShardedRange::new(
-                Range {
-                    start: Key::from_hex("000000067f00000001000000ae0000000000").unwrap(),
-                    end: Key::from_hex("000000067f00000001000000ae0000000001").unwrap(),
-                },
-                &shard_identity,
-            );
-
-            // Very simple case: range covering block zero of one relation, where that block maps to shard zero
-            if shard_number == 0 {
-                assert_eq!(range.page_count(), 1);
-            } else {
-                // Other shards should perceive the range's size as zero
-                assert_eq!(range.page_count(), 0);
-            }
-        }
-    }
-
-    /// Test helper: construct a ShardedRange and call fragment() on it, returning
+    /// Test helper: construct a KeyspaceRange and call fragment() on it, returning
     /// the total page count in the range and the fragments.
     fn do_fragment(
         range_start: Key,
         range_end: Key,
-        shard_identity: &ShardIdentity,
         target_nblocks: u32,
     ) -> (u32, Vec<(u32, Range<Key>)>) {
-        let range = ShardedRange::new(
-            Range {
-                start: range_start,
-                end: range_end,
-            },
-            shard_identity,
-        );
+        let range = KeyspaceRange::new(Range {
+            start: range_start,
+            end: range_end,
+        });
 
         let page_count = range.page_count();
         let fragments = range.fragment(target_nblocks);
@@ -995,18 +916,8 @@ mod tests {
         assert_eq!(fragments.first().unwrap().1.start, range_start);
         assert_eq!(fragments.last().unwrap().1.end, range_end);
 
-        if page_count > 0 {
-            // Invariant: every fragment must contain at least one shard-local page, if the
-            // total range contains at least one shard-local page
-            let all_nonzero = fragments.iter().all(|f| f.0 > 0);
-            if !all_nonzero {
-                eprintln!("Found a zero-length fragment: {fragments:?}");
-            }
-            assert!(all_nonzero);
-        } else {
-            // A range with no shard-local pages should always be returned as a single fragment
-            assert_eq!(fragments, vec![(0, range_start..range_end)]);
-        }
+        // Invariant: every fragment is non-empty (single-shard: every block is present)
+        assert!(fragments.iter().all(|f| f.0 > 0));
 
         // Invariant: fragments must be ordered and non-overlapping
         let mut last: Option<Range<Key>> = None;
@@ -1026,158 +937,13 @@ mod tests {
         (page_count, fragments)
     }
 
-    /// Really simple tests for fragment(), on a range that just contains a single stripe
-    /// for a single tenant.
-    #[test]
-    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
-    fn sharded_range_fragment_simple() {
-        const SHARD_COUNT: u8 = 4;
-        const STRIPE_SIZE: u32 = DEFAULT_STRIPE_SIZE.0;
-
-        let shard_identity = ShardIdentity::new(
-            ShardNumber(0),
-            ShardCount::new(SHARD_COUNT),
-            ShardStripeSize(STRIPE_SIZE),
-        )
-        .unwrap();
-
-        // A range which we happen to know covers exactly one stripe which belongs to this shard
-        let input_start = Key::from_hex("000000067f00000001000000ae0000000000").unwrap();
-        let mut input_end = input_start;
-        input_end.field6 += STRIPE_SIZE; // field6 is block number
-
-        // Ask for stripe_size blocks, we get the whole stripe
-        assert_eq!(
-            do_fragment(input_start, input_end, &shard_identity, STRIPE_SIZE),
-            (STRIPE_SIZE, vec![(STRIPE_SIZE, input_start..input_end)])
-        );
-
-        // Ask for more, we still get the whole stripe
-        assert_eq!(
-            do_fragment(input_start, input_end, &shard_identity, 10 * STRIPE_SIZE),
-            (STRIPE_SIZE, vec![(STRIPE_SIZE, input_start..input_end)])
-        );
-
-        // Ask for target_nblocks of half the stripe size, we get two halves
-        assert_eq!(
-            do_fragment(input_start, input_end, &shard_identity, STRIPE_SIZE / 2),
-            (
-                STRIPE_SIZE,
-                vec![
-                    (
-                        STRIPE_SIZE / 2,
-                        input_start..input_start.add(STRIPE_SIZE / 2)
-                    ),
-                    (STRIPE_SIZE / 2, input_start.add(STRIPE_SIZE / 2)..input_end)
-                ]
-            )
-        );
-    }
 
     #[test]
-    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
-    fn sharded_range_fragment_multi_stripe() {
-        const SHARD_COUNT: u8 = 4;
-        const STRIPE_SIZE: u32 = DEFAULT_STRIPE_SIZE.0;
-        const RANGE_SIZE: u32 = SHARD_COUNT as u32 * STRIPE_SIZE;
-
-        let shard_identity = ShardIdentity::new(
-            ShardNumber(0),
-            ShardCount::new(SHARD_COUNT),
-            ShardStripeSize(STRIPE_SIZE),
-        )
-        .unwrap();
-
-        // A range which covers multiple stripes, exactly one of which belongs to the current shard.
-        let input_start = Key::from_hex("000000067f00000001000000ae0000000000").unwrap();
-        let mut input_end = input_start;
-        input_end.field6 += RANGE_SIZE; // field6 is block number
-
-        // Ask for all the blocks, get a fragment that covers the whole range but reports
-        // its size to be just the blocks belonging to our shard.
-        assert_eq!(
-            do_fragment(input_start, input_end, &shard_identity, RANGE_SIZE),
-            (STRIPE_SIZE, vec![(STRIPE_SIZE, input_start..input_end)])
-        );
-
-        // Ask for a sub-stripe quantity that results in 3 fragments.
-        let limit = STRIPE_SIZE / 3 + 1;
-        assert_eq!(
-            do_fragment(input_start, input_end, &shard_identity, limit),
-            (
-                STRIPE_SIZE,
-                vec![
-                    (limit, input_start..input_start.add(limit)),
-                    (limit, input_start.add(limit)..input_start.add(2 * limit)),
-                    (
-                        STRIPE_SIZE - 2 * limit,
-                        input_start.add(2 * limit)..input_end
-                    ),
-                ]
-            )
-        );
-
-        // Try on a range that starts slightly after our owned stripe
-        assert_eq!(
-            do_fragment(input_start.add(1), input_end, &shard_identity, RANGE_SIZE),
-            (
-                STRIPE_SIZE - 1,
-                vec![(STRIPE_SIZE - 1, input_start.add(1)..input_end)]
-            )
-        );
-    }
-
-    /// Test our calculations work correctly when we start a range from the logical size key of
-    /// a previous relation.
-    #[test]
-    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
-    fn sharded_range_fragment_starting_from_logical_size() {
-        const SHARD_COUNT: u8 = 4;
-        const STRIPE_SIZE: u32 = DEFAULT_STRIPE_SIZE.0;
-        const RANGE_SIZE: u32 = SHARD_COUNT as u32 * STRIPE_SIZE;
-
-        let input_start = Key::from_hex("000000067f00000001000000ae00ffffffff").unwrap();
-        let mut input_end = Key::from_hex("000000067f00000001000000ae0100000000").unwrap();
-        input_end.field6 += RANGE_SIZE; // field6 is block number
-
-        // Shard 0 owns the first stripe in the relation, and the preceding logical size is shard local too
-        let shard_identity = ShardIdentity::new(
-            ShardNumber(0),
-            ShardCount::new(SHARD_COUNT),
-            ShardStripeSize(STRIPE_SIZE),
-        )
-        .unwrap();
-        assert_eq!(
-            do_fragment(input_start, input_end, &shard_identity, 2 * STRIPE_SIZE),
-            (
-                STRIPE_SIZE + 1,
-                vec![(STRIPE_SIZE + 1, input_start..input_end)]
-            )
-        );
-
-        // Shard 1 does not own the first stripe in the relation, but it does own the logical size (all shards
-        // store all logical sizes)
-        let shard_identity = ShardIdentity::new(
-            ShardNumber(1),
-            ShardCount::new(SHARD_COUNT),
-            ShardStripeSize(STRIPE_SIZE),
-        )
-        .unwrap();
-        assert_eq!(
-            do_fragment(input_start, input_end, &shard_identity, 2 * STRIPE_SIZE),
-            (1, vec![(1, input_start..input_end)])
-        );
-    }
-
-    /// Test that ShardedRange behaves properly when used on un-sharded data
-    #[test]
-    fn sharded_range_fragment_unsharded() {
-        let shard_identity = ShardIdentity::unsharded();
-
+    fn range_fragment_by_size() {
         let input_start = Key::from_hex("000000067f00000001000000ae0000000000").unwrap();
         let input_end = Key::from_hex("000000067f00000001000000ae0000010000").unwrap();
         assert_eq!(
-            do_fragment(input_start, input_end, &shard_identity, 0x8000),
+            do_fragment(input_start, input_end, 0x8000),
             (
                 0x10000,
                 vec![
@@ -1189,37 +955,22 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
-    fn sharded_range_fragment_cross_relation() {
-        let shard_identity = ShardIdentity::unsharded();
-
+    fn range_fragment_cross_relation() {
         // A range that spans relations: expect fragmentation to give up and return a u32::MAX size
         let input_start = Key::from_hex("000000067f00000001000000ae0000000000").unwrap();
         let input_end = Key::from_hex("000000068f00000001000000ae0000010000").unwrap();
         assert_eq!(
-            do_fragment(input_start, input_end, &shard_identity, 0x8000),
-            (u32::MAX, vec![(u32::MAX, input_start..input_end),])
-        );
-
-        // Same, but using a sharded identity
-        let shard_identity =
-            ShardIdentity::new(ShardNumber(0), ShardCount::new(4), DEFAULT_STRIPE_SIZE).unwrap();
-        assert_eq!(
-            do_fragment(input_start, input_end, &shard_identity, 0x8000),
+            do_fragment(input_start, input_end, 0x8000),
             (u32::MAX, vec![(u32::MAX, input_start..input_end),])
         );
     }
 
     #[test]
-    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
-    fn sharded_range_fragment_tiny_nblocks() {
-        let shard_identity = ShardIdentity::unsharded();
-
-        // A range that spans relations: expect fragmentation to give up and return a u32::MAX size
+    fn range_fragment_tiny_nblocks() {
         let input_start = Key::from_hex("000000067F00000001000004E10000000000").unwrap();
         let input_end = Key::from_hex("000000067F00000001000004E10000000038").unwrap();
         assert_eq!(
-            do_fragment(input_start, input_end, &shard_identity, 16),
+            do_fragment(input_start, input_end, 16),
             (
                 0x38,
                 vec![
@@ -1233,25 +984,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "yb-mode: ShardIdentity is degenerate (unsharded only)"]
-    fn sharded_range_fragment_fuzz() {
+    fn range_fragment_fuzz() {
         // Use a fixed seed: we don't want to explicitly pick values, but we do want
         // the test to be reproducible.
         let mut prng = rand::rngs::StdRng::seed_from_u64(0xdeadbeef);
 
         for _i in 0..1000 {
-            let shard_identity = if prng.next_u32() % 2 == 0 {
-                ShardIdentity::unsharded()
-            } else {
-                let shard_count = prng.next_u32() % 127 + 1;
-                ShardIdentity::new(
-                    ShardNumber((prng.next_u32() % shard_count) as u8),
-                    ShardCount::new(shard_count as u8),
-                    DEFAULT_STRIPE_SIZE,
-                )
-                .unwrap()
-            };
-
             let target_nblocks = prng.next_u32() % 65536 + 1;
 
             let start_offset = prng.next_u32() % 16384;
@@ -1259,31 +997,23 @@ mod tests {
             // Try ranges up to 4GiB in size, that are always at least 1
             let range_size = prng.next_u32() % 8192 + 1;
 
-            // A range that spans relations: expect fragmentation to give up and return a u32::MAX size
             let input_start = Key::from_hex("000000067F00000001000004E10000000000")
                 .unwrap()
                 .add(start_offset);
             let input_end = input_start.add(range_size);
 
             // This test's main success conditions are the invariants baked into do_fragment
-            let (_total_size, fragments) =
-                do_fragment(input_start, input_end, &shard_identity, target_nblocks);
+            let (_total_size, fragments) = do_fragment(input_start, input_end, target_nblocks);
 
             // Pick a random key within the range and check it appears in the output
             let example_key = input_start.add(prng.next_u32() % range_size);
 
-            // Panic on unwrap if it isn't found
+            // Panic on unwrap if it isn't found, and its fragment must be non-empty
             let example_key_frag = fragments
                 .iter()
                 .find(|f| f.1.contains(&example_key))
                 .unwrap();
-
-            // Check that the fragment containing our random key has a nonzero size if
-            // that key is shard-local
-            let example_key_local = !shard_identity.is_key_disposable(&example_key);
-            if example_key_local {
-                assert!(example_key_frag.0 > 0);
-            }
+            assert!(example_key_frag.0 > 0);
         }
     }
 }

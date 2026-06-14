@@ -874,7 +874,6 @@ impl Timeline {
         );
 
         let batches = keyspace.partition(
-            self.get_shard_identity(),
             self.conf.max_get_vectored_keys.get() as u64 * BLCKSZ as u64,
             BLCKSZ as u64,
         );
@@ -1105,7 +1104,6 @@ impl Timeline {
             );
 
             let batches = keyspace.partition(
-                self.get_shard_identity(),
                 self.conf.max_get_vectored_keys.get() as u64 * BLCKSZ as u64,
                 BLCKSZ as u64,
             );

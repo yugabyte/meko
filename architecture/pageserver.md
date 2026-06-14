@@ -31,12 +31,13 @@ pageserver_*/tenants/<tenant_id>-<shard_count>-<shard_number>/
                      timelines/<timeline_id>/<layer-files…>
 ```
 
-In yb-light only single-shard tenants are supported. `ShardCount` /
-`TenantShardId` / `ShardIdentity` types still exist in
-`libs/pageserver_api/src/keyspace.rs` and on the on-disk path, but the
-shard-split machinery in `storage_controller` was removed. The dev
-cluster runs `ShardCount = 0` (unsharded; one shard per tenant on one
-pageserver).
+In yb-light only single-shard tenants are supported, and the notion of
+shards is being removed entirely (epic #73). Keyspace partitioning
+(`KeyspaceRange` / `KeySpace::partition`, was `ShardedRange`) no longer
+consults a shard identity — it chunks purely by size. The residual
+`ShardCount` / `ShardIdentity` types still exist in
+`libs/pageserver_api/src/models.rs` + `libs/utils/src/id.rs` and a few
+wire/DB signatures, pending their removal in later stages of #73.
 
 ### Tenant / timeline layout
 
