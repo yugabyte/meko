@@ -77,7 +77,7 @@ pub struct SafekeeperConfigToml {
     /// how `pageserver.toml` stores `remote_storage`. Parsed by the
     /// safekeeper into a `ysql_client::YbConnConfig`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wal_yb_config: Option<String>,
+    pub yb_storage_conn: Option<String>,
     /// Capacity (MiB) of the recent-WAL cache. `None` derives it from
     /// `DEFAULT_WAL_CACHE_SIZE_MIB * scale_factor`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -136,7 +136,7 @@ impl Default for SafekeeperConfigToml {
             advertise_pg: None,
             availability_zone: None,
             heartbeat_timeout: Duration::from_millis(5000),
-            wal_yb_config: None,
+            yb_storage_conn: None,
             wal_cache_size_mib: None,
             scale_factor: DEFAULT_SCALE_FACTOR,
             max_timeline_disk_usage_bytes: DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES,
@@ -189,7 +189,7 @@ mod tests {
             timeline_id: Some(TimelineId::generate()),
             listen_pg: "127.0.0.1:5474".to_string(),
             listen_http: "127.0.0.1:7686".to_string(),
-            wal_yb_config: Some("{ host_ports = '127.0.0.1:5433', dbname = 'yb_storage' }".to_string()),
+            yb_storage_conn: Some("{ host_ports = '127.0.0.1:5433', dbname = 'yb_storage' }".to_string()),
             wal_cache_size_mib: Some(128),
             availability_zone: Some("sk-7".to_string()),
             ..Default::default()
@@ -211,6 +211,6 @@ mod tests {
         assert_eq!(cfg.listen_pg, "127.0.0.1:5474");
         assert_eq!(cfg.heartbeat_timeout, Duration::from_millis(5000));
         assert_eq!(cfg.control_file_save_interval, Duration::from_secs(300));
-        assert!(cfg.wal_yb_config.is_none());
+        assert!(cfg.yb_storage_conn.is_none());
     }
 }

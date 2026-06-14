@@ -679,7 +679,7 @@ async fn create_page_store_with_app_name(
     let rs_cfg = conf
         .remote_storage_config
         .as_ref()
-        .context("yb-pageserver requires `remote_storage` configured")?;
+        .context("yb-pageserver requires `yb_storage_conn` configured")?;
     let RemoteStorageKind::YbStore(yb_cfg) = &rs_cfg.storage;
     let ps_cfg = pageserver::page_store::PageStoreConfig::new(yb_cfg.clone())
         .with_scale_factor(conf.scale_factor);

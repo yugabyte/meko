@@ -46,7 +46,7 @@ fails). No operator DDL is required on a fresh YB cluster.
 
 Generic chunked blob store used by:
 
-- The pageserver. Its `remote_storage` block is the shared `YbConnConfig`
+- The pageserver. Its `yb_storage_conn` block is the shared `YbConnConfig`
   (`host_ports` / `user` / `dbname` / …) — there is no configured `prefix`
   or `table_name`; the table (`public.blobs`) and the namespace are
   hardcoded / derived, not configured.
@@ -434,7 +434,7 @@ by hand.
 | Schema | Object | Purpose |
 |---|---|---|
 | `public` | `blob_namespace` ENUM | `pageserver` / `safekeeper` discriminator on `blobs`. |
-| `public` | `blobs` | Chunked blob store (pageserver remote_storage). |
+| `public` | `blobs` | Chunked blob store (pageserver yb_storage_conn). |
 | `public` | `wals` | Live-WAL chunks; PK `((tenant, timeline) HASH, segno, chunk_offset)`. |
 | `pageserver` | `pages` | Relation pages, one row per (block, LSN); PK `((tenant, timeline, spc, db, rel, fork) HASH, blknum, lsn DESC, is_image)`. |
 | `pageserver` | `slru_pages` | SLRU blocks (pg_xact, pg_multixact_*); same shape as `pages`, keyed by `(kind, segno)`. |

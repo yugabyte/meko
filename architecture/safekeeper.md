@@ -516,20 +516,20 @@ timeline_id = "77ffde89..."
 listen_pg = "127.0.0.1:5474"
 listen_http = "127.0.0.1:7686"
 availability_zone = "sk-1"
-wal_yb_config = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage', sslmode = 'require' }"
+yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage', sslmode = 'require' }"
 # … tuning knobs (heartbeat_timeout, control_file_save_interval, ssl_*, …)
 # fall back to defaults when omitted; unknown keys are ignored.
 ```
 
-`wal_yb_config` is the single YB connection (a string-encoded inline table,
-like `pageserver.toml`'s `remote_storage`) used for both the
+`yb_storage_conn` is the single YB connection (a string-encoded inline table,
+like `pageserver.toml`'s `yb_storage_conn`) used for both the
 `safekeeper.timeline_state` row (control file) and the `public.wals` chunk
 stream — same DB, two tables. The WAL chunk table is hardcoded to
 `public.wals` (not configurable); `safekeeper.timeline_state` is reached
 via the same `YsqlClient`.
 
 `tenant_id`/`timeline_id` bake this process's single timeline identity
-(required whenever `wal_yb_config` is set) — the safekeeper's analogue of
+(required whenever `yb_storage_conn` is set) — the safekeeper's analogue of
 `pageserver.toml`'s identity keys. neon_local stamps them at provision time
 (`allocate_safekeeper_conf`). They scope the startup load to this one
 timeline and gate connections to it (see §5).

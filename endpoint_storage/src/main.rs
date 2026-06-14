@@ -32,8 +32,10 @@ struct Config {
     #[serde(default = "listen")]
     listen: std::net::SocketAddr,
     pemfile: camino::Utf8PathBuf,
-    #[serde(flatten)]
-    storage_kind: remote_storage::TypedRemoteStorageKind,
+    /// The YB connection (and storage kind) this service writes blobs to —
+    /// a nested block named `yb_storage_conn`, matching the key the
+    /// pageserver and safekeeper use.
+    yb_storage_conn: remote_storage::TypedRemoteStorageKind,
     #[serde(default = "max_upload_file_limit")]
     max_upload_file_limit: usize,
 }
@@ -67,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
     info!("listening on {}", listener.local_addr().unwrap());
 
     let storage =
-        remote_storage::GenericRemoteStorage::from_storage_kind(config.storage_kind).await?;
+        remote_storage::GenericRemoteStorage::from_storage_kind(config.yb_storage_conn).await?;
     let cancel = tokio_util::sync::CancellationToken::new();
 
     let proxy = std::sync::Arc::new(endpoint_storage::Storage {

@@ -349,7 +349,7 @@ control_plane_api = 'http://127.0.0.1:1244/upcall/v1/'
 listen_pg_addr = "127.0.0.1:64100"
 listen_http_addr = "127.0.0.1:9988"
 listen_grpc_addr = "127.0.0.1:51151"
-remote_storage = {
+yb_storage_conn = {
     host_ports = "127.0.0.1:5433",
     user = "yugabyte",
     dbname = "yb_storage"
@@ -360,7 +360,7 @@ Table names are not configured: this one block serves both the page
 store (`pageserver.pages` / `slru_pages` / `meta`) and the object store
 (`public.blobs`), each hardcoded by the component.
 
-`yb_light_local init` accepts a top-level config with this `remote_storage`
+`yb_light_local init` accepts a top-level config with this `yb_storage_conn`
 inline table; the generated `pageserver.toml` carries it through.
 
 `YbStore` is the only `RemoteStorage` backend in yb-light; LocalFs, S3,

@@ -75,34 +75,27 @@ impl EndpointStorage {
     pub fn init(&self) -> Result<()> {
         println!("Initializing object storage in {:?}", self.data_dir);
 
-        // The endpoint_storage service deserializes the top-level config
-        // via `#[serde(flatten)] storage_kind: TypedRemoteStorageKind`,
-        // so we just inline the JSON object the user supplied (or the
-        // default YbStore block we derive from storage_controller.yb)
-        // into the outer config.
+        // The endpoint_storage service deserializes its YB connection from a
+        // nested `yb_storage_conn` block (a `TypedRemoteStorageKind`), the
+        // same key the pageserver and safekeeper use. Nest the JSON object
+        // the user supplied (or the default YbStore block we derive from
+        // storage_controller.yb) under that key.
         let storage_kind = match &self.remote_storage_json {
             Some(json) => json.clone(),
             None => self.default_yb_store_json()?,
         };
+        let storage_obj: serde_json::Value = serde_json::from_str(&storage_kind)
+            .context("parsing remote_storage_json: must be a JSON object with a `type` field")?;
 
         let cfg = serde_json::json!({
             "listen": self.listen_addr(),
             "pemfile": self.pemfile.clone(),
+            "yb_storage_conn": storage_obj,
         });
-        let cfg_obj = cfg.as_object().unwrap().clone();
-        let storage_obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
-            &storage_kind,
-        )
-        .context("parsing remote_storage_json: must be a JSON object with a `type` field")?;
-        let mut merged: serde_json::Map<String, serde_json::Value> = cfg_obj;
-        merged.extend(storage_obj);
 
         std::fs::create_dir_all(self.config_path().parent().unwrap())?;
-        std::fs::write(
-            self.config_path(),
-            serde_json::to_string(&serde_json::Value::Object(merged))?,
-        )
-        .context("write object storage config")?;
+        std::fs::write(self.config_path(), serde_json::to_string(&cfg)?)
+            .context("write object storage config")?;
         Ok(())
     }
 

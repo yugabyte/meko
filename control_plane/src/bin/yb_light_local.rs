@@ -68,7 +68,7 @@ const DEFAULT_YB_USER: &str = "yugabyte";
 const DEFAULT_YB_DBNAME: &str = "yb_storage";
 
 /// The shared `[*.yb]` connection config for the dev cluster's YB. The
-/// pageserver (`remote_storage`), safekeeper (`--wal-yb-config`),
+/// pageserver (`yb_storage_conn`), safekeeper (`yb_storage_conn`),
 /// endpoint_storage and storage_controller (`--yb-config`) all consume this
 /// same block — each hardcodes the table(s) it owns, so it carries none.
 fn default_yb_conn_config(target: &YbStoreTarget) -> ysql_client::YbConnConfig {
@@ -138,8 +138,8 @@ struct InitCmdArgs {
 
     /// YugabyteDB database name baked into the default (no `--config`)
     /// config: the shared `[*.yb]` block consumed by the storage controller
-    /// (`--yb-config`), pageserver (`remote_storage`), safekeeper
-    /// (`wal_yb_config`) and endpoint_storage all point at it. Defaults to
+    /// (`--yb-config`), pageserver (`yb_storage_conn`), safekeeper
+    /// (`yb_storage_conn`) and endpoint_storage all point at it. Defaults to
     /// `yb_storage`. Lets callers (e.g. the e2e harness)
     /// target an ephemeral per-run database without templating a base TOML.
     /// Ignored when `--config` is given.
@@ -1081,7 +1081,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                 pg_port: sk_pg_port,
                 http_port: sk_http_port,
                 // Mirror live WAL into <db>.public.wals.
-                wal_yb_config: Some(yb_conn.to_inline_toml()),
+                yb_storage_conn: Some(yb_conn.to_inline_toml()),
                 ..Default::default()
             }],
             pageservers: (0..args.num_pageservers.unwrap_or(1))
@@ -1101,7 +1101,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                         grpc_auth_type: AuthType::Trust,
                         // Pages live in <db>.pageserver.*; relfile/layer
                         // objects in <db>.public.blobs (both tables hardcoded).
-                        remote_storage: Some(yb_conn.to_inline_toml()),
+                        yb_storage_conn: Some(yb_conn.to_inline_toml()),
                         other: Default::default(),
                         // Typical developer machines use disks with slow fsync, and we don't care
                         // about data integrity: disable disk syncs.
@@ -1190,7 +1190,7 @@ fn allocate_pageserver_conf(env: &LocalEnv, endpoint_id: &str) -> anyhow::Result
 }
 
 /// Build the full `YbLightLocalInitPageserverConf` (carrying
-/// `remote_storage` + other passthrough keys) for the first/main
+/// `yb_storage_conn` + other passthrough keys) for the first/main
 /// pageserver, by cloning the lowest-id template and stamping in the
 /// allocated id/ports/auth. Used to write the bootstrap pageserver.toml;
 /// branch pageservers instead clone their ancestor's toml.
@@ -1213,7 +1213,7 @@ fn pageserver_init_conf_for(
         http_auth_type: allocated.http_auth_type,
         grpc_auth_type: allocated.grpc_auth_type,
         no_sync: allocated.no_sync,
-        remote_storage: template.remote_storage.clone(),
+        yb_storage_conn: template.yb_storage_conn.clone(),
         other: template.other.clone(),
     })
 }
@@ -1247,7 +1247,7 @@ fn allocate_safekeeper_conf(
         backup_threads: template.backup_threads,
         auth_enabled: template.auth_enabled,
         listen_addr: template.listen_addr.clone(),
-        wal_yb_config: template.wal_yb_config.clone(),
+        yb_storage_conn: template.yb_storage_conn.clone(),
         wal_cache_size_mib: template.wal_cache_size_mib,
         tenant_id: Some(tenant_id),
         timeline_id: Some(timeline_id),
@@ -2864,7 +2864,7 @@ mod tests {
             http_auth_type: AuthType::Trust,
             grpc_auth_type: AuthType::Trust,
             no_sync: true,
-            remote_storage: Some("{ host = 'h' }".to_string()),
+            yb_storage_conn: Some("{ host = 'h' }".to_string()),
             other: Default::default(),
         }
     }
@@ -2874,7 +2874,7 @@ mod tests {
             id: NodeId(1),
             pg_port: 5454,
             http_port: 7676,
-            wal_yb_config: Some("{ host = 'h' }".to_string()),
+            yb_storage_conn: Some("{ host = 'h' }".to_string()),
             ..Default::default()
         }
     }
@@ -2941,7 +2941,7 @@ mod tests {
         assert_eq!(conf.tenant_id, Some(tn));
         assert_eq!(conf.timeline_id, Some(tl));
         assert_eq!(conf.endpoint_id, "main");
-        assert_eq!(conf.wal_yb_config.as_deref(), Some("{ host = 'h' }"));
+        assert_eq!(conf.yb_storage_conn.as_deref(), Some("{ host = 'h' }"));
     }
 
     #[test]
@@ -2995,13 +2995,13 @@ mod tests {
     }
 
     #[test]
-    fn pageserver_init_conf_preserves_template_remote_storage() {
+    fn pageserver_init_conf_preserves_template_yb_storage_conn() {
         let env = env_with_templates();
         let allocated = allocate_pageserver_conf(&env, "main").unwrap();
         let init_conf = pageserver_init_conf_for(&env, &allocated).unwrap();
         assert_eq!(init_conf.id, allocated.id);
         assert_eq!(init_conf.listen_pg_addr, allocated.listen_pg_addr);
-        assert_eq!(init_conf.remote_storage.as_deref(), Some("{ host = 'h' }"));
+        assert_eq!(init_conf.yb_storage_conn.as_deref(), Some("{ host = 'h' }"));
         assert!(init_conf.no_sync);
     }
 

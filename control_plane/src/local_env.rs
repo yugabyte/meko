@@ -76,13 +76,13 @@ pub struct LocalEnv {
     pub safekeepers: Vec<SafekeeperConf>,
 
     /// Init-time pageserver conf(s) from the `yb_light_local init` TOML.
-    /// Not a running node — the template (ports, `remote_storage`, auth)
+    /// Not a running node — the template (ports, `yb_storage_conn`, auth)
     /// that `endpoint create` clones for the first/main pageserver. The
     /// lowest-id template is the port base for all pageserver allocation.
     pub pageserver_templates: Vec<YbLightLocalInitPageserverConf>,
 
     /// Init-time safekeeper conf(s) from the `yb_light_local init` TOML.
-    /// The template (ports, `wal_yb_config`, auth) that `endpoint create`
+    /// The template (ports, `yb_storage_conn`, auth) that `endpoint create`
     /// clones for the first/main safekeeper.
     pub safekeeper_templates: Vec<SafekeeperConf>,
 
@@ -180,7 +180,7 @@ pub struct EndpointStorageConf {
     /// `yb_storage.public.blobs` table. Value must be a JSON object
     /// including the `type` discriminator, e.g.
     /// `{"type": "YbStore", "host": "...", "user": "...", ...}`. Mirrors
-    /// the way [`YbLightLocalInitPageserverConf::remote_storage`] feeds the
+    /// the way [`YbLightLocalInitPageserverConf::yb_storage_conn`] feeds the
     /// pageserver's TOML inline table — opaque to yb_light_local, parsed
     /// by `TypedRemoteStorageKind` in the target service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -331,13 +331,13 @@ pub struct YbLightLocalInitPageserverConf {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_sync: bool,
     /// If `Some`, written verbatim into `pageserver.toml` as
-    /// `remote_storage = <value>`. Value must be a TOML inline table for
-    /// `YbStore` (e.g. `{ host = "172.151.17.132", port = 5433, ... }`).
-    /// Required — pageserver init bails if neither this nor `other.remote_storage`
+    /// `yb_storage_conn = <value>`. Value must be a TOML inline table for
+    /// `YbStore` (e.g. `{ host_ports = "172.151.17.132:5433", ... }`).
+    /// Required — pageserver init bails if neither this nor `other.yb_storage_conn`
     /// is set. Bypasses the `#[serde(flatten)] other` round-trip that
     /// would otherwise mangle inline tables.
     #[serde(default)]
-    pub remote_storage: Option<String>,
+    pub yb_storage_conn: Option<String>,
     #[serde(flatten)]
     pub other: HashMap<String, toml::Value>,
 }
@@ -354,7 +354,7 @@ impl From<&YbLightLocalInitPageserverConf> for PageServerConf {
             http_auth_type,
             grpc_auth_type,
             no_sync,
-            remote_storage: _,
+            yb_storage_conn: _,
             other: _,
         } = conf;
         Self {
@@ -390,10 +390,10 @@ pub struct SafekeeperConf {
     /// as a TOML inline string that the safekeeper accepts as
     /// `--wal-yb-config`. Single-safekeeper constraint applies (see
     /// architecture/safekeeper.md §5).
-    pub wal_yb_config: Option<String>,
+    pub yb_storage_conn: Option<String>,
     /// Capacity (MiB) of the in-memory cache of recent WAL chunks used in
     /// YB-WAL mode. Maps to `--wal-cache-size-mib`. Ignored without
-    /// `wal_yb_config`. `Some(0)` disables the cache; `None` lets the
+    /// `yb_storage_conn`. `Some(0)` disables the cache; `None` lets the
     /// safekeeper apply its built-in default.
     pub wal_cache_size_mib: Option<u32>,
     /// The (tenant, timeline) this safekeeper is dedicated to (per-endpoint
@@ -421,7 +421,7 @@ impl Default for SafekeeperConf {
             backup_threads: None,
             auth_enabled: false,
             listen_addr: None,
-            wal_yb_config: None,
+            yb_storage_conn: None,
             wal_cache_size_mib: None,
             tenant_id: None,
             timeline_id: None,
@@ -1019,7 +1019,7 @@ impl LocalEnv {
         // PS+SK pair for a timeline is provisioned under its owning
         // `endpoints/<name>/` folder at `endpoint create`. The init
         // confs are kept as templates that the launcher clones (ports,
-        // `remote_storage`/`wal_yb_config`, auth) when it allocates a
+        // `yb_storage_conn`, auth) when it allocates a
         // pageserver/safekeeper. `pageservers`/`safekeepers` start empty
         // and are populated as endpoints are created.
         let env = LocalEnv {

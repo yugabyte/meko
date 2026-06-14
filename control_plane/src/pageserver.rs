@@ -131,18 +131,18 @@ impl PageServerNode {
             overrides.push(format!("control_plane_api_token='{jwt_token}'"));
         }
 
-        // `conf.remote_storage` is the supported way to set this — written
+        // `conf.yb_storage_conn` is the supported way to set this — written
         // verbatim to avoid the `#[serde(flatten)] other` mangling that
-        // turns inline tables into nested `other = { remote_storage = "..." }`
+        // turns inline tables into nested `other = { yb_storage_conn = "..." }`
         // blocks pageserver ignores. Legacy callers that stuff it into
-        // `other` still work. LocalFs was dropped from remote_storage, so
-        // a YbStore config is mandatory — bail out hard if it isn't set.
-        if let Some(rs) = &conf.remote_storage {
-            overrides.push(format!("remote_storage={rs}"));
-        } else if !conf.other.contains_key("remote_storage") {
+        // `other` still work. LocalFs was dropped, so a YbStore connection is
+        // mandatory — bail out hard if it isn't set.
+        if let Some(rs) = &conf.yb_storage_conn {
+            overrides.push(format!("yb_storage_conn={rs}"));
+        } else if !conf.other.contains_key("yb_storage_conn") {
             anyhow::bail!(
-                "pageserver remote_storage must be configured (LocalFs was removed; \
-                 set YbLightLocalInitPageserverConf::remote_storage to a YbStore inline table)"
+                "pageserver yb_storage_conn must be configured (LocalFs was removed; \
+                 set YbLightLocalInitPageserverConf::yb_storage_conn to a YbStore inline table)"
             );
         }
 
@@ -165,9 +165,9 @@ impl PageServerNode {
             // `id` is written out to `identity.toml` instead of `pageserver.toml`
             doc.remove("id").expect("it's part of the struct");
             // Already emitted verbatim above; serializing the Option<String>
-            // here would write `remote_storage = "{ host = ... }"` (a string,
-            // not a table), which pageserver rejects.
-            doc.remove("remote_storage");
+            // here would write `yb_storage_conn = "{ host_ports = ... }"` (a
+            // string, not a table), which pageserver rejects.
+            doc.remove("yb_storage_conn");
             doc.to_string()
         });
 

@@ -56,7 +56,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     step("Stop pageserver (immediate)");
     c.yb(&["pageserver", "stop", "-m", "immediate"])?;
 
-    step(&format!("Soak {soak}s — WAL flushes into yb_storage.wals via wal_yb_config"));
+    step(&format!("Soak {soak}s — WAL flushes into yb_storage.wals via yb_storage_conn"));
     tokio::time::sleep(Duration::from_secs(soak)).await;
 
     step("Stop safekeeper -m immediate");

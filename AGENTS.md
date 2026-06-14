@@ -60,7 +60,7 @@ Code anchors:
   auto-provisioning.
 - `control_plane/src/local_env.rs` — TOML config types
   (`YbLightStorageControllerConf::database_url`,
-  `SafekeeperConf::control_file_backend` / `wal_yb_config`).
+  `SafekeeperConf::control_file_backend` / `yb_storage_conn`).
 - `control_plane/src/safekeeper.rs` / `pageserver.rs` / `endpoint.rs` —
   per-service CLI assembly + per-component config.
 - `pageserver/src/page_store.rs` — `PageStore` row store for the

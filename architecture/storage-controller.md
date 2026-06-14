@@ -208,8 +208,8 @@ dbname = "yb_storage"
 ```
 
 This `[storage_controller.yb]` block is the same shared YB connection
-block (`YbConnConfig`) used by the pageserver `remote_storage`, the
-safekeeper `--wal-yb-config`, and endpoint_storage — identical field set.
+block (`YbConnConfig`) used by the pageserver `yb_storage_conn`, the
+safekeeper `yb_storage_conn`, and endpoint_storage — identical field set.
 
 The controller itself still links against `libpq`, so the Postgres v17
 libs must exist locally — but no Postgres *server* runs.

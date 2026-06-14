@@ -190,7 +190,7 @@ impl SafekeeperNode {
                 .https_port
                 .map(|p| format!("{}:{}", self.listen_addr, p)),
             availability_zone: Some(format!("sk-{id}")),
-            wal_yb_config: self.conf.wal_yb_config.clone(),
+            yb_storage_conn: self.conf.yb_storage_conn.clone(),
             wal_cache_size_mib: self.conf.wal_cache_size_mib.map(|s| s as usize),
             pg_auth_public_key_path: auth_key.clone(),
             pg_tenant_only_auth_public_key_path: auth_key.clone(),

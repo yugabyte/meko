@@ -83,7 +83,7 @@ pub struct SafeKeeperConf {
     /// every `write_wal` is INSERT'd into the (hardcoded) `public.wals`
     /// table in addition to being written to the local-FS shadow. When
     /// `None`, WAL only lives on local FS (default).
-    pub wal_yb_config: Option<ysql_client::YbConnConfig>,
+    pub yb_storage_conn: Option<ysql_client::YbConnConfig>,
     /// The single (tenant_id, timeline_id) this process serves for its
     /// lifetime. Set from `--tenant-id`/`--timeline-id`; required in
     /// YB-WAL mode (see [`Self::yb_ttid`]). `safekeeper.timeline_state`
@@ -93,7 +93,7 @@ pub struct SafeKeeperConf {
     pub timeline_id: Option<TimelineId>,
     /// In-memory cache capacity (MiB) for recent WAL chunks in YB-WAL
     /// mode. See [`crate::wal_cache`]. Ignored when
-    /// [`Self::wal_yb_config`] is `None`. Set to 0 to disable the cache.
+    /// [`Self::yb_storage_conn`] is `None`. Set to 0 to disable the cache.
     pub wal_cache_size_mib: usize,
     pub max_timeline_disk_usage_bytes: u64,
     /// How often to check the working directory's filesystem for total disk usage.
@@ -127,7 +127,7 @@ impl SafeKeeperConf {
     /// The system therefore requires exactly one safekeeper in this mode;
     /// see [`require_single_safekeeper`] and call sites that enforce this.
     pub fn is_yb_wal_mode(&self) -> bool {
-        self.wal_yb_config.is_some()
+        self.yb_storage_conn.is_some()
     }
 
     /// The single timeline this process is dedicated to. Required in
@@ -278,7 +278,7 @@ impl SafeKeeperConf {
             listen_https_addr: None,
             advertise_pg_addr: None,
             availability_zone: None,
-            wal_yb_config: None,
+            yb_storage_conn: None,
             tenant_id: None,
             timeline_id: None,
             wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,

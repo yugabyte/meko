@@ -219,7 +219,7 @@ from their own location, so they work from any working directory.
 
 The pageserver expects to find a YB cluster reachable from the host;
 configure host_ports/user/dbname/sslmode in `config.toml` under the
-`remote_storage` and `wal_yb_config` sections. `host_ports` is a single
+`yb_storage_conn` section. `host_ports` is a single
 CSV key of the form `host:port[,host:port,...]` (default port 5433);
 a bare host with no `:port` defaults to 5433 and a comma-separated list
 of YB tservers (`"10.0.0.1:5433,10.0.0.2:5433,10.0.0.3:5433"`) — the

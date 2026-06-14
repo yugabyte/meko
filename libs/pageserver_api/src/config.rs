@@ -198,7 +198,7 @@ pub struct ConfigToml {
     pub pg_auth_type: AuthType,
     pub grpc_auth_type: AuthType,
     pub auth_validation_public_key_path: Option<Utf8PathBuf>,
-    pub remote_storage: Option<RemoteStorageConfig>,
+    pub yb_storage_conn: Option<RemoteStorageConfig>,
     pub tenant_config: TenantConfigToml,
     /// libpq connection string of the single safekeeper, e.g.
     /// `host=127.0.0.1 port=5484`. The walreceiver opens its WAL
@@ -268,7 +268,7 @@ pub struct ConfigToml {
 
     /// yb-pageserver row-per-page writer tunables. The upstream
     /// `pageserver` binary ignores these — they only take effect when
-    /// `remote_storage.kind = "YbStore"` and the binary is
+    /// `yb_storage_conn.kind = "YbStore"` and the binary is
     /// `yb-pageserver`.
     #[serde(default)]
     pub yb_page_writer: YbPageWriterConfigToml,
@@ -798,7 +798,7 @@ impl Default for ConfigToml {
             pg_auth_type: (AuthType::Trust),
             grpc_auth_type: (AuthType::Trust),
             auth_validation_public_key_path: (None),
-            remote_storage: None,
+            yb_storage_conn: None,
             safekeeper_pg_addr: None,
             log_format: (LogFormat::from_str(DEFAULT_LOG_FORMAT).unwrap()),
 

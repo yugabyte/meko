@@ -55,7 +55,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SC node list empty after PS starts; PS log `register: None` | PS didn't auto-register | **E** |
 | PS exits at startup: `pageserver.toml must set tenant_id/timeline_id/generation` | single-timeline identity missing — launcher hasn't assigned one (run `tenant create`, or write the identity + `[timeline_init]` into pageserver.toml) | — |
 | PS exits at startup: `timeline … has no timeline_state row and no [timeline_init]` | row missing and no creation mode configured (wiped YB DB, or toml written without `[timeline_init]`) | — |
-| SK exits at startup: `YB-WAL mode requires --tenant-id and --timeline-id` | single-timeline identity missing from `safekeeper.toml` — the SK serves one timeline and scopes its load to it. Provisioned SKs get `tenant_id`/`timeline_id` written by `allocate_safekeeper_conf`; a hand-written `safekeeper.toml` must set both alongside `wal_yb_config` | — |
+| SK exits at startup: `YB-WAL mode requires --tenant-id and --timeline-id` | single-timeline identity missing from `safekeeper.toml` — the SK serves one timeline and scopes its load to it. Provisioned SKs get `tenant_id`/`timeline_id` written by `allocate_safekeeper_conf`; a hand-written `safekeeper.toml` must set both alongside `yb_storage_conn` | — |
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |
 | psql: `libreadline.so.7: cannot open shared object file` | bundle psql wants older readline | **G** |
 | Compute postmaster dies with `EADDRINUSE` on its own port | yb_light_local port collision | **H** |
@@ -67,9 +67,9 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 ## A. `yb_light_local init` config schema / serde errors
 `yb_light_local init --config <file>` is strict about its TOML. Common cascade of failures, each fixed
 by adding the missing/retyped key:
-- `remote_storage` under `[[pageservers]]` must be a **string-encoded inline table**, not a native
-  TOML map — i.e. `remote_storage='{ host_ports="…:5433", user="…", dbname="…" }'` (quoted string),
-  not `remote_storage={…}`. It carries no `table_name` (each component hardcodes its tables).
+- `yb_storage_conn` under `[[pageservers]]` must be a **string-encoded inline table**, not a native
+  TOML map — i.e. `yb_storage_conn='{ host_ports="…:5433", user="…", dbname="…" }'` (quoted string),
+  not `yb_storage_conn={…}`. It carries no `table_name` (each component hardcodes its tables).
 - Missing top-level keys it requires: `default_tenant_id`, `generate_local_ssl_certs`,
   `control_plane_api`. A panic at `local_env.rs:…` on init usually means `control_plane_api` is absent.
 - `[endpoint_storage]` stanza must be present.
@@ -104,7 +104,7 @@ A client opened a **non-TLS** connection to YugabyteDB, which requires TLS. Seen
 endpoint_storage `YbStore` config derived `sslmode:None`. Fix the relevant config to force TLS and
 supply the password env, e.g. in `.yb_light/endpoints/<ep>/endpoint_storage/endpoint_storage.json` add
 `"sslmode":"require"` and `"password_env":"YB_STORAGE_PASSWORD"`. Any component talking to YB
-(`pageserver.toml remote_storage`, safekeeper `--remote-storage`, SC `--database-url`) must specify
+(`pageserver.toml yb_storage_conn`, safekeeper `yb_storage_conn`, SC `--database-url`) must specify
 `sslmode=require`/`sslmode="require"`.
 
 > Separately: some builds **cannot** do TLS to YB at all due to a rustls→OpenSSL switch

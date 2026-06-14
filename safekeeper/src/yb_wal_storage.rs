@@ -172,7 +172,7 @@ impl YbWalConn {
     /// running without — every persistence path needs this).
     pub async fn from_conf(conf: &crate::SafeKeeperConf) -> anyhow::Result<Option<Arc<YbWalConn>>> {
         use anyhow::Context;
-        let Some(yb) = conf.wal_yb_config.as_ref() else {
+        let Some(yb) = conf.yb_storage_conn.as_ref() else {
             return Ok(None);
         };
         let endpoint = format!("{} (sslmode={:?})", yb.host_ports, yb.sslmode);

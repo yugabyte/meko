@@ -232,7 +232,7 @@ pub struct YbConnConfig {
 ```
 
 This is the single connection block shared by all four storage
-components (pageserver `remote_storage`, safekeeper `--wal-yb-config`,
+components (pageserver `yb_storage_conn`, safekeeper `yb_storage_conn`,
 endpoint_storage, storage_controller `--yb-config`). It carries no
 `table_name` (each component hardcodes its own table) and no `prefix` or
 `concurrency_limit`. Selected via the existing `RemoteStorageKind` enum
@@ -306,7 +306,7 @@ introduced in commit `7a424639e`.
 For the pageserver:
 
 ```toml
-remote_storage = {
+yb_storage_conn = {
     host_ports = "127.0.0.1:5433",
     user = "yugabyte",
     dbname = "yb_storage"

@@ -219,8 +219,8 @@ async fn main() -> anyhow::Result<()> {
         None => Vec::new(),
     };
 
-    let wal_yb_config = match cfg.wal_yb_config.as_deref() {
-        Some(s) => Some(parse_yb_conn_config(s).context("parse wal_yb_config from safekeeper.toml")?),
+    let yb_storage_conn = match cfg.yb_storage_conn.as_deref() {
+        Some(s) => Some(parse_yb_conn_config(s).context("parse yb_storage_conn from safekeeper.toml")?),
         None => None,
     };
 
@@ -234,7 +234,7 @@ async fn main() -> anyhow::Result<()> {
         advertise_pg_addr: cfg.advertise_pg,
         availability_zone: cfg.availability_zone,
         heartbeat_timeout: cfg.heartbeat_timeout,
-        wal_yb_config,
+        yb_storage_conn,
         tenant_id: cfg.tenant_id,
         timeline_id: cfg.timeline_id,
         wal_cache_size_mib: cfg.wal_cache_size_mib.unwrap_or_else(|| {
