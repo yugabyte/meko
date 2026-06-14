@@ -26,6 +26,16 @@ upstream Neon can skim) and **changes in yb-light**.
 | [`remote-storage.md`](remote-storage.md) | The `RemoteStorage` abstraction + `YbStore` |
 | [`yugabyte.md`](yugabyte.md) | What lives in YB: databases, schemas, tables |
 
+### HTTP APIs & metrics (per service)
+
+| Service | HTTP API | Metrics |
+|---|---|---|
+| Pageserver | [`yb-pageserver-apis.md`](yb-pageserver-apis.md) | [`yb-pageserver-metrics.md`](yb-pageserver-metrics.md) |
+| Safekeeper | [`safekeeper-apis.md`](safekeeper-apis.md) | [`safekeeper-metrics.md`](safekeeper-metrics.md) |
+| Storage controller | [`storage-controller-apis.md`](storage-controller-apis.md) | [`storage-controller-metrics.md`](storage-controller-metrics.md) |
+| compute_ctl | [`compute_ctl-apis.md`](compute_ctl-apis.md) | [`compute_ctl-metrics.md`](compute_ctl-metrics.md) |
+| Endpoint storage | [`endpoint-storage-apis.md`](endpoint-storage-apis.md) | [`endpoint-storage-metrics.md`](endpoint-storage-metrics.md) |
+
 ## Quick mental model
 
 ```
