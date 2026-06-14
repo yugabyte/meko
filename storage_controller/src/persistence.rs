@@ -907,9 +907,10 @@ impl Persistence {
             // large query strings.
             let chunk_ids = tenant_shard_ids.by_ref().take(32);
 
-            // Compose a comma separated list of tuples for matching on (tenant_id, shard_number, shard_count)
+            // Compose a comma separated list of tenant ids to match on. The
+            // `tenants` table is keyed by `tenant_id` alone (no shards in yb-light).
             let in_clause = chunk_ids
-                .map(|tsid| format!("('{}', {}, {})", tsid, 0, 0))
+                .map(|tsid| format!("'{tsid}'"))
                 .join(",");
 
             // We are done when our iterator gives us nothing to filter on
@@ -921,10 +922,8 @@ impl Persistence {
             let chunk_rows = self
                 .with_measured_conn(DatabaseOperation::ShardGenerations, move |conn| {
                     Box::pin(async move {
-                        // diesel doesn't support multi-column IN queries, so we compose raw SQL.  No escaping is required because
-                        // the inputs are strongly typed and cannot carry any user-supplied raw string content.
                         let result : Vec<TenantShardPersistence> = diesel::sql_query(
-                            format!("SELECT * from tenants where (tenant_id, shard_number, shard_count) in ({in_clause});").as_str()
+                            format!("SELECT * from tenants where tenant_id in ({in_clause});").as_str()
                         ).load(conn).await?;
 
                         Ok(result)
