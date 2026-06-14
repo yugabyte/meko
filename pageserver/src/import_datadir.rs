@@ -270,8 +270,6 @@ async fn import_wal(
 
     let mut walingest = WalIngest::new(tline, startpoint, ctx).await?;
 
-    let shard = vec![*tline.get_shard_identity()];
-
     while last_lsn <= endpoint {
         // FIXME: assume postgresql tli 1 for now
         let filename = XLogFileName(1, segno, WAL_SEGMENT_SIZE);
@@ -306,14 +304,8 @@ async fn import_wal(
         let mut modification = tline.begin_modification_for_import(last_lsn);
         while last_lsn <= endpoint {
             if let Some((lsn, recdata)) = waldecoder.poll_decode()? {
-                let interpreted = InterpretedWalRecord::from_bytes_filtered(
-                    recdata,
-                    &shard,
-                    lsn,
-                    tline.pg_version,
-                )?
-                .remove(tline.get_shard_identity())
-                .unwrap();
+                let interpreted =
+                    InterpretedWalRecord::from_bytes(recdata, lsn, tline.pg_version)?;
 
                 walingest
                     .ingest_record(interpreted, &mut modification, ctx)

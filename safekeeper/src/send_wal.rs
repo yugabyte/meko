@@ -544,7 +544,7 @@ impl SafekeeperPostgresHandler {
                                     start_pos
                                 );
                                 reader
-                                    .fanout(shard, tx, start_pos)
+                                    .fanout(tx, start_pos)
                                     .with_context(|| "Failed to fan out reader")
                             }
                         },
@@ -561,7 +561,7 @@ impl SafekeeperPostgresHandler {
                             );
 
                             InterpretedWalReader::spawn(
-                                wal_stream, start_pos, tx, shard, pg_version, &appname,
+                                wal_stream, start_pos, tx, pg_version, &appname,
                             )
                         },
                     )?;
@@ -590,7 +590,7 @@ impl SafekeeperPostgresHandler {
                     );
 
                     let reader = InterpretedWalReader::new(
-                        wal_reader, start_pos, tx, shard, pg_version, None,
+                        wal_reader, start_pos, tx, pg_version, None,
                     );
 
                     let sender = InterpretedWalSender {
