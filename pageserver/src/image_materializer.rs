@@ -174,13 +174,9 @@ impl ImageMaterializer {
             redo_concurrency,
             max_inflight_inserts,
         });
-        // Walredo's `debug_assert_current_span_has_tenant_id` requires
-        // both `tenant_id` and `shard_id` fields on the active span;
-        // we run with a single-shard hardcoded layout, so emit "0000".
         let span = info_span!(
             "image_materializer",
             tenant_id = %tenant_id,
-            shard_id = "0000",
             timeline_id = %timeline_id,
         );
         let handle = tokio::spawn(

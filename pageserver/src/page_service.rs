@@ -2239,7 +2239,7 @@ impl PageServerHandler {
 
     /// Handles the lsn lease request.
     /// If a lease cannot be obtained, the client will receive NULL.
-    #[instrument(skip_all, fields(shard_id, %lsn))]
+    #[instrument(skip_all, fields(%lsn))]
     async fn handle_make_lsn_lease<IO>(
         &mut self,
         pgb: &mut PostgresBackend<IO>,
@@ -2288,7 +2288,7 @@ impl PageServerHandler {
         Ok(())
     }
 
-    #[instrument(skip_all, fields(shard_id))]
+    #[instrument(skip_all)]
     async fn handle_get_rel_exists_request(
         timeline: &Timeline,
         req: &PagestreamExistsRequest,
@@ -2321,7 +2321,7 @@ impl PageServerHandler {
     /// If `allow_missing` is true, returns None instead of Err on missing relations. Otherwise,
     /// never returns None. It is only supported by the gRPC protocol, so we pass it separately to
     /// avoid changing the libpq protocol types.
-    #[instrument(skip_all, fields(shard_id))]
+    #[instrument(skip_all)]
     async fn handle_get_nblocks_request(
         timeline: &Timeline,
         req: &PagestreamNblocksRequest,
@@ -2360,7 +2360,7 @@ impl PageServerHandler {
         }))
     }
 
-    #[instrument(skip_all, fields(shard_id))]
+    #[instrument(skip_all)]
     async fn handle_db_size_request(
         timeline: &Timeline,
         req: &PagestreamDbSizeRequest,
@@ -2514,7 +2514,7 @@ impl PageServerHandler {
         )
     }
 
-    #[instrument(skip_all, fields(shard_id))]
+    #[instrument(skip_all)]
     async fn handle_get_slru_segment_request(
         timeline: &Timeline,
         req: &PagestreamGetSlruSegmentRequest,
@@ -2539,7 +2539,7 @@ impl PageServerHandler {
 
     // NB: this impl mimics what we do for batched getpage requests.
     #[cfg(feature = "testing")]
-    #[instrument(skip_all, fields(shard_id))]
+    #[instrument(skip_all)]
     async fn handle_test_request_batch(
         timeline: &Timeline,
         requests: Vec<BatchedTestRequest>,
@@ -2600,7 +2600,7 @@ impl PageServerHandler {
     /// TODO: wrap the pgb that we pass to the basebackup handler so that it's sensitive
     /// to connection cancellation.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(shard_id, ?lsn, ?prev_lsn, %full_backup))]
+    #[instrument(skip_all, fields(?lsn, ?prev_lsn, %full_backup))]
     async fn handle_basebackup_request<IO>(
         &mut self,
         pgb: &mut PostgresBackend<IO>,
@@ -3973,7 +3973,6 @@ where
             // These will be populated by TenantMetadataInterceptor.
             tenant_id = field::Empty,
             timeline_id = field::Empty,
-            shard_id = field::Empty,
             // NB: empty fields must be listed first above. Otherwise, the field names will be
             // clobbered when the empty fields are populated. They will be output last regardless.
             %peer,
