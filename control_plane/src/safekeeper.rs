@@ -15,6 +15,7 @@ use std::{io, result};
 use anyhow::Context;
 use camino::Utf8PathBuf;
 use postgres_connection::PgConnectionConfig;
+use safekeeper_api::config::SafekeeperConfigToml;
 use safekeeper_api::models::TimelineCreateRequest;
 use safekeeper_client::mgmt_api;
 use thiserror::Error;
@@ -132,107 +133,83 @@ impl SafekeeperNode {
         );
         io::stdout().flush().unwrap();
 
-        let listen_pg = format!("{}:{}", self.listen_addr, self.conf.pg_port);
-        let listen_http = format!("{}:{}", self.listen_addr, self.conf.http_port);
         let id = self.id;
         let datadir = self.datadir_path();
+        let datadir_str = datadir
+            .to_str()
+            .with_context(|| {
+                format!("Datadir path {datadir:?} cannot be represented as a unicode string")
+            })?
+            .to_owned();
 
-        let id_string = id.to_string();
-        // TODO: add availability_zone to the config.
-        // Right now we just specify any value here and use it to check metrics in tests.
-        let availability_zone = format!("sk-{id_string}");
-
-        let mut args = vec![
-            "-D".to_owned(),
-            datadir
-                .to_str()
-                .with_context(|| {
-                    format!("Datadir path {datadir:?} cannot be represented as a unicode string")
-                })?
-                .to_owned(),
-            "--id".to_owned(),
-            id_string,
-            "--listen-pg".to_owned(),
-            listen_pg,
-            "--listen-http".to_owned(),
-            listen_http,
-            "--availability-zone".to_owned(),
-            availability_zone,
-        ];
-        if let Some(pg_tenant_only_port) = self.conf.pg_tenant_only_port {
-            let listen_pg_tenant_only = format!("{}:{}", self.listen_addr, pg_tenant_only_port);
-            args.extend(["--listen-pg-tenant-only".to_owned(), listen_pg_tenant_only]);
-        }
-
-        let mut backup_threads = String::new();
-        if let Some(threads) = self.conf.backup_threads {
-            backup_threads = threads.to_string();
-            args.extend(["--backup-threads".to_owned(), backup_threads]);
+        // All configuration is written to `<datadir>/safekeeper.toml`, which
+        // the process reads on start — the safekeeper's analogue of
+        // `pageserver.toml`. Only `-D` (plus any test overrides) stays on the
+        // CLI. `backup_threads` has no toml field: `wal_backup` is removed in
+        // yb-light, so it is always `None`.
+        let auth_key = if self.conf.auth_enabled {
+            Some(
+                self.env
+                    .base_data_dir
+                    .join("auth_public_key.pem")
+                    .to_str()
+                    .context("auth key path is not unicode")?
+                    .to_owned(),
+            )
         } else {
-            drop(backup_threads);
-        }
+            None
+        };
+        let auth_token_path = if self.conf.auth_enabled {
+            Some(
+                datadir
+                    .join("peer_jwt_token")
+                    .to_str()
+                    .context("token path is not unicode")?
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+        let ssl_ca_file = match self.env.ssl_ca_cert_path() {
+            Some(p) => Some(p.to_str().context("ssl ca path is not unicode")?.to_owned()),
+            None => None,
+        };
 
-        if let Some(ref wal_yb) = self.conf.wal_yb_config {
-            args.extend(["--wal-yb-config".to_owned(), wal_yb.clone()]);
-        }
+        let toml_cfg = SafekeeperConfigToml {
+            id,
+            tenant_id: self.conf.tenant_id,
+            timeline_id: self.conf.timeline_id,
+            listen_pg: format!("{}:{}", self.listen_addr, self.conf.pg_port),
+            listen_pg_tenant_only: self
+                .conf
+                .pg_tenant_only_port
+                .map(|p| format!("{}:{}", self.listen_addr, p)),
+            listen_http: format!("{}:{}", self.listen_addr, self.conf.http_port),
+            listen_https: self
+                .conf
+                .https_port
+                .map(|p| format!("{}:{}", self.listen_addr, p)),
+            availability_zone: Some(format!("sk-{id}")),
+            wal_yb_config: self.conf.wal_yb_config.clone(),
+            wal_cache_size_mib: self.conf.wal_cache_size_mib.map(|s| s as usize),
+            pg_auth_public_key_path: auth_key.clone(),
+            pg_tenant_only_auth_public_key_path: auth_key.clone(),
+            http_auth_public_key_path: auth_key,
+            auth_token_path,
+            ssl_ca_file,
+            ..Default::default()
+        };
+        std::fs::create_dir_all(&datadir)
+            .with_context(|| format!("create safekeeper datadir {datadir:?}"))?;
+        std::fs::write(
+            datadir.join("safekeeper.toml"),
+            toml_cfg
+                .to_toml_string()
+                .context("serialize safekeeper.toml")?,
+        )
+        .context("write safekeeper.toml")?;
 
-        // Bake this safekeeper's single (tenant, timeline) identity so it
-        // scopes its startup load and gates connections (single-timeline
-        // per process). Always set on a provisioned safekeeper.
-        if let Some(tenant_id) = self.conf.tenant_id {
-            args.extend(["--tenant-id".to_owned(), tenant_id.to_string()]);
-        }
-        if let Some(timeline_id) = self.conf.timeline_id {
-            args.extend(["--timeline-id".to_owned(), timeline_id.to_string()]);
-        }
-
-        if let Some(size) = self.conf.wal_cache_size_mib {
-            args.extend(["--wal-cache-size-mib".to_owned(), size.to_string()]);
-        }
-
-        let key_path = self.env.base_data_dir.join("auth_public_key.pem");
-        if self.conf.auth_enabled {
-            let key_path_string = key_path
-                .to_str()
-                .with_context(|| {
-                    format!("Key path {key_path:?} cannot be represented as a unicode string")
-                })?
-                .to_owned();
-            args.extend([
-                "--pg-auth-public-key-path".to_owned(),
-                key_path_string.clone(),
-            ]);
-            args.extend([
-                "--pg-tenant-only-auth-public-key-path".to_owned(),
-                key_path_string.clone(),
-            ]);
-            args.extend([
-                "--http-auth-public-key-path".to_owned(),
-                key_path_string.clone(),
-            ]);
-        }
-
-        if let Some(https_port) = self.conf.https_port {
-            args.extend([
-                "--listen-https".to_owned(),
-                format!("{}:{}", self.listen_addr, https_port),
-            ]);
-        }
-        if let Some(ssl_ca_file) = self.env.ssl_ca_cert_path() {
-            args.push(format!("--ssl-ca-file={}", ssl_ca_file.to_str().unwrap()));
-        }
-
-        if self.conf.auth_enabled {
-            let token_path = self.datadir_path().join("peer_jwt_token");
-            let token_path_str = token_path
-                .to_str()
-                .with_context(|| {
-                    format!("Token path {token_path:?} cannot be represented as a unicode string")
-                })?
-                .to_owned();
-            args.extend(["--auth-token-path".to_owned(), token_path_str]);
-        }
-
+        let mut args = vec!["-D".to_owned(), datadir_str];
         args.extend_from_slice(extra_opts);
 
         let env_variables = Vec::new();

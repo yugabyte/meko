@@ -7,8 +7,10 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 const_format.workspace = true
+humantime-serde.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 postgres_ffi_types.workspace = true
 postgres_versioninfo.workspace = true
 pq_proto.workspace = true

@@ -55,7 +55,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SC node list empty after PS starts; PS log `register: None` | PS didn't auto-register | **E** |
 | PS exits at startup: `pageserver.toml must set tenant_id/timeline_id/generation` | single-timeline identity missing — launcher hasn't assigned one (run `tenant create`, or write the identity + `[timeline_init]` into pageserver.toml) | — |
 | PS exits at startup: `timeline … has no timeline_state row and no [timeline_init]` | row missing and no creation mode configured (wiped YB DB, or toml written without `[timeline_init]`) | — |
-| SK exits at startup: `YB-WAL mode requires --tenant-id and --timeline-id` | single-timeline identity missing — the SK serves one timeline and scopes its load to it. Provisioned SKs get the pair from `allocate_safekeeper_conf`; a hand-written start script must pass both `--tenant-id`/`--timeline-id` alongside `--wal-yb-config` | — |
+| SK exits at startup: `YB-WAL mode requires --tenant-id and --timeline-id` | single-timeline identity missing from `safekeeper.toml` — the SK serves one timeline and scopes its load to it. Provisioned SKs get `tenant_id`/`timeline_id` written by `allocate_safekeeper_conf`; a hand-written `safekeeper.toml` must set both alongside `wal_yb_config` | — |
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |
 | psql: `libreadline.so.7: cannot open shared object file` | bundle psql wants older readline | **G** |
 | Compute postmaster dies with `EADDRINUSE` on its own port | yb_light_local port collision | **H** |
@@ -92,10 +92,12 @@ PGPASSWORD="$YB_STORAGE_PASSWORD" $PSQL \
 if a `pageserver` schema is expected and missing.
 
 ## C. Safekeeper: "unexpected argument '--<flag>'"
-Build drift removes/renames flags. Known: **broker-less builds removed `--broker-endpoint` and
-`--control-file-backend`** from the safekeeper. If the SK refuses to start on an unknown flag, run
-`<build>/safekeeper --help`, diff against the start script, and delete the stale flags. Don't pin an
-old start script to a new build without checking `--help`.
+Build drift removes/renames flags. The safekeeper's whole config surface now lives in
+`<datadir>/safekeeper.toml` (written by the launcher; the analogue of `pageserver.toml`), so the
+binary accepts only `-D <datadir>`, `--init`, and `--dump-control-file`. A start script still passing
+`--id`/`--listen-pg`/`--wal-yb-config`/etc. will fail — move those settings into `safekeeper.toml`
+(see `architecture/safekeeper.md` "Run / configure"). Earlier drift also removed `--broker-endpoint`
+and `--control-file-backend`. Run `<build>/safekeeper --help` and diff against the start script.
 
 ## D. "no pg_hba.conf entry … no encryption" (TLS to YB)
 A client opened a **non-TLS** connection to YugabyteDB, which requires TLS. Seen when the

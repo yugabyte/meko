@@ -1,7 +1,6 @@
 //
 // Main entry point for the safekeeper executable
 //
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -13,13 +12,8 @@ use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use http_utils::tls_certs::ReloadingCertificateResolver;
 use metrics::set_build_info_metric;
-use safekeeper::defaults::{
-    DEFAULT_CONTROL_FILE_SAVE_INTERVAL, DEFAULT_GLOBAL_DISK_CHECK_INTERVAL,
-    DEFAULT_HEARTBEAT_TIMEOUT, DEFAULT_HTTP_LISTEN_ADDR, DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO,
-    DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES, DEFAULT_PG_LISTEN_ADDR, DEFAULT_SSL_CERT_FILE,
-    DEFAULT_SSL_CERT_RELOAD_PERIOD, DEFAULT_SSL_KEY_FILE,
-};
 use safekeeper::yb_wal_storage::YbWalConn;
+use safekeeper_api::config::SafekeeperConfigToml;
 use safekeeper::{
     BACKGROUND_RUNTIME, GlobalTimelines, HTTP_RUNTIME, SafeKeeperConf, WAL_SERVICE_RUNTIME, http,
     wal_service,
@@ -30,7 +24,6 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinError;
 use tracing::*;
 use utils::auth::{JwtAuth, Scope, SwappableJwtAuth};
-use utils::id::{NodeId, TenantId, TimelineId};
 use utils::logging::{self, LogFormat, SecretString};
 use utils::metrics_collector::{METRICS_COLLECTION_INTERVAL, METRICS_COLLECTOR};
 use utils::{pid_file, project_build_tag, project_git_version, tcp_listener};
@@ -87,191 +80,26 @@ split), and serving the hardened part further downstream to pageserver(s).
 #[derive(Parser)]
 #[command(name = "Neon safekeeper", version = GIT_VERSION, about = ABOUT, long_about = None)]
 struct Args {
-    /// Path to the safekeeper data directory.
+    /// Path to the safekeeper data directory. Holds `safekeeper.toml` (all
+    /// other configuration), logs, and the pidfile.
     #[arg(short = 'D', long, default_value = "./")]
     datadir: Utf8PathBuf,
-    /// Safekeeper node id. Required — must be the same value on every
-    /// restart of this safekeeper instance.
-    #[arg(long)]
-    id: u64,
-    /// Initialize safekeeper with given id and exit.
+    /// Initialize and exit (legacy no-op probe; configuration now lives in
+    /// `safekeeper.toml`).
     #[arg(long)]
     init: bool,
-    /// Listen endpoint for receiving/sending WAL in the form host:port.
-    #[arg(short, long, default_value = DEFAULT_PG_LISTEN_ADDR)]
-    listen_pg: String,
-    /// Listen endpoint for receiving/sending WAL in the form host:port allowing
-    /// only tenant scoped auth tokens. Pointless if auth is disabled.
-    #[arg(long, default_value = None, verbatim_doc_comment)]
-    listen_pg_tenant_only: Option<String>,
-    /// Listen http endpoint for management and metrics in the form host:port.
-    #[arg(long, default_value = DEFAULT_HTTP_LISTEN_ADDR)]
-    listen_http: String,
-    /// Listen https endpoint for management and metrics in the form host:port.
-    #[arg(long, default_value = None)]
-    listen_https: Option<String>,
-    /// Advertised endpoint for receiving/sending WAL in the form host:port. If not
-    /// specified, listen_pg is used to advertise instead.
-    #[arg(long, default_value = None)]
-    advertise_pg: Option<String>,
-    /// Availability zone of the safekeeper.
-    #[arg(long)]
-    availability_zone: Option<String>,
     /// Dump control file at path specified by this argument and exit.
     #[arg(long)]
     dump_control_file: Option<Utf8PathBuf>,
-    /// Peer safekeeper is considered dead after not receiving heartbeats from
-    /// it during this period passed as a human readable duration.
-    #[arg(long, value_parser= humantime::parse_duration, default_value = DEFAULT_HEARTBEAT_TIMEOUT, verbatim_doc_comment)]
-    heartbeat_timeout: Duration,
-    /// Optional YugabyteDB connection for mirroring live WAL writes. TOML
-    /// inline-table format with the shared YB connection fields
-    /// (host_ports, user, dbname, sslmode?, password_env?). When set,
-    /// each `write_wal` is INSERT'd into the (hardcoded) `public.wals`
-    /// table in addition to being written to local FS. Reads still use
-    /// local FS (Phase 1).
-    #[arg(long, value_parser = parse_yb_conn_config, verbatim_doc_comment)]
-    wal_yb_config: Option<ysql_client::YbConnConfig>,
-    /// The single (tenant_id, timeline_id) this safekeeper process serves
-    /// for its lifetime. Required in YB-WAL mode: `safekeeper.timeline_state`
-    /// is shared across the cluster, so the process scopes its load and
-    /// rejects connections for any other timeline by this baked identity.
-    #[arg(long)]
-    tenant_id: Option<TenantId>,
-    /// See `--tenant-id`.
-    #[arg(long)]
-    timeline_id: Option<TimelineId>,
-    /// Capacity (MiB) of the in-memory cache of recent WAL chunks used
-    /// in YB-WAL mode. Ignored when `--wal-yb-config` is not set.
-    /// Set to 0 to disable the cache. When omitted, derives from
-    /// `DEFAULT_WAL_CACHE_SIZE_MIB × scale_factor`.
-    #[arg(long)]
-    wal_cache_size_mib: Option<usize>,
-    /// Global multiplier on scale-derived defaults (WAL cache size,
-    /// runtime worker-thread counts, …). 1.0 preserves historical
-    /// sizing; 0.25 fits a small dev box; values >1 scale up.
-    /// Explicit values for individual flags always win over the
-    /// scaled default.
-    #[arg(long, default_value_t = safekeeper::DEFAULT_SCALE_FACTOR)]
-    scale_factor: f64,
-    /// Safekeeper will stop accepting new WALs if the timeline disk usage exceeds this value in bytes.
-    /// Setting this value to 0 disables the limit.
-    #[arg(long, default_value_t = DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES)]
-    max_timeline_disk_usage_bytes: u64,
-    /// If given, enables auth on incoming connections to WAL service endpoint
-    /// (--listen-pg). Value specifies path to a .pem public key used for
-    /// validations of JWT tokens. Empty string is allowed and means disabling
-    /// auth.
-    #[arg(long, verbatim_doc_comment, value_parser = opt_pathbuf_parser)]
-    pg_auth_public_key_path: Option<Utf8PathBuf>,
-    /// If given, enables auth on incoming connections to tenant only WAL
-    /// service endpoint (--listen-pg-tenant-only). Value specifies path to a
-    /// .pem public key used for validations of JWT tokens. Empty string is
-    /// allowed and means disabling auth.
-    #[arg(long, verbatim_doc_comment, value_parser = opt_pathbuf_parser)]
-    pg_tenant_only_auth_public_key_path: Option<Utf8PathBuf>,
-    /// If given, enables auth on incoming connections to http management
-    /// service endpoint (--listen-http). Value specifies path to a .pem public
-    /// key used for validations of JWT tokens. Empty string is allowed and
-    /// means disabling auth.
-    #[arg(long, verbatim_doc_comment, value_parser = opt_pathbuf_parser)]
-    http_auth_public_key_path: Option<Utf8PathBuf>,
-    /// Format for logging, either 'plain' or 'json'.
-    #[arg(long, default_value = "plain")]
-    log_format: String,
-    /// Run everything in single threaded current thread runtime, might be
-    /// useful for debugging.
-    #[arg(long)]
-    current_thread_runtime: bool,
-    /// Pending updates to control file will be automatically saved after this interval.
-    #[arg(long, value_parser = humantime::parse_duration, default_value = DEFAULT_CONTROL_FILE_SAVE_INTERVAL)]
-    control_file_save_interval: Duration,
-    /// Enable fanning out WAL to different shards from the same reader
-    #[arg(long)]
-    wal_reader_fanout: bool,
-    /// Only fan out the WAL reader if the absoulte delta between the new requested position
-    /// and the current position of the reader is smaller than this value.
-    #[arg(long)]
-    max_delta_for_fanout: Option<u64>,
-    /// Path to a file with certificate's private key for https API.
-    #[arg(long, default_value = DEFAULT_SSL_KEY_FILE)]
-    ssl_key_file: Utf8PathBuf,
-    /// Path to a file with a X509 certificate for https API.
-    #[arg(long, default_value = DEFAULT_SSL_CERT_FILE)]
-    ssl_cert_file: Utf8PathBuf,
-    /// Period to reload certificate and private key from files.
-    #[arg(long, value_parser = humantime::parse_duration, default_value = DEFAULT_SSL_CERT_RELOAD_PERIOD)]
-    ssl_cert_reload_period: Duration,
-    /// Trusted root CA certificates to use in https APIs.
-    #[arg(long)]
-    ssl_ca_file: Option<Utf8PathBuf>,
-    /// Flag to use https for requests to peer's safekeeper API.
-    #[arg(long)]
-    use_https_safekeeper_api: bool,
-    /// Path to the JWT auth token used to authenticate with other safekeepers.
-    #[arg(long)]
-    auth_token_path: Option<Utf8PathBuf>,
-
-    /// Enable TLS in WAL service API.
-    /// Does not force TLS: the client negotiates TLS usage during the handshake.
-    /// Uses key and certificate from ssl_key_file/ssl_cert_file.
-    #[arg(long)]
-    enable_tls_wal_service_api: bool,
-
-    /// Controls whether to collect all metrics on each scrape or to return potentially stale
-    /// results.
-    #[arg(long, default_value_t = true)]
-    force_metric_collection_on_scrape: bool,
-
-    /// Run in development mode (disables security checks)
-    #[arg(long, help = "Run in development mode (disables security checks)")]
-    dev: bool,
-    /// How often to scan entire data-dir for total disk usage
-    #[arg(long, value_parser=humantime::parse_duration, default_value = DEFAULT_GLOBAL_DISK_CHECK_INTERVAL)]
-    global_disk_check_interval: Duration,
-    /// The portion of the filesystem capacity that can be used by all timelines.
-    /// A circuit breaker will trip and reject all WAL writes if the total usage
-    /// exceeds this ratio.
-    /// Set to 0 to disable the global disk usage limit.
-    #[arg(long, default_value_t = DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO)]
-    max_global_disk_usage_ratio: f64,
-}
-
-// Like PathBufValueParser, but allows empty string.
-fn opt_pathbuf_parser(s: &str) -> Result<Utf8PathBuf, String> {
-    Ok(Utf8PathBuf::from_str(s).unwrap())
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    // We want to allow multiple occurences of the same arg (taking the last) so
-    // that yb_light_local could generate command with defaults + overrides without
-    // getting 'argument cannot be used multiple times' error. This seems to be
-    // impossible with pure Derive API, so convert struct to Command, modify it,
-    // parse arguments, and then fill the struct back.
-    let cmd = <Args as clap::CommandFactory>::command()
-        .args_override_self(true)
-        .version(version());
-    let mut matches = cmd.get_matches();
-    let mut args = <Args as clap::FromArgMatches>::from_arg_matches_mut(&mut matches)?;
-
-    // I failed to modify opt_pathbuf_parser to return Option<PathBuf> in
-    // reasonable time, so turn empty string into option post factum.
-    if let Some(pb) = &args.pg_auth_public_key_path {
-        if pb.as_os_str().is_empty() {
-            args.pg_auth_public_key_path = None;
-        }
-    }
-    if let Some(pb) = &args.pg_tenant_only_auth_public_key_path {
-        if pb.as_os_str().is_empty() {
-            args.pg_tenant_only_auth_public_key_path = None;
-        }
-    }
-    if let Some(pb) = &args.http_auth_public_key_path {
-        if pb.as_os_str().is_empty() {
-            args.http_auth_public_key_path = None;
-        }
-    }
+    let args = <Args as clap::FromArgMatches>::from_arg_matches(
+        &<Args as clap::CommandFactory>::command()
+            .version(version())
+            .get_matches(),
+    )?;
 
     if let Some(addr) = args.dump_control_file {
         anyhow::bail!(
@@ -281,23 +109,38 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    let workdir = args.datadir.canonicalize_utf8().with_context(|| {
+        format!(
+            "Failed to get the absolute path for input workdir {:?}",
+            args.datadir
+        )
+    })?;
+
+    // All real configuration lives in `<workdir>/safekeeper.toml`, written by
+    // the launcher. On `--init` the file may not exist yet (it's a legacy
+    // no-op probe), so fall back to defaults just to log and exit.
+    let config_path = workdir.join("safekeeper.toml");
+    let cfg = match std::fs::read_to_string(&config_path) {
+        Ok(s) => SafekeeperConfigToml::from_toml_str(&s)
+            .with_context(|| format!("parse {config_path}"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && args.init => {
+            SafekeeperConfigToml::default()
+        }
+        Err(e) => return Err(anyhow::Error::from(e).context(format!("read {config_path}"))),
+    };
+
     // important to keep the order of:
     // 1. init logging
     // 2. tracing panic hook
     // 3. sentry
     logging::init(
-        LogFormat::from_config(&args.log_format)?,
+        LogFormat::from_config(&cfg.log_format)?,
         logging::TracingErrorLayerEnablement::Disabled,
         logging::Output::Stdout,
     )?;
     logging::replace_panic_hook_with_tracing_panic_hook().forget();
     info!("version: {GIT_VERSION}");
     info!("buld_tag: {BUILD_TAG}");
-
-    let args_workdir = &args.datadir;
-    let workdir = args_workdir.canonicalize_utf8().with_context(|| {
-        format!("Failed to get the absolute path for input workdir {args_workdir:?}")
-    })?;
 
     // Change into the data directory.
     std::env::set_current_dir(&workdir)?;
@@ -311,63 +154,63 @@ async fn main() -> anyhow::Result<()> {
     // we need to release the lock file only when the current process is gone
     std::mem::forget(lock_file);
 
-    // Take the ID purely from CLI / config; no on-disk `safekeeper.id`.
-    let id = NodeId(args.id);
+    let id = cfg.id;
     info!("safekeeper ID {}", id);
     if args.init {
         return Ok(());
     }
 
-    let pg_auth = match args.pg_auth_public_key_path.as_ref() {
+    // An empty path string means "auth disabled" for that surface.
+    let key_path = |p: &Option<String>| p.as_deref().filter(|s| !s.is_empty()).map(Utf8PathBuf::from);
+    let load_jwt = |path: &Utf8PathBuf| -> anyhow::Result<JwtAuth> {
+        JwtAuth::from_key_path(path).context("failed to load the auth key")
+    };
+
+    let pg_auth = match key_path(&cfg.pg_auth_public_key_path) {
         None => {
             info!("pg auth is disabled");
             None
         }
         Some(path) => {
             info!("loading pg auth JWT key from {path}");
-            Some(Arc::new(
-                JwtAuth::from_key_path(path).context("failed to load the auth key")?,
-            ))
+            Some(Arc::new(load_jwt(&path)?))
         }
     };
-    let pg_tenant_only_auth = match args.pg_tenant_only_auth_public_key_path.as_ref() {
+    let pg_tenant_only_auth = match key_path(&cfg.pg_tenant_only_auth_public_key_path) {
         None => {
             info!("pg tenant only auth is disabled");
             None
         }
         Some(path) => {
             info!("loading pg tenant only auth JWT key from {path}");
-            Some(Arc::new(
-                JwtAuth::from_key_path(path).context("failed to load the auth key")?,
-            ))
+            Some(Arc::new(load_jwt(&path)?))
         }
     };
-    let http_auth = match args.http_auth_public_key_path.as_ref() {
+    let http_auth = match key_path(&cfg.http_auth_public_key_path) {
         None => {
             info!("http auth is disabled");
             None
         }
         Some(path) => {
             info!("loading http auth JWT key(s) from {path}");
-            let jwt_auth = JwtAuth::from_key_path(path).context("failed to load the auth key")?;
-            Some(Arc::new(SwappableJwtAuth::new(jwt_auth)))
+            Some(Arc::new(SwappableJwtAuth::new(load_jwt(&path)?)))
         }
     };
 
     // Load JWT auth token to connect to other safekeepers for pull_timeline.
-    let sk_auth_token = if let Some(auth_token_path) = args.auth_token_path.as_ref() {
+    let sk_auth_token = if let Some(auth_token_path) = key_path(&cfg.auth_token_path) {
         info!("loading JWT token for authentication with safekeepers from {auth_token_path}");
-        let auth_token = tokio::fs::read_to_string(auth_token_path).await?;
+        let auth_token = tokio::fs::read_to_string(&auth_token_path).await?;
         Some(SecretString::from(auth_token.trim().to_owned()))
     } else {
         info!("no JWT token for authentication with safekeepers detected");
         None
     };
 
-    let ssl_ca_certs = match args.ssl_ca_file.as_ref() {
+    let ssl_ca_certs = match key_path(&cfg.ssl_ca_file) {
         Some(ssl_ca_file) => {
             tracing::info!("Using ssl root CA file: {ssl_ca_file:?}");
-            let buf = tokio::fs::read(ssl_ca_file).await?;
+            let buf = tokio::fs::read(&ssl_ca_file).await?;
             pem::parse_many(&buf)?
                 .into_iter()
                 .filter(|pem| pem.tag() == "CERTIFICATE")
@@ -376,43 +219,48 @@ async fn main() -> anyhow::Result<()> {
         None => Vec::new(),
     };
 
+    let wal_yb_config = match cfg.wal_yb_config.as_deref() {
+        Some(s) => Some(parse_yb_conn_config(s).context("parse wal_yb_config from safekeeper.toml")?),
+        None => None,
+    };
+
     let conf = Arc::new(SafeKeeperConf {
         workdir,
         my_id: id,
-        listen_pg_addr: args.listen_pg,
-        listen_pg_addr_tenant_only: args.listen_pg_tenant_only,
-        listen_http_addr: args.listen_http,
-        listen_https_addr: args.listen_https,
-        advertise_pg_addr: args.advertise_pg,
-        availability_zone: args.availability_zone,
-        heartbeat_timeout: args.heartbeat_timeout,
-        wal_yb_config: args.wal_yb_config,
-        tenant_id: args.tenant_id,
-        timeline_id: args.timeline_id,
-        wal_cache_size_mib: args.wal_cache_size_mib.unwrap_or_else(|| {
+        listen_pg_addr: cfg.listen_pg,
+        listen_pg_addr_tenant_only: cfg.listen_pg_tenant_only,
+        listen_http_addr: cfg.listen_http,
+        listen_https_addr: cfg.listen_https,
+        advertise_pg_addr: cfg.advertise_pg,
+        availability_zone: cfg.availability_zone,
+        heartbeat_timeout: cfg.heartbeat_timeout,
+        wal_yb_config,
+        tenant_id: cfg.tenant_id,
+        timeline_id: cfg.timeline_id,
+        wal_cache_size_mib: cfg.wal_cache_size_mib.unwrap_or_else(|| {
             safekeeper::scale_count(
                 safekeeper::defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
-                args.scale_factor,
+                cfg.scale_factor,
             )
         }),
-        max_timeline_disk_usage_bytes: args.max_timeline_disk_usage_bytes,
+        max_timeline_disk_usage_bytes: cfg.max_timeline_disk_usage_bytes,
         pg_auth,
         pg_tenant_only_auth,
         http_auth,
         sk_auth_token,
-        current_thread_runtime: args.current_thread_runtime,
-        control_file_save_interval: args.control_file_save_interval,
-        wal_reader_fanout: args.wal_reader_fanout,
-        max_delta_for_fanout: args.max_delta_for_fanout,
-        ssl_key_file: args.ssl_key_file,
-        ssl_cert_file: args.ssl_cert_file,
-        ssl_cert_reload_period: args.ssl_cert_reload_period,
+        current_thread_runtime: cfg.current_thread_runtime,
+        control_file_save_interval: cfg.control_file_save_interval,
+        wal_reader_fanout: cfg.wal_reader_fanout,
+        max_delta_for_fanout: cfg.max_delta_for_fanout,
+        ssl_key_file: Utf8PathBuf::from(cfg.ssl_key_file),
+        ssl_cert_file: Utf8PathBuf::from(cfg.ssl_cert_file),
+        ssl_cert_reload_period: cfg.ssl_cert_reload_period,
         ssl_ca_certs,
-        use_https_safekeeper_api: args.use_https_safekeeper_api,
-        enable_tls_wal_service_api: args.enable_tls_wal_service_api,
-        force_metric_collection_on_scrape: args.force_metric_collection_on_scrape,
-        global_disk_check_interval: args.global_disk_check_interval,
-        max_global_disk_usage_ratio: args.max_global_disk_usage_ratio,
+        use_https_safekeeper_api: cfg.use_https_safekeeper_api,
+        enable_tls_wal_service_api: cfg.enable_tls_wal_service_api,
+        force_metric_collection_on_scrape: cfg.force_metric_collection_on_scrape,
+        global_disk_check_interval: cfg.global_disk_check_interval,
+        max_global_disk_usage_ratio: cfg.max_global_disk_usage_ratio,
     });
 
     start_safekeeper(conf).await

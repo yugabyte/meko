@@ -58,32 +58,8 @@ pub fn scale_count(base: usize, scale_factor: f64) -> usize {
 }
 
 pub mod defaults {
-    pub use safekeeper_api::{
-        DEFAULT_HTTP_LISTEN_ADDR, DEFAULT_HTTP_LISTEN_PORT, DEFAULT_PG_LISTEN_ADDR,
-        DEFAULT_PG_LISTEN_PORT,
-    };
-
-    pub const DEFAULT_HEARTBEAT_TIMEOUT: &str = "5000ms";
-
-    /// Capacity (in MiB) of the in-memory cache of recently-written WAL
-    /// chunks in YB-WAL mode. See [`crate::wal_cache`]. Set to 0 to
-    /// disable the cache entirely (every WAL read hits YB).
-    pub const DEFAULT_WAL_CACHE_SIZE_MIB: usize = 256;
-
-    /// Default disk usage limit is 0 (disabled) — yb-light has no
-    /// local-FS WAL anyway. Retained as a CLI knob because the
-    /// global-disk watcher uses it as the per-timeline cap when set.
-    pub const DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES: u64 = 0;
-
-    pub const DEFAULT_CONTROL_FILE_SAVE_INTERVAL: &str = "300s";
-
-    pub const DEFAULT_SSL_KEY_FILE: &str = "server.key";
-    pub const DEFAULT_SSL_CERT_FILE: &str = "server.crt";
-    pub const DEFAULT_SSL_CERT_RELOAD_PERIOD: &str = "60s";
-
-    // Global disk watcher defaults
-    pub const DEFAULT_GLOBAL_DISK_CHECK_INTERVAL: &str = "60s";
-    pub const DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO: f64 = 0.0;
+    pub use safekeeper_api::config::defaults::*;
+    pub use safekeeper_api::{DEFAULT_HTTP_LISTEN_PORT, DEFAULT_PG_LISTEN_PORT};
 }
 
 #[derive(Debug, Clone)]

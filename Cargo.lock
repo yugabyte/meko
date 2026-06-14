@@ -4857,6 +4857,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "const_format",
+ "humantime-serde",
  "pageserver_api",
  "postgres_ffi_types",
  "postgres_versioninfo",
@@ -4864,6 +4865,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "toml",
  "utils",
 ]
 

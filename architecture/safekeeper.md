@@ -68,7 +68,11 @@ Surviving background work:
   `init()` loads only the baked timeline, never the whole shared table. The
   external API (`get`, `get_all` → `Vec`, `timelines_count`, …) is unchanged.
 - `safekeeper/src/safekeeper.rs` — the consensus state machine.
-- `safekeeper/src/bin/safekeeper.rs` — entry point + CLI parsing.
+- `safekeeper/src/bin/safekeeper.rs` — entry point; reads
+  `<datadir>/safekeeper.toml` into `SafeKeeperConf` (only `-D`/`--init`/
+  `--dump-control-file` are CLI flags).
+- `libs/safekeeper_api/src/config.rs` — `SafekeeperConfigToml`, the on-disk
+  `safekeeper.toml` schema shared by the binary and neon_local.
 
 ## Changes in yb-light
 
@@ -365,9 +369,9 @@ accepted, two-member rejected, joint config with two new members rejected.
 **Single-timeline identity (one timeline per process).** The
 single-safekeeper constraint above is about *membership* (one acceptor per
 timeline); this is its dual on the *process* side: one safekeeper process
-serves exactly one `(tenant, timeline)` for its lifetime, baked in via
-`--tenant-id`/`--timeline-id` (`SafeKeeperConf::yb_ttid`, required in YB-WAL
-mode). It matters because `safekeeper.timeline_state` is shared across the
+serves exactly one `(tenant, timeline)` for its lifetime, baked into
+`safekeeper.toml`'s `tenant_id`/`timeline_id` (`SafeKeeperConf::yb_ttid`,
+required in YB-WAL mode). It matters because `safekeeper.timeline_state` is shared across the
 whole cluster — without a baked identity a process can't tell its own
 timeline from everyone else's. Two consequences:
 
@@ -380,15 +384,16 @@ timeline from everyone else's. Two consequences:
   before it can touch the registry, so a misrouted walproposer can't create
   or mutate a foreign timeline in this process.
 
-### 6. Node id from CLI, not from `safekeeper.id` (commit `8027e06c4`)
+### 6. Node id from config, not from `safekeeper.id` (commit `8027e06c4`)
 
 The 50-line `set_id()` helper that read/wrote `<workdir>/safekeeper.id` is
-gone. `--id` is now a required CLI flag; the binary fails fast at startup
-if missing. The id file is no longer created.
+gone. The id now comes from the `id` key in `safekeeper.toml` (originally a
+`--id` CLI flag; folded into the config file when the safekeeper's whole CLI
+surface moved to `safekeeper.toml`). The id file is no longer created.
 
-This was the last *durable* byte the safekeeper wrote to local FS in
-YB-backed mode. After this commit, a freshly-wiped workdir works fine on
-restart as long as `--id` is passed.
+This removed the last *durable* byte the safekeeper wrote to local FS in
+YB-backed mode. A freshly-wiped workdir works fine on restart as long as the
+launcher rewrites `safekeeper.toml` (it does, on every `SafekeeperNode::start`).
 
 ### 7. WAL acceptor batching ticker (commit `95088ba54`)
 
@@ -492,26 +497,39 @@ YB on next start. Logs and pidfile are recreated.
 
 ## Run / configure
 
+All configuration lives in `<datadir>/safekeeper.toml` — the safekeeper's
+analogue of `pageserver.toml`, written by neon_local
+(`SafekeeperNode::start`) and read once at startup
+(`safekeeper_api::config::SafekeeperConfigToml`). The only CLI flags are the
+datadir locator and two operational probes:
+
 ```
-safekeeper \
-    -D <workdir> \
-    --id 1 \
-    --listen-pg 127.0.0.1:5474 \
-    --listen-http 127.0.0.1:7686 \
-    --availability-zone sk-1 \
-    --tenant-id   c8178f5e... \
-    --timeline-id 77ffde89... \
-    --wal-yb-config    "{host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage', sslmode = 'require'}"
+safekeeper -D <datadir> [--init] [--dump-control-file <path>]
 ```
 
-`--wal-yb-config` is the single YB connection used for both the
+A representative `<datadir>/safekeeper.toml`:
+
+```toml
+id = 1
+tenant_id   = "c8178f5e..."
+timeline_id = "77ffde89..."
+listen_pg = "127.0.0.1:5474"
+listen_http = "127.0.0.1:7686"
+availability_zone = "sk-1"
+wal_yb_config = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage', sslmode = 'require' }"
+# … tuning knobs (heartbeat_timeout, control_file_save_interval, ssl_*, …)
+# fall back to defaults when omitted; unknown keys are ignored.
+```
+
+`wal_yb_config` is the single YB connection (a string-encoded inline table,
+like `pageserver.toml`'s `remote_storage`) used for both the
 `safekeeper.timeline_state` row (control file) and the `public.wals` chunk
 stream — same DB, two tables. The WAL chunk table is hardcoded to
 `public.wals` (not configurable); `safekeeper.timeline_state` is reached
 via the same `YsqlClient`.
 
-`--tenant-id`/`--timeline-id` bake this process's single timeline identity
-(required whenever `--wal-yb-config` is set) — the safekeeper's analogue of
+`tenant_id`/`timeline_id` bake this process's single timeline identity
+(required whenever `wal_yb_config` is set) — the safekeeper's analogue of
 `pageserver.toml`'s identity keys. neon_local stamps them at provision time
 (`allocate_safekeeper_conf`). They scope the startup load to this one
 timeline and gate connections to it (see §5).

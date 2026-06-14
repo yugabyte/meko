@@ -4,6 +4,8 @@ use const_format::formatcp;
 use pq_proto::SystemId;
 use serde::{Deserialize, Serialize};
 
+/// On-disk safekeeper configuration (`safekeeper.toml`).
+pub mod config;
 pub mod membership;
 /// Public API types
 pub mod models;
