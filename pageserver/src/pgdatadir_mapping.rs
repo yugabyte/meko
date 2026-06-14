@@ -24,7 +24,6 @@ use pageserver_api::key::{
 };
 use pageserver_api::keyspace::KeySpaceRandomAccum;
 use pageserver_api::models::RelSizeMigration;
-use pageserver_api::models::ShardIdentity;
 use pageserver_api::reltag::{BlockNumber, RelTag, SlruKind};
 use postgres_ffi::{BLCKSZ, PgMajorVersion, TransactionId};
 use postgres_ffi_types::forknum::{FSM_FORKNUM, VISIBILITYMAP_FORKNUM};
@@ -1683,23 +1682,14 @@ impl DatadirModification<'_> {
     }
 
     /// Given a block number for a relation (which represents a newly written block),
-    /// the previous block count of the relation, and the shard info, find the gaps
+    /// and the previous block count of the relation, find the gaps
     /// that were created by the newly written block if any.
-    fn find_gaps(
-        rel: RelTag,
-        blkno: u32,
-        previous_nblocks: u32,
-        shard: &ShardIdentity,
-    ) -> Option<KeySpace> {
+    fn find_gaps(rel: RelTag, blkno: u32, previous_nblocks: u32) -> Option<KeySpace> {
         let mut key = rel_block_to_key(rel, blkno);
         let mut gap_accum = None;
 
         for gap_blkno in previous_nblocks..blkno {
             key.field6 = gap_blkno;
-
-            if shard.get_shard_number(&key) != shard.number {
-                continue;
-            }
 
             gap_accum
                 .get_or_insert_with(KeySpaceAccum::new)
@@ -1712,8 +1702,6 @@ impl DatadirModification<'_> {
     pub async fn ingest_batch(
         &mut self,
         mut batch: SerializedValueBatch,
-        // TODO(vlad): remove this argument and replace the shard check with is_key_local
-        shard: &ShardIdentity,
         ctx: &RequestContext,
     ) -> Result<(), WalIngestError> {
         let mut gaps_at_lsns = Vec::default();
@@ -1730,7 +1718,7 @@ impl DatadirModification<'_> {
                 self.put_rel_extend(rel, new_nblocks, ctx).await?;
             }
 
-            if let Some(gaps) = Self::find_gaps(rel, blkno, old_nblocks, shard) {
+            if let Some(gaps) = Self::find_gaps(rel, blkno, old_nblocks) {
                 gaps_at_lsns.push((gaps, meta.lsn()));
             }
         }

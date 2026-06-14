@@ -29,7 +29,6 @@ use std::time::{Duration, Instant, SystemTime};
 
 use bytes::{Buf, Bytes};
 use pageserver_api::key::{Key, rel_block_to_key};
-use pageserver_api::models::ShardIdentity;
 use pageserver_api::reltag::{BlockNumber, RelTag, SlruKind};
 use postgres_ffi::walrecord::*;
 use postgres_ffi::{
@@ -94,7 +93,6 @@ impl WalLagCooldown {
 
 pub struct WalIngest {
     attach_wal_lag_cooldown: Arc<OnceLock<WalLagCooldown>>,
-    shard: ShardIdentity,
     checkpoint: CheckPoint,
     checkpoint_modified: bool,
     warn_ingest_lag: WarnIngestLag,
@@ -213,7 +211,6 @@ impl WalIngest {
         });
 
         Ok(WalIngest {
-            shard: *timeline.get_shard_identity(),
             checkpoint,
             checkpoint_modified: false,
             attach_wal_lag_cooldown: timeline.attach_wal_lag_cooldown.clone(),
@@ -360,7 +357,7 @@ impl WalIngest {
         }
 
         modification
-            .ingest_batch(interpreted.batch, &self.shard, ctx)
+            .ingest_batch(interpreted.batch, ctx)
             .await?;
 
         // If checkpoint data was updated, store the new version in the repository
@@ -567,19 +564,7 @@ impl WalIngest {
             // Copy content
             debug!("copying rel {} to {}, {} blocks", src_rel, dst_rel, nblocks);
             for blknum in 0..nblocks {
-                // Sharding:
-                //  - src and dst are always on the same shard, because they differ only by dbNode, and
-                //    dbNode is not included in the hash inputs for sharding.
-                //  - This WAL command is replayed on all shards, but each shard only copies the blocks
-                //    that belong to it.
                 let src_key = rel_block_to_key(src_rel, blknum);
-                if !self.shard.is_key_local(&src_key) {
-                    debug!(
-                        "Skipping non-local key {} during XLOG_DBASE_CREATE",
-                        src_key
-                    );
-                    continue;
-                }
                 debug!(
                     "copying block {} from {} ({}) to {}",
                     blknum, src_rel, src_key, dst_rel
@@ -670,19 +655,15 @@ impl WalIngest {
                 forknum: FSM_FORKNUM,
             };
 
-            // Zero out the last remaining FSM page, if this shard owns it. We are not precise here,
+            // Zero out the last remaining FSM page. We are not precise here,
             // and instead of digging in the FSM bitmap format we just clear the whole page.
             let fsm_logical_page_no = blkno / pg_constants::SLOTS_PER_FSM_PAGE;
             let mut fsm_physical_page_no = fsm_logical_to_physical(fsm_logical_page_no);
-            if blkno % pg_constants::SLOTS_PER_FSM_PAGE != 0
-                && self
-                    .shard
-                    .is_key_local(&rel_block_to_key(rel, fsm_physical_page_no))
-            {
+            if blkno % pg_constants::SLOTS_PER_FSM_PAGE != 0 {
                 modification.put_rel_page_image_zero(rel, fsm_physical_page_no)?;
                 fsm_physical_page_no += 1;
             }
-            // Truncate this shard's view of the FSM relation size, if it even has one.
+            // Truncate the FSM relation size, if it even has one.
             let nblocks = get_relsize(modification, rel, ctx).await?.unwrap_or(0);
             if nblocks > fsm_physical_page_no {
                 self.put_rel_truncation(modification, rel, fsm_physical_page_no, ctx)
@@ -708,10 +689,8 @@ impl WalIngest {
             // tail bits in the last remaining map page, representing truncated heap
             // blocks, need to be cleared. This is not only tidy, but also necessary
             // because we don't get a chance to clear the bits if the heap is extended
-            // again. Only do this on the shard that owns the page.
-            if (trunc_byte != 0 || trunc_offs != 0)
-                && self.shard.is_key_local(&rel_block_to_key(rel, vm_page_no))
-            {
+            // again.
+            if trunc_byte != 0 || trunc_offs != 0 {
                 modification.put_rel_wal_record(
                     rel,
                     vm_page_no,
@@ -1425,17 +1404,9 @@ impl WalIngest {
             //info!("extending {} {} to {}", rel, old_nblocks, new_nblocks);
             modification.put_rel_extend(rel, new_nblocks, ctx).await?;
 
-            let mut key = rel_block_to_key(rel, blknum);
-
             // fill the gap with zeros
             let mut gap_blocks_filled: u64 = 0;
             for gap_blknum in old_nblocks..blknum {
-                key.field6 = gap_blknum;
-
-                if self.shard.get_shard_number(&key) != self.shard.number {
-                    continue;
-                }
-
                 modification.put_rel_page_image_zero(rel, gap_blknum)?;
                 gap_blocks_filled += 1;
             }

@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use bytes::Bytes;
 use camino::Utf8Path;
-use pageserver_api::key::rel_block_to_key;
 use pageserver_api::reltag::{RelTag, SlruKind};
 use postgres_ffi::relfile_utils::*;
 use postgres_ffi::waldecoder::WalStreamDecoder;
@@ -167,10 +166,7 @@ async fn import_rel(
         let r = reader.read_exact(&mut buf).await;
         match r {
             Ok(_) => {
-                let key = rel_block_to_key(rel, blknum);
-                if modification.tline.get_shard_identity().is_key_local(&key) {
-                    modification.put_rel_page_image(rel, blknum, Bytes::copy_from_slice(&buf))?;
-                }
+                modification.put_rel_page_image(rel, blknum, Bytes::copy_from_slice(&buf))?;
             }
 
             // TODO: UnexpectedEof is expected
