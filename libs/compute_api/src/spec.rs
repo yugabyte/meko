@@ -13,7 +13,6 @@ use remote_storage::RemotePath;
 use serde::{Deserialize, Serialize};
 use url::Url;
 use utils::id::{NodeId, TenantId, TimelineId};
-use utils::id::{ShardCount, ShardIndex, ShardNumber, ShardStripeSize};
 use utils::lsn::Lsn;
 
 use crate::responses::TlsConfig;
@@ -116,16 +115,11 @@ pub struct ComputeSpec {
     /// versions of the control plane, `compute_ctl` will check 2. and 3. if the
     /// `pageserver_connection_info` field is missing.
     ///
-    /// If both `pageserver_connection_info` and `pageserver_connstring`+`shard_stripe_size` are
+    /// If both `pageserver_connection_info` and `pageserver_connstring` are
     /// given, they must contain the same information.
     pub pageserver_connection_info: Option<PageserverConnectionInfo>,
 
     pub pageserver_connstring: Option<String>,
-
-    /// Stripe size for pageserver sharding, in pages. This is set together with the legacy
-    /// `pageserver_connstring` field. When the modern `pageserver_connection_info` field is used,
-    /// the stripe size is stored in `pageserver_connection_info.stripe_size` instead.
-    pub shard_stripe_size: Option<ShardStripeSize>,
 
     // More neon ids that we expose to the compute_ctl
     // and to postgres as neon extension GUCs.
@@ -235,108 +229,49 @@ pub enum ComputeFeature {
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct PageserverConnectionInfo {
-    /// NB: 0 for unsharded tenants, 1 for sharded tenants with 1 shard, following storage
-    pub shard_count: ShardCount,
-
-    /// INVARIANT: null if shard_count is 0, otherwise non-null and immutable
-    pub stripe_size: Option<ShardStripeSize>,
-
-    pub shards: HashMap<ShardIndex, PageserverShardInfo>,
+    /// The pageserver(s) serving this timeline. yb-light is single-shard, so
+    /// normally exactly one; two may briefly overlap during a migration.
+    pub pageservers: Vec<PageserverConnectionItem>,
 
     /// If the compute supports both protocols, this indicates which one it should use.  The compute
     /// may use other available protocols too, if it doesn't support the preferred one. The URL's
-    /// for the protocol specified here must be present for all shards, i.e. do not mark a protocol
-    /// as preferred if it cannot actually be used with all the pageservers.
+    /// for the protocol specified here must be present on all pageservers.
     #[serde(default)]
     pub prefer_protocol: PageserverProtocol,
 }
 
-/// Extract PageserverConnectionInfo from a comma-separated list of libpq connection strings.
-///
-/// This is used for backwards-compatibility, to parse the legacy
-/// [ComputeSpec::pageserver_connstring] field, or the 'neon.pageserver_connstring' GUC. Nowadays,
-/// the 'pageserver_connection_info' field should be used instead.
 impl PageserverConnectionInfo {
-    pub fn from_connstr(
-        connstr: &str,
-        stripe_size: Option<ShardStripeSize>,
-    ) -> Result<PageserverConnectionInfo, anyhow::Error> {
-        let shard_infos: Vec<_> = connstr
+    /// Build a `PageserverConnectionInfo` from a comma-separated list of libpq
+    /// connection strings.
+    ///
+    /// Used for backwards-compatibility, to parse the legacy
+    /// [`ComputeSpec::pageserver_connstring`] field or the
+    /// `neon.pageserver_connstring` GUC. Nowadays the
+    /// `pageserver_connection_info` field should be used instead.
+    pub fn from_connstr(connstr: &str) -> Result<PageserverConnectionInfo, anyhow::Error> {
+        let pageservers: Vec<_> = connstr
             .split(',')
-            .map(|connstr| PageserverShardInfo {
-                pageservers: vec![PageserverShardConnectionInfo {
-                    id: None,
-                    libpq_url: Some(connstr.to_string()),
-                    grpc_url: None,
-                }],
+            .map(|connstr| PageserverConnectionItem {
+                id: None,
+                libpq_url: Some(connstr.to_string()),
+                grpc_url: None,
             })
             .collect();
 
-        match shard_infos.len() {
-            0 => anyhow::bail!("empty connection string"),
-            1 => {
-                // We assume that if there's only connection string, it means "unsharded",
-                // rather than a sharded system with just a single shard. The latter is
-                // possible in principle, but we never do it.
-                let shard_count = ShardCount::unsharded();
-                let only_shard = shard_infos.first().unwrap().clone();
-                let shards = vec![(ShardIndex::unsharded(), only_shard)];
-                Ok(PageserverConnectionInfo {
-                    shard_count,
-                    stripe_size: None,
-                    shards: shards.into_iter().collect(),
-                    prefer_protocol: PageserverProtocol::Libpq,
-                })
-            }
-            n => {
-                if stripe_size.is_none() {
-                    anyhow::bail!("{n} shards but no stripe_size");
-                }
-                let shard_count = ShardCount(n.try_into()?);
-                let shards = shard_infos
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, shard_info)| {
-                        (
-                            ShardIndex {
-                                shard_count,
-                                shard_number: ShardNumber(
-                                    idx.try_into().expect("shard number fits in u8"),
-                                ),
-                            },
-                            shard_info,
-                        )
-                    })
-                    .collect();
-                Ok(PageserverConnectionInfo {
-                    shard_count,
-                    stripe_size,
-                    shards,
-                    prefer_protocol: PageserverProtocol::Libpq,
-                })
-            }
+        if pageservers.is_empty() {
+            anyhow::bail!("empty connection string");
         }
+
+        Ok(PageserverConnectionInfo {
+            pageservers,
+            prefer_protocol: PageserverProtocol::Libpq,
+        })
     }
 
-    /// Convenience routine to get the connection string for a shard.
-    pub fn shard_url(
-        &self,
-        shard_number: ShardNumber,
-        protocol: PageserverProtocol,
-    ) -> anyhow::Result<&str> {
-        let shard_index = ShardIndex {
-            shard_number,
-            shard_count: self.shard_count,
-        };
-        let shard = self.shards.get(&shard_index).ok_or_else(|| {
-            anyhow::anyhow!("shard connection info missing for shard {}", shard_index)
-        })?;
-
-        // Just use the first pageserver in the list. That's good enough for this
-        // convenience routine; if you need more control, like round robin policy or
-        // failover support, roll your own. (As of this writing, we never have more than
-        // one pageserver per shard anyway, but that will change in the future.)
-        let pageserver = shard
+    /// Convenience routine to get the connection string for the given protocol,
+    /// using the first pageserver.
+    pub fn pageserver_url(&self, protocol: PageserverProtocol) -> anyhow::Result<&str> {
+        let pageserver = self
             .pageservers
             .first()
             .ok_or(anyhow::anyhow!("must have at least one pageserver"))?;
@@ -345,23 +280,18 @@ impl PageserverConnectionInfo {
             PageserverProtocol::Grpc => pageserver
                 .grpc_url
                 .as_ref()
-                .ok_or(anyhow::anyhow!("no grpc_url for shard {shard_index}"))?,
+                .ok_or(anyhow::anyhow!("no grpc_url"))?,
             PageserverProtocol::Libpq => pageserver
                 .libpq_url
                 .as_ref()
-                .ok_or(anyhow::anyhow!("no libpq_url for shard {shard_index}"))?,
+                .ok_or(anyhow::anyhow!("no libpq_url"))?,
         };
         Ok(result)
     }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
-pub struct PageserverShardInfo {
-    pub pageservers: Vec<PageserverShardConnectionInfo>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
-pub struct PageserverShardConnectionInfo {
+pub struct PageserverConnectionItem {
     pub id: Option<NodeId>,
     pub libpq_url: Option<String>,
     pub grpc_url: Option<String>,

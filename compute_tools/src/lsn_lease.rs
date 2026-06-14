@@ -117,33 +117,26 @@ fn try_acquire_lsn_lease(
 ) -> Result<Option<SystemTime>> {
     let mut leases = Vec::new();
 
-    for (shard_index, shard) in conninfo.shards.into_iter() {
-        let _ = shard_index;
-        let tenant_shard_id = TenantId::unsharded(tenant_id);
-
-        // XXX: If there are more than pageserver for the one shard, do we need to get a
-        // leas on all of them? Currently, that's what we assume, but this is hypothetical
-        // as of this writing, as we never pass the info for more than one pageserver per
-        // shard.
-        for pageserver in shard.pageservers {
-            let lease = match conninfo.prefer_protocol {
-                PageserverProtocol::Grpc => acquire_lsn_lease_grpc(
-                    &pageserver.grpc_url.unwrap(),
-                    auth,
-                    tenant_shard_id,
-                    timeline_id,
-                    lsn,
-                )?,
-                PageserverProtocol::Libpq => acquire_lsn_lease_libpq(
-                    &pageserver.libpq_url.unwrap(),
-                    auth,
-                    tenant_shard_id,
-                    timeline_id,
-                    lsn,
-                )?,
-            };
-            leases.push(lease);
-        }
+    // If there is more than one pageserver (briefly, during a migration), get a
+    // lease on all of them.
+    for pageserver in conninfo.pageservers {
+        let lease = match conninfo.prefer_protocol {
+            PageserverProtocol::Grpc => acquire_lsn_lease_grpc(
+                &pageserver.grpc_url.unwrap(),
+                auth,
+                tenant_id,
+                timeline_id,
+                lsn,
+            )?,
+            PageserverProtocol::Libpq => acquire_lsn_lease_libpq(
+                &pageserver.libpq_url.unwrap(),
+                auth,
+                tenant_id,
+                timeline_id,
+                lsn,
+            )?,
+        };
+        leases.push(lease);
     }
 
     Ok(leases.into_iter().min().flatten())

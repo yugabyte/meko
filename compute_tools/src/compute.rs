@@ -36,7 +36,7 @@ use tokio::{spawn, sync::watch, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info, instrument, warn};
 use url::Url;
-use utils::id::{ShardIndex, ShardNumber, ShardStripeSize};
+use utils::id::ShardIndex;
 use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 use utils::measured_stream::MeasuredReader;
@@ -312,22 +312,13 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
         let mut pageserver_conninfo = spec.pageserver_connection_info.clone();
         if pageserver_conninfo.is_none() {
             if let Some(pageserver_connstr_field) = &spec.pageserver_connstring {
-                pageserver_conninfo = Some(PageserverConnectionInfo::from_connstr(
-                    pageserver_connstr_field,
-                    spec.shard_stripe_size,
-                )?);
+                pageserver_conninfo =
+                    Some(PageserverConnectionInfo::from_connstr(pageserver_connstr_field)?);
             }
         }
         if pageserver_conninfo.is_none() {
             if let Some(guc) = spec.cluster.settings.find("neon.pageserver_connstring") {
-                let stripe_size = if let Some(guc) = spec.cluster.settings.find("neon.stripe_size")
-                {
-                    Some(ShardStripeSize(u32::from_str(&guc)?))
-                } else {
-                    None
-                };
-                pageserver_conninfo =
-                    Some(PageserverConnectionInfo::from_connstr(&guc, stripe_size)?);
+                pageserver_conninfo = Some(PageserverConnectionInfo::from_connstr(&guc)?);
             }
         }
         let pageserver_conninfo = pageserver_conninfo.ok_or(anyhow::anyhow!(
@@ -1245,20 +1236,18 @@ impl ComputeNode {
     /// Fetches a basebackup via gRPC. The connstring must use grpc://. Returns the timestamp when
     /// the connection was established, and the (compressed) size of the basebackup.
     fn try_get_basebackup_grpc(&self, spec: &ParsedSpec, lsn: Lsn) -> Result<(Instant, usize)> {
-        let shard0_index = ShardIndex {
-            shard_number: ShardNumber(0),
-            shard_count: spec.pageserver_conninfo.shard_count,
-        };
-        let shard0_url = spec
+        // yb-light is single-shard; the gRPC client still wants a shard id.
+        let shard_index = ShardIndex::unsharded();
+        let ps_url = spec
             .pageserver_conninfo
-            .shard_url(ShardNumber(0), PageserverProtocol::Grpc)?
+            .pageserver_url(PageserverProtocol::Grpc)?
             .to_owned();
         let (reader, connected) = tokio::runtime::Handle::current().block_on(async move {
             let mut client = page_api::Client::connect(
-                shard0_url,
+                ps_url,
                 spec.tenant_id,
                 spec.timeline_id,
-                shard0_index,
+                shard_index,
                 spec.storage_auth_token.clone(),
                 None, // NB: base backups use payload compression
             )
@@ -1290,10 +1279,10 @@ impl ComputeNode {
     /// Fetches a basebackup via libpq. The connstring must use postgresql://. Returns the timestamp
     /// when the connection was established, and the (compressed) size of the basebackup.
     fn try_get_basebackup_libpq(&self, spec: &ParsedSpec, lsn: Lsn) -> Result<(Instant, usize)> {
-        let shard0_connstr = spec
+        let ps_connstr = spec
             .pageserver_conninfo
-            .shard_url(ShardNumber(0), PageserverProtocol::Libpq)?;
-        let mut config = postgres::Config::from_str(shard0_connstr)?;
+            .pageserver_url(PageserverProtocol::Libpq)?;
+        let mut config = postgres::Config::from_str(ps_connstr)?;
 
         // Use the storage auth token from the config file, if given.
         // Note: this overrides any password set in the connection string.

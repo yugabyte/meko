@@ -37,7 +37,7 @@
 //!         <other PostgreSQL files>
 //! ```
 //!
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -58,11 +58,11 @@ use compute_api::responses::{
 };
 use compute_api::spec::{
     Cluster, ComputeAudit, ComputeFeature, ComputeMode, ComputeSpec, Database, PageserverProtocol,
-    PageserverShardInfo, PgIdent, RemoteExtSpec, Role,
+    PageserverConnectionItem, PgIdent, RemoteExtSpec, Role,
 };
 
 // re-export these, because they're used in the reconfigure() function
-pub use compute_api::spec::{PageserverConnectionInfo, PageserverShardConnectionInfo};
+pub use compute_api::spec::PageserverConnectionInfo;
 
 use jsonwebtoken::jwk::{
     AlgorithmParameters, CommonParameters, EllipticCurve, Jwk, JwkSet, KeyAlgorithm, KeyOperations,
@@ -79,7 +79,6 @@ use spki::der::Decode;
 use spki::{SubjectPublicKeyInfo, SubjectPublicKeyInfoRef};
 use tracing::debug;
 use utils::id::{NodeId, TenantId, TimelineId};
-use utils::id::{ShardCount, ShardIndex, ShardNumber};
 
 use pageserver_api::config::DEFAULT_GRPC_LISTEN_PORT as DEFAULT_PAGESERVER_GRPC_PORT;
 use pageserver_api::controller_api::ComputeEndpoint;
@@ -784,27 +783,8 @@ impl Endpoint {
         // Use a closure so that we can conviniently return None in the middle of the
         // loop.
         let pageserver_connstring: Option<String> = (|| {
-            let num_shards = args.pageserver_conninfo.shard_count.count();
             let mut connstrings = Vec::new();
-            for shard_no in 0..num_shards {
-                let shard_index = ShardIndex {
-                    shard_number: ShardNumber(shard_no),
-                    shard_count: args.pageserver_conninfo.shard_count,
-                };
-                let shard = args
-                    .pageserver_conninfo
-                    .shards
-                    .get(&shard_index)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "shard {} not found in pageserver_connection_info",
-                            shard_index
-                        )
-                    })?;
-                let pageserver = shard
-                    .pageservers
-                    .first()
-                    .ok_or(anyhow!("must have at least one pageserver"))?;
+            for pageserver in &args.pageserver_conninfo.pageservers {
                 if let Some(libpq_url) = &pageserver.libpq_url {
                     connstrings.push(libpq_url.clone());
                 } else {
@@ -865,7 +845,6 @@ impl Endpoint {
                 storage_auth_token: args.auth_token.clone(),
                 remote_extensions,
                 pgbouncer_settings: None,
-                shard_stripe_size: args.pageserver_conninfo.stripe_size, // redundant with pageserver_connection_info.stripe_size
                 local_proxy_config: None,
                 reconfigure_concurrency: self.reconfigure_concurrency,
                 drop_subscriptions_before_start: self.drop_subscriptions_before_start,
@@ -1120,11 +1099,10 @@ impl Endpoint {
             // If pageservers are provided, we need to ensure that they are not empty.
             // This is a requirement for the compute_ctl configuration.
             anyhow::ensure!(
-                !pageserver_conninfo.shards.is_empty(),
+                !pageserver_conninfo.pageservers.is_empty(),
                 "no pageservers provided"
             );
             spec.pageserver_connection_info = Some(pageserver_conninfo.clone());
-            spec.shard_stripe_size = pageserver_conninfo.stripe_size;
         }
 
         // If safekeepers are not specified, don't change them.
@@ -1380,23 +1358,14 @@ pub fn local_pageserver_conf_to_conn_info(
     } else {
         None
     };
-    let ps_conninfo = PageserverShardConnectionInfo {
+    let ps_conninfo = PageserverConnectionItem {
         id: Some(conf.id),
         libpq_url,
         grpc_url,
     };
 
-    let shard_info = PageserverShardInfo {
-        pageservers: vec![ps_conninfo],
-    };
-
-    let shards: HashMap<_, _> = vec![(ShardIndex::unsharded(), shard_info)]
-        .into_iter()
-        .collect();
     Ok(PageserverConnectionInfo {
-        shard_count: ShardCount::unsharded(),
-        stripe_size: None,
-        shards,
+        pageservers: vec![ps_conninfo],
         prefer_protocol: PageserverProtocol::default(),
     })
 }
