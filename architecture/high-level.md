@@ -145,7 +145,7 @@ yugabyted                       :7100 (master), :5433 (ysql)
 yb-light binaries (target/debug/)
   storage_controller --yb-config "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage' }" --listen 127.0.0.1:<port>
   yb-pageserver   (config from on-disk pageserver.toml; yb_light_local defaults :64100 pg, :9988 http, :51151 grpc — base ports 64000/9898/51051 + i offset)
-  safekeeper --id 1 --wal-yb-config <YbConnConfig TOML>   (yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
+  safekeeper --id 1   (config from on-disk safekeeper.toml: yb_storage_conn; yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
   endpoint_storage   (config from endpoints/<name>/endpoint_storage/endpoint_storage.json; one per endpoint, base port 9993 + 2*k)
   compute_ctl --pgdata .yb_light/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
     +-- postgres (v17.5 + Neon patches)  :55440
@@ -154,7 +154,7 @@ yb-light binaries (target/debug/)
 A production deployment would have M pageservers partitioned by tenant
 (one tenant per pageserver — yb-light has no sharding) and a YB cluster
 that's actually distributed. **The safekeeper count stays at 1**
-when `--wal-yb-config` is set — YB already provides the quorum durability
+when `yb_storage_conn` is configured — YB already provides the quorum durability
 that a multi-safekeeper Raft would. Running two protocols (YB's Raft + the
 safekeeper's Paxos) on top of each other is rejected at boot and at
 runtime; see [`safekeeper.md`](safekeeper.md) §5.

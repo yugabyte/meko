@@ -31,7 +31,9 @@ Read in this order:
    lifecycle, LSN MVCC, image vs delta, compaction, the page-7 worked
    example. The upstream source is gone (lane H, 2026-06-01); this doc
    stays because the inherited concepts (Key encoding, walredo, getpage
-   RPC, sharding, generation handshake) are still load-bearing.
+   RPC, generation handshake) are still load-bearing. (Sharding was
+   removed entirely — yb-light is single-shard; see `pageserver.md`
+   §"No sharding".)
 5. `architecture/yb-pageserver.md` — the row-per-page YugabyteDB
    storage design that REPLACES the layer-file path: image-anchored
    reads, background image materialiser, what's gone vs upstream,
@@ -39,9 +41,15 @@ Read in this order:
 6. `architecture/safekeeper.md` — `ControlFileStorage::Yb`,
    `YbWalStorage`, the `WalReader` fallback chain, the single-safekeeper
    constraint in YB-WAL mode.
-7. `architecture/storage-controller.md` — `database_url` → external
-   Postgres (YB) flow, the auto-provisioning of the `yb_storage` DB
-   (and its `storage_controller` schema) on first start.
+7. `architecture/storage-controller.md` — the `[storage_controller.yb]`
+   connection block → diesel URL flow (`--yb-config`), the
+   auto-provisioning of the `yb_storage` DB (and its `storage_controller`
+   schema) on first start.
+
+For per-service HTTP API and Prometheus metrics, see the
+`architecture/<service>-apis.md` / `<service>-metrics.md` references
+(pageserver, safekeeper, storage_controller, compute_ctl, endpoint_storage),
+indexed in `architecture/README.md`.
 
 Code anchors:
 
@@ -59,8 +67,8 @@ Code anchors:
   external-DB path, `ensure_external_database`, YB schema
   auto-provisioning.
 - `control_plane/src/local_env.rs` — TOML config types
-  (`YbLightStorageControllerConf::database_url`,
-  `SafekeeperConf::control_file_backend` / `yb_storage_conn`).
+  (`YbLightStorageControllerConf::yb`, `SafekeeperConf::yb_storage_conn`;
+  every service takes the same `yb_storage_conn` connection block).
 - `control_plane/src/safekeeper.rs` / `pageserver.rs` / `endpoint.rs` —
   per-service CLI assembly + per-component config.
 - `pageserver/src/page_store.rs` — `PageStore` row store for the

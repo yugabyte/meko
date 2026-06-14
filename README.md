@@ -540,6 +540,13 @@ Per-component deep dives:
   tables, prefixes, idempotency contract, and the DDL the operator
   must provision.
 
+Per-service HTTP API + Prometheus metrics reference (one `-apis.md` and
+one `-metrics.md` per service; indexed in `architecture/README.md`):
+pageserver, safekeeper, storage_controller, compute_ctl, and
+endpoint_storage — e.g.
+[`architecture/yb-pageserver-apis.md`](architecture/yb-pageserver-apis.md),
+[`architecture/safekeeper-metrics.md`](architecture/safekeeper-metrics.md).
+
 Upstream-Neon material that's still mostly accurate for the shell:
 
 - [`docs/sourcetree.md`](docs/sourcetree.md) — original Neon

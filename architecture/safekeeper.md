@@ -229,9 +229,10 @@ return                              │
   next `tx.send` then fails, `write_wal` propagates the captured error,
   the walproposer reconnects.
 
-CLI: `--wal-yb-config <YbConnConfig TOML>` (optional, the shared YB
-connection block). When absent, the
-safekeeper uses `WalStore::Physical(...)` and the wals table is untouched.
+Config: the `yb_storage_conn` inline table in `safekeeper.toml` (optional,
+the shared YB connection block — the same key the pageserver and
+endpoint_storage use). When absent, the safekeeper uses
+`WalStore::Physical(...)` and the wals table is untouched.
 
 ### 3. WalReader falls back to YB (Phase 2, commit `77553419b`, lazy/cached in `d7eef8275`+)
 
@@ -243,7 +244,7 @@ safekeeper uses `WalStore::Physical(...)` and the wals table is untouched.
    `AsyncRead` that consults the in-memory [`WalCache`](#wal-cache--lazy-yb-reader)
    first and falls through to a single-chunk YB `SELECT` only on miss.
 
-A safekeeper with `--wal-yb-config` set can lose its entire local WAL
+A safekeeper with `yb_storage_conn` configured can lose its entire local WAL
 directory and still serve every past-LSN streaming request from YB.
 
 #### WAL cache & lazy YB reader
@@ -348,7 +349,7 @@ protocols racing on different LSN views, harder semantics, no extra
 safety.
 
 The yb-light build therefore **requires exactly one safekeeper per
-timeline** when `--wal-yb-config` is set (the membership configuration
+timeline** when `yb_storage_conn` is configured (the membership configuration
 must have a single member). Multiple safekeeper *processes* may run on
 a host — the per-endpoint topology gives each branch its own dedicated
 safekeeper — but each timeline's membership is always one safekeeper.

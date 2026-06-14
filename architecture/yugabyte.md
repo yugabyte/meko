@@ -162,7 +162,7 @@ LIMIT 10;
 ## `yb_storage.wals`
 
 Per-write log used by the safekeeper's live-WAL mirror (when
-`--wal-yb-config` is set). Schema is *different* from `blobs` — keyed by
+`yb_storage_conn` is configured). Schema is *different* from `blobs` — keyed by
 `(tenant, timeline, segno, chunk_offset)`. Each row is one chunk of
 one `write_wal()` call; the writer never produces overlapping chunks
 (`truncate_wal` aligns the next write at exactly the truncation
