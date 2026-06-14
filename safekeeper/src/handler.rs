@@ -327,6 +327,21 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
             self.check_permission(Some(tenant_id))?;
             self.ttid = TenantTimelineId::new(tenant_id, timeline_id);
 
+            // This process serves a single timeline (single-timeline-per-
+            // process). Reject a connection for any other timeline before it
+            // can touch the registry — `safekeeper.timeline_state` is shared
+            // across the cluster, so a misrouted walproposer must not create
+            // or mutate a foreign timeline here.
+            if let (Some(t), Some(tl)) = (self.conf.tenant_id, self.conf.timeline_id) {
+                let baked = TenantTimelineId::new(t, tl);
+                if self.ttid != baked {
+                    return Err(QueryError::Other(anyhow::anyhow!(
+                        "this safekeeper serves {baked}, refusing connection for {}",
+                        self.ttid
+                    )));
+                }
+            }
+
             match cmd {
                 SafekeeperPostgresCommand::StartWalPush {
                     proto_version,

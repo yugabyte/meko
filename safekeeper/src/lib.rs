@@ -9,7 +9,7 @@ use once_cell::sync::Lazy;
 use pem::Pem;
 use tokio::runtime::Runtime;
 use utils::auth::SwappableJwtAuth;
-use utils::id::NodeId;
+use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
 use utils::logging::SecretString;
 
 mod auth;
@@ -108,6 +108,13 @@ pub struct SafeKeeperConf {
     /// addition to being written to the local-FS shadow. When `None`,
     /// WAL only lives on local FS (default).
     pub wal_yb_config: Option<remote_storage::YbStoreConfig>,
+    /// The single (tenant_id, timeline_id) this process serves for its
+    /// lifetime. Set from `--tenant-id`/`--timeline-id`; required in
+    /// YB-WAL mode (see [`Self::yb_ttid`]). `safekeeper.timeline_state`
+    /// is shared across the cluster, so this baked identity scopes the
+    /// startup load and gates connections to a single timeline.
+    pub tenant_id: Option<TenantId>,
+    pub timeline_id: Option<TimelineId>,
     /// In-memory cache capacity (MiB) for recent WAL chunks in YB-WAL
     /// mode. See [`crate::wal_cache`]. Ignored when
     /// [`Self::wal_yb_config`] is `None`. Set to 0 to disable the cache.
@@ -145,6 +152,21 @@ impl SafeKeeperConf {
     /// see [`require_single_safekeeper`] and call sites that enforce this.
     pub fn is_yb_wal_mode(&self) -> bool {
         self.wal_yb_config.is_some()
+    }
+
+    /// The single timeline this process is dedicated to. Required in
+    /// YB-WAL mode — `safekeeper.timeline_state` is cluster-shared, so a
+    /// process with no baked identity couldn't tell its own timeline from
+    /// the others. Errors if `--tenant-id`/`--timeline-id` weren't given.
+    pub fn yb_ttid(&self) -> anyhow::Result<TenantTimelineId> {
+        match (self.tenant_id, self.timeline_id) {
+            (Some(tenant_id), Some(timeline_id)) => {
+                Ok(TenantTimelineId::new(tenant_id, timeline_id))
+            }
+            _ => anyhow::bail!(
+                "YB-WAL mode requires --tenant-id and --timeline-id (single-timeline-per-process)"
+            ),
+        }
     }
 }
 
@@ -246,6 +268,28 @@ mod yb_mode_tests {
                 .unwrap_err();
         assert!(format!("{err}").contains("2 new members"));
     }
+
+    #[test]
+    fn yb_ttid_requires_both_ids() {
+        use super::SafeKeeperConf;
+        use utils::id::{TenantId, TenantTimelineId, TimelineId};
+
+        let mut conf = SafeKeeperConf::dummy();
+        // Missing identity: error.
+        assert!(conf.yb_ttid().is_err());
+
+        let tenant_id = TenantId::generate();
+        conf.tenant_id = Some(tenant_id);
+        // Only tenant set: still an error.
+        assert!(conf.yb_ttid().is_err());
+
+        let timeline_id = TimelineId::generate();
+        conf.timeline_id = Some(timeline_id);
+        assert_eq!(
+            conf.yb_ttid().unwrap(),
+            TenantTimelineId::new(tenant_id, timeline_id)
+        );
+    }
 }
 
 impl SafeKeeperConf {
@@ -259,6 +303,8 @@ impl SafeKeeperConf {
             advertise_pg_addr: None,
             availability_zone: None,
             wal_yb_config: None,
+            tenant_id: None,
+            timeline_id: None,
             wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
             my_id: NodeId(0),
             pg_auth: None,

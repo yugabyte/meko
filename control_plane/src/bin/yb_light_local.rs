@@ -1222,6 +1222,7 @@ fn pageserver_init_conf_for(
 fn allocate_safekeeper_conf(
     env: &LocalEnv,
     endpoint_id: &str,
+    tenant_id: TenantId,
     timeline_id: TimelineId,
 ) -> anyhow::Result<SafekeeperConf> {
     let template = env
@@ -1245,6 +1246,7 @@ fn allocate_safekeeper_conf(
         listen_addr: template.listen_addr.clone(),
         wal_yb_config: template.wal_yb_config.clone(),
         wal_cache_size_mib: template.wal_cache_size_mib,
+        tenant_id: Some(tenant_id),
         timeline_id: Some(timeline_id),
         endpoint_id: endpoint_id.to_string(),
     })
@@ -1680,7 +1682,7 @@ async fn provision_bootstrap(
     pg_version: PgMajorVersion,
 ) -> anyhow::Result<()> {
     let ps_conf = allocate_pageserver_conf(env, endpoint_id)?;
-    let sk_conf = allocate_safekeeper_conf(env, endpoint_id, timeline_id)?;
+    let sk_conf = allocate_safekeeper_conf(env, endpoint_id, tenant_id, timeline_id)?;
     // Record the safekeeper before building the pageserver toml: its
     // `safekeeper_pg_addr` is taken from `env.safekeepers.first()`.
     env.safekeepers.push(sk_conf.clone());
@@ -1837,7 +1839,7 @@ async fn provision_branch(
     let ancestor_ps = PageServerNode::from_env(env, &ancestor_ps_conf);
 
     let ps_conf = allocate_pageserver_conf(env, endpoint_id)?;
-    let sk_conf = allocate_safekeeper_conf(env, endpoint_id, timeline_id)?;
+    let sk_conf = allocate_safekeeper_conf(env, endpoint_id, tenant_id, timeline_id)?;
     env.safekeepers.push(sk_conf.clone());
 
     // Safekeeper first: it must hold the timeline (starting at the branch
@@ -2927,11 +2929,13 @@ mod tests {
     #[test]
     fn first_safekeeper_reuses_template_id_and_ports() {
         let env = env_with_templates();
+        let tn = TenantId::generate();
         let tl = TimelineId::generate();
-        let conf = allocate_safekeeper_conf(&env, "main", tl).unwrap();
+        let conf = allocate_safekeeper_conf(&env, "main", tn, tl).unwrap();
         assert_eq!(conf.id, NodeId(1));
         assert_eq!(conf.pg_port, 5454);
         assert_eq!(conf.http_port, 7676);
+        assert_eq!(conf.tenant_id, Some(tn));
         assert_eq!(conf.timeline_id, Some(tl));
         assert_eq!(conf.endpoint_id, "main");
         assert_eq!(conf.wal_yb_config.as_deref(), Some("{ host = 'h' }"));
@@ -2940,11 +2944,12 @@ mod tests {
     #[test]
     fn second_safekeeper_gets_next_id_and_port_delta() {
         let mut env = env_with_templates();
+        let tn = TenantId::generate();
         let main_tl = TimelineId::generate();
         env.safekeepers
-            .push(allocate_safekeeper_conf(&env.clone(), "main", main_tl).unwrap());
+            .push(allocate_safekeeper_conf(&env.clone(), "main", tn, main_tl).unwrap());
         let branch_tl = TimelineId::generate();
-        let conf = allocate_safekeeper_conf(&env, "ep_b1", branch_tl).unwrap();
+        let conf = allocate_safekeeper_conf(&env, "ep_b1", tn, branch_tl).unwrap();
         // id 2, delta = 2
         assert_eq!(conf.id, NodeId(2));
         assert_eq!(conf.pg_port, 5456);

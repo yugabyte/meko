@@ -62,7 +62,11 @@ Surviving background work:
 - `safekeeper/src/yb_wal_storage.rs` — YB mirror (`yb_storage.wals`),
   producer/consumer writer, `load_write_lsn` restart rehydrate.
 - `safekeeper/src/timeline.rs` — `SharedState`, `Timeline::load_timeline`.
-- `safekeeper/src/timelines_global_map.rs` — `GlobalTimelines`, startup scan.
+- `safekeeper/src/timelines_global_map.rs` — `GlobalTimelines`. One process
+  serves one timeline (see §5), so the registry is a single `Option<(ttid,
+  slot)>` plus one timeline- and one tenant-tombstone slot, not `HashMap`s;
+  `init()` loads only the baked timeline, never the whole shared table. The
+  external API (`get`, `get_all` → `Vec`, `timelines_count`, …) is unchanged.
 - `safekeeper/src/safekeeper.rs` — the consensus state machine.
 - `safekeeper/src/bin/safekeeper.rs` — entry point + CLI parsing.
 
@@ -357,6 +361,24 @@ issue.
 Unit tests in `yb_mode_tests` cover: empty config accepted, single-member
 accepted, two-member rejected, joint config with two new members rejected.
 
+**Single-timeline identity (one timeline per process).** The
+single-safekeeper constraint above is about *membership* (one acceptor per
+timeline); this is its dual on the *process* side: one safekeeper process
+serves exactly one `(tenant, timeline)` for its lifetime, baked in via
+`--tenant-id`/`--timeline-id` (`SafeKeeperConf::yb_ttid`, required in YB-WAL
+mode). It matters because `safekeeper.timeline_state` is shared across the
+whole cluster — without a baked identity a process can't tell its own
+timeline from everyone else's. Two consequences:
+
+- **Scoped load.** `GlobalTimelines::init()` loads only the baked timeline's
+  row (if it exists yet — a fresh bootstrap creates it on demand via the
+  walproposer handshake), never the whole table. The in-memory registry is
+  therefore a single `Option`, not a `HashMap`.
+- **Connection gating.** `SafekeeperPostgresHandler::process_query` rejects
+  any connection whose `(tenant, timeline)` doesn't match the baked identity
+  before it can touch the registry, so a misrouted walproposer can't create
+  or mutate a foreign timeline in this process.
+
 ### 6. Node id from CLI, not from `safekeeper.id` (commit `8027e06c4`)
 
 The 50-line `set_id()` helper that read/wrote `<workdir>/safekeeper.id` is
@@ -476,6 +498,8 @@ safekeeper \
     --listen-pg 127.0.0.1:5474 \
     --listen-http 127.0.0.1:7686 \
     --availability-zone sk-1 \
+    --tenant-id   c8178f5e... \
+    --timeline-id 77ffde89... \
     --wal-yb-config    "{host = '127.0.0.1', port = 5433, user = 'yugabyte', dbname = 'yb_storage', table_name = 'wals', sslmode = 'require'}"
 ```
 
@@ -483,6 +507,12 @@ safekeeper \
 `safekeeper.timeline_state` row (control file) and the `public.wals` chunk
 stream — same DB, two tables. `table_name` names the WAL chunk table;
 `safekeeper.timeline_state` is reached via the same `YsqlClient`.
+
+`--tenant-id`/`--timeline-id` bake this process's single timeline identity
+(required whenever `--wal-yb-config` is set) — the safekeeper's analogue of
+`pageserver.toml`'s identity keys. neon_local stamps them at provision time
+(`allocate_safekeeper_conf`). They scope the startup load to this one
+timeline and gate connections to it (see §5).
 
 `sslmode = "require"` is needed against YBA-managed universes (they
 default to TLS-mandatory `hostssl` rules). Add

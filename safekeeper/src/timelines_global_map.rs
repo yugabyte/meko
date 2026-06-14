@@ -31,20 +31,22 @@ enum GlobalMapTimeline {
 }
 
 struct GlobalTimelinesState {
-    timelines: HashMap<TenantTimelineId, GlobalMapTimeline>,
+    /// This process serves a single (tenant, timeline) (see
+    /// [`SafeKeeperConf::yb_ttid`]), so the registry is one slot, not a map.
+    timeline: Option<(TenantTimelineId, GlobalMapTimeline)>,
 
     /// A tombstone indicates this timeline used to exist has been deleted. These are used to prevent
     /// on-demand timeline creation from recreating deleted timelines. This is only soft-enforced, as
-    /// this map is dropped on restart.
+    /// this slot is dropped on restart.
     /// The timeline might also be locally deleted (excluded) via safekeeper migration algorithm. In that case,
     /// the tombsone contains the corresponding safekeeper generation. The pull_timeline requests with
     /// higher generation ignore such tombstones and can recreate the timeline.
-    timeline_tombstones: HashMap<TenantTimelineId, TimelineTombstone>,
+    timeline_tombstone: Option<(TenantTimelineId, TimelineTombstone)>,
     /// A tombstone indicates that the tenant used to exist has been deleted.
     /// These are created only by tenant_delete requests. They are always valid regardless of the
     /// request generation.
-    /// This is only soft-enforced, as this map is dropped on restart.
-    tenant_tombstones: HashMap<TenantId, Instant>,
+    /// This is only soft-enforced, as this slot is dropped on restart.
+    tenant_tombstone: Option<(TenantId, Instant)>,
 
     conf: Arc<SafeKeeperConf>,
     broker_active_set: Arc<TimelinesSet>,
@@ -67,10 +69,18 @@ impl GlobalTimelinesState {
         )
     }
 
+    /// Borrow the slot's entry if it is for `ttid`.
+    fn lookup(&self, ttid: &TenantTimelineId) -> Option<&GlobalMapTimeline> {
+        self.timeline
+            .as_ref()
+            .filter(|(k, _)| k == ttid)
+            .map(|(_, v)| v)
+    }
+
     /// Get timeline from the map. Returns error if timeline doesn't exist or
     /// creation is in progress.
     fn get(&self, ttid: &TenantTimelineId) -> Result<Arc<Timeline>, TimelineError> {
-        match self.timelines.get(ttid).cloned() {
+        match self.lookup(ttid).cloned() {
             Some(GlobalMapTimeline::Timeline(tli)) => Ok(tli),
             Some(GlobalMapTimeline::CreationInProgress) => {
                 Err(TimelineError::CreationInProgress(*ttid))
@@ -90,17 +100,22 @@ impl GlobalTimelinesState {
         ttid: &TenantTimelineId,
         generation: Option<SafekeeperGeneration>,
     ) -> bool {
+        let tombstone = self
+            .timeline_tombstone
+            .as_ref()
+            .filter(|(k, _)| k == ttid)
+            .map(|(_, t)| t);
         if let Some(generation) = generation {
-            self.timeline_tombstones
-                .get(ttid)
-                .is_some_and(|t| t.is_valid(generation))
+            tombstone.is_some_and(|t| t.is_valid(generation))
         } else {
-            self.timeline_tombstones.contains_key(ttid)
+            tombstone.is_some()
         }
     }
 
     fn has_tenant_tombstone(&self, tenant_id: &TenantId) -> bool {
-        self.tenant_tombstones.contains_key(tenant_id)
+        self.tenant_tombstone
+            .as_ref()
+            .is_some_and(|(k, _)| k == tenant_id)
     }
 
     /// Check if the state has a tenant or a timeline tombstone.
@@ -118,17 +133,27 @@ impl GlobalTimelinesState {
     /// Removes timeline tombstone for the given timeline ID.
     /// Returns `true` if there have been actual changes.
     fn remove_timeline_tombstone(&mut self, ttid: &TenantTimelineId) -> bool {
-        self.timeline_tombstones.remove(ttid).is_some()
+        if self
+            .timeline_tombstone
+            .as_ref()
+            .is_some_and(|(k, _)| k == ttid)
+        {
+            self.timeline_tombstone = None;
+            true
+        } else {
+            false
+        }
     }
 
     fn delete(&mut self, ttid: TenantTimelineId, generation: Option<SafekeeperGeneration>) {
-        self.timelines.remove(&ttid);
-        self.timeline_tombstones
-            .insert(ttid, TimelineTombstone::new(generation));
+        if self.timeline.as_ref().is_some_and(|(k, _)| *k == ttid) {
+            self.timeline = None;
+        }
+        self.timeline_tombstone = Some((ttid, TimelineTombstone::new(generation)));
     }
 
     fn add_tenant_tombstone(&mut self, tenant_id: TenantId) {
-        self.tenant_tombstones.insert(tenant_id, Instant::now());
+        self.tenant_tombstone = Some((tenant_id, Instant::now()));
     }
 }
 
@@ -142,9 +167,9 @@ impl GlobalTimelines {
     pub fn new(conf: Arc<SafeKeeperConf>, yb_wal: Option<Arc<YbWalConn>>) -> Self {
         Self {
             state: Mutex::new(GlobalTimelinesState {
-                timelines: HashMap::new(),
-                timeline_tombstones: HashMap::new(),
-                tenant_tombstones: HashMap::new(),
+                timeline: None,
+                timeline_tombstone: None,
+                tenant_tombstone: None,
                 conf,
                 broker_active_set: Arc::new(TimelinesSet::default()),
                 yb_wal,
@@ -157,21 +182,25 @@ impl GlobalTimelines {
     /// not on the local filesystem, so the on-disk workdir is only used
     /// for logs and tmp dirs and has no tenant subdirs to scan.
     pub async fn init(&self) -> Result<()> {
-        let yb_wal = {
+        let (yb_wal, ttid) = {
             let state = self.state.lock().unwrap();
-            state.yb_wal.clone()
+            (state.yb_wal.clone(), state.conf.yb_ttid()?)
         };
         let yb_wal = yb_wal.context("safekeeper init requires --wal-yb-config")?;
 
+        // `safekeeper.timeline_state` is shared across the whole cluster, so
+        // load ONLY our own timeline — never every row. Its row is absent on
+        // a fresh bootstrap (the timeline is created on demand by the first
+        // walproposer handshake); load it here only if it already exists.
         let ttids = control_file::YbControlFileStorage::list_all_ttids(&yb_wal.system_client)
             .await
             .context("enumerate safekeeper.timeline_state on init")?;
-        for ttid in ttids {
+        if ttids.contains(&ttid) {
             self.load_one_timeline(ttid).await;
         }
         info!(
             "loaded {} timelines from safekeeper.timeline_state",
-            self.state.lock().unwrap().timelines.len()
+            self.state.lock().unwrap().timeline.is_some() as usize
         );
         Ok(())
     }
@@ -187,11 +216,8 @@ impl GlobalTimelines {
         match Timeline::load_timeline(conf.clone(), ttid, yb_wal.clone()).await {
             Ok(tli) => {
                 let mut shared_state = tli.write_shared_state().await;
-                self.state
-                    .lock()
-                    .unwrap()
-                    .timelines
-                    .insert(ttid, GlobalMapTimeline::Timeline(tli.clone()));
+                self.state.lock().unwrap().timeline =
+                    Some((ttid, GlobalMapTimeline::Timeline(tli.clone())));
                 tli.bootstrap(&mut shared_state, &conf, broker_active_set, yb_wal);
             }
             Err(e) => error!("failed to load timeline {ttid}, reason: {e:?}"),
@@ -200,7 +226,7 @@ impl GlobalTimelines {
 
     /// Get the number of timelines in the map.
     pub fn timelines_count(&self) -> usize {
-        self.state.lock().unwrap().timelines.len()
+        self.state.lock().unwrap().timeline.is_some() as usize
     }
 
     /// Get the global safekeeper config.
@@ -276,7 +302,7 @@ impl GlobalTimelines {
         // Check for existence and mark that we're creating it.
         let (conf, broker_active_set, yb_wal) = {
             let mut state = self.state.lock().unwrap();
-            match state.timelines.get(&ttid) {
+            match state.lookup(&ttid) {
                 Some(GlobalMapTimeline::CreationInProgress) => {
                     bail!(TimelineError::CreationInProgress(ttid));
                 }
@@ -297,9 +323,7 @@ impl GlobalTimelines {
             // Remove it unconditionally.
             state.remove_timeline_tombstone(&ttid);
 
-            state
-                .timelines
-                .insert(ttid, GlobalMapTimeline::CreationInProgress);
+            state.timeline = Some((ttid, GlobalMapTimeline::CreationInProgress));
             state.get_dependencies()
         };
 
@@ -311,13 +335,11 @@ impl GlobalTimelines {
                 let mut timeline_shared_state = timeline.write_shared_state().await;
                 let mut state = self.state.lock().unwrap();
                 assert!(matches!(
-                    state.timelines.get(&ttid),
+                    state.lookup(&ttid),
                     Some(GlobalMapTimeline::CreationInProgress)
                 ));
 
-                state
-                    .timelines
-                    .insert(ttid, GlobalMapTimeline::Timeline(timeline.clone()));
+                state.timeline = Some((ttid, GlobalMapTimeline::Timeline(timeline.clone())));
                 drop(state);
                 timeline.bootstrap(&mut timeline_shared_state, &conf, broker_active_set, yb_wal);
                 drop(timeline_shared_state);
@@ -327,10 +349,10 @@ impl GlobalTimelines {
                 // Init failed, remove the marker from the map
                 let mut state = self.state.lock().unwrap();
                 assert!(matches!(
-                    state.timelines.get(&ttid),
+                    state.lookup(&ttid),
                     Some(GlobalMapTimeline::CreationInProgress)
                 ));
-                state.timelines.remove(&ttid);
+                state.timeline = None;
                 Err(e)
             }
         }
@@ -372,16 +394,10 @@ impl GlobalTimelines {
     pub fn get_all(&self) -> Vec<Arc<Timeline>> {
         let global_lock = self.state.lock().unwrap();
         global_lock
-            .timelines
-            .values()
-            .filter_map(|t| match t {
-                GlobalMapTimeline::Timeline(t) => {
-                    if t.is_cancelled() {
-                        None
-                    } else {
-                        Some(t.clone())
-                    }
-                }
+            .timeline
+            .iter()
+            .filter_map(|(_, t)| match t {
+                GlobalMapTimeline::Timeline(t) if !t.is_cancelled() => Some(t.clone()),
                 _ => None,
             })
             .collect()
@@ -391,9 +407,9 @@ impl GlobalTimelines {
     pub fn get_timeline_counts(&self) -> SafekeeperUtilization {
         let global_lock = self.state.lock().unwrap();
         let timeline_count = global_lock
-            .timelines
-            .values()
-            .filter(|t| match t {
+            .timeline
+            .iter()
+            .filter(|(_, t)| match t {
                 GlobalMapTimeline::CreationInProgress => false,
                 GlobalMapTimeline::Timeline(t) => !t.is_cancelled(),
             })
@@ -406,9 +422,9 @@ impl GlobalTimelines {
     fn get_all_for_tenant(&self, tenant_id: TenantId) -> Vec<Arc<Timeline>> {
         let global_lock = self.state.lock().unwrap();
         global_lock
-            .timelines
-            .values()
-            .filter_map(|t| match t {
+            .timeline
+            .iter()
+            .filter_map(|(_, t)| match t {
                 GlobalMapTimeline::Timeline(t) => Some(t.clone()),
                 _ => None,
             })
@@ -522,12 +538,20 @@ impl GlobalTimelines {
         // timelines.  If a compute kept running for longer than this TTL (or across a safekeeper restart) then they
         // may recreate a deleted timeline.
         let now = Instant::now();
-        state
-            .timeline_tombstones
-            .retain(|_, v| now.duration_since(v.timestamp) < *tombstone_ttl);
-        state
-            .tenant_tombstones
-            .retain(|_, v| now.duration_since(*v) < *tombstone_ttl);
+        if state
+            .timeline_tombstone
+            .as_ref()
+            .is_some_and(|(_, v)| now.duration_since(v.timestamp) >= *tombstone_ttl)
+        {
+            state.timeline_tombstone = None;
+        }
+        if state
+            .tenant_tombstone
+            .as_ref()
+            .is_some_and(|(_, v)| now.duration_since(*v) >= *tombstone_ttl)
+        {
+            state.tenant_tombstone = None;
+        }
     }
 
     pub fn get_sk_id(&self) -> NodeId {

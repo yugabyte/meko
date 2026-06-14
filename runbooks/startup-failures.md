@@ -55,6 +55,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SC node list empty after PS starts; PS log `register: None` | PS didn't auto-register | **E** |
 | PS exits at startup: `pageserver.toml must set tenant_id/timeline_id/generation` | single-timeline identity missing — launcher hasn't assigned one (run `tenant create`, or write the identity + `[timeline_init]` into pageserver.toml) | — |
 | PS exits at startup: `timeline … has no timeline_state row and no [timeline_init]` | row missing and no creation mode configured (wiped YB DB, or toml written without `[timeline_init]`) | — |
+| SK exits at startup: `YB-WAL mode requires --tenant-id and --timeline-id` | single-timeline identity missing — the SK serves one timeline and scopes its load to it. Provisioned SKs get the pair from `allocate_safekeeper_conf`; a hand-written start script must pass both `--tenant-id`/`--timeline-id` alongside `--wal-yb-config` | — |
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |
 | psql: `libreadline.so.7: cannot open shared object file` | bundle psql wants older readline | **G** |
 | Compute postmaster dies with `EADDRINUSE` on its own port | yb_light_local port collision | **H** |

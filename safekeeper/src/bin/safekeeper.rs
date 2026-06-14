@@ -30,7 +30,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinError;
 use tracing::*;
 use utils::auth::{JwtAuth, Scope, SwappableJwtAuth};
-use utils::id::NodeId;
+use utils::id::{NodeId, TenantId, TimelineId};
 use utils::logging::{self, LogFormat, SecretString};
 use utils::metrics_collector::{METRICS_COLLECTION_INTERVAL, METRICS_COLLECTOR};
 use utils::{pid_file, project_build_tag, project_git_version, tcp_listener};
@@ -131,6 +131,15 @@ struct Args {
     /// being written to local FS. Reads still use local FS (Phase 1).
     #[arg(long, value_parser = parse_yb_store_config, verbatim_doc_comment)]
     wal_yb_config: Option<remote_storage::YbStoreConfig>,
+    /// The single (tenant_id, timeline_id) this safekeeper process serves
+    /// for its lifetime. Required in YB-WAL mode: `safekeeper.timeline_state`
+    /// is shared across the cluster, so the process scopes its load and
+    /// rejects connections for any other timeline by this baked identity.
+    #[arg(long)]
+    tenant_id: Option<TenantId>,
+    /// See `--tenant-id`.
+    #[arg(long)]
+    timeline_id: Option<TimelineId>,
     /// Capacity (MiB) of the in-memory cache of recent WAL chunks used
     /// in YB-WAL mode. Ignored when `--wal-yb-config` is not set.
     /// Set to 0 to disable the cache. When omitted, derives from
@@ -377,6 +386,8 @@ async fn main() -> anyhow::Result<()> {
         availability_zone: args.availability_zone,
         heartbeat_timeout: args.heartbeat_timeout,
         wal_yb_config: args.wal_yb_config,
+        tenant_id: args.tenant_id,
+        timeline_id: args.timeline_id,
         wal_cache_size_mib: args.wal_cache_size_mib.unwrap_or_else(|| {
             safekeeper::scale_count(
                 safekeeper::defaults::DEFAULT_WAL_CACHE_SIZE_MIB,

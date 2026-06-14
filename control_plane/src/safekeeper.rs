@@ -176,6 +176,16 @@ impl SafekeeperNode {
             args.extend(["--wal-yb-config".to_owned(), wal_yb.clone()]);
         }
 
+        // Bake this safekeeper's single (tenant, timeline) identity so it
+        // scopes its startup load and gates connections (single-timeline
+        // per process). Always set on a provisioned safekeeper.
+        if let Some(tenant_id) = self.conf.tenant_id {
+            args.extend(["--tenant-id".to_owned(), tenant_id.to_string()]);
+        }
+        if let Some(timeline_id) = self.conf.timeline_id {
+            args.extend(["--timeline-id".to_owned(), timeline_id.to_string()]);
+        }
+
         if let Some(size) = self.conf.wal_cache_size_mib {
             args.extend(["--wal-cache-size-mib".to_owned(), size.to_string()]);
         }

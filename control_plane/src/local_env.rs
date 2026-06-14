@@ -393,9 +393,12 @@ pub struct SafekeeperConf {
     /// `wal_yb_config`. `Some(0)` disables the cache; `None` lets the
     /// safekeeper apply its built-in default.
     pub wal_cache_size_mib: Option<u32>,
-    /// The timeline this safekeeper is dedicated to (per-endpoint
-    /// safekeeper topology). `None` for the legacy/main safekeeper
-    /// that serves the initial timeline.
+    /// The (tenant, timeline) this safekeeper is dedicated to (per-endpoint
+    /// safekeeper topology). Passed to the process as
+    /// `--tenant-id`/`--timeline-id` so it scopes its startup load and gates
+    /// connections to a single timeline. `None` on the init-time template;
+    /// always set on a provisioned safekeeper (see `allocate_safekeeper_conf`).
+    pub tenant_id: Option<TenantId>,
     pub timeline_id: Option<TimelineId>,
     /// The endpoint whose folder holds this safekeeper's datadir
     /// (`endpoints/<endpoint_id>/safekeeper`). Empty for an init-time
@@ -417,6 +420,7 @@ impl Default for SafekeeperConf {
             listen_addr: None,
             wal_yb_config: None,
             wal_cache_size_mib: None,
+            tenant_id: None,
             timeline_id: None,
             endpoint_id: String::new(),
         }
