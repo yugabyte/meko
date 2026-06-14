@@ -470,7 +470,6 @@ impl SafekeeperPostgresHandler {
                 WalSenderState::Interpreted(InterpretedWalSenderInternalState {
                     public_state: safekeeper_api::models::InterpretedWalSenderState {
                         ttid: self.ttid,
-                        shard: self.shard.unwrap(),
                         addr: *pgb.get_peer_addr(),
                         conn_id: self.conn_id,
                         appname: self.appname.clone(),
@@ -528,9 +527,8 @@ impl SafekeeperPostgresHandler {
                 let end_watch_view = end_watch.view();
                 let wal_residence_guard = tli.wal_residence_guard().await?;
                 let (tx, rx) = tokio::sync::mpsc::channel::<Batch>(2);
-                let shard = self.shard.unwrap();
 
-                if self.conf.wal_reader_fanout && !shard.is_unsharded() {
+                if self.conf.wal_reader_fanout {
                     let ws_id = ws_guard.id();
                     ws_guard.walsenders().create_or_update_interpreted_reader(
                         ws_id,
@@ -802,7 +800,6 @@ mod tests {
         let walsender_state = WalSenderState::Interpreted(InterpretedWalSenderInternalState {
             public_state: safekeeper_api::models::InterpretedWalSenderState {
                 ttid: mock_ttid(),
-                shard: pageserver_api::models::ShardIdentity::unsharded(),
                 addr: mock_addr(),
                 conn_id: 1,
                 appname: None,

@@ -2,7 +2,6 @@
 
 use std::net::SocketAddr;
 
-use pageserver_api::models::ShardIdentity;
 use postgres_ffi_types::TimestampTz;
 use postgres_versioninfo::PgVersionId;
 use serde::{Deserialize, Serialize};
@@ -160,7 +159,6 @@ pub enum WalSenderState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterpretedWalSenderState {
     pub ttid: TenantTimelineId,
-    pub shard: ShardIdentity,
     pub addr: SocketAddr,
     pub conn_id: ConnectionId,
     // postgres application_name
