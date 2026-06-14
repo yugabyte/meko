@@ -558,7 +558,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Tenants { node_id: None } => {
             // Set up output formatting
             let mut table = comfy_table::Table::new();
-            table.set_header(["TenantId", "ShardCount", "Placement", "Scheduling"]);
+            table.set_header(["TenantId", "Placement", "Scheduling"]);
 
             // Pagination loop over listing API
             let mut start_after = None;
@@ -592,8 +592,6 @@ async fn main() -> anyhow::Result<()> {
                     let shard_zero = tenant.shards.into_iter().next().unwrap();
                     table.add_row([
                         format!("{}", tenant.tenant_id),
-                        // yb-mode: always single-shard (count = 1).
-                        "1".to_string(),
                         format!("{:?}", tenant.policy),
                         format!("{:?}", shard_zero.scheduling_policy),
                     ]);
