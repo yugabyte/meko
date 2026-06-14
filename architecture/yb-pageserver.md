@@ -168,8 +168,7 @@ The refactor deleted the entire layer-file machinery (~25 K lines:
 `inmemory_layer`, `remote_timeline_client`, `secondary*`, `heatmap*`,
 `eviction_task*`). What stayed — because it isn't
 storage-implementation-specific — is:
-- `pageserver_api` (Key, Lsn, configs, shard identity, controller
-  protocol)
+- `pageserver_api` (Key, Lsn, configs, controller protocol)
 - `pageserver_client`, `pageserver_client_grpc`,
   `pageserver_page_api` (sibling crates now living at `pageserver/{client,client_grpc,page_api}/`)
 - `wal_decoder` (Value, NeonWalRecord)

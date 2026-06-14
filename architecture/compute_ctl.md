@@ -248,8 +248,9 @@ touched the crate are fork-wide mechanical refactors, not behavior changes:
 
 - the `neon_local` → `yb_light_local` / `cargo neon` → `cargo yb_light` rename;
 - removal of the "Hadron" code;
-- the `TenantShardId` → `TenantId` collapse and shard-module fold (yb-light is
-  one-shard-per-timeline);
+- the removal of sharding entirely (the `ShardIdentity` / `ShardIndex` /
+  `ShardCount` / … types and `TenantShardId` are gone; a `TenantId` identifies a
+  tenant directly — yb-light is single-shard);
 - the strip of S3/Azure/GCS backends from `libs/remote_storage`.
 
 `compute_ctl` does not know YugabyteDB exists, by design (mirroring

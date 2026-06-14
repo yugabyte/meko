@@ -151,8 +151,9 @@ yb-light binaries (target/debug/)
     +-- postgres (v17.5 + Neon patches)  :55440
 ```
 
-A production deployment would have M pageservers sharded by tenant and a
-YB cluster that's actually distributed. **The safekeeper count stays at 1**
+A production deployment would have M pageservers partitioned by tenant
+(one tenant per pageserver — yb-light has no sharding) and a YB cluster
+that's actually distributed. **The safekeeper count stays at 1**
 when `--wal-yb-config` is set — YB already provides the quorum durability
 that a multi-safekeeper Raft would. Running two protocols (YB's Raft + the
 safekeeper's Paxos) on top of each other is rejected at boot and at
