@@ -1451,13 +1451,16 @@ impl Timeline {
         Ok(())
     }
 
-    /// Persist the durable `consistent_lsn` up to whatever the last flush
-    /// made durable, **bypassing the periodic UPDATE throttle**. The normal
-    /// `flush()` only writes the `timeline_state` row once per `max_age`; this
-    /// forces it through immediately. Used by the branch-time flush endpoint
-    /// so a freshly-branching descendant sees the ancestor's advance at once
-    /// instead of waiting out the throttle window.
-    pub(crate) async fn force_advance_consistent_lsn(&self) -> Result<(), FlushLayerError> {
+    /// [`Self::flush`] the row buffer to YB **and** force the durable
+    /// `consistent_lsn` UPDATE through immediately, bypassing the per-`max_age`
+    /// upsert throttle that `flush()` alone is subject to. Use when the
+    /// persisted `disk_consistent_lsn` must reflect everything just flushed
+    /// right away: graceful shutdown (so the next attach doesn't redo WAL) and
+    /// the branch-time flush endpoint (so a freshly-branching descendant sees
+    /// the ancestor's advance at once). The throttled periodic flush and the
+    /// create-time `flush()` deliberately don't force.
+    pub(crate) async fn force_flush(&self) -> Result<(), FlushLayerError> {
+        self.flush().await?;
         if let Some(pw) = &self.page_writer {
             pw.force_upsert_consistent_lsn_if_advanced()
                 .await
@@ -1589,19 +1592,13 @@ impl Timeline {
                 .load(std::sync::atomic::Ordering::Relaxed);
 
             if do_flush {
-                match self.flush().await {
-                    Ok(_) => {
-                        // Pages are durable in YB. Force the durable
-                        // `consistent_lsn` UPDATE through too, bypassing the
-                        // per-`max_age` upsert throttle — otherwise a clean
-                        // shutdown could leave the persisted
-                        // `disk_consistent_lsn` up to one throttle window
-                        // behind what's actually durable, costing extra WAL
-                        // replay (and log noise) on the next attach.
-                        if let Err(e) = self.force_advance_consistent_lsn().await {
-                            warn!("failed to force-advance consistent_lsn on shutdown: {e:#}");
-                        }
-                    }
+                // `force_flush` (not plain `flush`) so the persisted
+                // `disk_consistent_lsn` reflects everything just drained —
+                // otherwise a clean shutdown could leave it up to one upsert
+                // throttle window behind, costing extra WAL replay (and log
+                // noise) on the next attach.
+                match self.force_flush().await {
+                    Ok(_) => {}
                     Err(FlushLayerError::Cancelled) => {
                         debug_assert!(self.cancel.is_cancelled());
                     }

@@ -162,9 +162,10 @@ The bookkeeping atomics in `PageWriter` track the two halves:
   which is throttled to one per `max_age`).
 
 `observed ≥ watermark` always; the gap is recovered on clean
-shutdown by `force_upsert_consistent_lsn_if_advanced` — called both by
-`Timeline::shutdown`'s `Flush` mode (right after the final `flush()`) and
-by the `PageWriter` flusher task's final pass.
+shutdown by `force_upsert_consistent_lsn_if_advanced` — invoked via
+`Timeline::force_flush` (which `Timeline::shutdown`'s `Flush` mode and the
+branch-time flush endpoint use instead of plain `flush`), and by the
+`PageWriter` flusher task's final pass.
 
 **Used for:**
 - SK feedback fields: `disk_consistent_lsn` AND `remote_consistent_lsn`

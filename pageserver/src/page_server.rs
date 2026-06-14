@@ -32,7 +32,7 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::crashsafe::path_with_suffix_extension;
-use utils::sync::gate::{Gate, GateGuard};
+use utils::sync::gate::Gate;
 use utils::zstd::{create_zst_tarball, extract_zst_tarball};
 use utils::{backoff, failpoint_support, fs_ext, pausable_failpoint};
 
@@ -1928,41 +1928,6 @@ impl PageServer {
         Ok(create_guard)
     }
 
-    /// Flush any in-progress layers, schedule uploads, and wait for uploads to complete.
-    ///
-    /// This function can take a long time: callers should wrap it in a timeout if calling
-    /// from an external API handler.
-    ///
-    /// Cancel-safety: cancelling this function may leave I/O running, but such I/O is
-    /// still bounded by tenant/timeline shutdown.
-    #[tracing::instrument(skip_all)]
-    pub(crate) async fn flush_remote(&self) -> anyhow::Result<()> {
-        async fn flush_timeline(_gate: GateGuard, timeline: Arc<Timeline>) -> anyhow::Result<()> {
-            tracing::info!(timeline_id=%timeline.timeline_id, "Flushing...");
-            timeline.flush().await?;
-            // yb-mode: no asynchronous uploads to wait on; flush is
-            // synchronous against YB.
-            Ok(())
-        }
-
-        let Some(timeline) = self.timeline() else {
-            return Ok(());
-        };
-        // Run the flush in a task holding the timeline's gate: this
-        // means that if this function's future is cancelled, the Timeline shutdown
-        // will still wait for any I/O in here to complete.
-        let Ok(gate) = timeline.gate.enter() else {
-            return Ok(());
-        };
-        let jh = tokio::task::spawn(async move { flush_timeline(gate, timeline).await });
-        if let Err(e) = jh.await {
-            if !e.is_cancelled() && !e.is_panic() {
-                tracing::error!("unexpected join error: {e:?}");
-            }
-        }
-
-        Ok(())
-    }
 
     /// How much local disk space the timeline wants (initdb tarballs and
     /// basebackup cache only in yb-mode — page data lives in YB).
