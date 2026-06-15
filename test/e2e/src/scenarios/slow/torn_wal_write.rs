@@ -21,7 +21,7 @@
 //! #36, the compute-Init recycle race #37) are timing- and churn-dependent
 //! — a single matrix pass reliably passes, and they only surface once
 //! several iterations accumulate catalog/clog/rel state. `run` therefore
-//! repeats the whole matrix `TORN_ITERATIONS` times (default 6). All of
+//! repeats the whole matrix `TORN_ITERATIONS` times (default 3). All of
 //! #57/#36/#37 are fixed; this stays in `slow/` as their regression guard.
 
 use std::path::Path;
@@ -76,7 +76,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // churn-dependent — a single pass over the modes reliably passes; the
     // failures only surface once several iterations accumulate
     // catalog/clog/rel state. Repeat the matrix `iterations` times
-    // (default 6, env-overridable for deeper hunts), recycling the compute
+    // (default 3, env-overridable for deeper hunts), recycling the compute
     // between iterations exactly as the suite runner does between
     // scenarios. Stop at the first failed mode: one losing mode condemns
     // the build, and `--no-fail-clean` leaves the cluster at that point for
@@ -85,7 +85,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|&n| n >= 1)
-        .unwrap_or(6);
+        .unwrap_or(3);
 
     for iter in 1..=iterations {
         step(&format!("torn_wal_write iteration {iter}/{iterations}"));

@@ -16,8 +16,34 @@ use regex::Regex;
 
 static RUN_LOG: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
 
+/// Wall-clock instant of the last harness progress signal. The
+/// `run_scenario` watchdog treats a wedge as *no progress for `budget`*,
+/// not *total runtime exceeds `budget`* — so a legitimately long scenario
+/// (e.g. `torn_wal_write`'s full 6×7 crash matrix, which makes steady,
+/// corruption-free progress over several minutes) isn't failed just for
+/// taking a while, while a genuine hang (no step/output at all) still
+/// trips fast. Every [`tee_line`] (step banners, PASS lines, scenario
+/// `tee_println!`s) counts as progress.
+static LAST_PROGRESS: OnceLock<Mutex<Instant>> = OnceLock::new();
+
+fn progress_cell() -> &'static Mutex<Instant> {
+    LAST_PROGRESS.get_or_init(|| Mutex::new(Instant::now()))
+}
+
+/// Record forward progress now. Called from [`tee_line`]; also call
+/// directly to reset the wedge clock at a scenario boundary.
+pub fn mark_progress() {
+    *progress_cell().lock().unwrap() = Instant::now();
+}
+
+/// Time since the last [`mark_progress`].
+fn since_progress() -> Duration {
+    progress_cell().lock().unwrap().elapsed()
+}
+
 /// Write `s` to stdout and, if initialized, to the run log file.
 pub fn tee_line(s: &str) {
+    mark_progress();
     println!("{s}");
     if let Some(f) = RUN_LOG.get() {
         let _ = writeln!(f.lock().unwrap(), "{s}");
@@ -402,19 +428,36 @@ impl Cluster {
         // Run the scenario, but fail FAST if the cluster wedges: a
         // watchdog polls every cluster log for a fatal marker (e.g. the
         // safekeeper WAL-decode panic, #61) that would otherwise leave the
-        // test hung in `wait_lsn`, and a wall-clock backstop catches any
-        // other stall. Either beats waiting out a silent hang.
+        // test hung in `wait_lsn`, and a no-progress backstop catches any
+        // other silent stall. Either beats waiting out a silent hang.
+        //
+        // The backstop measures time since the last harness output, NOT
+        // total scenario runtime: a multi-iteration scenario like
+        // `torn_wal_write` legitimately runs for several minutes, emitting
+        // a step banner every few seconds while it crashes/recovers the
+        // cluster ~dozens of times. Capping *total* runtime here failed
+        // that scenario for merely being long (#71) even though it was
+        // making steady, corruption-free progress; capping *quiet time*
+        // still trips a real wedge (no step/output) within `budget`.
         let budget = Duration::from_secs(
             env_or(&["E2E_TEST_TIMEOUT"], "180").parse().unwrap_or(180),
         );
+        mark_progress();
         tokio::select! {
             r = fut => r?,
             hit = self.watch_fatal() => {
                 bail!("{label}: fatal marker in a cluster log while running (cluster wedged): {hit}");
             }
-            _ = tokio::time::sleep(budget) => {
+            _ = async {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    if since_progress() >= budget {
+                        return;
+                    }
+                }
+            } => {
                 bail!(
-                    "{label}: timed out after {}s with no fatal marker — cluster wedged; logs under {}",
+                    "{label}: no progress for {}s with no fatal marker — cluster wedged; logs under {}",
                     budget.as_secs(),
                     self.repo_dir.display()
                 );
