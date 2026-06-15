@@ -75,18 +75,37 @@ for arg in "$@"; do
     esac
 done
 
-# Build the harness and the cluster binary it drives. Debug by default
-# (per project convention for the dev/e2e loop); --release for release
+# Build the harness and every binary it drives. Debug by default (per
+# project convention for the dev/e2e loop); --release for release
 # verification.
+#
+# `yb_light_local` launches the cluster by spawning the server binaries
+# from target/<profile>/ at runtime — it does not build them — so they
+# must be compiled here too. Omitting one silently runs a STALE binary
+# from a previous build, which surfaces as baffling runtime mismatches
+# (e.g. a fresh launcher sending a request shape an old storage_controller
+# can't parse). Keep this list in sync with the binaries `yb_light_local`
+# spawns: storage_controller, yb-pageserver, safekeeper, endpoint_storage,
+# compute_ctl.
+#
 # The diagnostic tools are compiled bins too; the `tools` scenario shells
 # out to them, so build them in the same step.
+CLUSTER_BINS=(
+    --bin storage_controller
+    --bin yb-pageserver
+    --bin safekeeper
+    --bin endpoint_storage
+    --bin compute_ctl
+)
 TOOL_BINS=(--bin yb-dump-pages --bin yb-dump-wals --bin yb-reset-consistent-lsn)
 if [[ $PROFILE == release ]]; then
-    cargo build --release --bin e2e_tests --bin yb_light_local "${TOOL_BINS[@]}"
+    cargo build --release --bin e2e_tests --bin yb_light_local \
+        "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
     export YB_LIGHT=${YB_LIGHT:-$REPO/target/release/yb_light_local}
     BIN=$REPO/target/release/e2e_tests
 else
-    cargo build --bin e2e_tests --bin yb_light_local "${TOOL_BINS[@]}"
+    cargo build --bin e2e_tests --bin yb_light_local \
+        "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
     BIN=$REPO/target/debug/e2e_tests
 fi
 

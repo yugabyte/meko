@@ -20,9 +20,13 @@ test/e2e/run.sh -h              # full help
 ```
 
 `run.sh` is a thin wrapper: it `cargo build`s the harness +
-`yb_light_local` (incremental — a no-op when nothing changed), then
-execs the harness. Default builds are debug; `--release` builds and runs
-the release binaries.
+`yb_light_local` + every cluster server binary `yb_light_local` spawns
+(`storage_controller`, `yb-pageserver`, `safekeeper`, `endpoint_storage`,
+`compute_ctl`) + the diagnostic tools (incremental — a no-op when nothing
+changed), then execs the harness. Building the server binaries here is
+essential: `yb_light_local` launches them from `target/<profile>/` at
+runtime without rebuilding, so a missing one silently runs a stale binary.
+Default builds are debug; `--release` builds and runs the release binaries.
 
 - **`-n <count>`** repeats the selection and prints a cumulative
   `passed / failed` count. It runs *all* selected tests each iteration
