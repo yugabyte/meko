@@ -283,12 +283,8 @@ CREATE TABLE endpoint (
 
     -- Access to the endpoint
     address         TEXT,
-
-    -- Cert info as this needs rotation every 24~ hours
-    tls_cert_ref    text,
-    cert_issuer     text,
-    cert_expiry     timestamptz,
-    cert_rotation_state text,                  -- so cert rotation can run as a task
+    
+    config          jsonb, -- The config used to create an endpoint
 
     FOREIGN KEY (tenant_id, timeline_id)       -- tenant-scoped binding
         REFERENCES pg_cluster (tenant_id, timeline_id)
