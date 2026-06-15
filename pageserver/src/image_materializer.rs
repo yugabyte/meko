@@ -37,7 +37,7 @@ use utils::id::{TenantId, TimelineId};
 use utils::lsn::Lsn;
 use wal_decoder::models::record::NeonWalRecord;
 
-use crate::page_store::{PageRow, PageStore};
+use crate::page_store::{PageRow, PageStore, SlruPageRow};
 use crate::page_writer::{MaterializeJob, PageWriter};
 use crate::page_server::WalRedoManager;
 use crate::walredo::RedoAttemptType;
@@ -459,19 +459,53 @@ impl ImageMaterializer {
         // the whole thing typically lands in a single chunk; if it
         // overflows, put_pages's `buffer_unordered(4)` pipelines the
         // chunks on the dedicated connection.
+        // Route images by key type: rel images go to `pages` and are
+        // installed into the in-RAM UnifiedPages cache; SLRU images go to
+        // `slru_pages` and need no cache install — there is no long-lived
+        // in-RAM SLRU read cache, and the `is_image` row anchors
+        // subsequent `read_slru_chain` reads on its own.
+        let (slru_images, rel_images): (Vec<std::sync::Arc<PageRow>>, Vec<std::sync::Arc<PageRow>>) =
+            images
+                .iter()
+                .cloned()
+                .partition(|img| img.key.is_slru_block_key());
+
         let t_insert_start = std::time::Instant::now();
-        self.fpu_page_store
-            .put_pages(self.tenant_id, self.timeline_id, &images)
-            .await
-            .context("put_pages")?;
+        if !rel_images.is_empty() {
+            self.fpu_page_store
+                .put_pages(self.tenant_id, self.timeline_id, &rel_images)
+                .await
+                .context("put_pages")?;
+        }
+        if !slru_images.is_empty() {
+            let slru_rows = slru_images
+                .iter()
+                .map(|img| {
+                    let (kind, segno, blknum) = img.key.to_slru_block()?;
+                    Ok(SlruPageRow {
+                        kind,
+                        segno,
+                        blknum,
+                        lsn: img.lsn,
+                        is_image: img.is_image,
+                        will_init: img.will_init,
+                        payload: img.payload.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            self.fpu_page_store
+                .put_slru_pages(self.tenant_id, self.timeline_id, &slru_rows)
+                .await
+                .context("put_slru_pages")?;
+        }
         let t_insert = t_insert_start.elapsed();
 
-        // Install each image into the cache (one writer lock per
-        // image — short and bounded; we don't merge them into one
-        // critical section because that would block reads for the
-        // whole batch's worth of trim/push work).
+        // Install rel images into the cache (one writer lock per image —
+        // short and bounded; we don't merge them into one critical section
+        // because that would block reads for the whole batch's worth of
+        // trim/push work). SLRU images have no cache to install into.
         let t_install_start = std::time::Instant::now();
-        for image_row in &images {
+        for image_row in &rel_images {
             self.page_writer
                 .install_materialized_image(image_row.clone())
                 .await;
@@ -519,21 +553,71 @@ impl ImageMaterializer {
         // than aborting (the `Err` arm in the batch loop is reserved for
         // walredo failures, which fatal-abort). The deltas stay in
         // place; reads still serve them, and a later trigger retries.
-        let chain = match self
-            .page_writer
-            .read_chain_durable(job.key, job.target_lsn)
-            .await
-        {
-            Ok(chain) => chain,
-            Err(e) => {
-                tracing::error!(
-                    tenant_id = %self.tenant_id,
-                    timeline_id = %self.timeline_id,
-                    target_lsn = %job.target_lsn,
-                    key = %job.key,
-                    "read_chain_durable failed; skipping materialise of this page: {e:#}"
-                );
-                return Ok(None);
+        let chain = if job.key.is_slru_block_key() {
+            // SLRU (clog/multixact): the chain lives in `slru_pages`, not
+            // the rel `pages` table, so read it via the SLRU path and map
+            // into the uniform PageRow shape walredo + commit expect. Own
+            // timeline only — materialise never collapses ancestor deltas,
+            // and the deltas we're folding were written to this timeline.
+            let (kind, segno, blknum) = match job.key.to_slru_block() {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::error!(key = %job.key, "bad SLRU key in materialise job: {e:#}");
+                    return Ok(None);
+                }
+            };
+            match self
+                .fpu_page_store
+                .read_slru_chain(
+                    self.tenant_id,
+                    self.timeline_id,
+                    kind,
+                    segno,
+                    blknum,
+                    job.target_lsn,
+                )
+                .await
+            {
+                Ok(rows) => rows
+                    .into_iter()
+                    .map(|r| {
+                        std::sync::Arc::new(PageRow {
+                            key: job.key.clone(),
+                            lsn: r.lsn,
+                            is_image: r.is_image,
+                            will_init: r.will_init,
+                            payload: r.payload,
+                        })
+                    })
+                    .collect(),
+                Err(e) => {
+                    tracing::error!(
+                        tenant_id = %self.tenant_id,
+                        timeline_id = %self.timeline_id,
+                        target_lsn = %job.target_lsn,
+                        key = %job.key,
+                        "read_slru_chain failed; skipping materialise of this page: {e:#}"
+                    );
+                    return Ok(None);
+                }
+            }
+        } else {
+            match self
+                .page_writer
+                .read_chain_durable(job.key, job.target_lsn)
+                .await
+            {
+                Ok(chain) => chain,
+                Err(e) => {
+                    tracing::error!(
+                        tenant_id = %self.tenant_id,
+                        timeline_id = %self.timeline_id,
+                        target_lsn = %job.target_lsn,
+                        key = %job.key,
+                        "read_chain_durable failed; skipping materialise of this page: {e:#}"
+                    );
+                    return Ok(None);
+                }
             }
         };
         tracing::debug!(

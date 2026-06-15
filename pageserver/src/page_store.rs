@@ -1234,9 +1234,9 @@ impl PageStore {
                          WHERE a.tenant_id=$1 AND a.timeline_id=$2 AND a.kind=$3 AND a.segno=$4 \
                            AND a.blknum = b.blknum AND a.is_image=TRUE AND a.lsn <= $7 \
                          ORDER BY a.lsn DESC LIMIT 1), 0) \
-                 ORDER BY p.lsn DESC \
+                 ORDER BY p.lsn DESC, p.is_image DESC \
              ) p \
-             ORDER BY p.blknum, p.lsn DESC",
+             ORDER BY p.blknum, p.lsn DESC, p.is_image DESC",
             schema = self.schema
         );
         let rows = self

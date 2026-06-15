@@ -104,6 +104,10 @@ pub struct MaterializeJob {
 #[derive(Clone)]
 pub struct MaterializerHandle {
     pub count_limit: u32,
+    /// Per-key delta threshold for SLRU (clog/multixact) block keys.
+    /// SLRU keys ignore `count_limit`/`payload_bytes_limit` and use this
+    /// instead — see `YbPageWriterConfig::image_chain_limit_slru`.
+    pub slru_count_limit: u32,
     pub payload_bytes_limit: u32,
     pub tx: tokio::sync::mpsc::Sender<MaterializeJob>,
     /// Keys with a job currently queued or being processed. The write
@@ -603,7 +607,7 @@ impl PageWriter {
         // advances `flush_horizon_lsn`), not from this put loop. That
         // way every job's `target_lsn` is durable by construction —
         // see `flush()` for the trigger site.
-        let limits = self
+        let rel_limits = self
             .materializer
             .as_ref()
             .map(|m| (m.count_limit, m.payload_bytes_limit))
@@ -617,32 +621,41 @@ impl PageWriter {
             pageserver_api::write_trace::trace_stage("put", &key, lsn);
             self.pages.push(row);
             self.rows_written.fetch_add(1, Ordering::Relaxed);
-
-            if resets_chain {
-                // Anchor resets the chain: the key no longer needs
-                // materializing. Drop it from both the tally map and the
-                // ready set.
-                self.delta_counts.remove(&key);
-                self.delta_ready.remove(&key);
-            } else if let Some((count_limit, payload_bytes_limit)) = limits {
-                let crossed = {
-                    let mut tally = self.delta_counts.entry(key.clone()).or_default();
-                    let was_hit = tally.hits(count_limit, payload_bytes_limit);
-                    tally.count = tally.count.saturating_add(1);
-                    tally.payload_bytes = tally.payload_bytes.saturating_add(payload_len);
-                    if lsn > tally.last_lsn {
-                        tally.last_lsn = lsn;
-                    }
-                    // Crossed iff this put pushed the tally from below the
-                    // threshold to at/above it — record once per crossing so
-                    // the flush trigger can find this key without sweeping the
-                    // whole map. (Shard guard drops here, before the ready-set
-                    // insert: shard lock → DashSet, never nested.)
-                    tally.hits(count_limit, payload_bytes_limit) && !was_hit
-                };
-                if crossed {
-                    self.delta_ready.insert(key);
+            if let Some((count_limit, payload_bytes_limit)) = rel_limits {
+                self.record_delta_for_materialize(
+                    &key,
+                    lsn,
+                    resets_chain,
+                    payload_len,
+                    count_limit,
+                    payload_bytes_limit,
+                );
+            }
+        }
+        // SLRU (clog/multixact) rows feed the *same* materialise trigger,
+        // but with the dedicated SLRU threshold. The clog page takes one
+        // tiny delta per transaction commit, so without this its chain
+        // grows to a full page (~32 K deltas) and every basebackup
+        // re-walks it to rebuild the page (the slow phase we observed).
+        // The payload trigger is disabled — clog deltas are a couple of
+        // bytes. Tallied straight off `entries` because the built
+        // `slru_rows` drop the `Key`; `will_init` mirrors
+        // `build_slru_page_row` (image / ZEROPAGE anchors the chain).
+        if let Some(slru_count_limit) = self
+            .materializer
+            .as_ref()
+            .map(|m| m.slru_count_limit)
+            .filter(|&c| c > 0)
+        {
+            for (key, lsn, value) in entries {
+                if !key.is_slru_block_key() {
+                    continue;
                 }
+                let resets_chain = match value {
+                    Value::Image(_) => true,
+                    Value::WalRecord(rec) => rec.will_init(),
+                };
+                self.record_delta_for_materialize(key, *lsn, resets_chain, 0, slru_count_limit, 0);
             }
         }
         // Aux (slru + meta) buffers under one small mutex. Holds
@@ -744,6 +757,57 @@ impl PageWriter {
         }
     }
 
+    /// Per-key materialise thresholds. SLRU (clog/multixact) block keys
+    /// use the dedicated `slru_count_limit` with the payload trigger
+    /// disabled (clog deltas are tiny); every other key uses the
+    /// relation-page count + payload limits.
+    fn materialize_limits(m: &MaterializerHandle, key: &Key) -> (u32, u32) {
+        if key.is_slru_block_key() {
+            (m.slru_count_limit, 0)
+        } else {
+            (m.count_limit, m.payload_bytes_limit)
+        }
+    }
+
+    /// Advance the per-key delta tally and record a threshold crossing in
+    /// `delta_ready`. An anchor (`resets_chain` — image or `will_init`)
+    /// drops the key instead, since its chain no longer needs collapsing.
+    /// Shared by the rel and SLRU put paths so both stay in lock-step with
+    /// `collect_cold_residue_jobs`'s re-check.
+    fn record_delta_for_materialize(
+        &self,
+        key: &Key,
+        lsn: Lsn,
+        resets_chain: bool,
+        payload_len: u32,
+        count_limit: u32,
+        payload_bytes_limit: u32,
+    ) {
+        if resets_chain {
+            self.delta_counts.remove(key);
+            self.delta_ready.remove(key);
+            return;
+        }
+        let crossed = {
+            let mut tally = self.delta_counts.entry(key.clone()).or_default();
+            let was_hit = tally.hits(count_limit, payload_bytes_limit);
+            tally.count = tally.count.saturating_add(1);
+            tally.payload_bytes = tally.payload_bytes.saturating_add(payload_len);
+            if lsn > tally.last_lsn {
+                tally.last_lsn = lsn;
+            }
+            // Crossed iff this put pushed the tally from below the
+            // threshold to at/above it — record once per crossing so the
+            // flush trigger can find this key without sweeping the whole
+            // map. (Shard guard drops here, before the ready-set insert:
+            // shard lock → DashSet, never nested.)
+            tally.hits(count_limit, payload_bytes_limit) && !was_hit
+        };
+        if crossed {
+            self.delta_ready.insert(key.clone());
+        }
+    }
+
     /// Walk `delta_counts` for keys whose tally crossed threshold but
     /// have no current-flush snapshot row, dispatching them at their
     /// recorded `last_lsn`. Safe only when `last_lsn ≤
@@ -756,7 +820,7 @@ impl PageWriter {
         let Some(m) = self.materializer.as_ref() else {
             return Vec::new();
         };
-        if m.count_limit == 0 && m.payload_bytes_limit == 0 {
+        if m.count_limit == 0 && m.payload_bytes_limit == 0 && m.slru_count_limit == 0 {
             return Vec::new();
         }
         let horizon = Lsn(self.flush_horizon_lsn.load(Ordering::Relaxed));
@@ -779,7 +843,8 @@ impl PageWriter {
                 stale.push(key.clone());
                 continue;
             };
-            if !tally.hits(m.count_limit, m.payload_bytes_limit) {
+            let (count_limit, payload_bytes_limit) = Self::materialize_limits(m, key);
+            if !tally.hits(count_limit, payload_bytes_limit) {
                 stale.push(key.clone());
                 continue;
             }
@@ -1255,7 +1320,7 @@ impl PageWriter {
             // flush walk grows O(forever) instead of O(active keys).
             let mut to_materialize: Vec<MaterializeJob> = Vec::new();
             if let Some(m) = self.materializer.as_ref()
-                && (m.count_limit > 0 || m.payload_bytes_limit > 0)
+                && (m.count_limit > 0 || m.payload_bytes_limit > 0 || m.slru_count_limit > 0)
             {
                 let mut max_lsn_per_key: HashMap<Key, Lsn> = HashMap::new();
                 for row in &rel_rows {
@@ -1278,7 +1343,8 @@ impl PageWriter {
                         stale.push(key.clone());
                         continue;
                     };
-                    if !tally.hits(m.count_limit, m.payload_bytes_limit) {
+                    let (count_limit, payload_bytes_limit) = Self::materialize_limits(m, key);
+                    if !tally.hits(count_limit, payload_bytes_limit) {
                         stale.push(key.clone());
                         continue;
                     }
@@ -2168,7 +2234,7 @@ mod tests {
     ) {
         // Default fixture: count-only trigger (payload-bytes disabled)
         // so existing tests stay deterministic on count-based thresholds.
-        writer_with_materializer_thresholds(store, policy, limit, 0)
+        writer_with_materializer_thresholds(store, policy, limit, 0, 0)
     }
 
     /// Like `writer_with_materializer` but lets tests configure both
@@ -2181,6 +2247,7 @@ mod tests {
         policy: FlushPolicy,
         count_limit: u32,
         payload_bytes_limit: u32,
+        slru_count_limit: u32,
     ) -> (
         PageWriter,
         TenantId,
@@ -2204,6 +2271,7 @@ mod tests {
         let in_flight = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
         w.set_materializer(MaterializerHandle {
             count_limit,
+            slru_count_limit,
             payload_bytes_limit,
             tx,
             in_flight: in_flight.clone(),
@@ -2777,6 +2845,76 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
+    /// SLRU (clog) block keys use the dedicated `slru_count_limit`, not
+    /// the relation-page `count_limit`. After `SLRU_LIMIT` non-init
+    /// deltas on one clog block the post-flush trigger dispatches exactly
+    /// one materialise job, and a relation key is left untouched when its
+    /// own limits are 0. Guards the clog-chain growth that made basebackup
+    /// scale with commit volume (the page was never materialised before).
+    #[tokio::test]
+    async fn slru_delta_threshold_dispatches_one_job() {
+        use pageserver_api::key::slru_block_to_key;
+        use pageserver_api::reltag::SlruKind;
+        let (store, schema) = make_store("mat_slru_threshold").await;
+        const SLRU_LIMIT: u32 = 8;
+        // Rel limits 0 so *only* the SLRU trigger can fire.
+        let (w, _t, _tl, mut rx, in_flight) = writer_with_materializer_thresholds(
+            store.clone(),
+            FlushPolicy::default(),
+            0,
+            0,
+            SLRU_LIMIT,
+        );
+        let sk = slru_block_to_key(SlruKind::Clog, 0, 0);
+
+        // SLRU keys never join the rel flush snapshot, so they dispatch
+        // only via the cold-residue path — which is gated on the durable
+        // `flush_horizon_lsn`. In the real cluster the walreceiver advances
+        // that continuously as it ingests; here we note record LSNs to
+        // simulate it (mirrors `flush_horizon_advances_to_ingest_frontier`).
+
+        // (SLRU_LIMIT - 1) deltas + flush — below threshold, no dispatch.
+        for i in 0..(SLRU_LIMIT - 1) {
+            w.put(&[(sk, Lsn(10 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        w.note_record_lsn(Lsn(10 + SLRU_LIMIT as u64), Lsn(10));
+        w.flush().await.unwrap();
+        assert!(
+            rx.try_recv().is_err(),
+            "premature SLRU dispatch below threshold"
+        );
+
+        // The threshold-crossing delta + flush dispatches exactly one job
+        // for this clog block at its latest (now-durable) LSN.
+        w.put(&[(sk, Lsn(10 + SLRU_LIMIT as u64), delta_non_init())])
+            .await
+            .unwrap();
+        w.flush().await.unwrap();
+        let job = rx
+            .try_recv()
+            .expect("SLRU dispatch after flush hits threshold");
+        assert_eq!(job.key, sk);
+        assert_eq!(job.target_lsn, Lsn(10 + SLRU_LIMIT as u64));
+        in_flight.lock().unwrap().remove(&job.key);
+
+        // A relation key, with rel limits at 0, must NOT dispatch — the
+        // SLRU threshold is independent of and not applied to rel keys.
+        for i in 0..(SLRU_LIMIT + 5) {
+            w.put(&[(k(1), Lsn(300 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        w.flush().await.unwrap();
+        assert!(
+            rx.try_recv().is_err(),
+            "rel key dispatched despite rel limits = 0"
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
     /// An image row resets the per-key counter — the chain is anchored
     /// again, so post-image deltas count from zero.
     #[tokio::test]
@@ -2871,7 +3009,7 @@ mod tests {
         let limit = one_delta_bytes * 3; // exactly 3 deltas trigger.
 
         let (w, _t, _tl, mut rx, in_flight) =
-            writer_with_materializer_thresholds(store.clone(), FlushPolicy::default(), 0, limit);
+            writer_with_materializer_thresholds(store.clone(), FlushPolicy::default(), 0, limit, 0);
 
         w.put(&[(k(1), Lsn(10), delta_non_init())]).await.unwrap();
         w.put(&[(k(1), Lsn(20), delta_non_init())]).await.unwrap();
@@ -2928,6 +3066,7 @@ mod tests {
             FlushPolicy::default(),
             3,
             one_delta_bytes * 10,
+            0,
         );
 
         w.put(&[(k(1), Lsn(10), delta_non_init())]).await.unwrap();

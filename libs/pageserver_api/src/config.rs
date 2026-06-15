@@ -340,6 +340,8 @@ pub struct YbPageWriterConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_chain_limit: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_chain_limit_slru: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub image_chain_payload_bytes_limit: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub materialize_queue_capacity: Option<usize>,
@@ -380,6 +382,19 @@ pub struct YbPageWriterConfig {
     /// `image_chain_payload_bytes_limit` trigger remains in effect).
     /// Setting both to 0 disables the materialiser entirely. Default 20.
     pub image_chain_limit: u32,
+
+    /// Like `image_chain_limit`, but for SLRU (clog / multixact) block
+    /// keys. The clog page takes one tiny delta per transaction commit,
+    /// so its chain grows orders of magnitude faster than a relation
+    /// page's — but each delta is only a couple of bytes, so a much
+    /// higher threshold keeps reconstruction (and basebackup, which
+    /// rebuilds the active clog page) bounded without materialising
+    /// trivially often. Without it SLRU pages were never materialised
+    /// and basebackup time scaled with commit volume (chains reached
+    /// the full ~32 K deltas/page). 0 disables the SLRU trigger.
+    /// Default 1000 (caps clog reconstruction at ~1/30th of a full
+    /// page). The payload-bytes trigger does not apply to SLRU.
+    pub image_chain_limit_slru: u32,
 
     /// Materialiser trigger by combined-delta-payload size: when the
     /// sum of non-anchor delta payloads since the last anchor for a
@@ -444,6 +459,7 @@ impl YbPageWriterConfig {
             flush_size_bytes: 25 * 1024 * 1024,
             flush_poll_interval: Duration::from_millis(500),
             image_chain_limit: 20,
+            image_chain_limit_slru: 1000,
             image_chain_payload_bytes_limit: 4096,
             materialize_queue_capacity: 2000,
             read_cache_bytes: 1024 * 1024 * 1024,
@@ -472,6 +488,9 @@ impl YbPageWriterConfigToml {
                 .unwrap_or_else(|| scale_count(base.flush_size_bytes, scale_factor)),
             flush_poll_interval: self.flush_poll_interval.unwrap_or(base.flush_poll_interval),
             image_chain_limit: self.image_chain_limit.unwrap_or(base.image_chain_limit),
+            image_chain_limit_slru: self
+                .image_chain_limit_slru
+                .unwrap_or(base.image_chain_limit_slru),
             image_chain_payload_bytes_limit: self
                 .image_chain_payload_bytes_limit
                 .unwrap_or(base.image_chain_payload_bytes_limit),

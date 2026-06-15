@@ -1931,7 +1931,8 @@ impl Timeline {
             // Either-threshold trigger: count OR payload bytes, whichever
             // lands first. Both zero disables.
             let mat_enabled = (pw_cfg.image_chain_limit > 0
-                || pw_cfg.image_chain_payload_bytes_limit > 0)
+                || pw_cfg.image_chain_payload_bytes_limit > 0
+                || pw_cfg.image_chain_limit_slru > 0)
                 && walredo_mgr.is_some();
             let mat_channel = if mat_enabled {
                 let (tx, rx) = tokio::sync::mpsc::channel(pw_cfg.materialize_queue_capacity.max(1));
@@ -1939,6 +1940,7 @@ impl Timeline {
                     std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
                 writer.set_materializer(crate::page_writer::MaterializerHandle {
                     count_limit: pw_cfg.image_chain_limit,
+                    slru_count_limit: pw_cfg.image_chain_limit_slru,
                     payload_bytes_limit: pw_cfg.image_chain_payload_bytes_limit,
                     tx,
                     in_flight: in_flight.clone(),

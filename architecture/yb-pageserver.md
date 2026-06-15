@@ -394,23 +394,33 @@ Replaces `InMemoryLayer` + `flush_loop` + L0/L1 compaction.
    `will_init=true` row). Because flushes don't move the data, in-flight
    INSERTed rows remain visible.
 7. Background image materialiser: when `PageWriter::flush` observes
-   keys whose per-key delta tally crossed `image_chain_limit` (or the
-   payload-bytes threshold) during the just-flushed window, it
-   dispatches `MaterializeJob { key, target_lsn }` entries onto a
-   bounded mpsc (blocking send — backpressures the walreceiver if the
-   materialiser falls behind). The materialiser worker drains the
-   queue in batches of up to `BATCH_DRAIN_LIMIT` jobs and runs a
+   keys whose per-key delta tally crossed its threshold during the
+   just-flushed window, it dispatches `MaterializeJob { key, target_lsn }`
+   entries onto a bounded mpsc (blocking send — backpressures the
+   walreceiver if the materialiser falls behind). Relation-page keys use
+   `image_chain_limit` (or the payload-bytes threshold); **SLRU
+   (clog/multixact) block keys use the separate `image_chain_limit_slru`**
+   — the clog page takes one tiny delta per transaction commit, so its
+   chain grows orders of magnitude faster than a relation page's but each
+   delta is a couple of bytes, hence a much higher threshold. Without
+   materialising SLRU, the clog chain grew to a full page (~32 K deltas)
+   and every basebackup re-walked it to rebuild the page (the dominant,
+   commit-volume-scaling recovery cost). The materialiser worker drains
+   the queue in batches of up to `BATCH_DRAIN_LIMIT` jobs and runs a
    two-phase pipeline: `redo_phase` (chain reads + walredo on this
    task, with `redo_concurrency`-scaled fan-out) followed by
-   `commit_phase` (bulk INSERTs + `install_materialized_image`
-   spawned onto a separate task, bounded by
-   `BASE_MAX_INFLIGHT_INSERTS`). The pipeline lets batch N+1's redo
-   run concurrently with batch N's YB INSERT round-trip while
-   keeping per-batch correctness — see `image_materializer.rs:148-291`.
-   `install_materialized_image` trims the cache for the key up to the
-   image LSN and pushes the new image in as a durable cache entry.
-   Subsequent reads at LSN ≥ image_lsn anchor on the image instead of
-   walking back to the latest `will_init` delta.
+   `commit_phase` (bulk INSERTs + cache install spawned onto a separate
+   task, bounded by `BASE_MAX_INFLIGHT_INSERTS`). The pipeline lets
+   batch N+1's redo run concurrently with batch N's YB INSERT round-trip
+   while keeping per-batch correctness — see `image_materializer.rs`.
+   Jobs are routed by key type: relation chains read via `read_chain_durable`
+   and write the image via `put_pages` + `install_materialized_image`
+   (which trims the in-RAM cache for the key up to the image LSN);
+   SLRU chains read via `read_slru_chain` and write via `put_slru_pages`
+   (no in-RAM SLRU read cache — the image row in `slru_pages` anchors
+   subsequent reads on its own). Either way, subsequent reads at
+   LSN ≥ image_lsn anchor on the image (`is_image=TRUE, will_init=TRUE`)
+   instead of walking back to the latest `will_init` delta.
 
 Why the materialiser uses **durable-only** reads: if it built an
 image from pre-flush rows and the process crashed, WAL replay would
@@ -463,8 +473,9 @@ Default knobs (configurable via `pageserver.toml` under the
 | `flush_size_bytes` | 25 MiB | Size-based flush trigger |
 | `flush_poll_interval` | 500 ms | How often the background flusher checks the triggers |
 | `backpressure_bytes` | 50 MiB | Hard ceiling on the pre-flush buffer. `PageWriter::put` blocks until a flush drains below it. `0` disables (legacy unbounded growth) |
-| `image_chain_limit` | 20 | Deltas-since-anchor before a key is queued for materialisation (`0` disables count trigger) |
-| `image_chain_payload_bytes_limit` | 4 KiB | Combined-delta-payload trigger for materialisation (`0` disables size trigger) |
+| `image_chain_limit` | 20 | Relation-page deltas-since-anchor before a key is queued for materialisation (`0` disables count trigger) |
+| `image_chain_limit_slru` | 1000 | Same, for SLRU (clog/multixact) blocks. Higher than the relation limit because clog takes one ~2-byte delta per commit; caps clog reconstruction (and basebackup, which rebuilds the clog page) at ~1/30th of a full ~32 K-delta page. `0` disables SLRU materialisation |
+| `image_chain_payload_bytes_limit` | 4 KiB | Combined-delta-payload trigger for relation-page materialisation (`0` disables size trigger; does not apply to SLRU) |
 | `materialize_queue_capacity` | 2000 | Bounded mpsc depth; the write-side dispatch uses **blocking** send (backpressures walreceiver); the read-side dispatch uses `try_send` (drops on overflow — the next read of the same key re-evaluates) |
 | `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes`. Whole cold keys are evicted in LRU order when crossed; keys with unflushed (pre-flush) rows are pinned regardless |
 
