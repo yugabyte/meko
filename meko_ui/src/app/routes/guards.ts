@@ -33,14 +33,12 @@ export function resolveGuardRedirect(input: GuardInput): string | null {
 
   const onAuthRoute = isAuthRoute(location);
   const onProtectedRoute = isProtectedRoute(location);
-  const onOnboardingRoute = isOnboardingRoute(location);
 
-  if (authenticated && !hasCompletedOnboarding && !onOnboardingRoute) {
-    return ROUTES.onboarding;
-  }
+  // Onboarding isn't enforced: navigating away (e.g. a sidebar link) skips
+  // it. Fresh users still land on /onboarding after login (see App.tsx).
 
   if (authenticated && onAuthRoute) {
-    return ROUTES.datapacks;
+    return hasCompletedOnboarding ? ROUTES.datapacks : ROUTES.onboarding;
   }
 
 
