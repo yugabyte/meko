@@ -153,7 +153,7 @@ export default function DatapackSharePage({ datapackName, datapackId, currentUse
               </CardHeader>
               <CardContent className="p-6 pt-6">
                 <TabsContent value="person" className="mt-0 outline-none focus-visible:outline-none">
-                  <InviteByEmailSection datapackName={datapackName} datapackId={datapackId} onInviteSent={refreshShares} />
+                  <InviteByEmailSection datapackName={datapackName} datapackId={datapackId} currentUserEmail={currentUser?.email} onInviteSent={refreshShares} />
                 </TabsContent>
                 <TabsContent value="agent" className="mt-0 outline-none focus-visible:outline-none">
                   <ShareComingSoonPlaceholder

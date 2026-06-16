@@ -20,10 +20,12 @@ import { toast } from "@/hooks/use-toast";
 type Props = {
   datapackName: string;
   datapackId?: string;
+  /** Email of the currently signed-in user — used to block self-invites client-side. */
+  currentUserEmail?: string;
   onInviteSent: () => void | Promise<void>;
 };
 
-export function InviteByEmailSection({ datapackName, datapackId, onInviteSent }: Props) {
+export function InviteByEmailSection({ datapackName, datapackId, currentUserEmail, onInviteSent }: Props) {
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState<string | null>(null);
   const [inviteRole, setInviteRole] = useState<ShareInviteRoleId>(DATAPACK_SHARE_GRANT_CONTRIBUTOR);
@@ -46,6 +48,16 @@ export function InviteByEmailSection({ datapackName, datapackId, onInviteSent }:
         title: "Invalid email",
         description: parsed.message,
       });
+      return;
+    }
+    if (
+      currentUserEmail &&
+      parsed.email &&
+      parsed.email.trim().toLowerCase() === currentUserEmail.trim().toLowerCase()
+    ) {
+      const message = "You cannot invite yourself to this datapack.";
+      setEmailError(message);
+      toast({ variant: "destructive", title: "Invalid email", description: message });
       return;
     }
     setSubmitting(true);

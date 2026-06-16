@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -47,6 +48,34 @@ func TestSharingService_InviteToDatapack_RequiresValidGrant(t *testing.T) {
 			)
 			if err == nil || !strings.Contains(err.Error(), "grant is required") {
 				t.Errorf("expected grant validation error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestSharingService_InviteToDatapack_BlocksOwnerInvite(t *testing.T) {
+	svc := service.NewSharingService(nil, nil)
+	cases := []struct {
+		name      string
+		owner     string
+		recipient string
+	}{
+		{"exact", "owner@example.com", "owner@example.com"},
+		{"different case", "Owner@Example.com", "owner@example.com"},
+		{"recipient whitespace", "owner@example.com", "  owner@example.com  "},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := svc.InviteToDatapack(
+				context.Background(),
+				"dp-1", "owner-1", "test-datapack", "A test datapack", "Test Owner", c.owner,
+				service.InviteRequest{
+					RecipientEmail: c.recipient,
+					GrantRole:      "viewer",
+				},
+			)
+			if !errors.Is(err, service.ErrCannotInviteOwner) {
+				t.Errorf("expected ErrCannotInviteOwner, got %v", err)
 			}
 		})
 	}

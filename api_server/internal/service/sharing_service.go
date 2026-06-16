@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -11,6 +12,12 @@ import (
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
 )
+
+// ErrCannotInviteOwner is returned by InviteToDatapack when the recipient
+// email matches the datapack owner's email. The owner already has full
+// access, so the invite is rejected regardless of who is inviting (the
+// owner themselves or a maintainer). Handlers map this to 400.
+var ErrCannotInviteOwner = errors.New("the owner already has full access to this datapack")
 
 // CognitoInviter abstracts Cognito account provisioning for sharing invites.
 type CognitoInviter interface {
@@ -151,6 +158,13 @@ func (s *SharingService) InviteToDatapack(
 	req.GrantRole = strings.ToLower(strings.TrimSpace(req.GrantRole))
 	if !models.ValidGrantRole(req.GrantRole) {
 		return nil, fmt.Errorf("grant is required and must be one of: viewer, contributor, maintainer")
+	}
+
+	// Block inviting the datapack owner: they already have full access, so
+	// an invite to their email just creates a confusing pending invite /
+	// redundant grant. Compare case-insensitively.
+	if strings.EqualFold(email, strings.TrimSpace(ownerEmail)) {
+		return nil, ErrCannotInviteOwner
 	}
 
 	recipientUserID, err := s.repo.LookupUserByEmail(email)

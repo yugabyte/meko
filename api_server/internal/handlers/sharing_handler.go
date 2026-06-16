@@ -52,7 +52,7 @@ func (h *SharingHandler) Invite(c echo.Context) error {
 	// checks match; maintainers act on behalf of the same datapack.
 	resp, err := h.svc.InviteToDatapack(c.Request().Context(), dp.ID, dp.UserID, dp.Name, dp.Description, dp.OwnerName, dp.OwnerEmail, req)
 	if err != nil {
-		if isValidationErr(err) {
+		if isValidationErr(err) || errors.Is(err, service.ErrCannotInviteOwner) {
 			return apiError(c, http.StatusBadRequest,
 				"VALIDATION_ERROR", err.Error())
 		}
