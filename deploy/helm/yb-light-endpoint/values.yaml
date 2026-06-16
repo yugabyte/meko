@@ -1,0 +1,107 @@
+# Default values for yb-light-endpoint.
+
+# -- Number of endpoint pods. Each pod is an independent endpoint with its own
+# tenant/timeline; durable state lives in the shared external YugabyteDB.
+replicaCount: 1
+
+image:
+  # -- Endpoint image repository (built from deploy/endpoint/Dockerfile).
+  repository: yb-light/neon-endpoint
+  # -- Image tag. Empty string defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# YugabyteDB connection — the external, durable backend every storage service
+# talks to. This block is rendered verbatim into the ConfigMap consumed by the
+# pod. yb-light does NOT run YugabyteDB itself; point this at your cluster.
+yugabyte:
+  # -- CSV of YB tserver endpoints: "host:port[,host:port,...]" (default port 5433).
+  hostPorts: "yb-tserver:5433"
+  # -- YB role to connect as.
+  user: "yugabyte"
+  # -- YB database that holds all yb-light schemas.
+  dbname: "yb_storage"
+  # -- TLS mode: "" or "disable" => no TLS; "require"/"verify-ca"/"verify-full" => TLS.
+  sslmode: ""
+  # -- Path (inside the container) to a PEM CA bundle, for verify-ca/verify-full.
+  sslrootcert: ""
+  # Password delivery. Either set `password` (rendered into a chart-managed
+  # Secret) or point `existingSecret`/`existingSecretKey` at your own Secret.
+  # -- Inline password (dev/test only). Rendered into a Secret.
+  password: ""
+  # -- Name of a pre-existing Secret holding the YB password. Takes precedence over `password`.
+  existingSecret: ""
+  # -- Key within `existingSecret` holding the password.
+  existingSecretKey: "password"
+
+# Endpoint / compute settings.
+endpoint:
+  # -- Postgres major version for the compute.
+  pgVersion: "17"
+  # -- Postgres port the compute listens on (exposed by the Service).
+  computePort: 55433
+  # -- Tenant id to serve. Empty => the pod bootstraps a fresh tenant on first start.
+  tenantId: ""
+  # -- Timeline id to serve. Empty => generated during bootstrap.
+  timelineId: ""
+  # -- Postgres shared_preload_libraries for the compute.
+  sharedPreloadLibraries: "neon"
+  # -- Extra Postgres GUCs, as a name: value map.
+  extraSettings: {}
+
+# Internal listen ports for the co-located services. One endpoint per pod, so
+# these are fixed defaults; override only on conflict.
+ports:
+  pageserverPg: 64000
+  pageserverHttp: 9898
+  pageserverGrpc: 51051
+  safekeeperPg: 5454
+  safekeeperHttp: 7676
+  endpointStorageHttp: 9993
+  computeCtlHttp: 3080
+
+# Supervisor (the in-pod Python process manager) behaviour.
+supervisor:
+  # -- Seconds to back off before restarting a crashed service.
+  restartBackoffSeconds: 2
+  # -- Max restarts per service within the window before the pod exits (k8s then restarts it).
+  maxRestarts: 5
+  # -- Sliding window (seconds) over which maxRestarts is counted.
+  restartWindowSeconds: 60
+
+service:
+  type: ClusterIP
+  # -- Also publish the internal HTTP APIs (pageserver/safekeeper/endpoint_storage) on the Service.
+  exposeInternalHttp: false
+
+# Ephemeral scratch for logs, pidfiles and the compute's pgdata. All durable
+# state is in YugabyteDB, so this does not need a PersistentVolume.
+runDir:
+  # -- emptyDir size limit for the scratch volume.
+  sizeLimit: 10Gi
+
+resources: {}
+
+# Liveness/readiness probes hit the compute_ctl HTTP status endpoint.
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 15
+  failureThreshold: 4
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  failureThreshold: 6
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+securityContext: {}
+podSecurityContext: {}

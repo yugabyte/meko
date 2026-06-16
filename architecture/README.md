@@ -25,6 +25,7 @@ upstream Neon can skim) and **changes in yb-light**.
 | [`storage-controller.md`](storage-controller.md) | Cluster control plane (relational state) |
 | [`remote-storage.md`](remote-storage.md) | The `RemoteStorage` abstraction + `YbStore` |
 | [`yugabyte.md`](yugabyte.md) | What lives in YB: databases, schemas, tables |
+| [`single-container-endpoint.md`](single-container-endpoint.md) | Packaging an endpoint as one pod (`deploy/`): the supervisor, SC-free bootstrap |
 
 > **amp controller.** The standalone Go control plane being built for YB Light
 > (`yblight-controller` / `yblc`) is documented separately under

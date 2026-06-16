@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "yb-light-endpoint.fullname" . }}
+  labels:
+    {{- include "yb-light-endpoint.labels" . | nindent 4 }}
+data:
+  # --- YugabyteDB connection (the external durable backend) ---
+  YB_HOST_PORTS: {{ .Values.yugabyte.hostPorts | quote }}
+  YB_USER: {{ .Values.yugabyte.user | quote }}
+  YB_DBNAME: {{ .Values.yugabyte.dbname | quote }}
+  YB_SSLMODE: {{ .Values.yugabyte.sslmode | quote }}
+  YB_SSLROOTCERT: {{ .Values.yugabyte.sslrootcert | quote }}
+  {{- if include "yb-light-endpoint.hasPassword" . }}
+  # Name of the env var carrying the YB password (injected from a Secret).
+  YB_PASSWORD_ENV: "YB_PASSWORD"
+  {{- end }}
+
+  # --- Endpoint / compute settings ---
+  ENDPOINT_PG_VERSION: {{ .Values.endpoint.pgVersion | quote }}
+  COMPUTE_PORT: {{ .Values.endpoint.computePort | quote }}
+  TENANT_ID: {{ .Values.endpoint.tenantId | quote }}
+  TIMELINE_ID: {{ .Values.endpoint.timelineId | quote }}
+  SHARED_PRELOAD_LIBRARIES: {{ .Values.endpoint.sharedPreloadLibraries | quote }}
+  COMPUTE_EXTRA_SETTINGS_JSON: {{ .Values.endpoint.extraSettings | toJson | quote }}
+
+  # --- Internal service ports ---
+  PAGESERVER_PG_PORT: {{ .Values.ports.pageserverPg | quote }}
+  PAGESERVER_HTTP_PORT: {{ .Values.ports.pageserverHttp | quote }}
+  PAGESERVER_GRPC_PORT: {{ .Values.ports.pageserverGrpc | quote }}
+  SAFEKEEPER_PG_PORT: {{ .Values.ports.safekeeperPg | quote }}
+  SAFEKEEPER_HTTP_PORT: {{ .Values.ports.safekeeperHttp | quote }}
+  ENDPOINT_STORAGE_HTTP_PORT: {{ .Values.ports.endpointStorageHttp | quote }}
+  COMPUTE_CTL_HTTP_PORT: {{ .Values.ports.computeCtlHttp | quote }}
+
+  # --- Supervisor behaviour ---
+  SUPERVISOR_RESTART_BACKOFF_SECONDS: {{ .Values.supervisor.restartBackoffSeconds | quote }}
+  SUPERVISOR_MAX_RESTARTS: {{ .Values.supervisor.maxRestarts | quote }}
+  SUPERVISOR_RESTART_WINDOW_SECONDS: {{ .Values.supervisor.restartWindowSeconds | quote }}

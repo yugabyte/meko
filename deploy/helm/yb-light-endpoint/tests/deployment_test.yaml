@@ -1,0 +1,137 @@
+suite: deployment
+# configmap.yaml is listed so the deployment's `checksum/config` include resolves;
+# each test scopes its asserts to the Deployment via `template:`.
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+tests:
+  - it: renders a Deployment wired to the ConfigMap
+    template: templates/deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 1
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: RELEASE-NAME-yb-light-endpoint
+
+  - it: defaults the image tag to the chart appVersion
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: yb-light/neon-endpoint:0.1.0
+
+  - it: honours image repository and tag overrides
+    template: templates/deployment.yaml
+    set:
+      image:
+        repository: registry.example.com/yb/endpoint
+        tag: "1.2.3"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/yb/endpoint:1.2.3
+
+  - it: injects the YB password from a Secret when configured
+    template: templates/deployment.yaml
+    set:
+      yugabyte.password: hunter2
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: YB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-yb-light-endpoint
+                key: password
+
+  - it: references an existing Secret + key when provided
+    template: templates/deployment.yaml
+    set:
+      yugabyte.existingSecret: my-yb-secret
+      yugabyte.existingSecretKey: yb-pass
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: YB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: my-yb-secret
+                key: yb-pass
+
+  - it: defines no password env when no password is configured
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env
+
+  - it: exposes the compute Postgres port
+    template: templates/deployment.yaml
+    set:
+      endpoint.computePort: 5599
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: pg-compute
+            containerPort: 5599
+            protocol: TCP
+
+  - it: does not expose internal HTTP ports by default
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: ps-http
+            containerPort: 9898
+            protocol: TCP
+
+  - it: exposes internal HTTP ports when enabled
+    template: templates/deployment.yaml
+    set:
+      service.exposeInternalHttp: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: ps-http
+            containerPort: 9898
+            protocol: TCP
+
+  - it: mounts an emptyDir scratch volume at /data
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: run
+            mountPath: /data
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: run
+      - exists:
+          path: spec.template.spec.volumes[0].emptyDir
+
+  - it: rolls pods when the ConfigMap changes (checksum annotation)
+    template: templates/deployment.yaml
+    asserts:
+      - exists:
+          path: spec.template.metadata.annotations["checksum/config"]
+
+  - it: wires liveness + readiness probes to the compute port
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.tcpSocket.port
+          value: pg-compute
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.tcpSocket.port
+          value: pg-compute

@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yb-light-endpoint.fullname" . }}
+  labels:
+    {{- include "yb-light-endpoint.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "yb-light-endpoint.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: pg-compute
+      port: {{ .Values.endpoint.computePort }}
+      targetPort: pg-compute
+      protocol: TCP
+    {{- if .Values.service.exposeInternalHttp }}
+    - name: ps-http
+      port: {{ .Values.ports.pageserverHttp }}
+      targetPort: ps-http
+      protocol: TCP
+    - name: sk-http
+      port: {{ .Values.ports.safekeeperHttp }}
+      targetPort: sk-http
+      protocol: TCP
+    - name: es-http
+      port: {{ .Values.ports.endpointStorageHttp }}
+      targetPort: es-http
+      protocol: TCP
+    {{- end }}

@@ -1,0 +1,118 @@
+suite: configmap
+templates:
+  - templates/configmap.yaml
+tests:
+  - it: renders a ConfigMap named after the release
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-yb-light-endpoint
+
+  - it: carries the YugabyteDB connection block from values
+    set:
+      yugabyte:
+        hostPorts: "ts1:5433,ts2:5433"
+        user: yb_admin
+        dbname: yb_storage_prod
+        sslmode: require
+        sslrootcert: /etc/ssl/yb/ca.crt
+    asserts:
+      - equal:
+          path: data.YB_HOST_PORTS
+          value: "ts1:5433,ts2:5433"
+      - equal:
+          path: data.YB_USER
+          value: "yb_admin"
+      - equal:
+          path: data.YB_DBNAME
+          value: "yb_storage_prod"
+      - equal:
+          path: data.YB_SSLMODE
+          value: "require"
+      - equal:
+          path: data.YB_SSLROOTCERT
+          value: "/etc/ssl/yb/ca.crt"
+
+  - it: sets YB_PASSWORD_ENV only when a password is configured
+    set:
+      yugabyte.password: hunter2
+    asserts:
+      - equal:
+          path: data.YB_PASSWORD_ENV
+          value: "YB_PASSWORD"
+
+  - it: omits YB_PASSWORD_ENV when no password is configured
+    asserts:
+      - notExists:
+          path: data.YB_PASSWORD_ENV
+
+  - it: sets YB_PASSWORD_ENV when using an existing secret
+    set:
+      yugabyte.existingSecret: my-yb-secret
+    asserts:
+      - equal:
+          path: data.YB_PASSWORD_ENV
+          value: "YB_PASSWORD"
+
+  - it: propagates endpoint + compute settings
+    set:
+      endpoint:
+        pgVersion: "17"
+        computePort: 5599
+        tenantId: "deadbeefdeadbeefdeadbeefdeadbeef"
+        timelineId: "cafecafecafecafecafecafecafecafe"
+        sharedPreloadLibraries: "neon,pg_stat_statements"
+        extraSettings:
+          max_connections: "200"
+          work_mem: "16MB"
+    asserts:
+      - equal:
+          path: data.ENDPOINT_PG_VERSION
+          value: "17"
+      - equal:
+          path: data.COMPUTE_PORT
+          value: "5599"
+      - equal:
+          path: data.TENANT_ID
+          value: "deadbeefdeadbeefdeadbeefdeadbeef"
+      - equal:
+          path: data.TIMELINE_ID
+          value: "cafecafecafecafecafecafecafecafe"
+      - equal:
+          path: data.SHARED_PRELOAD_LIBRARIES
+          value: "neon,pg_stat_statements"
+      - matchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: '"max_connections":"200"'
+
+  - it: applies internal service port overrides
+    set:
+      ports:
+        pageserverHttp: 19898
+        safekeeperPg: 15454
+    asserts:
+      - equal:
+          path: data.PAGESERVER_HTTP_PORT
+          value: "19898"
+      - equal:
+          path: data.SAFEKEEPER_PG_PORT
+          value: "15454"
+
+  - it: carries supervisor restart policy
+    set:
+      supervisor:
+        restartBackoffSeconds: 3
+        maxRestarts: 9
+        restartWindowSeconds: 120
+    asserts:
+      - equal:
+          path: data.SUPERVISOR_RESTART_BACKOFF_SECONDS
+          value: "3"
+      - equal:
+          path: data.SUPERVISOR_MAX_RESTARTS
+          value: "9"
+      - equal:
+          path: data.SUPERVISOR_RESTART_WINDOW_SECONDS
+          value: "120"

@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "yb-light-endpoint.fullname" . }}
+  labels:
+    {{- include "yb-light-endpoint.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "yb-light-endpoint.selectorLabels" . | nindent 6 }}
+  # PGDATA is ephemeral (compute_ctl re-fetches a basebackup each start) and all
+  # durable state lives in YugabyteDB, so a rolling pod is safe.
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "yb-light-endpoint.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: endpoint
+          image: {{ include "yb-light-endpoint.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # The image ENTRYPOINT is `tini -- python3 .../supervisor.py`.
+          envFrom:
+            - configMapRef:
+                name: {{ include "yb-light-endpoint.fullname" . }}
+          {{- if include "yb-light-endpoint.hasPassword" . }}
+          env:
+            - name: YB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "yb-light-endpoint.secretName" . }}
+                  key: {{ include "yb-light-endpoint.secretKey" . }}
+          {{- end }}
+          ports:
+            - name: pg-compute
+              containerPort: {{ .Values.endpoint.computePort }}
+              protocol: TCP
+            {{- if .Values.service.exposeInternalHttp }}
+            - name: ps-http
+              containerPort: {{ .Values.ports.pageserverHttp }}
+              protocol: TCP
+            - name: sk-http
+              containerPort: {{ .Values.ports.safekeeperHttp }}
+              protocol: TCP
+            - name: es-http
+              containerPort: {{ .Values.ports.endpointStorageHttp }}
+              protocol: TCP
+            {{- end }}
+          {{- if .Values.readinessProbe.enabled }}
+          readinessProbe:
+            tcpSocket:
+              port: pg-compute
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.livenessProbe.enabled }}
+          livenessProbe:
+            tcpSocket:
+              port: pg-compute
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: run
+              mountPath: /data
+      volumes:
+        - name: run
+          emptyDir:
+            sizeLimit: {{ .Values.runDir.sizeLimit }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
