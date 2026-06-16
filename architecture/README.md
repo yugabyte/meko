@@ -26,6 +26,12 @@ upstream Neon can skim) and **changes in yb-light**.
 | [`remote-storage.md`](remote-storage.md) | The `RemoteStorage` abstraction + `YbStore` |
 | [`yugabyte.md`](yugabyte.md) | What lives in YB: databases, schemas, tables |
 
+> **amp controller.** The standalone Go control plane being built for YB Light
+> (`yblight-controller` / `yblc`) is documented separately under
+> [`../amp/architecture/`](../amp/architecture/), with its own subproject guide
+> in [`../amp/AGENTS.md`](../amp/AGENTS.md). It is not yet wired into the cluster
+> topology below.
+
 ### HTTP APIs & metrics (per service)
 
 | Service | HTTP API | Metrics |

@@ -168,6 +168,23 @@ endif
 .PHONY: neon-pg-ext
 neon-pg-ext: $(foreach pg_version,$(POSTGRES_VERSIONS),neon-pg-ext-$(pg_version))
 
+### amp controller (Go control plane)
+#
+# The amp controller is a self-contained Go module under amp/, independent of
+# the Rust/C build above (and deliberately not part of `all`).
+.PHONY: amp
+amp:
+	+@echo "Building amp controller"
+	go -C amp build ./...
+
+.PHONY: amp-test
+amp-test:
+	go -C amp test ./...
+
+.PHONY: amp-vet
+amp-vet:
+	go -C amp vet ./...
+
 # This removes everything
 .PHONY: distclean
 distclean:

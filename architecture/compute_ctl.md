@@ -9,7 +9,7 @@ grants), and then supervises the running compute while exposing an HTTP control 
 It is the **single point of contact inside an endpoint** that the control plane talks
 to — the control plane (today `yb_light_local`; tomorrow `yblight-controller`) never
 manages the Postgres / safekeeper / pageserver processes directly. See
-[`yblight-controller.md`](../yblight_controller/yblight-controller.md) §5.2
+[`yblight-controller.md`](../amp/architecture/yblight-controller.md) §5.2
 ("Per-endpoint services"), where `compute_ctl` is exactly this contact point.
 
 > **Scope note.** [`compute.md`](compute.md) covers the *compute itself* — Postgres
@@ -131,7 +131,7 @@ body of `POST /configure`. So the spec data is identical whether it arrives as a
 pull from the spec endpoint, or a push to `/configure` — the differences are delivery and
 trust (a file read with no auth vs. an authenticated, retried HTTP fetch carrying the
 `Empty`/`Attached` handshake), not content. See
-[yblight-controller §5.5](../yblight_controller/yblight-controller.md) for how the control
+[yblight-controller §5.5](../amp/architecture/yblight-controller.md) for how the control
 plane picks among the three.
 
 At load, the raw spec is wrapped in a `ParsedSpec` (`compute.rs`) that extracts and
@@ -263,7 +263,7 @@ HTTP gateway, not a cloud-storage backend.
 
 ## How it fits yblight-controller
 
-The [yblight-controller design](../yblight_controller/yblight-controller.md) leans on
+The [yblight-controller design](../amp/architecture/yblight-controller.md) leans on
 `compute_ctl` in a few concrete places:
 
 - **Single point of contact (§5.2).** `yblight-controller` will drive endpoints purely
