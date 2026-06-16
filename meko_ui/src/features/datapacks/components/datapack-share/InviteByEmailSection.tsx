@@ -15,6 +15,8 @@ import { SHARE_INVITE_ROLES, type ShareInviteRoleId } from "@/features/datapacks
 import { parseSingleInviteEmail } from "@/features/datapacks/components/datapack-share/shareInviteEmail";
 import { DATAPACK_SHARE_GRANT_CONTRIBUTOR } from "@/lib/datapackShareGrants";
 import { getApiErrorMessage, inviteDatapackShare } from "@/lib/api/mekoApi";
+import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
+import { trackEvent } from "@/lib/telemetry/rudderstack";
 import { toast } from "@/hooks/use-toast";
 
 type Props = {
@@ -65,6 +67,11 @@ export function InviteByEmailSection({ datapackId, currentUserEmail, onInviteSen
         recipient_email: parsed?.email?.toLowerCase(),
         grant: inviteRole,
       }, {});
+      trackEvent(TELEMETRY_EVENTS.DATAPACK_SHARE_INVITE_SENT, {
+        datapackId,
+        grant: inviteRole,
+        recipientEmail: parsed?.email?.toLowerCase(),
+      });
       setEmail("");
       toast({ title: "Invite sent" });
       await onInviteSent();

@@ -35,6 +35,8 @@ import { DATAPACKS_QUERY_KEY, useDatapacks } from "@/features/datapacks/hooks/us
 import { addAppEventListener, dispatchAppEvent, removeAppEventListener } from "@/lib/browserEvents";
 import { removeLocalItem, removeSessionItem } from "@/lib/browserStorage";
 import { ROUTES, datapackDetailPath } from "@/app/routes/paths";
+import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
+import { resetTelemetry, trackEvent } from "@/lib/telemetry/rudderstack";
 import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
 import { useBillingNavFlag } from "@/features/billing/hooks/useBillingNavFlag";
 import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
@@ -136,6 +138,10 @@ export default function Sidebar() {
   const expandSidebar = () => setIsCollapsed(false);
 
   const handleLogout = async () => {
+    // Fire the logout event while the user is still identified, then reset
+    // telemetry so later (anonymous) activity isn't attributed to them.
+    trackEvent(TELEMETRY_EVENTS.LOGGED_OUT);
+    resetTelemetry();
     // Best-effort server logout: even if it fails (network, expired
     // session, server down) we must still clear local state and send
     // the user to /login, otherwise they're trapped in an authenticated

@@ -16,6 +16,8 @@ import {
   resendSignupConfirmation,
 } from "@/lib/api/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
+import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
+import { identifyUser, trackEvent } from "@/lib/telemetry/rudderstack";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 import { setLocalItem } from "@/lib/browserStorage";
 import { ROUTES } from "@/app/routes/paths";
@@ -67,6 +69,7 @@ export default function SignInPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    trackEvent(TELEMETRY_EVENTS.SIGN_IN_CLICKED);
     setLoading(true);
     setError(null);
     setShowInviteExpired(false);
@@ -83,6 +86,14 @@ export default function SignInPage() {
       let nextPath: (typeof ROUTES)["datapacks" | "onboarding"] = ROUTES.onboarding;
       try {
         const user = await getCurrentUser();
+        identifyUser({
+          id: user.account_id,
+          email: user.email,
+          firstName: user.first_name,
+          lastName: user.last_name,
+          userType: user.user_type,
+        });
+        trackEvent(TELEMETRY_EVENTS.SIGNED_IN);
         setLocalItem(ONBOARDING_STATUS_CACHE_KEY, String(user.has_completed_onboarding));
         dispatchAppEvent(ONBOARDING_STATUS_UPDATED_EVENT, {
           has_completed_onboarding: user.has_completed_onboarding,

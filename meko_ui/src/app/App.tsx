@@ -1,15 +1,11 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
-import {
-  BrowserRouter,
-  Navigate,
-  useLocation,
-  useNavigate,
-} from "react-router-dom";
+import { BrowserRouter, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { queryClient } from "@/lib/queryClient";
+import { TrackPageViews } from "@/lib/telemetry/TrackPageViews";
 import PublicRoutes from "@/app/routes/PublicRoutes";
 import ProtectedRoutes from "@/app/routes/ProtectedRoutes";
 import { isAuthRoute, isOnboardingRoute, isProtectedRoute } from "@/app/routes/guards";
@@ -30,7 +26,6 @@ import {
   ONBOARDING_STATUS_CACHE_KEY,
   resetAuthExpiredState,
 } from "@/lib/api/mekoApi";
-
 
 function AppRouter() {
   const location = useLocation();
@@ -74,10 +69,7 @@ function AppRouter() {
         if (signal.aborted) return;
         setAuthenticated(true);
         setHasCompletedOnboarding(user.has_completed_onboarding);
-        setLocalItem(
-          ONBOARDING_STATUS_CACHE_KEY,
-          String(user.has_completed_onboarding),
-        );
+        setLocalItem(ONBOARDING_STATUS_CACHE_KEY, String(user.has_completed_onboarding));
       } catch (err) {
         if (signal.aborted || axios.isCancel(err)) return;
         setAuthenticated(false);
@@ -137,12 +129,7 @@ function AppRouter() {
   }
 
   if (isAuthRoute(location.pathname)) {
-    return (
-      <Navigate
-        to={hasCompletedOnboarding ? ROUTES.datapacks : ROUTES.onboarding}
-        replace
-      />
-    );
+    return <Navigate to={hasCompletedOnboarding ? ROUTES.datapacks : ROUTES.onboarding} replace />;
   }
 
   return <ProtectedRoutes isOnboardingRoute={isOnboardingRoute(location.pathname)} />;
@@ -154,6 +141,7 @@ export default function App() {
       <TooltipProvider>
         <Toaster />
         <BrowserRouter>
+          {/* <TrackPageViews /> */}
           <AppRouter />
         </BrowserRouter>
       </TooltipProvider>
