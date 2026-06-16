@@ -1,102 +1,206 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
-	"net/http"
-	"time"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 
-	"github.com/google/uuid"
-	"github.com/labstack/echo/v4"
-
-	"github.com/yugabyte/yb-light/amp/internal/db"
+	"github.com/yugabyte/yb-light/amp/internal/core"
+	applog "github.com/yugabyte/yb-light/amp/internal/log"
 	"github.com/yugabyte/yb-light/amp/internal/task"
 )
 
-type handlers struct {
-	pool  *db.Pool
-	store task.Store
+// Controllers implements the generated StrictServerInterface: the controller's
+// HTTP behavior, decoupled from the wire format (which the generated code owns)
+// and from persistence (which the core.Backend owns). Mutations that the design
+// routes through the task framework (timelines, §6) are logged-only for now —
+// issue #92: "the 3 timeline calls should just log for now, no task framework".
+type Controllers struct {
+	backend core.Backend
+	tasks   task.Store
+	logger  *slog.Logger
 }
 
-func registerRoutes(e *echo.Echo, h *handlers) {
-	e.GET("/healthz", h.healthz)
-	e.GET("/readyz", h.readyz)
-
-	// REST API, versioned in the path. Mutation handlers are stubs until the
-	// task framework's step catalog lands; each core workflow (§6) has a route
-	// so the surface is visible.
-	v1 := e.Group("/api/v1")
-	v1.POST("/storage-pools", h.createStoragePool)
-	v1.GET("/storage-pools", h.listStoragePools)
-	v1.POST("/databases", h.createDatabase)
-	v1.POST("/databases/:tenant/branches", h.branchDatabase)
-	v1.POST("/timelines/:tenant/:timeline/endpoints", h.createEndpoint)
-	v1.DELETE("/endpoints/:id", h.deleteEndpoint)
-	v1.GET("/tasks/:id", h.getTask)
+// NewControllers wires the controllers to a backend, the task store (for task
+// status reads), and the root logger.
+func NewControllers(backend core.Backend, tasks task.Store, logger *slog.Logger) *Controllers {
+	return &Controllers{backend: backend, tasks: tasks, logger: logger}
 }
 
-func (h *handlers) healthz(c echo.Context) error {
-	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
-}
+// Compile-time assertion that the controllers satisfy the generated contract.
+var _ StrictServerInterface = (*Controllers)(nil)
 
-func (h *handlers) readyz(c echo.Context) error {
-	if err := h.pool.Healthy(c.Request().Context()); err != nil {
-		return writeError(c, http.StatusServiceUnavailable, "not_ready", "database unavailable")
+// --- Users -----------------------------------------------------------------
+
+func (c *Controllers) CreateUser(ctx context.Context, request CreateUserRequestObject) (CreateUserResponseObject, error) {
+	isAdmin := false
+	if request.Body != nil && request.Body.IsAdmin != nil {
+		isAdmin = *request.Body.IsAdmin
 	}
-	return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
-}
-
-// Stub mutation handlers — each maps to a core workflow (§6) and will dispatch
-// a task once the framework's step catalog exists.
-
-func (h *handlers) createStoragePool(c echo.Context) error {
-	return notImplemented(c, "create storage pool")
-}
-func (h *handlers) listStoragePools(c echo.Context) error {
-	return notImplemented(c, "list storage pools")
-}
-func (h *handlers) createDatabase(c echo.Context) error { return notImplemented(c, "create database") }
-func (h *handlers) branchDatabase(c echo.Context) error { return notImplemented(c, "branch database") }
-func (h *handlers) createEndpoint(c echo.Context) error { return notImplemented(c, "create endpoint") }
-func (h *handlers) deleteEndpoint(c echo.Context) error { return notImplemented(c, "delete endpoint") }
-
-// taskView is the API representation of a task's status.
-type taskView struct {
-	ID          uuid.UUID       `json:"id"`
-	Kind        string          `json:"kind"`
-	Status      string          `json:"status"`
-	TenantID    *uuid.UUID      `json:"tenant_id,omitempty"`
-	TargetRef   *string         `json:"target_ref,omitempty"`
-	Params      json.RawMessage `json:"params,omitempty"`
-	Error       *string         `json:"error,omitempty"`
-	LeaseExpiry *time.Time      `json:"lease_expiry,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-}
-
-// getTask exposes task status so a caller can poll a long-running operation.
-// This is a real read path against the store, not a stub.
-func (h *handlers) getTask(c echo.Context) error {
-	id, err := uuid.Parse(c.Param("id"))
+	u, err := c.backend.CreateUser(ctx, isAdmin)
 	if err != nil {
-		return writeError(c, http.StatusBadRequest, "invalid_id", "task id must be a uuid")
+		return nil, fmt.Errorf("create user: %w", err)
 	}
-	t, err := h.store.Get(c.Request().Context(), id)
+	return CreateUser201JSONResponse(userToAPI(u)), nil
+}
+
+func (c *Controllers) GetUser(ctx context.Context, request GetUserRequestObject) (GetUserResponseObject, error) {
+	u, err := c.backend.GetUser(ctx, request.UserId)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return GetUser404JSONResponse{NotFoundJSONResponse(apiError("not_found", "user not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+	return GetUser200JSONResponse(userToAPI(u)), nil
+}
+
+// --- Storage pools ---------------------------------------------------------
+
+func (c *Controllers) CreateStoragePool(ctx context.Context, request CreateStoragePoolRequestObject) (CreateStoragePoolResponseObject, error) {
+	if request.Body == nil {
+		return CreateStoragePool400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
+	}
+	name := strings.TrimSpace(request.Body.Name)
+	if name == "" {
+		return CreateStoragePool400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
+	}
+	p, err := c.backend.CreateStoragePool(ctx, request.UserId, name)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return CreateStoragePool404JSONResponse{NotFoundJSONResponse(apiError("not_found", "user not found"))}, nil
+	case errors.Is(err, core.ErrConflict):
+		return CreateStoragePool409JSONResponse{ConflictJSONResponse(apiError("conflict", "a storage pool with that name already exists"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("create storage pool: %w", err)
+	}
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "storage pool created",
+		slog.String(applog.KeyUserID, request.UserId.String()),
+		slog.String(applog.KeyStoragePoolID, p.ID.String()))
+	return CreateStoragePool201JSONResponse(poolToAPI(p)), nil
+}
+
+func (c *Controllers) ListStoragePools(ctx context.Context, request ListStoragePoolsRequestObject) (ListStoragePoolsResponseObject, error) {
+	pools, err := c.backend.ListStoragePools(ctx, request.UserId)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return ListStoragePools404JSONResponse{NotFoundJSONResponse(apiError("not_found", "user not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("list storage pools: %w", err)
+	}
+	out := make([]StoragePool, 0, len(pools))
+	for _, p := range pools {
+		out = append(out, poolToAPI(p))
+	}
+	return ListStoragePools200JSONResponse(StoragePoolList{StoragePools: out}), nil
+}
+
+func (c *Controllers) GetStoragePool(ctx context.Context, request GetStoragePoolRequestObject) (GetStoragePoolResponseObject, error) {
+	p, err := c.backend.GetStoragePool(ctx, request.UserId, request.PoolId)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return GetStoragePool404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("get storage pool: %w", err)
+	}
+	return GetStoragePool200JSONResponse(poolToAPI(p)), nil
+}
+
+// --- Timelines (logged-only until the task framework lands, #92) -----------
+
+func (c *Controllers) CreateTimeline(ctx context.Context, request CreateTimelineRequestObject) (CreateTimelineResponseObject, error) {
+	if request.Body == nil {
+		return CreateTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
+	}
+	name := strings.TrimSpace(request.Body.Name)
+	if name == "" {
+		return CreateTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
+	}
+	attrs := []slog.Attr{
+		slog.String(applog.KeyUserID, request.UserId.String()),
+		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
+		slog.String("timeline_name", name),
+	}
+	if request.Body.PgVersion != nil {
+		attrs = append(attrs, slog.Int("pg_version", *request.Body.PgVersion))
+	}
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "create timeline requested (logged only; task framework pending)", attrs...)
+	return CreateTimeline202JSONResponse(loggedAck("create timeline")), nil
+}
+
+func (c *Controllers) DeleteTimeline(ctx context.Context, request DeleteTimelineRequestObject) (DeleteTimelineResponseObject, error) {
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete timeline requested (logged only; task framework pending)",
+		slog.String(applog.KeyUserID, request.UserId.String()),
+		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
+		slog.String(applog.KeyTimelineID, request.TimelineId.String()))
+	return DeleteTimeline202JSONResponse(loggedAck("delete timeline")), nil
+}
+
+func (c *Controllers) BranchTimeline(ctx context.Context, request BranchTimelineRequestObject) (BranchTimelineResponseObject, error) {
+	if request.Body == nil {
+		return BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
+	}
+	name := strings.TrimSpace(request.Body.Name)
+	if name == "" {
+		return BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
+	}
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "branch timeline requested (logged only; task framework pending)",
+		slog.String(applog.KeyUserID, request.UserId.String()),
+		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
+		slog.String(applog.KeyTimelineID, request.TimelineId.String()), // the parent
+		slog.String("branch_name", name))
+	return BranchTimeline202JSONResponse(loggedAck("branch timeline")), nil
+}
+
+// --- Tasks -----------------------------------------------------------------
+
+func (c *Controllers) GetTask(ctx context.Context, request GetTaskRequestObject) (GetTaskResponseObject, error) {
+	t, err := c.tasks.Get(ctx, request.TaskId)
 	if err != nil {
-		return writeError(c, http.StatusInternalServerError, "internal", "failed to load task")
+		return nil, fmt.Errorf("get task: %w", err)
 	}
 	if t == nil {
-		return writeError(c, http.StatusNotFound, "not_found", "task not found")
+		return GetTask404JSONResponse{NotFoundJSONResponse(apiError("not_found", "task not found"))}, nil
 	}
-	return c.JSON(http.StatusOK, taskView{
-		ID:          t.ID,
-		Kind:        t.Kind,
-		Status:      string(t.Status),
-		TenantID:    t.TenantID,
-		TargetRef:   t.TargetRef,
-		Params:      t.Params,
-		Error:       t.Error,
-		LeaseExpiry: t.LeaseExpiry,
-		CreatedAt:   t.CreatedAt,
-		UpdatedAt:   t.UpdatedAt,
-	})
+	return GetTask200JSONResponse(taskToAPI(t)), nil
+}
+
+// --- mapping helpers -------------------------------------------------------
+
+func loggedAck(what string) OperationAck {
+	return OperationAck{
+		Acknowledged: true,
+		Detail:       what + " logged; execution is pending the task framework",
+	}
+}
+
+func userToAPI(u core.User) User {
+	return User{Id: u.ID, IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt}
+}
+
+func poolToAPI(p core.StoragePool) StoragePool {
+	return StoragePool{Id: p.ID, Name: p.Name, OwnerUserId: p.OwnerUserID, CreatedAt: p.CreatedAt}
+}
+
+func taskToAPI(t *task.Task) Task {
+	out := Task{
+		Id:        t.ID,
+		Kind:      t.Kind,
+		Status:    TaskStatus(t.Status),
+		TenantId:  t.TenantID,
+		TargetRef: t.TargetRef,
+		Error:     t.Error,
+		CreatedAt: t.CreatedAt,
+		UpdatedAt: t.UpdatedAt,
+	}
+	if len(t.Params) > 0 {
+		var v any
+		if err := json.Unmarshal(t.Params, &v); err == nil {
+			out.Params = &v
+		}
+	}
+	return out
 }

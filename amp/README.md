@@ -13,10 +13,13 @@ Design docs (read these first):
 - [`yblight-controller.md`](architecture/yblight-controller.md) — high-level design and
   guiding principles (API-first, task framework, managed services, deployment).
 
-This module is the **base framework** ([#84](https://github.com/yugabyte/yb-light/issues/84)):
-a runnable skeleton — echo API stubs, `slog` logging, the write-ahead task
-framework, and the YBDB connection + initial migrations. The real workflow logic
-(create-database, branch, scale) lands on top of it later.
+It started as the **base framework** ([#84](https://github.com/yugabyte/yb-light/issues/84)):
+a runnable skeleton — `slog` logging, the write-ahead task framework, and the
+YBDB connection + initial migrations. On top of it, the **initial APIs**
+([#92](https://github.com/yugabyte/yb-light/issues/92)) add the OpenAPI v3-driven
+REST surface (users, storage pools, timelines) below. The workflow execution
+that backs the timeline calls (create-database, branch, scale) lands on the task
+framework later.
 
 ## Layout
 
@@ -26,7 +29,9 @@ amp/
   internal/config/    configuration (env + flags)
   internal/log/       slog logger + context helpers
   internal/db/        pgxpool connection + golang-migrate runner
-  internal/api/       echo server, middleware, stub handlers
+  internal/api/       REST API: openapi_spec.yaml (source of truth) + generated
+                      code (api.gen.go) + controllers, echo wiring, Swagger UI
+  internal/core/      domain layer: Backend interface + YBDB and in-memory impls
   internal/task/      write-ahead task framework (types, store, registry, worker)
   migrations/         embedded raw-SQL migrations (golang-migrate)
 ```
@@ -62,12 +67,23 @@ environment variables (`AMP_DATABASE_URL`, `AMP_LISTEN`, `AMP_DB_SCHEMA`,
 `AMP_LOG_LEVEL`, `AMP_LOG_FORMAT`, `AMP_TASK_POLL_INTERVAL`, `AMP_TASK_LEASE_TTL`,
 `AMP_SIGNING_KEY_PATH`); flags win.
 
-## Endpoints (stubs)
+## API
+
+The REST API is **OpenAPI v3-driven**: `internal/api/openapi_spec.yaml` is the
+source of truth, and `oapi-codegen` generates the models, the echo server
+interface the controllers implement, and the Go client the tests drive (run
+`make amp-generate` after editing the spec). The controller also serves the spec
+and an interactive explorer. See
+[`architecture/yblc-apis.md`](architecture/yblc-apis.md) for the full design.
 
 - `GET /healthz` — liveness
 - `GET /readyz` — readiness (pings the DB)
-- `GET /api/v1/tasks/:id` — task status (a real read path)
-- `POST /api/v1/storage-pools`, `/databases`, `/databases/:tenant/branches`,
-  `/timelines/:tenant/:timeline/endpoints`, `DELETE /endpoints/:id` — the core
-  workflows (§6), currently `501 Not Implemented` until the task step catalog
-  exists.
+- `GET /api/v1/openapi.yaml` — the OpenAPI document
+- `GET /api/v1/docs` — Swagger UI (interactive explorer, assets embedded)
+- `POST /api/v1/users`, `GET /api/v1/users/:userId` — users (no auth, #92)
+- `POST|GET /api/v1/users/:userId/storage-pools`,
+  `GET …/storage-pools/:poolId` — storage pools, owner-scoped (no sharing)
+- `POST|DELETE …/storage-pools/:poolId/timelines[/:timelineId]`,
+  `POST …/timelines/:timelineId/branch` — timelines; **logged only** (`202`)
+  until the task framework lands
+- `GET /api/v1/tasks/:taskId` — task status (a real read path)

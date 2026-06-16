@@ -185,6 +185,14 @@ amp-test:
 amp-vet:
 	go -C amp vet ./...
 
+# Regenerate the API code (models, echo server, Go client) from the OpenAPI
+# spec (amp/internal/api/openapi_spec.yaml). Run after editing the spec; the
+# generated api.gen.go is checked in. Uses the oapi-codegen tool pinned in
+# amp/go.mod.
+.PHONY: amp-generate
+amp-generate:
+	go -C amp generate ./...
+
 # This removes everything
 .PHONY: distclean
 distclean:

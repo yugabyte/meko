@@ -9,6 +9,9 @@ with the design docs in [`architecture/`](architecture/):
 - [`architecture/yblight-controller.md`](architecture/yblight-controller.md) —
   high-level design & guiding principles (API-first, the task framework,
   managed services, deployment).
+- [`architecture/yblc-apis.md`](architecture/yblc-apis.md) — the REST API: the
+  OpenAPI v3 spec as source of truth, code generation, the served explorer, and
+  how the API is tested through the generated client.
 
 This guide is scoped to `amp/`. The repo-wide guide is the top-level
 [`AGENTS.md`](../AGENTS.md); where they overlap, the rules here win for code
@@ -37,3 +40,14 @@ under `amp/`.
 
 From the repo root: `make amp`, `make amp-vet`, `make amp-test`. Or directly:
 `go -C amp build ./...`, `go -C amp vet ./...`, `go -C amp test ./...`.
+
+## API code generation
+
+The REST API is **spec-driven**: `internal/api/openapi_spec.yaml` is the source
+of truth, and the models, the echo server interface, and the Go client are
+generated into `internal/api/api.gen.go`. After editing the spec, run
+`make amp-generate` (`go -C amp generate ./...`) and commit the regenerated file.
+Don't hand-edit `api.gen.go`. The controllers (`internal/api/handlers.go`)
+implement the generated `StrictServerInterface`, so a spec change that drops or
+reshapes an operation fails the build until the handlers match. Keep
+`architecture/yblc-apis.md` in sync with the spec.

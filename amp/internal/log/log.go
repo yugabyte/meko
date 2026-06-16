@@ -13,12 +13,14 @@ import (
 
 // Canonical attribute keys, so resource logs stay queryable across components.
 const (
-	KeyTenantID   = "tenant_id"
-	KeyTimelineID = "timeline_id"
-	KeyEndpointID = "endpoint_id"
-	KeyTaskID     = "task_id"
-	KeyStep       = "step"
-	KeyRequestID  = "request_id"
+	KeyUserID        = "user_id"
+	KeyStoragePoolID = "storage_pool_id"
+	KeyTenantID      = "tenant_id"
+	KeyTimelineID    = "timeline_id"
+	KeyEndpointID    = "endpoint_id"
+	KeyTaskID        = "task_id"
+	KeyStep          = "step"
+	KeyRequestID     = "request_id"
 )
 
 // New constructs the root logger from config. JSON by default; text for dev.

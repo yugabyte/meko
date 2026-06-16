@@ -18,6 +18,7 @@ import (
 
 	"github.com/yugabyte/yb-light/amp/internal/api"
 	"github.com/yugabyte/yb-light/amp/internal/config"
+	"github.com/yugabyte/yb-light/amp/internal/core"
 	"github.com/yugabyte/yb-light/amp/internal/db"
 	applog "github.com/yugabyte/yb-light/amp/internal/log"
 	"github.com/yugabyte/yb-light/amp/internal/task"
@@ -91,7 +92,8 @@ func runServe(args []string) error {
 
 	store := task.NewPgStore(pool)
 	worker := task.NewWorker(store, task.DefaultRegistry(), cfg.Task, logger)
-	srv := api.NewServer(cfg, pool, store, logger)
+	backend := core.NewPgBackend(pool)
+	srv := api.NewServer(cfg, backend, store, logger)
 
 	var wg sync.WaitGroup
 	wg.Add(1)

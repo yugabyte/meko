@@ -1,0 +1,468 @@
+openapi: 3.0.3
+
+info:
+  title: amp controller API
+  version: 0.1.0
+  description: |
+    Control-plane REST API for the **amp controller** (yblight-controller): the
+    control plane for a single placement group. See `amp/architecture/`.
+
+    This is the initial API surface (issue
+    [#92](https://github.com/yugabyte/yb-light/issues/92)):
+
+    - **Users** — a basic, *unauthenticated* notion of a user. A caller acts as
+      a user by addressing resources under `/users/{userId}`; there is no auth
+      yet (the user/grant model is designed but authentication is deferred).
+    - **Storage pools** — any user can create a pool and becomes its owner.
+      Pool sharing (pool grants) is out of scope here; a user sees only the
+      pools they own.
+    - **Timelines** — create / delete / branch a timeline in a pool. These are
+      **logged only** for now: the write-ahead task framework that will execute
+      them is not yet wired up, so each call records intent and returns 202
+      without validating the pool/timeline or writing any state.
+
+    Every non-2xx response uses the same `Error` envelope. `500` is possible on
+    any operation; it is documented per operation so generated clients get a
+    typed handle.
+
+    The spec is the source of truth: server stubs and the Go client are
+    generated from this file (`oapi-codegen`), and the controller serves both
+    this document (`GET /api/v1/openapi.yaml`) and an interactive explorer
+    (`GET /api/v1/docs`).
+
+servers:
+  - url: /api/v1
+    description: Versioned API root (the controller serves the API under /api/v1).
+
+tags:
+  - name: users
+    description: A basic, unauthenticated notion of a user.
+  - name: storage-pools
+    description: Storage pools (≈ a Meko datapack); created and owned by a user.
+  - name: timelines
+    description: Timelines (PG clusters) in a pool. Mutations are logged only for now.
+  - name: tasks
+    description: Status of long-running operations (the write-ahead task log).
+
+paths:
+  /users:
+    post:
+      tags: [users]
+      operationId: createUser
+      summary: Create a user
+      description: Creates a user and returns it. No authentication; the new id is how a caller addresses resources as this user.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    get:
+      tags: [users]
+      operationId: getUser
+      summary: Get a user
+      responses:
+        '200':
+          description: The user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{userId}/storage-pools:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    post:
+      tags: [storage-pools]
+      operationId: createStoragePool
+      summary: Create a storage pool owned by the user
+      description: Creates a storage pool with the addressed user as its owner. Pool names are unique across the placement group.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStoragePoolRequest'
+      responses:
+        '201':
+          description: Storage pool created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoragePool'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [storage-pools]
+      operationId: listStoragePools
+      summary: List storage pools owned by the user
+      description: Lists the storage pools the user owns. Pool sharing is out of scope, so this is exactly the user's owned pools.
+      responses:
+        '200':
+          description: The user's storage pools.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoragePoolList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{userId}/storage-pools/{poolId}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/PoolId'
+    get:
+      tags: [storage-pools]
+      operationId: getStoragePool
+      summary: Get a storage pool owned by the user
+      responses:
+        '200':
+          description: The storage pool.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoragePool'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{userId}/storage-pools/{poolId}/timelines:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/PoolId'
+    post:
+      tags: [timelines]
+      operationId: createTimeline
+      summary: Create a timeline in a pool (logged only)
+      description: |
+        Records the intent to create a timeline (a PG cluster) in the pool and
+        returns 202. Execution via the write-ahead task framework is not yet
+        implemented, so nothing is provisioned and the pool is not validated —
+        the request is logged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTimelineRequest'
+      responses:
+        '202':
+          description: Request accepted and logged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationAck'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{userId}/storage-pools/{poolId}/timelines/{timelineId}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/TimelineId'
+    delete:
+      tags: [timelines]
+      operationId: deleteTimeline
+      summary: Delete a timeline (logged only)
+      description: Records the intent to delete a timeline and returns 202. Logged only for now (see createTimeline); the timeline is not validated.
+      responses:
+        '202':
+          description: Request accepted and logged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationAck'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{userId}/storage-pools/{poolId}/timelines/{timelineId}/branch:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/TimelineId'
+    post:
+      tags: [timelines]
+      operationId: branchTimeline
+      summary: Branch (fork) a timeline into a new timeline (logged only)
+      description: |
+        Records the intent to fork the addressed timeline into a new branch
+        timeline under the same tenant, and returns 202. Branching is explicit
+        (it is not part of timeline create). Logged only for now; the parent
+        timeline is not validated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BranchTimelineRequest'
+      responses:
+        '202':
+          description: Request accepted and logged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationAck'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tasks/{taskId}:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      tags: [tasks]
+      operationId: getTask
+      summary: Get the status of a task
+      description: Returns the status of a write-ahead task so a caller can poll a long-running operation.
+      responses:
+        '200':
+          description: The task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  parameters:
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: The user's id.
+      schema:
+        type: string
+        format: uuid
+    PoolId:
+      name: poolId
+      in: path
+      required: true
+      description: The storage pool's id.
+      schema:
+        type: string
+        format: uuid
+    TimelineId:
+      name: timelineId
+      in: path
+      required: true
+      description: The timeline's id.
+      schema:
+        type: string
+        format: uuid
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      description: The task's id.
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: The request was malformed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: The addressed resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: The request conflicts with existing state (e.g. a duplicate name).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: An unexpected error occurred serving the request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    User:
+      type: object
+      required: [id, is_admin, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        is_admin:
+          type: boolean
+          description: Admins skip all pool/tenant grants. Until auth lands, anyone may create an admin.
+        created_at:
+          type: string
+          format: date-time
+
+    CreateUserRequest:
+      type: object
+      properties:
+        is_admin:
+          type: boolean
+          default: false
+          description: Create the user as an admin.
+
+    StoragePool:
+      type: object
+      required: [id, name, owner_user_id, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        owner_user_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    StoragePoolList:
+      type: object
+      required: [storage_pools]
+      properties:
+        storage_pools:
+          type: array
+          items:
+            $ref: '#/components/schemas/StoragePool'
+
+    CreateStoragePoolRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 63
+          description: Pool name; unique across the placement group.
+
+    CreateTimelineRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Timeline (PG cluster) name; unique within its tenant.
+        pg_version:
+          type: integer
+          description: Postgres major version for the timeline's cluster.
+
+    BranchTimelineRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Name for the new branch timeline.
+
+    OperationAck:
+      type: object
+      required: [acknowledged, detail]
+      properties:
+        acknowledged:
+          type: boolean
+          description: Always true; the request was accepted and logged.
+        detail:
+          type: string
+          description: Human-readable note about what was logged.
+
+    Task:
+      type: object
+      required: [id, kind, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed]
+        tenant_id:
+          type: string
+          format: uuid
+          nullable: true
+        target_ref:
+          type: string
+          nullable: true
+        params:
+          description: The originating request, as opaque JSON.
+        error:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable, machine-readable error code.
+        message:
+          type: string
+          description: Human-readable error message.

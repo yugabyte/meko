@@ -1,20 +1,26 @@
 // Package api serves the controller's REST API (yblight-controller.md §3:
-// API-first, versioned in the URL path). The mutation handlers are stubs for
-// now; they will dispatch to the task framework as it fills in.
+// API-first, versioned in the URL path). The HTTP contract is generated from
+// openapi_spec.yaml (see gen.go); the controllers in handlers.go implement the
+// generated StrictServerInterface, and the controller also serves the spec
+// itself and an interactive explorer.
 package api
 
 import (
 	"context"
 	"log/slog"
+	"net/http"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
 	"github.com/yugabyte/yb-light/amp/internal/config"
-	"github.com/yugabyte/yb-light/amp/internal/db"
+	"github.com/yugabyte/yb-light/amp/internal/core"
 	applog "github.com/yugabyte/yb-light/amp/internal/log"
 	"github.com/yugabyte/yb-light/amp/internal/task"
 )
+
+// apiBaseURL is where the generated routes are mounted (the spec's server URL).
+const apiBaseURL = "/api/v1"
 
 // Server wraps the echo HTTP server.
 type Server struct {
@@ -23,18 +29,36 @@ type Server struct {
 	logger *slog.Logger
 }
 
-// NewServer wires middleware, routes, and handlers.
-func NewServer(cfg *config.Config, pool *db.Pool, store task.Store, logger *slog.Logger) *Server {
+// NewServer wires middleware, the spec/explorer routes, and the generated,
+// spec-driven API onto an echo server.
+func NewServer(cfg *config.Config, backend core.Backend, store task.Store, logger *slog.Logger) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
+	e.HTTPErrorHandler = errorHandler(logger)
 
 	e.Use(middleware.Recover())
 	e.Use(middleware.RequestID())
 	e.Use(slogLogger(logger))
 
-	h := &handlers{pool: pool, store: store}
-	registerRoutes(e, h)
+	// Liveness/readiness sit outside the versioned API and the spec.
+	e.GET("/healthz", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+	e.GET("/readyz", func(c echo.Context) error {
+		if err := backend.Healthy(c.Request().Context()); err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "database unavailable")
+		}
+		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
+	})
+
+	// The OpenAPI document and the interactive explorer.
+	registerDocs(e)
+
+	// The generated, spec-driven API. The controllers implement the strict
+	// interface; the generated router binds and validates against the spec.
+	impl := NewControllers(backend, store, logger)
+	RegisterHandlersWithBaseURL(e, NewStrictHandler(impl, nil), apiBaseURL)
 
 	return &Server{echo: e, addr: cfg.ListenAddr, logger: logger}
 }
@@ -69,9 +93,14 @@ func slogLogger(logger *slog.Logger) echo.MiddlewareFunc {
 	})
 }
 
+// Handler returns the underlying HTTP handler, for tests that drive the API
+// through httptest without binding a socket.
+func (s *Server) Handler() http.Handler { return s.echo }
+
 // Start begins serving and blocks until the server stops.
 func (s *Server) Start() error {
-	s.logger.Info("http server listening", "addr", s.addr)
+	s.logger.Info("http server listening", "addr", s.addr,
+		"docs", apiBaseURL+"/docs", "spec", apiBaseURL+"/openapi.yaml")
 	return s.echo.Start(s.addr)
 }
 
