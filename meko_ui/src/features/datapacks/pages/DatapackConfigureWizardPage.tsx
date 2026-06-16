@@ -34,7 +34,7 @@ import {
   updateDatapack,
   type CurrentUser,
   type ProvisionStatus,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
   filterFilesForKnowledgeUploadBatch,

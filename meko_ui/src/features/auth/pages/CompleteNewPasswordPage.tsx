@@ -12,7 +12,7 @@ import {
   PROVISION_STATUS_CACHE_KEY,
   ONBOARDING_STATUS_CACHE_KEY,
   AUTH_LOGOUT_EVENT
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { removeLocalItem, removeSessionItem } from "@/lib/browserStorage";
 import { ROUTES } from "@/app/routes/paths";

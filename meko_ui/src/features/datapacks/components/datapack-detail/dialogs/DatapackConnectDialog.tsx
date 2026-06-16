@@ -30,7 +30,7 @@ import {
   listMekoTokens,
   type MekoToken,
   type ProvisionStatus,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import {
   MEKO_TOKEN_INSTALLER_PLACEHOLDER,
   filterActiveMekoTokens,

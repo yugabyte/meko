@@ -1,4 +1,4 @@
-import { formatMemoryAuthor, type Memory } from "@/lib/mekoApi";
+import { formatMemoryAuthor, type Memory } from "@/lib/api/mekoApi";
 import { formatRelativeTime, formatUtcAbsolute, useNowMs } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
 
@@ -13,9 +13,7 @@ export function MemoryRowBody({ memory, textClassName }: Props) {
   const data = memory.data ?? "";
   const agent = memory.agent_id ?? "";
   const nowMs = useNowMs();
-  const createdLabel = memory.created_at
-    ? formatRelativeTime(memory.created_at, nowMs)
-    : null;
+  const createdLabel = memory.created_at ? formatRelativeTime(memory.created_at, nowMs) : null;
   const authorName = formatMemoryAuthor(memory);
   return (
     <div className="min-w-0 space-y-1">
@@ -35,7 +33,8 @@ export function MemoryRowBody({ memory, textClassName }: Props) {
           <span title={memory.created_at}>
             {createdLabel}
             <span className="text-muted-foreground/80">
-              {" · "}{formatUtcAbsolute(memory.created_at)}
+              {" · "}
+              {formatUtcAbsolute(memory.created_at)}
             </span>
           </span>
         ) : null}

@@ -69,6 +69,18 @@ type ServerConfig struct {
 	// AppURL is the base URL of the Meko web app included in invite emails.
 	// Derived from DeployEnv: prod → https://cloud.mekodata.ai, dev → https://app.mekodev.com.
 	AppURL string
+
+	// Stripe configuration for the billing endpoints. When
+	// StripeSecretKey or StripeWebhookSecret is empty the
+	// /billing/* routes are not registered and the UI's Upgrade /
+	// Manage payment buttons remain visibly disabled.
+	StripeSecretKey     string
+	StripeWebhookSecret string
+	// One Stripe Price ID per Meko paid tier. Enterprise has no price
+	// (billed off-platform); free obviously has no price either.
+	StripePriceIDStarter string
+	StripePriceIDGrowth  string
+	StripePriceIDScale   string
 	// MCPPATFlushInterval controls how often the background
 	// goroutine drains the in-memory last_used_at touch map onto the
 	// database. Zero (the default) falls back to

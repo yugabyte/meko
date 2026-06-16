@@ -16,6 +16,8 @@ export const ROUTES = {
   observeHub: "/observe-hub",
   /** Account-scoped settings page (profile + change password). */
   settings: "/settings",
+  /** Workspace plans & billing (current plan, usage, plan picker). */
+  billing: "/billing",
 } as const;
 
 /**

@@ -37,6 +37,8 @@ type serviceRegistry struct {
 	mcpPATRepo         *repository.MCPPATRepo
 	mcpPATAuditRepo    *repository.MCPPATAuditRepo
 	mcpPATSvc          *service.MCPPATService
+	billingRepo        *repository.BillingRepo
+	billingSvc         *service.BillingService
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -116,6 +118,21 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	mcpPATAuditRepo := repository.NewMCPPATAuditRepo(cfg.SystemDB)
 	mcpPATSvc := service.NewMCPPATService(mcpPATRepo, mcpPATAuditRepo)
 
+	billingRepo := repository.NewBillingRepo(cfg.SystemDB)
+	billingSvc := service.NewBillingService(service.BillingConfig{
+		StripeSecretKey:      cfg.StripeSecretKey,
+		StripeWebhookSecret:  cfg.StripeWebhookSecret,
+		PriceIDStarter:       cfg.StripePriceIDStarter,
+		PriceIDGrowth:        cfg.StripePriceIDGrowth,
+		PriceIDScale:         cfg.StripePriceIDScale,
+		AppURL:               cfg.AppURL,
+	}, billingRepo)
+	if billingSvc.Enabled() {
+		slog.Info("billing routes will be registered (stripe configured)")
+	} else {
+		slog.Warn("billing routes disabled (stripe secret/webhook/price ids not all set)")
+	}
+
 	slog.Info("service registry initialized")
 	return &serviceRegistry{
 		accountRepo:        accountRepo,
@@ -136,6 +153,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		mcpPATRepo:         mcpPATRepo,
 		mcpPATAuditRepo:    mcpPATAuditRepo,
 		mcpPATSvc:          mcpPATSvc,
+		billingRepo:        billingRepo,
+		billingSvc:         billingSvc,
 	}
 }
 
@@ -206,8 +225,31 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	e.GET("/success", handlers.SuccessHandler(successCfg))
 
 	registerDatapackRoutes(datapackGroup, dpDirect, reg)
+	registerBillingRoutes(v1, datapackGroup, reg)
 
 	return e, reg, nil
+}
+
+// registerBillingRoutes wires the three Stripe-backed endpoints when
+// BillingService is enabled. Skipped entirely when Stripe isn't
+// configured -- a missing route surfaces the misconfiguration the
+// first time the UI tries to upgrade instead of silently returning
+// 503 forever.
+//
+// The webhook handler attaches to v1 directly (no auth middleware)
+// because Stripe authenticates via the Stripe-Signature header; the
+// two session endpoints attach to datapackGroup so they go through
+// the same JWT path as the rest of the user-facing API.
+func registerBillingRoutes(v1 *echo.Group, authed *echo.Group, reg *serviceRegistry) {
+	if reg.billingSvc == nil || !reg.billingSvc.Enabled() {
+		return
+	}
+	h := handlers.NewBillingHandler(reg.billingSvc)
+	authed.GET("/billing/summary", h.Summary)
+	authed.POST("/billing/checkout-session", h.CreateCheckoutSession)
+	authed.POST("/billing/portal-session", h.CreatePortalSession)
+	v1.POST("/billing/webhook", h.Webhook)
+	slog.Info("billing routes registered")
 }
 
 // authRouteDeps holds the initialized auth objects needed by the

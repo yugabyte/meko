@@ -29,7 +29,7 @@ import {
   getCurrentUser,
   ONBOARDING_STATUS_CACHE_KEY,
   resetAuthExpiredState,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 
 
 function AppRouter() {

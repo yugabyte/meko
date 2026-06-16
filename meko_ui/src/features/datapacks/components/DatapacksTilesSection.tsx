@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import type { CurrentUser, Datapack } from "@/lib/mekoApi";
+import type { CurrentUser, Datapack } from "@/lib/api/mekoApi";
 import {
   formatDatapackCreatedDateShorthand,
   sortDatapacksByCreatedAtDesc,

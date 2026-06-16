@@ -13,7 +13,7 @@ import { ShareComingSoonPlaceholder } from "@/features/datapacks/components/data
 import { TransferOwnershipSection } from "@/features/datapacks/components/datapack-share/TransferOwnershipSection";
 import { useDatapackOutgoingShares } from "@/features/datapacks/components/datapack-share/useDatapackOutgoingShares";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
-import type { CurrentUser } from "@/lib/mekoApi";
+import type { CurrentUser } from "@/lib/api/mekoApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";

@@ -47,7 +47,7 @@ import {
   type Datapack,
   type KnowledgeBaseDocument,
   type ProvisionStatus,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { toast } from "@/hooks/use-toast";
 import { formatDatapackCreatedAtUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";

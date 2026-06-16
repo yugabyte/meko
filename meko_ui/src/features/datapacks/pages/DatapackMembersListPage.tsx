@@ -20,7 +20,7 @@ import {
   updateDatapackMemberGrant,
   type CurrentUser,
   type DatapackOutgoingMember,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { shareInviteRoleRowPresentation } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import {
   DATAPACK_SHARE_GRANT_CONTRIBUTOR,

@@ -27,7 +27,7 @@ import {
   getApiErrorMessage,
   submitFeedback,
   type FeedbackCategory,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 
 const CATEGORY_LABEL: Record<FeedbackCategory, string> = {
   bug: "Bug",

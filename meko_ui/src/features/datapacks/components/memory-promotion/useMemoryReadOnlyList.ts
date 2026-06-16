@@ -9,7 +9,7 @@ import {
   listMemories,
   MEMORY_LIST_DEFAULT_USER_TYPE,
   type Memory,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { DEFAULT_PAGE_SIZE } from "./useMemoryPromotion";
 
 export function useMemoryReadOnlyList({

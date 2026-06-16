@@ -8,9 +8,10 @@ import {
   getApiErrorMessage,
   listDatapacks,
   type Datapack,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { queryClient } from "@/lib/queryClient";
 import { DATAPACKS_QUERY_KEY } from "@/features/datapacks/hooks/useDatapacks";
+
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
 import {
   clearObserveBootstrapCache,
@@ -151,7 +152,9 @@ export default function ObservePage() {
       const ownedDatapack = datapacks.find((dp) => (dp.grant ?? "owner") === "owner");
       if (ownedDatapack) {
         try {
-          await ensureLangfuseProjectKeys(ownedDatapack.datapack_name, { datapackId: ownedDatapack.datapack_id });
+          await ensureLangfuseProjectKeys(ownedDatapack.datapack_name, {
+            datapackId: ownedDatapack.datapack_id,
+          });
         } catch {
           // Best-effort: bootstrap can still succeed using existing org/project mappings.
         }
@@ -232,10 +235,7 @@ export default function ObservePage() {
   useEffect(() => {
     const iframe = observeIframeRef.current;
     if (!iframe?.contentWindow) return;
-    iframe.contentWindow.postMessage(
-      { type: THEME_MESSAGE_TYPE, theme },
-      window.location.origin,
-    );
+    iframe.contentWindow.postMessage({ type: THEME_MESSAGE_TYPE, theme }, window.location.origin);
   }, [theme]);
 
   return (

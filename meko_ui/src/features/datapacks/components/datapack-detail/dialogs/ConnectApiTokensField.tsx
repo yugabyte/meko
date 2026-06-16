@@ -14,7 +14,7 @@ import { Link } from "react-router-dom";
 import { AlertCircle, Check, Copy, KeyRound, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ROUTES } from "@/app/routes/paths";
-import type { MekoToken } from "@/lib/mekoApi";
+import type { MekoToken } from "@/lib/api/mekoApi";
 
 type Props = {
   loading: boolean;

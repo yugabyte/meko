@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Bot } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { getApiErrorMessage, listAgents, type Agent } from "@/lib/mekoApi";
+import { getApiErrorMessage, listAgents, type Agent } from "@/lib/api/mekoApi";
 
 const PREVIEW_LIMIT = 3;
 

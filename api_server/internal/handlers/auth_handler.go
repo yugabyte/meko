@@ -354,6 +354,10 @@ func (h *AuthHandler) Me(c echo.Context) error {
 		"first_name":               account.FirstName,
 		"last_name":                account.LastName,
 		"has_completed_onboarding": account.HasCompletedOnboarding,
+		// Billing tier from meko_system.users.user_type. UI uses this to
+		// pick the active plan card / metric denominators on the Plans &
+		// billing page. Kept in sync by BillingService webhook handler.
+		"user_type": account.AccountType,
 	})
 }
 

@@ -26,7 +26,7 @@ import {
   getDatapackConversation,
   type DatapackConversationDetail,
   type DatapackThreadMessage,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { ConversationThreadHeader } from "./ConversationThreadHeader";
 import { ThreadTurn } from "./ThreadTurn";
 import { useNowMs } from "@/lib/relativeTime";

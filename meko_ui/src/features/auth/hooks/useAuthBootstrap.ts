@@ -1,11 +1,7 @@
 import { useEffect } from "react";
 import axios from "axios";
-import {
-  getLocalItem,
-  removeLocalItem,
-  setLocalItem,
-} from "@/lib/browserStorage";
-import { getCurrentUser, ONBOARDING_STATUS_CACHE_KEY } from "@/lib/mekoApi";
+import { getCurrentUser, ONBOARDING_STATUS_CACHE_KEY } from "@/lib/api/mekoApi";
+import { getLocalItem, removeLocalItem, setLocalItem } from "@/lib/browserStorage";
 
 type Args = {
   setAuthLoading: (value: boolean) => void;
@@ -36,10 +32,7 @@ export function useAuthBootstrap({
         if (controller.signal.aborted) return;
         setAuthenticated(true);
         setHasCompletedOnboarding(user.has_completed_onboarding);
-        setLocalItem(
-          ONBOARDING_STATUS_CACHE_KEY,
-          String(user.has_completed_onboarding),
-        );
+        setLocalItem(ONBOARDING_STATUS_CACHE_KEY, String(user.has_completed_onboarding));
       })
       .catch((err) => {
         // Ignore aborts triggered by the cleanup below; the component is

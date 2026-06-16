@@ -46,7 +46,7 @@ import {
   type Datapack,
   type KBActivityLogItem,
   type KnowledgeBaseSummary,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 
 type Props = {
   datapackName: string;

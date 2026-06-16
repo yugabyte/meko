@@ -14,6 +14,8 @@ import {
   Sparkles,
   BookOpen,
   Users,
+  Settings as SettingsIcon,
+  CreditCard,
 } from "lucide-react";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
 import { cn } from "@/lib/utils";
@@ -27,7 +29,7 @@ import {
   logout,
   ONBOARDING_STATUS_CACHE_KEY,
   PROVISION_STATUS_CACHE_KEY,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { queryClient } from "@/lib/queryClient";
 import { CURRENT_USER_QUERY_KEY, useCurrentUser } from "@/hooks/useCurrentUser";
 import { DATAPACKS_QUERY_KEY, useDatapacks } from "@/features/datapacks/hooks/useDatapacks";
@@ -35,6 +37,7 @@ import { addAppEventListener, dispatchAppEvent, removeAppEventListener } from "@
 import { removeLocalItem, removeSessionItem } from "@/lib/browserStorage";
 import { ROUTES, datapackDetailPath } from "@/app/routes/paths";
 import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
+import { useBillingNavFlag } from "@/features/billing/hooks/useBillingNavFlag";
 
 /**
  * Cap the nested "Datapacks" list at this many rows before it starts to
@@ -42,7 +45,7 @@ import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
  * everything below — Observe, Feedback, Sign out — off-screen unless
  * they scroll the whole sidebar.
  */
-const MAX_VISIBLE_DATAPACKS = 10;
+const MAX_VISIBLE_DATAPACKS = 7;
 
 /**
  * Approximate height of one rendered row in the datapacks list.
@@ -57,6 +60,10 @@ export default function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  // Hidden by default — unlocked once the user lands on
+  // /billing?showPaymentOptions=true (persisted in localStorage).
+  // See useBillingNavFlag for the gate logic.
+  const showBillingNav = useBillingNavFlag();
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   // Shared react-query cache — every other surface (HomePage, ObservePage,
@@ -94,10 +101,10 @@ export default function Sidebar() {
   }, [location.pathname, datapackList]);
 
   const onOnboardingRoute =
-    location.pathname === ROUTES.onboarding || location.pathname.startsWith(`${ROUTES.onboarding}/`);
+    location.pathname === ROUTES.onboarding ||
+    location.pathname.startsWith(`${ROUTES.onboarding}/`);
   const onConnectRoute =
     location.pathname === ROUTES.connect || location.pathname.startsWith(`${ROUTES.connect}/`);
-  const onDatapacksRoute = location.pathname.startsWith(ROUTES.datapacks);
   const onWorkbenchLMRoute =
     location.pathname === ROUTES.workbenchLm ||
     location.pathname.startsWith(`${ROUTES.workbenchLm}/`);
@@ -202,7 +209,11 @@ export default function Sidebar() {
           aria-label="Go to Datapacks"
         >
           {isCollapsed ? (
-            <img src="/favicons/favicon-32x32-dark.png" alt="meko" className="w-8 h-8 animate-in fade-in" />
+            <img
+              src="/favicons/favicon-32x32-dark.png"
+              alt="meko"
+              className="w-8 h-8 animate-in fade-in"
+            />
           ) : (
             <>
               {/*
@@ -376,7 +387,8 @@ export default function Sidebar() {
                     className={() => {
                       const basePath = datapackDetailPath(dp.datapack_name);
                       const onDatapackSubroute =
-                        location.pathname === basePath || location.pathname.startsWith(`${basePath}/`);
+                        location.pathname === basePath ||
+                        location.pathname.startsWith(`${basePath}/`);
                       // Keep the datapack highlighted whenever the current route is
                       // under that datapack path. If a datapack_id query is present,
                       // also require id match to avoid ambiguity on stale links.
@@ -418,7 +430,8 @@ export default function Sidebar() {
           className={cn(
             "flex items-center rounded-md text-sm font-medium transition-colors",
             isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
-            location.pathname === ROUTES.observeHub || location.pathname.startsWith(`${ROUTES.observeHub}/`)
+            location.pathname === ROUTES.observeHub ||
+              location.pathname.startsWith(`${ROUTES.observeHub}/`)
               ? "bg-foreground/10 text-foreground"
               : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
           )}
@@ -427,6 +440,59 @@ export default function Sidebar() {
           <Activity className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
           {!isCollapsed && <span className="animate-in fade-in truncate">Observe</span>}
         </NavLink>
+
+        {/* Account-scoped nav — Settings & Billing live here (previously
+            Settings was in the top header). Grouped below the workspace
+            items with a thin spacer so they read as "your account" rather
+            than "the workspace". */}
+        <div
+          className={cn(
+            "mt-2 pt-2 border-t border-border/40 flex flex-col gap-0.5",
+            isCollapsed ? "items-center" : "",
+          )}
+        >
+          <NavLink
+            to={ROUTES.settings}
+            onClick={expandSidebar}
+            className={cn(
+              "flex items-center rounded-md text-sm font-medium transition-colors",
+              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+              location.pathname === ROUTES.settings ||
+                location.pathname.startsWith(`${ROUTES.settings}/`)
+                ? "bg-foreground/10 text-foreground"
+                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+            )}
+            title={isCollapsed ? "Settings" : undefined}
+          >
+            <SettingsIcon className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+            {!isCollapsed && <span className="animate-in fade-in truncate">Settings</span>}
+          </NavLink>
+
+          {/* Plans & billing — pre-GA, gated behind ?showPaymentOptions=true
+              query-param unlock. Hidden by default; visible once the
+              flag has been latched in localStorage. The route itself
+              still mounts so direct URL navigation works for testers. */}
+          {showBillingNav ? (
+            <NavLink
+              to={ROUTES.billing}
+              onClick={expandSidebar}
+              className={cn(
+                "flex items-center rounded-md text-sm font-medium transition-colors",
+                isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+                location.pathname === ROUTES.billing ||
+                  location.pathname.startsWith(`${ROUTES.billing}/`)
+                  ? "bg-foreground/10 text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              )}
+              title={isCollapsed ? "Plans & billing" : undefined}
+            >
+              <CreditCard className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+              {!isCollapsed && (
+                <span className="animate-in fade-in truncate">Plans &amp; billing</span>
+              )}
+            </NavLink>
+          ) : null}
+        </div>
       </div>
 
       <div className="p-3 flex flex-col gap-1">

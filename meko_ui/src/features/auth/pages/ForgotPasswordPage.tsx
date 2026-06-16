@@ -7,7 +7,7 @@ import {
   forgotPasswordConfirm,
   forgotPasswordSendCode,
   getApiErrorMessage,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { ROUTES } from "@/app/routes/paths";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";

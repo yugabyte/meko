@@ -10,8 +10,8 @@ import { DatapackNameDescriptionFields } from "@/features/datapacks/components/D
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { datapackDetailPath, DEFAULT_ACCOUNT_DATAPACK_NAME, ROUTES } from "@/app/routes/paths";
 import { toast } from "@/hooks/use-toast";
-import type { CurrentUser } from "@/lib/mekoApi";
-import { getApiErrorMessage, getDatapack, updateDatapack } from "@/lib/mekoApi";
+import type { CurrentUser } from "@/lib/api/mekoApi";
+import { getApiErrorMessage, getDatapack, updateDatapack } from "@/lib/api/mekoApi";
 
 type Props = {
   datapackName: string;

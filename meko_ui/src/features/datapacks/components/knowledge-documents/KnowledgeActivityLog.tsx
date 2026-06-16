@@ -19,7 +19,7 @@ import {
   getApiErrorMessage,
   getKnowledgeBaseActivityLog,
   type KBActivityLogItem,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 
 const DEFAULT_PAGE_SIZE = 10;
 

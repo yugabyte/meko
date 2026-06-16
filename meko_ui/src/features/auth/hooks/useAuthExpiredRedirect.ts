@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
+import { AUTH_EXPIRED_EVENT, ONBOARDING_STATUS_CACHE_KEY } from "@/lib/api/mekoApi";
 import { removeLocalItem } from "@/lib/browserStorage";
-import { AUTH_EXPIRED_EVENT, ONBOARDING_STATUS_CACHE_KEY } from "@/lib/mekoApi";
 import type { NavigateFunction } from "react-router-dom";
 
 type Args = {

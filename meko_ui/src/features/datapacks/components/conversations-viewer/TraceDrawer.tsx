@@ -44,7 +44,7 @@ import {
   getApiErrorMessage,
   getDatapackMessageTrace,
   type DatapackTraceSpan,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { Link } from "react-router-dom";
 import { ROUTES, datapackKnowledgePath } from "@/app/routes/paths";
 import { parseMemoryOutput } from "./parseMemoryOutput";
@@ -212,9 +212,7 @@ export function TraceDrawer({
    */
   const memorySpans = useMemo(() => {
     const memoryIds = new Set(
-      spans
-        .filter((s) => /memor/i.test(s.name) && s.output)
-        .map((s) => s.id),
+      spans.filter((s) => /memor/i.test(s.name) && s.output).map((s) => s.id),
     );
     const topLevelMemorySpans = spans.filter(
       (s) =>
@@ -253,7 +251,7 @@ export function TraceDrawer({
       memorySpans.flatMap((span) =>
         // Prefer backend-expanded memory items (exact counts from DB/graph).
         // Fallback to parsed output when older API responses don't include them.
-        (span.memory_items && span.memory_items.length > 0
+        span.memory_items && span.memory_items.length > 0
           ? span.memory_items.map((item, index) => ({
               id: `${span.id}:${index}:${item.memory_id ?? "na"}`,
               span,
@@ -277,7 +275,7 @@ export function TraceDrawer({
               entityNames: [],
               relationNames: [],
               signals: { vector: 0, entities: 0, relations: 0 },
-            }))),
+            })),
       ),
     [memorySpans],
   );
@@ -464,9 +462,7 @@ export function TraceDrawer({
                       childrenOf={tree.childrenOf}
                       totalMs={totalMs}
                       collapsed={collapsed}
-                      onToggle={(id) =>
-                        setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))
-                      }
+                      onToggle={(id) => setCollapsed((prev) => ({ ...prev, [id]: !prev[id] }))}
                       hoveredSpanId={hoveredSpanId}
                       hoverSource={hoverSource}
                       activePathSpanIds={activePathSpanIds}
@@ -500,10 +496,11 @@ export function TraceDrawer({
                   inside the clip box instead of being cut at the edges. */}
               <div className="overflow-y-auto h-full px-4">
                 <div className="mb-3 flex items-center gap-2">
-                  <BrainCircuit className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-300" aria-hidden />
-                  <h4 className="text-[13px] font-medium text-foreground">
-                    Extracted memories
-                  </h4>
+                  <BrainCircuit
+                    className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-300"
+                    aria-hidden
+                  />
+                  <h4 className="text-[13px] font-medium text-foreground">Extracted memories</h4>
                   <span className="ml-auto shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] text-blue-700 dark:text-blue-300">
                     {memoryItems.length}
                   </span>
@@ -533,7 +530,10 @@ export function TraceDrawer({
                 {promotedMemoryItems.length > 0 ? (
                   <>
                     <div className="mb-2 mt-5 flex items-center gap-2">
-                      <BookUp className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-300" aria-hidden />
+                      <BookUp
+                        className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-300"
+                        aria-hidden
+                      />
                       <h4 className="text-[13px] font-medium text-emerald-700 dark:text-emerald-300">
                         Promoted memories
                       </h4>
@@ -711,26 +711,23 @@ function MemoryCard({
             ? "border-blue-500/20 bg-blue-500/5 hover:border-blue-400/40 hover:bg-blue-500/10"
             : "border-amber-400/80 bg-amber-500/15",
       )}
-      style={
-        flashing
-          ? { animation: "meko-memory-flash 0.7s ease-in-out 4" }
-          : undefined
-      }
+      style={flashing ? { animation: "meko-memory-flash 0.7s ease-in-out 4" } : undefined}
       onMouseEnter={() => onHoverSpan(span.id, "memory")}
       onMouseLeave={() => onHoverSpan(null, "memory")}
     >
       <div className="mb-1.5 flex items-center gap-1.5">
         <Brain className="h-3 w-3 shrink-0 text-blue-600 dark:text-blue-300" aria-hidden />
-        <span className="truncate text-[11px] text-blue-700 dark:text-blue-200/70" title={span.name}>
+        <span
+          className="truncate text-[11px] text-blue-700 dark:text-blue-200/70"
+          title={span.name}
+        >
           {`${span.name} #${ordinal}`}
         </span>
         <span className="ml-auto shrink-0 tabular-nums text-[10px] text-muted-foreground">
           {formatDuration(span.duration_ms)}
         </span>
       </div>
-      <p className="text-[12.5px] leading-relaxed text-foreground/85">
-        {memoryText}
-      </p>
+      <p className="text-[12.5px] leading-relaxed text-foreground/85">{memoryText}</p>
       {promoted ? (
         // Promoted memories live in the KB now (evicted from mem0), so the
         // vector/entity/relation counts no longer apply. The status row links
@@ -748,9 +745,7 @@ function MemoryCard({
             <div className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300">
               Promoted to knowledge base
             </div>
-            <div className="text-[10px] text-muted-foreground">
-              Now a shared knowledge entry
-            </div>
+            <div className="text-[10px] text-muted-foreground">Now a shared knowledge entry</div>
           </div>
           <SquareArrowOutUpRight
             className="ml-auto h-3 w-3 shrink-0 text-emerald-600/70 transition-colors group-hover:text-emerald-600 dark:text-emerald-300/70 dark:group-hover:text-emerald-300"
@@ -814,7 +809,9 @@ function MemoryCard({
           ) : null}
           {topRelations.length > 0 ? (
             <div className="flex min-w-0 items-start gap-1 text-[10px] text-blue-700 dark:text-blue-100/65">
-              <span className="shrink-0 text-blue-700/70 dark:text-blue-100/55">Sample relations:</span>
+              <span className="shrink-0 text-blue-700/70 dark:text-blue-100/55">
+                Sample relations:
+              </span>
               <span className="flex min-w-0 flex-1 flex-wrap gap-1">
                 {topRelations.map((name) => (
                   <span
@@ -861,56 +858,49 @@ function MemoryMetaBadge({
         ? "Embedding present for this memory."
         : "No embedding row linked to this memory."
       : metricName === "Entities"
-      ? `${metricValue} graph node${metricValue === 1 ? "" : "s"} referenced.`
-      : `${metricValue} edge${metricValue === 1 ? "" : "s"} connected to those nodes.`;
+        ? `${metricValue} graph node${metricValue === 1 ? "" : "s"} referenced.`
+        : `${metricValue} edge${metricValue === 1 ? "" : "s"} connected to those nodes.`;
 
   const sampledNames =
-    metricName === "Entities"
-      ? entityNames
-      : metricName === "Relations"
-      ? relationNames
-      : [];
+    metricName === "Entities" ? entityNames : metricName === "Relations" ? relationNames : [];
 
   const sampledLabel =
     metricName === "Entities"
       ? "Sample nodes (subset)"
       : metricName === "Relations"
-      ? "Sample relations (subset)"
-      : "Sample graph labels";
+        ? "Sample relations (subset)"
+        : "Sample graph labels";
   return (
-    <HoverInfoBadge
-      label={label}
-      ariaLabel={`${label}: ${description}`}
-    >
-        <span className="mb-1 block text-[11px] font-medium text-foreground">
-          {metricName}: {metricValue}
-        </span>
-        <span className="block text-[10px] text-foreground/85">{description}</span>
-        <span className="mt-1 block text-[10px] text-muted-foreground">{detail}</span>
-        <span className="mt-1 block text-[10px] text-foreground/75">{dynamicSummary}</span>
-        <span className="mt-1 block text-[10px] text-muted-foreground">
-          Span latency: {formatDuration(spanDurationMs)} · Source: persisted mem0 + graph DB
-        </span>
-        {sampledNames.length > 0 ? (
-          <span className="mt-1 block text-[10px] text-foreground/75">
-            {sampledLabel}
-            <span className="mt-1 flex flex-wrap gap-1">
-              {sampledNames.slice(0, 4).map((name) => (
-                <span
-                  key={name}
-                  className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground/90"
-                >
-                  {name}
-                </span>
-              ))}
-            </span>
+    <HoverInfoBadge label={label} ariaLabel={`${label}: ${description}`}>
+      <span className="mb-1 block text-[11px] font-medium text-foreground">
+        {metricName}: {metricValue}
+      </span>
+      <span className="block text-[10px] text-foreground/85">{description}</span>
+      <span className="mt-1 block text-[10px] text-muted-foreground">{detail}</span>
+      <span className="mt-1 block text-[10px] text-foreground/75">{dynamicSummary}</span>
+      <span className="mt-1 block text-[10px] text-muted-foreground">
+        Span latency: {formatDuration(spanDurationMs)} · Source: persisted mem0 + graph DB
+      </span>
+      {sampledNames.length > 0 ? (
+        <span className="mt-1 block text-[10px] text-foreground/75">
+          {sampledLabel}
+          <span className="mt-1 flex flex-wrap gap-1">
+            {sampledNames.slice(0, 4).map((name) => (
+              <span
+                key={name}
+                className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground/90"
+              >
+                {name}
+              </span>
+            ))}
           </span>
-        ) : null}
-        {memoryId ? (
-          <span className="mt-1 block font-mono text-[10px] text-muted-foreground">
-            Memory ID: {compactTraceMemoryID(memoryId)}
-          </span>
-        ) : null}
+        </span>
+      ) : null}
+      {memoryId ? (
+        <span className="mt-1 block font-mono text-[10px] text-muted-foreground">
+          Memory ID: {compactTraceMemoryID(memoryId)}
+        </span>
+      ) : null}
     </HoverInfoBadge>
   );
 }
@@ -1067,9 +1057,7 @@ function SpanTreeNode({
   // total tokens + cost for the whole operation. Falls back gracefully
   // when there are no LLM calls (e.g. Knowledgebase Search).
   const aggUsage =
-    !usage && span.type === "TOOL"
-      ? aggregateSubtreeUsage(spanId, byId, childrenOf)
-      : null;
+    !usage && span.type === "TOOL" ? aggregateSubtreeUsage(spanId, byId, childrenOf) : null;
   const showAgg = !!aggUsage && aggUsage.count > 0;
   const aggSuffix = showAgg
     ? ` (sum of ${aggUsage!.count} LLM call${aggUsage!.count === 1 ? "" : "s"})`
@@ -1114,19 +1102,24 @@ function SpanTreeNode({
             )}
           </button>
         ) : (
-          <span
-            className="flex h-4 w-4 shrink-0 items-center justify-center"
-            aria-hidden
-          >
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden>
             <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60" />
           </span>
         )}
 
-        <span className={cn("inline-flex h-4 w-4 shrink-0 items-center justify-center", accent.iconColor)}>
+        <span
+          className={cn(
+            "inline-flex h-4 w-4 shrink-0 items-center justify-center",
+            accent.iconColor,
+          )}
+        >
           {accent.icon}
         </span>
 
-        <span className="min-w-0 flex-1 max-w-full truncate text-[13px] text-foreground/90" title={span.name}>
+        <span
+          className="min-w-0 flex-1 max-w-full truncate text-[13px] text-foreground/90"
+          title={span.name}
+        >
           {span.name}
         </span>
 
@@ -1200,10 +1193,7 @@ function SpanTreeNode({
           (%s / $1) are shown as-is. */}
       {hasQuery ? (
         <div
-          className={cn(
-            "mb-1",
-            hasHoverContext && !isOnActivePath && !isFlashing && "opacity-45",
-          )}
+          className={cn("mb-1", hasHoverContext && !isOnActivePath && !isFlashing && "opacity-45")}
           style={{ marginLeft: `${depth * 14 + 32}px`, marginRight: "12px" }}
         >
           <button
@@ -1334,10 +1324,7 @@ function collectPathSpanIDs(
 }
 
 /** Max depth from any root (root row = 0, first child row = 1, …). */
-function maxSpanTreeDepthFromRoots(
-  childrenOf: Record<string, string[]>,
-  roots: string[],
-): number {
+function maxSpanTreeDepthFromRoots(childrenOf: Record<string, string[]>, roots: string[]): number {
   let globalMax = 0;
   const walk = (id: string, depth: number) => {
     globalMax = Math.max(globalMax, depth);
@@ -1491,11 +1478,7 @@ function toNumberOrNull(value: unknown): number | null {
   return null;
 }
 
-function formatTokenUsage(usage: {
-  input?: number;
-  output?: number;
-  total?: number;
-}): string {
+function formatTokenUsage(usage: { input?: number; output?: number; total?: number }): string {
   const inTokens = usage.input ?? 0;
   const outTokens = usage.output ?? 0;
   const totalTokens = usage.total ?? inTokens + outTokens;

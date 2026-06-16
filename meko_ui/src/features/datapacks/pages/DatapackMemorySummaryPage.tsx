@@ -7,7 +7,7 @@ import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-de
 import { MemoryReadOnlySummaryPanel } from "@/features/datapacks/components/memory-promotion/MemoryReadOnlySummaryPanel";
 import { WarningBanner } from "@/components/ui/warning-banner";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
-import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/mekoApi";
+import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/api/mekoApi";
 
 type Props = {
   datapackName: string;

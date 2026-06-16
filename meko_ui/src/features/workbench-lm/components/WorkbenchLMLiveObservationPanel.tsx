@@ -45,7 +45,7 @@ import {
   promoteMemories,
   type Memory,
   type PromotedMemory,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import {
   isDatapackGrantEligibleToPromoteMemoryToKnowledge,
   type DatapackShareGrant,

@@ -45,7 +45,7 @@ import {
   getKnowledgeBaseDocuments,
   requestKnowledgeBaseDownloadURL,
   type KnowledgeBaseDocument,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { toast } from "@/hooks/use-toast";
 import { documentNameLastSegment } from "./knowledgeDocumentName";
 import {

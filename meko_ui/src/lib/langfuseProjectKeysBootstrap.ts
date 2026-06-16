@@ -3,7 +3,7 @@
  * Shared by overview (all listed packs), detail (current pack), and the legacy reference page.
  */
 import { useEffect } from "react";
-import { ensureLangfuseProjectKeys } from "@/lib/mekoApi";
+import { ensureLangfuseProjectKeys } from "@/lib/api/mekoApi";
 import { DEFAULT_ACCOUNT_DATAPACK_NAME } from "@/app/routes/paths";
 
 const LANGFUSE_PROJECT_KEYS_CACHE_KEY = "meko:langfuse-project-keys-cache:v1";

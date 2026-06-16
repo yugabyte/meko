@@ -9,7 +9,7 @@ import {
   resendDatapackInvite,
   revokeDatapackInvite,
   type DatapackOutgoingPendingInvite,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { shareGrantDescription, shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 
 type Props = {

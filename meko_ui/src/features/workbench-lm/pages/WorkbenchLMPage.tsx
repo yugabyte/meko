@@ -24,15 +24,11 @@ import {
   type DatapackConversation,
   type DatapackThreadMessage,
   type KnowledgeBaseDocument,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDatapacks } from "@/features/datapacks/hooks/useDatapacks";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
-import {
-  getPersistedItem,
-  removePersistedItem,
-  setPersistedItem,
-} from "@/lib/browserStorage";
+import { getPersistedItem, removePersistedItem, setPersistedItem } from "@/lib/browserStorage";
 import { isDatapackGrantEligibleForWorkbenchLM } from "@/lib/datapackShareGrants";
 import { SAMPLE_KNOWLEDGE_FILENAME } from "@/features/workbench-lm/data/sampleKnowledge";
 import { DATAPACK_ID_QUERY_PARAM } from "@/app/routes/paths";
@@ -120,8 +116,10 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
   // Trace drawer state — message_id + conversation_id to deep-link into the
   // existing TraceDrawer (same one the Conversations viewer uses). Owning it
   // at the page level so the drawer survives chat re-renders cleanly.
-  const [traceTarget, setTraceTarget] = useState<{ messageId: string; conversationId: string } | null>(null);
-
+  const [traceTarget, setTraceTarget] = useState<{
+    messageId: string;
+    conversationId: string;
+  } | null>(null);
 
   // --- Sessions / resume-previous-chat state ------------------------------
   const SESSIONS_FETCH_LIMIT = 20;
@@ -194,8 +192,7 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
         // members' sessions. The effect re-runs once `accountId` lands
         // (it's in this callback's deps) and fills the list.
         const conversations = (resp.conversations ?? []).filter(
-          (c) => c.agent_id === WORKBENCH_LM_AGENT_ID
-            && c.user_id === accountId,
+          (c) => c.agent_id === WORKBENCH_LM_AGENT_ID && c.user_id === accountId,
         );
         setSessions(conversations);
       } catch (err) {
@@ -256,8 +253,6 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
     void refreshSessions();
   }, [refreshSessions]);
 
-
-
   // Pull the per-datapack mcp_api_key from /provision-status; the gateway
   // forwards it as `Authorization: Bearer <token>` to MCP. A failure here
   // leaves `mcpToken` null and the chat input falls back to the dev env var
@@ -279,10 +274,7 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
 
   // Stable callback so `WorkbenchLMKnowledgePanel`'s `useEffect` deps don't
   // churn each render.
-  const handleKbDocsChange = useCallback(
-    (docs: KnowledgeBaseDocument[]) => setKbDocs(docs),
-    [],
-  );
+  const handleKbDocsChange = useCallback((docs: KnowledgeBaseDocument[]) => setKbDocs(docs), []);
 
   // Single mutator for the selection — writes to the URL, the derived
   // `selectedId` falls out of that on the next render. Centralised so
@@ -347,9 +339,7 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
   // string, but `pendingSwitch` is an ID. Look up against the accessible
   // list (already filtered to packs the user can chat with).
   const pendingSwitchName = useMemo(
-    () =>
-      accessibleDatapacks.find((dp) => dp.datapack_id === pendingSwitch)?.datapack_name ??
-      "",
+    () => accessibleDatapacks.find((dp) => dp.datapack_id === pendingSwitch)?.datapack_name ?? "",
     [accessibleDatapacks, pendingSwitch],
   );
 
@@ -392,7 +382,6 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
     };
   }, [refetchDatapacks]);
 
-
   // Auto-select / validate the active datapack against the freshly
   // loaded list. Three cases:
   //   1. URL has no `datapack_id` and storage has no fallback (or it's
@@ -410,10 +399,7 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
   // want to sort here to keep the user's own packs at the top.
   useEffect(() => {
     if (accessibleDatapacks.length === 0) return;
-    if (
-      selectedId &&
-      accessibleDatapacks.some((dp) => dp.datapack_id === selectedId)
-    ) {
+    if (selectedId && accessibleDatapacks.some((dp) => dp.datapack_id === selectedId)) {
       return;
     }
     writeSelectedId(accessibleDatapacks[0].datapack_id);
@@ -489,9 +475,7 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
           onTurnComplete={() => {
             setRefreshTick((t) => t + 1);
           }}
-          onOpenTrace={(messageId, conversationId) =>
-            setTraceTarget({ messageId, conversationId })
-          }
+          onOpenTrace={(messageId, conversationId) => setTraceTarget({ messageId, conversationId })}
           loadedConversationId={loadedConversationId}
           loadedThread={loadedThread}
           loadedLangfuseProjectId={loadedLangfuseProjectId}
@@ -503,7 +487,6 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
           // "Promote to Ko" for contributors (owner/maintainer keep it).
           datapackGrant={selectedDatapack?.grant ?? null}
           paused={!isRouteActive}
-
         />
       </div>
 

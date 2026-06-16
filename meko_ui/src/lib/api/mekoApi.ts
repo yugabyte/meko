@@ -1,6 +1,7 @@
 import axios from "axios";
-import type { DatapackShareGrant } from "./datapackShareGrants";
-import type { KbHit, MemoryHit, ProcessingStep } from "./inferenceGateway";
+
+import type { DatapackShareGrant } from "@/lib/datapackShareGrants";
+import type { KbHit, MemoryHit, ProcessingStep } from "../inferenceGateway";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 
 type ApiError = {
@@ -193,7 +194,6 @@ export type AuthSessionTokens = {
   expires_in: number;
 };
 
-
 /** Cognito challenge from POST /auth/login when the user must set a new password first. */
 export const AUTH_CHALLENGE_NEW_PASSWORD_REQUIRED = "NEW_PASSWORD_REQUIRED" as const;
 export type LoginNewPasswordChallengeResponse = {
@@ -210,6 +210,14 @@ export type CurrentUser = {
   first_name: string;
   last_name: string;
   has_completed_onboarding: boolean;
+  /**
+   * Billing tier from `meko_system.users.user_type`. Optional because the
+   * BE may not return it yet on older deploys — UI falls back to "free".
+   * Values mirror the planned PlanId enum: free | starter | growth | scale
+   * | enterprise. Today's BE only emits free | pro | enterprise; mapping
+   * lives in `features/billing/hooks/useCurrentPlan`.
+   */
+  user_type?: string;
 };
 
 export type LangfuseProjectKeys = {
@@ -230,10 +238,7 @@ export type ProvisionStatus = {
   deploy_env: "prod" | "dev";
 };
 
-const API_BASE = (import.meta.env.VITE_MEKO_API_BASE_URL || "/api/v1").replace(
-  /\/$/,
-  "",
-);
+const API_BASE = (import.meta.env.VITE_MEKO_API_BASE_URL || "/api/v1").replace(/\/$/, "");
 const apiClient = axios.create({
   baseURL: API_BASE,
   withCredentials: true,
@@ -264,7 +269,9 @@ export type CompleteNewPasswordPayload = {
   last_name: string;
 };
 
-async function request<T>(
+// Exported so per-feature API modules under src/lib/api/* can reuse the
+// shared envelope unwrap + auth-expired handling without duplicating it.
+export async function request<T>(
   path: string,
   method: "GET" | "POST" | "PATCH" | "DELETE" = "GET",
   body?: unknown,
@@ -285,11 +292,7 @@ async function request<T>(
         httpStatus: res.status,
       });
     }
-    if (
-      path === "/auth/login" ||
-      path === "/auth/me" ||
-      path === "/auth/complete-new-password"
-    ) {
+    if (path === "/auth/login" || path === "/auth/me" || path === "/auth/complete-new-password") {
       resetAuthExpiredState();
     }
     return payload.data;
@@ -338,7 +341,10 @@ async function request<T>(
  * Maps errors from {@link request} (and raw axios failures) to a string safe to show in UI.
  * Prefer this over `err instanceof Error ? err.message : "…"` so network and HTTP cases read clearly.
  */
-export function getApiErrorMessage(err: unknown, fallback = "Something went wrong. Please try again."): string {
+export function getApiErrorMessage(
+  err: unknown,
+  fallback = "Something went wrong. Please try again.",
+): string {
   if (isMekoApiRequestError(err)) {
     return err.message.trim() || fallback;
   }
@@ -411,10 +417,7 @@ export async function listAgents(name: string, options: DatapackRouteOptions = {
   );
 }
 
-export async function listKnowledgeBases(
-  name: string,
-  options: DatapackRouteOptions = {},
-) {
+export async function listKnowledgeBases(name: string, options: DatapackRouteOptions = {}) {
   return request<KnowledgeBase[]>(
     withDatapackID(`/datapacks/${encodeURIComponent(name)}/knowledge-bases`, options.datapackId),
     "GET",
@@ -484,7 +487,7 @@ export {
   DATAPACK_SHARE_GRANT_VIEWER,
   DATAPACK_SHARE_GRANTS,
   isDatapackShareGrant,
-} from "./datapackShareGrants";
+} from "@/lib/datapackShareGrants";
 
 /** Recipient action on a pending invite. */
 export type DatapackInviteUserAction = "accept" | "decline";
@@ -592,7 +595,10 @@ export async function listDatapackOutgoingShares(
   options: DatapackRouteOptions = {},
 ) {
   return request<DatapackOutgoingSharesResponse>(
-    withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/outgoing-shares`, options.datapackId),
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/outgoing-shares`,
+      options.datapackId,
+    ),
     "GET",
     undefined,
     options,
@@ -608,13 +614,15 @@ export async function listDatapackMembers(
   options: DatapackRouteOptions = {},
 ) {
   return request<DatapackMembersResponse>(
-    withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/member-list`, options.datapackId),
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/member-list`,
+      options.datapackId,
+    ),
     "GET",
     undefined,
     options,
   );
 }
-
 
 /** Combined members + pending invites for share UI (from member-list + outgoing-shares). */
 export type DatapackShareListsResponse = {
@@ -810,11 +818,9 @@ export async function getCurrentUser(options: { signal?: AbortSignal } = {}) {
 }
 
 export async function updateOnboardingStatus(hasCompletedOnboarding: boolean) {
-  return request<{ message: string; has_completed_onboarding: boolean }>(
-    "/auth/me",
-    "PATCH",
-    { has_completed_onboarding: hasCompletedOnboarding },
-  );
+  return request<{ message: string; has_completed_onboarding: boolean }>("/auth/me", "PATCH", {
+    has_completed_onboarding: hasCompletedOnboarding,
+  });
 }
 
 // --- Meko personal access tokens (MCP PATs) ---
@@ -861,18 +867,10 @@ export async function createMekoToken(
   payload: CreateMekoTokenPayload,
   options: { signal?: AbortSignal } = {},
 ) {
-  return request<CreateMekoTokenResponse>(
-    "/me/meko-tokens",
-    "POST",
-    payload,
-    options,
-  );
+  return request<CreateMekoTokenResponse>("/me/meko-tokens", "POST", payload, options);
 }
 
-export async function revokeMekoToken(
-  tokenId: string,
-  options: { signal?: AbortSignal } = {},
-) {
+export async function revokeMekoToken(tokenId: string, options: { signal?: AbortSignal } = {}) {
   // DELETE returns 204 No Content. The request<T> helper expects an
   // envelope; the underlying handler treats null bodies as `data: null`
   // so we just claim void here.
@@ -981,7 +979,10 @@ export async function listDatapackConversations(
   if (params.q) qs.set("q", params.q);
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request<ListDatapackConversationsResponse>(
-    withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/conversations${suffix}`, options.datapackId),
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/conversations${suffix}`,
+      options.datapackId,
+    ),
     "GET",
     undefined,
     options,
@@ -1223,7 +1224,10 @@ export async function getDatapackConversationCount(
   options: DatapackRouteOptions = {},
 ) {
   return request<DatapackConversationCount>(
-    withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/conversations/count`, options.datapackId),
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/conversations/count`,
+      options.datapackId,
+    ),
     "GET",
     undefined,
     options,
@@ -1256,7 +1260,10 @@ export async function getDatapackProvisionStatus(
   options: DatapackRouteOptions = {},
 ) {
   return request<ProvisionStatus>(
-    withDatapackID(`/datapacks/${encodeURIComponent(datapackName)}/provision-status`, options.datapackId),
+    withDatapackID(
+      `/datapacks/${encodeURIComponent(datapackName)}/provision-status`,
+      options.datapackId,
+    ),
     "GET",
     undefined,
     options,
@@ -1265,7 +1272,7 @@ export async function getDatapackProvisionStatus(
 
 // --- Knowledge Base file upload & RAG APIs ---
 
-export { sha256Hex, canUseWebCryptoSha256, isNonSecureHttpOrigin } from "./sha256File";
+export { sha256Hex, canUseWebCryptoSha256, isNonSecureHttpOrigin } from "../sha256File";
 
 export async function requestUploadURL(
   datapackName: string,
@@ -1275,7 +1282,12 @@ export async function requestUploadURL(
   contentHash: string,
   options: DatapackRouteOptions = {},
 ) {
-  return request<{ url: string; key: string; already_uploaded: boolean; existing_filename?: string }>(
+  return request<{
+    url: string;
+    key: string;
+    already_uploaded: boolean;
+    existing_filename?: string;
+  }>(
     withDatapackID(
       `/datapacks/${encodeURIComponent(datapackName)}/knowledge-bases/upload-url`,
       options.datapackId,
@@ -1398,7 +1410,6 @@ export type KnowledgeBaseDocument = {
   size_bytes?: number | null;
 };
 
-
 /** Paginated envelope returned by GET .../knowledge-bases/documents. */
 export type KnowledgeBaseDocumentsPage = {
   items: KnowledgeBaseDocument[];
@@ -1477,7 +1488,6 @@ export type KnowledgeBaseSummary = {
   description: string;
   files_summary: string;
 };
-
 
 export async function getKnowledgeBaseSummary(
   datapackName: string,
@@ -1708,7 +1718,6 @@ export type MemoryListResponse = {
   langfuse_project_id?: string;
 };
 
-
 /**
  * GET /memories.
  *
@@ -1909,4 +1918,3 @@ export async function listPromotedMemories(
     options,
   );
 }
-

@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { Datapack } from "@/lib/mekoApi";
+import type { Datapack } from "@/lib/api/mekoApi";
 import {
   formatDatapackShareGrantCamelCase,
   type DatapackShareGrant,

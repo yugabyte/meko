@@ -29,7 +29,7 @@ import { ObserveButton } from "@/features/datapacks/components/ObserveButton";
 import { useMemoryReadOnlyList } from "./useMemoryReadOnlyList";
 import { PAGE_SIZE_OPTIONS } from "./useMemoryPromotion";
 import { MemoryRowBody } from "./memoryRowBody";
-import { deleteMemory, getApiErrorMessage, type Memory } from "@/lib/mekoApi";
+import { deleteMemory, getApiErrorMessage, type Memory } from "@/lib/api/mekoApi";
 
 type Props = {
   datapackName: string;

@@ -31,12 +31,9 @@ import {
   Sparkles,
   SquareArrowOutUpRight,
 } from "lucide-react";
-import {
-  CONVERSATION_SOURCE,
-  datapackConversationsPathWithSource,
-} from "@/app/routes/paths";
+import { CONVERSATION_SOURCE, datapackConversationsPathWithSource } from "@/app/routes/paths";
+import type { PromotedMemory } from "@/lib/api/mekoApi";
 import { formatRelativeTime, formatUtcAbsolute, useNowMs } from "@/lib/relativeTime";
-import type { PromotedMemory } from "@/lib/mekoApi";
 
 type Props = {
   memory: PromotedMemory;
@@ -72,7 +69,8 @@ export function PromotedMemoryCard({
   // Prefer the full name when available, otherwise fall back to email.
   // Mirrors the name → email → … fallback chain used everywhere else
   // memory authors are rendered.
-  const promotedBy = (memory.promoted_by_name ?? "").trim() || (memory.promoted_by_email ?? "").trim();
+  const promotedBy =
+    (memory.promoted_by_name ?? "").trim() || (memory.promoted_by_email ?? "").trim();
   // First 8 chars of memory id — enough to disambiguate in the UI
   // without consuming a whole row. Matches the "<id-prefix>" pattern
   // used by the conversations viewer.
@@ -103,11 +101,10 @@ export function PromotedMemoryCard({
           {promotedAt ? (
             <span title={promotedAt}>
               promoted{" "}
-              <span className="text-foreground/85">
-                {formatRelativeTime(promotedAt, nowMs)}
-              </span>
+              <span className="text-foreground/85">{formatRelativeTime(promotedAt, nowMs)}</span>
               <span className="text-muted-foreground/80">
-                {" · "}{formatUtcAbsolute(promotedAt)}
+                {" · "}
+                {formatUtcAbsolute(promotedAt)}
               </span>
               {promotedBy ? (
                 <>
@@ -141,7 +138,7 @@ export function PromotedMemoryCard({
       {/* Source memory drawer. Collapsed by default so the card stays
           compact; expand to inspect provenance. Only rendered when we
           have something useful to show (conv id or memory id). */}
-      {(conversationId || memoryIdPrefix) ? (
+      {conversationId || memoryIdPrefix ? (
         <section className="rounded-lg border border-border bg-background/30">
           <button
             type="button"

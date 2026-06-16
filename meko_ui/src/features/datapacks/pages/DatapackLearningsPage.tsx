@@ -15,7 +15,7 @@ import {
   datapackDetailPath,
   datapackKnowledgePath,
 } from "@/app/routes/paths";
-import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/mekoApi";
+import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/api/mekoApi";
 import { isDatapackGrantEligibleToPromoteMemoryToKnowledge } from "@/lib/datapackShareGrants";
 
 type Props = {

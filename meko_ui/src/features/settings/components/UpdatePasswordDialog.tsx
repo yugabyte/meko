@@ -17,7 +17,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -26,7 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
-import { changePassword, getApiErrorMessage } from "@/lib/mekoApi";
+import { changePassword, getApiErrorMessage } from "@/lib/api/mekoApi";
 import {
   getPasswordPolicyError,
   PasswordPolicyPanel,
@@ -82,9 +81,7 @@ export function UpdatePasswordDialog({ open, onOpenChange, username }: Props) {
   }, [open]);
 
   const confirmPasswordMismatch =
-    confirmPasswordTouched &&
-    confirmPassword.length > 0 &&
-    newPassword !== confirmPassword;
+    confirmPasswordTouched && confirmPassword.length > 0 && newPassword !== confirmPassword;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -168,9 +165,7 @@ export function UpdatePasswordDialog({ open, onOpenChange, username }: Props) {
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="settings-confirm-password">
-              Confirm new password
-            </Label>
+            <Label htmlFor="settings-confirm-password">Confirm new password</Label>
             <Input
               id="settings-confirm-password"
               type={showPasswords ? "text" : "password"}
@@ -192,10 +187,7 @@ export function UpdatePasswordDialog({ open, onOpenChange, username }: Props) {
               required
               className={passwordInputClass}
             />
-            <p
-              id="settings-confirm-password-help"
-              className="text-xs text-muted-foreground"
-            >
+            <p id="settings-confirm-password-help" className="text-xs text-muted-foreground">
               Re-enter your new password. It must match exactly.
             </p>
             {confirmPasswordMismatch ? (

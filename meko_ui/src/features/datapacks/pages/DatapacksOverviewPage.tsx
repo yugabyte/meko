@@ -6,7 +6,6 @@ import {
   ChevronDown,
   ChevronUp,
   Database,
-  Layers,
   Link as LinkIcon,
   Plus,
   Sparkles,
@@ -20,7 +19,7 @@ import {
   type CurrentUser,
   type Datapack,
   type ProvisionStatus,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
 import {
   DEFAULT_ACCOUNT_DATAPACK_NAME,

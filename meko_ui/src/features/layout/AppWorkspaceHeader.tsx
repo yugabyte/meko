@@ -3,14 +3,12 @@
  * when `showUserAvatar` is true, invite notifications plus “Signed in as …”
  * from the shared {@link useCurrentUser} query.
  */
+
 import { type ReactNode } from "react";
-import { Link } from "react-router-dom";
-import { Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { IncomingShareNotificationsBell } from "@/features/layout/IncomingShareNotificationsBell";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
-import { ROUTES } from "@/app/routes/paths";
 
 export type AppWorkspaceHeaderProps = {
   /** Left column (e.g. Observe title + subtitle). */
@@ -84,23 +82,7 @@ export function AppWorkspaceHeader({
               <span className="text-muted-foreground">Signed in</span>
             )}
           </p>
-          {/*
-            Settings entry — sits to the right of the email so it's
-            always one click away on any workspace page. Renders with a
-            visible label (not just an icon) so it doesn't disappear
-            against the dark header background. Hidden in the loader
-            frame so it doesn't pop in next to the skeleton.
-          */}
-          {!userLoading ? (
-            <Link
-              to={ROUTES.settings}
-              aria-label="Settings"
-              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-foreground transition-colors hover:border-blue-400/50 hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
-            >
-              <Settings className="h-3.5 w-3.5 text-blue-700 dark:text-blue-300" aria-hidden />
-              <span>Settings</span>
-            </Link>
-          ) : null}
+          {/* Settings moved to the left sidebar — see Sidebar.tsx. */}
         </div>
       ) : null}
     </header>

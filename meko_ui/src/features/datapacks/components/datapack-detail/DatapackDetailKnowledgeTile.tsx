@@ -1,7 +1,7 @@
 import { FileText, Link2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import type { KnowledgeBaseDocument } from "@/lib/mekoApi";
+import type { KnowledgeBaseDocument } from "@/lib/api/mekoApi";
 import { datapackKnowledgePath } from "@/app/routes/paths";
 import { documentNameLastSegment } from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentName";
 import { kbDocumentStatusLabel } from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentStatus";

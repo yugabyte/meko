@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { getApiErrorMessage, signup, confirmSignup } from "@/lib/api/mekoApi";
 import { Eye, EyeOff } from "lucide-react";
-import { getApiErrorMessage, signup, confirmSignup } from "@/lib/mekoApi";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ROUTES } from "@/app/routes/paths";
@@ -85,10 +85,7 @@ export default function SignUpPage() {
         <h1 className="mb-6 text-center text-3xl font-semibold text-foreground">
           {awaitingCode ? "Confirm your account" : "Sign up for Meko"}
         </h1>
-        <form
-          className="space-y-4"
-          onSubmit={awaitingCode ? handleConfirm : handleSignup}
-        >
+        <form className="space-y-4" onSubmit={awaitingCode ? handleConfirm : handleSignup}>
           {!awaitingCode ? (
             <>
               <div className="grid grid-cols-2 gap-3">
@@ -152,10 +149,7 @@ export default function SignUpPage() {
                     )}
                   </button>
                 </div>
-                <PasswordPolicyPanel
-                  id="signup-password-policy"
-                  password={password}
-                />
+                <PasswordPolicyPanel id="signup-password-policy" password={password} />
               </div>
             </>
           ) : (

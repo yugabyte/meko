@@ -1,5 +1,5 @@
 import { dispatchAppEvent } from "@/lib/browserEvents";
-import { DATAPACKS_LIST_UPDATED_EVENT } from "@/lib/mekoApi";
+import { DATAPACKS_LIST_UPDATED_EVENT } from "@/lib/api/mekoApi";
 import { clearLangfuseProjectKeysCache } from "@/lib/langfuseProjectKeysBootstrap";
 
 export const OBSERVE_BOOTSTRAP_CACHE_KEY = "meko:observe-bootstrap-cache:v1";

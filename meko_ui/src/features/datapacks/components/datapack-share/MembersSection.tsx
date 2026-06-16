@@ -13,12 +13,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import type { CurrentUser, DatapackOutgoingMember, DatapackShareGrant } from "@/lib/mekoApi";
+import type { CurrentUser, DatapackOutgoingMember, DatapackShareGrant } from "@/lib/api/mekoApi";
 import {
   getApiErrorMessage,
   removeDatapackMemberShare,
   updateDatapackMemberGrant,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { ShareComingSoonPlaceholder } from "@/features/datapacks/components/datapack-share/ShareComingSoonPlaceholder";
 import { DatapackChangeRoleConfirmDialog } from "@/features/datapacks/components/datapack-share/DatapackChangeRoleConfirmDialog";
 import { SHARE_INVITE_ROLES, shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";

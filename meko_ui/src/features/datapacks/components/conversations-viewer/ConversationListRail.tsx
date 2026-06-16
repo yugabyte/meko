@@ -25,7 +25,7 @@ import {
   getApiErrorMessage,
   listDatapackConversations,
   type DatapackConversation,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { MemoryIcon } from "@/components/conversation-telemetry";
 import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
 

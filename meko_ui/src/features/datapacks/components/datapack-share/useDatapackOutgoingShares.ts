@@ -7,7 +7,7 @@ import {
   listDatapackMembers,
   listDatapackOutgoingShares,
   type DatapackShareListsResponse,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 
 export function useDatapackOutgoingShares(datapackName: string, datapackId?: string) {
   const [data, setData] = useState<DatapackShareListsResponse | null>(null);

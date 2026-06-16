@@ -10,7 +10,7 @@ import {
   listDatapackIncomingShares,
   postDatapackInviteAction,
   type DatapackIncomingShare,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import { toast } from "@/hooks/use-toast";

@@ -14,7 +14,7 @@ import {
   ONBOARDING_STATUS_CACHE_KEY,
   ONBOARDING_STATUS_UPDATED_EVENT,
   resendSignupConfirmation,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 import { setLocalItem } from "@/lib/browserStorage";

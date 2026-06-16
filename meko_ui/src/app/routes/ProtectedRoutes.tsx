@@ -8,6 +8,7 @@ import HomePage from "@/features/home/pages/HomePage";
 import OnboardingPage from "@/features/onboarding/pages/OnboardingPage";
 import WorkbenchLMPage from "@/features/workbench-lm/pages/WorkbenchLMPage";
 import SettingsPage from "@/features/settings/pages/SettingsPage";
+import BillingPage from "@/features/billing/pages/BillingPage";
 
 type Props = {
   isOnboardingRoute: boolean;
@@ -36,10 +37,12 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const isConnect = pathname === ROUTES.connect || pathname.startsWith(`${ROUTES.connect}/`);
   const isWorkbenchLM =
     pathname === ROUTES.workbenchLm || pathname.startsWith(`${ROUTES.workbenchLm}/`);
-  const isSettings =
-    pathname === ROUTES.settings || pathname.startsWith(`${ROUTES.settings}/`);
+  const isSettings = pathname === ROUTES.settings || pathname.startsWith(`${ROUTES.settings}/`);
+
+  const isBilling = pathname === ROUTES.billing || pathname.startsWith(`${ROUTES.billing}/`);
+
   /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings. */
-  const isDatapacks = !isObserve && !isConnect && !isWorkbenchLM && !isSettings;
+  const isDatapacks = !isObserve && !isConnect && !isWorkbenchLM && !isSettings && !isBilling;
 
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden text-foreground">
@@ -47,7 +50,10 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <KbImportStatusBanner />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isConnect ? "contents" : "none" }}>
+          <div
+            className="min-h-0 flex-1 overflow-hidden"
+            style={{ display: isConnect ? "contents" : "none" }}
+          >
             <HomePage />
           </div>
           {/*
@@ -71,13 +77,28 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
             to the bottom).
           */}
           {isWorkbenchLM ? <WorkbenchLMPage isRouteActive={true} /> : null}
-          <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isSettings ? "contents" : "none" }}>
+          <div
+            className="min-h-0 flex-1 overflow-hidden"
+            style={{ display: isSettings ? "contents" : "none" }}
+          >
             <SettingsPage />
           </div>
-          <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isDatapacks ? "contents" : "none" }}>
+          <div
+            className="min-h-0 flex-1 overflow-hidden"
+            style={{ display: isBilling ? "contents" : "none" }}
+          >
+            <BillingPage />
+          </div>
+          <div
+            className="min-h-0 flex-1 overflow-hidden"
+            style={{ display: isDatapacks ? "contents" : "none" }}
+          >
             <DatapacksPage />
           </div>
-          <div className="min-h-0 flex-1 overflow-hidden" style={{ display: isObserve ? "contents" : "none" }}>
+          <div
+            className="min-h-0 flex-1 overflow-hidden"
+            style={{ display: isObserve ? "contents" : "none" }}
+          >
             <ObservePage />
           </div>
         </div>

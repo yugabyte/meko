@@ -8,7 +8,7 @@ import { ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { formatDatapackShareGrantCamelCase } from "@/lib/datapackShareGrants";
-import { DatapackShareGrant } from "@/lib/mekoApi";
+import { DatapackShareGrant } from "@/lib/api/mekoApi";
 
 /**
  * When true, shows the green “active” status pill next to the title.

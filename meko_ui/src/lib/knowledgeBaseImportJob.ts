@@ -3,7 +3,7 @@
  * Survives route changes; drives {@link KB_IMPORT_JOB_EVENT} for the global banner.
  */
 import { dispatchAppEvent } from "@/lib/browserEvents";
-import { createKnowledgeBase, getApiErrorMessage, getKBStatus } from "@/lib/mekoApi";
+import { createKnowledgeBase, getApiErrorMessage, getKBStatus } from "@/lib/api/mekoApi";
 import { toast } from "@/hooks/use-toast";
 
 export const KB_IMPORT_JOB_EVENT = "meko:kb-import-job";

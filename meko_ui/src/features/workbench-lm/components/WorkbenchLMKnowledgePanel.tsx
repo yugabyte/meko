@@ -18,7 +18,7 @@ import {
   getKnowledgeBaseDocuments,
   type DatapackConversation,
   type KnowledgeBaseDocument,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import {
   Select,
   SelectContent,
@@ -26,7 +26,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { toast } from "@/hooks/use-toast";
 import { DatapackKnowledgeUploadDialog } from "@/features/datapacks/components/datapack-detail/dialogs";
 import {
   buildSampleKnowledgeFile,
@@ -250,7 +249,9 @@ export function WorkbenchLMKnowledgePanel({
                       title={d.document_name}
                     >
                       <FileText className="h-3.5 w-3.5 shrink-0 text-emerald-400" aria-hidden />
-                      <span className="min-w-0 flex-1 truncate text-xs text-foreground">{display}</span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+                        {display}
+                      </span>
                       <span
                         className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground"
                         aria-label={`status ${d.status}`}

@@ -26,9 +26,7 @@ type Props = {
 };
 
 function preview(text: string): string {
-  return text.length > MEMORY_PREVIEW_CHARS
-    ? `${text.slice(0, MEMORY_PREVIEW_CHARS)}…`
-    : text;
+  return text.length > MEMORY_PREVIEW_CHARS ? `${text.slice(0, MEMORY_PREVIEW_CHARS)}…` : text;
 }
 
 export function MemoryHoverCard({
@@ -53,9 +51,7 @@ export function MemoryHoverCard({
   }, []);
 
   const survivingLabel =
-    count > 0
-      ? `${count.toLocaleString()} ${count === 1 ? "memory" : "memories"} extracted`
-      : "";
+    count > 0 ? `${count.toLocaleString()} ${count === 1 ? "memory" : "memories"} extracted` : "";
   const promotedLabel =
     promotedCount > 0
       ? `${promotedCount.toLocaleString()} ${promotedCount === 1 ? "memory" : "memories"} promoted to KB`
@@ -68,7 +64,9 @@ export function MemoryHoverCard({
         tabIndex={0}
         className={cn(
           "inline-flex cursor-pointer select-none items-center gap-1 rounded px-1 py-0.5 transition-colors",
-          open ? "bg-blue-500/15 text-blue-700 dark:text-blue-300" : "hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-300",
+          open
+            ? "bg-blue-500/15 text-blue-700 dark:text-blue-300"
+            : "hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-300",
         )}
         onMouseEnter={openPopover}
         onMouseLeave={closePopover}
@@ -128,7 +126,9 @@ export function MemoryHoverCard({
                 ) : null}
 
                 {promotedMemories.length > 0 ? (
-                  <div className={cn(memories.length > 0 && "mt-3 border-t border-border/60 pt-2.5")}>
+                  <div
+                    className={cn(memories.length > 0 && "mt-3 border-t border-border/60 pt-2.5")}
+                  >
                     <p className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
                       <BookUp className="h-3 w-3" aria-hidden />
                       Promoted to KB

@@ -13,7 +13,7 @@ import { Activity, Bot, Clock, Cpu, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MarkdownMessage } from "@/components/markdown-message";
 import { formatLatencyLabel } from "@/components/conversation-telemetry";
-import type { DatapackThreadMessage } from "@/lib/mekoApi";
+import type { DatapackThreadMessage } from "@/lib/api/mekoApi";
 import { DecisionTrace } from "@/components/decision-trace-viewer";
 import { MemoryHoverCard } from "./MemoryHoverCard";
 import { formatRelativeTime } from "@/lib/relativeTime";
@@ -115,10 +115,12 @@ export function ThreadTurn({
 
           <div className="relative overflow-hidden rounded-2xl">
             {hasOutput ? (
-              <div className={cn(
-                "rounded-2xl rounded-tl-sm border px-4 py-3 text-sm leading-relaxed text-foreground/95 whitespace-pre-wrap transition-colors duration-300",
-                isShimmering ? "border-foreground/20 bg-muted" : "border-border bg-card",
-              )}>
+              <div
+                className={cn(
+                  "rounded-2xl rounded-tl-sm border px-4 py-3 text-sm leading-relaxed text-foreground/95 whitespace-pre-wrap transition-colors duration-300",
+                  isShimmering ? "border-foreground/20 bg-muted" : "border-border bg-card",
+                )}
+              >
                 <MarkdownMessage text={normalizedOutput} />
               </div>
             ) : (
@@ -132,7 +134,8 @@ export function ThreadTurn({
                 className="pointer-events-none absolute inset-0 z-10"
                 style={{
                   animation: "memory-shimmer 1.6s ease-in-out forwards",
-                  background: "linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.08) 58%, transparent 70%)",
+                  background:
+                    "linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.08) 58%, transparent 70%)",
                   width: "200%",
                   height: "100%",
                   top: "0",

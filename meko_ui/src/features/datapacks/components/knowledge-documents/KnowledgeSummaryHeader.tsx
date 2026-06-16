@@ -10,7 +10,7 @@
 import { BookOpen, Clock, FileText, Layers, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
-import type { KnowledgeBaseSummary } from "@/lib/mekoApi";
+import type { KnowledgeBaseSummary } from "@/lib/api/mekoApi";
 
 type Props = {
   datapackName: string;

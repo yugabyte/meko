@@ -39,7 +39,7 @@ import {
   listMekoTokens,
   revokeMekoToken,
   type MekoToken,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 import {
   MEKO_TOKEN_MAX_COUNT,

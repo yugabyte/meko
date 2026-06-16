@@ -10,7 +10,7 @@ import { useState } from "react";
 import { Copy, KeyRound, Loader2, Mail, User as UserIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
-import { getApiErrorMessage } from "@/lib/mekoApi";
+import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { UpdatePasswordDialog } from "@/features/settings/components/UpdatePasswordDialog";
@@ -20,9 +20,7 @@ export default function SettingsPage() {
   // Shared, session-cached identity — usually already warmed by the
   // header, so deep-linking into /settings reads from cache.
   const { data: user = null, isLoading: loading, error } = useCurrentUser();
-  const errorMessage = error
-    ? getApiErrorMessage(error, "Failed to load your account.")
-    : null;
+  const errorMessage = error ? getApiErrorMessage(error, "Failed to load your account.") : null;
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
 
   // Convenience helper for the "copy account id" button — UUIDs are awkward
@@ -40,13 +38,13 @@ export default function SettingsPage() {
     }
   };
 
-  const fullName = user
-    ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim()
-    : "";
+  const fullName = user ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() : "";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background text-foreground">
-      <AppWorkspaceHeader leading={<h1 className="text-base font-medium text-foreground">Settings</h1>} />
+      <AppWorkspaceHeader
+        leading={<h1 className="text-base font-medium text-foreground">Settings</h1>}
+      />
 
       <div className="flex-1 overflow-y-auto px-8 py-8">
         <div className="mx-auto w-full max-w-2xl space-y-6">
@@ -71,12 +69,22 @@ export default function SettingsPage() {
                 <dl className="space-y-3">
                   <Field
                     label="Name"
-                    icon={<UserIcon className="h-3.5 w-3.5 text-blue-700 dark:text-blue-300" aria-hidden />}
+                    icon={
+                      <UserIcon
+                        className="h-3.5 w-3.5 text-blue-700 dark:text-blue-300"
+                        aria-hidden
+                      />
+                    }
                     value={fullName || "—"}
                   />
                   <Field
                     label="Email"
-                    icon={<Mail className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" aria-hidden />}
+                    icon={
+                      <Mail
+                        className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300"
+                        aria-hidden
+                      />
+                    }
                     value={user.email || "—"}
                   />
                   <Field

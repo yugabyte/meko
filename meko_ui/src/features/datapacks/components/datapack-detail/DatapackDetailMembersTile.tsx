@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { Crown, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { datapackMembersPath, datapackSharePath } from "@/app/routes/paths";
-import type { CurrentUser, DatapackOutgoingMember } from "@/lib/mekoApi";
+import type { CurrentUser, DatapackOutgoingMember } from "@/lib/api/mekoApi";
 import { shareInviteRoleRowPresentation } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import {
   DATAPACK_SHARE_GRANT_OWNER,

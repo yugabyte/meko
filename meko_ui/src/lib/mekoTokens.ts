@@ -3,7 +3,7 @@
 // installer-command builder all reference the same values instead of
 // drifting via inline literals.
 
-import type { MekoToken } from "@/lib/mekoApi";
+import type { MekoToken } from "@/lib/api/mekoApi";
 
 /**
  * Hard cap on tokens per user. Enforced server-side

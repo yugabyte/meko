@@ -47,22 +47,49 @@ export default function DatapacksPage() {
     if (nameEncoded) {
       const datapackName = decodeURIComponent(nameEncoded);
       if (segments[1] === DATAPACK_SUB_ROUTE.share) {
-        return <DatapackSharePage datapackName={datapackName} datapackId={routeDatapackId} currentUser={currentUser} />;
+        return (
+          <DatapackSharePage
+            datapackName={datapackName}
+            datapackId={routeDatapackId}
+            currentUser={currentUser}
+          />
+        );
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.edit && segments.length === 2) {
-        return <DatapackEditPage datapackName={datapackName} datapackId={routeDatapackId} currentUser={currentUser} />;
+        return (
+          <DatapackEditPage
+            datapackName={datapackName}
+            datapackId={routeDatapackId}
+            currentUser={currentUser}
+          />
+        );
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.configure) {
-        return <DatapackConfigureWizardPage datapackName={datapackName} datapackId={routeDatapackId} currentUser={currentUser} />;
+        return (
+          <DatapackConfigureWizardPage
+            datapackName={datapackName}
+            datapackId={routeDatapackId}
+            currentUser={currentUser}
+          />
+        );
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.memorySummary && segments.length === 2) {
-        return <DatapackMemorySummaryPage datapackName={datapackName} datapackId={routeDatapackId} />;
+        return (
+          <DatapackMemorySummaryPage datapackName={datapackName} datapackId={routeDatapackId} />
+        );
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.collectiveMemorySummary && segments.length === 2) {
-        return <DatapackCollectiveMemorySummaryPage datapackName={datapackName} datapackId={routeDatapackId} />;
+        return (
+          <DatapackCollectiveMemorySummaryPage
+            datapackName={datapackName}
+            datapackId={routeDatapackId}
+          />
+        );
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.knowledge && segments.length === 2) {
-        return <DatapackKnowledgeSummaryPage datapackName={datapackName} datapackId={routeDatapackId} />;
+        return (
+          <DatapackKnowledgeSummaryPage datapackName={datapackName} datapackId={routeDatapackId} />
+        );
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.members && segments.length === 2) {
         return <DatapackMembersListPage datapackName={datapackName} datapackId={routeDatapackId} />;
@@ -71,9 +98,7 @@ export default function DatapacksPage() {
         return <DatapackLearningsPage datapackName={datapackName} datapackId={routeDatapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.conversations && segments.length <= 3) {
-        const conversationId = segments[2]
-          ? decodeURIComponent(segments[2])
-          : undefined;
+        const conversationId = segments[2] ? decodeURIComponent(segments[2]) : undefined;
         return (
           <DatapackConversationsViewerPage
             datapackName={datapackName}

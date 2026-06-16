@@ -10,7 +10,7 @@
 import { Bot, Cpu, ExternalLink, MessageSquare, Send, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MemoryIcon } from "@/components/conversation-telemetry";
-import type { DatapackConversationDetail } from "@/lib/mekoApi";
+import type { DatapackConversationDetail } from "@/lib/api/mekoApi";
 import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 import { ROUTES } from "@/app/routes/paths";
 import { formatRelativeTime } from "@/lib/relativeTime";

@@ -142,6 +142,28 @@ func run() error {
 	sesRegion := flag.String("ses-region",
 		envOrDefault("SES_REGION", ""),
 		"AWS region for SES (e.g. us-east-2). Defaults to cognito-region when empty.")
+
+	// Stripe billing configuration. All five values must be set for
+	// the /billing/* routes to register; with any blank, the routes
+	// stay off and the UI's Upgrade / Manage payment buttons remain
+	// disabled. Price IDs come from the Stripe dashboard, one per
+	// recurring product (Starter / Growth / Scale).
+	stripeSecretKey := flag.String("stripe-secret-key",
+		os.Getenv("STRIPE_SECRET_KEY"),
+		"Stripe API secret key (sk_live_... or sk_test_...). Empty disables billing routes.")
+	stripeWebhookSecret := flag.String("stripe-webhook-secret",
+		os.Getenv("STRIPE_WEBHOOK_SECRET"),
+		"Stripe webhook signing secret (whsec_...). Required to accept /billing/webhook calls.")
+	stripePriceStarter := flag.String("stripe-price-starter",
+		os.Getenv("STRIPE_PRICE_STARTER"),
+		"Stripe Price ID for the Starter plan (e.g. price_...)")
+	stripePriceGrowth := flag.String("stripe-price-growth",
+		os.Getenv("STRIPE_PRICE_GROWTH"),
+		"Stripe Price ID for the Growth plan (e.g. price_...)")
+	stripePriceScale := flag.String("stripe-price-scale",
+		os.Getenv("STRIPE_PRICE_SCALE"),
+		"Stripe Price ID for the Scale plan (e.g. price_...)")
+
 	flag.Parse()
 
 	resolvedLogLevel := parseLogLevel(*logLevel)
@@ -307,6 +329,11 @@ func run() error {
 		SESRegion:                resolvedSESRegion,
 		SESFromAddress:           *sesFromAddress,
 		AppURL:                   appURL,
+		StripeSecretKey:          *stripeSecretKey,
+		StripeWebhookSecret:      *stripeWebhookSecret,
+		StripePriceIDStarter:     *stripePriceStarter,
+		StripePriceIDGrowth:      *stripePriceGrowth,
+		StripePriceIDScale:       *stripePriceScale,
 	})
 }
 

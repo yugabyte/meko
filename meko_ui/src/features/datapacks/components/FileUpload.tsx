@@ -11,7 +11,7 @@ import {
   sha256Hex,
   type PipelineDetail,
   type SourceStatus,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
   KNOWLEDGE_UPLOAD_MAX_BATCH,

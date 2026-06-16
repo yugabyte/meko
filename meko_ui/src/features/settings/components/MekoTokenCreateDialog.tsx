@@ -26,7 +26,7 @@ import {
   createMekoToken,
   getApiErrorMessage,
   type CreateMekoTokenResponse,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import {
   MEKO_TOKEN_DEFAULT_TTL_DAYS,
   MEKO_TOKEN_NAME_MAX_LENGTH,

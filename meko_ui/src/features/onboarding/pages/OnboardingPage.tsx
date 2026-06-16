@@ -21,7 +21,7 @@ import {
   ONBOARDING_STATUS_CACHE_KEY,
   ONBOARDING_STATUS_UPDATED_EVENT,
   updateOnboardingStatus,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { ROUTES } from "@/app/routes/paths";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";

@@ -4,7 +4,7 @@ import { setLocalItem } from "@/lib/browserStorage";
 import {
   ONBOARDING_STATUS_CACHE_KEY,
   ONBOARDING_STATUS_UPDATED_EVENT,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 
 type Args = {
   setHasCompletedOnboarding: (value: boolean) => void;

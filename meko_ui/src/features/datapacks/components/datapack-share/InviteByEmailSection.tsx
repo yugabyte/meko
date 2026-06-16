@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { SHARE_INVITE_ROLES, type ShareInviteRoleId } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 import { parseSingleInviteEmail } from "@/features/datapacks/components/datapack-share/shareInviteEmail";
 import { DATAPACK_SHARE_GRANT_CONTRIBUTOR } from "@/lib/datapackShareGrants";
-import { getApiErrorMessage, inviteDatapackShare } from "@/lib/mekoApi";
+import { getApiErrorMessage, inviteDatapackShare } from "@/lib/api/mekoApi";
 import { toast } from "@/hooks/use-toast";
 
 type Props = {

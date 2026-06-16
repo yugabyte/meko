@@ -22,7 +22,7 @@ import {
   getCurrentUser,
   listMemories,
   MEMORY_LIST_DEFAULT_USER_TYPE,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
 
 // Tile gradient tones — one per tab. Theme-aware: the default (light

@@ -9,7 +9,7 @@ import {
   getApiErrorMessage,
   listPromotedMemories,
   type PromotedMemory,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 import { DEFAULT_PAGE_SIZE } from "@/features/datapacks/components/memory-promotion/useMemoryPromotion";
 
 export function usePromotedMemoryList({

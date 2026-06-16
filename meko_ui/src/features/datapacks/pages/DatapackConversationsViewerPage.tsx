@@ -130,16 +130,11 @@ export default function DatapackConversationsViewerPage({
             className="mb-2"
           />
           <div className="flex items-center gap-2.5">
-            <MessageSquare
-              className="h-5 w-5 shrink-0 text-purple-300"
-              aria-hidden
-            />
+            <MessageSquare className="h-5 w-5 shrink-0 text-purple-300" aria-hidden />
             <h1 className="truncate text-xl font-semibold tracking-tight text-foreground">
               Conversations
             </h1>
-            <span className="truncate text-sm text-muted-foreground">
-              · {datapackName}
-            </span>
+            <span className="truncate text-sm text-muted-foreground">· {datapackName}</span>
           </div>
         </div>
 

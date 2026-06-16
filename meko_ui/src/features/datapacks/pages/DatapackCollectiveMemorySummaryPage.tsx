@@ -13,7 +13,7 @@ import {
   getKnowledgeBaseSummary,
   type Datapack,
   type KnowledgeBaseSummary,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 
 type Props = {
   datapackName: string;
