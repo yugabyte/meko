@@ -1,5 +1,5 @@
 /**
- * Route `/datapacks/:name/edit`: edit name and description, then continue to configure wizard.
+ * Route `/datapacks/:datapack_id/edit`: edit name and description, then continue to configure wizard.
  */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -10,16 +10,17 @@ import { DatapackNameDescriptionFields } from "@/features/datapacks/components/D
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { datapackDetailPath, DEFAULT_ACCOUNT_DATAPACK_NAME, ROUTES } from "@/app/routes/paths";
 import { toast } from "@/hooks/use-toast";
+import { validateDatapackName } from "@/lib/datapackNameValidation";
+import { setCachedDatapackName } from "@/features/datapacks/hooks/useDatapackName";
 import type { CurrentUser } from "@/lib/api/mekoApi";
 import { getApiErrorMessage, getDatapack, updateDatapack } from "@/lib/api/mekoApi";
 
 type Props = {
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   currentUser: CurrentUser | null;
 };
 
-export default function DatapackEditPage({ datapackName, datapackId, currentUser }: Props) {
+export default function DatapackEditPage({ datapackId, currentUser }: Props) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState("");
@@ -34,10 +35,10 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
     let cancelled = false;
     setLoading(true);
     setError(null);
-    void getDatapack(datapackName, { datapackId })
+    void getDatapack(datapackId, {})
       .then((dp) => {
         if (cancelled) return;
-        const n = dp.datapack_name ?? datapackName;
+        const n = dp.datapack_name ?? "";
         const d = dp.description ?? "";
         setName(n);
         setDescription(d);
@@ -55,21 +56,24 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
     return () => {
       cancelled = true;
     };
-  }, [datapackName]);
+  }, [datapackId]);
 
   const handleCancel = () => {
     if (currentUser && !currentUser.has_completed_onboarding) {
       navigate(ROUTES.onboarding);
       return;
     }
-    navigate(datapackDetailPath(datapackName, datapackId));
+    navigate(datapackDetailPath(datapackId));
   };
 
   const handleUpdate = async () => {
     const trimmedName = name.trim();
-    if (!trimmedName) {
-      setError("Enter a datapack name.");
-      return;
+    if (!isDefaultDatapack) {
+      const nameError = validateDatapackName(trimmedName);
+      if (nameError) {
+        setError(nameError);
+        return;
+      }
     }
     setSubmitting(true);
     setError(null);
@@ -79,10 +83,11 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
       (!isDefaultDatapack && trimmedName !== initialName) || descTrim !== initialDescTrim;
     try {
       if (dirty) {
-        await updateDatapack(datapackName, {
+        await updateDatapack(datapackId, {
           name: trimmedName,
           description: description,
-        }, { datapackId });
+        }, {});
+        setCachedDatapackName(datapackId, trimmedName);
         toast({
           title: "Datapack updated",
           description: trimmedName !== initialName
@@ -90,11 +95,7 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
             : "Description updated successfully.",
         });
       }
-      // After a successful update (which may have renamed the datapack)
-      // navigate by NAME — `trimmedName` is the new canonical name and
-      // we keep the id pin so a name-collision elsewhere can't swallow
-      // the redirect to the wrong row.
-      navigate(datapackDetailPath(trimmedName, datapackId), { replace: true });
+      navigate(datapackDetailPath(datapackId), { replace: true });
     } catch (err) {
       setError(getApiErrorMessage(err, "Failed to update datapack."));
     } finally {
@@ -122,7 +123,7 @@ export default function DatapackEditPage({ datapackName, datapackId, currentUser
           <DatapackBreadcrumbs
             items={[
               { label: "Datapacks", href: ROUTES.datapacks },
-              { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
+              { label: initialName, href: datapackDetailPath(datapackId) },
               { label: "edit" },
             ]}
           />

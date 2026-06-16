@@ -31,8 +31,10 @@ export type ThreadTurnProps = {
    *  "View Trace" on a Decision Trace step. */
   onViewTraceSpan?: (spanId: string) => void;
   isShimmering?: boolean;
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
+  /** Display-only: lets Decision Trace render a `datapack_id` PARAMS row as
+   *  the datapack name. Routing/API always use `datapackId`. */
+  datapackName?: string;
   /** Email of the conversation's author — rendered in place of the raw
    *  `user_id` UUID in Decision Trace PARAMS. */
   userEmail?: string;
@@ -51,8 +53,8 @@ export function ThreadTurn({
   onOpenTraceWithMemoryShimmer,
   onViewTraceSpan,
   isShimmering = false,
-  datapackName,
   datapackId,
+  datapackName,
   userEmail,
   conversationId,
   langfuseProjectId,

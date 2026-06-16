@@ -446,7 +446,7 @@ function LearningsSection({
         setPromotingId(null);
       }
     },
-    [accountId, datapackId, promotingId, canPromote, onPromoted],
+    [accountId, promotingId, canPromote, onPromoted],
   );
 
   const handleDelete = useCallback(

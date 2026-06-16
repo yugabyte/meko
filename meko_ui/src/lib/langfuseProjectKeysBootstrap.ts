@@ -44,22 +44,22 @@ export function isTechPreviewDefaultDatapackName(name: string): boolean {
 
 /**
  * Best-effort POST …/langfuse/project-keys for tech-preview default packs, with a
- * per-name sessionStorage TTL so we do not hammer the API. Errors are console-only.
+ * per-id sessionStorage TTL so we do not hammer the API. Errors are console-only.
  */
-export function scheduleEnsureLangfuseProjectKeysForDatapack(datapackName: string, datapackId?: string): void {
+export function scheduleEnsureLangfuseProjectKeysForDatapack(datapackName: string, datapackId: string): void {
   if (!datapackName.trim() || !isTechPreviewDefaultDatapackName(datapackName)) {
     return;
   }
   const cache = readLangfuseProjectKeysCache();
-  const updatedAt = cache[datapackName];
+  const updatedAt = cache[datapackId];
   if (updatedAt && isFresh(updatedAt, LANGFUSE_PROJECT_KEYS_TTL_MS)) {
     return;
   }
 
-  void ensureLangfuseProjectKeys(datapackName, { datapackId })
+  void ensureLangfuseProjectKeys(datapackId, {})
     .then(() => {
       const next = readLangfuseProjectKeysCache();
-      next[datapackName] = Date.now();
+      next[datapackId] = Date.now();
       writeLangfuseProjectKeysCache(next);
     })
     .catch((err) => {
@@ -75,11 +75,12 @@ export function scheduleEnsureLangfuseProjectKeysForDatapack(datapackName: strin
  */
 export function useEnsureLangfuseProjectKeysForTechPreviewDatapack(
   datapackName: string,
+  datapackId: string,
   isOwner?: boolean | null,
 ): void {
   useEffect(() => {
     // Skip until we know the grant status, and skip for non-owners.
     if (isOwner !== true) return;
-    scheduleEnsureLangfuseProjectKeysForDatapack(datapackName);
-  }, [datapackName, isOwner]);
+    scheduleEnsureLangfuseProjectKeysForDatapack(datapackName, datapackId);
+  }, [datapackName, datapackId, isOwner]);
 }

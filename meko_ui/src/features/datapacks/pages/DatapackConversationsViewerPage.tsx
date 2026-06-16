@@ -1,4 +1,4 @@
-// Full conversation viewer route: `/datapacks/:name/conversations[/:conversationId]`.
+// Full conversation viewer route: `/datapacks/:datapack_id/conversations[/:conversationId]`.
 //
 // Layout mirrors a chat client — left rail of conversations, right
 // thread pane for the selected one, and an on-demand slide-over
@@ -17,6 +17,7 @@ import { MessageSquare } from "lucide-react";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { ConversationListRail } from "@/features/datapacks/components/conversations-viewer/ConversationListRail";
+import { useDatapackName } from "@/features/datapacks/hooks/useDatapackName";
 import { ConversationThreadPane } from "@/features/datapacks/components/conversations-viewer/ConversationThreadPane";
 import { TraceDrawer } from "@/features/datapacks/components/conversations-viewer/TraceDrawer";
 import {
@@ -29,6 +30,7 @@ import {
   datapackMemorySummaryPath,
   type ConversationSource,
 } from "@/app/routes/paths";
+import type { DatapackConversation } from "@/lib/api/mekoApi";
 
 /** Drives an extra breadcrumb hop when the viewer is reached from one of
  *  the summary pages, so the user can step back to where they came from.
@@ -36,15 +38,15 @@ import {
  *  the compiler. */
 const SOURCE_BREADCRUMB: Record<
   ConversationSource,
-  (datapackName: string) => { label: string; href: string }
+  (datapackId: string) => { label: string; href: string }
 > = {
-  [CONVERSATION_SOURCE.memorySummary]: (datapackName) => ({
+  [CONVERSATION_SOURCE.memorySummary]: (datapackId) => ({
     label: "Memory Summary",
-    href: datapackMemorySummaryPath(datapackName),
+    href: datapackMemorySummaryPath(datapackId),
   }),
-  [CONVERSATION_SOURCE.collectiveMemorySummary]: (datapackName) => ({
+  [CONVERSATION_SOURCE.collectiveMemorySummary]: (datapackId) => ({
     label: "Collective Memory Summary",
-    href: datapackCollectiveMemorySummaryPath(datapackName),
+    href: datapackCollectiveMemorySummaryPath(datapackId),
   }),
 };
 
@@ -53,27 +55,25 @@ function isConversationSource(value: string): value is ConversationSource {
 }
 
 type Props = {
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   /** From URL; undefined when on the bare /conversations route. The
-   *  thread pane shows a "Pick a conversation" empty state until the
-   *  user explicitly picks one from the rail. */
+   *  rail will auto-select the newest conversation in that case. */
   conversationId?: string;
 };
 
 export default function DatapackConversationsViewerPage({
-  datapackName,
   datapackId,
   conversationId,
 }: Props) {
   const navigate = useNavigate();
+  const datapackName = useDatapackName(datapackId);
   const [searchParams] = useSearchParams();
   const targetMemoryId = searchParams.get("memoryId") ?? "";
   const sourceCrumb = useMemo(() => {
     const from = searchParams.get(CONVERSATION_SOURCE_QUERY_PARAM) ?? "";
     if (!isConversationSource(from)) return null;
-    return SOURCE_BREADCRUMB[from](datapackName);
-  }, [searchParams, datapackName]);
+    return SOURCE_BREADCRUMB[from](datapackId);
+  }, [searchParams, datapackId]);
 
   /** Currently open trace drawer message (null = drawer closed).
    *  Owned at the page level so the drawer survives thread re-fetches
@@ -109,9 +109,24 @@ export default function DatapackConversationsViewerPage({
   const handleSelect = useCallback(
     (id: string) => {
       if (id === conversationId) return;
-      navigate(datapackConversationsPath(datapackName, id), { replace: false });
+      navigate(datapackConversationsPath(datapackId, id), { replace: false });
     },
-    [navigate, datapackName, conversationId],
+    [navigate, datapackId, conversationId],
+  );
+
+  /** Auto-pick newest conversation when the user lands on the bare
+   *  /conversations route. Replace (not push) so the back button
+   *  doesn't bounce them between empty and selected. */
+  const handleFirstPageLoaded = useCallback(
+    (conversations: DatapackConversation[]) => {
+      if (conversationId) return;
+      const first = conversations[0];
+      if (!first) return;
+      navigate(datapackConversationsPath(datapackId, first.id), {
+        replace: true,
+      });
+    },
+    [navigate, datapackId, conversationId],
   );
 
   return (
@@ -123,7 +138,7 @@ export default function DatapackConversationsViewerPage({
           <DatapackBreadcrumbs
             items={[
               { label: "Datapacks", href: ROUTES.datapacks },
-              { label: datapackName, href: datapackDetailPath(datapackName) },
+              { label: datapackName, href: datapackDetailPath(datapackId) },
               ...(sourceCrumb ? [sourceCrumb] : []),
               { label: "Conversations" },
             ]}
@@ -140,18 +155,18 @@ export default function DatapackConversationsViewerPage({
 
         <div className="grid flex-1 grid-cols-[340px_1fr] min-h-0 overflow-hidden">
           <ConversationListRail
-            datapackName={datapackName}
             datapackId={datapackId}
             selectedId={conversationId ?? ""}
             onSelect={handleSelect}
+            onFirstPageLoaded={handleFirstPageLoaded}
             onSelectedEmailChange={handleSelectedEmailChange}
           />
 
           <section className="min-h-0 overflow-hidden">
             {conversationId ? (
               <ConversationThreadPane
-                datapackName={datapackName}
                 datapackId={datapackId}
+                datapackName={datapackName}
                 conversationId={conversationId}
                 userEmail={selectedEmail}
                 onOpenTrace={(messageId) => {
@@ -189,7 +204,6 @@ export default function DatapackConversationsViewerPage({
 
       <TraceDrawer
         open={!!traceMessageId}
-        datapackName={datapackName}
         datapackId={datapackId}
         conversationId={conversationId ?? ""}
         messageId={traceMessageId}

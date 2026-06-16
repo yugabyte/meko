@@ -18,8 +18,8 @@ export function ChatBubble({
   traceMessage,
   conversationId,
   langfuseProjectId,
-  datapackName,
   datapackId,
+  datapackName,
 }: {
   message: Message;
   onOpenTrace?: () => void;
@@ -36,8 +36,10 @@ export function ChatBubble({
   langfuseProjectId?: string;
   /** Live-fetch context: present for live turns so the bubble can lazily
    *  pull this message's decision trace on expand. */
-  datapackName?: string | null;
   datapackId?: string | null;
+  /** Display-only: lets Decision Trace render a `datapack_id` PARAMS row as
+   *  the datapack name. Routing/API always use `datapackId`. */
+  datapackName?: string | null;
 }) {
   const isUser = message.role === "user";
   // Live assistant turns (not loaded from history) fetch their decision
@@ -50,13 +52,12 @@ export function ChatBubble({
     message.role === "assistant" &&
     !!message.langfuseMessageId &&
     !!conversationId &&
-    !!datapackName;
+    !!datapackId;
 
   // Always called (rules of hooks); `enabled` gates the actual fetch so
   // user bubbles and historical turns never hit the network here.
   const liveTrace = useMessageDecisionTrace(
     {
-      datapackName,
       datapackId,
       conversationId,
       messageId: message.langfuseMessageId ?? null,
@@ -107,8 +108,8 @@ export function ChatBubble({
               />
             ) : canFetchLiveTrace ? (
               <LiveDecisionTrace
-                datapackName={datapackName!}
-                datapackId={datapackId ?? undefined}
+                datapackId={datapackId!}
+                datapackName={datapackName}
                 conversationId={conversationId!}
                 messageId={message.langfuseMessageId!}
               />

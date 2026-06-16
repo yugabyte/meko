@@ -46,7 +46,7 @@ function pipelineDocumentDisplayName(documentName: string): string {
 
 type Props = {
   datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   /** Optional pre-staged files (e.g. a sample seed). Captured on first mount only. */
   initialFiles?: File[];
   /** Called after createKnowledgeBase succeeds so the parent can refresh its lists. */
@@ -156,12 +156,11 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
       try {
         const contentHash = await sha256Hex(entry.file);
         const { url, key, already_uploaded, existing_filename } = await requestUploadURL(
-          datapackName,
+          datapackId,
           entry.file.name,
           entry.file.type || "application/octet-stream",
           entry.file.size,
           contentHash,
-          { datapackId },
         );
 
         if (already_uploaded) {
@@ -179,7 +178,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
         }
 
         await uploadFile(url, entry.file, i);
-        await confirmUpload(datapackName, key, entry.file.name, entry.file.size, { datapackId });
+        await confirmUpload(datapackId, key, entry.file.name, entry.file.size);
 
         uploaded++;
         setFiles((prev) =>
@@ -223,7 +222,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
     pollGraceRef.current = 3;
     setCreatingKB(true);
     try {
-      await createKnowledgeBase(datapackName, { datapackId });
+      await createKnowledgeBase(datapackId, {});
       // Arm the post-poll notification. The actual callback fires later
       // inside fetchStatus, once all docs reach a terminal status —
       // firing here would be too early (the BE has only accepted the
@@ -244,7 +243,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
 
   const fetchStatus = useCallback(async () => {
     try {
-      const status = await getKBStatus(datapackName, { datapackId });
+      const status = await getKBStatus(datapackId, {});
       const sources = status.source_statuses ?? [];
       const details = status.pipeline_details ?? [];
       setSourceStatuses(sources);
@@ -280,7 +279,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
     } catch {
       // silently retry on next interval
     }
-  }, [datapackName, datapackId, kbCreated, onKnowledgeBaseCreated]);
+  }, [datapackId, kbCreated, onKnowledgeBaseCreated]);
 
   useEffect(() => {
     fetchStatus();

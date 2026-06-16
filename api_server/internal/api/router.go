@@ -59,7 +59,14 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	kbSvc := service.NewKnowledgeBaseService(kbRepo, cfg.S3Bucket)
 	ragSvc := service.NewRagService(cfg.DB, service.DatapackIndexSchema, service.DatapackIndexName)
 
-	memoriesRepo := repository.NewMemoriesRepo(cfg.DB, cfg.SystemDB, cfg.OpenAIAPIKey, cfg.OpenAILLMModel, cfg.OpenAIEmbeddingModel, cfg.MemoryListSkipVectorSort)
+	memoriesRepo := repository.NewMemoriesRepo(
+		cfg.DB,
+		cfg.SystemDB,
+		cfg.OpenAIAPIKey,
+		cfg.OpenAILLMModel,
+		cfg.OpenAIEmbeddingModel,
+		cfg.MemoryListSkipVectorSort,
+	)
 	memoriesSvc := service.NewMemoriesService(memoriesRepo, cfg.MemoryListSkipVectorSort)
 
 	promoteMemoriesRepo := repository.NewPromoteMemoriesRepo(cfg.DB, cfg.SystemDB)
@@ -120,12 +127,12 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	billingRepo := repository.NewBillingRepo(cfg.SystemDB)
 	billingSvc := service.NewBillingService(service.BillingConfig{
-		StripeSecretKey:      cfg.StripeSecretKey,
-		StripeWebhookSecret:  cfg.StripeWebhookSecret,
-		PriceIDStarter:       cfg.StripePriceIDStarter,
-		PriceIDGrowth:        cfg.StripePriceIDGrowth,
-		PriceIDScale:         cfg.StripePriceIDScale,
-		AppURL:               cfg.AppURL,
+		StripeSecretKey:     cfg.StripeSecretKey,
+		StripeWebhookSecret: cfg.StripeWebhookSecret,
+		PriceIDStarter:      cfg.StripePriceIDStarter,
+		PriceIDGrowth:       cfg.StripePriceIDGrowth,
+		PriceIDScale:        cfg.StripePriceIDScale,
+		AppURL:              cfg.AppURL,
 	}, billingRepo)
 	if billingSvc.Enabled() {
 		slog.Info("billing routes will be registered (stripe configured)")
@@ -412,7 +419,7 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	dpDirect.GET("/memories", memoriesH.ListGET, auth.RequireScope(auth.ScopeRead))
 	dpDirect.GET("/memories/count", memoriesH.CountGET, auth.RequireScope(auth.ScopeRead))
 	// Deletion is gated inside the handler (not via Echo middleware) because
-	// the datapack id arrives as a query param, not a `:name` path segment —
+	// the datapack id arrives as a query param, not a datapack path segment —
 	// auth.RequireDatapackAccess expects the latter. The handler runs two
 	// checks of its own: (1) caller is currently a member of the datapack
 	// (owner or accepted share) and (2) the row's meko_user_id matches the
@@ -439,69 +446,73 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	g.POST("/datapacks/invite-action", shareH.InviteAction)
 
 	// Describe allows both owners and shared users. Reachable via PAT
-	// (read scope) so MCP clients can resolve a datapack by name.
-	dpDirect.GET("/datapacks/:name", dpH.Describe,
+	// (read scope) so MCP clients can resolve a datapack by UUID.
+	dpDirect.GET("/datapacks/:datapack_id", dpH.Describe,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
 	// Connect / MCP details: any member with datapack access (owner or
 	// accepted share with viewer/contributor/maintainer grant).
-	g.GET("/datapacks/:name/provision-status", handlers.DatapackProvisionStatusHandler(reg.dpRepo),
+	g.GET("/datapacks/:datapack_id/provision-status", handlers.DatapackProvisionStatusHandler(reg.dpRepo),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
 	// Langfuse-backed conversations: read-only; same access as Describe /
 	// provision-status (owner or shared member with agent_access).
 	// On dpDirect so PAT bearers (MCP server) are accepted.
-	dpDirect.GET("/datapacks/:name/conversations", observeH.ConversationList,
+	dpDirect.GET("/datapacks/:datapack_id/conversations", observeH.ConversationList,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	dpDirect.GET("/datapacks/:name/conversations/count", observeH.ConversationCount,
+	dpDirect.GET("/datapacks/:datapack_id/conversations/count", observeH.ConversationCount,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	dpDirect.GET("/datapacks/:name/conversations/:conversation_id", observeH.ConversationDetail,
+	dpDirect.GET("/datapacks/:datapack_id/conversations/:conversation_id", observeH.ConversationDetail,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	dpDirect.GET("/datapacks/:name/conversations/:conversation_id/messages/:message_id/trace", observeH.MessageTrace,
+	dpDirect.GET(
+		"/datapacks/:datapack_id/conversations/:conversation_id/messages/:message_id/trace",
+		observeH.MessageTrace,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	dpDirect.GET("/datapacks/:name/conversations/:conversation_id/messages/:message_id/decision-trace", observeH.MessageDecisionTrace,
+	dpDirect.GET(
+		"/datapacks/:datapack_id/conversations/:conversation_id/messages/:message_id/decision-trace",
+		observeH.MessageDecisionTrace,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
 	// Pending outgoing invites: owner or maintainer only.
-	g.GET("/datapacks/:name/outgoing-shares", shareH.OutgoingShares,
+	g.GET("/datapacks/:datapack_id/outgoing-shares", shareH.OutgoingShares,
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)
 	// Accepted members (roster): any role with datapack access.
-	g.GET("/datapacks/:name/member-list", shareH.MemberList,
+	g.GET("/datapacks/:datapack_id/member-list", shareH.MemberList,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
 	// Invite / resend / revoke: owner or maintainer (not under RequireDatapackOwnership).
 	// Middleware order is required: RequireDatapackAccess loads dp into context;
 	// RequireDatapackOwnerOrMaintainerGrant only reads that context (see its doc comment).
-	g.POST("/datapacks/:name/share", shareH.Invite,
+	g.POST("/datapacks/:datapack_id/share", shareH.Invite,
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)
-	g.POST("/datapacks/:name/invite/:invite_id/resend", shareH.ResendInvite,
+	g.POST("/datapacks/:datapack_id/invite/:invite_id/resend", shareH.ResendInvite,
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)
-	g.DELETE("/datapacks/:name/invite/:invite_id", shareH.RevokeInvite,
+	g.DELETE("/datapacks/:datapack_id/invite/:invite_id", shareH.RevokeInvite,
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)
 
-	named := g.Group("/datapacks/:name",
+	named := g.Group("/datapacks/:datapack_id",
 		auth.RequireDatapackOwnership(reg.dpRepo),
 	)
 	// dpNamedDirect mirrors `named` but lives on the PAT-accepting
@@ -509,7 +520,7 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	// in two keeps the agent link/unlink routes JWT-only (admin-style
 	// operations) while letting MCP clients hit the four datapack
 	// owner mutations with a PAT.
-	dpNamedDirect := dpDirect.Group("/datapacks/:name",
+	dpNamedDirect := dpDirect.Group("/datapacks/:datapack_id",
 		auth.RequireDatapackOwnership(reg.dpRepo),
 	)
 
@@ -526,23 +537,23 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 
 	// Read-only datapack routes: any member with datapack access (owner or accepted share),
 	// not the ownership-only group below.
-	g.GET("/datapacks/:name/agents", agentH.ListForDatapack,
+	g.GET("/datapacks/:datapack_id/agents", agentH.ListForDatapack,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	g.GET("/datapacks/:name/knowledge-bases/counts", kbH.Counts,
+	g.GET("/datapacks/:datapack_id/knowledge-bases/counts", kbH.Counts,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	g.GET("/datapacks/:name/knowledge-bases/documents", kbH.Documents,
+	g.GET("/datapacks/:datapack_id/knowledge-bases/documents", kbH.Documents,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 	// SharedKnowledge page: header tile aggregates + auto-generated
 	// description/files-summary strings. Same grant gate as /documents
 	// — read-only, anyone with access to the datapack can see it.
-	g.GET("/datapacks/:name/knowledge-bases/summary", kbH.Summary,
+	g.GET("/datapacks/:datapack_id/knowledge-bases/summary", kbH.Summary,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 	// SharedKnowledge page: merged file-upload + memory-promotion feed.
-	g.GET("/datapacks/:name/knowledge-bases/activity-log", kbH.ActivityLog,
+	g.GET("/datapacks/:datapack_id/knowledge-bases/activity-log", kbH.ActivityLog,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 	// SharedKnowledge page: presigned S3 GET URL for a single
@@ -550,7 +561,7 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	// datapack access, not just owner/maintainer), so we hang it off
 	// `RequireDatapackAccess` rather than the owner-or-maintainer
 	// chain used by uploads.
-	g.POST("/datapacks/:name/knowledge-bases/download-url", kbH.RequestDownloadURL,
+	g.POST("/datapacks/:datapack_id/knowledge-bases/download-url", kbH.RequestDownloadURL,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
@@ -561,7 +572,7 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	// RequireDatapackAccess (not the owner-or-maintainer middleware)
 	// — viewers and contributors who uploaded a file must be able
 	// to delete their own contribution.
-	g.DELETE("/datapacks/:name/knowledge-bases/documents/:document_id",
+	g.DELETE("/datapacks/:datapack_id/knowledge-bases/documents/:document_id",
 		kbH.DeleteDocument,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
@@ -574,20 +585,20 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	}
-	g.POST("/datapacks/:name/knowledge-bases", kbH.Add, kbOwnerOrMaintainer...)
-	g.GET("/datapacks/:name/knowledge-bases", kbH.List,
+	g.POST("/datapacks/:datapack_id/knowledge-bases", kbH.Add, kbOwnerOrMaintainer...)
+	g.GET("/datapacks/:datapack_id/knowledge-bases", kbH.List,
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
-	g.DELETE("/datapacks/:name/knowledge-bases/:rag_source_id", kbH.Delete, kbOwnerOrMaintainer...)
-	g.POST("/datapacks/:name/knowledge-bases/upload-url", kbH.RequestUploadURL, kbOwnerOrMaintainer...)
-	g.POST("/datapacks/:name/knowledge-bases/upload-complete", kbH.ConfirmUpload, kbOwnerOrMaintainer...)
-	g.POST("/datapacks/:name/knowledge-bases/create", kbH.CreateKB, kbOwnerOrMaintainer...)
-	g.GET("/datapacks/:name/knowledge-bases/status", kbH.KBStatus, kbOwnerOrMaintainer...)
+	g.DELETE("/datapacks/:datapack_id/knowledge-bases/:rag_source_id", kbH.Delete, kbOwnerOrMaintainer...)
+	g.POST("/datapacks/:datapack_id/knowledge-bases/upload-url", kbH.RequestUploadURL, kbOwnerOrMaintainer...)
+	g.POST("/datapacks/:datapack_id/knowledge-bases/upload-complete", kbH.ConfirmUpload, kbOwnerOrMaintainer...)
+	g.POST("/datapacks/:datapack_id/knowledge-bases/create", kbH.CreateKB, kbOwnerOrMaintainer...)
+	g.GET("/datapacks/:datapack_id/knowledge-bases/status", kbH.KBStatus, kbOwnerOrMaintainer...)
 
 	// Update a member's grant: owner or maintainer only (same gate as invite/resend/revoke).
 	// Uses RequireDatapackAccess so shared maintainers can act; dp.UserID in the handler
 	// always refers to the datapack row owner, not the caller.
-	g.PATCH("/datapacks/:name/share/:share_user_id", shareH.UpdateGrant,
+	g.PATCH("/datapacks/:datapack_id/share/:share_user_id", shareH.UpdateGrant,
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
 	)

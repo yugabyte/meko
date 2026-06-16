@@ -1,6 +1,7 @@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { DATAPACK_NAME_REQUIREMENTS } from "@/lib/datapackNameValidation";
 import { cn } from "@/lib/utils";
 
 export type DatapackNameDescriptionFieldsProps = {
@@ -43,6 +44,7 @@ export function DatapackNameDescriptionFields({
           disabled={disabled || nameDisabled}
           className="h-10 border-border bg-background shadow-sm"
         />
+        <p className="text-xs text-muted-foreground">{DATAPACK_NAME_REQUIREMENTS}</p>
       </div>
       <div className="flex flex-col gap-3">
         <Label htmlFor={descriptionInputId}>Description</Label>

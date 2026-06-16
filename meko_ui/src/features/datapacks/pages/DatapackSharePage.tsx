@@ -12,6 +12,7 @@ import { PendingInvitesSection } from "@/features/datapacks/components/datapack-
 import { ShareComingSoonPlaceholder } from "@/features/datapacks/components/datapack-share/ShareComingSoonPlaceholder";
 import { TransferOwnershipSection } from "@/features/datapacks/components/datapack-share/TransferOwnershipSection";
 import { useDatapackOutgoingShares } from "@/features/datapacks/components/datapack-share/useDatapackOutgoingShares";
+import { useDatapackName } from "@/features/datapacks/hooks/useDatapackName";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
 import type { CurrentUser } from "@/lib/api/mekoApi";
 import { Badge } from "@/components/ui/badge";
@@ -22,8 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
 type Props = {
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   currentUser: CurrentUser | null;
 };
 
@@ -37,9 +37,10 @@ const inviteTabTriggerClass = cn(
   "data-[state=inactive]:text-muted-foreground data-[state=inactive]:opacity-90 data-[state=inactive]:hover:bg-muted/20 data-[state=inactive]:hover:opacity-100",
 );
 
-export default function DatapackSharePage({ datapackName, datapackId, currentUser }: Props) {
+export default function DatapackSharePage({ datapackId, currentUser }: Props) {
+  const datapackName = useDatapackName(datapackId);
   const [inviteMode, setInviteMode] = useState<InviteMode>("person");
-  const { data, loading, error, refetch } = useDatapackOutgoingShares(datapackName, datapackId);
+  const { data, loading, error, refetch } = useDatapackOutgoingShares(datapackId);
   const members = data?.members ?? [];
   const pendingInvites = data?.pending_invites ?? [];
 
@@ -54,7 +55,7 @@ export default function DatapackSharePage({ datapackName, datapackId, currentUse
         <DatapackBreadcrumbs
           items={[
             { label: "Datapacks", href: ROUTES.datapacks },
-            { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
+            { label: datapackName, href: datapackDetailPath(datapackId) },
             { label: "Share" },
           ]}
         />
@@ -153,7 +154,7 @@ export default function DatapackSharePage({ datapackName, datapackId, currentUse
               </CardHeader>
               <CardContent className="p-6 pt-6">
                 <TabsContent value="person" className="mt-0 outline-none focus-visible:outline-none">
-                  <InviteByEmailSection datapackName={datapackName} datapackId={datapackId} currentUserEmail={currentUser?.email} onInviteSent={refreshShares} />
+                  <InviteByEmailSection datapackId={datapackId} currentUserEmail={currentUser?.email} onInviteSent={refreshShares} />
                 </TabsContent>
                 <TabsContent value="agent" className="mt-0 outline-none focus-visible:outline-none">
                   <ShareComingSoonPlaceholder
@@ -174,7 +175,6 @@ export default function DatapackSharePage({ datapackName, datapackId, currentUse
             onMembersChanged={refreshShares}
           />
           <PendingInvitesSection
-            datapackName={datapackName}
             datapackId={datapackId}
             invites={pendingInvites}
             loading={loading}

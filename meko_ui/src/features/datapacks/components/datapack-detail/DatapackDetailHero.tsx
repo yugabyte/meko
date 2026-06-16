@@ -3,9 +3,10 @@
  * description, and ID / created / access on one muted line. Renders an `actions` slot on the right.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Database, Sparkles } from "lucide-react";
+import { Check, Copy, Database, Sparkles } from "lucide-react";
 import { ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
+import { copyToClipboard } from "@/lib/clipboard";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { formatDatapackShareGrantCamelCase } from "@/lib/datapackShareGrants";
 import { DatapackShareGrant } from "@/lib/api/mekoApi";
@@ -60,9 +61,19 @@ export function DatapackDetailHero({
 }: Props) {
   const [descExpanded, setDescExpanded] = useState(false);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
+  const [idCopied, setIdCopied] = useState(false);
   const descRef = useRef<HTMLParagraphElement>(null);
   const trimmedDesc = (description ?? "").trim();
   const showDescription = trimmedDesc.length > 0;
+  const canCopyId = !statusLoading && Boolean(displayId) && displayId !== "—";
+
+  const handleCopyId = async () => {
+    if (!canCopyId) return;
+    const ok = await copyToClipboard(displayId);
+    if (!ok) return;
+    setIdCopied(true);
+    window.setTimeout(() => setIdCopied(false), 1500);
+  };
 
   useEffect(() => {
     setDescExpanded(false);
@@ -139,11 +150,26 @@ export function DatapackDetailHero({
             ) : null}
 
             <p className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1 pt-0.5 text-[11px] leading-relaxed text-muted-foreground sm:text-xs">
-              <span className="inline-flex flex-wrap items-baseline gap-x-1">
+              <span className="inline-flex flex-wrap items-center gap-x-1">
                 <span className="font-semibold text-foreground/90">ID</span>
                 <code className="rounded bg-muted/45 px-1 py-px font-mono text-[11px] text-foreground/90 sm:text-xs">
                   {statusLoading ? "…" : displayId}
                 </code>
+                {canCopyId ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyId()}
+                    className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    aria-label="Copy datapack ID"
+                    title={idCopied ? "Copied" : "Copy ID"}
+                  >
+                    {idCopied ? (
+                      <Check className="h-3.5 w-3.5 text-green-500" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                ) : null}
               </span>
               <span className="text-muted-foreground/45 select-none" aria-hidden>
                 ·

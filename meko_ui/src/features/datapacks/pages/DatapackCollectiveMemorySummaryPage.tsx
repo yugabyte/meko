@@ -16,14 +16,10 @@ import {
 } from "@/lib/api/mekoApi";
 
 type Props = {
-  datapackName: string;
-  /** Optional URL-pinned id from `?datapack_id=`. See sibling pages
-   *  for the rationale (name-collision disambiguation across share
-   *  boundaries). Falling back to name-only resolution when omitted. */
-  datapackId?: string;
+  datapackId: string;
 };
 
-export default function DatapackCollectiveMemorySummaryPage({ datapackName, datapackId }: Props) {
+export default function DatapackCollectiveMemorySummaryPage({ datapackId }: Props) {
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -32,6 +28,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
   // description / files-summary on this standalone page, but the
   // chips need the data so we fetch it lazily alongside the datapack.
   const [summary, setSummary] = useState<KnowledgeBaseSummary | null>(null);
+  const displayDatapackName = datapack?.datapack_name ?? "";
 
   useEffect(() => {
     let cancelled = false;
@@ -39,7 +36,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
       setStatusLoading(true);
       setStatusError(null);
       try {
-        const d = await getDatapack(datapackName, { datapackId });
+        const d = await getDatapack(datapackId, {});
         if (!cancelled) setDatapack(d);
       } catch (e) {
         if (!cancelled) {
@@ -54,11 +51,11 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
     return () => {
       cancelled = true;
     };
-  }, [datapackName, datapackId]);
+  }, [datapackId]);
 
   useEffect(() => {
     const ac = new AbortController();
-    void getKnowledgeBaseSummary(datapackName, { signal: ac.signal })
+    void getKnowledgeBaseSummary(datapackId, { signal: ac.signal })
       .then((s) => {
         if (!ac.signal.aborted) setSummary(s);
       })
@@ -66,7 +63,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
         // Silent — the panel degrades to no chips if /summary 404s.
       });
     return () => ac.abort();
-  }, [datapackName]);
+  }, [datapackId]);
 
   return (
     <div className="flex h-screen flex-1 flex-col overflow-y-auto bg-background text-foreground">
@@ -76,7 +73,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
         <DatapackBreadcrumbs
           items={[
             { label: "Datapacks", href: ROUTES.datapacks },
-            { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
+            { label: displayDatapackName, href: datapackDetailPath(datapackId) },
             { label: "Collective Memory Summary" },
           ]}
         />
@@ -90,7 +87,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
           </div>
           <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
             All memories promoted into the tenant knowledge base for{" "}
-            <span className="text-foreground/90">{datapackName}</span> (read-only).
+            <span className="text-foreground/90">{displayDatapackName}</span> (read-only).
           </p>
         </div>
 
@@ -98,7 +95,7 @@ export default function DatapackCollectiveMemorySummaryPage({ datapackName, data
 
         {datapack?.datapack_id ? (
           <CollectiveMemoryPanel
-            datapackName={datapackName}
+            datapackName={displayDatapackName}
             datapackId={datapack.datapack_id}
             pendingCount={datapack.learnings_count ?? 0}
             embeddingModel={summary?.embedding_model ?? null}

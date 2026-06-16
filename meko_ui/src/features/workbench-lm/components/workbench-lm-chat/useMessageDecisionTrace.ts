@@ -21,19 +21,22 @@ import {
 export const MESSAGE_DECISION_TRACE_QUERY_KEY = "message-decision-trace";
 
 type Params = {
-  datapackName?: string | null;
   datapackId?: string | null;
   conversationId?: string | null;
   messageId?: string | null;
 };
 
 export function useMessageDecisionTrace(
-  { datapackName, datapackId, conversationId, messageId }: Params,
+  { datapackId, conversationId, messageId }: Params,
   options?: { enabled?: boolean },
 ) {
   // Only fire when we have every id AND the caller opted in. Disabled
   // observers (e.g. user bubbles, or a collapsed trace) cost nothing.
-  const enabled = (options?.enabled ?? true) && !!datapackName && !!conversationId && !!messageId;
+  const enabled =
+    (options?.enabled ?? true) &&
+    !!datapackId &&
+    !!conversationId &&
+    !!messageId;
 
   return useQuery<GetDatapackMessageDecisionTraceResponse>({
     queryKey: [
@@ -45,12 +48,7 @@ export function useMessageDecisionTrace(
     // Own queryFn — the app-wide default queryFn does `fetch(key.join("/"))`,
     // which doesn't apply to our axios-based, datapack-scoped request.
     queryFn: () =>
-      getDatapackMessageDecisionTrace(
-        datapackName!,
-        conversationId!,
-        messageId!,
-        datapackId ? { datapackId } : {},
-      ),
+      getDatapackMessageDecisionTrace(datapackId!, conversationId!, messageId!),
     enabled,
     // staleTime means that the query will be refetched if it is older than 60 seconds on remount
     staleTime: 60_000,

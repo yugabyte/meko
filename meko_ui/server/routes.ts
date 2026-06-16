@@ -114,6 +114,10 @@ function getShareState(datapackName: string): MockShareState | null {
   return shareStateByDatapack[datapackName];
 }
 
+function datapackNameForID(datapackID: string): string {
+  return datapacks.find((d) => d.datapack_id === datapackID)?.datapack_name ?? datapackID;
+}
+
 function ok<T>(data: T) {
   return { data, error: null };
 }
@@ -126,9 +130,9 @@ export async function registerRoutes(
     res.json(ok(datapacks));
   });
 
-  app.get("/api/v1/datapacks/:name", (req, res) => {
-    const name = req.params.name;
-    const dp = datapacks.find((item) => item.datapack_name === name);
+  app.get("/api/v1/datapacks/:datapack_id", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
+    const dp = datapacks.find((item) => item.datapack_id === req.params.datapack_id);
     if (!dp) {
       return res.status(404).json({
         data: null,
@@ -233,19 +237,19 @@ export async function registerRoutes(
     );
   });
 
-  app.get("/api/v1/datapacks/:name/agents", (req, res) => {
-    const name = req.params.name;
+  app.get("/api/v1/datapacks/:datapack_id/agents", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
     res.json(ok(agentsByDatapack[name] || []));
   });
 
-  app.get("/api/v1/datapacks/:name/knowledge-bases", (req, res) => {
-    const name = req.params.name;
+  app.get("/api/v1/datapacks/:datapack_id/knowledge-bases", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
     res.json(ok(kbByDatapack[name] || []));
   });
 
   // --- Datapack sharing (mirrors mekoApi share helpers for local mock when MEKO_API_UPSTREAM is unset) ---
-  app.get("/api/v1/datapacks/:name/outgoing-shares", (req, res) => {
-    const name = req.params.name;
+  app.get("/api/v1/datapacks/:datapack_id/outgoing-shares", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
     const st = getShareState(name);
     if (!st) {
       return res.status(404).json({
@@ -256,8 +260,8 @@ export async function registerRoutes(
     return res.json(ok({ pending_invites: st.pending }));
   });
 
-  app.get("/api/v1/datapacks/:name/member-list", (req, res) => {
-    const name = req.params.name;
+  app.get("/api/v1/datapacks/:datapack_id/member-list", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
     const st = getShareState(name);
     if (!st) {
       return res.status(404).json({
@@ -268,8 +272,8 @@ export async function registerRoutes(
     return res.json(ok({ members: st.members }));
   });
 
-  app.post("/api/v1/datapacks/:name/share", (req, res) => {
-    const name = req.params.name;
+  app.post("/api/v1/datapacks/:datapack_id/share", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
     const st = getShareState(name);
     if (!st) {
       return res.status(404).json({
@@ -310,8 +314,8 @@ export async function registerRoutes(
     );
   });
 
-  app.post("/api/v1/datapacks/:name/invite/:inviteId/resend", (req, res) => {
-    const name = req.params.name;
+  app.post("/api/v1/datapacks/:datapack_id/invite/:inviteId/resend", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
     const inviteId = req.params.inviteId;
     const st = getShareState(name);
     if (!st) {
@@ -329,8 +333,8 @@ export async function registerRoutes(
     return res.json(ok({}));
   });
 
-  app.delete("/api/v1/datapacks/:name/invite/:inviteId", (req, res) => {
-    const name = req.params.name;
+  app.delete("/api/v1/datapacks/:datapack_id/invite/:inviteId", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
     const inviteId = req.params.inviteId;
     const st = getShareState(name);
     if (!st) {
@@ -350,8 +354,8 @@ export async function registerRoutes(
     return res.json(ok({}));
   });
 
-  app.patch("/api/v1/datapacks/:name/share/:shareUserId", (req, res) => {
-    const name = req.params.name;
+  app.patch("/api/v1/datapacks/:datapack_id/share/:shareUserId", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
     const shareUserId = req.params.shareUserId;
     const st = getShareState(name);
     if (!st) {
@@ -384,8 +388,8 @@ export async function registerRoutes(
     return res.json(ok({}));
   });
 
-  app.delete("/api/v1/datapacks/:name/share/:shareUserId", (req, res) => {
-    const name = req.params.name;
+  app.delete("/api/v1/datapacks/:datapack_id/share/:shareUserId", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
     const shareUserId = req.params.shareUserId;
     const st = getShareState(name);
     if (!st) {
@@ -411,9 +415,9 @@ export async function registerRoutes(
     return res.json(ok({}));
   });
 
-  app.patch("/api/v1/datapacks/:name", (req, res) => {
-    const name = req.params.name;
-    const dp = datapacks.find((item) => item.datapack_name === name);
+  app.patch("/api/v1/datapacks/:datapack_id", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
+    const dp = datapacks.find((item) => item.datapack_id === req.params.datapack_id);
     if (!dp) {
       return res.status(404).json({
         data: null,
@@ -469,9 +473,9 @@ export async function registerRoutes(
     return res.json(ok({ message: "datapack updated" }));
   });
 
-  app.delete("/api/v1/datapacks/:name", (req, res) => {
-    const name = req.params.name;
-    const idx = datapacks.findIndex((item) => item.datapack_name === name);
+  app.delete("/api/v1/datapacks/:datapack_id", (req, res) => {
+    const name = datapackNameForID(req.params.datapack_id);
+    const idx = datapacks.findIndex((item) => item.datapack_id === req.params.datapack_id);
     if (idx === -1) {
       return res.status(404).json({
         data: null,

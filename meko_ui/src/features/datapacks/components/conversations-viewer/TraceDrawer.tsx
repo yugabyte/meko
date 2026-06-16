@@ -53,8 +53,7 @@ import { MemoryIcon } from "@/components/conversation-telemetry";
 
 type Props = {
   open: boolean;
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   conversationId: string;
   /** When this changes the drawer refetches. The drawer stays mounted
    *  even when closed so the slide animation works in both directions
@@ -84,7 +83,6 @@ type HoverSource = "tree" | "memory" | null;
 
 export function TraceDrawer({
   open,
-  datapackName,
   datapackId,
   conversationId,
   messageId,
@@ -126,9 +124,8 @@ export function TraceDrawer({
     setError(null);
     setSpans([]);
     setLangfuseProjectId("");
-    getDatapackMessageTrace(datapackName, conversationId, messageId, {
+    getDatapackMessageTrace(datapackId, conversationId, messageId, {
       signal: ac.signal,
-      datapackId,
     })
       .then((resp) => {
         if (ac.signal.aborted) return;
@@ -143,7 +140,7 @@ export function TraceDrawer({
         if (!ac.signal.aborted) setLoading(false);
       });
     return () => ac.abort();
-  }, [open, datapackName, conversationId, messageId]);
+  }, [open, datapackId, conversationId, messageId]);
 
   // ESC closes.
   useEffect(() => {
@@ -512,7 +509,6 @@ export function TraceDrawer({
                       span={item.span}
                       memoryId={item.memoryId}
                       memoryText={item.text}
-                      datapackName={datapackName}
                       datapackId={datapackId}
                       promoted={item.promoted}
                       entityNames={item.entityNames}
@@ -548,7 +544,6 @@ export function TraceDrawer({
                           span={item.span}
                           memoryId={item.memoryId}
                           memoryText={item.text}
-                          datapackName={datapackName}
                           datapackId={datapackId}
                           promoted={item.promoted}
                           entityNames={item.entityNames}
@@ -608,11 +603,10 @@ export function TraceDrawer({
 // Deep-link to the knowledge page's Promoted memories tab, targeting a
 // specific promoted memory so the page can scroll to + shimmer it.
 function buildPromotedKBHref(
-  datapackName: string,
-  datapackId: string | undefined,
+  datapackId: string,
   memoryId: string | undefined,
 ): string {
-  const base = datapackKnowledgePath(datapackName, datapackId);
+  const base = datapackKnowledgePath(datapackId);
   const sep = base.includes("?") ? "&" : "?";
   const params = new URLSearchParams({ tab: "promoted-memories" });
   if (memoryId) params.set("promotedMemoryId", memoryId);
@@ -623,9 +617,8 @@ type MemoryCardProps = {
   span: DatapackTraceSpan;
   memoryId?: string;
   memoryText: string;
-  /** Datapack identity for the "Promoted to KB" deep-link to the knowledge page. */
-  datapackName: string;
-  datapackId?: string;
+  /** Datapack id for the "Promoted to KB" deep-link to the knowledge page. */
+  datapackId: string;
   /** True when this memory was promoted to the KB and evicted from mem0.
    *  vector/entities/relations counts are meaningless then, so the card
    *  shows just the text + a "Promoted to KB" tag. */
@@ -648,7 +641,6 @@ function MemoryCard({
   span,
   memoryId,
   memoryText,
-  datapackName,
   datapackId,
   promoted = false,
   entityNames,
@@ -734,7 +726,7 @@ function MemoryCard({
         // to the knowledge page's Promoted memories tab, deep-linking to this
         // entry so the user can inspect its shared-knowledge record.
         <Link
-          to={buildPromotedKBHref(datapackName, datapackId, memoryId)}
+          to={buildPromotedKBHref(datapackId, memoryId)}
           title="View in knowledge base"
           className="group mt-2.5 flex items-center gap-2 rounded-md border border-emerald-500/25 bg-emerald-500/[0.07] px-2.5 py-1.5 transition-colors hover:border-emerald-500/45 hover:bg-emerald-500/[0.12] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-400/50"
         >

@@ -21,9 +21,9 @@ export const ROUTES = {
 } as const;
 
 /**
- * Sub-route segments under `/datapacks/:name/...`. Single source of truth
+ * Sub-route segments under `/datapacks/:datapack_id/...`. Single source of truth
  * shared by the path builders below and the segment matcher in
- * `DatapacksPage.tsx` so a rename can't drift between them.
+ * `DatapacksPage.tsx`.
  */
 export const DATAPACK_SUB_ROUTE = {
   new: "new",
@@ -41,11 +41,8 @@ export const DATAPACK_SUB_ROUTE = {
 /** Default datapack provisioned for new accounts; used from onboarding (“Choose your tool” → configure). */
 export const DEFAULT_ACCOUNT_DATAPACK_NAME = "meko_default_datapack" as const;
 
-export function datapackDetailPath(datapackName: string, datapackId?: string): string {
-  return appendDatapackId(
-    `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}`,
-    datapackId,
-  );
+export function datapackDetailPath(datapackId: string): string {
+  return `${ROUTES.datapacks}/${encodeURIComponent(datapackId)}`;
 }
 
 /**
@@ -57,15 +54,17 @@ export const DATAPACK_QUERY_PARAM = {
   share: "share",
 } as const;
 
+/** Query param used by non-`/datapacks/:id` surfaces such as WorkbenchLM. */
+export const DATAPACK_ID_QUERY_PARAM = "datapack_id" as const;
+
 /** Value meaning “enable / open” for {@link DATAPACK_QUERY_PARAM} flags. */
 export const DATAPACK_QUERY_FLAG_ON = "1" as const;
 
 /** Datapack detail URL that opens the Connect dialog (consumes param on load). */
-export function datapackDetailUrlOpenConnect(datapackName: string, datapackId?: string): string {
+export function datapackDetailUrlOpenConnect(datapackId: string): string {
   const q = new URLSearchParams();
   q.set(DATAPACK_QUERY_PARAM.connect, DATAPACK_QUERY_FLAG_ON);
-  if (datapackId) q.set(DATAPACK_ID_QUERY_PARAM, datapackId);
-  return `${datapackDetailPath(datapackName)}?${q.toString()}`;
+  return `${datapackDetailPath(datapackId)}?${q.toString()}`;
 }
 
 /**
@@ -83,64 +82,30 @@ export type ConversationSource =
 
 /** Build a conversation viewer URL with a `from` source attached. */
 export function datapackConversationsPathWithSource(
-  datapackName: string,
+  datapackId: string,
   conversationId: string,
   source: ConversationSource,
   extraParams?: Record<string, string>,
-  datapackId?: string,
 ): string {
-  // Build the canonical base path (without our own query string), then
-  // collect everything into a single URLSearchParams so the resulting
-  // URL is well-formed regardless of which optional params are present.
-  // We deliberately don't call `datapackConversationsPath(name, id, datapackId)`
-  // here because that helper would already attach `?datapack_id=...` and we'd
-  // then have to merge two query strings. Cleaner to compose them in one place.
-  const base = `${datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.conversations)}/${encodeURIComponent(conversationId)}`;
+  const base = `${datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.conversations)}/${encodeURIComponent(conversationId)}`;
   const q = new URLSearchParams();
   if (extraParams) {
     for (const [k, v] of Object.entries(extraParams)) q.set(k, v);
   }
   q.set(CONVERSATION_SOURCE_QUERY_PARAM, source);
-  if (datapackId) q.set(DATAPACK_ID_QUERY_PARAM, datapackId);
   return `${base}?${q.toString()}`;
 }
 
-function datapackSubPath(datapackName: string, segment: string): string {
-  return `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/${segment}`;
+function datapackSubPath(datapackId: string, segment: string): string {
+  return `${datapackDetailPath(datapackId)}/${segment}`;
 }
 
-/**
- * Query-param name used to disambiguate datapacks that share a name across
- * share boundaries (owned vs. accepted-share with the same `datapack_name`).
- * Every datapack sub-route URL appends it when the caller has the id;
- * routes without it fall back to name-only resolution (BE picks first).
- *
- * Kept as a const so the router / handlers / URL builders never drift
- * on the spelling.
- */
-export const DATAPACK_ID_QUERY_PARAM = "datapack_id" as const;
-
-/**
- * Append `?datapack_id=<uuid>` to a path. When `datapackId` is empty /
- * undefined the path is returned unchanged so existing bookmarks /
- * deep-links without the id still navigate cleanly.
- *
- * Used by the per-route helpers below — keep all the URL-shape logic
- * in one place so a future rename of the param can't drift between
- * callers.
- */
-function appendDatapackId(path: string, datapackId?: string): string {
-  if (!datapackId) return path;
-  const sep = path.includes("?") ? "&" : "?";
-  return `${path}${sep}${DATAPACK_ID_QUERY_PARAM}=${encodeURIComponent(datapackId)}`;
+export function datapackEditPath(datapackId: string): string {
+  return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.edit);
 }
 
-export function datapackEditPath(datapackName: string): string {
-  return datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.edit);
-}
-
-export function datapackSharePath(datapackName: string): string {
-  return datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.share);
+export function datapackSharePath(datapackId: string): string {
+  return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.share);
 }
 
 /** Legacy `/datapacks/new` — prefer {@link datapackNewConfigurePath} (wizard includes create step). */
@@ -153,12 +118,12 @@ export function datapackNewConfigurePath(): string {
   return `${ROUTES.datapacks}/${DATAPACK_SUB_ROUTE.new}/${DATAPACK_SUB_ROUTE.configure}`;
 }
 
-export function datapackConfigurePath(datapackName: string): string {
-  return datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.configure);
+export function datapackConfigurePath(datapackId: string): string {
+  return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.configure);
 }
 
-export function datapackLearningsPath(datapackName: string, datapackId?: string): string {
-  return appendDatapackId(datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.learnings), datapackId);
+export function datapackLearningsPath(datapackId: string): string {
+  return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.learnings);
 }
 
 /**
@@ -181,54 +146,46 @@ export type LearningsSource =
  *  "Review N pending" on the SharedKnowledge "Promoted memories" tab
  *  to deep-link into review while preserving the breadcrumb trail). */
 export function datapackLearningsPathFrom(
-  datapackName: string,
+  datapackId: string,
   source: LearningsSource,
 ): string {
-  const base = datapackLearningsPath(datapackName);
+  const base = datapackLearningsPath(datapackId);
   const q = new URLSearchParams();
   q.set(LEARNINGS_SOURCE_QUERY_PARAM, source);
   return `${base}?${q.toString()}`;
 }
 
-export function datapackMemorySummaryPath(datapackName: string, datapackId?: string): string {
-  return appendDatapackId(datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.memorySummary), datapackId);
+export function datapackMemorySummaryPath(datapackId: string): string {
+  return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.memorySummary);
 }
 
 export function datapackCollectiveMemorySummaryPath(
-  datapackName: string,
-  datapackId?: string,
+  datapackId: string,
 ): string {
-  return appendDatapackId(
-    datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.collectiveMemorySummary),
-    datapackId,
-  );
+  return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.collectiveMemorySummary);
 }
 
-export function datapackKnowledgePath(datapackName: string, datapackId?: string): string {
-  return appendDatapackId(datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.knowledge), datapackId);
+export function datapackKnowledgePath(datapackId: string): string {
+  return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.knowledge);
 }
 
 /** Full members roster page — linked from the "View all" footer on
  *  the Members tile on the datapack detail page. */
-export function datapackMembersPath(datapackName: string, datapackId?: string): string {
-  return appendDatapackId(datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.members), datapackId);
+export function datapackMembersPath(datapackId: string): string {
+  return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.members);
 }
 
 /** Full conversation viewer route. When `conversationId` is provided
  *  the viewer pre-selects that session in the left rail; otherwise it
- *  lands on the first row of the newest page. `datapackId` (optional)
- *  pins the URL to a specific datapack so name collisions across
- *  share boundaries don't ambiguously resolve. */
+ *  lands on the first row of the newest page. */
 export function datapackConversationsPath(
-  datapackName: string,
+  datapackId: string,
   conversationId?: string,
-  datapackId?: string,
 ): string {
-  const base = datapackSubPath(datapackName, DATAPACK_SUB_ROUTE.conversations);
-  const withId = conversationId
+  const base = datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.conversations);
+  return conversationId
     ? `${base}/${encodeURIComponent(conversationId)}`
     : base;
-  return appendDatapackId(withId, datapackId);
 }
 
 export const AUTH_ROUTES = [
@@ -246,4 +203,5 @@ export const PROTECTED_ROUTE_PREFIXES = [
   ROUTES.workbenchLm,
   ROUTES.datapacks,
   ROUTES.observeHub,
+  ROUTES.settings,
 ] as const;

@@ -28,11 +28,11 @@ type Datapack struct {
 	OwnerName        string    `json:"datapack_owner_name,omitempty"`
 	OwnerEmail       string    `json:"datapack_owner_email_id,omitempty"`
 	Grant            string    `json:"grant,omitempty"`
-	MemoryCount           int `json:"memory_count"`
-	KnowledgeCount        int `json:"knowledge_count"`
+	MemoryCount      int       `json:"memory_count"`
+	KnowledgeCount   int       `json:"knowledge_count"`
 	// LearningsCount = mem0 rows still awaiting a user decision
 	// (meko_promotion_user_action IS NULL). A subset of MemoryCount.
-	LearningsCount        int `json:"learnings_count"`
+	LearningsCount int `json:"learnings_count"`
 	// CollectiveMemoryCount = memories promoted into the shared KB.
 	CollectiveMemoryCount int `json:"collective_memory_count"`
 }
@@ -110,7 +110,7 @@ type MemoryListFilter struct {
 	// included. "learnings" → only NULL (rows still awaiting decision).
 	// "memories" → NULL OR 'keep_as_memory'. Empty falls back to
 	// "memories" so legacy callers keep working.
-	Scope string `json:"scope,omitempty"`
+	Scope      string `json:"scope,omitempty"`
 	DatapackID string `json:"datapack_id"`
 	UserID     string `json:"user_id,omitempty"`
 	UserType   string `json:"user_type,omitempty"`
@@ -361,13 +361,13 @@ type OutgoingSharePendingInvite struct {
 	RecipientEmailID  string  `json:"recipient_email_id"`
 }
 
-// OutgoingPendingInvitesResponse is returned by GET /datapacks/:name/outgoing-shares
+// OutgoingPendingInvitesResponse is returned by GET /datapacks/:datapack_id/outgoing-shares
 // (pending invites only; owner or maintainer).
 type OutgoingPendingInvitesResponse struct {
 	PendingInvites []OutgoingSharePendingInvite `json:"pending_invites"`
 }
 
-// DatapackMembersResponse is returned by GET /datapacks/:name/member-list
+// DatapackMembersResponse is returned by GET /datapacks/:datapack_id/member-list
 // (accepted members and metadata; any datapack access).
 type DatapackMembersResponse struct {
 	Members []OutgoingShareMember `json:"members"`

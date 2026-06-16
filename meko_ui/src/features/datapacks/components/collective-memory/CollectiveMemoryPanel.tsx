@@ -317,11 +317,10 @@ export function CollectiveMemoryPanel({
             // clickable instead of the whole row being one big link.
             const conversationHref = conversationId
               ? datapackConversationsPathWithSource(
-                  datapackName,
+                  datapackId,
                   traceConversationId,
                   CONVERSATION_SOURCE.collectiveMemorySummary,
                   { memoryId: m.id },
-                  datapackId,
                 )
               : undefined;
             const isTarget = !!highlightMemoryId && m.id === highlightMemoryId;

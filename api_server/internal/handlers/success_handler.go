@@ -298,7 +298,7 @@ func renderSuccessWithToken(c echo.Context, accessToken string) error {
 }
 
 // DatapackProvisionStatusHandler returns credentials for the datapack
-// in path scope (/datapacks/:name). Backs the per-datapack Connect
+// in path scope (/datapacks/:datapack_id). Backs the per-datapack Connect
 // dialog. Access is enforced upstream by RequireDatapackAccess (owner or
 // accepted share with agent_access).
 func DatapackProvisionStatusHandler(dpRepo *repository.DatapackRepo) echo.HandlerFunc {

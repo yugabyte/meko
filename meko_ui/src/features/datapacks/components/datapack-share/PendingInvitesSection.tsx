@@ -13,8 +13,7 @@ import {
 import { shareGrantDescription, shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
 
 type Props = {
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   invites: DatapackOutgoingPendingInvite[];
   loading?: boolean;
   onChanged: () => void | Promise<void>;
@@ -23,17 +22,17 @@ type Props = {
 /** Tracks which invite row is in-flight so only that row’s buttons show a spinner. */
 type Busy = { id: string; action: "resend" | "revoke" };
 
-export function PendingInvitesSection({ datapackName, datapackId, invites, loading = false, onChanged }: Props) {
+export function PendingInvitesSection({ datapackId, invites, loading = false, onChanged }: Props) {
   const [busy, setBusy] = useState<Busy | null>(null);
 
   const run = async (inviteId: string, action: "resend" | "revoke") => {
     setBusy({ id: inviteId, action });
     try {
       if (action === "resend") {
-        await resendDatapackInvite(datapackName, inviteId, { datapackId });
+        await resendDatapackInvite(datapackId, inviteId, {});
         toast({ title: "Invite resent" });
       } else {
-        await revokeDatapackInvite(datapackName, inviteId, { datapackId });
+        await revokeDatapackInvite(datapackId, inviteId, {});
         toast({ title: "Invite revoked" });
       }
       await onChanged();

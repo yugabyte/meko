@@ -11,6 +11,7 @@ import { Crown, Loader2, Users } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
+import { useDatapackName } from "@/features/datapacks/hooks/useDatapackName";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
 import {
@@ -42,8 +43,7 @@ const SELECTABLE_GRANTS: DatapackShareGrant[] = [
 ];
 
 type Props = {
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
 };
 
 // --- Local helpers (kept private to this page; the tile has its own
@@ -84,7 +84,8 @@ function resolvedGrant(m: DatapackOutgoingMember): DatapackShareGrant {
   return DATAPACK_SHARE_GRANT_VIEWER;
 }
 
-export default function DatapackMembersListPage({ datapackName, datapackId }: Props) {
+export default function DatapackMembersListPage({ datapackId }: Props) {
+  const datapackName = useDatapackName(datapackId);
   const [members, setMembers] = useState<DatapackOutgoingMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -113,7 +114,7 @@ export default function DatapackMembersListPage({ datapackName, datapackId }: Pr
     const ac = new AbortController();
     setLoading(true);
     setError(null);
-    void listDatapackMembers(datapackName, { signal: ac.signal, datapackId })
+    void listDatapackMembers(datapackId, { signal: ac.signal })
       .then((resp) => {
         if (ac.signal.aborted) return;
         setMembers(resp.members ?? []);
@@ -128,7 +129,7 @@ export default function DatapackMembersListPage({ datapackName, datapackId }: Pr
         if (!ac.signal.aborted) setLoading(false);
       });
     return () => ac.abort();
-  }, [datapackName, datapackId]);
+  }, [datapackId]);
 
   const ordered = sortMembersForDisplay(members);
 
@@ -150,7 +151,7 @@ export default function DatapackMembersListPage({ datapackName, datapackId }: Pr
   // PATCH and as a hard rollback on failure.
   const reloadMembers = async (signal?: AbortSignal) => {
     try {
-      const resp = await listDatapackMembers(datapackName, { signal, datapackId });
+      const resp = await listDatapackMembers(datapackId, { signal });
       if (signal?.aborted) return;
       setMembers(resp.members ?? []);
     } catch {
@@ -170,7 +171,7 @@ export default function DatapackMembersListPage({ datapackName, datapackId }: Pr
       prev.map((m) => (m.user_id === userID ? { ...m, grant: newGrant } : m)),
     );
     try {
-      await updateDatapackMemberGrant(datapackName, userID, { grant: newGrant }, { datapackId });
+      await updateDatapackMemberGrant(datapackId, userID, { grant: newGrant });
       toast({ title: "Role updated" });
       // Reconcile from the server in case the BE normalised the grant
       // or another change landed concurrently.
@@ -199,7 +200,7 @@ export default function DatapackMembersListPage({ datapackName, datapackId }: Pr
         <DatapackBreadcrumbs
           items={[
             { label: "Datapacks", href: ROUTES.datapacks },
-            { label: datapackName, href: datapackDetailPath(datapackName) },
+            { label: datapackName, href: datapackDetailPath(datapackId) },
             { label: "Members" },
           ]}
         />

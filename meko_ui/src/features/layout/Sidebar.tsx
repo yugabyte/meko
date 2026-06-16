@@ -25,7 +25,6 @@ import { Button } from "@/components/ui/button";
 import {
   AUTH_LOGOUT_EVENT,
   DATAPACKS_LIST_UPDATED_EVENT,
-  getApiErrorMessage,
   logout,
   ONBOARDING_STATUS_CACHE_KEY,
   PROVISION_STATUS_CACHE_KEY,
@@ -38,6 +37,7 @@ import { removeLocalItem, removeSessionItem } from "@/lib/browserStorage";
 import { ROUTES, datapackDetailPath } from "@/app/routes/paths";
 import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
 import { useBillingNavFlag } from "@/features/billing/hooks/useBillingNavFlag";
+import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
 
 /**
  * Cap the nested "Datapacks" list at this many rows before it starts to
@@ -64,8 +64,7 @@ export default function Sidebar() {
   // /billing?showPaymentOptions=true (persisted in localStorage).
   // See useBillingNavFlag for the gate logic.
   const showBillingNav = useBillingNavFlag();
-  const [loggingOut, setLoggingOut] = useState(false);
-  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [signOutOpen, setSignOutOpen] = useState(false);
   // Shared react-query cache — every other surface (HomePage, ObservePage,
   // WorkbenchLM, DatapacksOverviewPage) subscribes to the same key, so
   // navigating between them doesn't re-fetch within `staleTime`.
@@ -137,18 +136,19 @@ export default function Sidebar() {
   const expandSidebar = () => setIsCollapsed(false);
 
   const handleLogout = async () => {
-    setLogoutError(null);
-    setLoggingOut(true);
+    // Best-effort server logout: even if it fails (network, expired
+    // session, server down) we must still clear local state and send
+    // the user to /login, otherwise they're trapped in an authenticated
+    // shell with no way out.
     try {
       await logout();
-      removeSessionItem(PROVISION_STATUS_CACHE_KEY);
-      removeLocalItem(ONBOARDING_STATUS_CACHE_KEY);
-      dispatchAppEvent(AUTH_LOGOUT_EVENT);
-      navigate(ROUTES.login, { replace: true });
     } catch (err) {
-      setLogoutError(getApiErrorMessage(err, "Could not sign out. Please try again."));
-      setLoggingOut(false);
+      console.error("Failed to call logout API:", err);
     }
+    removeSessionItem(PROVISION_STATUS_CACHE_KEY);
+    removeLocalItem(ONBOARDING_STATUS_CACHE_KEY);
+    dispatchAppEvent(AUTH_LOGOUT_EVENT);
+    navigate(ROUTES.login, { replace: true });
   };
 
   const isDatapacksSectionActive =
@@ -382,10 +382,10 @@ export default function Sidebar() {
                 {datapackList.map((dp) => (
                   <NavLink
                     key={dp.datapack_id}
-                    to={datapackDetailPath(dp.datapack_name, dp.datapack_id)}
+                    to={datapackDetailPath(dp.datapack_id)}
                     title={dp.datapack_name}
                     className={() => {
-                      const basePath = datapackDetailPath(dp.datapack_name);
+                      const basePath = datapackDetailPath(dp.datapack_id);
                       const onDatapackSubroute =
                         location.pathname === basePath ||
                         location.pathname.startsWith(`${basePath}/`);
@@ -588,21 +588,19 @@ export default function Sidebar() {
             "mt-1 flex items-center rounded-md text-sm font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors",
             isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
           )}
-          onClick={handleLogout}
-          disabled={loggingOut}
+          onClick={() => setSignOutOpen(true)}
           title={isCollapsed ? "Sign out" : undefined}
         >
           <LogOut className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
-          {!isCollapsed && (
-            <span className="animate-in fade-in truncate">
-              {loggingOut ? "Signing out..." : "Sign out"}
-            </span>
-          )}
+          {!isCollapsed && <span className="animate-in fade-in truncate">Sign out</span>}
         </button>
-        {!isCollapsed && logoutError ? (
-          <p className="px-3 pt-1 text-xs text-red-400">{logoutError}</p>
-        ) : null}
       </div>
+
+      <SignOutConfirmDialog
+        open={signOutOpen}
+        onOpenChange={setSignOutOpen}
+        onConfirm={handleLogout}
+      />
 
       <FeedbackDialog
         open={feedbackOpen}

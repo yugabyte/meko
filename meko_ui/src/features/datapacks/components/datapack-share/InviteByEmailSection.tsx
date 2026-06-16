@@ -18,14 +18,13 @@ import { getApiErrorMessage, inviteDatapackShare } from "@/lib/api/mekoApi";
 import { toast } from "@/hooks/use-toast";
 
 type Props = {
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   /** Email of the currently signed-in user — used to block self-invites client-side. */
   currentUserEmail?: string;
   onInviteSent: () => void | Promise<void>;
 };
 
-export function InviteByEmailSection({ datapackName, datapackId, currentUserEmail, onInviteSent }: Props) {
+export function InviteByEmailSection({ datapackId, currentUserEmail, onInviteSent }: Props) {
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState<string | null>(null);
   const [inviteRole, setInviteRole] = useState<ShareInviteRoleId>(DATAPACK_SHARE_GRANT_CONTRIBUTOR);
@@ -62,10 +61,10 @@ export function InviteByEmailSection({ datapackName, datapackId, currentUserEmai
     }
     setSubmitting(true);
     try {
-      await inviteDatapackShare(datapackName, {
+      await inviteDatapackShare(datapackId, {
         recipient_email: parsed?.email?.toLowerCase(),
         grant: inviteRole,
-      }, { datapackId });
+      }, {});
       setEmail("");
       toast({ title: "Invite sent" });
       await onInviteSent();

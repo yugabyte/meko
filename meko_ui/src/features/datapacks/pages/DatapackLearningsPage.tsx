@@ -19,18 +19,15 @@ import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/api/mekoAp
 import { isDatapackGrantEligibleToPromoteMemoryToKnowledge } from "@/lib/datapackShareGrants";
 
 type Props = {
-  datapackName: string;
-  /** Optional URL-pinned id from `?datapack_id=`. Disambiguates between
-   *  same-named datapacks across share boundaries; falls back to
-   *  name-only resolution when omitted. */
-  datapackId?: string;
+  datapackId: string;
 };
 
-export default function DatapackLearningsPage({ datapackName, datapackId }: Props) {
+export default function DatapackLearningsPage({ datapackId }: Props) {
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [isPromotionAllowed, setIsPromotionAllowed] = useState(false);
+  const displayDatapackName = datapack?.datapack_name ?? "";
 
   // `?from=...` carries which page the user came from. When set to
   // `shared-knowledge` we grow the breadcrumb trail by one hop so
@@ -43,17 +40,17 @@ export default function DatapackLearningsPage({ datapackName, datapackId }: Prop
   const breadcrumbItems = useMemo(() => {
     const items: { label: string; href?: string }[] = [
       { label: "Datapacks", href: ROUTES.datapacks },
-      { label: datapackName, href: datapackDetailPath(datapackName) },
+      { label: displayDatapackName, href: datapackDetailPath(datapackId) },
     ];
     if (cameFrom === LEARNINGS_SOURCE.sharedKnowledge) {
       items.push({
         label: "Shared Knowledge",
-        href: datapackKnowledgePath(datapackName),
+        href: datapackKnowledgePath(datapackId),
       });
     }
     items.push({ label: "Learnings Summary" });
     return items;
-  }, [datapackName, cameFrom]);
+  }, [displayDatapackName, datapackId, cameFrom]);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,7 +58,7 @@ export default function DatapackLearningsPage({ datapackName, datapackId }: Prop
       setStatusLoading(true);
       setStatusError(null);
       try {
-        const d = await getDatapack(datapackName, { datapackId });
+        const d = await getDatapack(datapackId, {});
         if (!cancelled) {
           setDatapack(d);
           setIsPromotionAllowed(isDatapackGrantEligibleToPromoteMemoryToKnowledge({ grant: d.grant }));
@@ -79,7 +76,7 @@ export default function DatapackLearningsPage({ datapackName, datapackId }: Prop
     return () => {
       cancelled = true;
     };
-  }, [datapackName, datapackId]);
+  }, [datapackId]);
 
   return (
     <div className="flex-1 h-screen overflow-y-auto bg-background text-foreground flex flex-col">
@@ -96,7 +93,7 @@ export default function DatapackLearningsPage({ datapackName, datapackId }: Prop
             </h1>
           </div>
           <p className="text-sm text-muted-foreground max-w-2xl leading-relaxed">
-            Review agent memories for <span className="text-foreground/90">{datapackName}</span> and promote them
+            Review agent memories for <span className="text-foreground/90">{displayDatapackName}</span> and promote them
             into the knowledge base.
           </p>
         </div>
@@ -104,7 +101,7 @@ export default function DatapackLearningsPage({ datapackName, datapackId }: Prop
         {statusError ? <WarningBanner>{statusError}</WarningBanner> : null}
 
         {datapack?.datapack_id ? (
-          <MemoryPromotionPanel datapackName={datapackName} datapackId={datapack.datapack_id} isPromotionAllowed={isPromotionAllowed} />
+          <MemoryPromotionPanel datapackName={displayDatapackName} datapackId={datapack.datapack_id} isPromotionAllowed={isPromotionAllowed} />
         ) : (
           <div className="rounded-xl border border-dashed border-border bg-muted/5 px-6 py-16 text-center text-sm text-muted-foreground">
             {statusLoading ? "Loading datapack…" : "Datapack not available."}

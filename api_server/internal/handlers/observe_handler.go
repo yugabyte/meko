@@ -13,7 +13,7 @@ import (
 	"meko/api_server/internal/service"
 )
 
-// Defaults for GET /datapacks/:name/conversations pagination.
+// Defaults for GET /datapacks/:datapack_id/conversations pagination.
 const (
 	conversationsDefaultLimit = 20
 	conversationsMaxLimit     = 200
@@ -69,7 +69,7 @@ func (h *ObserveHandler) BootstrapSession(c echo.Context) error {
 	})
 }
 
-// ConversationList handles GET /api/v1/datapacks/:name/conversations.
+// ConversationList handles GET /api/v1/datapacks/:datapack_id/conversations.
 // Returns one page of Langfuse sessions (= conversations) for the
 // datapack's project, newest first, with offset pagination. Datapack
 // ownership is enforced upstream by RequireDatapackOwnership.
@@ -148,7 +148,7 @@ func (h *ObserveHandler) ConversationList(c echo.Context) error {
 	})
 }
 
-// ConversationCount handles GET /api/v1/datapacks/:name/conversations/count.
+// ConversationCount handles GET /api/v1/datapacks/:datapack_id/conversations/count.
 // Returns the total number of distinct Langfuse sessions (= conversations)
 // for the datapack's project. Ownership is enforced upstream by
 // RequireDatapackOwnership.
@@ -185,7 +185,7 @@ func (h *ObserveHandler) ConversationCount(c echo.Context) error {
 }
 
 // ConversationDetail handles
-// GET /api/v1/datapacks/:name/conversations/:conversation_id.
+// GET /api/v1/datapacks/:datapack_id/conversations/:conversation_id.
 // Returns the header (same shape as a list row) plus a paginated
 // thread of user/assistant turns with reasoning and per-turn counters.
 //
@@ -260,7 +260,7 @@ func (h *ObserveHandler) ConversationDetail(c echo.Context) error {
 }
 
 // MessageTrace handles
-// GET /api/v1/datapacks/:name/conversations/:conversation_id/messages/:message_id/trace.
+// GET /api/v1/datapacks/:datapack_id/conversations/:conversation_id/messages/:message_id/trace.
 // Returns the windowed observation tree for one turn — the message
 // span plus all tool / generation observations between this message's
 // start_time and the next message's start_time.

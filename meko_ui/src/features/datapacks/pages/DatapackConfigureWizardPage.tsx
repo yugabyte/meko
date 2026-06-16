@@ -1,11 +1,12 @@
 /**
  * Configure wizard:
  * - `/datapacks/new/configure` — create flow (Configure creates datapack, then Install → Add Knowledge → Finish).
- * - `/datapacks/:name/configure` — existing datapack (same steps; Configure can be skipped).
+ * - `/datapacks/:datapack_id/configure` — existing datapack (same steps; Configure can be skipped).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
+import { setCachedDatapackName } from "@/features/datapacks/hooks/useDatapackName";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { DatapackConfigureWizardStepper } from "@/features/datapacks/components/configure-wizard/DatapackConfigureWizardStepper";
@@ -42,6 +43,7 @@ import {
 import { startKnowledgeBaseImport } from "@/lib/knowledgeBaseImportJob";
 import { uploadFileToS3 } from "@/lib/uploadFileToS3";
 import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
+import { validateDatapackName } from "@/lib/datapackNameValidation";
 import { toast } from "@/hooks/use-toast";
 
 const PERSISTED_KNOWLEDGE_FILES_PREFIX = "meko:configure-wizard:knowledge-files:v1:";
@@ -55,15 +57,13 @@ type DatapackConfigureWizardPageProps = {
   currentUser: CurrentUser | null;
   /** `/datapacks/new/configure` */
   isCreateFlow?: boolean;
-  /** `/datapacks/:name/configure` */
-  datapackName?: string;
+  /** `/datapacks/:datapack_id/configure` */
   datapackId?: string;
 };
 
 export default function DatapackConfigureWizardPage({
   currentUser,
   isCreateFlow = false,
-  datapackName: routeDatapackName,
   datapackId: routeDatapackId,
 }: DatapackConfigureWizardPageProps) {
   const navigate = useNavigate();
@@ -73,9 +73,10 @@ export default function DatapackConfigureWizardPage({
   const [stepId, setStepId] = useState<WizardStepId>(WIZARD_STEP_ID.configure);
   const currentIndex = wizardStepIndex(stepId);
 
-  /** Resolved server name for API calls (set after create, or from route / load for existing). */
-  const [apiDatapackName, setApiDatapackName] = useState<string | null>(() =>
-    isCreateFlow ? null : routeDatapackName ?? null,
+  /** Resolved server name for display (set after create, or from route / load for existing). */
+  const [apiDatapackName, setApiDatapackName] = useState<string | null>(null);
+  const [apiDatapackId, setApiDatapackId] = useState<string | null>(() =>
+    isCreateFlow ? null : routeDatapackId ?? null,
   );
 
   const [configureDraftName, setConfigureDraftName] = useState("");
@@ -101,7 +102,7 @@ export default function DatapackConfigureWizardPage({
   const restoredPersistenceRef = useRef<string | null>(null);
 
   const persistedKnowledgeStorageKey = (() => {
-    const identity = routeDatapackId ?? apiDatapackName ?? routeDatapackName;
+    const identity = apiDatapackId ?? routeDatapackId;
     return identity ? `${PERSISTED_KNOWLEDGE_FILES_PREFIX}${identity}` : null;
   })();
 
@@ -109,22 +110,24 @@ export default function DatapackConfigureWizardPage({
     if (isCreateFlow) {
       setConfigureLoading(false);
       setApiDatapackName(null);
+      setApiDatapackId(null);
       return;
     }
-    if (!routeDatapackName) return;
+    if (!routeDatapackId) return;
     let cancelled = false;
     setConfigureLoading(true);
     setConfigureError(null);
-    void getDatapack(routeDatapackName, { datapackId: routeDatapackId })
+    void getDatapack(routeDatapackId, {})
       .then((dp) => {
         if (cancelled) return;
-        const n = dp.datapack_name ?? routeDatapackName;
+        const n = dp.datapack_name ?? "";
         const d = dp.description ?? "";
         setConfigureDraftName(n);
         setConfigureDraftDescription(d);
         setConfigureInitialName(n);
         setConfigureInitialDescription(d);
         setApiDatapackName(n);
+        setApiDatapackId(dp.datapack_id ?? routeDatapackId);
       })
       .catch((err) => {
         if (!cancelled) setConfigureError(getApiErrorMessage(err, "Could not load datapack."));
@@ -135,17 +138,17 @@ export default function DatapackConfigureWizardPage({
     return () => {
       cancelled = true;
     };
-  }, [isCreateFlow, routeDatapackName]);
+  }, [isCreateFlow, routeDatapackId]);
 
   useEffect(() => {
-    if (stepId !== WIZARD_STEP_ID.install || !apiDatapackName) {
+    if (stepId !== WIZARD_STEP_ID.install || !apiDatapackId) {
       return;
     }
     const ac = new AbortController();
     setInstallProvisionLoading(true);
     setInstallProvisionError(null);
     setInstallProvision(null);
-    void getDatapackProvisionStatus(apiDatapackName, { signal: ac.signal })
+    void getDatapackProvisionStatus(apiDatapackId, { signal: ac.signal })
       .then((p) => {
         if (!ac.signal.aborted) setInstallProvision(p);
       })
@@ -159,7 +162,7 @@ export default function DatapackConfigureWizardPage({
         if (!ac.signal.aborted) setInstallProvisionLoading(false);
       });
     return () => ac.abort();
-  }, [stepId, apiDatapackName]);
+  }, [stepId, apiDatapackId]);
 
   const showSyncWarning = useCallback((msg: string) => {
     setSyncFileWarning(msg);
@@ -266,7 +269,7 @@ export default function DatapackConfigureWizardPage({
   }, []);
 
   const handleUploadKnowledgeFiles = useCallback(async (includedIds: Set<string>) => {
-    const pack = apiDatapackName;
+    const pack = apiDatapackId;
     if (!pack) return;
     setKnowledgeUploading(true);
     try {
@@ -346,7 +349,7 @@ export default function DatapackConfigureWizardPage({
     } finally {
       setKnowledgeUploading(false);
     }
-  }, [apiDatapackName, knowledgeItems]);
+  }, [apiDatapackId, knowledgeItems]);
 
   const syncAllKnowledgeUploaded =
     knowledgeItems.length > 0 &&
@@ -359,8 +362,9 @@ export default function DatapackConfigureWizardPage({
 
   const handleConfigureStepNext = useCallback(async () => {
     const trimmed = configureDraftName.trim();
-    if (!trimmed) {
-      setConfigureError("Enter a datapack name.");
+    const nameError = validateDatapackName(trimmed);
+    if (nameError) {
+      setConfigureError(nameError);
       return;
     }
     if (!currentUser?.account_id) {
@@ -372,15 +376,15 @@ export default function DatapackConfigureWizardPage({
     const descTrim = configureDraftDescription.trim();
     try {
       if (isCreateFlow) {
-        if (apiDatapackName) {
+        if (apiDatapackId) {
           const dirty =
             trimmed !== configureInitialName ||
             configureDraftDescription.trim() !== configureInitialDescription.trim();
           if (dirty) {
-            await updateDatapack(apiDatapackName, {
+            await updateDatapack(apiDatapackId, {
               name: trimmed,
               description: configureDraftDescription,
-            }, { datapackId: routeDatapackId });
+            }, {});
             setApiDatapackName(trimmed);
             setConfigureInitialName(trimmed);
             setConfigureInitialDescription(configureDraftDescription);
@@ -400,27 +404,31 @@ export default function DatapackConfigureWizardPage({
           localStorage.setItem("meko_latest_api_key", created.mcp_server.api_key);
         }
         const resolved = created.name;
+        const resolvedId = created.datapack_id;
         setApiDatapackName(resolved);
+        setApiDatapackId(resolvedId);
         setConfigureDraftName(resolved);
         setConfigureInitialName(resolved);
         setConfigureInitialDescription(configureDraftDescription);
         setStepId(WIZARD_STEP_ID.install);
         return;
       }
-      const routeName = routeDatapackName;
-      if (!routeName) return;
+      const routeId = routeDatapackId;
+      if (!routeId) return;
       const dirty =
         trimmed !== configureInitialName ||
         configureDraftDescription.trim() !== configureInitialDescription.trim();
       if (dirty) {
-        const updated = await updateDatapack(routeName, {
+        const updated = await updateDatapack(routeId, {
           name: trimmed,
           description: configureDraftDescription,
-        }, { datapackId: routeDatapackId });
+        }, {});
+        setCachedDatapackName(routeId, trimmed);
         if (updated?.message) {
-          notifyDatapacksListChanged(`rename:${routeName}->${trimmed}`);
+          notifyDatapacksListChanged(`rename:${routeId}->${trimmed}`);
         }
         setApiDatapackName(trimmed);
+        setApiDatapackId(routeId);
         setConfigureInitialName(trimmed);
         setConfigureInitialDescription(configureDraftDescription);
       }
@@ -431,14 +439,14 @@ export default function DatapackConfigureWizardPage({
       setConfigureSubmitting(false);
     }
   }, [
-    apiDatapackName,
+    apiDatapackId,
     configureDraftDescription,
     configureDraftName,
     configureInitialDescription,
     configureInitialName,
     currentUser?.account_id,
     isCreateFlow,
-    routeDatapackName,
+    routeDatapackId,
   ]);
 
   const handleWizardNext = useCallback(async () => {
@@ -459,8 +467,8 @@ export default function DatapackConfigureWizardPage({
     if (currentIndex === 0) {
       if (isCreateFlow) {
         navigate(ROUTES.datapacks);
-      } else if (apiDatapackName ?? routeDatapackName) {
-        navigate(datapackDetailPath(apiDatapackName ?? routeDatapackName ?? "", routeDatapackId));
+      } else if (apiDatapackId ?? routeDatapackId) {
+        navigate(datapackDetailPath(apiDatapackId ?? routeDatapackId ?? ""));
       } else {
         navigate(ROUTES.datapacks);
       }
@@ -479,8 +487,9 @@ export default function DatapackConfigureWizardPage({
   ).length;
 
   const finishPackName = apiDatapackName ?? "";
+  const finishPackId = apiDatapackId ?? routeDatapackId ?? "";
   const handleWizardFinish = useCallback(() => {
-    if (!finishPackName) return;
+    if (!finishPackName || !finishPackId) return;
     if (!hasUploadedKnowledge) {
       toast({
         title: "Finished setup",
@@ -488,13 +497,13 @@ export default function DatapackConfigureWizardPage({
         duration: 4000,
       });
     } else {
-      startKnowledgeBaseImport(finishPackName, routeDatapackId);
+      startKnowledgeBaseImport(finishPackName, finishPackId);
       if (persistedKnowledgeStorageKey) {
         localStorage.removeItem(persistedKnowledgeStorageKey);
       }
     }
-    navigate(datapackDetailPath(finishPackName, routeDatapackId));
-  }, [finishPackName, hasUploadedKnowledge, navigate, persistedKnowledgeStorageKey, routeDatapackId]);
+    navigate(datapackDetailPath(finishPackId));
+  }, [finishPackName, finishPackId, hasUploadedKnowledge, navigate, persistedKnowledgeStorageKey]);
 
   const canProceedFromConfigure =
     Boolean(configureDraftName.trim()) &&
@@ -505,7 +514,6 @@ export default function DatapackConfigureWizardPage({
   const headerDatapackName =
     configureDraftName.trim() ||
     apiDatapackName ||
-    routeDatapackName ||
     (isCreateFlow ? "new datapack" : "");
 
   const breadcrumbItems = isCreateFlow
@@ -516,7 +524,7 @@ export default function DatapackConfigureWizardPage({
     ]
     : [
       { label: "Datapacks", href: ROUTES.datapacks },
-      { label: routeDatapackName ?? "", href: datapackDetailPath(routeDatapackName ?? "", routeDatapackId) },
+      { label: apiDatapackName ?? "", href: datapackDetailPath(routeDatapackId ?? "") },
       { label: "configure" },
     ];
 

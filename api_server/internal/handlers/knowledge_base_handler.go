@@ -86,7 +86,7 @@ func NewKnowledgeBaseHandler(
 	}
 }
 
-// Add handles POST /api/v1/datapacks/:name/knowledge-bases.
+// Add handles POST /api/v1/datapacks/:datapack_id/knowledge-bases.
 //
 // TODO(external-kb): not on the canonical create path. The per-datapack
 // KB row is created/refreshed by CreateKB (POST /knowledge-bases/create)
@@ -99,7 +99,7 @@ func NewKnowledgeBaseHandler(
 //	@Tags		knowledge-bases
 //	@Accept		json
 //	@Produce	json
-//	@Param		name	path		string				true	"Datapack name"
+//	@Param		datapack_id	path		string				true	"Datapack ID"
 //	@Param		body	body		service.AddRequest	true	"Knowledge base URL"
 //	@Success	201		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
@@ -107,7 +107,7 @@ func NewKnowledgeBaseHandler(
 //	@Failure	404		{object}	APIResponse
 //	@Failure	409		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases [post]
+//	@Router		/datapacks/{datapack_id}/knowledge-bases [post]
 func (h *KnowledgeBaseHandler) Add(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -129,17 +129,17 @@ func (h *KnowledgeBaseHandler) Add(c echo.Context) error {
 	return ok(c, http.StatusCreated, result)
 }
 
-// List handles GET /api/v1/datapacks/:name/knowledge-bases.
+// List handles GET /api/v1/datapacks/:datapack_id/knowledge-bases.
 //
 //	@Summary	List knowledge bases for a datapack
 //	@Tags		knowledge-bases
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
+//	@Param		datapack_id	path		string	true	"Datapack ID"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	500		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases [get]
+//	@Router		/datapacks/{datapack_id}/knowledge-bases [get]
 func (h *KnowledgeBaseHandler) List(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -158,19 +158,19 @@ func (h *KnowledgeBaseHandler) List(c echo.Context) error {
 	return ok(c, http.StatusOK, kbs)
 }
 
-// Delete handles DELETE /api/v1/datapacks/:name/knowledge-bases/:rag_source_id.
+// Delete handles DELETE /api/v1/datapacks/:datapack_id/knowledge-bases/:rag_source_id.
 //
 //	@Summary	Delete a knowledge base
 //	@Tags		knowledge-bases
 //	@Produce	json
-//	@Param		name			path		string	true	"Datapack name"
+//	@Param		datapack_id			path		string	true	"Datapack ID"
 //	@Param		rag_source_id	path		string	true	"rag_source_id (UUID)"
 //	@Success	200				{object}	APIResponse
 //	@Failure	400				{object}	APIResponse
 //	@Failure	401				{object}	APIResponse
 //	@Failure	404				{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases/{rag_source_id} [delete]
+//	@Router		/datapacks/{datapack_id}/knowledge-bases/{rag_source_id} [delete]
 func (h *KnowledgeBaseHandler) Delete(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -230,20 +230,20 @@ func isHexSHA256(s string) bool {
 
 const maxFileSizeBytes = 5 * 1024 * 1024 // 5 MB
 
-// RequestUploadURL handles POST /api/v1/datapacks/:name/knowledge-bases/upload-url.
+// RequestUploadURL handles POST /api/v1/datapacks/:datapack_id/knowledge-bases/upload-url.
 //
 //	@Summary	Generate a presigned S3 upload URL
 //	@Tags		knowledge-bases
 //	@Accept		json
 //	@Produce	json
-//	@Param		name	path		string				true	"Datapack name"
+//	@Param		datapack_id	path		string				true	"Datapack ID"
 //	@Param		body	body		uploadURLRequest	true	"Upload request"
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	503		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases/upload-url [post]
+//	@Router		/datapacks/{datapack_id}/knowledge-bases/upload-url [post]
 func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 	if h.s3Svc == nil || !h.s3Svc.Enabled() {
 		return apiError(c, http.StatusServiceUnavailable,
@@ -339,7 +339,7 @@ type downloadURLRequest struct {
 	DocumentURI string `json:"document_uri"`
 }
 
-// RequestDownloadURL handles POST /api/v1/datapacks/:name/knowledge-bases/download-url.
+// RequestDownloadURL handles POST /api/v1/datapacks/:datapack_id/knowledge-bases/download-url.
 //
 // Returns a short-lived presigned S3 GET URL for the given document.
 // The UI fetches this on click and opens it directly — no api_server
@@ -349,7 +349,7 @@ type downloadURLRequest struct {
 //	@Tags		knowledge-bases
 //	@Accept		json
 //	@Produce	json
-//	@Param		name	path		string				true	"Datapack name"
+//	@Param		datapack_id	path		string				true	"Datapack ID"
 //	@Param		body	body		downloadURLRequest	true	"Document download request"
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
@@ -357,7 +357,7 @@ type downloadURLRequest struct {
 //	@Failure	403		{object}	APIResponse
 //	@Failure	500		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases/download-url [post]
+//	@Router		/datapacks/{datapack_id}/knowledge-bases/download-url [post]
 func (h *KnowledgeBaseHandler) RequestDownloadURL(c echo.Context) error {
 	if h.s3Svc == nil || !h.s3Svc.Enabled() {
 		return apiError(c, http.StatusServiceUnavailable,
@@ -445,7 +445,7 @@ func canDeleteKBDocument(
 	return false
 }
 
-// DeleteDocument handles DELETE /api/v1/datapacks/:name/knowledge-bases/documents/:document_id.
+// DeleteDocument handles DELETE /api/v1/datapacks/:datapack_id/knowledge-bases/documents/:document_id.
 //
 // Removes a single knowledge-base file end-to-end:
 //
@@ -463,7 +463,7 @@ func canDeleteKBDocument(
 //     @Summary	Delete one knowledge-base file
 //     @Tags		knowledge-bases
 //     @Produce	json
-//     @Param		name		path	string	true	"Datapack name"
+//     @Param		datapack_id		path	string	true	"Datapack ID"
 //     @Param		document_id	path	string	true	"dist_rag document UUID"
 //     @Success	200		{object}	APIResponse
 //     @Failure	400		{object}	APIResponse
@@ -472,7 +472,7 @@ func canDeleteKBDocument(
 //     @Failure	404		{object}	APIResponse
 //     @Failure	500		{object}	APIResponse
 //     @Security	BearerAuth
-//     @Router		/datapacks/{name}/knowledge-bases/documents/{document_id} [delete]
+//     @Router		/datapacks/{datapack_id}/knowledge-bases/documents/{document_id} [delete]
 func (h *KnowledgeBaseHandler) DeleteDocument(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -558,7 +558,7 @@ func (h *KnowledgeBaseHandler) DeleteDocument(c echo.Context) error {
 	})
 }
 
-// ConfirmUpload handles POST /api/v1/datapacks/:name/knowledge-bases/upload-complete.
+// ConfirmUpload handles POST /api/v1/datapacks/:datapack_id/knowledge-bases/upload-complete.
 //
 // This endpoint is currently advisory: the actual KB row is created by
 // the subsequent /knowledge-bases/create call which lists the S3 prefix
@@ -568,13 +568,13 @@ func (h *KnowledgeBaseHandler) DeleteDocument(c echo.Context) error {
 //	@Tags		knowledge-bases
 //	@Accept		json
 //	@Produce	json
-//	@Param		name	path		string					true	"Datapack name"
+//	@Param		datapack_id	path		string					true	"Datapack ID"
 //	@Param		body	body		uploadCompleteRequest	true	"Upload confirmation"
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases/upload-complete [post]
+//	@Router		/datapacks/{datapack_id}/knowledge-bases/upload-complete [post]
 func (h *KnowledgeBaseHandler) ConfirmUpload(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -606,7 +606,7 @@ func (h *KnowledgeBaseHandler) ConfirmUpload(c echo.Context) error {
 	})
 }
 
-// CreateKB handles POST /api/v1/datapacks/:name/knowledge-bases/create.
+// CreateKB handles POST /api/v1/datapacks/:datapack_id/knowledge-bases/create.
 //
 // Workflow:
 //
@@ -628,14 +628,14 @@ func (h *KnowledgeBaseHandler) ConfirmUpload(c echo.Context) error {
 //     @Summary	Create or refresh a knowledge base from uploaded files
 //     @Tags		knowledge-bases
 //     @Produce	json
-//     @Param		name	path		string	true	"Datapack name"
+//     @Param		datapack_id	path		string	true	"Datapack ID"
 //     @Success	201		{object}	APIResponse
 //     @Failure	400		{object}	APIResponse
 //     @Failure	401		{object}	APIResponse
 //     @Failure	500		{object}	APIResponse
 //     @Failure	503		{object}	APIResponse
 //     @Security	BearerAuth
-//     @Router		/datapacks/{name}/knowledge-bases/create [post]
+//     @Router		/datapacks/{datapack_id}/knowledge-bases/create [post]
 func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 	if h.s3Svc == nil || !h.s3Svc.Enabled() {
 		return apiError(c, http.StatusServiceUnavailable,
@@ -875,18 +875,18 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 	})
 }
 
-// KBStatus handles GET /api/v1/datapacks/:name/knowledge-bases/status.
+// KBStatus handles GET /api/v1/datapacks/:datapack_id/knowledge-bases/status.
 //
 //	@Summary	Get knowledge base pipeline status
 //	@Tags		knowledge-bases
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
+//	@Param		datapack_id	path		string	true	"Datapack ID"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	500		{object}	APIResponse
 //	@Failure	503		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases/status [get]
+//	@Router		/datapacks/{datapack_id}/knowledge-bases/status [get]
 func (h *KnowledgeBaseHandler) KBStatus(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -951,7 +951,7 @@ func (h *KnowledgeBaseHandler) KBStatus(c echo.Context) error {
 	return ok(c, http.StatusOK, status)
 }
 
-// Counts handles GET /api/v1/datapacks/:name/knowledge-bases/counts.
+// Counts handles GET /api/v1/datapacks/:datapack_id/knowledge-bases/counts.
 //
 // Returns the per-datapack breakdown of total uploaded documents,
 // total stored chunks, and total promoted memories.
@@ -959,12 +959,12 @@ func (h *KnowledgeBaseHandler) KBStatus(c echo.Context) error {
 //	@Summary	Knowledge base counts breakdown for a datapack
 //	@Tags		knowledge-bases
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
+//	@Param		datapack_id	path		string	true	"Datapack ID"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	500		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases/counts [get]
+//	@Router		/datapacks/{datapack_id}/knowledge-bases/counts [get]
 func (h *KnowledgeBaseHandler) Counts(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -982,7 +982,7 @@ func (h *KnowledgeBaseHandler) Counts(c echo.Context) error {
 	return ok(c, http.StatusOK, counts)
 }
 
-// Documents handles GET /api/v1/datapacks/:name/knowledge-bases/documents.
+// Documents handles GET /api/v1/datapacks/:datapack_id/knowledge-bases/documents.
 //
 // Returns a paginated envelope { items, total, page, page_size, has_more }
 // of dist_rag documents for the datapack.
@@ -1002,7 +1002,7 @@ func (h *KnowledgeBaseHandler) Counts(c echo.Context) error {
 //     @Summary	List uploaded documents for a datapack (paginated)
 //     @Tags		knowledge-bases
 //     @Produce	json
-//     @Param		name		path	string	true	"Datapack name"
+//     @Param		datapack_id		path	string	true	"Datapack ID"
 //     @Param		page		query	int		false	"Page number (default 1)"
 //     @Param		page_size	query	int		false	"Page size (default 50, max 200)"
 //     @Param		q			query	string	false	"Filename substring search"
@@ -1012,7 +1012,7 @@ func (h *KnowledgeBaseHandler) Counts(c echo.Context) error {
 //     @Failure	401			{object}	APIResponse
 //     @Failure	500			{object}	APIResponse
 //     @Security	BearerAuth
-//     @Router		/datapacks/{name}/knowledge-bases/documents [get]
+//     @Router		/datapacks/{datapack_id}/knowledge-bases/documents [get]
 func (h *KnowledgeBaseHandler) Documents(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -1059,7 +1059,7 @@ func (h *KnowledgeBaseHandler) Documents(c echo.Context) error {
 	return ok(c, http.StatusOK, result)
 }
 
-// Summary handles GET /api/v1/datapacks/:name/knowledge-bases/summary.
+// Summary handles GET /api/v1/datapacks/:datapack_id/knowledge-bases/summary.
 //
 // Returns the header tile aggregates + the two deterministic description
 // strings consumed by the SharedKnowledge page. One round trip from the
@@ -1068,12 +1068,12 @@ func (h *KnowledgeBaseHandler) Documents(c echo.Context) error {
 //	@Summary	Header aggregates for the SharedKnowledge page
 //	@Tags		knowledge-bases
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
+//	@Param		datapack_id	path		string	true	"Datapack ID"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	500		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases/summary [get]
+//	@Router		/datapacks/{datapack_id}/knowledge-bases/summary [get]
 func (h *KnowledgeBaseHandler) Summary(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -1090,7 +1090,7 @@ func (h *KnowledgeBaseHandler) Summary(c echo.Context) error {
 	return ok(c, http.StatusOK, summary)
 }
 
-// ActivityLog handles GET /api/v1/datapacks/:name/knowledge-bases/activity-log.
+// ActivityLog handles GET /api/v1/datapacks/:datapack_id/knowledge-bases/activity-log.
 //
 // Merged feed of file uploads + memory promotions for this datapack,
 // ordered by timestamp DESC. **Keyset pagination**: first call omits
@@ -1100,14 +1100,14 @@ func (h *KnowledgeBaseHandler) Summary(c echo.Context) error {
 //	@Summary	Merged activity feed (file uploads + memory promotions)
 //	@Tags		knowledge-bases
 //	@Produce	json
-//	@Param		name		path	string	true	"Datapack name"
+//	@Param		datapack_id		path	string	true	"Datapack ID"
 //	@Param		limit		query	int		false	"Page size (default 10, max 50)"
 //	@Param		cursor		query	string	false	"Opaque next-page cursor from a previous call; omit for first page"
 //	@Success	200			{object}	APIResponse
 //	@Failure	401			{object}	APIResponse
 //	@Failure	500			{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/knowledge-bases/activity-log [get]
+//	@Router		/datapacks/{datapack_id}/knowledge-bases/activity-log [get]
 func (h *KnowledgeBaseHandler) ActivityLog(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {

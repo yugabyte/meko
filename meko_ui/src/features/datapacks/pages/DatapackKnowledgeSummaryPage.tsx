@@ -49,11 +49,10 @@ import {
 } from "@/lib/api/mekoApi";
 
 type Props = {
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
 };
 
-export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId }: Props) {
+export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [datapackLoading, setDatapackLoading] = useState(true);
   const [datapackError, setDatapackError] = useState<string | null>(null);
@@ -122,7 +121,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
   // Fetch un-promoted memory count for the "X pending" badge.
   // page_size=1 minimises payload — we only need `total`.
   useEffect(() => {
-    const dpId = datapack?.datapack_id ?? datapackId ?? "";
+    const dpId = datapack?.datapack_id ?? datapackId;
     if (!dpId || !currentUser?.account_id) return;
     const ac = new AbortController();
     void listMemories(
@@ -140,7 +139,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
     let cancelled = false;
     setDatapackLoading(true);
     setDatapackError(null);
-    void getDatapack(datapackName, { datapackId })
+    void getDatapack(datapackId, {})
       .then((d) => {
         setPendingMemoryCount(d.learnings_count ?? 0);
         if (!cancelled) setDatapack(d);
@@ -157,12 +156,12 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
     return () => {
       cancelled = true;
     };
-  }, [datapackName, datapackId]);
+  }, [datapackId]);
 
   useEffect(() => {
     const ac = new AbortController();
     setSummaryLoading(true);
-    void getKnowledgeBaseSummary(datapackName, { signal: ac.signal, datapackId })
+    void getKnowledgeBaseSummary(datapackId, { signal: ac.signal })
       .then((s) => {
         if (ac.signal.aborted) return;
         setSummary(s);
@@ -176,7 +175,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
         if (!ac.signal.aborted) setSummaryLoading(false);
       });
     return () => ac.abort();
-  }, [datapackName, datapackId]);
+  }, [datapackId]);
 
   // First-page activity-log fetch JUST for the "Last activity" header
   // cell. Best-effort: we don't surface errors here because the full
@@ -184,11 +183,11 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
   useEffect(() => {
     const ac = new AbortController();
     void getKnowledgeBaseActivityLog(
-      datapackName,
+      datapackId,
       // First page only — we just need the newest row's timestamp
       // for the "Last activity" header cell, no pagination from here.
       { limit: 1 },
-      { signal: ac.signal, datapackId },
+      { signal: ac.signal },
     )
       .then((resp) => {
         if (ac.signal.aborted) return;
@@ -199,9 +198,10 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
         // Silent; the header falls back to summary.last_file_uploaded_at.
       });
     return () => ac.abort();
-  }, [datapackName, datapackId]);
+  }, [datapackId]);
 
-  const resolvedDatapackId = datapack?.datapack_id ?? datapackId ?? "";
+  const resolvedDatapackId = datapack?.datapack_id ?? datapackId;
+  const displayDatapackName = datapack?.datapack_name ?? "";
   const promotedCount = summary?.promoted_memories_count ?? 0;
   // Use summary.total_files for the tab badge — KnowledgeFilesTab owns
   // its own paginated document fetch, so the parent no longer holds the
@@ -216,7 +216,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
         <DatapackBreadcrumbs
           items={[
             { label: "Datapacks", href: ROUTES.datapacks },
-            { label: datapackName, href: datapackDetailPath(datapackName) },
+            { label: displayDatapackName, href: datapackDetailPath(datapackId) },
             { label: "Shared Knowledge" },
           ]}
         />
@@ -228,7 +228,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
         ) : null}
 
         <KnowledgeSummaryHeader
-          datapackName={datapackName}
+          datapackName={displayDatapackName}
           summary={summary}
           loading={summaryLoading}
           lastActivityAt={latestActivityAt}
@@ -284,7 +284,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
 
             <TabsContent value="files" className="mt-6 outline-none">
               <KnowledgeFilesTab
-                datapackName={datapackName}
+                datapackName={displayDatapackName}
                 datapackId={resolvedDatapackId}
                 filesSummary={summary?.files_summary ?? ""}
                 heaviestSourceName={summary?.heaviest_source_name ?? null}
@@ -300,7 +300,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
                   // /documents and /activity-log, then also refresh /summary.
                   setRefreshKey((k) => k + 1);
                   setSummaryLoading(true);
-                  void getKnowledgeBaseSummary(datapackName, { datapackId })
+                  void getKnowledgeBaseSummary(datapackId, {})
                     .then((s) => setSummary(s))
                     .catch(() => { })
                     .finally(() => setSummaryLoading(false));
@@ -311,7 +311,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
 
             <TabsContent value="promoted-memories" className="mt-6 outline-none">
               <CollectiveMemoryPanel
-                datapackName={datapackName}
+                datapackName={displayDatapackName}
                 datapackId={resolvedDatapackId}
                 searchQuery={search}
                 pendingCount={pendingMemoryCount}
@@ -330,7 +330,6 @@ export default function DatapackKnowledgeSummaryPage({ datapackName, datapackId 
 
         {resolvedDatapackId ? (
           <KnowledgeActivityLog
-            datapackName={datapackName}
             datapackId={resolvedDatapackId}
             refreshKey={refreshKey}
             pageSize={10}

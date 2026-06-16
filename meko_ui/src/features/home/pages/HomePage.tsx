@@ -36,10 +36,7 @@ export default function HomePage() {
     queryKey: ["datapack-provision-status", firstOwner?.datapack_id ?? ""],
     queryFn: ({ signal }) => {
       if (!firstOwner) throw new Error("No owner datapack found");
-      return getDatapackProvisionStatus(firstOwner.datapack_name, {
-        signal,
-        datapackId: firstOwner.datapack_id,
-      });
+      return getDatapackProvisionStatus(firstOwner.datapack_id, { signal });
     },
     enabled: !!firstOwner,
     staleTime: Infinity,

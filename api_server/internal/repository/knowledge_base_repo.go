@@ -1175,13 +1175,10 @@ func (r *KnowledgeBaseRepo) ListActivityLog(
 //
 //  1. systemDB: gather this datapack's rag_source_id values (`GetSourceIDs`).
 //  2. dataDB:  pipeline rows filtered by `source_id = ANY($1::uuid[])`.
-
-//             Drops the previous `LEFT JOIN meko_system.users` —
-//             uploader_user_id is selected raw from `document_details`.
 //  3. systemDB: batch-resolve user_id → display info (`LookupUserDisplays`).
 //     Drops the previous `LEFT JOIN meko_system.users` —
 //     uploader_user_id is selected raw from `document_details`.
-//  4. Go:      merge the email back into each row.
+//  4. Go:      merge the display info back into each row.
 //
 // (When the two physical DBs are colocated, this is one extra trivial
 // round-trip; when they're truly split, this is the only correct shape.)

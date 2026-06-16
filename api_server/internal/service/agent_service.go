@@ -72,7 +72,7 @@ func (s *AgentService) DeleteUserAgent(userID, agentID string) error {
 	return s.repo.DeleteAgent(userID, agentID)
 }
 
-// LinkAgentRequest is the body for POST /api/v1/datapacks/:name/agents.
+// LinkAgentRequest is the body for POST /api/v1/datapacks/:datapack_id/agents.
 // The agent must already exist for this user (strict link-only model).
 type LinkAgentRequest struct {
 	AgentID string `json:"agent_id"`

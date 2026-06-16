@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"meko/api_server/internal/models"
@@ -350,16 +351,12 @@ func clientIPFromContext(c echo.Context) string {
 
 // DatapackOwnershipLookup abstracts datapack lookup for the ownership
 // middleware. Typically implemented by repository.DatapackRepo.
-//
-// The lookup hits meko_system.datapacks via the
-// UNIQUE (user_id, datapack_name) constraint so the URL-friendly :name
-// parameter remains a stable identifier per user.
 type DatapackOwnershipLookup interface {
-	GetByName(userID, name string) (*models.Datapack, error)
+	GetByID(userID, datapackID string) (*models.Datapack, error)
 }
 
 // RequireDatapackOwnership returns Echo middleware that verifies the
-// authenticated user owns the datapack identified by the :name route
+// authenticated user owns the datapack identified by the :datapack_id route
 // parameter. Must run after RequireAuth.
 //
 // On success the resolved *models.Datapack is stored on the context
@@ -375,21 +372,30 @@ func RequireDatapackOwnership(datapacks DatapackOwnershipLookup) echo.Middleware
 				return authError(c, "missing account context")
 			}
 
-			name := c.Param("name")
-			if name == "" {
+			datapackID := strings.TrimSpace(c.Param("datapack_id"))
+			if datapackID == "" {
 				return c.JSON(http.StatusBadRequest, map[string]any{
 					"data": nil,
 					"error": map[string]any{
 						"code":    "VALIDATION_ERROR",
-						"message": "datapack name is required",
+						"message": "datapack_id is required",
+					},
+				})
+			}
+			if _, parseErr := uuid.Parse(datapackID); parseErr != nil {
+				return c.JSON(http.StatusBadRequest, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "VALIDATION_ERROR",
+						"message": "invalid datapack_id format",
 					},
 				})
 			}
 
-			dp, err := datapacks.GetByName(account.ID, name)
+			dp, err := datapacks.GetByID(account.ID, datapackID)
 			if err != nil {
 				slog.Error("ownership lookup failed",
-					"datapack", name, "user_id", account.ID, "error", err)
+					"datapack_id", datapackID, "user_id", account.ID, "error", err)
 				return c.JSON(http.StatusInternalServerError, map[string]any{
 					"data": nil,
 					"error": map[string]any{
@@ -403,7 +409,7 @@ func RequireDatapackOwnership(datapacks DatapackOwnershipLookup) echo.Middleware
 					"data": nil,
 					"error": map[string]any{
 						"code":    "NOT_FOUND",
-						"message": fmt.Sprintf("datapack %q not found", name),
+						"message": fmt.Sprintf("datapack %q not found", datapackID),
 					},
 				})
 			}
@@ -417,11 +423,6 @@ func RequireDatapackOwnership(datapacks DatapackOwnershipLookup) echo.Middleware
 // DatapackAccessLookup abstracts datapack lookup for the access
 // middleware: ownership first, then shared access via agent_access.
 type DatapackAccessLookup interface {
-	GetByName(userID, name string) (*models.Datapack, error)
-	GetByNameForSharedAccess(userID, name string) (*models.Datapack, error)
-}
-
-type datapackIDAccessLookup interface {
 	GetByID(userID, datapackID string) (*models.Datapack, error)
 	GetByIDForSharedAccess(userID, datapackID string) (*models.Datapack, error)
 }
@@ -445,64 +446,30 @@ func RequireDatapackAccess(datapacks DatapackAccessLookup) echo.MiddlewareFunc {
 				return authError(c, "missing account context")
 			}
 
-			name := c.Param("name")
-			if name == "" {
+			datapackID := strings.TrimSpace(c.Param("datapack_id"))
+			if datapackID == "" {
 				return c.JSON(http.StatusBadRequest, map[string]any{
 					"data": nil,
 					"error": map[string]any{
 						"code":    "VALIDATION_ERROR",
-						"message": "datapack name is required",
+						"message": "datapack_id is required",
+					},
+				})
+			}
+			if _, parseErr := uuid.Parse(datapackID); parseErr != nil {
+				return c.JSON(http.StatusBadRequest, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "VALIDATION_ERROR",
+						"message": "invalid datapack_id format",
 					},
 				})
 			}
 
-			// Disambiguation for duplicate datapack names across owner/shared rows:
-			// when datapack_id is provided, resolve access by ID first.
-			datapackID := strings.TrimSpace(c.QueryParam("datapack_id"))
-			if datapackID != "" {
-				if byID, ok := datapacks.(datapackIDAccessLookup); ok {
-					dp, err := byID.GetByID(account.ID, datapackID)
-					if err != nil {
-						slog.Error("access lookup by id failed",
-							"datapack_id", datapackID, "user_id", account.ID, "error", err)
-						return c.JSON(http.StatusInternalServerError, map[string]any{
-							"data": nil,
-							"error": map[string]any{
-								"code":    "INTERNAL_ERROR",
-								"message": "failed to verify datapack access",
-							},
-						})
-					}
-					if dp != nil {
-						c.Set(ContextKeyDatapack, dp)
-						c.Set(ContextKeyAccessLevel, "owner")
-						return next(c)
-					}
-
-					dp, err = byID.GetByIDForSharedAccess(account.ID, datapackID)
-					if err != nil {
-						slog.Error("shared access lookup by id failed",
-							"datapack_id", datapackID, "user_id", account.ID, "error", err)
-						return c.JSON(http.StatusInternalServerError, map[string]any{
-							"data": nil,
-							"error": map[string]any{
-								"code":    "INTERNAL_ERROR",
-								"message": "failed to verify datapack access",
-							},
-						})
-					}
-					if dp != nil {
-						c.Set(ContextKeyDatapack, dp)
-						c.Set(ContextKeyAccessLevel, "shared")
-						return next(c)
-					}
-				}
-			}
-
-			dp, err := datapacks.GetByName(account.ID, name)
+			dp, err := datapacks.GetByID(account.ID, datapackID)
 			if err != nil {
 				slog.Error("access lookup failed",
-					"datapack", name, "user_id", account.ID, "error", err)
+					"datapack_id", datapackID, "user_id", account.ID, "error", err)
 				return c.JSON(http.StatusInternalServerError, map[string]any{
 					"data": nil,
 					"error": map[string]any{
@@ -517,10 +484,10 @@ func RequireDatapackAccess(datapacks DatapackAccessLookup) echo.MiddlewareFunc {
 				return next(c)
 			}
 
-			dp, err = datapacks.GetByNameForSharedAccess(account.ID, name)
+			dp, err = datapacks.GetByIDForSharedAccess(account.ID, datapackID)
 			if err != nil {
 				slog.Error("shared access lookup failed",
-					"datapack", name, "user_id", account.ID, "error", err)
+					"datapack_id", datapackID, "user_id", account.ID, "error", err)
 				return c.JSON(http.StatusInternalServerError, map[string]any{
 					"data": nil,
 					"error": map[string]any{
@@ -534,7 +501,7 @@ func RequireDatapackAccess(datapacks DatapackAccessLookup) echo.MiddlewareFunc {
 					"data": nil,
 					"error": map[string]any{
 						"code":    "NOT_FOUND",
-						"message": fmt.Sprintf("datapack %q not found", name),
+						"message": fmt.Sprintf("datapack %q not found", datapackID),
 					},
 				})
 			}

@@ -213,13 +213,12 @@ export function KnowledgeFilesTab({
     const ac = new AbortController();
     setLoading(true);
     setError(null);
-    void getKnowledgeBaseDocuments(datapackName, {
+    void getKnowledgeBaseDocuments(datapackId, {
       page,
       page_size: PAGE_SIZE,
       q: searchQuery.trim() || undefined,
       type_filter: typeFilter !== "all" ? typeFilter : undefined,
       indexed_only: indexedOnly || undefined,
-      datapackId,
       signal: ac.signal,
     })
       .then((resp) => {
@@ -803,7 +802,7 @@ function RemoveFromKBAction({
     setBusy(true);
     setError(null);
     try {
-      await deleteKnowledgeBaseDocument(datapackName, doc.id, { datapackId });
+      await deleteKnowledgeBaseDocument(datapackId, doc.id);
       setOpen(false);
       onDocumentDeleted(doc.id);
       toast({
@@ -886,11 +885,7 @@ function DownloadAction({
     if (!doc.document_uri || busy) return;
     setBusy(true);
     try {
-      const resp = await requestKnowledgeBaseDownloadURL(
-        datapackName,
-        doc.document_uri,
-        { datapackId },
-      );
+      const resp = await requestKnowledgeBaseDownloadURL(datapackId, doc.document_uri);
       // Open in a new tab. `noopener` keeps the new context isolated;
       // S3 issues a 302 to the actual file blob so the browser handles
       // the download natively (preserves filename via response headers).

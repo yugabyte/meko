@@ -365,17 +365,19 @@ curl http://localhost:25433/api/v1/datapacks
 
 ---
 
-#### `GET /api/v1/datapacks/:name` — Describe a datapack
+#### `GET /api/v1/datapacks/:datapack_id` — Describe a datapack
+
+Datapacks are addressed by their UUID (`datapack_id`, returned from `POST /datapacks`), not by their name.
 
 ```bash
-curl http://localhost:25433/api/v1/datapacks/my-datapack
+curl http://localhost:25433/api/v1/datapacks/<datapack-id>
 ```
 
 Returns the full datapack object. `404` if not found.
 
 ---
 
-#### `PATCH /api/v1/datapacks/:name` — Update a datapack
+#### `PATCH /api/v1/datapacks/:datapack_id` — Update a datapack
 
 **Request body (all fields optional):**
 
@@ -385,7 +387,7 @@ Returns the full datapack object. `404` if not found.
 | `embedding_model` | string | New embedding model name  |
 
 ```bash
-curl -X PATCH http://localhost:25433/api/v1/datapacks/my-datapack \
+curl -X PATCH http://localhost:25433/api/v1/datapacks/<datapack-id> \
   -H "Content-Type: application/json" \
   -d '{"llm_model": "gpt-4o"}'
 ```
@@ -400,10 +402,10 @@ curl -X PATCH http://localhost:25433/api/v1/datapacks/my-datapack \
 
 ---
 
-#### `DELETE /api/v1/datapacks/:name` — Delete a datapack
+#### `DELETE /api/v1/datapacks/:datapack_id` — Delete a datapack
 
 ```bash
-curl -X DELETE http://localhost:25433/api/v1/datapacks/my-datapack
+curl -X DELETE http://localhost:25433/api/v1/datapacks/<datapack-id>
 ```
 
 Cascades to agents and knowledge bases. `404` if not found.
@@ -418,10 +420,10 @@ Cascades to agents and knowledge bases. `404` if not found.
 
 ---
 
-#### `GET /api/v1/datapacks/:name/status` — Datapack status
+#### `GET /api/v1/datapacks/:datapack_id/status` — Datapack status
 
 ```bash
-curl http://localhost:25433/api/v1/datapacks/my-datapack/status
+curl http://localhost:25433/api/v1/datapacks/<datapack-id>/status
 ```
 
 **Response (200):**
@@ -446,7 +448,7 @@ curl http://localhost:25433/api/v1/datapacks/my-datapack/status
 
 Agents are scoped to a datapack. A default agent (`meko_user_agent`) is created automatically when a datapack is created.
 
-#### `POST /api/v1/datapacks/:name/agents` — Create an agent
+#### `POST /api/v1/datapacks/:datapack_id/agents` — Create an agent
 
 **Request body:**
 
@@ -456,7 +458,7 @@ Agents are scoped to a datapack. A default agent (`meko_user_agent`) is created 
 | `agent_metadata` | string | no       | JSON metadata string           |
 
 ```bash
-curl -X POST http://localhost:25433/api/v1/datapacks/my-datapack/agents \
+curl -X POST http://localhost:25433/api/v1/datapacks/<datapack-id>/agents \
   -H "Content-Type: application/json" \
   -d '{"agent_name": "research-agent"}'
 ```
@@ -475,10 +477,10 @@ curl -X POST http://localhost:25433/api/v1/datapacks/my-datapack/agents \
 
 ---
 
-#### `GET /api/v1/datapacks/:name/agents` — List agents
+#### `GET /api/v1/datapacks/:datapack_id/agents` — List agents
 
 ```bash
-curl http://localhost:25433/api/v1/datapacks/my-datapack/agents
+curl http://localhost:25433/api/v1/datapacks/<datapack-id>/agents
 ```
 
 **Response (200):**
@@ -500,10 +502,10 @@ curl http://localhost:25433/api/v1/datapacks/my-datapack/agents
 
 ---
 
-#### `DELETE /api/v1/datapacks/:name/agents/:agent` — Delete an agent
+#### `DELETE /api/v1/datapacks/:datapack_id/agents/:agent_id` — Delete an agent
 
 ```bash
-curl -X DELETE http://localhost:25433/api/v1/datapacks/my-datapack/agents/research-agent
+curl -X DELETE http://localhost:25433/api/v1/datapacks/<datapack-id>/agents/<agent-id>
 ```
 
 **Response (200):**
@@ -520,7 +522,7 @@ curl -X DELETE http://localhost:25433/api/v1/datapacks/my-datapack/agents/resear
 
 Knowledge bases are scoped to a datapack. A seed knowledge base is added during datapack creation.
 
-#### `POST /api/v1/datapacks/:name/knowledge-bases` — Add a knowledge base
+#### `POST /api/v1/datapacks/:datapack_id/knowledge-bases` — Add a knowledge base
 
 **Request body:**
 
@@ -529,7 +531,7 @@ Knowledge bases are scoped to a datapack. A seed knowledge base is added during 
 | `url` | string | yes      | Knowledge base URL   |
 
 ```bash
-curl -X POST http://localhost:25433/api/v1/datapacks/my-datapack/knowledge-bases \
+curl -X POST http://localhost:25433/api/v1/datapacks/<datapack-id>/knowledge-bases \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/more-docs"}'
 ```
@@ -548,10 +550,10 @@ curl -X POST http://localhost:25433/api/v1/datapacks/my-datapack/knowledge-bases
 
 ---
 
-#### `GET /api/v1/datapacks/:name/knowledge-bases` — List knowledge bases
+#### `GET /api/v1/datapacks/:datapack_id/knowledge-bases` — List knowledge bases
 
 ```bash
-curl http://localhost:25433/api/v1/datapacks/my-datapack/knowledge-bases
+curl http://localhost:25433/api/v1/datapacks/<datapack-id>/knowledge-bases
 ```
 
 **Response (200):**
@@ -572,18 +574,12 @@ curl http://localhost:25433/api/v1/datapacks/my-datapack/knowledge-bases
 
 ---
 
-#### `DELETE /api/v1/datapacks/:name/knowledge-bases` — Delete a knowledge base
+#### `DELETE /api/v1/datapacks/:datapack_id/knowledge-bases/:rag_source_id` — Delete a knowledge base
 
-**Request body:**
-
-| Field | Type   | Required | Description                   |
-|-------|--------|----------|-------------------------------|
-| `url` | string | yes      | URL of the knowledge base     |
+The knowledge base is identified by its `rag_source_id` (UUID) in the path.
 
 ```bash
-curl -X DELETE http://localhost:25433/api/v1/datapacks/my-datapack/knowledge-bases \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com/more-docs"}'
+curl -X DELETE http://localhost:25433/api/v1/datapacks/<datapack-id>/knowledge-bases/<rag-source-id>
 ```
 
 **Response (200):**

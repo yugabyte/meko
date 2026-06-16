@@ -195,7 +195,7 @@ func TestAgent_DeleteUser_NotFound(t *testing.T) {
 }
 
 // TestAgent_LinkAndList verifies the link-only flow on
-// POST /datapacks/:name/agents and GET /datapacks/:name/agents.
+// POST /datapacks/:datapack_id/agents and GET /datapacks/:datapack_id/agents.
 func TestAgent_LinkAndList(t *testing.T) {
 	srv, db := setupTestServer(t)
 	defer srv.Close()
@@ -290,7 +290,7 @@ func TestAgent_Link_AgentNotFound(t *testing.T) {
 	}
 }
 
-// TestAgent_Unlink verifies DELETE /datapacks/:name/agents/:agent_id
+// TestAgent_Unlink verifies DELETE /datapacks/:datapack_id/agents/:agent_id
 // removes only the link, not the underlying user-scoped agent.
 func TestAgent_Unlink(t *testing.T) {
 	srv, db := setupTestServer(t)

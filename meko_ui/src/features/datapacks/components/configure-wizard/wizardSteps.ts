@@ -1,5 +1,5 @@
 /**
- * Ordered wizard steps and helpers for `/datapacks/:name/configure`.
+ * Ordered wizard steps and helpers for `/datapacks/:datapack_id/configure`.
  * Step ids drive which panel renders and how the stepper marks progress.
  */
 export const WIZARD_STEP_ID = {

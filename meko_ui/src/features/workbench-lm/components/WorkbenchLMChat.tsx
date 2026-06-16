@@ -203,7 +203,7 @@ export function WorkbenchLMChat({
       const trimmed = text.trim();
       if (
         !trimmed ||
-        !datapackName ||
+        !datapackId ||
         !userId ||
         !userToken ||
         sending ||
@@ -263,17 +263,7 @@ export function WorkbenchLMChat({
         setSending(false);
       }
     },
-    [
-      datapackName,
-      userId,
-      userToken,
-      sending,
-      sessionId,
-      conversationId,
-      datapackId,
-      gatedReadiness,
-      onTurnComplete,
-    ],
+    [datapackId, userId, userToken, sending, sessionId, conversationId, gatedReadiness, onTurnComplete],
   );
 
   const handleSubmit = useCallback(() => {
@@ -355,8 +345,8 @@ export function WorkbenchLMChat({
                   traceMessage={traceMessage}
                   conversationId={conversationId ?? undefined}
                   langfuseProjectId={loadedLangfuseProjectId ?? undefined}
-                  datapackName={datapackName}
                   datapackId={datapackId}
+                  datapackName={datapackName}
                 />
               );
             })}

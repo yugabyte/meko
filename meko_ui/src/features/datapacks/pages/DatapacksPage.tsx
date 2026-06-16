@@ -1,4 +1,4 @@
-import { Navigate, useLocation, useSearchParams } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { DATAPACK_SUB_ROUTE, datapackNewConfigurePath, ROUTES } from "@/app/routes/paths";
 import DatapackConfigureWizardPage from "@/features/datapacks/pages/DatapackConfigureWizardPage";
 import DatapackConversationsViewerPage from "@/features/datapacks/pages/DatapackConversationsViewerPage";
@@ -13,20 +13,23 @@ import DatapackSharePage from "@/features/datapacks/pages/DatapackSharePage";
 import DatapacksOverviewPage from "@/features/datapacks/pages/DatapacksOverviewPage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 
+// Matches any 36-char canonical UUID without pinning version/variant nibbles,
+// so newer schemes (e.g. UUIDv7) are accepted too. Mirrors the backend's
+// lenient uuid.Parse — this is a route-shape guard, not a strict RFC check.
+const UUID_PATH_SEGMENT_RE: RegExp = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
- * Datapacks area: overview at `/datapacks`, new datapack wizard at `/datapacks/new/configure`, edit at `/datapacks/:name/edit`,
- * configure at `/datapacks/:name/configure`, learnings at `/datapacks/:name/learnings`,
- * memory-summary at `/datapacks/:name/memory-summary`,
- * collective-memory-summary at `/datapacks/:name/collective-memory-summary`,
- * knowledge at `/datapacks/:name/knowledge`,
- * members at `/datapacks/:name/members`,
- * conversations viewer at `/datapacks/:name/conversations[/:conversationId]`,
- * detail at `/datapacks/:name`, share at `/datapacks/:name/share`.
+ * Datapacks area: overview at `/datapacks`, new datapack wizard at `/datapacks/new/configure`, edit at `/datapacks/:datapack_id/edit`,
+ * configure at `/datapacks/:datapack_id/configure`, learnings at `/datapacks/:datapack_id/learnings`,
+ * memory-summary at `/datapacks/:datapack_id/memory-summary`,
+ * collective-memory-summary at `/datapacks/:datapack_id/collective-memory-summary`,
+ * knowledge at `/datapacks/:datapack_id/knowledge`,
+ * members at `/datapacks/:datapack_id/members`,
+ * conversations viewer at `/datapacks/:datapack_id/conversations[/:conversationId]`,
+ * detail at `/datapacks/:datapack_id`, share at `/datapacks/:datapack_id/share`.
  */
 export default function DatapacksPage() {
   const location = useLocation();
-  const [searchParams] = useSearchParams();
-  const routeDatapackId = (searchParams.get("datapack_id") ?? "").trim() || undefined;
   // Shared, session-cached identity — one `/me` fetch app-wide.
   const { data: currentUser = null } = useCurrentUser();
 
@@ -43,71 +46,46 @@ export default function DatapacksPage() {
       return <Navigate to={datapackNewConfigurePath()} replace />;
     }
 
-    const nameEncoded = segments[0];
-    if (nameEncoded) {
-      const datapackName = decodeURIComponent(nameEncoded);
+    const idEncoded = segments[0];
+    if (idEncoded) {
+      const datapackId = decodeURIComponent(idEncoded);
+      if (!UUID_PATH_SEGMENT_RE.test(datapackId)) {
+        return <Navigate to={ROUTES.datapacks} replace />;
+      }
       if (segments[1] === DATAPACK_SUB_ROUTE.share) {
-        return (
-          <DatapackSharePage
-            datapackName={datapackName}
-            datapackId={routeDatapackId}
-            currentUser={currentUser}
-          />
-        );
+        return <DatapackSharePage datapackId={datapackId} currentUser={currentUser} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.edit && segments.length === 2) {
-        return (
-          <DatapackEditPage
-            datapackName={datapackName}
-            datapackId={routeDatapackId}
-            currentUser={currentUser}
-          />
-        );
+        return <DatapackEditPage datapackId={datapackId} currentUser={currentUser} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.configure) {
-        return (
-          <DatapackConfigureWizardPage
-            datapackName={datapackName}
-            datapackId={routeDatapackId}
-            currentUser={currentUser}
-          />
-        );
+        return <DatapackConfigureWizardPage datapackId={datapackId} currentUser={currentUser} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.memorySummary && segments.length === 2) {
-        return (
-          <DatapackMemorySummaryPage datapackName={datapackName} datapackId={routeDatapackId} />
-        );
+        return <DatapackMemorySummaryPage datapackId={datapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.collectiveMemorySummary && segments.length === 2) {
-        return (
-          <DatapackCollectiveMemorySummaryPage
-            datapackName={datapackName}
-            datapackId={routeDatapackId}
-          />
-        );
+        return <DatapackCollectiveMemorySummaryPage datapackId={datapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.knowledge && segments.length === 2) {
-        return (
-          <DatapackKnowledgeSummaryPage datapackName={datapackName} datapackId={routeDatapackId} />
-        );
+        return <DatapackKnowledgeSummaryPage datapackId={datapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.members && segments.length === 2) {
-        return <DatapackMembersListPage datapackName={datapackName} datapackId={routeDatapackId} />;
+        return <DatapackMembersListPage datapackId={datapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.learnings && segments.length === 2) {
-        return <DatapackLearningsPage datapackName={datapackName} datapackId={routeDatapackId} />;
+        return <DatapackLearningsPage datapackId={datapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.conversations && segments.length <= 3) {
         const conversationId = segments[2] ? decodeURIComponent(segments[2]) : undefined;
         return (
           <DatapackConversationsViewerPage
-            datapackName={datapackName}
-            datapackId={routeDatapackId}
+            datapackId={datapackId}
             conversationId={conversationId}
           />
         );
       }
-      return <DatapackDetailPage datapackName={datapackName} currentUser={currentUser} />;
+      return <DatapackDetailPage datapackId={datapackId} currentUser={currentUser} />;
     }
   }
 

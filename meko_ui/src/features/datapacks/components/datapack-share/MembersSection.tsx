@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 type Props = {
   currentUser: CurrentUser | null;
   datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   members: DatapackOutgoingMember[];
   loading: boolean;
   onMembersChanged: () => void | Promise<void>;
@@ -57,7 +57,7 @@ function MemberRow({
 }: {
   member: DatapackOutgoingMember;
   datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   currentUserEmail: string | null | undefined;
   canManage: boolean;
   onMembersChanged: () => void | Promise<void>;
@@ -83,7 +83,7 @@ function MemberRow({
     if (!pendingGrant) return;
     setGrantBusy(true);
     try {
-      await updateDatapackMemberGrant(datapackName, member.user_id, { grant: pendingGrant }, { datapackId });
+      await updateDatapackMemberGrant(datapackId, member.user_id, { grant: pendingGrant });
       toast({ title: "Role updated" });
       setPendingGrant(null);
       await onMembersChanged();
@@ -105,7 +105,7 @@ function MemberRow({
     if (!canManage || member.is_owner) return;
     setRemoveBusy(true);
     try {
-      await removeDatapackMemberShare(datapackName, member.user_id, { datapackId });
+      await removeDatapackMemberShare(datapackId, member.user_id);
       toast({ title: "Access removed" });
       await onMembersChanged();
     } catch (err) {
@@ -205,7 +205,7 @@ function MembersList({
 }: {
   members: DatapackOutgoingMember[];
   datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   currentUser: CurrentUser | null;
   canManage: boolean;
   loading: boolean;

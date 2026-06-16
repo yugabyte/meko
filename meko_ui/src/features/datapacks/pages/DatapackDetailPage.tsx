@@ -75,7 +75,7 @@ import { DatapackDetailHero } from "@/features/datapacks/components/datapack-det
 import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
 
 type Props = {
-  datapackName: string;
+  datapackId: string;
   currentUser: CurrentUser | null;
 };
 
@@ -98,10 +98,10 @@ function writeProvisionStatusCache(cache: ProvisionStatusCache) {
   sessionStorage.setItem(PROVISION_STATUS_CACHE_KEY, JSON.stringify(cache));
 }
 
-export default function DatapackDetailPage({ datapackName, currentUser }: Props) {
+export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const routeDatapackId = (searchParams.get("datapack_id") ?? "").trim() || undefined;
+  const routeDatapackId = datapackId;
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -114,23 +114,23 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     (tab: DatapackDetailTab) => {
       switch (tab) {
         case DATAPACK_DETAIL_TAB.conversations:
-          navigate(datapackConversationsPath(datapackName, undefined, routeDatapackId));
+          navigate(datapackConversationsPath(routeDatapackId, undefined));
           return;
         case DATAPACK_DETAIL_TAB.memories:
-          navigate(datapackMemorySummaryPath(datapackName, routeDatapackId));
+          navigate(datapackMemorySummaryPath(routeDatapackId));
           return;
         case DATAPACK_DETAIL_TAB.learnings:
-          navigate(datapackLearningsPath(datapackName, routeDatapackId));
+          navigate(datapackLearningsPath(routeDatapackId));
           return;
         case DATAPACK_DETAIL_TAB.collectiveMemory:
-          navigate(datapackCollectiveMemorySummaryPath(datapackName, routeDatapackId));
+          navigate(datapackCollectiveMemorySummaryPath(routeDatapackId));
           return;
         case DATAPACK_DETAIL_TAB.knowledge:
-          navigate(datapackKnowledgePath(datapackName, routeDatapackId));
+          navigate(datapackKnowledgePath(routeDatapackId));
           return;
       }
     },
-    [navigate, datapackName, routeDatapackId],
+    [navigate, routeDatapackId],
   );
 
   const [isConnectOpen, setIsConnectOpen] = useState(false);
@@ -162,10 +162,11 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
   const [datapackGrant, setDatapackGrant] = useState<DatapackShareGrant | null>(null);
   const [members, setMembers] = useState<DatapackOutgoingMember[]>([]);
   const [membersListStatus, setMembersListStatus] = useState<DatapackMembersListStatus>("loading");
+  const displayDatapackName = datapack?.datapack_name ?? "";
 
   // Only the owner should provision project keys; null = not yet loaded.
   const isOwner = datapack !== null ? (datapackGrant === null || datapackGrant === "owner") : null;
-  useEnsureLangfuseProjectKeysForTechPreviewDatapack(datapackName, isOwner);
+  useEnsureLangfuseProjectKeysForTechPreviewDatapack(displayDatapackName, routeDatapackId, isOwner);
 
   useEffect(() => {
     if (searchParams.get(DATAPACK_QUERY_PARAM.connect) !== DATAPACK_QUERY_FLAG_ON) return;
@@ -173,7 +174,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     const next = new URLSearchParams(searchParams);
     next.delete(DATAPACK_QUERY_PARAM.connect);
     setSearchParams(next, { replace: true });
-  }, [datapackName, searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     let cancelled = false;
@@ -181,7 +182,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
       setStatusLoading(true);
       setStatusError(null);
       try {
-        const dp = await getDatapack(datapackName, { datapackId: routeDatapackId });
+        const dp = await getDatapack(routeDatapackId, {});
         if (!cancelled) {
           setDatapack(dp);
           // setKnowledgeBaseCount(dp.knowledge_count ?? 0);
@@ -198,7 +199,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
           ) {
             toast({
               title: "Datapack no longer available",
-              description: `Datapack "${datapackName}" was deleted or your access was removed.`,
+              description: `Datapack "${displayDatapackName}" was deleted or your access was removed.`,
             });
             navigate(ROUTES.datapacks, { replace: true });
             return;
@@ -215,12 +216,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       cancelled = true;
     };
-  }, [datapackName, navigate, routeDatapackId]);
+  }, [displayDatapackName, navigate, routeDatapackId]);
 
   useEffect(() => {
     const ac = new AbortController();
     setConversationsCount(0);
-    void getDatapackConversationCount(datapackName, { signal: ac.signal, datapackId: routeDatapackId })
+    void getDatapackConversationCount(routeDatapackId, { signal: ac.signal })
       .then((res) => {
         if (ac.signal.aborted) return;
         setConversationsCount(res.count ?? 0);
@@ -229,7 +230,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       ac.abort();
     };
-  }, [datapackName, routeDatapackId]);
+  }, [routeDatapackId]);
 
   useEffect(() => {
     const datapackId = datapack?.datapack_id;
@@ -242,7 +243,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     }
     setProvisionStatus(null);
     const ac = new AbortController();
-    void getDatapackProvisionStatus(datapackName, { signal: ac.signal, datapackId: routeDatapackId })
+    void getDatapackProvisionStatus(routeDatapackId, { signal: ac.signal })
       .then((details) => {
         if (ac.signal.aborted) return;
         setProvisionStatus(details);
@@ -253,12 +254,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       ac.abort();
     };
-  }, [datapackName, datapack?.datapack_id, routeDatapackId]);
+  }, [datapack?.datapack_id, routeDatapackId]);
 
   useEffect(() => {
     const ac = new AbortController();
     setMembersListStatus("loading");
-    void listDatapackMembers(datapackName, { signal: ac.signal, datapackId: routeDatapackId })
+    void listDatapackMembers(routeDatapackId, { signal: ac.signal })
       .then((res) => {
         if (ac.signal.aborted) return;
         setMembers(res.members ?? []);
@@ -272,7 +273,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       ac.abort();
     };
-  }, [datapackName, datapack?.datapack_id, routeDatapackId]);
+  }, [datapack?.datapack_id, routeDatapackId]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -284,7 +285,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     // stay locked together. The Shared Knowledge tile's count no
     // longer depends on this fetch (it reads `getKnowledgeBaseSummary`
     // separately), so over-fetching here would be pure waste.
-    void getKnowledgeBaseDocuments(datapackName, { signal: ac.signal, datapackId: routeDatapackId, page_size: KNOWLEDGE_PREVIEW_LIMIT })
+    void getKnowledgeBaseDocuments(routeDatapackId, { signal: ac.signal, page_size: KNOWLEDGE_PREVIEW_LIMIT })
       .then((page) => {
         if (ac.signal.aborted) return;
         setKnowledgeDocuments(page.items ?? []);
@@ -300,12 +301,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
         if (!ac.signal.aborted) setKnowledgeDocumentsLoading(false);
       });
     return () => ac.abort();
-  }, [datapackName, routeDatapackId]);
+  }, [routeDatapackId]);
 
   // Knowledge base SUMMARY — count of promoted memories + successfukl file uploaded
   useEffect(() => {
     const ac = new AbortController();
-    void getKnowledgeBaseSummary(datapackName, { signal: ac.signal, datapackId: routeDatapackId })
+    void getKnowledgeBaseSummary(routeDatapackId, { signal: ac.signal })
       .then((s) => {
         if (ac.signal.aborted) return;
         const files = s.total_files ?? 0;
@@ -322,7 +323,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     // `knowledgeSummaryRefreshTick` is here so the upload dialog's
     // `onKnowledgeBaseCreated` callback re-runs this effect and the
     // counts update without a page reload.
-  }, [datapackName, routeDatapackId, knowledgeSummaryRefreshTick]);
+  }, [routeDatapackId, knowledgeSummaryRefreshTick]);
 
   useEffect(() => {
     if (!isConnectOpen) return;
@@ -336,7 +337,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
       try {
         setConnectLoading(true);
         setConnectError(null);
-        const details = await getDatapackProvisionStatus(datapackName, { datapackId: routeDatapackId });
+        const details = await getDatapackProvisionStatus(routeDatapackId, {});
         if (!mounted) return;
         setProvisionStatus(details);
         const nextCache = readProvisionStatusCache();
@@ -361,12 +362,12 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     return () => {
       mounted = false;
     };
-  }, [isConnectOpen, datapackName, datapack?.datapack_id, routeDatapackId]);
+  }, [isConnectOpen, datapack?.datapack_id, routeDatapackId]);
 
   const displayId = datapack?.datapack_id ?? "—";
   const createdLabel = formatDatapackCreatedAtUtc(datapack?.created_at);
   const isNewDatapack = isDatapackCreatedWithinLast24Hours(datapack?.created_at);
-  const isDefaultDatapack = datapackName === DEFAULT_ACCOUNT_DATAPACK_NAME;
+  const isDefaultDatapack = displayDatapackName === DEFAULT_ACCOUNT_DATAPACK_NAME;
 
   const showDatapackActionsDropdown =
     isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) ||
@@ -377,11 +378,11 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
     (isDatapackGrantEligibleToEdit({ grant: datapackGrant }) || isDatapackGrantEligibleToDelete({ grant: datapackGrant }));
 
   const handleDeleteConfirm = async () => {
-    const { message } = await deleteDatapack(datapackName, { datapackId: routeDatapackId });
-    notifyDatapacksListChanged(`delete:${datapackName}`);
+    const { message } = await deleteDatapack(routeDatapackId, {});
+    notifyDatapacksListChanged(`delete:${routeDatapackId}`);
     toast({
       title: "Datapack deleted",
-      description: `"${datapackName}" was deleted.`,
+      description: `"${displayDatapackName}" was deleted.`,
     });
     navigate(ROUTES.datapacks, { replace: true });
   };
@@ -397,7 +398,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
             connection is conceptually a workspace-wide affordance, not a
             per-datapack one. */}
         <DatapackDetailHero
-          datapackName={datapackName}
+          datapackName={displayDatapackName}
           description={datapack?.description}
           displayId={displayId}
           createdLabel={createdLabel}
@@ -411,14 +412,14 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                   type="button"
                   variant="outline"
                   className="gap-2 border-border bg-background/80"
-                  onClick={() => navigate(datapackSharePath(datapackName))}
+                  onClick={() => navigate(datapackSharePath(routeDatapackId))}
                 >
                   <Share2 className="h-4 w-4 shrink-0" aria-hidden />
                   Share
                 </Button>
               )}
               <DatapackKnowledgeUploadDialog
-                datapackName={datapackName}
+                datapackName={displayDatapackName}
                 datapackId={routeDatapackId}
                 open={isUploadOpen}
                 onOpenChange={setIsUploadOpen}
@@ -442,7 +443,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
               <DatapackDeleteConfirmDialog
                 open={isDeleteOpen}
                 onOpenChange={setIsDeleteOpen}
-                datapackName={datapackName}
+                datapackName={displayDatapackName}
                 onConfirm={handleDeleteConfirm}
               />
               {showDatapackActionsDropdown ? (
@@ -471,10 +472,10 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                     {showActionsDropdownDangerSeparator ? <DropdownMenuSeparator className="bg-border" /> : null}
                     {isDatapackGrantEligibleToEdit({ grant: datapackGrant }) && <DropdownMenuItem
                       className="gap-2 cursor-pointer focus:bg-muted/20"
-                      onSelect={() => navigate(datapackConfigurePath(datapackName))}
+                      onSelect={() => navigate(datapackConfigurePath(routeDatapackId))}
                     >
                       <Pencil className="h-4 w-4 shrink-0" aria-hidden />
-                      Edit {datapackName}
+                      Edit {displayDatapackName}
                     </DropdownMenuItem>}
                     {isDatapackGrantEligibleToDelete({ grant: datapackGrant }) && <DropdownMenuItem
                       className="gap-2 cursor-pointer text-red-700 dark:text-red-300 focus:bg-red-950/40 focus:text-red-700 dark:text-red-200"
@@ -485,7 +486,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
                       }}
                     >
                       <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
-                      Delete {datapackName}
+                      Delete {displayDatapackName}
                     </DropdownMenuItem>}
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -515,14 +516,14 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
             Collective Memory / Knowledge summary pages. */}
         <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-2 lg:items-stretch lg:gap-6">
           <DatapackDetailMembersTile
-            datapackName={datapackName}
+            datapackName={displayDatapackName}
+            datapackId={routeDatapackId}
             currentUser={currentUser}
             members={members}
             canShare={isDatapackGrantEligibleToShare({ grant: datapackGrant })}
             membersListStatus={membersListStatus}
           />
           <DatapackDetailKnowledgeTile
-            datapackName={datapackName}
             datapackId={routeDatapackId}
             documents={knowledgeDocuments}
             documentsLoading={knowledgeDocumentsLoading}
@@ -531,7 +532,7 @@ export default function DatapackDetailPage({ datapackName, currentUser }: Props)
             canAddSource={isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant })}
             onAddSource={() => setIsUploadOpen(true)}
           />
-          <DatapackDetailAgentsTile datapackName={datapackName} datapackId={routeDatapackId} />
+          <DatapackDetailAgentsTile datapackId={routeDatapackId} />
           <DatapackDetailConnectTile
             mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
             onOpenConnect={() => setIsConnectOpen(true)}

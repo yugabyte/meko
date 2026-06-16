@@ -257,7 +257,7 @@ export function useMemoryPromotion({
         setPromotingId(null);
       }
     },
-    [accountId, datapackId, loadMemories, memories, onPromoted, selected],
+    [accountId, loadMemories, memories, onPromoted, selected],
   );
 
   const promote = useCallback(async () => {

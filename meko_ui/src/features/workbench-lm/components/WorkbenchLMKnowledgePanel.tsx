@@ -35,6 +35,7 @@ import {
 
 type Props = {
   datapackName: string | null;
+  datapackId: string | null;
   /** Fired whenever the docs list changes (initial load, after upload, or
    *  after a status-change poll). WorkbenchLMPage uses this to gate the chat
    *  input until at least one doc is `COMPLETED`. */
@@ -76,6 +77,7 @@ const KB_STEADY_REFRESH_MS = 30_000;
 
 export function WorkbenchLMKnowledgePanel({
   datapackName,
+  datapackId,
   onDocumentsChange,
   paused = false,
   sessions,
@@ -98,14 +100,14 @@ export function WorkbenchLMKnowledgePanel({
 
   const fetchDocs = useCallback(
     async (signal?: AbortSignal) => {
-      if (!datapackName) {
+      if (!datapackId) {
         setDocs([]);
         return;
       }
       setDocsLoading(true);
       setDocsError(null);
       try {
-        const page = await getKnowledgeBaseDocuments(datapackName, { signal, page_size: 200 });
+        const page = await getKnowledgeBaseDocuments(datapackId, { signal, page_size: 200 });
         setDocs(page.items ?? []);
       } catch (err) {
         if ((err as { name?: string })?.name === "CanceledError") return;
@@ -115,7 +117,7 @@ export function WorkbenchLMKnowledgePanel({
         setDocsLoading(false);
       }
     },
-    [datapackName],
+    [datapackId],
   );
 
   useEffect(() => {
@@ -130,14 +132,14 @@ export function WorkbenchLMKnowledgePanel({
   // is in a terminal state (`COMPLETED`) — or when the WorkbenchLM route is
   // not active (parent passes `paused`).
   useEffect(() => {
-    if (!datapackName || paused) return;
+    if (!datapackId || paused) return;
     const stillWorking = docs.length > 0 && docs.some((d) => d.status !== "COMPLETED");
     if (!stillWorking) return;
     const id = setInterval(() => {
       void fetchDocs();
     }, KB_POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [datapackName, docs, fetchDocs, paused]);
+  }, [datapackId, docs, fetchDocs, paused]);
 
   // Steady-state refresh — every 30s, surface uploads that landed via
   // another client (CLI, datapack detail page, another browser tab) so
@@ -145,7 +147,7 @@ export function WorkbenchLMKnowledgePanel({
   // the tab is hidden OR the WorkbenchLM route is not active (parent
   // passes `paused` — the page tree stays mounted under ProtectedRoutes).
   useEffect(() => {
-    if (!datapackName || paused) return;
+    if (!datapackId || paused) return;
     let id: ReturnType<typeof setInterval> | null = null;
     const start = () => {
       if (id !== null) return;
@@ -169,7 +171,7 @@ export function WorkbenchLMKnowledgePanel({
       document.removeEventListener("visibilitychange", onVisibilityChange);
       stop();
     };
-  }, [datapackName, fetchDocs, paused]);
+  }, [datapackId, fetchDocs, paused]);
 
   // Refresh after the upload dialog closes so newly added files appear in the list.
   const handleUploadOpenChange = (open: boolean) => {
@@ -203,7 +205,7 @@ export function WorkbenchLMKnowledgePanel({
           <BookOpen className="h-4 w-4 text-emerald-400" aria-hidden />
           <h2 className="text-sm font-medium text-foreground">Knowledge</h2>
         </div>
-        {datapackName ? (
+        {datapackId ? (
           <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
             {sourceCount} {sourceCount === 1 ? "source" : "sources"}
           </span>
@@ -222,7 +224,7 @@ export function WorkbenchLMKnowledgePanel({
             <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Loaded sources
             </h3>
-            {!datapackName ? (
+            {!datapackId ? (
               <p className="text-xs text-muted-foreground">
                 Select a datapack to see its knowledge sources.
               </p>
@@ -272,7 +274,7 @@ export function WorkbenchLMKnowledgePanel({
             <button
               type="button"
               onClick={openOwnUpload}
-              disabled={!datapackName}
+              disabled={!datapackId}
               className="group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 bg-card px-3 py-3 text-sm font-medium text-foreground transition-colors hover:border-blue-400/70 hover:bg-blue-500/5 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Upload className="h-4 w-4 text-blue-400" aria-hidden />
@@ -388,7 +390,7 @@ export function WorkbenchLMKnowledgePanel({
                 <button
                   type="button"
                   onClick={openSampleUpload}
-                  disabled={!datapackName}
+                  disabled={!datapackId}
                   className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Sparkles className="h-3.5 w-3.5" aria-hidden />
@@ -414,9 +416,10 @@ export function WorkbenchLMKnowledgePanel({
         ) : null}
       </div>
 
-      {datapackName ? (
+      {datapackName && datapackId ? (
         <DatapackKnowledgeUploadDialog
           datapackName={datapackName}
+          datapackId={datapackId}
           open={uploadOpen}
           onOpenChange={handleUploadOpenChange}
           initialFiles={sampleSeed}

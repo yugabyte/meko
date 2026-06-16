@@ -399,8 +399,8 @@ function KvRow({ k, v }: { k: string; v: unknown }) {
   // conversation deep-links).
   const convId =
     k === "conversation_id" && typeof v === "string" ? v.replace(/-/g, "") : "";
-  if (convId && datapackName && enableConversationLink) {
-    const href = datapackConversationsPath(datapackName, convId, datapackId);
+  if (convId && datapackId && enableConversationLink) {
+    const href = datapackConversationsPath(datapackId, convId);
     return (
       <>
         <dt className="text-muted-foreground">{k}:</dt>

@@ -9,7 +9,7 @@ import FileUpload from "@/features/datapacks/components/FileUpload";
 
 export type DatapackKnowledgeUploadDialogProps = {
   datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Optional pre-staged files (e.g. a sample). Re-captured each time the dialog opens. */

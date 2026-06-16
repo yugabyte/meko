@@ -128,7 +128,7 @@ func (s *SharingService) SetEmailer(e EmailSender) {
 	s.emailer = e
 }
 
-// InviteRequest is the body for POST /datapacks/:name/share.
+// InviteRequest is the body for POST /datapacks/:datapack_id/share.
 type InviteRequest struct {
 	RecipientEmail string `json:"recipient_email"`
 	GrantRole      string `json:"grant"`
@@ -453,7 +453,7 @@ func (s *SharingService) RevokeInvite(
 	return s.repo.RevokeInvite(inviteID)
 }
 
-// UpdateGrantRequest is the body for PATCH /datapacks/:name/share/:share_user_id.
+// UpdateGrantRequest is the body for PATCH /datapacks/:datapack_id/share/:share_user_id.
 type UpdateGrantRequest struct {
 	GrantRole string `json:"grant"`
 }

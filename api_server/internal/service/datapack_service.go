@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	_ "github.com/lib/pq"
 
@@ -17,6 +19,52 @@ import (
 )
 
 const defaultDatapackName = "meko_default_datapack"
+
+const (
+	minDatapackNameLength = 3
+	maxDatapackNameLength = 60
+)
+
+var htmlTagPattern = regexp.MustCompile(`<[^>]*>`)
+
+var ErrInvalidDatapackName = errors.New("invalid datapack name")
+
+type invalidDatapackNameError struct {
+	message string
+}
+
+func (e invalidDatapackNameError) Error() string {
+	return e.message
+}
+
+func (e invalidDatapackNameError) Is(target error) bool {
+	return target == ErrInvalidDatapackName
+}
+
+func newInvalidDatapackNameError(message string) error {
+	return invalidDatapackNameError{message: message}
+}
+
+func validateDatapackName(name string) error {
+	// Datapack names are mirrored to Langfuse project names during create and
+	// rename, so this intentionally mirrors Langfuse's projectNameSchema:
+	// StringNoHTML.min(3, "Must have at least 3 characters").max(60, ...),
+	// where StringNoHTML uses /<[^>]*>/g.
+	if name == "" {
+		return newInvalidDatapackNameError("name is required")
+	}
+	nameLength := utf8.RuneCountInString(name)
+	if nameLength < minDatapackNameLength {
+		return newInvalidDatapackNameError("Must have at least 3 characters")
+	}
+	if nameLength > maxDatapackNameLength {
+		return newInvalidDatapackNameError("Must have at most 60 characters")
+	}
+	if htmlTagPattern.MatchString(name) {
+		return newInvalidDatapackNameError("Text cannot contain HTML tags")
+	}
+	return nil
+}
 
 // DatapackService orchestrates datapack lifecycle operations.
 //
@@ -96,8 +144,8 @@ type CreateResponse struct {
 // POST /agents.
 func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
-		return nil, fmt.Errorf("name is required")
+	if err := validateDatapackName(req.Name); err != nil {
+		return nil, err
 	}
 	if req.UserID == "" {
 		return nil, fmt.Errorf("user_id is required")
@@ -212,50 +260,47 @@ type UpdateRequest struct {
 	Description       string `json:"description,omitempty"`
 }
 
-// Update modifies a datapack's configuration. When the name is being changed
-// and Langfuse is configured, the corresponding Langfuse project is renamed as
-// a best-effort operation: failure is logged but does not roll back the local
-// DB rename.
+// Update modifies a datapack's configuration identified by its stable UUID.
+// When the name is being changed and Langfuse is configured, the corresponding
+// Langfuse project is renamed as a best-effort operation: failure is logged but
+// does not roll back the local DB rename.
 func (s *DatapackService) Update(
-	userID, name string, req UpdateRequest,
+	userID, datapackID string, req UpdateRequest,
 ) error {
-	if name == "" {
-		return fmt.Errorf("name is required")
+	if datapackID == "" {
+		return fmt.Errorf("datapack_id is required")
 	}
 	if userID == "" {
 		return fmt.Errorf("user_id is required")
 	}
+
+	// Resolve the current row so rename guards/no-op detection compare
+	// against the datapack's existing name rather than a URL segment.
+	dp, err := s.repo.GetByID(userID, datapackID)
+	if err != nil {
+		return fmt.Errorf("get datapack before update: %w", err)
+	}
+	if dp == nil {
+		return fmt.Errorf("datapack %q not found", datapackID)
+	}
+
 	if req.Name != "" {
 		req.Name = strings.TrimSpace(req.Name)
-		if req.Name == "" {
-			return fmt.Errorf("name cannot be blank")
+		if err := validateDatapackName(req.Name); err != nil {
+			return err
 		}
 		// Normalise: if the client sends the same name back, treat it as no-op
 		// for the rename path so the default-datapack guard and Langfuse sync
 		// are not triggered unnecessarily.
-		if req.Name == name {
+		if req.Name == dp.Name {
 			req.Name = ""
 		}
 	}
-	if req.Name != "" && name == defaultDatapackName {
+	if req.Name != "" && dp.Name == defaultDatapackName {
 		return fmt.Errorf("%s cannot be renamed", defaultDatapackName)
 	}
 
-	// Fetch the datapack ID before the rename so we can reference it in
-	// Langfuse (the project mapping is keyed by datapack_id, not name).
-	var datapackID string
-	if req.Name != "" && s.langfuseSvc != nil {
-		dp, err := s.repo.GetByName(userID, name)
-		if err != nil {
-			return fmt.Errorf("get datapack before rename: %w", err)
-		}
-		if dp == nil {
-			return fmt.Errorf("datapack %q not found", name)
-		}
-		datapackID = dp.ID
-	}
-
-	if err := s.repo.Update(userID, name, repository.UpdateDatapackParams{
+	if err := s.repo.UpdateByID(userID, datapackID, repository.UpdateDatapackParams{
 		YBConnStr:   req.YBUniverseConnStr,
 		Name:        req.Name,
 		Description: req.Description,
@@ -263,7 +308,7 @@ func (s *DatapackService) Update(
 		return err
 	}
 
-	if datapackID != "" {
+	if req.Name != "" && s.langfuseSvc != nil {
 		if err := s.langfuseSvc.RenameProject(userID, datapackID, req.Name); err != nil {
 			slog.Warn("langfuse project rename failed after datapack rename",
 				"datapack_id", datapackID,
@@ -278,20 +323,20 @@ func (s *DatapackService) Update(
 // Delete removes the Langfuse project (when configured), deletes the
 // datapack registry entry, and releases the universe slot. There is no
 // per-datapack database to drop in the multi-tenant model.
-func (s *DatapackService) Delete(userID, name string) error {
-	if name == "" {
-		return fmt.Errorf("name is required")
+func (s *DatapackService) Delete(userID, datapackID string) error {
+	if datapackID == "" {
+		return fmt.Errorf("datapack_id is required")
 	}
 	if userID == "" {
 		return fmt.Errorf("user_id is required")
 	}
 
-	dp, err := s.repo.GetByName(userID, name)
+	dp, err := s.repo.GetByID(userID, datapackID)
 	if err != nil {
 		return fmt.Errorf("failed to look up datapack: %w", err)
 	}
 	if dp == nil {
-		return fmt.Errorf("datapack %q not found", name)
+		return fmt.Errorf("datapack %q not found", datapackID)
 	}
 
 	if s.langfuseSvc != nil {
@@ -300,7 +345,7 @@ func (s *DatapackService) Delete(userID, name string) error {
 		}
 	}
 
-	if err := s.repo.Delete(userID, name); err != nil {
+	if err := s.repo.DeleteByID(userID, datapackID); err != nil {
 		return fmt.Errorf("failed to delete registry entry: %w", err)
 	}
 
@@ -308,7 +353,7 @@ func (s *DatapackService) Delete(userID, name string) error {
 		slog.Info("langfuse cleanup completed for datapack deletion",
 			"user_id", userID,
 			"datapack_id", dp.ID,
-			"datapack_name", name,
+			"datapack_name", dp.Name,
 		)
 	}
 
@@ -317,26 +362,26 @@ func (s *DatapackService) Delete(userID, name string) error {
 			"universe_id", dp.UniverseID, "error", err)
 	}
 
-	slog.Info("datapack deleted successfully", "datapack", name)
+	slog.Info("datapack deleted successfully", "datapack_id", datapackID, "datapack", dp.Name)
 	return nil
 }
 
-// Status returns summary information about a datapack.
+// Status returns summary information about a datapack by stable UUID.
 func (s *DatapackService) Status(
-	userID, name string,
+	userID, datapackID string,
 ) (*repository.DatapackStatus, error) {
-	if name == "" {
-		return nil, fmt.Errorf("name is required")
+	if datapackID == "" {
+		return nil, fmt.Errorf("datapack_id is required")
 	}
 	if userID == "" {
 		return nil, fmt.Errorf("user_id is required")
 	}
-	st, err := s.repo.GetStatus(userID, name)
+	st, err := s.repo.GetStatusByID(userID, datapackID)
 	if err != nil {
 		return nil, err
 	}
 	if st == nil {
-		return nil, fmt.Errorf("datapack %q not found", name)
+		return nil, fmt.Errorf("datapack %q not found", datapackID)
 	}
 	return st, nil
 }

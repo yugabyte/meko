@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -67,7 +68,7 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 
 	resp, err := h.svc.Create(req)
 	if err != nil {
-		if isValidationErr(err) {
+		if isDatapackValidationErr(err) {
 			return apiError(c, http.StatusBadRequest,
 				"VALIDATION_ERROR", err.Error())
 		}
@@ -121,7 +122,7 @@ func (h *DatapackHandler) List(c echo.Context) error {
 	return ok(c, http.StatusOK, datapacks)
 }
 
-// Describe handles GET /api/v1/datapacks/:name.
+// Describe handles GET /api/v1/datapacks/:datapack_id.
 // The datapack is resolved by RequireDatapackAccess middleware which
 // supports both owners and shared users. The Grant field is already
 // populated by the repository layer.
@@ -129,12 +130,12 @@ func (h *DatapackHandler) List(c echo.Context) error {
 //	@Summary	Describe a datapack
 //	@Tags		datapacks
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
+//	@Param		datapack_id	path		string	true	"Datapack ID"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name} [get]
+//	@Router		/datapacks/{datapack_id} [get]
 func (h *DatapackHandler) Describe(c echo.Context) error {
 	dp, found := c.Get(auth.ContextKeyDatapack).(*models.Datapack)
 	if !found || dp == nil {
@@ -171,19 +172,19 @@ func (h *DatapackHandler) Describe(c echo.Context) error {
 	return ok(c, http.StatusOK, dp)
 }
 
-// Update handles PATCH /api/v1/datapacks/:name.
+// Update handles PATCH /api/v1/datapacks/:datapack_id.
 //
 //	@Summary	Update a datapack
 //	@Tags		datapacks
 //	@Accept		json
 //	@Produce	json
-//	@Param		name	path		string					true	"Datapack name"
-//	@Param		body	body		service.UpdateRequest	true	"Update fields"
+//	@Param		datapack_id	path		string					true	"Datapack ID"
+//	@Param		body		body		service.UpdateRequest	true	"Update fields"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name} [patch]
+//	@Router		/datapacks/{datapack_id} [patch]
 func (h *DatapackHandler) Update(c echo.Context) error {
 	account, err := auth.GetAccount(c)
 	if err != nil {
@@ -191,10 +192,10 @@ func (h *DatapackHandler) Update(c echo.Context) error {
 			"UNAUTHORIZED", "missing account context")
 	}
 
-	name := c.Param("name")
-	if name == "" {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "datapack name is required")
+	dp, err := auth.GetDatapack(c)
+	if err != nil || dp == nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack not resolved by middleware")
 	}
 
 	var req service.UpdateRequest
@@ -203,7 +204,11 @@ func (h *DatapackHandler) Update(c echo.Context) error {
 			"INVALID_JSON", "malformed request body")
 	}
 
-	if err := h.svc.Update(account.ID, name, req); err != nil {
+	if err := h.svc.Update(account.ID, dp.ID, req); err != nil {
+		if isDatapackValidationErr(err) {
+			return apiError(c, http.StatusBadRequest,
+				"VALIDATION_ERROR", err.Error())
+		}
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", err.Error())
@@ -217,17 +222,17 @@ func (h *DatapackHandler) Update(c echo.Context) error {
 	})
 }
 
-// Delete handles DELETE /api/v1/datapacks/:name.
+// Delete handles DELETE /api/v1/datapacks/:datapack_id.
 //
 //	@Summary	Delete a datapack
 //	@Tags		datapacks
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
+//	@Param		datapack_id	path		string	true	"Datapack ID"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name} [delete]
+//	@Router		/datapacks/{datapack_id} [delete]
 func (h *DatapackHandler) Delete(c echo.Context) error {
 	account, err := auth.GetAccount(c)
 	if err != nil {
@@ -235,13 +240,13 @@ func (h *DatapackHandler) Delete(c echo.Context) error {
 			"UNAUTHORIZED", "missing account context")
 	}
 
-	name := c.Param("name")
-	if name == "" {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "datapack name is required")
+	dp, err := auth.GetDatapack(c)
+	if err != nil || dp == nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack not resolved by middleware")
 	}
 
-	if err := h.svc.Delete(account.ID, name); err != nil {
+	if err := h.svc.Delete(account.ID, dp.ID); err != nil {
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", err.Error())
@@ -255,31 +260,30 @@ func (h *DatapackHandler) Delete(c echo.Context) error {
 	})
 }
 
-// Status handles GET /api/v1/datapacks/:name/status.
+// Status handles GET /api/v1/datapacks/:datapack_id/status.
 //
 //	@Summary	Get datapack status
 //	@Tags		datapacks
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
+//	@Param		datapack_id	path		string	true	"Datapack ID"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/status [get]
+//	@Router		/datapacks/{datapack_id}/status [get]
 func (h *DatapackHandler) Status(c echo.Context) error {
-	account, err := auth.GetAccount(c)
-	if err != nil {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "missing account context")
+	if _, err := auth.GetAccount(c); err != nil {
+		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
 	}
 
-	name := c.Param("name")
-	if name == "" {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "datapack name is required")
+	dp, err := auth.GetDatapack(c)
+	if err != nil || dp == nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "datapack not resolved by middleware")
 	}
-
-	st, err := h.svc.Status(account.ID, name)
+	// dp.UserID is the owner's id (populated by RequireDatapackAccess even on
+	// the shared-access path); the status lookup is keyed by owner, so passing
+	// the caller's id would 404 for shared maintainers.
+	st, err := h.svc.Status(dp.UserID, dp.ID)
 	if err != nil {
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,
@@ -294,29 +298,23 @@ func (h *DatapackHandler) Status(c echo.Context) error {
 }
 
 // GenerateLangfuseProjectKeys handles
-// POST /api/v1/datapacks/:name/langfuse/project-keys.
+// POST /api/v1/datapacks/:datapack_id/langfuse/project-keys.
 //
 //	@Summary	Generate Langfuse project keys for a datapack
 //	@Tags		datapacks
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
+//	@Param		datapack_id	path		string	true	"Datapack ID"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Failure	503		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/langfuse/project-keys [post]
+//	@Router		/datapacks/{datapack_id}/langfuse/project-keys [post]
 func (h *DatapackHandler) GenerateLangfuseProjectKeys(c echo.Context) error {
 	if h.langfuse == nil || !h.langfuse.Enabled() {
 		return apiError(c, http.StatusServiceUnavailable,
 			"SERVICE_UNAVAILABLE",
 			"langfuse is not configured")
-	}
-
-	name := c.Param("name")
-	if name == "" {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "datapack name is required")
 	}
 
 	account, err := auth.GetAccount(c)
@@ -325,14 +323,10 @@ func (h *DatapackHandler) GenerateLangfuseProjectKeys(c echo.Context) error {
 			"UNAUTHORIZED", "missing account context")
 	}
 
-	dp, err := h.svc.Describe(account.ID, name)
-	if err != nil {
-		if isNotFoundErr(err) {
-			return apiError(c, http.StatusNotFound,
-				"NOT_FOUND", err.Error())
-		}
+	dp, err := auth.GetDatapack(c)
+	if err != nil || dp == nil {
 		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+			"INTERNAL_ERROR", "datapack not resolved by middleware")
 	}
 
 	keys, err := h.langfuse.GenerateProjectKeysForDatapack(
@@ -349,6 +343,10 @@ func (h *DatapackHandler) GenerateLangfuseProjectKeys(c echo.Context) error {
 	}
 
 	return ok(c, http.StatusOK, keys)
+}
+
+func isDatapackValidationErr(err error) bool {
+	return errors.Is(err, service.ErrInvalidDatapackName)
 }
 
 func isValidationErr(err error) bool {

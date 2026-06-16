@@ -152,9 +152,7 @@ export default function ObservePage() {
       const ownedDatapack = datapacks.find((dp) => (dp.grant ?? "owner") === "owner");
       if (ownedDatapack) {
         try {
-          await ensureLangfuseProjectKeys(ownedDatapack.datapack_name, {
-            datapackId: ownedDatapack.datapack_id,
-          });
+          await ensureLangfuseProjectKeys(ownedDatapack.datapack_id);
         } catch {
           // Best-effort: bootstrap can still succeed using existing org/project mappings.
         }

@@ -170,19 +170,17 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
   const accountId = currentUser?.account_id ?? "";
   const refreshSessions = useCallback(
     async (signal?: AbortSignal) => {
-      if (!selectedName) {
+      const datapackId = selectedDatapack?.datapack_id;
+      if (!datapackId) {
         setSessions([]);
         return;
       }
       setSessionsLoading(true);
       try {
         const resp = await listDatapackConversations(
-          selectedName,
+          datapackId,
           { limit: SESSIONS_FETCH_LIMIT, offset: 0 },
-          {
-            signal,
-            datapackId: selectedDatapack?.datapack_id,
-          },
+          { signal },
         );
         // Scope the dropdown to THIS user's WorkbenchLM sessions: the
         // datapack can be shared across members and written to by other
@@ -221,13 +219,13 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
   // need "load older" which we can add later if anyone hits it).
   const handleSelectConversation = useCallback(
     async (conversationId: string) => {
-      if (!selectedName || !conversationId) return;
+      const datapackId = selectedDatapack?.datapack_id;
+      if (!datapackId || !conversationId) return;
       try {
         const resp = await getDatapackConversation(
-          selectedName,
+          datapackId,
           conversationId,
           { messagesLimit: 100, messagesOffset: 0 },
-          { datapackId: selectedDatapack?.datapack_id },
         );
         // Set the loaded id FIRST so the chat's useEffect that resets on
         // datapack/conversation changes sees the new value when it
@@ -455,6 +453,7 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
       <div className="grid min-h-0 flex-1 grid-cols-[320px_1fr_360px] overflow-hidden">
         <WorkbenchLMKnowledgePanel
           datapackName={selectedName}
+          datapackId={selectedDatapack?.datapack_id ?? null}
           onDocumentsChange={handleKbDocsChange}
           paused={!isRouteActive}
           sessions={sessions}
@@ -505,11 +504,10 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
         It stays mounted while a target is set so the close animation can
         play; clearing `traceTarget` triggers the slide-out + unmount.
       */}
-      {selectedName ? (
+      {selectedDatapack?.datapack_id ? (
         <TraceDrawer
           open={traceTarget !== null}
-          datapackName={selectedName}
-          datapackId={selectedDatapack?.datapack_id}
+          datapackId={selectedDatapack.datapack_id}
           conversationId={traceTarget?.conversationId ?? ""}
           messageId={traceTarget?.messageId ?? null}
           onClose={() => setTraceTarget(null)}

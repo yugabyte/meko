@@ -24,8 +24,7 @@ import {
 const DEFAULT_PAGE_SIZE = 10;
 
 type Props = {
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   /** Increment to reset and re-fetch from the first page (e.g. after a new KB is created). */
   refreshKey?: number;
   /**
@@ -36,7 +35,7 @@ type Props = {
   pageSize?: number;
 };
 
-export function KnowledgeActivityLog({ datapackName, datapackId, refreshKey, pageSize = DEFAULT_PAGE_SIZE }: Props) {
+export function KnowledgeActivityLog({ datapackId, refreshKey, pageSize = DEFAULT_PAGE_SIZE }: Props) {
   const [items, setItems] = useState<KBActivityLogItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -50,14 +49,14 @@ export function KnowledgeActivityLog({ datapackName, datapackId, refreshKey, pag
 
   const loadPage = useCallback(
     async (cursor: string, append: boolean) => {
-      if (!datapackName) return;
+      if (!datapackId) return;
       setLoading(true);
       setError(null);
       try {
         const resp = await getKnowledgeBaseActivityLog(
-          datapackName,
+          datapackId,
           { limit: pageSize, cursor },
-          { datapackId },
+          {},
         );
         setItems((prev) => (append ? [...prev, ...resp.items] : resp.items));
         setHasMore(resp.has_more);
@@ -69,7 +68,7 @@ export function KnowledgeActivityLog({ datapackName, datapackId, refreshKey, pag
         setLoading(false);
       }
     },
-    [datapackName, datapackId, pageSize],
+    [datapackId, pageSize],
   );
 
   useEffect(() => {

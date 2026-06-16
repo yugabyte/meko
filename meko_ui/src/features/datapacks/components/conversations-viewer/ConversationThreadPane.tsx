@@ -8,7 +8,7 @@
 //                                     (rendered inside `<ThreadTurn>`)
 //
 // Pagination is offset-based against
-// `GET /datapacks/:name/conversations/:conversationId`. We render the
+// `GET /datapacks/:datapack_id/conversations/:conversationId`. We render the
 // first page on mount; when `thread_has_more` is true a "Load older
 // messages" button appears at the top of the scroll area.
 //
@@ -36,8 +36,10 @@ import { useNowMs } from "@/lib/relativeTime";
 const THREAD_PAGE_SIZE = 100;
 
 type Props = {
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
+  /** Display-only datapack name, forwarded to Decision Trace so a
+   *  `datapack_id` PARAMS row renders as the name. Routing/API use `datapackId`. */
+  datapackName?: string;
   conversationId: string;
   /** Author email of this conversation, sourced from the rail's list
    *  rows. The detail endpoint omits `user_email_id`, so the parent
@@ -59,8 +61,8 @@ type Props = {
 };
 
 export function ConversationThreadPane({
-  datapackName,
   datapackId,
+  datapackName,
   conversationId,
   userEmail,
   onOpenTrace,
@@ -98,10 +100,10 @@ export function ConversationThreadPane({
     setDetail(null);
     setOlderMessages([]);
     getDatapackConversation(
-      datapackName,
+      datapackId,
       conversationId,
       { messagesLimit: THREAD_PAGE_SIZE, messagesOffset: 0 },
-      { signal: ac.signal, datapackId },
+      { signal: ac.signal },
     )
       .then((resp) => {
         if (ac.signal.aborted) return;
@@ -118,17 +120,17 @@ export function ConversationThreadPane({
         if (!ac.signal.aborted) setLoading(false);
       });
     return () => ac.abort();
-  }, [datapackName, conversationId, datapackId]);
+  }, [datapackId, conversationId]);
 
   const loadOlder = useCallback(async () => {
     if (!conversationId || !olderHasMore || loadingOlder) return;
     setLoadingOlder(true);
     try {
       const resp = await getDatapackConversation(
-        datapackName,
+        datapackId,
         conversationId,
         { messagesLimit: THREAD_PAGE_SIZE, messagesOffset: olderOffset },
-        { datapackId },
+        {},
       );
       const incoming = resp.conversation.thread ?? [];
       setOlderMessages((prev) => [...prev, ...incoming]);
@@ -139,7 +141,7 @@ export function ConversationThreadPane({
     } finally {
       setLoadingOlder(false);
     }
-  }, [datapackName, conversationId, olderOffset, olderHasMore, loadingOlder, datapackId]);
+  }, [datapackId, conversationId, olderOffset, olderHasMore, loadingOlder]);
 
   /** Concatenated message list. Older pages first (chronological ordering),
    *  then the initial page. */
@@ -323,8 +325,8 @@ export function ConversationThreadPane({
                   : undefined
               }
               isShimmering={shimmeringMessageId === m.message_id}
-              datapackName={datapackName}
               datapackId={datapackId}
+              datapackName={datapackName}
               userEmail={userEmail}
               conversationId={conversationId}
               langfuseProjectId={langfuseProjectId}

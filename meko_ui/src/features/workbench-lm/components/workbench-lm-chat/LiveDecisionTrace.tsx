@@ -20,17 +20,19 @@ import type { DatapackMessageDecisionTrace, DatapackThreadMessage } from "@/lib/
 import { useMessageDecisionTrace } from "./useMessageDecisionTrace";
 
 type Props = {
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
+  /** Display-only: lets Decision Trace render a `datapack_id` PARAMS row as
+   *  the datapack name. Routing/API always use `datapackId`. */
+  datapackName?: string | null;
   conversationId: string;
   /** message_id from the POST /chat response for this assistant turn. */
   messageId: string;
 };
 
-export function LiveDecisionTrace({ datapackName, datapackId, conversationId, messageId }: Props) {
+export function LiveDecisionTrace({ datapackId, datapackName, conversationId, messageId }: Props) {
   const [expanded, setExpanded] = useState(false);
   const { data, isFetching, isError } = useMessageDecisionTrace(
-    { datapackName, datapackId, conversationId, messageId },
+    { datapackId, conversationId, messageId },
     { enabled: expanded },
   );
 
@@ -45,7 +47,7 @@ export function LiveDecisionTrace({ datapackName, datapackId, conversationId, me
         message={trace}
         conversationId={conversationId}
         langfuseProjectId={data?.langfuse_project_id}
-        datapackName={datapackName}
+        datapackName={datapackName ?? undefined}
         datapackId={datapackId}
         enableConversationLink
         defaultExpanded

@@ -47,7 +47,7 @@ const DefaultAgentID = "meko_agent"
 // Backing table: meko_system.datapacks. Identified by
 // (user_id, datapack_id) with a UNIQUE (user_id, datapack_name)
 // constraint that lets us look up by name for the URL-friendly
-// /datapacks/:name routes.
+// /datapacks/:datapack_id routes.
 type DatapackRepo struct {
 	db           *sql.DB
 	mcpServerURL string
@@ -483,7 +483,12 @@ func (r *DatapackRepo) Update(
 		if marshalErr != nil {
 			return fmt.Errorf("failed to marshal datapack_details: %w", marshalErr)
 		}
-		setClauses = append(setClauses, fmt.Sprintf("datapack_details = $%d", idx))
+		// Merge into datapack_details rather than overwrite: `||` shallow-merges
+		// the new {"description": ...} so any other keys in the JSONB are kept.
+		// COALESCE seeds an empty object when the column is NULL (|| with NULL
+		// yields NULL, which would wipe the row's details).
+		setClauses = append(setClauses, fmt.Sprintf(
+			"datapack_details = COALESCE(datapack_details, '{}'::jsonb) || $%d::jsonb", idx))
 		args = append(args, string(detailsJSON))
 		idx++
 	}
@@ -513,6 +518,64 @@ func (r *DatapackRepo) Update(
 	return nil
 }
 
+// UpdateByID modifies a datapack's mutable fields using the stable datapack UUID.
+func (r *DatapackRepo) UpdateByID(
+	userID, datapackID string, p UpdateDatapackParams,
+) error {
+	setClauses := []string{}
+	args := []interface{}{}
+	idx := 1
+
+	if p.YBConnStr != "" {
+		setClauses = append(setClauses, fmt.Sprintf("datapack_ysql_connection_string = $%d", idx))
+		args = append(args, p.YBConnStr)
+		idx++
+	}
+	if p.Name != "" {
+		setClauses = append(setClauses, fmt.Sprintf("datapack_name = $%d", idx))
+		args = append(args, p.Name)
+		idx++
+	}
+	if p.Description != "" {
+		detailsJSON, marshalErr := json.Marshal(map[string]string{"description": p.Description})
+		if marshalErr != nil {
+			return fmt.Errorf("failed to marshal datapack_details: %w", marshalErr)
+		}
+		// Merge into datapack_details rather than overwrite: `||` shallow-merges
+		// the new {"description": ...} so any other keys in the JSONB are kept.
+		// COALESCE seeds an empty object when the column is NULL (|| with NULL
+		// yields NULL, which would wipe the row's details).
+		setClauses = append(setClauses, fmt.Sprintf(
+			"datapack_details = COALESCE(datapack_details, '{}'::jsonb) || $%d::jsonb", idx))
+		args = append(args, string(detailsJSON))
+		idx++
+	}
+
+	if len(setClauses) == 0 {
+		return nil
+	}
+
+	setClauses = append(setClauses, "updated_at = NOW()")
+	query := fmt.Sprintf(
+		"UPDATE meko_system.datapacks SET %s WHERE user_id = $%d AND datapack_id = $%d",
+		strings.Join(setClauses, ", "), idx, idx+1,
+	)
+	args = append(args, userID, datapackID)
+
+	res, err := r.db.Exec(query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to update datapack: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("datapack %q not found", datapackID)
+	}
+	return nil
+}
+
 // Delete removes a datapack by user and name. Child rows in
 // agent_access / agent_access_permissions / knowledge_bases must
 // either be cascaded by FK or handled separately by the caller.
@@ -531,6 +594,26 @@ func (r *DatapackRepo) Delete(userID, name string) error {
 	}
 	if n == 0 {
 		return fmt.Errorf("datapack %q not found", name)
+	}
+	return nil
+}
+
+// DeleteByID removes a datapack by user and stable datapack UUID.
+func (r *DatapackRepo) DeleteByID(userID, datapackID string) error {
+	res, err := r.db.Exec(
+		`DELETE FROM meko_system.datapacks
+		 WHERE user_id = $1 AND datapack_id = $2`,
+		userID, datapackID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete datapack: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("datapack %q not found", datapackID)
 	}
 	return nil
 }
@@ -615,6 +698,39 @@ func (r *DatapackRepo) GetStatus(userID, name string) (*DatapackStatus, error) {
 		 FROM meko_system.datapacks d
 		 WHERE d.user_id = $1 AND d.datapack_name = $2`,
 		userID, name,
+	).Scan(
+		&s.ID, &s.Name,
+		&s.CreatedByAgentID,
+		&s.UniverseID, &s.YBUniverseConn,
+		&s.MCPUserName,
+		&s.CreatedAt, &s.AgentCount, &s.KBCount,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get datapack status: %w", err)
+	}
+	return &s, nil
+}
+
+// GetStatusByID returns a summary status for a datapack by stable UUID.
+func (r *DatapackRepo) GetStatusByID(userID, datapackID string) (*DatapackStatus, error) {
+	var s DatapackStatus
+	err := r.db.QueryRow(
+		`SELECT d.datapack_id, d.datapack_name,
+		        COALESCE(d.created_by_agent_id, ''),
+		        d.universe_id, d.datapack_ysql_connection_string,
+		        d.datapack_ysql_username,
+		        d.created_at,
+		        (SELECT COUNT(*) FROM meko_system.agent_access ad
+		           WHERE ad.user_id = d.user_id
+		             AND ad.datapack_id = d.datapack_id),
+		        (SELECT COUNT(*) FROM meko_system.knowledge_bases kb
+		           WHERE kb.datapack_id = d.datapack_id)
+		 FROM meko_system.datapacks d
+		 WHERE d.user_id = $1 AND d.datapack_id = $2`,
+		userID, datapackID,
 	).Scan(
 		&s.ID, &s.Name,
 		&s.CreatedByAgentID,

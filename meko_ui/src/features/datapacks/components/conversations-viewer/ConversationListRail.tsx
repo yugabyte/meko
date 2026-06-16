@@ -3,10 +3,10 @@
 // sentinel.
 //
 // Selection is fully URL-driven — clicking a row navigates to
-// `/datapacks/:name/conversations/:conversationId` so refreshes,
+// `/datapacks/:datapack_id/conversations/:conversationId` so refreshes,
 // back/forward, and shared links all land on the same conversation.
 //
-// Pagination is offset-based against GET /datapacks/:name/conversations.
+// Pagination is offset-based against GET /datapacks/:datapack_id/conversations.
 // `has_more` from the server tells us when to stop loading; we
 // concatenate pages into a single accumulating list rather than
 // paging in place (matches Slack/Linear-style channel rails).
@@ -35,8 +35,7 @@ import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
 const PAGE_SIZE = 20;
 
 type Props = {
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   /** Currently selected conversation id (URL-derived). Empty when no
    *  selection — the rail still renders, just without a highlight. */
   selectedId: string;
@@ -54,7 +53,6 @@ type Props = {
 };
 
 export function ConversationListRail({
-  datapackName,
   datapackId,
   selectedId,
   onSelect,
@@ -92,9 +90,9 @@ export function ConversationListRail({
       try {
         const nextOffset = reset ? 0 : offset;
         const resp = await listDatapackConversations(
-          datapackName,
+          datapackId,
           { limit: PAGE_SIZE, offset: nextOffset, q: debouncedSearch.trim() || undefined },
-          { signal: params.signal, datapackId },
+          { signal: params.signal },
         );
         if (params.signal?.aborted) return;
         const incoming = resp.conversations ?? [];
@@ -110,7 +108,7 @@ export function ConversationListRail({
         if (!params.signal?.aborted) setLoading(false);
       }
     },
-    [datapackName, offset, onFirstPageLoaded, debouncedSearch],
+    [datapackId, offset, onFirstPageLoaded, debouncedSearch],
   );
 
   // Reset + first fetch whenever the datapack OR the search filter
@@ -128,7 +126,7 @@ export function ConversationListRail({
     // loadPage intentionally not in deps — its captured `offset` is
     // stale on first run and we only want this on datapack/search change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datapackName, debouncedSearch]);
+  }, [datapackId, debouncedSearch]);
 
   // Bottom sentinel observer — triggers next page when scrolled into
   // view. We re-create the observer when `hasMore`/`loading` flip so

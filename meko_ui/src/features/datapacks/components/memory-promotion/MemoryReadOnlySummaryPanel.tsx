@@ -119,14 +119,10 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
     if (!isValidConvId(conversationId)) return;
     navigate(
       datapackConversationsPathWithSource(
-        datapackName,
+        datapackId,
         traceId(conversationId),
         CONVERSATION_SOURCE.memorySummary,
         { memoryId },
-        // Carry datapack_id through so the conversation viewer can
-        // resolve unambiguously when names collide across share
-        // boundaries.
-        datapackId,
       ),
     );
   };

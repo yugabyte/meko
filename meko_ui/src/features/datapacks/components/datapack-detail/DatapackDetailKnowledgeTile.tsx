@@ -9,9 +9,7 @@ import { kbDocumentStatusLabel } from "@/features/datapacks/components/knowledge
 export const KNOWLEDGE_PREVIEW_LIMIT = 3;
 
 type Props = {
-  /** Datapack name — used to build the "View all" link to the KB page. */
-  datapackName: string;
-  datapackId?: string;
+  datapackId: string;
   /** From parent’s single GET …/knowledge-bases/documents fetch. Capped
    *  at `KNOWLEDGE_PREVIEW_LIMIT` rows on the page side to keep the
    *  request light — we only need the preview rows here. */
@@ -25,7 +23,6 @@ type Props = {
 };
 
 export function DatapackDetailKnowledgeTile({
-  datapackName,
   datapackId,
   documents,
   documentsLoading,
@@ -58,7 +55,7 @@ export function DatapackDetailKnowledgeTile({
           {countLabel}
         </span>
         <Link
-          to={datapackKnowledgePath(datapackName, datapackId)}
+          to={datapackKnowledgePath(datapackId)}
           className="ml-auto shrink-0 text-xs text-blue-400 hover:text-blue-300 transition-colors"
         >
           View all →

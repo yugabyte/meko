@@ -21,20 +21,20 @@ func NewSharingHandler(svc *service.SharingService) *SharingHandler {
 	return &SharingHandler{svc: svc}
 }
 
-// Invite handles POST /api/v1/datapacks/:name/share.
+// Invite handles POST /api/v1/datapacks/:datapack_id/share.
 //
 //	@Summary	Invite a person to a datapack
 //	@Tags		sharing
 //	@Accept		json
 //	@Produce	json
-//	@Param		name	path		string				true	"Datapack name"
+//	@Param		datapack_id	path		string				true	"Datapack ID"
 //	@Param		body	body		service.InviteRequest	true	"Invite request"
 //	@Success	200		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Failure	409		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/share [post]
+//	@Router		/datapacks/{datapack_id}/share [post]
 func (h *SharingHandler) Invite(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -50,7 +50,16 @@ func (h *SharingHandler) Invite(c echo.Context) error {
 
 	// Invite rows use the datapack row owner as OwnerUserID so resend/revoke
 	// checks match; maintainers act on behalf of the same datapack.
-	resp, err := h.svc.InviteToDatapack(c.Request().Context(), dp.ID, dp.UserID, dp.Name, dp.Description, dp.OwnerName, dp.OwnerEmail, req)
+	resp, err := h.svc.InviteToDatapack(
+		c.Request().Context(),
+		dp.ID,
+		dp.UserID,
+		dp.Name,
+		dp.Description,
+		dp.OwnerName,
+		dp.OwnerEmail,
+		req,
+	)
 	if err != nil {
 		if isValidationErr(err) || errors.Is(err, service.ErrCannotInviteOwner) {
 			return apiError(c, http.StatusBadRequest,
@@ -137,18 +146,18 @@ func (h *SharingHandler) InviteAction(c echo.Context) error {
 	return ok(c, http.StatusOK, resp)
 }
 
-// OutgoingShares handles GET /api/v1/datapacks/:name/outgoing-shares (pending invites only).
+// OutgoingShares handles GET /api/v1/datapacks/:datapack_id/outgoing-shares (pending invites only).
 //
 //	@Summary	List pending outgoing invites for a datapack
 //	@Tags		sharing
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
+//	@Param		datapack_id	path		string	true	"Datapack ID"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	403		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/outgoing-shares [get]
+//	@Router		/datapacks/{datapack_id}/outgoing-shares [get]
 func (h *SharingHandler) OutgoingShares(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -165,17 +174,17 @@ func (h *SharingHandler) OutgoingShares(c echo.Context) error {
 	return ok(c, http.StatusOK, resp)
 }
 
-// MemberList handles GET /api/v1/datapacks/:name/member-list (accepted members).
+// MemberList handles GET /api/v1/datapacks/:datapack_id/member-list (accepted members).
 //
 //	@Summary	List datapack members
 //	@Tags		sharing
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
+//	@Param		datapack_id	path		string	true	"Datapack ID"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/member-list [get]
+//	@Router		/datapacks/{datapack_id}/member-list [get]
 func (h *SharingHandler) MemberList(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -192,17 +201,17 @@ func (h *SharingHandler) MemberList(c echo.Context) error {
 	return ok(c, http.StatusOK, resp)
 }
 
-// ResendInvite handles POST /api/v1/datapacks/:name/invite/:invite_id/resend.
+// ResendInvite handles POST /api/v1/datapacks/:datapack_id/invite/:invite_id/resend.
 //
 //	@Summary	Resend a pending invite
 //	@Tags		sharing
 //	@Produce	json
-//	@Param		name		path		string	true	"Datapack name"
+//	@Param		datapack_id		path		string	true	"Datapack ID"
 //	@Param		invite_id	path		string	true	"Invite ID"
 //	@Success	200			{object}	APIResponse
 //	@Failure	404			{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/invite/{invite_id}/resend [post]
+//	@Router		/datapacks/{datapack_id}/invite/{invite_id}/resend [post]
 func (h *SharingHandler) ResendInvite(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -216,7 +225,16 @@ func (h *SharingHandler) ResendInvite(c echo.Context) error {
 			"VALIDATION_ERROR", "invite_id is required")
 	}
 
-	id, err := h.svc.ResendInvite(c.Request().Context(), dp.ID, dp.UserID, dp.Name, dp.Description, dp.OwnerName, dp.OwnerEmail, inviteID)
+	id, err := h.svc.ResendInvite(
+		c.Request().Context(),
+		dp.ID,
+		dp.UserID,
+		dp.Name,
+		dp.Description,
+		dp.OwnerName,
+		dp.OwnerEmail,
+		inviteID,
+	)
 	if err != nil {
 		if isNotFoundErr(err) {
 			return apiError(c, http.StatusNotFound,
@@ -232,17 +250,17 @@ func (h *SharingHandler) ResendInvite(c echo.Context) error {
 	})
 }
 
-// RevokeInvite handles DELETE /api/v1/datapacks/:name/invite/:invite_id.
+// RevokeInvite handles DELETE /api/v1/datapacks/:datapack_id/invite/:invite_id.
 //
 //	@Summary	Revoke a pending invite
 //	@Tags		sharing
 //	@Produce	json
-//	@Param		name		path		string	true	"Datapack name"
+//	@Param		datapack_id		path		string	true	"Datapack ID"
 //	@Param		invite_id	path		string	true	"Invite ID"
 //	@Success	200			{object}	APIResponse
 //	@Failure	404			{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/invite/{invite_id} [delete]
+//	@Router		/datapacks/{datapack_id}/invite/{invite_id} [delete]
 func (h *SharingHandler) RevokeInvite(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {
@@ -271,20 +289,20 @@ func (h *SharingHandler) RevokeInvite(c echo.Context) error {
 	})
 }
 
-// UpdateGrant handles PATCH /api/v1/datapacks/:name/share/:share_user_id.
+// UpdateGrant handles PATCH /api/v1/datapacks/:datapack_id/share/:share_user_id.
 //
 //	@Summary	Update a member's grant level
 //	@Tags		sharing
 //	@Accept		json
 //	@Produce	json
-//	@Param		name			path		string					true	"Datapack name"
+//	@Param		datapack_id			path		string					true	"Datapack ID"
 //	@Param		share_user_id	path		string					true	"Member user ID"
 //	@Param		body			body		service.UpdateGrantRequest	true	"New grant"
 //	@Success	200				{object}	APIResponse
 //	@Failure	400				{object}	APIResponse
 //	@Failure	404				{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/share/{share_user_id} [patch]
+//	@Router		/datapacks/{datapack_id}/share/{share_user_id} [patch]
 func (h *SharingHandler) UpdateGrant(c echo.Context) error {
 	dp, err := auth.GetDatapack(c)
 	if err != nil {

@@ -10,15 +10,10 @@ import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
 import { getApiErrorMessage, getDatapack, type Datapack } from "@/lib/api/mekoApi";
 
 type Props = {
-  datapackName: string;
-  /** Optional URL-pinned id from `?datapack_id=`. Forwarded to the
-   *  initial /datapacks/:name fetch so name collisions across share
-   *  boundaries resolve unambiguously. Falling back to name-only
-   *  resolution when omitted keeps old bookmarks working. */
-  datapackId?: string;
+  datapackId: string;
 };
 
-export default function DatapackMemorySummaryPage({ datapackName, datapackId }: Props) {
+export default function DatapackMemorySummaryPage({ datapackId }: Props) {
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -29,7 +24,7 @@ export default function DatapackMemorySummaryPage({ datapackName, datapackId }: 
       setStatusLoading(true);
       setStatusError(null);
       try {
-        const d = await getDatapack(datapackName, { datapackId });
+        const d = await getDatapack(datapackId, {});
         if (!cancelled) setDatapack(d);
       } catch (e) {
         if (!cancelled) {
@@ -44,7 +39,9 @@ export default function DatapackMemorySummaryPage({ datapackName, datapackId }: 
     return () => {
       cancelled = true;
     };
-  }, [datapackName, datapackId]);
+  }, [datapackId]);
+
+  const displayDatapackName = datapack?.datapack_name ?? "";
 
   return (
     <div className="flex h-screen flex-1 flex-col overflow-y-auto bg-background text-foreground">
@@ -54,7 +51,7 @@ export default function DatapackMemorySummaryPage({ datapackName, datapackId }: 
         <DatapackBreadcrumbs
           items={[
             { label: "Datapacks", href: ROUTES.datapacks },
-            { label: datapackName, href: datapackDetailPath(datapackName, datapackId) },
+            { label: displayDatapackName, href: datapackDetailPath(datapackId) },
             { label: "Memory Summary" },
           ]}
         />
@@ -67,7 +64,7 @@ export default function DatapackMemorySummaryPage({ datapackName, datapackId }: 
             </h1>
           </div>
           <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-            All session memories for <span className="text-foreground/90">{datapackName}</span> (read-only).
+            All session memories for <span className="text-foreground/90">{displayDatapackName}</span> (read-only).
           </p>
         </div>
 
@@ -75,7 +72,7 @@ export default function DatapackMemorySummaryPage({ datapackName, datapackId }: 
 
         {datapack?.datapack_id ? (
           <MemoryReadOnlySummaryPanel
-            datapackName={datapackName}
+            datapackName={displayDatapackName}
             datapackId={datapack.datapack_id}
           />
         ) : (

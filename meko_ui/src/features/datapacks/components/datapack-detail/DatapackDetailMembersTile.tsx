@@ -53,6 +53,7 @@ function resolvedMemberGrant(m: DatapackOutgoingMember): DatapackShareGrant {
 
 type Props = {
   datapackName: string;
+  datapackId: string;
   currentUser: CurrentUser | null;
   members: DatapackOutgoingMember[];
   canShare: boolean;
@@ -67,6 +68,7 @@ type Props = {
  */
 export function DatapackDetailMembersTile({
   datapackName,
+  datapackId,
   currentUser,
   canShare,
   members,
@@ -97,7 +99,7 @@ export function DatapackDetailMembersTile({
           </span>
         </div>
         {canShare && <Link
-          to={datapackSharePath(datapackName)}
+          to={datapackSharePath(datapackId)}
           className="shrink-0 text-xs font-medium text-blue-400 hover:underline"
         >
           Share →
@@ -215,7 +217,7 @@ export function DatapackDetailMembersTile({
       <div className="mt-auto border-t border-border">
         {viewAllEnabled ? (
           <Link
-            to={datapackMembersPath(datapackName)}
+            to={datapackMembersPath(datapackId)}
             className="block w-full py-3 text-center text-sm font-normal text-foreground/90 transition-colors hover:text-foreground"
           >
             View all →

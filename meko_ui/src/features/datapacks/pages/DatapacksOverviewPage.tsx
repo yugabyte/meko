@@ -206,9 +206,8 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
   // defensive reset.
   useEffect(() => {
     if (!isConnectOpen) return;
-    const dpName = firstOwnerDatapack?.datapack_name;
     const dpId = firstOwnerDatapack?.datapack_id;
-    if (!dpName) {
+    if (!dpId) {
       setConnectProvisionStatus(null);
       setConnectError("No owner datapack available to connect.");
       setConnectLoading(false);
@@ -218,7 +217,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
     setConnectProvisionStatus(null);
     setConnectLoading(true);
     setConnectError(null);
-    void getDatapackProvisionStatus(dpName, { signal: ac.signal, datapackId: dpId })
+    void getDatapackProvisionStatus(dpId, { signal: ac.signal })
       .then((status) => {
         if (ac.signal.aborted) return;
         setConnectProvisionStatus(status);
@@ -232,7 +231,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
         if (!ac.signal.aborted) setConnectLoading(false);
       });
     return () => ac.abort();
-  }, [isConnectOpen, firstOwnerDatapack?.datapack_name, firstOwnerDatapack?.datapack_id]);
+  }, [isConnectOpen, firstOwnerDatapack?.datapack_id]);
 
   const showProvisioningScreen =
     !isLoading && datapacks.length === 0 && isProvisioningDefaultDatapack;
@@ -438,16 +437,11 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
           datapacks={datapacks}
           isLoading={isLoading}
           currentUser={currentUser}
-          onOpenDatapack={(dp) =>
-            // datapackDetailPath now accepts the id and appends
-            // ?datapack_id= via the shared `appendDatapackId` helper;
-            // manual concat is no longer needed.
-            navigate(datapackDetailPath(dp.datapack_name, dp.datapack_id))
-          }
+          onOpenDatapack={(dp) => navigate(datapackDetailPath(dp.datapack_id))}
           onConnectDatapack={(dp) =>
-            navigate(datapackDetailUrlOpenConnect(dp.datapack_name, dp.datapack_id))
+            navigate(datapackDetailUrlOpenConnect(dp.datapack_id))
           }
-          onShareDatapack={(dp) => navigate(datapackSharePath(dp.datapack_name))}
+          onShareDatapack={(dp) => navigate(datapackSharePath(dp.datapack_id))}
           onNewDatapack={() => navigate(datapackNewConfigurePath())}
         />
 

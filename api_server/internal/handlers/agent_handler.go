@@ -18,7 +18,7 @@ import (
 //
 //   - User-scoped CRUD on /api/v1/agents (CreateUser, ListUser,
 //     DeleteUser) backed by meko_system.agents.
-//   - Link-only operations on /api/v1/datapacks/:name/agents (Link,
+//   - Link-only operations on /api/v1/datapacks/:datapack_id/agents (Link,
 //     ListForDatapack, Unlink) backed by meko_system.agent_access.
 type AgentHandler struct {
 	svc *service.AgentService
@@ -142,21 +142,21 @@ func (h *AgentHandler) DeleteUser(c echo.Context) error {
 	})
 }
 
-// Link handles POST /api/v1/datapacks/:name/agents and links an
-// existing user-scoped agent to the datapack identified by :name.
+// Link handles POST /api/v1/datapacks/:datapack_id/agents and links an
+// existing user-scoped agent to the datapack identified by :datapack_id.
 //
 //	@Summary	Link an agent to a datapack
 //	@Tags		agents
 //	@Accept		json
 //	@Produce	json
-//	@Param		name	path		string						true	"Datapack name"
+//	@Param		datapack_id	path		string						true	"Datapack ID"
 //	@Param		body	body		service.LinkAgentRequest	true	"Link request"
 //	@Success	201		{object}	APIResponse
 //	@Failure	400		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/agents [post]
+//	@Router		/datapacks/{datapack_id}/agents [post]
 func (h *AgentHandler) Link(c echo.Context) error {
 	account, err := auth.GetAccount(c)
 	if err != nil {
@@ -196,19 +196,19 @@ func (h *AgentHandler) Link(c echo.Context) error {
 	})
 }
 
-// ListForDatapack handles GET /api/v1/datapacks/:name/agents and
+// ListForDatapack handles GET /api/v1/datapacks/:datapack_id/agents and
 // returns the agents currently linked to the datapack for the
 // authenticated user.
 //
 //	@Summary	List agents linked to a datapack
 //	@Tags		agents
 //	@Produce	json
-//	@Param		name	path		string	true	"Datapack name"
+//	@Param		datapack_id	path		string	true	"Datapack ID"
 //	@Success	200		{object}	APIResponse
 //	@Failure	401		{object}	APIResponse
 //	@Failure	404		{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/agents [get]
+//	@Router		/datapacks/{datapack_id}/agents [get]
 func (h *AgentHandler) ListForDatapack(c echo.Context) error {
 	account, err := auth.GetAccount(c)
 	if err != nil {
@@ -232,20 +232,20 @@ func (h *AgentHandler) ListForDatapack(c echo.Context) error {
 	return ok(c, http.StatusOK, agents)
 }
 
-// Unlink handles DELETE /api/v1/datapacks/:name/agents/:agent_id and
+// Unlink handles DELETE /api/v1/datapacks/:datapack_id/agents/:agent_id and
 // removes the link between a user-scoped agent and a datapack. The
 // underlying agent row is left intact.
 //
 //	@Summary	Unlink an agent from a datapack
 //	@Tags		agents
 //	@Produce	json
-//	@Param		name		path		string	true	"Datapack name"
+//	@Param		datapack_id		path		string	true	"Datapack ID"
 //	@Param		agent_id	path		string	true	"Agent ID"
 //	@Success	200			{object}	APIResponse
 //	@Failure	401			{object}	APIResponse
 //	@Failure	404			{object}	APIResponse
 //	@Security	BearerAuth
-//	@Router		/datapacks/{name}/agents/{agent_id} [delete]
+//	@Router		/datapacks/{datapack_id}/agents/{agent_id} [delete]
 func (h *AgentHandler) Unlink(c echo.Context) error {
 	account, err := auth.GetAccount(c)
 	if err != nil {
