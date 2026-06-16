@@ -16,7 +16,7 @@
 import { useState } from "react";
 import { Brain, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { DecisionTrace } from "@/components/decision-trace-viewer";
-import type { DatapackMessageDecisionTrace, DatapackThreadMessage } from "@/lib/mekoApi";
+import type { DatapackMessageDecisionTrace, DatapackThreadMessage } from "@/lib/api/mekoApi";
 import { useMessageDecisionTrace } from "./useMessageDecisionTrace";
 
 type Props = {
@@ -64,11 +64,20 @@ export function LiveDecisionTrace({ datapackName, datapackId, conversationId, me
         aria-expanded={expanded}
       >
         {isFetching ? (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-purple-600 dark:text-purple-300" aria-hidden />
+          <Loader2
+            className="h-3 w-3 shrink-0 animate-spin text-purple-600 dark:text-purple-300"
+            aria-hidden
+          />
         ) : expanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0 text-purple-600 dark:text-purple-300" aria-hidden />
+          <ChevronDown
+            className="h-3 w-3 shrink-0 text-purple-600 dark:text-purple-300"
+            aria-hidden
+          />
         ) : (
-          <ChevronRight className="h-3 w-3 shrink-0 text-purple-600 dark:text-purple-300" aria-hidden />
+          <ChevronRight
+            className="h-3 w-3 shrink-0 text-purple-600 dark:text-purple-300"
+            aria-hidden
+          />
         )}
         <Brain className="h-3 w-3 shrink-0 text-purple-600 dark:text-purple-300" aria-hidden />
         <span className="text-[11px] font-medium uppercase tracking-wide text-purple-700 dark:text-purple-200/90">
@@ -77,7 +86,9 @@ export function LiveDecisionTrace({ datapackName, datapackId, conversationId, me
         {isFetching ? (
           <span className="text-[11px] text-muted-foreground">· loading…</span>
         ) : isError ? (
-          <span className="text-[11px] text-amber-600 dark:text-amber-400/90">· couldn't load — click to retry</span>
+          <span className="text-[11px] text-amber-600 dark:text-amber-400/90">
+            · couldn't load — click to retry
+          </span>
         ) : null}
       </button>
     </div>

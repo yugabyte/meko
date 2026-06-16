@@ -9,20 +9,10 @@
 // Pure helpers live in helpers.ts.
 
 import { useMemo, useState } from "react";
-import {
-  Brain,
-  ChevronDown,
-  ChevronRight,
-  Layers,
-  Sparkles,
-  Workflow,
-} from "lucide-react";
-import type { DatapackThreadMessage } from "@/lib/mekoApi";
+import { Brain, ChevronDown, ChevronRight, Layers, Sparkles, Workflow } from "lucide-react";
+import type { DatapackThreadMessage } from "@/lib/api/mekoApi";
 import { normalizeMarkdownText } from "@/features/datapacks/components/conversations-viewer/markdownNormalize";
-import {
-  DecisionTraceHeader,
-  type DbBreakdownEntry,
-} from "./DecisionTraceHeader";
+import { DecisionTraceHeader, type DbBreakdownEntry } from "./DecisionTraceHeader";
 import { PhaseAccordion } from "./PhaseAccordion";
 import { PlanContent } from "./PlanContent";
 import { DecisionTraceProvider } from "./decisionTraceContext";
@@ -100,10 +90,7 @@ export function DecisionTrace({
     () => insertSyntheticContextAssemble(rawSteps, memoryHits, kbHits),
     [rawSteps, memoryHits, kbHits],
   );
-  const phases = useMemo(
-    () => groupStepsByPhase(stepsWithContext),
-    [stepsWithContext],
-  );
+  const phases = useMemo(() => groupStepsByPhase(stepsWithContext), [stepsWithContext]);
 
   // Header `db` chip counts every step badge-labelled `DB` by
   // `stepKindLabel`: memory.search / knowledge.retrieve (reads) plus
@@ -130,21 +117,15 @@ export function DecisionTrace({
         ms: acc.get(n)!.ms,
       }));
   }, [rawSteps]);
-  const dbCalls = useMemo(
-    () => dbBreakdown.reduce((a, b) => a + b.count, 0),
-    [dbBreakdown],
-  );
+  const dbCalls = useMemo(() => dbBreakdown.reduce((a, b) => a + b.count, 0), [dbBreakdown]);
 
   const hasAnythingToShow =
-    rawSteps.length > 0 ||
-    memoryHits.length > 0 ||
-    kbHits.length > 0 ||
-    hasReasoning ||
-    hasPlan;
+    rawSteps.length > 0 || memoryHits.length > 0 || kbHits.length > 0 || hasReasoning || hasPlan;
   if (!hasAnythingToShow) return null;
 
   const summaryParts: string[] = [];
-  if (rawSteps.length > 0) summaryParts.push(`${rawSteps.length} step${rawSteps.length === 1 ? "" : "s"}`);
+  if (rawSteps.length > 0)
+    summaryParts.push(`${rawSteps.length} step${rawSteps.length === 1 ? "" : "s"}`);
   if (memoryHits.length > 0) summaryParts.push(`${memoryHits.length} mem`);
   if (kbHits.length > 0) summaryParts.push(`${kbHits.length} chunks`);
   if (hasPlan) summaryParts.push(`${planSteps.length} planned`);
@@ -160,75 +141,83 @@ export function DecisionTrace({
         aria-expanded={expanded}
       >
         {expanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0 text-purple-600 dark:text-purple-300" aria-hidden />
+          <ChevronDown
+            className="h-3 w-3 shrink-0 text-purple-600 dark:text-purple-300"
+            aria-hidden
+          />
         ) : (
-          <ChevronRight className="h-3 w-3 shrink-0 text-purple-600 dark:text-purple-300" aria-hidden />
+          <ChevronRight
+            className="h-3 w-3 shrink-0 text-purple-600 dark:text-purple-300"
+            aria-hidden
+          />
         )}
         <Brain className="h-3 w-3 shrink-0 text-purple-600 dark:text-purple-300" aria-hidden />
         <span className="text-[11px] font-medium uppercase tracking-wide text-purple-700 dark:text-purple-200/90">
           Decision trace
         </span>
-        {summary ? (
-          <span className="text-[11px] text-muted-foreground">· {summary}</span>
-        ) : null}
+        {summary ? <span className="text-[11px] text-muted-foreground">· {summary}</span> : null}
       </button>
 
       {expanded ? (
         <DecisionTraceProvider value={traceContext}>
-        <div className="space-y-2 border-t border-purple-500/15 px-3 py-3">
-          <DecisionTraceHeader
-            totalMs={message.latency_ms}
-            totalTokens={message.total_tokens ?? 0}
-            dbCalls={dbCalls}
-            dbBreakdown={dbBreakdown}
-            llmCalls={message.llm_calls ?? 0}
-            conversationId={conversationId}
-            langfuseProjectId={langfuseProjectId}
-          />
-
-          <PhaseAccordion
-            number={1}
-            label="Preprocess"
-            accent="blue"
-            icon={<Layers className="h-3 w-3 text-blue-600 dark:text-blue-300" aria-hidden />}
-            steps={phases.preprocess}
-            taglineFallback={preprocessTagline(phases.preprocess, memoryHits, kbHits)}
-            conversationId={conversationId}
-            langfuseProjectId={langfuseProjectId}
-            memoryHits={memoryHits}
-            kbHits={kbHits}
-          />
-
-          <PhaseAccordion
-            number={2}
-            label="Plan"
-            accent="purple"
-            icon={<Sparkles className="h-3 w-3 text-purple-600 dark:text-purple-300" aria-hidden />}
-            steps={[]}
-            taglineFallback={planTagline(planSteps, hasReasoning)}
-            conversationId={conversationId}
-            langfuseProjectId={langfuseProjectId}
-            hasContentOverride={hasReasoning || hasPlan}
-          >
-            <PlanContent
-              reasoning={reasoningText}
-              plan={planSteps}
-              model={message.model}
-              accent="purple"
+          <div className="space-y-2 border-t border-purple-500/15 px-3 py-3">
+            <DecisionTraceHeader
+              totalMs={message.latency_ms}
+              totalTokens={message.total_tokens ?? 0}
+              dbCalls={dbCalls}
+              dbBreakdown={dbBreakdown}
+              llmCalls={message.llm_calls ?? 0}
+              conversationId={conversationId}
+              langfuseProjectId={langfuseProjectId}
             />
-          </PhaseAccordion>
 
-          <PhaseAccordion
-            number={3}
-            label="Execute"
-            accent="emerald"
-            icon={<Workflow className="h-3 w-3 text-emerald-600 dark:text-emerald-300" aria-hidden />}
-            steps={phases.execute}
-            taglineFallback={executeTagline(phases.execute, message.memories_extracted ?? 0)}
-            conversationId={conversationId}
-            langfuseProjectId={langfuseProjectId}
-          />
-        </div>
+            <PhaseAccordion
+              number={1}
+              label="Preprocess"
+              accent="blue"
+              icon={<Layers className="h-3 w-3 text-blue-600 dark:text-blue-300" aria-hidden />}
+              steps={phases.preprocess}
+              taglineFallback={preprocessTagline(phases.preprocess, memoryHits, kbHits)}
+              conversationId={conversationId}
+              langfuseProjectId={langfuseProjectId}
+              memoryHits={memoryHits}
+              kbHits={kbHits}
+            />
+
+            <PhaseAccordion
+              number={2}
+              label="Plan"
+              accent="purple"
+              icon={
+                <Sparkles className="h-3 w-3 text-purple-600 dark:text-purple-300" aria-hidden />
+              }
+              steps={[]}
+              taglineFallback={planTagline(planSteps, hasReasoning)}
+              conversationId={conversationId}
+              langfuseProjectId={langfuseProjectId}
+              hasContentOverride={hasReasoning || hasPlan}
+            >
+              <PlanContent
+                reasoning={reasoningText}
+                plan={planSteps}
+                model={message.model}
+                accent="purple"
+              />
+            </PhaseAccordion>
+
+            <PhaseAccordion
+              number={3}
+              label="Execute"
+              accent="emerald"
+              icon={
+                <Workflow className="h-3 w-3 text-emerald-600 dark:text-emerald-300" aria-hidden />
+              }
+              steps={phases.execute}
+              taglineFallback={executeTagline(phases.execute, message.memories_extracted ?? 0)}
+              conversationId={conversationId}
+              langfuseProjectId={langfuseProjectId}
+            />
+          </div>
         </DecisionTraceProvider>
       ) : null}
     </div>

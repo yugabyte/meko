@@ -29,7 +29,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { WarningBanner } from "@/components/ui/warning-banner";
 import { MekoTokenCreateDialog } from "@/features/settings/components/MekoTokenCreateDialog";
-import { listMekoTokens, type MekoToken } from "@/lib/mekoApi";
+import { listMekoTokens, type MekoToken } from "@/lib/api/mekoApi";
 import {
   MEKO_TOKEN_INSTALLER_PLACEHOLDER,
   MEKO_TOKEN_STATUS,
@@ -49,9 +49,7 @@ export function ApiKeyStatusBanner() {
     try {
       const tokens = await listMekoTokens({ signal });
       if (signal?.aborted) return;
-      const active = (tokens ?? []).filter(
-        (t) => mekoTokenStatus(t) === MEKO_TOKEN_STATUS.active,
-      );
+      const active = (tokens ?? []).filter((t) => mekoTokenStatus(t) === MEKO_TOKEN_STATUS.active);
       setActiveKeys(active);
     } catch {
       // Stay silent on error: the rest of the page still works.
@@ -139,7 +137,7 @@ function ActiveApiKeysHint({ keys }: { keys: MekoToken[] }) {
         <p>
           You have <span className="font-medium text-foreground">{count}</span> active API key
           {count === 1 ? "" : "s"}. Paste the full key you saved at creation time into the install
-          command below — {" "}
+          command below —{" "}
           <code className="rounded bg-background/60 px-1 py-0.5 text-[12px]">
             {MEKO_TOKEN_INSTALLER_PLACEHOLDER}
           </code>{" "}
@@ -154,7 +152,9 @@ function ActiveApiKeysHint({ keys }: { keys: MekoToken[] }) {
               >
                 <KeyRound className="h-3 w-3 text-blue-700 dark:text-blue-300" aria-hidden />
                 <span className="font-medium">{k.name}</span>
-                <code className="font-mono text-blue-700 dark:text-blue-200/85">{k.token_prefix}…</code>
+                <code className="font-mono text-blue-700 dark:text-blue-200/85">
+                  {k.token_prefix}…
+                </code>
               </Badge>
             </li>
           ))}

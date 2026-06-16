@@ -14,7 +14,7 @@ import {
   getDatapackMessageDecisionTrace,
   isMekoApiRequestError,
   type GetDatapackMessageDecisionTraceResponse,
-} from "@/lib/mekoApi";
+} from "@/lib/api/mekoApi";
 
 /** Stable prefix for the query key — exported so callers / tests can
  *  invalidate or assert against it without restating the string. */
@@ -33,11 +33,7 @@ export function useMessageDecisionTrace(
 ) {
   // Only fire when we have every id AND the caller opted in. Disabled
   // observers (e.g. user bubbles, or a collapsed trace) cost nothing.
-  const enabled =
-    (options?.enabled ?? true) &&
-    !!datapackName &&
-    !!conversationId &&
-    !!messageId;
+  const enabled = (options?.enabled ?? true) && !!datapackName && !!conversationId && !!messageId;
 
   return useQuery<GetDatapackMessageDecisionTraceResponse>({
     queryKey: [

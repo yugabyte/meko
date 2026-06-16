@@ -15,7 +15,7 @@
 // out the staleness window.
 
 import { useQuery } from "@tanstack/react-query";
-import { listDatapacks, type Datapack } from "@/lib/mekoApi";
+import { listDatapacks, type Datapack } from "@/lib/api/mekoApi";
 
 export const DATAPACKS_QUERY_KEY = "datapacks";
 

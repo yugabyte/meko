@@ -9,7 +9,7 @@
 // the polled fetch.
 
 import { useQuery } from "@tanstack/react-query";
-import { getCurrentUser, type CurrentUser } from "@/lib/mekoApi";
+import { getCurrentUser, type CurrentUser } from "@/lib/api/mekoApi";
 
 export const CURRENT_USER_QUERY_KEY = "current-user";
 

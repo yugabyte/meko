@@ -5,7 +5,7 @@ import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { ApiKeyStatusBanner } from "@/features/datapacks/components/install/ApiKeyStatusBanner";
 import { McpInstallGuide } from "@/features/datapacks/components/install/McpInstallGuide";
 import { useDatapacks } from "@/features/datapacks/hooks/useDatapacks";
-import { getDatapackProvisionStatus, type ProvisionStatus } from "@/lib/mekoApi";
+import { getDatapackProvisionStatus, type ProvisionStatus } from "@/lib/api/mekoApi";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
 
 export default function HomePage() {
@@ -66,10 +66,7 @@ export default function HomePage() {
             neutral name+prefix chip list when they already have one. */}
         <ApiKeyStatusBanner />
 
-        <McpInstallGuide
-          className="mt-8"
-          mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
-        />
+        <McpInstallGuide className="mt-8" mcpServerUrl={provisionStatus?.mcp_server_url ?? null} />
       </main>
     </div>
   );

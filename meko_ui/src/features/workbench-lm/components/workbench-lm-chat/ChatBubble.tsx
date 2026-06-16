@@ -6,7 +6,7 @@ import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MarkdownMessage } from "@/components/markdown-message";
 import { DecisionTrace } from "@/components/decision-trace-viewer";
-import type { DatapackThreadMessage } from "@/lib/mekoApi";
+import type { DatapackThreadMessage } from "@/lib/api/mekoApi";
 import { AssistantMetaRow } from "./AssistantMetaRow";
 import { LiveDecisionTrace } from "./LiveDecisionTrace";
 import { useMessageDecisionTrace } from "./useMessageDecisionTrace";
@@ -76,9 +76,7 @@ export function ChatBubble({
       <div
         className={cn(
           "max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
-          isUser
-            ? "bg-blue-600/90 text-white"
-            : "border border-border bg-card text-foreground",
+          isUser ? "bg-blue-600/90 text-white" : "border border-border bg-card text-foreground",
         )}
       >
         {isUser ? (

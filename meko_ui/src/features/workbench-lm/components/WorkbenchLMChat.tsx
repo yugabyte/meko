@@ -13,11 +13,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Download } from "lucide-react";
-import {
-  getInferenceGatewayErrorMessage,
-  postChat,
-} from "@/lib/inferenceGateway";
-import type { DatapackThreadMessage } from "@/lib/mekoApi";
+import { getInferenceGatewayErrorMessage, postChat } from "@/lib/inferenceGateway";
+import type { DatapackThreadMessage } from "@/lib/api/mekoApi";
 import { ChatBubble, ThinkingBubble } from "./workbench-lm-chat/ChatBubble";
 import { ChatInput } from "./workbench-lm-chat/ChatInput";
 import { EmptyState } from "./workbench-lm-chat/EmptyState";
@@ -266,7 +263,17 @@ export function WorkbenchLMChat({
         setSending(false);
       }
     },
-    [datapackName, userId, userToken, sending, sessionId, conversationId, datapackId, gatedReadiness, onTurnComplete],
+    [
+      datapackName,
+      userId,
+      userToken,
+      sending,
+      sessionId,
+      conversationId,
+      datapackId,
+      gatedReadiness,
+      onTurnComplete,
+    ],
   );
 
   const handleSubmit = useCallback(() => {
