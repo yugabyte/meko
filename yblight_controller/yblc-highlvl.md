@@ -33,7 +33,7 @@ These parts split into two planes — control and data — with the MCP server s
 front of the control plane, and the rule for reaching each is different.
 
 **Control plane — always through the Controller.** Anything that changes the shape of
-the world — create a tenant, create or branch a timeline, add/remove/pause an
+the world — create a database, branch a timeline, add/remove/pause an
 endpoint, scale — is a **control-plane mutation**, and the only way to perform one is
 a Controller API call. Agents, the MCP server, future automation — they are all just
 API consumers of the Controller. Neither the data nor the compute layer has the
@@ -42,7 +42,7 @@ the control plane today.
 
 **An MCP server ships with YBLC.** Alongside the REST API, YBLC exposes its control
 plane as an MCP server so that AI agents can drive lifecycle operations — create a
-tenant, create or branch a timeline, stand up or pause an endpoint, scale — through
+database, branch a timeline, stand up or pause an endpoint, scale — through
 tool calls. The MCP server is a thin adapter over the same Controller API; it grants
 no special privileges and bypasses nothing, it simply makes the control plane
 directly consumable by agents.
@@ -83,23 +83,24 @@ exists. Requirements are cumulative going down the table.
 
 ```
 Foundation (= one YugabyteDB universe, one Controller)
-  └── Tenant Pool        ≈ an "org"; created by an admin
-        └── Tenant       a customer/team; the unit of timeline ownership and access
-              └── Timeline (PG cluster)   a database + its data
-                    └── Endpoint          a running Postgres serving that database
+  └── Storage Pool       ≈ a Meko datapack; any user can create one (becomes owner)
+        └── Tenant       a "database": created with its one main timeline (PG cluster)
+              └── Timeline (PG cluster)   the main timeline + its branches (forks)
+                    └── Endpoint          a running Postgres serving that timeline
 ```
 
 | To create… | You need (cumulatively)… | Notes |
 |---|---|---|
-| **Tenant pool** | **Admin** on the foundation | A pool is like an "org"; standing one up stays an admin action. |
-| **Tenant** | Access to the pool | Tenants live within a pool. Access is then granted per tenant, so a pool's users don't automatically reach every tenant in it. |
-| **Timeline (PG cluster)** | Write access to a tenant | Creating the timeline also stands up its first (write) endpoint by default. |
+| **Storage pool** | A user account | Any user can create a pool and becomes its owner. It maps roughly to a Meko datapack; reaching someone else's pool requires it to be **shared** with you. |
+| **Database** (tenant + main timeline) | Access to the pool | Creating a database creates the tenant *and* its one **main** timeline together, and optionally that timeline's first (write) endpoint. A tenant is never created on its own. Access is then granted per tenant. |
+| **Branch** (another timeline) | Write access to the tenant | Fork an existing timeline into a new one under the same tenant. |
 | **Endpoint** | An existing timeline | A *write* endpoint is only allowed if the timeline has no writer yet (single-writer rule); all others are read-only. |
 
-Branching and merging are not resources — they are the action of creating a new timeline 
-from an existing one or merging them together.
+Branching is the action of creating a new timeline (a branch) from an existing one;
+once created, a branch is an ordinary timeline under the same tenant. (Merging timelines
+is future work.)
 
-Creating tenants, timelines, and endpoints can all be driven through the **MCP server**.
+Creating databases, branches, and endpoints can all be driven through the **MCP server**.
 
 Some notes on timelines and endpoints:
 
@@ -112,14 +113,18 @@ Every one of these is a **Controller API call** — there is no other entry poin
 each runs as a **task**: a durable, idempotent, re-runnable workflow built from reusable
 steps, so a crash mid-operation resumes rather than leaving a mess.
 
-1. **Create tenant.** With access to the target pool, the Controller records a new tenant
-   under it and assigns it a **`tenant_id`** — the identifier every resource below it is
-   scoped by. Access to that tenant is then granted per user.
-2. **Create timeline (PG cluster).** Under an existing tenant, the Controller creates a
-   new timeline *scoped to that `tenant_id`* and assigns it its own **`timeline_id`** — a
-   timeline is identified by the pair **(tenant_id, timeline_id)**, never globally. It then
-   registers the timeline with the storage layer, creates the database record, and can
-   stand up its first write endpoint.
+1. **Create storage pool.** Any user can create a storage pool and becomes its **owner**;
+   it maps roughly to a Meko datapack. A user who did not create a pool reaches it only if
+   it is **shared** with them.
+2. **Create database.** (Tenant/Timeline) The primary entry point. Under a storage pool the caller can
+   reach, the Controller — in one task — creates a **tenant** (assigning its
+   **`tenant_id`**, the identifier every resource below it is scoped by), creates that
+   tenant's one **main timeline (PG cluster)** *scoped to that `tenant_id`* (assigning its
+   **`timeline_id`**; a timeline is identified by the pair **(tenant_id, timeline_id)**,
+   never globally), registers the timeline with the storage layer, creates the database
+   record, and can stand up its first write endpoint. A tenant is never created on its
+   own — a database *is* a tenant plus its main timeline. Access to the new tenant is then
+   granted per user.
 3. **Create endpoint.** On an existing timeline — addressed by its **(tenant_id,
    timeline_id)** — the Controller assembles the endpoint *spec* (DB connection, timeline
    binding, read/write role, version, TLS, telemetry), assigns the endpoint its own unique
@@ -183,21 +188,24 @@ That fence is **future work**; until it lands, the partition case is a known gap
 ## 5. How the task framework keeps YBLC available across crashes
 
 Because every operation is a task, YBLC can lose the instance that happens to be
-running one and still finish the work. The framework rests on three properties:
+running one and still finish the work. A task is **write-ahead**: it records the ordered
+list of **steps** it will run before running any of them, then walks that list, marking
+each step done as it goes (the `task` / `task_step` tables in §6). The framework rests on
+three properties:
 
 - **Task state lives in the managed YBDB, not in the running process.** A task and its
-  subtasks — which step it is on, which steps already finished, their results — are
+  steps — which step it is on, which steps already finished, their results — are
   persisted as rows. A controller crash loses no progress, because the progress was
   never only in memory.
-- **Subtasks are idempotent and checkpointed.** Each step records its own completion, so
+- **Steps are idempotent and checkpointed.** Each step records its own completion, so
   re-running a task skips the steps that already succeeded and resumes from the one that
   didn't. Replaying a half-finished operation converges to the same result instead of
   double-applying it.
 - **A task is owned by one instance at a time, and ownership is recoverable.** Claiming a
-  task is an atomic transition (pending → running), so two instances never run the same
-  task at once. If the owner crashes, its task is left `running` with its checkpoints
-  intact; another instance reclaims orphaned tasks (running → pending) and carries them
-  to completion, skipping the steps the dead instance already finished.
+  task is an atomic transition (pending → running) under a lease, so two instances never
+  run the same task at once. If the owner crashes, its task stays `running` until the
+  lease expires; another instance then reclaims it and carries it to completion, skipping
+  the steps the dead instance already finished.
 
 ## 6. State: a first look at the tables
 
@@ -207,9 +215,6 @@ hierarchy, the **physical** resources (timelines and endpoints), and the **opera
 task log. A sketch in PostgreSQL DDL follows — a first cut to show the shape; authoritative
 DDL lives with the code and its migrations.
 
-The task structure is left out of this high level document, and can be designed/implemented
-later.
-
 `tenant_id` and `timeline_id` are the storage layer's 128-bit ids, carried here as `uuid`.
 All foreign keys are `RESTRICT` (the PG default) unless noted: teardown is top-down through
 tasks, never via `ON DELETE CASCADE` surprises.
@@ -217,27 +222,30 @@ tasks, never via `ON DELETE CASCADE` surprises.
 **Ownership & access**
 
 ```sql
-CREATE TABLE tenant_pool (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name        text NOT NULL UNIQUE
-);
-
-CREATE TABLE tenant (
-    id              uuid PRIMARY KEY,   -- the storage-layer tenant_id
-    tenant_pool_id  uuid NOT NULL REFERENCES tenant_pool(id),
-    name            text NOT NULL,
-    UNIQUE (tenant_pool_id, name)              -- name unique within its pool
-);
-
 CREATE TABLE app_user (                        -- "user" is reserved in PG
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    is_admin    boolean NOT NULL DEFAULT false    -- admins skip all grants
+    is_admin    boolean NOT NULL DEFAULT false  -- admins skip all grants
 );
 
-CREATE TABLE user_pool_grant (                 -- create/see tenants in a pool
-    user_id         uuid NOT NULL REFERENCES app_user(id),
-    tenant_pool_id  uuid NOT NULL REFERENCES tenant_pool(id),
-    PRIMARY KEY (user_id, tenant_pool_id)
+-- A storage pool maps roughly to a Meko datapack. Any user can create one and is
+-- recorded as its owner; others reach it only via a user_pool_grant (a "share").
+CREATE TABLE storage_pool (
+    id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name           text NOT NULL UNIQUE,
+    owner_user_id  uuid NOT NULL REFERENCES app_user(id)
+);
+
+CREATE TABLE tenant (                          -- a "database": one tenant, one main timeline
+    id               uuid PRIMARY KEY,   -- the storage-layer tenant_id
+    storage_pool_id  uuid NOT NULL REFERENCES storage_pool(id),
+    name             text NOT NULL,
+    UNIQUE (storage_pool_id, name)             -- name unique within its pool
+);
+
+CREATE TABLE user_pool_grant (                 -- the "share": create/see tenants in a pool
+    user_id          uuid NOT NULL REFERENCES app_user(id),
+    storage_pool_id  uuid NOT NULL REFERENCES storage_pool(id),
+    PRIMARY KEY (user_id, storage_pool_id)
 );
 
 CREATE TYPE grant_role AS ENUM ('read_only', 'read_write');
@@ -258,8 +266,9 @@ CREATE TABLE pg_cluster (
     tenant_id           uuid NOT NULL REFERENCES tenant(id),
     timeline_id         uuid NOT NULL,
     name                text NOT NULL,
-    pg_version          int  NOT NULL,
-    
+    pg_version          int  NOT NULL, -- Is PG Version needed?
+    is_main             boolean NOT NULL DEFAULT false,  -- the tenant's main (root) cluster
+
     -- Branching timelines
     parent_timeline_id  uuid,                  -- fork ancestry; NULL for a root timeline
     fork_lsn            pg_lsn,                -- the point the branch was taken at
@@ -269,6 +278,9 @@ CREATE TABLE pg_cluster (
     FOREIGN KEY (tenant_id, parent_timeline_id)   -- a fork parent stays in-tenant
         REFERENCES pg_cluster (tenant_id, timeline_id)
 );
+
+-- Exactly one main cluster per tenant (created with the tenant); the rest are branches.
+CREATE UNIQUE INDEX one_main_per_tenant ON pg_cluster (tenant_id) WHERE is_main;
 
 CREATE TYPE endpoint_role  AS ENUM ('read_write', 'read_only');
 
@@ -296,10 +308,39 @@ CREATE UNIQUE INDEX one_writer_per_timeline
     WHERE role = 'read_write';
 ```
 
+**Operational**
+
+The task log is the write-ahead structure from §5: one `task` row per operation (the
+user-visible, API-monitorable unit) plus its ordered `task_step` rows — the steps it will
+run, written before execution and marked complete as it goes.
+
+```sql
+CREATE TABLE task (                            -- one per operation; status is exposed via API
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    kind         text        NOT NULL,         -- 'create_database', 'branch', 'scale', ...
+    status       text        NOT NULL DEFAULT 'pending',
+    params       jsonb       NOT NULL,         -- the originating request
+    error        text,                          -- set when status = 'failed'
+    owner        text,                          -- which instance holds it (crash recovery)
+    lease_expiry timestamptz                    -- lease expiry => another instance may reclaim
+);
+
+CREATE TABLE task_step (                        -- the write-ahead steps of one task
+    task_id    uuid        NOT NULL REFERENCES task(id),
+    ordinal    int         NOT NULL,            -- execution order within the task
+    kind       text        NOT NULL,            -- which re-usable step
+    status     text        NOT NULL DEFAULT 'pending',
+    args       jsonb       NOT NULL,            -- inputs, written when the task is planned
+    result     jsonb,                            -- outputs, written when the step succeeds
+    PRIMARY KEY (task_id, ordinal)              -- steps are ordered, unique within a task
+);
+```
+
 The load-bearing rules are in the DDL above, not just in API checks: timeline references
 are **tenant-scoped composite FKs** (cross-tenant use or forks are unrepresentable), the
-**single-writer** partial unique index, **scoped-not-global names**, and **restrict (not
-cascade) deletes** across the resource hierarchy.
+**single-writer** partial unique index, **one main cluster per tenant**,
+**scoped-not-global names**, and **restrict (not cascade) deletes** across the resource
+hierarchy.
 
 ## What this doc intentionally leaves out
 
@@ -307,5 +348,5 @@ cascade) deletes** across the resource hierarchy.
 - the cross foundation agent layer
 - billing/quotas
 - end-user API and authentication
-- Meko integration: datapacks as tenants, Meko users gaining access, and updating meko api 
-and mcp servers
+- Meko integration: datapacks as storage pools, Meko users gaining access, and updating
+the Meko API and MCP servers

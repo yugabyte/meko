@@ -12,7 +12,7 @@ stay consistent with the principles laid out here.
 
 yblight-controller is the control plane for a **single placement group**. It lives within the
 placement group it manages and owns the full lifecycle of everything inside it:
-tenancy (tenant pools, tenants), PG clusters and their timelines, and the endpoints
+tenancy (storage pools, tenants), PG clusters and their timelines, and the endpoints
 that serve traffic. It provisions capacity ahead of demand, drives YBA for YBDB
 universe management, and exposes an API for all of it.
 
@@ -67,8 +67,8 @@ instances; yblight-controller creates, configures, tracks, and retires them.
    yblight-controller independently enforces it at the API layer so users can never get into a bad
    position. Defense in depth, with yblight-controller as the first line.
 5. **All mutations go through the task framework.** Any action that changes the world
-   — create a tenant, fork a timeline, add an endpoint — is a task composed of
-   re-usable, idempotent subtasks. Nothing mutates state out-of-band.
+   — create a database, branch a timeline, add an endpoint — is a task composed of
+   re-usable, idempotent **steps** (§8). Nothing mutates state out-of-band.
 6. **yblight-controller is the source of truth for intent; the world is the source of truth for
    reality.** yblight-controller records what *should* exist; reconciliation against what actually
    exists (in k8s, YBA, and the endpoints themselves) detects drift — and repairs it
@@ -84,15 +84,17 @@ The hierarchy:
 
 ```
 Placement Group ──── YBDB Universe (managed by YBA)
-  └── Tenant Pools (0+)
-        └── Tenants (0+)
-              └── PG Clusters (0+)
+  └── Storage Pools (0+)       ≈ a Meko datapack; created by any user, shared to others
+        └── Tenants (0+)       each is a "database": a tenant + its one main PG cluster
+              └── PG Clusters   the main (root) cluster + its branches (0+ forks)
                     └── Endpoints (0+)
 ```
 
-Every level may be empty: a fresh placement group has no tenant pools yet, a fresh
-pool no tenants, a tenant no clusters, a cluster no endpoints (§4.4). Empty is both
-a valid resting state and what top-down teardown (§10.2) passes through.
+Most levels may be empty: a fresh placement group has no storage pools yet, a fresh
+pool no tenants, a cluster no endpoints (§4.4). The tenant is the exception — it is
+created together with its main PG cluster (§6), so a tenant always has at least that
+one cluster. Empty is both a valid resting state and what top-down teardown (§10.2)
+passes through.
 
 A yblight-controller instance manages exactly **one** placement group (§1), so the placement
 group is the implicit root of everything in yblight-controller's API and database — not one row
@@ -104,14 +106,18 @@ These exist only in yblight-controller's state store; they have no physical foot
 
 - **Placement group** — top-level unit, and the scope of a yblight-controller deployment. Each
   placement group has exactly one YBDB universe (managed by a YBA; one YBA can manage
-  multiple universes) and holds zero or more tenant pools.
-- **Tenant pool** — roughly an "org"; contains zero or more tenants. A grant on the
-  pool lets a user create and see its tenants; access to each tenant is granted
-  separately (§10.1).
-- **Tenant** — a customer/team within a pool; owns zero or more PG clusters. The
-  tenant is the unit of timeline ownership (§4.3) and the finest grain of user access
-  (§10.1) — that timeline scoping is what isolates tenants from each other
-  structurally, with access granted per tenant.
+  multiple universes) and holds zero or more storage pools.
+- **Storage pool** — a grouping of tenants, modeled to map roughly onto a **Meko
+  datapack**. It is *not* an "org" — the org level above pools is currently undefined
+  (§12). Any user can create a storage pool and becomes its **owner**; a user who did
+  not create it reaches it only if the pool is **shared** with them (a pool grant,
+  §10.1). A user can own, or be shared into, many pools.
+- **Tenant** — a **database**: the unit a client creates, scoped to one storage pool. A
+  tenant maps ~1:1 to its **main PG cluster** — creating a database creates the tenant
+  and that main cluster together (§6) — and every branch of that cluster lives under the
+  same tenant (§4.3). The tenant is the unit of timeline ownership (§4.3) and the finest
+  grain of user access (§10.1); that timeline scoping is what isolates tenants from each
+  other structurally, with access granted per tenant.
 
 ### 4.2 Physical constructs
 
@@ -120,8 +126,9 @@ These correspond to real data or real running processes, and yblight-controller 
 - **YBDB universe** — the shared storage layer for a placement group; managed by YBA,
   driven by yblight-controller through YBA's API.
 - **PG cluster** — a logical Postgres database backed by physical data in YBDB; that
-  data is the cluster's timeline, exactly one per cluster (§4.3). Clusters can be
-  stand-alone or branched from another cluster by forking its timeline.
+  data is the cluster's timeline, exactly one per cluster (§4.3). Each tenant has one
+  **main** (root) cluster, created with the tenant; every other cluster under the tenant
+  is a **branch**, produced by forking another cluster's timeline (§4.3).
 - **Endpoint** — a self-contained YB Light instance serving a PG cluster; runs on a
   pod (or, later, a VM). Endpoints are what users actually connect to, so the API
   must return endpoint connection details (host, port, TLS state) to users.
@@ -160,13 +167,13 @@ to it; the parent/child relationship is tracked so branch ancestry is queryable.
 
 Headroom — the spare capacity kept on hand so new endpoints and PG clusters never
 block on provisioning — is modeled at the **placement group level**: one pool of
-spare capacity per placement group, not per tenant pool or tenant. Subdividing it
-between tenant pools is a later refinement, possible if and when it's needed,
+spare capacity per placement group, not per storage pool or tenant. Subdividing it
+between storage pools is a later refinement, possible if and when it's needed,
 precisely because we start with the coarser unit.
 
 This works because endpoints are stateless (§5.3) and carry no hardware affinity:
 an endpoint may be scheduled next to endpoints of other tenants — including tenants
-in other tenant pools. Isolation between tenants is enforced by timeline scoping
+in other storage pools. Isolation between tenants is enforced by timeline scoping
 (§4.3), with user access granted per tenant (§10.1) — not by dedicated
 hardware.
 
@@ -332,15 +339,18 @@ these routes without reshaping it. See
 ## 6. Core workflows
 
 These are the initial user-facing workflows. Each is implemented as a task built from
-re-usable subtasks (§8); none is a special case.
+re-usable steps (§8); none is a special case.
 
-1. **New tenant in a tenant pool** — create the tenant within its pool (the caller
-   needs a grant on that pool). Access to the new tenant is then granted per tenant
-   (§10.1).
-2. **New PG cluster (fresh timeline)** — create a new timeline under the tenant,
-   create the PG cluster bound to it, optionally create its first (write) endpoint.
-3. **Fork a PG cluster (branch a timeline)** — fork an existing timeline at a point,
-   creating a new timeline and a new PG cluster linked to its parent.
+1. **Create a storage pool** — any user can create a pool and becomes its owner;
+   reaching a pool created by someone else requires a share (a pool grant, §10.1).
+2. **Create a database** — the primary entry point. In one task this creates the
+   **tenant**, its **main PG cluster** (a fresh timeline), and optionally that cluster's
+   first (write) endpoint, all under a storage pool the caller can reach. Tenants are
+   never created on their own — a database *is* a tenant plus its main cluster. Access
+   to the new tenant is then granted per tenant (§10.1).
+3. **Branch a database (fork a timeline)** — fork an existing cluster's timeline at a
+   point, creating a new branch cluster and timeline linked to its parent, under the
+   same tenant (§4.3).
 4. **Add/remove endpoints on a PG cluster** — scale endpoints up and down, including
    down to **zero**. Adding a write endpoint is only valid when none exists; removing
    the write endpoint leaves a read-only (or empty) cluster.
@@ -376,32 +386,104 @@ corner on any of them:
 - **Multi-cloud, multi-runtime** — endpoints on VMs (via ybops + node-agent) and on
   Kubernetes in multiple clouds, behind the same provisioning interface.
 
-## 8. Task framework (principles only — design TBD)
+## 8. Task framework
 
-The detailed design of the task framework is deferred to its own doc. What is fixed
-now are the guarantees we require from it:
+Every mutation (principle 5, §6, §7) runs as a **task**. The guarantees we require:
 
-- **Idempotency is the contract.** Every subtask must be safely re-runnable: a task
-  can be retried after failure, process restart, or partial execution, and converge
-  to the same result. Subtasks check current state before acting ("create if absent",
-  "ensure configured as X") rather than assuming a clean slate.
-- **Tasks are composed of re-usable subtasks.** "Create endpoint" appears inside
-  new-cluster, fork, and scale-up flows as the same subtask, not three copies.
-- **All workflows in §6 and §7 are tasks — and so are reconciliation repairs.**
-  When reconciliation detects drift (principle 6), the repair is a task like any
-  other. There is no second code path for mutations.
-- **Tasks are durable and observable.** Task state lives in yblight-controller's state store and
-  survives restarts; in-flight tasks resume or retry rather than vanish. Because task
-  state is in the universe rather than in any one process, a crashed controller doesn't
-  strand its in-flight work: another instance can reclaim and finish it, which is what
-  makes the control plane highly available rather than a single point of failure.
+- **Idempotency is the contract.** Every step must be safely re-runnable: a task can be
+  retried after failure, process restart, or partial execution, and converge to the same
+  result. Steps check current state before acting ("create if absent", "ensure configured
+  as X") rather than assuming a clean slate.
+- **Tasks are composed of re-usable steps.** "Create endpoint" appears inside
+  create-database, branch, and scale-up flows as the same step, not three copies.
+- **All workflows in §6 and §7 are tasks — and so are reconciliation repairs.** When
+  reconciliation detects drift (principle 6), the repair is a task like any other. There
+  is no second code path for mutations.
+- **Tasks are durable and observable.** Task state lives in yblight-controller's state
+  store and survives restarts; in-flight tasks resume or retry rather than vanish. Because
+  task state is in the universe rather than in any one process, a crashed controller
+  doesn't strand its in-flight work: another instance can reclaim and finish it, which is
+  what makes the control plane highly available rather than a single point of failure.
 
-> **Implementation note (deferred, not a decision).** If yblight-controller is built in
-> Rust, Microsoft's [`duroxide`](https://github.com/microsoft/duroxide) — a
-> durable-execution / durable-task library for Rust — is a candidate runtime for these
-> guarantees, rather than hand-rolling the durable-step and resume machinery. It is a
-> lead to evaluate in the task framework's own design doc; the language and the runtime
-> choice are both still open.
+We implement these guarantees directly on the state store — there is no external
+durable-execution runtime. The mechanism is a write-ahead task log.
+
+### 8.1 A write-ahead task log
+
+The framework is **write-ahead**: when a task starts, it records the ordered list of steps
+it intends to run *before* it runs any of them, then walks that list, marking each step as
+it completes. The plan is durable intent; execution catches up to it. This is the same
+discipline as the storage layer's WAL — log what you will do, then do it — applied to
+control-plane operations.
+
+Two record types, both rows in yblight-controller's schema (§10):
+
+- **`task`** — one row per initiated operation (create database, branch, scale, a
+  reconciliation repair). This is the **user-visible** unit: the API exposes task status
+  so a caller can monitor or poll a long-running operation. It carries the task kind, a
+  coarse status, the resource it targets, the originating request, and (on failure) the
+  error.
+- **`task_step`** — the ordered steps of one task, one row each. A step records its
+  position in the sequence (`ordinal`), which re-usable step it is (`kind`), its own
+  status, its input arguments, and its result. These rows **are** the write-ahead log:
+  written when the task is planned, updated as execution progresses.
+
+Execution is then a simple loop: take the lowest-`ordinal` step that is not yet
+`succeeded`, run it, record its result and status, repeat until the list is exhausted or a
+step fails. On crash and reclaim (§8.2), the new owner runs the *same* loop — completed
+steps are skipped because their status already says `succeeded`, so work resumes at the
+first unfinished step instead of from the top.
+
+A sketch of the DDL (authoritative DDL lives with the code and its migrations):
+
+```sql
+CREATE TYPE task_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
+CREATE TYPE step_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
+
+CREATE TABLE task (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    kind         text        NOT NULL,        -- e.g. 'create_database', 'branch', 'scale'
+    status       task_status NOT NULL DEFAULT 'pending',
+    tenant_id    uuid,                         -- the resource the task is about, for API
+    target_ref   text,                         --   monitoring; nullable (a task may create
+                                               --   its own target, absent when planned)
+    params       jsonb       NOT NULL,        -- the request that created the task
+    error        text,                         -- set when status = 'failed'
+    owner        text,                         -- which instance holds the task (§8.2)
+    lease_expiry timestamptz,                  -- ownership lease; expiry => reclaimable
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE task_step (
+    task_id    uuid        NOT NULL REFERENCES task(id),
+    ordinal    int         NOT NULL,          -- execution order within the task
+    kind       text        NOT NULL,          -- which re-usable step (e.g. 'create_endpoint')
+    status     step_status NOT NULL DEFAULT 'pending',
+    args       jsonb       NOT NULL,          -- inputs, written when the task is planned
+    result     jsonb,                          -- outputs, written when the step succeeds
+    error      text,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (task_id, ordinal)            -- steps are ordered, unique within a task
+);
+
+-- the claim/resume query only ever scans unfinished tasks
+CREATE INDEX task_runnable ON task (status) WHERE status IN ('pending', 'running');
+```
+
+### 8.2 Ownership and recovery
+
+A task is owned by one instance at a time. Claiming a task is an atomic transition
+(`pending` → `running`, stamping `owner` and `lease_expiry`), so two instances never run
+the same task concurrently. If the owner crashes, its lease expires; another instance then
+reclaims the task — re-stamping `owner` and resuming from the first non-`succeeded` step
+(§8.1). Because every step is idempotent, replaying the step that was in flight when the
+owner died converges rather than double-applying.
+
+The catalog of step kinds — which steps exist and their exact arguments — belongs to the
+task framework's own design doc. What is fixed here is the shape: a user-visible `task`
+plus its ordered, idempotent `task_step` rows, planned write-ahead and executed by a
+resume-safe loop under a lease.
 
 ## 9. Deployment configuration
 
@@ -460,7 +542,7 @@ project) covers both connection modes:
 
 Once the database is reachable (either way), yblight-controller's first boot creates
 its control-plane database and schema (§10) and the placement group is ready for
-tenant pools.
+storage pools.
 
 ### 9.4 Control-plane signing key
 
@@ -498,16 +580,17 @@ consequences worth stating up front:
 
 The state store tracks both halves of the model:
 
-- **Logical:** tenant pools, tenants, and users — users are either **admin**
-  (placement-group-wide, all pools and tenants) or non-admin, holding a **pool grant**
-  (to create and see tenants in a pool) plus **per-tenant grants** (read-only or
-  read-write access to specific tenants), see §10.1 — plus the RBAC bindings at each
-  level.
-- **Physical:** PG clusters and their timelines (including fork ancestry), and
-  endpoints (timeline binding and r/w vs. read-only role, exposed ports/address,
-  placement, version, TLS/cert state, otel config). Endpoint records must be complete
-  enough to recreate the endpoint from scratch (§5.3).
-- **Operational:** tasks and subtasks, with enough state to resume them.
+- **Logical:** storage pools (each with an owner), tenants, and users — users are either
+  **admin** (placement-group-wide, all pools and tenants) or non-admin. A non-admin
+  reaches a pool they created (as owner) or one **shared** with them via a **pool grant**,
+  and reaches a tenant through **per-tenant grants** (read-only or read-write access to
+  specific tenants), see §10.1 — plus the RBAC bindings at each level.
+- **Physical:** PG clusters and their timelines (which is the tenant's main cluster, plus
+  fork ancestry), and endpoints (timeline binding and r/w vs. read-only role, exposed
+  ports/address, placement, version, TLS/cert state, otel config). Endpoint records must
+  be complete enough to recreate the endpoint from scratch (§5.3).
+- **Operational:** tasks and their ordered task steps (§8), with enough state to resume
+  them.
 
 Records carry intent (desired state) distinctly from observed state, so
 reconciliation has something to reconcile against.
@@ -515,20 +598,24 @@ reconciliation has something to reconcile against.
 ### 10.1 Entities
 
 ```
-user ──< user_pool_grant >── tenant_pool ──< tenant ──< pg_cluster (timeline) ──< endpoint
- │                                            │
- └──< user_tenant_grant >─────────────────────┘   (role: read_only | read_write)
+user ──< user_pool_grant >── storage_pool ──< tenant ──< pg_cluster (timeline) ──< endpoint
+ │           (a "share")          ▲             │         one main cluster + its branches
+ │       owner_user_id ───────────┘             │
+ └──< user_tenant_grant >───────────────────────┘   (role: read_only | read_write)
 
-admin users skip both grants: all pools and tenants
+admin users skip both grants; a pool's owner needs no share for that pool
 ```
 
-- **tenant_pool / tenant** — the plain ownership hierarchy; names are unique within
-  their parent scope (pool within placement group, tenant within pool), not globally,
-  so tenants can't collide with or probe each other's names.
+- **storage_pool / tenant** — the ownership hierarchy. A storage pool maps roughly to a
+  **Meko datapack** and carries an **owner** (`owner_user_id`, the user who created it);
+  it is *not* an "org" (that level is undefined for now, §12). Names are unique within
+  their parent scope (pool within placement group, tenant within pool), not globally, so
+  tenants can't collide with or probe each other's names.
 - **pg_cluster** — carries its timeline (the two are synonyms, §4.3), keyed by the
-  composite **(tenant_id, timeline_id)**; plus name (unique within its tenant), fork
-  ancestry (parent timeline + fork point), and lifecycle state. There is no separate
-  timelines table.
+  composite **(tenant_id, timeline_id)**; plus name (unique within its tenant), an
+  `is_main` flag (exactly one main cluster per tenant, created with the tenant, §6; the
+  rest are branches), fork ancestry (parent timeline + fork point), and lifecycle state.
+  There is no separate timelines table.
 - **endpoint** — durable **record**, ephemeral **instance**. The record is what users
   address through the API ("add/remove endpoint"), by id — endpoints have no names.
   The record carries the spec: timeline
@@ -538,13 +625,15 @@ admin users skip both grants: all pools and tenants
   (new pod, same record); scale-to-zero deletes records, not just instances.
   Address + ports + TLS state form the connection details returned to users.
 - **user / user_pool_grant / user_tenant_grant** — users are either **admin** (all
-  pools and tenants, no grants needed) or non-admin. A non-admin holds a **pool
-  grant**, keyed `(user_id, tenant_pool_id)`, that lets them create and see tenants in
-  a pool; and **tenant grants**, keyed `(user_id, tenant_id)` with a `read_only` |
-  `read_write` role, that govern access to specific tenants. Effective access is the
-  union of the tenant grants. Revocation is dropping the relevant row; a non-admin with
-  zero grants is valid and can access nothing. The tenant is the finest grain of user
-  access (decided).
+  pools and tenants, no grants needed) or non-admin. Any user may **create** a storage
+  pool and is recorded as its **owner**, which needs no grant. To reach a pool they did
+  not create, a non-admin needs a **pool grant** (the "share"), keyed
+  `(user_id, storage_pool_id)`, that lets them create and see tenants in it; and
+  **tenant grants**, keyed `(user_id, tenant_id)` with a `read_only` | `read_write` role,
+  that govern access to specific tenants. Effective access is the union of the tenant
+  grants. Revocation is dropping the relevant row; a non-admin with zero grants (and no
+  pools of their own) is valid and can access nothing. The tenant is the finest grain of
+  user access (decided).
 - The **placement group has no table** — a controller instance *is* one placement
   group (§4); its identity and connection-mode configuration are deployment config,
   not rows.
@@ -560,10 +649,13 @@ in API-layer validation (full DDL lives with the code and its migrations):
 2. **Single writer per PG cluster.** A partial unique index —
    `UNIQUE (tenant_id, timeline_id) WHERE role = 'read_write'` — so two write
    endpoints cannot exist no matter what code path tries.
-3. **Access is explicit rows.** Pool grants key on `(user_id, tenant_pool_id)` and
+3. **One main cluster per tenant.** A partial unique index on `pg_cluster` —
+   `UNIQUE (tenant_id) WHERE is_main` — so a tenant cannot acquire a second main
+   cluster; every other cluster under it is a branch.
+4. **Access is explicit rows.** Pool grants key on `(user_id, storage_pool_id)` and
    tenant grants on `(user_id, tenant_id)`; a grant at either level either exists or it
-   doesn't.
-4. **Deletes are restricted, not cascaded.** Removing a pool with tenants, a tenant
+   doesn't. A pool's `owner_user_id` is access in its own right and needs no grant row.
+5. **Deletes are restricted, not cascaded.** Removing a pool with tenants, a tenant
    with clusters, a cluster with endpoints, or a cluster whose timeline has fork
    children is a constraint violation; teardown happens top-down through tasks,
    never via `ON DELETE CASCADE` surprises.
@@ -664,7 +756,11 @@ cache warmth, nothing else — so it inherits the replacement-is-recovery postur
 - **Multi-placement-group management** — the higher-level "agent" layer that manages
   fleets of control planes. yblight-controller's job is to expose an API good enough for that
   layer to build on.
-- **Task framework internals** — separate design doc.
+- **An org layer above storage pools** — storage pools map roughly to Meko datapacks
+  (§4.1) with no grouping above them; what an "org" is, and how pools roll up into one,
+  is undefined for now.
+- **Task framework step catalog** — the framework's shape is fixed here (§8); the
+  inventory of step kinds and their arguments is a separate design doc.
 - **VM runtime** — designed for, not built; Kubernetes first.
 - **Billing/metering, quotas** — will build on the tenancy model later.
 - **API authentication** — the user/grant model (§10.1) is designed; how callers
