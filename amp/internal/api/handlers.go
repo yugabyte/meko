@@ -2,16 +2,34 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/yugabyte/yb-light/amp/internal/core"
+	"github.com/yugabyte/yb-light/amp/internal/deploy"
 	applog "github.com/yugabyte/yb-light/amp/internal/log"
+	"github.com/yugabyte/yb-light/amp/internal/storagecontroller"
 	"github.com/yugabyte/yb-light/amp/internal/task"
 )
+
+// Provisioning holds the collaborators the create-timeline workflow uses beyond
+// the state store: the storage controller (to register the tenant) and the
+// endpoint deployer (to provision the compute). Both are optional — with neither,
+// create-timeline records the tenant + timeline only. SCEndpointURL is the
+// controller URL as a *launched endpoint* reaches it (e.g. over the shared
+// network); empty means the endpoint runs SC-free.
+type Provisioning struct {
+	SC            *storagecontroller.Client
+	Deployer      deploy.Deployer
+	EndpointYB    deploy.YBConn
+	SCEndpointURL string
+}
 
 // Controllers implements the generated StrictServerInterface: the controller's
 // HTTP behavior, decoupled from the wire format (which the generated code owns)
@@ -21,13 +39,14 @@ import (
 type Controllers struct {
 	backend core.Backend
 	tasks   task.Store
+	prov    Provisioning
 	logger  *slog.Logger
 }
 
 // NewControllers wires the controllers to a backend, the task store (for task
-// status reads), and the root logger.
-func NewControllers(backend core.Backend, tasks task.Store, logger *slog.Logger) *Controllers {
-	return &Controllers{backend: backend, tasks: tasks, logger: logger}
+// status reads), the provisioning collaborators, and the root logger.
+func NewControllers(backend core.Backend, tasks task.Store, prov Provisioning, logger *slog.Logger) *Controllers {
+	return &Controllers{backend: backend, tasks: tasks, prov: prov, logger: logger}
 }
 
 // Compile-time assertion that the controllers satisfy the generated contract.
@@ -109,7 +128,13 @@ func (c *Controllers) GetStoragePool(ctx context.Context, request GetStoragePool
 	return GetStoragePool200JSONResponse(poolToAPI(p)), nil
 }
 
-// --- Timelines (logged-only until the task framework lands, #92) -----------
+// --- Timelines -------------------------------------------------------------
+// Create provisions a tenant + its main timeline. Delete and branch remain
+// logged-only until the task framework lands (#92).
+
+// defaultPgVersion is used when a create-timeline request omits pg_version.
+// yb-light is Postgres v17 only.
+const defaultPgVersion = 17
 
 func (c *Controllers) CreateTimeline(ctx context.Context, request CreateTimelineRequestObject) (CreateTimelineResponseObject, error) {
 	if request.Body == nil {
@@ -119,16 +144,93 @@ func (c *Controllers) CreateTimeline(ctx context.Context, request CreateTimeline
 	if name == "" {
 		return CreateTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
 	}
-	attrs := []slog.Attr{
+	pgVersion := defaultPgVersion
+	if request.Body.PgVersion != nil {
+		pgVersion = *request.Body.PgVersion
+	}
+	// yb-light is Postgres v17 only; reject anything else up front rather than
+	// failing opaquely when the endpoint image (v17) can't honor it.
+	if pgVersion != defaultPgVersion {
+		return CreateTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+			fmt.Sprintf("unsupported pg_version %d (only %d is supported)", pgVersion, defaultPgVersion)))}, nil
+	}
+	tl, err := c.backend.CreateTimeline(ctx, request.UserId, request.PoolId, name, pgVersion)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return CreateTimeline404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
+	case errors.Is(err, core.ErrConflict):
+		return CreateTimeline409JSONResponse{ConflictJSONResponse(apiError("conflict", "a timeline with that name already exists in the pool"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("create timeline: %w", err)
+	}
+	tenantHex := hex32(tl.TenantID)
+	timelineHex := hex32(tl.TimelineID)
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "timeline created",
 		slog.String(applog.KeyUserID, request.UserId.String()),
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
-		slog.String("timeline_name", name),
+		slog.String(applog.KeyTenantID, tl.TenantID.String()),
+		slog.String(applog.KeyTimelineID, tl.TimelineID.String()),
+		slog.String("timeline_name", tl.Name))
+
+	// TODO(#106): this workflow is synchronous and non-atomic across subsystems —
+	// CreateTimeline has already committed, so a failure in the storage-controller
+	// or endpoint steps below orphans the timeline record (a same-name retry then
+	// 409s). Move onto the write-ahead task framework (durable/resumable), or add a
+	// compensation block that deletes the committed tenant/timeline on failure.
+
+	// Register the tenant with the storage controller (the controller is the
+	// tenant/node registry + generation authority; the endpoint attaches to it).
+	if c.prov.SC != nil {
+		if err := c.prov.SC.CreateTenant(ctx, tenantHex); err != nil {
+			return nil, fmt.Errorf("register tenant %s with storage controller: %w", tenantHex, err)
+		}
+		c.logger.LogAttrs(ctx, slog.LevelInfo, "tenant registered with storage controller",
+			slog.String(applog.KeyTenantID, tl.TenantID.String()))
 	}
-	if request.Body.PgVersion != nil {
-		attrs = append(attrs, slog.Int("pg_version", *request.Body.PgVersion))
+
+	out := timelineToAPI(tl)
+
+	// Provision the compute endpoint for the timeline (the data plane), and
+	// record it. The deployer launches the endpoint, which materializes the
+	// timeline (bootstrap) and — in SC mode — registers + attaches to the
+	// controller. The returned address is what a client connects to.
+	if c.prov.Deployer != nil {
+		ep, err := c.prov.Deployer.CreateEndpoint(ctx, deploy.EndpointSpec{
+			Name:                 "yb-ep-" + timelineHex,
+			TenantID:             tenantHex,
+			TimelineID:           timelineHex,
+			PgVersion:            pgVersion,
+			YB:                   c.prov.EndpointYB,
+			StorageControllerURL: c.prov.SCEndpointURL,
+			Bootstrap:            true,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create endpoint: %w", err)
+		}
+		rec, err := c.backend.CreateEndpoint(ctx, tl.TenantID, tl.TimelineID, "read_write", ep.Address)
+		if err != nil {
+			// The container is up but unrecorded; tear it down so it (and its
+			// published port) don't leak with nothing pointing at it. Background
+			// context so cleanup runs even if the request ctx was cancelled.
+			if derr := c.prov.Deployer.DeleteEndpoint(context.Background(), ep.ID); derr != nil {
+				c.logger.LogAttrs(ctx, slog.LevelError, "failed to remove endpoint after record failure",
+					slog.String(applog.KeyEndpointID, ep.ID), slog.String("error", derr.Error()))
+			}
+			return nil, fmt.Errorf("record endpoint: %w", err)
+		}
+		out.Endpoint = &Endpoint{Id: rec.ID, Role: ReadWrite, Address: rec.Address}
+		c.logger.LogAttrs(ctx, slog.LevelInfo, "endpoint created",
+			slog.String(applog.KeyTenantID, tl.TenantID.String()),
+			slog.String(applog.KeyTimelineID, tl.TimelineID.String()),
+			slog.String(applog.KeyEndpointID, rec.ID.String()),
+			slog.String("address", rec.Address))
 	}
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "create timeline requested (logged only; task framework pending)", attrs...)
-	return CreateTimeline202JSONResponse(loggedAck("create timeline")), nil
+	return CreateTimeline201JSONResponse(out), nil
+}
+
+// hex32 renders a UUID as the storage layer's 32-lowercase-hex TenantId/TimelineId.
+func hex32(id uuid.UUID) string {
+	return hex.EncodeToString(id[:])
 }
 
 func (c *Controllers) DeleteTimeline(ctx context.Context, request DeleteTimelineRequestObject) (DeleteTimelineResponseObject, error) {
@@ -183,6 +285,17 @@ func userToAPI(u core.User) User {
 
 func poolToAPI(p core.StoragePool) StoragePool {
 	return StoragePool{Id: p.ID, Name: p.Name, OwnerUserId: p.OwnerUserID, CreatedAt: p.CreatedAt}
+}
+
+func timelineToAPI(t core.Timeline) Timeline {
+	return Timeline{
+		TenantId:   t.TenantID,
+		TimelineId: t.TimelineID,
+		Name:       t.Name,
+		PgVersion:  t.PgVersion,
+		IsMain:     t.IsMain,
+		CreatedAt:  t.CreatedAt,
+	}
 }
 
 func taskToAPI(t *task.Task) Task {

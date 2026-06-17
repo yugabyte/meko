@@ -37,14 +37,27 @@ RUN set -e \
     && useradd -d /data -m yugabyte \
     && chown -R yugabyte:yugabyte /data
 
-# The bundle: amp and storage_controller side by side. amp resolves the storage
-# controller from its own directory (#94), so no bin path needs configuring.
-# The amp binary is static (built CGO_ENABLED=0 by `make amp-bundle`); the
-# storage controller is dynamically linked against glibc, hence the
-# build-it-on-a-compatible-base note above.
+# The Docker CLI, so the controller's Docker deployer can launch endpoint
+# containers over a mounted daemon socket. Just the static client binary (no
+# daemon, no apt repo). The Kubernetes deployer uses client-go instead and needs
+# neither this nor the socket, so this is specific to the Docker runtime.
+ARG DOCKER_CLI_VERSION=26.1.3
+ADD https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz /tmp/docker.tgz
+RUN set -e \
+    && tar -xzf /tmp/docker.tgz -C /tmp docker/docker \
+    && mv /tmp/docker/docker /usr/local/bin/docker \
+    && chmod +x /usr/local/bin/docker \
+    && rm -rf /tmp/docker /tmp/docker.tgz
+
+# The bundle: amp (and, in the full bundle, storage_controller) side by side.
+# amp resolves the storage controller from its own directory (#94), so no bin
+# path needs configuring. We copy the whole bundle directory so the same image
+# works for both layouts: `make amp-bundle` (amp + storage_controller) and
+# `make amp-bundle-amp-only` (amp alone — run with AMP_STORAGE_CONTROLLER=false).
+# The amp binary is static (CGO_ENABLED=0); the storage controller, when present,
+# is dynamically linked against glibc, hence the build-it-on-a-compatible-base note.
 ARG BUNDLE_DIR
-COPY --chown=yugabyte:yugabyte ${BUNDLE_DIR}/amp                /opt/yb-light-amp/amp
-COPY --chown=yugabyte:yugabyte ${BUNDLE_DIR}/storage_controller /opt/yb-light-amp/storage_controller
+COPY --chown=yugabyte:yugabyte ${BUNDLE_DIR}/ /opt/yb-light-amp/
 
 ENV PATH=/opt/yb-light-amp:$PATH \
     AMP_LISTEN=:8080 \

@@ -6,6 +6,31 @@ and golden `.sql` workloads, scanning the pageserver log for corruption
 markers after every test. This is the verification gate the
 `e2e-before-corruption-claim` skill points at.
 
+There are two entry points. Most of this doc is the **`yb_light_local`** suite
+(`run.sh`, below). The **amp-on-Docker** suite (`run-amp.sh`) is summarized next.
+
+## amp-on-Docker suite (`run-amp.sh`)
+
+`test/e2e/run-amp.sh` exercises the **amp** control plane on Docker: it starts the
+`amp` container (with its managed storage controller) against the host's
+YugabyteDB, then runs a *thin* test that calls amp's REST API
+(`user → storage pool → timeline`) and runs `psql` against the endpoint amp
+returns. **amp owns all provisioning** — a single create-timeline call creates the
+tenant, drives the storage controller, and launches the compute endpoint via amp's
+Go `deploy.Deployer` (yblight-controller.md §5.6); the harness contains no
+orchestration. The `e2e_tests amp` selector is the harness side (`src/amp.rs`).
+
+```sh
+test/e2e/run-amp.sh           # storage-controller-driven (default)
+test/e2e/run-amp.sh --no-sc   # SC-free (endpoint self-bootstraps)
+test/e2e/run-amp.sh -n 3      # repeat the suite 3x
+```
+
+Prerequisites: Docker; a YugabyteDB on the host at `:5433` (yugabyte/yugabyte);
+the `yb-light/neon-endpoint:dev` image present (build it once with
+`docker build -t yb-light/neon-endpoint:dev -f deploy/endpoint/Dockerfile .`).
+`run-amp.sh` builds `yb-light/amp:dev` itself and tears everything down on exit.
+
 ## Running
 
 ```sh

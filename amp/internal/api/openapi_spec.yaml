@@ -16,10 +16,12 @@ info:
     - **Storage pools** — any user can create a pool and becomes its owner.
       Pool sharing (pool grants) is out of scope here; a user sees only the
       pools they own.
-    - **Timelines** — create / delete / branch a timeline in a pool. These are
-      **logged only** for now: the write-ahead task framework that will execute
-      them is not yet wired up, so each call records intent and returns 202
-      without validating the pool/timeline or writing any state.
+    - **Timelines** — create / delete / branch a timeline in a pool. *Create*
+      provisions the control-plane record: it creates a tenant (a "database")
+      and its main timeline under the pool and returns their storage-layer ids
+      (`tenant_id`, `timeline_id`). *Delete* and *branch* are still **logged
+      only** (202): the write-ahead task framework that will execute them is not
+      yet wired up.
 
     Every non-2xx response uses the same `Error` envelope. `500` is possible on
     any operation; it is documented per operation so generated clients get a
@@ -40,7 +42,7 @@ tags:
   - name: storage-pools
     description: Storage pools (≈ a Meko datapack); created and owned by a user.
   - name: timelines
-    description: Timelines (PG clusters) in a pool. Mutations are logged only for now.
+    description: Timelines (PG clusters) in a pool. Create is real; delete/branch are logged only for now.
   - name: tasks
     description: Status of long-running operations (the write-ahead task log).
 
@@ -167,12 +169,12 @@ paths:
     post:
       tags: [timelines]
       operationId: createTimeline
-      summary: Create a timeline in a pool (logged only)
+      summary: Create a tenant and its main timeline in a pool
       description: |
-        Records the intent to create a timeline (a PG cluster) in the pool and
-        returns 202. Execution via the write-ahead task framework is not yet
-        implemented, so nothing is provisioned and the pool is not validated —
-        the request is logged.
+        Creates a tenant (a "database") in the pool together with its main
+        timeline (a PG cluster), and returns their storage-layer ids
+        (`tenant_id`, `timeline_id`). The name is unique within the pool. The
+        caller must own the pool, or the pool 404s (owner-scoped).
       requestBody:
         required: true
         content:
@@ -180,14 +182,18 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateTimelineRequest'
       responses:
-        '202':
-          description: Request accepted and logged.
+        '201':
+          description: Tenant and main timeline created.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OperationAck'
+                $ref: '#/components/schemas/Timeline'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -393,10 +399,50 @@ components:
         name:
           type: string
           minLength: 1
-          description: Timeline (PG cluster) name; unique within its tenant.
+          description: Tenant (database) name; unique within the pool. Also names the main timeline.
         pg_version:
           type: integer
-          description: Postgres major version for the timeline's cluster.
+          description: Postgres major version for the timeline's cluster. Defaults to 17.
+
+    Timeline:
+      type: object
+      required: [tenant_id, timeline_id, name, pg_version, is_main, created_at]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: The storage-layer tenant id this timeline belongs to.
+        timeline_id:
+          type: string
+          format: uuid
+          description: The storage-layer timeline id.
+        name:
+          type: string
+        pg_version:
+          type: integer
+        is_main:
+          type: boolean
+          description: True for a tenant's root (main) timeline.
+        created_at:
+          type: string
+          format: date-time
+        endpoint:
+          description: The compute endpoint provisioned for the timeline, when endpoint deployment is enabled. Connect to its address with psql (user cloud_admin, database postgres).
+          $ref: '#/components/schemas/Endpoint'
+
+    Endpoint:
+      type: object
+      required: [id, role, address]
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [read_write, read_only]
+        address:
+          type: string
+          description: 'host:port for the Postgres wire protocol.'
 
     BranchTimelineRequest:
       type: object

@@ -13,20 +13,41 @@ import (
 // the API layer be tested end-to-end — through the generated client and the
 // real controllers — without a database. It is safe for concurrent use.
 type MemBackend struct {
-	mu    sync.Mutex
-	users map[uuid.UUID]User
-	pools map[uuid.UUID]StoragePool
-	names map[string]struct{} // pool names are unique across the placement group
-	now   func() time.Time
+	mu          sync.Mutex
+	users       map[uuid.UUID]User
+	pools       map[uuid.UUID]StoragePool
+	names       map[string]struct{} // pool names are unique across the placement group
+	timelines   map[uuid.UUID]Timeline
+	tenantNames map[tenantNameKey]struct{} // tenant names are unique within their pool
+	endpoints   map[uuid.UUID]Endpoint
+	writers     map[timelineKey]struct{} // at most one read_write endpoint per timeline
+	now         func() time.Time
+}
+
+// tenantNameKey makes a tenant name unique within its pool (the schema's
+// UNIQUE (storage_pool_id, name)).
+type tenantNameKey struct {
+	poolID uuid.UUID
+	name   string
+}
+
+// timelineKey identifies a timeline (the schema's (tenant_id, timeline_id) PK).
+type timelineKey struct {
+	tenantID   uuid.UUID
+	timelineID uuid.UUID
 }
 
 // NewMemBackend returns an empty in-memory backend.
 func NewMemBackend() *MemBackend {
 	return &MemBackend{
-		users: make(map[uuid.UUID]User),
-		pools: make(map[uuid.UUID]StoragePool),
-		names: make(map[string]struct{}),
-		now:   time.Now,
+		users:       make(map[uuid.UUID]User),
+		pools:       make(map[uuid.UUID]StoragePool),
+		names:       make(map[string]struct{}),
+		timelines:   make(map[uuid.UUID]Timeline),
+		tenantNames: make(map[tenantNameKey]struct{}),
+		endpoints:   make(map[uuid.UUID]Endpoint),
+		writers:     make(map[timelineKey]struct{}),
+		now:         time.Now,
 	}
 }
 
@@ -89,6 +110,57 @@ func (m *MemBackend) GetStoragePool(_ context.Context, owner, poolID uuid.UUID) 
 		return StoragePool{}, ErrNotFound
 	}
 	return p, nil
+}
+
+func (m *MemBackend) CreateTimeline(_ context.Context, owner, poolID uuid.UUID, name string, pgVersion int) (Timeline, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Owner-scoped: a pool the caller doesn't own is treated as absent.
+	p, ok := m.pools[poolID]
+	if !ok || p.OwnerUserID != owner {
+		return Timeline{}, ErrNotFound
+	}
+	key := tenantNameKey{poolID: poolID, name: name}
+	if _, taken := m.tenantNames[key]; taken {
+		return Timeline{}, ErrConflict
+	}
+	t := Timeline{
+		TenantID:   uuid.New(),
+		TimelineID: uuid.New(),
+		Name:       name,
+		PgVersion:  pgVersion,
+		IsMain:     true,
+		CreatedAt:  m.now(),
+	}
+	m.timelines[t.TimelineID] = t
+	m.tenantNames[key] = struct{}{}
+	return t, nil
+}
+
+func (m *MemBackend) CreateEndpoint(_ context.Context, tenantID, timelineID uuid.UUID, role, address string) (Endpoint, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tl, ok := m.timelines[timelineID]
+	if !ok || tl.TenantID != tenantID {
+		return Endpoint{}, ErrNotFound
+	}
+	if role == "read_write" {
+		k := timelineKey{tenantID: tenantID, timelineID: timelineID}
+		if _, taken := m.writers[k]; taken {
+			return Endpoint{}, ErrConflict
+		}
+		m.writers[k] = struct{}{}
+	}
+	e := Endpoint{
+		ID:         uuid.New(),
+		TenantID:   tenantID,
+		TimelineID: timelineID,
+		Role:       role,
+		Address:    address,
+		CreatedAt:  m.now(),
+	}
+	m.endpoints[e.ID] = e
+	return e, nil
 }
 
 func sortPoolsByCreatedAt(pools []StoragePool) {

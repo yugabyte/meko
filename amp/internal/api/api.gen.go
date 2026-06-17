@@ -20,6 +20,12 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for EndpointRole.
+const (
+	ReadOnly  EndpointRole = "read_only"
+	ReadWrite EndpointRole = "read_write"
+)
+
 // Defines values for TaskStatus.
 const (
 	Failed    TaskStatus = "failed"
@@ -42,10 +48,10 @@ type CreateStoragePoolRequest struct {
 
 // CreateTimelineRequest defines model for CreateTimelineRequest.
 type CreateTimelineRequest struct {
-	// Name Timeline (PG cluster) name; unique within its tenant.
+	// Name Tenant (database) name; unique within the pool. Also names the main timeline.
 	Name string `json:"name"`
 
-	// PgVersion Postgres major version for the timeline's cluster.
+	// PgVersion Postgres major version for the timeline's cluster. Defaults to 17.
 	PgVersion *int `json:"pg_version,omitempty"`
 }
 
@@ -54,6 +60,17 @@ type CreateUserRequest struct {
 	// IsAdmin Create the user as an admin.
 	IsAdmin *bool `json:"is_admin,omitempty"`
 }
+
+// Endpoint defines model for Endpoint.
+type Endpoint struct {
+	// Address host:port for the Postgres wire protocol.
+	Address string             `json:"address"`
+	Id      openapi_types.UUID `json:"id"`
+	Role    EndpointRole       `json:"role"`
+}
+
+// EndpointRole defines model for Endpoint.Role.
+type EndpointRole string
 
 // Error defines model for Error.
 type Error struct {
@@ -108,6 +125,23 @@ type Task struct {
 
 // TaskStatus defines model for Task.Status.
 type TaskStatus string
+
+// Timeline defines model for Timeline.
+type Timeline struct {
+	CreatedAt time.Time `json:"created_at"`
+	Endpoint  *Endpoint `json:"endpoint,omitempty"`
+
+	// IsMain True for a tenant's root (main) timeline.
+	IsMain    bool   `json:"is_main"`
+	Name      string `json:"name"`
+	PgVersion int    `json:"pg_version"`
+
+	// TenantId The storage-layer tenant id this timeline belongs to.
+	TenantId openapi_types.UUID `json:"tenant_id"`
+
+	// TimelineId The storage-layer timeline id.
+	TimelineId openapi_types.UUID `json:"timeline_id"`
+}
 
 // User defines model for User.
 type User struct {
@@ -1044,8 +1078,10 @@ func (r GetStoragePoolResponse) StatusCode() int {
 type CreateTimelineResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON202      *OperationAck
+	JSON201      *Timeline
 	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
 	JSON500      *InternalError
 }
 
@@ -1522,12 +1558,12 @@ func ParseCreateTimelineResponse(rsp *http.Response) (*CreateTimelineResponse, e
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest OperationAck
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Timeline
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON202 = &dest
+		response.JSON201 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest BadRequest
@@ -1535,6 +1571,20 @@ func ParseCreateTimelineResponse(rsp *http.Response) (*CreateTimelineResponse, e
 			return nil, err
 		}
 		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -1648,7 +1698,7 @@ type ServerInterface interface {
 	// Get a storage pool owned by the user
 	// (GET /users/{userId}/storage-pools/{poolId})
 	GetStoragePool(ctx echo.Context, userId UserId, poolId PoolId) error
-	// Create a timeline in a pool (logged only)
+	// Create a tenant and its main timeline in a pool
 	// (POST /users/{userId}/storage-pools/{poolId}/timelines)
 	CreateTimeline(ctx echo.Context, userId UserId, poolId PoolId) error
 	// Delete a timeline (logged only)
@@ -2173,11 +2223,11 @@ type CreateTimelineResponseObject interface {
 	VisitCreateTimelineResponse(w http.ResponseWriter) error
 }
 
-type CreateTimeline202JSONResponse OperationAck
+type CreateTimeline201JSONResponse Timeline
 
-func (response CreateTimeline202JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+func (response CreateTimeline201JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(202)
+	w.WriteHeader(201)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -2187,6 +2237,24 @@ type CreateTimeline400JSONResponse struct{ BadRequestJSONResponse }
 func (response CreateTimeline400JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateTimeline404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CreateTimeline404JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateTimeline409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateTimeline409JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -2295,7 +2363,7 @@ type StrictServerInterface interface {
 	// Get a storage pool owned by the user
 	// (GET /users/{userId}/storage-pools/{poolId})
 	GetStoragePool(ctx context.Context, request GetStoragePoolRequestObject) (GetStoragePoolResponseObject, error)
-	// Create a timeline in a pool (logged only)
+	// Create a tenant and its main timeline in a pool
 	// (POST /users/{userId}/storage-pools/{poolId}/timelines)
 	CreateTimeline(ctx context.Context, request CreateTimelineRequestObject) (CreateTimelineResponseObject, error)
 	// Delete a timeline (logged only)

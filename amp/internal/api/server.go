@@ -31,7 +31,7 @@ type Server struct {
 
 // NewServer wires middleware, the spec/explorer routes, and the generated,
 // spec-driven API onto an echo server.
-func NewServer(cfg *config.Config, backend core.Backend, store task.Store, logger *slog.Logger) *Server {
+func NewServer(cfg *config.Config, backend core.Backend, store task.Store, prov Provisioning, logger *slog.Logger) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -46,8 +46,17 @@ func NewServer(cfg *config.Config, backend core.Backend, store task.Store, logge
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 	e.GET("/readyz", func(c echo.Context) error {
-		if err := backend.Healthy(c.Request().Context()); err != nil {
+		ctx := c.Request().Context()
+		if err := backend.Healthy(ctx); err != nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "database unavailable")
+		}
+		// When amp manages a storage controller, it is not ready to serve the
+		// provisioning workflow until that controller is serving too — gate on
+		// it so callers (and run-amp.sh) don't race a still-starting controller.
+		if prov.SC != nil {
+			if err := prov.SC.Ready(ctx); err != nil {
+				return echo.NewHTTPError(http.StatusServiceUnavailable, "storage controller unavailable")
+			}
 		}
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
 	})
@@ -57,7 +66,7 @@ func NewServer(cfg *config.Config, backend core.Backend, store task.Store, logge
 
 	// The generated, spec-driven API. The controllers implement the strict
 	// interface; the generated router binds and validates against the spec.
-	impl := NewControllers(backend, store, logger)
+	impl := NewControllers(backend, store, prov, logger)
 	RegisterHandlersWithBaseURL(e, NewStrictHandler(impl, nil), apiBaseURL)
 
 	return &Server{echo: e, addr: cfg.ListenAddr, logger: logger}

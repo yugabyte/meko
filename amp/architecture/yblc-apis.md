@@ -61,7 +61,7 @@ Everything is under `/api/v1`. The error envelope is `{ "error": { "code",
 | `POST /users/{userId}/storage-pools` | createStoragePool | Caller (the addressed user) becomes the owner. |
 | `GET /users/{userId}/storage-pools` | listStoragePools | The user's **owned** pools (no sharing). |
 | `GET /users/{userId}/storage-pools/{poolId}` | getStoragePool | Owner-scoped; 404 if not owned. |
-| `POST …/{poolId}/timelines` | createTimeline | **Logged only** → `202`. |
+| `POST …/{poolId}/timelines` | createTimeline | Runs the full workflow: tenant + main timeline + storage-controller registration + compute endpoint; returns `(tenant_id, timeline_id)` and the endpoint's `address`. `201` / `404` / `409`. |
 | `DELETE …/timelines/{timelineId}` | deleteTimeline | **Logged only** → `202`. |
 | `POST …/timelines/{timelineId}/branch` | branchTimeline | **Logged only** → `202`. Branching is explicit. |
 | `GET /tasks/{taskId}` | getTask | Status of a write-ahead task. |
@@ -87,21 +87,34 @@ for #92**, so `listStoragePools` returns exactly the pools a user owns, and
 `getStoragePool` is owner-scoped (another user's pool 404s rather than leaking
 its existence).
 
-### Timelines are logged-only
+### Timelines: create runs the full provisioning workflow; delete and branch are logged-only
 
-All mutations are meant to run through the write-ahead task framework
-(yblight-controller.md §5, §8). That framework's step catalog does not exist yet,
-so per #92 the three timeline calls (create / delete / branch) **only log** the
-request and return `202 Accepted` with an acknowledgement. No timeline is
-provisioned and no `task` row is written; `getTask` is wired to the store for
-when they are.
+**`createTimeline` runs the whole create-an-endpoint workflow, in amp.** It:
+1. validates the pool (owner-scoped: `404` if not owned) and creates a tenant
+   (a "database", unique name within the pool, else `409`) together with its main
+   timeline (`pg_cluster`, `is_main`) — one transaction, `core.Backend.CreateTimeline`;
+2. registers the tenant with the managed storage controller
+   (`storagecontroller.Client.CreateTenant` → `POST /v1/tenant`), when one is
+   configured; and
+3. provisions the compute endpoint via the runtime-agnostic
+   [`deploy.Deployer`](../internal/deploy/) (Docker today, Kubernetes later),
+   persists it (the `endpoint` table), and returns its connection `address` in the
+   `Timeline.endpoint` field.
 
-These three routes **bypass `core.Backend` entirely** — they don't even check
-that the pool or timeline exists (that validation belongs to the task steps that
-will replace the logging). So the only outcomes are `202`, `400` (a missing
-`name`, or a malformed UUID rejected by the generated router), and `500`; the
-spec lists exactly those, with no `404`, so it stays honest about what the
-logged-only handlers can return.
+The endpoint it launches materializes the timeline (bootstrap initdb) and — in SC
+mode — registers + attaches to the controller for its generation. The call is
+synchronous (it blocks while the endpoint comes up); moving it onto the
+write-ahead task framework (async + `getTask` polling) is a follow-up. amp's
+`/readyz` gates on the managed controller so a caller can't race its startup.
+
+**`deleteTimeline` and `branchTimeline` are still logged-only.** All such
+mutations are meant to run through the write-ahead task framework
+(yblight-controller.md §5, §8), whose step catalog does not exist yet, so per #92
+these two **only log** the request and return `202 Accepted`. They bypass
+`core.Backend` and don't validate the timeline (that validation belongs to the
+task steps that will replace the logging); no `task` row is written, and
+`getTask` is wired to the store for when they are. Their only outcomes are
+`202`, `400`, and `500`.
 
 ## Layering
 
@@ -116,8 +129,9 @@ internal/task/   Task store, read by getTask.
 
 The `core.Backend` seam is what lets the whole HTTP layer be tested without a
 database: `MemBackend` mirrors `PgBackend`'s semantics (owner-existence checks,
-globally-unique pool names, owner-scoped listing). The user and storage-pool
-controllers go through it; the timeline controllers do not (above). A controller
+globally-unique pool names, owner-scoped listing, tenant create). The user,
+storage-pool, and create-timeline controllers go through it; the delete/branch
+timeline controllers do not (above). A controller
 that returns an unexpected (non-`echo.HTTPError`) error yields a `500` rendered
 in the same `Error` envelope — documented per operation in the spec so the
 generated client gets a typed handle for it.

@@ -17,6 +17,7 @@ deploy/
 |----------------------|----------------------------------------------------------|------------|
 | `amp`                | the control plane (API + task worker), and the supervisor| YugabyteDB |
 | `storage_controller` | storage-layer registry + generation fencing (§11.1)      | YugabyteDB |
+| `docker` (CLI)       | lets amp's Docker `deploy.Deployer` launch endpoint containers (yblight-controller.md §5.6) | — |
 
 Unlike the [endpoint image](../endpoint), there is **no separate supervisor**:
 `amp` *is* the supervisor. It spawns the storage controller as a child process,
@@ -108,6 +109,32 @@ exposes amp's API on the host's `8080`. `AMP_STORAGE_CONTROLLER_DEV=true` runs
 the storage controller in `--dev` mode — no auth — which suits local testing
 only.)
 
+## Provisioning endpoints
+
+With `AMP_DEPLOY=true`, amp's create-timeline workflow provisions a compute
+**endpoint** through its Docker `deploy.Deployer` (yblight-controller.md §5.6): it
+`docker run`s the [endpoint image](../endpoint) and returns the connection address.
+For that, the container needs the **Docker daemon socket** mounted, and amp + the
+endpoints it launches share a **user-defined network** (so the storage controller
+reaches endpoints by container name). The bundled `docker` CLI talks to the socket.
+
+```sh
+docker run -d --name amp --hostname amp --network ybamp \
+  --user root -v /var/run/docker.sock:/var/run/docker.sock \
+  --add-host host.docker.internal:host-gateway -p 8080:8080 \
+  -e AMP_DATABASE_URL=postgres://yugabyte@host.docker.internal:5433/yblight_controller \
+  -e AMP_STORAGE_CONTROLLER=true -e AMP_STORAGE_CONTROLLER_DEV=true \
+  -e AMP_STORAGE_CONTROLLER_LISTEN=0.0.0.0:50051 \
+  -e AMP_STORAGE_CONTROLLER_DATABASE_URL=postgresql://yugabyte@host.docker.internal:5433/yb_storage?sslmode=disable \
+  -e AMP_DEPLOY=true -e AMP_DEPLOY_NETWORK=ybamp \
+  -e AMP_ENDPOINT_YB_HOST_PORTS=host.docker.internal:5433 -e AMP_ENDPOINT_YB_DBNAME=yb_storage \
+  yb-light/amp:dev
+```
+
+`--user root` is the dev-simple way to give amp access to the mounted socket; the
+end-to-end driver `test/e2e/run-amp.sh` wires all of this up. The Kubernetes
+deployer (§5.6) uses the cluster API instead and needs neither the socket nor this CLI.
+
 ## Configuration
 
 amp reads the usual `AMP_*` variables (see [`amp/README.md`](../../amp/README.md));
@@ -121,6 +148,12 @@ the storage-controller knobs the image cares about:
 | `AMP_STORAGE_CONTROLLER_DATABASE_URL` | `AMP_DATABASE_URL` | universe connection for the storage controller |
 | `AMP_STORAGE_CONTROLLER_DEV` | _(unset → false)_ | run the storage controller in `--dev` mode (no auth) |
 | `AMP_STORAGE_CONTROLLER_BIN` | `storage_controller` | resolved next to the amp binary (the bundle), then `PATH` |
+| `AMP_DEPLOY` | _(unset → false)_ | provision real compute endpoints via the Docker deployer |
+| `AMP_DEPLOY_NETWORK` | _(empty)_ | shared Docker network for amp + the endpoints it launches |
+| `AMP_DEPLOY_ENDPOINT_IMAGE` | `yb-light/neon-endpoint:dev` | endpoint image to launch |
+| `AMP_DEPLOY_EXTERNAL_HOST` | `127.0.0.1` | host a client uses to reach a published compute port |
+| `AMP_ENDPOINT_YB_HOST_PORTS` | `host.docker.internal:5433` | how an endpoint reaches the YB storage universe |
+| `AMP_ENDPOINT_YB_DBNAME` | _(required if `AMP_DEPLOY`)_ | the storage database for endpoints (same DB as the storage controller in SC mode) |
 
 A Helm chart for the AMP layer (mirroring
 [`helm/yb-light-endpoint`](../helm/yb-light-endpoint)) is not part of this change.

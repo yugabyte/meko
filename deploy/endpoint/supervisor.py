@@ -95,6 +95,31 @@ NODE_ID = 1  # one pageserver + one safekeeper per endpoint pod
 # the SC-free pod. Point it at the AMP storage_controller if you have one.
 CONTROL_PLANE_API = env("CONTROL_PLANE_API", "http://localhost:6666")
 
+# Storage-controller coordination (opt-in). When STORAGE_CONTROLLER_URL is set,
+# this endpoint registers its pageserver node + safekeeper with that controller
+# and takes its pageserver generation from the controller's attach-hook (instead
+# of the standalone GENERATION default) — the faithful AMP topology, where the
+# controller is the tenant/node registry + generation-fencing authority. The
+# controller heartbeats and reconciles the nodes it knows about, so it must be
+# able to reach them: SC_REACHABLE_HOST + the *PUB ports are the host:port the
+# controller uses (e.g. a Docker published port via the host gateway), and the
+# pageserver/safekeeper bind 0.0.0.0 so those published ports reach them. Left
+# unset, the endpoint stays SC-free and self-manages (the default).
+STORAGE_CONTROLLER_URL = env("STORAGE_CONTROLLER_URL")
+USE_STORAGE_CONTROLLER = STORAGE_CONTROLLER_URL is not None
+SC_REACHABLE_HOST = env("SC_REACHABLE_HOST", "host.docker.internal")
+# How the controller reaches this endpoint's services (default to the in-container
+# ports, i.e. the single-host case where no port remapping happens).
+PAGESERVER_HTTP_PUB_PORT = env_int("PAGESERVER_HTTP_PUB_PORT", PAGESERVER_HTTP_PORT)
+PAGESERVER_PG_PUB_PORT = env_int("PAGESERVER_PG_PUB_PORT", PAGESERVER_PG_PORT)
+SAFEKEEPER_HTTP_PUB_PORT = env_int("SAFEKEEPER_HTTP_PUB_PORT", SAFEKEEPER_HTTP_PORT)
+SAFEKEEPER_PG_PUB_PORT = env_int("SAFEKEEPER_PG_PUB_PORT", SAFEKEEPER_PG_PORT)
+# Listen address for the pageserver/safekeeper: 0.0.0.0 under controller
+# coordination (so published host ports route in), loopback otherwise. Internal
+# callers (compute, the supervisor's own probes) keep using 127.0.0.1, which a
+# 0.0.0.0 listener also accepts.
+BIND_HOST = "0.0.0.0" if USE_STORAGE_CONTROLLER else LISTEN_HOST
+
 # Supervisor behaviour.
 RESTART_BACKOFF = env_int("SUPERVISOR_RESTART_BACKOFF_SECONDS", 2)
 MAX_RESTARTS = env_int("SUPERVISOR_MAX_RESTARTS", 5)
@@ -218,12 +243,14 @@ def write_pageserver_config(datadir, bootstrap):
 
     lines = [
         f"pg_distrib_dir='{PG_DISTRIB_DIR}'",
-        f"listen_pg_addr='{LISTEN_HOST}:{PAGESERVER_PG_PORT}'",
-        f"listen_http_addr='{LISTEN_HOST}:{PAGESERVER_HTTP_PORT}'",
-        f"listen_grpc_addr='{LISTEN_HOST}:{PAGESERVER_GRPC_PORT}'",
+        f"listen_pg_addr='{BIND_HOST}:{PAGESERVER_PG_PORT}'",
+        f"listen_http_addr='{BIND_HOST}:{PAGESERVER_HTTP_PORT}'",
+        f"listen_grpc_addr='{BIND_HOST}:{PAGESERVER_GRPC_PORT}'",
+        # The local safekeeper this pageserver streams WAL from is always reached
+        # over loopback inside the pod, regardless of the public bind address.
         f"safekeeper_pg_addr='{LISTEN_HOST}:{SAFEKEEPER_PG_PORT}'",
         "availability_zone='local'",
-        f"control_plane_api='{CONTROL_PLANE_API}'",
+        f"control_plane_api='{STORAGE_CONTROLLER_URL or CONTROL_PLANE_API}'",
         f"yb_storage_conn={yb_conn_inline_toml()}",
         f"tenant_id='{TENANT_ID}'",
         f"timeline_id='{TIMELINE_ID}'",
@@ -243,8 +270,8 @@ def write_safekeeper_config(datadir):
         f"id = {NODE_ID}",
         f"tenant_id = {_toml_quote(TENANT_ID)}",
         f"timeline_id = {_toml_quote(TIMELINE_ID)}",
-        f"listen_pg = {_toml_quote(f'{LISTEN_HOST}:{SAFEKEEPER_PG_PORT}')}",
-        f"listen_http = {_toml_quote(f'{LISTEN_HOST}:{SAFEKEEPER_HTTP_PORT}')}",
+        f"listen_pg = {_toml_quote(f'{BIND_HOST}:{SAFEKEEPER_PG_PORT}')}",
+        f"listen_http = {_toml_quote(f'{BIND_HOST}:{SAFEKEEPER_HTTP_PORT}')}",
         f"availability_zone = {_toml_quote(f'sk-{NODE_ID}')}",
         f"yb_storage_conn = {_toml_quote(yb_conn_inline_toml())}",
     ]
@@ -456,26 +483,93 @@ def provision_schema():
         psql(YB_DBNAME, file=mig)
 
 
+def sc_register_and_attach():
+    """Register this endpoint's safekeeper + pageserver node with the storage
+    controller and take the pageserver generation from its attach-hook. Mirrors
+    control_plane's register_safekeeper + register_and_attach
+    (control_plane/src/{storage_controller,pageserver}.rs); returns the granted
+    generation. The controller reaches the nodes at SC_REACHABLE_HOST + the *PUB
+    ports, so they must be published and bound on 0.0.0.0 (see BIND_HOST)."""
+    base = STORAGE_CONTROLLER_URL.rstrip("/")
+
+    # Safekeeper registration is best-effort: with timelines_onto_safekeepers
+    # off the controller doesn't place timelines on it, so this only populates
+    # the controller's registry (and lets it heartbeat the SK).
+    try:
+        http_request("POST", f"{base}/control/v1/safekeeper/{NODE_ID}", body={
+            "id": NODE_ID,
+            "created_at": "2023-10-25T09:11:25Z",
+            "updated_at": "2024-08-28T11:32:43Z",
+            "region_id": "local",
+            "host": SC_REACHABLE_HOST,
+            "port": SAFEKEEPER_PG_PUB_PORT,
+            "http_port": SAFEKEEPER_HTTP_PUB_PORT,
+            "https_port": None,
+            "version": 5957,
+            "availability_zone_id": f"local-{NODE_ID}",
+        })
+        http_request("POST", f"{base}/control/v1/safekeeper/{NODE_ID}/scheduling_policy",
+                     body={"scheduling_policy": "active"})
+        log("registered safekeeper with storage controller")
+    except Exception as e:  # noqa: BLE001 - registry-only, never fatal
+        log(f"WARNING: safekeeper registration failed (continuing): {e}")
+
+    # Pageserver node registration is required: the controller assigns the
+    # pageserver's generation against this node via the attach-hook.
+    http_request("POST", f"{base}/control/v1/node", body={
+        "node_id": NODE_ID,
+        "listen_pg_addr": SC_REACHABLE_HOST,
+        "listen_pg_port": PAGESERVER_PG_PUB_PORT,
+        "listen_http_addr": SC_REACHABLE_HOST,
+        "listen_http_port": PAGESERVER_HTTP_PUB_PORT,
+    })
+    _, resp = http_request("POST", f"{base}/debug/v1/attach-hook",
+                           body={"tenant_id": TENANT_ID, "node_id": NODE_ID})
+    gen = (resp or {}).get("gen")
+    if gen is None:
+        raise RuntimeError(f"attach-hook did not return a generation: {resp}")
+    log(f"storage controller granted pageserver generation {gen} "
+        f"for tenant {TENANT_ID} on node {NODE_ID}")
+    return gen
+
+
 def main():
-    global TENANT_ID, TIMELINE_ID
+    global TENANT_ID, TIMELINE_ID, GENERATION
 
     sup = Supervisor()
     signal.signal(signal.SIGTERM, sup.shutdown)
     signal.signal(signal.SIGINT, sup.shutdown)
 
-    bootstrap = TENANT_ID is None
-    if bootstrap:
+    # BOOTSTRAP=true forces a fresh initdb of the *supplied* tenant/timeline,
+    # for when a control plane (AMP) allocated the ids but the timeline has not
+    # been materialized yet. Default keeps the original behaviour: bootstrap only
+    # when no ids are supplied, otherwise attach to an existing timeline.
+    force_bootstrap = env("BOOTSTRAP", "false").lower() in ("1", "true", "yes")
+    if TENANT_ID is None:
         TENANT_ID = os.urandom(16).hex()
         TIMELINE_ID = os.urandom(16).hex()
+        bootstrap = True
         log(f"no TENANT_ID supplied; bootstrapping fresh tenant {TENANT_ID} "
             f"timeline {TIMELINE_ID}")
     else:
         if TIMELINE_ID is None:
             raise SystemExit("TENANT_ID set but TIMELINE_ID missing")
-        log(f"serving tenant {TENANT_ID} timeline {TIMELINE_ID}")
+        bootstrap = force_bootstrap
+        if bootstrap:
+            log(f"BOOTSTRAP=true; initializing supplied tenant {TENANT_ID} "
+                f"timeline {TIMELINE_ID}")
+        else:
+            log(f"serving tenant {TENANT_ID} timeline {TIMELINE_ID}")
 
     if DEV_PROVISION_SCHEMA:
         provision_schema()
+
+    # Under controller coordination, register the nodes and take the pageserver
+    # generation from the controller *before* writing the pageserver config (it
+    # bakes the generation in). The controller becomes the tenant/generation
+    # authority; the pageserver still materializes the timeline itself (below).
+    if USE_STORAGE_CONTROLLER:
+        GENERATION = sc_register_and_attach()
 
     es_dir = RUN_DIR / "endpoint_storage"
     sk_dir = RUN_DIR / "safekeeper"
@@ -569,6 +663,38 @@ def main():
     )
     sup.add(compute)
     compute.start()
+
+    # The compute spec sets skip_pg_catalog_updates, so the cloud_admin password
+    # from the spec is never applied: loopback works via the `trust` pg_hba rules
+    # but any non-loopback client (published port, k8s service, port-forward) hits
+    # the `host all all all md5` rule with no stored password and fails. Set the
+    # password over the local trust connection so COMPUTE_PASSWORD works remotely.
+    def _set_compute_password():
+        wait_for("compute accepting connections",
+                 lambda: tcp_open(LISTEN_HOST, COMPUTE_PORT), timeout=180)
+        esc = COMPUTE_PASSWORD.replace("'", "''")
+        cmd = [
+            str(PG_BIN / "psql"), "-h", LISTEN_HOST, "-p", str(COMPUTE_PORT),
+            "-U", "cloud_admin", "-d", "postgres",
+            "-v", "ON_ERROR_STOP=1", "--no-psqlrc",
+            "-c", f"ALTER ROLE cloud_admin WITH PASSWORD '{esc}'",
+        ]
+        res = None
+        for _ in range(60):
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode == 0:
+                # LOAD-BEARING: amp's Docker deployer (amp/internal/deploy/docker.go)
+                # waits for this exact line as the endpoint's readiness signal.
+                # Keep the two in sync.
+                log("set cloud_admin password for remote auth")
+                return
+            time.sleep(1)
+        log(f"WARNING: could not set cloud_admin password: "
+            f"{(res.stderr or '').strip()[:200]}")
+    # Run in the background so the monitor loop starts supervising immediately:
+    # _set_compute_password waits for the compute (bounded by timeouts), and we
+    # don't want that wait to delay restarting a sibling that crashes meanwhile.
+    threading.Thread(target=_set_compute_password, daemon=True).start()
 
     log("all services started; entering monitor loop")
     rc = sup.monitor()

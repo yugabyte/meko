@@ -45,6 +45,25 @@ type StorageControllerConfig struct {
 	StopTimeout  time.Duration // grace period after SIGTERM before SIGKILL
 }
 
+// DeployConfig configures how the controller provisions compute endpoints
+// (the runtime behind the deploy.Deployer interface). Only the Docker driver
+// exists today; a Kubernetes driver is the future sibling.
+type DeployConfig struct {
+	Enabled       bool   // create real endpoints (else create-timeline is metadata-only)
+	EndpointImage string // the single-container endpoint image
+	Network       string // shared Docker network for the controller + its endpoints
+	ExternalHost  string // host a client uses to reach a published compute port
+	// How an endpoint reaches the YugabyteDB storage universe. In SC mode this
+	// database must be the same one the storage controller uses.
+	EndpointYBHostPorts string
+	EndpointYBUser      string
+	EndpointYBPassword  string
+	EndpointYBDBName    string
+	// SupervisorPath bind-mounts a host supervisor.py into launched endpoints
+	// (dev-only; empty uses the image's bundled supervisor). See deploy.DockerConfig.
+	SupervisorPath string
+}
+
 // Config is the fully-resolved controller configuration.
 type Config struct {
 	ListenAddr        string
@@ -53,6 +72,7 @@ type Config struct {
 	DB                DBConfig
 	Task              TaskConfig
 	StorageController StorageControllerConfig
+	Deploy            DeployConfig
 }
 
 var schemaRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -80,6 +100,17 @@ func Load(args []string) (*Config, error) {
 	fs.DurationVar(&sc.StartTimeout, "storage-controller-start-timeout", envDuration("AMP_STORAGE_CONTROLLER_START_TIMEOUT", 30*time.Second), "how long to wait for the storage controller to become ready")
 	fs.DurationVar(&sc.StopTimeout, "storage-controller-stop-timeout", envDuration("AMP_STORAGE_CONTROLLER_STOP_TIMEOUT", 10*time.Second), "grace period after SIGTERM before the storage controller is killed")
 
+	dep := &c.Deploy
+	fs.BoolVar(&dep.Enabled, "deploy", envBool("AMP_DEPLOY", false), "provision real compute endpoints via the deployer (create-timeline launches an endpoint)")
+	fs.StringVar(&dep.EndpointImage, "deploy-endpoint-image", env("AMP_DEPLOY_ENDPOINT_IMAGE", "yb-light/neon-endpoint:dev"), "single-container endpoint image to launch")
+	fs.StringVar(&dep.Network, "deploy-network", env("AMP_DEPLOY_NETWORK", ""), "shared Docker network for the controller + its endpoints (so the SC reaches endpoints by name)")
+	fs.StringVar(&dep.ExternalHost, "deploy-external-host", env("AMP_DEPLOY_EXTERNAL_HOST", "127.0.0.1"), "host a client uses to reach a published compute port")
+	fs.StringVar(&dep.EndpointYBHostPorts, "endpoint-yb-host-ports", env("AMP_ENDPOINT_YB_HOST_PORTS", "host.docker.internal:5433"), "host:port[,..] an endpoint uses to reach the YB storage universe")
+	fs.StringVar(&dep.EndpointYBUser, "endpoint-yb-user", env("AMP_ENDPOINT_YB_USER", "yugabyte"), "YB user for endpoints")
+	fs.StringVar(&dep.EndpointYBPassword, "endpoint-yb-password", env("AMP_ENDPOINT_YB_PASSWORD", "yugabyte"), "YB password for endpoints")
+	fs.StringVar(&dep.EndpointYBDBName, "endpoint-yb-dbname", env("AMP_ENDPOINT_YB_DBNAME", ""), "YB storage database for endpoints (must match the storage controller's DB in SC mode)")
+	fs.StringVar(&dep.SupervisorPath, "deploy-supervisor-path", env("AMP_DEPLOY_SUPERVISOR_PATH", ""), "dev-only: host path to supervisor.py to bind-mount into launched endpoints (empty uses the image's bundled one)")
+
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -100,6 +131,14 @@ func Load(args []string) (*Config, error) {
 	}
 	if err := validateStorageController(sc, c.DB.URL); err != nil {
 		return nil, err
+	}
+	if dep.Enabled {
+		if dep.EndpointImage == "" {
+			return nil, fmt.Errorf("deploy endpoint image is required when --deploy is set")
+		}
+		if dep.EndpointYBDBName == "" {
+			return nil, fmt.Errorf("endpoint YB dbname is required when --deploy is set (set --endpoint-yb-dbname or AMP_ENDPOINT_YB_DBNAME)")
+		}
 	}
 	return c, nil
 }

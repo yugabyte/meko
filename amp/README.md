@@ -131,7 +131,8 @@ ships amp + storage controller together, so amp finds it with no configuration.
 - `POST /api/v1/users`, `GET /api/v1/users/:userId` — users (no auth, #92)
 - `POST|GET /api/v1/users/:userId/storage-pools`,
   `GET …/storage-pools/:poolId` — storage pools, owner-scoped (no sharing)
-- `POST|DELETE …/storage-pools/:poolId/timelines[/:timelineId]`,
-  `POST …/timelines/:timelineId/branch` — timelines; **logged only** (`202`)
-  until the task framework lands
+- `POST …/storage-pools/:poolId/timelines` — create a timeline: creates a tenant
+  (a "database") + its main timeline and returns `(tenant_id, timeline_id)` (`201`)
+- `DELETE …/timelines/:timelineId`, `POST …/timelines/:timelineId/branch` —
+  delete / branch a timeline; **logged only** (`202`) until the task framework lands
 - `GET /api/v1/tasks/:taskId` — task status (a real read path)

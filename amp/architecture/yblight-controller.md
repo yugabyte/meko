@@ -1,7 +1,7 @@
 # yblight-controller — High-Level Design & Guiding Principles
 
 **Status:** Draft
-**Last updated:** 2026-06-11
+**Last updated:** 2026-06-17
 
 This is the guiding-principles document for yblight-controller, the control plane for YB Light.
 It is intentionally not a feature design doc — individual features (task framework,
@@ -58,10 +58,13 @@ instances; yblight-controller creates, configures, tracks, and retires them.
    It must not require cluster-admin powers, cloud-provider credentials in its core
    path, or anything else that would tie it to one runtime. Runtime-specific logic
    (e.g. creating pods vs. VMs) lives behind a provisioning interface, not in the core.
-3. **Kubernetes first, multi-runtime by design.** The first supported runtime for
-   endpoints is Kubernetes. The abstractions (provisioner interface, endpoint spec,
-   task framework) are designed so VMs — and multiple clouds — can be added without
-   reworking the model.
+3. **Multi-runtime behind a provisioning interface.** Runtime-specific endpoint
+   provisioning lives behind the `deploy.Deployer` interface (§5.6), never in the
+   core. The first *implemented* runtime is **Docker** (one container per endpoint —
+   used by local/dev and the e2e); **Kubernetes** (one pod per endpoint) is the
+   production target and the next implementation. The abstractions (deployer
+   interface, endpoint spec, task framework) are designed so a new runtime — VMs,
+   another cloud — is a new `Deployer`, not a change to the model.
 4. **The control plane enforces invariants; it doesn't just hope the data plane does.**
    Even where YB Light enforces a rule internally (e.g. a single writer per timeline),
    yblight-controller independently enforces it at the API layer so users can never get into a bad
@@ -290,13 +293,13 @@ Per-endpoint configuration that yblight-controller owns and tracks includes (non
 
 An endpoint is packaged and deployed as a single, self-contained software blob —
 compute, safekeeper, pageserver, compute_ctl, and the otel collector travel together.
-On Kubernetes this means **one pod per endpoint**. On VMs, the same blob runs as a
-handful of processes on the host.
+On **Docker** (the first implemented runtime, §5.6) this is **one container** — the
+single-container endpoint image (`deploy/endpoint`), whose processes are brought up
+and supervised by a small `supervisor.py` under tini. On **Kubernetes** the same
+blob is **one pod per endpoint**; on VMs, a handful of processes on the host.
 
-The per-runtime packaging details (image layout, process supervision on VMs) are
-deliberately not designed here. What is fixed now is the granularity: the unit of
-deployment, scheduling, replacement, and upgrade is the whole endpoint — never an
-individual service inside one.
+The unit of deployment, scheduling, replacement, and upgrade is the whole endpoint
+— never an individual service inside one.
 
 ### 5.5 Delivering the endpoint spec to compute_ctl
 
@@ -336,9 +339,40 @@ fixed here is that the spec is one artifact the controller owns and can deliver 
 these routes without reshaping it. See
 [`compute_ctl.md`](../architecture/compute_ctl.md) for the compute-side mechanics.
 
+### 5.6 Provisioning endpoints: the `deploy.Deployer` interface
+
+Launching the endpoint blob (§5.4) on a concrete runtime is the one runtime-specific
+step (principle 3), so it sits behind a single Go interface, `deploy.Deployer`
+(`amp/internal/deploy`):
+
+```go
+CreateEndpoint(ctx, EndpointSpec) (Endpoint, error)  // launch, wait until serving, return host:port
+DeleteEndpoint(ctx, id) error
+```
+
+The create-database workflow (§6) calls it; nothing else in `core` or the API
+handlers knows how an endpoint is launched. A new runtime is a new implementation of
+this interface, not a change to the workflow.
+
+- **Docker (implemented).** `DockerDeployer` runs the single-container endpoint image
+  as one container, over the Docker daemon socket. The controller and the endpoints it
+  launches share a **user-defined Docker network**, so the storage controller (§11.1)
+  reaches an endpoint's pageserver/safekeeper **by container name** (Docker DNS) — not
+  a juggled host port. Only the compute's Postgres port is published to the host, and
+  the controller returns that `host:port` as the endpoint's address; endpoints reach
+  the YBDB universe via the host gateway. This is the runtime exercised by the
+  amp-on-Docker e2e (`test/e2e/run-amp.sh`).
+- **Kubernetes (next).** A `K8sDeployer` implements the same interface against the
+  cluster API — a pod per endpoint, a Service for the address — reusing the
+  `deploy/helm/yb-light-endpoint` chart. VMs (via ybops) follow the same shape.
+
+The endpoint spec carried in `EndpointSpec` (tenant/timeline ids, PG version, the YBDB
+connection, the storage-controller URL, bootstrap flag) is delivered to the endpoint as
+environment today; §5.5's `compute_ctl` transports are the longer-term refinement.
+
 ## 6. Core workflows
 
-These are the initial user-facing workflows. Each is implemented as a task built from
+These are the initial user-facing workflows. Each is intended to be a task built from
 re-usable steps (§8); none is a special case.
 
 1. **Create a storage pool** — any user can create a pool and becomes its owner;
@@ -357,6 +391,15 @@ re-usable steps (§8); none is a special case.
 
 Implied operator-facing workflows (capacity headroom, node/pool provisioning, universe
 creation through YBA) follow the same pattern but are not user-facing.
+
+**Implemented today (create-database).** `POST .../timelines` runs workflow 2 end to
+end inside the controller: it creates the tenant + main timeline (state store),
+registers the tenant with the managed storage controller (§11.1), and provisions the
+write endpoint through the deployer (§5.6), returning the endpoint's connection
+address. It currently runs **synchronously** (the call blocks while the endpoint comes
+up) rather than through the write-ahead task framework — moving it onto a task
+(principle 5, §8) so it is async, durable, and resumable is the planned next step. See
+[`yblc-apis.md`](yblc-apis.md) for the API shape.
 
 ## 7. Longer-term requirements (designed for now, built later)
 

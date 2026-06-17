@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,6 +21,7 @@ import (
 	"github.com/yugabyte/yb-light/amp/internal/config"
 	"github.com/yugabyte/yb-light/amp/internal/core"
 	"github.com/yugabyte/yb-light/amp/internal/db"
+	"github.com/yugabyte/yb-light/amp/internal/deploy"
 	applog "github.com/yugabyte/yb-light/amp/internal/log"
 	"github.com/yugabyte/yb-light/amp/internal/process"
 	"github.com/yugabyte/yb-light/amp/internal/storagecontroller"
@@ -49,6 +51,61 @@ func main() {
 		fmt.Fprintln(os.Stderr, "amp: "+err.Error())
 		os.Exit(1)
 	}
+}
+
+// buildProvisioning assembles the create-timeline workflow's collaborators from
+// config: the storage-controller client (when the managed controller is on) and
+// the endpoint deployer (when --deploy is on). The SC URL it hands the deployer
+// is amp's own network-reachable name + the controller's port, so an endpoint
+// container on the shared network can register/attach back.
+func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisioning, error) {
+	var prov api.Provisioning
+
+	if cfg.StorageController.Enabled {
+		prov.SC = storagecontroller.NewClient(cfg.StorageController.ListenAddr)
+		// The URL a launched endpoint uses to reach the controller is amp's own
+		// network-reachable name + the controller's port. If either can't be
+		// resolved, leave it empty and warn — and fail below if it's actually needed.
+		_, port, perr := net.SplitHostPort(cfg.StorageController.ListenAddr)
+		host, herr := os.Hostname()
+		switch {
+		case perr != nil:
+			logger.Warn("cannot parse storage controller listen address for the endpoint URL",
+				"listen", cfg.StorageController.ListenAddr, "error", perr)
+		case herr != nil || host == "":
+			logger.Warn("cannot resolve hostname for the storage controller endpoint URL", "error", herr)
+		default:
+			prov.SCEndpointURL = fmt.Sprintf("http://%s:%s", host, port)
+		}
+	}
+
+	if cfg.Deploy.Enabled {
+		// Endpoints the deployer launches must be able to reach the managed
+		// storage controller. If we couldn't resolve that URL, refuse to start
+		// rather than silently launch controller-free endpoints while amp
+		// registers their tenants with the controller (a split-brain).
+		if cfg.StorageController.Enabled && prov.SCEndpointURL == "" {
+			return api.Provisioning{}, fmt.Errorf(
+				"endpoint deployment is enabled with the storage controller, but the controller URL endpoints should use could not be resolved (listen=%q); refusing to start",
+				cfg.StorageController.ListenAddr)
+		}
+		prov.Deployer = deploy.NewDockerDeployer(deploy.DockerConfig{
+			EndpointImage:  cfg.Deploy.EndpointImage,
+			Network:        cfg.Deploy.Network,
+			ExternalHost:   cfg.Deploy.ExternalHost,
+			SupervisorPath: cfg.Deploy.SupervisorPath,
+		}, logger)
+		prov.EndpointYB = deploy.YBConn{
+			HostPorts: cfg.Deploy.EndpointYBHostPorts,
+			User:      cfg.Deploy.EndpointYBUser,
+			Password:  cfg.Deploy.EndpointYBPassword,
+			DBName:    cfg.Deploy.EndpointYBDBName,
+		}
+		logger.Info("endpoint deployment enabled",
+			"image", cfg.Deploy.EndpointImage, "network", cfg.Deploy.Network,
+			"sc_endpoint_url", prov.SCEndpointURL)
+	}
+	return prov, nil
 }
 
 // runMigrate applies migrations and exits — useful as an init container or a
@@ -95,7 +152,14 @@ func runServe(args []string) error {
 	store := task.NewPgStore(pool)
 	worker := task.NewWorker(store, task.DefaultRegistry(), cfg.Task, logger)
 	backend := core.NewPgBackend(pool)
-	srv := api.NewServer(cfg, backend, store, logger)
+
+	// The create-timeline workflow's collaborators: the storage controller (to
+	// register the tenant) and the endpoint deployer (to provision the compute).
+	prov, err := buildProvisioning(cfg, logger)
+	if err != nil {
+		return err
+	}
+	srv := api.NewServer(cfg, backend, store, prov, logger)
 
 	// Managed services the controller owns as subprocesses (§11). The storage
 	// controller is the first; the manager is a no-op until one is enabled.

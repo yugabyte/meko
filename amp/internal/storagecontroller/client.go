@@ -43,6 +43,20 @@ func (c *Client) Ready(ctx context.Context) error {
 	return c.do(ctx, http.MethodGet, "/ready", nil, nil)
 }
 
+// CreateTenant registers a tenant with the storage controller (POST /v1/tenant).
+// Placement is "Detached" so it succeeds before any pageserver has registered —
+// the endpoint's attach-hook (at endpoint start) attaches the tenant to that
+// endpoint's pageserver and assigns the generation. tenantID is 32 lowercase hex
+// digits (no dashes), the storage-layer TenantId. Idempotent on the controller.
+func (c *Client) CreateTenant(ctx context.Context, tenantID string) error {
+	body := map[string]any{
+		"new_tenant_id":    tenantID,
+		"placement_policy": "Detached",
+	}
+	var out json.RawMessage // response is {"shards":[...]}; accept and discard.
+	return c.do(ctx, http.MethodPost, "/v1/tenant", body, &out)
+}
+
 // CreateTimeline registers a new timeline under tenant
 // (POST /v1/tenant/{tenant}/timeline). The request and response bodies are
 // passed through as raw JSON so this client stays decoupled from the upstream

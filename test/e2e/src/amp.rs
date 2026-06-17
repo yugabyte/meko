@@ -1,0 +1,262 @@
+//! The amp-on-Docker e2e backend — deliberately thin.
+//!
+//! Per the design, the whole provisioning workflow lives in **amp**: a single
+//! `POST .../timelines` creates the tenant, drives the storage controller, and
+//! launches the compute endpoint (via amp's Deployer), returning the endpoint's
+//! connection address. So this test only:
+//!   1. calls amp's REST API (user -> storage pool -> timeline), and
+//!   2. runs PG against the endpoint address amp hands back.
+//! There is no container/Docker orchestration here — that is amp's job.
+//!
+//! amp itself is started by `test/e2e/run-amp.sh`, which passes its base URL in
+//! `AMP_BASE_URL`. Invoked as `e2e_tests amp`.
+
+use std::future::Future;
+use std::pin::Pin;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, bail};
+use serde_json::{Value, json};
+
+use crate::cluster::step;
+use crate::db;
+
+// --- amp REST client --------------------------------------------------------
+
+struct AmpClient {
+    root: String,
+    base: String,
+    http: reqwest::Client,
+}
+
+/// What amp returns from the create-timeline workflow.
+struct TimelineResult {
+    tenant_hex: String,
+    endpoint_address: Option<String>,
+}
+
+impl AmpClient {
+    fn new(base_url: &str) -> Self {
+        let root = base_url.trim_end_matches('/').to_string();
+        Self {
+            base: format!("{root}/api/v1"),
+            root,
+            // No client-wide timeout: the create-timeline call blocks while amp
+            // provisions the endpoint (tens of seconds).
+            http: reqwest::Client::new(),
+        }
+    }
+
+    async fn wait_ready(&self, timeout: Duration) -> Result<()> {
+        let url = format!("{}/readyz", self.root);
+        let deadline = Instant::now() + timeout;
+        let mut last = String::from("(no response yet)");
+        while Instant::now() < deadline {
+            match self.http.get(&url).timeout(Duration::from_secs(3)).send().await {
+                Ok(r) if r.status().is_success() => return Ok(()),
+                Ok(r) => last = format!("status {}", r.status()),
+                Err(e) => last = e.to_string(),
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        bail!("amp {url} not ready within {timeout:?}: {last}");
+    }
+
+    async fn post(&self, path: &str, body: Value, want: u16) -> Result<Value> {
+        let url = format!("{}{path}", self.base);
+        let resp = self.http.post(&url).json(&body).send().await.with_context(|| format!("POST {url}"))?;
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap_or_default();
+        if status != want {
+            bail!("POST {url} -> {status} (want {want}): {text}");
+        }
+        serde_json::from_str(&text).with_context(|| format!("decoding {url} response: {text}"))
+    }
+
+    async fn create_user(&self, is_admin: bool) -> Result<String> {
+        let v = self.post("/users", json!({ "is_admin": is_admin }), 201).await?;
+        field(&v, "id")
+    }
+
+    async fn create_storage_pool(&self, user: &str, name: &str) -> Result<String> {
+        let v = self.post(&format!("/users/{user}/storage-pools"), json!({ "name": name }), 201).await?;
+        field(&v, "id")
+    }
+
+    /// Drive the full create-timeline workflow (tenant + storage controller +
+    /// endpoint) and return the storage-layer tenant id (hex) and the endpoint's
+    /// connection address, if amp provisioned one.
+    async fn create_timeline(&self, user: &str, pool: &str, name: &str, pg_version: u32) -> Result<TimelineResult> {
+        let v = self
+            .post(
+                &format!("/users/{user}/storage-pools/{pool}/timelines"),
+                json!({ "name": name, "pg_version": pg_version }),
+                201,
+            )
+            .await?;
+        let tenant_hex = field(&v, "tenant_id")?.replace('-', "");
+        let endpoint_address = v
+            .get("endpoint")
+            .and_then(|e| e.get("address"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        Ok(TimelineResult { tenant_hex, endpoint_address })
+    }
+}
+
+fn field(v: &Value, key: &str) -> Result<String> {
+    v.get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .with_context(|| format!("response missing string field {key:?}: {v}"))
+}
+
+// --- the endpoint under test ------------------------------------------------
+
+/// The compute endpoint amp provisioned: how to connect, and which tenant it
+/// should be serving.
+struct Endpoint {
+    compute_conn: String,
+    tenant_hex: String,
+}
+
+impl Endpoint {
+    /// Connection string for the address amp returned (`host:port`), with the
+    /// endpoint's md5 password (set by the endpoint supervisor).
+    fn from_address(addr: &str, tenant_hex: String) -> Result<Self> {
+        let (host, port) = addr
+            .rsplit_once(':')
+            .with_context(|| format!("endpoint address {addr:?} is not host:port"))?;
+        let conn = format!(
+            "host={host} port={port} user=cloud_admin password=cloud_admin dbname=postgres"
+        );
+        Ok(Self { compute_conn: conn, tenant_hex })
+    }
+
+    async fn wait_ready(&self, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        let mut last = String::from("(no attempt yet)");
+        while Instant::now() < deadline {
+            match db::query_i64(&self.compute_conn, "SELECT 1::bigint").await {
+                Ok(1) => return Ok(()),
+                Ok(other) => last = format!("readiness probe returned {other}"),
+                Err(e) => last = format!("{e:#}"),
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        bail!("compute not ready within {timeout:?}: {last}");
+    }
+}
+
+// --- scenarios --------------------------------------------------------------
+
+type ScenarioFut<'a> = Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
+
+fn scenarios(e: &Endpoint) -> Vec<(&'static str, ScenarioFut<'_>)> {
+    vec![
+        ("smoke", Box::pin(smoke(e))),
+        ("resource_ladder", Box::pin(resource_ladder(e))),
+    ]
+}
+
+/// The endpoint is a working Postgres: DDL + DML, read back.
+async fn smoke(e: &Endpoint) -> Result<()> {
+    let conn = &e.compute_conn;
+    let version = db::query_text(conn, "SELECT version()").await?;
+    if !version.contains("PostgreSQL") {
+        bail!("unexpected version banner: {version}");
+    }
+    db::batch(
+        conn,
+        "CREATE TABLE amp_smoke (id int PRIMARY KEY, note text); \
+         INSERT INTO amp_smoke VALUES (1, 'hello'), (2, 'world');",
+    )
+    .await?;
+    let n = db::query_i64(conn, "SELECT count(*) FROM amp_smoke").await?;
+    if n != 2 {
+        bail!("amp_smoke row count = {n}, want 2");
+    }
+    let note = db::query_text(conn, "SELECT note FROM amp_smoke WHERE id = 1").await?;
+    if note != "hello" {
+        bail!("amp_smoke id=1 note = {note:?}, want \"hello\"");
+    }
+    Ok(())
+}
+
+/// The compute serves exactly the tenant amp created, and writes are YB-backed
+/// (durable across a CHECKPOINT).
+async fn resource_ladder(e: &Endpoint) -> Result<()> {
+    let conn = &e.compute_conn;
+    let served = db::query_text(conn, "SELECT current_setting('neon.tenant_id')").await?;
+    if served != e.tenant_hex {
+        bail!("compute serves tenant {served}, but amp created {}", e.tenant_hex);
+    }
+    db::batch(
+        conn,
+        "CREATE TABLE amp_ladder (k int); INSERT INTO amp_ladder SELECT generate_series(1, 100); CHECKPOINT;",
+    )
+    .await?;
+    let sum = db::query_i64(conn, "SELECT sum(k) FROM amp_ladder").await?;
+    if sum != 5050 {
+        bail!("amp_ladder sum = {sum}, want 5050");
+    }
+    Ok(())
+}
+
+// --- run loop ---------------------------------------------------------------
+
+/// Drive amp's API to provision an endpoint, then run the scenarios against it.
+/// amp must already be running; its base URL comes from `AMP_BASE_URL`.
+pub async fn run_suite(repeat: u32, fail_fast: bool) -> Result<()> {
+    let base = std::env::var("AMP_BASE_URL")
+        .context("AMP_BASE_URL is not set — run via test/e2e/run-amp.sh, which starts amp")?;
+    step(&format!("amp e2e: driving amp at {base}"));
+    let client = AmpClient::new(&base);
+    client.wait_ready(Duration::from_secs(60)).await.context("amp readiness")?;
+
+    step("amp e2e: create user -> storage pool -> timeline (amp provisions the endpoint)");
+    let user = client.create_user(true).await?;
+    let pool = client.create_storage_pool(&user, "e2e-pool").await?;
+    let tl = client.create_timeline(&user, &pool, "main", 17).await.context("create timeline")?;
+    let addr = tl.endpoint_address.clone().context(
+        "amp did not return an endpoint address — start amp with --deploy (AMP_DEPLOY=true)",
+    )?;
+    step(&format!("amp e2e: amp provisioned endpoint at {addr} (tenant {})", tl.tenant_hex));
+
+    let endpoint = Endpoint::from_address(&addr, tl.tenant_hex)?;
+    endpoint.wait_ready(Duration::from_secs(60)).await.context("endpoint readiness")?;
+
+    let mut passed = 0u64;
+    let mut failed = 0u64;
+    let mut fatal: Option<anyhow::Error> = None;
+    'outer: for iter in 1..=repeat {
+        if repeat > 1 {
+            step(&format!("amp iteration {iter}/{repeat}"));
+        }
+        for (name, fut) in scenarios(&endpoint) {
+            match fut.await {
+                Ok(()) => {
+                    passed += 1;
+                    println!("PASS — amp/{name}");
+                }
+                Err(e) => {
+                    failed += 1;
+                    eprintln!("FAIL — amp/{name}: {e:#}");
+                    if fail_fast {
+                        fatal = Some(e);
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+
+    step(&format!("amp e2e: {passed} passed, {failed} failed"));
+    if let Some(e) = fatal {
+        return Err(e);
+    }
+    if failed > 0 {
+        bail!("{failed} amp test(s) failed");
+    }
+    Ok(())
+}

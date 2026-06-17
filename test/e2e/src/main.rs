@@ -26,6 +26,7 @@
 //!                              # — useful for flakiness hunting, e.g.
 //!                              # `e2e_tests -n 20 restart_wal_replay_yb`.
 
+mod amp;
 mod cluster;
 mod db;
 mod psql;
@@ -59,6 +60,11 @@ enum Mode {
     Categories(Vec<Category>),
     /// Run only tests whose name matches (exact or substring).
     Filter(String),
+    /// Run the amp-on-Docker suite: drive amp's REST API and run PG against the
+    /// endpoint amp provisions (see [`crate::amp`]). Whether amp drives the
+    /// storage controller is amp's own configuration, set by run-amp.sh — the
+    /// test is identical either way.
+    Amp,
 }
 
 /// One executable test: a scenario future or a `.sql` golden workload.
@@ -88,7 +94,7 @@ async fn main() -> ExitCode {
         Ok(a) => a,
         Err(msg) => {
             eprintln!("{msg}");
-            eprintln!("usage: e2e_tests [-n <count>] [fast|slow|all|<test-name>]");
+            eprintln!("usage: e2e_tests [-n <count>] [fast|slow|all|amp|<test-name>]");
             return ExitCode::from(2);
         }
     };
@@ -136,6 +142,7 @@ fn parse_args() -> Result<Args, String> {
         None | Some("fast") => Mode::Categories(vec![Category::Fast]),
         Some("slow") => Mode::Categories(vec![Category::Slow]),
         Some("all") => Mode::Categories(vec![Category::Fast, Category::Slow]),
+        Some("amp") => Mode::Amp,
         Some(name) => Mode::Filter(name.to_string()),
     };
 
@@ -151,6 +158,12 @@ async fn run(args: Args) -> anyhow::Result<()> {
     // --no-fail-clean to keep the cluster live for forensics).
     if std::env::var("E2E_STOP_ON_FAIL").is_ok() {
         fail_fast = true;
+    }
+    // The amp-on-Docker suite only drives amp's REST API and psql's the endpoint
+    // amp provisions (amp owns all orchestration); it does not use yb_light_local,
+    // so handle it before that cluster setup.
+    if matches!(mode, Mode::Amp) {
+        return amp::run_suite(repeat, fail_fast).await;
     }
     let mut cluster = Cluster::setup().await?;
 
@@ -221,6 +234,9 @@ fn collect_items<'a>(c: &'a Cluster, mode: &Mode) -> anyhow::Result<Vec<(String,
                 );
             }
         }
+        // The amp suite is dispatched in `run()` before the yb_light_local
+        // cluster (and thus this list) is ever built.
+        Mode::Amp => unreachable!("amp mode is handled in run()"),
     }
 
     // `E2E_SKIP=<substr>[,<substr>...]` drops matching tests from the run

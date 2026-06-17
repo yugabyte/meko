@@ -215,6 +215,17 @@ amp-bundle: postgres-headers-install-v17 cargo-target-dir
 	$(CARGO_CMD_PREFIX) cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE) --bin storage_controller
 	cp "$(NEON_CARGO_ARTIFACT_TARGET_DIR)/storage_controller" "$(AMP_BUNDLE_DIR)/storage_controller"
 
+# amp-only bundle: just the Go controller, no storage_controller. Needs no Rust
+# toolchain, no Postgres headers, and no vendor/postgres-v17 submodule — so it
+# builds in environments where the full bundle can't. Pair it with the deploy/amp
+# image run with AMP_STORAGE_CONTROLLER=false. Used by the docker e2e (amp/tasks).
+.PHONY: amp-bundle-amp-only
+amp-bundle-amp-only:
+	+@echo "Bundling amp (Go only, no storage controller) -> $(AMP_BUNDLE_DIR)"
+	$(RM) -r "$(AMP_BUNDLE_DIR)"
+	mkdir -p "$(AMP_BUNDLE_DIR)"
+	CGO_ENABLED=0 go -C amp build -trimpath -o "$(AMP_BUNDLE_DIR)/amp" ./cmd/amp
+
 # This removes everything
 .PHONY: distclean
 distclean:
