@@ -21,6 +21,8 @@ import (
 	"github.com/yugabyte/yb-light/amp/internal/core"
 	"github.com/yugabyte/yb-light/amp/internal/db"
 	applog "github.com/yugabyte/yb-light/amp/internal/log"
+	"github.com/yugabyte/yb-light/amp/internal/process"
+	"github.com/yugabyte/yb-light/amp/internal/storagecontroller"
 	"github.com/yugabyte/yb-light/amp/internal/task"
 )
 
@@ -95,11 +97,26 @@ func runServe(args []string) error {
 	backend := core.NewPgBackend(pool)
 	srv := api.NewServer(cfg, backend, store, logger)
 
+	// Managed services the controller owns as subprocesses (§11). The storage
+	// controller is the first; the manager is a no-op until one is enabled.
+	mgr := process.NewManager(logger)
+	if cfg.StorageController.Enabled {
+		mgr.Add(storagecontroller.Spec(cfg.StorageController))
+		logger.Info("storage controller managed as subprocess",
+			"bin", cfg.StorageController.BinPath, "listen", cfg.StorageController.ListenAddr)
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		worker.Run(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		mgr.Run(ctx)
 	}()
 
 	srvErr := make(chan error, 1)

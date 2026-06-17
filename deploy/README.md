@@ -9,9 +9,15 @@ deploy/
   endpoint/
     Dockerfile      # builds the single-container endpoint image
     supervisor.py   # PID-1 (under tini) process manager for the 5 services
+  amp/
+    Dockerfile      # the AMP layer: amp + storage_controller bundled (see deploy/amp/README.md, #94)
   helm/
     yb-light-endpoint/   # Helm chart (Deployment + ConfigMap + Secret + Service)
 ```
+
+The **AMP layer** — the `amp` controller plus the shared `storage_controller`
+this endpoint deliberately omits — has its own bundled image under
+[`amp/`](amp/README.md).
 
 ## What's in the container
 

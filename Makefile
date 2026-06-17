@@ -193,6 +193,28 @@ amp-vet:
 amp-generate:
 	go -C amp generate ./...
 
+# Bundle the amp controller and the storage controller it manages, side by side
+# in one directory, so amp resolves and runs the storage controller from its own
+# location with no extra configuration (#94).
+#
+# storage_controller compiles against the Postgres v17 server headers (its
+# transitive postgres_ffi dependency), so this installs them first via
+# postgres-headers-install-v17 — headers only, no Postgres server built, and no
+# build-tools image: just the repo's normal toolchain (rust-toolchain.toml +
+# clang/libclang for bindgen) and an initialized vendor/postgres-v17 submodule.
+# The Rust build follows BUILD_TYPE like the rest of the workspace; the deploy/amp
+# container packages the same layout. Output: $(AMP_BUNDLE_DIR)/{amp,storage_controller}.
+AMP_BUNDLE_DIR ?= $(ROOT_PROJECT_DIR)/target/amp-bundle
+
+.PHONY: amp-bundle
+amp-bundle: postgres-headers-install-v17 cargo-target-dir
+	+@echo "Bundling amp + storage_controller -> $(AMP_BUNDLE_DIR)"
+	mkdir -p "$(AMP_BUNDLE_DIR)"
+	# amp is built static (CGO off) so it runs unchanged in a slim runtime image.
+	CGO_ENABLED=0 go -C amp build -trimpath -o "$(AMP_BUNDLE_DIR)/amp" ./cmd/amp
+	$(CARGO_CMD_PREFIX) cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE) --bin storage_controller
+	cp "$(NEON_CARGO_ARTIFACT_TARGET_DIR)/storage_controller" "$(AMP_BUNDLE_DIR)/storage_controller"
+
 # This removes everything
 .PHONY: distclean
 distclean:

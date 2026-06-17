@@ -686,6 +686,36 @@ yblight-controller's state store, and never exposed to users.** This is principl
 applied: the hard, proven part is the fencing/registry protocol the data-plane
 binaries already speak, and we do not rewrite it.
 
+**How the controller runs it ([#94](https://github.com/yugabyte/yb-light/issues/94)).**
+yblight-controller owns the storage controller as a child process it fully
+manages. A generic process supervisor (`amp/internal/process`) starts the
+binary, streams its stdout/stderr into the controller's structured log,
+restarts it with capped exponential backoff if it exits on its own, and stops
+it cleanly on shutdown — SIGTERM first, escalating to SIGKILL after a grace
+period. The supervisor's `Manager` runs any number of managed processes; the
+storage controller is the first. The storage-controller specifics — the binary
+path, the `--listen` / `--database-url` / `--dev` arguments, and the `/ready`
+readiness probe — live in `amp/internal/storagecontroller`, which also holds
+the thin internal HTTP client yblight-controller uses to drive timeline
+management (create/delete/describe over the storage controller's
+`/v1/tenant/{tenant}/timeline` surface). The manager runs alongside the API
+server and the task worker in the `serve` loop, gated on `--storage-controller`;
+when disabled (the default for the base skeleton, so the controller still runs
+without the binary present) the controller serves without it. Driving the
+lifecycle *through tasks* (§8) — start and upgrade as durable, idempotent
+operations rather than a process spawned at boot — is the next step; #94 lays
+the supervision foundation it builds on.
+
+**Packaging.** Because yblight-controller owns the storage controller's
+lifecycle, the two ship together: `make amp-bundle` lays the `amp` and
+`storage_controller` binaries side by side in one directory, and the
+`deploy/amp` container does the same under `/opt/yb-light-amp`. yblight-controller
+resolves a bare storage-controller binary name against its *own* directory
+first, so the bundled binary is found with no path configuration (falling back
+to `PATH`); an explicit path is honored verbatim. This keeps "one deployment, no
+new external dependency" (§11) literally true — the managed service travels
+inside the controller's own image.
+
 ### 11.2 What is reused, what is not
 
 | API surface | What it does | Used by yb-light today | yblight-controller posture |

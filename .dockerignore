@@ -29,5 +29,7 @@
 !workspace_hack/
 !build-tools/patches
 !deploy/endpoint/
+# deploy/amp packages the prebuilt bundle from `make amp-bundle`.
+!target/amp-bundle/
 # cargo must read every workspace member's manifest to load the workspace.
 !test/e2e/
