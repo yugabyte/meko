@@ -13,7 +13,7 @@ Integrate with AI agents for interactive use cases, such as saving personal, tea
 
 ## Before you connect
 
-1. **Generate an API key**. In the portal, open **Settings>API Keys>Generate API key**, enter a name, then copy or download the key before closing the dialog (it starts with `mko_tkn_` and is shown only once). You can also use **Generate API key** on the configure wizard **Install** step.
+1. **Generate an API key**. In the portal, open **Settings>API Keys>Generate API key**, enter a name, then copy or download the key before closing the dialog (it starts with `mko_tkn_` and is shown only once).
 1. **Use the MCP server URL** `https://mcp.mekodata.ai/mcp` (the same URL appears in any datapack **Connect** dialog).
 
 For any of the following integrations, replace `<paste-your-api-key>` with the key you saved. The portal's one-line installer uses that same placeholder.
@@ -24,7 +24,7 @@ For the full workflow, see [MCP server URL and API key](../#mcp-server-url-and-a
 
 ##### Automated setup
 
-In the Meko portal, select **Install** and follow the steps.
+In the Meko portal, select **Connect** and follow the steps.
 
 ##### Manual setup
 
@@ -54,7 +54,7 @@ In the Meko portal, select **Install** and follow the steps.
 3. Verify the Connection by entering the following in chat.
 
     ```text
-    Is Cursor configured with an MCP Server for Meko?
+    List my datapacks in Meko
     ```
 
 ## Cursor Web
@@ -67,7 +67,7 @@ In the Meko portal, select **Install** and follow the steps.
 
 ##### Automated setup
 
-In the Meko portal, select **Install** and follow the steps.
+In the Meko portal, select **Connect** and follow the steps.
 
 ##### Manual setup
 
@@ -108,14 +108,14 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
 1. Verify the connection by entering the following in chat:
 
     ```text
-    Is Claude configured with an MCP Server for Meko?
+    List my datapacks in Meko
     ```
 
 ## Claude Code
 
 ##### Automated setup
 
-In the Meko portal, select **Install** and follow the steps.
+In the Meko portal, select **Connect** and follow the steps.
 
 ##### Manual setup
 
@@ -130,12 +130,8 @@ In the Meko portal, select **Install** and follow the steps.
 2. Verify the connection by entering the following at the command-line console:
 
     ```txt
-    Is Claude configured with an MCP Server for Meko?
+    List my datapacks in Meko
     ```
-
-    You should see a response like the following:
-
-    ![Claude Code](/images/integrations-claudecode-response.png)
 
 ## Open AI Codex Desktop
  
@@ -167,7 +163,7 @@ In the Meko portal, select **Install** and follow the steps.
 8. Verify the connection by entering the following in chat:
 
     ```text
-    Is Codex Desktop configured with an MCP Server for Meko?
+    List my datapacks in Meko
     ```
 
 ## VS Code
@@ -195,7 +191,7 @@ In the Meko portal, select **Install** and follow the steps.
 1. Verify the connection by entering the following in chat:
 
     ```text
-    Is VS Code configured with an MCP Server for Meko?
+    List my datapacks in Meko
     ```
 
 <!-- ## Windsurf, GitHub Copilot CLI, Gemini Anti-Gravity, and others

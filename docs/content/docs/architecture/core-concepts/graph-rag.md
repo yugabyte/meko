@@ -33,12 +33,12 @@ Meko's memory search combines results from both pgvector (semantic) and Meko AGE
 
 ## Configuration
 
-The graph store is configured with connection details to the Meko AGE instance and a similarity threshold for node matching:
+Under the hood, the graph store is configured with connection details to the Meko AGE instance and a similarity threshold for node matching. (These are set by Meko and are not user configurable.)
 
-| Setting | Description | Default |
-| :------ | :---------- | :------ |
-| `graph_name` | Name of the graph in Meko AGE | Configured per deployment |
-| `threshold` | Similarity threshold for node matching (0.0 to 1.0) | 0.7 |
+| Setting | Description |
+| :------ | :---------- |
+| `graph_name` | Name of the graph in Meko AGE. This is set automatically per deployment |
+| `threshold` | Similarity threshold for node matching, set to 0.7 (on a scale of 0.0 to 1.0) |
 
 <!-- TODO: Add deeper technical details on graph schema, query patterns, and tuning the similarity threshold -->
 <!-- TODO: Document how to query the graph directly via PostgreSQL/AGE SQL extensions -->

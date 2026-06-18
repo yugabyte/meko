@@ -39,6 +39,14 @@ POST /api/v1/datapacks/{name}/knowledge-bases
 
 ## Supported sources
 
+Currently, you must upload knowledge via the Meko portal:
+
+1. Navigate to **Datapacks** and select your datapack.
+1. Click **Upload Knowledge Files** (or **Add to Knowledge Base**).
+
+Currently, Meko accepts PDF, TXT, MD, JSON, and CSV files up to 5MB each, up to 10 per batch.
+
+<!--
 | Source | Example URL |
 | :----- | :---------- |
 | S3 | `s3://bucket/docs/` |
@@ -48,6 +56,7 @@ POST /api/v1/datapacks/{name}/knowledge-bases
 ## Supported document formats
 
 PDF, Parquet, Iceberg, JSON, images, and video.
+-->
 
 ## Query knowledge
 

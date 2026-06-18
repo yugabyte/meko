@@ -49,8 +49,8 @@ _Recommended for Cursor, Claude Code, and Claude Desktop._
 
 The portal gives you a one-line `npx` command per client. It registers the Meko MCP server **and** installs an agent behavioral skill that teaches your agent _when_ to use Meko tools automatically — saving conversations, capturing memories, and searching knowledge without you having to ask each time. In harnesses that support it (e.g., Claude Code), the skill also hooks into session lifecycle events to capture context at session start and end.
 
-1. Generate an API key from **Settings > API Keys** (or from the datapack **Connect** dialog). Name it for the client that will use it (e.g., `laptop/claude-desktop`). The key starts with `mko_tkn_` and is shown exactly once — copy or download before closing.
-2. Open the **Connect** dialog on any datapack, or go to the **Install** page in the sidebar. Select your client tab (Claude Code, Claude Desktop, or Cursor).
+1. Generate an API key from **Settings > API Keys**. Name it for the client that will use it (e.g., `laptop/claude-desktop`). The key starts with `mko_tkn_` and is shown exactly once — copy or download before closing.
+2. Open the **Connect** dialog on any datapack, or go to the **Connect** page in the sidebar. Select your client tab (Claude Code, Claude Desktop, or Cursor).
 3. Run the install command shown. It looks like this:
 
     ```sh
@@ -130,7 +130,7 @@ _Under development._ Programmatic integration patterns for agent frameworks (Lan
 
 {{< card-group >}}
   {{< card
-    href="quick-start/explore-memory/"
+    href="quick-start/explore-meko/"
     title="Explore Meko"
     desc="Add knowledge to your datapack and create memories."
   >}}

@@ -6,7 +6,28 @@ weight: 6000
 type: docs
 ---
 
-If you run into a problem with Meko or want to share feedback, here's where to go.
+## Common problems installing and connecting
+
+If you have problems with your setup, check the following common issues:
+
+- API key.
+
+    Ensure you pasted your API key correctly (no whitespace). Ensure the key is not revoked or expired.
+
+- Node version.
+
+    Ensure you have the correct version of Node (Node.js 18.0 or newer) installed.
+
+- Claude Desktop.
+    - Restart is required after editing your configuration.
+    - `--allow-http` flag is required in [manual setup](../../integrations/connect-to-ai-agent/#manual-setup-1).
+
+<!--
+- OAuth datapack-tools caveat (per outcome of the OAuth docs ticket)
+-->
+- Agent answers but never calls Meko tools.
+
+    The Meko skills are not installed; see **Connect>Manual MCP Install** in the portal.
 
 ## Report an issue
 

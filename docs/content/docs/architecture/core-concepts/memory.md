@@ -19,7 +19,7 @@ This dual storage means memories can be found both by semantic similarity ("find
 
 ## Memory operations
 
-Meko exposes four core memory operations.
+Meko exposes [memory tools](../../../reference/mcp-server/#memory-tools), including the following.
 
 ### Add memory
 
@@ -41,13 +41,13 @@ Find relevant memories using semantic similarity search. Returns the top matches
 
 This searches both the vector store (pgvector) and the graph store (Meko AGE), combining results for comprehensive recall.
 
-### Get all memories
+### Get memories
 
-Retrieve every memory stored for a given user or agent. Useful for debugging or displaying a memory dashboard.
+Retrieve memories stored for a given user or agent. Useful for debugging or displaying a memory dashboard.
 
 ### Clear memories
 
-Remove all memories for a user or agent. This is a destructive operation - cleared memories cannot be recovered.
+Remove memories for a user or agent. This is a destructive operation - cleared memories cannot be recovered.
 
 ## Memory vs. conversation history
 

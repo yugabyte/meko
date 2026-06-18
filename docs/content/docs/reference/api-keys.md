@@ -15,7 +15,7 @@ Meko uses long-lived API keys (personal access tokens) to authenticate MCP clien
 1. In the Meko portal, open **Settings**.
 2. In the **API Keys** section, click **Generate API key**.
 3. Enter a **Name** that identifies the client (e.g., `laptop/claude-desktop`, `laptop/cursor`). This is a label only — pick something that tells you where the key is used.
-4. Click **Generate token**.
+4. Click **Generate API key**.
 5. **Copy** or **Download .txt** before closing the dialog. The full key is shown exactly once.
 
 **From the datapack Connect dialog**

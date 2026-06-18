@@ -61,26 +61,15 @@ To share your datapack with colleagues:
 
 Each datapack is fully isolated:
 
-- **Data isolation**. Separate database per datapack. One agent cannot access another's data.
+- **Data isolation**. Logical isolation within a shared YugabyteDB universe. One agent cannot access another's data.
 - **Credential isolation**. User API keys and database credentials are scoped to your account; datapack data is separated in storage.
 - **MCP isolation**. Tool calls include a `datapack_id` so the shared MCP server only reads and writes that datapack's data.
 
 ## Connect via MCP
 
-Each datapack exposes an MCP server that agents use to interact with their data:
+Each datapack exposes an MCP server that agents use to interact with their data.
 
-```json
-{
-  "mcpServers": {
-    "my-datapack": {
-      "command": "meko",
-      "args": ["mcp", "serve", "--name", "my-datapack"]
-    }
-  }
-}
-```
-
-When you create a datapack in the Meko portal, Meko provides instructions to connect your datapack to your agent automatically. The connection commands are also available under **Install** in the Meko portal.
+When you create a datapack in the Meko portal, Meko provides instructions to connect your datapack to your agent automatically. The connection commands are also available under **Connect** in the Meko portal.
 
 You can also configure clients by manually adding this configuration to your coding agent or agent framework. See [Integrations](/integrations/).
 

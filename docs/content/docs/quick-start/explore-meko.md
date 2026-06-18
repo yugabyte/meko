@@ -20,7 +20,7 @@ To see how Meko stores knowledge, add documents to your datapack and query them 
 
 As an example, for Claude Code, the standard for providing project knowledge and coding practices is a [CLAUDE.md file](https://claude.com/blog/using-claude-md-files). You can add your CLAUDE.md file to your datapack.
 
-In your coding agent, issue a prompt to add a document to your datapack, and attach a file in CSV, JSON, markdown, or PDF format.
+<!--In your coding agent, issue a prompt to add a document to your datapack, and attach a file in CSV, JSON, markdown, or PDF format.-->
 
 Use the following markdown content in Claude Code to try this out by copying and modifying the contents to a local `CLAUDE.md` file.
 
@@ -60,12 +60,10 @@ IMPORTANT: After every significant code change, you MUST follow this sequence:
 - **API**: All external service calls must include a 3-second timeout and explicit error handling.
 ```
 
-##### Use the portal
-
-On the Meko portal:
+Then, on the Meko portal:
 
 1. Navigate to **Datapacks** and select your datapack.
-1. Click **Actions>Add Knowledge**.
+1. Click **Upload Knowledge Files** (or **Add to Knowledge Base**).
 1. Upload your file.
 
 Meko will process the file; this may take a few minutes.
