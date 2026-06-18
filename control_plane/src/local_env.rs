@@ -31,6 +31,21 @@ pub const DEFAULT_PG_VERSION: u32 = 17;
 // to 'yb_light_local init --config=<path>' option. See control_plane/simple.conf for
 // an example.
 //
+/// Process-local memoized `reqwest::Client`, built once and cloned cheaply
+/// (the client is `Arc`-internal). Building a client parses the rustls root
+/// store, which is ~100ms in debug builds — and `StorageController::from_env`
+/// builds one per controller call (~7 per `endpoint create`), so memoizing it
+/// here takes that repeated cost off every `yb_light_local` controller path.
+/// Not logical config state: excluded from `LocalEnv` equality.
+#[derive(Clone, Debug, Default)]
+pub struct HttpClientCache(std::sync::OnceLock<reqwest::Client>);
+
+impl PartialEq for HttpClientCache {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 #[derive(PartialEq, Clone, Debug)]
 pub struct LocalEnv {
     // Base directory for all the nodes (the pageserver, safekeepers and
@@ -108,6 +123,11 @@ pub struct LocalEnv {
     /// Flag to generate SSL certificates for components that need it.
     /// Also generates root CA certificate that is used to sign all other certificates.
     pub use_local_tls: bool,
+
+    /// Memoized HTTP client (see [`HttpClientCache`]). Built lazily on first
+    /// [`Self::create_http_client`] and reused for the rest of the process.
+    #[doc(hidden)]
+    pub http_client: HttpClientCache,
 }
 
 /// On-disk state stored in `.yb_light/config`.
@@ -610,20 +630,29 @@ impl LocalEnv {
     }
 
     /// Creates HTTP client with local SSL CA certificates.
+    /// Return this env's HTTP client, building it on first call and reusing
+    /// it thereafter (clones share the connection pool). Building is the
+    /// expensive part — see [`HttpClientCache`] — so callers that previously
+    /// rebuilt per request now get the memoized one for free.
     pub fn create_http_client(&self) -> reqwest::Client {
-        let ssl_ca_certs = self.ssl_ca_cert_path().map(|ssl_ca_file| {
-            let buf = std::fs::read(ssl_ca_file).expect("SSL CA file should exist");
-            Certificate::from_pem_bundle(&buf).expect("SSL CA file should be valid")
-        });
+        self.http_client
+            .0
+            .get_or_init(|| {
+                let ssl_ca_certs = self.ssl_ca_cert_path().map(|ssl_ca_file| {
+                    let buf = std::fs::read(ssl_ca_file).expect("SSL CA file should exist");
+                    Certificate::from_pem_bundle(&buf).expect("SSL CA file should be valid")
+                });
 
-        let mut http_client = reqwest::Client::builder();
-        for ssl_ca_cert in ssl_ca_certs.unwrap_or_default() {
-            http_client = http_client.add_root_certificate(ssl_ca_cert);
-        }
+                let mut http_client = reqwest::Client::builder();
+                for ssl_ca_cert in ssl_ca_certs.unwrap_or_default() {
+                    http_client = http_client.add_root_certificate(ssl_ca_cert);
+                }
 
-        http_client
-            .build()
-            .expect("HTTP client should construct with no error")
+                http_client
+                    .build()
+                    .expect("HTTP client should construct with no error")
+            })
+            .clone()
     }
 
     /// Inspect the base data directory and extract the instance id and instance directory path
@@ -738,6 +767,7 @@ impl LocalEnv {
             } = on_disk_config;
             LocalEnv {
                 base_data_dir: repopath.to_owned(),
+                http_client: HttpClientCache::default(),
                 pg_distrib_dir,
                 yb_light_distrib_dir,
                 default_tenant_id,
@@ -1024,6 +1054,7 @@ impl LocalEnv {
         // and are populated as endpoints are created.
         let env = LocalEnv {
             base_data_dir: base_path.clone(),
+            http_client: HttpClientCache::default(),
             pg_distrib_dir,
             yb_light_distrib_dir,
             default_tenant_id: Some(default_tenant_id),
@@ -1203,6 +1234,7 @@ mod tests {
     fn minimal_env(base: PathBuf) -> LocalEnv {
         LocalEnv {
             base_data_dir: base,
+            http_client: HttpClientCache::default(),
             pg_distrib_dir: PathBuf::from("/pg"),
             yb_light_distrib_dir: PathBuf::from("/neon"),
             default_tenant_id: None,

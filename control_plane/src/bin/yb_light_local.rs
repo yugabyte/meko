@@ -2961,6 +2961,7 @@ mod tests {
     fn env_with_templates() -> LocalEnv {
         LocalEnv {
             base_data_dir: PathBuf::from("/tmp/repo"),
+            http_client: local_env::HttpClientCache::default(),
             pg_distrib_dir: PathBuf::from("/pg"),
             yb_light_distrib_dir: PathBuf::from("/yb_light"),
             default_tenant_id: None,
