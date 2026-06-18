@@ -852,7 +852,7 @@ impl PageStore {
         for r in rows {
             let row = row_to_page(r)?;
             order_check.push((row.lsn, row.is_image, row.will_init));
-            assert_chain_order_for_key(&order_check, "read_chain");
+            assert_chain_step(&order_check, "read_chain");
             let anchor = row.will_init;
             chain.push(Arc::new(row));
             if anchor {
@@ -1009,7 +1009,7 @@ impl PageStore {
                 row.is_image,
                 row.will_init,
             ));
-            assert_chain_order_for_key(order_check.get(&key).unwrap(), "scan_range");
+            assert_chain_step(order_check.get(&key).unwrap(), "scan_range");
             let chain = by_key.entry(key).or_default();
             if chain.last().is_some_and(|last| last.will_init) {
                 continue;
@@ -1162,7 +1162,7 @@ impl PageStore {
         for r in rows {
             let row = row_to_slru_page(r)?;
             order_check.push((row.lsn, row.is_image, row.will_init));
-            assert_chain_order_for_key(&order_check, "read_slru_chain");
+            assert_chain_step(&order_check, "read_slru_chain");
             let anchor = row.will_init;
             chain.push(row);
             if anchor {
@@ -1265,7 +1265,7 @@ impl PageStore {
                 .entry(row.blknum)
                 .or_default()
                 .push((row.lsn, row.is_image, row.will_init));
-            assert_chain_order_for_key(order_check.get(&row.blknum).unwrap(), "scan_slru_range");
+            assert_chain_step(order_check.get(&row.blknum).unwrap(), "scan_slru_range");
             let entry = by_block.entry(row.blknum).or_default();
             if entry.last().is_some_and(|last| last.will_init) {
                 continue;
@@ -2270,34 +2270,55 @@ impl PageStore {
 /// tiebreaker (caller bug) or stale prepared-statement state. Panic
 /// rather than silently feed walredo a chain that would yield wrong
 /// page contents.
-fn assert_chain_order_for_key(chain: &[(Lsn, bool, bool /* will_init */)], where_: &str) {
-    let mut prev: Option<(Lsn, bool)> = None;
-    for (i, &(lsn, is_image, _will_init)) in chain.iter().enumerate() {
-        if let Some((plsn, pis_image)) = prev {
-            if lsn > plsn {
-                panic!("{where_}: chain row {i} lsn {lsn} > prev lsn {plsn} (must be DESC)",);
-            }
-            if lsn == plsn && !pis_image && is_image {
-                panic!(
-                    "{where_}: chain has image at lsn {lsn} after a delta at the same lsn (need ORDER BY ..., is_image DESC tiebreaker)",
-                );
-            }
-        }
-        prev = Some((lsn, is_image));
+///
+/// This is the **incremental** form: it validates only the just-appended
+/// row (`chain.last()`) against its predecessor, so calling it once per
+/// appended row inside the read loop is O(n) total and is equivalent to a
+/// single full scan after the loop. (Re-scanning the whole accumulated
+/// chain per row would be O(n²) — on clog's runaway CLOG chains of tens of
+/// thousands of rows that was ~15s of pure assertion overhead per chain,
+/// the dominant cost behind slow post-burst materialise / basebackup
+/// reconstruction; see #115.)
+fn assert_chain_step(chain: &[(Lsn, bool, bool /* will_init */)], where_: &str) {
+    let n = chain.len();
+    if n < 2 {
+        return;
+    }
+    let (plsn, pis_image, _) = chain[n - 2];
+    let (lsn, is_image, _) = chain[n - 1];
+    if lsn > plsn {
+        panic!("{where_}: chain row {} lsn {lsn} > prev lsn {plsn} (must be DESC)", n - 1);
+    }
+    if lsn == plsn && !pis_image && is_image {
+        panic!(
+            "{where_}: chain has image at lsn {lsn} after a delta at the same lsn (need ORDER BY ..., is_image DESC tiebreaker)",
+        );
     }
 }
 
 #[cfg(test)]
 mod chain_order_tests {
-    //! Unit tests for [`assert_chain_order_for_key`]. The guard runs
-    //! after every chain trim in `read_chain` / `scan_range` /
-    //! `read_slru_chain` / `scan_slru_range`, so a regression in
-    //! either the SQL `ORDER BY` clause or in the row-to-PageRow
-    //! decode would be caught here without needing a live YB.
+    //! Unit tests for [`assert_chain_step`], the per-row chain-order guard
+    //! run inside `read_chain` / `scan_range` / `read_slru_chain` /
+    //! `scan_slru_range`. [`check`] mirrors the production usage — push
+    //! rows one at a time and validate the new tail each step — so a
+    //! regression in the SQL `ORDER BY` clause or in the row-to-PageRow
+    //! decode is caught without needing a live YB.
     use super::*;
 
     fn row(lsn: u64, is_image: bool, will_init: bool) -> (Lsn, bool, bool) {
         (Lsn(lsn), is_image, will_init)
+    }
+
+    /// Drive `assert_chain_step` exactly as the read loops do: append each
+    /// row to a growing chain and validate against its predecessor every
+    /// step. Equivalent to validating the whole chain, but O(n) overall.
+    fn check(rows: &[(Lsn, bool, bool)], where_: &str) {
+        let mut chain: Vec<(Lsn, bool, bool)> = Vec::with_capacity(rows.len());
+        for &r in rows {
+            chain.push(r);
+            assert_chain_step(&chain, where_);
+        }
     }
 
     /// The canonical happy-path chain. Walking the trim DESC: a delta
@@ -2305,7 +2326,7 @@ mod chain_order_tests {
     /// lower LSN — break. Strict-decreasing LSNs, no tied LSNs.
     #[test]
     fn pure_descending_lsn_is_accepted() {
-        assert_chain_order_for_key(
+        check(
             &[
                 row(300, false, false),
                 row(200, false, false),
@@ -2321,7 +2342,7 @@ mod chain_order_tests {
     /// SQL with `ORDER BY p.lsn DESC, p.is_image DESC` produces.
     #[test]
     fn image_first_at_tied_lsn_is_accepted() {
-        assert_chain_order_for_key(
+        check(
             &[
                 row(200, false, false),
                 row(100, true, true),
@@ -2332,12 +2353,11 @@ mod chain_order_tests {
     }
 
     /// Two deltas at the same LSN, then an image at a lower LSN.
-    /// Same-LSN deltas are legal (different sub-records or same
-    /// record decoded twice for different keys can land at the same
-    /// LSN); only image-AFTER-delta-at-tied-LSN is forbidden.
+    /// Same-LSN deltas are legal; only image-AFTER-delta-at-tied-LSN
+    /// is forbidden.
     #[test]
     fn delta_delta_at_same_lsn_is_accepted() {
-        assert_chain_order_for_key(
+        check(
             &[
                 row(200, false, false),
                 row(200, false, false),
@@ -2347,50 +2367,49 @@ mod chain_order_tests {
         );
     }
 
-    /// Two images at the same LSN — pathological but legal under
-    /// the rule. The first one anchors the trim; the second would
-    /// be dropped by the will_init break in the caller. The guard
-    /// only forbids image-AFTER-delta at the same LSN.
+    /// Two images at the same LSN — pathological but legal under the
+    /// rule (only image-AFTER-delta at the same LSN is forbidden).
     #[test]
     fn image_image_at_same_lsn_is_accepted() {
-        assert_chain_order_for_key(
-            &[row(100, true, true), row(100, true, true)],
-            "test_image_image_tie",
-        );
+        check(&[row(100, true, true), row(100, true, true)], "test_image_image_tie");
     }
 
-    /// Single-row chain is trivially ordered.
+    /// Single-row and empty chains never reach a predecessor, so the
+    /// `n < 2` short-circuit makes them trivially ordered.
     #[test]
-    fn single_row_is_accepted() {
-        assert_chain_order_for_key(&[row(100, true, true)], "test_single");
+    fn single_and_empty_are_accepted() {
+        check(&[row(100, true, true)], "test_single");
+        check(&[], "test_empty");
+        // Direct calls exercise the short-circuit itself.
+        assert_chain_step(&[], "test_empty_direct");
+        assert_chain_step(&[row(100, true, true)], "test_single_direct");
     }
 
-    /// Empty chain is trivially ordered.
+    /// A long valid chain validates without panicking — the regression
+    /// guard for the O(n²)→O(n) fix (#115): each step is O(1), and a long
+    /// strictly-descending chain stays accepted.
     #[test]
-    fn empty_chain_is_accepted() {
-        assert_chain_order_for_key(&[], "test_empty");
+    fn long_descending_chain_is_accepted() {
+        let rows: Vec<_> = (0..10_000u64).rev().map(|l| row(l + 1, false, false)).collect();
+        check(&rows, "test_long_desc");
     }
 
-    /// LSN increasing across two rows must panic — the trim relies
-    /// on DESC order, and walredo would then receive WAL records in
-    /// the wrong replay order.
+    /// LSN increasing across two rows must panic — the trim relies on
+    /// DESC order, and walredo would then receive WAL records in the
+    /// wrong replay order.
     #[test]
     #[should_panic(expected = "must be DESC")]
     fn lsn_ascending_panics() {
-        assert_chain_order_for_key(
-            &[row(100, false, false), row(200, false, false)],
-            "test_lsn_asc",
-        );
+        check(&[row(100, false, false), row(200, false, false)], "test_lsn_asc");
     }
 
-    /// Image AFTER a delta at the same LSN is the pre-fix bug. The
-    /// trim would push the delta, then break at the image, so the
-    /// chain handed to walredo would contain a same-LSN delta whose
-    /// effect is already baked into the image — double-apply.
+    /// Image AFTER a delta at the same LSN is the pre-fix bug: the chain
+    /// handed to walredo would contain a same-LSN delta whose effect is
+    /// already baked into the image — double-apply.
     #[test]
     #[should_panic(expected = "after a delta at the same lsn")]
     fn image_after_delta_at_tied_lsn_panics() {
-        assert_chain_order_for_key(
+        check(
             &[
                 row(200, false, false),
                 row(100, false, false),
@@ -2400,19 +2419,11 @@ mod chain_order_tests {
         );
     }
 
-    /// LSN strict-decreasing is fine; only an increase panics. The
-    /// equal-LSN case is allowed (handled by the `lsn > plsn` check,
-    /// not `>=`).
+    /// Equal LSNs are fine; only an increase panics (`lsn > plsn`, not
+    /// `>=`). Two same-LSN deltas don't trip the DESC or image checks.
     #[test]
     fn equal_lsn_does_not_trigger_desc_panic() {
-        // Two deltas at the same LSN — first row sets the prev, second
-        // hits `lsn == plsn`, which does NOT trigger the DESC panic
-        // (only `lsn > plsn` does). The image-after-delta check also
-        // doesn't fire because both rows are deltas.
-        assert_chain_order_for_key(
-            &[row(100, false, false), row(100, false, false)],
-            "test_equal_lsn_deltas",
-        );
+        check(&[row(100, false, false), row(100, false, false)], "test_equal_lsn_deltas");
     }
 }
 
