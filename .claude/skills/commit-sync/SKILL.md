@@ -6,7 +6,9 @@ description: >-
   **same** commit: (1) `architecture/*.md` docs, (2) tests covering the
   new/changed behavior, (3) inspection/diagnostic tooling under `tools/` and
   `scripts/`, and (4) operational `runbooks/*.md`. For each, decide whether the
-  change makes it wrong or missing, and update it in the same commit. Use for
+  change makes it wrong or missing, and update it in the same commit. Also, on
+  any commit that touches Rust, run `cargo clippy` and resolve every warning
+  before committing (a Rust commit lands clippy-clean). Use for
   `git commit`, `git add`-then-commit, `/commit-commands:commit`,
   `/commit-commands:commit-push-pr`, or any flow that ends in a commit.
 ---
@@ -27,7 +29,7 @@ must keep that companion accurate, **in the same commit**. Not "follow-up", not
 fine; you still have to look.
 
 (Note: the GitHub-issue tracker is handled by the separate
-`task-tracker-sync` skill. This skill's Step 4 still reminds you to
+`task-tracker-sync` skill. This skill's Step 5 still reminds you to
 reference and close the relevant issue at commit time — they work together.)
 
 ## When to fire
@@ -179,7 +181,35 @@ Update a runbook when your change makes one of those wrong:
 - A startup precondition / failure mode the runbook diagnoses changed (esp. for
   `startup-failures.md`).
 
-## Step 3 — update in the same commit
+## Step 3 — clippy must be clean
+
+If the commit touches Rust (`*.rs`, `Cargo.toml`, build scripts), run
+clippy and resolve every warning **before** you commit — a warning-clean
+tree is part of "landing complete", same as the companions above. A
+warning that lands is one the next person has to wade past to see whether
+*their* change added anything.
+
+```
+cargo clippy --workspace --all-targets 2>&1 | grep -E "^warning: " | grep -v generated
+```
+
+Must print nothing. If it doesn't:
+
+- `cargo clippy --fix --workspace --all-targets --allow-dirty --allow-staged`
+  clears the machine-applicable lints; fix the rest by hand.
+- Prefer a real fix. Reach for a **targeted** `#[allow(clippy::...)]`
+  (with a one-line reason) only for design-choice lints where a refactor
+  would be riskier than the lint — e.g. `too_many_arguments` on a wide
+  wiring/constructor signature, `large_enum_variant` where boxing would
+  ripple through the type. Never blanket-allow at crate level.
+- Re-run until the grep above is empty, then `cargo build --workspace` to
+  confirm the fixes compile.
+
+Skip this step only when nothing staged is Rust (pure docs/runbook/config
+commits). It is **not** optional just because the warnings are
+pre-existing: a Rust commit lands clippy-clean.
+
+## Step 4 — update in the same commit
 
 Edit the companions that apply. Do **not** split into a separate "docs/tests
 follow-up" commit — if the code lands and a companion still says the old thing,
@@ -242,7 +272,7 @@ tests, tools, runbooks) ride along silently — don't enumerate them in
 the subject. Call out a companion in the body only if it's large or
 load-bearing (e.g. a substantial doc rewrite or a new test suite).
 
-## Step 4 — reference and close the tracked issue
+## Step 5 — reference and close the tracked issue
 
 If this commit advances or completes a GitHub issue (see the
 `task-tracker-sync` skill for the full tracker contract):
