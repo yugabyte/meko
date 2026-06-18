@@ -899,6 +899,15 @@ func (s *LangfuseService) GetConversation(
 	return projectID, detail, nil
 }
 
+// ConversationHistoryIndexed reports whether the conversation is already in the
+// conversation cache. The handler calls this only after the owner + agent gates.
+func (s *LangfuseService) ConversationHistoryIndexed(datapackID, conversationID string) (bool, error) {
+	if s == nil || s.repo == nil {
+		return false, fmt.Errorf("langfuse service is not configured")
+	}
+	return s.repo.ConversationHistoryIndexed(datapackID, conversationID)
+}
+
 // GetMessageTrace returns the windowed observation tree for one
 // message turn — used by the conversation viewer's trace drawer.
 //

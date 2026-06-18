@@ -199,7 +199,7 @@ export function WorkbenchLMChat({
   const inputDisabled = blockedReason !== null || sending;
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, opts?: { bypassConversationCache?: boolean }) => {
       const trimmed = text.trim();
       if (
         !trimmed ||
@@ -211,6 +211,7 @@ export function WorkbenchLMChat({
       ) {
         return;
       }
+      const bypass = opts?.bypassConversationCache ?? false;
 
       setError(null);
       const userMsg: Message = {
@@ -238,9 +239,19 @@ export function WorkbenchLMChat({
           // (gateway responses populate it); also set when the user
           // resumed a previous chat from the dropdown.
           conversation_id: conversationId ?? undefined,
+          // Set by the "Regenerate with full search" button to force the
+          // full memory + KB + LLM path instead of reusing a cached answer.
+          bypass_conversation_cache: bypass || undefined,
         });
         if (resp.session_id) setSessionId(resp.session_id);
         if (resp.conversation_id) setConversationId(resp.conversation_id);
+        // A conversation-cache hit shows up as a `conversation_summarize` step
+        // in the gateway's per-turn timeline — detect it immediately (no need
+        // to wait for the Langfuse decision-trace fetch) so the bubble can
+        // offer "Regenerate with full search".
+        const answeredFromCache = (resp.processing_steps ?? []).some(
+          (s) => s.name === "conversation_summarize" && s.status === "ok",
+        );
         const assistantMsgId = crypto.randomUUID();
         const assistantMsg: Message = {
           id: assistantMsgId,
@@ -254,6 +265,10 @@ export function WorkbenchLMChat({
           // so the gateway's `memory_hits` / `kb_hits` / `processing_steps`
           // / `memory_context` / `kb_context` go unused here.
           langfuseMessageId: resp.message_id || undefined,
+          // Only mark as cache-answered when this turn DIDN'T already bypass
+          // the cache — a re-answer should never offer to regenerate again.
+          answeredFromCache: answeredFromCache && !bypass,
+          sourceUserMessage: answeredFromCache && !bypass ? trimmed : undefined,
         };
         setMessages((prev) => [...prev, assistantMsg]);
         onTurnComplete?.();
@@ -263,7 +278,16 @@ export function WorkbenchLMChat({
         setSending(false);
       }
     },
-    [datapackId, userId, userToken, sending, sessionId, conversationId, gatedReadiness, onTurnComplete],
+    [
+      datapackId,
+      userId,
+      userToken,
+      sending,
+      sessionId,
+      conversationId,
+      gatedReadiness,
+      onTurnComplete,
+    ],
   );
 
   const handleSubmit = useCallback(() => {
@@ -346,6 +370,11 @@ export function WorkbenchLMChat({
                   conversationId={conversationId ?? undefined}
                   langfuseProjectId={loadedLangfuseProjectId ?? undefined}
                   datapackId={datapackId}
+                  onRegenerate={
+                    m.role === "assistant" && m.answeredFromCache && m.sourceUserMessage && !sending
+                      ? () => void send(m.sourceUserMessage!, { bypassConversationCache: true })
+                      : undefined
+                  }
                   datapackName={datapackName}
                 />
               );

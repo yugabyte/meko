@@ -7,11 +7,17 @@ Frozen dataclass so configuration is immutable after startup.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 # Provider defaults — reused by argparse and tests.
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_BEDROCK_MODEL = "us.amazon.nova-2-lite-v1:0"
+
+# Small, cheap model used to summarize conversation-history chunks on a cache
+# hit (separate from the main chat model). Nova Lite is the cost/quality sweet
+# spot on Bedrock; override with --conv-summary-model / INFERENCE_CONV_SUMMARY_MODEL.
+DEFAULT_CONV_SUMMARY_BEDROCK_MODEL = "mistral.ministral-3-3b-instruct"
 
 # MCP / network defaults.
 DEFAULT_MCP_ENDPOINT = "https://mcp.mekodata.ai/mcp"
@@ -83,3 +89,6 @@ class AppConfig:
     max_history: int
     memory_top_k: int
     llm_max_tokens: int = DEFAULT_LLM_MAX_TOKENS
+    # Small model for summarizing conversation-history hits. None → reuse the
+    # main llm_model (still works, just not as cheap).
+    conv_summary_model: Optional[str] = None

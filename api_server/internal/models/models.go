@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+// WorkbenchAgentID is the Inference Gateway's agent_id. Only its conversations
+// populate the conversation cache, so only they can be backfilled.
+const WorkbenchAgentID = "WorkbenchLM"
+
 // Datapack represents a registered datapack in the meko system.
 //
 // Backed by meko_system.datapacks. Identified by (user_id, datapack_id);

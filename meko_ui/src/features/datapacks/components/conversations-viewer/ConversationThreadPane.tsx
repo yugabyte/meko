@@ -80,6 +80,8 @@ export function ConversationThreadPane({
   const [loading, setLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped to re-fetch the detail (e.g. after indexing flips can_index → false).
+  const [reloadToken, setReloadToken] = useState(0);
 
   const now = useNowMs();
 
@@ -120,7 +122,7 @@ export function ConversationThreadPane({
         if (!ac.signal.aborted) setLoading(false);
       });
     return () => ac.abort();
-  }, [datapackId, conversationId]);
+  }, [datapackId, conversationId, reloadToken]);
 
   const loadOlder = useCallback(async () => {
     if (!conversationId || !olderHasMore || loadingOlder) return;
@@ -253,6 +255,8 @@ export function ConversationThreadPane({
         conversationId={conversationId}
         langfuseProjectId={langfuseProjectId}
         userEmail={userEmail}
+        datapackId={datapackId}
+        onIndexed={() => setReloadToken((t) => t + 1)}
         now={now}
       />
 

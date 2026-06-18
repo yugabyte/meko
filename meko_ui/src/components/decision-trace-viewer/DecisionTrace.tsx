@@ -10,7 +10,8 @@
 
 import { useMemo, useState } from "react";
 import { Brain, ChevronDown, ChevronRight, Layers, Sparkles, Workflow } from "lucide-react";
-import type { DatapackThreadMessage } from "@/lib/api/mekoApi";
+import { useQuery } from "@tanstack/react-query";
+import { listDatapackMembers, type DatapackThreadMessage } from "@/lib/api/mekoApi";
 import { normalizeMarkdownText } from "@/features/datapacks/components/conversations-viewer/markdownNormalize";
 import { DecisionTraceHeader, type DbBreakdownEntry } from "./DecisionTraceHeader";
 import { PhaseAccordion } from "./PhaseAccordion";
@@ -63,6 +64,29 @@ export function DecisionTrace({
   defaultExpanded = false,
 }: DecisionTraceProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+
+  // Resolve author user_id → email for conversation-search chunks. Only fetched
+  // when a datapack has chunk authors to show; react-query caches by name so
+  // repeated DecisionTrace instances share one request.
+  const hasConvChunks = useMemo(
+    () => (message.processing_steps ?? []).some((s) => (s.conversation_chunks?.length ?? 0) > 0),
+    [message.processing_steps],
+  );
+
+  const { data: membersData } = useQuery({
+    queryKey: ["datapack-members", datapackName],
+    queryFn: () => listDatapackMembers(datapackName as string),
+    enabled: !!datapackName && hasConvChunks,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const userNameById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const m of membersData?.members ?? []) {
+      if (m.user_id && m.user_email_id) map[m.user_id] = m.user_email_id;
+    }
+    return map;
+  }, [membersData]);
 
   const traceContext = useMemo(
     () => ({
@@ -119,9 +143,25 @@ export function DecisionTrace({
   }, [rawSteps]);
   const dbCalls = useMemo(() => dbBreakdown.reduce((a, b) => a + b.count, 0), [dbBreakdown]);
 
+  // Estimated tokens saved when this turn was answered from the conversation
+  // cache (main LLM skipped). Computed CLIENT-SIDE — we deliberately don't
+  // thread a token count from the backend; instead we approximate from the
+  // reused prior-conversation content (the chunks on the `conversation_search`
+  // step), which is what a full regeneration would have had to produce, at the
+  // usual ~4 chars/token. Zero when this wasn't a cache hit (no chunks).
+  const estimatedTokensSaved = useMemo(() => {
+    const convStep = rawSteps.find((s) => s.name === "conversation_search");
+    const chunks = convStep?.conversation_chunks ?? [];
+    if (chunks.length === 0) return 0;
+    const chars = chunks.reduce(
+      (sum, c) => sum + (c.question?.length ?? 0) + (c.answer?.length ?? 0),
+      0,
+    );
+    return Math.round(chars / 4);
+  }, [rawSteps]);
+
   const hasAnythingToShow =
     rawSteps.length > 0 || memoryHits.length > 0 || kbHits.length > 0 || hasReasoning || hasPlan;
-  if (!hasAnythingToShow) return null;
 
   const summaryParts: string[] = [];
   if (rawSteps.length > 0)
@@ -168,6 +208,7 @@ export function DecisionTrace({
               dbBreakdown={dbBreakdown}
               llmCalls={message.llm_calls ?? 0}
               conversationId={conversationId}
+              estimatedTokensSaved={estimatedTokensSaved}
               langfuseProjectId={langfuseProjectId}
             />
 
@@ -182,6 +223,8 @@ export function DecisionTrace({
               langfuseProjectId={langfuseProjectId}
               memoryHits={memoryHits}
               kbHits={kbHits}
+              datapackName={datapackName}
+              userNameById={userNameById}
             />
 
             <PhaseAccordion
@@ -216,6 +259,8 @@ export function DecisionTrace({
               taglineFallback={executeTagline(phases.execute, message.memories_extracted ?? 0)}
               conversationId={conversationId}
               langfuseProjectId={langfuseProjectId}
+              datapackName={datapackName}
+              userNameById={userNameById}
             />
           </div>
         </DecisionTraceProvider>

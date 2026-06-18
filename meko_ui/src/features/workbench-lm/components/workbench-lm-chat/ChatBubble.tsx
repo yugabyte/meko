@@ -19,10 +19,14 @@ export function ChatBubble({
   conversationId,
   langfuseProjectId,
   datapackId,
+  onRegenerate,
   datapackName,
 }: {
   message: Message;
   onOpenTrace?: () => void;
+  /** Cache-hit turns only: re-send the original question with the
+   *  conversation cache bypassed. Undefined otherwise. */
+  onRegenerate?: () => void;
   /** When this assistant turn was loaded from a previous conversation,
    *  the raw `DatapackThreadMessage` (matched by message_id) is passed
    *  in so we render the full `DecisionTrace` straight from the already-
@@ -124,6 +128,7 @@ export function ChatBubble({
             latencyMs={latencyMs}
             memoriesExtracted={memoriesExtracted}
             llmCalls={llmCalls}
+            onRegenerate={onRegenerate}
           />
         )}
       </div>

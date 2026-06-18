@@ -103,6 +103,14 @@ _MIN_QUERY_LENGTH_FOR_RETRIEVAL = 4
 # prompt with thousands of rows.
 MAX_RETRIEVAL_ITEMS = 50
 
+# Prior-conversation turns fed to the SUMMARY model on a cache hit. The MCP
+# server already caps the thread it returns (CONVERSATION_MAX_THREAD_TURNS);
+# this is the gateway-side bound applied when building the summary prompt.
+CONV_SUMMARY_MAX_TURNS = 50
+# Reused turns surfaced in the decision-trace "REUSED CONVERSATIONS" card —
+# observability only; does not affect the answer.
+CONV_TRACE_MAX_CHUNKS = 50
+
 
 def _is_trivial_query(message: str) -> bool:
     """Decide whether a user message is too short / too generic to retrieve for.
@@ -357,6 +365,88 @@ class ChatTurnResult(NamedTuple):
     processing_steps: Tuple[ProcessingStep, ...] = ()
 
 
+_CONV_SUMMARY_SYSTEM = (
+    "You answer the user's CURRENT question using ONLY the prior conversation "
+    "excerpts below, taken from this shared workspace. The excerpts are turns "
+    "from one or more prior conversations, ordered oldest→newest; a later turn "
+    "may refine or correct an earlier one, so treat later turns as updates. Use "
+    "ONLY the excerpts relevant to the current question and IGNORE unrelated "
+    "turns — the excerpts may include off-topic content. Synthesize one direct, "
+    "helpful answer from the relevant turns. If none of the excerpts actually "
+    "answer THIS question, say so briefly — do NOT answer a different question "
+    "or invent details."
+)
+
+
+async def _summarize_conversation_hits(
+    summary_llm: BaseChatModel,
+    query: str,
+    hits: List[Dict[str, Any]],
+) -> str:
+    """Summarize retrieved prior-conversation chunks into an answer to `query`
+    using the small summary model. Falls back to the closest answer verbatim if
+    the model call fails — we never want a tracing/model hiccup to drop the turn."""
+    if not hits:
+        return ""
+    # Fallback answer when the SLM returns empty or errors: the CLOSEST matched
+    # turn by distance — never blindly the oldest turn (which, in a multi-topic
+    # conversation, is often unrelated to the question).
+    def _closest_answer() -> str:
+        scored = [h for h in hits if isinstance(h.get("distance"), (int, float))]
+        if scored:
+            return min(scored, key=lambda h: h["distance"]).get("answer", "")
+        return hits[0].get("answer", "")
+    blocks = []
+    # Cap so a long thread can't blow up the summary prompt; fewer is fine
+    # (most threads are far shorter). Turns arrive oldest→newest.
+    for i, h in enumerate(hits[:CONV_SUMMARY_MAX_TURNS], 1):
+        blocks.append(f"[{i}] Q: {h.get('question', '')}\n    A: {h.get('answer', '')}")
+    context = "\n\n".join(blocks)
+    messages = [
+        SystemMessage(content=_CONV_SUMMARY_SYSTEM),
+        HumanMessage(content=f"User question:\n{query}\n\nPrior conversation excerpts:\n{context}"),
+    ]
+    try:
+        result = await summary_llm.ainvoke(messages)
+        text = _coerce_text(result.content).strip()
+        if not text:
+            logger.warning("conversation summary returned empty; falling back to closest answer")
+            return _closest_answer()
+        return text
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("conversation summary failed, falling back to closest answer: %s", exc)
+        return _closest_answer()
+
+
+_FOLLOWUP_CLASSIFY_SYSTEM = (
+    "The user was just shown an answer that was SUMMARIZED FROM THEIR PRIOR "
+    "CONVERSATIONS. Classify their next message as EXACTLY one word:\n"
+    "- dissatisfied : they reject / aren't happy with that answer, with NO new requirement\n"
+    "- refine : they reject it AND add a new requirement or correction\n"
+    "- other : a normal new or unrelated request (not a rejection)\n"
+    "Reply with ONLY one word: dissatisfied, refine, or other."
+)
+
+
+async def _classify_followup(model: BaseChatModel, prior_query: str, message: str) -> str:
+    """Classify the message that follows a cache-hit answer as one of
+    `dissatisfied` / `refine` / `other`. Uses the small summary model (cheap,
+    one-word output). Defaults to `other` on any error so we never bypass the
+    cache on a false positive."""
+    try:
+        result = await model.ainvoke([
+            SystemMessage(content=_FOLLOWUP_CLASSIFY_SYSTEM),
+            HumanMessage(content=f"Prior question: {prior_query}\nUser's next message: {message}"),
+        ])
+        label = _coerce_text(result.content).strip().lower()
+        for v in ("dissatisfied", "refine", "other"):
+            if v in label:
+                return v
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("follow-up classify failed (defaulting to 'other'): %s", exc)
+    return "other"
+
+
 async def run_chat_turn(
     *,
     cfg: AppConfig,
@@ -367,6 +457,8 @@ async def run_chat_turn(
     user_message: str,
     datapack_id: Optional[str],
     resume_conversation_id: Optional[str] = None,
+    summary_llm: Optional[BaseChatModel] = None,
+    bypass_conversation_cache: bool = False,
 ) -> ChatTurnResult:
     """Run one chat turn end-to-end. Returns the assistant text + Langfuse
     message_id + structured retrieval hits + a processing-steps timeline
@@ -472,43 +564,138 @@ async def run_chat_turn(
     # hits — vector search returns top-K regardless, so we'd just feed the
     # LLM five random memories. Skip both round-trips entirely and record
     # the skip explicitly so the UI shows it.
+    memory_hits: List[MemoryHit] = []
+    kb_hits: List[KbHit] = []
+    # Did the user reject the previous cache answer? Either via the UI button
+    # (bypass_conversation_cache) or by typing dissatisfaction on the turn right
+    # after a cache hit. On a reject we bypass the conversation cache and answer
+    # via the full memory + KB + LLM path.
+    bypass = bypass_conversation_cache
     if _is_trivial_query(user_message):
         logger.info(
             "skipping retrieval for trivial query session=%s len=%d",
             session_id, len(user_message.strip()),
         )
-        memory_hits: List[MemoryHit] = []
-        kb_hits: List[KbHit] = []
-        steps.append(
-            ProcessingStep(
-                "memory_search", 0, "skipped", "trivial query", query=user_message,
-            )
-        )
-        steps.append(
-            ProcessingStep(
-                "knowledgebase_search", 0, "skipped", "trivial query", query=user_message,
-            )
-        )
+        for nm in ("conversation_search", "memory_search", "knowledgebase_search"):
+            steps.append(ProcessingStep(nm, 0, "skipped", "trivial query", query=user_message))
     else:
-        memory_hits, kb_hits = await asyncio.gather(
-            _search_memories(
+        # Typed-rejection detection: only on the turn right after a cache hit,
+        # classify the message — dissatisfied/refine → bypass the cache.
+        if not bypass:
+            was_hit, prior_query = await session_store.get_cache_state(session_id)
+            if was_hit and prior_query:
+                verdict = await _classify_followup(summary_llm or llm, prior_query, user_message)
+                if verdict in ("dissatisfied", "refine"):
+                    bypass = True
+                    if verdict == "dissatisfied":
+                        # No new requirement — re-answer the prior question.
+                        user_message = prior_query
+                    logger.info("conversation cache rejected via typed '%s' — bypassing", verdict)
+
+        if bypass:
+            steps.append(
+                ProcessingStep("conversation_search", 0, "skipped", "user rejected cache answer", query=user_message)
+            )
+
+        # 2. Knowledge-base search runs FIRST and (when enabled and NOT bypassed)
+        #    performs conversation-history search INSIDE it. Returns either a
+        #    conversation hit (chunks + thread → summarize) or KB chunks (a miss
+        #    → then run memory search). `skip_conversation` forces pure KB when
+        #    the user rejected the cache.
+        kb_hits, conv_result = await _search_knowledge(
+            tools_by_name=tools_by_name,
+            agent_id=cfg.agent_id,
+            query=user_message,
+            conversation_id=conversation_id,
+            datapack_id=datapack_id,
+            top_k=cfg.memory_top_k,
+            steps=steps,
+            skip_conversation=bypass,
+        )
+
+        if conv_result:
+            hits = conv_result.get("hits") or []
+            # Summarize the WHOLE matched conversation (oldest→newest) so later
+            # turns supersede earlier ones; fall back to the matched chunks if
+            # the thread wasn't returned.
+            turns = conv_result.get("thread") or hits
+            summary_model = cfg.conv_summary_model or cfg.llm_model
+            top = hits[0] if hits else (turns[0] if turns else {})
+            source_conv_id = top.get("conversation_id")
+            summ_start = time.monotonic()
+            assistant_text = await _summarize_conversation_hits(
+                summary_llm or llm, user_message, turns
+            )
+            steps.append(
+                ProcessingStep(
+                    "conversation_summarize",
+                    int((time.monotonic() - summ_start) * 1000),
+                    "ok",
+                    f"{summary_model} summarized {len(turns)} turn(s) of conversation {source_conv_id}",
+                    tool_args={"summary_model": summary_model, "conversation_id": source_conv_id},
+                )
+            )
+            steps.append(ProcessingStep("memory_search", 0, "skipped", "conversation cache hit"))
+            steps.append(ProcessingStep("knowledgebase_search", 0, "skipped", "conversation cache hit"))
+            steps.append(
+                ProcessingStep("llm_invoke", 0, "skipped", "answered from conversation history (small-model summary)")
+            )
+            # Provenance + observability: closest chunk for the primary deep-link,
+            # the summarized turns, and the summary model.
+            answered_from_cache = {
+                "conversation_id": source_conv_id,
+                "message_id": top.get("message_id"),
+                "distance": top.get("distance"),
+                "summary_model": summary_model,
+                "chunks": turns,
+            }
+            addmsg_start = time.monotonic()
+            message_id = await _add_message(
                 tools_by_name=tools_by_name,
-                agent_id=cfg.agent_id,
-                query=user_message,
                 conversation_id=conversation_id,
-                datapack_id=datapack_id,
-                top_k=cfg.memory_top_k,
-                steps=steps,
-            ),
-            _search_knowledge(
-                tools_by_name=tools_by_name,
                 agent_id=cfg.agent_id,
-                query=user_message,
-                conversation_id=conversation_id,
+                user_message=user_message,
+                assistant_message=assistant_text,
                 datapack_id=datapack_id,
-                top_k=cfg.memory_top_k,
-                steps=steps,
-            ),
+                index_for_search=False,  # don't re-index a summary of existing chunks
+                answered_from_cache=answered_from_cache,
+            )
+            steps.append(
+                ProcessingStep(
+                    "conversation_add_message",
+                    int((time.monotonic() - addmsg_start) * 1000),
+                    "ok",
+                )
+            )
+            steps.append(
+                ProcessingStep("memory_add", 0, "skipped", "history hit — no memory extraction")
+            )
+            # Arm typed-rejection detection for the NEXT turn: if the user now
+            # types "no, that's wrong", we re-answer this query with the cache
+            # bypassed.
+            await session_store.set_cache_state(session_id, True, user_message)
+            await session_store.append(session_id, "user", user_message)
+            await session_store.append(session_id, "assistant", assistant_text)
+            return ChatTurnResult(
+                assistant_text=assistant_text,
+                message_id=message_id,
+                memory_context="",
+                kb_context="",
+                memory_hits=(),
+                kb_hits=(),
+                processing_steps=tuple(steps),
+            )
+
+        # 2b. No conversation hit → KB chunks are already in hand from the call
+        #     above; run memory search to complete the memory + KB grounding.
+        memory_hits = await _search_memories(
+            tools_by_name=tools_by_name,
+            agent_id=cfg.agent_id,
+            query=user_message,
+            conversation_id=conversation_id,
+            datapack_id=datapack_id,
+            top_k=cfg.memory_top_k,
+            steps=steps,
         )
 
     # Derive the bulleted system-prompt blocks from the structured hits.
@@ -579,6 +766,8 @@ async def run_chat_turn(
             user_message=user_message,
             assistant_message=assistant_text,
             datapack_id=datapack_id,
+            index_for_search=True,  # cache genuine Q&A for future reuse
+            rejected_cache=bypass,  # full re-answer after a rejected cache hit
         )
         steps.append(
             ProcessingStep(
@@ -619,7 +808,10 @@ async def run_chat_turn(
         ProcessingStep("memory_add", 0, "skipped", "background task — see trace")
     )
 
-    # 6. Update local session state.
+    # 6. Update local session state. This turn was NOT a conversation-cache
+    #    hit (it went through the full memory + KB + LLM path), so clear the
+    #    cache state — the next turn shouldn't be classified as a rejection.
+    await session_store.set_cache_state(session_id, False, None)
     await session_store.append(session_id, "user", user_message)
     await session_store.append(session_id, "assistant", assistant_text)
 
@@ -757,12 +949,17 @@ async def _search_knowledge(
     datapack_id: Optional[str],
     top_k: int,
     steps: Optional[List[ProcessingStep]] = None,
-) -> List[KbHit]:
-    """Run `knowledgebase_search` and return structured hits.
+    skip_conversation: bool = False,
+) -> Tuple[List[KbHit], Optional[Dict[str, Any]]]:
+    """Run `knowledgebase_search` and return (kb_hits, conv_result).
 
-    Skips entirely when `datapack_id` is missing (kb_search requires it)
-    — recorded as "skipped" in the step list. Same best-effort semantics
-    as `_search_memories` on tool failures.
+    When MEKO_ENABLE_CONVERSATION_SEARCH is on, the MCP `knowledgebase_search`
+    tool runs conversation-history search INTERNALLY and, on a hit, returns
+    `conversation_hits` + `thread` instead of KB chunks. We surface that as
+    conv_result (`{"hits", "thread"}`) so the caller can summarize it and skip
+    memory. On a miss, conv_result is None and kb_hits holds the KB chunks.
+
+    Skips entirely when `datapack_id` is missing. Best-effort on failures.
     """
     start = time.monotonic()
     # Capture every MCP arg we'll send (minus `query`). Same shape as
@@ -786,7 +983,7 @@ async def _search_knowledge(
                     query=query, tool_args=kb_tool_args,
                 )
             )
-        return []
+        return [], None
     tool = tools_by_name.get("knowledgebase_search")
     if tool is None:
         logger.warning("knowledgebase_search tool unavailable; skipping KB grounding")
@@ -797,7 +994,7 @@ async def _search_knowledge(
                     query=query, tool_args=kb_tool_args,
                 )
             )
-        return []
+        return [], None
     args: Dict[str, Any] = {
         "scope": "read",
         "query": query,
@@ -806,6 +1003,10 @@ async def _search_knowledge(
         "agent_id": agent_id,
         "limit": top_k,
     }
+    # User rejected the cache → force pure KB (no internal conversation search).
+    if skip_conversation:
+        args["skip_conversation"] = True
+        kb_tool_args["skip_conversation"] = True
     try:
         raw = await tool.ainvoke(args)
     except Exception as exc:  # noqa: BLE001
@@ -821,8 +1022,27 @@ async def _search_knowledge(
                     tool_args=kb_tool_args,
                 )
             )
-        return []
-    hits = _extract_kb_hits(_parse_json(raw))
+        return [], None
+    parsed = _parse_json(raw)
+    # Conversation hit — knowledgebase_search ran conversation search internally
+    # and returned the matched conversation's chunks + thread instead of KB rows.
+    if isinstance(parsed, dict) and parsed.get("conversation_hits"):
+        ch = parsed["conversation_hits"]
+        thread = parsed.get("thread")
+        if steps is not None:
+            top_d = ch[0].get("distance") if ch else None
+            steps.append(
+                ProcessingStep(
+                    "conversation_search",
+                    int((time.monotonic() - start) * 1000),
+                    "ok",
+                    f"{len(ch)} chunk(s)" + (f", top_distance={top_d}" if ch else ""),
+                    query=query,
+                    tool_args=kb_tool_args,
+                )
+            )
+        return [], {"hits": ch, "thread": thread if isinstance(thread, list) else []}
+    hits = _extract_kb_hits(parsed)
     if steps is not None:
         steps.append(
             ProcessingStep(
@@ -834,7 +1054,7 @@ async def _search_knowledge(
                 tool_args=kb_tool_args,
             )
         )
-    return hits
+    return hits, None
 
 
 async def _add_message(
@@ -845,9 +1065,19 @@ async def _add_message(
     user_message: str,
     assistant_message: str,
     datapack_id: Optional[str],
+    index_for_search: bool = False,
+    answered_from_cache: Optional[Dict[str, Any]] = None,
+    rejected_cache: bool = False,
 ) -> str:
     """Append the turn to the conversation. Returns the Langfuse `message_id`
     minted by MCP (used by the UI to deep-link into the trace drawer).
+
+    `index_for_search` asks MCP to embed + cache this turn for future reuse;
+    `answered_from_cache` (set on a cache hit) tags the trace with provenance
+    so observability can show which prior conversation answered it.
+    `rejected_cache` marks a full re-answer the user requested after rejecting
+    a prior cache-hit summary — tagged in the trace so dashboards can tell the
+    cache was overridden.
 
     Best-effort: a missing tool or a tool failure logs and returns "" — the
     chat turn still succeeds; the user just doesn't get a trace deep-link
@@ -865,9 +1095,47 @@ async def _add_message(
         "agent_id": agent_id,
         "input": user_message,
         "output": assistant_message,
+        "index_for_search": index_for_search,
     }
     if datapack_id:
         args["datapack_id"] = datapack_id
+    if answered_from_cache:
+        # This conversation-search metadata (answered_from, summary_model, and
+        # the chunks below) is persisted to Langfuse via the MCP
+        # `conversation_add_message` tool call below (args["metadata"]); the
+        # api_server decision-trace API reads it back from user_metadata so the
+        # UI can show which prior conversation answered the query.
+        # Slim chunk list for the decision-trace card: show ALL retrieved turns
+        # (up to the 50-turn retrieval cap) so the trace reflects exactly what we
+        # summarized. Each Q/A is still length-trimmed to keep metadata bounded.
+        chunks = answered_from_cache.get("chunks") or []
+        slim_chunks = [
+            {
+                "question": (c.get("question") or "")[:300],
+                "answer": (c.get("answer") or "")[:600],
+                "distance": c.get("distance"),
+                "conversation_id": c.get("conversation_id"),
+                "message_id": c.get("message_id"),
+                "user_id": c.get("user_id"),
+            }
+            for c in chunks[:CONV_TRACE_MAX_CHUNKS]
+            if isinstance(c, dict)
+        ]
+        meta_payload = {
+            "answered_from": "conversation_cache",
+            "source_conversation_id": answered_from_cache.get("conversation_id"),
+            "source_message_id": answered_from_cache.get("message_id"),
+            "match_distance": answered_from_cache.get("distance"),
+        }
+        if answered_from_cache.get("summary_model"):
+            meta_payload["summary_model"] = answered_from_cache["summary_model"]
+        if slim_chunks:
+            meta_payload["conversation_chunks"] = slim_chunks
+        args["metadata"] = json.dumps(meta_payload)
+    elif rejected_cache:
+        # Full re-answer after the user rejected a cache-hit summary. No source
+        # provenance (we deliberately bypassed the cache); just mark it.
+        args["metadata"] = json.dumps({"answered_from": "conversation_cache_rejected"})
     try:
         raw = await tool.ainvoke(args)
     except Exception as exc:  # noqa: BLE001

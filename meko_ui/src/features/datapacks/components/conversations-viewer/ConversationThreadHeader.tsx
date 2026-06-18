@@ -15,6 +15,7 @@ import { formatDatapackCreatedAtUtc } from "@/lib/datapackDateFormat";
 import { ROUTES } from "@/app/routes/paths";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { Chip } from "./Chip";
+import { IndexConversationButton } from "./IndexConversationButton";
 
 type Props = {
   detail: DatapackConversationDetail;
@@ -25,6 +26,11 @@ type Props = {
    *  detail's own value is preferred when present (future-proofs against
    *  the backend later including it). */
   userEmail?: string;
+  /** Datapack the conversation belongs to — needed to fetch the MCP token
+   *  and index the conversation. */
+  datapackId?: string;
+  /** Called after a successful index so the parent refetches the detail. */
+  onIndexed?: () => void;
   /** Current epoch ms — ticks via `useNowMs` in the parent so the
    *  "last activity" relative time stays fresh without a per-component
    *  timer. */
@@ -36,6 +42,8 @@ export function ConversationThreadHeader({
   conversationId,
   langfuseProjectId,
   userEmail,
+  datapackId,
+  onIndexed,
   now,
 }: Props) {
   const headline = detail.title || detail.first_message || "(no messages yet)";
@@ -102,6 +110,13 @@ export function ConversationThreadHeader({
               <ExternalLink className="h-3 w-3" aria-hidden />
               <span>Observe</span>
             </a>
+          ) : null}
+          {detail.can_index && datapackId ? (
+            <IndexConversationButton
+              datapackId={datapackId}
+              conversationId={conversationId}
+              onIndexed={onIndexed}
+            />
           ) : null}
           <Button
             variant="outline"

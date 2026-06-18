@@ -38,6 +38,10 @@ export type GatewayChatRequest = {
    *  it when the user picked a previous chat from the dropdown — keeps
    *  every new turn appended to the same conversation row in Langfuse. */
   conversation_id?: string | null;
+  /** When true, skip the conversation-history cache for this turn and answer
+   *  via the full memory + KB + LLM path. Set by the "Regenerate with full
+   *  search" button after a cache-hit answer the user wasn't happy with. */
+  bypass_conversation_cache?: boolean;
 };
 
 /** One structured memory hit returned by `memory_search`. `kind`
@@ -101,10 +105,27 @@ export type ProcessingStep = {
    *  card to deep-link the row to the matching span. Missing for
    *  synthesized rows that don't map to a single observation. */
   span_id?: string;
+  /** Parent step's span_id when this step ran nested inside another (e.g.
+   *  conversation_search under knowledgebase_search). Used to indent it. */
+  parent_span_id?: string;
   /** Sub-timings rolled up under this step (e.g. `vector_ms`, `graph_ms`
    *  for retrieval). Empty/undefined when the step has no surfaced
    *  child spans. */
   sub_timings?: Record<string, number>;
+  /** Prior-conversation excerpts retrieved by this step — populated only
+   *  on the `conversation_search` step. Each links back to its source
+   *  conversation and the user who authored it. */
+  conversation_chunks?: ConversationChunk[];
+};
+
+/** One prior-conversation excerpt that fed a conversation_search hit. */
+export type ConversationChunk = {
+  question?: string;
+  answer?: string;
+  distance?: number;
+  conversation_id?: string;
+  message_id?: string;
+  user_id?: string;
 };
 
 /** Response shape from POST /chat. */
@@ -135,6 +156,27 @@ export type GatewayChatResponse = {
 
 export async function postChat(body: GatewayChatRequest): Promise<GatewayChatResponse> {
   const { data } = await client.post<GatewayChatResponse>("/chat", body);
+  return data;
+}
+
+/** Body of POST /index-conversation — backfill the conversation cache for one
+ *  past conversation. */
+export type IndexConversationRequest = {
+  conversation_id: string;
+  user_token: string;
+  datapack_id?: string | null;
+};
+
+export type IndexConversationResponse = {
+  indexed: number;
+  can_index: boolean;
+  reason: string;
+};
+
+export async function indexConversation(
+  body: IndexConversationRequest,
+): Promise<IndexConversationResponse> {
+  const { data } = await client.post<IndexConversationResponse>("/index-conversation", body);
   return data;
 }
 

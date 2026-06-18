@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"meko/api_server/internal/auth"
+	"meko/api_server/internal/models"
 	"meko/api_server/internal/service"
 )
 
@@ -249,6 +250,21 @@ func (h *ObserveHandler) ConversationDetail(c echo.Context) error {
 			"error", err)
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", "failed to fetch conversation detail")
+	}
+
+	// "Index conversation" eligibility, gated owner → agent → DB so we only hit
+	// the DB for a WorkbenchLM conversation owned by the current user.
+	if detail != nil {
+		account, aErr := auth.GetAccount(c)
+		if aErr == nil && account != nil &&
+			detail.UserID == account.ID && detail.AgentID == models.WorkbenchAgentID {
+			indexed, idxErr := h.langfuse.ConversationHistoryIndexed(dp.ID, conversationID)
+			if idxErr != nil {
+				slog.Warn("conversation detail: indexed check failed",
+					"datapack_id", dp.ID, "conversation_id", conversationID, "err", idxErr)
+			}
+			detail.CanIndex = !indexed
+		}
 	}
 
 	return ok(c, http.StatusOK, map[string]any{

@@ -21,6 +21,7 @@ from .config import (
     DEFAULT_AGENT_ID,
     DEFAULT_AWS_REGION,
     DEFAULT_BEDROCK_MODEL,
+    DEFAULT_CONV_SUMMARY_BEDROCK_MODEL,
     DEFAULT_CORS_ORIGINS,
     DEFAULT_MAX_HISTORY_MESSAGES,
     DEFAULT_MCP_ENDPOINT,
@@ -45,6 +46,13 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         default=os.getenv("INFERENCE_LLM_MODEL"),
         help="Provider-specific model id. Defaults to gpt-4o-mini (openai) "
              "or us.amazon.nova-2-lite-v1:0 (bedrock).",
+    )
+    p.add_argument(
+        "--conv-summary-model",
+        default=os.getenv("INFERENCE_CONV_SUMMARY_MODEL"),
+        help="Small/cheap model used to summarize conversation-history hits on a "
+             "cache hit. Defaults to us.amazon.nova-lite-v1:0 (bedrock) or "
+             "gpt-4o-mini (openai). Set to the main model to disable the SLM split.",
     )
     p.add_argument(
         "--aws-region",
@@ -105,6 +113,13 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
             DEFAULT_OPENAI_MODEL if args.llm_provider == "openai" else DEFAULT_BEDROCK_MODEL
         )
 
+    # Default the conversation-summary model to a cheap one per provider.
+    if not args.conv_summary_model:
+        args.conv_summary_model = (
+            DEFAULT_OPENAI_MODEL if args.llm_provider == "openai"
+            else DEFAULT_CONV_SUMMARY_BEDROCK_MODEL
+        )
+
     if args.cors_origins is None:
         env_origins = os.getenv("INFERENCE_CORS_ORIGINS", "").strip()
         if env_origins:
@@ -127,6 +142,7 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         max_history=args.max_history,
         memory_top_k=args.memory_top_k,
         llm_max_tokens=args.llm_max_tokens,
+        conv_summary_model=args.conv_summary_model,
     )
     return cfg, args.log_level
 

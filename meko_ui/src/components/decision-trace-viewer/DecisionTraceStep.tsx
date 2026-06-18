@@ -4,16 +4,18 @@
 // deep-links the row's `span_id` back into Observe Hub.
 
 import { useMemo, useState } from "react";
-import { ChartSpline, ChevronDown, ChevronRight, ExternalLink, FileText, Sparkles } from "lucide-react";
+import {
+  ChartSpline,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  FileText,
+  Sparkles,
+} from "lucide-react";
 import { ROUTES, datapackConversationsPath } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
 import type { KbHit, MemoryHit, ProcessingStep } from "@/lib/inferenceGateway";
-import {
-  ACCENT_BADGE,
-  ACCENT_BORDER,
-  ACCENT_TEXT,
-  type AccentKey,
-} from "./PhaseAccordion";
+import { ACCENT_BADGE, ACCENT_BORDER, ACCENT_TEXT, type AccentKey } from "./PhaseAccordion";
 import { useDecisionTraceContext } from "./decisionTraceContext";
 import {
   formatDuration,
@@ -29,6 +31,8 @@ export function DecisionTraceStep({
   accent,
   conversationId,
   langfuseProjectId,
+  datapackName,
+  userNameById,
   memoryHits,
   kbHits,
 }: {
@@ -36,6 +40,8 @@ export function DecisionTraceStep({
   accent: AccentKey;
   conversationId: string;
   langfuseProjectId?: string;
+  datapackName?: string;
+  userNameById?: Record<string, string>;
   /** Per-turn retrieval hits. The matching arrays are rendered as an
    *  expandable "matched chunks/memories" list on the retrieval step they
    *  belong to (memory.search → memoryHits, knowledge.retrieve → kbHits). */
@@ -58,14 +64,24 @@ export function DecisionTraceStep({
   }, [step.query, step.tool_args]);
   const hasParams = Object.keys(paramsObj).length > 0;
 
+  // conversation.summarize renders a bespoke line (model + linkable
+  // conversation id) instead of the generic PARAMS/STATS blocks.
+  const isConvSummarize = step.name === "conversation_summarize";
+  const summaryModel = (step.tool_args?.summary_model as string | undefined) ?? "";
+  const summarizedConvId = (step.tool_args?.conversation_id as string | undefined) ?? "";
+  const summarizeConvUrl =
+    summarizedConvId && datapackName
+      ? `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/conversations/${summarizedConvId.replace(/-/g, "")}`
+      : "";
+
   const subTimings = step.sub_timings ?? {};
   const subTimingEntries = Object.entries(subTimings).filter(([, v]) => v != null);
   const hasSubTimings = subTimingEntries.length > 0;
 
   // Retrieval hits belonging to this step. memory.search shows its memory
   // hits; knowledge.retrieve shows its KB chunks (grouped by document).
-  const matchedMemory = step.name === "memory_search" ? memoryHits ?? [] : [];
-  const matchedKb = step.name === "knowledgebase_search" ? kbHits ?? [] : [];
+  const matchedMemory = step.name === "memory_search" ? (memoryHits ?? []) : [];
+  const matchedKb = step.name === "knowledgebase_search" ? (kbHits ?? []) : [];
 
   const traceUrl =
     step.span_id && langfuseProjectId && conversationId
@@ -89,10 +105,12 @@ export function DecisionTraceStep({
           <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
         )}
         {kind ? (
-          <span className={cn(
-            "shrink-0 rounded border px-1.5 py-[1px] font-mono text-[9.5px] uppercase tracking-wider",
-            ACCENT_BADGE[accent],
-          )}>
+          <span
+            className={cn(
+              "shrink-0 rounded border px-1.5 py-[1px] font-mono text-[9.5px] uppercase tracking-wider",
+              ACCENT_BADGE[accent],
+            )}
+          >
             {kind}
           </span>
         ) : null}
@@ -100,9 +118,7 @@ export function DecisionTraceStep({
           {op}
         </code>
         {summary ? (
-          <span className="min-w-0 truncate text-[11px] text-muted-foreground">
-            {summary}
-          </span>
+          <span className="min-w-0 truncate text-[11px] text-muted-foreground">{summary}</span>
         ) : null}
         {step.duration_ms > 0 ? (
           <span className="ml-auto shrink-0 tabular-nums text-[11px] text-muted-foreground">
@@ -113,15 +129,32 @@ export function DecisionTraceStep({
 
       {open ? (
         <div className="border-t border-border/40 px-3 py-2 space-y-2 text-[11.5px]">
-          {hasParams ? (
-            <KvBlock
-              title="PARAMS"
-              entries={paramsObj}
-              accent={accent}
-            />
+          {isConvSummarize ? (
+            <div className="text-[11px] text-foreground/90">
+              Used{" "}
+              <code className="font-mono text-foreground/80">{summaryModel || "small model"}</code>{" "}
+              for summarizing conversation{" "}
+              {summarizeConvUrl ? (
+                <a
+                  href={summarizeConvUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-1 text-purple-700 transition-colors hover:text-purple-800 dark:text-purple-300 dark:hover:text-purple-200"
+                  title="Open the summarized conversation (new tab)"
+                >
+                  <ExternalLink className="h-2.5 w-2.5" aria-hidden />
+                  {truncateMiddle(summarizedConvId, 16)}
+                </a>
+              ) : (
+                <code className="font-mono text-foreground/80">
+                  {truncateMiddle(summarizedConvId, 16)}
+                </code>
+              )}
+            </div>
           ) : null}
+          {hasParams ? <KvBlock title="PARAMS" entries={paramsObj} accent={accent} /> : null}
 
-          {hasSubTimings || step.detail ? (
+          {hasSubTimings || (step.detail && !isConvSummarize) ? (
             <div className="space-y-1">
               <div className={cn("text-[10px] uppercase tracking-wider", ACCENT_TEXT[accent])}>
                 STATS
@@ -137,6 +170,82 @@ export function DecisionTraceStep({
                     {key}: <span className="text-foreground/90 tabular-nums">{value}</span>
                   </span>
                 ))}
+              </div>
+            </div>
+          ) : null}
+
+          {step.conversation_chunks && step.conversation_chunks.length > 0 ? (
+            <div className="space-y-1.5">
+              <div className={cn("text-[10px] uppercase tracking-wider", ACCENT_TEXT[accent])}>
+                REUSED CONVERSATIONS ({step.conversation_chunks.length})
+              </div>
+              <div className="space-y-2">
+                {step.conversation_chunks.map((c, i) => {
+                  // Link to the source conversation inside the datapack:
+                  // /datapacks/<name>/conversations/<conversation_id>.
+                  const convUrl =
+                    c.conversation_id && datapackName
+                      ? `${ROUTES.datapacks}/${encodeURIComponent(datapackName)}/conversations/${c.conversation_id.replace(/-/g, "")}`
+                      : "";
+                  // Prefer a resolved display name (email) for the author.
+                  const who =
+                    (c.user_id && userNameById?.[c.user_id]) ||
+                    (c.user_id ? truncateMiddle(c.user_id, 16) : "");
+                  return (
+                    <div
+                      key={c.message_id ?? i}
+                      className="rounded border border-border/40 bg-background/40 p-2 space-y-1"
+                    >
+                      {c.question ? (
+                        <div className="text-[11px] font-medium text-foreground/90">
+                          Q: {c.question}
+                        </div>
+                      ) : null}
+                      {c.answer ? (
+                        <div className="line-clamp-3 whitespace-pre-wrap text-[11px] text-muted-foreground">
+                          {c.answer}
+                        </div>
+                      ) : null}
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted-foreground">
+                        {typeof c.distance === "number" ? (
+                          <span>
+                            distance:{" "}
+                            <span className="tabular-nums text-foreground/80">
+                              {c.distance.toFixed(3)}
+                            </span>
+                          </span>
+                        ) : null}
+                        {who ? (
+                          <span>
+                            by: <span className="text-foreground/80">{who}</span>
+                          </span>
+                        ) : null}
+                        {/* Conversation link pinned to the right of the row. */}
+                        {c.conversation_id ? (
+                          convUrl ? (
+                            <a
+                              href={convUrl}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              className="ml-auto inline-flex items-center gap-1 text-purple-700 transition-colors hover:text-purple-800 dark:text-purple-300 dark:hover:text-purple-200"
+                              title="Open the source conversation (new tab)"
+                            >
+                              <ExternalLink className="h-2.5 w-2.5" aria-hidden />
+                              conversation
+                            </a>
+                          ) : (
+                            <span className="ml-auto">
+                              conversation:{" "}
+                              <code className="text-foreground/80">
+                                {truncateMiddle(c.conversation_id, 16)}
+                              </code>
+                            </span>
+                          )
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ) : null}
@@ -199,8 +308,12 @@ function MatchedHits({
   const isKb = kbHits.length > 0;
   const total = isKb ? kbHits.length : memoryHits.length;
   const noun = isKb
-    ? total === 1 ? "matched chunk" : "matched chunks"
-    : total === 1 ? "matched memory" : "matched memories";
+    ? total === 1
+      ? "matched chunk"
+      : "matched chunks"
+    : total === 1
+      ? "matched memory"
+      : "matched memories";
 
   // Split KB hits: document chunks (grouped by source document) vs.
   // promoted-memory hits (memories elevated into the KB — shown together
@@ -251,9 +364,15 @@ function MatchedHits({
                     className="overflow-hidden rounded-md border border-border/50 bg-background/30"
                   >
                     <div className="flex items-center gap-1.5 border-b border-border/40 bg-muted/30 px-2.5 py-1.5">
-                      <FileText className={cn("h-3.5 w-3.5 shrink-0", ACCENT_TEXT[accent])} aria-hidden />
+                      <FileText
+                        className={cn("h-3.5 w-3.5 shrink-0", ACCENT_TEXT[accent])}
+                        aria-hidden
+                      />
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-[11px] font-medium text-foreground/90" title={docName || docId}>
+                        <div
+                          className="truncate text-[11px] font-medium text-foreground/90"
+                          title={docName || docId}
+                        >
                           {docName || docId}
                         </div>
                         {docName ? (
@@ -278,7 +397,10 @@ function MatchedHits({
               {promotedHits.length > 0 ? (
                 <div className="overflow-hidden rounded-md border border-border/50 bg-background/30">
                   <div className="flex items-center gap-1.5 border-b border-border/40 bg-muted/30 px-2.5 py-1.5">
-                    <Sparkles className={cn("h-3.5 w-3.5 shrink-0", ACCENT_TEXT[accent])} aria-hidden />
+                    <Sparkles
+                      className={cn("h-3.5 w-3.5 shrink-0", ACCENT_TEXT[accent])}
+                      aria-hidden
+                    />
                     <span className="min-w-0 shrink truncate text-[11px] font-medium text-foreground/90">
                       Promoted memories
                     </span>
@@ -349,9 +471,7 @@ function KvBlock({
 }) {
   return (
     <div className="space-y-1">
-      <div className={cn("text-[10px] uppercase tracking-wider", ACCENT_TEXT[accent])}>
-        {title}
-      </div>
+      <div className={cn("text-[10px] uppercase tracking-wider", ACCENT_TEXT[accent])}>{title}</div>
       <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 font-mono">
         {Object.entries(entries).map(([k, v]) => (
           <KvRow key={k} k={k} v={v} />
@@ -363,8 +483,7 @@ function KvBlock({
 
 function KvRow({ k, v }: { k: string; v: unknown }) {
   // Card-wide labelling config is read from context (see DecisionTrace).
-  const { datapackName, datapackId, userEmail, enableConversationLink } =
-    useDecisionTraceContext();
+  const { datapackName, datapackId, userEmail, enableConversationLink } = useDecisionTraceContext();
 
   // A `datapack_id` param is shown as the datapack name when we know it
   // (and the id matches the datapack we're in, so we never mislabel a
@@ -397,8 +516,8 @@ function KvRow({ k, v }: { k: string; v: unknown }) {
   // (new tab) when enabled. The viewer route expects the dash-less
   // session id form (matches how Collective Learnings builds its
   // conversation deep-links).
-  const convId =
-    k === "conversation_id" && typeof v === "string" ? v.replace(/-/g, "") : "";
+  const convId = k === "conversation_id" && typeof v === "string" ? v.replace(/-/g, "") : "";
+
   if (convId && datapackId && enableConversationLink) {
     const href = datapackConversationsPath(datapackId, convId);
     return (

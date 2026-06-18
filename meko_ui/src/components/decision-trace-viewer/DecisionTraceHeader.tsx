@@ -12,6 +12,7 @@ import {
   Database,
   ExternalLink,
   Hash,
+  Zap,
 } from "lucide-react";
 import { ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,7 @@ export function DecisionTraceHeader({
   dbCalls,
   dbBreakdown,
   llmCalls,
+  estimatedTokensSaved = 0,
   conversationId,
   langfuseProjectId,
 }: {
@@ -44,6 +46,9 @@ export function DecisionTraceHeader({
   dbCalls: number;
   dbBreakdown: DbBreakdownEntry[];
   llmCalls: number;
+  /** Client-side estimate of tokens saved by answering from the conversation
+   *  cache instead of the full model. 0 when this wasn't a cache hit. */
+  estimatedTokensSaved?: number;
   conversationId: string;
   langfuseProjectId?: string;
 }) {
@@ -123,6 +128,16 @@ export function DecisionTraceHeader({
           value={llmCalls.toString()}
           label="llm"
         />
+        {estimatedTokensSaved > 0 ? (
+          <span
+            className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 tabular-nums text-emerald-700 dark:text-emerald-300"
+            title="Estimated tokens saved by answering from a prior conversation instead of the full model (rough client-side estimate from the reused conversation content)"
+          >
+            <Zap className="h-3 w-3" aria-hidden />
+            <span className="font-mono">~{estimatedTokensSaved.toLocaleString()}</span>
+            <span>saved</span>
+          </span>
+        ) : null}
         <div className="ml-auto flex items-center gap-1.5">
           <span className="text-muted-foreground">trace_id</span>
           <code

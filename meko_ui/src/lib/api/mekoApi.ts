@@ -1005,6 +1005,9 @@ export type DatapackThreadMessage = {
   /** Sum of `usage_details.total` across every GENERATION span in this
    *  turn's window. Always present; 0 when no usage was reported. */
   total_tokens: number;
+  /** "conversation_cache" when this turn was answered from a prior
+   *  conversation (LLM skipped); empty otherwise. */
+  answered_from?: string;
   /** LLM identifier sourced from Langfuse's `provided_model_name` on the
    *  matched Reasoning generation. Empty when the agent's harness didn't
    *  supply it. */
@@ -1026,6 +1029,9 @@ export type DatapackConversationDetail = DatapackConversation & {
   thread_limit: number;
   thread_offset: number;
   thread_has_more: boolean;
+  /** True when this WorkbenchLM conversation is owned by the viewer and not
+   *  yet in the conversation cache — drives the "Index conversation" button. */
+  can_index?: boolean;
 };
 
 export type GetDatapackConversationResponse = {

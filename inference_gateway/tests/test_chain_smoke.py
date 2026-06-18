@@ -205,6 +205,9 @@ async def test_full_turn_wires_everything() -> None:
             "agent_id": "agent",
             "input": "plan a trip",
             "output": "hello back",
+            # Normal-path turns ask MCP to embed + cache the Q&A for future
+            # conversation-history reuse.
+            "index_for_search": True,
             "datapack_id": "dp-1",
         }
     )
@@ -298,11 +301,13 @@ async def test_second_turn_reuses_conversation_and_includes_history() -> None:
     # That's the new expected behaviour.
     assert addmem.ainvoke.await_count == 0
 
-    # The MAIN LLM call is what we inspect for history — extraction
-    # calls also land in `llm.calls` but they're separate invocations.
-    # Main calls are at indices 0 (first turn) and 2 (second turn);
-    # extraction calls are at 1 and 3.
-    second_main_call = llm.calls[2]
+    # The MAIN LLM call is what we inspect for history. The fire-and-forget
+    # extraction calls also land in `llm.calls`, but as background tasks they
+    # can interleave with the main calls in a non-deterministic order — so we
+    # select the main calls by their system prompt rather than a fixed index.
+    main_calls = [c for c in llm.calls if "Meko playground assistant" in c[0].content]
+    assert len(main_calls) == 2
+    second_main_call = main_calls[1]
     roles = [type(m).__name__ for m in second_main_call]
     # system, user(first), assistant(a), user(second)
     assert roles == ["SystemMessage", "HumanMessage", "AIMessage", "HumanMessage"]

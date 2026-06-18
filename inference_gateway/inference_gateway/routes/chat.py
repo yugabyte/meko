@@ -7,6 +7,7 @@ The actual chat orchestration lives in `chain.run_chat_turn`.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Any, Dict, Optional
@@ -95,6 +96,14 @@ class ChatRequest(BaseModel):
             "chat from the dropdown; absent for fresh chats."
         ),
     )
+    bypass_conversation_cache: bool = Field(
+        default=False,
+        description=(
+            "When true, skip the conversation-history cache for this turn and "
+            "answer via the full memory + KB + LLM path. Set by the UI's "
+            "'Regenerate with full search' button after a cache-hit answer."
+        ),
+    )
 
 
 class ChatResponse(BaseModel):
@@ -137,6 +146,7 @@ async def healthz() -> dict:
 async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     cfg: AppConfig = request.app.state.config
     llm = request.app.state.llm
+    summary_llm = request.app.state.summary_llm
     session_store: InMemorySessionStore = request.app.state.session_store
 
     session_id = req.session_id or uuid.uuid4().hex
@@ -154,12 +164,14 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         result = await run_chat_turn(
             cfg=cfg,
             llm=llm,
+            summary_llm=summary_llm,
             tools_by_name=tools,
             session_store=session_store,
             session_id=session_id,
             user_message=req.message,
             datapack_id=req.datapack_id,
             resume_conversation_id=req.conversation_id,
+            bypass_conversation_cache=req.bypass_conversation_cache,
         )
     except RuntimeError as exc:
         # Raised by chain when a required MCP tool is missing or returns
@@ -185,4 +197,56 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         memory_hits=[MemoryHitOut(**h._asdict()) for h in result.memory_hits],
         kb_hits=[KbHitOut(**h._asdict()) for h in result.kb_hits],
         processing_steps=[ProcessingStepOut(**s._asdict()) for s in result.processing_steps],
+    )
+
+
+class IndexConversationRequest(BaseModel):
+    """Body for POST /index-conversation — backfill the cache for one past conversation."""
+
+    conversation_id: str = Field(..., min_length=1)
+    user_token: str = Field(..., min_length=1)
+    datapack_id: Optional[str] = None
+
+
+class IndexConversationResponse(BaseModel):
+    indexed: int = 0
+    can_index: bool = True
+    reason: str = ""
+
+
+@router.post("/index-conversation", response_model=IndexConversationResponse)
+async def index_conversation(req: IndexConversationRequest, request: Request) -> IndexConversationResponse:
+    """Embed a past conversation's turns into the cache via the MCP
+    conversation_index_history tool (the gateway is the MCP client)."""
+    cfg: AppConfig = request.app.state.config
+    try:
+        tools = await build_mcp_tools(cfg.mcp_endpoint, req.user_token)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("MCP tool discovery failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"MCP tool discovery failed: {exc}") from exc
+
+    tool = tools.get("conversation_index_history")
+    if tool is None:
+        raise HTTPException(status_code=502, detail="conversation_index_history tool unavailable")
+
+    args: Dict[str, Any] = {
+        "scope": "write",
+        "conversation_id": req.conversation_id,
+        "agent_id": cfg.agent_id,
+    }
+    if req.datapack_id:
+        args["datapack_id"] = req.datapack_id
+    try:
+        raw = await tool.ainvoke(args)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("index-conversation failed")
+        raise HTTPException(status_code=502, detail=f"index failed: {exc}") from exc
+
+    payload = raw if isinstance(raw, dict) else (json.loads(raw) if isinstance(raw, str) and raw.strip() else {})
+    if payload.get("error"):
+        raise HTTPException(status_code=502, detail=str(payload.get("detail") or payload["error"]))
+    return IndexConversationResponse(
+        indexed=int(payload.get("indexed") or 0),
+        can_index=bool(payload.get("can_index", True)),
+        reason=str(payload.get("reason") or ""),
     )

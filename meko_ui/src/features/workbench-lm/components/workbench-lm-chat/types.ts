@@ -34,6 +34,17 @@ export type Message = {
   latencyMs?: number;
   memoriesExtracted?: number;
   llmCalls?: number;
+  /** True when this assistant turn was answered from the conversation-history
+   *  cache (a prior conversation summarized by the small model) rather than
+   *  the full memory + KB + LLM path. Detected from the gateway's
+   *  `processing_steps` (a `conversation_summarize` step) at send time.
+   *  Drives the "Regenerate with full search" affordance on the bubble. */
+  answeredFromCache?: boolean;
+  /** The user prompt that produced this assistant turn — kept on the
+   *  assistant message so the "Regenerate with full search" button can
+   *  re-send the exact original question with the cache bypassed. Set only
+   *  for cache-hit assistant turns. */
+  sourceUserMessage?: string;
   // NOTE: `langfuseProjectId` lives at the page level — it's a per-datapack
   // constant fetched once per session and passed to each bubble via prop,
   // rather than carried per-message. See `WorkbenchLMPage`.

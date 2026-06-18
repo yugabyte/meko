@@ -4,7 +4,7 @@
 // `ConversationThreadPane`'s meta row so the two surfaces feel identical.
 
 import { useState } from "react";
-import { Activity, Check, Clock, Copy, Cpu } from "lucide-react";
+import { Activity, Check, Clock, Copy, Cpu, RefreshCw } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import {
   MemoryIcon,
@@ -17,12 +17,16 @@ export function AssistantMetaRow({
   latencyMs,
   memoriesExtracted,
   llmCalls,
+  onRegenerate,
 }: {
   text: string;
   onOpenTrace?: () => void;
   latencyMs?: number;
   memoriesExtracted?: number;
   llmCalls?: number;
+  /** Present only on cache-hit assistant turns. Re-sends the original
+   *  question with the conversation cache bypassed (full memory + KB + LLM). */
+  onRegenerate?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -97,6 +101,21 @@ export function AssistantMetaRow({
           >
             <Activity className="h-3 w-3" aria-hidden />
             View execution trace
+          </button>
+        </>
+      ) : null}
+      {onRegenerate ? (
+        <>
+          <span className="text-border">|</span>
+          <button
+            type="button"
+            onClick={onRegenerate}
+            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-sky-700 dark:text-sky-300 hover:bg-card hover:text-sky-800 dark:hover:text-sky-200 transition-colors"
+            aria-label="Regenerate with full search"
+            title="This answer was reused from a past conversation. Regenerate it with a full memory + knowledge-base search."
+          >
+            <RefreshCw className="h-3 w-3" aria-hidden />
+            Regenerate with full search
           </button>
         </>
       ) : null}

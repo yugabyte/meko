@@ -13,11 +13,13 @@ import type { KbHit, MemoryHit, ProcessingStep } from "@/lib/inferenceGateway";
 export const PREPROCESS_NAMES = new Set([
   "memory_search",
   "knowledgebase_search",
+  "conversation_search",
   "context_assemble",
 ]);
 
 /** Steps rendered under the "Execute" phase. */
 export const EXECUTE_NAMES = new Set([
+  "conversation_summarize",
   "llm_invoke",
   "memory_add",
   "conversation_add_message",
@@ -184,6 +186,10 @@ export function prettifyStepName(name: string): string {
       return "memory.search";
     case "knowledgebase_search":
       return "knowledge.retrieve";
+    case "conversation_search":
+      return "conversation.search";
+    case "conversation_summarize":
+      return "conversation.summarize";
     case "memory_add":
       return "memory.add";
     case "context_assemble":
@@ -198,9 +204,14 @@ export function prettifyStepName(name: string): string {
 }
 
 export function stepKindLabel(name: string): string {
-  if (name === "memory_search" || name === "knowledgebase_search" || name === "memory_add")
+  if (
+    name === "memory_search" ||
+    name === "knowledgebase_search" ||
+    name === "conversation_search" ||
+    name === "memory_add"
+  )
     return "DB";
-  if (name === "llm_invoke") return "LLM";
+  if (name === "llm_invoke" || name === "conversation_summarize") return "LLM";
   if (name === "context_assemble") return "FMT";
   if (name === "conversation_add_message") return "LOG";
   return "";
@@ -213,6 +224,16 @@ export function stepSummary(step: ProcessingStep): string {
       return query ? `Searched memories for "${query}"` : "Searched memories";
     case "knowledgebase_search":
       return query ? `Retrieved chunks for "${query}"` : "Retrieved knowledge chunks";
+    case "conversation_search": {
+      const n = step.conversation_chunks?.length ?? 0;
+      return n > 0
+        ? `Reused ${n} prior conversation ${n === 1 ? "answer" : "answers"}`
+        : "Searched prior conversations";
+    }
+    case "conversation_summarize": {
+      const model = (step.tool_args?.summary_model as string | undefined) ?? "small model";
+      return `Summarized the matched conversation with ${model}`;
+    }
     case "memory_add":
       return step.detail ? `Stored ${step.detail}` : "Extracted memories from this turn";
     case "context_assemble":

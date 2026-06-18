@@ -27,6 +27,11 @@ Message = Tuple[str, str]  # (role, content)
 class _SessionState:
     messages: Deque[Message] = field(default_factory=deque)
     conversation_id: Optional[str] = None
+    # Whether the PREVIOUS turn was answered from the conversation cache, and
+    # the question it answered. Used to detect typed dissatisfaction on the very
+    # next turn ("no, that's wrong") and re-answer with the cache bypassed.
+    last_was_cache_hit: bool = False
+    last_cache_query: Optional[str] = None
 
 
 class InMemorySessionStore:
@@ -73,6 +78,21 @@ class InMemorySessionStore:
         async with self._lock:
             state = self._touch_locked(session_id)
             state.conversation_id = conversation_id
+
+    async def set_cache_state(self, session_id: str, was_hit: bool, query: Optional[str]) -> None:
+        """Record whether this turn was a conversation-cache hit (+ the query)."""
+        async with self._lock:
+            state = self._touch_locked(session_id)
+            state.last_was_cache_hit = was_hit
+            state.last_cache_query = query if was_hit else None
+
+    async def get_cache_state(self, session_id: str) -> Tuple[bool, Optional[str]]:
+        """Return (last_was_cache_hit, last_cache_query) for this session."""
+        async with self._lock:
+            state = self._sessions.get(session_id)
+            if state is None:
+                return False, None
+            return state.last_was_cache_hit, state.last_cache_query
 
     # --- internal ---
 

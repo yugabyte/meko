@@ -50,6 +50,8 @@ export function PhaseAccordion({
   taglineFallback,
   conversationId,
   langfuseProjectId,
+  datapackName,
+  userNameById,
   memoryHits,
   kbHits,
   children,
@@ -64,6 +66,8 @@ export function PhaseAccordion({
   taglineFallback: string;
   conversationId: string;
   langfuseProjectId?: string;
+  datapackName?: string;
+  userNameById?: Record<string, string>;
   /** Per-turn retrieval hits, forwarded to retrieval steps so they can
    *  show their matched chunks/memories. */
   memoryHits?: MemoryHit[];
@@ -102,7 +106,9 @@ export function PhaseAccordion({
           {number}
         </span>
         {icon}
-        <span className={cn("text-[11px] font-medium uppercase tracking-wide", ACCENT_TEXT[accent])}>
+        <span
+          className={cn("text-[11px] font-medium uppercase tracking-wide", ACCENT_TEXT[accent])}
+        >
           {label}
         </span>
         {phaseDuration > 0 ? (
@@ -110,9 +116,7 @@ export function PhaseAccordion({
             {formatDuration(phaseDuration)}
           </span>
         ) : null}
-        <span className="ml-2 text-[11px] text-muted-foreground truncate">
-          · {taglineFallback}
-        </span>
+        <span className="ml-2 text-[11px] text-muted-foreground truncate">· {taglineFallback}</span>
         <span className="ml-auto">
           {open ? (
             <ChevronDown className="h-3 w-3 text-muted-foreground" aria-hidden />
@@ -129,25 +133,55 @@ export function PhaseAccordion({
           ) : (
             <>
               {reasoning ? (
-                <div className={cn(
-                  "rounded-md border px-3 py-2 text-[12px] italic leading-relaxed whitespace-pre-wrap",
-                  ACCENT_BORDER[accent],
-                  "bg-background/40 text-foreground/90",
-                )}>
+                <div
+                  className={cn(
+                    "rounded-md border px-3 py-2 text-[12px] italic leading-relaxed whitespace-pre-wrap",
+                    ACCENT_BORDER[accent],
+                    "bg-background/40 text-foreground/90",
+                  )}
+                >
                   <MarkdownMessage text={reasoning} />
                 </div>
               ) : null}
-              {steps.map((step, i) => (
-                <DecisionTraceStep
-                  key={`${step.name}-${i}-${step.span_id ?? ""}`}
-                  step={step}
-                  accent={accent}
-                  conversationId={conversationId}
-                  langfuseProjectId={langfuseProjectId}
-                  memoryHits={memoryHits}
-                  kbHits={kbHits}
-                />
-              ))}
+              {(() => {
+                const ids = new Set(steps.map((s) => s.span_id).filter(Boolean));
+                const byParent = new Map<string, ProcessingStep[]>();
+                for (const s of steps) {
+                  if (s.parent_span_id && ids.has(s.parent_span_id)) {
+                    byParent.set(s.parent_span_id, [...(byParent.get(s.parent_span_id) ?? []), s]);
+                  }
+                }
+                const renderStep = (step: ProcessingStep, key: string) => (
+                  <DecisionTraceStep
+                    key={key}
+                    step={step}
+                    accent={accent}
+                    conversationId={conversationId}
+                    langfuseProjectId={langfuseProjectId}
+                    datapackName={datapackName}
+                    userNameById={userNameById}
+                    memoryHits={memoryHits}
+                    kbHits={kbHits}
+                  />
+                );
+                // Render parents at top level; nested children indented under them.
+                return steps
+                  .filter((s) => !(s.parent_span_id && ids.has(s.parent_span_id)))
+                  .map((step, i) => {
+                    const kids = step.span_id ? byParent.get(step.span_id) : undefined;
+                    const key = `${step.name}-${i}-${step.span_id ?? ""}`;
+                    return (
+                      <div key={key}>
+                        {renderStep(step, key)}
+                        {kids?.length ? (
+                          <div className="ml-4 border-l border-border/40 pl-2">
+                            {kids.map((c, j) => renderStep(c, `${key}-child-${j}`))}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  });
+              })()}
             </>
           )}
         </div>

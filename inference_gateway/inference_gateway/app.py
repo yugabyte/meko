@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import AppConfig
-from .llm import build_llm
+from .llm import build_llm, build_summary_llm
 from .routes.chat import router as chat_router
 from .session_store import InMemorySessionStore
 
@@ -37,6 +37,7 @@ def create_app(cfg: AppConfig) -> FastAPI:
 
     app.state.config = cfg
     app.state.llm = build_llm(cfg)
+    app.state.summary_llm = build_summary_llm(cfg)
     app.state.session_store = InMemorySessionStore(
         max_messages_per_session=cfg.max_history,
     )
@@ -44,9 +45,10 @@ def create_app(cfg: AppConfig) -> FastAPI:
     app.include_router(chat_router)
 
     logger.info(
-        "inference gateway ready (provider=%s, model=%s, mcp=%s, cors=%s)",
+        "inference gateway ready (provider=%s, model=%s, summary_model=%s, mcp=%s, cors=%s)",
         cfg.llm_provider,
         cfg.llm_model,
+        cfg.conv_summary_model or cfg.llm_model,
         cfg.mcp_endpoint,
         list(cfg.cors_origins),
     )

@@ -256,19 +256,19 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
   // leaves `mcpToken` null and the chat input falls back to the dev env var
   // (or stays disabled with a clear "MCP token unavailable" reason).
   useEffect(() => {
-    if (!selectedName) {
+    if (!selectedId) {
       setMcpToken(null);
       return;
     }
     const ac = new AbortController();
-    void getDatapackProvisionStatus(selectedName, { signal: ac.signal })
+    void getDatapackProvisionStatus(selectedId, { signal: ac.signal })
       .then((res) => setMcpToken(res.mcp_api_key || null))
       .catch((err) => {
         if ((err as { name?: string })?.name === "CanceledError") return;
         setMcpToken(null);
       });
     return () => ac.abort();
-  }, [selectedName]);
+  }, [selectedId]);
 
   // Stable callback so `WorkbenchLMKnowledgePanel`'s `useEffect` deps don't
   // churn each render.

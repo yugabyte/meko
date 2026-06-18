@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"sort"
 	"strings"
@@ -156,7 +157,10 @@ type ThreadMessage struct {
 	// fact-extraction LLM calls for Conversations (the external agent's
 	// own assistant call lives outside our process and contributes
 	// nothing here). Always present; 0 when no usage was reported.
-	TotalTokens     int64            `json:"total_tokens"`
+	TotalTokens int64 `json:"total_tokens"`
+	// AnsweredFrom is "conversation_cache" when this turn was served from the
+	// shared Q&A cache instead of the LLM (so total_tokens is ~0 by design).
+	AnsweredFrom    string           `json:"answered_from,omitempty"`
 	MemoryHits      []MemoryHit      `json:"memory_hits,omitempty"`
 	KBHits          []KBHit          `json:"kb_hits,omitempty"`
 	ProcessingSteps []ProcessingStep `json:"processing_steps,omitempty"`
@@ -194,6 +198,10 @@ type ProcessingStep struct {
 	// to deep-link the step row to the matching span inside the Langfuse
 	// trace viewer. Empty for synthesized rows (e.g. context_assemble).
 	SpanID string `json:"span_id,omitempty"`
+	// ParentSpanID is this step's parent observation id, when it ran nested
+	// inside another step's span (e.g. conversation_search under
+	// knowledgebase_search). Lets the UI render it as a child. Empty for roots.
+	ParentSpanID string `json:"parent_span_id,omitempty"`
 	// SubTimings carries durations of child spans rolled up under this
 	// step — e.g. memory_search splits into `vector_ms` (mem0's
 	// `Searching (yugabytedb / vector)` span) and `graph_ms` (mem0's
@@ -202,6 +210,10 @@ type ProcessingStep struct {
 	// when the step has no surfaced sub-spans (e.g. memory_add,
 	// llm_invoke).
 	SubTimings map[string]int64 `json:"sub_timings,omitempty"`
+	// ConversationChunks are the prior-conversation excerpts this step
+	// retrieved — populated only on the `conversation_search` step. Each
+	// links back to its source conversation/user. Empty on other steps.
+	ConversationChunks []ConversationChunk `json:"conversation_chunks,omitempty"`
 }
 
 type messageWindow struct {
@@ -219,6 +231,9 @@ type ConversationDetail struct {
 	ThreadLimit   int             `json:"thread_limit"`
 	ThreadOffset  int             `json:"thread_offset"`
 	ThreadHasMore bool            `json:"thread_has_more"`
+	// CanIndex: WorkbenchLM conversation owned by the viewer that isn't yet in
+	// the conversation cache → the UI shows an "Index conversation" button.
+	CanIndex bool `json:"can_index"`
 }
 
 // TraceSpan is one observation in the per-message span tree returned
@@ -277,10 +292,15 @@ type TraceMemoryItem struct {
 // anywhere). Sourced by projecting one row out of the existing
 // ThreadMessage list — no new SQL path.
 type MessageDecisionTrace struct {
-	MessageID         string           `json:"message_id"`
-	Model             string           `json:"model,omitempty"`
-	LatencyMs         int64            `json:"latency_ms"`
-	TotalTokens       int64            `json:"total_tokens"`
+	MessageID   string `json:"message_id"`
+	Model       string `json:"model,omitempty"`
+	LatencyMs   int64  `json:"latency_ms"`
+	TotalTokens int64  `json:"total_tokens"`
+	// AnsweredFrom is "conversation_cache" when this turn was served from the
+	// shared cache (LLM skipped); empty otherwise. (The retrieved chunks
+	// themselves live on the `conversation_search` processing step — see
+	// ProcessingStep.ConversationChunks.)
+	AnsweredFrom      string           `json:"answered_from,omitempty"`
 	LLMCalls          int64            `json:"llm_calls"`
 	MemoriesExtracted int64            `json:"memories_extracted"`
 	Reasoning         string           `json:"reasoning,omitempty"`
@@ -288,6 +308,17 @@ type MessageDecisionTrace struct {
 	MemoryHits        []MemoryHit      `json:"memory_hits,omitempty"`
 	KBHits            []KBHit          `json:"kb_hits,omitempty"`
 	ProcessingSteps   []ProcessingStep `json:"processing_steps,omitempty"`
+}
+
+// ConversationChunk is one prior-conversation excerpt that fed a cache-hit
+// summary. conversation_id + user_id let the UI link back to the source.
+type ConversationChunk struct {
+	Question       string   `json:"question,omitempty"`
+	Answer         string   `json:"answer,omitempty"`
+	Distance       *float64 `json:"distance,omitempty"`
+	ConversationID string   `json:"conversation_id,omitempty"`
+	MessageID      string   `json:"message_id,omitempty"`
+	UserID         string   `json:"user_id,omitempty"`
 }
 
 // LangfuseRepo encapsulates database operations for Langfuse mappings
@@ -789,6 +820,31 @@ LIMIT  $3 OFFSET $4`
 	return out, nil
 }
 
+// ConversationHistoryIndexed reports whether any conversation_history_search
+// row already exists for this conversation (datapack = tenant). Indexed lookup
+// via the (tenant_id, conversation_id) index — no scan.
+func (r *LangfuseRepo) ConversationHistoryIndexed(datapackID, conversationID string) (bool, error) {
+	if r == nil || r.dataDB == nil {
+		return false, fmt.Errorf("data db not configured")
+	}
+	dpUUID := canonicalUUID(datapackID)
+	convUUID := canonicalUUID(conversationID)
+	if dpUUID == "" || convUUID == "" {
+		return false, nil
+	}
+	const q = `SELECT 1 FROM datapacks.conversation_history_search
+	           WHERE tenant_id = $1::uuid AND conversation_id = $2::uuid LIMIT 1`
+	var one int
+	switch err := r.dataDB.QueryRow(q, dpUUID, convUUID).Scan(&one); err {
+	case nil:
+		return true, nil
+	case sql.ErrNoRows:
+		return false, nil
+	default:
+		return false, fmt.Errorf("meta db: conversation indexed check: %w", err)
+	}
+}
+
 // GetConversationThread returns the header aggregates for one
 // conversation plus a page of its messages, paired with reasoning and
 // per-turn counters. messagesLimit/messagesOffset paginate through
@@ -836,6 +892,7 @@ func (r *LangfuseRepo) GetConversationThread(
 SELECT
     sessions.conversation_id,
     sessions.agent_id,
+    sessions.user_id,
     sessions.started_at,
     COALESCE(obs_agg.title, LEFT(obs_agg.first_message, 80))  AS title,
     obs_agg.first_message,
@@ -846,6 +903,7 @@ FROM (
     SELECT DISTINCT ON (traces.session_id)
         traces.session_id              AS conversation_id,
         traces.metadata->>'agent_id'   AS agent_id,
+        traces.user_id                 AS user_id,
         traces."timestamp"             AS started_at
     FROM clickhouse.traces AS traces
     WHERE traces.project_id = $1
@@ -886,6 +944,7 @@ LIMIT 1`
 	var (
 		header    ConversationDetail
 		agentID   sql.NullString
+		userID    sql.NullString
 		title     sql.NullString
 		firstMsg  sql.NullString
 		startedAt sql.NullTime
@@ -894,6 +953,7 @@ LIMIT 1`
 	err := r.langfuseDB.QueryRow(headerQ, projectID, sessionID).Scan(
 		&header.ID,
 		&agentID,
+		&userID,
 		&startedAt,
 		&title,
 		&firstMsg,
@@ -909,6 +969,9 @@ LIMIT 1`
 	}
 	if agentID.Valid {
 		header.AgentID = agentID.String
+	}
+	if userID.Valid {
+		header.UserID = userID.String
 	}
 	if title.Valid {
 		header.Title = title.String
@@ -944,6 +1007,9 @@ WITH raw_obs AS (
            -- LLM identifier (carried on the Reasoning generation when
            -- the client passes the model parameter). Langfuse-native column.
            provided_model_name,
+           -- Whole user_metadata blob (cache-hit provenance + chunks) as text;
+           -- parsed in Go, robust to how Langfuse nests it.
+           metadata ->> 'user_metadata' AS user_metadata_json,
            (metadata ->> 'message_id' IS NOT NULL AND name = 'Conversation Message Added') AS is_bookmark
     FROM   clickhouse.observations
     WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
@@ -1028,7 +1094,8 @@ SELECT b.msg_id AS message_id, b.id AS observation_id, s.root_start, b.start_tim
        mp.model AS model,
        s.latency_ms,
        COALESCE(s.llm_calls, 0) AS llm_calls,
-       COALESCE(s.total_tokens, 0) AS total_tokens
+       COALESCE(s.total_tokens, 0) AS total_tokens,
+       b.user_metadata_json AS user_metadata_json
 FROM   raw_obs b
 JOIN   turn_stats s ON s.message_id = b.msg_id
 LEFT JOIN reasoning r ON r.message_id = b.msg_id
@@ -1045,17 +1112,21 @@ LIMIT  $3 OFFSET $4`
 
 	header.Thread = make([]ThreadMessage, 0, messagesLimit)
 	windows := make([]messageWindow, 0, messagesLimit)
+	// Conversation-search chunks per message, attached to each message's
+	// conversation_search step after processing steps are populated below.
+	chunksByMsg := make(map[string][]ConversationChunk)
 	for threadRows.Next() {
 		var (
-			row         ThreadMessage
-			windowStart sql.NullTime
-			started     sql.NullTime
-			nextStart   sql.NullTime
-			input       sql.NullString
-			output      sql.NullString
-			reason      sql.NullString
-			planJSON    sql.NullString
-			model       sql.NullString
+			row          ThreadMessage
+			windowStart  sql.NullTime
+			started      sql.NullTime
+			nextStart    sql.NullTime
+			input        sql.NullString
+			output       sql.NullString
+			reason       sql.NullString
+			planJSON     sql.NullString
+			model        sql.NullString
+			userMetaJSON sql.NullString
 		)
 		if err := threadRows.Scan(
 			&row.MessageID,
@@ -1071,8 +1142,24 @@ LIMIT  $3 OFFSET $4`
 			&row.LatencyMs,
 			&row.LLMCalls,
 			&row.TotalTokens,
+			&userMetaJSON,
 		); err != nil {
 			return nil, fmt.Errorf("langfuse db: scan thread row: %w", err)
+		}
+		// Parse cache-hit metadata the gateway wrote into user_metadata.
+		if userMetaJSON.Valid && strings.TrimSpace(userMetaJSON.String) != "" {
+			var um struct {
+				AnsweredFrom       string              `json:"answered_from"`
+				ConversationChunks []ConversationChunk `json:"conversation_chunks"`
+			}
+			if err := json.Unmarshal([]byte(userMetaJSON.String), &um); err != nil {
+				slog.Debug("failed to parse conversation user_metadata", "message_id", row.MessageID, "err", err)
+			} else {
+				row.AnsweredFrom = um.AnsweredFrom
+				if len(um.ConversationChunks) > 0 {
+					chunksByMsg[row.MessageID] = um.ConversationChunks
+				}
+			}
 		}
 		if started.Valid {
 			row.StartedAt = started.Time
@@ -1143,6 +1230,27 @@ LIMIT  $3 OFFSET $4`
 			header.Thread[i].MemoryHits = agentRes.memoryHits[messageID]
 			header.Thread[i].KBHits = agentRes.kbHits[messageID]
 			header.Thread[i].ProcessingSteps = ensureLLMInvokeStep(agentRes.processingSteps[messageID], header.Thread[i].LLMCalls)
+			// Attach conversation-search chunks to this message's
+			// conversation_search step (or synthesize it if the span didn't land).
+			if chunks, ok := chunksByMsg[messageID]; ok && len(chunks) > 0 {
+				attached := false
+				for j := range header.Thread[i].ProcessingSteps {
+					if header.Thread[i].ProcessingSteps[j].Name == "conversation_search" {
+						header.Thread[i].ProcessingSteps[j].ConversationChunks = chunks
+						attached = true
+						break
+					}
+				}
+				if !attached {
+					header.Thread[i].ProcessingSteps = append(header.Thread[i].ProcessingSteps, ProcessingStep{
+						Name:               "conversation_search",
+						Status:             "ok",
+						Detail:             fmt.Sprintf("%d chunk(s)", len(chunks)),
+						ParentSpanID:       kbSearchSpanID(header.Thread[i].ProcessingSteps),
+						ConversationChunks: chunks,
+					})
+				}
+			}
 		}
 	}
 
@@ -1332,13 +1440,14 @@ type agentReasoningWindowResult struct {
 }
 
 type agentReasoningObservation struct {
-	ID         string
-	Name       string
-	Type       string
-	StartTime  time.Time
-	DurationMs int64
-	Input      string
-	Output     string
+	ID                  string
+	ParentObservationID string
+	Name                string
+	Type                string
+	StartTime           time.Time
+	DurationMs          int64
+	Input               string
+	Output              string
 }
 
 // childSubTimingClass maps the name of a child observation to the parent
@@ -1391,6 +1500,7 @@ func (r *LangfuseRepo) agentReasoningPerMessageWindow(
 	// are not ideal for large tables and can degrade query performance.
 	const q = `
 SELECT id,
+       COALESCE(parent_observation_id, '') AS parent_observation_id,
        name,
        type::text,
        start_time,
@@ -1533,7 +1643,7 @@ ORDER  BY start_time ASC`
 	winIdx := 0
 	for rows.Next() {
 		var obs agentReasoningObservation
-		if err := rows.Scan(&obs.ID, &obs.Name, &obs.Type, &obs.StartTime, &obs.DurationMs, &obs.Input, &obs.Output); err != nil {
+		if err := rows.Scan(&obs.ID, &obs.ParentObservationID, &obs.Name, &obs.Type, &obs.StartTime, &obs.DurationMs, &obs.Input, &obs.Output); err != nil {
 			return emptyResult, fmt.Errorf("langfuse db: scan agent reasoning observation: %w", err)
 		}
 		for winIdx < len(windows) {
@@ -1607,6 +1717,17 @@ const (
 	agentReasoningKBMaxDistance  = 1.2
 )
 
+// kbSearchSpanID returns the knowledgebase_search step's span id, so a
+// synthesized conversation_search step can nest under it in the UI.
+func kbSearchSpanID(steps []ProcessingStep) string {
+	for i := range steps {
+		if steps[i].Name == "knowledgebase_search" {
+			return steps[i].SpanID
+		}
+	}
+	return ""
+}
+
 func processingStepFromObservation(obs agentReasoningObservation) *ProcessingStep {
 	name := strings.ToLower(strings.TrimSpace(obs.Name))
 	stepName := ""
@@ -1615,6 +1736,8 @@ func processingStepFromObservation(obs agentReasoningObservation) *ProcessingSte
 		stepName = "memory_search"
 	case strings.Contains(name, "knowledge") && strings.Contains(name, "search"):
 		stepName = "knowledgebase_search"
+	case strings.Contains(name, "conversation") && strings.Contains(name, "search"):
+		stepName = "conversation_search"
 	case strings.Contains(name, "conversation add message") || name == "conversation message added":
 		stepName = "conversation_add_message"
 	case strings.Contains(name, "memory add"):
@@ -1627,12 +1750,13 @@ func processingStepFromObservation(obs agentReasoningObservation) *ProcessingSte
 
 	args, query := extractToolArgsAndQuery(parseJSONValue(obs.Input))
 	return &ProcessingStep{
-		Name:       stepName,
-		DurationMs: obs.DurationMs,
-		Status:     "ok",
-		Query:      query,
-		ToolArgs:   args,
-		SpanID:     obs.ID,
+		Name:         stepName,
+		DurationMs:   obs.DurationMs,
+		Status:       "ok",
+		Query:        query,
+		ToolArgs:     args,
+		SpanID:       obs.ID,
+		ParentSpanID: obs.ParentObservationID,
 	}
 }
 
@@ -2261,11 +2385,15 @@ WITH raw_obs AS (
            metadata ->> 'message_id' AS msg_id,
            CASE WHEN metadata ? 'plan' THEN metadata ->> 'plan' END AS plan_json,
            provided_model_name,
+           -- Whole user_metadata blob as text; parsed in Go (robust to how
+           -- Langfuse nests it — avoids depending on 2-level JSON access).
+           metadata ->> 'user_metadata' AS user_metadata_json,
            (metadata ->> 'message_id' IS NOT NULL AND name = 'Conversation Message Added') AS is_bookmark
     FROM   clickhouse.observations
     WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
 ), bookmark_bounds AS (
     SELECT msg_id, id AS bookmark_id, start_time AS bm_time,
+           user_metadata_json,
            LAG(start_time)  OVER (ORDER BY start_time)      AS prev_bm_time,
            (ROW_NUMBER() OVER (ORDER BY start_time DESC) = 1) AS is_last
     FROM   raw_obs
@@ -2324,7 +2452,8 @@ SELECT t.msg_id,
        mp.model AS model,
        COALESCE(s.latency_ms, 0)   AS latency_ms,
        COALESCE(s.llm_calls, 0)    AS llm_calls,
-       COALESCE(s.total_tokens, 0) AS total_tokens
+       COALESCE(s.total_tokens, 0) AS total_tokens,
+       t.user_metadata_json AS user_metadata_json
 FROM   target t
 LEFT JOIN turn_stats s  ON true
 LEFT JOIN reasoning  r  ON true
@@ -2343,11 +2472,13 @@ LEFT JOIN next_root  n  ON true`
 		latencyMs     int64
 		llmCalls      int64
 		totalTokens   int64
+		userMetaJSON  sql.NullString
 	)
 	err := r.langfuseDB.QueryRow(q, projectID, sessionID, messageID).Scan(
 		&msgID, &bookmarkID, &bmTime, &rootStart, &nextRootStart,
 		&reasoningStr, &planJSON, &model,
 		&latencyMs, &llmCalls, &totalTokens,
+		&userMetaJSON,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -2355,6 +2486,16 @@ LEFT JOIN next_root  n  ON true`
 	if err != nil {
 		return nil, fmt.Errorf("langfuse db: load message decision trace: %w", err)
 	}
+
+	slog.Debug("decision-trace user_metadata",
+		"message_id", msgID,
+		"user_metadata_present", userMetaJSON.Valid,
+		"user_metadata", func() string {
+			if userMetaJSON.Valid {
+				return userMetaJSON.String
+			}
+			return "<null>"
+		}())
 
 	// Hand a single-element windows slice to the existing helpers —
 	// they iterate spans by start_time and assign to the matching
@@ -2399,6 +2540,59 @@ LEFT JOIN next_root  n  ON true`
 	}
 	if model.Valid {
 		out.Model = model.String
+	}
+	// Parse the cache-hit metadata the gateway wrote into the bookmark's
+	// user_metadata: answered_from and the retrieved chunks.
+	if userMetaJSON.Valid && strings.TrimSpace(userMetaJSON.String) != "" {
+		var um struct {
+			AnsweredFrom         string              `json:"answered_from"`
+			ConversationChunks   []ConversationChunk `json:"conversation_chunks"`
+			SummaryModel         string              `json:"summary_model"`
+			SourceConversationID string              `json:"source_conversation_id"`
+		}
+		if err := json.Unmarshal([]byte(userMetaJSON.String), &um); err != nil {
+			slog.Debug("failed to parse conversation user_metadata", "message_id", msgID, "err", err)
+		} else {
+			out.AnsweredFrom = um.AnsweredFrom
+			// Attach chunks to the conversation_search step (their semantic
+			// owner) so the UI can expand that step to show + link them.
+			if len(um.ConversationChunks) > 0 {
+				attached := false
+				for i := range out.ProcessingSteps {
+					if out.ProcessingSteps[i].Name == "conversation_search" {
+						out.ProcessingSteps[i].ConversationChunks = um.ConversationChunks
+						attached = true
+						break
+					}
+				}
+				// MCP's conversation_search span emit is best-effort; if it
+				// didn't land as a step, synthesize one so chunks still surface.
+				if !attached {
+					out.ProcessingSteps = append(out.ProcessingSteps, ProcessingStep{
+						Name:               "conversation_search",
+						Status:             "ok",
+						Detail:             fmt.Sprintf("%d chunk(s)", len(um.ConversationChunks)),
+						ParentSpanID:       kbSearchSpanID(out.ProcessingSteps),
+						ConversationChunks: um.ConversationChunks,
+					})
+				}
+			}
+			// Synthesize the conversation_summarize step (Execute phase) so a
+			// loaded conversation shows which small model summarized which
+			// conversation — the gateway's live step isn't a Langfuse span.
+			if um.SummaryModel != "" {
+				out.ProcessingSteps = append(out.ProcessingSteps, ProcessingStep{
+					Name:   "conversation_summarize",
+					Status: "ok",
+					// tool_args (not Detail) so the UI renders the bespoke
+					// "Used <model> for summarizing conversation <link>" line.
+					ToolArgs: map[string]interface{}{
+						"summary_model":   um.SummaryModel,
+						"conversation_id": um.SourceConversationID,
+					},
+				})
+			}
+		}
 	}
 	if planJSON.Valid {
 		out.Plan = parsePlanSteps(planJSON.String)
