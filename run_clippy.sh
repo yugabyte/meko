@@ -13,10 +13,5 @@ set -euo pipefail
 # at the expense of longer runtime. This script is used by developers, so, don't
 # do that here.
 
-# Clippy args (inlined from the former .neon_clippy_args):
-# * `-A unknown_lints` – do not warn about unknown lint suppressions
-#                        that people with newer toolchains might use
-# * `-D warnings`      - fail on any warnings (`cargo` returns non-zero exit status)
-# * `-D clippy::todo`  - don't let `todo!()` slip into `main`
-CLIPPY_COMMON_ARGS="--locked --workspace --all-targets -- -A unknown_lints -D warnings -D clippy::todo"
+CLIPPY_COMMON_ARGS="$( source .yb-light_clippy_args; echo "$CLIPPY_COMMON_ARGS")"
 exec cargo clippy --all-features $CLIPPY_COMMON_ARGS
