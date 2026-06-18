@@ -274,6 +274,17 @@ fn push_category<'a>(c: &'a Cluster, cat: Category, items: &mut Vec<(String, Ite
         let path = sql_path(cat, &name);
         items.push((name, Item::Sql(path)));
     }
+    // Surface disabled workloads (`<name>.sql.disabled`) so they're
+    // visibly skipped, never silently dropped.
+    let disabled = disabled_sql_names(cat);
+    if !disabled.is_empty() {
+        eprintln!(
+            "disabled (skipped) {} workload(s) in {}/: {}",
+            disabled.len(),
+            cat.dir(),
+            disabled.join(", ")
+        );
+    }
 }
 
 /// Every test name, for the "no match" error message.
@@ -315,4 +326,25 @@ fn sql_names(cat: Category) -> Vec<String> {
 /// Resolve a `.sql` workload path (`<category>/<name>.sql`).
 fn sql_path(cat: Category, name: &str) -> PathBuf {
     category_dir(cat).join(format!("{name}.sql"))
+}
+
+/// Names of disabled `.sql` workloads in a category — files named
+/// `<name>.sql.disabled`. The runner never executes these; they're
+/// reported as skipped so a disabled test stays visible. Re-enable by
+/// stripping the `.disabled` suffix (from both `.sql` and `.out`).
+fn disabled_sql_names(cat: Category) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(category_dir(cat))
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.strip_suffix(".sql.disabled"))
+                .map(String::from)
+        })
+        .collect();
+    names.sort();
+    names
 }

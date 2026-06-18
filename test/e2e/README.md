@@ -118,10 +118,19 @@ Nothing central to edit — tests are auto-discovered.
 
 - **A golden `.sql` workload**: drop `<name>.sql` + `<name>.out` into
   `fast/` or `slow/`. The runner execs `psql -f`, normalizes stdout, and
-  diffs against the `.out` golden. Generate/refresh the golden with
+  diffs against the `.out` golden. The `psql` used is the one built from
+  yb-light's own Postgres (`pg_install/v17/bin/psql`), not whatever is on
+  `PATH` — its meta-commands (e.g. `\d`) must match the compute's major
+  version. Generate/refresh the golden with
   `E2E_REGEN_EXPECTED=1 test/e2e/run.sh <name>` and review the diff
   before committing. `.sql` workloads are discovered at runtime — no
   recompile needed to add one.
+- **Disabling a workload**: rename both files to `<name>.sql.disabled`
+  and `<name>.out.disabled`. The runner skips them but prints them as
+  `disabled (skipped)` so they stay visible; re-enable by stripping the
+  `.disabled` suffix. Used for tests that pass but destabilize the suite —
+  e.g. `clog`/`subxacts`, whose heavy commit bursts make the next endpoint
+  recycle time out (see issue #115).
 
 ## Layout
 

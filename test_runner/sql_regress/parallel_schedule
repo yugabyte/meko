@@ -2,13 +2,14 @@
 # Like in PostgreSQL src/test/regress/parallel_schedule, we put no
 # more than twenty tests in any one parallel group; this limits the
 # number of connections needed to run the tests.
+#
+# Most tests here were ported to the e2e suite under test/e2e/fast/
+# (cid, rel-truncate, spgist, vacuum-full, plus clog/subxacts which are
+# checked in disabled — see issue #115). The two below remain here
+# because they don't fit the e2e golden runner: event-triggers needs
+# extra roles + a second database and has intentional errors, and
+# test-utils needs the neon_test_utils extension.
 # ----------
 
-test: neon-cid
-test: neon-rel-truncate
-test: neon-clog
 test: neon-test-utils
-test: neon-vacuum-full
-test: neon-subxacts
-test: neon-spgist
 test: neon-event-triggers
