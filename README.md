@@ -4,8 +4,9 @@
 
 # ybAmp
 
-**ybAmp** is a serverless Postgres-compatible storage system that runs
-PostgreSQL computes over **YugabyteDB** as the durable backing store.
+**Yugabyte AMP** — **A**gentic **M**ultitenant **P**ostgres — is a
+serverless Postgres-compatible storage system that runs PostgreSQL
+computes over **YugabyteDB** as the durable backing store.
 Compute nodes are stateless and the storage tier is row-per-page tables
 in YB — so the system inherits YugabyteDB's highly available,
 geo-distributed, multi-region, multi-cloud, infinitely-scalable
