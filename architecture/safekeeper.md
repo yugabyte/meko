@@ -370,7 +370,7 @@ allows `len == 0` (pre-generations / empty configs) and `len == 1`; rejects
 anything larger with a descriptive error pointing at the redundant-consensus
 issue.
 
-Unit tests in `yb_mode_tests` cover: empty config accepted, single-member
+Unit tests in `yb_light_tests` cover: empty config accepted, single-member
 accepted, two-member rejected, joint config with two new members rejected.
 
 **Single-timeline identity (one timeline per process).** The

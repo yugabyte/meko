@@ -247,7 +247,7 @@ pub static BACKGROUND_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
 });
 
 #[cfg(test)]
-mod yb_mode_tests {
+mod yb_light_tests {
     use super::require_single_safekeeper;
     use safekeeper_api::membership::{
         Configuration, MemberSet, SafekeeperGeneration, SafekeeperId,
