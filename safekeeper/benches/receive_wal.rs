@@ -60,7 +60,7 @@ fn bench_process_msg(c: &mut Criterion) {
     }
 
     // The actual benchmark.
-    // yb-mode: commit_lsn ≡ flush_lsn is derived, no longer carried on
+    // In yb-light, commit_lsn ≡ flush_lsn is derived, no longer carried on
     // AppendRequestHeader, so there is no commit dimension to vary.
     fn run_bench(b: &mut Bencher, size: usize, fsync: bool) -> anyhow::Result<()> {
         let runtime = tokio::runtime::Builder::new_current_thread() // single is fine, sync IO only
@@ -216,7 +216,7 @@ fn bench_wal_acceptor_throughput(c: &mut Criterion) {
     }
 
     /// The actual benchmark. size is the payload size per message, count is the number of messages.
-    /// yb-mode: commit_lsn ≡ flush_lsn is derived, not carried on
+    /// In yb-light, commit_lsn ≡ flush_lsn is derived, not carried on
     /// AppendRequestHeader, so there is no commit dimension to vary.
     fn run_bench(b: &mut Bencher, count: usize, size: usize, fsync: bool) -> anyhow::Result<()> {
         let runtime = tokio::runtime::Runtime::new()?; // needs multithreaded
