@@ -905,7 +905,7 @@ impl Endpoint {
             let conn_str = self.connstr("test", "neondb");
             println!("Also at '{conn_str}'");
         }
-        let mut cmd = Command::new(self.env.yb_light_distrib_dir.join("compute_ctl"));
+        let mut cmd = Command::new(self.env.yb_light_distrib_dir.join("yb-compute-ctl"));
         cmd.args([
             "--external-http-port",
             &self.external_http_address.port().to_string(),

@@ -66,14 +66,14 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
          --bin yb-pageserver \
          --bin yb-safekeeper \
          --bin yb-endpoint-storage \
-         --bin compute_ctl \
+         --bin yb-compute-ctl \
          --bin storage_controller \
          --bin yb_light_local \
     && mkdir -p /home/nonroot/out \
     && cp target/release/yb-pageserver \
           target/release/yb-safekeeper \
           target/release/yb-endpoint-storage \
-          target/release/compute_ctl \
+          target/release/yb-compute-ctl \
           target/release/storage_controller \
           target/release/yb_light_local \
           /home/nonroot/out/ \
@@ -111,7 +111,7 @@ RUN set -e \
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-pageserver      /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-safekeeper          /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-endpoint-storage    /usr/local/bin/
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/compute_ctl         /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-compute-ctl         /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/storage_controller  /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb_light_local      /usr/local/bin/
 

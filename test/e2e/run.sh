@@ -95,7 +95,7 @@ CLUSTER_BINS=(
     --bin yb-pageserver
     --bin yb-safekeeper
     --bin yb-endpoint-storage
-    --bin compute_ctl
+    --bin yb-compute-ctl
 )
 TOOL_BINS=(--bin yb-dump-pages --bin yb-dump-wals --bin yb-reset-consistent-lsn)
 if [[ $PROFILE == release ]]; then
