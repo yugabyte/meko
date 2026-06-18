@@ -5,10 +5,8 @@
 > not as Markdown files. The old `tasks/*.md` files were migrated to
 > issues and deleted; their full history is in git.
 
-The area labels (`storage` / `control plane`), the milestones
-(`POC` / `Early Access` / `K8 Deploy`), and the create/close contract
-live in **[`../docs/issue-tracking.md`](../docs/issue-tracking.md)** —
-that file is the source of truth.
+See **[`../docs/issue-tracking.md`](../docs/issue-tracking.md)** — the
+source of truth for the issue conventions.
 
 Quick reference:
 
