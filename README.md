@@ -37,12 +37,13 @@ flowchart LR
     end
 
     subgraph sk["Safekeeper (stateless)"]
-        skp["WAL ingress"]
+        skp["WAL ingress<br/>(walproposer push)"]
+        sks["interpreted-WAL sender"]
     end
 
     subgraph ps["Pageserver (stateless)"]
-        cps["compute_page_store pool<br/>(reads, chain reconstruct)"]
-        fps["fpu_page_store pool<br/>(walreceiver + materialiser)"]
+        cps["compute_page_store<br/>(reads + chain reconstruct)"]
+        fps["fpu_page_store<br/>(walreceiver + materialiser)"]
         mat["image materialiser"]
     end
 
@@ -63,7 +64,8 @@ flowchart LR
     pg -- "gRPC GetPage @ LSN" --> cps
     wp -- "WAL stream<br/>(START_WAL_PUSH)" --> skp
     skp -- "INSERT each WAL chunk" --> tblWal
-    ps -- "START_REPLICATION<br/>(walreceiver)" --> skp
+    fps -- "START_REPLICATION<br/>(walreceiver)" --> sks
+    sks -- "interpreted WAL" --> fps
     cps -- "SELECT page rows" --> tblPages
     fps -- "INSERT page rows<br/>(write path)" --> tblPages
     fps -- "INSERT materialised images" --> tblPages
