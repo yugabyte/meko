@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/yugabytedb-light-logo.jpg" alt="YugabyteDB AMP" width="600">
+  <img src="docs/yb-amp-logo.png" alt="YugabyteDB AMP" width="600">
 </p>
 
 # ybAmp
