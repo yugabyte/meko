@@ -1,0 +1,44 @@
+name: Bug
+description: Report a bug in yb-light
+labels: ["t/bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pick an **Area** below — it sets the required area label
+        (`storage` / `control plane`). Also set a **milestone** after
+        filing (both are required; see `docs/issue-tracking.md`).
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which subsystem does this affect?
+      options:
+        - storage
+        - control plane
+        - both
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit / branch, how the cluster was started, etc.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, links

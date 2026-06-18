@@ -1,0 +1,59 @@
+name: Require area label
+
+# Every issue must carry an area label (`storage` and/or `control plane`)
+# — see docs/issue-tracking.md. GitHub can't block label-less creation, so
+# this enforces it post-hoc: it auto-applies the area label from the issue
+# form's "Area" dropdown, and flags anything still uncovered with
+# `needs-area-label` + a comment. The flag clears automatically once a real
+# area label is added (the `labeled` trigger re-runs this).
+
+on:
+  issues:
+    types: [opened, edited, reopened, labeled, unlabeled]
+
+permissions:
+  issues: write
+
+jobs:
+  require-area-label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const AREA_LABELS = ["storage", "control plane"];
+            const NEEDS = "needs-area-label";
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            const number = context.payload.issue.number;
+
+            const issue = (await github.rest.issues.get({ ...repo, issue_number: number })).data;
+            let labels = issue.labels.map(l => (typeof l === "string" ? l : l.name));
+
+            // 1. Auto-apply the area label(s) from the issue form's "Area"
+            //    dropdown. Forms render the answer as "### Area\n\n<value>".
+            if (!labels.some(l => AREA_LABELS.includes(l))) {
+              const m = (issue.body || "").match(/^###\s*Area\s*\r?\n\r?\n(.+)$/im);
+              const add = [];
+              if (m) {
+                const v = m[1].toLowerCase();
+                if (v.includes("storage")) add.push("storage");
+                if (v.includes("control")) add.push("control plane");
+              }
+              if (add.length) {
+                await github.rest.issues.addLabels({ ...repo, issue_number: number, labels: add });
+                labels = labels.concat(add);
+              }
+            }
+
+            const hasArea = labels.some(l => AREA_LABELS.includes(l));
+
+            if (!hasArea && !labels.includes(NEEDS)) {
+              await github.rest.issues.addLabels({ ...repo, issue_number: number, labels: [NEEDS] });
+              await github.rest.issues.createComment({
+                ...repo,
+                issue_number: number,
+                body: "⚠️ This issue has no **area label**. Every issue needs `storage` and/or `control plane` (and a milestone) — see [`docs/issue-tracking.md`](../blob/main/docs/issue-tracking.md). Add one and this `needs-area-label` flag clears automatically.",
+              });
+            } else if (hasArea && labels.includes(NEEDS)) {
+              await github.rest.issues.removeLabel({ ...repo, issue_number: number, name: NEEDS }).catch(() => {});
+            }
