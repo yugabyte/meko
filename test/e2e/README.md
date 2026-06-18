@@ -12,17 +12,22 @@ There are two entry points. Most of this doc is the **`yb_light_local`** suite
 ## amp-on-Docker suite (`run-amp.sh`)
 
 `test/e2e/run-amp.sh` exercises the **amp** control plane on Docker: it starts the
-`amp` container (with its managed storage controller) against the host's
+`amp` container (with its Docker endpoint provisioner enabled) against the host's
 YugabyteDB, then runs a *thin* test that calls amp's REST API
-(`user → storage pool → timeline`) and runs `psql` against the endpoint amp
-returns. **amp owns all provisioning** — a single create-timeline call creates the
-tenant, drives the storage controller, and launches the compute endpoint via amp's
-Go `deploy.Deployer` (yblight-controller.md §5.6); the harness contains no
-orchestration. The `e2e_tests amp` selector is the harness side (`src/amp.rs`).
+(`user → storage pool → timeline → endpoint`) and runs `psql` against the endpoint
+amp returns. **amp owns all provisioning** — create-timeline records the tenant +
+its main timeline, and create-endpoint deploys the compute container synchronously
+via amp's `deploy.Deployer` (the Docker driver; yblight-controller.md §5.6),
+returning its address. The harness contains no orchestration. The `e2e_tests amp`
+selector is the harness side (`src/amp.rs`).
+
+It runs the SC-free self-bootstrap path: amp deploys the endpoint with
+`--deploy-bootstrap`, so it provisions the storage schema and initdb's the
+recorded tenant/timeline on first start (there is no create-database flow yet).
+Storage-controller-coordinated deploy is future work.
 
 ```sh
-test/e2e/run-amp.sh           # storage-controller-driven (default)
-test/e2e/run-amp.sh --no-sc   # SC-free (endpoint self-bootstraps)
+test/e2e/run-amp.sh           # create timeline + endpoint, psql the endpoint
 test/e2e/run-amp.sh -n 3      # repeat the suite 3x
 ```
 

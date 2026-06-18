@@ -53,11 +53,13 @@ func main() {
 	}
 }
 
-// buildProvisioning assembles the create-timeline workflow's collaborators from
-// config: the storage-controller client (when the managed controller is on) and
-// the endpoint deployer (when --deploy is on). The SC URL it hands the deployer
-// is amp's own network-reachable name + the controller's port, so an endpoint
-// container on the shared network can register/attach back.
+// buildProvisioning assembles the create-timeline / create-endpoint workflow's
+// collaborators from config: the storage-controller client (when the managed
+// controller is on) and the endpoint deployer (when --deploy is on). The deploy
+// driver (--deploy-driver) selects the Docker or the Kubernetes/Helm Deployer;
+// both consume the same EndpointSpec, so the create-endpoint workflow is
+// identical. The SC URL it hands the deployer is amp's own network-reachable
+// name + the controller's port, so a launched endpoint can register/attach back.
 func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisioning, error) {
 	var prov api.Provisioning
 
@@ -83,27 +85,65 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 		// Endpoints the deployer launches must be able to reach the managed
 		// storage controller. If we couldn't resolve that URL, refuse to start
 		// rather than silently launch controller-free endpoints while amp
-		// registers their tenants with the controller (a split-brain).
+		// registers their tenants with the controller (a split-brain). A config
+		// override (--deploy-storage-controller-url) takes precedence when set
+		// (e.g. an explicit in-cluster Service name for the Kubernetes driver).
+		if cfg.Deploy.StorageControllerURL != "" {
+			prov.SCEndpointURL = cfg.Deploy.StorageControllerURL
+		}
 		if cfg.StorageController.Enabled && prov.SCEndpointURL == "" {
 			return api.Provisioning{}, fmt.Errorf(
 				"endpoint deployment is enabled with the storage controller, but the controller URL endpoints should use could not be resolved (listen=%q); refusing to start",
 				cfg.StorageController.ListenAddr)
 		}
-		prov.Deployer = deploy.NewDockerDeployer(deploy.DockerConfig{
-			EndpointImage:  cfg.Deploy.EndpointImage,
-			Network:        cfg.Deploy.Network,
-			ExternalHost:   cfg.Deploy.ExternalHost,
-			SupervisorPath: cfg.Deploy.SupervisorPath,
-		}, logger)
-		prov.EndpointYB = deploy.YBConn{
-			HostPorts: cfg.Deploy.EndpointYBHostPorts,
-			User:      cfg.Deploy.EndpointYBUser,
-			Password:  cfg.Deploy.EndpointYBPassword,
-			DBName:    cfg.Deploy.EndpointYBDBName,
+
+		switch cfg.Deploy.Driver {
+		case config.DriverKubernetes:
+			prov.Deployer = deploy.NewKubernetesDeployer(deploy.KubernetesConfig{
+				Namespace:                  cfg.Deploy.Namespace,
+				ChartPath:                  cfg.Deploy.ChartPath,
+				HelmBin:                    cfg.Deploy.HelmBin,
+				KubeconfigPath:             cfg.Deploy.KubeconfigPath,
+				EndpointImageRepo:          cfg.Deploy.EndpointImageRepo,
+				EndpointImageTag:           cfg.Deploy.EndpointImageTag,
+				PullSecret:                 cfg.Deploy.PullSecret,
+				ComputePort:                cfg.Deploy.ComputePort,
+				ServiceType:                cfg.Deploy.ServiceType,
+				ServiceAnnotations:         cfg.Deploy.ServiceAnnotations,
+				BackingYBExistingSecret:    cfg.Deploy.BackingYBExistingSecret,
+				BackingYBExistingSecretKey: cfg.Deploy.BackingYBExistingSecretKey,
+				Timeout:                    cfg.Deploy.Timeout,
+			}, logger)
+			logger.Info("kubernetes endpoint deployer enabled",
+				"namespace", cfg.Deploy.Namespace,
+				"chart", cfg.Deploy.ChartPath,
+				"image", cfg.Deploy.EndpointImageRepo+":"+cfg.Deploy.EndpointImageTag,
+				"backing_yb", cfg.Deploy.BackingYBHostPorts,
+				"sc_endpoint_url", prov.SCEndpointURL)
+		default: // config.DriverDocker
+			prov.Deployer = deploy.NewDockerDeployer(deploy.DockerConfig{
+				EndpointImage:  cfg.Deploy.EndpointImage,
+				Network:        cfg.Deploy.Network,
+				ExternalHost:   cfg.Deploy.ExternalHost,
+				SupervisorPath: cfg.Deploy.SupervisorPath,
+				ReadyTimeout:   cfg.Deploy.Timeout,
+			}, logger)
+			logger.Info("docker endpoint deployer enabled",
+				"image", cfg.Deploy.EndpointImage, "network", cfg.Deploy.Network,
+				"backing_yb", cfg.Deploy.BackingYBHostPorts,
+				"sc_endpoint_url", prov.SCEndpointURL)
 		}
-		logger.Info("endpoint deployment enabled",
-			"image", cfg.Deploy.EndpointImage, "network", cfg.Deploy.Network,
-			"sc_endpoint_url", prov.SCEndpointURL)
+
+		// Both drivers attach the launched compute to the backing YugabyteDB and
+		// (when bootstrap is on) initdb the recorded tenant/timeline. This flows
+		// into the EndpointSpec the handler builds for every endpoint.
+		prov.EndpointYB = deploy.YBConn{
+			HostPorts: cfg.Deploy.BackingYBHostPorts,
+			User:      cfg.Deploy.BackingYBUser,
+			Password:  cfg.Deploy.BackingYBPassword,
+			DBName:    cfg.Deploy.BackingYBDBName,
+		}
+		prov.Bootstrap = cfg.Deploy.Bootstrap
 	}
 	return prov, nil
 }
@@ -153,8 +193,9 @@ func runServe(args []string) error {
 	worker := task.NewWorker(store, task.DefaultRegistry(), cfg.Task, logger)
 	backend := core.NewPgBackend(pool)
 
-	// The create-timeline workflow's collaborators: the storage controller (to
-	// register the tenant) and the endpoint deployer (to provision the compute).
+	// The create-timeline / create-endpoint workflow's collaborators: the storage
+	// controller (to record the pending-init recipe) and the endpoint deployer
+	// (to provision the compute, behind the configured driver).
 	prov, err := buildProvisioning(cfg, logger)
 	if err != nil {
 		return err

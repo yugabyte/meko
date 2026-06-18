@@ -176,12 +176,13 @@ func TestListTimelines(t *testing.T) {
 
 func TestListEndpoints(t *testing.T) {
 	dep := &fakeDeployer{addr: "127.0.0.1:5555"}
-	client := newTestServerWithProv(t, api.Provisioning{Deployer: dep})
+	client, _ := newTestServerWithProv(t, api.Provisioning{Deployer: dep})
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
-	// Create-timeline provisions a read_write endpoint (deployer is set).
+	// Create-timeline records the tenant + main timeline only; compute is a
+	// separate resource. The first endpoint is deployed by POSTing it.
 	ct, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "main"})
 	if err != nil {
 		t.Fatalf("CreateTimeline: %v", err)
@@ -190,6 +191,16 @@ func TestListEndpoints(t *testing.T) {
 		t.Fatalf("CreateTimeline status = %d, body = %s", ct.StatusCode(), ct.Body)
 	}
 	tl := *ct.JSON201
+
+	// Deploy a read_write endpoint on the timeline (the deployer is set).
+	rw := api.CreateEndpointRequestRoleReadWrite
+	cep, err := client.CreateEndpointWithResponse(ctx, pool.Id, tl.TimelineId, api.CreateEndpointRequest{Role: &rw})
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	if cep.StatusCode() != http.StatusCreated || cep.JSON201 == nil {
+		t.Fatalf("CreateEndpoint status = %d, body = %s", cep.StatusCode(), cep.Body)
+	}
 
 	eps, err := client.ListEndpointsWithResponse(ctx, pool.Id, tl.TimelineId, nil)
 	if err != nil {
@@ -201,7 +212,7 @@ func TestListEndpoints(t *testing.T) {
 	if eps.JSON200.Total != 1 || eps.JSON200.Count != 1 {
 		t.Fatalf("endpoints = {total:%d count:%d}, want {1 1}", eps.JSON200.Total, eps.JSON200.Count)
 	}
-	if got := eps.JSON200.Endpoints[0]; got.Role != api.ReadWrite || got.Address != "127.0.0.1:5555" {
+	if got := eps.JSON200.Endpoints[0]; got.Role != api.EndpointRoleReadWrite || got.Address != "127.0.0.1:5555" {
 		t.Errorf("endpoint = {role:%q addr:%q}, want {read_write 127.0.0.1:5555}", got.Role, got.Address)
 	}
 

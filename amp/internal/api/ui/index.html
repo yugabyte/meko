@@ -260,6 +260,7 @@
     const listTimelines = (poolId) => api("GET", `/storage-pools/${poolId}/timelines${PAGE}`);
     const createTimeline= (poolId, name) => api("POST", `/storage-pools/${poolId}/timelines`, { name });
     const listEndpoints = (poolId, tlId) => api("GET", `/storage-pools/${poolId}/timelines/${tlId}/endpoints${PAGE}`);
+    const createEndpoint= (poolId, tlId, role) => api("POST", `/storage-pools/${poolId}/timelines/${tlId}/endpoints`, { role });
 
     // --- router --------------------------------------------------------------
 
@@ -495,20 +496,55 @@
       catch (e) { host.innerHTML = `<div class="muted" style="font-size:12px">Failed to load endpoints: ${esc(e.message)}</div>`; return; }
 
       const eps = data.endpoints || [];
-      if (!eps.length) {
-        host.innerHTML = `<div class="muted" style="font-size:12px">No endpoints (compute provisioning is off).</div>`;
-        return;
-      }
-      host.innerHTML = eps.map((ep) => {
-        const cls = ep.role === "read_write" ? "rw" : "ro";
-        const label = ep.role === "read_write" ? "read-write" : "read-only";
-        return `<div class="endpoint">
-          <span class="badge ${cls}">${label}</span>
-          <span class="addr">${esc(ep.address)}</span>
-          ${idChip(ep.id)}
+      const list = eps.length
+        ? eps.map((ep) => {
+            const cls = ep.role === "read_write" ? "rw" : "ro";
+            const label = ep.role === "read_write" ? "read-write" : "read-only";
+            // Demo-only: every endpoint uses the fixed cloud_admin default.
+            const conn = `postgresql://cloud_admin:cloud_admin@${ep.address}/postgres`;
+            return `<div class="endpoint">
+              <span class="badge ${cls}">${label}</span>
+              <span class="addr">${esc(ep.address)}</span>
+              ${idChip(ep.id)}
+              <div class="cred" style="font-size:12px; margin-top:4px; color:var(--muted)">
+                user <code>cloud_admin</code> · password <code>cloud_admin</code> · db <code>postgres</code>
+                <button class="copy" data-copy="${esc(conn)}" title="Copy connection string">${COPY_ICON}</button>
+              </div>
+            </div>`;
+          }).join("")
+        : `<div class="muted" style="font-size:12px">No endpoints yet.</div>`;
+      // Compute is provisioned in a separate, synchronous step: the controller
+      // Helm-deploys the endpoint pod and waits for it to be ready before the
+      // call returns (so the button blocks for the duration).
+      const provision = `
+        <div class="inline-form" style="margin-top:8px">
+          <select class="ep-role" aria-label="endpoint role">
+            <option value="read_write">read-write</option>
+            <option value="read_only">read-only</option>
+          </select>
+          <button class="btn create-endpoint" data-pool="${esc(poolId)}" data-timeline="${esc(tlId)}">Provision compute</button>
         </div>`;
-      }).join("");
+      host.innerHTML = list + provision;
       bind();
+
+      const epBtn = host.querySelector(".create-endpoint");
+      if (epBtn) {
+        epBtn.addEventListener("click", async () => {
+          const role = host.querySelector(".ep-role").value;
+          const prev = epBtn.textContent;
+          epBtn.disabled = true;
+          epBtn.textContent = "Provisioning… (~30–60s)";
+          try {
+            await createEndpoint(poolId, tlId, role);
+            toast("Endpoint provisioned", true);
+            await hydrateEndpoints(poolId, tlId);
+          } catch (err) {
+            toast(err.message);
+            epBtn.disabled = false;
+            epBtn.textContent = prev;
+          }
+        });
+      }
     }
 
     // --- error panel ---------------------------------------------------------

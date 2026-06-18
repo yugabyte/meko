@@ -52,6 +52,22 @@ endpoint:
   sharedPreloadLibraries: "neon"
   # -- Extra Postgres GUCs, as a name: value map.
   extraSettings: {}
+  # -- initdb the supplied tenant/timeline on first start, instead of attaching
+  # an existing one. Used with storageController.url for the controller-
+  # coordinated flow (the controller allocates the ids; the endpoint materializes
+  # them). Off => attach an existing (already-materialized) tenant/timeline.
+  bootstrap: false
+
+# Storage-controller coordination. Empty url => the endpoint runs
+# storage-controller-free with a pinned generation. Set => the endpoint
+# registers its pageserver + safekeeper with the controller, takes its
+# generation from the attach-hook, and registers the timeline; the controller
+# reaches this endpoint at its stable Service DNS (set as SC_REACHABLE_HOST), so
+# a rescheduled pod re-registers the same address (#121).
+storageController:
+  # -- URL the endpoint uses to reach the storage controller (e.g.
+  # http://amp-controller.<ns>.svc.cluster.local:50051). Empty = SC-free.
+  url: ""
 
 # Internal listen ports for the co-located services. One endpoint per pod, so
 # these are fixed defaults; override only on conflict.
@@ -75,6 +91,9 @@ supervisor:
 
 service:
   type: ClusterIP
+  # -- Annotations for the Service. For an internal LoadBalancer on GKE, set e.g.
+  # networking.gke.io/load-balancer-type: Internal (+ ...allow-global-access).
+  annotations: {}
   # -- Also publish the internal HTTP APIs (pageserver/safekeeper/endpoint_storage) on the Service.
   exposeInternalHttp: false
 

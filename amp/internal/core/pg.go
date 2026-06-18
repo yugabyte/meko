@@ -177,40 +177,6 @@ func (b *PgBackend) CreateTimeline(ctx context.Context, poolID uuid.UUID, name s
 	return b.getTimeline(ctx, tenantID, timelineID)
 }
 
-func (b *PgBackend) CreateEndpoint(ctx context.Context, tenantID, timelineID uuid.UUID, role, address string) (Endpoint, error) {
-	id := uuid.New()
-	_, err := b.pool.Exec(ctx,
-		`INSERT INTO endpoint (id, tenant_id, timeline_id, role, address, config)
-		 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::endpoint_role, $5, '{}'::jsonb)
-		 ON CONFLICT (id) DO NOTHING`,
-		id.String(), tenantID.String(), timelineID.String(), role, address)
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			switch pgErr.Code {
-			case "23505": // one_writer_per_timeline: a writer already exists
-				return Endpoint{}, ErrConflict
-			case "23503": // foreign_key_violation: the timeline does not exist
-				return Endpoint{}, ErrNotFound
-			}
-		}
-		return Endpoint{}, fmt.Errorf("insert endpoint: %w", err)
-	}
-	return b.getEndpoint(ctx, id)
-}
-
-func (b *PgBackend) getEndpoint(ctx context.Context, id uuid.UUID) (Endpoint, error) {
-	row := b.pool.QueryRow(ctx,
-		`SELECT id::text, tenant_id::text, timeline_id::text, role::text, COALESCE(address, ''), created_at
-		 FROM endpoint WHERE id = $1::uuid`,
-		id.String())
-	e, err := scanEndpoint(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Endpoint{}, ErrNotFound
-	}
-	return e, err
-}
-
 func (b *PgBackend) getTimeline(ctx context.Context, tenantID, timelineID uuid.UUID) (Timeline, error) {
 	row := b.pool.QueryRow(ctx,
 		`SELECT tenant_id::text, timeline_id::text, name, pg_version, is_main, created_at
@@ -286,6 +252,79 @@ func (b *PgBackend) ListTimelines(ctx context.Context, poolID uuid.UUID, limit, 
 	return timelines, total, nil
 }
 
+// timelineSelect joins pg_cluster -> tenant -> storage_pool so a timeline is
+// only visible through the pool its tenant belongs to. The API addresses a
+// timeline by id alone (no tenant in the path); timeline_id is a random 16-byte
+// storage id, so it is treated as globally unique. Pools are top-level, so this
+// is not owner-scoped.
+const timelineSelect = `SELECT c.tenant_id::text, c.timeline_id::text, c.name, c.pg_version, c.is_main, c.created_at
+	FROM pg_cluster c
+	JOIN tenant t ON t.id = c.tenant_id
+	JOIN storage_pool sp ON sp.id = t.storage_pool_id`
+
+func (b *PgBackend) GetTimeline(ctx context.Context, poolID, timelineID uuid.UUID) (Timeline, error) {
+	row := b.pool.QueryRow(ctx,
+		timelineSelect+` WHERE c.timeline_id = $1::uuid AND sp.id = $2::uuid`,
+		timelineID.String(), poolID.String())
+	tl, err := scanTimeline(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Timeline{}, ErrNotFound
+	}
+	return tl, err
+}
+
+func (b *PgBackend) CreateEndpoint(ctx context.Context, tenantID, timelineID uuid.UUID, role string, config []byte) (Endpoint, error) {
+	id := uuid.New()
+	var cfg any
+	if len(config) > 0 {
+		cfg = config
+	}
+	_, err := b.pool.Exec(ctx,
+		`INSERT INTO endpoint (id, tenant_id, timeline_id, role, config)
+		 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::endpoint_role, $5::jsonb)
+		 ON CONFLICT (id) DO NOTHING`,
+		id.String(), tenantID.String(), timelineID.String(), role, cfg)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case "23505": // unique_violation: a read_write endpoint already exists (one_writer_per_timeline)
+				return Endpoint{}, ErrConflict
+			case "23503": // foreign_key_violation: the (tenant_id, timeline_id) timeline does not exist
+				return Endpoint{}, ErrNotFound
+			}
+		}
+		return Endpoint{}, fmt.Errorf("insert endpoint: %w", err)
+	}
+	return b.getEndpointByID(ctx, id)
+}
+
+// endpointSelect projects an endpoint row; address is NULL until the endpoint
+// is deployed (SetEndpointAddress), so it is coalesced to the empty string to
+// match Endpoint.Address being a plain string.
+const endpointSelect = `SELECT e.id::text, e.tenant_id::text, e.timeline_id::text, e.role::text, COALESCE(e.address, ''), e.created_at
+	FROM endpoint e`
+
+func (b *PgBackend) getEndpointByID(ctx context.Context, id uuid.UUID) (Endpoint, error) {
+	row := b.pool.QueryRow(ctx, endpointSelect+` WHERE e.id = $1::uuid`, id.String())
+	return scanEndpoint(row)
+}
+
+func (b *PgBackend) GetEndpoint(ctx context.Context, poolID, timelineID, endpointID uuid.UUID) (Endpoint, error) {
+	row := b.pool.QueryRow(ctx,
+		endpointSelect+`
+		 JOIN pg_cluster c ON c.tenant_id = e.tenant_id AND c.timeline_id = e.timeline_id
+		 JOIN tenant t ON t.id = c.tenant_id
+		 JOIN storage_pool sp ON sp.id = t.storage_pool_id
+		 WHERE e.id = $1::uuid AND c.timeline_id = $2::uuid AND sp.id = $3::uuid`,
+		endpointID.String(), timelineID.String(), poolID.String())
+	ep, err := scanEndpoint(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Endpoint{}, ErrNotFound
+	}
+	return ep, err
+}
+
 func (b *PgBackend) ListEndpoints(ctx context.Context, poolID, timelineID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
 	// Resolve the timeline within the pool (it's addressed by id under the pool,
 	// but the storage layer keys it by (tenant_id, timeline_id)). No row means
@@ -301,9 +340,8 @@ func (b *PgBackend) ListEndpoints(ctx context.Context, poolID, timelineID uuid.U
 		return nil, 0, fmt.Errorf("count endpoints: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
-		`SELECT id::text, tenant_id::text, timeline_id::text, role::text, COALESCE(address, ''), created_at
-		 FROM endpoint WHERE tenant_id = $1::uuid AND timeline_id = $2::uuid
-		 ORDER BY created_at, id LIMIT $3 OFFSET $4`,
+		endpointSelect+` WHERE e.tenant_id = $1::uuid AND e.timeline_id = $2::uuid
+		 ORDER BY e.created_at, e.id LIMIT $3 OFFSET $4`,
 		tenantID.String(), timelineID.String(), limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list endpoints: %w", err)
@@ -322,6 +360,24 @@ func (b *PgBackend) ListEndpoints(ctx context.Context, poolID, timelineID uuid.U
 		return nil, 0, fmt.Errorf("list endpoints: %w", err)
 	}
 	return endpoints, total, nil
+}
+
+func (b *PgBackend) SetEndpointAddress(ctx context.Context, endpointID uuid.UUID, address string) error {
+	_, err := b.pool.Exec(ctx,
+		`UPDATE endpoint SET address = $2 WHERE id = $1::uuid`,
+		endpointID.String(), address)
+	if err != nil {
+		return fmt.Errorf("set endpoint address: %w", err)
+	}
+	return nil
+}
+
+func (b *PgBackend) DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) error {
+	_, err := b.pool.Exec(ctx, `DELETE FROM endpoint WHERE id = $1::uuid`, endpointID.String())
+	if err != nil {
+		return fmt.Errorf("delete endpoint: %w", err)
+	}
+	return nil
 }
 
 // timelineTenant resolves the storage-layer tenant id of the timeline addressed
@@ -427,25 +483,25 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 		idStr       string
 		tenantStr   string
 		timelineStr string
-		e           Endpoint
+		ep          Endpoint
 	)
-	if err := r.Scan(&idStr, &tenantStr, &timelineStr, &e.Role, &e.Address, &e.CreatedAt); err != nil {
+	if err := r.Scan(&idStr, &tenantStr, &timelineStr, &ep.Role, &ep.Address, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
 	}
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("parse endpoint id: %w", err)
 	}
-	tenantID, err := uuid.Parse(tenantStr)
+	tenant, err := uuid.Parse(tenantStr)
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("parse tenant id: %w", err)
 	}
-	timelineID, err := uuid.Parse(timelineStr)
+	timeline, err := uuid.Parse(timelineStr)
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("parse timeline id: %w", err)
 	}
-	e.ID = id
-	e.TenantID = tenantID
-	e.TimelineID = timelineID
-	return e, nil
+	ep.ID = id
+	ep.TenantID = tenant
+	ep.TimelineID = timeline
+	return ep, nil
 }

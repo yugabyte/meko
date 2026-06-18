@@ -73,6 +73,12 @@ func NewServer(cfg *config.Config, backend core.Backend, store task.Store, prov 
 	impl := NewControllers(backend, store, prov, logger)
 	RegisterHandlersWithBaseURL(e, NewStrictHandler(impl, nil), apiBaseURL)
 
+	if cfg.Deploy.Enabled {
+		logger.Info("endpoint deployment enabled", "driver", cfg.Deploy.Driver)
+	} else {
+		logger.Warn("endpoint API is served but the deployer is disabled; endpoint create/retire will return 501 (set --deploy)")
+	}
+
 	return &Server{echo: e, addr: cfg.ListenAddr, logger: logger}
 }
 

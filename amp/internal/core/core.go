@@ -4,10 +4,11 @@
 // database. The real implementation (PgBackend) persists to YBDB, the
 // controller's only state store (yblight-controller.md §10).
 //
-// Scope is issue #92's initial surface: users (no auth), storage pools, and
-// timeline create (which provisions a tenant + its main timeline). Timeline
-// delete and branch remain logged-only in the API for now (no task framework
-// yet), so they have no Backend method.
+// Scope: users (no auth), storage pools, timeline create (which provisions a
+// tenant + its main timeline, #92), and endpoints on a timeline (#108: create
+// records the row and the API synchronously deploys it; get/list/delete round
+// out the lifecycle). Timeline delete and branch remain logged-only in the API
+// for now (no task framework yet), so they have no Backend method.
 package core
 
 import (
@@ -58,9 +59,11 @@ type Timeline struct {
 	CreatedAt  time.Time
 }
 
-// Endpoint is a running compute bound to a timeline. The Address is the
-// connection target returned to users; Role is "read_write" or "read_only"
-// (at most one read_write per timeline, enforced in the schema).
+// Endpoint is the durable record of a compute endpoint on a timeline. Address
+// is the connection target returned to users; it is empty until the endpoint is
+// deployed (set via SetEndpointAddress once Helm/Docker reports the endpoint
+// ready). Role is the endpoint_role (read_write | read_only) with the
+// single-writer rule enforced in the schema.
 type Endpoint struct {
 	ID         uuid.UUID
 	TenantID   uuid.UUID
@@ -68,6 +71,17 @@ type Endpoint struct {
 	Role       string
 	Address    string
 	CreatedAt  time.Time
+}
+
+// Endpoint roles (the endpoint_role enum).
+const (
+	RoleReadWrite = "read_write"
+	RoleReadOnly  = "read_only"
+)
+
+// ValidRole reports whether role is a known endpoint role.
+func ValidRole(role string) bool {
+	return role == RoleReadWrite || role == RoleReadOnly
 }
 
 // Backend is the controller's state store. Every method must be safe to call
@@ -109,13 +123,36 @@ type Backend interface {
 	// pool does not exist.
 	ListTimelines(ctx context.Context, poolID uuid.UUID, limit, offset int) ([]Timeline, int, error)
 
-	// CreateEndpoint records a compute endpoint bound to (tenantID, timelineID)
-	// with its connection address. Returns ErrNotFound if the timeline does not
-	// exist, or ErrConflict if a read_write endpoint already exists for it.
-	CreateEndpoint(ctx context.Context, tenantID, timelineID uuid.UUID, role, address string) (Endpoint, error)
+	// GetTimeline returns the timeline addressed by (poolID, timelineID),
+	// validating that the timeline's tenant belongs to the pool. Pools are
+	// top-level, so this is not owner-scoped. Returns ErrNotFound if any link is
+	// missing.
+	GetTimeline(ctx context.Context, poolID, timelineID uuid.UUID) (Timeline, error)
+
+	// CreateEndpoint records an endpoint on the (tenantID, timelineID) timeline.
+	// config is the deploy spec stored for (re)creation. The address is set
+	// later (SetEndpointAddress) once the endpoint is deployed. Returns
+	// ErrNotFound if the timeline does not exist, or ErrConflict if a read_write
+	// endpoint already exists for the timeline (the single-writer rule).
+	CreateEndpoint(ctx context.Context, tenantID, timelineID uuid.UUID, role string, config []byte) (Endpoint, error)
+
+	// GetEndpoint returns the endpoint addressed by (poolID, timelineID,
+	// endpointID), validating the pool->timeline->endpoint chain by ids. Pools
+	// are top-level, so this is not owner-scoped. Returns ErrNotFound if any
+	// link is missing.
+	GetEndpoint(ctx context.Context, poolID, timelineID, endpointID uuid.UUID) (Endpoint, error)
+
 	// ListEndpoints returns a page of the endpoints bound to the timeline
 	// (addressed by its id within the pool) ordered by (created_at, id), and the
 	// total number of endpoints for the timeline (ignoring limit/offset).
 	// Returns ErrNotFound if the pool or the timeline does not exist.
 	ListEndpoints(ctx context.Context, poolID, timelineID uuid.UUID, limit, offset int) ([]Endpoint, int, error)
+
+	// SetEndpointAddress records an endpoint's client address. Idempotent
+	// (absolute UPDATE keyed by id); a missing endpoint is not an error.
+	SetEndpointAddress(ctx context.Context, endpointID uuid.UUID, address string) error
+
+	// DeleteEndpoint removes an endpoint record. Idempotent: deleting an absent
+	// row is a no-op.
+	DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) error
 }

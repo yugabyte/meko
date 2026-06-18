@@ -1,10 +1,10 @@
 //! The amp-on-Docker e2e backend — deliberately thin.
 //!
-//! Per the design, the whole provisioning workflow lives in **amp**: a single
-//! `POST .../timelines` creates the tenant, drives the storage controller, and
-//! launches the compute endpoint (via amp's Deployer), returning the endpoint's
-//! connection address. So this test only:
-//!   1. calls amp's REST API (user -> storage pool -> timeline), and
+//! Provisioning lives in **amp**, across two REST calls: `POST .../timelines`
+//! records the tenant + its main timeline, then `POST .../endpoints` deploys a
+//! compute endpoint for it (synchronously, via amp's Docker provisioner) and
+//! returns its connection address. So this test only:
+//!   1. calls amp's REST API (user -> storage pool -> timeline -> endpoint), and
 //!   2. runs PG against the endpoint address amp hands back.
 //!
 //! There is no container/Docker orchestration here — that is amp's job.
@@ -30,10 +30,11 @@ struct AmpClient {
     http: reqwest::Client,
 }
 
-/// What amp returns from the create-timeline workflow.
+/// What amp returns from create-timeline: the storage-layer tenant id (hex) and
+/// the timeline id (used to address the endpoint sub-resource).
 struct TimelineResult {
     tenant_hex: String,
-    endpoint_address: Option<String>,
+    timeline_id: String,
 }
 
 impl AmpClient {
@@ -87,9 +88,8 @@ impl AmpClient {
         field(&v, "id")
     }
 
-    /// Drive the full create-timeline workflow (tenant + storage controller +
-    /// endpoint) and return the storage-layer tenant id (hex) and the endpoint's
-    /// connection address, if amp provisioned one.
+    /// Create a tenant + its main timeline. Returns the storage-layer tenant id
+    /// (hex) and the timeline id. Compute is a separate resource (create_endpoint).
     async fn create_timeline(&self, pool: &str, name: &str, pg_version: u32) -> Result<TimelineResult> {
         let v = self
             .post(
@@ -99,12 +99,22 @@ impl AmpClient {
             )
             .await?;
         let tenant_hex = field(&v, "tenant_id")?.replace('-', "");
-        let endpoint_address = v
-            .get("endpoint")
-            .and_then(|e| e.get("address"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        Ok(TimelineResult { tenant_hex, endpoint_address })
+        let timeline_id = field(&v, "timeline_id")?;
+        Ok(TimelineResult { tenant_hex, timeline_id })
+    }
+
+    /// Deploy a read_write compute endpoint on the timeline and return its
+    /// connection address. amp deploys synchronously, so the `201` response
+    /// already carries the address. Endpoints are top-level under the timeline.
+    async fn create_endpoint(&self, pool: &str, timeline: &str) -> Result<String> {
+        let v = self
+            .post(
+                &format!("/storage-pools/{pool}/timelines/{timeline}/endpoints"),
+                json!({ "role": "read_write" }),
+                201,
+            )
+            .await?;
+        field(&v, "address")
     }
 }
 
@@ -218,14 +228,15 @@ pub async fn run_suite(repeat: u32, fail_fast: bool) -> Result<()> {
     let client = AmpClient::new(&base);
     client.wait_ready(Duration::from_secs(60)).await.context("amp readiness")?;
 
-    step("amp e2e: create user -> storage pool -> timeline (amp provisions the endpoint)");
+    step("amp e2e: create user -> storage pool -> timeline -> endpoint (amp deploys the compute)");
     let user = client.create_user(true).await?;
     let pool = client.create_storage_pool(&user, "e2e-pool").await?;
     let tl = client.create_timeline(&pool, "main", 17).await.context("create timeline")?;
-    let addr = tl.endpoint_address.clone().context(
-        "amp did not return an endpoint address — start amp with --deploy (AMP_DEPLOY=true)",
-    )?;
-    step(&format!("amp e2e: amp provisioned endpoint at {addr} (tenant {})", tl.tenant_hex));
+    let addr = client
+        .create_endpoint(&pool, &tl.timeline_id)
+        .await
+        .context("create endpoint — start amp with --deploy (AMP_DEPLOY=true)")?;
+    step(&format!("amp e2e: amp deployed endpoint at {addr} (tenant {})", tl.tenant_hex));
 
     let endpoint = Endpoint::from_address(&addr, tl.tenant_hex)?;
     endpoint.wait_ready(Duration::from_secs(60)).await.context("endpoint readiness")?;

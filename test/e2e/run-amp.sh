@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 #
 # amp-on-Docker end-to-end entry point. Starts the amp control plane as a
-# container and runs the thin e2e suite against it. ALL provisioning
-# orchestration lives in amp: amp's create-timeline workflow creates the tenant,
-# drives the (managed) storage controller, and launches the compute endpoint via
-# amp's Deployer (over the Docker socket mounted here). The e2e only calls amp's
-# REST API and runs psql against the endpoint amp returns.
+# container (with its Docker endpoint provisioner enabled) and runs the thin e2e
+# suite against it. Provisioning lives in amp, across two REST calls: create the
+# timeline, then create an endpoint on it — amp deploys the compute container
+# synchronously (via the Docker provisioner, over the daemon socket mounted here)
+# and returns its address. The e2e only calls amp's REST API and runs psql
+# against that address.
+#
+# This drives the SC-free self-bootstrap path: amp runs the endpoint with
+# --deploy-bootstrap, so it provisions the storage schema and initdb's the
+# recorded tenant/timeline on first start (there is no create-database flow yet).
+# Storage-controller-coordinated deploy is future work.
 #
 # Prereqs: Docker, and a YugabyteDB on the host at :5433 (yugabyte/yugabyte).
 # Builds yb-light/amp:dev locally; requires the endpoint image
@@ -14,12 +20,11 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: test/e2e/run-amp.sh [-n <count>] [--no-sc] [-h|--help]
+Usage: test/e2e/run-amp.sh [-n <count>] [-h|--help]
 
-Starts amp (with its managed storage controller, so create-timeline drives the
-SC and the endpoint registers/attaches to it) and runs the amp e2e suite.
+Starts amp with the Docker endpoint provisioner and runs the amp e2e suite
+(create user -> storage pool -> timeline -> endpoint, then psql the endpoint).
 
-  --no-sc       run amp without the storage controller (endpoint self-bootstraps).
   -n <count>    repeat the suite <count> times (forwarded to the harness).
 
 Builds yb-light/amp:dev locally each run. Requires yb-light/neon-endpoint:dev and
@@ -27,12 +32,10 @@ a YugabyteDB on the host (:5433).
 EOF
 }
 
-USE_SC=1
 ARGS=()
 for arg in "$@"; do
     case "$arg" in
         -h|--help) usage; exit 0 ;;
-        --no-sc) USE_SC=0 ;;
         *) ARGS+=("$arg") ;;
     esac
 done
@@ -73,13 +76,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ $USE_SC == 1 ]]; then
-    echo "==> Building the full amp bundle (amp + storage_controller) for SC mode"
-    make amp-bundle
-else
-    echo "==> Building the amp-only bundle"
-    make amp-bundle-amp-only
-fi
+echo "==> Building the amp bundle"
+make amp-bundle-amp-only
 echo "==> Building the amp image ($AMP_IMAGE)"
 DOCKER_BUILDKIT=1 docker build -t "$AMP_IMAGE" -f deploy/amp/Dockerfile .
 
@@ -97,19 +95,9 @@ docker network create "$NET" >/dev/null
 yb -c "CREATE DATABASE \"$CTL_DB\"" >/dev/null
 yb -c "CREATE DATABASE \"$STORE_DB\"" >/dev/null
 
-echo "==> Starting amp ($AMP_NAME) on port $AMP_HOST_PORT (sc=$USE_SC)"
-SC_ENV=()
-if [[ $USE_SC == 1 ]]; then
-    SC_ENV=(
-        -e AMP_STORAGE_CONTROLLER=true
-        -e AMP_STORAGE_CONTROLLER_LISTEN=0.0.0.0:50051
-        -e "AMP_STORAGE_CONTROLLER_DATABASE_URL=postgresql://yugabyte@host.docker.internal:5433/${STORE_DB}?sslmode=disable"
-        -e AMP_STORAGE_CONTROLLER_DEV=true
-    )
-fi
-# --hostname == --name so amp's os.Hostname() is DNS-resolvable by the endpoint
-# containers it launches on this network. --user root + the mounted socket let
-# amp's Docker deployer launch endpoints.
+echo "==> Starting amp ($AMP_NAME) on port $AMP_HOST_PORT (docker runtime)"
+# --user root + the mounted socket let amp's Docker provisioner launch endpoints;
+# the endpoints join $NET so amp and the client can reach them.
 docker run -d --name "$AMP_NAME" --hostname "$AMP_NAME" --network "$NET" \
     --user root \
     -p "${AMP_HOST_PORT}:8080" \
@@ -118,12 +106,13 @@ docker run -d --name "$AMP_NAME" --hostname "$AMP_NAME" --network "$NET" \
     -e "AMP_DATABASE_URL=postgres://yugabyte@host.docker.internal:5433/${CTL_DB}" \
     -e AMP_LOG_FORMAT=text \
     -e AMP_DEPLOY=true \
+    -e AMP_DEPLOY_DRIVER=docker \
     -e AMP_DEPLOY_NETWORK="$NET" \
     -e AMP_DEPLOY_ENDPOINT_IMAGE="$ENDPOINT_IMAGE" \
     -e AMP_DEPLOY_EXTERNAL_HOST=127.0.0.1 \
-    -e AMP_ENDPOINT_YB_HOST_PORTS=host.docker.internal:5433 \
-    -e AMP_ENDPOINT_YB_DBNAME="$STORE_DB" \
-    "${SC_ENV[@]}" \
+    -e AMP_DEPLOY_BOOTSTRAP=true \
+    -e AMP_DEPLOY_YB_HOST_PORTS=host.docker.internal:5433 \
+    -e AMP_DEPLOY_YB_DBNAME="$STORE_DB" \
     "$AMP_IMAGE" >/dev/null
 
 echo "==> Waiting for amp to be ready"

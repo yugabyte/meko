@@ -32,8 +32,8 @@ type DockerConfig struct {
 }
 
 // DockerDeployer runs endpoints as Docker containers via the `docker` CLI (over
-// the daemon socket mounted into the controller container). The Kubernetes
-// deployer is the future sibling implementation of [Deployer].
+// the daemon socket mounted into the controller container). It is the Docker
+// sibling of the Helm-backed KubernetesDeployer.
 type DockerDeployer struct {
 	cfg    DockerConfig
 	logger *slog.Logger
@@ -46,6 +46,8 @@ func NewDockerDeployer(cfg DockerConfig, logger *slog.Logger) *DockerDeployer {
 	}
 	return &DockerDeployer{cfg: cfg, logger: logger}
 }
+
+var _ Deployer = (*DockerDeployer)(nil)
 
 const (
 	endpointComputePort = 55433

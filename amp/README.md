@@ -12,14 +12,25 @@ Design docs (read these first):
   core workflows, and the state tables.
 - [`yblight-controller.md`](architecture/yblight-controller.md) — high-level design and
   guiding principles (API-first, task framework, managed services, deployment).
+- [`yblc-k8s-deploy.md`](architecture/yblc-k8s-deploy.md) — deploying endpoints: the
+  Helm-backed Kubernetes deployer and its Docker sibling, the synchronous
+  deploy/retire path, and the `--deploy-driver` selector.
+- [`amp-timeline-create.md`](architecture/amp-timeline-create.md) — creating a
+  timeline (patterned on `yb_light_local`): declare a recipe at create, materialize
+  the storage layer at the first endpoint.
 
 It started as the **base framework** ([#84](https://github.com/yugabyte/yb-light/issues/84)):
 a runnable skeleton — `slog` logging, the write-ahead task framework, and the
 YBDB connection + initial migrations. On top of it, the **initial APIs**
 ([#92](https://github.com/yugabyte/yb-light/issues/92)) add the OpenAPI v3-driven
-REST surface (users, storage pools, timelines) below. The workflow execution
-that backs the timeline calls (create-database, branch, scale) lands on the task
-framework later.
+REST surface (users, storage pools, timelines) below. The **Kubernetes endpoint
+deploy** ([#108](https://github.com/yugabyte/yb-light/issues/108)) adds endpoints
+as a resource: `createEndpoint` synchronously shells out to the configured driver
+— Docker by default, or Helm on Kubernetes via `--deploy-driver kubernetes` — to
+bring up one pod/container per endpoint (see
+[`yblc-k8s-deploy.md`](architecture/yblc-k8s-deploy.md)). Moving the deploy onto
+the write-ahead task framework, along with the remaining timeline calls
+(create-database, branch, scale), lands later.
 
 ## Layout
 
@@ -35,6 +46,8 @@ amp/
   internal/task/      write-ahead task framework (types, store, registry, worker)
   internal/process/   subprocess supervision (spawn, restart with backoff, clean stop)
   internal/storagecontroller/  managed storage controller: subprocess spec + timeline client
+  internal/helm/      one-shot helm CLI wrapper (upgrade --install / uninstall)
+  internal/deploy/    endpoint provisioner: Kubernetes/Helm or Docker (synchronous deploy/retire)
   migrations/         embedded raw-SQL migrations (golang-migrate)
 ```
 

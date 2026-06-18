@@ -201,13 +201,31 @@ amp-generate:
 # transitive postgres_ffi dependency), so this installs them first via
 # postgres-headers-install-v17 — headers only, no Postgres server built, and no
 # build-tools image: just the repo's normal toolchain (rust-toolchain.toml +
-# clang/libclang for bindgen) and an initialized vendor/postgres-v17 submodule.
+# clang/libclang for bindgen). amp-bundle initializes the vendor/postgres-v17
+# submodule itself (the postgres_ffi headers need it), so a fresh checkout builds
+# without a separate `git submodule update` step.
 # The Rust build follows BUILD_TYPE like the rest of the workspace; the deploy/amp
 # container packages the same layout. Output: $(AMP_BUNDLE_DIR)/{amp,storage_controller}.
 AMP_BUNDLE_DIR ?= $(ROOT_PROJECT_DIR)/target/amp-bundle
 
+# Initialize submodules (currently just vendor/postgres-v17). Idempotent: a no-op
+# when they are already present and at the recorded commit, so it is safe to run
+# on every build.
+.PHONY: submodules
+submodules:
+	git submodule update --init --recursive --depth 2 --progress .
+
+# amp-bundle initializes the submodule before building so the postgres-headers
+# step finds vendor/postgres-v17. The sub-make keeps that ordered ahead of the
+# headers build even under parallel make (-j), where listing it as a sibling
+# prerequisite would race the postgres configure check.
 .PHONY: amp-bundle
-amp-bundle: postgres-headers-install-v17 cargo-target-dir
+amp-bundle:
+	+$(MAKE) submodules
+	+$(MAKE) amp-bundle-build
+
+.PHONY: amp-bundle-build
+amp-bundle-build: postgres-headers-install-v17 cargo-target-dir
 	+@echo "Bundling amp + storage_controller -> $(AMP_BUNDLE_DIR)"
 	mkdir -p "$(AMP_BUNDLE_DIR)"
 	# amp is built static (CGO off) so it runs unchanged in a slim runtime image.

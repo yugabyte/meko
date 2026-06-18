@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -30,42 +29,53 @@ import (
 // an in-memory backend and a fake task store, and returns the generated client
 // pointed at it.
 func newTestServer(t *testing.T) (*api.ClientWithResponses, *core.MemBackend, *fakeTaskStore) {
-	t.Helper()
-	backend := core.NewMemBackend()
-	tasks := newFakeTaskStore()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	srv := api.NewServer(&config.Config{ListenAddr: ":0"}, backend, tasks, api.Provisioning{}, logger)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
-
-	client, err := api.NewClientWithResponses(ts.URL + "/api/v1")
-	if err != nil {
-		t.Fatalf("NewClientWithResponses: %v", err)
-	}
-	return client, backend, tasks
+	// Deploy enabled by default so the endpoint routes are live (a fake deployer
+	// returns a derived address without touching a real runtime).
+	return newTestServerDeploy(t, true)
 }
 
-// newTestServerWithProv is newTestServer with provisioning collaborators wired
-// in (a fake deployer, etc.), returning just the client.
-func newTestServerWithProv(t *testing.T, prov api.Provisioning) *api.ClientWithResponses {
+func newTestServerDeploy(t *testing.T, deployEnabled bool) (*api.ClientWithResponses, *core.MemBackend, *fakeTaskStore) {
+	t.Helper()
+	var prov api.Provisioning
+	if deployEnabled {
+		prov.Deployer = &fakeDeployer{}
+	}
 	return newTestServerWith(t, core.NewMemBackend(), prov)
 }
 
+// newTestServerWithProv builds the server over a fresh MemBackend with the
+// given provisioning (a nil Deployer disables the endpoint mutation routes),
+// returning the client and the backend.
+func newTestServerWithProv(t *testing.T, prov api.Provisioning) (*api.ClientWithResponses, *core.MemBackend) {
+	client, backend, _ := newTestServerWith(t, core.NewMemBackend(), prov)
+	return client, backend
+}
+
 // newTestServerWith builds the server over an explicit backend + provisioning
-// (used to inject a failing backend), returning just the client.
-func newTestServerWith(t *testing.T, backend core.Backend, prov api.Provisioning) *api.ClientWithResponses {
+// (used to inject a failing backend / deployer), returning the client, the
+// backend, and the task store wired into the server.
+func newTestServerWith(t *testing.T, backend *core.MemBackend, prov api.Provisioning) (*api.ClientWithResponses, *core.MemBackend, *fakeTaskStore) {
+	t.Helper()
+	client, tasks := newTestServerBackend(t, backend, prov)
+	return client, backend, tasks
+}
+
+// newTestServerBackend builds the server over any core.Backend (so a failing
+// backend can be injected), returning the client and the wired task store.
+func newTestServerBackend(t *testing.T, backend core.Backend, prov api.Provisioning) (*api.ClientWithResponses, *fakeTaskStore) {
 	t.Helper()
 	tasks := newFakeTaskStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := api.NewServer(&config.Config{ListenAddr: ":0"}, backend, tasks, prov, logger)
+	cfg := &config.Config{ListenAddr: ":0"}
+	cfg.Deploy.Enabled = prov.Deployer != nil
+	srv := api.NewServer(cfg, backend, tasks, prov, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	client, err := api.NewClientWithResponses(ts.URL + "/api/v1")
 	if err != nil {
 		t.Fatalf("NewClientWithResponses: %v", err)
 	}
-	return client
+	return client, tasks
 }
 
 func mustCreateUser(t *testing.T, client *api.ClientWithResponses, isAdmin bool) api.User {
@@ -251,84 +261,107 @@ func TestCreateTimeline(t *testing.T) {
 	}
 }
 
-// fakeDeployer is a deploy.Deployer that records the spec and returns a fixed
-// address, so the create-timeline workflow's endpoint wiring can be tested
-// without Docker. (The real Docker path + the storage-controller call are
-// covered by the amp-on-Docker e2e, test/e2e/run-amp.sh.)
+// fakeDeployer is a deploy.Deployer that records calls and returns a derived
+// address, so the synchronous endpoint deploy/retire wiring can be tested
+// without a real runtime. createErr, when set, makes CreateEndpoint fail (to
+// exercise the handler's compensating row delete).
 type fakeDeployer struct {
-	addr     string
-	lastSpec deploy.EndpointSpec
-	deleted  []string // ids passed to DeleteEndpoint
+	addr      string
+	created   []deploy.EndpointSpec
+	deleted   []string
+	createErr error
 }
 
 func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpec) (deploy.Endpoint, error) {
-	f.lastSpec = spec
-	return deploy.Endpoint{ID: spec.Name, Address: f.addr}, nil
+	f.created = append(f.created, spec)
+	if f.createErr != nil {
+		return deploy.Endpoint{}, f.createErr
+	}
+	addr := f.addr
+	if addr == "" {
+		addr = spec.Name + ".ns.svc.cluster.local:55433"
+	}
+	return deploy.Endpoint{ID: spec.Name, Address: addr}, nil
 }
+
 func (f *fakeDeployer) DeleteEndpoint(_ context.Context, id string) error {
 	f.deleted = append(f.deleted, id)
 	return nil
 }
 
-// failEndpointBackend is a MemBackend whose endpoint record-write always fails,
-// to exercise the handler's compensating teardown of the already-launched
-// container (so it doesn't leak with no record pointing at it).
-type failEndpointBackend struct{ *core.MemBackend }
-
-func (failEndpointBackend) CreateEndpoint(context.Context, uuid.UUID, uuid.UUID, string, string) (core.Endpoint, error) {
-	return core.Endpoint{}, errors.New("simulated endpoint record-write failure")
-}
-
-func TestCreateTimelineRemovesEndpointWhenRecordFails(t *testing.T) {
-	dep := &fakeDeployer{addr: "127.0.0.1:54321"}
-	client := newTestServerWith(t, failEndpointBackend{core.NewMemBackend()}, api.Provisioning{Deployer: dep})
+func TestCreateEndpointDeployFailureCompensates(t *testing.T) {
+	dep := &fakeDeployer{createErr: errors.New("simulated deploy failure")}
+	client, backend := newTestServerWithProv(t, api.Provisioning{Deployer: dep})
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
+	timelineID := uuid.New()
+	backend.SeedTimeline(pool.Id, core.Timeline{TenantID: uuid.New(), TimelineID: timelineID, Name: "main", PgVersion: 17, IsMain: true})
 
-	ct, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "main"})
+	rw := api.CreateEndpointRequestRoleReadWrite
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, timelineID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
-		t.Fatalf("CreateTimeline: %v", err)
+		t.Fatalf("CreateEndpoint: %v", err)
 	}
-	if ct.StatusCode() != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (endpoint record write failed)", ct.StatusCode())
+	if created.StatusCode() != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (deploy failed); body = %s", created.StatusCode(), created.Body)
 	}
-	// The launched container must have been torn down, not leaked.
-	if len(dep.deleted) != 1 {
-		t.Fatalf("DeleteEndpoint calls = %v, want exactly 1 (container cleaned up after record failure)", dep.deleted)
+	if len(dep.created) != 1 {
+		t.Fatalf("CreateEndpoint deploy calls = %d, want 1", len(dep.created))
+	}
+	// The committed row must have been removed so it doesn't linger undeployed.
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, timelineID, nil)
+	if err != nil {
+		t.Fatalf("ListEndpoints: %v", err)
+	}
+	if list.JSON200 == nil || len(list.JSON200.Endpoints) != 0 {
+		t.Fatalf("endpoints after failed deploy = %v, want none (compensated)", list.Body)
 	}
 }
 
-func TestCreateTimelineProvisionsEndpoint(t *testing.T) {
-	dep := &fakeDeployer{addr: "127.0.0.1:54321"}
-	client := newTestServerWithProv(t, api.Provisioning{Deployer: dep})
+// addrFailBackend makes SetEndpointAddress fail while delegating everything else
+// to MemBackend, to exercise the compensation when a deploy succeeds but its
+// address can't be recorded.
+type addrFailBackend struct {
+	*core.MemBackend
+}
+
+func (addrFailBackend) SetEndpointAddress(context.Context, uuid.UUID, string) error {
+	return errors.New("simulated address-record failure")
+}
+
+// After a successful deploy, a failure recording the address must retire the
+// just-deployed endpoint and remove the row, so the writer slot is freed and a
+// retry isn't permanently blocked (mirrors the deploy-failure compensation).
+func TestCreateEndpointAddressRecordFailureCompensates(t *testing.T) {
+	mem := core.NewMemBackend()
+	dep := &fakeDeployer{}
+	client, _ := newTestServerBackend(t, addrFailBackend{mem}, api.Provisioning{Deployer: dep})
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
+	timelineID := uuid.New()
+	mem.SeedTimeline(pool.Id, core.Timeline{TenantID: uuid.New(), TimelineID: timelineID, Name: "main", PgVersion: 17, IsMain: true})
 
-	ct, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "main"})
+	rw := api.CreateEndpointRequestRoleReadWrite
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, timelineID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
-		t.Fatalf("CreateTimeline: %v", err)
+		t.Fatalf("CreateEndpoint: %v", err)
 	}
-	if ct.StatusCode() != http.StatusCreated || ct.JSON201 == nil {
-		t.Fatalf("CreateTimeline status = %d, body = %s", ct.StatusCode(), ct.Body)
+	if created.StatusCode() != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (address record failed); body = %s", created.StatusCode(), created.Body)
 	}
-	ep := ct.JSON201.Endpoint
-	if ep == nil {
-		t.Fatal("create timeline returned no endpoint, want one (deployer was set)")
+	// The deployed endpoint must have been retired (compensation), not leaked.
+	if len(dep.created) != 1 || len(dep.deleted) != 1 {
+		t.Fatalf("deployer calls: created=%d deleted=%d, want 1 and 1 (retired on compensation)", len(dep.created), len(dep.deleted))
 	}
-	if ep.Address != "127.0.0.1:54321" {
-		t.Errorf("endpoint address = %q, want 127.0.0.1:54321", ep.Address)
+	// The row must be gone so the writer slot is freed for a retry.
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, timelineID, nil)
+	if err != nil {
+		t.Fatalf("ListEndpoints: %v", err)
 	}
-	if ep.Role != api.ReadWrite {
-		t.Errorf("endpoint role = %q, want read_write", ep.Role)
-	}
-	// The deployer was asked to bind the timeline amp created (32-hex ids).
-	if dep.lastSpec.TenantID != strings.ReplaceAll(ct.JSON201.TenantId.String(), "-", "") {
-		t.Errorf("deployer tenant = %q, want %s", dep.lastSpec.TenantID, ct.JSON201.TenantId)
-	}
-	if !dep.lastSpec.Bootstrap {
-		t.Error("deployer spec Bootstrap = false, want true for a fresh timeline")
+	if list.JSON200 == nil || len(list.JSON200.Endpoints) != 0 {
+		t.Fatalf("endpoints after address-record failure = %v, want none (compensated)", list.Body)
 	}
 }
 
@@ -416,8 +449,17 @@ func (f *fakeTaskStore) Get(_ context.Context, id uuid.UUID) (*task.Task, error)
 	return f.tasks[id], nil
 }
 
-func (f *fakeTaskStore) Plan(context.Context, string, json.RawMessage, []task.StepPlan) (*task.Task, error) {
-	return nil, nil
+func (f *fakeTaskStore) Plan(_ context.Context, kind string, params json.RawMessage, _ []task.StepPlan) (*task.Task, error) {
+	tk := &task.Task{
+		ID:        uuid.New(),
+		Kind:      kind,
+		Status:    task.StatusPending,
+		Params:    params,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	f.tasks[tk.ID] = tk
+	return tk, nil
 }
 func (f *fakeTaskStore) ClaimNext(context.Context, string, time.Duration) (*task.Task, error) {
 	return nil, nil

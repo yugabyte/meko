@@ -12,6 +12,14 @@ with the design docs in [`architecture/`](architecture/):
 - [`architecture/yblc-apis.md`](architecture/yblc-apis.md) — the REST API: the
   OpenAPI v3 spec as source of truth, code generation, the served explorer, and
   how the API is tested through the generated client.
+- [`architecture/yblc-k8s-deploy.md`](architecture/yblc-k8s-deploy.md) — how the
+  controller deploys endpoints (the Helm-backed Kubernetes deployer and its
+  Docker sibling behind `deploy.Deployer`, the synchronous deploy/retire path,
+  the `--deploy-driver` selector, the recipe/bootstrap model, internal-LoadBalancer
+  endpoints, and the current deployment assumptions).
+- [`architecture/amp-timeline-create.md`](architecture/amp-timeline-create.md) —
+  creating a timeline, patterned on `yb_light_local`: declare a recipe at create,
+  materialize the storage layer at the first endpoint.
 
 This guide is scoped to `amp/`. The repo-wide guide is the top-level
 [`AGENTS.md`](../AGENTS.md); where they overlap, the rules here win for code

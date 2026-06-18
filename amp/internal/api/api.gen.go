@@ -20,10 +20,16 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for CreateEndpointRequestRole.
+const (
+	CreateEndpointRequestRoleReadOnly  CreateEndpointRequestRole = "read_only"
+	CreateEndpointRequestRoleReadWrite CreateEndpointRequestRole = "read_write"
+)
+
 // Defines values for EndpointRole.
 const (
-	ReadOnly  EndpointRole = "read_only"
-	ReadWrite EndpointRole = "read_write"
+	EndpointRoleReadOnly  EndpointRole = "read_only"
+	EndpointRoleReadWrite EndpointRole = "read_write"
 )
 
 // Defines values for TaskStatus.
@@ -39,6 +45,15 @@ type BranchTimelineRequest struct {
 	// Name Name for the new branch timeline.
 	Name string `json:"name"`
 }
+
+// CreateEndpointRequest defines model for CreateEndpointRequest.
+type CreateEndpointRequest struct {
+	// Role The endpoint's role. A timeline admits at most one read_write endpoint.
+	Role *CreateEndpointRequestRole `json:"role,omitempty"`
+}
+
+// CreateEndpointRequestRole The endpoint's role. A timeline admits at most one read_write endpoint.
+type CreateEndpointRequestRole string
 
 // CreateStoragePoolRequest defines model for CreateStoragePoolRequest.
 type CreateStoragePoolRequest struct {
@@ -66,10 +81,17 @@ type CreateUserRequest struct {
 
 // Endpoint defines model for Endpoint.
 type Endpoint struct {
-	// Address host:port for the Postgres wire protocol.
-	Address string             `json:"address"`
-	Id      openapi_types.UUID `json:"id"`
-	Role    EndpointRole       `json:"role"`
+	// Address Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed.
+	Address   string             `json:"address"`
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
+	Role      EndpointRole       `json:"role"`
+
+	// TenantId The storage-layer tenant id this endpoint is bound to.
+	TenantId openapi_types.UUID `json:"tenant_id"`
+
+	// TimelineId The storage-layer timeline id this endpoint is bound to.
+	TimelineId openapi_types.UUID `json:"timeline_id"`
 }
 
 // EndpointRole defines model for Endpoint.Role.
@@ -150,7 +172,6 @@ type TaskStatus string
 // Timeline defines model for Timeline.
 type Timeline struct {
 	CreatedAt time.Time `json:"created_at"`
-	Endpoint  *Endpoint `json:"endpoint,omitempty"`
 
 	// IsMain True for a tenant's root (main) timeline.
 	IsMain    bool   `json:"is_main"`
@@ -195,6 +216,9 @@ type UserList struct {
 	Total TotalCount `json:"total"`
 	Users []User     `json:"users"`
 }
+
+// EndpointId defines model for EndpointId.
+type EndpointId = openapi_types.UUID
 
 // Limit defines model for Limit.
 type Limit = int
@@ -270,6 +294,9 @@ type CreateTimelineJSONRequestBody = CreateTimelineRequest
 
 // BranchTimelineJSONRequestBody defines body for BranchTimeline for application/json ContentType.
 type BranchTimelineJSONRequestBody = BranchTimelineRequest
+
+// CreateEndpointJSONRequestBody defines body for CreateEndpoint for application/json ContentType.
+type CreateEndpointJSONRequestBody = CreateEndpointRequest
 
 // CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 type CreateUserJSONRequestBody = CreateUserRequest
@@ -376,6 +403,17 @@ type ClientInterface interface {
 
 	// ListEndpoints request
 	ListEndpoints(ctx context.Context, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateEndpointWithBody request with any body
+	CreateEndpointWithBody(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteEndpoint request
+	DeleteEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetEndpoint request
+	GetEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetTask request
 	GetTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -514,6 +552,54 @@ func (c *Client) BranchTimeline(ctx context.Context, poolId PoolId, timelineId T
 
 func (c *Client) ListEndpoints(ctx context.Context, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListEndpointsRequest(c.Server, poolId, timelineId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateEndpointWithBody(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateEndpointRequestWithBody(c.Server, poolId, timelineId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateEndpointRequest(c.Server, poolId, timelineId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteEndpointRequest(c.Server, poolId, timelineId, endpointId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetEndpointRequest(c.Server, poolId, timelineId, endpointId)
 	if err != nil {
 		return nil, err
 	}
@@ -1016,6 +1102,156 @@ func NewListEndpointsRequest(server string, poolId PoolId, timelineId TimelineId
 	return req, nil
 }
 
+// NewCreateEndpointRequest calls the generic CreateEndpoint builder with application/json body
+func NewCreateEndpointRequest(server string, poolId PoolId, timelineId TimelineId, body CreateEndpointJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateEndpointRequestWithBody(server, poolId, timelineId, "application/json", bodyReader)
+}
+
+// NewCreateEndpointRequestWithBody generates requests for CreateEndpoint with any type of body
+func NewCreateEndpointRequestWithBody(server string, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s/endpoints", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDeleteEndpointRequest generates requests for DeleteEndpoint
+func NewDeleteEndpointRequest(server string, poolId PoolId, timelineId TimelineId, endpointId EndpointId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "endpointId", runtime.ParamLocationPath, endpointId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s/endpoints/%s", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetEndpointRequest generates requests for GetEndpoint
+func NewGetEndpointRequest(server string, poolId PoolId, timelineId TimelineId, endpointId EndpointId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "endpointId", runtime.ParamLocationPath, endpointId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s/endpoints/%s", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetTaskRequest generates requests for GetTask
 func NewGetTaskRequest(server string, taskId TaskId) (*http.Request, error) {
 	var err error
@@ -1262,6 +1498,17 @@ type ClientWithResponsesInterface interface {
 	// ListEndpointsWithResponse request
 	ListEndpointsWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*ListEndpointsResponse, error)
 
+	// CreateEndpointWithBodyWithResponse request with any body
+	CreateEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error)
+
+	CreateEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error)
+
+	// DeleteEndpointWithResponse request
+	DeleteEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*DeleteEndpointResponse, error)
+
+	// GetEndpointWithResponse request
+	GetEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error)
+
 	// GetTaskWithResponse request
 	GetTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*GetTaskResponse, error)
 
@@ -1476,6 +1723,81 @@ func (r ListEndpointsResponse) StatusCode() int {
 	return 0
 }
 
+type CreateEndpointResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Endpoint
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateEndpointResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateEndpointResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type DeleteEndpointResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteEndpointResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteEndpointResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetEndpointResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Endpoint
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetEndpointResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetEndpointResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type GetTaskResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -1668,6 +1990,41 @@ func (c *ClientWithResponses) ListEndpointsWithResponse(ctx context.Context, poo
 		return nil, err
 	}
 	return ParseListEndpointsResponse(rsp)
+}
+
+// CreateEndpointWithBodyWithResponse request with arbitrary body returning *CreateEndpointResponse
+func (c *ClientWithResponses) CreateEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error) {
+	rsp, err := c.CreateEndpointWithBody(ctx, poolId, timelineId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateEndpointResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error) {
+	rsp, err := c.CreateEndpoint(ctx, poolId, timelineId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateEndpointResponse(rsp)
+}
+
+// DeleteEndpointWithResponse request returning *DeleteEndpointResponse
+func (c *ClientWithResponses) DeleteEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*DeleteEndpointResponse, error) {
+	rsp, err := c.DeleteEndpoint(ctx, poolId, timelineId, endpointId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteEndpointResponse(rsp)
+}
+
+// GetEndpointWithResponse request returning *GetEndpointResponse
+func (c *ClientWithResponses) GetEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error) {
+	rsp, err := c.GetEndpoint(ctx, poolId, timelineId, endpointId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetEndpointResponse(rsp)
 }
 
 // GetTaskWithResponse request returning *GetTaskResponse
@@ -2083,6 +2440,147 @@ func ParseListEndpointsResponse(rsp *http.Response) (*ListEndpointsResponse, err
 	return response, nil
 }
 
+// ParseCreateEndpointResponse parses an HTTP response from a CreateEndpointWithResponse call
+func ParseCreateEndpointResponse(rsp *http.Response) (*CreateEndpointResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateEndpointResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Endpoint
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteEndpointResponse parses an HTTP response from a DeleteEndpointWithResponse call
+func ParseDeleteEndpointResponse(rsp *http.Response) (*DeleteEndpointResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteEndpointResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetEndpointResponse parses an HTTP response from a GetEndpointWithResponse call
+func ParseGetEndpointResponse(rsp *http.Response) (*GetEndpointResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetEndpointResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Endpoint
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetTaskResponse parses an HTTP response from a GetTaskWithResponse call
 func ParseGetTaskResponse(rsp *http.Response) (*GetTaskResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -2283,6 +2781,15 @@ type ServerInterface interface {
 	// List the endpoints bound to a timeline
 	// (GET /storage-pools/{poolId}/timelines/{timelineId}/endpoints)
 	ListEndpoints(ctx echo.Context, poolId PoolId, timelineId TimelineId, params ListEndpointsParams) error
+	// Create and deploy an endpoint on a timeline
+	// (POST /storage-pools/{poolId}/timelines/{timelineId}/endpoints)
+	CreateEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId) error
+	// Retire an endpoint
+	// (DELETE /storage-pools/{poolId}/timelines/{timelineId}/endpoints/{endpointId})
+	DeleteEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId) error
+	// Get an endpoint
+	// (GET /storage-pools/{poolId}/timelines/{timelineId}/endpoints/{endpointId})
+	GetEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId) error
 	// Get the status of a task
 	// (GET /tasks/{taskId})
 	GetTask(ctx echo.Context, taskId TaskId) error
@@ -2488,6 +2995,94 @@ func (w *ServerInterfaceWrapper) ListEndpoints(ctx echo.Context) error {
 	return err
 }
 
+// CreateEndpoint converts echo context to params.
+func (w *ServerInterfaceWrapper) CreateEndpoint(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "timelineId" -------------
+	var timelineId TimelineId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.CreateEndpoint(ctx, poolId, timelineId)
+	return err
+}
+
+// DeleteEndpoint converts echo context to params.
+func (w *ServerInterfaceWrapper) DeleteEndpoint(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "timelineId" -------------
+	var timelineId TimelineId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+	}
+
+	// ------------- Path parameter "endpointId" -------------
+	var endpointId EndpointId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "endpointId", ctx.Param("endpointId"), &endpointId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter endpointId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.DeleteEndpoint(ctx, poolId, timelineId, endpointId)
+	return err
+}
+
+// GetEndpoint converts echo context to params.
+func (w *ServerInterfaceWrapper) GetEndpoint(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "timelineId" -------------
+	var timelineId TimelineId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+	}
+
+	// ------------- Path parameter "endpointId" -------------
+	var endpointId EndpointId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "endpointId", ctx.Param("endpointId"), &endpointId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter endpointId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetEndpoint(ctx, poolId, timelineId, endpointId)
+	return err
+}
+
 // GetTask converts echo context to params.
 func (w *ServerInterfaceWrapper) GetTask(ctx echo.Context) error {
 	var err error
@@ -2590,6 +3185,9 @@ func RegisterHandlersWithBaseURL(router EchoRouter, si ServerInterface, baseURL 
 	router.DELETE(baseURL+"/storage-pools/:poolId/timelines/:timelineId", wrapper.DeleteTimeline)
 	router.POST(baseURL+"/storage-pools/:poolId/timelines/:timelineId/branch", wrapper.BranchTimeline)
 	router.GET(baseURL+"/storage-pools/:poolId/timelines/:timelineId/endpoints", wrapper.ListEndpoints)
+	router.POST(baseURL+"/storage-pools/:poolId/timelines/:timelineId/endpoints", wrapper.CreateEndpoint)
+	router.DELETE(baseURL+"/storage-pools/:poolId/timelines/:timelineId/endpoints/:endpointId", wrapper.DeleteEndpoint)
+	router.GET(baseURL+"/storage-pools/:poolId/timelines/:timelineId/endpoints/:endpointId", wrapper.GetEndpoint)
 	router.GET(baseURL+"/tasks/:taskId", wrapper.GetTask)
 	router.GET(baseURL+"/users", wrapper.ListUsers)
 	router.POST(baseURL+"/users", wrapper.CreateUser)
@@ -2955,6 +3553,152 @@ func (response ListEndpoints500JSONResponse) VisitListEndpointsResponse(w http.R
 	return json.NewEncoder(w).Encode(response)
 }
 
+type CreateEndpointRequestObject struct {
+	PoolId     PoolId     `json:"poolId"`
+	TimelineId TimelineId `json:"timelineId"`
+	Body       *CreateEndpointJSONRequestBody
+}
+
+type CreateEndpointResponseObject interface {
+	VisitCreateEndpointResponse(w http.ResponseWriter) error
+}
+
+type CreateEndpoint201JSONResponse Endpoint
+
+func (response CreateEndpoint201JSONResponse) VisitCreateEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateEndpoint400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateEndpoint400JSONResponse) VisitCreateEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateEndpoint404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CreateEndpoint404JSONResponse) VisitCreateEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateEndpoint409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateEndpoint409JSONResponse) VisitCreateEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateEndpoint500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CreateEndpoint500JSONResponse) VisitCreateEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteEndpointRequestObject struct {
+	PoolId     PoolId     `json:"poolId"`
+	TimelineId TimelineId `json:"timelineId"`
+	EndpointId EndpointId `json:"endpointId"`
+}
+
+type DeleteEndpointResponseObject interface {
+	VisitDeleteEndpointResponse(w http.ResponseWriter) error
+}
+
+type DeleteEndpoint204Response struct {
+}
+
+func (response DeleteEndpoint204Response) VisitDeleteEndpointResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteEndpoint400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response DeleteEndpoint400JSONResponse) VisitDeleteEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteEndpoint404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteEndpoint404JSONResponse) VisitDeleteEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteEndpoint500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeleteEndpoint500JSONResponse) VisitDeleteEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetEndpointRequestObject struct {
+	PoolId     PoolId     `json:"poolId"`
+	TimelineId TimelineId `json:"timelineId"`
+	EndpointId EndpointId `json:"endpointId"`
+}
+
+type GetEndpointResponseObject interface {
+	VisitGetEndpointResponse(w http.ResponseWriter) error
+}
+
+type GetEndpoint200JSONResponse Endpoint
+
+func (response GetEndpoint200JSONResponse) VisitGetEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetEndpoint400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetEndpoint400JSONResponse) VisitGetEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetEndpoint404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetEndpoint404JSONResponse) VisitGetEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetEndpoint500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetEndpoint500JSONResponse) VisitGetEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type GetTaskRequestObject struct {
 	TaskId TaskId `json:"taskId"`
 }
@@ -3139,6 +3883,15 @@ type StrictServerInterface interface {
 	// List the endpoints bound to a timeline
 	// (GET /storage-pools/{poolId}/timelines/{timelineId}/endpoints)
 	ListEndpoints(ctx context.Context, request ListEndpointsRequestObject) (ListEndpointsResponseObject, error)
+	// Create and deploy an endpoint on a timeline
+	// (POST /storage-pools/{poolId}/timelines/{timelineId}/endpoints)
+	CreateEndpoint(ctx context.Context, request CreateEndpointRequestObject) (CreateEndpointResponseObject, error)
+	// Retire an endpoint
+	// (DELETE /storage-pools/{poolId}/timelines/{timelineId}/endpoints/{endpointId})
+	DeleteEndpoint(ctx context.Context, request DeleteEndpointRequestObject) (DeleteEndpointResponseObject, error)
+	// Get an endpoint
+	// (GET /storage-pools/{poolId}/timelines/{timelineId}/endpoints/{endpointId})
+	GetEndpoint(ctx context.Context, request GetEndpointRequestObject) (GetEndpointResponseObject, error)
 	// Get the status of a task
 	// (GET /tasks/{taskId})
 	GetTask(ctx context.Context, request GetTaskRequestObject) (GetTaskResponseObject, error)
@@ -3380,6 +4133,92 @@ func (sh *strictHandler) ListEndpoints(ctx echo.Context, poolId PoolId, timeline
 		return err
 	} else if validResponse, ok := response.(ListEndpointsResponseObject); ok {
 		return validResponse.VisitListEndpointsResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// CreateEndpoint operation middleware
+func (sh *strictHandler) CreateEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId) error {
+	var request CreateEndpointRequestObject
+
+	request.PoolId = poolId
+	request.TimelineId = timelineId
+
+	var body CreateEndpointJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateEndpoint(ctx.Request().Context(), request.(CreateEndpointRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateEndpoint")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(CreateEndpointResponseObject); ok {
+		return validResponse.VisitCreateEndpointResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// DeleteEndpoint operation middleware
+func (sh *strictHandler) DeleteEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId) error {
+	var request DeleteEndpointRequestObject
+
+	request.PoolId = poolId
+	request.TimelineId = timelineId
+	request.EndpointId = endpointId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteEndpoint(ctx.Request().Context(), request.(DeleteEndpointRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteEndpoint")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(DeleteEndpointResponseObject); ok {
+		return validResponse.VisitDeleteEndpointResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetEndpoint operation middleware
+func (sh *strictHandler) GetEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId) error {
+	var request GetEndpointRequestObject
+
+	request.PoolId = poolId
+	request.TimelineId = timelineId
+	request.EndpointId = endpointId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetEndpoint(ctx.Request().Context(), request.(GetEndpointRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetEndpoint")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetEndpointResponseObject); ok {
+		return validResponse.VisitGetEndpointResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

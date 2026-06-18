@@ -9,11 +9,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// MemBackend is an in-memory Backend that mirrors PgBackend's semantics (owner
-// existence checks, globally-unique pool names, top-level pools, paginated
-// lists). It lets the API layer be tested end-to-end — through the generated
-// client and the real controllers — without a database. It is safe for
-// concurrent use.
+// MemBackend is an in-memory Backend that mirrors PgBackend's semantics
+// (owner existence checks, globally-unique pool names, top-level pools,
+// paginated lists, the single-writer rule, and endpoints whose address is set
+// after deploy). It lets the API layer be tested end-to-end — through the
+// generated client and the real controllers — without a database. It is safe
+// for concurrent use.
 type MemBackend struct {
 	mu           sync.Mutex
 	users        map[uuid.UUID]User
@@ -53,6 +54,17 @@ func NewMemBackend() *MemBackend {
 		writers:      make(map[timelineKey]struct{}),
 		now:          time.Now,
 	}
+}
+
+// SeedTimeline registers a timeline under a pool. Endpoint tests (#108) seed a
+// timeline directly when they want to exercise the endpoint lifecycle without
+// going through CreateTimeline, mirroring how a real timeline is provisioned
+// out-of-band.
+func (m *MemBackend) SeedTimeline(poolID uuid.UUID, tl Timeline) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.timelines[tl.TimelineID] = tl
+	m.timelinePool[tl.TimelineID] = poolID
 }
 
 func (m *MemBackend) Healthy(context.Context) error { return nil }
@@ -168,41 +180,76 @@ func (m *MemBackend) ListTimelines(_ context.Context, poolID uuid.UUID, limit, o
 	return page(timelines, limit, offset), len(timelines), nil
 }
 
-func (m *MemBackend) CreateEndpoint(_ context.Context, tenantID, timelineID uuid.UUID, role, address string) (Endpoint, error) {
+// timelineInPool returns the timeline addressed by (poolID, timelineID) if the
+// timeline's tenant belongs to the pool. Pools are top-level, so this is not
+// owner-scoped. Caller holds m.mu.
+func (m *MemBackend) timelineInPool(poolID, timelineID uuid.UUID) (Timeline, bool) {
+	tl, ok := m.timelines[timelineID]
+	if !ok || m.timelinePool[timelineID] != poolID {
+		return Timeline{}, false
+	}
+	if _, ok := m.pools[poolID]; !ok {
+		return Timeline{}, false
+	}
+	return tl, true
+}
+
+func (m *MemBackend) GetTimeline(_ context.Context, poolID, timelineID uuid.UUID) (Timeline, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tl, ok := m.timelineInPool(poolID, timelineID)
+	if !ok {
+		return Timeline{}, ErrNotFound
+	}
+	return tl, nil
+}
+
+func (m *MemBackend) CreateEndpoint(_ context.Context, tenantID, timelineID uuid.UUID, role string, _ []byte) (Endpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	tl, ok := m.timelines[timelineID]
 	if !ok || tl.TenantID != tenantID {
 		return Endpoint{}, ErrNotFound
 	}
-	if role == "read_write" {
+	if role == RoleReadWrite {
 		k := timelineKey{tenantID: tenantID, timelineID: timelineID}
 		if _, taken := m.writers[k]; taken {
 			return Endpoint{}, ErrConflict
 		}
 		m.writers[k] = struct{}{}
 	}
+	// Address is set later via SetEndpointAddress, once the endpoint is deployed.
 	e := Endpoint{
 		ID:         uuid.New(),
 		TenantID:   tenantID,
 		TimelineID: timelineID,
 		Role:       role,
-		Address:    address,
 		CreatedAt:  m.now(),
 	}
 	m.endpoints[e.ID] = e
 	return e, nil
 }
 
+func (m *MemBackend) GetEndpoint(_ context.Context, poolID, timelineID, endpointID uuid.UUID) (Endpoint, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tl, ok := m.timelineInPool(poolID, timelineID)
+	if !ok {
+		return Endpoint{}, ErrNotFound
+	}
+	ep, ok := m.endpoints[endpointID]
+	// Match PgBackend, which joins on (tenant_id, timeline_id): the endpoint must
+	// belong to this timeline's tenant, not just share its timeline id.
+	if !ok || ep.TimelineID != timelineID || ep.TenantID != tl.TenantID {
+		return Endpoint{}, ErrNotFound
+	}
+	return ep, nil
+}
+
 func (m *MemBackend) ListEndpoints(_ context.Context, poolID, timelineID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.pools[poolID]; !ok {
-		return nil, 0, ErrNotFound
-	}
-	// The timeline must live in the addressed pool, mirroring the pg backend's
-	// join through tenant.storage_pool_id.
-	if m.timelinePool[timelineID] != poolID {
+	if _, ok := m.timelineInPool(poolID, timelineID); !ok {
 		return nil, 0, ErrNotFound
 	}
 	var endpoints []Endpoint
@@ -215,6 +262,28 @@ func (m *MemBackend) ListEndpoints(_ context.Context, poolID, timelineID uuid.UU
 		return createdBefore(endpoints[i].CreatedAt, endpoints[j].CreatedAt, endpoints[i].ID, endpoints[j].ID)
 	})
 	return page(endpoints, limit, offset), len(endpoints), nil
+}
+
+func (m *MemBackend) SetEndpointAddress(_ context.Context, endpointID uuid.UUID, address string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ep, ok := m.endpoints[endpointID]; ok {
+		ep.Address = address
+		m.endpoints[endpointID] = ep
+	}
+	return nil
+}
+
+func (m *MemBackend) DeleteEndpoint(_ context.Context, endpointID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ep, ok := m.endpoints[endpointID]; ok {
+		if ep.Role == RoleReadWrite {
+			delete(m.writers, timelineKey{tenantID: ep.TenantID, timelineID: ep.TimelineID})
+		}
+		delete(m.endpoints, endpointID)
+	}
+	return nil
 }
 
 // createdBefore orders items by (created_at, id), matching the pg backend's

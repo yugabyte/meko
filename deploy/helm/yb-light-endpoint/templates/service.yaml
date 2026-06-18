@@ -4,6 +4,10 @@ metadata:
   name: {{ include "yb-light-endpoint.fullname" . }}
   labels:
     {{- include "yb-light-endpoint.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.service.type }}
   selector:
@@ -13,7 +17,7 @@ spec:
       port: {{ .Values.endpoint.computePort }}
       targetPort: pg-compute
       protocol: TCP
-    {{- if .Values.service.exposeInternalHttp }}
+    {{- if or .Values.service.exposeInternalHttp .Values.storageController.url }}
     - name: ps-http
       port: {{ .Values.ports.pageserverHttp }}
       targetPort: ps-http

@@ -82,11 +82,14 @@ Everything is under `/api/v1`. The resource ladder is **storage pool → timelin
 | `POST /storage-pools` | createStoragePool | Top-level; the owner is named in the body (`owner_user_id`). |
 | `GET /storage-pools` | listStoragePools | Paginated; lists **every** pool (no owner filter yet). |
 | `GET /storage-pools/{poolId}` | getStoragePool | By id; not owner-scoped. |
-| `POST /storage-pools/{poolId}/timelines` | createTimeline | Runs the full workflow: tenant + main timeline + storage-controller registration + compute endpoint; returns `(tenant_id, timeline_id)` and the endpoint's `address`. `201` / `404` / `409`. |
+| `POST /storage-pools/{poolId}/timelines` | createTimeline | Creates a tenant + its main timeline and records the storage-controller pending-init recipe; returns `(tenant_id, timeline_id)`. Does **not** deploy an endpoint. `201` / `404` / `409`. |
 | `GET /storage-pools/{poolId}/timelines` | listTimelines | Paginated; the pool's timelines (all tenants). `404` if the pool is unknown. |
 | `DELETE …/timelines/{timelineId}` | deleteTimeline | **Logged only** → `202`. |
 | `POST …/timelines/{timelineId}/branch` | branchTimeline | **Logged only** → `202`. Branching is explicit. |
+| `POST …/timelines/{timelineId}/endpoints` | createEndpoint | Creates the endpoint and **synchronously deploys** it → `201 {endpoint}` (its `address` set). `501` if `--deploy` is off. |
 | `GET …/timelines/{timelineId}/endpoints` | listEndpoints | Paginated; the timeline's endpoints. `404` if the pool/timeline is unknown. |
+| `GET …/endpoints/{endpointId}` | getEndpoint | One endpoint (its `address` is set once deployed). |
+| `DELETE …/endpoints/{endpointId}` | deleteEndpoint | **Synchronously retires** the endpoint → `204`. `501` if `--deploy` is off. |
 | `GET /tasks/{taskId}` | getTask | Status of a write-ahead task. |
 
 ### Pagination
@@ -124,26 +127,28 @@ longer owner-scoped: `listStoragePools` returns **every** pool (an owner filter
 can come with grants), and `getStoragePool` resolves a pool by id regardless of
 who created it.
 
-### Timelines: create runs the full provisioning workflow; delete and branch are logged-only
+### Timelines: create persists the tenant + main timeline; delete and branch are logged-only
 
-**`createTimeline` runs the whole create-an-endpoint workflow, in amp.** It:
+**`createTimeline` records the control-plane resource and the pending-init
+recipe.** It:
 1. creates a tenant (a "database", unique name within the pool, else `409`)
    together with its main timeline (`pg_cluster`, `is_main`) — one transaction,
-   `core.Backend.CreateTimeline`; an unknown pool surfaces as `404` (the
-   `tenant.storage_pool_id` foreign key);
-2. registers the tenant with the managed storage controller
-   (`storagecontroller.Client.CreateTenant` → `POST /v1/tenant`), when one is
-   configured; and
-3. provisions the compute endpoint via the runtime-agnostic
-   [`deploy.Deployer`](../internal/deploy/) (Docker today, Kubernetes later),
-   persists it (the `endpoint` table), and returns its connection `address` in the
-   `Timeline.endpoint` field.
+   `core.Backend.CreateTimeline`; the pool is top-level, so an unknown pool
+   surfaces as `404` (the `tenant.storage_pool_id` foreign key); and
+2. records the storage controller's **pending-init recipe**
+   (`storagecontroller.Client.RecordPendingTimelineInit`) when a controller is
+   configured — the timeline is declared, not yet materialized.
 
-The endpoint it launches materializes the timeline (bootstrap initdb) and — in SC
-mode — registers + attaches to the controller for its generation. The call is
-synchronous (it blocks while the endpoint comes up); moving it onto the
-write-ahead task framework (async + `getTask` polling) is a follow-up. amp's
-`/readyz` gates on the managed controller so a caller can't race its startup.
+It returns the storage-layer ids `(tenant_id, timeline_id)`. It does **not**
+eagerly create the tenant on the controller or deploy an endpoint: compute is a
+separate resource (below), and the first endpoint deployed on the timeline
+materializes it (the recipe is then dropped). See
+[`amp-timeline-create.md`](amp-timeline-create.md).
+
+Compute is a **separate resource**: a caller `POST`s an endpoint on the timeline
+(below), which the controller deploys synchronously. Bootstrapping a fresh
+tenant's storage (initdb + the storage schema) is still out-of-band — the deploy
+path attaches an existing tenant (Mode B), it does not create one.
 
 **`deleteTimeline` and `branchTimeline` are still logged-only.** All such
 mutations are meant to run through the write-ahead task framework
@@ -162,6 +167,26 @@ backend first resolves the timeline within the pool — `timeline_id` is a
 generated UUID, unique within a pool — and a pool or timeline that doesn't exist
 is a `404`.
 
+### Endpoints are deployed synchronously (#108)
+
+`createEndpoint` resolves the timeline within the pool via
+`core.Backend.GetTimeline` (`(poolId, timelineId)`, top-level: a missing link is
+`404`), inserts the `endpoint` row (recorded first, so the single-writer rule is
+enforced before a deploy is spent), then **synchronously deploys** it via the
+runtime-agnostic [`deploy.Deployer`](../internal/deploy/) (Docker today,
+Kubernetes via Helm), records the resolved `address`
+(`core.Backend.SetEndpointAddress`), and best-effort drops the storage
+controller's pending-init recipe (the endpoint has now materialized the
+timeline). It returns `201` with the deployed endpoint. If the deploy fails the
+row is removed (compensation). A timeline admits at most one `read_write`
+endpoint — the schema's `one_writer_per_timeline` partial unique index — which
+surfaces as `409`. `deleteEndpoint` synchronously retires the endpoint (remove
+the running instance + drop the row) and returns `204`. Both refuse with `501`
+when the deployer is disabled (`--deploy` off). The Kubernetes deploy mechanism
+(the Helm release per endpoint, Mode-B attach) is described in
+[`yblc-k8s-deploy.md`](yblc-k8s-deploy.md); moving the deploy onto the
+write-ahead task framework (async + `getTask` polling) is a follow-up.
+
 ## Layering
 
 ```
@@ -171,6 +196,7 @@ internal/api/    HTTP: generated contract (api.gen.go) + controllers (handlers.g
 internal/core/   Domain: Backend interface + PgBackend (YBDB) + MemBackend (tests).
                  ErrNotFound → 404, ErrConflict → 409.
 internal/task/   Task store, read by getTask.
+internal/deploy/ Kubernetes endpoint provisioner; synchronous deploy/retire (yblc-k8s-deploy.md).
 ```
 
 The `core.Backend` seam is what lets the whole HTTP layer be tested without a

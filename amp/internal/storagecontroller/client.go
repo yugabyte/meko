@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -83,9 +84,58 @@ func (c *Client) GetTimeline(ctx context.Context, tenantID, timelineID string) (
 	return out, err
 }
 
+// PendingTimelineInit is the recipe for a timeline that has been declared but
+// not yet materialized: the storage controller stores it until an endpoint's
+// pageserver attaches and bootstraps the timeline (amp/architecture/
+// amp-timeline-create.md). ancestor_timeline_id is null for a root (Bootstrap)
+// timeline; set, with start_lsn, for a branch. start_lsn is the controller's
+// Lsn string form ("hi/lo" uppercase hex, e.g. "0/0"); pg_version is the bare
+// major version (17).
+type PendingTimelineInit struct {
+	BranchName         string  `json:"branch_name"`
+	PgVersion          int     `json:"pg_version"`
+	AncestorTimelineID *string `json:"ancestor_timeline_id"`
+	StartLSN           string  `json:"start_lsn"`
+}
+
+// RecordPendingTimelineInit records the recipe for a not-yet-materialized
+// timeline (POST /control/v1/tenant/{tenant}/timeline/{timeline}/pending_init).
+// ids are 32 lowercase hex digits (the storage-layer TenantId/TimelineId).
+func (c *Client) RecordPendingTimelineInit(ctx context.Context, tenantID, timelineID string, req PendingTimelineInit) error {
+	return c.do(ctx, http.MethodPost,
+		"/control/v1/tenant/"+url.PathEscape(tenantID)+"/timeline/"+url.PathEscape(timelineID)+"/pending_init",
+		req, nil)
+}
+
+// DeletePendingTimelineInit drops the recipe once the timeline is materialized
+// (DELETE .../pending_init). It is idempotent: a missing recipe (404) — e.g. a
+// timeline an earlier endpoint already materialized — is treated as success.
+func (c *Client) DeletePendingTimelineInit(ctx context.Context, tenantID, timelineID string) error {
+	err := c.do(ctx, http.MethodDelete,
+		"/control/v1/tenant/"+url.PathEscape(tenantID)+"/timeline/"+url.PathEscape(timelineID)+"/pending_init",
+		nil, nil)
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusNotFound {
+		return nil
+	}
+	return err
+}
+
+// statusError is returned by do for a non-2xx response, so callers can react to
+// a specific status (e.g. tolerate 404 on an idempotent delete).
+type statusError struct {
+	method, path string
+	code         int
+	body         string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("%s %s: status %d: %s", e.method, e.path, e.code, e.body)
+}
+
 // do issues one request. body, if non-nil, is JSON-encoded; out, if non-nil,
-// receives the decoded JSON response. A non-2xx status is returned as an error
-// carrying a snippet of the response body.
+// receives the decoded JSON response. A non-2xx status is returned as a
+// *statusError carrying a snippet of the response body.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
@@ -110,7 +160,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return fmt.Errorf("%s %s: status %d: %s", method, path, resp.StatusCode, bytes.TrimSpace(snippet))
+		return &statusError{method: method, path: path, code: resp.StatusCode, body: string(bytes.TrimSpace(snippet))}
 	}
 	if out != nil {
 		// The caller asked for a body, so an empty response (io.EOF) is an

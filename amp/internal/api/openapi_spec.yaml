@@ -52,7 +52,7 @@ tags:
   - name: timelines
     description: Timelines (PG clusters) in a pool. Create is real; delete/branch are logged only for now.
   - name: endpoints
-    description: Compute endpoints bound to a timeline.
+    description: Compute endpoints bound to a timeline; deployed synchronously (one container/pod per endpoint).
   - name: tasks
     description: Status of long-running operations (the write-ahead task log).
 
@@ -299,6 +299,37 @@ paths:
     parameters:
       - $ref: '#/components/parameters/PoolId'
       - $ref: '#/components/parameters/TimelineId'
+    post:
+      tags: [endpoints]
+      operationId: createEndpoint
+      summary: Create and deploy an endpoint on a timeline
+      description: |
+        Records an endpoint on the addressed timeline and synchronously deploys
+        it (one container/pod per endpoint). Returns 201 with the deployed
+        endpoint, its `address` populated. A timeline admits at most one
+        `read_write` endpoint (the single-writer rule). Requires the endpoint
+        deployer (`--deploy`); returns 501 otherwise.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEndpointRequest'
+      responses:
+        '201':
+          description: Endpoint created and deployed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Endpoint'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
     get:
       tags: [endpoints]
       operationId: listEndpoints
@@ -314,6 +345,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EndpointList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /storage-pools/{poolId}/timelines/{timelineId}/endpoints/{endpointId}:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/TimelineId'
+      - $ref: '#/components/parameters/EndpointId'
+    get:
+      tags: [endpoints]
+      operationId: getEndpoint
+      summary: Get an endpoint
+      responses:
+        '200':
+          description: The endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Endpoint'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [endpoints]
+      operationId: deleteEndpoint
+      summary: Retire an endpoint
+      description: |
+        Synchronously removes the endpoint's running instance and then deletes
+        the endpoint record. Returns 204 once retired. Requires the endpoint
+        deployer (`--deploy`); returns 501 otherwise.
+      responses:
+        '204':
+          description: Endpoint retired.
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -366,6 +437,14 @@ components:
       in: path
       required: true
       description: The timeline's id.
+      schema:
+        type: string
+        format: uuid
+    EndpointId:
+      name: endpointId
+      in: path
+      required: true
+      description: The endpoint's id.
       schema:
         type: string
         format: uuid
@@ -536,9 +615,6 @@ components:
         created_at:
           type: string
           format: date-time
-        endpoint:
-          description: The compute endpoint provisioned for the timeline, when endpoint deployment is enabled. Connect to its address with psql (user cloud_admin, database postgres).
-          $ref: '#/components/schemas/Endpoint'
 
     TimelineList:
       type: object
@@ -553,19 +629,39 @@ components:
         count:
           $ref: '#/components/schemas/PageCount'
 
+    BranchTimelineRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Name for the new branch timeline.
+
     Endpoint:
       type: object
-      required: [id, role, address]
+      required: [id, tenant_id, timeline_id, role, address, created_at]
       properties:
         id:
           type: string
           format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+          description: The storage-layer tenant id this endpoint is bound to.
+        timeline_id:
+          type: string
+          format: uuid
+          description: The storage-layer timeline id this endpoint is bound to.
         role:
           type: string
           enum: [read_write, read_only]
         address:
           type: string
-          description: 'host:port for the Postgres wire protocol.'
+          description: 'Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed.'
+        created_at:
+          type: string
+          format: date-time
 
     EndpointList:
       type: object
@@ -580,14 +676,14 @@ components:
         count:
           $ref: '#/components/schemas/PageCount'
 
-    BranchTimelineRequest:
+    CreateEndpointRequest:
       type: object
-      required: [name]
       properties:
-        name:
+        role:
           type: string
-          minLength: 1
-          description: Name for the new branch timeline.
+          enum: [read_write, read_only]
+          default: read_write
+          description: The endpoint's role. A timeline admits at most one read_write endpoint.
 
     OperationAck:
       type: object

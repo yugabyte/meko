@@ -87,7 +87,30 @@ SAFEKEEPER_HTTP_PORT = env_int("SAFEKEEPER_HTTP_PORT", 7676)
 ENDPOINT_STORAGE_HTTP_PORT = env_int("ENDPOINT_STORAGE_HTTP_PORT", 9993)
 
 LISTEN_HOST = "127.0.0.1"
-NODE_ID = 1  # one pageserver + one safekeeper per endpoint pod
+
+
+def _derive_node_id(timeline_id):
+    """Each endpoint pod runs its own pageserver + safekeeper. When many
+    endpoints register with one shared storage controller, a fixed id collides:
+    the controller rejects re-registering node 1 at a new address with 409, so
+    every endpoint after the first crash-loops. Derive a stable id from the
+    timeline id (one endpoint per timeline) — a 31-bit hash of its first 8 hex
+    digits, so distinct per timeline with overwhelming probability — so the
+    controller tracks each endpoint's PS/SK as distinct nodes. Masked positive,
+    comfortably within the controller's NodeId (i64) and any i32 column. An
+    explicit NODE_ID env (e.g. an allocator) overrides; SC-free pods keep 1.
+    Falls back to 1 for a missing or non-hex id (ids are 32-hex in practice)."""
+    if not timeline_id:
+        return 1
+    try:
+        return (int(timeline_id[:8], 16) & 0x7FFFFFFF) or 1
+    except ValueError:
+        return 1
+
+
+# one pageserver + one safekeeper per endpoint pod; unique per endpoint so a
+# shared storage controller can tell co-located endpoints apart (see above).
+NODE_ID = env_int("NODE_ID", _derive_node_id(TIMELINE_ID))
 
 # The pageserver requires `control_plane_api` to be set ("pageservers cannot
 # run in isolation"), but this fork's pageserver no longer calls back to it at
@@ -508,8 +531,10 @@ def sc_register_and_attach():
             "version": 5957,
             "availability_zone_id": f"local-{NODE_ID}",
         })
+        # The controller deserializes this with serde (PascalCase variants), not
+        # its FromStr (which accepts lowercase) — so "Active", not "active", else 400.
         http_request("POST", f"{base}/control/v1/safekeeper/{NODE_ID}/scheduling_policy",
-                     body={"scheduling_policy": "active"})
+                     body={"scheduling_policy": "Active"})
         log("registered safekeeper with storage controller")
     except Exception as e:  # noqa: BLE001 - registry-only, never fatal
         log(f"WARNING: safekeeper registration failed (continuing): {e}")
@@ -642,6 +667,35 @@ def main():
         # 409/already-exists is fine on restart.
         if e.code not in (409,):
             log(f"safekeeper create_timeline returned {e.code}: {e.read()[:200]}")
+
+    # Under controller coordination, tell the storage controller where this
+    # timeline's WAL lives (this endpoint's safekeeper). Mirrors control_plane's
+    # timeline_register (control_plane/src/storage_controller.rs): the controller
+    # is the source of truth for the timeline's safekeeper placement. Reuse the
+    # exact start LSN already given to the safekeeper create above; the pageserver
+    # API returns it as the controller's `Lsn` "hi/lo" string, so pass it through
+    # (only convert if we somehow hold it as an integer).
+    if USE_STORAGE_CONTROLLER:
+        sc_start_lsn = start_lsn
+        if isinstance(sc_start_lsn, int):
+            sc_start_lsn = f"{sc_start_lsn >> 32:X}/{sc_start_lsn & 0xFFFFFFFF:X}"
+        base = STORAGE_CONTROLLER_URL.rstrip("/")
+        try:
+            http_request(
+                "POST",
+                f"{base}/control/v1/tenant/{TENANT_ID}/timeline/{TIMELINE_ID}/register",
+                body={"start_lsn": sc_start_lsn, "sk_set": [NODE_ID]},
+            )
+            log("registered timeline with storage controller")
+        except urllib.error.HTTPError as e:
+            # 409/already-registered is fine on restart.
+            if e.code not in (409,):
+                log(f"storage controller timeline_register returned {e.code}: {e.read()[:200]}")
+        except Exception as e:  # noqa: BLE001 - registry update is best-effort, never fatal
+            # The safekeeper already has the timeline (created above) and serves the
+            # compute; registering it with the controller is bookkeeping, so a
+            # transient connection error must not crash the pod.
+            log(f"WARNING: storage controller timeline_register failed (continuing): {e}")
 
     # 4. compute_ctl + postgres
     spec = render_compute_spec(RUN_DIR / "compute_spec.json")

@@ -59,10 +59,24 @@ RUN set -e \
 ARG BUNDLE_DIR
 COPY --chown=yugabyte:yugabyte ${BUNDLE_DIR}/ /opt/yb-light-amp/
 
+# helm + the endpoint chart, for the Kubernetes deploy runtime: the k8s
+# provisioner shells out to `helm upgrade --install` (it is not a client-go
+# deployer). In-cluster, helm uses the pod's service account, so no kubeconfig is
+# needed — just RBAC on that service account to manage the endpoint's objects.
+ARG HELM_VERSION=3.18.6
+ADD https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz /tmp/helm.tgz
+RUN set -e \
+    && tar -xzf /tmp/helm.tgz -C /tmp linux-amd64/helm \
+    && mv /tmp/linux-amd64/helm /usr/local/bin/helm \
+    && chmod +x /usr/local/bin/helm \
+    && rm -rf /tmp/helm.tgz /tmp/linux-amd64
+COPY --chown=yugabyte:yugabyte deploy/helm/yb-light-endpoint /opt/yb-light-amp/chart
+
 ENV PATH=/opt/yb-light-amp:$PATH \
     AMP_LISTEN=:8080 \
     AMP_STORAGE_CONTROLLER=true \
-    AMP_STORAGE_CONTROLLER_LISTEN=127.0.0.1:50051
+    AMP_STORAGE_CONTROLLER_LISTEN=127.0.0.1:50051 \
+    AMP_DEPLOY_CHART=/opt/yb-light-amp/chart
 
 USER yugabyte
 
