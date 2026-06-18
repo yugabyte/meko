@@ -671,10 +671,19 @@ function renderTlNode(node, ctx) {
         title="Branch off ${esc(branch)} and create + start a new endpoint">+ branch</button>`
     : '';
 
+  // Drop is offered on named branches except `main`: dropping a tenant's root
+  // timeline would orphan it. Reddish styling + a confirm() flag the
+  // destructive, irreversible-ish action (vs the no-prompt branch create).
+  const dropBtn = (branch && branch !== 'main')
+    ? `<button onclick='dropBranch(${JSON.stringify(tid)},${JSON.stringify(tlid)},${JSON.stringify(branch)},this)'
+        style="margin-left:6px;font-size:11px;padding:2px 8px;cursor:pointer;background:#2b1e22;color:#d99;border:1px solid #3a2a2f;border-radius:4px;"
+        title="Drop ${esc(branch)} and all its endpoints">× Delete</button>`
+    : '';
+
   return `<div class="tl-tree-node">
     <div class="tl-block">
       <div class="tl-head">
-        ${branchPill} <span class="tl-label">Timeline:</span> ${mono(tlid)}${branchBtn}
+        ${branchPill} <span class="tl-label">Timeline:</span> ${mono(tlid)}${branchBtn}${dropBtn}
       </div>
       ${epSection}
     </div>
@@ -774,6 +783,38 @@ async function createBranch(tid, ancestor, ancestorTlid, btn) {
     }
   } catch (e) {
     alert("Branch creation failed: " + e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+    burstRefresh();
+  }
+}
+
+async function dropBranch(tid, tlid, branch, btn) {
+  if (!confirm("Drop branch '" + branch + "' and all its endpoints?\n\n"
+      + "This stops its compute(s), deletes their records, and marks the "
+      + "timeline dropped. The underlying data is left for a later GC pass.")) {
+    return;
+  }
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "…dropping";
+  try {
+    const r = await fetch("/api/drop", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({tenant_id: tid, timeline_id: tlid}),
+    });
+    const d = await r.json();
+    // No prompt on success — refresh and the branch disappears. Surface
+    // failures only, so a click that does nothing isn't a mystery.
+    if (!(r.ok && d.ok)) {
+      const detail = d.error
+        || (d.steps || []).map(s => `${s.ok ? "✓" : "✗"} ${s.cmd}\n${s.output}`).join("\n\n");
+      alert("Branch drop failed:\n\n" + detail);
+    }
+  } catch (e) {
+    alert("Branch drop failed: " + e);
   } finally {
     btn.disabled = false;
     btn.textContent = old;
@@ -1005,6 +1046,36 @@ def create_tenant_with_endpoint(repo_dir):
             "endpoint": name, "steps": steps}
 
 
+def drop_branch(repo_dir, tenant_id, timeline_id):
+    """Drop a branch and all its endpoints via `yb_light_local timeline drop`:
+    stops the branch's endpoint compute(s), deletes their records, and marks
+    the timeline dropped in the storage controller (the underlying PS/SK data
+    is left for a later GC pass). Shells out to the repo's
+    `target/debug/yb_light_local` (args passed as a list, never via a shell).
+    Returns {ok, steps:[{cmd, ok, output}]} or {ok: False, error}.
+    """
+    if not tenant_id or not re.fullmatch(r"[0-9a-fA-F]{32}", str(tenant_id)):
+        return {"ok": False, "error": f"invalid tenant_id {tenant_id!r}"}
+    if not timeline_id or not re.fullmatch(r"[0-9a-fA-F]{32}", str(timeline_id)):
+        return {"ok": False, "error": f"invalid timeline_id {timeline_id!r}"}
+
+    repo_root = os.path.dirname(os.path.abspath(repo_dir)) if repo_dir else os.getcwd()
+    binary = os.path.join(repo_root, "target", "debug", "yb_light_local")
+    if not os.path.exists(binary):
+        return {"ok": False, "error": f"yb_light_local binary not found at {binary}"}
+
+    cmd = ["timeline", "drop", "--tenant-id", tenant_id, "--timeline-id", timeline_id]
+    try:
+        p = subprocess.run([binary, *cmd], cwd=repo_root,
+                           capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return {"ok": False,
+                "steps": [{"cmd": " ".join(cmd), "ok": False, "output": "timed out"}]}
+    out = (p.stdout + p.stderr).strip()
+    ok = p.returncode == 0
+    return {"ok": ok, "steps": [{"cmd": " ".join(cmd), "ok": ok, "output": out[-2000:]}]}
+
+
 class Handler(BaseHTTPRequestHandler):
     repo_dir = ".yb_light"
     database_url = None
@@ -1046,6 +1117,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(code, json.dumps(result).encode("utf-8"), "application/json")
         elif self.path.rstrip("/") == "/api/tenant":
             result = create_tenant_with_endpoint(self.repo_dir)
+            code = 200 if result.get("ok") else 500
+            self._send(code, json.dumps(result).encode("utf-8"), "application/json")
+        elif self.path.rstrip("/") == "/api/drop":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError) as e:
+                self._send(400, json.dumps({"ok": False, "error": f"bad request: {e}"}).encode("utf-8"),
+                           "application/json")
+                return
+            result = drop_branch(self.repo_dir, payload.get("tenant_id"),
+                                 payload.get("timeline_id"))
             code = 200 if result.get("ok") else 500
             self._send(code, json.dumps(result).encode("utf-8"), "application/json")
         else:
