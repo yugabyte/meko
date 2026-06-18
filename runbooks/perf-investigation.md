@@ -127,3 +127,4 @@ spending time on a tuning theory.
 | PS heap (leak vs cache) | `curl …/profile/heap` |
 | WAL rate | `pg_wal_lsn_diff` over 4 s (throughput runbook §2) |
 | backend waits | `pg_stat_activity` loop (throughput runbook §1) |
+| endpoint/branch create latency | `YBL_TIMING=1 yb_light_local endpoint create …` — per-phase ms to stderr (`[timing <scope> +Nms] …`); attributes create time across cplane-load / branch-resolve / SK+PS provisioning / register |

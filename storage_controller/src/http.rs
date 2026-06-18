@@ -664,7 +664,7 @@ async fn handle_timeline_register(
     let body = json_request::<TimelineRegisterRequest>(&mut req).await?;
 
     service
-        .timeline_register(tenant_id, timeline_id, body.start_lsn, body.sk_set)
+        .timeline_register(tenant_id, timeline_id, body.start_lsn, body.sk_set, body.branch_name)
         .await?;
     json_response(StatusCode::OK, ())
 }

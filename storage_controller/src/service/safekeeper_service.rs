@@ -360,7 +360,22 @@ impl Service {
         timeline_id: TimelineId,
         start_lsn: utils::lsn::Lsn,
         sk_set: Vec<utils::id::NodeId>,
+        branch_name: Option<String>,
     ) -> Result<(), ApiError> {
+        // A branch alias maps to exactly one live timeline per tenant. Setting
+        // it here — in the same write as the registration — folds the
+        // launcher's old separate list+set round-trips; enforce the same
+        // uniqueness `register_branch_mapping` did, server-side.
+        if let Some(ref name) = branch_name {
+            let existing = self.persistence.list_timeline_branch_names().await?;
+            if existing.iter().any(|(t, tl, n)| {
+                n == name && *t == tenant_id.to_string() && *tl != timeline_id.to_string()
+            }) {
+                return Err(ApiError::Conflict(format!(
+                    "branch '{name}' already maps to another timeline in tenant {tenant_id}"
+                )));
+            }
+        }
         let timeline_persist = TimelinePersistence {
             tenant_id: tenant_id.to_string(),
             timeline_id: timeline_id.to_string(),
@@ -368,7 +383,7 @@ impl Service {
             generation: 1,
             sk_set: sk_set.iter().map(|id| id.0 as i64).collect(),
             deleted_at: None,
-            branch_name: None,
+            branch_name,
         };
         let inserted = self.persistence.insert_timeline(timeline_persist).await?;
         if !inserted {

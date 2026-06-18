@@ -1257,35 +1257,6 @@ fn allocate_endpoint_storage_conf(env: &LocalEnv, endpoint_id: &str) -> Endpoint
     }
 }
 
-/// Provision and start the endpoint_storage instance dedicated to
-/// `endpoint_id` under `endpoints/<endpoint_id>/endpoint_storage`, then
-/// record it in the env. One instance per endpoint, alongside the
-/// co-located PS/SK pair. Tolerates an old yb-light binary without the
-/// `endpoint_storage` executable (compat tests): skip rather than fail.
-async fn provision_endpoint_storage(env: &mut LocalEnv, endpoint_id: &str) -> anyhow::Result<()> {
-    let conf = allocate_endpoint_storage_conf(env, endpoint_id);
-    let storage = EndpointStorage::from_conf(env, &conf);
-    if !storage.bin.exists() {
-        eprintln!(
-            "{} binary not found; skipping endpoint_storage provisioning \
-             (ignore if this is a compatibility test)",
-            storage.bin
-        );
-        return Ok(());
-    }
-    println!(
-        "Provisioning endpoint_storage ({}) for endpoint '{endpoint_id}'",
-        conf.listen_addr
-    );
-    storage.init().context("endpoint_storage init")?;
-    storage
-        .start(&std::time::Duration::from_secs(30))
-        .await
-        .context("start endpoint_storage")?;
-    env.endpoint_storages.push(conf);
-    Ok(())
-}
-
 /// The ancestor timeline's durable WAL end (`flush_lsn`), read from its
 /// safekeeper. This is the authoritative "everything committed so far"
 /// position; the ancestor pageserver's `last_record_lsn` only reflects
@@ -1618,11 +1589,22 @@ async fn provision_timeline_for_endpoint(
             })?
     };
 
+    // The branch alias is set on the timeline row in the same write as
+    // `timeline_register` (inside provision_*), folding the old separate
+    // set-branch-name round-trip.
+    let branch_name = Some(pending.branch_name);
     match pending.ancestor_timeline_id {
         // No ancestor => Bootstrap (the tenant's initial timeline).
         None => {
-            provision_bootstrap(env, endpoint_id, tenant_id, timeline_id, pending.pg_version)
-                .await?;
+            provision_bootstrap(
+                env,
+                endpoint_id,
+                tenant_id,
+                timeline_id,
+                pending.pg_version,
+                branch_name,
+            )
+            .await?;
         }
         Some(ancestor_timeline_id) => {
             provision_branch(
@@ -1633,16 +1615,11 @@ async fn provision_timeline_for_endpoint(
                 ancestor_timeline_id,
                 pending.start_lsn,
                 pending.pg_version,
+                branch_name,
             )
             .await?;
         }
     }
-
-    // The timeline now exists in the storage controller, so it will accept
-    // the branch-name mapping (deferred from `tenant create` / `timeline
-    // branch`).
-    env.register_branch_mapping(pending.branch_name, tenant_id, timeline_id)
-        .await?;
 
     // The pair is materialized; drop the pending recipe from YB.
     StorageController::from_env(env)
@@ -1660,6 +1637,7 @@ async fn provision_bootstrap(
     tenant_id: TenantId,
     timeline_id: TimelineId,
     pg_version: PgMajorVersion,
+    branch_name: Option<String>,
 ) -> anyhow::Result<()> {
     let ps_conf = allocate_pageserver_conf(env, endpoint_id)?;
     let sk_conf = allocate_safekeeper_conf(env, endpoint_id, tenant_id, timeline_id)?;
@@ -1788,6 +1766,7 @@ async fn provision_bootstrap(
             pageserver_api::controller_api::TimelineRegisterRequest {
                 start_lsn,
                 sk_set: vec![sk_conf.id],
+                branch_name,
             },
         )
         .await
@@ -1809,7 +1788,9 @@ async fn provision_branch(
     ancestor_timeline_id: TimelineId,
     start_lsn: Lsn,
     pg_version: PgMajorVersion,
+    branch_name: Option<String>,
 ) -> anyhow::Result<()> {
+    let timer = PhaseTimer::new("branch");
     let ancestor_ps_conf = env
         .pageserver_conf_for_timeline(ancestor_timeline_id)
         .with_context(|| {
@@ -1836,6 +1817,7 @@ async fn provision_branch(
         .start(&[], &std::time::Duration::from_secs(30))
         .await
         .context("start branch safekeeper")?;
+    timer.tick("safekeeper started");
     let sk_host = sk_conf
         .listen_addr
         .clone()
@@ -1864,6 +1846,7 @@ async fn provision_branch(
         })
         .await
         .context("create branch timeline on safekeeper")?;
+    timer.tick("safekeeper create_timeline");
 
     // Pageserver: clone the ancestor's config, bake the branch identity,
     // start. The process writes the branch's timeline_state row at startup
@@ -1898,11 +1881,13 @@ async fn provision_branch(
     {
         println!("branch: best-effort ancestor flush failed (relying on startup retry): {e:#}");
     }
+    timer.tick("ancestor flush");
 
     pageserver
         .start(&std::time::Duration::from_secs(60))
         .await
         .context("start branch pageserver")?;
+    timer.tick("pageserver started");
 
     // Wait for the branch timeline to come up Active.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
@@ -1933,6 +1918,7 @@ async fn provision_branch(
         }
     }
 
+    timer.tick("timeline Active");
     // Record the launcher-created timeline in the storage controller's
     // bookkeeping (branch names + deletion flows hang off the timelines row).
     let storage_controller = StorageController::from_env(env);
@@ -1943,6 +1929,7 @@ async fn provision_branch(
             pageserver_api::controller_api::TimelineRegisterRequest {
                 start_lsn,
                 sk_set: vec![sk_conf.id],
+                branch_name,
             },
         )
         .await
@@ -1952,8 +1939,50 @@ async fn provision_branch(
     Ok(())
 }
 
+/// Opt-in (`YBL_TIMING=1`) phase timer for one-shot CLI flows: prints
+/// elapsed-since-creation at each [`PhaseTimer::tick`], tagged with a scope.
+/// Off (and free) by default.
+///
+/// Hand-rolled deliberately: `std::time::Instant` is the timing primitive,
+/// the workspace vendors no lightweight labelled-stopwatch crate, and the
+/// idiomatic `tracing`-span approach needs a subscriber wired into the binary
+/// (this CLI has none) and times whole spans, not the mid-function
+/// checkpoints we want here.
+struct PhaseTimer {
+    start: std::time::Instant,
+    scope: &'static str,
+    enabled: bool,
+}
+
+impl PhaseTimer {
+    fn new(scope: &'static str) -> Self {
+        Self {
+            start: std::time::Instant::now(),
+            scope,
+            enabled: std::env::var_os("YBL_TIMING").is_some(),
+        }
+    }
+
+    /// Print `[timing <scope> +<elapsed>ms] <label>` when `YBL_TIMING` is set.
+    fn tick(&self, label: &str) {
+        if self.enabled {
+            eprintln!(
+                "[timing {:<8} +{:>7.1}ms] {label}",
+                self.scope,
+                self.start.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+}
+
 async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) -> Result<()> {
+    // Opt-in phase timing (`YBL_TIMING=1`): prints elapsed-since-entry at key
+    // checkpoints so `endpoint create` latency can be attributed without a
+    // profiler. Cheap and off by default.
+    let timer = PhaseTimer::new("endpoint");
+
     let mut cplane = ComputeControlPlane::load(env.clone()).await?;
+    timer.tick("ComputeControlPlane::load");
 
     match subcmd {
         EndpointCmd::List(args) => {
@@ -2043,6 +2072,8 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                     })?,
             };
 
+            timer.tick("branch resolved");
+
             let mode = match (args.lsn, args.hot_standby) {
                 (Some(lsn), false) => ComputeMode::Static(lsn),
                 (None, true) => ComputeMode::Replica,
@@ -2068,17 +2099,73 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 cplane.check_conflicting_endpoints(mode, tenant_id, timeline_id)?;
             }
 
-            // Provision the timeline's pageserver + safekeeper under this
-            // endpoint's folder if nothing serves it yet (running the
-            // pending Bootstrap/Branch init from `tenant create` /
-            // `timeline branch`). A second endpoint on an already-served
-            // branch skips this — the pair stays under the first endpoint.
-            provision_timeline_for_endpoint(env, &endpoint_id, tenant_id, timeline_id).await?;
+            // Provision the timeline's pageserver + safekeeper pair (one per
+            // timeline, run the pending Bootstrap/Branch init from `tenant
+            // create` / `timeline branch`; a second endpoint on an
+            // already-served branch makes this a no-op) CONCURRENTLY with this
+            // endpoint's own endpoint_storage instance.
+            //
+            // The pair is internally ordered and can't be split — the
+            // safekeeper must hold the timeline before the pageserver's
+            // walreceiver and the compute's walproposer dial in. But
+            // endpoint_storage is independent of the pair (per-endpoint LFC
+            // scratch store), so overlapping its process start with the
+            // longer pair provisioning takes it off the critical path.
+            //
+            // endpoint_storage's port is reserved up front (serial,
+            // `&LocalEnv` read) so it can't race the pair's allocations; its
+            // conf is recorded in `env` only after a successful start, and a
+            // failed pair provisioning stops it so it can't leak / squat its
+            // port.
+            let es_conf = allocate_endpoint_storage_conf(env, &endpoint_id);
+            let es = EndpointStorage::from_conf(env, &es_conf);
+            let es_present = es.bin.exists();
+            if es_present {
+                println!(
+                    "Provisioning endpoint_storage ({}) for endpoint '{endpoint_id}'",
+                    es_conf.listen_addr
+                );
+                es.init().context("endpoint_storage init")?;
+            } else {
+                eprintln!(
+                    "{} binary not found; skipping endpoint_storage provisioning \
+                     (ignore if this is a compatibility test)",
+                    es.bin
+                );
+            }
 
-            // One endpoint_storage instance per endpoint, under this
-            // endpoint's folder. Unlike the PS/SK pair (one per timeline,
-            // shared by siblings), every endpoint gets its own.
-            provision_endpoint_storage(env, &endpoint_id).await?;
+            timer.tick("pre-provision (endpoint_storage init done)");
+
+            let (timeline_res, es_res) = tokio::join!(
+                provision_timeline_for_endpoint(env, &endpoint_id, tenant_id, timeline_id),
+                async {
+                    if es_present {
+                        es.start(&std::time::Duration::from_secs(30))
+                            .await
+                            .context("start endpoint_storage")
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            match (timeline_res, es_res) {
+                (Ok(()), Ok(())) => {
+                    if es_present {
+                        env.endpoint_storages.push(es_conf);
+                    }
+                }
+                (Err(pair_err), es_res) => {
+                    // Pair failed: stop the endpoint_storage we may have
+                    // started so it doesn't leak / squat its port, then
+                    // surface the original (pair) error.
+                    if es_present && es_res.is_ok() {
+                        let _ = es.stop(true);
+                    }
+                    return Err(pair_err);
+                }
+                (Ok(()), Err(es_err)) => return Err(es_err),
+            }
+            timer.tick("provision pair ‖ endpoint_storage");
 
             cplane.new_endpoint(
                 &endpoint_id,
@@ -2098,6 +2185,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 args.pg_settings.clone(),
             )
             .await?;
+            timer.tick("new_endpoint (record + endpoint_create)");
         }
         EndpointCmd::Start(args) => {
             let endpoint_id = &args.endpoint_id;

@@ -600,6 +600,12 @@ pub struct TimelineRegisterRequest {
     pub start_lsn: Lsn,
     /// Safekeeper node ids serving this timeline.
     pub sk_set: Vec<NodeId>,
+    /// Human-readable branch alias to set on the timeline row in the *same*
+    /// write as the registration, folding the old separate set-branch-name
+    /// round-trip. `None` leaves it unset. Rejected if the alias already maps
+    /// to a different live timeline in the same tenant.
+    #[serde(default)]
+    pub branch_name: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]

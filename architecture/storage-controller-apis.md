@@ -156,7 +156,7 @@ Branch-name mapping and the pending-timeline-init recipe registry. Scope:
 |---|---|---|
 | GET | `/control/v1/tenant/:tenant_id/timeline/:timeline_id` | Describe a timeline (scope `Scrubber`) |
 | PUT | `/control/v1/tenant/:tenant_id/timeline/:timeline_id/branch_name` | Set a timeline's branch name (`SetTimelineBranchNameRequest`) |
-| POST | `/control/v1/tenant/:tenant_id/timeline/:timeline_id/register` | Register a timeline (start_lsn + sk_set) (`TimelineRegisterRequest`) |
+| POST | `/control/v1/tenant/:tenant_id/timeline/:timeline_id/register` | Register a timeline (start_lsn + sk_set, optional `branch_name` set in the same write — folds the separate branch_name call) (`TimelineRegisterRequest`) |
 | PUT | `/control/v1/tenant/:tenant_id/timeline/:timeline_id/drop` | Drop a branch + all its endpoints; mark timeline deleted; idempotent |
 | GET | `/control/v1/timeline_branch_names` | List live (non-deleted) branch-name mappings |
 | POST | `/control/v1/tenant/:tenant_id/timeline/:timeline_id/pending_init` | Record a pending timeline-init recipe (`PendingTimelineInitRequest`) |
