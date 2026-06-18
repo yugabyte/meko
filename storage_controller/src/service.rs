@@ -1127,7 +1127,7 @@ impl Service {
                 tenant.observed.locations = HashMap::from([(
                     node_id,
                     ObservedStateLocation {
-                        conf: Some(LocationConfig {
+                        conf: Some(models::LocationConfig {
                             generation: tenant.generation.unwrap().into(),
                         }),
                     },

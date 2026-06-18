@@ -49,20 +49,20 @@ criterion_main!(benches);
 fn bench_process_msg(c: &mut Criterion) {
     let mut g = c.benchmark_group("process_msg");
     for fsync in [false, true] {
-        for commit in [false, true] {
-            for size in [8, KB, 8 * KB, 128 * KB, MB] {
-                // Kind of weird to change the group throughput per benchmark, but it's the only way
-                // to vary it per benchmark. It works.
-                g.throughput(criterion::Throughput::Bytes(size as u64));
-                g.bench_function(format!("fsync={fsync}/commit={commit}/size={size}"), |b| {
-                    run_bench(b, size, fsync, commit).unwrap()
-                });
-            }
+        for size in [8, KB, 8 * KB, 128 * KB, MB] {
+            // Kind of weird to change the group throughput per benchmark, but it's the only way
+            // to vary it per benchmark. It works.
+            g.throughput(criterion::Throughput::Bytes(size as u64));
+            g.bench_function(format!("fsync={fsync}/size={size}"), |b| {
+                run_bench(b, size, fsync).unwrap()
+            });
         }
     }
 
-    // The actual benchmark. If commit is true, advance the commit LSN on every message.
-    fn run_bench(b: &mut Bencher, size: usize, fsync: bool, commit: bool) -> anyhow::Result<()> {
+    // The actual benchmark.
+    // yb-mode: commit_lsn ≡ flush_lsn is derived, no longer carried on
+    // AppendRequestHeader, so there is no commit dimension to vary.
+    fn run_bench(b: &mut Bencher, size: usize, fsync: bool) -> anyhow::Result<()> {
         let runtime = tokio::runtime::Builder::new_current_thread() // single is fine, sync IO only
             .enable_all()
             .build()?;
@@ -93,8 +93,6 @@ fn bench_process_msg(c: &mut Criterion) {
                         term: 1,
                         begin_lsn: lsn,
                         end_lsn: lsn + record.len() as u64,
-                        commit_lsn: if commit { lsn } else { Lsn(0) }, // commit previous record
-                        truncate_lsn: Lsn(0),
                     },
                     wal_data: record,
                 })
@@ -164,8 +162,6 @@ fn bench_wal_acceptor(c: &mut Criterion) {
                             term: 1,
                             begin_lsn: lsn,
                             end_lsn: lsn + record.len() as u64,
-                            commit_lsn: Lsn(0),
-                            truncate_lsn: Lsn(0),
                         },
                         wal_data: record,
                     })
@@ -210,26 +206,19 @@ fn bench_wal_acceptor_throughput(c: &mut Criterion) {
     g.throughput(criterion::Throughput::Bytes(VOLUME as u64));
 
     for fsync in [false, true] {
-        for commit in [false, true] {
-            for size in [KB, 8 * KB, 128 * KB, MB] {
-                assert_eq!(VOLUME % size, 0, "volume must be divisible by size");
-                let count = VOLUME / size;
-                g.bench_function(format!("fsync={fsync}/commit={commit}/size={size}"), |b| {
-                    run_bench(b, count, size, fsync, commit).unwrap()
-                });
-            }
+        for size in [KB, 8 * KB, 128 * KB, MB] {
+            assert_eq!(VOLUME % size, 0, "volume must be divisible by size");
+            let count = VOLUME / size;
+            g.bench_function(format!("fsync={fsync}/size={size}"), |b| {
+                run_bench(b, count, size, fsync).unwrap()
+            });
         }
     }
 
     /// The actual benchmark. size is the payload size per message, count is the number of messages.
-    /// If commit is true, advance the commit LSN on each message.
-    fn run_bench(
-        b: &mut Bencher,
-        count: usize,
-        size: usize,
-        fsync: bool,
-        commit: bool,
-    ) -> anyhow::Result<()> {
+    /// yb-mode: commit_lsn ≡ flush_lsn is derived, not carried on
+    /// AppendRequestHeader, so there is no commit dimension to vary.
+    fn run_bench(b: &mut Bencher, count: usize, size: usize, fsync: bool) -> anyhow::Result<()> {
         let runtime = tokio::runtime::Runtime::new()?; // needs multithreaded
 
         // Construct the payload. The prefix counts towards the payload (including NUL terminator).
@@ -265,8 +254,6 @@ fn bench_wal_acceptor_throughput(c: &mut Criterion) {
                         term: 1,
                         begin_lsn: lsn,
                         end_lsn: lsn + record.len() as u64,
-                        commit_lsn: if commit { lsn } else { Lsn(0) }, // commit previous record
-                        truncate_lsn: Lsn(0),
                     },
                     wal_data: record,
                 });
