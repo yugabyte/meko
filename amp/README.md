@@ -83,7 +83,9 @@ The REST API is **OpenAPI v3-driven**: `internal/api/openapi_spec.yaml` is the
 source of truth, and `oapi-codegen` generates the models, the echo server
 interface the controllers implement, and the Go client the tests drive (run
 `make amp-generate` after editing the spec). The controller also serves the spec
-and an interactive explorer. See
+and an interactive explorer, plus an embedded **admin console** at `/` (open the
+listen address, e.g. `http://localhost:8080/`): a static page to manage users
+and, per user, their storage pools, timelines, and endpoints. See
 [`architecture/yblc-apis.md`](architecture/yblc-apis.md) for the full design.
 
 ## Managed services

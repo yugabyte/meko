@@ -51,6 +51,22 @@ server (`internal/api/docs.go`):
 - `GET /api/v1/openapi.yaml` — the embedded spec (`go:embed`).
 - `GET /api/v1/docs` — **Swagger UI**, the interactive explorer, with its assets
   embedded in the binary (`swaggest/swgui`), so it works with no network access.
+- `GET /` — the **admin console** (`internal/api/ui.go`): a single static
+  HTML+CSS+vanilla-JS page (`internal/api/ui/index.html`), embedded with
+  `go:embed`. It is a pure client of the API below — the home page lists and
+  creates users, and selecting a user shows that user's storage pools and their
+  timelines and endpoints, with create forms for pools and timelines. It does
+  the owner filtering client-side (the list endpoints aren't owner-scoped yet)
+  and omits branching entirely (the API's branch call is logged-only and is not
+  surfaced). No build step and no server-side rendering, so it can't drift from
+  the spec.
+
+The home page lists and creates users; selecting one drills into that user's
+storage pools, timelines, and endpoints:
+
+| Users (home) | User detail: pools → timelines → endpoints |
+|---|---|
+| ![Users list and create](screenshots/admin-console-users.png) | ![Storage pools, timelines, and endpoints for a user](screenshots/admin-console-pools.png) |
 
 ## The surface
 
@@ -181,4 +197,5 @@ Two layers, both in `internal/api/*_test.go`:
   contract and clamping, `total` (all matches) vs `count` (this page), and the
   parent `404`s on the nested timeline/endpoint lists.
 
-`TestServesSpecAndExplorer` covers the spec/Swagger-UI/health endpoints.
+`TestServesSpecAndExplorer` covers the spec/Swagger-UI/health endpoints, and
+`TestServesUI` covers the admin console served at `/`.
