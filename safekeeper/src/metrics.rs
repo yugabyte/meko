@@ -790,7 +790,7 @@ impl Collector for TimelineCollector {
 
             self.commit_lsn
                 .with_label_values(labels)
-                // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
+                // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum).
                 .set(tli.flush_lsn.into());
             self.flush_lsn
                 .with_label_values(labels)

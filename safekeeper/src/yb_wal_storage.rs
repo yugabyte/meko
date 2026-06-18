@@ -522,7 +522,7 @@ impl YbWalStorage {
         // No post-crash row scrub: `load_write_lsn` already takes the
         // max chunk-end across the table, so any committed-but-unacked
         // rows from a crashed run are absorbed as durable rather than
-        // discarded. yb-mode has no truncation-past-durable case that
+        // discarded. yb-light has no truncation-past-durable case that
         // would justify a DELETE here.
         Ok(me)
     }

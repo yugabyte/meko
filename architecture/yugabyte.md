@@ -269,7 +269,7 @@ transactionally-updatable record. `current_generation` is the gate
 that fences a stale pageserver — every flush is wrapped in a
 transaction that conditionally updates this row. The `lineage` JSONB
 is a forward-looking slot for ancestor-detach state (always `Default`
-in yb-mode today).
+in yb-light today).
 
 ```sql
 CREATE TABLE pageserver.timeline_state (

@@ -341,7 +341,7 @@ pub struct Service {
     http_client: reqwest::Client,
 }
 
-// yb-mode: tenants are single-shard; shard-split scaffolding
+// yb-light: tenants are single-shard; shard-split scaffolding
 // (ShardSplitParams / ShardSplitAction / ShardSplitTarget /
 // TenantShardSplitAbort / ShardSplitInputs and the compute_split_shards
 // helper) has been removed.
@@ -360,7 +360,7 @@ pub(crate) struct ShardMutationLocations {
 #[derive(Default, Clone)]
 pub(crate) struct TenantMutationLocations(pub BTreeMap<TenantId, ShardMutationLocations>);
 
-// yb-mode: TenantId is now TenantId, so the upstream
+// yb-light: TenantId is now TenantId, so the upstream
 // TenantId/TenantId discriminator is redundant — there's only a
 // single tenant id space. The wrapper is kept to minimize churn at
 // call-sites.
@@ -791,7 +791,7 @@ impl Service {
             tenant_persistence.len()
         );
 
-        // yb-mode: shard splits don't exist; the recovery dance for
+        // yb-light: shard splits don't exist; the recovery dance for
         // mid-split states is gone with the split machinery.
 
         let mut tenants = BTreeMap::new();
@@ -1184,7 +1184,7 @@ impl Service {
             tenants: Vec::new(),
         };
 
-        // yb-mode: pageservers carry no authoritative local tenant state — the
+        // yb-light: pageservers carry no authoritative local tenant state — the
         // re-attach response is what they'll honor, and any prior observed
         // location for this node is stale, so clear it.
         tracing::info!(
@@ -1384,7 +1384,7 @@ impl Service {
 
         tracing::info!("Creating tenant {}", create_req.new_tenant_id);
 
-        // yb-mode: always single shard regardless of requested count.
+        // yb-light: always single shard regardless of requested count.
         let create_ids = vec![tenant_id];
 
         // If the caller specifies a None generation, it means "start from default".
@@ -1688,7 +1688,7 @@ impl Service {
         counts.sort_unstable();
 
         for count in counts {
-            // yb-mode: always single shard regardless of the historical shard counts.
+            // yb-light: always single shard regardless of the historical shard counts.
             let _ = count;
             let shard_ids = vec![tenant_id];
             for tenant_id in shard_ids {
@@ -1880,7 +1880,7 @@ impl Service {
         Ok(())
     }
 
-    /// yb-mode: the pageserver creates its single timeline ITSELF at
+    /// yb-light: the pageserver creates its single timeline ITSELF at
     /// process startup, driven by the `[timeline_init]` block the
     /// launcher wrote into its `pageserver.toml` (the pageserver-side
     /// timeline-create HTTP API no longer exists). This function
@@ -3296,7 +3296,7 @@ impl Service {
         let mut describe_shards = Vec::new();
 
         for shard in shards {
-            // yb-mode: every tenant has exactly one shard, which is shard zero.
+            // yb-light: every tenant has exactly one shard, which is shard zero.
             shard_zero = Some(shard);
 
             describe_shards.push(TenantDescribeResponseShard {
@@ -3983,7 +3983,7 @@ impl Service {
                 (false, true) => Some(true),
                 (false, false) => None,
             };
-            // yb-mode has no Secondary location concept; the observed
+            // yb-light has no Secondary location concept; the observed
             // side is always either attached (`generation: Some`) or
             // absent. Always emit `Some(false)` when we have an
             // observation so the response shape stays stable.
@@ -4359,7 +4359,7 @@ impl Service {
         self.node_configure(node_id, availability, scheduling).await
     }
 
-    // yb-mode: automatic shard-splitting is gone (tenants are
+    // yb-light: automatic shard-splitting is gone (tenants are
     // single-shard). The upstream `compute_split_shards` /
     // `tenant_shard_split` orchestration has been removed.
 

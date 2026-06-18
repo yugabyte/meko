@@ -101,7 +101,7 @@ impl Drop for WriteGuardSharedState<'_> {
     fn drop(&mut self) {
         let term_flush_lsn =
             TermLsn::from((self.guard.sk.last_log_term(), self.guard.sk.flush_lsn()));
-        // yb-mode: commit_lsn = flush_lsn (single-SK quorum, every flush is
+        // yb-light: commit_lsn = flush_lsn (single-SK quorum, every flush is
         // committed). The watcher subscribers (walsenders, yb_wal) see
         // updates every time flush_lsn advances.
         let commit_lsn = self.guard.sk.flush_lsn();
@@ -424,7 +424,7 @@ impl Timeline {
         conf: Arc<SafeKeeperConf>,
         yb_wal: Option<Arc<YbWalConn>>,
     ) -> Arc<Self> {
-        // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
+        // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum).
         let (commit_lsn_watch_tx, commit_lsn_watch_rx) =
             watch::channel(shared_state.sk.flush_lsn());
         let (term_flush_lsn_watch_tx, term_flush_lsn_watch_rx) = watch::channel(TermLsn::from((

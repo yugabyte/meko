@@ -135,7 +135,7 @@ variants add `tenant_id`.
 | --- | --- | --- | --- |
 | `pageserver_last_record_lsn` | IntGauge | `tenant_id`, `timeline_id` | Last record (applied) LSN. |
 | `pageserver_current_logical_size` | UIntGauge | `tenant_id`, `timeline_id` | Current logical size. |
-| `pageserver_resident_physical_size` | UIntGauge | `tenant_id`, `timeline_id` | Resident layer-file bytes (attached). yb-mode: ~0. |
+| `pageserver_resident_physical_size` | UIntGauge | `tenant_id`, `timeline_id` | Resident layer-file bytes (attached). yb-light: ~0. |
 | `pageserver_resident_physical_size_global` | UIntGauge | — | Global resident physical size. |
 | `pageserver_visible_physical_size` | UIntGauge | `tenant_id`, `timeline_id` | Visible layer-file bytes. |
 | `pageserver_pitr_history_size` | UIntGauge | `tenant_id`, `timeline_id` | Data written since PITR cutoff. |
@@ -197,7 +197,7 @@ variants add `tenant_id`.
 | `pageserver_tokio_epoll_uring_systems_created` / `_systems_destroyed` | UIntGauge | — | tokio-epoll-uring systems created / destroyed. |
 | `pageserver_tokio_epoll_uring_pageserver_thread_local_launch_success_count` / `_failures_count` | IntCounter | — | thread-local system launch successes / failures. |
 
-## Defined but inactive in yb-mode
+## Defined but inactive in yb-light
 
 These metrics exist in `metrics.rs` but are dead code in yb-light (the remote
 timeline client / S3-style layer upload path is gone) and will not appear with

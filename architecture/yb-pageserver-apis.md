@@ -107,7 +107,7 @@ other IDs return `404`/`NotFound`.
   durable `consistent_lsn` is `>= lsn`. This is **not** testing-gated: the
   launcher calls it on the ancestor at branch time so the branch's
   `create_branch_row` durability barrier clears without waiting for the periodic
-  flush. In yb-mode "freeze" is a no-op (no in-memory layers); this is purely a
+  flush. In yb-light "freeze" is a no-op (no in-memory layers); this is purely a
   flush-to-YB.
 
 ### Fallback

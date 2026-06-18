@@ -62,7 +62,7 @@ pub struct PageServerConf {
     // can safely distinguish different pageservers
     pub id: NodeId,
 
-    /// yb-mode single-timeline identity. `None` only during the
+    /// yb-light single-timeline identity. `None` only during the
     /// transition while the control plane still attaches tenants
     /// dynamically; once the single-timeline startup lands this is
     /// required and startup fails without it.

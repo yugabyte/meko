@@ -300,7 +300,7 @@ impl ConnectionManagerState {
         let connection_conf_args = ConnectionConfigArgs {
             protocol: conf.protocol,
             ttid,
-            // Single-shard yb-mode: carry the unsharded constants.
+            // Single-shard yb-light: carry the unsharded constants.
             shard_number: Some(0),
             shard_count: Some(0),
             shard_stripe_size: Some(0),

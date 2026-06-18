@@ -894,7 +894,7 @@ mod throttle_config_tests {
     }
 }
 
-/// Wire form of [`crate::tenant::LocationConf`]. yb-mode has no
+/// Wire form of [`crate::tenant::LocationConf`]. yb-light has no
 /// multi-mode attach state: `generation: Some(g)` requests attach in
 /// generation `g`; `generation: None` requests detach.
 ///

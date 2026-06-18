@@ -52,7 +52,7 @@ pub struct TimelinePersistentState {
 }
 
 impl TimelinePersistentState {
-    /// yb-mode: `commit_lsn` collapsed into `flush_lsn`, so creation only
+    /// yb-light: `commit_lsn` collapsed into `flush_lsn`, so creation only
     /// needs `start_lsn`. Term history is seeded when `start_lsn` is known.
     pub fn new(
         ttid: &TenantTimelineId,

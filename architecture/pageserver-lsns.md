@@ -9,7 +9,7 @@ several of them describe upstream paths that no longer exist.
 
 ## The two key watermarks
 
-yb-mode splits the durability concept into two distinct atomics on
+yb-light splits the durability concept into two distinct atomics on
 `Timeline`. Conflating them is what made restart-after-flush lose
 records before the eager/durable split was introduced:
 
@@ -171,7 +171,7 @@ branch-time flush endpoint use instead of plain `flush`), and by the
 - SK feedback fields: `disk_consistent_lsn` AND `remote_consistent_lsn`
   in `PageserverFeedback` both come from
   `Timeline::get_consistent_lsn()`. (Wire protocol carries both; in
-  yb-mode they're semantically identical and one will be dropped in a
+  yb-light they're semantically identical and one will be dropped in a
   future protocol bump.)
 - Walreceiver `START_REPLICATION` startpoint
   (`walreceiver_connection.rs`).
@@ -223,7 +223,7 @@ post-creation).
 **Where:** `Timeline.initdb_lsn` + `timeline_state.initdb_lsn`.
 
 **Meaning:** LSN at which initdb/import seeded the timeline. On load,
-falls back to `disk_consistent_lsn` if NULL. Low impact in yb-mode.
+falls back to `disk_consistent_lsn` if NULL. Low impact in yb-light.
 
 ---
 

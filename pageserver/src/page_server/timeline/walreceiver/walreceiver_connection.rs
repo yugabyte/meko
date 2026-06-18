@@ -554,7 +554,7 @@ pub(super) async fn handle_walreceiver_connection(
             // protocol compat, but semantically this is `consistent_lsn`
             // (durable, gap-free). Do NOT report `applied_lsn` here —
             // SK / restart logic must see a value that's actually in
-            // `pageserver.pages`. In yb-mode this is the same value as
+            // `pageserver.pages`. In yb-light this is the same value as
             // `remote_consistent_lsn` below; both fields are kept for
             // wire compat. TODO: drop one in a future protocol bump.
             let disk_consistent_lsn = timeline.get_consistent_lsn();
@@ -590,7 +590,7 @@ pub(super) async fn handle_walreceiver_connection(
                 disk_consistent_lsn,
                 remote_consistent_lsn,
                 replytime: ts,
-                // yb-mode: always shard 0.
+                // yb-light: always shard 0.
                 shard_number: 0,
                 corruption_detected: timeline
                     .corruption_detected

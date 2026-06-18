@@ -384,7 +384,7 @@ impl SafekeeperPostgresHandler {
         // Write row if timeline exists
         if let Some(tli) = tli {
             let flush_lsn = tli.get_flush_lsn().await;
-            // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
+            // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum).
             pgb.write_message_noflush(&BeMessage::DataRow(&[
                 Some(flush_lsn.to_string().as_bytes()),
                 Some(flush_lsn.to_string().as_bytes()),
@@ -404,7 +404,7 @@ impl SafekeeperPostgresHandler {
     ) -> Result<(), QueryError> {
         let tli = self.global_timelines.get(self.ttid)?;
 
-        // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum), so both
+        // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum), so both
         // branches return the same value.
         let lsn = tli.get_flush_lsn().await.to_string();
 

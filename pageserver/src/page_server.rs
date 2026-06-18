@@ -158,7 +158,7 @@ pub(crate) struct TenantPreload {
 }
 
 /// Build a `TimelineMetadata` from a `pageserver.timeline_state` row.
-/// In yb-mode the row *is* the timeline metadata; everything that
+/// In yb-light the row *is* the timeline metadata; everything that
 /// used to ride on `index_part.json` either lives in the row or is
 /// dead weight.
 fn synth_timeline_metadata_from_row(
@@ -179,7 +179,7 @@ fn synth_timeline_metadata_from_row(
         row.applied_gc_cutoff_lsn,
         // initdb_lsn falls back to disk_consistent_lsn — only consulted
         // by the bootstrap-time image-layer optimisation (dead code in
-        // yb-mode) and consumption metrics.
+        // yb-light) and consumption metrics.
         row.initdb_lsn.unwrap_or(row.consistent_lsn),
         pg_major,
     ))
@@ -532,8 +532,8 @@ impl PageServer {
             ancestor.clone(),
             resources,
             idempotency.clone(),
-            None, // rel_size_v2_status — always None in yb-mode
-            None, // rel_size_migrated_at — always None in yb-mode
+            None, // rel_size_v2_status — always None in yb-light
+            None, // rel_size_migrated_at — always None in yb-light
             ctx,
         )?;
         let consistent_lsn_seed = timeline.get_applied_lsn();
@@ -548,7 +548,7 @@ impl PageServer {
             "applied_lsn is seeded from the persisted consistent_lsn at construction"
         );
 
-        // yb-mode: no upload queue to init. The PageWriter takes the
+        // yb-light: no upload queue to init. The PageWriter takes the
         // `remote_state.consistent_lsn` slot directly so flush success
         // advances the durable, gap-free watermark that feeds SK
         // feedback and restart-resume.
@@ -748,10 +748,10 @@ impl PageServer {
         if let Some((timeline_id, preload)) = preload.timeline {
             // `preload.metadata` is synthesised from
             // `pageserver.timeline_state` in `Tenant::preload`, so it's
-            // always `Ok(_)` — no remote blob download path remains in yb-mode.
+            // always `Ok(_)` — no remote blob download path remains in yb-light.
             let metadata = preload
                 .metadata
-                .expect("yb-mode preload always builds an Ok TimelineMetadata");
+                .expect("yb-light preload always builds an Ok TimelineMetadata");
             timeline_ancestors = Some((timeline_id, metadata));
         }
 
@@ -913,18 +913,18 @@ impl PageServer {
         // to track; cross-process ancestor pins are GC future work (#54).
         self.initialize_gc_info();
 
-        // Resume-deletion path is dead in yb-mode: synth never produces
+        // Resume-deletion path is dead in yb-light: synth never produces
         // `MaybeDeletedIndexPart::Deleted`, so there's nothing to
-        // restart here. If we want crash-safe deletion in yb-mode,
+        // restart here. If we want crash-safe deletion in yb-light,
         // surface `timeline_state.deleted_at` at preload time instead.
 
-        // yb-mode is the only path; we never wrote layer files, never
+        // yb-light is the only path; we never wrote layer files, never
         // created per-timeline dentries, nothing to reconcile. The
         // tenant manifest was a remote-storage blob that gated
         // offloaded-timeline tracking; offload isn't supported here
         // so there's nothing to write.
 
-        // gc_blocking lived on index_part.json; yb-mode has no source for it
+        // gc_blocking lived on index_part.json; yb-light has no source for it
         // yet, so initialise empty.
         self.gc_block.set_scanned(enumset::EnumSet::empty());
 
@@ -942,7 +942,7 @@ impl PageServer {
     ///
     /// This function relies on the index_part instead of listing the remote storage
     pub fn remote_size(&self) -> u64 {
-        // yb-mode: no remote layer files; sum is always 0. The
+        // yb-light: no remote layer files; sum is always 0. The
         // caller (storage_ctl heatmap) tolerates this; tenant-size
         // reporting happens via timeline-row LSN ranges, not blob
         // bytes.
@@ -1928,7 +1928,7 @@ impl PageServer {
 
 
     /// How much local disk space the timeline wants (initdb tarballs and
-    /// basebackup cache only in yb-mode — page data lives in YB).
+    /// basebackup cache only in yb-light — page data lives in YB).
     pub(crate) fn local_storage_wanted(&self) -> u64 {
         self.timeline()
             .map(|t| t.metrics.visible_physical_size_gauge.get())

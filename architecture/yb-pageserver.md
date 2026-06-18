@@ -158,7 +158,7 @@ bakes it into the read SQL, would silently break branch reads — keep the
 lineage walk and its per-segment binding intact.
 
 Note the `lineage` JSONB column on `timeline_state` is unrelated: it
-carries upstream detach-ancestor state (always `Default` in yb-mode);
+carries upstream detach-ancestor state (always `Default` in yb-light);
 the ancestry chain is derived from the `ancestor_*` columns.
 
 ## What was kept from upstream
@@ -636,7 +636,7 @@ name + every delete is gen-checked" machinery into one column.
   shape: a tenant-level "recover to timestamp T" command resolves
   T → LSN via the existing `find_lsn_for_timestamp` helper (still
   intact), then creates a fresh timeline branched at that LSN. Branch
-  creation is already wired in yb-mode (`timeline branch` provisions a
+  creation is already wired in yb-light (`timeline branch` provisions a
   pageserver+safekeeper pair; see the `ancestor_timeline_id` /
   `ancestor_lsn` columns on `pageserver.timeline_state`). What's missing is the operator-facing
   command + the GC story for the source timeline's `pageserver.pages`

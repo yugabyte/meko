@@ -27,7 +27,7 @@ flowchart LR
     COMP[Compute / walproposer] -->|AppendRequest + flush| SK_ING[SafeKeeper ingest]
     SK_ING -->|write_wal| YB_WAL[(safekeeper.wals)]
     SK_ING -->|flush_wal| FL[flush_lsn]
-    FL -->|yb-mode: ≡ commit_lsn| COMM[commit_lsn watch]
+    FL -->|yb-light: ≡ commit_lsn| COMM[commit_lsn watch]
     PS[Pageserver] -->|START_REPLICATION start_pos| WS[walsender]
     WS -->|read WAL| YB_WAL
     WS -->|InterpretedWalRecords| PS
@@ -38,7 +38,7 @@ flowchart LR
 
 ---
 
-## yb-mode collapse: `commit_lsn ≡ flush_lsn`
+## yb-light collapse: `commit_lsn ≡ flush_lsn`
 
 Upstream Neon maintained separate `commit_lsn` (quorum-committed) and
 `flush_lsn` (locally durable). In yb-light with a **single safekeeper**
@@ -84,7 +84,7 @@ Authoritative current column list is `COLUMNS` in
 `inmem.remote_consistent_lsn > pers.remote_consistent_lsn`.
 
 **Not persisted as separate columns** (gone or in-memory only):
-- `commit_lsn` — alias of `flush_lsn` in yb-mode.
+- `commit_lsn` — alias of `flush_lsn` in yb-light.
 - `backup_lsn`, `peer_horizon_lsn` — removed with S3 offloader.
 - `term_start_lsn` — in-memory field on `SafeKeeper` struct only
   (epoch start for current proposer term).
@@ -132,7 +132,7 @@ the highest submitted `end_lsn`.
 
 | LSN | Storage | Role |
 |-----|---------|------|
-| `start_streaming_at` | Message only (`ProposerElected`) | Where walproposer wants to start appending; SK truncates WAL here after finding common term history. Must be `≥ flush_lsn` (yb-mode: don't truncate durable tail). |
+| `start_streaming_at` | Message only (`ProposerElected`) | Where walproposer wants to start appending; SK truncates WAL here after finding common term history. Must be `≥ flush_lsn` (yb-light: don't truncate durable tail). |
 | `term_start_lsn` | `SafeKeeper` in-memory | LSN of current term's first record; set from elected proposer's term history. Triggers control-file sync when `flush_lsn` crosses it. |
 | `term_history` | Persisted JSONB | `(term, lsn)` switches; `find_highest_common_point` picks resume/truncation point with proposer. |
 | `last_log_term` | Derived | Term of WAL at `flush_lsn` from term history. |
@@ -157,7 +157,7 @@ Safekeeper accepts the requested LSN and streams forward:
 ```rust
 // send_wal.rs — pageserver path (no term)
 let end_watch = EndWatch::Commit(tli.get_commit_lsn_watch_rx());
-// end_pos = flush_lsn (yb-mode)
+// end_pos = flush_lsn (yb-light)
 ```
 
 If `start_pos > end_pos`, streaming starts anyway (logged as info) —
@@ -183,7 +183,7 @@ connection status.
 |-------|----------------|
 | `remote_consistent_lsn` | **Yes** — `update_remote_consistent_lsn`, WAL GC horizon, broker activity. |
 | `last_received_lsn` | Metrics only (`safekeeper_ps_last_received_lsn`). |
-| `disk_consistent_lsn` | Metrics only — **not** used for truncation. yb-mode pageserver populates this with the same value as `remote_consistent_lsn` (both come from `Timeline::get_consistent_lsn()`, the durable gap-free watermark); the two wire fields are semantically identical and one will be dropped in a future protocol bump. |
+| `disk_consistent_lsn` | Metrics only — **not** used for truncation. yb-light pageserver populates this with the same value as `remote_consistent_lsn` (both come from `Timeline::get_consistent_lsn()`, the durable gap-free watermark); the two wire fields are semantically identical and one will be dropped in a future protocol bump. |
 
 ```rust
 // send_wal.rs
@@ -237,7 +237,7 @@ the in-memory copy. A pageserver feedback bump that hasn't been flushed
 to YB yet does **not** immediately allow WAL deletion.
 
 Walsender laggard clamp prevents deleting bytes an active pageserver
-connection still reads — in yb-mode there is no local-disk WAL fallback.
+connection still reads — in yb-light there is no local-disk WAL fallback.
 
 ---
 

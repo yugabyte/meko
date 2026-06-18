@@ -367,7 +367,7 @@ impl Manager {
         num_computes: usize,
         state: &StateSnapshot,
     ) {
-        // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum).
+        // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum).
         let is_active = is_wal_backup_required
             || num_computes > 0
             || state.remote_consistent_lsn < state.flush_lsn;

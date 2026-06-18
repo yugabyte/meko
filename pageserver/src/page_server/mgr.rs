@@ -136,7 +136,7 @@ pub struct TenantManager {
 ///
 /// Stale entries can occur after a crash mid-detach or after a different timeline's
 /// pageserver previously ran out of this directory. They hold only initdb tarballs
-/// and basebackup caches in yb-mode, so removing them is always safe.
+/// and basebackup caches in yb-light, so removing them is always safe.
 async fn purge_stale_tenant_dirs(
     conf: &'static PageServerConf,
     attached: &HashMap<TenantId, Generation>,

@@ -552,7 +552,7 @@ impl timeline::handle::TenantManager<TenantManagerTypes> for TenantManagerWrappe
 }
 
 /// Whether to hold the applied GC cutoff guard when processing GetPage requests.
-/// In yb-mode this is always `Yes` (GC runs on YB rows, not on local layer
+/// In yb-light this is always `Yes` (GC runs on YB rows, not on local layer
 /// files, so the original Neon escape valve doesn't apply). Kept as a
 /// single-variant enum so the parameter threading stays explicit.
 #[derive(Debug, Clone, Copy)]
@@ -4317,7 +4317,7 @@ mod tests {
                 lsn: Lsn::from_str("0/16ABCDE").unwrap(),
             })
         );
-        // yb-mode: TenantId::split is gone.
+        // yb-light: TenantId::split is gone.
         let cmd = PageServiceCmd::parse("set a = b").unwrap();
         assert_eq!(cmd, PageServiceCmd::Set);
         let cmd = PageServiceCmd::parse("SET foo").unwrap();

@@ -719,7 +719,7 @@ impl Timeline {
             return Err(PageReconstructError::Other(anyhow::anyhow!("Invalid LSN")));
         }
 
-        // yb-mode: tenants are single-shard, so every key is local.
+        // yb-light: tenants are single-shard, so every key is local.
 
         let query = VersionedKeySpaceQuery::uniform(KeySpace::single(key..key.next()), lsn);
 
@@ -774,7 +774,7 @@ impl Timeline {
             ));
         }
 
-        // yb-mode: single-shard, every key is local; no disposability check.
+        // yb-light: single-shard, every key is local; no disposability check.
 
         trace!(
             "get vectored query {} from task kind {:?}",
@@ -1170,7 +1170,7 @@ impl Timeline {
     }
 
     /// `consistent_lsn` from the perspective of the tenant's current generation.
-    /// In yb-mode the slot is driven directly by `PageWriter` (no upload
+    /// In yb-light the slot is driven directly by `PageWriter` (no upload
     /// pipeline), so projected and visible are the same single `AtomicLsn`.
     /// Kept as `remote_consistent_lsn` in HTTP/wire field names for back-compat.
     pub(crate) fn get_remote_consistent_lsn_projected(&self) -> Option<Lsn> {
@@ -1185,7 +1185,7 @@ impl Timeline {
         (lsn != Lsn(0)).then_some(lsn)
     }
 
-    /// yb-mode: no layer files exist, so the sum is always 0.
+    /// yb-light: no layer files exist, so the sum is always 0.
     pub(crate) async fn layer_size_sum(&self) -> u64 {
         0
     }
@@ -1469,7 +1469,7 @@ impl Timeline {
         Ok(())
     }
 
-    /// yb-mode: no-op. In Neon this background task closes open
+    /// yb-light: no-op. In Neon this background task closes open
     /// ephemeral InMemoryLayers when idle / oversized. yb-pageserver
     /// never opens an InMemoryLayer (writes go straight into
     /// `PageWriter`'s row buffer and through to YB), so there is
@@ -1583,7 +1583,7 @@ impl Timeline {
         }
 
         if let ShutdownMode::Flush = mode {
-            // yb-mode: no in-memory layers to inspect; always issue the
+            // yb-light: no in-memory layers to inspect; always issue the
             // flush so PageWriter has a chance to drain its pending row
             // buffer before shutdown.
             let do_flush = !self
@@ -1624,7 +1624,7 @@ impl Timeline {
             .deleting
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
-        // yb-mode: there are no `RemoteUploadTask`s spawned, so the
+        // yb-light: there are no `RemoteUploadTask`s spawned, so the
         // upstream "shut down upload queue tasks" step is a no-op.
 
         // TODO: work toward making this a no-op. See this function's doc comment for more context.
@@ -1632,7 +1632,7 @@ impl Timeline {
         task_mgr::shutdown_tasks(None, Some(self.tenant_id), Some(self.timeline_id)).await;
 
         {
-            // yb-mode: no in-memory layers to drop. The write_lock is
+            // yb-light: no in-memory layers to drop. The write_lock is
             // still held briefly to drain any in-flight writers.
             let _write_guard = self.write_lock.lock().await;
         }
@@ -1878,7 +1878,7 @@ impl Timeline {
 
         // Embedded threshold for the EvictionsWithLowResidenceDuration
         // metric. The metric tracks layer-file evictions that fired
-        // before reaching the residency target; yb-mode has no layer
+        // before reaching the residency target; yb-light has no layer
         // files, so this never fires. The threshold is still a
         // required constructor arg — use the upstream default (24 h).
         let evictions_low_residence_duration_metric_threshold = Duration::from_secs(24 * 3600);
@@ -2097,7 +2097,7 @@ impl Timeline {
         })
     }
 
-    /// yb-mode: no-op. The legacy Neon flush_loop only runs to
+    /// yb-light: no-op. The legacy Neon flush_loop only runs to
     /// freeze InMemoryLayers into image / delta layer files; ybLight
     /// never opens an InMemoryLayer (writes route through PageWriter
     /// into YB rows), so spawning the loop is wasted. Kept as a stub
@@ -2113,7 +2113,7 @@ impl Timeline {
             Some(rel_size_v2_status.clone()),
             rel_size_migrated_at,
         )));
-        // yb-mode: status lives in `self.rel_size_v2_status` (set
+        // yb-light: status lives in `self.rel_size_v2_status` (set
         // above) only; no index_part.json to upload.
         let _ = (rel_size_v2_status, rel_size_migrated_at);
         Ok(())
@@ -2174,7 +2174,7 @@ impl Timeline {
         ));
     }
 
-    /// yb-mode: no layer map to initialize.
+    /// yb-light: no layer map to initialize.
     pub(super) fn init_empty_layer_map(&self, _start_lsn: Lsn) {}
 
     /// Retrieve current logical size of the timeline.
@@ -2566,7 +2566,7 @@ impl Timeline {
     /// Returns true if the given lsn is or was an ancestor branchpoint.
     /// In upstream Neon a detached timeline carries
     /// `ancestor_lsn = Lsn::INVALID` and the original branchpoint
-    /// lives in `IndexPart::lineage.reparenting_history`. yb-mode
+    /// lives in `IndexPart::lineage.reparenting_history`. yb-light
     /// doesn't run detach-ancestor (the handler returns "not
     /// supported"), so the reparenting branch is unreachable.
     pub(crate) fn is_ancestor_lsn(&self, lsn: Lsn) -> bool {
@@ -2708,7 +2708,7 @@ impl Timeline {
     /// this Timeline is shut down.  Calling this function will cause the initial
     /// logical size calculation to skip waiting for the background jobs barrier.
     pub(crate) async fn await_initial_logical_size(self: Arc<Self>) {
-        // yb-mode: tenants are single-shard (== shard 0), always populate logical size.
+        // yb-light: tenants are single-shard (== shard 0), always populate logical size.
 
         if self
             .remote_state
@@ -2788,7 +2788,7 @@ impl Timeline {
         ctx: &RequestContext,
     ) -> Result<Option<Lsn>, PageReconstructError> {
         debug_assert_current_span_has_tenant_and_timeline_id();
-        // yb-mode: single-shard, so we always have the SLRU data
+        // yb-light: single-shard, so we always have the SLRU data
         // locally and compute the PITR time -> LSN mapping ourselves.
         let time_range = if pitr == Duration::ZERO {
             humantime::parse_duration(DEFAULT_PITR_INTERVAL).expect("constant is invalid")
@@ -2894,7 +2894,7 @@ impl Timeline {
             }
         })
     }
-    /// yb-mode: GC of layer files is meaningless; old page versions
+    /// yb-light: GC of layer files is meaningless; old page versions
     /// are pruned inside the row store by `PageWriter`. Returning an
     /// empty result preserves the gc_loop's telemetry shape.
     pub(super) async fn gc(&self) -> Result<GcResult, GcError> {
@@ -2995,7 +2995,7 @@ impl Timeline {
         }
     }
 
-    /// yb-mode: there are no image layers; treat applied_lsn as
+    /// yb-light: there are no image layers; treat applied_lsn as
     /// image-consistent so basebackup/compute reads don't stall behind
     /// the slower durable watermark.
     pub(crate) async fn compute_image_consistent_lsn(&self) -> anyhow::Result<Lsn> {
@@ -3003,7 +3003,7 @@ impl Timeline {
     }
 }
 
-/// yb-mode placeholder. The original Neon TimelineWriter tracked the
+/// yb-light placeholder. The original Neon TimelineWriter tracked the
 /// open InMemoryLayer + size + last-freeze hints to drive the
 /// roll-layer trigger heuristic. ybLight has no InMemoryLayer
 /// (writes go through PageWriter → YB rows), so the state is empty.
@@ -3040,11 +3040,11 @@ impl TimelineWriter<'_> {
             return Ok(());
         }
 
-        // yb-mode: single-shard, so every key trivially belongs to this shard.
+        // yb-light: single-shard, so every key trivially belongs to this shard.
 
         let batch_max_lsn = batch.max_lsn;
 
-        // yb-mode write path: every entry routes into PageWriter →
+        // yb-light write path: every entry routes into PageWriter →
         // pageserver.{pages, slru_pages, meta} rows. The legacy
         // layer-file write branch is gone (Phase 4d): a timeline
         // without a PageWriter has nowhere to put the data.
@@ -3067,7 +3067,7 @@ impl TimelineWriter<'_> {
         // restart resume, HTTP API durability field) must read
         // `Timeline::get_consistent_lsn()`, not this.
         self.tl.applied_lsn.fetch_max(batch_max_lsn);
-        // yb-mode: the legacy TimelineWriterState (prev_lsn, max_lsn,
+        // yb-light: the legacy TimelineWriterState (prev_lsn, max_lsn,
         // open_layer) has no writers anymore — those fields fed the
         // deleted roll-layer trigger heuristic.
         let _ = batch_max_lsn;
@@ -3079,7 +3079,7 @@ impl TimelineWriter<'_> {
         _batch: &[(Range<Key>, Lsn)],
         _ctx: &RequestContext,
     ) -> anyhow::Result<()> {
-        // yb-mode: deletions of relations / SLRU segments are not
+        // yb-light: deletions of relations / SLRU segments are not
         // expressed as tombstone keys in the row store; the WAL
         // record itself (TRUNCATE / DROP RELATION) drives the
         // appropriate INSERTs into pageserver.pages via PageWriter.

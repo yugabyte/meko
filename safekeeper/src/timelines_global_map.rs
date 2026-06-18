@@ -591,7 +591,7 @@ pub async fn create_temp_timeline_dir(
 
 /// Validate a freshly-created temp timeline by reading its control-file
 /// blob back from remote storage and checking generation bounds.
-/// Returns `(commit_lsn, flush_lsn)` which in yb-mode both collapse to
+/// Returns `(commit_lsn, flush_lsn)` which in yb-light both collapse to
 /// `timeline_start_lsn` at creation time.
 #[allow(dead_code)]
 pub async fn validate_temp_timeline(

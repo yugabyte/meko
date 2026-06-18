@@ -1494,7 +1494,7 @@ impl ComputeNode {
 
         let lsn = match spec.mode {
             ComputeMode::Primary => {
-                // yb-mode: a single safekeeper reports commit_lsn == flush_lsn
+                // yb-light: a single safekeeper reports commit_lsn == flush_lsn
                 // (quorum of one, every flush is committed), so the lightweight
                 // TIMELINE_STATUS check always yields the durable LSN. There is
                 // no multi-safekeeper consensus to drive, so we never run

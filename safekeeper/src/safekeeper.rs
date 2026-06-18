@@ -980,7 +980,7 @@ where
         }
 
         // We are also expected to never attempt to truncate committed data.
-        // yb-mode: commit_lsn ≡ flush_lsn, so the invariant is identical to
+        // yb-light: commit_lsn ≡ flush_lsn, so the invariant is identical to
         // "don't truncate before our durable end-of-WAL".
         assert!(
             msg.start_streaming_at >= self.flush_lsn(),
@@ -1030,7 +1030,7 @@ where
                 state.local_start_lsn = msg.start_streaming_at;
                 info!("setting local_start_lsn to {:?}", state.local_start_lsn);
             }
-            // yb-mode: commit_lsn collapsed to flush_lsn; nothing to seed.
+            // yb-light: commit_lsn collapsed to flush_lsn; nothing to seed.
 
             // Seed remote_consistent_lsn at the timeline start so that
             // post-restart catch-up doesn't read a pre-timeline LSN.
@@ -1137,7 +1137,7 @@ where
             self.wal_store.flush_wal().await?;
         }
 
-        // yb-mode: commit_lsn ≡ flush_lsn (single-SK quorum). The
+        // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum). The
         // walproposer's `msg.h.commit_lsn` / `msg.h.truncate_lsn` are
         // Sync the control file if this write crossed the term boundary.
         self.maybe_sync_on_term_crossing(flush_lsn).await?;

@@ -28,7 +28,7 @@
 //! GC blocking reasons stay in `gc_block::GcBlock` (per-tenant
 //! Mutex<HashMap<TimelineId, …>>) — that struct already owns the
 //! runtime authority; the RTC schedule_*_gc_block_reason calls
-//! are only there to persist to `index_part.json`, which yb-mode
+//! are only there to persist to `index_part.json`, which yb-light
 //! doesn't write. Step 4 removes those calls.
 
 use std::sync::atomic::AtomicBool;

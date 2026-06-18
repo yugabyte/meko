@@ -18,7 +18,7 @@ pub(crate) enum TimelineImportState {
     Idle,
 }
 
-/// yb-mode: a tenant has exactly one shard, so the per-shard import status
+/// yb-light: a tenant has exactly one shard, so the per-shard import status
 /// map collapses to a single status.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct ShardImportStatuses(pub(crate) ShardImportStatus);

@@ -491,7 +491,7 @@ async fn handle_tenant_timeline_passthrough(
 
     tracing::info!("Proxying request for tenant {} ({})", tenant_id, path);
 
-    // yb-mode: find the node that holds the tenant.
+    // yb-light: find the node that holds the tenant.
     let (_, tenant_id) = service.tenant0_node(tenant_id).await?;
 
     let service_inner = service.clone();

@@ -88,7 +88,7 @@ and reset each scrape.
 
 | Metric | Type | Meaning |
 | --- | --- | --- |
-| `safekeeper_commit_lsn` | GaugeVec | Current commit_lsn. **yb-mode: ≡ `flush_lsn`** (single-SK quorum). |
+| `safekeeper_commit_lsn` | GaugeVec | Current commit_lsn. **yb-light: ≡ `flush_lsn`** (single-SK quorum). |
 | `safekeeper_flush_lsn` | GaugeVec | Current flush_lsn. |
 | `safekeeper_epoch_start_lsn` | GaugeVec | LSN since which compute generates new WAL in the current term. |
 | `safekeeper_remote_consistent_lsn` | GaugeVec | LSN persisted to remote storage in the pageserver. |
