@@ -40,17 +40,17 @@ flowchart LR
         skp["WAL ingress"]
     end
 
-    subgraph ps["Pageserver (yb-pageserver)"]
+    subgraph ps["Pageserver (stateless)"]
         cps["compute_page_store pool<br/>(reads, chain reconstruct)"]
         fps["fpu_page_store pool<br/>(walreceiver + materialiser)"]
         mat["image materialiser"]
     end
 
-    subgraph sc["Storage controller"]
+    subgraph sc["Storage controller (stateless)"]
         sct["tenant placement<br/>generation fencing"]
     end
 
-    subgraph yb["YugabyteDB cluster (RF=3, Raft replication)"]
+    subgraph yb["YugabyteDB cluster (stateful)"]
         direction LR
         tblPages[("pageserver.pages<br/>pageserver.slru_pages<br/>pageserver.meta")]
         tblConf[("pageserver.tenant_config<br/>pageserver.timeline_state")]
