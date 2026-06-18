@@ -1,17 +1,17 @@
 <p align="center">
-  <img src="docs/yugabytedb-light-logo.jpg" alt="yugabyteDB Light" width="600">
+  <img src="docs/yugabytedb-light-logo.jpg" alt="YugabyteDB AMP" width="600">
 </p>
 
-# ybLight
+# ybAmp
 
-**ybLight** is a serverless Postgres-compatible storage system that runs
+**ybAmp** is a serverless Postgres-compatible storage system that runs
 PostgreSQL computes over **YugabyteDB** as the durable backing store.
 Compute nodes are stateless and the storage tier is row-per-page tables
 in YB — so the system inherits YugabyteDB's highly available,
 geo-distributed, multi-region, multi-cloud, infinitely-scalable
 replication model directly underneath every byte of every page.
 
-ybLight started as a fork of [neondatabase/neon](https://github.com/neondatabase/neon)
+ybAmp started as a fork of [neondatabase/neon](https://github.com/neondatabase/neon)
 but is no longer one in any meaningful sense. The layer-file storage
 engine, the disk-backed page cache, the in-process LFC pretense of
 "local cache", the secondary-tenant warm replicas, and most of the
@@ -43,7 +43,7 @@ the Postgres compute and YugabyteDB.
 - **Safekeeper**: **stateless, no consensus protocol**. Original Neon
   safekeepers ran a Paxos quorum of 3 (or more) nodes with local disk
   WAL + leader election to guarantee a single durable WAL stream. In
-  ybLight every WAL record is `INSERT`ed into a YugabyteDB row at the
+  ybAmp every WAL record is `INSERT`ed into a YugabyteDB row at the
   moment it's received; durability is YB's Raft replication, not a
   per-safekeeper Paxos. The safekeeper itself holds no persistent
   state beyond its config — restart-from-scratch and it just resumes
@@ -65,12 +65,12 @@ the Postgres compute and YugabyteDB.
   can take over a tenant's attachment via the storage_controller's
   generation-fenced `live_migrate`.
 - **Multi-region resilience**: YB's Raft replication runs across
-  zones / regions / clouds. ybLight's storage tier is wherever the YB
+  zones / regions / clouds. ybAmp's storage tier is wherever the YB
   cluster says it is.
 - **Geo-distributed**: tablet placement is YB's job. The pageserver
   just talks YSQL to whatever endpoint resolves.
 - **Multi-cloud**: the storage tier is a YB cluster, which can live
-  on AWS, GCP, Azure, on-prem, or any mix. ybLight follows.
+  on AWS, GCP, Azure, on-prem, or any mix. ybAmp follows.
 - **Infinite scale**: tablet count grows with data; YB shards on the
   PK hash of `(tenant, timeline, fork)`. Adding YB nodes adds
   pageserver-side read capacity automatically.
@@ -137,7 +137,7 @@ flowchart LR
     compute -- "basebackup fetch" --> ps
 ```
 
-A ybLight install is:
+A ybAmp install is:
 
 - **Compute nodes**: patched PostgreSQL, stateless, configured against a
   pageserver endpoint and a safekeeper set. The `neon` smgr extension
@@ -185,12 +185,12 @@ context. [`CLAUDE.md`](CLAUDE.md) just points there.
 
 This repo has a Meko datapack associated with it for agent memory:
 
-- **Name**: `yb-light`
+- **Name**: `yb-amp`
 - **ID**: `fd3b43a0-ebd6-4732-958b-fae9a50a0505`
 
 ## Quick start
 
-ybLight is **not** a hosted service. To run it you bring your own
+ybAmp is **not** a hosted service. To run it you bring your own
 YugabyteDB cluster (any deployment — local single-node, YBA-managed
 multi-region, YBM) and point a pageserver + safekeeper at it.
 
@@ -306,7 +306,7 @@ brew install libpq && brew link --force libpq
 
 ### First build: check out the Postgres submodule
 
-ybLight builds against a patched PostgreSQL tree vendored as a git
+ybAmp builds against a patched PostgreSQL tree vendored as a git
 submodule. It currently targets **PostgreSQL v17** — only
 `vendor/postgres-v17` is vendored. After cloning, check it out before building:
 
@@ -396,7 +396,7 @@ the suite before claiming any corruption-class fix.
 
 Many of the legacy Neon unit tests have been deleted along with the
 layer-file machinery they exercised — they tested code paths that no
-longer execute in ybLight. The remaining suite focuses on the
+longer execute in ybAmp. The remaining suite focuses on the
 row-store gateway, the YB-side write batching, the chain
 reconstruction, and the materialiser.
 
@@ -471,7 +471,7 @@ overrides for remote clusters.
 ## Operational runbooks
 
 [`runbooks/`](runbooks/) — incident-time playbooks for common failure
-modes on a running ybLight deployment. Each runbook is structured as
+modes on a running ybAmp deployment. Each runbook is structured as
 "symptom → quick diagnosis → fix"; read them in advance once so the
 shape is familiar, then jump straight to the relevant one during an
 incident.
@@ -516,7 +516,7 @@ Start here:
 Per-component deep dives:
 
 - [`architecture/compute.md`](architecture/compute.md) — the patched
-  Postgres compute (unchanged in yb-light); how the `neon` smgr
+  Postgres compute (unchanged in yb-amp); how the `neon` smgr
   extension wires page reads and WAL writes through the gateway.
 - [`architecture/yb-pageserver.md`](architecture/yb-pageserver.md) —
   the row-store gateway design: schema, chain reconstruction,
@@ -528,7 +528,7 @@ Per-component deep dives:
   basebackup).
 - [`architecture/safekeeper.md`](architecture/safekeeper.md) — the
   upstream-Neon safekeeper (Raft acceptor); the WAL-in-YB
-  reduction in ybLight is described inline in `yugabyte.md` and in
+  reduction in ybAmp is described inline in `yugabyte.md` and in
   the safekeeper module docs.
 - [`architecture/storage-controller.md`](architecture/storage-controller.md)
   — tenant placement, generation fencing, and live-migrate semantics.
@@ -536,7 +536,7 @@ Per-component deep dives:
   — the `RemoteStorage` abstraction and the `YbStore` backend that
   replaced S3/GCS/Azure (blob/basebackup tar/initdb layer).
 - [`architecture/yugabyte.md`](architecture/yugabyte.md) — what the
-  YB cluster looks like from ybLight's perspective: databases,
+  YB cluster looks like from ybAmp's perspective: databases,
   tables, prefixes, idempotency contract, and the DDL the operator
   must provision.
 
@@ -557,7 +557,7 @@ Upstream-Neon material that's still mostly accurate for the shell:
 ## Issue tracking
 
 Cross-session work is tracked as **GitHub issues** on
-[`yugabyte/yb-light`](https://github.com/yugabyte/yb-light/issues) (the
+[`yugabyte/yb-amp`](https://github.com/yugabyte/yb-amp/issues) (the
 old file-based `tasks/` tracker has been retired and migrated to
 issues). See [`docs/issue-tracking.md`](docs/issue-tracking.md) for the
 area labels, milestones, the create/filter contract, and how commit

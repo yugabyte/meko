@@ -1,6 +1,6 @@
-# Agent guide — yb-light
+# Agent guide — yb-amp
 
-This is **yb-light**: a fork of [Neon](https://github.com/neondatabase/neon)
+This is **yb-amp**: a fork of [Neon](https://github.com/neondatabase/neon)
 that points every durable byte at **YugabyteDB** instead of S3/Azure/GCS
 and instead of the storage controller's local Postgres. If you're new to
 the codebase, read `architecture/high-level.md` first, then the
@@ -10,7 +10,7 @@ subsystem doc that matches whatever you're touching.
 
 This repo has a Meko datapack for agent memory:
 
-- **Name**: `yb-light`
+- **Name**: `yb-amp`
 - **ID**: `fd3b43a0-ebd6-4732-958b-fae9a50a0505`
 
 Use it when storing repo-scoped memories.
@@ -32,7 +32,7 @@ Read in this order:
    example. The upstream source is gone (lane H, 2026-06-01); this doc
    stays because the inherited concepts (Key encoding, walredo, getpage
    RPC, generation handshake) are still load-bearing. (Sharding was
-   removed entirely — yb-light is single-shard; see `pageserver.md`
+   removed entirely — yb-amp is single-shard; see `pageserver.md`
    §"No sharding".)
 5. `architecture/yb-pageserver.md` — the row-per-page YugabyteDB
    storage design that REPLACES the layer-file path: image-anchored
