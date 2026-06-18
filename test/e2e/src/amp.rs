@@ -79,17 +79,20 @@ impl AmpClient {
     }
 
     async fn create_storage_pool(&self, user: &str, name: &str) -> Result<String> {
-        let v = self.post(&format!("/users/{user}/storage-pools"), json!({ "name": name }), 201).await?;
+        // Storage pools are top-level; the owner is named in the body.
+        let v = self
+            .post("/storage-pools", json!({ "name": name, "owner_user_id": user }), 201)
+            .await?;
         field(&v, "id")
     }
 
     /// Drive the full create-timeline workflow (tenant + storage controller +
     /// endpoint) and return the storage-layer tenant id (hex) and the endpoint's
     /// connection address, if amp provisioned one.
-    async fn create_timeline(&self, user: &str, pool: &str, name: &str, pg_version: u32) -> Result<TimelineResult> {
+    async fn create_timeline(&self, pool: &str, name: &str, pg_version: u32) -> Result<TimelineResult> {
         let v = self
             .post(
-                &format!("/users/{user}/storage-pools/{pool}/timelines"),
+                &format!("/storage-pools/{pool}/timelines"),
                 json!({ "name": name, "pg_version": pg_version }),
                 201,
             )
@@ -217,7 +220,7 @@ pub async fn run_suite(repeat: u32, fail_fast: bool) -> Result<()> {
     step("amp e2e: create user -> storage pool -> timeline (amp provisions the endpoint)");
     let user = client.create_user(true).await?;
     let pool = client.create_storage_pool(&user, "e2e-pool").await?;
-    let tl = client.create_timeline(&user, &pool, "main", 17).await.context("create timeline")?;
+    let tl = client.create_timeline(&pool, "main", 17).await.context("create timeline")?;
     let addr = tl.endpoint_address.clone().context(
         "amp did not return an endpoint address — start amp with --deploy (AMP_DEPLOY=true)",
     )?;

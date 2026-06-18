@@ -129,10 +129,17 @@ ships amp + storage controller together, so amp finds it with no configuration.
 - `GET /api/v1/openapi.yaml` — the OpenAPI document
 - `GET /api/v1/docs` — Swagger UI (interactive explorer, assets embedded)
 - `POST /api/v1/users`, `GET /api/v1/users/:userId` — users (no auth, #92)
-- `POST|GET /api/v1/users/:userId/storage-pools`,
-  `GET …/storage-pools/:poolId` — storage pools, owner-scoped (no sharing)
-- `POST …/storage-pools/:poolId/timelines` — create a timeline: creates a tenant
-  (a "database") + its main timeline and returns `(tenant_id, timeline_id)` (`201`)
+- `GET /api/v1/users` — list users (paginated)
+- `POST|GET /api/v1/storage-pools`, `GET …/storage-pools/:poolId` — storage pools,
+  top-level (#109): create names the owner in the body (`owner_user_id`); list
+  returns every pool; get is by id (not owner-scoped)
+- `POST|GET …/storage-pools/:poolId/timelines` — create a timeline (creates a tenant
+  (a "database") + its main timeline and returns `(tenant_id, timeline_id)`, `201`);
+  list the pool's timelines (paginated)
 - `DELETE …/timelines/:timelineId`, `POST …/timelines/:timelineId/branch` —
   delete / branch a timeline; **logged only** (`202`) until the task framework lands
+- `GET …/timelines/:timelineId/endpoints` — list the timeline's endpoints (paginated)
 - `GET /api/v1/tasks/:taskId` — task status (a real read path)
+
+List endpoints take `limit`/`offset` query params and return `total` (all matches)
+and `count` (this page); see [`architecture/yblc-apis.md`](architecture/yblc-apis.md).

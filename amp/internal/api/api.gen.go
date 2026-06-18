@@ -44,6 +44,9 @@ type BranchTimelineRequest struct {
 type CreateStoragePoolRequest struct {
 	// Name Pool name; unique across the placement group.
 	Name string `json:"name"`
+
+	// OwnerUserId The user that will own the pool.
+	OwnerUserId openapi_types.UUID `json:"owner_user_id"`
 }
 
 // CreateTimelineRequest defines model for CreateTimelineRequest.
@@ -72,6 +75,16 @@ type Endpoint struct {
 // EndpointRole defines model for Endpoint.Role.
 type EndpointRole string
 
+// EndpointList defines model for EndpointList.
+type EndpointList struct {
+	// Count The number of items returned in this response (this page).
+	Count     PageCount  `json:"count"`
+	Endpoints []Endpoint `json:"endpoints"`
+
+	// Total The number of items matching the request across all pages (ignores limit/offset).
+	Total TotalCount `json:"total"`
+}
+
 // Error defines model for Error.
 type Error struct {
 	Error ErrorBody `json:"error"`
@@ -95,6 +108,9 @@ type OperationAck struct {
 	Detail string `json:"detail"`
 }
 
+// PageCount The number of items returned in this response (this page).
+type PageCount = int
+
 // StoragePool defines model for StoragePool.
 type StoragePool struct {
 	CreatedAt   time.Time          `json:"created_at"`
@@ -105,7 +121,12 @@ type StoragePool struct {
 
 // StoragePoolList defines model for StoragePoolList.
 type StoragePoolList struct {
+	// Count The number of items returned in this response (this page).
+	Count        PageCount     `json:"count"`
 	StoragePools []StoragePool `json:"storage_pools"`
+
+	// Total The number of items matching the request across all pages (ignores limit/offset).
+	Total TotalCount `json:"total"`
 }
 
 // Task defines model for Task.
@@ -143,6 +164,19 @@ type Timeline struct {
 	TimelineId openapi_types.UUID `json:"timeline_id"`
 }
 
+// TimelineList defines model for TimelineList.
+type TimelineList struct {
+	// Count The number of items returned in this response (this page).
+	Count     PageCount  `json:"count"`
+	Timelines []Timeline `json:"timelines"`
+
+	// Total The number of items matching the request across all pages (ignores limit/offset).
+	Total TotalCount `json:"total"`
+}
+
+// TotalCount The number of items matching the request across all pages (ignores limit/offset).
+type TotalCount = int
+
 // User defines model for User.
 type User struct {
 	CreatedAt time.Time          `json:"created_at"`
@@ -151,6 +185,22 @@ type User struct {
 	// IsAdmin Admins skip all pool/tenant grants. Until auth lands, anyone may create an admin.
 	IsAdmin bool `json:"is_admin"`
 }
+
+// UserList defines model for UserList.
+type UserList struct {
+	// Count The number of items returned in this response (this page).
+	Count PageCount `json:"count"`
+
+	// Total The number of items matching the request across all pages (ignores limit/offset).
+	Total TotalCount `json:"total"`
+	Users []User     `json:"users"`
+}
+
+// Limit defines model for Limit.
+type Limit = int
+
+// Offset defines model for Offset.
+type Offset = int
 
 // PoolId defines model for PoolId.
 type PoolId = openapi_types.UUID
@@ -176,8 +226,41 @@ type InternalError = Error
 // NotFound defines model for NotFound.
 type NotFound = Error
 
-// CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
-type CreateUserJSONRequestBody = CreateUserRequest
+// ListStoragePoolsParams defines parameters for ListStoragePools.
+type ListStoragePoolsParams struct {
+	// Limit Maximum number of items to return. Clamped to 1..1000; defaults to 100.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
+	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// ListTimelinesParams defines parameters for ListTimelines.
+type ListTimelinesParams struct {
+	// Limit Maximum number of items to return. Clamped to 1..1000; defaults to 100.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
+	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// ListEndpointsParams defines parameters for ListEndpoints.
+type ListEndpointsParams struct {
+	// Limit Maximum number of items to return. Clamped to 1..1000; defaults to 100.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
+	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// ListUsersParams defines parameters for ListUsers.
+type ListUsersParams struct {
+	// Limit Maximum number of items to return. Clamped to 1..1000; defaults to 100.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
+	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
 
 // CreateStoragePoolJSONRequestBody defines body for CreateStoragePool for application/json ContentType.
 type CreateStoragePoolJSONRequestBody = CreateStoragePoolRequest
@@ -187,6 +270,9 @@ type CreateTimelineJSONRequestBody = CreateTimelineRequest
 
 // BranchTimelineJSONRequestBody defines body for BranchTimeline for application/json ContentType.
 type BranchTimelineJSONRequestBody = BranchTimelineRequest
+
+// CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
+type CreateUserJSONRequestBody = CreateUserRequest
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -261,8 +347,41 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// ListStoragePools request
+	ListStoragePools(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateStoragePoolWithBody request with any body
+	CreateStoragePoolWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateStoragePool(ctx context.Context, body CreateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetStoragePool request
+	GetStoragePool(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListTimelines request
+	ListTimelines(ctx context.Context, poolId PoolId, params *ListTimelinesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateTimelineWithBody request with any body
+	CreateTimelineWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateTimeline(ctx context.Context, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteTimeline request
+	DeleteTimeline(ctx context.Context, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// BranchTimelineWithBody request with any body
+	BranchTimelineWithBody(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	BranchTimeline(ctx context.Context, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListEndpoints request
+	ListEndpoints(ctx context.Context, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetTask request
 	GetTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListUsers request
+	ListUsers(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateUserWithBody request with any body
 	CreateUserWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -271,34 +390,154 @@ type ClientInterface interface {
 
 	// GetUser request
 	GetUser(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
 
-	// ListStoragePools request
-	ListStoragePools(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*http.Response, error)
+func (c *Client) ListStoragePools(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListStoragePoolsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
 
-	// CreateStoragePoolWithBody request with any body
-	CreateStoragePoolWithBody(ctx context.Context, userId UserId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+func (c *Client) CreateStoragePoolWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateStoragePoolRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
 
-	CreateStoragePool(ctx context.Context, userId UserId, body CreateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+func (c *Client) CreateStoragePool(ctx context.Context, body CreateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateStoragePoolRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
 
-	// GetStoragePool request
-	GetStoragePool(ctx context.Context, userId UserId, poolId PoolId, reqEditors ...RequestEditorFn) (*http.Response, error)
+func (c *Client) GetStoragePool(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetStoragePoolRequest(c.Server, poolId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
 
-	// CreateTimelineWithBody request with any body
-	CreateTimelineWithBody(ctx context.Context, userId UserId, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+func (c *Client) ListTimelines(ctx context.Context, poolId PoolId, params *ListTimelinesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListTimelinesRequest(c.Server, poolId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
 
-	CreateTimeline(ctx context.Context, userId UserId, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+func (c *Client) CreateTimelineWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateTimelineRequestWithBody(c.Server, poolId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
 
-	// DeleteTimeline request
-	DeleteTimeline(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*http.Response, error)
+func (c *Client) CreateTimeline(ctx context.Context, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateTimelineRequest(c.Server, poolId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
 
-	// BranchTimelineWithBody request with any body
-	BranchTimelineWithBody(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+func (c *Client) DeleteTimeline(ctx context.Context, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteTimelineRequest(c.Server, poolId, timelineId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
 
-	BranchTimeline(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+func (c *Client) BranchTimelineWithBody(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBranchTimelineRequestWithBody(c.Server, poolId, timelineId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) BranchTimeline(ctx context.Context, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewBranchTimelineRequest(c.Server, poolId, timelineId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListEndpoints(ctx context.Context, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListEndpointsRequest(c.Server, poolId, timelineId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) GetTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetTaskRequest(c.Server, taskId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListUsers(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListUsersRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -345,112 +584,436 @@ func (c *Client) GetUser(ctx context.Context, userId UserId, reqEditors ...Reque
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListStoragePools(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListStoragePoolsRequest(c.Server, userId)
+// NewListStoragePoolsRequest generates requests for ListStoragePools
+func NewListStoragePoolsRequest(server string, params *ListStoragePoolsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+
+	operationPath := fmt.Sprintf("/storage-pools")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
 		return nil, err
 	}
-	return c.Client.Do(req)
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "limit", runtime.ParamLocationQuery, *params.Limit); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Offset != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "offset", runtime.ParamLocationQuery, *params.Offset); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
-func (c *Client) CreateStoragePoolWithBody(ctx context.Context, userId UserId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateStoragePoolRequestWithBody(c.Server, userId, contentType, body)
+// NewCreateStoragePoolRequest calls the generic CreateStoragePool builder with application/json body
+func NewCreateStoragePoolRequest(server string, body CreateStoragePoolJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateStoragePoolRequestWithBody(server, "application/json", bodyReader)
 }
 
-func (c *Client) CreateStoragePool(ctx context.Context, userId UserId, body CreateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateStoragePoolRequest(c.Server, userId, body)
+// NewCreateStoragePoolRequestWithBody generates requests for CreateStoragePool with any type of body
+func NewCreateStoragePoolRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+
+	operationPath := fmt.Sprintf("/storage-pools")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
 		return nil, err
 	}
-	return c.Client.Do(req)
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
 }
 
-func (c *Client) GetStoragePool(ctx context.Context, userId UserId, poolId PoolId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetStoragePoolRequest(c.Server, userId, poolId)
+// NewGetStoragePoolRequest generates requests for GetStoragePool
+func NewGetStoragePoolRequest(server string, poolId PoolId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
 		return nil, err
 	}
-	return c.Client.Do(req)
+
+	operationPath := fmt.Sprintf("/storage-pools/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
-func (c *Client) CreateTimelineWithBody(ctx context.Context, userId UserId, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateTimelineRequestWithBody(c.Server, userId, poolId, contentType, body)
+// NewListTimelinesRequest generates requests for ListTimelines
+func NewListTimelinesRequest(server string, poolId PoolId, params *ListTimelinesParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
 		return nil, err
 	}
-	return c.Client.Do(req)
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/timelines", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "limit", runtime.ParamLocationQuery, *params.Limit); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Offset != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "offset", runtime.ParamLocationQuery, *params.Offset); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
-func (c *Client) CreateTimeline(ctx context.Context, userId UserId, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateTimelineRequest(c.Server, userId, poolId, body)
+// NewCreateTimelineRequest calls the generic CreateTimeline builder with application/json body
+func NewCreateTimelineRequest(server string, poolId PoolId, body CreateTimelineJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateTimelineRequestWithBody(server, poolId, "application/json", bodyReader)
 }
 
-func (c *Client) DeleteTimeline(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewDeleteTimelineRequest(c.Server, userId, poolId, timelineId)
+// NewCreateTimelineRequestWithBody generates requests for CreateTimeline with any type of body
+func NewCreateTimelineRequestWithBody(server string, poolId PoolId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
 		return nil, err
 	}
-	return c.Client.Do(req)
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/timelines", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
 }
 
-func (c *Client) BranchTimelineWithBody(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewBranchTimelineRequestWithBody(c.Server, userId, poolId, timelineId, contentType, body)
+// NewDeleteTimelineRequest generates requests for DeleteTimeline
+func NewDeleteTimelineRequest(server string, poolId PoolId, timelineId TimelineId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	if err != nil {
 		return nil, err
 	}
-	return c.Client.Do(req)
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
-func (c *Client) BranchTimeline(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewBranchTimelineRequest(c.Server, userId, poolId, timelineId, body)
+// NewBranchTimelineRequest calls the generic BranchTimeline builder with application/json body
+func NewBranchTimelineRequest(server string, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+	bodyReader = bytes.NewReader(buf)
+	return NewBranchTimelineRequestWithBody(server, poolId, timelineId, "application/json", bodyReader)
+}
+
+// NewBranchTimelineRequestWithBody generates requests for BranchTimeline with any type of body
+func NewBranchTimelineRequestWithBody(server string, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
+	if err != nil {
 		return nil, err
 	}
-	return c.Client.Do(req)
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s/branch", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewListEndpointsRequest generates requests for ListEndpoints
+func NewListEndpointsRequest(server string, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s/endpoints", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "limit", runtime.ParamLocationQuery, *params.Limit); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Offset != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "offset", runtime.ParamLocationQuery, *params.Offset); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewGetTaskRequest generates requests for GetTask
@@ -477,6 +1040,71 @@ func NewGetTaskRequest(server string, taskId TaskId) (*http.Request, error) {
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListUsersRequest generates requests for ListUsers
+func NewListUsersRequest(server string, params *ListUsersParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/users")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "limit", runtime.ParamLocationQuery, *params.Limit); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Offset != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "offset", runtime.ParamLocationQuery, *params.Offset); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
 	}
 
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
@@ -561,291 +1189,6 @@ func NewGetUserRequest(server string, userId UserId) (*http.Request, error) {
 	return req, nil
 }
 
-// NewListStoragePoolsRequest generates requests for ListStoragePools
-func NewListStoragePoolsRequest(server string, userId UserId) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "userId", runtime.ParamLocationPath, userId)
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/users/%s/storage-pools", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("GET", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewCreateStoragePoolRequest calls the generic CreateStoragePool builder with application/json body
-func NewCreateStoragePoolRequest(server string, userId UserId, body CreateStoragePoolJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewCreateStoragePoolRequestWithBody(server, userId, "application/json", bodyReader)
-}
-
-// NewCreateStoragePoolRequestWithBody generates requests for CreateStoragePool with any type of body
-func NewCreateStoragePoolRequestWithBody(server string, userId UserId, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "userId", runtime.ParamLocationPath, userId)
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/users/%s/storage-pools", pathParam0)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewGetStoragePoolRequest generates requests for GetStoragePool
-func NewGetStoragePoolRequest(server string, userId UserId, poolId PoolId) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "userId", runtime.ParamLocationPath, userId)
-	if err != nil {
-		return nil, err
-	}
-
-	var pathParam1 string
-
-	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/users/%s/storage-pools/%s", pathParam0, pathParam1)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("GET", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewCreateTimelineRequest calls the generic CreateTimeline builder with application/json body
-func NewCreateTimelineRequest(server string, userId UserId, poolId PoolId, body CreateTimelineJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewCreateTimelineRequestWithBody(server, userId, poolId, "application/json", bodyReader)
-}
-
-// NewCreateTimelineRequestWithBody generates requests for CreateTimeline with any type of body
-func NewCreateTimelineRequestWithBody(server string, userId UserId, poolId PoolId, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "userId", runtime.ParamLocationPath, userId)
-	if err != nil {
-		return nil, err
-	}
-
-	var pathParam1 string
-
-	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/users/%s/storage-pools/%s/timelines", pathParam0, pathParam1)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewDeleteTimelineRequest generates requests for DeleteTimeline
-func NewDeleteTimelineRequest(server string, userId UserId, poolId PoolId, timelineId TimelineId) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "userId", runtime.ParamLocationPath, userId)
-	if err != nil {
-		return nil, err
-	}
-
-	var pathParam1 string
-
-	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
-	if err != nil {
-		return nil, err
-	}
-
-	var pathParam2 string
-
-	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/users/%s/storage-pools/%s/timelines/%s", pathParam0, pathParam1, pathParam2)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewBranchTimelineRequest calls the generic BranchTimeline builder with application/json body
-func NewBranchTimelineRequest(server string, userId UserId, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewBranchTimelineRequestWithBody(server, userId, poolId, timelineId, "application/json", bodyReader)
-}
-
-// NewBranchTimelineRequestWithBody generates requests for BranchTimeline with any type of body
-func NewBranchTimelineRequestWithBody(server string, userId UserId, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	var pathParam0 string
-
-	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "userId", runtime.ParamLocationPath, userId)
-	if err != nil {
-		return nil, err
-	}
-
-	var pathParam1 string
-
-	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
-	if err != nil {
-		return nil, err
-	}
-
-	var pathParam2 string
-
-	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
-	if err != nil {
-		return nil, err
-	}
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/users/%s/storage-pools/%s/timelines/%s/branch", pathParam0, pathParam1, pathParam2)
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -889,8 +1232,41 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// ListStoragePoolsWithResponse request
+	ListStoragePoolsWithResponse(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*ListStoragePoolsResponse, error)
+
+	// CreateStoragePoolWithBodyWithResponse request with any body
+	CreateStoragePoolWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateStoragePoolResponse, error)
+
+	CreateStoragePoolWithResponse(ctx context.Context, body CreateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateStoragePoolResponse, error)
+
+	// GetStoragePoolWithResponse request
+	GetStoragePoolWithResponse(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*GetStoragePoolResponse, error)
+
+	// ListTimelinesWithResponse request
+	ListTimelinesWithResponse(ctx context.Context, poolId PoolId, params *ListTimelinesParams, reqEditors ...RequestEditorFn) (*ListTimelinesResponse, error)
+
+	// CreateTimelineWithBodyWithResponse request with any body
+	CreateTimelineWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error)
+
+	CreateTimelineWithResponse(ctx context.Context, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error)
+
+	// DeleteTimelineWithResponse request
+	DeleteTimelineWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*DeleteTimelineResponse, error)
+
+	// BranchTimelineWithBodyWithResponse request with any body
+	BranchTimelineWithBodyWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error)
+
+	BranchTimelineWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error)
+
+	// ListEndpointsWithResponse request
+	ListEndpointsWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*ListEndpointsResponse, error)
+
 	// GetTaskWithResponse request
 	GetTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*GetTaskResponse, error)
+
+	// ListUsersWithResponse request
+	ListUsersWithResponse(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*ListUsersResponse, error)
 
 	// CreateUserWithBodyWithResponse request with any body
 	CreateUserWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateUserResponse, error)
@@ -899,104 +1275,6 @@ type ClientWithResponsesInterface interface {
 
 	// GetUserWithResponse request
 	GetUserWithResponse(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*GetUserResponse, error)
-
-	// ListStoragePoolsWithResponse request
-	ListStoragePoolsWithResponse(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*ListStoragePoolsResponse, error)
-
-	// CreateStoragePoolWithBodyWithResponse request with any body
-	CreateStoragePoolWithBodyWithResponse(ctx context.Context, userId UserId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateStoragePoolResponse, error)
-
-	CreateStoragePoolWithResponse(ctx context.Context, userId UserId, body CreateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateStoragePoolResponse, error)
-
-	// GetStoragePoolWithResponse request
-	GetStoragePoolWithResponse(ctx context.Context, userId UserId, poolId PoolId, reqEditors ...RequestEditorFn) (*GetStoragePoolResponse, error)
-
-	// CreateTimelineWithBodyWithResponse request with any body
-	CreateTimelineWithBodyWithResponse(ctx context.Context, userId UserId, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error)
-
-	CreateTimelineWithResponse(ctx context.Context, userId UserId, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error)
-
-	// DeleteTimelineWithResponse request
-	DeleteTimelineWithResponse(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*DeleteTimelineResponse, error)
-
-	// BranchTimelineWithBodyWithResponse request with any body
-	BranchTimelineWithBodyWithResponse(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error)
-
-	BranchTimelineWithResponse(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error)
-}
-
-type GetTaskResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *Task
-	JSON400      *BadRequest
-	JSON404      *NotFound
-	JSON500      *InternalError
-}
-
-// Status returns HTTPResponse.Status
-func (r GetTaskResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r GetTaskResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type CreateUserResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON201      *User
-	JSON400      *BadRequest
-	JSON500      *InternalError
-}
-
-// Status returns HTTPResponse.Status
-func (r CreateUserResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r CreateUserResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type GetUserResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *User
-	JSON400      *BadRequest
-	JSON404      *NotFound
-	JSON500      *InternalError
-}
-
-// Status returns HTTPResponse.Status
-func (r GetUserResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r GetUserResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
 }
 
 type ListStoragePoolsResponse struct {
@@ -1004,7 +1282,6 @@ type ListStoragePoolsResponse struct {
 	HTTPResponse *http.Response
 	JSON200      *StoragePoolList
 	JSON400      *BadRequest
-	JSON404      *NotFound
 	JSON500      *InternalError
 }
 
@@ -1069,6 +1346,31 @@ func (r GetStoragePoolResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r GetStoragePoolResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ListTimelinesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *TimelineList
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListTimelinesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListTimelinesResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -1149,6 +1451,225 @@ func (r BranchTimelineResponse) StatusCode() int {
 	return 0
 }
 
+type ListEndpointsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *EndpointList
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListEndpointsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListEndpointsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetTaskResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Task
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetTaskResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetTaskResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ListUsersResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *UserList
+	JSON400      *BadRequest
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListUsersResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListUsersResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateUserResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *User
+	JSON400      *BadRequest
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateUserResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateUserResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetUserResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *User
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetUserResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetUserResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ListStoragePoolsWithResponse request returning *ListStoragePoolsResponse
+func (c *ClientWithResponses) ListStoragePoolsWithResponse(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*ListStoragePoolsResponse, error) {
+	rsp, err := c.ListStoragePools(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListStoragePoolsResponse(rsp)
+}
+
+// CreateStoragePoolWithBodyWithResponse request with arbitrary body returning *CreateStoragePoolResponse
+func (c *ClientWithResponses) CreateStoragePoolWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateStoragePoolResponse, error) {
+	rsp, err := c.CreateStoragePoolWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateStoragePoolResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateStoragePoolWithResponse(ctx context.Context, body CreateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateStoragePoolResponse, error) {
+	rsp, err := c.CreateStoragePool(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateStoragePoolResponse(rsp)
+}
+
+// GetStoragePoolWithResponse request returning *GetStoragePoolResponse
+func (c *ClientWithResponses) GetStoragePoolWithResponse(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*GetStoragePoolResponse, error) {
+	rsp, err := c.GetStoragePool(ctx, poolId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetStoragePoolResponse(rsp)
+}
+
+// ListTimelinesWithResponse request returning *ListTimelinesResponse
+func (c *ClientWithResponses) ListTimelinesWithResponse(ctx context.Context, poolId PoolId, params *ListTimelinesParams, reqEditors ...RequestEditorFn) (*ListTimelinesResponse, error) {
+	rsp, err := c.ListTimelines(ctx, poolId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListTimelinesResponse(rsp)
+}
+
+// CreateTimelineWithBodyWithResponse request with arbitrary body returning *CreateTimelineResponse
+func (c *ClientWithResponses) CreateTimelineWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error) {
+	rsp, err := c.CreateTimelineWithBody(ctx, poolId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateTimelineResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateTimelineWithResponse(ctx context.Context, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error) {
+	rsp, err := c.CreateTimeline(ctx, poolId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateTimelineResponse(rsp)
+}
+
+// DeleteTimelineWithResponse request returning *DeleteTimelineResponse
+func (c *ClientWithResponses) DeleteTimelineWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*DeleteTimelineResponse, error) {
+	rsp, err := c.DeleteTimeline(ctx, poolId, timelineId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteTimelineResponse(rsp)
+}
+
+// BranchTimelineWithBodyWithResponse request with arbitrary body returning *BranchTimelineResponse
+func (c *ClientWithResponses) BranchTimelineWithBodyWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error) {
+	rsp, err := c.BranchTimelineWithBody(ctx, poolId, timelineId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBranchTimelineResponse(rsp)
+}
+
+func (c *ClientWithResponses) BranchTimelineWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error) {
+	rsp, err := c.BranchTimeline(ctx, poolId, timelineId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseBranchTimelineResponse(rsp)
+}
+
+// ListEndpointsWithResponse request returning *ListEndpointsResponse
+func (c *ClientWithResponses) ListEndpointsWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*ListEndpointsResponse, error) {
+	rsp, err := c.ListEndpoints(ctx, poolId, timelineId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListEndpointsResponse(rsp)
+}
+
 // GetTaskWithResponse request returning *GetTaskResponse
 func (c *ClientWithResponses) GetTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*GetTaskResponse, error) {
 	rsp, err := c.GetTask(ctx, taskId, reqEditors...)
@@ -1156,6 +1677,15 @@ func (c *ClientWithResponses) GetTaskWithResponse(ctx context.Context, taskId Ta
 		return nil, err
 	}
 	return ParseGetTaskResponse(rsp)
+}
+
+// ListUsersWithResponse request returning *ListUsersResponse
+func (c *ClientWithResponses) ListUsersWithResponse(ctx context.Context, params *ListUsersParams, reqEditors ...RequestEditorFn) (*ListUsersResponse, error) {
+	rsp, err := c.ListUsers(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListUsersResponse(rsp)
 }
 
 // CreateUserWithBodyWithResponse request with arbitrary body returning *CreateUserResponse
@@ -1182,218 +1712,6 @@ func (c *ClientWithResponses) GetUserWithResponse(ctx context.Context, userId Us
 		return nil, err
 	}
 	return ParseGetUserResponse(rsp)
-}
-
-// ListStoragePoolsWithResponse request returning *ListStoragePoolsResponse
-func (c *ClientWithResponses) ListStoragePoolsWithResponse(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*ListStoragePoolsResponse, error) {
-	rsp, err := c.ListStoragePools(ctx, userId, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseListStoragePoolsResponse(rsp)
-}
-
-// CreateStoragePoolWithBodyWithResponse request with arbitrary body returning *CreateStoragePoolResponse
-func (c *ClientWithResponses) CreateStoragePoolWithBodyWithResponse(ctx context.Context, userId UserId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateStoragePoolResponse, error) {
-	rsp, err := c.CreateStoragePoolWithBody(ctx, userId, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateStoragePoolResponse(rsp)
-}
-
-func (c *ClientWithResponses) CreateStoragePoolWithResponse(ctx context.Context, userId UserId, body CreateStoragePoolJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateStoragePoolResponse, error) {
-	rsp, err := c.CreateStoragePool(ctx, userId, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateStoragePoolResponse(rsp)
-}
-
-// GetStoragePoolWithResponse request returning *GetStoragePoolResponse
-func (c *ClientWithResponses) GetStoragePoolWithResponse(ctx context.Context, userId UserId, poolId PoolId, reqEditors ...RequestEditorFn) (*GetStoragePoolResponse, error) {
-	rsp, err := c.GetStoragePool(ctx, userId, poolId, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseGetStoragePoolResponse(rsp)
-}
-
-// CreateTimelineWithBodyWithResponse request with arbitrary body returning *CreateTimelineResponse
-func (c *ClientWithResponses) CreateTimelineWithBodyWithResponse(ctx context.Context, userId UserId, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error) {
-	rsp, err := c.CreateTimelineWithBody(ctx, userId, poolId, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateTimelineResponse(rsp)
-}
-
-func (c *ClientWithResponses) CreateTimelineWithResponse(ctx context.Context, userId UserId, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error) {
-	rsp, err := c.CreateTimeline(ctx, userId, poolId, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseCreateTimelineResponse(rsp)
-}
-
-// DeleteTimelineWithResponse request returning *DeleteTimelineResponse
-func (c *ClientWithResponses) DeleteTimelineWithResponse(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*DeleteTimelineResponse, error) {
-	rsp, err := c.DeleteTimeline(ctx, userId, poolId, timelineId, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseDeleteTimelineResponse(rsp)
-}
-
-// BranchTimelineWithBodyWithResponse request with arbitrary body returning *BranchTimelineResponse
-func (c *ClientWithResponses) BranchTimelineWithBodyWithResponse(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error) {
-	rsp, err := c.BranchTimelineWithBody(ctx, userId, poolId, timelineId, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseBranchTimelineResponse(rsp)
-}
-
-func (c *ClientWithResponses) BranchTimelineWithResponse(ctx context.Context, userId UserId, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error) {
-	rsp, err := c.BranchTimeline(ctx, userId, poolId, timelineId, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseBranchTimelineResponse(rsp)
-}
-
-// ParseGetTaskResponse parses an HTTP response from a GetTaskWithResponse call
-func ParseGetTaskResponse(rsp *http.Response) (*GetTaskResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &GetTaskResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest Task
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest BadRequest
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest NotFound
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest InternalError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseCreateUserResponse parses an HTTP response from a CreateUserWithResponse call
-func ParseCreateUserResponse(rsp *http.Response) (*CreateUserResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &CreateUserResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
-		var dest User
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON201 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest BadRequest
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest InternalError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseGetUserResponse parses an HTTP response from a GetUserWithResponse call
-func ParseGetUserResponse(rsp *http.Response) (*GetUserResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &GetUserResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest User
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest BadRequest
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest NotFound
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest InternalError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
 }
 
 // ParseListStoragePoolsResponse parses an HTTP response from a ListStoragePoolsWithResponse call
@@ -1423,13 +1741,6 @@ func ParseListStoragePoolsResponse(rsp *http.Response) (*ListStoragePoolsRespons
 			return nil, err
 		}
 		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest NotFound
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -1513,6 +1824,53 @@ func ParseGetStoragePoolResponse(rsp *http.Response) (*GetStoragePoolResponse, e
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest StoragePool
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListTimelinesResponse parses an HTTP response from a ListTimelinesWithResponse call
+func ParseListTimelinesResponse(rsp *http.Response) (*ListTimelinesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListTimelinesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest TimelineList
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -1678,40 +2036,456 @@ func ParseBranchTimelineResponse(rsp *http.Response) (*BranchTimelineResponse, e
 	return response, nil
 }
 
+// ParseListEndpointsResponse parses an HTTP response from a ListEndpointsWithResponse call
+func ParseListEndpointsResponse(rsp *http.Response) (*ListEndpointsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListEndpointsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest EndpointList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetTaskResponse parses an HTTP response from a GetTaskWithResponse call
+func ParseGetTaskResponse(rsp *http.Response) (*GetTaskResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetTaskResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Task
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListUsersResponse parses an HTTP response from a ListUsersWithResponse call
+func ParseListUsersResponse(rsp *http.Response) (*ListUsersResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListUsersResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest UserList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateUserResponse parses an HTTP response from a CreateUserWithResponse call
+func ParseCreateUserResponse(rsp *http.Response) (*CreateUserResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateUserResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest User
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetUserResponse parses an HTTP response from a GetUserWithResponse call
+func ParseGetUserResponse(rsp *http.Response) (*GetUserResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetUserResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest User
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// List storage pools
+	// (GET /storage-pools)
+	ListStoragePools(ctx echo.Context, params ListStoragePoolsParams) error
+	// Create a storage pool
+	// (POST /storage-pools)
+	CreateStoragePool(ctx echo.Context) error
+	// Get a storage pool
+	// (GET /storage-pools/{poolId})
+	GetStoragePool(ctx echo.Context, poolId PoolId) error
+	// List the timelines in a pool
+	// (GET /storage-pools/{poolId}/timelines)
+	ListTimelines(ctx echo.Context, poolId PoolId, params ListTimelinesParams) error
+	// Create a tenant and its main timeline in a pool
+	// (POST /storage-pools/{poolId}/timelines)
+	CreateTimeline(ctx echo.Context, poolId PoolId) error
+	// Delete a timeline (logged only)
+	// (DELETE /storage-pools/{poolId}/timelines/{timelineId})
+	DeleteTimeline(ctx echo.Context, poolId PoolId, timelineId TimelineId) error
+	// Branch (fork) a timeline into a new timeline (logged only)
+	// (POST /storage-pools/{poolId}/timelines/{timelineId}/branch)
+	BranchTimeline(ctx echo.Context, poolId PoolId, timelineId TimelineId) error
+	// List the endpoints bound to a timeline
+	// (GET /storage-pools/{poolId}/timelines/{timelineId}/endpoints)
+	ListEndpoints(ctx echo.Context, poolId PoolId, timelineId TimelineId, params ListEndpointsParams) error
 	// Get the status of a task
 	// (GET /tasks/{taskId})
 	GetTask(ctx echo.Context, taskId TaskId) error
+	// List users
+	// (GET /users)
+	ListUsers(ctx echo.Context, params ListUsersParams) error
 	// Create a user
 	// (POST /users)
 	CreateUser(ctx echo.Context) error
 	// Get a user
 	// (GET /users/{userId})
 	GetUser(ctx echo.Context, userId UserId) error
-	// List storage pools owned by the user
-	// (GET /users/{userId}/storage-pools)
-	ListStoragePools(ctx echo.Context, userId UserId) error
-	// Create a storage pool owned by the user
-	// (POST /users/{userId}/storage-pools)
-	CreateStoragePool(ctx echo.Context, userId UserId) error
-	// Get a storage pool owned by the user
-	// (GET /users/{userId}/storage-pools/{poolId})
-	GetStoragePool(ctx echo.Context, userId UserId, poolId PoolId) error
-	// Create a tenant and its main timeline in a pool
-	// (POST /users/{userId}/storage-pools/{poolId}/timelines)
-	CreateTimeline(ctx echo.Context, userId UserId, poolId PoolId) error
-	// Delete a timeline (logged only)
-	// (DELETE /users/{userId}/storage-pools/{poolId}/timelines/{timelineId})
-	DeleteTimeline(ctx echo.Context, userId UserId, poolId PoolId, timelineId TimelineId) error
-	// Branch (fork) a timeline into a new timeline (logged only)
-	// (POST /users/{userId}/storage-pools/{poolId}/timelines/{timelineId}/branch)
-	BranchTimeline(ctx echo.Context, userId UserId, poolId PoolId, timelineId TimelineId) error
 }
 
 // ServerInterfaceWrapper converts echo contexts to parameters.
 type ServerInterfaceWrapper struct {
 	Handler ServerInterface
+}
+
+// ListStoragePools converts echo context to params.
+func (w *ServerInterfaceWrapper) ListStoragePools(ctx echo.Context) error {
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListStoragePoolsParams
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "limit", ctx.QueryParams(), &params.Limit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter limit: %s", err))
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "offset", ctx.QueryParams(), &params.Offset)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter offset: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.ListStoragePools(ctx, params)
+	return err
+}
+
+// CreateStoragePool converts echo context to params.
+func (w *ServerInterfaceWrapper) CreateStoragePool(ctx echo.Context) error {
+	var err error
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.CreateStoragePool(ctx)
+	return err
+}
+
+// GetStoragePool converts echo context to params.
+func (w *ServerInterfaceWrapper) GetStoragePool(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetStoragePool(ctx, poolId)
+	return err
+}
+
+// ListTimelines converts echo context to params.
+func (w *ServerInterfaceWrapper) ListTimelines(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListTimelinesParams
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "limit", ctx.QueryParams(), &params.Limit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter limit: %s", err))
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "offset", ctx.QueryParams(), &params.Offset)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter offset: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.ListTimelines(ctx, poolId, params)
+	return err
+}
+
+// CreateTimeline converts echo context to params.
+func (w *ServerInterfaceWrapper) CreateTimeline(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.CreateTimeline(ctx, poolId)
+	return err
+}
+
+// DeleteTimeline converts echo context to params.
+func (w *ServerInterfaceWrapper) DeleteTimeline(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "timelineId" -------------
+	var timelineId TimelineId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.DeleteTimeline(ctx, poolId, timelineId)
+	return err
+}
+
+// BranchTimeline converts echo context to params.
+func (w *ServerInterfaceWrapper) BranchTimeline(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "timelineId" -------------
+	var timelineId TimelineId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.BranchTimeline(ctx, poolId, timelineId)
+	return err
+}
+
+// ListEndpoints converts echo context to params.
+func (w *ServerInterfaceWrapper) ListEndpoints(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "timelineId" -------------
+	var timelineId TimelineId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListEndpointsParams
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "limit", ctx.QueryParams(), &params.Limit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter limit: %s", err))
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "offset", ctx.QueryParams(), &params.Offset)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter offset: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.ListEndpoints(ctx, poolId, timelineId, params)
+	return err
 }
 
 // GetTask converts echo context to params.
@@ -1727,6 +2501,31 @@ func (w *ServerInterfaceWrapper) GetTask(ctx echo.Context) error {
 
 	// Invoke the callback with all the unmarshaled arguments
 	err = w.Handler.GetTask(ctx, taskId)
+	return err
+}
+
+// ListUsers converts echo context to params.
+func (w *ServerInterfaceWrapper) ListUsers(ctx echo.Context) error {
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListUsersParams
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "limit", ctx.QueryParams(), &params.Limit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter limit: %s", err))
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "offset", ctx.QueryParams(), &params.Offset)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter offset: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.ListUsers(ctx, params)
 	return err
 }
 
@@ -1752,150 +2551,6 @@ func (w *ServerInterfaceWrapper) GetUser(ctx echo.Context) error {
 
 	// Invoke the callback with all the unmarshaled arguments
 	err = w.Handler.GetUser(ctx, userId)
-	return err
-}
-
-// ListStoragePools converts echo context to params.
-func (w *ServerInterfaceWrapper) ListStoragePools(ctx echo.Context) error {
-	var err error
-	// ------------- Path parameter "userId" -------------
-	var userId UserId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "userId", ctx.Param("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter userId: %s", err))
-	}
-
-	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.ListStoragePools(ctx, userId)
-	return err
-}
-
-// CreateStoragePool converts echo context to params.
-func (w *ServerInterfaceWrapper) CreateStoragePool(ctx echo.Context) error {
-	var err error
-	// ------------- Path parameter "userId" -------------
-	var userId UserId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "userId", ctx.Param("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter userId: %s", err))
-	}
-
-	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.CreateStoragePool(ctx, userId)
-	return err
-}
-
-// GetStoragePool converts echo context to params.
-func (w *ServerInterfaceWrapper) GetStoragePool(ctx echo.Context) error {
-	var err error
-	// ------------- Path parameter "userId" -------------
-	var userId UserId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "userId", ctx.Param("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter userId: %s", err))
-	}
-
-	// ------------- Path parameter "poolId" -------------
-	var poolId PoolId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
-	}
-
-	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.GetStoragePool(ctx, userId, poolId)
-	return err
-}
-
-// CreateTimeline converts echo context to params.
-func (w *ServerInterfaceWrapper) CreateTimeline(ctx echo.Context) error {
-	var err error
-	// ------------- Path parameter "userId" -------------
-	var userId UserId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "userId", ctx.Param("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter userId: %s", err))
-	}
-
-	// ------------- Path parameter "poolId" -------------
-	var poolId PoolId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
-	}
-
-	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.CreateTimeline(ctx, userId, poolId)
-	return err
-}
-
-// DeleteTimeline converts echo context to params.
-func (w *ServerInterfaceWrapper) DeleteTimeline(ctx echo.Context) error {
-	var err error
-	// ------------- Path parameter "userId" -------------
-	var userId UserId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "userId", ctx.Param("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter userId: %s", err))
-	}
-
-	// ------------- Path parameter "poolId" -------------
-	var poolId PoolId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
-	}
-
-	// ------------- Path parameter "timelineId" -------------
-	var timelineId TimelineId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
-	}
-
-	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.DeleteTimeline(ctx, userId, poolId, timelineId)
-	return err
-}
-
-// BranchTimeline converts echo context to params.
-func (w *ServerInterfaceWrapper) BranchTimeline(ctx echo.Context) error {
-	var err error
-	// ------------- Path parameter "userId" -------------
-	var userId UserId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "userId", ctx.Param("userId"), &userId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter userId: %s", err))
-	}
-
-	// ------------- Path parameter "poolId" -------------
-	var poolId PoolId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
-	}
-
-	// ------------- Path parameter "timelineId" -------------
-	var timelineId TimelineId
-
-	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
-	}
-
-	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.BranchTimeline(ctx, userId, poolId, timelineId)
 	return err
 }
 
@@ -1927,15 +2582,18 @@ func RegisterHandlersWithBaseURL(router EchoRouter, si ServerInterface, baseURL 
 		Handler: si,
 	}
 
+	router.GET(baseURL+"/storage-pools", wrapper.ListStoragePools)
+	router.POST(baseURL+"/storage-pools", wrapper.CreateStoragePool)
+	router.GET(baseURL+"/storage-pools/:poolId", wrapper.GetStoragePool)
+	router.GET(baseURL+"/storage-pools/:poolId/timelines", wrapper.ListTimelines)
+	router.POST(baseURL+"/storage-pools/:poolId/timelines", wrapper.CreateTimeline)
+	router.DELETE(baseURL+"/storage-pools/:poolId/timelines/:timelineId", wrapper.DeleteTimeline)
+	router.POST(baseURL+"/storage-pools/:poolId/timelines/:timelineId/branch", wrapper.BranchTimeline)
+	router.GET(baseURL+"/storage-pools/:poolId/timelines/:timelineId/endpoints", wrapper.ListEndpoints)
 	router.GET(baseURL+"/tasks/:taskId", wrapper.GetTask)
+	router.GET(baseURL+"/users", wrapper.ListUsers)
 	router.POST(baseURL+"/users", wrapper.CreateUser)
 	router.GET(baseURL+"/users/:userId", wrapper.GetUser)
-	router.GET(baseURL+"/users/:userId/storage-pools", wrapper.ListStoragePools)
-	router.POST(baseURL+"/users/:userId/storage-pools", wrapper.CreateStoragePool)
-	router.GET(baseURL+"/users/:userId/storage-pools/:poolId", wrapper.GetStoragePool)
-	router.POST(baseURL+"/users/:userId/storage-pools/:poolId/timelines", wrapper.CreateTimeline)
-	router.DELETE(baseURL+"/users/:userId/storage-pools/:poolId/timelines/:timelineId", wrapper.DeleteTimeline)
-	router.POST(baseURL+"/users/:userId/storage-pools/:poolId/timelines/:timelineId/branch", wrapper.BranchTimeline)
 
 }
 
@@ -1946,6 +2604,356 @@ type ConflictJSONResponse Error
 type InternalErrorJSONResponse Error
 
 type NotFoundJSONResponse Error
+
+type ListStoragePoolsRequestObject struct {
+	Params ListStoragePoolsParams
+}
+
+type ListStoragePoolsResponseObject interface {
+	VisitListStoragePoolsResponse(w http.ResponseWriter) error
+}
+
+type ListStoragePools200JSONResponse StoragePoolList
+
+func (response ListStoragePools200JSONResponse) VisitListStoragePoolsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListStoragePools400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListStoragePools400JSONResponse) VisitListStoragePoolsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListStoragePools500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListStoragePools500JSONResponse) VisitListStoragePoolsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateStoragePoolRequestObject struct {
+	Body *CreateStoragePoolJSONRequestBody
+}
+
+type CreateStoragePoolResponseObject interface {
+	VisitCreateStoragePoolResponse(w http.ResponseWriter) error
+}
+
+type CreateStoragePool201JSONResponse StoragePool
+
+func (response CreateStoragePool201JSONResponse) VisitCreateStoragePoolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateStoragePool400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateStoragePool400JSONResponse) VisitCreateStoragePoolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateStoragePool404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CreateStoragePool404JSONResponse) VisitCreateStoragePoolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateStoragePool409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateStoragePool409JSONResponse) VisitCreateStoragePoolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateStoragePool500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CreateStoragePool500JSONResponse) VisitCreateStoragePoolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetStoragePoolRequestObject struct {
+	PoolId PoolId `json:"poolId"`
+}
+
+type GetStoragePoolResponseObject interface {
+	VisitGetStoragePoolResponse(w http.ResponseWriter) error
+}
+
+type GetStoragePool200JSONResponse StoragePool
+
+func (response GetStoragePool200JSONResponse) VisitGetStoragePoolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetStoragePool400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetStoragePool400JSONResponse) VisitGetStoragePoolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetStoragePool404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetStoragePool404JSONResponse) VisitGetStoragePoolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetStoragePool500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetStoragePool500JSONResponse) VisitGetStoragePoolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListTimelinesRequestObject struct {
+	PoolId PoolId `json:"poolId"`
+	Params ListTimelinesParams
+}
+
+type ListTimelinesResponseObject interface {
+	VisitListTimelinesResponse(w http.ResponseWriter) error
+}
+
+type ListTimelines200JSONResponse TimelineList
+
+func (response ListTimelines200JSONResponse) VisitListTimelinesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListTimelines400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListTimelines400JSONResponse) VisitListTimelinesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListTimelines404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListTimelines404JSONResponse) VisitListTimelinesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListTimelines500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListTimelines500JSONResponse) VisitListTimelinesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateTimelineRequestObject struct {
+	PoolId PoolId `json:"poolId"`
+	Body   *CreateTimelineJSONRequestBody
+}
+
+type CreateTimelineResponseObject interface {
+	VisitCreateTimelineResponse(w http.ResponseWriter) error
+}
+
+type CreateTimeline201JSONResponse Timeline
+
+func (response CreateTimeline201JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateTimeline400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateTimeline400JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateTimeline404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CreateTimeline404JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateTimeline409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateTimeline409JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateTimeline500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CreateTimeline500JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteTimelineRequestObject struct {
+	PoolId     PoolId     `json:"poolId"`
+	TimelineId TimelineId `json:"timelineId"`
+}
+
+type DeleteTimelineResponseObject interface {
+	VisitDeleteTimelineResponse(w http.ResponseWriter) error
+}
+
+type DeleteTimeline202JSONResponse OperationAck
+
+func (response DeleteTimeline202JSONResponse) VisitDeleteTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteTimeline400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response DeleteTimeline400JSONResponse) VisitDeleteTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteTimeline500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeleteTimeline500JSONResponse) VisitDeleteTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type BranchTimelineRequestObject struct {
+	PoolId     PoolId     `json:"poolId"`
+	TimelineId TimelineId `json:"timelineId"`
+	Body       *BranchTimelineJSONRequestBody
+}
+
+type BranchTimelineResponseObject interface {
+	VisitBranchTimelineResponse(w http.ResponseWriter) error
+}
+
+type BranchTimeline202JSONResponse OperationAck
+
+func (response BranchTimeline202JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type BranchTimeline400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response BranchTimeline400JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type BranchTimeline500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response BranchTimeline500JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListEndpointsRequestObject struct {
+	PoolId     PoolId     `json:"poolId"`
+	TimelineId TimelineId `json:"timelineId"`
+	Params     ListEndpointsParams
+}
+
+type ListEndpointsResponseObject interface {
+	VisitListEndpointsResponse(w http.ResponseWriter) error
+}
+
+type ListEndpoints200JSONResponse EndpointList
+
+func (response ListEndpoints200JSONResponse) VisitListEndpointsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListEndpoints400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListEndpoints400JSONResponse) VisitListEndpointsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListEndpoints404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListEndpoints404JSONResponse) VisitListEndpointsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListEndpoints500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListEndpoints500JSONResponse) VisitListEndpointsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
 
 type GetTaskRequestObject struct {
 	TaskId TaskId `json:"taskId"`
@@ -1985,6 +2993,41 @@ func (response GetTask404JSONResponse) VisitGetTaskResponse(w http.ResponseWrite
 type GetTask500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response GetTask500JSONResponse) VisitGetTaskResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListUsersRequestObject struct {
+	Params ListUsersParams
+}
+
+type ListUsersResponseObject interface {
+	VisitListUsersResponse(w http.ResponseWriter) error
+}
+
+type ListUsers200JSONResponse UserList
+
+func (response ListUsers200JSONResponse) VisitListUsersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListUsers400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListUsers400JSONResponse) VisitListUsersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListUsers500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListUsers500JSONResponse) VisitListUsersResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -2070,308 +3113,44 @@ func (response GetUser500JSONResponse) VisitGetUserResponse(w http.ResponseWrite
 	return json.NewEncoder(w).Encode(response)
 }
 
-type ListStoragePoolsRequestObject struct {
-	UserId UserId `json:"userId"`
-}
-
-type ListStoragePoolsResponseObject interface {
-	VisitListStoragePoolsResponse(w http.ResponseWriter) error
-}
-
-type ListStoragePools200JSONResponse StoragePoolList
-
-func (response ListStoragePools200JSONResponse) VisitListStoragePoolsResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ListStoragePools400JSONResponse struct{ BadRequestJSONResponse }
-
-func (response ListStoragePools400JSONResponse) VisitListStoragePoolsResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ListStoragePools404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response ListStoragePools404JSONResponse) VisitListStoragePoolsResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ListStoragePools500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response ListStoragePools500JSONResponse) VisitListStoragePoolsResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateStoragePoolRequestObject struct {
-	UserId UserId `json:"userId"`
-	Body   *CreateStoragePoolJSONRequestBody
-}
-
-type CreateStoragePoolResponseObject interface {
-	VisitCreateStoragePoolResponse(w http.ResponseWriter) error
-}
-
-type CreateStoragePool201JSONResponse StoragePool
-
-func (response CreateStoragePool201JSONResponse) VisitCreateStoragePoolResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(201)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateStoragePool400JSONResponse struct{ BadRequestJSONResponse }
-
-func (response CreateStoragePool400JSONResponse) VisitCreateStoragePoolResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateStoragePool404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response CreateStoragePool404JSONResponse) VisitCreateStoragePoolResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateStoragePool409JSONResponse struct{ ConflictJSONResponse }
-
-func (response CreateStoragePool409JSONResponse) VisitCreateStoragePoolResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(409)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateStoragePool500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response CreateStoragePool500JSONResponse) VisitCreateStoragePoolResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetStoragePoolRequestObject struct {
-	UserId UserId `json:"userId"`
-	PoolId PoolId `json:"poolId"`
-}
-
-type GetStoragePoolResponseObject interface {
-	VisitGetStoragePoolResponse(w http.ResponseWriter) error
-}
-
-type GetStoragePool200JSONResponse StoragePool
-
-func (response GetStoragePool200JSONResponse) VisitGetStoragePoolResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetStoragePool400JSONResponse struct{ BadRequestJSONResponse }
-
-func (response GetStoragePool400JSONResponse) VisitGetStoragePoolResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetStoragePool404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response GetStoragePool404JSONResponse) VisitGetStoragePoolResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetStoragePool500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response GetStoragePool500JSONResponse) VisitGetStoragePoolResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateTimelineRequestObject struct {
-	UserId UserId `json:"userId"`
-	PoolId PoolId `json:"poolId"`
-	Body   *CreateTimelineJSONRequestBody
-}
-
-type CreateTimelineResponseObject interface {
-	VisitCreateTimelineResponse(w http.ResponseWriter) error
-}
-
-type CreateTimeline201JSONResponse Timeline
-
-func (response CreateTimeline201JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(201)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateTimeline400JSONResponse struct{ BadRequestJSONResponse }
-
-func (response CreateTimeline400JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateTimeline404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response CreateTimeline404JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateTimeline409JSONResponse struct{ ConflictJSONResponse }
-
-func (response CreateTimeline409JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(409)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateTimeline500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response CreateTimeline500JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type DeleteTimelineRequestObject struct {
-	UserId     UserId     `json:"userId"`
-	PoolId     PoolId     `json:"poolId"`
-	TimelineId TimelineId `json:"timelineId"`
-}
-
-type DeleteTimelineResponseObject interface {
-	VisitDeleteTimelineResponse(w http.ResponseWriter) error
-}
-
-type DeleteTimeline202JSONResponse OperationAck
-
-func (response DeleteTimeline202JSONResponse) VisitDeleteTimelineResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(202)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type DeleteTimeline400JSONResponse struct{ BadRequestJSONResponse }
-
-func (response DeleteTimeline400JSONResponse) VisitDeleteTimelineResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type DeleteTimeline500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response DeleteTimeline500JSONResponse) VisitDeleteTimelineResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type BranchTimelineRequestObject struct {
-	UserId     UserId     `json:"userId"`
-	PoolId     PoolId     `json:"poolId"`
-	TimelineId TimelineId `json:"timelineId"`
-	Body       *BranchTimelineJSONRequestBody
-}
-
-type BranchTimelineResponseObject interface {
-	VisitBranchTimelineResponse(w http.ResponseWriter) error
-}
-
-type BranchTimeline202JSONResponse OperationAck
-
-func (response BranchTimeline202JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(202)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type BranchTimeline400JSONResponse struct{ BadRequestJSONResponse }
-
-func (response BranchTimeline400JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type BranchTimeline500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response BranchTimeline500JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// List storage pools
+	// (GET /storage-pools)
+	ListStoragePools(ctx context.Context, request ListStoragePoolsRequestObject) (ListStoragePoolsResponseObject, error)
+	// Create a storage pool
+	// (POST /storage-pools)
+	CreateStoragePool(ctx context.Context, request CreateStoragePoolRequestObject) (CreateStoragePoolResponseObject, error)
+	// Get a storage pool
+	// (GET /storage-pools/{poolId})
+	GetStoragePool(ctx context.Context, request GetStoragePoolRequestObject) (GetStoragePoolResponseObject, error)
+	// List the timelines in a pool
+	// (GET /storage-pools/{poolId}/timelines)
+	ListTimelines(ctx context.Context, request ListTimelinesRequestObject) (ListTimelinesResponseObject, error)
+	// Create a tenant and its main timeline in a pool
+	// (POST /storage-pools/{poolId}/timelines)
+	CreateTimeline(ctx context.Context, request CreateTimelineRequestObject) (CreateTimelineResponseObject, error)
+	// Delete a timeline (logged only)
+	// (DELETE /storage-pools/{poolId}/timelines/{timelineId})
+	DeleteTimeline(ctx context.Context, request DeleteTimelineRequestObject) (DeleteTimelineResponseObject, error)
+	// Branch (fork) a timeline into a new timeline (logged only)
+	// (POST /storage-pools/{poolId}/timelines/{timelineId}/branch)
+	BranchTimeline(ctx context.Context, request BranchTimelineRequestObject) (BranchTimelineResponseObject, error)
+	// List the endpoints bound to a timeline
+	// (GET /storage-pools/{poolId}/timelines/{timelineId}/endpoints)
+	ListEndpoints(ctx context.Context, request ListEndpointsRequestObject) (ListEndpointsResponseObject, error)
 	// Get the status of a task
 	// (GET /tasks/{taskId})
 	GetTask(ctx context.Context, request GetTaskRequestObject) (GetTaskResponseObject, error)
+	// List users
+	// (GET /users)
+	ListUsers(ctx context.Context, request ListUsersRequestObject) (ListUsersResponseObject, error)
 	// Create a user
 	// (POST /users)
 	CreateUser(ctx context.Context, request CreateUserRequestObject) (CreateUserResponseObject, error)
 	// Get a user
 	// (GET /users/{userId})
 	GetUser(ctx context.Context, request GetUserRequestObject) (GetUserResponseObject, error)
-	// List storage pools owned by the user
-	// (GET /users/{userId}/storage-pools)
-	ListStoragePools(ctx context.Context, request ListStoragePoolsRequestObject) (ListStoragePoolsResponseObject, error)
-	// Create a storage pool owned by the user
-	// (POST /users/{userId}/storage-pools)
-	CreateStoragePool(ctx context.Context, request CreateStoragePoolRequestObject) (CreateStoragePoolResponseObject, error)
-	// Get a storage pool owned by the user
-	// (GET /users/{userId}/storage-pools/{poolId})
-	GetStoragePool(ctx context.Context, request GetStoragePoolRequestObject) (GetStoragePoolResponseObject, error)
-	// Create a tenant and its main timeline in a pool
-	// (POST /users/{userId}/storage-pools/{poolId}/timelines)
-	CreateTimeline(ctx context.Context, request CreateTimelineRequestObject) (CreateTimelineResponseObject, error)
-	// Delete a timeline (logged only)
-	// (DELETE /users/{userId}/storage-pools/{poolId}/timelines/{timelineId})
-	DeleteTimeline(ctx context.Context, request DeleteTimelineRequestObject) (DeleteTimelineResponseObject, error)
-	// Branch (fork) a timeline into a new timeline (logged only)
-	// (POST /users/{userId}/storage-pools/{poolId}/timelines/{timelineId}/branch)
-	BranchTimeline(ctx context.Context, request BranchTimelineRequestObject) (BranchTimelineResponseObject, error)
 }
 
 type StrictHandlerFunc = strictecho.StrictEchoHandlerFunc
@@ -2384,6 +3163,227 @@ func NewStrictHandler(ssi StrictServerInterface, middlewares []StrictMiddlewareF
 type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
+}
+
+// ListStoragePools operation middleware
+func (sh *strictHandler) ListStoragePools(ctx echo.Context, params ListStoragePoolsParams) error {
+	var request ListStoragePoolsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListStoragePools(ctx.Request().Context(), request.(ListStoragePoolsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListStoragePools")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(ListStoragePoolsResponseObject); ok {
+		return validResponse.VisitListStoragePoolsResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// CreateStoragePool operation middleware
+func (sh *strictHandler) CreateStoragePool(ctx echo.Context) error {
+	var request CreateStoragePoolRequestObject
+
+	var body CreateStoragePoolJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateStoragePool(ctx.Request().Context(), request.(CreateStoragePoolRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateStoragePool")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(CreateStoragePoolResponseObject); ok {
+		return validResponse.VisitCreateStoragePoolResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetStoragePool operation middleware
+func (sh *strictHandler) GetStoragePool(ctx echo.Context, poolId PoolId) error {
+	var request GetStoragePoolRequestObject
+
+	request.PoolId = poolId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetStoragePool(ctx.Request().Context(), request.(GetStoragePoolRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetStoragePool")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetStoragePoolResponseObject); ok {
+		return validResponse.VisitGetStoragePoolResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// ListTimelines operation middleware
+func (sh *strictHandler) ListTimelines(ctx echo.Context, poolId PoolId, params ListTimelinesParams) error {
+	var request ListTimelinesRequestObject
+
+	request.PoolId = poolId
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTimelines(ctx.Request().Context(), request.(ListTimelinesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTimelines")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(ListTimelinesResponseObject); ok {
+		return validResponse.VisitListTimelinesResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// CreateTimeline operation middleware
+func (sh *strictHandler) CreateTimeline(ctx echo.Context, poolId PoolId) error {
+	var request CreateTimelineRequestObject
+
+	request.PoolId = poolId
+
+	var body CreateTimelineJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateTimeline(ctx.Request().Context(), request.(CreateTimelineRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateTimeline")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(CreateTimelineResponseObject); ok {
+		return validResponse.VisitCreateTimelineResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// DeleteTimeline operation middleware
+func (sh *strictHandler) DeleteTimeline(ctx echo.Context, poolId PoolId, timelineId TimelineId) error {
+	var request DeleteTimelineRequestObject
+
+	request.PoolId = poolId
+	request.TimelineId = timelineId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteTimeline(ctx.Request().Context(), request.(DeleteTimelineRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteTimeline")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(DeleteTimelineResponseObject); ok {
+		return validResponse.VisitDeleteTimelineResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// BranchTimeline operation middleware
+func (sh *strictHandler) BranchTimeline(ctx echo.Context, poolId PoolId, timelineId TimelineId) error {
+	var request BranchTimelineRequestObject
+
+	request.PoolId = poolId
+	request.TimelineId = timelineId
+
+	var body BranchTimelineJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.BranchTimeline(ctx.Request().Context(), request.(BranchTimelineRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BranchTimeline")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(BranchTimelineResponseObject); ok {
+		return validResponse.VisitBranchTimelineResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// ListEndpoints operation middleware
+func (sh *strictHandler) ListEndpoints(ctx echo.Context, poolId PoolId, timelineId TimelineId, params ListEndpointsParams) error {
+	var request ListEndpointsRequestObject
+
+	request.PoolId = poolId
+	request.TimelineId = timelineId
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListEndpoints(ctx.Request().Context(), request.(ListEndpointsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListEndpoints")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(ListEndpointsResponseObject); ok {
+		return validResponse.VisitListEndpointsResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
 }
 
 // GetTask operation middleware
@@ -2405,6 +3405,31 @@ func (sh *strictHandler) GetTask(ctx echo.Context, taskId TaskId) error {
 		return err
 	} else if validResponse, ok := response.(GetTaskResponseObject); ok {
 		return validResponse.VisitGetTaskResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// ListUsers operation middleware
+func (sh *strictHandler) ListUsers(ctx echo.Context, params ListUsersParams) error {
+	var request ListUsersRequestObject
+
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListUsers(ctx.Request().Context(), request.(ListUsersRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListUsers")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(ListUsersResponseObject); ok {
+		return validResponse.VisitListUsersResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}
@@ -2459,180 +3484,6 @@ func (sh *strictHandler) GetUser(ctx echo.Context, userId UserId) error {
 		return err
 	} else if validResponse, ok := response.(GetUserResponseObject); ok {
 		return validResponse.VisitGetUserResponse(ctx.Response())
-	} else if response != nil {
-		return fmt.Errorf("unexpected response type: %T", response)
-	}
-	return nil
-}
-
-// ListStoragePools operation middleware
-func (sh *strictHandler) ListStoragePools(ctx echo.Context, userId UserId) error {
-	var request ListStoragePoolsRequestObject
-
-	request.UserId = userId
-
-	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.ListStoragePools(ctx.Request().Context(), request.(ListStoragePoolsRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "ListStoragePools")
-	}
-
-	response, err := handler(ctx, request)
-
-	if err != nil {
-		return err
-	} else if validResponse, ok := response.(ListStoragePoolsResponseObject); ok {
-		return validResponse.VisitListStoragePoolsResponse(ctx.Response())
-	} else if response != nil {
-		return fmt.Errorf("unexpected response type: %T", response)
-	}
-	return nil
-}
-
-// CreateStoragePool operation middleware
-func (sh *strictHandler) CreateStoragePool(ctx echo.Context, userId UserId) error {
-	var request CreateStoragePoolRequestObject
-
-	request.UserId = userId
-
-	var body CreateStoragePoolJSONRequestBody
-	if err := ctx.Bind(&body); err != nil {
-		return err
-	}
-	request.Body = &body
-
-	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.CreateStoragePool(ctx.Request().Context(), request.(CreateStoragePoolRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "CreateStoragePool")
-	}
-
-	response, err := handler(ctx, request)
-
-	if err != nil {
-		return err
-	} else if validResponse, ok := response.(CreateStoragePoolResponseObject); ok {
-		return validResponse.VisitCreateStoragePoolResponse(ctx.Response())
-	} else if response != nil {
-		return fmt.Errorf("unexpected response type: %T", response)
-	}
-	return nil
-}
-
-// GetStoragePool operation middleware
-func (sh *strictHandler) GetStoragePool(ctx echo.Context, userId UserId, poolId PoolId) error {
-	var request GetStoragePoolRequestObject
-
-	request.UserId = userId
-	request.PoolId = poolId
-
-	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.GetStoragePool(ctx.Request().Context(), request.(GetStoragePoolRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetStoragePool")
-	}
-
-	response, err := handler(ctx, request)
-
-	if err != nil {
-		return err
-	} else if validResponse, ok := response.(GetStoragePoolResponseObject); ok {
-		return validResponse.VisitGetStoragePoolResponse(ctx.Response())
-	} else if response != nil {
-		return fmt.Errorf("unexpected response type: %T", response)
-	}
-	return nil
-}
-
-// CreateTimeline operation middleware
-func (sh *strictHandler) CreateTimeline(ctx echo.Context, userId UserId, poolId PoolId) error {
-	var request CreateTimelineRequestObject
-
-	request.UserId = userId
-	request.PoolId = poolId
-
-	var body CreateTimelineJSONRequestBody
-	if err := ctx.Bind(&body); err != nil {
-		return err
-	}
-	request.Body = &body
-
-	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.CreateTimeline(ctx.Request().Context(), request.(CreateTimelineRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "CreateTimeline")
-	}
-
-	response, err := handler(ctx, request)
-
-	if err != nil {
-		return err
-	} else if validResponse, ok := response.(CreateTimelineResponseObject); ok {
-		return validResponse.VisitCreateTimelineResponse(ctx.Response())
-	} else if response != nil {
-		return fmt.Errorf("unexpected response type: %T", response)
-	}
-	return nil
-}
-
-// DeleteTimeline operation middleware
-func (sh *strictHandler) DeleteTimeline(ctx echo.Context, userId UserId, poolId PoolId, timelineId TimelineId) error {
-	var request DeleteTimelineRequestObject
-
-	request.UserId = userId
-	request.PoolId = poolId
-	request.TimelineId = timelineId
-
-	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.DeleteTimeline(ctx.Request().Context(), request.(DeleteTimelineRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "DeleteTimeline")
-	}
-
-	response, err := handler(ctx, request)
-
-	if err != nil {
-		return err
-	} else if validResponse, ok := response.(DeleteTimelineResponseObject); ok {
-		return validResponse.VisitDeleteTimelineResponse(ctx.Response())
-	} else if response != nil {
-		return fmt.Errorf("unexpected response type: %T", response)
-	}
-	return nil
-}
-
-// BranchTimeline operation middleware
-func (sh *strictHandler) BranchTimeline(ctx echo.Context, userId UserId, poolId PoolId, timelineId TimelineId) error {
-	var request BranchTimelineRequestObject
-
-	request.UserId = userId
-	request.PoolId = poolId
-	request.TimelineId = timelineId
-
-	var body BranchTimelineJSONRequestBody
-	if err := ctx.Bind(&body); err != nil {
-		return err
-	}
-	request.Body = &body
-
-	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.BranchTimeline(ctx.Request().Context(), request.(BranchTimelineRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "BranchTimeline")
-	}
-
-	response, err := handler(ctx, request)
-
-	if err != nil {
-		return err
-	} else if validResponse, ok := response.(BranchTimelineResponseObject); ok {
-		return validResponse.VisitBranchTimelineResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

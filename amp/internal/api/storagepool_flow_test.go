@@ -11,32 +11,35 @@ import (
 	"github.com/yugabyte/yb-light/amp/internal/api"
 )
 
-// TestStoragePoolFlow runs the storage-pool workflow a user drives through the
-// API: create pools, list them, fetch one — and confirms ownership scoping
-// (no sharing, #92): a user sees only their own pools, and cannot fetch
-// another user's pool.
+// TestStoragePoolFlow runs the storage-pool workflow over the *top-level* pool
+// API: pools are addressed by their own id (not under a user), listing returns
+// every pool in the placement group, and any pool can be fetched by id
+// regardless of who created it (no owner scoping — a pool will eventually be
+// acted on by more than its creator). Pool names stay globally unique.
 func TestStoragePoolFlow(t *testing.T) {
 	client, _, _ := newTestServer(t)
 	ctx := context.Background()
 
 	alice := mustCreateUser(t, client, false)
+	bob := mustCreateUser(t, client, false)
 
-	// A fresh user owns no pools.
-	if names := listPoolNames(t, client, alice.Id); len(names) != 0 {
-		t.Fatalf("new user pools = %v, want none", names)
+	// No pools yet.
+	if names := listPoolNames(t, client); len(names) != 0 {
+		t.Fatalf("initial pools = %v, want none", names)
 	}
 
-	// Create two pools as Alice.
+	// Create pools owned by different users.
 	alpha := mustCreatePool(t, client, alice.Id, "alpha")
 	mustCreatePool(t, client, alice.Id, "beta")
+	gamma := mustCreatePool(t, client, bob.Id, "gamma")
 
-	// List returns exactly Alice's two pools.
-	if got, want := listPoolNames(t, client, alice.Id), []string{"alpha", "beta"}; !equalStrings(got, want) {
+	// List is top-level: it returns every pool, not just one user's.
+	if got, want := listPoolNames(t, client), []string{"alpha", "beta", "gamma"}; !equalStrings(got, want) {
 		t.Fatalf("list = %v, want %v", got, want)
 	}
 
-	// Fetch one pool by id.
-	gp, err := client.GetStoragePoolWithResponse(ctx, alice.Id, alpha.Id)
+	// Fetch a pool by id; owner_user_id reflects its creator.
+	gp, err := client.GetStoragePoolWithResponse(ctx, alpha.Id)
 	if err != nil {
 		t.Fatalf("GetStoragePool: %v", err)
 	}
@@ -47,8 +50,20 @@ func TestStoragePoolFlow(t *testing.T) {
 		t.Errorf("got {name:%q owner:%s}, want {alpha %s}", gp.JSON200.Name, gp.JSON200.OwnerUserId, alice.Id)
 	}
 
+	// Bob's pool is fetchable by anyone now that pools are top-level (no scoping).
+	cross, err := client.GetStoragePoolWithResponse(ctx, gamma.Id)
+	if err != nil {
+		t.Fatalf("GetStoragePool(gamma): %v", err)
+	}
+	if cross.StatusCode() != http.StatusOK || cross.JSON200 == nil {
+		t.Fatalf("GetStoragePool(gamma) status = %d, want 200, body = %s", cross.StatusCode(), cross.Body)
+	}
+	if cross.JSON200.OwnerUserId != bob.Id {
+		t.Errorf("gamma owner = %s, want %s", cross.JSON200.OwnerUserId, bob.Id)
+	}
+
 	// A random pool id is a 404.
-	gm, err := client.GetStoragePoolWithResponse(ctx, alice.Id, uuid.New())
+	gm, err := client.GetStoragePoolWithResponse(ctx, uuid.New())
 	if err != nil {
 		t.Fatalf("GetStoragePool(missing): %v", err)
 	}
@@ -56,39 +71,19 @@ func TestStoragePoolFlow(t *testing.T) {
 		t.Fatalf("GetStoragePool(missing) status = %d, body = %s", gm.StatusCode(), gm.Body)
 	}
 
-	// Pool names are unique across the placement group.
-	dup, err := client.CreateStoragePoolWithResponse(ctx, alice.Id, api.CreateStoragePoolRequest{Name: "alpha"})
+	// Pool names are unique across the placement group, regardless of owner.
+	dup, err := client.CreateStoragePoolWithResponse(ctx, api.CreateStoragePoolRequest{Name: "alpha", OwnerUserId: bob.Id})
 	if err != nil {
 		t.Fatalf("CreateStoragePool(dup): %v", err)
 	}
 	if dup.StatusCode() != http.StatusConflict {
 		t.Fatalf("dup status = %d, body = %s", dup.StatusCode(), dup.Body)
 	}
-
-	// A second user's pool is invisible to Alice, and vice versa (no sharing).
-	bob := mustCreateUser(t, client, false)
-	gamma := mustCreatePool(t, client, bob.Id, "gamma")
-
-	if names := listPoolNames(t, client, alice.Id); !equalStrings(names, []string{"alpha", "beta"}) {
-		t.Errorf("alice list after bob's pool = %v, want [alpha beta]", names)
-	}
-	if names := listPoolNames(t, client, bob.Id); !equalStrings(names, []string{"gamma"}) {
-		t.Errorf("bob list = %v, want [gamma]", names)
-	}
-
-	// Alice cannot fetch Bob's pool — owner-scoped, so it 404s rather than leaks.
-	cross, err := client.GetStoragePoolWithResponse(ctx, alice.Id, gamma.Id)
-	if err != nil {
-		t.Fatalf("GetStoragePool(cross): %v", err)
-	}
-	if cross.StatusCode() != http.StatusNotFound {
-		t.Fatalf("cross-user get status = %d, want 404", cross.StatusCode())
-	}
 }
 
 func mustCreatePool(t *testing.T, client *api.ClientWithResponses, owner uuid.UUID, name string) api.StoragePool {
 	t.Helper()
-	resp, err := client.CreateStoragePoolWithResponse(context.Background(), owner, api.CreateStoragePoolRequest{Name: name})
+	resp, err := client.CreateStoragePoolWithResponse(context.Background(), api.CreateStoragePoolRequest{Name: name, OwnerUserId: owner})
 	if err != nil {
 		t.Fatalf("CreateStoragePool(%q): %v", name, err)
 	}
@@ -98,9 +93,11 @@ func mustCreatePool(t *testing.T, client *api.ClientWithResponses, owner uuid.UU
 	return *resp.JSON201
 }
 
-func listPoolNames(t *testing.T, client *api.ClientWithResponses, owner uuid.UUID) []string {
+// listPoolNames returns the names of every pool the list endpoint reports
+// (default pagination), sorted for stable comparison.
+func listPoolNames(t *testing.T, client *api.ClientWithResponses) []string {
 	t.Helper()
-	resp, err := client.ListStoragePoolsWithResponse(context.Background(), owner)
+	resp, err := client.ListStoragePoolsWithResponse(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("ListStoragePools: %v", err)
 	}

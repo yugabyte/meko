@@ -80,26 +80,42 @@ type Backend interface {
 	CreateUser(ctx context.Context, isAdmin bool) (User, error)
 	// GetUser returns a user by id, or ErrNotFound.
 	GetUser(ctx context.Context, id uuid.UUID) (User, error)
+	// ListUsers returns a page of users ordered by (created_at, id), and the
+	// total number of users (ignoring limit/offset). limit must be >= 1 and
+	// offset >= 0 (the API layer clamps them).
+	ListUsers(ctx context.Context, limit, offset int) ([]User, int, error)
 
 	// CreateStoragePool creates a pool owned by owner. Returns ErrNotFound if
 	// owner does not exist, or ErrConflict if the name is already taken.
 	CreateStoragePool(ctx context.Context, owner uuid.UUID, name string) (StoragePool, error)
-	// ListStoragePools returns the pools owned by owner (no sharing, #92).
-	// Returns ErrNotFound if owner does not exist.
-	ListStoragePools(ctx context.Context, owner uuid.UUID) ([]StoragePool, error)
-	// GetStoragePool returns a pool owned by owner, or ErrNotFound if it does
-	// not exist or is not owned by that user (which hides its existence).
-	GetStoragePool(ctx context.Context, owner, poolID uuid.UUID) (StoragePool, error)
+	// ListStoragePools returns a page of every pool in the placement group
+	// ordered by (created_at, id), and the total number of pools (ignoring
+	// limit/offset). Owner filtering is out of scope for now (pool sharing is
+	// deferred).
+	ListStoragePools(ctx context.Context, limit, offset int) ([]StoragePool, int, error)
+	// GetStoragePool returns a pool by id, or ErrNotFound. Pools are top-level,
+	// so this is not owner-scoped: a pool will eventually be acted on by more
+	// than the one user who created it.
+	GetStoragePool(ctx context.Context, poolID uuid.UUID) (StoragePool, error)
 
 	// CreateTimeline creates a tenant (a "database") named name in the pool,
 	// together with its main timeline at Postgres major version pgVersion, and
-	// returns the timeline. Returns ErrNotFound if the pool does not exist or is
-	// not owned by owner, or ErrConflict if a tenant with that name already
-	// exists in the pool.
-	CreateTimeline(ctx context.Context, owner, poolID uuid.UUID, name string, pgVersion int) (Timeline, error)
+	// returns the timeline. Returns ErrNotFound if the pool does not exist, or
+	// ErrConflict if a tenant with that name already exists in the pool.
+	CreateTimeline(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (Timeline, error)
+	// ListTimelines returns a page of the timelines across all tenants in the
+	// pool ordered by (created_at, timeline_id), and the total number of
+	// timelines in the pool (ignoring limit/offset). Returns ErrNotFound if the
+	// pool does not exist.
+	ListTimelines(ctx context.Context, poolID uuid.UUID, limit, offset int) ([]Timeline, int, error)
 
 	// CreateEndpoint records a compute endpoint bound to (tenantID, timelineID)
 	// with its connection address. Returns ErrNotFound if the timeline does not
 	// exist, or ErrConflict if a read_write endpoint already exists for it.
 	CreateEndpoint(ctx context.Context, tenantID, timelineID uuid.UUID, role, address string) (Endpoint, error)
+	// ListEndpoints returns a page of the endpoints bound to the timeline
+	// (addressed by its id within the pool) ordered by (created_at, id), and the
+	// total number of endpoints for the timeline (ignoring limit/offset).
+	// Returns ErrNotFound if the pool or the timeline does not exist.
+	ListEndpoints(ctx context.Context, poolID, timelineID uuid.UUID, limit, offset int) ([]Endpoint, int, error)
 }

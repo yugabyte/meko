@@ -77,16 +77,45 @@ func (b *PgBackend) CreateStoragePool(ctx context.Context, owner uuid.UUID, name
 	return b.getStoragePoolByID(ctx, id)
 }
 
-func (b *PgBackend) ListStoragePools(ctx context.Context, owner uuid.UUID) ([]StoragePool, error) {
-	if _, err := b.GetUser(ctx, owner); err != nil {
-		return nil, err // ErrNotFound when the user is unknown
+func (b *PgBackend) ListUsers(ctx context.Context, limit, offset int) ([]User, int, error) {
+	total, err := b.count(ctx, `SELECT count(*) FROM app_user`)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count users: %w", err)
+	}
+	rows, err := b.pool.Query(ctx,
+		`SELECT id::text, is_admin, created_at
+		 FROM app_user ORDER BY created_at, id LIMIT $1 OFFSET $2`,
+		limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("list users: %w", err)
+	}
+	return users, total, nil
+}
+
+func (b *PgBackend) ListStoragePools(ctx context.Context, limit, offset int) ([]StoragePool, int, error) {
+	total, err := b.count(ctx, `SELECT count(*) FROM storage_pool`)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count storage pools: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
 		`SELECT id::text, name, owner_user_id::text, created_at
-		 FROM storage_pool WHERE owner_user_id = $1::uuid ORDER BY created_at, id`,
-		owner.String())
+		 FROM storage_pool ORDER BY created_at, id LIMIT $1 OFFSET $2`,
+		limit, offset)
 	if err != nil {
-		return nil, fmt.Errorf("list storage pools: %w", err)
+		return nil, 0, fmt.Errorf("list storage pools: %w", err)
 	}
 	defer rows.Close()
 
@@ -94,37 +123,27 @@ func (b *PgBackend) ListStoragePools(ctx context.Context, owner uuid.UUID) ([]St
 	for rows.Next() {
 		p, err := scanPool(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		pools = append(pools, p)
 	}
 	// rows.Next returns false on both end-of-rows and error; check Err so an
 	// iteration failure isn't mistaken for a complete (but truncated) result.
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list storage pools: %w", err)
+		return nil, 0, fmt.Errorf("list storage pools: %w", err)
 	}
-	return pools, nil
+	return pools, total, nil
 }
 
-func (b *PgBackend) GetStoragePool(ctx context.Context, owner, poolID uuid.UUID) (StoragePool, error) {
-	row := b.pool.QueryRow(ctx,
-		`SELECT id::text, name, owner_user_id::text, created_at
-		 FROM storage_pool WHERE id = $1::uuid AND owner_user_id = $2::uuid`,
-		poolID.String(), owner.String())
-	p, err := scanPool(row)
+func (b *PgBackend) GetStoragePool(ctx context.Context, poolID uuid.UUID) (StoragePool, error) {
+	p, err := b.getStoragePoolByID(ctx, poolID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return StoragePool{}, ErrNotFound
 	}
 	return p, err
 }
 
-func (b *PgBackend) CreateTimeline(ctx context.Context, owner, poolID uuid.UUID, name string, pgVersion int) (Timeline, error) {
-	// Owner-scoped pool check: a pool the caller doesn't own 404s rather than
-	// leaking its existence, matching GetStoragePool.
-	if _, err := b.GetStoragePool(ctx, owner, poolID); err != nil {
-		return Timeline{}, err
-	}
-
+func (b *PgBackend) CreateTimeline(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (Timeline, error) {
 	tenantID := uuid.New()
 	timelineID := uuid.New()
 
@@ -206,8 +225,7 @@ func (b *PgBackend) getTimeline(ctx context.Context, tenantID, timelineID uuid.U
 
 // mapTimelineErr translates the constraint violations the timeline writes can
 // raise: a duplicate tenant name (unique storage_pool_id, name) -> ErrConflict,
-// and a missing pool (foreign key) -> ErrNotFound (it was deleted between the
-// ownership check and the insert).
+// and a missing pool (foreign key on tenant.storage_pool_id) -> ErrNotFound.
 func mapTimelineErr(what string, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -227,6 +245,116 @@ func (b *PgBackend) getStoragePoolByID(ctx context.Context, id uuid.UUID) (Stora
 		 FROM storage_pool WHERE id = $1::uuid`,
 		id.String())
 	return scanPool(row)
+}
+
+func (b *PgBackend) ListTimelines(ctx context.Context, poolID uuid.UUID, limit, offset int) ([]Timeline, int, error) {
+	// A missing pool 404s rather than returning an empty page.
+	if _, err := b.GetStoragePool(ctx, poolID); err != nil {
+		return nil, 0, err
+	}
+	total, err := b.count(ctx,
+		`SELECT count(*) FROM pg_cluster c
+		 JOIN tenant t ON c.tenant_id = t.id
+		 WHERE t.storage_pool_id = $1::uuid`,
+		poolID.String())
+	if err != nil {
+		return nil, 0, fmt.Errorf("count timelines: %w", err)
+	}
+	rows, err := b.pool.Query(ctx,
+		`SELECT c.tenant_id::text, c.timeline_id::text, c.name, c.pg_version, c.is_main, c.created_at
+		 FROM pg_cluster c
+		 JOIN tenant t ON c.tenant_id = t.id
+		 WHERE t.storage_pool_id = $1::uuid
+		 ORDER BY c.created_at, c.timeline_id LIMIT $2 OFFSET $3`,
+		poolID.String(), limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list timelines: %w", err)
+	}
+	defer rows.Close()
+
+	var timelines []Timeline
+	for rows.Next() {
+		t, err := scanTimeline(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		timelines = append(timelines, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("list timelines: %w", err)
+	}
+	return timelines, total, nil
+}
+
+func (b *PgBackend) ListEndpoints(ctx context.Context, poolID, timelineID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
+	// Resolve the timeline within the pool (it's addressed by id under the pool,
+	// but the storage layer keys it by (tenant_id, timeline_id)). No row means
+	// the pool or the timeline does not exist -> 404.
+	tenantID, err := b.timelineTenant(ctx, poolID, timelineID)
+	if err != nil {
+		return nil, 0, err
+	}
+	total, err := b.count(ctx,
+		`SELECT count(*) FROM endpoint WHERE tenant_id = $1::uuid AND timeline_id = $2::uuid`,
+		tenantID.String(), timelineID.String())
+	if err != nil {
+		return nil, 0, fmt.Errorf("count endpoints: %w", err)
+	}
+	rows, err := b.pool.Query(ctx,
+		`SELECT id::text, tenant_id::text, timeline_id::text, role::text, COALESCE(address, ''), created_at
+		 FROM endpoint WHERE tenant_id = $1::uuid AND timeline_id = $2::uuid
+		 ORDER BY created_at, id LIMIT $3 OFFSET $4`,
+		tenantID.String(), timelineID.String(), limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list endpoints: %w", err)
+	}
+	defer rows.Close()
+
+	var endpoints []Endpoint
+	for rows.Next() {
+		e, err := scanEndpoint(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		endpoints = append(endpoints, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("list endpoints: %w", err)
+	}
+	return endpoints, total, nil
+}
+
+// timelineTenant resolves the storage-layer tenant id of the timeline addressed
+// by timelineID within poolID, or ErrNotFound if the pool or the timeline does
+// not exist. timeline_id is a generated UUID, so it is unique within a pool.
+func (b *PgBackend) timelineTenant(ctx context.Context, poolID, timelineID uuid.UUID) (uuid.UUID, error) {
+	var tenantStr string
+	err := b.pool.QueryRow(ctx,
+		`SELECT c.tenant_id::text
+		 FROM pg_cluster c
+		 JOIN tenant t ON c.tenant_id = t.id
+		 WHERE t.storage_pool_id = $1::uuid AND c.timeline_id = $2::uuid`,
+		poolID.String(), timelineID.String()).Scan(&tenantStr)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("resolve timeline tenant: %w", err)
+	}
+	tenantID, err := uuid.Parse(tenantStr)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("parse tenant id: %w", err)
+	}
+	return tenantID, nil
+}
+
+// count runs a scalar COUNT(*) query and returns its result.
+func (b *PgBackend) count(ctx context.Context, sql string, args ...any) (int, error) {
+	var n int
+	if err := b.pool.QueryRow(ctx, sql, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // scanRow is satisfied by both pgx.Row and pgx.Rows.

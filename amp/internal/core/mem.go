@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -9,19 +10,21 @@ import (
 )
 
 // MemBackend is an in-memory Backend that mirrors PgBackend's semantics (owner
-// existence checks, globally-unique pool names, owner-scoped listing). It lets
-// the API layer be tested end-to-end — through the generated client and the
-// real controllers — without a database. It is safe for concurrent use.
+// existence checks, globally-unique pool names, top-level pools, paginated
+// lists). It lets the API layer be tested end-to-end — through the generated
+// client and the real controllers — without a database. It is safe for
+// concurrent use.
 type MemBackend struct {
-	mu          sync.Mutex
-	users       map[uuid.UUID]User
-	pools       map[uuid.UUID]StoragePool
-	names       map[string]struct{} // pool names are unique across the placement group
-	timelines   map[uuid.UUID]Timeline
-	tenantNames map[tenantNameKey]struct{} // tenant names are unique within their pool
-	endpoints   map[uuid.UUID]Endpoint
-	writers     map[timelineKey]struct{} // at most one read_write endpoint per timeline
-	now         func() time.Time
+	mu           sync.Mutex
+	users        map[uuid.UUID]User
+	pools        map[uuid.UUID]StoragePool
+	names        map[string]struct{} // pool names are unique across the placement group
+	timelines    map[uuid.UUID]Timeline
+	timelinePool map[uuid.UUID]uuid.UUID    // timeline id -> the pool it lives in (pg joins tenant.storage_pool_id)
+	tenantNames  map[tenantNameKey]struct{} // tenant names are unique within their pool
+	endpoints    map[uuid.UUID]Endpoint
+	writers      map[timelineKey]struct{} // at most one read_write endpoint per timeline
+	now          func() time.Time
 }
 
 // tenantNameKey makes a tenant name unique within its pool (the schema's
@@ -40,14 +43,15 @@ type timelineKey struct {
 // NewMemBackend returns an empty in-memory backend.
 func NewMemBackend() *MemBackend {
 	return &MemBackend{
-		users:       make(map[uuid.UUID]User),
-		pools:       make(map[uuid.UUID]StoragePool),
-		names:       make(map[string]struct{}),
-		timelines:   make(map[uuid.UUID]Timeline),
-		tenantNames: make(map[tenantNameKey]struct{}),
-		endpoints:   make(map[uuid.UUID]Endpoint),
-		writers:     make(map[timelineKey]struct{}),
-		now:         time.Now,
+		users:        make(map[uuid.UUID]User),
+		pools:        make(map[uuid.UUID]StoragePool),
+		names:        make(map[string]struct{}),
+		timelines:    make(map[uuid.UUID]Timeline),
+		timelinePool: make(map[uuid.UUID]uuid.UUID),
+		tenantNames:  make(map[tenantNameKey]struct{}),
+		endpoints:    make(map[uuid.UUID]Endpoint),
+		writers:      make(map[timelineKey]struct{}),
+		now:          time.Now,
 	}
 }
 
@@ -86,38 +90,46 @@ func (m *MemBackend) CreateStoragePool(_ context.Context, owner uuid.UUID, name 
 	return p, nil
 }
 
-func (m *MemBackend) ListStoragePools(_ context.Context, owner uuid.UUID) ([]StoragePool, error) {
+func (m *MemBackend) ListUsers(_ context.Context, limit, offset int) ([]User, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.users[owner]; !ok {
-		return nil, ErrNotFound
+	users := make([]User, 0, len(m.users))
+	for _, u := range m.users {
+		users = append(users, u)
 	}
-	var pools []StoragePool
-	for _, p := range m.pools {
-		if p.OwnerUserID == owner {
-			pools = append(pools, p)
-		}
-	}
-	sortPoolsByCreatedAt(pools)
-	return pools, nil
+	sort.SliceStable(users, func(i, j int) bool {
+		return createdBefore(users[i].CreatedAt, users[j].CreatedAt, users[i].ID, users[j].ID)
+	})
+	return page(users, limit, offset), len(users), nil
 }
 
-func (m *MemBackend) GetStoragePool(_ context.Context, owner, poolID uuid.UUID) (StoragePool, error) {
+func (m *MemBackend) ListStoragePools(_ context.Context, limit, offset int) ([]StoragePool, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pools := make([]StoragePool, 0, len(m.pools))
+	for _, p := range m.pools {
+		pools = append(pools, p)
+	}
+	sort.SliceStable(pools, func(i, j int) bool {
+		return createdBefore(pools[i].CreatedAt, pools[j].CreatedAt, pools[i].ID, pools[j].ID)
+	})
+	return page(pools, limit, offset), len(pools), nil
+}
+
+func (m *MemBackend) GetStoragePool(_ context.Context, poolID uuid.UUID) (StoragePool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	p, ok := m.pools[poolID]
-	if !ok || p.OwnerUserID != owner {
+	if !ok {
 		return StoragePool{}, ErrNotFound
 	}
 	return p, nil
 }
 
-func (m *MemBackend) CreateTimeline(_ context.Context, owner, poolID uuid.UUID, name string, pgVersion int) (Timeline, error) {
+func (m *MemBackend) CreateTimeline(_ context.Context, poolID uuid.UUID, name string, pgVersion int) (Timeline, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Owner-scoped: a pool the caller doesn't own is treated as absent.
-	p, ok := m.pools[poolID]
-	if !ok || p.OwnerUserID != owner {
+	if _, ok := m.pools[poolID]; !ok {
 		return Timeline{}, ErrNotFound
 	}
 	key := tenantNameKey{poolID: poolID, name: name}
@@ -133,8 +145,27 @@ func (m *MemBackend) CreateTimeline(_ context.Context, owner, poolID uuid.UUID, 
 		CreatedAt:  m.now(),
 	}
 	m.timelines[t.TimelineID] = t
+	m.timelinePool[t.TimelineID] = poolID
 	m.tenantNames[key] = struct{}{}
 	return t, nil
+}
+
+func (m *MemBackend) ListTimelines(_ context.Context, poolID uuid.UUID, limit, offset int) ([]Timeline, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.pools[poolID]; !ok {
+		return nil, 0, ErrNotFound
+	}
+	var timelines []Timeline
+	for id, tl := range m.timelines {
+		if m.timelinePool[id] == poolID {
+			timelines = append(timelines, tl)
+		}
+	}
+	sort.SliceStable(timelines, func(i, j int) bool {
+		return createdBefore(timelines[i].CreatedAt, timelines[j].CreatedAt, timelines[i].TimelineID, timelines[j].TimelineID)
+	})
+	return page(timelines, limit, offset), len(timelines), nil
 }
 
 func (m *MemBackend) CreateEndpoint(_ context.Context, tenantID, timelineID uuid.UUID, role, address string) (Endpoint, error) {
@@ -163,19 +194,42 @@ func (m *MemBackend) CreateEndpoint(_ context.Context, tenantID, timelineID uuid
 	return e, nil
 }
 
-func sortPoolsByCreatedAt(pools []StoragePool) {
-	// Insertion sort keeps a stable, dependency-free ordering matching the
-	// pg backend's ORDER BY created_at, id (lists are tiny in tests).
-	for i := 1; i < len(pools); i++ {
-		for j := i; j > 0 && less(pools[j], pools[j-1]); j-- {
-			pools[j], pools[j-1] = pools[j-1], pools[j]
+func (m *MemBackend) ListEndpoints(_ context.Context, poolID, timelineID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.pools[poolID]; !ok {
+		return nil, 0, ErrNotFound
+	}
+	// The timeline must live in the addressed pool, mirroring the pg backend's
+	// join through tenant.storage_pool_id.
+	if m.timelinePool[timelineID] != poolID {
+		return nil, 0, ErrNotFound
+	}
+	var endpoints []Endpoint
+	for _, e := range m.endpoints {
+		if e.TimelineID == timelineID {
+			endpoints = append(endpoints, e)
 		}
 	}
+	sort.SliceStable(endpoints, func(i, j int) bool {
+		return createdBefore(endpoints[i].CreatedAt, endpoints[j].CreatedAt, endpoints[i].ID, endpoints[j].ID)
+	})
+	return page(endpoints, limit, offset), len(endpoints), nil
 }
 
-func less(a, b StoragePool) bool {
-	if a.CreatedAt.Equal(b.CreatedAt) {
-		return a.ID.String() < b.ID.String()
+// createdBefore orders items by (created_at, id), matching the pg backend's
+// ORDER BY created_at, <id> so the two backends paginate identically.
+func createdBefore(ti, tj time.Time, idi, idj uuid.UUID) bool {
+	if ti.Equal(tj) {
+		return idi.String() < idj.String()
 	}
-	return a.CreatedAt.Before(b.CreatedAt)
+	return ti.Before(tj)
+}
+
+// page returns the half-open window items[offset : offset+limit], clamped to the
+// slice bounds. The API layer guarantees limit >= 1 and offset >= 0.
+func page[T any](items []T, limit, offset int) []T {
+	start := min(offset, len(items))
+	end := min(start+limit, len(items))
+	return items[start:end]
 }

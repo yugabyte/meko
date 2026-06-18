@@ -7,21 +7,29 @@ info:
     Control-plane REST API for the **amp controller** (yblight-controller): the
     control plane for a single placement group. See `amp/architecture/`.
 
-    This is the initial API surface (issue
-    [#92](https://github.com/yugabyte/yb-light/issues/92)):
+    The resource ladder is **storage pool → timeline → endpoint**. Users are a
+    basic, *unauthenticated* notion of an identity; there is no auth yet (the
+    user/grant model is designed but authentication is deferred).
 
-    - **Users** — a basic, *unauthenticated* notion of a user. A caller acts as
-      a user by addressing resources under `/users/{userId}`; there is no auth
-      yet (the user/grant model is designed but authentication is deferred).
-    - **Storage pools** — any user can create a pool and becomes its owner.
-      Pool sharing (pool grants) is out of scope here; a user sees only the
-      pools they own.
-    - **Timelines** — create / delete / branch a timeline in a pool. *Create*
-      provisions the control-plane record: it creates a tenant (a "database")
-      and its main timeline under the pool and returns their storage-layer ids
-      (`tenant_id`, `timeline_id`). *Delete* and *branch* are still **logged
-      only** (202): the write-ahead task framework that will execute them is not
-      yet wired up.
+    - **Users** — created and fetched by id, and listed. A user owns the storage
+      pools it creates.
+    - **Storage pools** — *top-level* resources (not nested under a user): any
+      user can create a pool (passing its `owner_user_id`) and becomes its owner.
+      Pool sharing (pool grants) is out of scope here, but a pool is addressed by
+      its own id because multiple users will eventually act on it. Listing
+      returns every pool.
+    - **Timelines** — create / list / delete / branch a timeline in a pool.
+      *Create* provisions the control-plane record: it creates a tenant (a
+      "database") and its main timeline under the pool and returns their
+      storage-layer ids (`tenant_id`, `timeline_id`). *Delete* and *branch* are
+      still **logged only** (202): the write-ahead task framework that will
+      execute them is not yet wired up.
+    - **Endpoints** — the compute bound to a timeline; listed under the timeline.
+
+    **Pagination.** List endpoints take `limit` and `offset` query parameters
+    (values outside the documented range are clamped) and return a `total` (the
+    count of *all* matching items, ignoring `limit`/`offset`) alongside a `count`
+    (the number of items in *this* response).
 
     Every non-2xx response uses the same `Error` envelope. `500` is possible on
     any operation; it is documented per operation so generated clients get a
@@ -40,9 +48,11 @@ tags:
   - name: users
     description: A basic, unauthenticated notion of a user.
   - name: storage-pools
-    description: Storage pools (≈ a Meko datapack); created and owned by a user.
+    description: Storage pools (≈ a Meko datapack); top-level, created and owned by a user.
   - name: timelines
     description: Timelines (PG clusters) in a pool. Create is real; delete/branch are logged only for now.
+  - name: endpoints
+    description: Compute endpoints bound to a timeline.
   - name: tasks
     description: Status of long-running operations (the write-ahead task log).
 
@@ -70,6 +80,24 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '500':
           $ref: '#/components/responses/InternalError'
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: List users
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of users.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
   /users/{userId}:
     parameters:
@@ -92,14 +120,12 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /users/{userId}/storage-pools:
-    parameters:
-      - $ref: '#/components/parameters/UserId'
+  /storage-pools:
     post:
       tags: [storage-pools]
       operationId: createStoragePool
-      summary: Create a storage pool owned by the user
-      description: Creates a storage pool with the addressed user as its owner. Pool names are unique across the placement group.
+      summary: Create a storage pool
+      description: Creates a storage pool owned by the user named in `owner_user_id`. Pool names are unique across the placement group.
       requestBody:
         required: true
         content:
@@ -124,30 +150,30 @@ paths:
     get:
       tags: [storage-pools]
       operationId: listStoragePools
-      summary: List storage pools owned by the user
-      description: Lists the storage pools the user owns. Pool sharing is out of scope, so this is exactly the user's owned pools.
+      summary: List storage pools
+      description: Lists every storage pool in the placement group. Owner filtering is out of scope for now (pool sharing is deferred).
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
       responses:
         '200':
-          description: The user's storage pools.
+          description: A page of storage pools.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/StoragePoolList'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /users/{userId}/storage-pools/{poolId}:
+  /storage-pools/{poolId}:
     parameters:
-      - $ref: '#/components/parameters/UserId'
       - $ref: '#/components/parameters/PoolId'
     get:
       tags: [storage-pools]
       operationId: getStoragePool
-      summary: Get a storage pool owned by the user
+      summary: Get a storage pool
       responses:
         '200':
           description: The storage pool.
@@ -162,9 +188,8 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /users/{userId}/storage-pools/{poolId}/timelines:
+  /storage-pools/{poolId}/timelines:
     parameters:
-      - $ref: '#/components/parameters/UserId'
       - $ref: '#/components/parameters/PoolId'
     post:
       tags: [timelines]
@@ -173,8 +198,8 @@ paths:
       description: |
         Creates a tenant (a "database") in the pool together with its main
         timeline (a PG cluster), and returns their storage-layer ids
-        (`tenant_id`, `timeline_id`). The name is unique within the pool. The
-        caller must own the pool, or the pool 404s (owner-scoped).
+        (`tenant_id`, `timeline_id`). The name is unique within the pool. Returns
+        404 if the pool does not exist.
       requestBody:
         required: true
         content:
@@ -196,10 +221,30 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
+    get:
+      tags: [timelines]
+      operationId: listTimelines
+      summary: List the timelines in a pool
+      description: Lists the timelines across all tenants in the pool. Returns 404 if the pool does not exist.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of timelines.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TimelineList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
-  /users/{userId}/storage-pools/{poolId}/timelines/{timelineId}:
+  /storage-pools/{poolId}/timelines/{timelineId}:
     parameters:
-      - $ref: '#/components/parameters/UserId'
       - $ref: '#/components/parameters/PoolId'
       - $ref: '#/components/parameters/TimelineId'
     delete:
@@ -219,9 +264,8 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /users/{userId}/storage-pools/{poolId}/timelines/{timelineId}/branch:
+  /storage-pools/{poolId}/timelines/{timelineId}/branch:
     parameters:
-      - $ref: '#/components/parameters/UserId'
       - $ref: '#/components/parameters/PoolId'
       - $ref: '#/components/parameters/TimelineId'
     post:
@@ -248,6 +292,32 @@ paths:
                 $ref: '#/components/schemas/OperationAck'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /storage-pools/{poolId}/timelines/{timelineId}/endpoints:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/TimelineId'
+    get:
+      tags: [endpoints]
+      operationId: listEndpoints
+      summary: List the endpoints bound to a timeline
+      description: Lists the compute endpoints bound to the timeline. Returns 404 if the pool or timeline does not exist.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of endpoints.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EndpointList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -307,6 +377,25 @@ components:
       schema:
         type: string
         format: uuid
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return. Clamped to 1..1000; defaults to 100.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+    Offset:
+      name: offset
+      in: query
+      required: false
+      description: Number of items to skip from the start of the result set. Negative values are clamped to 0.
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
 
   responses:
     BadRequest:
@@ -357,6 +446,19 @@ components:
           default: false
           description: Create the user as an admin.
 
+    UserList:
+      type: object
+      required: [users, total, count]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        total:
+          $ref: '#/components/schemas/TotalCount'
+        count:
+          $ref: '#/components/schemas/PageCount'
+
     StoragePool:
       type: object
       required: [id, name, owner_user_id, created_at]
@@ -375,22 +477,30 @@ components:
 
     StoragePoolList:
       type: object
-      required: [storage_pools]
+      required: [storage_pools, total, count]
       properties:
         storage_pools:
           type: array
           items:
             $ref: '#/components/schemas/StoragePool'
+        total:
+          $ref: '#/components/schemas/TotalCount'
+        count:
+          $ref: '#/components/schemas/PageCount'
 
     CreateStoragePoolRequest:
       type: object
-      required: [name]
+      required: [name, owner_user_id]
       properties:
         name:
           type: string
           minLength: 1
           maxLength: 63
           description: Pool name; unique across the placement group.
+        owner_user_id:
+          type: string
+          format: uuid
+          description: The user that will own the pool.
 
     CreateTimelineRequest:
       type: object
@@ -430,6 +540,19 @@ components:
           description: The compute endpoint provisioned for the timeline, when endpoint deployment is enabled. Connect to its address with psql (user cloud_admin, database postgres).
           $ref: '#/components/schemas/Endpoint'
 
+    TimelineList:
+      type: object
+      required: [timelines, total, count]
+      properties:
+        timelines:
+          type: array
+          items:
+            $ref: '#/components/schemas/Timeline'
+        total:
+          $ref: '#/components/schemas/TotalCount'
+        count:
+          $ref: '#/components/schemas/PageCount'
+
     Endpoint:
       type: object
       required: [id, role, address]
@@ -443,6 +566,19 @@ components:
         address:
           type: string
           description: 'host:port for the Postgres wire protocol.'
+
+    EndpointList:
+      type: object
+      required: [endpoints, total, count]
+      properties:
+        endpoints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Endpoint'
+        total:
+          $ref: '#/components/schemas/TotalCount'
+        count:
+          $ref: '#/components/schemas/PageCount'
 
     BranchTimelineRequest:
       type: object
@@ -494,6 +630,14 @@ components:
         updated_at:
           type: string
           format: date-time
+
+    TotalCount:
+      type: integer
+      description: The number of items matching the request across all pages (ignores limit/offset).
+
+    PageCount:
+      type: integer
+      description: The number of items returned in this response (this page).
 
     Error:
       type: object

@@ -121,7 +121,7 @@ func TestCreateStoragePoolStatusCodes(t *testing.T) {
 	u := mustCreateUser(t, client, false)
 
 	// Empty name -> 400.
-	bad, err := client.CreateStoragePoolWithResponse(ctx, u.Id, api.CreateStoragePoolRequest{Name: "  "})
+	bad, err := client.CreateStoragePoolWithResponse(ctx, api.CreateStoragePoolRequest{Name: "  ", OwnerUserId: u.Id})
 	if err != nil {
 		t.Fatalf("CreateStoragePool(empty): %v", err)
 	}
@@ -129,8 +129,17 @@ func TestCreateStoragePoolStatusCodes(t *testing.T) {
 		t.Fatalf("empty name status = %d, body = %s", bad.StatusCode(), bad.Body)
 	}
 
+	// Missing owner_user_id -> 400.
+	noOwner, err := client.CreateStoragePoolWithResponse(ctx, api.CreateStoragePoolRequest{Name: "p1"})
+	if err != nil {
+		t.Fatalf("CreateStoragePool(no owner): %v", err)
+	}
+	if noOwner.StatusCode() != http.StatusBadRequest || noOwner.JSON400 == nil {
+		t.Fatalf("missing owner_user_id status = %d, body = %s", noOwner.StatusCode(), noOwner.Body)
+	}
+
 	// Unknown owner -> 404.
-	missing, err := client.CreateStoragePoolWithResponse(ctx, uuid.New(), api.CreateStoragePoolRequest{Name: "p1"})
+	missing, err := client.CreateStoragePoolWithResponse(ctx, api.CreateStoragePoolRequest{Name: "p1", OwnerUserId: uuid.New()})
 	if err != nil {
 		t.Fatalf("CreateStoragePool(missing user): %v", err)
 	}
@@ -139,7 +148,7 @@ func TestCreateStoragePoolStatusCodes(t *testing.T) {
 	}
 
 	// Valid -> 201, owned by the user.
-	ok, err := client.CreateStoragePoolWithResponse(ctx, u.Id, api.CreateStoragePoolRequest{Name: "p1"})
+	ok, err := client.CreateStoragePoolWithResponse(ctx, api.CreateStoragePoolRequest{Name: "p1", OwnerUserId: u.Id})
 	if err != nil {
 		t.Fatalf("CreateStoragePool: %v", err)
 	}
@@ -154,7 +163,7 @@ func TestCreateStoragePoolStatusCodes(t *testing.T) {
 	}
 
 	// Duplicate name -> 409.
-	dup, err := client.CreateStoragePoolWithResponse(ctx, u.Id, api.CreateStoragePoolRequest{Name: "p1"})
+	dup, err := client.CreateStoragePoolWithResponse(ctx, api.CreateStoragePoolRequest{Name: "p1", OwnerUserId: u.Id})
 	if err != nil {
 		t.Fatalf("CreateStoragePool(dup): %v", err)
 	}
@@ -169,7 +178,7 @@ func TestCreateStoragePoolTrimsName(t *testing.T) {
 	u := mustCreateUser(t, client, false)
 
 	// Surrounding whitespace is trimmed before the pool is stored.
-	resp, err := client.CreateStoragePoolWithResponse(ctx, u.Id, api.CreateStoragePoolRequest{Name: "  padded  "})
+	resp, err := client.CreateStoragePoolWithResponse(ctx, api.CreateStoragePoolRequest{Name: "  padded  ", OwnerUserId: u.Id})
 	if err != nil {
 		t.Fatalf("CreateStoragePool: %v", err)
 	}
@@ -189,7 +198,7 @@ func TestCreateTimeline(t *testing.T) {
 
 	// Create timeline -> 201 with real (tenant_id, timeline_id).
 	pgv := 17
-	ct, err := client.CreateTimelineWithResponse(ctx, u.Id, pool.Id, api.CreateTimelineRequest{Name: "main", PgVersion: &pgv})
+	ct, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "main", PgVersion: &pgv})
 	if err != nil {
 		t.Fatalf("CreateTimeline: %v", err)
 	}
@@ -205,7 +214,7 @@ func TestCreateTimeline(t *testing.T) {
 	}
 
 	// Empty name -> 400.
-	ctBad, err := client.CreateTimelineWithResponse(ctx, u.Id, pool.Id, api.CreateTimelineRequest{Name: ""})
+	ctBad, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: ""})
 	if err != nil {
 		t.Fatalf("CreateTimeline(empty): %v", err)
 	}
@@ -214,7 +223,7 @@ func TestCreateTimeline(t *testing.T) {
 	}
 
 	// Duplicate name in the same pool -> 409.
-	dup, err := client.CreateTimelineWithResponse(ctx, u.Id, pool.Id, api.CreateTimelineRequest{Name: "main"})
+	dup, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "main"})
 	if err != nil {
 		t.Fatalf("CreateTimeline(dup): %v", err)
 	}
@@ -222,8 +231,8 @@ func TestCreateTimeline(t *testing.T) {
 		t.Fatalf("CreateTimeline(dup) status = %d, body = %s", dup.StatusCode(), dup.Body)
 	}
 
-	// Unknown / unowned pool -> 404 (owner-scoped).
-	missing, err := client.CreateTimelineWithResponse(ctx, u.Id, uuid.New(), api.CreateTimelineRequest{Name: "x"})
+	// Unknown pool -> 404.
+	missing, err := client.CreateTimelineWithResponse(ctx, uuid.New(), api.CreateTimelineRequest{Name: "x"})
 	if err != nil {
 		t.Fatalf("CreateTimeline(missing pool): %v", err)
 	}
@@ -233,7 +242,7 @@ func TestCreateTimeline(t *testing.T) {
 
 	// Unsupported pg_version -> 400 (yb-light is v17 only).
 	badVer := 15
-	bv, err := client.CreateTimelineWithResponse(ctx, u.Id, pool.Id, api.CreateTimelineRequest{Name: "pg15", PgVersion: &badVer})
+	bv, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "pg15", PgVersion: &badVer})
 	if err != nil {
 		t.Fatalf("CreateTimeline(bad version): %v", err)
 	}
@@ -277,7 +286,7 @@ func TestCreateTimelineRemovesEndpointWhenRecordFails(t *testing.T) {
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
-	ct, err := client.CreateTimelineWithResponse(ctx, u.Id, pool.Id, api.CreateTimelineRequest{Name: "main"})
+	ct, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "main"})
 	if err != nil {
 		t.Fatalf("CreateTimeline: %v", err)
 	}
@@ -297,7 +306,7 @@ func TestCreateTimelineProvisionsEndpoint(t *testing.T) {
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
-	ct, err := client.CreateTimelineWithResponse(ctx, u.Id, pool.Id, api.CreateTimelineRequest{Name: "main"})
+	ct, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "main"})
 	if err != nil {
 		t.Fatalf("CreateTimeline: %v", err)
 	}
@@ -330,7 +339,7 @@ func TestTimelineDeleteBranchLoggedOnly(t *testing.T) {
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
 	// Delete timeline -> 202 (logged only, parent not validated).
-	del, err := client.DeleteTimelineWithResponse(ctx, u.Id, pool.Id, uuid.New())
+	del, err := client.DeleteTimelineWithResponse(ctx, pool.Id, uuid.New())
 	if err != nil {
 		t.Fatalf("DeleteTimeline: %v", err)
 	}
@@ -339,14 +348,14 @@ func TestTimelineDeleteBranchLoggedOnly(t *testing.T) {
 	}
 
 	// Branch timeline -> 202; empty name -> 400.
-	br, err := client.BranchTimelineWithResponse(ctx, u.Id, pool.Id, uuid.New(), api.BranchTimelineRequest{Name: "feature"})
+	br, err := client.BranchTimelineWithResponse(ctx, pool.Id, uuid.New(), api.BranchTimelineRequest{Name: "feature"})
 	if err != nil {
 		t.Fatalf("BranchTimeline: %v", err)
 	}
 	if br.StatusCode() != http.StatusAccepted || br.JSON202 == nil {
 		t.Fatalf("BranchTimeline status = %d, body = %s", br.StatusCode(), br.Body)
 	}
-	brBad, err := client.BranchTimelineWithResponse(ctx, u.Id, pool.Id, uuid.New(), api.BranchTimelineRequest{Name: ""})
+	brBad, err := client.BranchTimelineWithResponse(ctx, pool.Id, uuid.New(), api.BranchTimelineRequest{Name: ""})
 	if err != nil {
 		t.Fatalf("BranchTimeline(empty): %v", err)
 	}
@@ -413,8 +422,8 @@ func (f *fakeTaskStore) Plan(context.Context, string, json.RawMessage, []task.St
 func (f *fakeTaskStore) ClaimNext(context.Context, string, time.Duration) (*task.Task, error) {
 	return nil, nil
 }
-func (f *fakeTaskStore) Steps(context.Context, uuid.UUID) ([]task.Step, error)    { return nil, nil }
-func (f *fakeTaskStore) StartStep(context.Context, uuid.UUID, int) error          { return nil }
+func (f *fakeTaskStore) Steps(context.Context, uuid.UUID) ([]task.Step, error) { return nil, nil }
+func (f *fakeTaskStore) StartStep(context.Context, uuid.UUID, int) error       { return nil }
 func (f *fakeTaskStore) CompleteStep(context.Context, uuid.UUID, int, json.RawMessage) error {
 	return nil
 }

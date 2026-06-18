@@ -77,6 +77,19 @@ func (c *Controllers) GetUser(ctx context.Context, request GetUserRequestObject)
 	return GetUser200JSONResponse(userToAPI(u)), nil
 }
 
+func (c *Controllers) ListUsers(ctx context.Context, request ListUsersRequestObject) (ListUsersResponseObject, error) {
+	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
+	users, total, err := c.backend.ListUsers(ctx, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	out := make([]User, 0, len(users))
+	for _, u := range users {
+		out = append(out, userToAPI(u))
+	}
+	return ListUsers200JSONResponse(UserList{Users: out, Total: total, Count: len(out)}), nil
+}
+
 // --- Storage pools ---------------------------------------------------------
 
 func (c *Controllers) CreateStoragePool(ctx context.Context, request CreateStoragePoolRequestObject) (CreateStoragePoolResponseObject, error) {
@@ -87,7 +100,12 @@ func (c *Controllers) CreateStoragePool(ctx context.Context, request CreateStora
 	if name == "" {
 		return CreateStoragePool400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
 	}
-	p, err := c.backend.CreateStoragePool(ctx, request.UserId, name)
+	// Pools are top-level, so the owner is named in the body rather than the path.
+	owner := request.Body.OwnerUserId
+	if owner == uuid.Nil {
+		return CreateStoragePool400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "owner_user_id is required"))}, nil
+	}
+	p, err := c.backend.CreateStoragePool(ctx, owner, name)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return CreateStoragePool404JSONResponse{NotFoundJSONResponse(apiError("not_found", "user not found"))}, nil
@@ -97,28 +115,26 @@ func (c *Controllers) CreateStoragePool(ctx context.Context, request CreateStora
 		return nil, fmt.Errorf("create storage pool: %w", err)
 	}
 	c.logger.LogAttrs(ctx, slog.LevelInfo, "storage pool created",
-		slog.String(applog.KeyUserID, request.UserId.String()),
+		slog.String(applog.KeyUserID, owner.String()),
 		slog.String(applog.KeyStoragePoolID, p.ID.String()))
 	return CreateStoragePool201JSONResponse(poolToAPI(p)), nil
 }
 
 func (c *Controllers) ListStoragePools(ctx context.Context, request ListStoragePoolsRequestObject) (ListStoragePoolsResponseObject, error) {
-	pools, err := c.backend.ListStoragePools(ctx, request.UserId)
-	switch {
-	case errors.Is(err, core.ErrNotFound):
-		return ListStoragePools404JSONResponse{NotFoundJSONResponse(apiError("not_found", "user not found"))}, nil
-	case err != nil:
+	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
+	pools, total, err := c.backend.ListStoragePools(ctx, limit, offset)
+	if err != nil {
 		return nil, fmt.Errorf("list storage pools: %w", err)
 	}
 	out := make([]StoragePool, 0, len(pools))
 	for _, p := range pools {
 		out = append(out, poolToAPI(p))
 	}
-	return ListStoragePools200JSONResponse(StoragePoolList{StoragePools: out}), nil
+	return ListStoragePools200JSONResponse(StoragePoolList{StoragePools: out, Total: total, Count: len(out)}), nil
 }
 
 func (c *Controllers) GetStoragePool(ctx context.Context, request GetStoragePoolRequestObject) (GetStoragePoolResponseObject, error) {
-	p, err := c.backend.GetStoragePool(ctx, request.UserId, request.PoolId)
+	p, err := c.backend.GetStoragePool(ctx, request.PoolId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return GetStoragePool404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
@@ -154,7 +170,7 @@ func (c *Controllers) CreateTimeline(ctx context.Context, request CreateTimeline
 		return CreateTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
 			fmt.Sprintf("unsupported pg_version %d (only %d is supported)", pgVersion, defaultPgVersion)))}, nil
 	}
-	tl, err := c.backend.CreateTimeline(ctx, request.UserId, request.PoolId, name, pgVersion)
+	tl, err := c.backend.CreateTimeline(ctx, request.PoolId, name, pgVersion)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return CreateTimeline404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
@@ -166,7 +182,6 @@ func (c *Controllers) CreateTimeline(ctx context.Context, request CreateTimeline
 	tenantHex := hex32(tl.TenantID)
 	timelineHex := hex32(tl.TimelineID)
 	c.logger.LogAttrs(ctx, slog.LevelInfo, "timeline created",
-		slog.String(applog.KeyUserID, request.UserId.String()),
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
 		slog.String(applog.KeyTenantID, tl.TenantID.String()),
 		slog.String(applog.KeyTimelineID, tl.TimelineID.String()),
@@ -218,7 +233,8 @@ func (c *Controllers) CreateTimeline(ctx context.Context, request CreateTimeline
 			}
 			return nil, fmt.Errorf("record endpoint: %w", err)
 		}
-		out.Endpoint = &Endpoint{Id: rec.ID, Role: ReadWrite, Address: rec.Address}
+		apiEp := endpointToAPI(rec)
+		out.Endpoint = &apiEp
 		c.logger.LogAttrs(ctx, slog.LevelInfo, "endpoint created",
 			slog.String(applog.KeyTenantID, tl.TenantID.String()),
 			slog.String(applog.KeyTimelineID, tl.TimelineID.String()),
@@ -233,9 +249,24 @@ func hex32(id uuid.UUID) string {
 	return hex.EncodeToString(id[:])
 }
 
+func (c *Controllers) ListTimelines(ctx context.Context, request ListTimelinesRequestObject) (ListTimelinesResponseObject, error) {
+	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
+	timelines, total, err := c.backend.ListTimelines(ctx, request.PoolId, limit, offset)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return ListTimelines404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("list timelines: %w", err)
+	}
+	out := make([]Timeline, 0, len(timelines))
+	for _, t := range timelines {
+		out = append(out, timelineToAPI(t))
+	}
+	return ListTimelines200JSONResponse(TimelineList{Timelines: out, Total: total, Count: len(out)}), nil
+}
+
 func (c *Controllers) DeleteTimeline(ctx context.Context, request DeleteTimelineRequestObject) (DeleteTimelineResponseObject, error) {
 	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete timeline requested (logged only; task framework pending)",
-		slog.String(applog.KeyUserID, request.UserId.String()),
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
 		slog.String(applog.KeyTimelineID, request.TimelineId.String()))
 	return DeleteTimeline202JSONResponse(loggedAck("delete timeline")), nil
@@ -250,11 +281,28 @@ func (c *Controllers) BranchTimeline(ctx context.Context, request BranchTimeline
 		return BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
 	}
 	c.logger.LogAttrs(ctx, slog.LevelInfo, "branch timeline requested (logged only; task framework pending)",
-		slog.String(applog.KeyUserID, request.UserId.String()),
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
 		slog.String(applog.KeyTimelineID, request.TimelineId.String()), // the parent
 		slog.String("branch_name", name))
 	return BranchTimeline202JSONResponse(loggedAck("branch timeline")), nil
+}
+
+// --- Endpoints -------------------------------------------------------------
+
+func (c *Controllers) ListEndpoints(ctx context.Context, request ListEndpointsRequestObject) (ListEndpointsResponseObject, error) {
+	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
+	endpoints, total, err := c.backend.ListEndpoints(ctx, request.PoolId, request.TimelineId, limit, offset)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return ListEndpoints404JSONResponse{NotFoundJSONResponse(apiError("not_found", "timeline not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("list endpoints: %w", err)
+	}
+	out := make([]Endpoint, 0, len(endpoints))
+	for _, e := range endpoints {
+		out = append(out, endpointToAPI(e))
+	}
+	return ListEndpoints200JSONResponse(EndpointList{Endpoints: out, Total: total, Count: len(out)}), nil
 }
 
 // --- Tasks -----------------------------------------------------------------
@@ -296,6 +344,35 @@ func timelineToAPI(t core.Timeline) Timeline {
 		IsMain:     t.IsMain,
 		CreatedAt:  t.CreatedAt,
 	}
+}
+
+func endpointToAPI(e core.Endpoint) Endpoint {
+	return Endpoint{Id: e.ID, Role: EndpointRole(e.Role), Address: e.Address}
+}
+
+// Pagination bounds for the list endpoints, matching the spec's limit parameter.
+const (
+	defaultPageLimit = 100
+	maxPageLimit     = 1000
+)
+
+// pageParams resolves the spec's optional limit/offset query parameters into
+// backend arguments: limit defaults to 100 and is clamped to 1..1000; offset
+// defaults to 0 and is clamped to >= 0. Out-of-range values are clamped rather
+// than rejected, so a caller never has a list call 400 on pagination alone.
+func pageParams(limit *Limit, offset *Offset) (int, int) {
+	l := defaultPageLimit
+	if limit != nil {
+		l = int(*limit)
+	}
+	l = max(1, min(l, maxPageLimit))
+
+	o := 0
+	if offset != nil {
+		o = int(*offset)
+	}
+	o = max(0, o)
+	return l, o
 }
 
 func taskToAPI(t *task.Task) Task {
