@@ -992,7 +992,7 @@ impl Timeline {
 
         use futures::StreamExt;
         let mut results: BTreeMap<Key, Result<Bytes, PageReconstructError>> = meta_results;
-        futures::pin_mut!(futs);
+        let mut futs = std::pin::pin!(futs);
         while let Some((key, res)) = futs.next().await {
             results.insert(key, res);
         }
@@ -1955,8 +1955,7 @@ impl Timeline {
 
             let materializer_task = match (mat_channel, walredo_mgr.clone()) {
                 (Some((rx, in_flight)), Some(wr)) => {
-                    let pg_major = postgres_ffi::PgMajorVersion::try_from(pg_version)
-                        .expect("invalid pg_version in timeline init");
+                    let pg_major = pg_version;
                     Some(crate::image_materializer::ImageMaterializer::spawn(
                         tenant_id,
                         timeline_id,
@@ -1991,7 +1990,7 @@ impl Timeline {
                 tenant_conf,
                 myself: myself.clone(),
                 timeline_id,
-                tenant_id: tenant_id,
+                tenant_id,
                 generation,
                 pg_version,
 
@@ -2775,10 +2774,10 @@ impl Drop for Timeline {
     }
 }
 
-/// Descriptor for a delta layer used in testing infra. The start/end key/lsn range of the
-/// delta layer might be different from the min/max key/lsn in the delta layer. Therefore,
-/// the layer descriptor requires the user to provide the ranges, which should cover all
-/// keys specified in the `data` field.
+// Descriptor for a delta layer used in testing infra. The start/end key/lsn range of the
+// delta layer might be different from the min/max key/lsn in the delta layer. Therefore,
+// the layer descriptor requires the user to provide the ranges, which should cover all
+// keys specified in the `data` field.
 
 impl Timeline {
     async fn find_gc_time_cutoff(
@@ -3162,7 +3161,7 @@ fn chain_to_value_reconstruct_state(
     } else if anchor.will_init {
         // will_init delta anchor: it fully initialises the page, so no
         // base_img is needed — include it as the first (oldest) record.
-        &chain[..]
+        chain
     } else {
         // No anchor at all: the oldest row is a plain delta (not an
         // image, not will_init), so there is nothing to initialise the

@@ -364,6 +364,8 @@ pub struct WriterStats {
 }
 
 impl PageWriter {
+    // Wide signature: constructor wires up all collaborators in one place.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tenant_id: TenantId,
         timeline_id: TimelineId,
@@ -614,7 +616,7 @@ impl PageWriter {
             .filter(|(c, b)| *c > 0 || *b > 0);
         // Rel rows: per-key DashMap shards; no global lock.
         for row in rel_rows {
-            let key = row.key.clone();
+            let key = row.key;
             let lsn = row.lsn;
             let resets_chain = row.is_image || row.will_init;
             let payload_len = row.payload.len() as u32;
@@ -734,7 +736,7 @@ impl PageWriter {
                     .with_label_values(&["materializer"])
                     .inc();
             }
-            let key_for_rollback = job.key.clone();
+            let key_for_rollback = job.key;
             if let Err(e) = m.tx.send(job).await {
                 tracing::debug!("materialiser send dropped (receiver closed): {e}");
                 m.in_flight.lock().unwrap().remove(&key_for_rollback);
@@ -789,7 +791,7 @@ impl PageWriter {
             return;
         }
         let crossed = {
-            let mut tally = self.delta_counts.entry(key.clone()).or_default();
+            let mut tally = self.delta_counts.entry(*key).or_default();
             let was_hit = tally.hits(count_limit, payload_bytes_limit);
             tally.count = tally.count.saturating_add(1);
             tally.payload_bytes = tally.payload_bytes.saturating_add(payload_len);
@@ -804,7 +806,7 @@ impl PageWriter {
             tally.hits(count_limit, payload_bytes_limit) && !was_hit
         };
         if crossed {
-            self.delta_ready.insert(key.clone());
+            self.delta_ready.insert(*key);
         }
     }
 
@@ -840,12 +842,12 @@ impl PageWriter {
             let key = entry.key();
             let Some(tally) = self.delta_counts.get(key).map(|t| *t) else {
                 // Tally gone (anchor reset it) — stale hint.
-                stale.push(key.clone());
+                stale.push(*key);
                 continue;
             };
             let (count_limit, payload_bytes_limit) = Self::materialize_limits(m, key);
             if !tally.hits(count_limit, payload_bytes_limit) {
-                stale.push(key.clone());
+                stale.push(*key);
                 continue;
             }
             if tally.last_lsn == Lsn(0) || tally.last_lsn > horizon {
@@ -853,11 +855,11 @@ impl PageWriter {
                 // flush once the horizon advances.
                 continue;
             }
-            let inserted = m.in_flight.lock().unwrap().insert(key.clone());
+            let inserted = m.in_flight.lock().unwrap().insert(*key);
             if inserted {
-                dispatched.push(key.clone());
+                dispatched.push(*key);
                 to_dispatch.push(MaterializeJob {
-                    key: key.clone(),
+                    key: *key,
                     target_lsn: tally.last_lsn,
                 });
             }
@@ -1163,7 +1165,7 @@ impl PageWriter {
         // other keys do not block install; reads on THIS key see a
         // brief shard-lock blip while trim/push run.
         let t_start = Instant::now();
-        let key = image.key.clone();
+        let key = image.key;
         let lsn = image.lsn;
         let t_trim_start = Instant::now();
         self.pages.trim_key_up_to(&key, lsn);
@@ -1324,7 +1326,7 @@ impl PageWriter {
             {
                 let mut max_lsn_per_key: HashMap<Key, Lsn> = HashMap::new();
                 for row in &rel_rows {
-                    let entry = max_lsn_per_key.entry(row.key.clone()).or_insert(Lsn(0));
+                    let entry = max_lsn_per_key.entry(row.key).or_insert(Lsn(0));
                     if row.lsn > *entry {
                         *entry = row.lsn;
                     }
@@ -1340,12 +1342,12 @@ impl PageWriter {
                 for entry in self.delta_ready.iter() {
                     let key = entry.key();
                     let Some(tally) = self.delta_counts.get(key).map(|t| *t) else {
-                        stale.push(key.clone());
+                        stale.push(*key);
                         continue;
                     };
                     let (count_limit, payload_bytes_limit) = Self::materialize_limits(m, key);
                     if !tally.hits(count_limit, payload_bytes_limit) {
-                        stale.push(key.clone());
+                        stale.push(*key);
                         continue;
                     }
                     let target_lsn = match max_lsn_per_key.get(key) {
@@ -1365,11 +1367,11 @@ impl PageWriter {
                             tally.last_lsn
                         }
                     };
-                    let inserted = m.in_flight.lock().unwrap().insert(key.clone());
+                    let inserted = m.in_flight.lock().unwrap().insert(*key);
                     if inserted {
-                        dispatched.push(key.clone());
+                        dispatched.push(*key);
                         to_materialize.push(MaterializeJob {
-                            key: key.clone(),
+                            key: *key,
                             target_lsn,
                         });
                     }
@@ -2215,6 +2217,17 @@ mod tests {
         }
     }
 
+    /// What the `writer_with_materializer*` fixtures hand back: the writer,
+    /// its tenant/timeline ids, the job receiver, and the shared `in_flight`
+    /// set.
+    type MaterializerFixture = (
+        PageWriter,
+        TenantId,
+        TimelineId,
+        tokio::sync::mpsc::Receiver<MaterializeJob>,
+        Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
+    );
+
     /// `writer` plus an installed materializer handle. Returns the
     /// receiver so tests can pull queued jobs AND the `in_flight`
     /// Arc so tests can simulate the materialiser's per-batch
@@ -2225,13 +2238,7 @@ mod tests {
         store: Arc<PageStore>,
         policy: FlushPolicy,
         limit: u32,
-    ) -> (
-        PageWriter,
-        TenantId,
-        TimelineId,
-        tokio::sync::mpsc::Receiver<MaterializeJob>,
-        Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
-    ) {
+    ) -> MaterializerFixture {
         // Default fixture: count-only trigger (payload-bytes disabled)
         // so existing tests stay deterministic on count-based thresholds.
         writer_with_materializer_thresholds(store, policy, limit, 0, 0)
@@ -2248,13 +2255,7 @@ mod tests {
         count_limit: u32,
         payload_bytes_limit: u32,
         slru_count_limit: u32,
-    ) -> (
-        PageWriter,
-        TenantId,
-        TimelineId,
-        tokio::sync::mpsc::Receiver<MaterializeJob>,
-        Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
-    ) {
+    ) -> MaterializerFixture {
         let t = TenantId::generate();
         let tl = TimelineId::generate();
         let mut w = PageWriter::new(

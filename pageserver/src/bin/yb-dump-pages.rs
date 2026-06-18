@@ -363,7 +363,7 @@ mod tests {
         let (max_off, counts) = lp_state(&page);
         assert_eq!(max_off, 3);
         assert_eq!(counts.get("NORMAL"), Some(&3));
-        assert!(counts.get("UNUSED").is_none());
+        assert!(!counts.contains_key("UNUSED"));
     }
 
     /// Build a minimal Neon-RM XLogRecord: header + one same-rel block

@@ -132,9 +132,11 @@ async fn main() -> anyhow::Result<()> {
     println!("copy OK");
 
     // Range download.
-    let mut opts = DownloadOpts::default();
-    opts.byte_start = std::ops::Bound::Included(100);
-    opts.byte_end = std::ops::Bound::Excluded(200);
+    let opts = DownloadOpts {
+        byte_start: std::ops::Bound::Included(100),
+        byte_end: std::ops::Bound::Excluded(200),
+        ..DownloadOpts::default()
+    };
     let mut dl3 = storage.download(&key_a, &opts, &cancel).await?;
     let mut got3: Vec<u8> = Vec::new();
     while let Some(chunk) = dl3.download_stream.next().await {

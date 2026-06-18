@@ -3055,8 +3055,8 @@ mod tests {
 
     /// Replay below the durable horizon: storage already knows a size
     /// >= nblocks. No size-key rewrite, but the cache MUST advance to
-    /// the storage value — a cache left untouched here is the #22
-    /// pin that re-zero-fills live blocks on every record.
+    /// > the storage value — a cache left untouched here is the #22
+    /// > pin that re-zero-fills live blocks on every record.
     #[test]
     fn rel_extend_replay_advances_cache_without_write() {
         let plan = rel_extend_plan(100, 61);

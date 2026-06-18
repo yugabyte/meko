@@ -179,6 +179,73 @@ pub fn require_single_safekeeper(
     Ok(())
 }
 
+impl SafeKeeperConf {
+    pub fn dummy() -> Self {
+        SafeKeeperConf {
+            workdir: Utf8PathBuf::from("./"),
+            listen_pg_addr: defaults::DEFAULT_PG_LISTEN_ADDR.to_string(),
+            listen_pg_addr_tenant_only: None,
+            listen_http_addr: defaults::DEFAULT_HTTP_LISTEN_ADDR.to_string(),
+            listen_https_addr: None,
+            advertise_pg_addr: None,
+            availability_zone: None,
+            yb_storage_conn: None,
+            tenant_id: None,
+            timeline_id: None,
+            wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
+            my_id: NodeId(0),
+            pg_auth: None,
+            pg_tenant_only_auth: None,
+            http_auth: None,
+            sk_auth_token: None,
+            heartbeat_timeout: Duration::new(5, 0),
+            max_timeline_disk_usage_bytes: defaults::DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES,
+            global_disk_check_interval: Duration::from_secs(60),
+            max_global_disk_usage_ratio: defaults::DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO,
+            current_thread_runtime: false,
+            control_file_save_interval: Duration::from_secs(1),
+            wal_reader_fanout: false,
+            max_delta_for_fanout: None,
+            ssl_key_file: Utf8PathBuf::from(defaults::DEFAULT_SSL_KEY_FILE),
+            ssl_cert_file: Utf8PathBuf::from(defaults::DEFAULT_SSL_CERT_FILE),
+            ssl_cert_reload_period: Duration::from_secs(60),
+            ssl_ca_certs: Vec::new(),
+            use_https_safekeeper_api: false,
+            enable_tls_wal_service_api: false,
+            force_metric_collection_on_scrape: true,
+        }
+    }
+}
+
+// Tokio runtimes.
+pub static WAL_SERVICE_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_name("WAL service worker")
+        .enable_all()
+        .build()
+        .expect("Failed to create WAL service runtime")
+});
+
+pub static HTTP_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_name("HTTP worker")
+        .enable_all()
+        .build()
+        .expect("Failed to create HTTP runtime")
+});
+
+/// Dedicated runtime for infrequent background tasks.
+pub static BACKGROUND_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_name("SK background worker")
+        // One worker thread is enough, as most of the actual tasks run on blocking threads
+        // which has it own thread pool.
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("Failed to create background runtime")
+});
+
 #[cfg(test)]
 mod yb_mode_tests {
     use super::require_single_safekeeper;
@@ -267,70 +334,3 @@ mod yb_mode_tests {
         );
     }
 }
-
-impl SafeKeeperConf {
-    pub fn dummy() -> Self {
-        SafeKeeperConf {
-            workdir: Utf8PathBuf::from("./"),
-            listen_pg_addr: defaults::DEFAULT_PG_LISTEN_ADDR.to_string(),
-            listen_pg_addr_tenant_only: None,
-            listen_http_addr: defaults::DEFAULT_HTTP_LISTEN_ADDR.to_string(),
-            listen_https_addr: None,
-            advertise_pg_addr: None,
-            availability_zone: None,
-            yb_storage_conn: None,
-            tenant_id: None,
-            timeline_id: None,
-            wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
-            my_id: NodeId(0),
-            pg_auth: None,
-            pg_tenant_only_auth: None,
-            http_auth: None,
-            sk_auth_token: None,
-            heartbeat_timeout: Duration::new(5, 0),
-            max_timeline_disk_usage_bytes: defaults::DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES,
-            global_disk_check_interval: Duration::from_secs(60),
-            max_global_disk_usage_ratio: defaults::DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO,
-            current_thread_runtime: false,
-            control_file_save_interval: Duration::from_secs(1),
-            wal_reader_fanout: false,
-            max_delta_for_fanout: None,
-            ssl_key_file: Utf8PathBuf::from(defaults::DEFAULT_SSL_KEY_FILE),
-            ssl_cert_file: Utf8PathBuf::from(defaults::DEFAULT_SSL_CERT_FILE),
-            ssl_cert_reload_period: Duration::from_secs(60),
-            ssl_ca_certs: Vec::new(),
-            use_https_safekeeper_api: false,
-            enable_tls_wal_service_api: false,
-            force_metric_collection_on_scrape: true,
-        }
-    }
-}
-
-// Tokio runtimes.
-pub static WAL_SERVICE_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-    tokio::runtime::Builder::new_multi_thread()
-        .thread_name("WAL service worker")
-        .enable_all()
-        .build()
-        .expect("Failed to create WAL service runtime")
-});
-
-pub static HTTP_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-    tokio::runtime::Builder::new_multi_thread()
-        .thread_name("HTTP worker")
-        .enable_all()
-        .build()
-        .expect("Failed to create HTTP runtime")
-});
-
-/// Dedicated runtime for infrequent background tasks.
-pub static BACKGROUND_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-    tokio::runtime::Builder::new_multi_thread()
-        .thread_name("SK background worker")
-        // One worker thread is enough, as most of the actual tasks run on blocking threads
-        // which has it own thread pool.
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .expect("Failed to create background runtime")
-});

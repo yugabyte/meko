@@ -3734,7 +3734,7 @@ impl proto::PageService for GrpcPageServiceHandler {
         let timeline = handles
             .get(tenant_id, timeline_id)
             .await
-            .map_err(|err| tonic::Status::from(err))?
+            .map_err(tonic::Status::from)?
             .downgrade();
 
         // Construct the GetPageRequest stream handler.

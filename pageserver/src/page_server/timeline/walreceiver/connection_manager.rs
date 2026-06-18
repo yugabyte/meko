@@ -254,9 +254,8 @@ impl Backoff {
             (self.duration_seconds * 1000.0) as i64,
         ));
         let next = self.duration_seconds * RECONNECT_BACKOFF_MULTIPLIER;
-        self.duration_seconds = next
-            .min(RECONNECT_MAX_BACKOFF_SECONDS)
-            .max(RECONNECT_MIN_BACKOFF_SECONDS);
+        self.duration_seconds =
+            next.clamp(RECONNECT_MIN_BACKOFF_SECONDS, RECONNECT_MAX_BACKOFF_SECONDS);
     }
 
     /// How long to wait before the next attempt, or `None` if we may try

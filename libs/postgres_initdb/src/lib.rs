@@ -50,7 +50,7 @@ pub async fn do_run_initdb(args: RunInitdbArgs<'_>) -> Result<(), Error> {
         superuser,
         locale,
         initdb_bin: initdb_bin_path,
-        pg_version,
+        pg_version: _,
         library_search_path,
         pgdata,
     } = args;

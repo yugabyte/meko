@@ -11,9 +11,9 @@
 //! - `decode`        — WAL decoder added the row to the per-shard batch.
 //! - `put`           — `PageWriter::put` pushed it into `UnifiedPages`.
 //! - `snapshot`      — `PageWriter::flush` captured it in the unflushed
-//!                     snapshot it is about to send to YB.
+//!   snapshot it is about to send to YB.
 //! - `put_pages_in`  — `PageStore::put_pages` is about to INSERT this
-//!                     row's chunk.
+//!   row's chunk.
 //! - `put_pages_ok`  — the chunk's INSERT returned success.
 //! - `durable`       — `mark_flushed` flipped the cache slot durable.
 //!

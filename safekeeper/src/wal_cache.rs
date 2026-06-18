@@ -176,7 +176,7 @@ impl WalCache {
         if let Some(seg) = self.by_segno.get_mut(&segno_end) {
             let drops: Vec<u64> = seg
                 .iter()
-                .filter(|(off, c)| *off + &(c.chunk_size as u64) > end_offset)
+                .filter(|(off, c)| *off + (c.chunk_size as u64) > end_offset)
                 .map(|(off, _)| *off)
                 .collect();
             for off in drops {

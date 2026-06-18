@@ -115,6 +115,7 @@ pub struct SlruPageRow {
 ///   2. the same flushed delta listed twice because the cache+YB merge found
 ///      it in both sources — byte-identical, so dropping the duplicate is
 ///      lossless.
+///
 /// What IS flagged: two non-image rows at one LSN whose CONTENT differs — a
 /// *non-image* survivor over a row with a different payload. That means we are
 /// silently dropping a real, distinct record. It reads back as a hole in the chain
@@ -711,7 +712,7 @@ impl PageStore {
             }
             // Cheap Arc-clone per row keeps its `payload` alive so we can
             // bind `&[u8]` slices below without copying the page bytes.
-            let arcs: Vec<Arc<PageRow>> = chunk.iter().cloned().collect();
+            let arcs: Vec<Arc<PageRow>> = chunk.to_vec();
             // Common full chunk reuses the memoized SQL; the rare short
             // final chunk rebuilds (one alloc, ids baked in).
             let sql: Arc<str> = if n == ROWS_PER_INSERT {
@@ -735,13 +736,13 @@ impl PageStore {
             let traced_in_chunk: Vec<(Key, Lsn)> = chunk
                 .iter()
                 .filter(|row| pageserver_api::write_trace::is_traced(&row.key))
-                .map(|row| (row.key.clone(), row.lsn))
+                .map(|row| (row.key, row.lsn))
                 .collect();
             for (k, l) in &traced_in_chunk {
                 pageserver_api::write_trace::trace_stage("put_pages_in", k, *l);
             }
-            let chunk_first = chunk.first().map(|r| (r.key.clone(), r.lsn));
-            let chunk_last = chunk.last().map(|r| (r.key.clone(), r.lsn));
+            let chunk_first = chunk.first().map(|r| (r.key, r.lsn));
+            let chunk_last = chunk.last().map(|r| (r.key, r.lsn));
             futs.push(Box::pin(async move {
                 let payloads: Vec<&[u8]> = arcs.iter().map(|r| r.payload.as_ref()).collect();
                 let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * PAGES_PER_ROW);
@@ -1002,8 +1003,8 @@ impl PageStore {
         let mut order_check: HashMap<Key, Vec<(Lsn, bool, bool)>> = HashMap::new();
         for r in rows {
             let row = row_to_page(r)?;
-            let key = row.key.clone();
-            order_check.entry(key.clone()).or_default().push((
+            let key = row.key;
+            order_check.entry(key).or_default().push((
                 row.lsn,
                 row.is_image,
                 row.will_init,
@@ -3020,7 +3021,7 @@ mod tests {
             .unwrap();
         // 3 keys (blknum 1, 2, 3); each with 2 rows.
         assert_eq!(got.len(), 3);
-        for (_k, chain) in &got {
+        for chain in got.values() {
             assert_eq!(chain.len(), 2);
             assert_eq!(chain[0].lsn, Lsn(20));
             assert_eq!(chain[1].lsn, Lsn(10));

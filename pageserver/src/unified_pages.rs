@@ -213,9 +213,9 @@ impl UnifiedPages {
     /// this row — `insert_entry` keeps it and reports back that nothing
     /// new was added, so we don't double-record it in the FIFO.
     pub fn push(&self, row: PageRow) {
-        let key = row.key.clone();
+        let key = row.key;
         let lsn = row.lsn;
-        if self.insert_entry(key.clone(), lsn, row, false) {
+        if self.insert_entry(key, lsn, row, false) {
             self.unflushed_fifo.lock().push_back((key, lsn));
         }
     }
@@ -232,7 +232,7 @@ impl UnifiedPages {
     /// same Arc reaches both the YB INSERT (`put_pages`) and the cache
     /// install — no struct copy at the boundary.
     pub fn push_durable_arc(&self, row: Arc<PageRow>) {
-        let key = row.key.clone();
+        let key = row.key;
         let lsn = row.lsn;
         self.insert_arc_entry(key, lsn, row, true);
     }
@@ -262,7 +262,7 @@ impl UnifiedPages {
                 ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
             }
             promoted_by_key
-                .entry(entry.row.key.clone())
+                .entry(entry.row.key)
                 .or_default()
                 .push(entry.row.lsn);
         }
@@ -301,7 +301,7 @@ impl UnifiedPages {
                     break;
                 }
                 let Some((key, _)) = lru.front() else { break };
-                key.clone()
+                *key
             };
 
             // Check pinned + remove if evictable, holding the key's
@@ -531,7 +531,7 @@ impl UnifiedPages {
         target_lsn: Lsn,
     ) -> HashMap<Key, Vec<Arc<PageRow>>> {
         let mut out: HashMap<Key, Vec<Arc<PageRow>>> = HashMap::new();
-        for node in self.by_key.range(start_key.clone()..end_key.clone()) {
+        for node in self.by_key.range(*start_key..*end_key) {
             let rows: Vec<Arc<PageRow>> = node
                 .value()
                 .lock()
@@ -541,7 +541,7 @@ impl UnifiedPages {
                 .map(|(_, e)| e.row_arc())
                 .collect();
             if !rows.is_empty() {
-                out.insert(node.key().clone(), rows);
+                out.insert(*node.key(), rows);
             }
         }
         out
@@ -645,7 +645,7 @@ impl UnifiedPages {
                 if lru.contains_key(&key) {
                     lru.to_back(&key);
                 } else {
-                    lru.insert(key.clone(), ());
+                    lru.insert(key, ());
                 }
             }
 
@@ -673,7 +673,7 @@ impl UnifiedPages {
             //     accounting + drop the stale FIFO entry.
             let node = self
                 .by_key
-                .get_or_insert(key.clone(), Mutex::new(KeyState::new()));
+                .get_or_insert(key, Mutex::new(KeyState::new()));
             let mut ks_guard = node.value().lock();
             if node.is_removed() {
                 // Raced an eviction/trim that removed this node between

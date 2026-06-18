@@ -136,6 +136,9 @@ impl Drop for WriteGuardSharedState<'_> {
 /// Usually it holds SafeKeeper, but it also supports offloaded timeline state. In this
 /// case, SafeKeeper is not available (because WAL is not present on disk) and all
 /// operations can be done only with control file.
+// `Loaded` dominates the size; the `Empty` transitional state is rare and short-lived,
+// so boxing the common variant would cost more than the unused space.
+#[allow(clippy::large_enum_variant)]
 pub enum StateSK {
     Loaded(SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore>),
     // Not used, required for moving between states.

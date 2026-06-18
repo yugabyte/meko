@@ -518,7 +518,7 @@ impl GlobalTimelines {
 
         // If there was an error, return it.
         if let Some(e) = err {
-            return Err(anyhow::Error::from(e));
+            return Err(e);
         }
 
         // There may be broken timelines on disk, so delete the whole tenant dir as well.

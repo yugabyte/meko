@@ -146,6 +146,8 @@ impl MaterializerTask {
 }
 
 impl ImageMaterializer {
+    // Wide signature: spawn wires up all collaborators in one place.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn spawn(
         tenant_id: TenantId,
         timeline_id: TimelineId,
@@ -288,8 +290,8 @@ impl ImageMaterializer {
 
     /// Phase 1 of the pipelined materialise step: run chain reads
     /// + walredo for every job in the batch. Returns a [`RedoOutcome`]
-    /// ready to be handed to [`commit_phase`], which runs the bulk
-    /// INSERT + cache install asynchronously.
+    ///   ready to be handed to [`commit_phase`], which runs the bulk
+    ///   INSERT + cache install asynchronously.
     ///
     /// Per-job redo errors are logged and skipped — one bad chain
     /// shouldn't drop the whole batch. The function itself currently
@@ -582,7 +584,7 @@ impl ImageMaterializer {
                     .into_iter()
                     .map(|r| {
                         std::sync::Arc::new(PageRow {
-                            key: job.key.clone(),
+                            key: job.key,
                             lsn: r.lsn,
                             is_image: r.is_image,
                             will_init: r.will_init,
@@ -694,7 +696,7 @@ impl ImageMaterializer {
         drop(chain_guard);
         Ok(Some((
             PageRow {
-                key: job.key.clone(),
+                key: job.key,
                 lsn: actual_lsn,
                 is_image: true,
                 will_init: true,
@@ -706,15 +708,18 @@ impl ImageMaterializer {
     }
 }
 
+/// The `(base_img, records)` pair `WalRedoManager::request_redo` expects:
+/// an optional base image at an LSN, plus the LSN-stamped WAL records to
+/// replay on top of it.
+type RedoChain = (Option<(Lsn, Bytes)>, Vec<(Lsn, NeonWalRecord)>);
+
 /// Turn an LSN-descending chain (oldest at `chain.last()`) into the
 /// `(base_img, records)` pair `WalRedoManager::request_redo` expects.
 /// Mirrors `page_server::timeline::chain_to_value_reconstruct_state` but
 /// returns the tuple directly so we don't pull in the read-path's
 /// `ValueReconstructState` (which lives in `storage_layer`, slated for
 /// removal in Phase 4d).
-fn parse_chain(
-    chain: &[std::sync::Arc<PageRow>],
-) -> Result<(Option<(Lsn, Bytes)>, Vec<(Lsn, NeonWalRecord)>)> {
+fn parse_chain(chain: &[std::sync::Arc<PageRow>]) -> Result<RedoChain> {
     use utils::bin_ser::BeSer;
 
     if chain.is_empty() {
@@ -729,7 +734,7 @@ fn parse_chain(
             &chain[..anchor_idx],
         )
     } else {
-        (None, &chain[..])
+        (None, chain)
     };
 
     let mut records = Vec::with_capacity(records_slice.len());

@@ -1038,6 +1038,8 @@ async fn truncate_wals_above(
 ///
 /// Exits cleanly when `tx` is dropped (channel closes from the
 /// producer side, `rx.recv()` returns `None`).
+// Wide signature: consumer task needs the full set of YB connection params.
+#[allow(clippy::too_many_arguments)]
 async fn consumer_main(
     mut rx: mpsc::Receiver<PendingChunk>,
     ysql_fpu_client: Arc<YsqlClient>,
@@ -1407,8 +1409,7 @@ impl AsyncRead for YbSegmentReader {
                 }
                 Poll::Ready(Ok(Err(e))) => {
                     me.fetch = None;
-                    return Poll::Ready(Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Poll::Ready(Err(std::io::Error::other(
                         format!(
                             "YB WAL fetch failed for segno {} offset {}: {e}",
                             me.segno, me.pos
@@ -1419,8 +1420,7 @@ impl AsyncRead for YbSegmentReader {
                     // Spawned fetch task dropped its sender without
                     // sending — shouldn't happen, but treat as IO error.
                     me.fetch = None;
-                    return Poll::Ready(Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Poll::Ready(Err(std::io::Error::other(
                         "YB WAL fetch task dropped without result",
                     )));
                 }

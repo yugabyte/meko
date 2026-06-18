@@ -6,6 +6,7 @@
 //! connection address. So this test only:
 //!   1. calls amp's REST API (user -> storage pool -> timeline), and
 //!   2. runs PG against the endpoint address amp hands back.
+//!
 //! There is no container/Docker orchestration here — that is amp's job.
 //!
 //! amp itself is started by `test/e2e/run-amp.sh`, which passes its base URL in

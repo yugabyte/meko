@@ -834,6 +834,8 @@ impl YsqlClient {
     /// exhaustion (`Exhaust`), or signals a fatal classification
     /// (`Fatal`). Centralized so the prepare-failure and run-failure
     /// paths in `run_with_retries` share identical logic.
+    // Wide signature: retry-classification context that callers pass through verbatim.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_retry_outcome(
         &self,
         slot: usize,
@@ -1288,7 +1290,7 @@ mod retry_class_tests {
         ];
         for needle in expected {
             assert!(
-                YB_TRANSIENT_MSG_PATTERNS.iter().any(|p| *p == needle),
+                YB_TRANSIENT_MSG_PATTERNS.contains(&needle),
                 "missing transient pattern: {needle}"
             );
         }

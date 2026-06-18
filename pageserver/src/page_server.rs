@@ -1021,8 +1021,6 @@ impl PageServer {
             .collect()
     }
 
-    /// Helper for unit tests to create a timeline with some pre-loaded states.
-
     /// perform one garbage collection iteration, removing old data files from disk.
     /// this function is periodically called by gc task.
     /// also it can be explicitly requested through page server api 'do_gc' command.
@@ -1935,11 +1933,6 @@ impl PageServer {
         self.timeline()
             .map(|t| t.metrics.visible_physical_size_gauge.get())
             .unwrap_or(0)
-    }
-
-    /// Return the visible size of the timeline.
-    pub(crate) fn get_visible_size(&self) -> u64 {
-        self.local_storage_wanted()
     }
 }
 

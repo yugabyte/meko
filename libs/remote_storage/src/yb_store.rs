@@ -320,10 +320,10 @@ impl YbStore {
     ///   with these segments **dropped**:
     ///     - the literal `tenants` and `timelines` markers,
     ///     - the tenant_id and timeline_id values themselves.
-    ///   What's left is the trailing discriminator the object would have
-    ///   relative to its `(namespace, tenant_id, timeline_id)` bucket —
-    ///   e.g. `000000-FFF__layer-1`, `tenant-manifest-1.json`,
-    ///   `safekeeper-control`, or `000000010000000000000005`.
+    ///       What's left is the trailing discriminator the object would have
+    ///       relative to its `(namespace, tenant_id, timeline_id)` bucket —
+    ///       e.g. `000000-FFF__layer-1`, `tenant-manifest-1.json`,
+    ///       `safekeeper-control`, or `000000010000000000000005`.
     ///
     /// [`reconstruct_key`] is the inverse — it knows the per-namespace
     /// layout convention and reassembles the original path.

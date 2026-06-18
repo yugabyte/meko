@@ -1712,7 +1712,7 @@ impl Persistence {
                         Some(some) => TimelineImport::from_persistent(some).unwrap(),
                         None => {
                             return Ok(Err(TimelineImportUpdateError::ImportNotFound {
-                                tenant_id: tenant_id,
+                                tenant_id,
                                 timeline_id,
                             }));
                         }
@@ -1743,7 +1743,7 @@ impl Persistence {
 
                             if updated != 1 {
                                 return Ok(Err(TimelineImportUpdateError::ImportNotFound {
-                                    tenant_id: tenant_id,
+                                    tenant_id,
                                     timeline_id,
                                 }));
                             }

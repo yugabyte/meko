@@ -1263,7 +1263,7 @@ async fn watch_tenant_shard(
         let desc = storcon_client
             .dispatch::<(), TenantDescribeResponse>(
                 Method::GET,
-                format!("control/v1/tenant/{}", tenant_id),
+                format!("control/v1/tenant/{tenant_id}"),
                 None,
             )
             .await?;

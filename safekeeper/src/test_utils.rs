@@ -9,11 +9,9 @@ use utils::lsn::Lsn;
 
 use crate::receive_wal::WalAcceptor;
 use crate::safekeeper::{
-    AcceptorProposerMessage, AppendRequest, AppendRequestHeader, ProposerAcceptorMessage,
-    ProposerElected, SafeKeeper, TermHistory,
+    AcceptorProposerMessage, AppendRequest, AppendRequestHeader, ProposerAcceptorMessage, SafeKeeper,
 };
 use crate::send_wal::EndWatch;
-use crate::state::TimelinePersistentState;
 use crate::timeline::{SharedState, StateSK, Timeline, get_timeline_dir};
 use crate::timelines_set::TimelinesSet;
 use crate::yb_wal_storage::YbWalConn;
