@@ -146,12 +146,25 @@ fn main() -> anyhow::Result<()> {
     // disarming this hook on pageserver, because we never tear down tracing.
     logging::replace_panic_hook_with_tracing_panic_hook().forget();
 
-    // Warn about ignored config items; see pageserver_api::config::ConfigToml
-    // doc comment for rationale why we prefer this over serde(deny_unknown_fields).
+    // Refuse to start on unknown configuration items. A misspelled or stale
+    // key in pageserver.toml is almost always an operator mistake (the value
+    // they intended silently has no effect); failing loud at startup beats
+    // running with a config that doesn't mean what it says. This complements
+    // the deserialization-time failures for wrong types, out-of-range values,
+    // and duplicate keys. (Upstream Neon only warns here — see the
+    // pageserver_api::config::ConfigToml doc comment — because their
+    // pageserver.toml has a separate lifecycle from the binary across a large
+    // fleet; yb-light's config is launcher-generated against the same build,
+    // so fail-fast is the right default.)
     {
         let ignored_fields::Paths { paths } = &ignored;
-        for path in paths {
-            warn!(?path, "ignoring unknown configuration item");
+        if !paths.is_empty() {
+            anyhow::bail!(
+                "unknown configuration item(s) in pageserver.toml: {}. \
+                 Remove or correct them (a misspelled key has no effect). \
+                 Aborting start up ...",
+                paths.join(", ")
+            );
         }
     }
 

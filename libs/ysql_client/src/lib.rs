@@ -133,6 +133,7 @@ impl<'de> serde::Deserialize<'de> for HostPorts {
 /// (pageserver → pageserver.pages/slru_pages/meta, safekeeper →
 /// safekeeper.wals, endpoint_storage → public.blobs).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct YbConnConfig {
     /// YB tserver endpoints. Wire form is the CSV string
     /// `host:port[,host:port,...]`; stored parsed (see [`HostPorts`]).

@@ -61,6 +61,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | Compute postmaster dies with `EADDRINUSE` on its own port | yb_light_local port collision | **H** |
 | Fresh `cloud_admin` can't auth over socket / password rejected | role needs socket-trust password set | **I** |
 | PS can't find the safekeeper (broker-less builds) | missing `safekeeper_pg_addr` | **J** |
+| Any process exits at startup: `unknown configuration item(s) …` / `unknown field …` | misspelled, stale, or misplaced config key — rejected, not ignored | **K** |
 
 ---
 
@@ -163,6 +164,22 @@ With the storage_broker removed, the PS discovers the safekeeper via a `safekeep
 `pageserver.toml` (e.g. `safekeeper_pg_addr = '$SK_HOST:$SK_PG_PORT'`) instead of dialing a broker.
 If the PS can't pull WAL / find the SK, confirm that key is present and points at the SK's
 advertised PG address. There is no `broker_endpoint` in these builds.
+
+## K. A process refuses to start on a bad config item
+Config is **fail-fast across every process** (pageserver, safekeeper, endpoint_storage,
+storage_controller, and the `yb_light_local` on-disk config): a config item that is wrong is
+refused at startup rather than logged and ignored. The classes that abort start-up:
+
+- **Unknown / misspelled / stale key** — e.g. `unknown configuration item(s) in pageserver.toml:
+  timeline_init.scale_factor`, or serde `unknown field \`foo\``. The pageserver names the offending
+  paths; the safekeeper / endpoint_storage / `--yb-config` (`YbConnConfig`) report the serde field.
+- **Wrong type / out-of-range value / duplicate key** — already failed at deserialize; unchanged.
+
+A silently-ignored key used to be the trap (the value you intended had no effect). Now it's loud.
+**Fix:** remove or correct the named key, then restart. Note a key is also "unknown" if it's in the
+**wrong table** — e.g. a `[tenant_config]` knob placed at top level, or a connection field outside the
+`yb_storage_conn` block. The compute spec (`compute_ctl`) is deliberately **exempt** — it's supplied
+by the control plane on a separate lifecycle, so it still tolerates unknown fields for version skew.
 
 ---
 

@@ -6,8 +6,9 @@
 //! the node id, lives here.
 //!
 //! All fields have defaults (`#[serde(default)]` + the `Default` impl below),
-//! so a partial `safekeeper.toml` is valid and unknown keys are ignored
-//! (forward-compat across builds).
+//! so a partial `safekeeper.toml` is valid. Unknown keys are **rejected**
+//! (`deny_unknown_fields`): a misspelled or stale config item fails the
+//! safekeeper at startup rather than being silently ignored.
 
 use std::time::Duration;
 
@@ -47,7 +48,7 @@ pub mod defaults {
 /// `SafeKeeperConf` from this (loading the auth-key / ssl-CA files the path
 /// fields point at); neon_local serializes it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SafekeeperConfigToml {
     /// Safekeeper node id. Must be stable across restarts of this instance.
     pub id: NodeId,
@@ -201,10 +202,9 @@ mod tests {
 
     #[test]
     fn partial_toml_fills_defaults() {
-        // A minimal file: missing keys take their defaults, unknown keys are
-        // ignored (forward-compat).
+        // A minimal file: missing keys take their defaults.
         let cfg = SafekeeperConfigToml::from_toml_str(
-            "id = 3\nlisten_pg = '127.0.0.1:5474'\nfuture_key = 'ignored'\n",
+            "id = 3\nlisten_pg = '127.0.0.1:5474'\n",
         )
         .unwrap();
         assert_eq!(cfg.id, NodeId(3));
@@ -212,5 +212,19 @@ mod tests {
         assert_eq!(cfg.heartbeat_timeout, Duration::from_millis(5000));
         assert_eq!(cfg.control_file_save_interval, Duration::from_secs(300));
         assert!(cfg.yb_storage_conn.is_none());
+    }
+
+    #[test]
+    fn unknown_key_is_rejected() {
+        // An unknown/misspelled key fails the safekeeper at startup rather
+        // than being silently ignored (deny_unknown_fields).
+        let err = SafekeeperConfigToml::from_toml_str(
+            "id = 3\nlisten_pg = '127.0.0.1:5474'\nfuture_key = 'oops'\n",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("future_key") || err.to_string().contains("unknown"),
+            "expected an unknown-field error, got: {err}"
+        );
     }
 }

@@ -28,6 +28,7 @@ struct Args {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Config {
     #[serde(default = "listen")]
     listen: std::net::SocketAddr,

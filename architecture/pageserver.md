@@ -349,6 +349,13 @@ Table names are not configured: this one block serves both the page
 store (`pageserver.pages` / `slru_pages` / `meta`) and the object store
 (`public.blobs`), each hardcoded by the component.
 
+Config is **fail-fast**: an unknown/misspelled key in `pageserver.toml`
+aborts startup (`unknown configuration item(s) …`), rather than being logged
+and ignored. `bin/yb-pageserver.rs` detects ignored items by diffing the
+on-disk TOML against the re-serialized `ConfigToml` (so nested keys, e.g.
+inside `yb_storage_conn`, are caught too), alongside the deserialize-time
+failures for wrong types, out-of-range values, and duplicate keys.
+
 `yb_light_local init` accepts a top-level config with this `yb_storage_conn`
 inline table; the generated `pageserver.toml` carries it through.
 

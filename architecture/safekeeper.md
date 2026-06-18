@@ -510,8 +510,11 @@ YB on next start. Logs and pidfile are recreated.
 All configuration lives in `<datadir>/safekeeper.toml` — the safekeeper's
 analogue of `pageserver.toml`, written by neon_local
 (`SafekeeperNode::start`) and read once at startup
-(`safekeeper_api::config::SafekeeperConfigToml`). The only CLI flags are the
-datadir locator and two operational probes:
+(`safekeeper_api::config::SafekeeperConfigToml`). Config is **fail-fast**:
+`SafekeeperConfigToml` is `deny_unknown_fields`, so a misspelled or stale key
+aborts startup rather than being silently ignored (alongside the usual
+wrong-type / bad-value / duplicate-key deserialize failures). The only CLI
+flags are the datadir locator and two operational probes:
 
 ```
 safekeeper -D <datadir> [--init] [--dump-control-file <path>]

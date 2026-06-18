@@ -136,6 +136,17 @@ impl Display for NodeMetadata {
 /// This process is [documented internally](
 /// https://docs.neon.build/storage/pageserver_configuration.html).
 ///
+/// yb-light note: although `ConfigToml` itself still ignores unknown fields at
+/// the serde layer (this struct has no `deny_unknown_fields`), the yb-light
+/// `yb-pageserver` binary treats any ignored field as fatal and refuses to
+/// start (see `bin/yb-pageserver.rs`, which diffs the on-disk TOML against the
+/// re-serialized config). The upstream rollout/rollback rationale above does
+/// not apply here: yb-light's `pageserver.toml` is launcher-generated against
+/// the same build, so a stray key is an operator mistake, not a fleet-skew
+/// feature flag. Consequence: do not add a field with a value-dependent
+/// `skip_serializing_if` anywhere reachable from `ConfigToml` — it would
+/// round-trip-drop at its default value and be misreported as unknown.
+///
 /// Note that above relaxed compatbility for the config format does NOT APPLY
 /// TO THE STORAGE FORMAT. As general guidance, when introducing storage format
 /// changes, ensure that the potential rollback target version will be compatible

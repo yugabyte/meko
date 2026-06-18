@@ -13,20 +13,17 @@ pub struct RemoteStorageConfig {
     pub storage: RemoteStorageKind,
     /// A common timeout enforced for all requests after concurrency limiter permit has been
     /// acquired.
-    #[serde(
-        with = "humantime_serde",
-        default = "default_timeout",
-        skip_serializing_if = "is_default_timeout"
-    )]
+    // Always serialized (no skip_serializing_if): the pageserver treats any
+    // on-disk config key absent from the re-serialized config as an unknown
+    // item and refuses to start. A value-dependent skip here would drop the
+    // key on round-trip when it equals the default, falsely flagging a valid
+    // `timeout` as unknown.
+    #[serde(with = "humantime_serde", default = "default_timeout")]
     pub timeout: Duration,
     /// Alternative timeout used for metadata objects which are expected to be small.
     /// Retained for backwards-compat with existing config files; the
     /// surviving backend (YbStore) doesn't currently use it.
-    #[serde(
-        with = "humantime_serde",
-        default = "default_small_timeout",
-        skip_serializing_if = "is_default_small_timeout"
-    )]
+    #[serde(with = "humantime_serde", default = "default_small_timeout")]
     pub small_timeout: Duration,
 }
 
@@ -55,14 +52,6 @@ fn default_timeout() -> Duration {
 
 fn default_small_timeout() -> Duration {
     RemoteStorageConfig::DEFAULT_SMALL_TIMEOUT
-}
-
-fn is_default_timeout(d: &Duration) -> bool {
-    *d == RemoteStorageConfig::DEFAULT_TIMEOUT
-}
-
-fn is_default_small_timeout(d: &Duration) -> bool {
-    *d == RemoteStorageConfig::DEFAULT_SMALL_TIMEOUT
 }
 
 /// A kind of a remote storage to connect to, with its connection
@@ -150,5 +139,30 @@ mod tests {
         assert_eq!(yb.user, "yugabyte");
         assert_eq!(yb.dbname, "yb_storage");
         assert!(yb.sslmode.is_none());
+    }
+
+    #[test]
+    fn test_yb_store_timeout_not_rejected_by_conn_deny() {
+        // `timeout` belongs to RemoteStorageConfig, not YbConnConfig. With
+        // YbConnConfig#[deny_unknown_fields], the flatten must consume the
+        // RemoteStorageConfig fields before YbConnConfig sees the residual —
+        // otherwise a valid config that sets a timeout would be rejected.
+        let config = parse("host_ports = 'localhost'\ntimeout = '42s'").unwrap();
+        let RemoteStorageKind::YbStore(yb) = &config.storage;
+        assert_eq!(yb.host_ports.to_string(), "localhost:5433");
+        assert_eq!(config.timeout, Duration::from_secs(42));
+    }
+
+    #[test]
+    fn test_yb_store_rejects_unknown_field() {
+        // A misspelled/stale connection key fails to parse rather than being
+        // silently ignored (deny_unknown_fields on YbConnConfig).
+        let err = parse("host_ports = 'localhost'\npasswordenv = 'X'").unwrap_err();
+        assert!(
+            err.to_string().contains("passwordenv")
+                || err.to_string().contains("unknown")
+                || err.to_string().contains("did not match"),
+            "expected an unknown-field error, got: {err}"
+        );
     }
 }
