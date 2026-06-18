@@ -44,7 +44,7 @@ rm -rf "${BUNDLE}"
 mkdir -p "${BUNDLE}/lib" "${BUNDLE}/tools"
 
 # Binaries actually launched by yb_light_local (see local_env.rs).
-for bin in yb-pageserver yb_light_local safekeeper storage_controller compute_ctl endpoint_storage; do
+for bin in yb-pageserver yb_light_local yb-safekeeper storage_controller compute_ctl yb-endpoint-storage; do
     cp -v "target/release/${bin}" "${BUNDLE}/${bin}"
 done
 

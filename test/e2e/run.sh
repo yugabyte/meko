@@ -93,8 +93,8 @@ done
 CLUSTER_BINS=(
     --bin storage_controller
     --bin yb-pageserver
-    --bin safekeeper
-    --bin endpoint_storage
+    --bin yb-safekeeper
+    --bin yb-endpoint-storage
     --bin compute_ctl
 )
 TOOL_BINS=(--bin yb-dump-pages --bin yb-dump-wals --bin yb-reset-consistent-lsn)

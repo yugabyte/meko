@@ -74,7 +74,7 @@ Surviving background work:
   `init()` loads only the baked timeline, never the whole shared table. The
   external API (`get`, `get_all` → `Vec`, `timelines_count`, …) is unchanged.
 - `safekeeper/src/safekeeper.rs` — the consensus state machine.
-- `safekeeper/src/bin/safekeeper.rs` — entry point; reads
+- `safekeeper/src/bin/yb-safekeeper.rs` — entry point; reads
   `<datadir>/safekeeper.toml` into `SafeKeeperConf` (only `-D`/`--init`/
   `--dump-control-file` are CLI flags).
 - `libs/safekeeper_api/src/config.rs` — `SafekeeperConfigToml`, the on-disk
@@ -517,7 +517,7 @@ wrong-type / bad-value / duplicate-key deserialize failures). The only CLI
 flags are the datadir locator and two operational probes:
 
 ```
-safekeeper -D <datadir> [--init] [--dump-control-file <path>]
+yb-safekeeper -D <datadir> [--init] [--dump-control-file <path>]
 ```
 
 A representative `<datadir>/safekeeper.toml`:

@@ -516,7 +516,7 @@ impl LocalEnv {
     }
 
     pub fn endpoint_storage_bin(&self) -> PathBuf {
-        self.yb_light_distrib_dir.join("endpoint_storage")
+        self.yb_light_distrib_dir.join("yb-endpoint-storage")
     }
 
     pub fn pageserver_bin(&self) -> PathBuf {
@@ -534,7 +534,7 @@ impl LocalEnv {
     }
 
     pub fn safekeeper_bin(&self) -> PathBuf {
-        self.yb_light_distrib_dir.join("safekeeper")
+        self.yb_light_distrib_dir.join("yb-safekeeper")
     }
 
     pub fn endpoints_path(&self) -> PathBuf {

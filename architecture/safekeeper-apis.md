@@ -1,7 +1,7 @@
 # Safekeeper HTTP API
 
 Source: `safekeeper/src/http/routes.rs` (router + handlers),
-`safekeeper/src/bin/safekeeper.rs` (listener wiring),
+`safekeeper/src/bin/yb-safekeeper.rs` (listener wiring),
 `libs/safekeeper_api/src/lib.rs` (port default).
 
 The safekeeper exposes a small JSON/HTTP control-and-observability surface.
@@ -11,7 +11,7 @@ below.
 
 ## Binary, listen address, auth
 
-- **Binary**: `safekeeper` (`safekeeper/src/bin/safekeeper.rs`). The HTTP
+- **Binary**: `yb-safekeeper` (`safekeeper/src/bin/yb-safekeeper.rs`). The HTTP
   router is built by `make_router()` and served on the listener bound to
   `conf.listen_http_addr`.
 - **Listen address**: `--listen-http`, default `127.0.0.1:7676`

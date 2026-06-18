@@ -114,11 +114,11 @@ RUN  --mount=type=secret,uid=1000,id=SUBZERO_ACCESS_TOKEN \
       --bin pg_sni_router  \
       --bin pageserver  \
       --bin pagectl  \
-      --bin safekeeper  \
+      --bin yb-safekeeper  \
       --bin storage_broker  \
       --bin storage_controller  \
       --bin proxy  \
-      --bin endpoint_storage \
+      --bin yb-endpoint-storage \
       --bin yb_light_local \
       --bin storage_scrubber \
       --locked --release \
@@ -157,11 +157,11 @@ RUN set -e \
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/pg_sni_router       /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/pageserver          /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/pagectl             /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/safekeeper          /usr/local/bin
+COPY --from=build --chown=neon:neon /home/nonroot/target/release/yb-safekeeper          /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/storage_broker      /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/storage_controller  /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/proxy               /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/endpoint_storage    /usr/local/bin
+COPY --from=build --chown=neon:neon /home/nonroot/target/release/yb-endpoint-storage    /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/yb_light_local          /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/storage_scrubber    /usr/local/bin
 COPY --from=build /home/nonroot/pg_install/v14 /usr/local/v14/

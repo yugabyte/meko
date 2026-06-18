@@ -3,6 +3,12 @@ name = "endpoint_storage"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
+
+# Binary is yb-prefixed (process name); the lib crate stays `endpoint_storage`.
+[[bin]]
+name = "yb-endpoint-storage"
+path = "src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
 axum-extra.workspace = true

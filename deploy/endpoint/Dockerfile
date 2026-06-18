@@ -64,15 +64,15 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
     && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes" \
        cargo build --locked --release \
          --bin yb-pageserver \
-         --bin safekeeper \
-         --bin endpoint_storage \
+         --bin yb-safekeeper \
+         --bin yb-endpoint-storage \
          --bin compute_ctl \
          --bin storage_controller \
          --bin yb_light_local \
     && mkdir -p /home/nonroot/out \
     && cp target/release/yb-pageserver \
-          target/release/safekeeper \
-          target/release/endpoint_storage \
+          target/release/yb-safekeeper \
+          target/release/yb-endpoint-storage \
           target/release/compute_ctl \
           target/release/storage_controller \
           target/release/yb_light_local \
@@ -109,8 +109,8 @@ RUN set -e \
 # Storage + control-plane binaries (copied out of the cache-mounted target dir
 # into /home/nonroot/out by the build stage).
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-pageserver      /usr/local/bin/
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/safekeeper          /usr/local/bin/
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/endpoint_storage    /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-safekeeper          /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-endpoint-storage    /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/compute_ctl         /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/storage_controller  /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb_light_local      /usr/local/bin/
