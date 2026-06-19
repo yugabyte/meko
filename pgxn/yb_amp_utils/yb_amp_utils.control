@@ -1,5 +1,5 @@
 # yb_amp_utils extension
-comment = 'neon_utils - small useful functions'
+comment = 'yb_amp_utils - small useful functions'
 default_version = '1.0'
 module_pathname = '$libdir/yb_amp_utils'
 relocatable = true

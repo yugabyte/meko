@@ -15,31 +15,31 @@
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/freespace.h"
-#include "neon_rmgr.h"
+#include "yb_amp_rmgr.h"
 
 PG_MODULE_MAGIC;
 void		_PG_init(void);
 
-static void neon_rm_redo(XLogReaderState *record);
-static void neon_rm_startup(void);
-static void neon_rm_cleanup(void);
-static void neon_rm_mask(char *pagedata, BlockNumber blkno);
+static void yb_amp_rm_redo(XLogReaderState *record);
+static void yb_amp_rm_startup(void);
+static void yb_amp_rm_cleanup(void);
+static void yb_amp_rm_mask(char *pagedata, BlockNumber blkno);
 
-static void redo_neon_heap_insert(XLogReaderState *record);
-static void redo_neon_heap_delete(XLogReaderState *record);
-static void redo_neon_heap_update(XLogReaderState *record, bool hot_update);
-static void redo_neon_heap_lock(XLogReaderState *record);
-static void redo_neon_heap_multi_insert(XLogReaderState *record);
+static void redo_yb_amp_heap_insert(XLogReaderState *record);
+static void redo_yb_amp_heap_delete(XLogReaderState *record);
+static void redo_yb_amp_heap_update(XLogReaderState *record, bool hot_update);
+static void redo_yb_amp_heap_lock(XLogReaderState *record);
+static void redo_yb_amp_heap_multi_insert(XLogReaderState *record);
 
-const static RmgrData NeonRmgr = {
-	.rm_name = "neon",
-	.rm_redo = neon_rm_redo,
-	.rm_desc = neon_rm_desc,
-	.rm_identify = neon_rm_identify,
-	.rm_startup = neon_rm_startup,
-	.rm_cleanup = neon_rm_cleanup,
-	.rm_mask = neon_rm_mask,
-	.rm_decode = neon_rm_decode,
+const static RmgrData YbAmpRmgr = {
+	.rm_name = "yb_amp",
+	.rm_redo = yb_amp_rm_redo,
+	.rm_desc = yb_amp_rm_desc,
+	.rm_identify = yb_amp_rm_identify,
+	.rm_startup = yb_amp_rm_startup,
+	.rm_cleanup = yb_amp_rm_cleanup,
+	.rm_mask = yb_amp_rm_mask,
+	.rm_decode = yb_amp_rm_decode,
 };
 
 void
@@ -48,53 +48,53 @@ _PG_init(void)
 	if (!process_shared_preload_libraries_in_progress)
 		return;
 
-	RegisterCustomRmgr(RM_NEON_ID, &NeonRmgr);
+	RegisterCustomRmgr(RM_NEON_ID, &YbAmpRmgr);
 }
 
 static void
-neon_rm_redo(XLogReaderState *record)
+yb_amp_rm_redo(XLogReaderState *record)
 {
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 
 	switch (info & XLOG_NEON_OPMASK)
 	{
 		case XLOG_NEON_HEAP_INSERT:
-			redo_neon_heap_insert(record);
+			redo_yb_amp_heap_insert(record);
 			break;
 		case XLOG_NEON_HEAP_DELETE:
-			redo_neon_heap_delete(record);
+			redo_yb_amp_heap_delete(record);
 			break;
 		case XLOG_NEON_HEAP_UPDATE:
-			redo_neon_heap_update(record, false);
+			redo_yb_amp_heap_update(record, false);
 			break;
 		case XLOG_NEON_HEAP_HOT_UPDATE:
-			redo_neon_heap_update(record, true);
+			redo_yb_amp_heap_update(record, true);
 			break;
 		case XLOG_NEON_HEAP_LOCK:
-			redo_neon_heap_lock(record);
+			redo_yb_amp_heap_lock(record);
 			break;
 		case XLOG_NEON_HEAP_MULTI_INSERT:
-			redo_neon_heap_multi_insert(record);
+			redo_yb_amp_heap_multi_insert(record);
 			break;
 		default:
-			elog(PANIC, "neon_rm_redo: unknown op code %u", info);
+			elog(PANIC, "yb_amp_rm_redo: unknown op code %u", info);
 	}
 }
 
 static void
-neon_rm_startup(void)
+yb_amp_rm_startup(void)
 {
 	/* nothing to do here */
 }
 
 static void
-neon_rm_cleanup(void)
+yb_amp_rm_cleanup(void)
 {
 	/* nothing to do here */
 }
 
 static void
-neon_rm_mask(char *pagedata, BlockNumber blkno)
+yb_amp_rm_mask(char *pagedata, BlockNumber blkno)
 {
 	Page		page = (Page) pagedata;
 	OffsetNumber off;
@@ -206,7 +206,7 @@ fix_infomask_from_infobits(uint8 infobits, uint16 *infomask, uint16 *infomask2)
 }
 
 static void
-redo_neon_heap_insert(XLogReaderState *record)
+redo_yb_amp_heap_insert(XLogReaderState *record)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
 	xl_neon_heap_insert *xlrec = (xl_neon_heap_insert *) XLogRecGetData(record);
@@ -266,7 +266,7 @@ redo_neon_heap_insert(XLogReaderState *record)
 		page = BufferGetPage(buffer);
 
 		if (PageGetMaxOffsetNumber(page) + 1 < xlrec->offnum)
-			elog(PANIC, "neon_rm_redo: invalid max offset number");
+			elog(PANIC, "yb_amp_rm_redo: invalid max offset number");
 
 		data = XLogRecGetBlockData(record, 0, &datalen);
 
@@ -291,7 +291,7 @@ redo_neon_heap_insert(XLogReaderState *record)
 
 		if (PageAddItem(page, (Item) htup, newlen, xlrec->offnum,
 						true, true) == InvalidOffsetNumber)
-			elog(PANIC, "neon_rm_redo: failed to add tuple");
+			elog(PANIC, "yb_amp_rm_redo: failed to add tuple");
 
 		freespace = PageGetHeapFreeSpace(page); /* needed to update FSM below */
 
@@ -323,7 +323,7 @@ redo_neon_heap_insert(XLogReaderState *record)
 }
 
 static void
-redo_neon_heap_delete(XLogReaderState *record)
+redo_yb_amp_heap_delete(XLogReaderState *record)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
 	xl_neon_heap_delete *xlrec = (xl_neon_heap_delete *) XLogRecGetData(record);
@@ -362,7 +362,7 @@ redo_neon_heap_delete(XLogReaderState *record)
 			lp = PageGetItemId(page, xlrec->offnum);
 
 		if (PageGetMaxOffsetNumber(page) < xlrec->offnum || !ItemIdIsNormal(lp))
-			elog(PANIC, "neon_rm_redo: invalid lp");
+			elog(PANIC, "yb_amp_rm_redo: invalid lp");
 
 		htup = (HeapTupleHeader) PageGetItem(page, lp);
 
@@ -396,7 +396,7 @@ redo_neon_heap_delete(XLogReaderState *record)
 }
 
 static void
-redo_neon_heap_update(XLogReaderState *record, bool hot_update)
+redo_yb_amp_heap_update(XLogReaderState *record, bool hot_update)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
 	xl_neon_heap_update *xlrec = (xl_neon_heap_update *) XLogRecGetData(record);
@@ -476,7 +476,7 @@ redo_neon_heap_update(XLogReaderState *record, bool hot_update)
 			lp = PageGetItemId(page, offnum);
 
 		if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
-			elog(PANIC, "neon_rm_redo: invalid lp");
+			elog(PANIC, "yb_amp_rm_redo: invalid lp");
 
 		htup = (HeapTupleHeader) PageGetItem(page, lp);
 
@@ -554,7 +554,7 @@ redo_neon_heap_update(XLogReaderState *record, bool hot_update)
 
 		offnum = xlrec->new_offnum;
 		if (PageGetMaxOffsetNumber(page) + 1 < offnum)
-			elog(PANIC, "neon_rm_redo: invalid max offset number");
+			elog(PANIC, "yb_amp_rm_redo: invalid max offset number");
 
 		if (xlrec->flags & XLH_UPDATE_PREFIX_FROM_OLD)
 		{
@@ -632,7 +632,7 @@ redo_neon_heap_update(XLogReaderState *record, bool hot_update)
 
 		offnum = PageAddItem(page, (Item) htup, newlen, offnum, true, true);
 		if (offnum == InvalidOffsetNumber)
-			elog(PANIC, "neon_rm_redo: failed to add tuple");
+			elog(PANIC, "yb_amp_rm_redo: failed to add tuple");
 
 		if (xlrec->flags & XLH_UPDATE_NEW_ALL_VISIBLE_CLEARED)
 			PageClearAllVisible(page);
@@ -668,7 +668,7 @@ redo_neon_heap_update(XLogReaderState *record, bool hot_update)
 }
 
 static void
-redo_neon_heap_lock(XLogReaderState *record)
+redo_yb_amp_heap_lock(XLogReaderState *record)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
 	xl_neon_heap_lock *xlrec = (xl_neon_heap_lock *) XLogRecGetData(record);
@@ -708,7 +708,7 @@ redo_neon_heap_lock(XLogReaderState *record)
 			lp = PageGetItemId(page, offnum);
 
 		if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
-			elog(PANIC, "neon_rm_redo: invalid lp");
+			elog(PANIC, "yb_amp_rm_redo: invalid lp");
 
 		htup = (HeapTupleHeader) PageGetItem(page, lp);
 
@@ -739,7 +739,7 @@ redo_neon_heap_lock(XLogReaderState *record)
 }
 
 static void
-redo_neon_heap_multi_insert(XLogReaderState *record)
+redo_yb_amp_heap_multi_insert(XLogReaderState *record)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
 	xl_neon_heap_multi_insert *xlrec;
@@ -822,7 +822,7 @@ redo_neon_heap_multi_insert(XLogReaderState *record)
 			else
 				offnum = xlrec->offsets[i];
 			if (PageGetMaxOffsetNumber(page) + 1 < offnum)
-				elog(PANIC, "neon_rm_redo: invalid max offset number");
+				elog(PANIC, "yb_amp_rm_redo: invalid max offset number");
 
 			xlhdr = (xl_neon_multi_insert_tuple *) SHORTALIGN(tupdata);
 			tupdata = ((char *) xlhdr) + SizeOfNeonMultiInsertTuple;
@@ -848,10 +848,10 @@ redo_neon_heap_multi_insert(XLogReaderState *record)
 
 			offnum = PageAddItem(page, (Item) htup, newlen, offnum, true, true);
 			if (offnum == InvalidOffsetNumber)
-				elog(PANIC, "neon_rm_redo: failed to add tuple");
+				elog(PANIC, "yb_amp_rm_redo: failed to add tuple");
 		}
 		if (tupdata != endptr)
-			elog(PANIC, "neon_rm_redo: total tuple length mismatch");
+			elog(PANIC, "yb_amp_rm_redo: total tuple length mismatch");
 
 		freespace = PageGetHeapFreeSpace(page); /* needed to update FSM below */
 

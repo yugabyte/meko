@@ -9,7 +9,7 @@
 #include "storage/buf.h"
 #include "storage/bufpage.h"
 
-#include "neon_rmgr.h"
+#include "yb_amp_rmgr.h"
 
 /*
  * NOTE: "keyname" argument cannot have trailing spaces or punctuation
@@ -45,7 +45,7 @@ infobits_desc(StringInfo buf, uint8 infobits, const char *keyname)
 }
 
 void
-neon_rm_desc(StringInfo buf, XLogReaderState *record)
+yb_amp_rm_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
@@ -116,7 +116,7 @@ neon_rm_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-neon_rm_identify(uint8 info)
+yb_amp_rm_identify(uint8 info)
 {
 	const char *id = NULL;
 

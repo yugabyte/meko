@@ -1,5 +1,5 @@
 /*
- * Interface to set of libpq wrappers walproposer and neon_walreader need.
+ * Interface to set of libpq wrappers walproposer and yb_amp_walreader need.
  * Similar to libpqwalreceiver, but it has blocking connection establishment and
  * pqexec which don't fit us. Implementation is at walproposer_pg.c.
  */

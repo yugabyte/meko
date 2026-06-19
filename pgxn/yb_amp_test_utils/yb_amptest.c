@@ -1,16 +1,16 @@
 /*-------------------------------------------------------------------------
  *
- * neontest.c
- *	  Helpers for neon testing and debugging
+ * yb_amptest.c
+ *	  Helpers for yb_amp testing and debugging
  *
  * IDENTIFICATION
- *	 contrib/neon_test_utils/neontest.c
+ *	 contrib/yb_amp_test_utils/yb_amptest.c
  *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
 
-#include "../yb_amp/neon_pgversioncompat.h"
+#include "../yb_amp/yb_amp_pgversioncompat.h"
 
 #include "access/relation.h"
 #include "access/xact.h"
@@ -42,18 +42,18 @@ PG_FUNCTION_INFO_V1(test_release_memory);
 PG_FUNCTION_INFO_V1(clear_buffer_cache);
 PG_FUNCTION_INFO_V1(get_raw_page_at_lsn);
 PG_FUNCTION_INFO_V1(get_raw_page_at_lsn_ex);
-PG_FUNCTION_INFO_V1(neon_xlogflush);
+PG_FUNCTION_INFO_V1(yb_amp_xlogflush);
 PG_FUNCTION_INFO_V1(trigger_panic);
 PG_FUNCTION_INFO_V1(trigger_segfault);
 
 /*
- * Linkage to functions in neon module.
+ * Linkage to functions in yb_amp module.
  * The signature here would need to be updated whenever function parameters change in pagestore_smgr.c
  */
-typedef void (*neon_read_at_lsn_type) (NRelFileInfo rinfo, ForkNumber forkNum, BlockNumber blkno,
-									   neon_request_lsns request_lsns, void *buffer);
+typedef void (*yb_amp_read_at_lsn_type) (NRelFileInfo rinfo, ForkNumber forkNum, BlockNumber blkno,
+									   yb_amp_request_lsns request_lsns, void *buffer);
 
-static neon_read_at_lsn_type neon_read_at_lsn_ptr;
+static yb_amp_read_at_lsn_type yb_amp_read_at_lsn_ptr;
 
 /*
  * Module initialize function: fetch function pointers for cross-module calls.
@@ -62,13 +62,13 @@ void
 _PG_init(void)
 {
 	/* Asserts verify that typedefs above match original declarations */
-	AssertVariableIsOfType(&neon_read_at_lsn, neon_read_at_lsn_type);
-	neon_read_at_lsn_ptr = (neon_read_at_lsn_type)
-		load_external_function("$libdir/yb_amp", "neon_read_at_lsn",
+	AssertVariableIsOfType(&yb_amp_read_at_lsn, yb_amp_read_at_lsn_type);
+	yb_amp_read_at_lsn_ptr = (yb_amp_read_at_lsn_type)
+		load_external_function("$libdir/yb_amp", "yb_amp_read_at_lsn",
 							   true, NULL);
 }
 
-#define neon_read_at_lsn neon_read_at_lsn_ptr
+#define yb_amp_read_at_lsn yb_amp_read_at_lsn_ptr
 
 /*
  * test_consume_oids(int4), for rapidly consuming OIDs, to test wraparound.
@@ -233,7 +233,7 @@ test_release_memory(PG_FUNCTION_ARGS)
 Datum
 clear_buffer_cache(PG_FUNCTION_ARGS)
 {
-	bool		save_neon_test_evict;
+	bool		save_yb_amp_test_evict;
 
 	/*
 	 * Temporarily set the neon_test_evict GUC, so that when we pin and
@@ -241,7 +241,7 @@ clear_buffer_cache(PG_FUNCTION_ARGS)
 	 * buffers, as there is no explicit "evict this buffer" function in the
 	 * buffer manager.
 	 */
-	save_neon_test_evict = neon_test_evict;
+	save_yb_amp_test_evict = neon_test_evict;
 	neon_test_evict = true;
 	PG_TRY();
 	{
@@ -286,7 +286,7 @@ clear_buffer_cache(PG_FUNCTION_ARGS)
 	PG_FINALLY();
 	{
 		/* restore the GUC */
-		neon_test_evict = save_neon_test_evict;
+		neon_test_evict = save_yb_amp_test_evict;
 	}
 	PG_END_TRY();
 
@@ -312,7 +312,7 @@ get_raw_page_at_lsn(PG_FUNCTION_ARGS)
 	text	   *relname;
 	text	   *forkname;
 	uint32		blkno;
-	neon_request_lsns	request_lsns;
+	yb_amp_request_lsns	request_lsns;
 
 	if (PG_NARGS() != 5)
 		elog(ERROR, "unexpected number of arguments in SQL function signature");
@@ -386,7 +386,7 @@ get_raw_page_at_lsn(PG_FUNCTION_ARGS)
 	SET_VARSIZE(raw_page, BLCKSZ + VARHDRSZ);
 	raw_page_data = VARDATA(raw_page);
 
-	neon_read_at_lsn(InfoFromRelation(rel), forknum, blkno, request_lsns,
+	yb_amp_read_at_lsn(InfoFromRelation(rel), forknum, blkno, request_lsns,
 					 raw_page_data);
 
 	relation_close(rel, AccessShareLock);
@@ -433,7 +433,7 @@ get_raw_page_at_lsn_ex(PG_FUNCTION_ARGS)
 
 		ForkNumber	forknum = PG_GETARG_UINT32(3);
 		uint32		blkno = PG_GETARG_UINT32(4);
-		neon_request_lsns	request_lsns;
+		yb_amp_request_lsns	request_lsns;
 
 		/* Initialize buffer to copy to */
 		bytea	   *raw_page = (bytea *) palloc(BLCKSZ + VARHDRSZ);
@@ -451,7 +451,7 @@ get_raw_page_at_lsn_ex(PG_FUNCTION_ARGS)
 		SET_VARSIZE(raw_page, BLCKSZ + VARHDRSZ);
 		raw_page_data = VARDATA(raw_page);
 
-		neon_read_at_lsn(rinfo, forknum, blkno, request_lsns, raw_page_data);
+		yb_amp_read_at_lsn(rinfo, forknum, blkno, request_lsns, raw_page_data);
 		PG_RETURN_BYTEA_P(raw_page);
 	}
 }
@@ -462,7 +462,7 @@ get_raw_page_at_lsn_ex(PG_FUNCTION_ARGS)
  * If 'lsn' is not specified (is NULL), flush all generated WAL.
  */
 Datum
-neon_xlogflush(PG_FUNCTION_ARGS)
+yb_amp_xlogflush(PG_FUNCTION_ARGS)
 {
 	XLogRecPtr	lsn;
 
@@ -509,7 +509,7 @@ neon_xlogflush(PG_FUNCTION_ARGS)
 Datum
 trigger_panic(PG_FUNCTION_ARGS)
 {
-    elog(PANIC, "neon_test_utils: panic");
+    elog(PANIC, "yb_amp_test_utils: panic");
     PG_RETURN_VOID();
 }
 

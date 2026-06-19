@@ -670,7 +670,7 @@ impl Endpoint {
 
         // Pass authentication token used for the connections to pageserver and safekeepers
         if let Some(token) = auth_token {
-            cmd.env("NEON_AUTH_TOKEN", token);
+            cmd.env("YBAMP_AUTH_TOKEN", token);
         }
 
         let pg_ctl = cmd

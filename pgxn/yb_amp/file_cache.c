@@ -15,7 +15,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#include "neon_pgversioncompat.h"
+#include "yb_amp_pgversioncompat.h"
 
 #include "access/parallel.h"
 #include "access/xlog.h"
@@ -46,10 +46,10 @@
 #include "hll.h"
 #include "bitmap.h"
 #include "file_cache.h"
-#include "neon.h"
-#include "neon_lwlsncache.h"
-#include "neon_perf_counters.h"
-#include "neon_utils.h"
+#include "yb_amp.h"
+#include "yb_amp_lwlsncache.h"
+#include "yb_amp_perf_counters.h"
+#include "yb_amp_utils.h"
 #include "pagestore_client.h"
 #include "communicator.h"
 
@@ -247,7 +247,7 @@ lfc_close_file(void)
 }
 
 /*
- * Local file cache is optional and Neon can work without it.
+ * Local file cache is optional and YbAmp can work without it.
  * In case of any any errors with this cache, we should disable it but to not throw error.
  * Also we should allow  re-enable it if source of failure (lack of disk space, permissions,...) is fixed.
  * All cache content should be invalidated to avoid reading of stale or corrupted data
@@ -493,7 +493,7 @@ lfc_change_limit_hook(int newval, void *extra)
 		CriticalAssert(victim->access_count == 0);
 #ifdef FALLOC_FL_PUNCH_HOLE
 		if (fallocate(lfc_desc, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, (off_t) victim->offset * lfc_blocks_per_chunk * BLCKSZ, lfc_blocks_per_chunk * BLCKSZ) < 0)
-			neon_log(LOG, "Failed to punch hole in file: %m");
+			yb_amp_log(LOG, "Failed to punch hole in file: %m");
 #endif
 		/* We remove the old entry, and re-enter a hole to the hash table */
 		for (int i = 0; i < lfc_blocks_per_chunk; i++)
@@ -521,7 +521,7 @@ lfc_change_limit_hook(int newval, void *extra)
 	else
 		lfc_ctl->limit = new_size;
 
-	neon_log(DEBUG1, "set local file cache limit to %d", new_size);
+	yb_amp_log(DEBUG1, "set local file cache limit to %d", new_size);
 
 	LWLockRelease(lfc_lock);
 }
@@ -534,7 +534,7 @@ lfc_init(void)
 	 * shared_preload_libraries.
 	 */
 	if (!process_shared_preload_libraries_in_progress)
-		neon_log(ERROR, "Neon module should be loaded via shared_preload_libraries");
+		yb_amp_log(ERROR, "YbAmp module should be loaded via shared_preload_libraries");
 
 
 	DefineCustomBoolVariable("yb_amp.store_prefetch_result_in_lfc",
@@ -560,7 +560,7 @@ lfc_init(void)
 							NULL);
 
 	DefineCustomIntVariable("yb_amp.max_file_cache_size",
-							"Maximal size of Neon local file cache",
+							"Maximal size of YbAmp local file cache",
 							NULL,
 							&lfc_max_size,
 							0,	/* disabled by default */
@@ -573,7 +573,7 @@ lfc_init(void)
 							NULL);
 
 	DefineCustomIntVariable("yb_amp.file_cache_size_limit",
-							"Current limit for size of Neon local file cache",
+							"Current limit for size of YbAmp local file cache",
 							NULL,
 							&lfc_size_limit,
 							0,	/* disabled by default */
@@ -1308,7 +1308,7 @@ lfc_readv_select(NRelFileInfo rinfo, ForkNumber forkNum, BlockNumber blkno,
 					sleeping = true;
 				}
 				LWLockRelease(lfc_lock);
-				ConditionVariableTimedSleep(cv, CV_WAIT_TIMEOUT, WAIT_EVENT_NEON_LFC_CV_WAIT);
+				ConditionVariableTimedSleep(cv, CV_WAIT_TIMEOUT, WAIT_EVENT_YBAMP_LFC_CV_WAIT);
 				LWLockAcquire(lfc_lock, LW_EXCLUSIVE);
 			}
 			if (sleeping)
@@ -1336,7 +1336,7 @@ lfc_readv_select(NRelFileInfo rinfo, ForkNumber forkNum, BlockNumber blkno,
 			/* offset of first IOV */
 			first_read_offset += chunk_offs + first_block_in_chunk_read;
 
-			pgstat_report_wait_start(WAIT_EVENT_NEON_LFC_READ);
+			pgstat_report_wait_start(WAIT_EVENT_YBAMP_LFC_READ);
 
 			/* Read only the blocks we're interested in, limiting */
 			rc = preadv(lfc_desc, &iov[first_block_in_chunk_read],
@@ -1472,7 +1472,7 @@ lfc_init_new_entry(FileCacheEntry* entry, uint32 hash)
 		entry->offset = victim->offset; /* grab victim's chunk */
 		hash_search_with_hash_value(lfc_hash, &victim->key,
 									victim->hash, HASH_REMOVE, NULL);
-		neon_log(DEBUG2, "Swap file cache page");
+		yb_amp_log(DEBUG2, "Swap file cache page");
 	}
 	else
 	{
@@ -1560,7 +1560,7 @@ lfc_prefetch(NRelFileInfo rinfo, ForkNumber forknum, BlockNumber blkno,
 		return false;
 	}
 
-	lwlsn = neon_get_lwlsn(rinfo, forknum, blkno);
+	lwlsn = yb_amp_get_lwlsn(rinfo, forknum, blkno);
 
 	if (lwlsn > lsn)
 	{
@@ -1609,7 +1609,7 @@ lfc_prefetch(NRelFileInfo rinfo, ForkNumber forknum, BlockNumber blkno,
 
 	LWLockRelease(lfc_lock);
 
-	pgstat_report_wait_start(WAIT_EVENT_NEON_LFC_WRITE);
+	pgstat_report_wait_start(WAIT_EVENT_YBAMP_LFC_WRITE);
 	INSTR_TIME_SET_CURRENT(io_start);
 	rc = pwrite(lfc_desc, buffer, BLCKSZ,
 				((off_t) entry_offset * lfc_blocks_per_chunk + chunk_offs) * BLCKSZ);
@@ -1782,7 +1782,7 @@ lfc_writev(NRelFileInfo rinfo, ForkNumber forkNum, BlockNumber blkno,
 					sleeping = true;
 				}
 				LWLockRelease(lfc_lock);
-				ConditionVariableTimedSleep(cv, CV_WAIT_TIMEOUT, WAIT_EVENT_NEON_LFC_CV_WAIT);
+				ConditionVariableTimedSleep(cv, CV_WAIT_TIMEOUT, WAIT_EVENT_YBAMP_LFC_CV_WAIT);
 				LWLockAcquire(lfc_lock, LW_EXCLUSIVE);
 			}
 			if (sleeping)
@@ -1792,7 +1792,7 @@ lfc_writev(NRelFileInfo rinfo, ForkNumber forkNum, BlockNumber blkno,
 		}
 		LWLockRelease(lfc_lock);
 
-		pgstat_report_wait_start(WAIT_EVENT_NEON_LFC_WRITE);
+		pgstat_report_wait_start(WAIT_EVENT_YBAMP_LFC_WRITE);
 		INSTR_TIME_SET_CURRENT(io_start);
 		rc = pwritev(lfc_desc, iov, blocks_in_chunk,
 					 ((off_t) entry_offset * lfc_blocks_per_chunk + chunk_offs) * BLCKSZ);

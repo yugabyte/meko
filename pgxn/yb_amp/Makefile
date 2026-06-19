@@ -11,20 +11,20 @@ OBJS = \
 	hll.o \
 	libpagestore.o \
 	logical_replication_monitor.o \
-	neon.o \
-	neon_lwlsncache.o \
-	neon_pgversioncompat.o \
-	neon_perf_counters.o \
-	neon_utils.o \
-	neon_walreader.o \
+	yb_amp.o \
+	yb_amp_lwlsncache.o \
+	yb_amp_pgversioncompat.o \
+	yb_amp_perf_counters.o \
+	yb_amp_utils.o \
+	yb_amp_walreader.o \
 	pagestore_smgr.o \
 	relsize_cache.o \
 	unstable_extensions.o \
 	walproposer.o \
 	walproposer_pg.o \
-	neon_ddl_handler.o \
+	yb_amp_ddl_handler.o \
 	walsender_hooks.o \
-	$(NEON_CARGO_ARTIFACT_TARGET_DIR)/libcommunicator.a
+	$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)/libcommunicator.a
 
 PG_CPPFLAGS = -I$(libpq_srcdir)
 SHLIB_LINK_INTERNAL = $(libpq)
@@ -62,7 +62,7 @@ EXTRA_CLEAN = \
 WALPROP_OBJS = \
 	$(WIN32RES) \
 	walproposer.o \
-	neon_utils.o \
+	yb_amp_utils.o \
 	walproposer_compat.o
 
 # libcommunicator.a is built by cargo from the Rust sources under communicator/
@@ -70,12 +70,12 @@ WALPROP_OBJS = \
 communicator_process.o: communicator/communicator_bindings.h
 file_cache.o: communicator/communicator_bindings.h
 
-$(NEON_CARGO_ARTIFACT_TARGET_DIR)/libcommunicator.a communicator/communicator_bindings.h &:
+$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)/libcommunicator.a communicator/communicator_bindings.h &:
 	(cd $(srcdir)/communicator && cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE))
 
 # Force `cargo build` every time. Some of the Rust sources might have
 # changed.
-.PHONY: $(NEON_CARGO_ARTIFACT_TARGET_DIR)/libcommunicator.a communicator/communicator_bindings.h
+.PHONY: $(YBAMP_CARGO_ARTIFACT_TARGET_DIR)/libcommunicator.a communicator/communicator_bindings.h
 
 .PHONY: walproposer-lib
 walproposer-lib: CPPFLAGS += -DWALPROPOSER_LIB
@@ -94,8 +94,8 @@ libwalproposer.a: $(WALPROP_OBJS)
 .PHONY: pgindent
 pgindent:
 	+@ echo top_srcdir=$(top_srcdir) top_builddir=$(top_builddir) srcdir=$(srcdir)
-	$(FIND_TYPEDEF) . > neon.typedefs
-	INDENT=$(INDENT) $(PGINDENT_SCRIPT) --typedefs neon.typedefs $(srcdir)/*.c $(srcdir)/*.h
+	$(FIND_TYPEDEF) . > yb_amp.typedefs
+	INDENT=$(INDENT) $(PGINDENT_SCRIPT) --typedefs yb_amp.typedefs $(srcdir)/*.c $(srcdir)/*.h
 
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)

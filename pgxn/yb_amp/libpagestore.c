@@ -35,9 +35,9 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 
-#include "neon.h"
-#include "neon_perf_counters.h"
-#include "neon_utils.h"
+#include "yb_amp.h"
+#include "yb_amp_perf_counters.h"
+#include "yb_amp_utils.h"
 #include "pagestore_client.h"
 #include "walproposer.h"
 
@@ -51,13 +51,13 @@
 #define MIN_RECONNECT_INTERVAL_USEC 1000
 #define MAX_RECONNECT_INTERVAL_USEC 1000000
 
-enum NeonComputeMode {
+enum YbAmpComputeMode {
 	CP_MODE_PRIMARY = 0,
 	CP_MODE_REPLICA,
 	CP_MODE_STATIC
 };
 
-static const struct config_enum_entry neon_compute_modes[] = {
+static const struct config_enum_entry yb_amp_compute_modes[] = {
 	{"primary", CP_MODE_PRIMARY, false},
 	{"replica", CP_MODE_REPLICA, false},
 	{"static", CP_MODE_STATIC, false},
@@ -65,21 +65,21 @@ static const struct config_enum_entry neon_compute_modes[] = {
 };
 
 /* GUCs */
-char	   *neon_timeline;
-char	   *neon_tenant;
-char	   *neon_project_id;
-char	   *neon_branch_id;
-char	   *neon_endpoint_id;
+char	   *yb_amp_timeline;
+char	   *yb_amp_tenant;
+char	   *yb_amp_project_id;
+char	   *yb_amp_branch_id;
+char	   *yb_amp_endpoint_id;
 int32		max_cluster_size;
 char	   *pageserver_connstring;
-char	   *neon_auth_token;
+char	   *yb_amp_auth_token;
 
 int			readahead_buffer_size = 128;
 int			flush_every_n_requests = 8;
 
-int         neon_protocol_version = 3;
+int         yb_amp_protocol_version = 3;
 
-static int	neon_compute_mode = 0;
+static int	yb_amp_compute_mode = 0;
 static int	max_reconnect_attempts = 60;
 static int	stripe_size;
 static int	max_sockets;
@@ -183,7 +183,7 @@ typedef struct
 } PageServer;
 
 static uint32 local_request_counter;
-#define GENERATE_REQUEST_ID() (((NeonRequestId)MyProcPid << 32) | ++local_request_counter)
+#define GENERATE_REQUEST_ID() (((YbAmpRequestId)MyProcPid << 32) | ++local_request_counter)
 
 static PageServer page_servers[MAX_SHARDS];
 
@@ -230,12 +230,12 @@ ParseShardMap(const char *connstr, ShardMap *result)
 
 		if (nshards >= MAX_SHARDS)
 		{
-			neon_log(LOG, "Too many shards");
+			yb_amp_log(LOG, "Too many shards");
 			return false;
 		}
 		if (connstr_len >= MAX_PAGESERVER_CONNSTRING_SIZE)
 		{
-			neon_log(LOG, "Connection string too long");
+			yb_amp_log(LOG, "Connection string too long");
 			return false;
 		}
 		if (result)
@@ -361,7 +361,7 @@ load_shard_map(shardno_t shard_no, char *connstr_p, shardno_t *num_shards_p, siz
 		   || end_update_counter != pg_atomic_read_u64(&pagestore_shared->end_update_counter));
 
 	if (connstr_p && shard_no >= num_shards)
-		neon_log(ERROR, "Shard %d is greater or equal than number of shards %d",
+		yb_amp_log(ERROR, "Shard %d is greater or equal than number of shards %d",
 				 shard_no, num_shards);
 
 	/*
@@ -422,7 +422,7 @@ CLEANUP_AND_DISCONNECT(PageServer *shard)
 	}
 	if (shard->conn)
 	{
-		MyNeonCounters->pageserver_disconnects_total++;
+		MyYbAmpCounters->pageserver_disconnects_total++;
 		PQfinish(shard->conn);
 		shard->conn = NULL;
 	}
@@ -469,7 +469,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		/* Make sure we start with a clean slate */
 		CLEANUP_AND_DISCONNECT(shard);
 
-		neon_shard_log(shard_no, DEBUG5, "Connection state: Disconnected");
+		yb_amp_shard_log(shard_no, DEBUG5, "Connection state: Disconnected");
 
 		now = GetCurrentTimestamp();
 		us_since_last_attempt = (int64) (now - shard->last_reconnect_time);
@@ -506,7 +506,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 
 		/*
 		 * Connect using the connection string we got from the
-		 * yb_amp.pageserver_connstring GUC. If the NEON_AUTH_TOKEN environment
+		 * yb_amp.pageserver_connstring GUC. If the YBAMP_AUTH_TOKEN environment
 		 * variable was set, use that as the password.
 		 *
 		 * The connection options are parsed in the order they're given, so when
@@ -534,16 +534,16 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		values[n_pgsql_params] = connstr;
 		n_pgsql_params++;
 
-		if (neon_auth_token)
+		if (yb_amp_auth_token)
 		{
 			keywords[n_pgsql_params] = "password";
-			values[n_pgsql_params] = neon_auth_token;
+			values[n_pgsql_params] = yb_amp_auth_token;
 			n_pgsql_params++;
 		}
 
 		{
 			bool param_set = false;
-			switch (neon_compute_mode)
+			switch (yb_amp_compute_mode)
 			{
 				case CP_MODE_PRIMARY:
 					strncpy(endpoint_str, "-c yb_amp.compute_mode=primary", sizeof(endpoint_str));
@@ -576,7 +576,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 			CLEANUP_AND_DISCONNECT(shard);
 			ereport(elevel,
 					(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
-						errmsg(NEON_TAG "[shard %d] could not establish connection to pageserver", shard_no),
+						errmsg(YBAMP_TAG "[shard %d] could not establish connection to pageserver", shard_no),
 						errdetail_internal("%s", msg)));
 			pfree(msg);
 			return false;
@@ -590,7 +590,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		int			ps_send_query_ret;
 		bool		connected = false;
 		int poll_result = PGRES_POLLING_WRITING;
-		neon_shard_log(shard_no, DEBUG5, "Connection state: Connecting_Startup");
+		yb_amp_shard_log(shard_no, DEBUG5, "Connection state: Connecting_Startup");
 
 		do
 		{
@@ -601,7 +601,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 				{
 					char	   *pqerr = PQerrorMessage(shard->conn);
 					char	   *msg = NULL;
-					neon_shard_log(shard_no, DEBUG5, "POLLING_FAILED");
+					yb_amp_shard_log(shard_no, DEBUG5, "POLLING_FAILED");
 
 					if (pqerr)
 						msg = pchomp(pqerr);
@@ -610,13 +610,13 @@ pageserver_connect(shardno_t shard_no, int elevel)
 
 					if (msg)
 					{
-						neon_shard_log(shard_no, elevel,
+						yb_amp_shard_log(shard_no, elevel,
 									   "could not connect to pageserver: %s",
 									   msg);
 						pfree(msg);
 					}
 					else
-						neon_shard_log(shard_no, elevel,
+						yb_amp_shard_log(shard_no, elevel,
 									   "could not connect to pageserver");
 
 					return false;
@@ -629,7 +629,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 											   WL_EXIT_ON_PM_DEATH | WL_LATCH_SET | WL_SOCKET_READABLE,
 											   PQsocket(shard->conn),
 											   0,
-											   WAIT_EVENT_NEON_PS_STARTING);
+											   WAIT_EVENT_YBAMP_PS_STARTING);
 					elog(DEBUG5, "PGRES_POLLING_READING=>%d", rc);
 					if (rc & WL_LATCH_SET)
 					{
@@ -651,7 +651,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 											   WL_EXIT_ON_PM_DEATH | WL_LATCH_SET | WL_SOCKET_WRITEABLE,
 											   PQsocket(shard->conn),
 											   0,
-											   WAIT_EVENT_NEON_PS_STARTING);
+											   WAIT_EVENT_YBAMP_PS_STARTING);
 					elog(DEBUG5, "PGRES_POLLING_WRITING=>%d", rc);
 					if (rc & WL_LATCH_SET)
 					{
@@ -666,7 +666,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 
 				break;
 			case PGRES_POLLING_OK:
-				neon_shard_log(shard_no, DEBUG5, "POLLING_OK");
+				yb_amp_shard_log(shard_no, DEBUG5, "POLLING_OK");
 				connected = true;
 				break;
 			}
@@ -690,16 +690,16 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		AddWaitEventToSet(shard->wes_read, WL_SOCKET_READABLE, PQsocket(shard->conn), NULL, NULL);
 
 
-		switch (neon_protocol_version)
+		switch (yb_amp_protocol_version)
 		{
 		case 3:
-			pagestream_query = psprintf("pagestream_v3 %s %s", neon_tenant, neon_timeline);
+			pagestream_query = psprintf("pagestream_v3 %s %s", yb_amp_tenant, yb_amp_timeline);
 			break;
 		case 2:
-			pagestream_query = psprintf("pagestream_v2 %s %s", neon_tenant, neon_timeline);
+			pagestream_query = psprintf("pagestream_v2 %s %s", yb_amp_tenant, yb_amp_timeline);
 			break;
 		default:
-			elog(ERROR, "unexpected neon_protocol_version %d", neon_protocol_version);
+			elog(ERROR, "unexpected yb_amp_protocol_version %d", yb_amp_protocol_version);
 		}
 
 		if (PQstatus(shard->conn) == CONNECTION_BAD)
@@ -710,7 +710,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 
 			ereport(elevel,
 					(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
-						errmsg(NEON_TAG "[shard %d] could not establish connection to pageserver", shard_no),
+						errmsg(YBAMP_TAG "[shard %d] could not establish connection to pageserver", shard_no),
 						errdetail_internal("%s", msg)));
 			pfree(msg);
 			return false;
@@ -722,7 +722,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		{
 			CLEANUP_AND_DISCONNECT(shard);
 
-			neon_shard_log(shard_no, elevel, "could not send pagestream command to pageserver");
+			yb_amp_shard_log(shard_no, elevel, "could not send pagestream command to pageserver");
 			return false;
 		}
 
@@ -731,7 +731,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 	/* FALLTHROUGH */
 	case PS_Connecting_PageStream:
 	{
-		neon_shard_log(shard_no, DEBUG5, "Connection state: Connecting_PageStream");
+		yb_amp_shard_log(shard_no, DEBUG5, "Connection state: Connecting_PageStream");
 
 		if (PQstatus(shard->conn) == CONNECTION_BAD)
 		{
@@ -739,7 +739,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 			CLEANUP_AND_DISCONNECT(shard);
 			ereport(elevel,
 					(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
-						errmsg(NEON_TAG "[shard %d] could not establish connection to pageserver", shard_no),
+						errmsg(YBAMP_TAG "[shard %d] could not establish connection to pageserver", shard_no),
 						errdetail_internal("%s", msg)));
 			pfree(msg);
 			return false;
@@ -751,7 +751,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 
 			/* Sleep until there's something to do */
 			(void) WaitEventSetWait(shard->wes_read, -1L, &event, 1,
-									WAIT_EVENT_NEON_PS_CONFIGURING);
+									WAIT_EVENT_YBAMP_PS_CONFIGURING);
 			ResetLatch(MyLatch);
 
 			CHECK_FOR_INTERRUPTS();
@@ -764,7 +764,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 					char	   *msg = pchomp(PQerrorMessage(shard->conn));
 
 					CLEANUP_AND_DISCONNECT(shard);
-					neon_shard_log(shard_no, elevel, "could not complete handshake with pageserver: %s",
+					yb_amp_shard_log(shard_no, elevel, "could not complete handshake with pageserver: %s",
 								   msg);
 					pfree(msg);
 					return false;
@@ -787,11 +787,11 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		 */
 		shard->delay_us = MIN_RECONNECT_INTERVAL_USEC;
 
-		neon_shard_log(shard_no, DEBUG5, "Connection state: Connected");
-		neon_shard_log(shard_no, LOG, "libpagestore: connected to '%s' with protocol version %d", connstr, neon_protocol_version);
+		yb_amp_shard_log(shard_no, DEBUG5, "Connection state: Connected");
+		yb_amp_shard_log(shard_no, LOG, "libpagestore: connected to '%s' with protocol version %d", connstr, yb_amp_protocol_version);
 		return true;
 	default:
-		neon_shard_log(shard_no, ERROR, "libpagestore: invalid connection state %d", shard->state);
+		yb_amp_shard_log(shard_no, ERROR, "libpagestore: invalid connection state %d", shard->state);
 	}
 
 	pg_unreachable();
@@ -893,7 +893,7 @@ retry:
 		timeout = (long) ceil(Min(log_timeout, disconnect_timeout));
 
 		noccurred = WaitEventSetWait(shard->wes_read, timeout, &occurred_event, 1,
-									 WAIT_EVENT_NEON_PS_READ);
+									 WAIT_EVENT_YBAMP_PS_READ);
 		ResetLatch(MyLatch);
 
 		CHECK_FOR_INTERRUPTS();
@@ -905,7 +905,7 @@ retry:
 			{
 				char	   *msg = pchomp(PQerrorMessage(pageserver_conn));
 
-				neon_shard_log(shard_no, LOG, "could not get response from pageserver: %s", msg);
+				yb_amp_shard_log(shard_no, LOG, "could not get response from pageserver: %s", msg);
 				pfree(msg);
 				return -1;
 			}
@@ -939,15 +939,15 @@ retry:
 			get_local_port(PQsocket(pageserver_conn), &port);
 			get_socket_stats(PQsocket(pageserver_conn), &sndbuf, &recvbuf);
 
-			neon_shard_log(shard_no, LOG,
+			yb_amp_shard_log(shard_no, LOG,
 						   "no response received from pageserver for %0.3f s, still waiting (sent " UINT64_FORMAT " requests, received " UINT64_FORMAT " responses) (socket port=%d sndbuf=%d recvbuf=%d) (conn start=%d end=%d)",
 						   INSTR_TIME_GET_DOUBLE(since_start),
 						   shard->nrequests_sent, shard->nresponses_received, port, sndbuf, recvbuf,
 				           pageserver_conn->inStart, pageserver_conn->inEnd);
 			shard->receive_last_log_time = now;
-			MyNeonCounters->compute_getpage_stuck_requests_total += !shard->receive_logged;
+			MyYbAmpCounters->compute_getpage_stuck_requests_total += !shard->receive_logged;
 			shard->receive_logged = true;
-			max_wait = &MyNeonCounters->compute_getpage_max_inflight_stuck_time_ms;
+			max_wait = &MyYbAmpCounters->compute_getpage_max_inflight_stuck_time_ms;
 			*max_wait = Max(*max_wait, INSTR_TIME_GET_MILLISEC(since_start));
 		}
 
@@ -969,9 +969,9 @@ retry:
 		{
 			int 		port;
 			get_local_port(PQsocket(pageserver_conn), &port);
-			neon_shard_log(shard_no, LOG, "no response from pageserver for %0.3f s, disconnecting (socket port=%d)",
+			yb_amp_shard_log(shard_no, LOG, "no response from pageserver for %0.3f s, disconnecting (socket port=%d)",
 					   INSTR_TIME_GET_DOUBLE(since_start), port);
-			MyNeonCounters->compute_getpage_max_inflight_stuck_time_ms = 0;
+			MyYbAmpCounters->compute_getpage_max_inflight_stuck_time_ms = 0;
 			pageserver_disconnect(shard_no);
 			return -1;
 		}
@@ -988,14 +988,14 @@ retry:
 		INSTR_TIME_SET_CURRENT(now);
 		since_start = now;
 		INSTR_TIME_SUBTRACT(since_start, shard->receive_start_time);
-		neon_shard_log(shard_no, LOG,
+		yb_amp_shard_log(shard_no, LOG,
 					   "received response from pageserver after %0.3f s",
 					   INSTR_TIME_GET_DOUBLE(since_start));
 	}
 	INSTR_TIME_SET_ZERO(shard->receive_start_time);
 	INSTR_TIME_SET_ZERO(shard->receive_last_log_time);
 	shard->receive_logged = false;
-	MyNeonCounters->compute_getpage_max_inflight_stuck_time_ms = 0;
+	MyYbAmpCounters->compute_getpage_max_inflight_stuck_time_ms = 0;
 
 	return ret;
 }
@@ -1138,18 +1138,18 @@ hadron_request_configuration_refresh() {
 // END HADRON
 
 static bool
-pageserver_send(shardno_t shard_no, NeonRequest *request)
+pageserver_send(shardno_t shard_no, YbAmpRequest *request)
 {
 	StringInfoData req_buff;
 	PageServer *shard = &page_servers[shard_no];
 	PGconn	   *pageserver_conn;
 
-	MyNeonCounters->pageserver_requests_sent_total++;
+	MyYbAmpCounters->pageserver_requests_sent_total++;
 
 	/* If the connection was lost for some reason, reconnect */
 	if (shard->state == PS_Connected && PQstatus(shard->conn) == CONNECTION_BAD)
 	{
-		neon_shard_log(shard_no, LOG, "pageserver_send disconnect bad connection");
+		yb_amp_shard_log(shard_no, LOG, "pageserver_send disconnect bad connection");
 		pageserver_disconnect(shard_no);
 		pageserver_conn = NULL;
 	}
@@ -1174,7 +1174,7 @@ pageserver_send(shardno_t shard_no, NeonRequest *request)
 			if (shard->n_reconnect_attempts > conf_refresh_reconnect_attempt_threshold
 				&& hadron_request_configuration_refresh() )
 			{
-				neon_shard_log(shard_no, ERROR, "request failed too many times, cancelling query");
+				yb_amp_shard_log(shard_no, ERROR, "request failed too many times, cancelling query");
 			}
 		}
 		shard->n_reconnect_attempts = 0;
@@ -1202,7 +1202,7 @@ pageserver_send(shardno_t shard_no, NeonRequest *request)
 		char	   *msg = pchomp(PQerrorMessage(pageserver_conn));
 
 		pageserver_disconnect(shard_no);
-		neon_shard_log(shard_no, LOG, "pageserver_send disconnected: failed to send page request (try to reconnect): %s", msg);
+		yb_amp_shard_log(shard_no, LOG, "pageserver_send disconnected: failed to send page request (try to reconnect): %s", msg);
 		pfree(msg);
 		pfree(req_buff.data);
 		return false;
@@ -1212,20 +1212,20 @@ pageserver_send(shardno_t shard_no, NeonRequest *request)
 
 	if (message_level_is_interesting(PageStoreTrace))
 	{
-		char	   *msg = nm_to_string((NeonMessage *) request);
+		char	   *msg = nm_to_string((YbAmpMessage *) request);
 
-		neon_shard_log(shard_no, PageStoreTrace, "sent request: %s", msg);
+		yb_amp_shard_log(shard_no, PageStoreTrace, "sent request: %s", msg);
 		pfree(msg);
 	}
 
 	return true;
 }
 
-static NeonResponse *
+static YbAmpResponse *
 pageserver_receive(shardno_t shard_no)
 {
 	StringInfoData resp_buff;
-	NeonResponse *resp;
+	YbAmpResponse *resp;
 	PageServer *shard = &page_servers[shard_no];
 	PGconn	   *pageserver_conn = shard->conn;
 	/* read response */
@@ -1233,7 +1233,7 @@ pageserver_receive(shardno_t shard_no)
 
 	if (shard->state != PS_Connected)
 	{
-		neon_shard_log(shard_no, LOG,
+		yb_amp_shard_log(shard_no, LOG,
 					   "pageserver_receive: returning NULL for non-connected pageserver connection: 0x%02x",
 					   shard->state);
 		return NULL;
@@ -1256,7 +1256,7 @@ pageserver_receive(shardno_t shard_no)
 		}
 		PG_CATCH();
 		{
-			neon_shard_log(shard_no, LOG, "pageserver_receive: disconnect due to failure while parsing response");
+			yb_amp_shard_log(shard_no, LOG, "pageserver_receive: disconnect due to failure while parsing response");
 			pageserver_disconnect(shard_no);
 			PG_RE_THROW();
 		}
@@ -1264,9 +1264,9 @@ pageserver_receive(shardno_t shard_no)
 
 		if (message_level_is_interesting(PageStoreTrace))
 		{
-			char	   *msg = nm_to_string((NeonMessage *) resp);
+			char	   *msg = nm_to_string((YbAmpMessage *) resp);
 
-			neon_shard_log(shard_no, PageStoreTrace, "got response: %s", msg);
+			yb_amp_shard_log(shard_no, PageStoreTrace, "got response: %s", msg);
 			pfree(msg);
 		}
 
@@ -1277,11 +1277,11 @@ pageserver_receive(shardno_t shard_no)
 		 * waiting out pageserver_response_disconnect_timeout for the
 		 * read to time out.
 		 */
-		if (resp != NULL && resp->tag == T_NeonGoingAwayResponse)
+		if (resp != NULL && resp->tag == T_YbAmpGoingAwayResponse)
 		{
-			NeonGoingAwayResponse *ga = (NeonGoingAwayResponse *) resp;
+			YbAmpGoingAwayResponse *ga = (YbAmpGoingAwayResponse *) resp;
 
-			neon_shard_log(shard_no, LOG,
+			yb_amp_shard_log(shard_no, LOG,
 						   "received GoingAway from pageserver (reason=%u); disconnecting",
 						   ga->reason);
 			pfree(resp);
@@ -1299,7 +1299,7 @@ pageserver_receive(shardno_t shard_no)
 	{
 		char	   *msg = pchomp(PQerrorMessage(pageserver_conn));
 
-		neon_shard_log(shard_no, LOG, "pageserver_receive disconnect: psql end of copy data: %s", msg);
+		yb_amp_shard_log(shard_no, LOG, "pageserver_receive disconnect: psql end of copy data: %s", msg);
 		pfree(msg);
 		pageserver_disconnect(shard_no);
 		resp = NULL;
@@ -1317,24 +1317,24 @@ pageserver_receive(shardno_t shard_no)
 
 		pageserver_disconnect(shard_no);
 		hadron_request_configuration_refresh();
-		neon_shard_log(shard_no, ERROR, "pageserver_receive disconnect: could not read COPY data: %s", msg);
+		yb_amp_shard_log(shard_no, ERROR, "pageserver_receive disconnect: could not read COPY data: %s", msg);
 	}
 	else
 	{
 		pageserver_disconnect(shard_no);
 		hadron_request_configuration_refresh();
-		neon_shard_log(shard_no, ERROR, "pageserver_receive disconnect: unexpected PQgetCopyData return value: %d", rc);
+		yb_amp_shard_log(shard_no, ERROR, "pageserver_receive disconnect: unexpected PQgetCopyData return value: %d", rc);
 	}
 
 	shard->nresponses_received++;
-	return (NeonResponse *) resp;
+	return (YbAmpResponse *) resp;
 }
 
-static NeonResponse *
+static YbAmpResponse *
 pageserver_try_receive(shardno_t shard_no)
 {
 	StringInfoData resp_buff;
-	NeonResponse *resp;
+	YbAmpResponse *resp;
 	PageServer *shard = &page_servers[shard_no];
 	PGconn	   *pageserver_conn = shard->conn;
 	int	rc;
@@ -1367,7 +1367,7 @@ pageserver_try_receive(shardno_t shard_no)
 		}
 		PG_CATCH();
 		{
-			neon_shard_log(shard_no, LOG, "pageserver_receive: disconnect due to failure while parsing response");
+			yb_amp_shard_log(shard_no, LOG, "pageserver_receive: disconnect due to failure while parsing response");
 			pageserver_disconnect(shard_no);
 			/*
 			 * Malformed responses from PageServer are a reason to raise
@@ -1379,17 +1379,17 @@ pageserver_try_receive(shardno_t shard_no)
 
 		if (message_level_is_interesting(PageStoreTrace))
 		{
-			char	   *msg = nm_to_string((NeonMessage *) resp);
+			char	   *msg = nm_to_string((YbAmpMessage *) resp);
 
-			neon_shard_log(shard_no, PageStoreTrace, "got response: %s", msg);
+			yb_amp_shard_log(shard_no, PageStoreTrace, "got response: %s", msg);
 			pfree(msg);
 		}
 
-		if (resp != NULL && resp->tag == T_NeonGoingAwayResponse)
+		if (resp != NULL && resp->tag == T_YbAmpGoingAwayResponse)
 		{
-			NeonGoingAwayResponse *ga = (NeonGoingAwayResponse *) resp;
+			YbAmpGoingAwayResponse *ga = (YbAmpGoingAwayResponse *) resp;
 
-			neon_shard_log(shard_no, LOG,
+			yb_amp_shard_log(shard_no, LOG,
 						   "received GoingAway from pageserver (reason=%u); disconnecting",
 						   ga->reason);
 			pfree(resp);
@@ -1399,7 +1399,7 @@ pageserver_try_receive(shardno_t shard_no)
 	}
 	else if (rc == -1)
 	{
-		neon_shard_log(shard_no, LOG, "pageserver_receive disconnect: psql end of copy data: %s", pchomp(PQerrorMessage(pageserver_conn)));
+		yb_amp_shard_log(shard_no, LOG, "pageserver_receive disconnect: psql end of copy data: %s", pchomp(PQerrorMessage(pageserver_conn)));
 		pageserver_disconnect(shard_no);
 		resp = NULL;
 		hadron_request_configuration_refresh();
@@ -1410,14 +1410,14 @@ pageserver_try_receive(shardno_t shard_no)
 
 		pageserver_disconnect(shard_no);
 		hadron_request_configuration_refresh();
-		neon_shard_log(shard_no, LOG, "pageserver_receive disconnect: could not read COPY data: %s", msg);
+		yb_amp_shard_log(shard_no, LOG, "pageserver_receive disconnect: could not read COPY data: %s", msg);
 		resp = NULL;
 	}
 	else
 	{
 		pageserver_disconnect(shard_no);
 		hadron_request_configuration_refresh();
-		neon_shard_log(shard_no, ERROR, "pageserver_receive disconnect: unexpected PQgetCopyData return value: %d", rc);
+		yb_amp_shard_log(shard_no, ERROR, "pageserver_receive disconnect: unexpected PQgetCopyData return value: %d", rc);
 	}
 
 	/*
@@ -1427,11 +1427,11 @@ pageserver_try_receive(shardno_t shard_no)
 	 */
 	if ( rc < 0 && hadron_request_configuration_refresh() )
 	{
-		neon_shard_log(shard_no, ERROR, "refresh_configuration request failed, cancelling query");
+		yb_amp_shard_log(shard_no, ERROR, "refresh_configuration request failed, cancelling query");
 	}
 
 	shard->nresponses_received++;
-	return (NeonResponse *) resp;
+	return (YbAmpResponse *) resp;
 }
 
 
@@ -1442,17 +1442,17 @@ pageserver_flush(shardno_t shard_no)
 
 	if (page_servers[shard_no].state != PS_Connected)
 	{
-		neon_shard_log(shard_no, WARNING, "Tried to flush while disconnected");
+		yb_amp_shard_log(shard_no, WARNING, "Tried to flush while disconnected");
 	}
 	else
 	{
-		MyNeonCounters->pageserver_send_flushes_total++;
+		MyYbAmpCounters->pageserver_send_flushes_total++;
 		if (PQflush(pageserver_conn))
 		{
 			char	   *msg = pchomp(PQerrorMessage(pageserver_conn));
 
 			pageserver_disconnect(shard_no);
-			neon_shard_log(shard_no, LOG, "pageserver_flush disconnect because failed to flush page requests: %s", msg);
+			yb_amp_shard_log(shard_no, LOG, "pageserver_flush disconnect because failed to flush page requests: %s", msg);
 			pfree(msg);
 			return false;
 		}
@@ -1471,7 +1471,7 @@ page_server_api api =
 };
 
 static bool
-check_neon_id(char **newval, void **extra, GucSource source)
+check_yb_amp_id(char **newval, void **extra, GucSource source)
 {
 	uint8		id[16];
 
@@ -1517,43 +1517,43 @@ pg_init_libpagestore(void)
 							   CheckPageserverConnstring, AssignPageserverConnstring, NULL);
 
 	DefineCustomStringVariable("yb_amp.timeline_id",
-							   "Neon timeline_id the server is running on",
+							   "YbAmp timeline_id the server is running on",
 							   NULL,
-							   &neon_timeline,
+							   &yb_amp_timeline,
 							   "",
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */
-							   check_neon_id, NULL, NULL);
+							   check_yb_amp_id, NULL, NULL);
 
 	DefineCustomStringVariable("yb_amp.tenant_id",
-							   "Neon tenant_id the server is running on",
+							   "YbAmp tenant_id the server is running on",
 							   NULL,
-							   &neon_tenant,
+							   &yb_amp_tenant,
 							   "",
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */
-							   check_neon_id, NULL, NULL);
+							   check_yb_amp_id, NULL, NULL);
 
 	DefineCustomStringVariable("yb_amp.project_id",
-							   "Neon project_id the server is running on",
+							   "YbAmp project_id the server is running on",
 							   NULL,
-							   &neon_project_id,
+							   &yb_amp_project_id,
 							   "",
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */
 							   NULL, NULL, NULL);
 	DefineCustomStringVariable("yb_amp.branch_id",
-							   "Neon branch_id the server is running on",
+							   "YbAmp branch_id the server is running on",
 							   NULL,
-							   &neon_branch_id,
+							   &yb_amp_branch_id,
 							   "",
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */
 							   NULL, NULL, NULL);
 	DefineCustomStringVariable("yb_amp.endpoint_id",
-							   "Neon endpoint_id the server is running on",
+							   "YbAmp endpoint_id the server is running on",
 							   NULL,
-							   &neon_endpoint_id,
+							   &yb_amp_endpoint_id,
 							   "",
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */
@@ -1618,7 +1618,7 @@ pg_init_libpagestore(void)
 	DefineCustomIntVariable("yb_amp.protocol_version",
 							"Version of compute<->page server protocol",
 							NULL,
-							&neon_protocol_version,
+							&yb_amp_protocol_version,
 							3,	/* use protocol version 3 */
 							2,	/* min */
 							3,	/* max */
@@ -1660,33 +1660,33 @@ pg_init_libpagestore(void)
 							"yb_amp.compute_mode",
 							"The compute endpoint node type",
 							NULL,
-							&neon_compute_mode,
+							&yb_amp_compute_mode,
 							CP_MODE_PRIMARY,
-							neon_compute_modes,
+							yb_amp_compute_modes,
 							PGC_POSTMASTER,
 							0,
 							NULL, NULL, NULL);
 
 	if (page_server != NULL)
-		neon_log(ERROR, "libpagestore already loaded");
+		yb_amp_log(ERROR, "libpagestore already loaded");
 
-	neon_log(PageStoreTrace, "libpagestore already loaded");
+	yb_amp_log(PageStoreTrace, "libpagestore already loaded");
 	page_server = &api;
 
 	/*
 	 * Retrieve the auth token to use when connecting to pageserver and
 	 * safekeepers
 	 */
-	neon_auth_token = getenv("NEON_AUTH_TOKEN");
-	if (neon_auth_token)
-		neon_log(LOG, "using storage auth token from NEON_AUTH_TOKEN environment variable");
+	yb_amp_auth_token = getenv("YBAMP_AUTH_TOKEN");
+	if (yb_amp_auth_token)
+		yb_amp_log(LOG, "using storage auth token from YBAMP_AUTH_TOKEN environment variable");
 
 	if (pageserver_connstring[0])
 	{
-		neon_log(PageStoreTrace, "set neon_smgr hook");
-		smgr_hook = smgr_neon;
-		smgr_init_hook = smgr_init_neon;
-		dbsize_hook = neon_dbsize;
+		yb_amp_log(PageStoreTrace, "set yb_amp_smgr hook");
+		smgr_hook = smgr_yb_amp;
+		smgr_init_hook = smgr_init_yb_amp;
+		dbsize_hook = yb_amp_dbsize;
 	}
 
 	memset(page_servers, 0, sizeof(page_servers));

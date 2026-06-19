@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * neon_ddl_handler.c
+ * yb_amp_ddl_handler.c
  *	  Captures updates to roles/databases using ProcessUtility_hook and
  *        sends them to the control ProcessUtility_hook. The changes are sent
  *        via HTTP to the URL specified by the GUC yb_amp.console_url when the
@@ -16,7 +16,7 @@
  *    Support event triggers for {privileged_role_name}
  *
  * IDENTIFICATION
- *	 contrib/neon/neon_dll_handler.c
+ *	 contrib/yb_amp/yb_amp_dll_handler.c
  *
  *-------------------------------------------------------------------------
  */
@@ -47,14 +47,14 @@
 #include <utils/lsyscache.h>
 #include <utils/syscache.h>
 
-#include "neon_ddl_handler.h"
-#include "neon_utils.h"
-#include "neon.h"
+#include "yb_amp_ddl_handler.h"
+#include "yb_amp_utils.h"
+#include "yb_amp.h"
 
 static ProcessUtility_hook_type PreviousProcessUtilityHook = NULL;
 static fmgr_hook_type next_fmgr_hook = NULL;
 static needs_fmgr_hook_type next_needs_fmgr_hook = NULL;
-static bool neon_event_triggers = true;
+static bool yb_amp_event_triggers = true;
 
 static const char *jwt_token = NULL;
 
@@ -510,7 +510,7 @@ PopTable()
 }
 
 static void
-NeonSubXactCallback(
+YbAmpSubXactCallback(
 					SubXactEvent event,
 					SubTransactionId mySubid,
 					SubTransactionId parentSubid,
@@ -530,7 +530,7 @@ NeonSubXactCallback(
 }
 
 static void
-NeonXactCallback(XactEvent event, void *arg)
+YbAmpXactCallback(XactEvent event, void *arg)
 {
 	if (event == XACT_EVENT_PRE_COMMIT || event == XACT_EVENT_PARALLEL_PRE_COMMIT)
 	{
@@ -843,7 +843,7 @@ HandleRename(RenameStmt *stmt)
  */
 
 static bool
-neon_needs_fmgr_hook(Oid functionId) {
+yb_amp_needs_fmgr_hook(Oid functionId) {
 
 	return (next_needs_fmgr_hook && (*next_needs_fmgr_hook) (functionId))
 		|| get_func_rettype(functionId) == EVENT_TRIGGEROID;
@@ -897,7 +897,7 @@ force_noop(FmgrInfo *finfo)
  * {privileged_role_name}.
  */
 static void
-neon_fmgr_hook(FmgrHookEventType event, FmgrInfo *flinfo, Datum *private)
+yb_amp_fmgr_hook(FmgrHookEventType event, FmgrInfo *flinfo, Datum *private)
 {
 	/*
 	 * It can be other needs_fmgr_hook which cause our hook to be invoked for
@@ -923,11 +923,11 @@ neon_fmgr_hook(FmgrHookEventType event, FmgrInfo *flinfo, Datum *private)
 	 * proxy of the Event Trigger function being owned by {privileged_role_name}.
 	 *
 	 * A role that is created in role {privileged_role_name} should be allowed to also
-	 * benefit from the neon_event_triggers GUC, and will be considered the
+	 * benefit from the yb_amp_event_triggers GUC, and will be considered the
 	 * same as the {privileged_role_name} role.
 	 */
 	if (event == FHET_START
-		&& !neon_event_triggers
+		&& !yb_amp_event_triggers
 		&& is_privileged_role())
 	{
 		Oid weak_superuser_oid = get_role_oid(privileged_role_name, false);
@@ -1116,7 +1116,7 @@ alter_event_trigger_owner(const char *obj_name, Oid role_oid)
 
 
 /*
- * Neon processing of the CREATE EVENT TRIGGER requires special attention and
+ * YbAmp processing of the CREATE EVENT TRIGGER requires special attention and
  * is worth having its own ProcessUtility_hook for that.
  */
 static void
@@ -1257,10 +1257,10 @@ ProcessCreateEventTrigger(
 
 
 /*
- * Neon hooks for DDLs (handling privileges, limiting features, etc).
+ * YbAmp hooks for DDLs (handling privileges, limiting features, etc).
  */
 static void
-NeonProcessUtility(
+YbAmpProcessUtility(
 				   PlannedStmt *pstmt,
 				   const char *queryString,
 				   bool readOnlyTree,
@@ -1291,7 +1291,7 @@ NeonProcessUtility(
 	}
 
 	/*
-	 * Other commands that need Neon specific implementations are handled here:
+	 * Other commands that need YbAmp specific implementations are handled here:
 	 */
 	switch (nodeTag(parseTree))
 	{
@@ -1321,7 +1321,7 @@ NeonProcessUtility(
 			{
 				ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					errmsg("CREATE TABLESPACE is not supported on Neon")));
+					errmsg("CREATE TABLESPACE is not supported on YbAmp")));
 			}
    			break;
 		default:
@@ -1358,7 +1358,7 @@ NeonProcessUtility(
  * Only {privileged_role_name} is granted privilege to edit yb_amp.event_triggers GUC.
  */
 static void
-neon_event_triggers_assign_hook(bool newval, void *extra)
+yb_amp_event_triggers_assign_hook(bool newval, void *extra)
 {
 	if (IsTransactionState() && !is_privileged_role())
 	{
@@ -1374,20 +1374,20 @@ void
 InitDDLHandler()
 {
 	PreviousProcessUtilityHook = ProcessUtility_hook;
-	ProcessUtility_hook = NeonProcessUtility;
+	ProcessUtility_hook = YbAmpProcessUtility;
 
     next_needs_fmgr_hook = needs_fmgr_hook;
-	needs_fmgr_hook = neon_needs_fmgr_hook;
+	needs_fmgr_hook = yb_amp_needs_fmgr_hook;
 
 	next_fmgr_hook = fmgr_hook;
-	fmgr_hook = neon_fmgr_hook;
+	fmgr_hook = yb_amp_fmgr_hook;
 
-	RegisterXactCallback(NeonXactCallback, NULL);
-	RegisterSubXactCallback(NeonSubXactCallback, NULL);
+	RegisterXactCallback(YbAmpXactCallback, NULL);
+	RegisterSubXactCallback(YbAmpSubXactCallback, NULL);
 
 	/*
 	 * The GUC yb_amp.event_triggers should provide the same effect as the
-	 * Postgres GUC event_triggers, but the neon one is PGC_USERSET.
+	 * Postgres GUC event_triggers, but the yb_amp one is PGC_USERSET.
 	 *
 	 * This allows using the GUC in the connection string and work out of a
 	 * LOGIN Event Trigger that would break database access, all without
@@ -1397,17 +1397,17 @@ InitDDLHandler()
 							 "yb_amp.event_triggers",
 							 "Enable firing of event triggers",
 							 NULL,
-							 &neon_event_triggers,
+							 &yb_amp_event_triggers,
 							 true,
 							 PGC_USERSET,
 							 0,
 							 NULL,
-							 neon_event_triggers_assign_hook,
+							 yb_amp_event_triggers_assign_hook,
 							 NULL);
 
 	DefineCustomStringVariable(
 							   "yb_amp.console_url",
-							   "URL of the Neon Console, which will be forwarded changes to dbs and roles",
+							   "URL of the YbAmp Console, which will be forwarded changes to dbs and roles",
 							   NULL,
 							   &ConsoleURL,
 							   NULL,
@@ -1441,10 +1441,10 @@ InitDDLHandler()
 							 NULL,
 							 NULL);
 
-	jwt_token = getenv("NEON_CONTROL_PLANE_TOKEN");
+	jwt_token = getenv("YBAMP_CONTROL_PLANE_TOKEN");
 	if (!jwt_token)
 	{
-		elog(LOG, "Missing NEON_CONTROL_PLANE_TOKEN environment variable, forwarding will not be authenticated");
+		elog(LOG, "Missing YBAMP_CONTROL_PLANE_TOKEN environment variable, forwarding will not be authenticated");
 	}
 
 }

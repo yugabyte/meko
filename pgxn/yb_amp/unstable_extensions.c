@@ -9,7 +9,7 @@
 #include "utils/errcodes.h"
 #include "utils/guc.h"
 
-#include "neon_pgversioncompat.h"
+#include "yb_amp_pgversioncompat.h"
 #include "unstable_extensions.h"
 
 static bool					allow_unstable_extensions = false;
@@ -65,7 +65,7 @@ CheckUnstableExtension(
 			{
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-						 errmsg("%s extension is in beta and may be unstable or introduce backward-incompatible changes.\nWe recommend testing it in a separate, dedicated Neon project.", stmt->extname),
+						 errmsg("%s extension is in beta and may be unstable or introduce backward-incompatible changes.\nWe recommend testing it in a separate, dedicated YbAmp project.", stmt->extname),
 						 errhint("to proceed with installation, run SET yb_amp.allow_unstable_extensions='true'")));
 			}
 			break;

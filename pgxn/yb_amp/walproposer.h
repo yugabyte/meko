@@ -1,5 +1,5 @@
-#ifndef __NEON_WALPROPOSER_H__
-#define __NEON_WALPROPOSER_H__
+#ifndef __YBAMP_WALPROPOSER_H__
+#define __YBAMP_WALPROPOSER_H__
 
 #include "access/transam.h"
 #include "access/xlogdefs.h"
@@ -9,7 +9,7 @@
 #include "utils/uuid.h"
 
 #include "libpqwalproposer.h"
-#include "neon_walreader.h"
+#include "yb_amp_walreader.h"
 #include "pagestore_client.h"
 
 #define MAX_SAFEKEEPERS 32
@@ -112,7 +112,7 @@ typedef enum
 	SS_ACTIVE_SEND,
 
 	/*
-	 * Polling neon_walreader to receive chunk of WAL (probably remotely) to
+	 * Polling yb_amp_walreader to receive chunk of WAL (probably remotely) to
 	 * send to this safekeeper.
 	 *
 	 * Note: socket management is done completely inside walproposer_pg for
@@ -137,7 +137,7 @@ typedef enum
 /* Consensus logical timestamp. */
 typedef uint64 term_t;
 
-/* neon storage node id */
+/* yb_amp storage node id */
 typedef uint64 NNodeId;
 
 /*
@@ -411,7 +411,7 @@ typedef struct AppendResponse
 	/* commit_lsn ≡ flush_lsn). */
 	HotStandbyFeedback hs;
 	/* Feedback received from pageserver includes standby_status_update fields */
-	/* and custom neon feedback. */
+	/* and custom yb_amp feedback. */
 	/* This part of the message is extensible. */
 	PageserverFeedback ps_feedback;
 } AppendResponse;
@@ -480,7 +480,7 @@ typedef struct Safekeeper
 	/*
 	 * WAL reader, allocated for each safekeeper.
 	 */
-	NeonWALReader *xlogreader;
+	YbAmpWALReader *xlogreader;
 
 	/*
 	 * Position in wait event set. Equal to -1 if no event
@@ -488,7 +488,7 @@ typedef struct Safekeeper
 	int			eventPos;
 
 	/*
-	 * Neon WAL reader position in wait event set, or -1 if no socket. Note
+	 * YbAmp WAL reader position in wait event set, or -1 if no socket. Note
 	 * that event must be removed not only on error/failure, but also on
 	 * successful *local* read, as next read might again be remote, but with
 	 * different socket.
@@ -621,7 +621,7 @@ typedef struct walproposer_api
 	void		(*wal_reader_allocate) (Safekeeper *sk);
 
 	/* Read WAL from disk to buf. */
-	NeonWALReadResult (*wal_read) (Safekeeper *sk, char *buf, XLogRecPtr startptr, Size count, char **errmsg);
+	YbAmpWALReadResult (*wal_read) (Safekeeper *sk, char *buf, XLogRecPtr startptr, Size count, char **errmsg);
 
 	/* Returns events to be awaited on WAL reader, if any. */
 	uint32		(*wal_reader_events) (Safekeeper *sk);
@@ -711,10 +711,10 @@ typedef struct walproposer_api
 typedef struct WalProposerConfig
 {
 	/* hex-encoded TenantId cstr */
-	char	   *neon_tenant;
+	char	   *yb_amp_tenant;
 
 	/* hex-encoded TimelineId cstr */
-	char	   *neon_timeline;
+	char	   *yb_amp_timeline;
 
 	/*
 	 * Comma-separated list of safekeepers, in the following format:
@@ -907,4 +907,4 @@ extern void WalProposerLibLog(WalProposer *wp, int elevel, char *fmt,...) pg_att
  */
 #define wpg_log(elevel, fmt, ...) elog(elevel, WP_LOG_PREFIX fmt, ## __VA_ARGS__)
 
-#endif							/* __NEON_WALPROPOSER_H__ */
+#endif							/* __YBAMP_WALPROPOSER_H__ */

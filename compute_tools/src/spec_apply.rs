@@ -1244,7 +1244,7 @@ async fn get_operations<'a>(
                 },
                 Operation {
                     query: String::from(
-                        "GRANT SELECT ON yb_amp.neon_perf_counters TO databricks_monitor",
+                        "GRANT SELECT ON yb_amp.yb_amp_perf_counters TO databricks_monitor",
                     ),
                     comment: Some(String::from(
                         "Permissions needed to access neon performance counters view",

@@ -39,9 +39,9 @@
 
 #include "postgres.h"
 #include "libpq/pqformat.h"
-#include "neon.h"
+#include "yb_amp.h"
 #include "walproposer.h"
-#include "neon_utils.h"
+#include "yb_amp_utils.h"
 
 /* Prototypes for private functions */
 static void WalProposerLoop(WalProposer *wp);
@@ -163,7 +163,7 @@ WalProposerCreate(WalProposerConfig *config, walproposer_api api)
 			written = snprintf((char *) &sk->conninfo, MAXCONNINFO,
 							   "%s host=%s port=%s dbname=replication options='-c timeline_id=%s tenant_id=%s'",
 							   wp->config->safekeeper_conninfo_options, sk->host, sk->port,
-							   wp->config->neon_timeline, wp->config->neon_tenant);
+							   wp->config->yb_amp_timeline, wp->config->yb_amp_tenant);
 			if (written > MAXCONNINFO || written < 0)
 				wp_log(FATAL, "could not create connection string for safekeeper %s:%s", sk->host, sk->port);
 		}
@@ -190,12 +190,12 @@ WalProposerCreate(WalProposerConfig *config, walproposer_api api)
 
 	/* Fill the greeting package */
 	wp->greetRequest.pam.tag = 'g';
-	if (!wp->config->neon_tenant)
+	if (!wp->config->yb_amp_tenant)
 		wp_log(FATAL, "yb_amp.tenant_id is not provided");
-	wp->greetRequest.tenant_id = wp->config->neon_tenant;
-	if (!wp->config->neon_timeline)
+	wp->greetRequest.tenant_id = wp->config->yb_amp_tenant;
+	if (!wp->config->yb_amp_timeline)
 		wp_log(FATAL, "yb_amp.timeline_id is not provided");
-	wp->greetRequest.timeline_id = wp->config->neon_timeline;
+	wp->greetRequest.timeline_id = wp->config->yb_amp_timeline;
 	wp->greetRequest.pg_version = PG_VERSION_NUM;
 	wp->greetRequest.system_id = wp->config->systemId;
 	wp->greetRequest.wal_seg_size = wp->config->wal_segment_size;
@@ -961,7 +961,7 @@ RecvAcceptorGreeting(Safekeeper *sk)
 		 * would allow sync-safekeepers not to die here if it intersected with
 		 * sk migration (as well as remove 1s delay).
 		 *
-		 * Note that assign_neon_safekeepers also currently restarts the
+		 * Note that assign_yb_amp_safekeepers also currently restarts the
 		 * process, so during normal migration walproposer may restart twice.
 		 */
 		if (wp->state >= WPS_CAMPAIGN)
@@ -1243,7 +1243,7 @@ HandleElectedProposer(WalProposer *wp)
 	/*
 	 * Synchronously download WAL from the most advanced safekeeper. We do
 	 * that only for logical replication (and switching logical walsenders to
-	 * neon_walreader is a todo.)
+	 * yb_amp_walreader is a todo.)
 	 */
 	if (!wp->api.recovery_download(wp, wp->donor))
 	{
@@ -1614,7 +1614,7 @@ HandleActiveState(Safekeeper *sk, uint32 events)
 	/* expected never to happen, c.f. walprop_pg_active_state_update_event_set */
 	if (events & WL_SOCKET_CLOSED)
 	{
-		wp_log(WARNING, "connection to %s:%s in active state failed, got WL_SOCKET_CLOSED on neon_walreader socket",
+		wp_log(WARNING, "connection to %s:%s in active state failed, got WL_SOCKET_CLOSED on yb_amp_walreader socket",
 			   sk->host, sk->port);
 		ShutdownConnection(sk);
 		return;
@@ -1627,7 +1627,7 @@ HandleActiveState(Safekeeper *sk, uint32 events)
 
 /*
  * Send WAL messages starting from sk->streamingAt until the end or non-writable
- * socket or neon_walreader blocks, whichever comes first; active_state is
+ * socket or yb_amp_walreader blocks, whichever comes first; active_state is
  * updated accordingly. Caller should take care of updating event set. Even if
  * no unsent WAL is available, at least one empty message will be sent as a
  * heartbeat, if socket is ready.
@@ -1711,11 +1711,11 @@ SendAppendRequests(Safekeeper *sk)
 										 req_len,
 										 &errmsg))
 				{
-					case NEON_WALREAD_SUCCESS:
+					case YBAMP_WALREAD_SUCCESS:
 						break;
-					case NEON_WALREAD_WOULDBLOCK:
+					case YBAMP_WALREAD_WOULDBLOCK:
 						return true;
-					case NEON_WALREAD_ERROR:
+					case YBAMP_WALREAD_ERROR:
 						wp_log(WARNING, "WAL reading for node %s:%s failed: %s",
 							   sk->host, sk->port, errmsg);
 						ShutdownConnection(sk);
@@ -2617,7 +2617,7 @@ AssertEventsOkForState(uint32 events, Safekeeper *sk)
 	}
 }
 
-/* Returns the set of events for both safekeeper (sk_events) and neon_walreader
+/* Returns the set of events for both safekeeper (sk_events) and yb_amp_walreader
  * (nwr_events) sockets a safekeeper in this state should be waiting on.
  *
  * This will return WL_NO_EVENTS (= 0) for some events. */
@@ -2681,7 +2681,7 @@ SafekeeperStateDesiredEvents(Safekeeper *sk, uint32 *sk_events, uint32 *nwr_even
 					return;
 
 					/*
-					 * Waiting for neon_walreader socket, but we still read
+					 * Waiting for yb_amp_walreader socket, but we still read
 					 * responses from sk socket.
 					 */
 				case SS_ACTIVE_READ_WAL:
@@ -2690,7 +2690,7 @@ SafekeeperStateDesiredEvents(Safekeeper *sk, uint32 *sk_events, uint32 *nwr_even
 					return;
 
 					/*
-					 * Need to flush the sk socket, so ignore neon_walreader
+					 * Need to flush the sk socket, so ignore yb_amp_walreader
 					 * one and set write interest on sk.
 					 */
 				case SS_ACTIVE_FLUSH:

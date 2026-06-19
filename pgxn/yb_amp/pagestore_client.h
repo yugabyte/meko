@@ -11,7 +11,7 @@
 #ifndef PAGESTORE_CLIENT_h
 #define PAGESTORE_CLIENT_h
 
-#include "neon_pgversioncompat.h"
+#include "yb_amp_pgversioncompat.h"
 
 #include "access/slru.h"
 #include "access/xlogdefs.h"
@@ -26,38 +26,38 @@
 typedef enum
 {
 	/* pagestore_client -> pagestore */
-	T_NeonExistsRequest = 0,
-	T_NeonNblocksRequest,
-	T_NeonGetPageRequest,
-	T_NeonDbSizeRequest,
-	T_NeonGetSlruSegmentRequest,
+	T_YbAmpExistsRequest = 0,
+	T_YbAmpNblocksRequest,
+	T_YbAmpGetPageRequest,
+	T_YbAmpDbSizeRequest,
+	T_YbAmpGetSlruSegmentRequest,
 	/* future tags above this line */
-	T_NeonTestRequest = 99, /* only in cfg(feature = "testing") */
+	T_YbAmpTestRequest = 99, /* only in cfg(feature = "testing") */
 
 	/* pagestore -> pagestore_client */
-	T_NeonExistsResponse = 100,
-	T_NeonNblocksResponse,
-	T_NeonGetPageResponse,
-	T_NeonErrorResponse,
-	T_NeonDbSizeResponse,
-	T_NeonGetSlruSegmentResponse,
-	T_NeonGoingAwayResponse, /* unsolicited; pageserver closing the connection */
+	T_YbAmpExistsResponse = 100,
+	T_YbAmpNblocksResponse,
+	T_YbAmpGetPageResponse,
+	T_YbAmpErrorResponse,
+	T_YbAmpDbSizeResponse,
+	T_YbAmpGetSlruSegmentResponse,
+	T_YbAmpGoingAwayResponse, /* unsolicited; pageserver closing the connection */
 	/* future tags above this line */
-	T_NeonTestResponse = 199, /* only in cfg(feature = "testing") */
-} NeonMessageTag;
+	T_YbAmpTestResponse = 199, /* only in cfg(feature = "testing") */
+} YbAmpMessageTag;
 
-typedef uint64 NeonRequestId;
+typedef uint64 YbAmpRequestId;
 
 /* base struct for c-style inheritance */
 typedef struct
 {
-	NeonMessageTag tag;
-	NeonRequestId reqid;
+	YbAmpMessageTag tag;
+	YbAmpRequestId reqid;
 	XLogRecPtr	lsn;
 	XLogRecPtr	not_modified_since;
-} NeonMessage;
+} YbAmpMessage;
 
-#define messageTag(m) (((const NeonMessage *)(m))->tag)
+#define messageTag(m) (((const YbAmpMessage *)(m))->tag)
 
 /* SLRUs downloadable from page server */
 typedef enum {
@@ -67,7 +67,7 @@ typedef enum {
 } SlruKind;
 
 /*--
- * supertype of all the Neon*Request structs below.
+ * supertype of all the YbAmp*Request structs below.
  *
  * All requests contain two LSNs:
  *
@@ -92,86 +92,86 @@ typedef enum {
  * We copy fields from request to response to make checking more reliable: request ID is formed from process ID
  * and local counter, so in principle there can be duplicated requests IDs if process PID is reused.
  */
-typedef NeonMessage NeonRequest;
+typedef YbAmpMessage YbAmpRequest;
 
 typedef struct
 {
-	NeonRequest hdr;
+	YbAmpRequest hdr;
 	NRelFileInfo rinfo;
 	ForkNumber	forknum;
-} NeonExistsRequest;
+} YbAmpExistsRequest;
 
 typedef struct
 {
-	NeonRequest hdr;
+	YbAmpRequest hdr;
 	NRelFileInfo rinfo;
 	ForkNumber	forknum;
-} NeonNblocksRequest;
+} YbAmpNblocksRequest;
 
 typedef struct
 {
-	NeonRequest hdr;
+	YbAmpRequest hdr;
 	Oid			dbNode;
-} NeonDbSizeRequest;
+} YbAmpDbSizeRequest;
 
 typedef struct
 {
-	NeonRequest hdr;
+	YbAmpRequest hdr;
 	NRelFileInfo rinfo;
 	ForkNumber	forknum;
 	BlockNumber blkno;
-} NeonGetPageRequest;
+} YbAmpGetPageRequest;
 
 typedef struct
 {
-	NeonRequest hdr;
+	YbAmpRequest hdr;
 	SlruKind	kind;
 	int			segno;
-} NeonGetSlruSegmentRequest;
+} YbAmpGetSlruSegmentRequest;
 
 
-/* supertype of all the Neon*Response structs below */
-typedef NeonMessage NeonResponse;
+/* supertype of all the YbAmp*Response structs below */
+typedef YbAmpMessage YbAmpResponse;
 
 typedef struct
 {
-	NeonExistsRequest req;
+	YbAmpExistsRequest req;
 	bool		exists;
-} NeonExistsResponse;
+} YbAmpExistsResponse;
 
 typedef struct
 {
-	NeonNblocksRequest req;
+	YbAmpNblocksRequest req;
 	uint32		n_blocks;
-} NeonNblocksResponse;
+} YbAmpNblocksResponse;
 
 typedef struct
 {
-	NeonGetPageRequest req;
+	YbAmpGetPageRequest req;
 	char		page[FLEXIBLE_ARRAY_MEMBER];
-} NeonGetPageResponse;
+} YbAmpGetPageResponse;
 
-#define PS_GETPAGERESPONSE_SIZE (MAXALIGN(offsetof(NeonGetPageResponse, page) + BLCKSZ))
+#define PS_GETPAGERESPONSE_SIZE (MAXALIGN(offsetof(YbAmpGetPageResponse, page) + BLCKSZ))
 
 typedef struct
 {
-	NeonDbSizeRequest req;
+	YbAmpDbSizeRequest req;
 	int64		db_size;
-} NeonDbSizeResponse;
+} YbAmpDbSizeResponse;
 
 typedef struct
 {
-	NeonResponse req;
+	YbAmpResponse req;
 	char		message[FLEXIBLE_ARRAY_MEMBER]; /* null-terminated error
 												 * message */
-} NeonErrorResponse;
+} YbAmpErrorResponse;
 
 typedef struct
 {
-	NeonGetSlruSegmentRequest req;
+	YbAmpGetSlruSegmentRequest req;
 	int			n_blocks;
 	char		data[BLCKSZ * SLRU_PAGES_PER_SEGMENT];
-} NeonGetSlruSegmentResponse;
+} YbAmpGetSlruSegmentResponse;
 
 /*
  * Unsolicited "I'm shutting down" frame the pageserver sends just before
@@ -184,19 +184,19 @@ typedef struct
  */
 typedef enum
 {
-	NEON_GOING_AWAY_SHUTDOWN = 0
-} NeonGoingAwayReason;
+	YBAMP_GOING_AWAY_SHUTDOWN = 0
+} YbAmpGoingAwayReason;
 
 typedef struct
 {
-	NeonResponse req;
-	uint8		reason;	/* NeonGoingAwayReason */
-} NeonGoingAwayResponse;
+	YbAmpResponse req;
+	uint8		reason;	/* YbAmpGoingAwayReason */
+} YbAmpGoingAwayResponse;
 
 
-extern StringInfoData nm_pack_request(NeonRequest *msg);
-extern NeonResponse *nm_unpack_response(StringInfo s);
-extern char *nm_to_string(NeonMessage *msg);
+extern StringInfoData nm_pack_request(YbAmpRequest *msg);
+extern YbAmpResponse *nm_unpack_response(StringInfo s);
+extern char *nm_to_string(YbAmpMessage *msg);
 
 /*
  * If debug_compare_local>DEBUG_COMPARE_LOCAL_NONE, we pass through all the SMGR API
@@ -226,14 +226,14 @@ typedef struct
 	 * Send this request to the PageServer associated with this shard.
 	 * This function assigns request_id to the request which can be extracted by caller from request struct.
 	 */
-	bool		(*send) (shardno_t  shard_no, NeonRequest * request);
+	bool		(*send) (shardno_t  shard_no, YbAmpRequest * request);
 	/*
 	 * Blocking read for the next response of this shard.
 	 *
 	 * When a CANCEL signal is handled, the connection state will be
 	 * unmodified.
 	 */
-	NeonResponse *(*receive) (shardno_t shard_no);
+	YbAmpResponse *(*receive) (shardno_t shard_no);
 	/*
 	 * Try get the next response from the TCP buffers, if any.
 	 * Returns NULL when the data is not yet available.
@@ -242,7 +242,7 @@ typedef struct
 	 * back into connection). All other error conditions are soft errors and
 	 * return NULL as "no response available".
 	 */
-	NeonResponse *(*try_receive) (shardno_t shard_no);
+	YbAmpResponse *(*try_receive) (shardno_t shard_no);
 	/*
 	 * Make sure all requests are sent to PageServer.
 	 */
@@ -260,15 +260,15 @@ extern page_server_api *page_server;
 extern char *pageserver_connstring;
 extern int	flush_every_n_requests;
 extern int	readahead_buffer_size;
-extern char *neon_timeline;
-extern char *neon_tenant;
+extern char *yb_amp_timeline;
+extern char *yb_amp_tenant;
 extern int32 max_cluster_size;
-extern int  neon_protocol_version;
+extern int  yb_amp_protocol_version;
 
 extern shardno_t get_shard_number(BufferTag* tag);
 
-extern const f_smgr *smgr_neon(ProcNumber backend, NRelFileInfo rinfo);
-extern void smgr_init_neon(void);
+extern const f_smgr *smgr_yb_amp(ProcNumber backend, NRelFileInfo rinfo);
+extern void smgr_init_yb_amp(void);
 extern void readahead_buffer_resize(int newsize, void *extra);
 
 
@@ -302,17 +302,17 @@ typedef struct
 	 * to a prefetched request is still valid.
 	 */
 	XLogRecPtr effective_request_lsn;
-} neon_request_lsns;
+} yb_amp_request_lsns;
 
-extern PGDLLEXPORT void neon_read_at_lsn(NRelFileInfo rnode, ForkNumber forkNum, BlockNumber blkno,
-										 neon_request_lsns request_lsns, void *buffer);
-extern int64 neon_dbsize(Oid dbNode);
+extern PGDLLEXPORT void yb_amp_read_at_lsn(NRelFileInfo rnode, ForkNumber forkNum, BlockNumber blkno,
+										 yb_amp_request_lsns request_lsns, void *buffer);
+extern int64 yb_amp_dbsize(Oid dbNode);
 
-extern void neon_get_request_lsns(NRelFileInfo rinfo, ForkNumber forknum,
-								  BlockNumber blkno, neon_request_lsns *output,
+extern void yb_amp_get_request_lsns(NRelFileInfo rinfo, ForkNumber forknum,
+								  BlockNumber blkno, yb_amp_request_lsns *output,
 								  BlockNumber nblocks);
 
-/* utils for neon relsize cache */
+/* utils for yb_amp relsize cache */
 extern void relsize_hash_init(void);
 extern bool get_cached_relsize(NRelFileInfo rinfo, ForkNumber forknum, BlockNumber *size);
 extern void set_cached_relsize(NRelFileInfo rinfo, ForkNumber forknum, BlockNumber size);

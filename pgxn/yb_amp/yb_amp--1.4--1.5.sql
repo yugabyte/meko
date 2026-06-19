@@ -3,12 +3,12 @@
 
 CREATE FUNCTION get_backend_perf_counters()
 RETURNS SETOF RECORD
-AS 'MODULE_PATHNAME', 'neon_get_backend_perf_counters'
+AS 'MODULE_PATHNAME', 'yb_amp_get_backend_perf_counters'
 LANGUAGE C PARALLEL SAFE;
 
 CREATE FUNCTION get_perf_counters()
 RETURNS SETOF RECORD
-AS 'MODULE_PATHNAME', 'neon_get_perf_counters'
+AS 'MODULE_PATHNAME', 'yb_amp_get_perf_counters'
 LANGUAGE C PARALLEL SAFE;
 
 -- Show various metrics, for each backend. Note that the values are not reset
@@ -18,7 +18,7 @@ LANGUAGE C PARALLEL SAFE;
 -- beginning of the session somewhere, and subtract them on subsequent calls.
 --
 -- For histograms, 'bucket_le' is the upper bound of the histogram bucket.
-CREATE VIEW neon_backend_perf_counters AS
+CREATE VIEW yb_amp_backend_perf_counters AS
   SELECT P.procno, P.pid, P.metric, P.bucket_le, P.value
   FROM get_backend_perf_counters() AS P (
     procno integer,
@@ -29,8 +29,8 @@ CREATE VIEW neon_backend_perf_counters AS
   );
 
 -- Summary across all backends. (This could also be implemented with
--- an aggregate query over neon_backend_perf_counters view.)
-CREATE VIEW neon_perf_counters AS
+-- an aggregate query over yb_amp_backend_perf_counters view.)
+CREATE VIEW yb_amp_perf_counters AS
   SELECT P.metric, P.bucket_le, P.value
   FROM get_perf_counters() AS P (
     metric text,

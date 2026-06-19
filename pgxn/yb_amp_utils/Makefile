@@ -4,7 +4,7 @@
 MODULE_big = yb_amp_utils
 OBJS = \
 	$(WIN32RES) \
-	neon_utils.o
+	yb_amp_utils.o
 
 EXTENSION = yb_amp_utils
 DATA = yb_amp_utils--1.0.sql

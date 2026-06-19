@@ -1675,10 +1675,10 @@ impl ComputeNode {
             );
 
             let mut env_vars = databricks_env_vars.to_env_var_list();
-            env_vars.extend(storage_auth_token.map(|t| ("NEON_AUTH_TOKEN".to_string(), t)));
+            env_vars.extend(storage_auth_token.map(|t| ("YBAMP_AUTH_TOKEN".to_string(), t)));
             env_vars
         } else if let Some(storage_auth_token) = &storage_auth_token {
-            vec![("NEON_AUTH_TOKEN".to_owned(), storage_auth_token.to_owned())]
+            vec![("YBAMP_AUTH_TOKEN".to_owned(), storage_auth_token.to_owned())]
         } else {
             vec![]
         };

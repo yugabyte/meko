@@ -30,18 +30,18 @@ ifeq ($(BUILD_TYPE),release)
 	PG_CFLAGS += -O2 -g3 $(CFLAGS)
 	PG_LDFLAGS = $(LDFLAGS)
 	CARGO_PROFILE ?= --profile=release
-	# NEON_CARGO_ARTIFACT_TARGET_DIR is the directory where `cargo build` places
+	# YBAMP_CARGO_ARTIFACT_TARGET_DIR is the directory where `cargo build` places
 	# the final build artifacts. There is unfortunately no easy way of changing
 	# it to a fully predictable path, nor to extract the path with a simple
 	# command. See https://github.com/rust-lang/cargo/issues/9661 and
 	# https://github.com/rust-lang/cargo/issues/6790.
-	NEON_CARGO_ARTIFACT_TARGET_DIR = $(ROOT_PROJECT_DIR)/target/release
+	YBAMP_CARGO_ARTIFACT_TARGET_DIR = $(ROOT_PROJECT_DIR)/target/release
 else ifeq ($(BUILD_TYPE),debug)
 	PG_CONFIGURE_OPTS = --enable-debug --with-openssl --enable-cassert --enable-depend
 	PG_CFLAGS += -O0 -g3 $(CFLAGS)
 	PG_LDFLAGS = $(LDFLAGS)
 	CARGO_PROFILE ?= --profile=dev
-	NEON_CARGO_ARTIFACT_TARGET_DIR = $(ROOT_PROJECT_DIR)/target/debug
+	YBAMP_CARGO_ARTIFACT_TARGET_DIR = $(ROOT_PROJECT_DIR)/target/debug
 else
 	$(error Bad build type '$(BUILD_TYPE)', see Makefile for options)
 endif
@@ -126,7 +126,7 @@ neon-pg-ext-%: postgres-install-% cargo-target-dir
 	+@echo "Compiling neon-specific Postgres extensions for $*"
 	mkdir -p $(BUILD_DIR)/pgxn-$*
 	$(MAKE) PG_CONFIG="$(POSTGRES_INSTALL_DIR)/$*/bin/pg_config" COPT='$(COPT)' \
-		NEON_CARGO_ARTIFACT_TARGET_DIR="$(NEON_CARGO_ARTIFACT_TARGET_DIR)" \
+		YBAMP_CARGO_ARTIFACT_TARGET_DIR="$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)" \
 		CARGO_BUILD_FLAGS="$(CARGO_BUILD_FLAGS)" \
 		CARGO_PROFILE="$(CARGO_PROFILE)" \
 		-C $(BUILD_DIR)/pgxn-$*\
@@ -231,7 +231,7 @@ amp-bundle-build: postgres-headers-install-v17 cargo-target-dir
 	# amp is built static (CGO off) so it runs unchanged in a slim runtime image.
 	CGO_ENABLED=0 go -C amp build -trimpath -o "$(AMP_BUNDLE_DIR)/amp" ./cmd/amp
 	$(CARGO_CMD_PREFIX) cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE) --bin storage_controller
-	cp "$(NEON_CARGO_ARTIFACT_TARGET_DIR)/storage_controller" "$(AMP_BUNDLE_DIR)/storage_controller"
+	cp "$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)/storage_controller" "$(AMP_BUNDLE_DIR)/storage_controller"
 
 # amp-only bundle: just the Go controller, no storage_controller. Needs no Rust
 # toolchain, no Postgres headers, and no vendor/postgres-v17 submodule — so it

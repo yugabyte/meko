@@ -1,5 +1,5 @@
-#ifndef __NEON_UTILS_H__
-#define __NEON_UTILS_H__
+#ifndef __YBAMP_UTILS_H__
+#define __YBAMP_UTILS_H__
 
 #include "lib/stringinfo.h"
 #include "storage/buf_internals.h"
@@ -26,4 +26,4 @@ CURL *		alloc_curl_handle(void);
 
 #endif
 
-#endif							/* __NEON_UTILS_H__ */
+#endif							/* __YBAMP_UTILS_H__ */

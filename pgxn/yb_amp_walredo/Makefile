@@ -11,7 +11,7 @@ OBJS = \
 # are wrapped in #ifdef HAVE_LIBSECCOMP instead.
 OBJS += seccomp.o
 
-PGFILEDESC = "yb_amp_walredo - helper process that runs in Neon pageserver"
+PGFILEDESC = "yb_amp_walredo - helper process that runs in YbAmp pageserver"
 
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)

@@ -2,12 +2,12 @@
 
 -- Create a convenient view similar to pg_stat_database
 -- that exposes all lfc stat values in one row.
-CREATE OR REPLACE VIEW NEON_STAT_FILE_CACHE AS 
+CREATE OR REPLACE VIEW YBAMP_STAT_FILE_CACHE AS 
    WITH lfc_stats AS (
    SELECT 
      stat_name, 
      count
-   FROM neon_get_lfc_stats() AS t(stat_name text, count bigint)
+   FROM yb_amp_get_lfc_stats() AS t(stat_name text, count bigint)
    ),
    lfc_values AS (
    SELECT 
@@ -26,4 +26,4 @@ CREATE OR REPLACE VIEW NEON_STAT_FILE_CACHE AS
 SELECT file_cache_misses, file_cache_hits, file_cache_used, file_cache_writes, file_cache_hit_ratio from lfc_values;
 
 -- externalize the view to all users in role pg_monitor
-GRANT SELECT ON NEON_STAT_FILE_CACHE TO PG_MONITOR;
+GRANT SELECT ON YBAMP_STAT_FILE_CACHE TO PG_MONITOR;

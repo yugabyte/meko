@@ -10,8 +10,8 @@
  */
 #include "postgres.h"
 
-#include "neon.h"
-#include "neon_pgversioncompat.h"
+#include "yb_amp.h"
+#include "yb_amp_pgversioncompat.h"
 
 #include "miscadmin.h"
 #include "pagestore_client.h"
@@ -67,10 +67,10 @@ RelsizeCacheShmemInit(void)
 	relsize_ctl = (RelSizeHashControl *) ShmemInitStruct("relsize_hash", sizeof(RelSizeHashControl), &found);
 	if (!found)
 	{
-		relsize_lock = (LWLockId) GetNamedLWLockTranche("neon_relsize");
+		relsize_lock = (LWLockId) GetNamedLWLockTranche("yb_amp_relsize");
 		info.keysize = sizeof(RelTag);
 		info.entrysize = sizeof(RelSizeEntry);
-		relsize_hash = ShmemInitHash("neon_relsize",
+		relsize_hash = ShmemInitHash("yb_amp_relsize",
 									 relsize_hash_size, relsize_hash_size,
 									 &info,
 									 HASH_ELEM | HASH_BLOBS);
@@ -221,7 +221,7 @@ void
 relsize_hash_init(void)
 {
 	DefineCustomIntVariable("yb_amp.relsize_hash_size",
-							"Sets the maximum number of cached relation sizes for neon",
+							"Sets the maximum number of cached relation sizes for yb_amp",
 							NULL,
 							&relsize_hash_size,
 							DEFAULT_RELSIZE_HASH_SIZE,
@@ -234,11 +234,11 @@ relsize_hash_init(void)
 
 /*
  * shmem_request hook: request additional shared resources.  We'll allocate or
- * attach to the shared resources in neon_smgr_shmem_startup().
+ * attach to the shared resources in yb_amp_smgr_shmem_startup().
  */
 void
 RelsizeCacheShmemRequest(void)
 {
 	RequestAddinShmemSpace(sizeof(RelSizeHashControl) + hash_estimate_size(relsize_hash_size, sizeof(RelSizeEntry)));
-	RequestNamedLWLockTranche("neon_relsize", 1);
+	RequestNamedLWLockTranche("yb_amp_relsize", 1);
 }

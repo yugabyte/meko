@@ -8,24 +8,24 @@
 #include "replication/logical.h"
 #include "replication/snapbuild.h"
 
-#include "neon_rmgr.h"
+#include "yb_amp_rmgr.h"
 
 #endif /* PG >= 16 */
 
 #if PG_MAJORVERSION_NUM == 16
 
 /* individual record(group)'s handlers */
-static void DecodeNeonInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
-static void DecodeNeonUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
-static void DecodeNeonDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
-static void DecodeNeonMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeYbAmpInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeYbAmpUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeYbAmpDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeYbAmpMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 
 /* common function to decode tuples */
 static void DecodeXLogTuple(char *data, Size len, ReorderBufferTupleBuf *tuple);
 
 
 void
-neon_rm_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+yb_amp_rm_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	uint8		info = XLogRecGetInfo(buf->record) & XLOG_NEON_OPMASK;
 	TransactionId xid = XLogRecGetXid(buf->record);
@@ -45,22 +45,22 @@ neon_rm_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	{
 		case XLOG_NEON_HEAP_INSERT:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeNeonInsert(ctx, buf);
+				DecodeYbAmpInsert(ctx, buf);
 			break;
 		case XLOG_NEON_HEAP_DELETE:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeNeonDelete(ctx, buf);
+				DecodeYbAmpDelete(ctx, buf);
 			break;
 		case XLOG_NEON_HEAP_UPDATE:
 		case XLOG_NEON_HEAP_HOT_UPDATE:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeNeonUpdate(ctx, buf);
+				DecodeYbAmpUpdate(ctx, buf);
 			break;
 		case XLOG_NEON_HEAP_LOCK:
 			break;
 		case XLOG_NEON_HEAP_MULTI_INSERT:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeNeonMultiInsert(ctx, buf);
+				DecodeYbAmpMultiInsert(ctx, buf);
 			break;
 		default:
 			elog(ERROR, "unexpected RM_HEAP_ID record type: %u", info);
@@ -83,7 +83,7 @@ FilterByOrigin(LogicalDecodingContext *ctx, RepOriginId origin_id)
  * Deletes can contain the new tuple.
  */
 static void
-DecodeNeonInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeYbAmpInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	Size		datalen;
 	char	   *tupledata;
@@ -141,7 +141,7 @@ DecodeNeonInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
  * Deletes can possibly contain the old primary key.
  */
 static void
-DecodeNeonDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeYbAmpDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	XLogReaderState *r = buf->record;
 	xl_neon_heap_delete *xlrec;
@@ -198,7 +198,7 @@ DecodeNeonDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
  * Updates can possibly contain a new tuple and the old primary key.
  */
 static void
-DecodeNeonUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeYbAmpUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	XLogReaderState *r = buf->record;
 	xl_neon_heap_update *xlrec;
@@ -265,7 +265,7 @@ DecodeNeonUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
  * Currently MULTI_INSERT will always contain the full tuples.
  */
 static void
-DecodeNeonMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeYbAmpMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	XLogReaderState *r = buf->record;
 	xl_neon_heap_multi_insert *xlrec;
@@ -409,17 +409,17 @@ DecodeXLogTuple(char *data, Size len, ReorderBufferTupleBuf *tuple)
 #if PG_MAJORVERSION_NUM == 17
 
 /* individual record(group)'s handlers */
-static void DecodeNeonInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
-static void DecodeNeonUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
-static void DecodeNeonDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
-static void DecodeNeonMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeYbAmpInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeYbAmpUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeYbAmpDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeYbAmpMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 
 /* common function to decode tuples */
 static void DecodeXLogTuple(char *data, Size len, HeapTuple tuple);
 
 
 void
-neon_rm_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+yb_amp_rm_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	uint8		info = XLogRecGetInfo(buf->record) & XLOG_NEON_OPMASK;
 	TransactionId xid = XLogRecGetXid(buf->record);
@@ -439,22 +439,22 @@ neon_rm_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	{
 		case XLOG_NEON_HEAP_INSERT:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeNeonInsert(ctx, buf);
+				DecodeYbAmpInsert(ctx, buf);
 			break;
 		case XLOG_NEON_HEAP_DELETE:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeNeonDelete(ctx, buf);
+				DecodeYbAmpDelete(ctx, buf);
 			break;
 		case XLOG_NEON_HEAP_UPDATE:
 		case XLOG_NEON_HEAP_HOT_UPDATE:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeNeonUpdate(ctx, buf);
+				DecodeYbAmpUpdate(ctx, buf);
 			break;
 		case XLOG_NEON_HEAP_LOCK:
 			break;
 		case XLOG_NEON_HEAP_MULTI_INSERT:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeNeonMultiInsert(ctx, buf);
+				DecodeYbAmpMultiInsert(ctx, buf);
 			break;
 		default:
 			elog(ERROR, "unexpected RM_HEAP_ID record type: %u", info);
@@ -477,7 +477,7 @@ FilterByOrigin(LogicalDecodingContext *ctx, RepOriginId origin_id)
  * Deletes can contain the new tuple.
  */
 static void
-DecodeNeonInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeYbAmpInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	Size		datalen;
 	char	   *tupledata;
@@ -535,7 +535,7 @@ DecodeNeonInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
  * Deletes can possibly contain the old primary key.
  */
 static void
-DecodeNeonDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeYbAmpDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	XLogReaderState *r = buf->record;
 	xl_neon_heap_delete *xlrec;
@@ -592,7 +592,7 @@ DecodeNeonDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
  * Updates can possibly contain a new tuple and the old primary key.
  */
 static void
-DecodeNeonUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeYbAmpUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	XLogReaderState *r = buf->record;
 	xl_neon_heap_update *xlrec;
@@ -659,7 +659,7 @@ DecodeNeonUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
  * Currently MULTI_INSERT will always contain the full tuples.
  */
 static void
-DecodeNeonMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeYbAmpMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	XLogReaderState *r = buf->record;
 	xl_neon_heap_multi_insert *xlrec;

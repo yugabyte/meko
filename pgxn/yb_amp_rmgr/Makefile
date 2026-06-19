@@ -4,14 +4,14 @@
 MODULE_big = yb_amp_rmgr
 OBJS = \
 	$(WIN32RES) \
-	neon_rmgr.o \
-	neon_rmgr_decode.o \
-	neon_rmgr_desc.o
+	yb_amp_rmgr.o \
+	yb_amp_rmgr_decode.o \
+	yb_amp_rmgr_desc.o
 
 
 EXTENSION = yb_amp_rmgr
 DATA = 
-PGFILEDESC = "Neon WAL Resource Manager - custom WAL records used to make Neon work (since PG 16)"
+PGFILEDESC = "YbAmp WAL Resource Manager - custom WAL records used to make YbAmp work (since PG 16)"
 
 
 PG_CONFIG = pg_config

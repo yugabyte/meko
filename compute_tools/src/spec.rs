@@ -72,11 +72,11 @@ fn do_control_plane_request(
 }
 
 /// Request config from the control-plane by compute_id. If
-/// `NEON_CONTROL_PLANE_TOKEN` env variable is set, it will be used for
+/// `YBAMP_CONTROL_PLANE_TOKEN` env variable is set, it will be used for
 /// authorization.
 pub fn get_config_from_control_plane(base_uri: &str, compute_id: &str) -> Result<ComputeConfig> {
     let cp_uri = format!("{base_uri}/compute/api/v2/computes/{compute_id}/spec");
-    let jwt: String = std::env::var("NEON_CONTROL_PLANE_TOKEN").unwrap_or_default();
+    let jwt: String = std::env::var("YBAMP_CONTROL_PLANE_TOKEN").unwrap_or_default();
     let mut attempt = 1;
 
     info!("getting config from control plane: {}", cp_uri);

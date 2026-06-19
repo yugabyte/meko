@@ -12,9 +12,9 @@ yb_amp extension consists of several parts:
 
 - file_cache: Local file cache is used to temporary store relations pages in local file system for better performance.
 
-- relsize_cache: Relation size cache for better neon performance.
+- relsize_cache: Relation size cache for better yb_amp performance.
 
-### SQL functions in `neon--*.sql`
+### SQL functions in `yb_amp--*.sql`
 
-Utility functions to expose neon specific information to user and metrics collection.
+Utility functions to expose yb_amp specific information to user and metrics collection.
 This extension is created in all databases in the cluster by default.

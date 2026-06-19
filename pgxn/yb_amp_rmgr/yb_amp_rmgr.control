@@ -1,4 +1,4 @@
 # yb_amp_rmgr extension
-comment = 'Neon WAL Resource Manager - custom WAL records used to make Neon work (since PG 16)'
+comment = 'YbAmp WAL Resource Manager - custom WAL records used to make YbAmp work (since PG 16)'
 default_version = '1.0'
 module_pathname = '$libdir/yb_amp_rmgr'

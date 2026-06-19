@@ -1,10 +1,10 @@
 /*-------------------------------------------------------------------------
  *
- * neon_utils.c
- *	  neon_utils - small useful functions
+ * yb_amp_utils.c
+ *	  yb_amp_utils - small useful functions
  *
  * IDENTIFICATION
- *	 contrib/neon_utils/neon_utils.c
+ *	 contrib/yb_amp_utils/yb_amp_utils.c
  *
  *-------------------------------------------------------------------------
  */

@@ -1,5 +1,5 @@
 # yb_amp_test_utils extension
-comment = 'helpers for neon testing and debugging'
+comment = 'helpers for yb_amp testing and debugging'
 default_version = '1.3'
 module_pathname = '$libdir/yb_amp_test_utils'
 relocatable = true

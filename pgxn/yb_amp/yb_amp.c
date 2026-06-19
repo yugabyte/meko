@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
- * neon.c
- *	  Main entry point into the neon extension
+ * yb_amp.c
+ *	  Main entry point into the yb_amp extension
  *
  *-------------------------------------------------------------------------
  */
@@ -34,10 +34,10 @@
 #include "communicator_process.h"
 #include "extension_server.h"
 #include "file_cache.h"
-#include "neon.h"
-#include "neon_ddl_handler.h"
-#include "neon_lwlsncache.h"
-#include "neon_perf_counters.h"
+#include "yb_amp.h"
+#include "yb_amp_ddl_handler.h"
+#include "yb_amp_lwlsncache.h"
+#include "yb_amp_perf_counters.h"
 #include "logical_replication_monitor.h"
 #include "unstable_extensions.h"
 #include "walsender_hooks.h"
@@ -57,12 +57,12 @@ static bool monitor_query_exec_time = false;
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 
-static void neon_ExecutorStart(QueryDesc *queryDesc, int eflags);
-static void neon_ExecutorEnd(QueryDesc *queryDesc);
+static void yb_amp_ExecutorStart(QueryDesc *queryDesc, int eflags);
+static void yb_amp_ExecutorEnd(QueryDesc *queryDesc);
 
 static shmem_startup_hook_type prev_shmem_startup_hook;
-static void neon_shmem_startup_hook(void);
-static void neon_shmem_request_hook(void);
+static void yb_amp_shmem_startup_hook(void);
+static void yb_amp_shmem_request_hook(void);
 
 #if PG_MAJORVERSION_NUM >= 15
 static shmem_request_hook_type prev_shmem_request_hook = NULL;
@@ -70,16 +70,16 @@ static shmem_request_hook_type prev_shmem_request_hook = NULL;
 
 
 #if PG_MAJORVERSION_NUM >= 17
-uint32		WAIT_EVENT_NEON_LFC_MAINTENANCE;
-uint32		WAIT_EVENT_NEON_LFC_READ;
-uint32		WAIT_EVENT_NEON_LFC_TRUNCATE;
-uint32		WAIT_EVENT_NEON_LFC_WRITE;
-uint32		WAIT_EVENT_NEON_LFC_CV_WAIT;
-uint32		WAIT_EVENT_NEON_PS_STARTING;
-uint32		WAIT_EVENT_NEON_PS_CONFIGURING;
-uint32		WAIT_EVENT_NEON_PS_SEND;
-uint32		WAIT_EVENT_NEON_PS_READ;
-uint32		WAIT_EVENT_NEON_WAL_DL;
+uint32		WAIT_EVENT_YBAMP_LFC_MAINTENANCE;
+uint32		WAIT_EVENT_YBAMP_LFC_READ;
+uint32		WAIT_EVENT_YBAMP_LFC_TRUNCATE;
+uint32		WAIT_EVENT_YBAMP_LFC_WRITE;
+uint32		WAIT_EVENT_YBAMP_LFC_CV_WAIT;
+uint32		WAIT_EVENT_YBAMP_PS_STARTING;
+uint32		WAIT_EVENT_YBAMP_PS_CONFIGURING;
+uint32		WAIT_EVENT_YBAMP_PS_SEND;
+uint32		WAIT_EVENT_YBAMP_PS_READ;
+uint32		WAIT_EVENT_YBAMP_WAL_DL;
 #endif
 
 int databricks_test_hook = 0;
@@ -124,7 +124,7 @@ static const struct config_enum_entry debug_compare_local_modes[] = {
  *
  * That's not great in PostgreSQL, because a hot standby does not necessary
  * open up for queries immediately as you might expect. But it's worse in
- * Neon: A standby in Neon doesn't need to start WAL replay from a checkpoint
+ * YbAmp: A standby in YbAmp doesn't need to start WAL replay from a checkpoint
  * record; it can start at any LSN. Postgres arranges things so that there is
  * a running-xacts record soon after every checkpoint record, but when you
  * start from an arbitrary LSN, that doesn't help. If the primary is idle, or
@@ -466,7 +466,7 @@ void
 _PG_init(void)
 {
 	/*
-	 * Also load 'neon_rmgr'. This makes it unnecessary to list both 'neon'
+	 * Also load 'yb_amp_rmgr'. This makes it unnecessary to list both 'yb_amp'
 	 * and 'yb_amp_rmgr' in shared_preload_libraries.
 	 */
 #if PG_VERSION_NUM >= 160000
@@ -495,14 +495,14 @@ _PG_init(void)
 	 *    request hooks" are a new mechanism in Postgres v15. In v14 and
 	 *    below, you had to make those Requests in stage 1 already, which
 	 *    means they could not depend on MaxBackends. (See hack in
-	 *    NeonPerfCountersShmemRequest())
+	 *    YbAmpPerfCountersShmemRequest())
 	 *
 	 * 3. After some more runtime-computed GUCs that affect the amount of
 	 *    shared memory needed have been calculated, the "shmem startup" hooks
 	 *    are called. In this stage, we allocate any shared memory, LWLocks
 	 *    and other shared resources.
 	 *
-	 * Here, in the 'neon' extension, we register just one shmem request hook
+	 * Here, in the 'yb_amp' extension, we register just one shmem request hook
 	 * and one startup hook, which call into functions in all the subsystems
 	 * that are part of the extension. On v14, the ShmemRequest functions are
 	 * called in stage 1, and on v15 onwards they are called in stage 2.
@@ -518,7 +518,7 @@ _PG_init(void)
 	pg_init_communicator_process();
 
 	pg_init_communicator();
-	Custom_XLogReaderRoutines = NeonOnDemandXLogReaderRoutines;
+	Custom_XLogReaderRoutines = YbAmpOnDemandXLogReaderRoutines;
 
 	InitUnstableExtensionsSupport();
 	InitLogicalReplicationMonitor();
@@ -579,7 +579,7 @@ _PG_init(void)
 							NULL, NULL, NULL);
 
 	DefineCustomIntVariable("yb_amp.pgstat_file_size_limit",
-							"Maximal size of pgstat.stat file saved in Neon storage",
+							"Maximal size of pgstat.stat file saved in YbAmp storage",
 							"Zero value disables persisting pgstat.stat file",
 							&neon_pgstat_file_size_limit,
 							0, 0, 1000000, /* disabled by default */
@@ -608,7 +608,7 @@ _PG_init(void)
 
 	DefineCustomBoolVariable(
 							"yb_amp.lakebase_mode",
-							"Is neon running in Lakebase?",
+							"Is yb_amp running in Lakebase?",
 							NULL,
 							&lakebase_mode,
 							false,
@@ -644,20 +644,20 @@ _PG_init(void)
 	 */
 #if PG_VERSION_NUM >= 150000
 	prev_shmem_request_hook = shmem_request_hook;
-	shmem_request_hook = neon_shmem_request_hook;
+	shmem_request_hook = yb_amp_shmem_request_hook;
 #else
-	neon_shmem_request_hook();
+	yb_amp_shmem_request_hook();
 #endif
 
 	/* Register hooks for stage 3 */
 	prev_shmem_startup_hook = shmem_startup_hook;
-	shmem_startup_hook = neon_shmem_startup_hook;
+	shmem_startup_hook = yb_amp_shmem_startup_hook;
 
 	/* Other misc initialization */
 	prev_ExecutorStart = ExecutorStart_hook;
-	ExecutorStart_hook = neon_ExecutorStart;
+	ExecutorStart_hook = yb_amp_ExecutorStart;
 	prev_ExecutorEnd = ExecutorEnd_hook;
-	ExecutorEnd_hook = neon_ExecutorEnd;
+	ExecutorEnd_hook = yb_amp_ExecutorEnd;
 }
 
 /* Various functions exposed at SQL level */
@@ -667,7 +667,7 @@ PG_FUNCTION_INFO_V1(backpressure_lsns);
 PG_FUNCTION_INFO_V1(backpressure_throttling_time);
 PG_FUNCTION_INFO_V1(approximate_working_set_size_seconds);
 PG_FUNCTION_INFO_V1(approximate_working_set_size);
-PG_FUNCTION_INFO_V1(neon_get_lfc_stats);
+PG_FUNCTION_INFO_V1(yb_amp_get_lfc_stats);
 PG_FUNCTION_INFO_V1(local_cache_pages);
 
 Datum
@@ -675,7 +675,7 @@ pg_cluster_size(PG_FUNCTION_ARGS)
 {
 	int64		size;
 
-	size = GetNeonCurrentClusterSize();
+	size = GetYbAmpCurrentClusterSize();
 
 	if (size == 0)
 		PG_RETURN_NULL();
@@ -744,9 +744,9 @@ approximate_working_set_size(PG_FUNCTION_ARGS)
 }
 
 Datum
-neon_get_lfc_stats(PG_FUNCTION_ARGS)
+yb_amp_get_lfc_stats(PG_FUNCTION_ARGS)
 {
-#define NUM_NEON_GET_STATS_COLS        2
+#define NUM_YBAMP_GET_STATS_COLS        2
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	LfcStatsEntry *entries;
 	size_t		num_entries;
@@ -760,8 +760,8 @@ neon_get_lfc_stats(PG_FUNCTION_ARGS)
 	for (size_t i = 0; i < num_entries; i++)
 	{
 		LfcStatsEntry *entry = &entries[i];
-		Datum		values[NUM_NEON_GET_STATS_COLS];
-		bool		nulls[NUM_NEON_GET_STATS_COLS];
+		Datum		values[NUM_YBAMP_GET_STATS_COLS];
+		bool		nulls[NUM_YBAMP_GET_STATS_COLS];
 
 		values[0] = CStringGetTextDatum(entry->metric_name);
 		nulls[0] = false;
@@ -771,7 +771,7 @@ neon_get_lfc_stats(PG_FUNCTION_ARGS)
 	}
 	PG_RETURN_VOID();
 
-#undef NUM_NEON_GET_STATS_COLS
+#undef NUM_YBAMP_GET_STATS_COLS
 }
 
 Datum
@@ -820,7 +820,7 @@ local_cache_pages(PG_FUNCTION_ARGS)
  * For a high-level explanation of the initialization process, see _PG_init().
  */
 static void
-neon_shmem_request_hook(void)
+yb_amp_shmem_request_hook(void)
 {
 #if PG_VERSION_NUM >= 150000
 	if (prev_shmem_request_hook)
@@ -828,7 +828,7 @@ neon_shmem_request_hook(void)
 #endif
 
 	LfcShmemRequest();
-	NeonPerfCountersShmemRequest();
+	YbAmpPerfCountersShmemRequest();
 	PagestoreShmemRequest();
 	RelsizeCacheShmemRequest();
 	WalproposerShmemRequest();
@@ -842,7 +842,7 @@ neon_shmem_request_hook(void)
  * For a high-level explanation of the initialization process, see _PG_init().
  */
 static void
-neon_shmem_startup_hook(void)
+yb_amp_shmem_startup_hook(void)
 {
 	if (prev_shmem_startup_hook)
 		prev_shmem_startup_hook();
@@ -850,7 +850,7 @@ neon_shmem_startup_hook(void)
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
 	LfcShmemInit();
-	NeonPerfCountersShmemInit();
+	YbAmpPerfCountersShmemInit();
 	if (lakebase_mode) {
 		DatabricksMetricsShmemInit();
 	}
@@ -860,16 +860,16 @@ neon_shmem_startup_hook(void)
 	LwLsnCacheShmemInit();
 
 #if PG_MAJORVERSION_NUM >= 17
-	WAIT_EVENT_NEON_LFC_MAINTENANCE = WaitEventExtensionNew("Neon/FileCache_Maintenance");
-	WAIT_EVENT_NEON_LFC_READ = WaitEventExtensionNew("Neon/FileCache_Read");
-	WAIT_EVENT_NEON_LFC_TRUNCATE = WaitEventExtensionNew("Neon/FileCache_Truncate");
-	WAIT_EVENT_NEON_LFC_WRITE = WaitEventExtensionNew("Neon/FileCache_Write");
-	WAIT_EVENT_NEON_LFC_CV_WAIT = WaitEventExtensionNew("Neon/FileCache_CvWait");
-	WAIT_EVENT_NEON_PS_STARTING = WaitEventExtensionNew("Neon/PS_Starting");
-	WAIT_EVENT_NEON_PS_CONFIGURING = WaitEventExtensionNew("Neon/PS_Configuring");
-	WAIT_EVENT_NEON_PS_SEND = WaitEventExtensionNew("Neon/PS_SendIO");
-	WAIT_EVENT_NEON_PS_READ = WaitEventExtensionNew("Neon/PS_ReadIO");
-	WAIT_EVENT_NEON_WAL_DL = WaitEventExtensionNew("Neon/WAL_Download");
+	WAIT_EVENT_YBAMP_LFC_MAINTENANCE = WaitEventExtensionNew("YbAmp/FileCache_Maintenance");
+	WAIT_EVENT_YBAMP_LFC_READ = WaitEventExtensionNew("YbAmp/FileCache_Read");
+	WAIT_EVENT_YBAMP_LFC_TRUNCATE = WaitEventExtensionNew("YbAmp/FileCache_Truncate");
+	WAIT_EVENT_YBAMP_LFC_WRITE = WaitEventExtensionNew("YbAmp/FileCache_Write");
+	WAIT_EVENT_YBAMP_LFC_CV_WAIT = WaitEventExtensionNew("YbAmp/FileCache_CvWait");
+	WAIT_EVENT_YBAMP_PS_STARTING = WaitEventExtensionNew("YbAmp/PS_Starting");
+	WAIT_EVENT_YBAMP_PS_CONFIGURING = WaitEventExtensionNew("YbAmp/PS_Configuring");
+	WAIT_EVENT_YBAMP_PS_SEND = WaitEventExtensionNew("YbAmp/PS_SendIO");
+	WAIT_EVENT_YBAMP_PS_READ = WaitEventExtensionNew("YbAmp/PS_ReadIO");
+	WAIT_EVENT_YBAMP_WAL_DL = WaitEventExtensionNew("YbAmp/WAL_Download");
 #endif
 
 	LWLockRelease(AddinShmemInitLock);
@@ -879,7 +879,7 @@ neon_shmem_startup_hook(void)
  * ExecutorStart hook: start up tracking if needed
  */
 static void
-neon_ExecutorStart(QueryDesc *queryDesc, int eflags)
+yb_amp_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	if (prev_ExecutorStart)
 		prev_ExecutorStart(queryDesc, eflags);
@@ -908,7 +908,7 @@ neon_ExecutorStart(QueryDesc *queryDesc, int eflags)
  * ExecutorEnd hook: store results if needed
  */
 static void
-neon_ExecutorEnd(QueryDesc *queryDesc)
+yb_amp_ExecutorEnd(QueryDesc *queryDesc)
 {
 	if (monitor_query_exec_time && queryDesc->totaltime)
 	{

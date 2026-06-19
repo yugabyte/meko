@@ -12,7 +12,7 @@
 #include "utils/guc.h"
 
 #include "extension_server.h"
-#include "neon_utils.h"
+#include "yb_amp_utils.h"
 
 int	hadron_extension_server_port = 0;
 static int	extension_server_request_timeout = 60;
@@ -31,7 +31,7 @@ static download_extension_file_hook_type prev_download_extension_file_hook = NUL
   * curl -X POST http://localhost:8080/extension_server/postgis-3.so?is_library=true
   */
 static bool
-neon_download_extension_file_http(const char *filename, bool is_library)
+yb_amp_download_extension_file_http(const char *filename, bool is_library)
 {
 	CURLcode	res;
 	bool		ret = false;
@@ -68,7 +68,7 @@ neon_download_extension_file_http(const char *filename, bool is_library)
 		 * Don't error here because postgres will try to find the file and will
 		 * fail with some proper error message if it's not found.
 		 */
-		elog(WARNING, "neon_download_extension_file_http failed: %s\n", curl_easy_strerror(res));
+		elog(WARNING, "yb_amp_download_extension_file_http failed: %s\n", curl_easy_strerror(res));
 	}
 
 	return ret;
@@ -108,5 +108,5 @@ pg_init_extension_server()
 
 	/* set download_extension_file_hook */
 	prev_download_extension_file_hook = download_extension_file_hook;
-	download_extension_file_hook = neon_download_extension_file_http;
+	download_extension_file_hook = yb_amp_download_extension_file_http;
 }
