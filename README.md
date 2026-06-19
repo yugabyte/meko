@@ -68,8 +68,7 @@ flowchart LR
     sks -- "interpreted WAL" --> fps
     cps -- "SELECT page rows" --> tblPages
     fps -- "INSERT page rows<br/>(write path)" --> tblPages
-    fps -- "INSERT materialised images" --> tblPages
-    mat -- "compact long chains" --> fps
+    mat -- "compact long chains<br/>(materialised images)" --> tblPages
     ps -- "tenant_config R/W" --> tblConf
     sc -- "attach + generation" --> ps
     sc -- "state R/W" --> tblSc
