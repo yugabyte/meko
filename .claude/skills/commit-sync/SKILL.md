@@ -120,7 +120,7 @@ Where tests live in this repo:
 |---|---|
 | Unit | `#[cfg(test)]` modules inside the crate (e.g. `libs/ysql_client/src/lib.rs`) |
 | Integration (Rust) | `<crate>/tests/` (e.g. `compute_tools/tests/`, `safekeeper/tests/`) |
-| End-to-end (cluster) | `test/e2e/fast/` and `test/e2e/slow/` (`*.sh` / `*.sql`, driven by `test/e2e/run.sh`) |
+| End-to-end (cluster) | `test/e2e/storage/fast/` and `test/e2e/storage/slow/` (`*.sh` / `*.sql`, driven by `test/e2e/storage/run.sh`) |
 | Python harness | `test_runner/` |
 
 Triggers that usually mean "add/extend a test":
@@ -133,7 +133,7 @@ Triggers that usually mean "add/extend a test":
 
 Don't add ceremonial tests for pure refactors that existing coverage already
 exercises, or for changes that only an end-to-end run can meaningfully cover —
-in that case lean on `test/e2e/` and **say so** (run it, cite the result; see
+in that case lean on `test/e2e/storage/` and **say so** (run it, cite the result; see
 the `e2e-before-corruption-claim` skill for the corruption-class rule). If a
 change genuinely can't be unit-tested, note why rather than forcing a hollow
 test.

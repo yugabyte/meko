@@ -20,7 +20,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: test/e2e/run-amp.sh [-n <count>] [-h|--help]
+Usage: test/e2e/control_plane/run-amp.sh [-n <count>] [-h|--help]
 
 Starts amp with the Docker endpoint provisioner and runs the amp e2e suite
 (create user -> storage pool -> timeline -> endpoint, then psql the endpoint).
@@ -88,7 +88,7 @@ if ! docker image inspect "$ENDPOINT_IMAGE" >/dev/null 2>&1; then
 fi
 
 echo "==> Building the e2e harness"
-cargo build --bin e2e_tests
+cargo build --bin e2e_control_plane
 
 echo "==> Creating network $NET + databases ($CTL_DB, $STORE_DB)"
 docker network create "$NET" >/dev/null
@@ -125,4 +125,4 @@ for i in $(seq 1 60); do
 done
 
 echo "==> Running the amp-on-Docker suite"
-AMP_BASE_URL="http://127.0.0.1:${AMP_HOST_PORT}" "$REPO/target/debug/e2e_tests" amp ${ARGS[@]+"${ARGS[@]}"}
+AMP_BASE_URL="http://127.0.0.1:${AMP_HOST_PORT}" "$REPO/target/debug/e2e_control_plane" ${ARGS[@]+"${ARGS[@]}"}

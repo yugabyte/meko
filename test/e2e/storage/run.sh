@@ -4,7 +4,7 @@
 # (`e2e_tests` crate). The harness brings up one yb_light_local cluster
 # against an ephemeral YB database and runs every scenario in each
 # requested category, scanning the pageserver log for corruption
-# markers after each. See test/e2e/src/main.rs.
+# markers after each. See test/e2e/storage/main.rs.
 #
 # All scenarios share a single cluster + tenant + `main` endpoint; the
 # tenant + timeline persist across scenarios, so scenarios use unique
@@ -18,7 +18,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: test/e2e/run.sh [options] [selection]
+Usage: test/e2e/storage/run.sh [options] [selection]
 
 Selection (default: fast):
   fast            the fast suite
@@ -53,11 +53,11 @@ E2E_SKIP=going_away to skip a known-flaky one); the skipped names are
 printed, never silently dropped.
 
 Examples:
-  test/e2e/run.sh                       # fast suite, debug
-  test/e2e/run.sh all                   # fast then slow
-  test/e2e/run.sh smoke                 # one golden workload
-  test/e2e/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, count
-  test/e2e/run.sh --release all         # full suite, release build
+  test/e2e/storage/run.sh                       # fast suite, debug
+  test/e2e/storage/run.sh all                   # fast then slow
+  test/e2e/storage/run.sh smoke                 # one golden workload
+  test/e2e/storage/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, count
+  test/e2e/storage/run.sh --release all         # full suite, release build
 EOF
 }
 
@@ -129,7 +129,7 @@ cleanup() {
     echo "run.sh: signalled — tearing down this run's e2e cluster (db=$YB_DBNAME)" >&2
     if [ -n "${HARNESS_PID:-}" ]; then kill "$HARNESS_PID" 2>/dev/null || true; fi
     YB_HOST="${YB_HOST:-127.0.0.1}" YB_PORT="${YB_PORT:-5433}" \
-        bash "$REPO/test/e2e/clean.sh" >/dev/null 2>&1 || true
+        bash "$REPO/test/e2e/storage/clean.sh" >/dev/null 2>&1 || true
     exit 130
 }
 trap cleanup INT TERM HUP

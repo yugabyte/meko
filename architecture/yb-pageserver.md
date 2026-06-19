@@ -469,7 +469,7 @@ corruption: `put_rel_extend` no-opped, the rel-size cache pinned at
 the replay-start size, and the gap-fill zero-filled
 `[pinned_size, blkno)` on every record, stamping all-zero page images
 over live tail blocks. The regression test is
-`test/e2e/src/scenarios/fast/restart_relsize_zero_shadow.rs` (SIGKILL
+`test/e2e/storage/fast/restart_relsize_zero_shadow.rs` (SIGKILL
 + replay + tenant-wide zero-image shadowing assertions).
 
 FSM and visibility-map forks are a tolerated exception to the implicit
@@ -696,14 +696,14 @@ Per-phase task records live under [`../tasks/`](../tasks/). See
 > `read_chain_durable` cache-miss path, the basebackup-cache
 > invalidation on LSN advance, and the generation-fence shutdown.
 > Backfill is tracked alongside the relevant task files. The
-> end-to-end suite (`test/e2e/`, a Rust harness — see
-> [`test/e2e/README.md`](../test/e2e/README.md)) is the cross-seam
+> end-to-end suite (`test/e2e/storage/`, a Rust harness — see
+> [`test/e2e/storage/README.md`](../test/e2e/storage/README.md)) is the cross-seam
 > backstop: it runs scenario tests + golden `.sql` workloads against a
 > real `yb_light_local` + YB and scans the pageserver log for corruption
 > markers after every test. The `.sql` workloads diff their result sets
 > against checked-in `.out` goldens (#19), so silently-wrong reads
 > no longer pass as long as no statement errors out. Run it with
-> `test/e2e/run.sh fast|slow|all` before claiming a corruption-class fix
+> `test/e2e/storage/run.sh fast|slow|all` before claiming a corruption-class fix
 > (the `e2e-before-corruption-claim` skill enforces this).
 
 ## Code anchors

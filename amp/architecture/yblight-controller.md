@@ -361,7 +361,7 @@ this interface, not a change to the workflow.
   a juggled host port. Only the compute's Postgres port is published to the host, and
   the controller returns that `host:port` as the endpoint's address; endpoints reach
   the YBDB universe via the host gateway. This is the runtime exercised by the
-  amp-on-Docker e2e (`test/e2e/run-amp.sh`).
+  amp-on-Docker e2e (`test/e2e/control_plane/run-amp.sh`).
 - **Kubernetes (next).** A `K8sDeployer` implements the same interface against the
   cluster API — a pod per endpoint, a Service for the address — reusing the
   `deploy/helm/yb-light-endpoint` chart. VMs (via ybops) follow the same shape.

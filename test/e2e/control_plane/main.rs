@@ -1,26 +1,73 @@
-//! The amp-on-Docker e2e backend — deliberately thin.
+//! The amp-on-Docker e2e suite (`e2e_control_plane`) — deliberately thin.
 //!
 //! Provisioning lives in **amp**, across two REST calls: `POST .../timelines`
 //! records the tenant + its main timeline, then `POST .../endpoints` deploys a
 //! compute endpoint for it (synchronously, via amp's Docker provisioner) and
-//! returns its connection address. So this test only:
+//! returns its connection address. So this suite only:
 //!   1. calls amp's REST API (user -> storage pool -> timeline -> endpoint), and
 //!   2. runs PG against the endpoint address amp hands back.
 //!
 //! There is no container/Docker orchestration here — that is amp's job.
 //!
-//! amp itself is started by `test/e2e/run-amp.sh`, which passes its base URL in
-//! `AMP_BASE_URL`. Invoked as `e2e_tests amp`.
+//! amp itself is started by `test/e2e/control_plane/run-amp.sh`, which builds +
+//! runs this binary with amp's base URL in `AMP_BASE_URL`.
 
 use std::future::Future;
 use std::pin::Pin;
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::cluster::step;
-use crate::db;
+use e2e_common::db;
+
+/// Print a step banner. (The storage suite's `step` also tees to a run
+/// log; this suite just prints to stdout.)
+fn step(msg: &str) {
+    println!();
+    println!("=== {msg} ===");
+}
+
+/// `e2e_control_plane [-n <count>]` — run the amp suite once, or `<count>`
+/// times with `-n` (run-all + tally, which also disables fail-fast).
+#[tokio::main]
+async fn main() -> ExitCode {
+    let mut repeat: u32 = 1;
+    let mut fail_fast = true;
+    let mut it = std::env::args().skip(1);
+    while let Some(arg) = it.next() {
+        let count = if arg == "-n" {
+            it.next()
+        } else {
+            arg.strip_prefix("-n=").or_else(|| arg.strip_prefix("-n")).map(str::to_string)
+        };
+        match count {
+            Some(c) => match c.parse::<u32>().ok().filter(|&n| n >= 1) {
+                Some(n) => {
+                    repeat = n;
+                    fail_fast = false; // -n opts into run-all + tally
+                }
+                None => {
+                    eprintln!("invalid -n count: {c:?}");
+                    return ExitCode::from(2);
+                }
+            },
+            None => {
+                eprintln!("unexpected argument: {arg:?}\nusage: e2e_control_plane [-n <count>]");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    match run_suite(repeat, fail_fast).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("\nAMP E2E FAILED: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
 // --- amp REST client --------------------------------------------------------
 
@@ -223,7 +270,7 @@ async fn resource_ladder(e: &Endpoint) -> Result<()> {
 /// amp must already be running; its base URL comes from `AMP_BASE_URL`.
 pub async fn run_suite(repeat: u32, fail_fast: bool) -> Result<()> {
     let base = std::env::var("AMP_BASE_URL")
-        .context("AMP_BASE_URL is not set — run via test/e2e/run-amp.sh, which starts amp")?;
+        .context("AMP_BASE_URL is not set — run via test/e2e/control_plane/run-amp.sh, which starts amp")?;
     step(&format!("amp e2e: driving amp at {base}"));
     let client = AmpClient::new(&base);
     client.wait_ready(Duration::from_secs(60)).await.context("amp readiness")?;

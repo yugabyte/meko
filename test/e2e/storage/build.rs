@@ -1,8 +1,9 @@
-//! Auto-register e2e scenarios from the filesystem. Scans
-//! `src/scenarios/fast/` and `src/scenarios/slow/` for `*.rs` files and
-//! generates the module declarations + the `fast()`/`slow()` registries
-//! into `$OUT_DIR/scenarios_registry.rs`, which `src/scenarios/mod.rs`
-//! includes. Adding a scenario is just dropping a `<name>.rs` (with a
+//! Auto-register e2e scenarios from the filesystem. Scans the `fast/` and
+//! `slow/` category dirs for `*.rs` files (the `.sql` golden workloads
+//! share those dirs and are ignored here) and generates the module
+//! declarations + the `fast()`/`slow()` registries into
+//! `$OUT_DIR/scenarios_registry.rs`, which `scenarios.rs` includes. Adding
+//! a scenario is just dropping a `<name>.rs` (with a
 //! `pub async fn run(&Cluster) -> anyhow::Result<()>`) into the right
 //! subdir — no list to edit. The subdir is the fast/slow category; the
 //! file stem is the test name.
@@ -15,11 +16,11 @@ use std::path::Path;
 fn main() {
     let manifest = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
-    let scenarios = Path::new(&manifest).join("src/scenarios");
+    let manifest_dir = Path::new(&manifest);
 
     let mut code = String::new();
     for cat in ["fast", "slow"] {
-        let dir = scenarios.join(cat);
+        let dir = manifest_dir.join(cat);
         // Re-run when files are added to / removed from the category dir.
         println!("cargo:rerun-if-changed={}", dir.display());
 

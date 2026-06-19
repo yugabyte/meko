@@ -1,4 +1,4 @@
-# End-to-end test suite
+# Storage e2e suite
 
 A Rust harness (`e2e_tests` crate) that brings up a real `yb_light_local`
 cluster against a real YugabyteDB and exercises it with scenario tests
@@ -6,47 +6,21 @@ and golden `.sql` workloads, scanning the pageserver log for corruption
 markers after every test. This is the verification gate the
 `e2e-before-corruption-claim` skill points at.
 
-There are two entry points. Most of this doc is the **`yb_light_local`** suite
-(`run.sh`, below). The **amp-on-Docker** suite (`run-amp.sh`) is summarized next.
-
-## amp-on-Docker suite (`run-amp.sh`)
-
-`test/e2e/run-amp.sh` exercises the **amp** control plane on Docker: it starts the
-`amp` container (with its Docker endpoint provisioner enabled) against the host's
-YugabyteDB, then runs a *thin* test that calls amp's REST API
-(`user → storage pool → timeline → endpoint`) and runs `psql` against the endpoint
-amp returns. **amp owns all provisioning** — create-timeline records the tenant +
-its main timeline, and create-endpoint deploys the compute container synchronously
-via amp's `deploy.Deployer` (the Docker driver; yblight-controller.md §5.6),
-returning its address. The harness contains no orchestration. The `e2e_tests amp`
-selector is the harness side (`src/amp.rs`).
-
-It runs the SC-free self-bootstrap path: amp deploys the endpoint with
-`--deploy-bootstrap`, so it provisions the storage schema and initdb's the
-recorded tenant/timeline on first start (there is no create-database flow yet).
-Storage-controller-coordinated deploy is future work.
-
-```sh
-test/e2e/run-amp.sh           # create timeline + endpoint, psql the endpoint
-test/e2e/run-amp.sh -n 3      # repeat the suite 3x
-```
-
-Prerequisites: Docker; a YugabyteDB on the host at `:5433` (yugabyte/yugabyte);
-the `yb-light/neon-endpoint:dev` image present (build it once with
-`docker build -t yb-light/neon-endpoint:dev -f deploy/endpoint/Dockerfile .`).
-`run-amp.sh` builds `yb-light/amp:dev` itself and tears everything down on exit.
+> The companion **control-plane (amp-on-Docker)** suite lives in
+> [`../control_plane`](../control_plane); Postgres assertion helpers
+> shared by both suites are in [`../libs/e2e_common`](../libs/e2e_common).
 
 ## Running
 
 ```sh
-test/e2e/run.sh                 # fast suite (default)
-test/e2e/run.sh fast            # explicit
-test/e2e/run.sh slow            # slow suite only
-test/e2e/run.sh all             # fast then slow (one shared cluster)
-test/e2e/run.sh smoke           # one test by name (substring also matches)
-test/e2e/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, cumulative pass/fail
-test/e2e/run.sh --release all   # build + run in release mode
-test/e2e/run.sh -h              # full help
+test/e2e/storage/run.sh                 # fast suite (default)
+test/e2e/storage/run.sh fast            # explicit
+test/e2e/storage/run.sh slow            # slow suite only
+test/e2e/storage/run.sh all             # fast then slow (one shared cluster)
+test/e2e/storage/run.sh smoke           # one test by name (substring also matches)
+test/e2e/storage/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, cumulative pass/fail
+test/e2e/storage/run.sh --release all   # build + run in release mode
+test/e2e/storage/run.sh -h              # full help
 ```
 
 `run.sh` is a thin wrapper: it `cargo build`s the harness +
@@ -100,8 +74,9 @@ Default builds are debug; `--release` builds and runs the release binaries.
 Test name = source file stem; the subdirectory/category is fast vs slow.
 Nothing central to edit — tests are auto-discovered.
 
-- **A scenario** (typed assertions): drop
-  `src/scenarios/fast/<name>.rs` (or `slow/`) with:
+- **A scenario** (typed assertions): drop a Rust
+  `fast/<name>.rs` (or `slow/`) — in the same category dir as the `.sql`
+  workloads — with:
 
   ```rust
   use crate::cluster::{Cluster, step};
@@ -127,7 +102,7 @@ Nothing central to edit — tests are auto-discovered.
   yb-light's own Postgres (`pg_install/v17/bin/psql`), not whatever is on
   `PATH` — its meta-commands (e.g. `\d`) must match the compute's major
   version. Generate/refresh the golden with
-  `E2E_REGEN_EXPECTED=1 test/e2e/run.sh <name>` and review the diff
+  `E2E_REGEN_EXPECTED=1 test/e2e/storage/run.sh <name>` and review the diff
   before committing. `.sql` workloads are discovered at runtime — no
   recompile needed to add one.
 - **Disabling a workload**: rename both files to `<name>.sql.disabled`
@@ -141,20 +116,20 @@ Nothing central to edit — tests are auto-discovered.
 
 ```
 test/e2e/
-  run.sh                  wrapper: build + exec the harness
-  clean.sh                teardown (kill procs, drop DB, wipe run dir)
-  build.rs                auto-registers scenarios from the subdirs
-  src/
-    main.rs               CLI + run loop (fast/slow/all/<name>/-n/--release)
-    cluster.rs            shared-cluster fixture + corruption gate + teardown
-    db.rs                 typed tokio-postgres assertion helpers
-    psql.rs               psql wrappers (.sql workloads + background loops)
-    workload.rs           .sql runner: exec + normalize + golden diff
-    scenarios/
-      fast/*.rs           fast scenarios (one `run` fn each)
-      slow/*.rs           slow scenarios
-  fast/  *.sql *.out      fast golden workloads
-  slow/  *.sql *.out      slow golden workloads
+  storage/                 this suite (the `e2e_tests` crate)
+    run.sh                 wrapper: build + run the harness (signal-trap cleanup)
+    clean.sh               teardown (kill procs, drop DB, wipe run dir)
+    build.rs               auto-registers scenarios from fast/ and slow/
+    Cargo.toml             the `e2e_tests` crate
+    main.rs                CLI + run loop (fast/slow/all/<name>/-n/--release)
+    cluster.rs             shared-cluster fixture + corruption gate + teardown
+    psql.rs                psql wrappers (.sql workloads + background loops)
+    workload.rs            .sql runner: exec + normalize + golden diff
+    scenarios.rs           scenario registry (includes build.rs codegen)
+    fast/  *.rs *.sql *.out  fast scenarios + golden workloads (same dir)
+    slow/  *.rs *.sql *.out  slow scenarios + golden workloads (same dir)
+  control_plane/           the amp-on-Docker suite (`e2e_control_plane`)
+  libs/e2e_common/         shared `db` helpers used by both suites
 ```
 
 ## Useful env vars

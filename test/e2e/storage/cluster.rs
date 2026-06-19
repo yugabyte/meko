@@ -558,7 +558,7 @@ impl Cluster {
     /// repo dir + ephemeral db name in the env.
     fn clean(&self) -> anyhow::Result<()> {
         let status = Command::new("bash")
-            .arg(self.repo.join("test/e2e/clean.sh"))
+            .arg(self.repo.join("test/e2e/storage/clean.sh"))
             .current_dir(&self.repo)
             .env("YB_LIGHT_REPO_DIR", &self.repo_dir)
             .env("YB_DBNAME", &self.db_name)
@@ -578,7 +578,7 @@ impl Cluster {
     /// 7 days.
     fn teardown(&self) {
         let _ = Command::new("bash")
-            .arg(self.repo.join("test/e2e/clean.sh"))
+            .arg(self.repo.join("test/e2e/storage/clean.sh"))
             .current_dir(&self.repo)
             .env("YB_LIGHT_REPO_DIR", &self.repo_dir)
             .env("YB_DBNAME", &self.db_name)
@@ -670,7 +670,7 @@ impl Cluster {
 
         if !is_running(&sc) {
             step("restart storage_controller (prior test left it down)");
-            self.yb(&["storage_controller", "start"])?;
+            self.yb(&["storage-controller", "start"])?;
         }
         if !is_running(&ps) {
             step("restart pageserver (prior test left it down)");
@@ -682,7 +682,7 @@ impl Cluster {
         }
         if !is_running(&es) {
             step("restart endpoint_storage (prior test left it down)");
-            self.yb(&["endpoint_storage", "start"])?;
+            self.yb(&["endpoint-storage", "start"])?;
         }
 
         // Drain the pageserver's ingest backlog while the compute is
@@ -788,7 +788,7 @@ impl Drop for Cluster {
             eprintln!("  logs/dir: {}", self.repo_dir.display());
             eprintln!("  YB db:    {}", self.db_name);
             eprintln!(
-                "  tear down manually with: YB_LIGHT_REPO_DIR={} YB_DBNAME={} test/e2e/clean.sh",
+                "  tear down manually with: YB_LIGHT_REPO_DIR={} YB_DBNAME={} test/e2e/storage/clean.sh",
                 self.repo_dir.display(),
                 self.db_name
             );

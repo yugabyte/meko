@@ -1298,10 +1298,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "e2e_common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tokio",
+ "tokio-postgres",
+ "workspace_hack",
+]
+
+[[package]]
+name = "e2e_control_plane"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "e2e_common",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "workspace_hack",
+]
+
+[[package]]
 name = "e2e_tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "e2e_common",
  "nix 0.30.1",
  "regex",
  "reqwest",

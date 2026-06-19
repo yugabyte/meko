@@ -56,7 +56,7 @@ pub fn run_sql_workload(cluster: &Cluster, label: &str, sql: &Path) -> anyhow::R
     if !expected.exists() {
         eprintln!("FAIL — no golden output for {label}.");
         eprintln!("  expected file missing: {}", expected.display());
-        eprintln!("  generate it with: E2E_REGEN_EXPECTED=1 test/e2e/run.sh …");
+        eprintln!("  generate it with: E2E_REGEN_EXPECTED=1 test/e2e/storage/run.sh …");
         bail!("no golden output for {label}");
     }
 

@@ -44,7 +44,9 @@ members = [
     "libs/proxy/tokio-postgres2",
     "endpoint_storage",
     "pgxn/yb_amp/communicator",
-    "test/e2e",
+    "test/e2e/storage",
+    "test/e2e/control_plane",
+    "test/e2e/libs/e2e_common",
 ]
 
 [workspace.package]

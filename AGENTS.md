@@ -116,14 +116,14 @@ Code anchors:
 ## Testing
 
 - Unit/workspace tests: `cargo test`.
-- End-to-end: `test/e2e/run.sh [fast|slow|all|<name>]` — a Rust harness
+- End-to-end: `test/e2e/storage/run.sh [fast|slow|all|<name>]` — a Rust harness
   (`e2e_tests` crate) that brings up a real `yb_light_local` + YB, runs
   scenario tests + golden `.sql` workloads, and scans the pageserver log
   for corruption markers after every test. `-n <count>` repeats for
   flakiness hunting; `--release` runs the release build. See
-  [`test/e2e/README.md`](test/e2e/README.md) for how to run and how to
-  add a test (just drop a file under `test/e2e/src/scenarios/{fast,slow}/`
-  or a `.sql`/`.out` pair under `test/e2e/{fast,slow}/`).
+  [`test/e2e/storage/README.md`](test/e2e/storage/README.md) for how to run and how to
+  add a test (just drop a file under `test/e2e/storage/{fast,slow}/`
+  or a `.sql`/`.out` pair under `test/e2e/storage/{fast,slow}/`).
 - Run e2e before claiming any corruption-class fix — unit tests don't
   exercise the cross-seam bugs (enforced by the
   `e2e-before-corruption-claim` skill).

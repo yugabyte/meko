@@ -1390,7 +1390,7 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
             )
             .await?;
 
-            // NB: test/e2e/run.sh extracts the tenant id from this exact
+            // NB: test/e2e/storage/run.sh extracts the tenant id from this exact
             // line (`awk '/successfully created/{print $2}'`). The
             // pageserver that serves it comes up at `endpoint create`.
             println!("tenant {tenant_id} successfully created");

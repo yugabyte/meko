@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 /// The Postgres install built from yb-light's own vendored Postgres
-/// (`pg_install/v17`), relative to this crate (`<repo>/test/e2e`).
+/// (`pg_install/v17`), relative to this crate (`<repo>/test/e2e/storage`).
 fn pg_install() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../pg_install/v17")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../pg_install/v17")
 }
 
 /// Base `psql` command against a compute endpoint: trust auth (empty

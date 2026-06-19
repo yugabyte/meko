@@ -3,12 +3,12 @@
 //! typed `tokio-postgres`/`reqwest` assertions.
 //!
 //! Scenarios are auto-registered from the filesystem: the build script
-//! ([`build.rs`]) scans `src/scenarios/{fast,slow}/` and generates the
+//! ([`build.rs`]) scans the `fast/` and `slow/` dirs and generates the
 //! `pub mod` declarations + the `fast()`/`slow()` registries below.
 //! Adding a scenario is just dropping a `<name>.rs` into the right
 //! subdir — nothing here to edit. The subdir is the category; the file
 //! stem is the test name. `.sql` golden workloads are likewise
-//! auto-discovered at runtime from `test/e2e/{fast,slow}/*.sql`.
+//! auto-discovered at runtime from `test/e2e/storage/{fast,slow}/*.sql`.
 //!
 //! The runner [`crate::cluster::Cluster::run_scenario`] handles the
 //! recycle/gate/PASS reporting around each — scenarios just assert and

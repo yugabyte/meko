@@ -1,0 +1,46 @@
+# Control-plane e2e suite (amp-on-Docker)
+
+The `e2e_control_plane` crate: a deliberately thin driver that exercises
+the **amp** control plane on Docker. `run-amp.sh` starts the `amp`
+container (with its Docker endpoint provisioner enabled) against the
+host's YugabyteDB, then this binary calls amp's REST API
+(`user → storage pool → timeline → endpoint`) and runs `psql` against the
+endpoint amp returns.
+
+**amp owns all provisioning** — create-timeline records the tenant + its
+main timeline, and create-endpoint deploys the compute container
+synchronously via amp's `deploy.Deployer` (the Docker driver;
+yblight-controller.md §5.6), returning its address. The harness contains
+no orchestration; `main.rs` is the harness side.
+
+It runs the SC-free self-bootstrap path: amp deploys the endpoint with
+`--deploy-bootstrap`, so it provisions the storage schema and initdb's the
+recorded tenant/timeline on first start (there is no create-database flow
+yet). Storage-controller-coordinated deploy is future work.
+
+## Running
+
+```sh
+test/e2e/control_plane/run-amp.sh           # create timeline + endpoint, psql the endpoint
+test/e2e/control_plane/run-amp.sh -n 3      # repeat the suite 3x
+```
+
+Prerequisites: Docker; a YugabyteDB on the host at `:5433`
+(yugabyte/yugabyte); the `yb-light/neon-endpoint:dev` image present (build
+it once with
+`docker build -t yb-light/neon-endpoint:dev -f deploy/endpoint/Dockerfile .`).
+`run-amp.sh` builds `yb-light/amp:dev` itself and tears everything down on
+exit.
+
+## Layout
+
+```
+test/e2e/control_plane/
+  run-amp.sh   starts amp in Docker, then builds + runs the suite
+  Cargo.toml   the `e2e_control_plane` crate
+  main.rs      arg parse + amp REST client + scenarios + run loop
+```
+
+Shared Postgres assertion helpers (the `db` module) live in
+[`../libs/e2e_common`](../libs/e2e_common), used by both this suite and the
+storage suite.

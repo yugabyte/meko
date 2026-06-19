@@ -145,7 +145,7 @@ docker run -d --name amp --hostname amp --network ybamp \
 ```
 
 `--user root` is the dev-simple way to give amp access to the mounted socket; the
-end-to-end driver `test/e2e/run-amp.sh` wires all of this up. The Kubernetes
+end-to-end driver `test/e2e/control_plane/run-amp.sh` wires all of this up. The Kubernetes
 driver (`AMP_DEPLOY_DRIVER=kubernetes`) uses Helm + the cluster API instead and
 needs neither the socket nor this CLI.
 
