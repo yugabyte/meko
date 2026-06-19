@@ -13,6 +13,17 @@ geo-distributed, multi-region, multi-cloud, infinitely-scalable
 replication model directly underneath every byte of every page.
 
 
+## AI assistants
+
+AI coding agents working in this repo should read [`AGENTS.md`](AGENTS.md)
+first for repo conventions, architecture pointers, and ongoing project
+context. [`CLAUDE.md`](CLAUDE.md) just points there.
+
+This repo has a Meko datapack associated with it for agent memory:
+
+- **Name**: `yb-amp`
+- **ID**: `fd3b43a0-ebd6-4732-958b-fae9a50a0505`
+
 
 ## Architecture overview
 
@@ -107,16 +118,101 @@ A ybAmp install is:
 > [`architecture/yugabyte.md`](architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent)
 > for the full contract.
 
-## AI assistants
+## AMP topology and deployment
 
-AI coding agents working in this repo should read [`AGENTS.md`](AGENTS.md)
-first for repo conventions, architecture pointers, and ongoing project
-context. [`CLAUDE.md`](CLAUDE.md) just points there.
+Two complementary views of an install. **AMP Topology** is the logical
+view — tenant pools and branches, how capacity is carved up and
+presented. **AMP Deployment** is the physical view — processes, nodes,
+and availability zones, where bytes and connections actually live.
 
-This repo has a Meko datapack associated with it for agent memory:
+### AMP Topology: tenant pools, branches
 
-- **Name**: `yb-amp`
-- **ID**: `fd3b43a0-ebd6-4732-958b-fae9a50a0505`
+```mermaid
+flowchart TB
+    subgraph found["Foundation / Topology"]
+        subgraph pools[" "]
+            direction LR
+            subgraph tp1["Tenant Pool 1"]
+                tA["Tenant A"]
+                tB1["Tenant B"]
+            end
+            subgraph tp2["Tenant Pool 2 · Tenant B"]
+                direction LR
+                pgc1["PG Cluster 1<br/>Endpoint (RW) · Endpoint (RO)"]
+                pgc2["PG Cluster 2<br/>Endpoint (RW) · Endpoint (RO)"]
+                pgc1 -- "&lt;branch&gt;" --> pgc2
+            end
+            subgraph tp3["Tenant Pool 3"]
+                tdots["..."]
+            end
+            tp1 ~~~ tp2 ~~~ tp3
+        end
+        ybdb["YBDB (ONLY persisted layer)"]
+        gwcm["Gateway / Connection Manager"]
+    end
+
+    cp["Yb Light Control plane<br/>(MCP)"]
+    ui["ybLight UI"]
+    arch["Architect agent"]
+    voy["Voyager Agent"]
+    pa["PA Agent"]
+    sa["SA Agent"]
+
+    ui --> cp
+    arch --> cp
+    voy --> cp
+    pa --> cp
+    sa --> cp
+    cp --> found
+```
+
+### AMP Deployment: processes, nodes, AZs
+
+```mermaid
+flowchart TB
+    subgraph gw["Stateless gateway"]
+        direction LR
+        cm1["Connection<br/>Manager"]
+        cm2["Connection<br/>Manager"]
+        cm3["Connection<br/>Manager"]
+        cm4["Connection<br/>Manager"]
+        cm5["Connection<br/>Manager"]
+        cm1 ~~~ cm2 ~~~ cm3 ~~~ cm4 ~~~ cm5
+    end
+
+    subgraph epA["Endpoint A — Virtual Node vn1 · 1 hostname/IP (POD / CGroup / VM)"]
+        direction LR
+        pg["PG / Compute"]
+        sk["Safekeeper"]
+        ps["Pageserver"]
+        otel["OTEL"]
+        cctl["compute_ctl"]
+    end
+
+    subgraph pgc["PG Cluster"]
+        direction LR
+        subgraph naz1["Physical node az-a-1"]
+            pA["Endpoint A (RW)"]
+            pC["Endpoint C (RO)"]
+        end
+        subgraph naz2["Physical node az-a-2"]
+            pB["Endpoint B (RO)"]
+        end
+        subgraph naz3["Physical node az-b-1"]
+            pD["Endpoint D (RO)"]
+        end
+    end
+
+    yba{"YBA/<br/>yb_light_local"}
+    ybdb[/"YBDB Universe"/]
+
+    gw --> pg
+    yba --> ybdb
+    gw --> ybdb
+    epA -.- pA
+    epA --> ybdb
+    pgc --> ybdb
+```
 
 ## Quick start
 
