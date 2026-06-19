@@ -12,16 +12,7 @@ in YB — so the system inherits YugabyteDB's highly available,
 geo-distributed, multi-region, multi-cloud, infinitely-scalable
 replication model directly underneath every byte of every page.
 
-ybAmp started as a fork of [neondatabase/neon](https://github.com/neondatabase/neon)
-but is no longer one in any meaningful sense. The layer-file storage
-engine, the disk-backed page cache, the in-process LFC pretense of
-"local cache", the secondary-tenant warm replicas, and most of the
-S3 / GCS / Azure remote-storage machinery have all been removed. What
-remains is the shape of the original control plane (`yb_light_local`,
-`storage_controller`, `safekeeper`, `pageserver` binary layout, the
-patched Postgres compute) wrapped around an entirely different storage
-substrate. The "pageserver" is now a thin row-store gateway between
-the Postgres compute and YugabyteDB.
+
 
 ## Architecture overview
 
@@ -511,6 +502,17 @@ subjects reference issues.
   the implementation.
 
 ## What's left of Neon, what's new
+
+ybAmp started as a fork of [neondatabase/neon](https://github.com/neondatabase/neon)
+but is no longer one in any meaningful sense. The layer-file storage
+engine, the disk-backed page cache, the in-process LFC pretense of
+"local cache", the secondary-tenant warm replicas, and most of the
+S3 / GCS / Azure remote-storage machinery have all been removed. What
+remains is the shape of the original control plane (`yb_light_local`,
+`storage_controller`, `safekeeper`, `pageserver` binary layout, the
+patched Postgres compute) wrapped around an entirely different storage
+substrate. The "pageserver" is now a thin row-store gateway between
+the Postgres compute and YugabyteDB.
 
 **Kept (the shell):**
 - The compute / pageserver / safekeeper / storage_controller separation.
