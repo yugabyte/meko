@@ -190,9 +190,6 @@ impl Cluster {
         // construction and can execute concurrently. `main` lives in the
         // compute lane at base + COMPUTE_LANE. `E2E_PORT_BASE` pins the block;
         // otherwise a free one is auto-picked.
-        let port_base = pick_port_base();
-        let compute_port: u16 = port_base + COMPUTE_LANE;
-
         let yb_light = match std::env::var("YB_LIGHT") {
             Ok(p) if !p.is_empty() => PathBuf::from(p),
             _ => repo.join("target/debug/yb_light_local"),
@@ -211,8 +208,8 @@ impl Cluster {
             db_name,
             yb_host,
             yb_port,
-            port_base,
-            compute_port,
+            port_base: 0,
+            compute_port: 0,
             tid: String::new(),
             markers: Regex::new(MARKERS).expect("static marker regex"),
             fatal_markers: Regex::new(FATAL_MARKERS).expect("static fatal-marker regex"),
@@ -220,21 +217,52 @@ impl Cluster {
             no_fail_clean: std::env::var("E2E_NO_FAIL_CLEAN").is_ok_and(|v| !v.is_empty()),
         };
 
-        // clean leftover state, then init + start the stack.
-        cluster.clean()?;
+        // Bring the stack up in a free, below-ephemeral port block. The
+        // free-block probe is advisory and can lose a race to a concurrent
+        // run that grabs the same block between probe and bind, so on a
+        // bring-up failure we tear down and retry in a fresh block. This is
+        // what lets several e2e runs (and the dev cluster) coexist.
+        let mut tried: Vec<u16> = Vec::new();
+        let mut last_err: Option<anyhow::Error> = None;
+        for attempt in 1..=PORT_BLOCK_ATTEMPTS {
+            let port_base = pick_port_base(&tried);
+            tried.push(port_base);
+            cluster.port_base = port_base;
+            cluster.compute_port = port_base + COMPUTE_LANE;
+            cluster.tid = String::new();
+            match cluster.bring_up() {
+                Ok(()) => return Ok(cluster),
+                Err(e) => {
+                    tee_println!(
+                        "cluster bring-up in port block {port_base} failed \
+                         (attempt {attempt}/{PORT_BLOCK_ATTEMPTS}): {e:#}"
+                    );
+                    let _ = cluster.clean();
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no port block tried")))
+            .context("cluster bring-up failed in every candidate port block")
+    }
 
-        step(&format!(
-            "yb_light_local init + start (db={})",
-            cluster.db_name
-        ));
-        let yb_port = cluster.yb_port.to_string();
-        let port_base = cluster.port_base.to_string();
-        cluster.yb(&[
+    /// `clean` + `init` + `start` + one shared tenant + the `main` endpoint,
+    /// all in the cluster's currently-selected port block. Split out of
+    /// [`Cluster::setup`] so a lost port-block race can be retried in a
+    /// fresh block without rebuilding the whole fixture.
+    fn bring_up(&mut self) -> anyhow::Result<()> {
+        // clean leftover state, then init + start the stack.
+        self.clean()?;
+
+        step(&format!("yb_light_local init + start (db={})", self.db_name));
+        let yb_port = self.yb_port.to_string();
+        let port_base = self.port_base.to_string();
+        self.yb(&[
             "init",
             "--yb-dbname",
-            &cluster.db_name,
+            &self.db_name,
             "--yb-host",
-            &cluster.yb_host,
+            &self.yb_host,
             "--yb-port",
             &yb_port,
             // Relocate the whole cluster into a free port block so concurrent
@@ -242,27 +270,26 @@ impl Cluster {
             "--port-base",
             &port_base,
         ])?;
-        cluster.yb(&["start"])?;
+        self.yb(&["start"])?;
 
         step("tenant + endpoint");
-        let tid = cluster.tenant_create()?;
+        let tid = self.tenant_create()?;
         if tid.is_empty() {
             bail!("tenant create failed");
         }
         tee_println!("tenant: {tid}");
-        cluster.tid = tid;
+        self.tid = tid;
 
         // Pin `main` to `compute_port` (the compute lane, base +
         // COMPUTE_LANE) so the harness knows where to connect.
-        let tid = cluster.tid.clone();
-        let pg_port = cluster.compute_port.to_string();
-        cluster.yb(&[
+        let tid = self.tid.clone();
+        let pg_port = self.compute_port.to_string();
+        self.yb(&[
             "endpoint", "create", "main", "--tenant-id", &tid, "--branch-name", "main",
             "--pg-version", "17", "--pg-port", &pg_port,
         ])?;
-        cluster.yb(&["endpoint", "start", "main"])?;
-
-        Ok(cluster)
+        self.yb(&["endpoint", "start", "main"])?;
+        Ok(())
     }
 
     /// Flip teardown to actually run `clean.sh`. Called once at the end
@@ -880,20 +907,69 @@ fn gc_old_runs(test_dir: &Path) {
 /// scenario branch endpoints live just above `main` at `compute_port + N`.
 const COMPUTE_LANE: u16 = 700;
 
+/// How many distinct port blocks to try before giving up on bring-up.
+/// Each retry picks a fresh block, so this also bounds how many concurrent
+/// runs can lose the block race and still recover.
+const PORT_BLOCK_ATTEMPTS: u16 = 6;
+
 /// Pick a base for a free port block (base+0 .. base+900) so each run's
 /// cluster coexists with concurrent runs and a developer's local cluster.
 /// Probes candidate bases (one per service-family lane) and returns the
 /// first all-free one; override/pin with `E2E_PORT_BASE`.
-fn pick_port_base() -> u16 {
+///
+/// Two properties keep this robust under concurrency:
+///   * The whole block stays **below the OS ephemeral port range**, so a
+///     fixed cluster port can never clash with a transient outbound
+///     connection's source port — that clash surfaces as a flaky
+///     `tenant create` / `endpoint create` bind failure, not as an
+///     obvious "address in use".
+///   * The scan starts at a **PID-derived offset** (wrapping), so several
+///     harness runs firing at once spread across the range instead of all
+///     converging on the lowest free block and colliding.
+fn pick_port_base(tried: &[u16]) -> u16 {
     if let Ok(b) = env_or(&["E2E_PORT_BASE"], "").parse::<u16>() {
         return b;
     }
-    for base in (20000u16..=60000).step_by(1000) {
-        if (0..=900).step_by(100).all(|d| port_free(base + d)) {
+    const LO: u16 = 10000;
+    const STEP: u16 = 1000;
+    const BLOCK: u16 = 900; // the block spans base+0 ..= base+900
+    // Highest base whose entire block still sits below the ephemeral floor.
+    let hi = ephemeral_floor().saturating_sub(BLOCK + STEP);
+    let candidates: Vec<u16> = (LO..=hi)
+        .step_by(STEP as usize)
+        .filter(|b| !tried.contains(b))
+        .collect();
+    if candidates.is_empty() {
+        return LO;
+    }
+    // Seed the scan from pid XOR wall-clock nanos so concurrent runs — and
+    // successive retries within one run — start at different offsets rather
+    // than all converging on the lowest free block.
+    let seed = std::process::id() as u128
+        ^ SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+    let start = (seed % candidates.len() as u128) as usize;
+    for i in 0..candidates.len() {
+        let base = candidates[(start + i) % candidates.len()];
+        if (0..=BLOCK).step_by(100).all(|d| port_free(base + d)) {
             return base;
         }
     }
-    20000 // best-effort: the bind-probe is advisory anyway
+    candidates[start] // best-effort: the bind-probe is advisory anyway
+}
+
+/// Low end of the OS ephemeral (dynamic) port range. Cluster ports must
+/// stay below this so a fixed port can't collide with a transient
+/// outbound connection's source port. Reads Linux's `ip_local_port_range`
+/// (first field); falls back to the common 32768 default elsewhere.
+fn ephemeral_floor() -> u16 {
+    std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse::<u16>().ok())
+        .filter(|&n| n > 10000)
+        .unwrap_or(32768)
 }
 
 /// Is `port` bindable on loopback right now? (Advisory free-port check.)
