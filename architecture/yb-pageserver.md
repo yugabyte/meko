@@ -405,7 +405,29 @@ Replaces `InMemoryLayer` + `flush_loop` + L0/L1 compaction.
    delta is a couple of bytes, hence a much higher threshold. Without
    materialising SLRU, the clog chain grew to a full page (~32 K deltas)
    and every basebackup re-walked it to rebuild the page (the dominant,
-   commit-volume-scaling recovery cost). The materialiser worker drains
+   commit-volume-scaling recovery cost). Two refinements keep SLRU
+   chains near the threshold under a high-rate commit burst rather than
+   letting them run to a full page (#115):
+   - **Dispatch is woken, not just cadence-driven.** A threshold
+     crossing pulses `materialize_wakeup`, on which the periodic flusher
+     waits alongside its timer; the flush — and the dispatch it drives —
+     then runs within ~ms of the crossing instead of at the next
+     5 s / 25 MiB flush. (`notify_one` coalesces a burst of crossings
+     into back-to-back flushes, and `put()` never blocks on it, so this
+     paces the materialiser without throttling ingest.)
+   - **The actively-growing SLRU page is imaged at the flush horizon.**
+     Its newest delta's LSN always races ahead of the durable
+     `flush_horizon_lsn`, so the cold-residue dispatch (which requires
+     `last_lsn ≤ horizon`) would *skip* it every flush and only collapse
+     it once cold (full page). Instead, an SLRU key whose `last_lsn`
+     exceeds the horizon dispatches at `horizon` — imaging the durable
+     prefix. The image is stamped at the actual durable chain-head LSN
+     (`read_slru_chain` returns only durable rows), so there is no hole;
+     using `horizon` (vs `last_lsn`) also lets a page already imaged at
+     `horizon` hit the "head is image ≥ target" skip and avoid redundant
+     walredo. The deltas above `horizon` stay a short tail, re-imaged as
+     `horizon` advances.
+   The materialiser worker drains
    the queue in batches of up to `BATCH_DRAIN_LIMIT` jobs and runs a
    two-phase pipeline: `redo_phase` (chain reads + walredo on this
    task, with `redo_concurrency`-scaled fan-out) followed by

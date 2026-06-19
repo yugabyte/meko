@@ -286,6 +286,24 @@ pub struct PageWriter {
     /// `flush()`. `put()` blocks on this when the buffer exceeds
     /// `policy.backpressure_bytes`.
     flush_completed: tokio::sync::Notify,
+    /// Pulsed by `record_delta_for_materialize` the instant a key's
+    /// delta chain first crosses its materialise threshold. The
+    /// periodic flusher (`spawn_flusher`) waits on this alongside its
+    /// timer tick and flushes immediately when it fires, so the
+    /// `flush()`-side materialise dispatch runs within ~ms of the
+    /// crossing instead of waiting for the next `policy.max_age` /
+    /// `max_bytes` flush. Without it, dispatch is bolted to the
+    /// 5s/25MB flush cadence: under a high-rate commit burst a CLOG
+    /// page's chain runs to the full 32768-row page capacity and a
+    /// large un-materialised backlog accumulates, which a later
+    /// basebackup must collapse synchronously (the #115 recycle
+    /// stall). `notify_one` coalesces a burst of crossings into
+    /// back-to-back flushes rather than a per-crossing storm, and
+    /// `put()` never blocks on it (the notify is non-blocking) — so
+    /// this paces the materialiser without throttling ingest. An
+    /// `Arc` so the flusher task can wait on it without holding a
+    /// strong ref to the writer between ticks.
+    materialize_wakeup: Arc<tokio::sync::Notify>,
     /// Total puts that had to wait at least once on `flush_completed`
     /// because the buffer was at `policy.backpressure_bytes`. Exposed
     /// for telemetry / smoke tests.
@@ -402,6 +420,7 @@ impl PageWriter {
             record_lsn_history: std::sync::Mutex::new(std::collections::BTreeMap::new()),
             consistent_lsn_slot: std::sync::OnceLock::new(),
             flush_completed: tokio::sync::Notify::new(),
+            materialize_wakeup: Arc::new(tokio::sync::Notify::new()),
             backpressure_waits: std::sync::atomic::AtomicU64::new(0),
             flush_horizon_lsn: std::sync::atomic::AtomicU64::new(0),
             flush_serialize: tokio::sync::Mutex::new(()),
@@ -605,10 +624,13 @@ impl PageWriter {
             return Ok(());
         }
         // Accumulate per-key delta counters here; the materialiser
-        // trigger fires from `flush()` (after `mark_flushed`
-        // advances `flush_horizon_lsn`), not from this put loop. That
-        // way every job's `target_lsn` is durable by construction —
-        // see `flush()` for the trigger site.
+        // trigger still fires from `flush()` (after `mark_flushed`
+        // advances `flush_horizon_lsn`), not from this put loop, so
+        // every job's `target_lsn` is durable by construction — see
+        // `flush()` for the trigger site. A threshold crossing only
+        // *wakes* the flusher (`materialize_wakeup`) so that flush —
+        // and its dispatch — runs promptly instead of at the next
+        // 5s/25MB cadence; the durable-target invariant is unchanged.
         let rel_limits = self
             .materializer
             .as_ref()
@@ -807,6 +829,13 @@ impl PageWriter {
         };
         if crossed {
             self.delta_ready.insert(*key);
+            // Wake the periodic flusher now so the flush — and the
+            // dispatch it drives — runs within ~ms of the crossing
+            // rather than at the next 5s/25MB flush. Keeps chains near
+            // the limit instead of letting a hot CLOG page run to a full
+            // 32768-row page under a commit burst (#115). Non-blocking
+            // and coalesced, so this never stalls the ingest put().
+            self.materialize_wakeup.notify_one();
         }
     }
 
@@ -1353,18 +1382,39 @@ impl PageWriter {
                     let target_lsn = match max_lsn_per_key.get(key) {
                         Some(&lsn) => lsn,
                         None => {
-                            // Cold residue. Dispatch at `last_lsn` iff
-                            // it's durable; otherwise the only delta
-                            // is still buffered (just-bumped pre-flush
-                            // by an unflushed put after the snapshot)
-                            // and we leave it for the next flush. The
-                            // `Lsn(0)` guard handles tallies created
-                            // before the `last_lsn` field existed in
-                            // case of in-place upgrades.
-                            if tally.last_lsn == Lsn(0) || tally.last_lsn > horizon {
+                            // Cold residue / SLRU. SLRU (clog/multixact)
+                            // block keys never appear in the rel snapshot,
+                            // so they always land here. The `Lsn(0)` guard
+                            // handles tallies created before the `last_lsn`
+                            // field existed in case of in-place upgrades.
+                            if tally.last_lsn == Lsn(0) {
                                 continue;
                             }
-                            tally.last_lsn
+                            if tally.last_lsn <= horizon {
+                                // Durable: image up to the newest delta.
+                                tally.last_lsn
+                            } else if key.is_slru_block_key() && horizon > Lsn(0) {
+                                // The actively-growing CLOG/multixact
+                                // page's newest delta always races ahead
+                                // of the durable `horizon`. Don't skip it —
+                                // image the durable prefix at `horizon`.
+                                // Otherwise the page is never collapsed
+                                // until it goes cold (the next page becomes
+                                // active), by which point its chain has run
+                                // to the full 32768-row page capacity and a
+                                // later basebackup must walk all of it (the
+                                // #115 recycle stall). The deltas above
+                                // `horizon` stay as a short tail and are
+                                // re-imaged as `horizon` advances on the
+                                // next flush.
+                                horizon
+                            } else {
+                                // Rel cold residue whose only delta is
+                                // still buffered (bumped post-snapshot by
+                                // an unflushed put) — leave it for the
+                                // next flush, when it's durable.
+                                continue;
+                            }
                         }
                     };
                     let inserted = m.in_flight.lock().unwrap().insert(*key);
@@ -1797,19 +1847,28 @@ impl PageWriter {
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
         let weak = Arc::downgrade(self);
+        // Cloned out so the task can wait on a materialise crossing
+        // without upgrading `weak` (which would pin the writer across
+        // the whole tick and defeat drop-based shutdown).
+        let wakeup = Arc::clone(&self.materialize_wakeup);
         let handle = tokio::spawn(async move {
             loop {
-                tokio::select! {
+                // A materialise wakeup forces a flush regardless of the
+                // size/age policy: the just-crossed key needs its chain
+                // durable so `flush()`'s dispatch can enqueue it now.
+                // Timer ticks defer to `should_flush()` as before.
+                let forced = tokio::select! {
                     _ = cancel_for_task.cancelled() => break,
-                    _ = tokio::time::sleep(tick) => {}
-                }
+                    _ = tokio::time::sleep(tick) => false,
+                    _ = wakeup.notified() => true,
+                };
                 let Some(w) = weak.upgrade() else { break };
                 // `stats()` refreshes the unflushed-bytes Prometheus
                 // gauge as a side-effect. Done every tick so a
                 // /metrics scrape reflects the current buffer depth
                 // even when there's nothing to flush.
                 let _ = w.stats().await;
-                if w.should_flush().await
+                if (forced || w.should_flush().await)
                     && let Err(e) = w.flush().await
                 {
                     crate::metrics::CORRECTNESS_ERRORS
