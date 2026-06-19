@@ -96,7 +96,7 @@
                 "vartype": "integer"
             },
             {
-                "name": "neon.safekeepers",
+                "name": "yb_amp.safekeepers",
                 "value": "127.0.0.1:6502,127.0.0.1:6503,127.0.0.1:6501",
                 "vartype": "string"
             },
@@ -161,7 +161,7 @@
                 "vartype": "integer"
             },
             {
-                "name": "neon.tenant_id",
+                "name": "yb_amp.tenant_id",
                 "value": "b0554b632bd4d547a63b86c3630317e8",
                 "vartype": "string"
             },
@@ -171,7 +171,7 @@
                 "vartype": "integer"
             },
             {
-                "name": "neon.timeline_id",
+                "name": "yb_amp.timeline_id",
                 "value": "2414a61ffc94e428f14b5758fe308e13",
                 "vartype": "string"
             },
@@ -186,7 +186,7 @@
                 "vartype": "string"
             },
             {
-                "name": "neon.pageserver_connstring",
+                "name": "yb_amp.pageserver_connstring",
                 "value": "host=127.0.0.1 port=6400",
                 "vartype": "string"
             },

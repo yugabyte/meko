@@ -24,6 +24,6 @@
 /libs/safekeeper_api/ @neondatabase/storage
 
 # Shared
-/pgxn/neon/ @neondatabase/compute @neondatabase/storage
+/pgxn/yb_amp/ @neondatabase/compute @neondatabase/storage
 /libs/compute_api/ @neondatabase/compute @neondatabase/control-plane
 /libs/postgres_ffi/ @neondatabase/compute @neondatabase/storage

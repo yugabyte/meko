@@ -43,7 +43,7 @@ members = [
     "libs/proxy/subzero_core",
     "libs/proxy/tokio-postgres2",
     "endpoint_storage",
-    "pgxn/neon/communicator",
+    "pgxn/yb_amp/communicator",
     "test/e2e",
 ]
 

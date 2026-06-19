@@ -82,15 +82,15 @@ pub fn write_postgres_conf(
             )?;
             writeln!(
                 file,
-                "neon.pageserver_connstring={}",
+                "yb_amp.pageserver_connstring={}",
                 escape_conf_value(&libpq_urls.join(","))
             )?;
         } else {
-            writeln!(file, "# no neon.pageserver_connstring")?;
+            writeln!(file, "# no yb_amp.pageserver_connstring")?;
         }
     } else if let Some(s) = &spec.pageserver_connstring {
         writeln!(file, "# from compute spec's pageserver_connstring field")?;
-        writeln!(file, "neon.pageserver_connstring={}", escape_conf_value(s))?;
+        writeln!(file, "yb_amp.pageserver_connstring={}", escape_conf_value(s))?;
     }
 
     if !spec.safekeeper_connstrings.is_empty() {
@@ -106,28 +106,28 @@ pub fn write_postgres_conf(
         neon_safekeepers_value.push_str(&spec.safekeeper_connstrings.join(","));
         writeln!(
             file,
-            "neon.safekeepers={}",
+            "yb_amp.safekeepers={}",
             escape_conf_value(&neon_safekeepers_value)
         )?;
     }
     if let Some(s) = &spec.tenant_id {
-        writeln!(file, "neon.tenant_id={}", escape_conf_value(&s.to_string()))?;
+        writeln!(file, "yb_amp.tenant_id={}", escape_conf_value(&s.to_string()))?;
     }
     if let Some(s) = &spec.timeline_id {
         writeln!(
             file,
-            "neon.timeline_id={}",
+            "yb_amp.timeline_id={}",
             escape_conf_value(&s.to_string())
         )?;
     }
     if let Some(s) = &spec.project_id {
-        writeln!(file, "neon.project_id={}", escape_conf_value(s))?;
+        writeln!(file, "yb_amp.project_id={}", escape_conf_value(s))?;
     }
     if let Some(s) = &spec.branch_id {
-        writeln!(file, "neon.branch_id={}", escape_conf_value(s))?;
+        writeln!(file, "yb_amp.branch_id={}", escape_conf_value(s))?;
     }
     if let Some(s) = &spec.endpoint_id {
-        writeln!(file, "neon.endpoint_id={}", escape_conf_value(s))?;
+        writeln!(file, "yb_amp.endpoint_id={}", escape_conf_value(s))?;
     }
 
     // tls
@@ -157,7 +157,7 @@ pub fn write_postgres_conf(
         writeln!(file, "lc_numeric='C.UTF-8'")?;
     }
 
-    writeln!(file, "neon.compute_mode={}", spec.mode.to_type_str())?;
+    writeln!(file, "yb_amp.compute_mode={}", spec.mode.to_type_str())?;
     match spec.mode {
         ComputeMode::Primary => {}
         ComputeMode::Static(lsn) => {
@@ -194,7 +194,7 @@ pub fn write_postgres_conf(
 
     writeln!(
         file,
-        "neon.privileged_role_name={}",
+        "yb_amp.privileged_role_name={}",
         escape_conf_value(params.privileged_role_name.as_str())
     )?;
 
@@ -234,7 +234,7 @@ pub fn write_postgres_conf(
                 // Typically, this should be unreacheable,
                 // because we always set at least some shared_preload_libraries in the spec
                 // but let's handle it explicitly anyway.
-                writeln!(file, "shared_preload_libraries='neon,pgaudit'")?;
+                writeln!(file, "shared_preload_libraries='yb_amp,pgaudit'")?;
             }
             writeln!(file, "# Managed by compute_ctl base audit settings: end")?;
         }
@@ -288,7 +288,7 @@ pub fn write_postgres_conf(
                 // but let's handle it explicitly anyway.
                 writeln!(
                     file,
-                    "shared_preload_libraries='neon,pgaudit,pgauditlogtofile'"
+                    "shared_preload_libraries='yb_amp,pgaudit,pgauditlogtofile'"
                 )?;
             }
             writeln!(
@@ -298,13 +298,13 @@ pub fn write_postgres_conf(
         }
     }
 
-    writeln!(file, "neon.extension_server_port={extension_server_port}")?;
+    writeln!(file, "yb_amp.extension_server_port={extension_server_port}")?;
 
     if spec.drop_subscriptions_before_start {
-        writeln!(file, "neon.disable_logical_replication_subscribers=true")?;
+        writeln!(file, "yb_amp.disable_logical_replication_subscribers=true")?;
     } else {
         // be explicit about the default value
-        writeln!(file, "neon.disable_logical_replication_subscribers=false")?;
+        writeln!(file, "yb_amp.disable_logical_replication_subscribers=false")?;
     }
 
     // We need Postgres to send logs to rsyslog so that we can forward them

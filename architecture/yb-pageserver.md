@@ -668,14 +668,14 @@ name + every delete is gen-checked" machinery into one column.
 ## Compute ↔ pageserver timeouts
 
 The compute opens libpq connections to the pageserver per backend
-(`pgxn/neon/libpagestore.c`). The relevant timers, with yb-light defaults
+(`pgxn/yb_amp/libpagestore.c`). The relevant timers, with yb-light defaults
 where they differ from upstream:
 
 | Stage | GUC / location | Default | Notes |
 |---|---|---|---|
 | TCP connect | libpq, no explicit cap in `control_plane/src/endpoint.rs::local_pageserver_conf_to_conn_info` | **Unset** → OS TCP SYN-retry (~127 s on Linux) | Currently no `connect_timeout=` parameter is appended to the constructed connstring. |
-| First WARN log on stalled response | `neon.pageserver_response_log_timeout` (`libpagestore.c:87`) | **10 s** | Cosmetic; request keeps waiting. |
-| Disconnect + reconnect on stalled response | `neon.pageserver_response_disconnect_timeout` (`libpagestore.c:95`) | **30 s** *(was 150 s upstream)* | Lowered in yb-light: yb-pageserver is a same-DC, low-latency hop, so a stuck request is far more likely a pageserver-side stall than transient packet loss — drop and reopen the socket fast, don't wait for TCP retry backoff. |
+| First WARN log on stalled response | `yb_amp.pageserver_response_log_timeout` (`libpagestore.c:87`) | **10 s** | Cosmetic; request keeps waiting. |
+| Disconnect + reconnect on stalled response | `yb_amp.pageserver_response_disconnect_timeout` (`libpagestore.c:95`) | **30 s** *(was 150 s upstream)* | Lowered in yb-light: yb-pageserver is a same-DC, low-latency hop, so a stuck request is far more likely a pageserver-side stall than transient packet loss — drop and reopen the socket fast, don't wait for TCP retry backoff. |
 | Reconnect attempts before erroring back to compute | `max_reconnect_attempts` (`libpagestore.c:83`) | **60** (1 s backoff each) | Combined with the disconnect timeout, a hard-down pageserver surfaces to the compute query in ~30 s + 60 × 1 s ≈ ~90 s. |
 | Pageserver-side activation wait | none | — | The timeline is opened synchronously before listeners start; until then, computes get ECONNREFUSED and retry via the reconnect loop above. |
 

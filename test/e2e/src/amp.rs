@@ -201,7 +201,7 @@ async fn smoke(e: &Endpoint) -> Result<()> {
 /// (durable across a CHECKPOINT).
 async fn resource_ladder(e: &Endpoint) -> Result<()> {
     let conn = &e.compute_conn;
-    let served = db::query_text(conn, "SELECT current_setting('neon.tenant_id')").await?;
+    let served = db::query_text(conn, "SELECT current_setting('yb_amp.tenant_id')").await?;
     if served != e.tenant_hex {
         bail!("compute serves tenant {served}, but amp created {}", e.tenant_hex);
     }

@@ -3084,7 +3084,7 @@ where
             if let Some(options) = params.get("options") {
                 let (config, _) = parse_options(options);
                 for (key, value) in config {
-                    if key == "neon.compute_mode" {
+                    if key == "yb_amp.compute_mode" {
                         self.perf_span_fields.compute_mode = Some(value.clone());
                         Span::current().record("compute_mode", field::display(value));
                     }
@@ -4354,29 +4354,29 @@ mod tests {
 
     #[test]
     fn test_parse_options() {
-        let (config, has_error) = parse_options(" -c neon.compute_mode=primary ");
+        let (config, has_error) = parse_options(" -c yb_amp.compute_mode=primary ");
         assert!(!has_error);
         assert_eq!(
             config,
-            vec![("neon.compute_mode".to_string(), "primary".to_string())]
+            vec![("yb_amp.compute_mode".to_string(), "primary".to_string())]
         );
 
-        let (config, has_error) = parse_options(" -c neon.compute_mode=primary -c foo=bar ");
+        let (config, has_error) = parse_options(" -c yb_amp.compute_mode=primary -c foo=bar ");
         assert!(!has_error);
         assert_eq!(
             config,
             vec![
-                ("neon.compute_mode".to_string(), "primary".to_string()),
+                ("yb_amp.compute_mode".to_string(), "primary".to_string()),
                 ("foo".to_string(), "bar".to_string()),
             ]
         );
 
-        let (config, has_error) = parse_options(" -c neon.compute_mode=primary -cfoo=bar");
+        let (config, has_error) = parse_options(" -c yb_amp.compute_mode=primary -cfoo=bar");
         assert!(!has_error);
         assert_eq!(
             config,
             vec![
-                ("neon.compute_mode".to_string(), "primary".to_string()),
+                ("yb_amp.compute_mode".to_string(), "primary".to_string()),
                 ("foo".to_string(), "bar".to_string()),
             ]
         );
@@ -4390,7 +4390,7 @@ mod tests {
         let (_, has_error) = parse_options("    ");
         assert!(!has_error);
 
-        let (_, has_error) = parse_options(" -c neon.compute_mode");
+        let (_, has_error) = parse_options(" -c yb_amp.compute_mode");
         assert!(has_error);
     }
 }

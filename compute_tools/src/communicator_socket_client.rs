@@ -10,7 +10,7 @@ use hyper::client::conn::http1::SendRequest;
 use hyper_util::rt::TokioIo;
 
 /// Name of the socket within the Postgres data directory. This better match that in
-/// `pgxn/neon/communicator/src/lib.rs`.
+/// `pgxn/yb_amp/communicator/src/lib.rs`.
 const NEON_COMMUNICATOR_SOCKET_NAME: &str = "neon-communicator.socket";
 
 /// Open a connection to the communicator's control socket, prepare to send requests to it

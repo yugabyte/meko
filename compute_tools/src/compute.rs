@@ -316,7 +316,7 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
             }
         }
         if pageserver_conninfo.is_none() {
-            if let Some(guc) = spec.cluster.settings.find("neon.pageserver_connstring") {
+            if let Some(guc) = spec.cluster.settings.find("yb_amp.pageserver_connstring") {
                 pageserver_conninfo = Some(PageserverConnectionInfo::from_connstr(&guc)?);
             }
         }
@@ -329,7 +329,7 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
             if matches!(spec.mode, ComputeMode::Primary) {
                 spec.cluster
                     .settings
-                    .find("neon.safekeepers")
+                    .find("yb_amp.safekeepers")
                     .ok_or(anyhow::anyhow!("safekeeper connstrings should be provided"))?
                     .split(',')
                     .map(|str| str.to_string())
@@ -348,7 +348,7 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
             let guc = spec
                 .cluster
                 .settings
-                .find("neon.tenant_id")
+                .find("yb_amp.tenant_id")
                 .ok_or(anyhow::anyhow!("tenant id should be provided"))?;
             TenantId::from_str(&guc).context("invalid tenant id")?
         };
@@ -358,7 +358,7 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
             let guc = spec
                 .cluster
                 .settings
-                .find("neon.timeline_id")
+                .find("yb_amp.timeline_id")
                 .ok_or(anyhow::anyhow!("timeline id should be provided"))?;
             TimelineId::from_str(&guc).context(anyhow::anyhow!("invalid timeline id"))?
         };
@@ -366,11 +366,11 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
         let endpoint_storage_addr: Option<String> = spec
             .endpoint_storage_addr
             .clone()
-            .or_else(|| spec.cluster.settings.find("neon.endpoint_storage_addr"));
+            .or_else(|| spec.cluster.settings.find("yb_amp.endpoint_storage_addr"));
         let endpoint_storage_token = spec
             .endpoint_storage_token
             .clone()
-            .or_else(|| spec.cluster.settings.find("neon.endpoint_storage_token"));
+            .or_else(|| spec.cluster.settings.find("yb_amp.endpoint_storage_token"));
 
         let res = ParsedSpec {
             spec,
@@ -1291,7 +1291,7 @@ impl ComputeNode {
 
         config.application_name("compute_ctl");
         config.options(&format!(
-            "-c neon.compute_mode={}",
+            "-c yb_amp.compute_mode={}",
             spec.spec.mode.to_type_str()
         ));
 
@@ -1623,7 +1623,7 @@ impl ComputeNode {
         let mut file = std::fs::File::create(conf_path)?;
         writeln!(file, "shared_buffers=65536")?;
         writeln!(file, "port=51055")?; // Nobody should be connecting
-        writeln!(file, "shared_preload_libraries = 'neon'")?;
+        writeln!(file, "shared_preload_libraries = 'yb_amp'")?;
 
         // Start postgres
         info!("starting postgres");
@@ -1822,7 +1822,7 @@ impl ComputeNode {
 
                     // Disable forwarding so that users don't get a cloud_admin role
                     let mut func = || {
-                        client.simple_query("SET neon.forward_ddl = false")?;
+                        client.simple_query("SET yb_amp.forward_ddl = false")?;
                         client.simple_query("CREATE USER cloud_admin WITH SUPERUSER")?;
                         client.simple_query("GRANT zenith_admin TO cloud_admin")?;
                         Ok::<_, anyhow::Error>(())
@@ -1848,9 +1848,9 @@ impl ComputeNode {
         // Disable DDL forwarding because control plane already knows about the roles/databases
         // we're about to modify.
         client
-            .simple_query("SET neon.forward_ddl = false")
+            .simple_query("SET yb_amp.forward_ddl = false")
             .await
-            .context("apply_config SET neon.forward_ddl = false")?;
+            .context("apply_config SET yb_amp.forward_ddl = false")?;
 
         Ok(client)
     }
@@ -2036,7 +2036,7 @@ impl ComputeNode {
             // Temporarily reset max_cluster_size in config
             // to avoid the possibility of hitting the limit, while we are reconfiguring:
             // creating new extensions, roles, etc.
-            config::with_compute_ctl_tmp_override(pgdata_path, "neon.max_cluster_size=-1", || {
+            config::with_compute_ctl_tmp_override(pgdata_path, "yb_amp.max_cluster_size=-1", || {
                 self.pg_reload_conf()?;
 
                 if spec.mode == ComputeMode::Primary {
@@ -2073,7 +2073,7 @@ impl ComputeNode {
             // temporarily reset max_cluster_size in config
             // to avoid the possibility of hitting the limit, while we are applying config:
             // creating new extensions, roles, etc...
-            config::with_compute_ctl_tmp_override(pgdata_path, "neon.max_cluster_size=-1", || {
+            config::with_compute_ctl_tmp_override(pgdata_path, "yb_amp.max_cluster_size=-1", || {
                 self.pg_reload_conf()?;
 
                 self.apply_config(compute_state)?;
@@ -2084,10 +2084,10 @@ impl ComputeNode {
             let postgresql_conf_path = pgdata_path.join("postgresql.conf");
             if config::line_in_file(
                 &postgresql_conf_path,
-                "neon.disable_logical_replication_subscribers=false",
+                "yb_amp.disable_logical_replication_subscribers=false",
             )? {
                 info!(
-                    "updated postgresql.conf to set neon.disable_logical_replication_subscribers=false"
+                    "updated postgresql.conf to set yb_amp.disable_logical_replication_subscribers=false"
                 );
             }
             self.pg_reload_conf()?;

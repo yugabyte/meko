@@ -73,8 +73,8 @@ the **SC-free subset** of that flow:
   (generation 1), matching what the launcher does minus the controller's
   `timeline_register` bookkeeping.
 - **Compute.** `compute_ctl` is given a generated spec (`ComputeConfig`) whose
-  `neon.pageserver_connstring` / `neon.safekeepers` (with the `g#1:` membership
-  prefix) / `neon.tenant_id` / `neon.timeline_id` point at the co-located
+  `yb_amp.pageserver_connstring` / `yb_amp.safekeepers` (with the `g#1:` membership
+  prefix) / `yb_amp.tenant_id` / `yb_amp.timeline_id` point at the co-located
   services over `localhost`. It fetches a basebackup from the pageserver and
   starts Postgres as usual.
 
@@ -91,7 +91,7 @@ cruft for this fork (it references absent `postgres-v14..v16` submodules, a
 `pageserver` binary that no longer exists — it is `yb-pageserver` — and the
 removed `storage_broker`). The Postgres-family binaries link
 `pg_install/v17/lib` (`libpq.so.5`), so `LD_LIBRARY_PATH` is set image-wide; the
-`neon` extension additionally needs `libcurl4` at runtime.
+`yb_amp` extension additionally needs `libcurl4` at runtime.
 
 See [`deploy/README.md`](../deploy/README.md) for the build/run/config details
 and the Helm chart.

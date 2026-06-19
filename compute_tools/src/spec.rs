@@ -234,10 +234,10 @@ pub fn add_standby_signal(pgdata_path: &Path) -> Result<()> {
 pub async fn handle_neon_extension_upgrade(client: &mut Client) -> Result<()> {
     // The neon C library is preloaded into every backend via
     // shared_preload_libraries, but the SQL extension object (a
-    // `pg_extension` row, created by `CREATE EXTENSION neon`) only exists in
+    // `pg_extension` row, created by `CREATE EXTENSION yb_amp`) only exists in
     // the databases the spec installs it into — not the `postgres`
     // maintenance database that post_apply_config connects to. Running
-    // `ALTER EXTENSION neon UPDATE` there would fail with
+    // `ALTER EXTENSION yb_amp UPDATE` there would fail with
     // `extension "neon" does not exist` and log a spurious error on every
     // startup, even though neon is loaded and working. Only upgrade when the
     // extension is actually installed in the connected database.
@@ -249,11 +249,11 @@ pub async fn handle_neon_extension_upgrade(client: &mut Client) -> Result<()> {
         .await?
         .is_some();
     if !installed {
-        info!("neon extension not installed in this database; skipping ALTER EXTENSION neon UPDATE");
+        info!("yb_amp extension not installed in this database; skipping ALTER EXTENSION yb_amp UPDATE");
         return Ok(());
     }
 
-    let query = "ALTER EXTENSION neon UPDATE";
+    let query = "ALTER EXTENSION yb_amp UPDATE";
     info!("update neon extension version with query: {}", query);
     client.simple_query(query).await?;
 

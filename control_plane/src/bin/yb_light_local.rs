@@ -633,8 +633,8 @@ struct EndpointCreateCmdArgs {
     shared_buffers: Option<String>,
 
     /// Enables Neon's Local File Cache (LFC) on the compute by setting
-    /// both `neon.max_file_cache_size` (postmaster) and
-    /// `neon.file_cache_size_limit` (SIGHUP) to this value. Pass a
+    /// both `yb_amp.max_file_cache_size` (postmaster) and
+    /// `yb_amp.file_cache_size_limit` (SIGHUP) to this value. Pass a
     /// Postgres size literal, e.g. `--lfc-size=8GB`. Without this, LFC
     /// is disabled and every shared_buffers miss is a getpage RPC.
     #[clap(long)]
@@ -668,7 +668,7 @@ struct EndpointStartCmdArgs {
     /// Pageserver ID.
     #[clap(long = "pageserver-id")]
     endpoint_pageserver_id: Option<NodeId>,
-    /// Safekeepers membership generation to prefix neon.safekeepers with.
+    /// Safekeepers membership generation to prefix yb_amp.safekeepers with.
     #[clap(long)]
     safekeepers_generation: Option<u32>,
     /// List of safekeepers endpoint will talk to.

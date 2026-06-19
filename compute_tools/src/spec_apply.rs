@@ -70,7 +70,7 @@ impl ComputeNode {
             // it will start again with the same spec and flag value.
             //
             // To handle this, we save the fact of the operation in the database
-            // in the neon.drop_subscriptions_done table.
+            // in the yb_amp.drop_subscriptions_done table.
             // If the table does not exist, we assume that the operation was never performed, so we must do it.
             // If table exists, we check if the operation was performed on the current timelilne.
             //
@@ -82,7 +82,7 @@ impl ComputeNode {
                 info!("Checking if drop subscription operation was already performed for timeline_id: {}", timeline_id);
 
                 drop_subscriptions_done = match
-                    client.query("select 1 from neon.drop_subscriptions_done where timeline_id OPERATOR(pg_catalog.=) $1", &[&timeline_id.to_string()]).await {
+                    client.query("select 1 from yb_amp.drop_subscriptions_done where timeline_id OPERATOR(pg_catalog.=) $1", &[&timeline_id.to_string()]).await {
                     Ok(result) => !result.is_empty(),
                     Err(e) =>
                     {
@@ -1156,7 +1156,7 @@ async fn get_operations<'a>(
         ApplySpecPhase::HandleNeonExtension => {
             let operations = vec![
                 Operation {
-                    query: String::from("CREATE EXTENSION IF NOT EXISTS neon WITH SCHEMA neon"),
+                    query: String::from("CREATE EXTENSION IF NOT EXISTS yb_amp WITH SCHEMA yb_amp"),
                     comment: Some(String::from(
                         "init: install the extension if not already installed",
                     )),
@@ -1168,11 +1168,11 @@ async fn get_operations<'a>(
                     comment: Some(String::from("compat/fix: make neon relocatable")),
                 },
                 Operation {
-                    query: String::from("ALTER EXTENSION neon SET SCHEMA neon"),
+                    query: String::from("ALTER EXTENSION yb_amp SET SCHEMA yb_amp"),
                     comment: Some(String::from("compat/fix: alter neon extension schema")),
                 },
                 Operation {
-                    query: String::from("ALTER EXTENSION neon UPDATE"),
+                    query: String::from("ALTER EXTENSION yb_amp UPDATE"),
                     comment: Some(String::from("compat/update: update neon extension version")),
                 },
             ]
@@ -1223,7 +1223,7 @@ async fn get_operations<'a>(
         ApplySpecPhase::AddDatabricksGrants => {
             let operations = vec![
                 Operation {
-                    query: String::from("GRANT USAGE ON SCHEMA neon TO databricks_monitor"),
+                    query: String::from("GRANT USAGE ON SCHEMA yb_amp TO databricks_monitor"),
                     comment: Some(String::from(
                         "Permissions needed to execute neon.* functions (in the postgres database)",
                     )),
@@ -1244,7 +1244,7 @@ async fn get_operations<'a>(
                 },
                 Operation {
                     query: String::from(
-                        "GRANT SELECT ON neon.neon_perf_counters TO databricks_monitor",
+                        "GRANT SELECT ON yb_amp.neon_perf_counters TO databricks_monitor",
                     ),
                     comment: Some(String::from(
                         "Permissions needed to access neon performance counters view",
@@ -1252,7 +1252,7 @@ async fn get_operations<'a>(
                 },
                 Operation {
                     query: String::from(
-                        "GRANT EXECUTE ON FUNCTION neon.get_perf_counters() TO databricks_monitor",
+                        "GRANT EXECUTE ON FUNCTION yb_amp.get_perf_counters() TO databricks_monitor",
                     ),
                     comment: Some(String::from(
                         "Permissions needed to execute the underlying performance counters function",

@@ -1,6 +1,6 @@
 //! Rust definitions of the libpq-based pagestream API
 //!
-//! See also the C implementation of the same API in pgxn/neon/pagestore_client.h
+//! See also the C implementation of the same API in pgxn/yb_amp/pagestore_client.h
 
 use std::io::{BufRead, Read};
 

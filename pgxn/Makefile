@@ -3,7 +3,7 @@
 #
 # This is used in two different ways:
 #
-# 1. The main makefile calls this, when you invoke the `make neon-pg-ext-%`
+# 1. The main makefile calls this, when you invoke the `make yb_amp-pg-ext-%`
 #    target. It passes PG_CONFIG pointing to pg_install/%/bin/pg_config.
 #    This is a VPATH build; the current directory is build/pgxn-%, and
 #    the path to the Makefile is passed with the -f argument.
@@ -16,12 +16,12 @@ srcdir = $(dir $(firstword $(MAKEFILE_LIST)))
 
 PG_CONFIG = pg_config
 
-subdirs = neon neon_rmgr neon_walredo neon_utils neon_test_utils
+subdirs = yb_amp yb_amp_rmgr yb_amp_walredo yb_amp_utils yb_amp_test_utils
 
 .PHONY: install install-compute install-storage $(subdirs)
 install: $(subdirs)
-install-compute: neon neon_utils neon_test_utils neon_rmgr
-install-storage: neon_rmgr neon_walredo
+install-compute: yb_amp yb_amp_utils yb_amp_test_utils yb_amp_rmgr
+install-storage: yb_amp_rmgr yb_amp_walredo
 
 $(subdirs): %:
 	mkdir -p $*

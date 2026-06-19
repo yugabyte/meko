@@ -10,7 +10,7 @@
 //! process. Then we get the page image back. Communication with the
 //! postgres process happens via stdin/stdout
 //!
-//! See pgxn/neon_walredo/walredoproc.c for the other side of
+//! See pgxn/yb_amp_walredo/walredoproc.c for the other side of
 //! this communication.
 //!
 //! The Postgres process is assumed to be secure against malicious WAL

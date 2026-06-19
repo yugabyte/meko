@@ -360,8 +360,8 @@ pub struct Endpoint {
     shared_buffers: Option<String>,
 
     /// If set, enables Neon's Local File Cache (LFC) on the compute by
-    /// writing both `neon.max_file_cache_size` (postmaster, hard cap) and
-    /// `neon.file_cache_size_limit` (SIGHUP, soft cap) to this value
+    /// writing both `yb_amp.max_file_cache_size` (postmaster, hard cap) and
+    /// `yb_amp.file_cache_size_limit` (SIGHUP, soft cap) to this value
     /// (e.g. `8GB`). Without this, LFC is disabled and every shared_buffers
     /// miss is a getpage RPC.
     lfc_size: Option<String>,
@@ -512,14 +512,14 @@ impl Endpoint {
         conf.append("restart_after_crash", "off");
 
         // Load the 'neon' extension
-        conf.append("shared_preload_libraries", "neon");
+        conf.append("shared_preload_libraries", "yb_amp");
 
         // When local TLS is off (the default), tell walproposer not to attempt a
         // TLS handshake against the safekeeper. The GUC is prepended verbatim to
         // the libpq conninfo walproposer builds per-safekeeper.
         // Flip `use_local_tls = true` in .yb_light/config to re-enable.
         if !self.env.use_local_tls {
-            conf.append("neon.safekeeper_conninfo_options", "sslmode=disable");
+            conf.append("yb_amp.safekeeper_conninfo_options", "sslmode=disable");
         }
 
         // Neon Local File Cache: when --lfc-size=<v> was passed at create,
@@ -527,8 +527,8 @@ impl Endpoint {
         // SIGHUP-tunable soft cap to the same value. Without this, both
         // GUCs default to 0 and LFC is fully disabled.
         if let Some(lfc) = self.lfc_size.as_deref() {
-            conf.append("neon.max_file_cache_size", lfc);
-            conf.append("neon.file_cache_size_limit", lfc);
+            conf.append("yb_amp.max_file_cache_size", lfc);
+            conf.append("yb_amp.file_cache_size_limit", lfc);
         }
 
         // User-supplied --pg-setting overrides (or extras). These come
@@ -569,7 +569,7 @@ impl Endpoint {
                         .map(|sk| format!("localhost:{}", sk.get_compute_port()))
                         .collect::<Vec<String>>()
                         .join(",");
-                    conf.append("neon.safekeepers", &safekeepers);
+                    conf.append("yb_amp.safekeepers", &safekeepers);
                 } else {
                     // We only use setup without safekeepers for tests,
                     // and don't care about data durability on pageserver,

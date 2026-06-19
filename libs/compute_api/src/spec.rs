@@ -100,7 +100,7 @@ pub struct ComputeSpec {
     // `safekeeper_connstrings` must be set for a primary.
     //
     // For backwards compatibility, the control plane may leave out all of
-    // these, and instead set the "neon.tenant_id", "neon.timeline_id",
+    // these, and instead set the "yb_amp.tenant_id", "yb_amp.timeline_id",
     // etc. GUCs in cluster.settings. TODO: Once the control plane has been
     // updated to fill these fields, we can make these non optional.
     pub tenant_id: Option<TenantId>,
@@ -128,7 +128,7 @@ pub struct ComputeSpec {
     pub endpoint_id: Option<String>,
 
     /// Safekeeper membership config generation. It is put in
-    /// neon.safekeepers GUC and serves two purposes:
+    /// yb_amp.safekeepers GUC and serves two purposes:
     /// 1) Non zero value forces walproposer to use membership configurations.
     /// 2) If walproposer wants to update list of safekeepers to connect to
     ///    taking them from some safekeeper mconf, it should check what value
@@ -246,7 +246,7 @@ impl PageserverConnectionInfo {
     ///
     /// Used for backwards-compatibility, to parse the legacy
     /// [`ComputeSpec::pageserver_connstring`] field or the
-    /// `neon.pageserver_connstring` GUC. Nowadays the
+    /// `yb_amp.pageserver_connstring` GUC. Nowadays the
     /// `pageserver_connection_info` field should be used instead.
     pub fn from_connstr(connstr: &str) -> Result<PageserverConnectionInfo, anyhow::Error> {
         let pageservers: Vec<_> = connstr

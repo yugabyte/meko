@@ -133,7 +133,7 @@ neon-pg-ext-%: postgres-install-% cargo-target-dir
 		-f $(ROOT_PROJECT_DIR)/pgxn/Makefile  install
 
 # Build walproposer as a static library. walproposer source code is located
-# in the pgxn/neon directory.
+# in the pgxn/yb_amp directory.
 #
 # We also need to include libpgport.a and libpgcommon.a, because walproposer
 # uses some functions from those libraries.
@@ -147,7 +147,7 @@ walproposer-lib: neon-pg-ext-v17
 	mkdir -p $(BUILD_DIR)/walproposer-lib
 	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/v17/bin/pg_config COPT='$(COPT)' \
 		-C $(BUILD_DIR)/walproposer-lib \
-		-f $(ROOT_PROJECT_DIR)/pgxn/neon/Makefile walproposer-lib
+		-f $(ROOT_PROJECT_DIR)/pgxn/yb_amp/Makefile walproposer-lib
 	cp $(POSTGRES_INSTALL_DIR)/v17/lib/libpgport.a $(BUILD_DIR)/walproposer-lib
 	cp $(POSTGRES_INSTALL_DIR)/v17/lib/libpgcommon.a $(BUILD_DIR)/walproposer-lib
 	$(AR) d $(BUILD_DIR)/walproposer-lib/libpgport.a \
@@ -288,8 +288,8 @@ neon-pgindent: postgres-v17-pg-bsd-indent neon-pg-ext-v17
 		FIND_TYPEDEF=$(ROOT_PROJECT_DIR)/vendor/postgres-v17/src/tools/find_typedef \
 		INDENT=$(BUILD_DIR)/v17/src/tools/pg_bsd_indent/pg_bsd_indent \
 		PGINDENT_SCRIPT=$(ROOT_PROJECT_DIR)/vendor/postgres-v17/src/tools/pgindent/pgindent \
-		-C $(BUILD_DIR)/pgxn-v17/neon \
-		-f $(ROOT_PROJECT_DIR)/pgxn/neon/Makefile pgindent
+		-C $(BUILD_DIR)/pgxn-v17/yb_amp \
+		-f $(ROOT_PROJECT_DIR)/pgxn/yb_amp/Makefile pgindent
 
 
 .PHONY: setup-pre-commit-hook

@@ -183,7 +183,7 @@ behind JWT auth except for metrics:
 | `GET /liveness_probe` | liveness |
 
 **Internal** (`--internal-http-port`, default **3081**) — loopback-only, called by the
-`neon` extension and `local_proxy`:
+`yb_amp` extension and `local_proxy`:
 
 | Route | Purpose |
 |---|---|
@@ -222,7 +222,7 @@ internal `POST /refresh_configuration`, which the configurator turns into a re-f
 | Module | What it does |
 |---|---|
 | `compute_prewarm.rs` | LFC **prewarm** (load cache state before/at startup) and **offload** (periodically save it). State is read/written to **endpoint_storage** at `{addr}/{tenant}/{timeline}/{endpoint}/lfc_state` (zstd). Auto-prewarm if `spec.autoprewarm`; offload loop if `offload_lfc_interval_seconds` set. |
-| `compute_promote.rs` | Replica→Primary: wait for the standby to catch up to the primary's flush LSN, set `neon.safekeepers` + `synchronous_standby_names`, `pg_promote()`, then reconfigure as Primary. |
+| `compute_promote.rs` | Replica→Primary: wait for the standby to catch up to the primary's flush LSN, set `yb_amp.safekeepers` + `synchronous_standby_names`, `pg_promote()`, then reconfigure as Primary. |
 | `sync_sk.rs` | Query each safekeeper's `TIMELINE_STATUS` for flush/commit LSN and confirm a quorum agrees, before basebackup and on shutdown. |
 | `lsn_lease.rs` | Static mode: renew the pageserver LSN lease (`GET /lsn_lease`) so the pinned LSN survives GC. |
 | `extension_server.rs` | Download remote extensions from the proxy gateway (`--remote-ext-base-url`), unpack into PG's `lib`/`share`. |

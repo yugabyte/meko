@@ -28,7 +28,7 @@ cargo build --release \
     -p endpoint_storage
 
 echo
-echo ">>> Building compute extensions (pgxn/neon/*.so for v17)..."
+echo ">>> Building compute extensions (pgxn/yb_amp/*.so for v17)..."
 # `neon.so` + walredo/test/utils extensions are loaded by the compute's
 # postgres at startup. The walproposer wire protocol with the
 # safekeeper has to match these binaries; shipping the server binaries
