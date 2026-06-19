@@ -37,8 +37,8 @@ flowchart LR
     end
 
     subgraph sk["Safekeeper (stateless)"]
-        skp["WAL ingress<br/>(walproposer push)"]
         sks["interpreted-WAL sender"]
+        skp["WAL ingress<br/>(walproposer push)"]
     end
 
     subgraph ps["Pageserver (stateless)"]
