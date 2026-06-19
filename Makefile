@@ -102,17 +102,17 @@ CARGO_CMD_PREFIX += CARGO_TERM_PROGRESS_WHEN=never CI=1
 CACHEDIR_TAG_CONTENTS := "Signature: 8a477f597d28d172789f06886806bc55"
 
 #
-# Top level Makefile to build Neon and PostgreSQL
+# Top level Makefile to build ybLight and PostgreSQL
 #
 .PHONY: all
 all: neon postgres-install neon-pg-ext
 
-### Neon Rust bits
+### ybLight Rust bits
 #
 # The 'postgres_ffi' crate depends on the Postgres headers.
 .PHONY: neon
 neon: postgres-headers-install walproposer-lib cargo-target-dir
-	+@echo "Compiling Neon"
+	+@echo "Compiling ybLight"
 	$(CARGO_CMD_PREFIX) cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE)
 
 .PHONY: cargo-target-dir
