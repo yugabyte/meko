@@ -34,7 +34,7 @@ flowchart LR
     end
 
     subgraph compute["Compute (patched PostgreSQL, stateless)"]
-        pg["postgres + neon smgr"]
+        pg["postgres + yb_amp smgr"]
         wp["walproposer"]
     end
 
@@ -81,7 +81,7 @@ flowchart LR
 A ybAmp install is:
 
 - **Compute nodes**: patched PostgreSQL, stateless, configured against a
-  pageserver endpoint and a safekeeper set. The `neon` smgr extension
+  pageserver endpoint and a safekeeper set. The `yb_amp` smgr extension
   routes every `smgr_read` to a gRPC `GetPage` and every WAL flush to
   the safekeepers.
 - **Pageserver (`yb-pageserver`)**: the row-store gateway. Two YSQL
@@ -263,9 +263,8 @@ Once running, connect with any Postgres client:
 psql -p 55432 -h 127.0.0.1 -U cloud_admin postgres
 ```
 
-Branches still work the same way as Neon — they're cheap timeline
-forks at a given LSN, served by the same pageserver out of the same
-YB rows:
+Branches are a cheap timeline forks at a given LSN, served out of
+the same YB rows:
 
 ```sh
 cargo yb_light timeline branch --branch-name migration_check
@@ -362,7 +361,7 @@ BUILD_TYPE=release make -j`nproc` -s  # release
 ```
 
 The `make` target builds the Postgres headers, the walproposer static
-lib, and the neon PG extensions before invoking `cargo build`, so it is
+lib, and the yb_amp PG extensions before invoking `cargo build`, so it is
 the correct entry point for a clean first build. Build artefacts land in
 `target/{debug,release}/`. The release bundle
 deployed to a target host typically contains:
@@ -419,12 +418,6 @@ Scenario tests live in `test/e2e/src/scenarios/{fast,slow}/` (typed
 `test/e2e/{fast,slow}/` and diff against checked-in `.out` captures.
 Both are auto-discovered — adding a test is just dropping a file. Run
 the suite before claiming any corruption-class fix.
-
-Many of the legacy Neon unit tests have been deleted along with the
-layer-file machinery they exercised — they tested code paths that no
-longer execute in ybAmp. The remaining suite focuses on the
-row-store gateway, the YB-side write batching, the chain
-reconstruction, and the materialiser.
 
 ## Operator tools
 
@@ -542,18 +535,12 @@ Start here:
 Per-component deep dives:
 
 - [`architecture/compute.md`](architecture/compute.md) — the patched
-  Postgres compute (unchanged in yb-amp); how the `neon` smgr
+  Postgres compute (unchanged in yb-amp); how the `yb_amp` smgr
   extension wires page reads and WAL writes through the gateway.
 - [`architecture/yb-pageserver.md`](architecture/yb-pageserver.md) —
   the row-store gateway design: schema, chain reconstruction,
-  `UnifiedPages` buffer, image materialiser semantics, write batching,
-  and the phase plan for the Neon-shell deletion cascade.
-- [`architecture/pageserver.md`](architecture/pageserver.md) — the
-  original upstream-Neon pageserver design; kept for context on
-  pieces yb-pageserver still inherits (gRPC `getpage`, walreceiver,
-  basebackup).
-- [`architecture/safekeeper.md`](architecture/safekeeper.md) — the
-  upstream-Neon safekeeper (Raft acceptor); the WAL-in-YB
+  `UnifiedPages` buffer, image materialiser semantics, and write batching.
+- [`architecture/safekeeper.md`](architecture/safekeeper.md) — the WAL-in-YB
   reduction in ybAmp is described inline in `yugabyte.md` and in
   the safekeeper module docs.
 - [`architecture/storage-controller.md`](architecture/storage-controller.md)
@@ -573,11 +560,6 @@ endpoint_storage — e.g.
 [`architecture/yb-pageserver-apis.md`](architecture/yb-pageserver-apis.md),
 [`architecture/safekeeper-metrics.md`](architecture/safekeeper-metrics.md).
 
-Upstream-Neon material that's still mostly accurate for the shell:
-
-- [`docs/sourcetree.md`](docs/sourcetree.md) — original Neon
-  sourcetree map.
-
 `cargo doc --no-deps --open` for rustdoc.
 
 ## Issue tracking
@@ -593,80 +575,16 @@ subjects reference issues.
 
 - Read [`AGENTS.md`](AGENTS.md) — applies to humans too.
 - Read [`CONTRIBUTING.md`](/CONTRIBUTING.md) for style and process.
-- Don't restore deleted Neon code without a concrete reason; if you
-  need a removed feature, surface the requirement instead of resurrecting
-  the implementation.
 
 ## What's left of Neon, what's new
 
 ybAmp started as a fork of [neondatabase/neon](https://github.com/neondatabase/neon)
 but is no longer one in any meaningful sense. The layer-file storage
-engine, the disk-backed page cache, the in-process LFC pretense of
-"local cache", the secondary-tenant warm replicas, and most of the
-S3 / GCS / Azure remote-storage machinery have all been removed. What
-remains is the shape of the original control plane (`yb_light_local`,
-`storage_controller`, `safekeeper`, `pageserver` binary layout, the
-patched Postgres compute) wrapped around an entirely different storage
-substrate. The "pageserver" is now a thin row-store gateway between
-the Postgres compute and YugabyteDB.
-
-**Kept (the shell):**
-- The compute / pageserver / safekeeper / storage_controller separation.
-- The `yb_light_local` developer experience: `init`, `start`, `tenant create`,
-  `endpoint create`, `endpoint start`, timelines as forks.
-- The patched Postgres tree with the `neon` smgr extension wiring page
-  reads and WAL writes through the gateway.
-- The gRPC page_service protocol; the WAL streaming protocol to the
-  safekeepers.
-
-**Replaced wholesale:**
-- **Page storage**: every block lives in a YugabyteDB row keyed by
-  `(tenant, timeline, rel, fork, blknum, lsn, is_image)`. No layer
-  files. No disk-backed page cache. Reads chain the LSN history out
-  of YB rows + an in-RAM `UnifiedPages` buffer; an image materialiser
-  task compacts long delta chains into walredo-applied images in the
-  background.
-- **Safekeeper**: **stateless, no consensus protocol**. Original Neon
-  safekeepers ran a Paxos quorum of 3 (or more) nodes with local disk
-  WAL + leader election to guarantee a single durable WAL stream. In
-  ybAmp every WAL record is `INSERT`ed into a YugabyteDB row at the
-  moment it's received; durability is YB's Raft replication, not a
-  per-safekeeper Paxos. The safekeeper itself holds no persistent
-  state beyond its config — restart-from-scratch and it just resumes
-  by reading the next LSN out of YB. You can run one safekeeper or
-  ten; HA is provided by the YB cluster underneath either way.
-- **Remote storage**: `YbStore` writes blobs (basebackup tar, initdb)
-  into a YugabyteDB table — same connection model as the page store.
-  S3 / GCS / Azure backends are deleted.
-- **Concurrency model**: `YsqlClient` is a pooled, auto-reconnecting,
-  prepared-statement-caching wrapper around `tokio_postgres`. Hot
-  read paths run pool_size=4 (or more) so compute-side prefetches
-  parallelise on YB.
-
-**New properties inherited from YB:**
-- **Highly available**: pages, WAL, and control-plane state all live
-  in YB, so durability is YB's RF=3 Raft replication with online
-  tablet repair. The pageserver layer is stateless-on-attach — no
-  local layer files, no S3 layer-file handoff — so any pageserver
-  can take over a tenant's attachment via the storage_controller's
-  generation-fenced `live_migrate`.
-- **Multi-region resilience**: YB's Raft replication runs across
-  zones / regions / clouds. ybAmp's storage tier is wherever the YB
-  cluster says it is.
-- **Geo-distributed**: tablet placement is YB's job. The pageserver
-  just talks YSQL to whatever endpoint resolves.
-- **Multi-cloud**: the storage tier is a YB cluster, which can live
-  on AWS, GCP, Azure, on-prem, or any mix. ybAmp follows.
-- **Infinite scale**: tablet count grows with data; YB shards on the
-  PK hash of `(tenant, timeline, fork)`. Adding YB nodes adds
-  pageserver-side read capacity automatically.
-
-## What removed for real
-
-- ~30K LOC of Neon's layer-file machinery, secondary tenants, disk-usage
-  eviction, heatmap synchronisation, compaction loops, and remote-
-  storage backends. See `architecture/yb-pageserver.md` Phase 4d for the
-  ongoing cascade.
-- The OS-level page_cache is dead in this fork — preallocated buffers
-  that the hot path never touches. Stub-sized in current builds; full
-  removal is gated on the storage_layer cascade.
+engine, the disk-backed page cache, the S3 / GCS / Azure remote-storage machinery,
+and sharding logic, have all been removed. What
+remains is the patched Postgres compute, and WAL redo handling,  wrapped around an
+entirely different storage substrate. The "pageserver" is now a thin row-store
+gateway between the Postgres compute and YugabyteDB. It is no longer multi-tenant,
+and only supports a single endpoint. The safekeeper does not use any paxos logic,
+since the underlying yb storage provides the necessary consistency and durability
+guarantees.
