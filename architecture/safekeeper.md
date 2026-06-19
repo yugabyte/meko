@@ -1,25 +1,11 @@
 # Safekeeper
 
-The safekeeper is the durable, fault-tolerant landing zone for the compute's
-WAL. It's a Raft acceptor — N safekeepers form a quorum-replicated WAL log
-that the compute writes to synchronously and the pageserver reads from
-asynchronously.
+The safekeeper is landing zone for the compute's WAL. The compute writes to it
+synchronously and the pageserver reads from asynchronously.
 
 In yb-light, **all of the safekeeper's durable state lives in YugabyteDB**.
 The local filesystem holds only a log file and a pidfile.
 
-## Inherited from Neon
-
-### Raft acceptor
-
-`safekeeper/src/safekeeper.rs` implements a single-decree Paxos / Raft-ish
-acceptor:
-
-- A `term` and a `vote` are maintained per timeline.
-- Each new walproposer (the compute's WAL push side) starts an election
-  bumping the term; the safekeeper votes once per term.
-- After election the proposer sends `START_REPLICATION` from a chosen LSN
-  and the safekeeper appends.
 
 ### Wire protocol
 
@@ -35,7 +21,7 @@ acceptor:
   protocol (`send_interpreted_wal`); no same-host/same-build fast-path may be
   assumed on this link without a negotiated capability (see #69).
 
-### Per-timeline state (upstream Neon)
+### Per-timeline state
 
 - **Control file**: 388 B binary blob holding the consensus state (`term`,
   `vote`, peer set, `commit_lsn`, `backup_lsn`, `peer_horizon_lsn`,
@@ -78,7 +64,7 @@ Surviving background work:
   `<datadir>/safekeeper.toml` into `SafeKeeperConf` (only `-D`/`--init`/
   `--dump-control-file` are CLI flags).
 - `libs/safekeeper_api/src/config.rs` — `SafekeeperConfigToml`, the on-disk
-  `safekeeper.toml` schema shared by the binary and neon_local.
+  `safekeeper.toml` schema shared by the binary and yb_light_local.
 
 ## Changes in yb-light
 
