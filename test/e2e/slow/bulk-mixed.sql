@@ -12,9 +12,9 @@
 -- golden `.expected` capture can diff them. `created_at` defaults to
 -- now() but is never projected, so it doesn't perturb the output.
 --
--- Run via `test/repro/run-e2e.sh` for the full bring-up + verdict. Manual
--- usage against an already-running endpoint:
---   psql -h 127.0.0.1 -p 55432 -U cloud_admin postgres -f test/repro/workload.sql
+-- Run via `test/e2e/run.sh bulk-mixed` for the full bring-up + verdict.
+-- Manual usage against an already-running endpoint:
+--   psql -h 127.0.0.1 -p 55432 -U cloud_admin postgres -f test/e2e/slow/bulk-mixed.sql
 
 \timing on
 DROP TABLE IF EXISTS big_table;
