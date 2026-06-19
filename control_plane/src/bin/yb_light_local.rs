@@ -686,7 +686,7 @@ struct EndpointStartCmdArgs {
     allow_multiple: bool,
     /// Timeout until we fail the command.
     #[clap(short = 't', long, value_parser= humantime::parse_duration)]
-    #[arg(default_value = "90s")]
+    #[arg(default_value = "180s")]
     start_timeout: Duration,
 
     /// Download LFC cache from endpoint storage on endpoint startup
