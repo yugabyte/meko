@@ -494,7 +494,7 @@ YB on next start. Logs and pidfile are recreated.
 ## Run / configure
 
 All configuration lives in `<datadir>/safekeeper.toml` — the safekeeper's
-analogue of `pageserver.toml`, written by neon_local
+analogue of `pageserver.toml`, written by yb_light_local
 (`SafekeeperNode::start`) and read once at startup
 (`safekeeper_api::config::SafekeeperConfigToml`). Config is **fail-fast**:
 `SafekeeperConfigToml` is `deny_unknown_fields`, so a misspelled or stale key
@@ -529,7 +529,7 @@ via the same `YsqlClient`.
 
 `tenant_id`/`timeline_id` bake this process's single timeline identity
 (required whenever `yb_storage_conn` is set) — the safekeeper's analogue of
-`pageserver.toml`'s identity keys. neon_local stamps them at provision time
+`pageserver.toml`'s identity keys. yb_light_local stamps them at provision time
 (`allocate_safekeeper_conf`). They scope the startup load to this one
 timeline and gate connections to it (see §5).
 
