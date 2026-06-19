@@ -421,7 +421,7 @@ impl Cluster {
     where
         Fut: Future<Output = anyhow::Result<()>>,
     {
-        self.prep_for_next_test()?;
+        self.prep_for_next_test().await?;
         step(&format!("script: {label}"));
         let before = self.ps_log_lines();
         let t0 = Instant::now();
@@ -511,7 +511,7 @@ impl Cluster {
     /// golden (regenerate with `E2E_REGEN_EXPECTED=1`). Also runs the
     /// corruption gate.
     pub async fn run_sql(&self, label: &str, sql: &Path) -> anyhow::Result<()> {
-        self.prep_for_next_test()?;
+        self.prep_for_next_test().await?;
         step(&format!("workload: {label}"));
         let before = self.ps_log_lines();
         let t0 = Instant::now();
@@ -559,10 +559,78 @@ impl Cluster {
             .status();
     }
 
+    /// Discover the (single) timeline id under the shared tenant from
+    /// the pageserver's timeline listing.
+    async fn main_timeline_id(&self) -> anyhow::Result<String> {
+        let url = format!(
+            "http://127.0.0.1:{}/v1/tenant/{}/timeline",
+            self.ps_http_port(),
+            self.tid
+        );
+        let body: serde_json::Value = reqwest::get(&url).await?.json().await?;
+        body.as_array()
+            .and_then(|a| a.first())
+            .and_then(|t| t.get("timeline_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow::anyhow!("no timeline in pageserver listing for tenant {}", self.tid))
+    }
+
+    /// Before recycling, drive the pageserver to ingest + flush every WAL
+    /// record the compute has produced, so its `consistent_lsn` reaches
+    /// the tip. The post-recycle basebackup's `wait_lsn` then has ~no WAL
+    /// to re-ingest.
+    ///
+    /// Without this, a heavy-commit scenario (e.g. `clog`) leaves the
+    /// pageserver tens of MB behind the safekeeper — the compute commits
+    /// faster than the PS ingests — and the next compute start drains
+    /// that lag synchronously inside the basebackup, blowing the
+    /// compute-startup budget (#115). Paying it here, with the compute
+    /// still up, moves the cost out of the timed recycle.
+    ///
+    /// Best-effort: if the compute is already down (prior test stopped
+    /// it) or the flush call fails, log and let the recycle proceed.
+    async fn drain_ingest_before_recycle(&self) {
+        match self.try_drain_ingest().await {
+            Ok(Some(secs)) if secs >= 2 => {
+                tee_println!("  (pre-recycle ingest drain: {secs}s)")
+            }
+            Ok(_) => {}
+            Err(e) => tee_println!("  (pre-recycle ingest drain skipped: {e:#})"),
+        }
+    }
+
+    /// Returns `Some(seconds)` for the drain, or `None` if there was
+    /// nothing to do. Errors propagate to the best-effort wrapper.
+    async fn try_drain_ingest(&self) -> anyhow::Result<Option<u64>> {
+        // The compute's flushed WAL position is the tip the pageserver
+        // must catch up to. A failure here (compute down) means no fresh
+        // lag to drain, so the `?` short-circuit is the right behavior.
+        let tip = crate::db::query_text(
+            &crate::db::compute_conn(self.compute_port()),
+            "select pg_current_wal_flush_lsn()::text",
+        )
+        .await?;
+        let timeline = self.main_timeline_id().await?;
+        // `flush?lsn=<tip>` waits for WAL ingest to reach `tip`, then
+        // force_flushes — advancing `consistent_lsn` to the tip.
+        let url = format!(
+            "http://127.0.0.1:{}/v1/tenant/{}/timeline/{timeline}/flush?lsn={tip}",
+            self.ps_http_port(),
+            self.tid
+        );
+        let t0 = Instant::now();
+        let resp = reqwest::Client::new().put(&url).send().await?;
+        if !resp.status().is_success() {
+            bail!("pageserver flush returned {}", resp.status());
+        }
+        Ok(Some(t0.elapsed().as_secs()))
+    }
+
     /// Restart any cluster component the prior scenario left stopped,
     /// then recycle the compute, so each scenario starts from a clean
     /// compute state.
-    pub fn prep_for_next_test(&self) -> anyhow::Result<()> {
+    pub async fn prep_for_next_test(&self) -> anyhow::Result<()> {
         let r = &self.repo_dir;
         let sc = r.join("storage_controller_1/storage_controller.pid");
         let ps = r.join("endpoints/main/pageserver/pageserver.pid");
@@ -585,6 +653,11 @@ impl Cluster {
             step("restart endpoint_storage (prior test left it down)");
             self.yb(&["endpoint_storage", "start"])?;
         }
+
+        // Drain the pageserver's ingest backlog while the compute is
+        // still up, so the recycle below doesn't pay it inside the timed
+        // basebackup `wait_lsn` (#115).
+        self.drain_ingest_before_recycle().await;
 
         // Always recycle the compute (immediate stop: some scenarios
         // leave it mid-flight and a graceful stop blocks on the next

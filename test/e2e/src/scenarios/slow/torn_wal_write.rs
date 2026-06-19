@@ -106,7 +106,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         // Recycle between iterations so the accumulated cross-iteration
         // churn (compute restart) matches a `-n` run of the matrix.
         if iter < iterations {
-            c.prep_for_next_test()?;
+            c.prep_for_next_test().await?;
         }
     }
     Ok(())
