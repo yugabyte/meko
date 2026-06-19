@@ -1,0 +1,25 @@
+CREATE EXTENSION
+CREATE TABLE
+SET
+ test_consume_xids
+-------------------
+
+(1 row)
+
+INSERT 0 1000
+ test_consume_xids
+-------------------
+
+(1 row)
+
+ clear_buffer_cache
+--------------------
+
+(1 row)
+
+ count
+-------
+  1000
+(1 row)
+
+DROP TABLE

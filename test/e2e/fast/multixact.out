@@ -1,0 +1,20 @@
+CREATE EXTENSION
+CREATE TABLE
+INSERT 0 10000
+DO
+ clear_buffer_cache
+--------------------
+
+(1 row)
+
+ count
+-------
+ 10000
+(1 row)
+
+ count
+-------
+ 10000
+(1 row)
+
+DROP TABLE
