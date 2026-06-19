@@ -99,7 +99,7 @@ where
         // ```
         .current_dir(datadir);
 
-    let filled_cmd = fill_env_vars_prefixed_neon(fill_remote_storage_secrets_vars(
+    let filled_cmd = fill_env_vars_prefixed_yb(fill_remote_storage_secrets_vars(
         fill_rust_env_vars(background_command),
     ));
     filled_cmd.envs(envs);
@@ -287,13 +287,17 @@ fn fill_remote_storage_secrets_vars(cmd: &mut Command) -> &mut Command {
     // Lane E removed the cloud-storage backends (S3, Azure, GCS) and
     // their SDK dependencies. LocalFs was then dropped as well; the only
     // remaining remote_storage backend is YbStore, whose credentials
-    // flow through YB_STORAGE_PASSWORD via fill_env_vars_prefixed_neon below.
+    // flow through YB_STORAGE_PASSWORD via fill_env_vars_prefixed_yb below.
     cmd
 }
 
-fn fill_env_vars_prefixed_neon(mut cmd: &mut Command) -> &mut Command {
+/// Forward `YB_*`-prefixed environment variables (e.g. `YB_STORAGE_PASSWORD`)
+/// from the launcher to the spawned child. We `env_clear()` children in
+/// `fill_rust_env_vars`, so any credential the child needs has to be
+/// re-added here; the YB store password is the one that matters in practice.
+fn fill_env_vars_prefixed_yb(mut cmd: &mut Command) -> &mut Command {
     for (var, val) in std::env::vars() {
-        if var.starts_with("NEON_") {
+        if var.starts_with("YB_") {
             cmd = cmd.env(var, val);
         }
     }
