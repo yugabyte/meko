@@ -57,6 +57,12 @@ endpoint:
   # coordinated flow (the controller allocates the ids; the endpoint materializes
   # them). Off => attach an existing (already-materialized) tenant/timeline.
   bootstrap: false
+  # -- Branch ancestry. When ancestorTimelineId is set, the endpoint forks that
+  # ancestor timeline at ancestorLsn (the pageserver writes a branch init recipe;
+  # lineage reads serve the pre-fork pages) instead of running initdb. Empty for
+  # a root (main) timeline. ancestorLsn is the storage layer's "X/Y" LSN form.
+  ancestorTimelineId: ""
+  ancestorLsn: ""
 
 # Storage-controller coordination. Empty url => the endpoint runs
 # storage-controller-free with a pinned generation. Set => the endpoint

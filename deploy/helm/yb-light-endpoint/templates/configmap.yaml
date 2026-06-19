@@ -25,6 +25,11 @@ data:
   COMPUTE_EXTRA_SETTINGS_JSON: {{ .Values.endpoint.extraSettings | toJson | quote }}
   # initdb the supplied tenant/timeline on first start (vs. attach an existing).
   BOOTSTRAP: {{ .Values.endpoint.bootstrap | quote }}
+  # Branch ancestry: when ANCESTOR_TIMELINE_ID is set, the endpoint forks the
+  # ancestor at ANCESTOR_LSN (lineage reads serve pre-fork pages) instead of
+  # initdb'ing a fresh timeline. Empty for a root (main) timeline.
+  ANCESTOR_TIMELINE_ID: {{ .Values.endpoint.ancestorTimelineId | quote }}
+  ANCESTOR_LSN: {{ .Values.endpoint.ancestorLsn | quote }}
 
   {{- if .Values.storageController.url }}
   # --- Storage-controller coordination ---

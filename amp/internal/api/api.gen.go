@@ -42,7 +42,11 @@ const (
 
 // BranchTimelineRequest defines model for BranchTimelineRequest.
 type BranchTimelineRequest struct {
-	// Name Name for the new branch timeline.
+	// ForkPointLsn The ancestor LSN to branch at (storage-layer "X/X" form, e.g.
+	// "0/16ABCD0"). Omit to branch at the parent's latest LSN.
+	ForkPointLsn *string `json:"fork_point_lsn,omitempty"`
+
+	// Name Name for the new branch timeline; unique within the parent's tenant.
 	Name string `json:"name"`
 }
 
@@ -173,10 +177,16 @@ type TaskStatus string
 type Timeline struct {
 	CreatedAt time.Time `json:"created_at"`
 
+	// ForkLsn The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a root (main) timeline.
+	ForkLsn *string `json:"fork_lsn"`
+
 	// IsMain True for a tenant's root (main) timeline.
-	IsMain    bool   `json:"is_main"`
-	Name      string `json:"name"`
-	PgVersion int    `json:"pg_version"`
+	IsMain bool   `json:"is_main"`
+	Name   string `json:"name"`
+
+	// ParentTimelineId The timeline this one was forked from (a branch), or null for a root (main) timeline. Always in the same tenant.
+	ParentTimelineId *openapi_types.UUID `json:"parent_timeline_id"`
+	PgVersion        int                 `json:"pg_version"`
 
 	// TenantId The storage-layer tenant id this timeline belongs to.
 	TenantId openapi_types.UUID `json:"tenant_id"`
@@ -1677,8 +1687,10 @@ func (r DeleteTimelineResponse) StatusCode() int {
 type BranchTimelineResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON202      *OperationAck
+	JSON201      *Timeline
 	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
 	JSON500      *InternalError
 }
 
@@ -2367,12 +2379,12 @@ func ParseBranchTimelineResponse(rsp *http.Response) (*BranchTimelineResponse, e
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest OperationAck
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Timeline
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON202 = &dest
+		response.JSON201 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest BadRequest
@@ -2380,6 +2392,20 @@ func ParseBranchTimelineResponse(rsp *http.Response) (*BranchTimelineResponse, e
 			return nil, err
 		}
 		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -2775,7 +2801,7 @@ type ServerInterface interface {
 	// Delete a timeline (logged only)
 	// (DELETE /storage-pools/{poolId}/timelines/{timelineId})
 	DeleteTimeline(ctx echo.Context, poolId PoolId, timelineId TimelineId) error
-	// Branch (fork) a timeline into a new timeline (logged only)
+	// Branch (fork) a timeline into a new timeline
 	// (POST /storage-pools/{poolId}/timelines/{timelineId}/branch)
 	BranchTimeline(ctx echo.Context, poolId PoolId, timelineId TimelineId) error
 	// List the endpoints bound to a timeline
@@ -3480,11 +3506,11 @@ type BranchTimelineResponseObject interface {
 	VisitBranchTimelineResponse(w http.ResponseWriter) error
 }
 
-type BranchTimeline202JSONResponse OperationAck
+type BranchTimeline201JSONResponse Timeline
 
-func (response BranchTimeline202JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
+func (response BranchTimeline201JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(202)
+	w.WriteHeader(201)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -3494,6 +3520,24 @@ type BranchTimeline400JSONResponse struct{ BadRequestJSONResponse }
 func (response BranchTimeline400JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type BranchTimeline404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response BranchTimeline404JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type BranchTimeline409JSONResponse struct{ ConflictJSONResponse }
+
+func (response BranchTimeline409JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -3877,7 +3921,7 @@ type StrictServerInterface interface {
 	// Delete a timeline (logged only)
 	// (DELETE /storage-pools/{poolId}/timelines/{timelineId})
 	DeleteTimeline(ctx context.Context, request DeleteTimelineRequestObject) (DeleteTimelineResponseObject, error)
-	// Branch (fork) a timeline into a new timeline (logged only)
+	// Branch (fork) a timeline into a new timeline
 	// (POST /storage-pools/{poolId}/timelines/{timelineId}/branch)
 	BranchTimeline(ctx context.Context, request BranchTimelineRequestObject) (BranchTimelineResponseObject, error)
 	// List the endpoints bound to a timeline

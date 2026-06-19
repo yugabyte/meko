@@ -260,7 +260,7 @@ def psql(dbname, sql=None, file=None, ignore_errors=False):
 # exact compute spec shape are verified against `yb_light_local`-generated
 # configs during bring-up testing.
 
-def write_pageserver_config(datadir, bootstrap):
+def write_pageserver_config(datadir, bootstrap, ancestor_timeline_id=None, ancestor_lsn=None):
     datadir.mkdir(parents=True, exist_ok=True)
     (datadir / "identity.toml").write_text(f"id={NODE_ID}\n")
 
@@ -279,10 +279,18 @@ def write_pageserver_config(datadir, bootstrap):
         f"timeline_id='{TIMELINE_ID}'",
         f"generation={GENERATION}",
     ]
-    if bootstrap:
+    # TimelineInitConfig is internally tagged (`tag = "mode"`, rename_all =
+    # snake_case); PgMajorVersion serializes as its integer.
+    if ancestor_timeline_id:
+        # Branch: fork the ancestor at ancestor_lsn instead of initdb. The
+        # pageserver writes a timeline_state row pointing at the ancestor;
+        # pre-fork pages stay under the ancestor's timeline_id and are reached
+        # via lineage-aware reads from shared storage (nothing is copied).
+        lines += ["", "[timeline_init]", 'mode = "branch"',
+                  f'ancestor_timeline_id = "{ancestor_timeline_id}"',
+                  f'ancestor_lsn = "{ancestor_lsn}"']
+    elif bootstrap:
         # Tell the pageserver to run initdb + import for a fresh timeline.
-        # TimelineInitConfig is internally tagged (`tag = "mode"`,
-        # rename_all = snake_case); PgMajorVersion serializes as its integer.
         lines += ["", "[timeline_init]", 'mode = "bootstrap"', f"pg_version = {int(PG_VERSION)}"]
     (datadir / "pageserver.toml").write_text("\n".join(lines) + "\n")
 
@@ -570,12 +578,25 @@ def main():
     # been materialized yet. Default keeps the original behaviour: bootstrap only
     # when no ids are supplied, otherwise attach to an existing timeline.
     force_bootstrap = env("BOOTSTRAP", "false").lower() in ("1", "true", "yes")
+    # Branch ancestry (set by the controller for a branch timeline): fork the
+    # ancestor at ANCESTOR_LSN instead of initdb'ing a fresh, empty timeline.
+    ancestor_timeline_id = env("ANCESTOR_TIMELINE_ID", "").strip() or None
+    ancestor_lsn = env("ANCESTOR_LSN", "").strip() or None
     if TENANT_ID is None:
         TENANT_ID = os.urandom(16).hex()
         TIMELINE_ID = os.urandom(16).hex()
         bootstrap = True
         log(f"no TENANT_ID supplied; bootstrapping fresh tenant {TENANT_ID} "
             f"timeline {TIMELINE_ID}")
+    elif ancestor_timeline_id:
+        if TIMELINE_ID is None:
+            raise SystemExit("TENANT_ID set but TIMELINE_ID missing")
+        if not ancestor_lsn:
+            raise SystemExit("ANCESTOR_TIMELINE_ID set but ANCESTOR_LSN missing")
+        # A branch clones from its ancestor; it must not initdb.
+        bootstrap = False
+        log(f"branch: forking ancestor {ancestor_timeline_id} at {ancestor_lsn} "
+            f"into tenant {TENANT_ID} timeline {TIMELINE_ID}")
     else:
         if TIMELINE_ID is None:
             raise SystemExit("TENANT_ID set but TIMELINE_ID missing")
@@ -622,8 +643,9 @@ def main():
         health=lambda: http_request("GET", f"http://{LISTEN_HOST}:{SAFEKEEPER_HTTP_PORT}/v1/status")[0] == 200,
     )
 
-    # 3. pageserver (runs initdb for the Bootstrap recipe on first start)
-    write_pageserver_config(ps_dir, bootstrap)
+    # 3. pageserver (runs initdb for a Bootstrap recipe, or forks the ancestor
+    #    for a Branch recipe, on first start)
+    write_pageserver_config(ps_dir, bootstrap, ancestor_timeline_id, ancestor_lsn)
     ps = Service(
         "yb-pageserver",
         [BIN_DIR / "yb-pageserver", "-D", ps_dir],

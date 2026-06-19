@@ -152,21 +152,35 @@ func TestClientDeleteTimeline(t *testing.T) {
 	}
 }
 
-func TestClientGetTimeline(t *testing.T) {
+func TestClientTimelineLatestLSN(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/control/v1/tenant/tenant-1/timeline/tl-1" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
-		io.WriteString(w, `{"timeline_id":"tl-1"}`)
+		// The describe response nests LSNs per shard.
+		io.WriteString(w, `{"shards":[{"last_record_lsn":"0/16ABCD0"}]}`)
 	}))
 	defer srv.Close()
 
-	out, err := clientForServer(t, srv).GetTimeline(context.Background(), "tenant-1", "tl-1")
+	lsn, err := clientForServer(t, srv).TimelineLatestLSN(context.Background(), "tenant-1", "tl-1")
 	if err != nil {
-		t.Fatalf("GetTimeline: %v", err)
+		t.Fatalf("TimelineLatestLSN: %v", err)
 	}
-	if string(out) != `{"timeline_id":"tl-1"}` {
-		t.Errorf("out = %q", out)
+	if lsn != "0/16ABCD0" {
+		t.Errorf("lsn = %q, want 0/16ABCD0", lsn)
+	}
+}
+
+func TestClientTimelineLatestLSNNoShards(t *testing.T) {
+	// No shards / no last_record_lsn (e.g. an unmaterialized timeline) is an
+	// error, not an empty LSN, so the caller can surface a clear failure.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"shards":[]}`)
+	}))
+	defer srv.Close()
+
+	if _, err := clientForServer(t, srv).TimelineLatestLSN(context.Background(), "tenant-1", "tl-1"); err == nil {
+		t.Fatal("expected an error when the describe response has no shards")
 	}
 }
 
@@ -178,7 +192,7 @@ func TestClientErrorsOnEmptyBodyWhenResultExpected(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := clientForServer(t, srv).GetTimeline(context.Background(), "tenant-1", "tl-1"); err == nil {
+	if _, err := clientForServer(t, srv).TimelineLatestLSN(context.Background(), "tenant-1", "tl-1"); err == nil {
 		t.Fatal("expected an error decoding an empty body into a requested result")
 	}
 }

@@ -5,10 +5,11 @@
 // controller's only state store (yblight-controller.md §10).
 //
 // Scope: users (no auth), storage pools, timeline create (which provisions a
-// tenant + its main timeline, #92), and endpoints on a timeline (#108: create
-// records the row and the API synchronously deploys it; get/list/delete round
-// out the lifecycle). Timeline delete and branch remain logged-only in the API
-// for now (no task framework yet), so they have no Backend method.
+// tenant + its main timeline, #92) and branch (which forks an existing timeline,
+// #130), and endpoints on a timeline (#108: create records the row and the API
+// synchronously deploys it; get/list/delete round out the lifecycle). Timeline
+// delete remains logged-only in the API for now (no task framework yet), so it
+// has no Backend method.
 package core
 
 import (
@@ -49,14 +50,21 @@ type StoragePool struct {
 
 // Timeline is a PG cluster: identity is the (TenantID, TimelineID) pair
 // (yblc-highlvl.md §6). Creating a tenant (a "database") creates its main
-// timeline at the same time (IsMain), which is what CreateTimeline returns.
+// timeline at the same time (IsMain), which is what CreateTimeline returns;
+// BranchTimeline forks an existing timeline into a non-main one.
 type Timeline struct {
 	TenantID   uuid.UUID
 	TimelineID uuid.UUID
 	Name       string
 	PgVersion  int
 	IsMain     bool
-	CreatedAt  time.Time
+	// ParentTimelineID is the in-tenant timeline this one was forked from (a
+	// branch), or nil for a tenant's root (main) timeline.
+	ParentTimelineID *uuid.UUID
+	// ForkLSN is the ancestor LSN the branch was taken at (the storage layer's
+	// "X/X" pg_lsn form), or "" for a root timeline.
+	ForkLSN   string
+	CreatedAt time.Time
 }
 
 // Endpoint is the durable record of a compute endpoint on a timeline. Address
@@ -122,6 +130,15 @@ type Backend interface {
 	// timelines in the pool (ignoring limit/offset). Returns ErrNotFound if the
 	// pool does not exist.
 	ListTimelines(ctx context.Context, poolID uuid.UUID, limit, offset int) ([]Timeline, int, error)
+
+	// BranchTimeline forks the timeline addressed by (poolID, parentTimelineID)
+	// into a new branch timeline (a non-main pg_cluster) under the same tenant,
+	// named name and recording its fork ancestry (parent_timeline_id, fork_lsn).
+	// The Postgres version is inherited from the parent. forkLSN is the ancestor
+	// LSN to branch at (the storage layer's "X/X" pg_lsn form). Returns
+	// ErrNotFound if the pool or the parent timeline does not exist, or
+	// ErrConflict if a timeline named name already exists in the parent's tenant.
+	BranchTimeline(ctx context.Context, poolID, parentTimelineID uuid.UUID, name, forkLSN string) (Timeline, error)
 
 	// GetTimeline returns the timeline addressed by (poolID, timelineID),
 	// validating that the timeline's tenant belongs to the pool. Pools are

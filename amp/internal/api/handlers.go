@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -40,12 +41,11 @@ type Provisioning struct {
 
 // Controllers implements the generated StrictServerInterface: the controller's
 // HTTP behavior, decoupled from the wire format (which the generated code owns)
-// and from persistence (which the core.Backend owns). Timeline create records
-// the tenant + main timeline and the storage controller's pending-init recipe;
-// the timeline is materialized later by the first endpoint deployed on it (#108).
-// Timeline delete/branch route through the task framework eventually (§6) and
-// are logged-only for now — issue #92: "the 3 timeline calls should just log for
-// now, no task framework".
+// and from persistence (which the core.Backend owns). Timeline create and branch
+// record the control rows plus the storage controller's pending-init recipe; the
+// timeline is materialized later by the first endpoint deployed on it (#108,
+// #130). Timeline delete still routes through the task framework eventually (§6)
+// and is logged-only for now (#92).
 type Controllers struct {
 	backend core.Backend
 	tasks   task.Store
@@ -263,6 +263,12 @@ func (c *Controllers) DeleteTimeline(ctx context.Context, request DeleteTimeline
 	return DeleteTimeline202JSONResponse(loggedAck("delete timeline")), nil
 }
 
+// BranchTimeline forks the addressed timeline (the parent, in the path) into a
+// new branch timeline under the same tenant. Like create-timeline it records a
+// recipe — the control-plane row plus the storage controller's pending-init,
+// this time with the ancestor and fork LSN set — and materializes lazily at the
+// first endpoint deployed on the branch (amp-timeline-create.md). #113 moves the
+// recipe writes onto the write-ahead task framework.
 func (c *Controllers) BranchTimeline(ctx context.Context, request BranchTimelineRequestObject) (BranchTimelineResponseObject, error) {
 	if request.Body == nil {
 		return BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
@@ -271,11 +277,107 @@ func (c *Controllers) BranchTimeline(ctx context.Context, request BranchTimeline
 	if name == "" {
 		return BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
 	}
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "branch timeline requested (logged only; task framework pending)",
+
+	// The parent is addressed by the path. Resolve it within the pool (404 if
+	// absent); we also need its tenant and pg_version for the branch recipe.
+	parent, err := c.backend.GetTimeline(ctx, request.PoolId, request.TimelineId)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return BranchTimeline404JSONResponse{NotFoundJSONResponse(apiError("not_found", "parent timeline not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("get parent timeline: %w", err)
+	}
+
+	// Resolve the fork point before mutating anything, so a bad LSN or an
+	// unmaterialized parent 400s without leaving a half-created branch behind.
+	forkLSN, errResp := c.resolveForkLSN(ctx, parent, request.Body.ForkPointLsn)
+	if errResp != nil {
+		return errResp, nil
+	}
+
+	tl, err := c.backend.BranchTimeline(ctx, request.PoolId, request.TimelineId, name, forkLSN)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return BranchTimeline404JSONResponse{NotFoundJSONResponse(apiError("not_found", "parent timeline not found"))}, nil
+	case errors.Is(err, core.ErrConflict):
+		return BranchTimeline409JSONResponse{ConflictJSONResponse(apiError("conflict", "a timeline with that name already exists in the tenant"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("branch timeline: %w", err)
+	}
+
+	// Record the branch recipe with the storage controller: same tenant, the
+	// ancestor (the parent) and the fork LSN set. Synchronous for now (#113).
+	if c.prov.SC != nil {
+		ancestor := hex32(parent.TimelineID)
+		if err := c.prov.SC.RecordPendingTimelineInit(ctx,
+			hex32(tl.TenantID), hex32(tl.TimelineID),
+			storagecontroller.PendingTimelineInit{
+				BranchName:         tl.Name,
+				PgVersion:          parent.PgVersion, // a branch inherits the ancestor's version
+				AncestorTimelineID: &ancestor,
+				StartLSN:           forkLSN,
+			}); err != nil {
+			return nil, fmt.Errorf("storage controller record pending timeline init: %w", err)
+		}
+	} else {
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "storage controller not available; branch recipe recorded in the control DB only")
+	}
+
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "timeline branched",
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
-		slog.String(applog.KeyTimelineID, request.TimelineId.String()), // the parent
-		slog.String("branch_name", name))
-	return BranchTimeline202JSONResponse(loggedAck("branch timeline")), nil
+		slog.String(applog.KeyTenantID, tl.TenantID.String()),
+		slog.String("parent_timeline_id", parent.TimelineID.String()),
+		slog.String(applog.KeyTimelineID, tl.TimelineID.String()),
+		slog.String("branch_name", tl.Name),
+		slog.String("fork_lsn", forkLSN),
+		slog.Bool("recipe_recorded", c.prov.SC != nil))
+
+	return BranchTimeline201JSONResponse(timelineToAPI(tl)), nil
+}
+
+// lsnRE matches the storage layer's "X/X" LSN form, e.g. "0/16ABCD0". Each half
+// is a 32-bit value, so it is capped at 8 hex digits: a longer group is not a
+// valid pg_lsn and would otherwise pass this gate only to fail (500) at the
+// `$5::pg_lsn` cast. Branch fork points are validated against it before they
+// reach the cast or the storage controller.
+var lsnRE = regexp.MustCompile(`^[0-9a-fA-F]{1,8}/[0-9a-fA-F]{1,8}$`)
+
+// resolveForkLSN determines the LSN a branch forks at, or a 400 response to
+// return as-is. An explicit, well-formed fork_point_lsn wins. Otherwise it
+// defaults to the parent's latest LSN, read from the storage controller. Without
+// a storage controller there is no way to resolve a default (and no recipe to
+// materialize the branch), so an explicit fork_point_lsn is required rather than
+// silently forking at 0/0.
+//
+// NOTE: the default is the pageserver's last_record_lsn, the ingested position,
+// which can lag the safekeeper's durable flush_lsn that yb_light_local branches
+// at; the controller does not expose flush_lsn, so an exact point needs
+// fork_point_lsn (#130).
+func (c *Controllers) resolveForkLSN(ctx context.Context, parent core.Timeline, requested *string) (string, BranchTimelineResponseObject) {
+	if requested != nil {
+		if lsn := strings.TrimSpace(*requested); lsn != "" {
+			if !lsnRE.MatchString(lsn) {
+				return "", BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+					"fork_point_lsn must be an LSN of the form X/X (hex), e.g. 0/16ABCD0"))}
+			}
+			return lsn, nil
+		}
+	}
+	if c.prov.SC == nil {
+		return "", BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+			"fork_point_lsn is required when no storage controller is configured"))}
+	}
+	lsn, err := c.prov.SC.TimelineLatestLSN(ctx, hex32(parent.TenantID), hex32(parent.TimelineID))
+	if err != nil {
+		// No usable LSN: the parent has not been materialized (no endpoint ever
+		// deployed on it) or the controller is unreachable — there is nothing to
+		// branch from. Steer the caller rather than branching at a wrong point.
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "could not resolve default fork point",
+			slog.String(applog.KeyTimelineID, parent.TimelineID.String()), slog.String("error", err.Error()))
+		return "", BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+			"cannot determine a fork point for the parent timeline (deploy an endpoint on it first, or pass fork_point_lsn)"))}
+	}
+	return lsn, nil
 }
 
 // --- Endpoints (synchronously deployed, #108) ------------------------------
@@ -332,7 +434,7 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	// background context so cleanup runs even if the request ctx was cancelled.
 	// The instance name is keyed by the endpoint id (unique per endpoint), since a
 	// timeline can carry more than one endpoint (a writer plus read replicas).
-	deployed, err := c.prov.Deployer.CreateEndpoint(ctx, deploy.EndpointSpec{
+	spec := deploy.EndpointSpec{
 		Name:                 endpointDeployName(ep.ID),
 		TenantID:             hex32(tl.TenantID),
 		TimelineID:           hex32(tl.TimelineID),
@@ -340,7 +442,17 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		YB:                   c.prov.EndpointYB,
 		StorageControllerURL: c.prov.SCEndpointURL,
 		Bootstrap:            c.prov.Bootstrap,
-	})
+	}
+	// A branch must clone from its ancestor at the fork LSN, not initdb a fresh
+	// timeline — otherwise it comes up empty. The deployer relays the ancestor to
+	// the endpoint, whose pageserver writes a Branch init recipe (lineage reads
+	// serve the pre-fork pages from shared storage). Bootstrap is forced off.
+	if tl.ParentTimelineID != nil {
+		spec.AncestorTimelineID = hex32(*tl.ParentTimelineID)
+		spec.AncestorLSN = tl.ForkLSN
+		spec.Bootstrap = false
+	}
+	deployed, err := c.prov.Deployer.CreateEndpoint(ctx, spec)
 	if err != nil {
 		if derr := c.backend.DeleteEndpoint(context.Background(), ep.ID); derr != nil {
 			c.logger.LogAttrs(ctx, slog.LevelError, "failed to remove endpoint after deploy failure",
@@ -472,14 +584,19 @@ func poolToAPI(p core.StoragePool) StoragePool {
 }
 
 func timelineToAPI(t core.Timeline) Timeline {
-	return Timeline{
-		TenantId:   t.TenantID,
-		TimelineId: t.TimelineID,
-		Name:       t.Name,
-		PgVersion:  t.PgVersion,
-		IsMain:     t.IsMain,
-		CreatedAt:  t.CreatedAt,
+	out := Timeline{
+		TenantId:         t.TenantID,
+		TimelineId:       t.TimelineID,
+		Name:             t.Name,
+		PgVersion:        t.PgVersion,
+		IsMain:           t.IsMain,
+		ParentTimelineId: t.ParentTimelineID, // nil for a root (main) timeline
+		CreatedAt:        t.CreatedAt,
 	}
+	if t.ForkLSN != "" {
+		out.ForkLsn = &t.ForkLSN
+	}
+	return out
 }
 
 func endpointToAPI(e core.Endpoint) Endpoint {

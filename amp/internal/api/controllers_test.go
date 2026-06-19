@@ -365,7 +365,7 @@ func TestCreateEndpointAddressRecordFailureCompensates(t *testing.T) {
 	}
 }
 
-func TestTimelineDeleteBranchLoggedOnly(t *testing.T) {
+func TestTimelineDeleteLoggedOnlyAndBranchValidation(t *testing.T) {
 	client, _, _ := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
@@ -380,13 +380,15 @@ func TestTimelineDeleteBranchLoggedOnly(t *testing.T) {
 		t.Fatalf("DeleteTimeline status = %d, body = %s", del.StatusCode(), del.Body)
 	}
 
-	// Branch timeline -> 202; empty name -> 400.
+	// Branch is real now (#130): a nonexistent parent -> 404, and an empty name
+	// -> 400. The happy path (a real parent + the recipe) lives in
+	// timeline_storage_test.go, where a fake storage controller is wired.
 	br, err := client.BranchTimelineWithResponse(ctx, pool.Id, uuid.New(), api.BranchTimelineRequest{Name: "feature"})
 	if err != nil {
 		t.Fatalf("BranchTimeline: %v", err)
 	}
-	if br.StatusCode() != http.StatusAccepted || br.JSON202 == nil {
-		t.Fatalf("BranchTimeline status = %d, body = %s", br.StatusCode(), br.Body)
+	if br.StatusCode() != http.StatusNotFound {
+		t.Fatalf("BranchTimeline(missing parent) status = %d, body = %s", br.StatusCode(), br.Body)
 	}
 	brBad, err := client.BranchTimelineWithResponse(ctx, pool.Id, uuid.New(), api.BranchTimelineRequest{Name: ""})
 	if err != nil {

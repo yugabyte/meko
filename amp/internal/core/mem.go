@@ -21,8 +21,9 @@ type MemBackend struct {
 	pools        map[uuid.UUID]StoragePool
 	names        map[string]struct{} // pool names are unique across the placement group
 	timelines    map[uuid.UUID]Timeline
-	timelinePool map[uuid.UUID]uuid.UUID    // timeline id -> the pool it lives in (pg joins tenant.storage_pool_id)
-	tenantNames  map[tenantNameKey]struct{} // tenant names are unique within their pool
+	timelinePool map[uuid.UUID]uuid.UUID     // timeline id -> the pool it lives in (pg joins tenant.storage_pool_id)
+	tenantNames  map[tenantNameKey]struct{}  // tenant names are unique within their pool
+	clusterNames map[clusterNameKey]struct{} // timeline names are unique within their tenant
 	endpoints    map[uuid.UUID]Endpoint
 	writers      map[timelineKey]struct{} // at most one read_write endpoint per timeline
 	now          func() time.Time
@@ -33,6 +34,14 @@ type MemBackend struct {
 type tenantNameKey struct {
 	poolID uuid.UUID
 	name   string
+}
+
+// clusterNameKey makes a timeline name unique within its tenant (the schema's
+// pg_cluster UNIQUE (tenant_id, name)): a tenant's main timeline plus its
+// branches all share one name space.
+type clusterNameKey struct {
+	tenantID uuid.UUID
+	name     string
 }
 
 // timelineKey identifies a timeline (the schema's (tenant_id, timeline_id) PK).
@@ -50,6 +59,7 @@ func NewMemBackend() *MemBackend {
 		timelines:    make(map[uuid.UUID]Timeline),
 		timelinePool: make(map[uuid.UUID]uuid.UUID),
 		tenantNames:  make(map[tenantNameKey]struct{}),
+		clusterNames: make(map[clusterNameKey]struct{}),
 		endpoints:    make(map[uuid.UUID]Endpoint),
 		writers:      make(map[timelineKey]struct{}),
 		now:          time.Now,
@@ -65,6 +75,7 @@ func (m *MemBackend) SeedTimeline(poolID uuid.UUID, tl Timeline) {
 	defer m.mu.Unlock()
 	m.timelines[tl.TimelineID] = tl
 	m.timelinePool[tl.TimelineID] = poolID
+	m.clusterNames[clusterNameKey{tenantID: tl.TenantID, name: tl.Name}] = struct{}{}
 }
 
 func (m *MemBackend) Healthy(context.Context) error { return nil }
@@ -159,6 +170,36 @@ func (m *MemBackend) CreateTimeline(_ context.Context, poolID uuid.UUID, name st
 	m.timelines[t.TimelineID] = t
 	m.timelinePool[t.TimelineID] = poolID
 	m.tenantNames[key] = struct{}{}
+	m.clusterNames[clusterNameKey{tenantID: t.TenantID, name: name}] = struct{}{}
+	return t, nil
+}
+
+func (m *MemBackend) BranchTimeline(_ context.Context, poolID, parentTimelineID uuid.UUID, name, forkLSN string) (Timeline, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	parent, ok := m.timelineInPool(poolID, parentTimelineID)
+	if !ok {
+		return Timeline{}, ErrNotFound
+	}
+	ck := clusterNameKey{tenantID: parent.TenantID, name: name}
+	if _, taken := m.clusterNames[ck]; taken {
+		return Timeline{}, ErrConflict
+	}
+	parentID := parent.TimelineID
+	// A branch stays in its ancestor's tenant and inherits its Postgres version.
+	t := Timeline{
+		TenantID:         parent.TenantID,
+		TimelineID:       uuid.New(),
+		Name:             name,
+		PgVersion:        parent.PgVersion,
+		IsMain:           false,
+		ParentTimelineID: &parentID,
+		ForkLSN:          forkLSN,
+		CreatedAt:        m.now(),
+	}
+	m.timelines[t.TimelineID] = t
+	m.timelinePool[t.TimelineID] = poolID
+	m.clusterNames[ck] = struct{}{}
 	return t, nil
 }
 

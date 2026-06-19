@@ -289,6 +289,10 @@ type endpointValues struct {
 	TenantId    string `json:"tenantId"`
 	TimelineId  string `json:"timelineId"`
 	Bootstrap   bool   `json:"bootstrap"`
+	// Branch ancestry: empty for a root timeline. When set, the endpoint forks
+	// the ancestor at AncestorLsn instead of running initdb.
+	AncestorTimelineId string `json:"ancestorTimelineId,omitempty"`
+	AncestorLsn        string `json:"ancestorLsn,omitempty"`
 }
 
 // values builds the per-endpoint Helm values. With spec.StorageControllerURL set
@@ -313,11 +317,13 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Dbname:    spec.YB.DBName,
 		},
 		Endpoint: endpointValues{
-			PgVersion:   strconv.Itoa(pgVersion),
-			ComputePort: k.cfg.ComputePort,
-			TenantId:    spec.TenantID,
-			TimelineId:  spec.TimelineID,
-			Bootstrap:   spec.Bootstrap,
+			PgVersion:          strconv.Itoa(pgVersion),
+			ComputePort:        k.cfg.ComputePort,
+			TenantId:           spec.TenantID,
+			TimelineId:         spec.TimelineID,
+			Bootstrap:          spec.Bootstrap,
+			AncestorTimelineId: spec.AncestorTimelineID,
+			AncestorLsn:        spec.AncestorLSN,
 		},
 		StorageController: storageControllerValues{URL: spec.StorageControllerURL},
 		Service:           serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},

@@ -55,11 +55,11 @@ server (`internal/api/docs.go`):
   HTML+CSS+vanilla-JS page (`internal/api/ui/index.html`), embedded with
   `go:embed`. It is a pure client of the API below — the home page lists and
   creates users, and selecting a user shows that user's storage pools and their
-  timelines and endpoints, with create forms for pools and timelines. It does
-  the owner filtering client-side (the list endpoints aren't owner-scoped yet)
-  and omits branching entirely (the API's branch call is logged-only and is not
-  surfaced). No build step and no server-side rendering, so it can't drift from
-  the spec.
+  timelines and endpoints, with create forms for pools and timelines and a
+  per-timeline **branch** form (with an optional fork-LSN), and it shows a
+  branch's lineage (which timeline it forked from, and at what LSN). It does the
+  owner filtering client-side (the list endpoints aren't owner-scoped yet). No
+  build step and no server-side rendering, so it can't drift from the spec.
 
 The home page lists and creates users; selecting one drills into that user's
 storage pools, timelines, and endpoints:
@@ -85,7 +85,7 @@ Everything is under `/api/v1`. The resource ladder is **storage pool → timelin
 | `POST /storage-pools/{poolId}/timelines` | createTimeline | Creates a tenant + its main timeline and records the storage-controller pending-init recipe; returns `(tenant_id, timeline_id)`. Does **not** deploy an endpoint. `201` / `404` / `409`. |
 | `GET /storage-pools/{poolId}/timelines` | listTimelines | Paginated; the pool's timelines (all tenants). `404` if the pool is unknown. |
 | `DELETE …/timelines/{timelineId}` | deleteTimeline | **Logged only** → `202`. |
-| `POST …/timelines/{timelineId}/branch` | branchTimeline | **Logged only** → `202`. Branching is explicit. |
+| `POST …/timelines/{timelineId}/branch` | branchTimeline | Forks the parent into a new (non-main) timeline under the same tenant, recording the storage-controller recipe with the ancestor + fork LSN set (default: the parent's latest LSN; override with `fork_point_lsn`). Returns the branch `{tenant_id, timeline_id, parent_timeline_id, fork_lsn}`. Does **not** deploy an endpoint. `201` / `404` / `409`. |
 | `POST …/timelines/{timelineId}/endpoints` | createEndpoint | Creates the endpoint and **synchronously deploys** it → `201 {endpoint}` (its `address` set). `501` if `--deploy` is off. |
 | `GET …/timelines/{timelineId}/endpoints` | listEndpoints | Paginated; the timeline's endpoints. `404` if the pool/timeline is unknown. |
 | `GET …/endpoints/{endpointId}` | getEndpoint | One endpoint (its `address` is set once deployed). |
@@ -127,7 +127,7 @@ longer owner-scoped: `listStoragePools` returns **every** pool (an owner filter
 can come with grants), and `getStoragePool` resolves a pool by id regardless of
 who created it.
 
-### Timelines: create persists the tenant + main timeline; delete and branch are logged-only
+### Timelines: create + branch persist the resource and its recipe; delete is logged-only
 
 **`createTimeline` records the control-plane resource and the pending-init
 recipe.** It:
@@ -150,14 +150,29 @@ Compute is a **separate resource**: a caller `POST`s an endpoint on the timeline
 tenant's storage (initdb + the storage schema) is still out-of-band — the deploy
 path attaches an existing tenant (Mode B), it does not create one.
 
-**`deleteTimeline` and `branchTimeline` are still logged-only.** All such
-mutations are meant to run through the write-ahead task framework
-(yblight-controller.md §5, §8), whose step catalog does not exist yet, so per #92
-these two **only log** the request and return `202 Accepted`. They bypass
-`core.Backend` and don't validate the timeline (that validation belongs to the
-task steps that will replace the logging); no `task` row is written, and
-`getTask` is wired to the store for when they are. Their only outcomes are
-`202`, `400`, and `500`.
+**`branchTimeline` forks an existing timeline (#130).** The parent is the
+timeline in the path; the branch is a new, non-main `pg_cluster` under the
+**same tenant**, inheriting the parent's `pg_version` and recording its fork
+ancestry (`parent_timeline_id`, `fork_lsn`) — `core.Backend.BranchTimeline`. The
+fork point defaults to the parent's latest LSN, read from the storage controller
+(`GetTimeline`'s `last_record_lsn`); a caller can pin an earlier point with
+`fork_point_lsn`. Like create, it then records the storage controller's
+**pending-init recipe**, this time with the ancestor and `start_lsn` set, and the
+branch is materialized lazily by the first endpoint deployed on it (the
+pageserver clones from the ancestor at `fork_lsn` instead of running `initdb`).
+It returns the branch timeline (`201`); a missing pool/parent `404`s and a
+duplicate name within the tenant `409`s. *(`last_record_lsn` is the pageserver's
+ingested position, which can lag the safekeeper's durable `flush_lsn` that
+`yb_light_local` branches at; the controller doesn't expose `flush_lsn`, so an
+exact point needs `fork_point_lsn`.)*
+
+**`deleteTimeline` is still logged-only.** It is meant to run through the
+write-ahead task framework (yblight-controller.md §5, §8), whose step catalog
+does not exist yet, so per #92 it **only logs** the request and returns
+`202 Accepted`. It bypasses `core.Backend` and doesn't validate the timeline
+(that validation belongs to the task steps that will replace the logging); no
+`task` row is written, and `getTask` is wired to the store for when it is. Its
+only outcomes are `202`, `400`, and `500`.
 
 **`listTimelines` and `listEndpoints` are read-only and paginated.**
 `listTimelines` returns the pool's timelines across all its tenants (joining
@@ -201,9 +216,10 @@ internal/deploy/ Kubernetes endpoint provisioner; synchronous deploy/retire (ybl
 
 The `core.Backend` seam is what lets the whole HTTP layer be tested without a
 database: `MemBackend` mirrors `PgBackend`'s semantics (owner-existence checks,
-globally-unique pool names, top-level + paginated listing, tenant create). The
-user, storage-pool, timeline, and endpoint controllers go through it; the
-delete/branch timeline controllers do not (above). A controller
+globally-unique pool names, top-level + paginated listing, tenant create, and
+in-tenant-unique branch names). The user, storage-pool, timeline (create +
+branch), and endpoint controllers go through it; the logged-only delete-timeline
+controller does not (above). A controller
 that returns an unexpected (non-`echo.HTTPError`) error yields a `500` rendered
 in the same `Error` envelope — documented per operation in the spec so the
 generated client gets a typed handle for it.

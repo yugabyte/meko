@@ -87,6 +87,28 @@ tests:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           pattern: '"max_connections":"200"'
 
+  - it: renders branch ancestry env when set
+    set:
+      endpoint:
+        ancestorTimelineId: "aaaabbbbccccddddeeeeffff00001111"
+        ancestorLsn: "0/236A730"
+    asserts:
+      - equal:
+          path: data.ANCESTOR_TIMELINE_ID
+          value: "aaaabbbbccccddddeeeeffff00001111"
+      - equal:
+          path: data.ANCESTOR_LSN
+          value: "0/236A730"
+
+  - it: leaves branch ancestry env empty for a root timeline
+    asserts:
+      - equal:
+          path: data.ANCESTOR_TIMELINE_ID
+          value: ""
+      - equal:
+          path: data.ANCESTOR_LSN
+          value: ""
+
   - it: applies internal service port overrides
     set:
       ports:

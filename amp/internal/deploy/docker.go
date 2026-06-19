@@ -85,6 +85,11 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		"ENDPOINT_PG_VERSION": strconv.Itoa(spec.PgVersion),
 		"BOOTSTRAP":           strconv.FormatBool(spec.Bootstrap),
 	}
+	// Branch: relay the ancestor so the endpoint forks it instead of initdb'ing.
+	if spec.AncestorTimelineID != "" {
+		env["ANCESTOR_TIMELINE_ID"] = spec.AncestorTimelineID
+		env["ANCESTOR_LSN"] = spec.AncestorLSN
+	}
 	if spec.StorageControllerURL != "" {
 		// SC-coordinated: the controller reaches this endpoint's services by its
 		// container name on the shared network, at their internal ports.

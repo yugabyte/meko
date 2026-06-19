@@ -30,8 +30,15 @@ type EndpointSpec struct {
 	// pageserver + safekeeper with that controller and take its generation from
 	// the controller's attach-hook. Empty => SC-free self-bootstrap.
 	StorageControllerURL string
-	// Bootstrap forces initdb of the (supplied) timeline on first start.
+	// Bootstrap forces initdb of the (supplied) timeline on first start. Ignored
+	// for a branch (AncestorTimelineID set): a branch clones from its ancestor.
 	Bootstrap bool
+	// AncestorTimelineID, when non-empty, makes this a branch: the endpoint's
+	// pageserver creates the timeline as a fork of the ancestor at AncestorLSN
+	// (lineage reads serve the pre-fork pages) instead of running initdb. The id
+	// is 32 lowercase hex digits; AncestorLSN is the storage layer's "X/Y" form.
+	AncestorTimelineID string
+	AncestorLSN        string
 }
 
 // Endpoint is a running compute: an id (for teardown) and the address a client

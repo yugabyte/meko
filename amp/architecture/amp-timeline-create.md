@@ -83,6 +83,31 @@ controller is **not** asked to create the timeline (there is no
 identical, except the pageserver clones from the ancestor at `fork_lsn` instead
 of running `initdb`.
 
+## Branching a timeline
+
+`POST …/timelines/{parent}/branch` (#130) is the same recipe-then-materialize
+flow, forking an existing timeline instead of bootstrapping a fresh one:
+
+1. cAmp resolves the **parent** (the timeline in the path) within the pool, then
+   writes a `pg_cluster` row under the **same tenant** with a new `timeline_id`,
+   `is_main = false`, `parent_timeline_id = parent`, the inherited `pg_version`,
+   and `fork_lsn` (`core.Backend.BranchTimeline`).
+2. The **fork point** defaults to the parent's latest LSN — read from the storage
+   controller (`GetTimeline`'s `last_record_lsn`) — or an explicit
+   `fork_point_lsn`. (`last_record_lsn` is the pageserver's ingested position,
+   which can lag the safekeeper's durable `flush_lsn` that `yb_light_local`
+   branches at; the controller doesn't expose `flush_lsn`, so an exact point
+   needs `fork_point_lsn`.)
+3. cAmp records the pending-init recipe with `ancestor_timeline_id = parent` and
+   `start_lsn = fork_lsn` (vs. `null` / `0` for a root timeline).
+
+Materialization is unchanged (Step 2): the first endpoint deployed on the branch
+brings up its pageserver/safekeeper and registers the timeline — except the
+pageserver clones from the ancestor at `fork_lsn` rather than running `initdb`.
+Pre-fork data stays under the ancestor's `timeline_id` and is served via
+lineage-aware reads; nothing is copied. As with create, the branch's recipe
+writes are synchronous today and move onto the task framework under #113.
+
 ## `yb_light_local` → Amp Controller
 
 | `yb_light_local` | Amp Controller (cAmp) |

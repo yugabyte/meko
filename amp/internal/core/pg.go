@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -179,7 +180,7 @@ func (b *PgBackend) CreateTimeline(ctx context.Context, poolID uuid.UUID, name s
 
 func (b *PgBackend) getTimeline(ctx context.Context, tenantID, timelineID uuid.UUID) (Timeline, error) {
 	row := b.pool.QueryRow(ctx,
-		`SELECT tenant_id::text, timeline_id::text, name, pg_version, is_main, created_at
+		`SELECT tenant_id::text, timeline_id::text, name, pg_version, is_main, parent_timeline_id::text, fork_lsn::text, created_at
 		 FROM pg_cluster WHERE tenant_id = $1::uuid AND timeline_id = $2::uuid`,
 		tenantID.String(), timelineID.String())
 	t, err := scanTimeline(row)
@@ -187,6 +188,33 @@ func (b *PgBackend) getTimeline(ctx context.Context, tenantID, timelineID uuid.U
 		return Timeline{}, ErrNotFound
 	}
 	return t, err
+}
+
+func (b *PgBackend) BranchTimeline(ctx context.Context, poolID, parentTimelineID uuid.UUID, name, forkLSN string) (Timeline, error) {
+	// Resolve the parent within the pool: this validates that the pool and the
+	// parent timeline exist (a missing parent 404s) and yields the tenant the
+	// branch lives under (a branch stays in its ancestor's tenant).
+	tenantID, err := b.timelineTenant(ctx, poolID, parentTimelineID)
+	if err != nil {
+		return Timeline{}, err
+	}
+
+	branchID := uuid.New()
+	// is_main = false; record the fork ancestry. pg_version is inherited from the
+	// parent (the SELECT source) so a branch and its ancestor never drift.
+	// ON CONFLICT (pk) DO NOTHING makes a same-id retry converge; a duplicate name
+	// surfaces as 23505 on UNIQUE (tenant_id, name) -> ErrConflict, and the
+	// in-tenant parent FK as 23503 -> ErrNotFound. forkLSN is validated to be a
+	// well-formed LSN by the caller before it reaches the pg_lsn cast.
+	if _, err := b.pool.Exec(ctx,
+		`INSERT INTO pg_cluster (tenant_id, timeline_id, name, pg_version, is_main, parent_timeline_id, fork_lsn)
+		 SELECT $1::uuid, $2::uuid, $3, p.pg_version, false, $4::uuid, $5::pg_lsn
+		 FROM pg_cluster p WHERE p.tenant_id = $1::uuid AND p.timeline_id = $4::uuid
+		 ON CONFLICT (tenant_id, timeline_id) DO NOTHING`,
+		tenantID.String(), branchID.String(), name, parentTimelineID.String(), forkLSN); err != nil {
+		return Timeline{}, mapTimelineErr("insert branch pg_cluster", err)
+	}
+	return b.getTimeline(ctx, tenantID, branchID)
 }
 
 // mapTimelineErr translates the constraint violations the timeline writes can
@@ -227,7 +255,7 @@ func (b *PgBackend) ListTimelines(ctx context.Context, poolID uuid.UUID, limit, 
 		return nil, 0, fmt.Errorf("count timelines: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
-		`SELECT c.tenant_id::text, c.timeline_id::text, c.name, c.pg_version, c.is_main, c.created_at
+		`SELECT c.tenant_id::text, c.timeline_id::text, c.name, c.pg_version, c.is_main, c.parent_timeline_id::text, c.fork_lsn::text, c.created_at
 		 FROM pg_cluster c
 		 JOIN tenant t ON c.tenant_id = t.id
 		 WHERE t.storage_pool_id = $1::uuid
@@ -257,7 +285,7 @@ func (b *PgBackend) ListTimelines(ctx context.Context, poolID uuid.UUID, limit, 
 // timeline by id alone (no tenant in the path); timeline_id is a random 16-byte
 // storage id, so it is treated as globally unique. Pools are top-level, so this
 // is not owner-scoped.
-const timelineSelect = `SELECT c.tenant_id::text, c.timeline_id::text, c.name, c.pg_version, c.is_main, c.created_at
+const timelineSelect = `SELECT c.tenant_id::text, c.timeline_id::text, c.name, c.pg_version, c.is_main, c.parent_timeline_id::text, c.fork_lsn::text, c.created_at
 	FROM pg_cluster c
 	JOIN tenant t ON t.id = c.tenant_id
 	JOIN storage_pool sp ON sp.id = t.storage_pool_id`
@@ -460,9 +488,11 @@ func scanTimeline(r scanRow) (Timeline, error) {
 	var (
 		tenantStr   string
 		timelineStr string
+		parentStr   sql.NullString // NULL for a root (main) timeline
+		forkLSN     sql.NullString // NULL for a root (main) timeline
 		t           Timeline
 	)
-	if err := r.Scan(&tenantStr, &timelineStr, &t.Name, &t.PgVersion, &t.IsMain, &t.CreatedAt); err != nil {
+	if err := r.Scan(&tenantStr, &timelineStr, &t.Name, &t.PgVersion, &t.IsMain, &parentStr, &forkLSN, &t.CreatedAt); err != nil {
 		return Timeline{}, err
 	}
 	tenantID, err := uuid.Parse(tenantStr)
@@ -475,6 +505,14 @@ func scanTimeline(r scanRow) (Timeline, error) {
 	}
 	t.TenantID = tenantID
 	t.TimelineID = timelineID
+	if parentStr.Valid {
+		parentID, err := uuid.Parse(parentStr.String)
+		if err != nil {
+			return Timeline{}, fmt.Errorf("parse parent timeline id: %w", err)
+		}
+		t.ParentTimelineID = &parentID
+	}
+	t.ForkLSN = forkLSN.String // "" when NULL
 	return t, nil
 }
 

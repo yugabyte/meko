@@ -261,6 +261,11 @@
     const createTimeline= (poolId, name) => api("POST", `/storage-pools/${poolId}/timelines`, { name });
     const listEndpoints = (poolId, tlId) => api("GET", `/storage-pools/${poolId}/timelines/${tlId}/endpoints${PAGE}`);
     const createEndpoint= (poolId, tlId, role) => api("POST", `/storage-pools/${poolId}/timelines/${tlId}/endpoints`, { role });
+    // Fork a timeline into a new branch. forkLsn is optional (defaults to the
+    // parent's latest LSN server-side); pass it only when set.
+    const branchTimeline= (poolId, parentTlId, name, forkLsn) =>
+      api("POST", `/storage-pools/${poolId}/timelines/${parentTlId}/branch`,
+          forkLsn ? { name, fork_point_lsn: forkLsn } : { name });
 
     // --- router --------------------------------------------------------------
 
@@ -466,24 +471,55 @@
         host.innerHTML = `<div class="empty">No timelines yet.</div>`;
         return;
       }
-      host.innerHTML = timelines.map((t) => `
+      host.innerHTML = timelines.map((t) => {
+        // A branch shows where it forked from; a main timeline has no ancestry.
+        const lineage = t.parent_timeline_id
+          ? `<span><span class="k">forked from</span> ${idChip(t.parent_timeline_id)}` +
+            `${t.fork_lsn ? ` @ <code>${esc(t.fork_lsn)}</code>` : ""}</span>`
+          : "";
+        return `
         <div class="timeline" id="tlrow-${esc(t.timeline_id)}">
           <div class="tl-head">
             <span class="tl-name">${esc(t.name)}</span>
-            ${t.is_main ? '<span class="badge main">main</span>' : ''}
+            ${t.is_main ? '<span class="badge main">main</span>' : '<span class="badge muted">branch</span>'}
             <span class="badge muted">pg ${esc(t.pg_version)}</span>
           </div>
           <div class="meta">
             <span><span class="k">tenant</span> ${idChip(t.tenant_id)}</span>
             <span><span class="k">timeline</span> ${idChip(t.timeline_id)}</span>
+            ${lineage}
             <span><span class="k">created</span> ${fmtDate(t.created_at)}</span>
+          </div>
+          <div class="inline-form" style="margin-top:8px">
+            <input type="text" class="branch-name" data-parent="${esc(t.timeline_id)}" placeholder="New branch name" style="min-width:160px" />
+            <input type="text" class="branch-lsn" data-parent="${esc(t.timeline_id)}" placeholder="fork LSN (optional)" style="min-width:150px" />
+            <button class="btn branch-timeline" data-parent="${esc(t.timeline_id)}">Branch</button>
           </div>
           <div class="endpoints" id="ep-${esc(t.timeline_id)}">
             <div class="muted" style="font-size:12px">Loading endpoints…</div>
           </div>
-        </div>`).join("");
+        </div>`;
+      }).join("");
 
       bind();
+      // Wire each timeline's "Branch" button: fork it into a new timeline, then
+      // re-hydrate the pool so the branch (and its lineage) shows up. An empty
+      // fork-LSN field defaults to the parent's latest LSN server-side.
+      host.querySelectorAll(".branch-timeline").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const parent = btn.getAttribute("data-parent");
+          const nameEl = host.querySelector(`.branch-name[data-parent="${parent}"]`);
+          const name = nameEl.value.trim();
+          if (!name) { toast("Enter a branch name"); return; }
+          const forkLsn = host.querySelector(`.branch-lsn[data-parent="${parent}"]`).value.trim();
+          btn.disabled = true;
+          try {
+            await branchTimeline(poolId, parent, name, forkLsn);
+            toast("Branch created", true);
+            await hydratePool(poolId, userId);
+          } catch (err) { toast(err.message); btn.disabled = false; }
+        });
+      });
       // Endpoints per timeline, in parallel.
       timelines.forEach((t) => hydrateEndpoints(poolId, t.timeline_id));
     }
