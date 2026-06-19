@@ -109,4 +109,33 @@ else
     BIN=$REPO/target/debug/e2e_tests
 fi
 
-exec "$BIN" ${ARGS[@]+"${ARGS[@]}"}
+# Run-scoped identifiers shared by the harness and the cleanup trap below.
+# The harness honours these env vars (src/cluster.rs::setup); pre-setting
+# them lets the trap tear down THIS run's cluster on a signal, where the
+# harness's own Drop-based teardown never runs. Honour caller-provided
+# values (e.g. a developer pinning a dir/db).
+RUN_ID="${EPOCHSECONDS:-$(date +%s)}_$$"
+export YB_LIGHT_REPO_DIR="${YB_LIGHT_REPO_DIR:-$REPO/.e2e-tests/run_${RUN_ID}}"
+export YB_DBNAME="${YB_DBNAME:-yb_storage_e2e_${RUN_ID}}"
+
+# Backstop teardown for ABNORMAL termination only. A normal exit (success
+# or failure — including --no-fail-clean's deliberate keep-alive) is handled
+# by the harness's own Drop, so we do NOT trap EXIT; only the signals that
+# bypass Drop (Ctrl-C, kill, hangup). clean.sh is scoped to this run via the
+# env above, so it never touches a concurrent run or a dev .yb_light cluster.
+cleanup() {
+    trap - INT TERM HUP
+    echo >&2
+    echo "run.sh: signalled — tearing down this run's e2e cluster (db=$YB_DBNAME)" >&2
+    if [ -n "${HARNESS_PID:-}" ]; then kill "$HARNESS_PID" 2>/dev/null || true; fi
+    YB_HOST="${YB_HOST:-127.0.0.1}" YB_PORT="${YB_PORT:-5433}" \
+        bash "$REPO/test/e2e/clean.sh" >/dev/null 2>&1 || true
+    exit 130
+}
+trap cleanup INT TERM HUP
+
+# Foreground (not exec) so the trap stays installed and fires on a signal.
+"$BIN" ${ARGS[@]+"${ARGS[@]}"} &
+HARNESS_PID=$!
+wait "$HARNESS_PID" || EXIT_CODE=$?
+exit "${EXIT_CODE:-0}"

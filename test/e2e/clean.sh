@@ -46,9 +46,14 @@ step "Stop e2e cluster processes (scoped — leaves a developer's .yb_light clus
 # matches them directly.
 pkill -9 -f "(yb-pageserver|safekeeper|endpoint_storage|compute_ctl).*${YB_LIGHT_REPO_DIR}" 2>/dev/null || true
 
-# The storage controller has no data dir in argv, but its --database-url
-# carries this run's ephemeral db name.
-pkill -9 -f "storage_controller.*/${YB_DBNAME} " 2>/dev/null || true
+# The storage controller has no data dir in argv, but its --yb-config
+# carries this run's ephemeral db name as `dbname = "<db>"`. Anchor on
+# that exact quoted name so the kill stays scoped to THIS run and never
+# touches a concurrent e2e run (different ephemeral db) — a developer's
+# `.yb_light` cluster runs as `dbname = "yb_storage"`, which only matches
+# when YB_DBNAME is left at its destructive default (clean.sh already
+# drops that db below, so that case is intentional).
+pkill -9 -f "storage_controller.*dbname = \"${YB_DBNAME}\"" 2>/dev/null || true
 
 # Compute postgres (a compute_ctl child) survives a hung pg_ctl shutdown
 # and squats on COMPUTE_PORT. It runs as

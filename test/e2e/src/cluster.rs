@@ -157,13 +157,17 @@ impl Cluster {
         std::fs::create_dir_all(&repo_dir)
             .with_context(|| format!("creating {}", repo_dir.display()))?;
 
-        // Open the run log: inside repo_dir when YB_LIGHT_REPO_DIR was set,
-        // otherwise a sibling of the run dir under test_dir.
-        let log_dir = match &yb_light_repo_dir_env {
-            Some(_) => repo_dir.clone(),
-            None => test_dir.clone(),
-        };
-        let log_path = log_dir.join(format!("run_{run_id}.log"));
+        // Open the run log as a SIBLING of the run dir under test_dir,
+        // named after the run dir, so a teardown/`clean.sh` that wipes the
+        // run dir never deletes the log (a failed run keeps its log for
+        // postmortem). Holds whether the run dir was auto-derived or pinned
+        // via YB_LIGHT_REPO_DIR (e.g. by run.sh, whose cleanup trap targets
+        // this exact run).
+        let run_dir_name = repo_dir
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("run_{run_id}"));
+        let log_path = test_dir.join(format!("{run_dir_name}.log"));
         if let Ok(f) = std::fs::File::create(&log_path) {
             let _ = RUN_LOG.set(Mutex::new(f));
             println!("run log: {}", log_path.display());
