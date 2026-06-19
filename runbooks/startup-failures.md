@@ -62,6 +62,9 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | Fresh `cloud_admin` can't auth over socket / password rejected | role needs socket-trust password set | **I** |
 | PS can't find the safekeeper (broker-less builds) | missing `safekeeper_pg_addr` | **J** |
 | Any process exits at startup: `unknown configuration item(s) …` / `unknown field …` | misspelled, stale, or misplaced config key — rejected, not ignored | **K** |
+| SC: `Postgres directory 'lib' not found in <dir>/pg_install` | init baked a `pg_distrib_dir` that doesn't exist on this box | **L** |
+| SC connects to YB and fails: `password missing` / `building database URL from --yb-config` | init omits `password_env`/`sslmode` from the YB conn blocks | **M** |
+| `pageserver.toml` top-level knob rejected at startup as `<section>.<key>` | a top-level key was placed **after** a `[section]` header | **N** |
 
 ---
 
@@ -180,6 +183,64 @@ A silently-ignored key used to be the trap (the value you intended had no effect
 **wrong table** — e.g. a `[tenant_config]` knob placed at top level, or a connection field outside the
 `yb_storage_conn` block. The compute spec (`compute_ctl`) is deliberately **exempt** — it's supplied
 by the control plane on a separate lifecycle, so it still tolerates unknown fields for version skew.
+
+## L. SC: `Postgres directory 'lib' not found in <dir>/pg_install`
+`yb_light_local init` bakes `pg_distrib_dir` into the generated repo config. The default is
+`$POSTGRES_DISTRIB_DIR` if set, otherwise `<cwd-at-init-time>/pg_install` (`local_env.rs`). If you
+init from a directory that has no `pg_install` (e.g. `/home/ec2-user`), SC startup fails immediately
+because the Postgres install tree isn't there.
+
+Fix — point it at the build's pg_install, either before init or by patching the generated config:
+```bash
+# Cleanest: set this before `yb_light_local init` so the config is written correctly
+export POSTGRES_DISTRIB_DIR=$BUILD/pg_install
+
+# Or patch the already-generated config:
+CFG=$YB_LIGHT_REPO_DIR/config
+sed -i "s|^pg_distrib_dir = .*|pg_distrib_dir = \"$BUILD/pg_install\"|" "$CFG"
+```
+The companion `yb_light_distrib_dir = "$BUILD"` should already be correct.
+
+## M. SC: `password missing` / `building database URL from --yb-config`
+`yb_light_local init` writes the YB connection blocks (`[storage_controller.yb]` and the per-template
+`yb_storage_conn = '{…}'` inline tables) with `password_env: None` and `sslmode: None`
+(`yb_light_local.rs`) — only `host_ports/user/dbname`. SC then can't authenticate, and YB rejects
+non-TLS connections anyway (see **D**).
+
+Fix: edit the generated `$YB_LIGHT_REPO_DIR/config` and add both keys to every YB block:
+```bash
+CFG=$YB_LIGHT_REPO_DIR/config
+# [storage_controller.yb] block (TOML section)
+sed -i '/^\[storage_controller\.yb\]/,/^\[/ {
+  /^dbname = /a\
+password_env = "YB_STORAGE_PASSWORD"\
+sslmode = "require"
+}' "$CFG"
+# Inline yb_storage_conn = '{ … }' on PS/SK templates
+sed -i 's|\(yb_storage_conn = .{ host_ports = "[^"]*", user = "[^"]*", dbname = "[^"]*"\) }\(.*\)|\1, password_env = "YB_STORAGE_PASSWORD", sslmode = "require" }\2|' "$CFG"
+```
+Then restart everything (or just don't `yb_light_local start` until the patch is in).
+
+## N. `pageserver.toml` top-level knob placed after a `[section]` header
+TOML sections are open-ended: once a `[section]` header appears, every subsequent key belongs to that
+section until the next header. So a top-level knob (e.g. `scale_factor`, `page_cache_size`) appended
+**after** `[timeline_init]` becomes `timeline_init.scale_factor` — an unknown key in the wrong table.
+The PS then **refuses to start** with
+`unknown configuration item(s) in pageserver.toml: timeline_init.scale_factor` (see **K**).
+
+Fix: place top-level keys **before** any `[…]` section, e.g.
+```toml
+# top-level keys here
+scale_factor    = 6.0
+page_cache_size = 8192
+
+[timeline_init]   # section keys after here
+mode = "bootstrap"
+pg_version = 17
+```
+Then `yb_light_local pageserver restart --id 1` and confirm the PS starts clean (no `unknown
+configuration item` rejection, no `ignoring unknown` warning). See throughput Step 3a for the
+`scale_factor` tuning this most often bites.
 
 ---
 

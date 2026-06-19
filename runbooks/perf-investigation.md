@@ -53,9 +53,15 @@ materializer can be starved on the image-map lock.
 ```bash
 $M | grep -E '^pageserver_yb_pagewriter_delta_counts_entries|^pageserver_yb_materializer_(queue_depth|inflight_bytes|read_side_dispatches_total)'
 ```
-- `delta_counts_entries` **net-growing/unbounded** = materializer behind → long chains → slow
-  getpage. (A cold-key drain landed in build `6d7510942`; older builds grew without bound.)
-- `queue_depth=0, inflight_bytes=0` = keeping up.
+- `delta_counts_entries` = size of the per-key delta-tally map = **count of pages with ≥1 non-anchor
+  delta since their last anchor**; entry removed on re-image (chain crosses threshold) or FPI reset.
+  Most entries are sub-threshold/cold pages, so the absolute count isn't a backlog. **Read the shape:**
+  flat/decaying = healthy; climbs-then-plateaus = normal; climbs monotonically even at idle =
+  drain < arrival (old-build bug, hit 8.4M; cold-residue case fixed in `6d7510942`, drained per flush).
+- The "falling behind" signals are `queue_depth`/`inflight_bytes` staying up and a heavy
+  `deltas_per_read` tail. `queue_depth=0, inflight_bytes=0` = keeping up, regardless of entry count.
+- `6d7510942`'s cold-key drain trims cold residue; it does NOT materialize continuously-hot pages,
+  whose deep chains surface in `deltas_per_read`.
 - PS log: `perf tag="install_image" acquire_ms= held_ms=` — high `acquire_ms` with `held_ms=0` is
   pure **lock-acquire starvation**, not YB latency. Typically appears as **one PS core pegged at
   100% while the rest idle** — adding cores won't help.
