@@ -61,7 +61,7 @@ flowchart LR
     end
 
     app -- "SQL: SELECT / INSERT / UPDATE" --> pg
-    pg -- "gRPC GetPage @ LSN" --> cps
+    pg -- "GetPage @ LSN" --> cps
     wp -- "WAL stream<br/>(START_WAL_PUSH)" --> skp
     skp -- "INSERT each WAL chunk" --> tblWal
     fps -- "START_REPLICATION<br/>(walreceiver)" --> sks
