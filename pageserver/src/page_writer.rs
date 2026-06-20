@@ -1017,6 +1017,16 @@ impl PageWriter {
         if horizon.0 == 0 {
             return;
         }
+        // Materialise at the read's LSN, capped at the durable horizon
+        // (the materialiser may only read durable YB rows). A historical
+        // read folds an image at its own LSN — useful, because future reads
+        // of the same historical key (static endpoints, branches) anchor on
+        // it. What makes installing a below-head image SAFE is the install
+        // guard in `UnifiedPages::install_image_if_extends`: it only seeds
+        // the image into the cache when the key is already present with a
+        // complete suffix above the image's LSN, so the image can never
+        // become a stale mid-chain anchor missing YB-only rows. See that
+        // method for the full argument.
         let bounded_target = std::cmp::min(target_lsn, horizon);
         // A chain that crossed into an ancestor segment dispatches
         // regardless of length: materialising an image into the OWN
@@ -1186,33 +1196,36 @@ impl PageWriter {
     /// indexes the new image as a durable cache entry; subsequent
     /// `read_chain` / `read_chain_durable` find the image first and
     /// don't walk the chain back.
+    ///
+    /// The check-trim-insert is delegated to
+    /// `UnifiedPages::install_image_if_extends`, which runs it atomically
+    /// under the key's shard mutex and *skips* the install unless it keeps
+    /// the cache a complete suffix (key present, image.lsn ≥ the lowest
+    /// cached lsn). A skip is correct — the image is already durable in YB,
+    /// so reads just fall through to the YB blend. See that method for why
+    /// a below-head install would otherwise be a silent lost-update.
     pub async fn install_materialized_image(&self, image: Arc<PageRow>) {
-        // No outer lock — `pages` is internally sharded. The three
-        // calls below only touch the image's key shard (trim, push)
-        // plus the LRU (small parking_lot::Mutex held for ns) plus
-        // evict (LRU walk + per-shard removes). Concurrent reads on
-        // other keys do not block install; reads on THIS key see a
-        // brief shard-lock blip while trim/push run.
+        // No outer lock — `pages` is internally sharded. The call below
+        // only touches the image's key shard plus (on a successful install)
+        // the LRU and evict. Concurrent reads on other keys do not block;
+        // reads on THIS key see a brief shard-lock blip.
         let t_start = Instant::now();
-        let key = image.key;
-        let lsn = image.lsn;
-        let t_trim_start = Instant::now();
-        self.pages.trim_key_up_to(&key, lsn);
-        let t_trim = t_trim_start.elapsed();
-        let t_push_start = Instant::now();
-        self.pages.push_durable_arc(image);
-        let t_push = t_push_start.elapsed();
+        let installed = self.pages.install_image_if_extends(image);
+        let t_install = t_start.elapsed();
+        // Only re-check capacity when we actually added bytes.
         let t_evict_start = Instant::now();
-        self.pages.evict_to_capacity();
+        if installed {
+            self.pages.evict_to_capacity();
+        }
         let t_evict = t_evict_start.elapsed();
         let total = t_start.elapsed();
         if total.as_millis() >= 5 {
             info!(
                 tag = "install_image",
                 total_ms = total.as_millis() as u64,
-                trim_us = t_trim.as_micros() as u64,
-                push_us = t_push.as_micros() as u64,
+                install_us = t_install.as_micros() as u64,
                 evict_us = t_evict.as_micros() as u64,
+                installed,
                 "perf",
             );
         }

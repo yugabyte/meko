@@ -396,6 +396,153 @@ impl UnifiedPages {
         }
     }
 
+    /// Atomic guarded materialiser-image install: trim the durable prefix
+    /// `≤ image.lsn`, then insert `image` as a durable anchor — but ONLY
+    /// if that keeps the key's cache a complete suffix. Returns `true` if
+    /// installed, `false` if skipped.
+    ///
+    /// Skipping is always safe: the image is already durable in YB (the
+    /// materialiser `put_pages`'d it before calling this), so a skip merely
+    /// means reads of this key fall through the cache fast path
+    /// (`lookup_chain_if_complete`) to the YB blend — correct, just not
+    /// cache-accelerated.
+    ///
+    /// **Why the guard.** The fast path trusts any cached `will_init` row
+    /// as an anchor with a *complete* chain above it (see
+    /// `lookup_chain_if_complete`). A materialiser image installed below
+    /// the head would break that: the rows between the image and the head
+    /// can live only in YB (evicted, or never cached), so a later read
+    /// would anchor on the image and miss them — a silent lost-update. The
+    /// old `trim_key_up_to` + `push_durable_arc` pairing did exactly that,
+    /// and was *also* a TOCTOU (two separate lock holds — an eviction could
+    /// drop the key between them, turning the push into a lone stale
+    /// anchor). This method closes both: check + trim + insert run under
+    /// one continuous hold of the key's shard mutex, and we install only
+    /// when
+    ///   * the key is **present** (an absent / just-evicted key has no
+    ///     cached rows above the image to vouch for it — seeding a lone
+    ///     anchor there is precisely the hole), and
+    ///   * `image.lsn >= min(cached lsns)` (installing below the lowest
+    ///     cached row would leave a gap `(image.lsn, min_cached)` living
+    ///     only in YB).
+    ///
+    /// Those two conditions are *sufficient* because the materialiser
+    /// bounds `image.lsn ≤ flush_horizon_lsn`: every cached row
+    /// `≤ image.lsn` is therefore durable (so the prefix trim is total)
+    /// and every unflushed row is strictly above it; and a present key's
+    /// **top** row is never selectively removed (trim only drops a prefix,
+    /// eviction drops the whole key), so a present key's chain is exactly
+    /// the complete suffix `[min_cached, head]`. Trimming to `image.lsn`
+    /// and re-anchoring there yields a complete `[image.lsn, head]`.
+    pub fn install_image_if_extends(&self, image: Arc<PageRow>) -> bool {
+        use std::collections::btree_map::Entry;
+
+        let key = image.key;
+        let lsn = image.lsn;
+        let size = row_size(&image);
+
+        // Bytes leaving total_bytes (trimmed durable rows + any overwritten
+        // same-LSN slot) and unflushed_bytes (only an overwritten unflushed
+        // slot), tallied under the lock and applied to the atomics after.
+        let mut total_sub = 0usize;
+        let mut unflushed_sub = 0usize;
+        let mut overwrote_unflushed = false;
+
+        {
+            // Present-only: deliberately NOT `get_or_insert`. An absent (or
+            // just-evicted) key must not be re-seeded with a below-head
+            // anchor — that is the hole this guard exists to prevent.
+            let Some(node) = self.by_key.get(&key) else {
+                return false;
+            };
+            let mut ks_guard = node.value().lock();
+            if node.is_removed() {
+                // Raced an eviction/trim that detached this node. Treat as
+                // absent and skip (do not retry onto a fresh node — that
+                // would recreate the absent-key hole).
+                return false;
+            }
+            let ks = &mut *ks_guard;
+
+            // Guard: only install if it extends the existing suffix, never
+            // gaps below it. An empty chain can't happen for a live node,
+            // but treat it as "absent" defensively.
+            match ks.chain.keys().next() {
+                Some(&min_lsn) if lsn >= min_lsn => {}
+                _ => return false,
+            }
+
+            // Trim the durable prefix `≤ image.lsn` the image subsumes.
+            // Unflushed rows `≤ image.lsn` only occur via the benign #57
+            // reconnect re-push; leave them — an exact-LSN collision is
+            // handled by the insert's Occupied arm below.
+            let to_remove: Vec<Lsn> = ks
+                .chain
+                .range(..=lsn)
+                .filter(|(_, e)| e.is_durable())
+                .map(|(l, _)| *l)
+                .collect();
+            for l in to_remove {
+                if let Some(e) = ks.chain.remove(&l) {
+                    let s = row_size(&e.row);
+                    ks.bytes -= s;
+                    total_sub += s;
+                }
+            }
+
+            // Insert the image as a durable anchor.
+            match ks.chain.entry(lsn) {
+                Entry::Occupied(mut o) => {
+                    // A same-LSN slot survived the trim ⇒ it was unflushed
+                    // (a #57 re-push of an already-durable record; an exact
+                    // image-LSN collision with a durable row would have been
+                    // trimmed). Overwrite and reverse its unflushed pin.
+                    let prev = row_size(&o.get().row);
+                    overwrote_unflushed = !o.get().is_durable();
+                    ks.bytes = ks.bytes + size - prev;
+                    total_sub += prev;
+                    if overwrote_unflushed {
+                        unflushed_sub = prev;
+                        ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
+                    }
+                    o.insert(PageEntry::from_arc_row(image, true));
+                }
+                Entry::Vacant(v) => {
+                    ks.bytes += size;
+                    v.insert(PageEntry::from_arc_row(image, true));
+                }
+            }
+        }
+
+        self.total_bytes.fetch_add(size, Ordering::Relaxed);
+        if total_sub > 0 {
+            self.total_bytes.fetch_sub(total_sub, Ordering::Relaxed);
+        }
+        if unflushed_sub > 0 {
+            self.unflushed_bytes.fetch_sub(unflushed_sub, Ordering::Relaxed);
+        }
+
+        // Bump the (present) key to the back of the LRU — most recently
+        // used. Lock order matches `trim_key_up_to`: node mutex (released
+        // above) → LRU, never nested.
+        {
+            let mut lru = self.lru.lock();
+            if lru.contains_key(&key) {
+                lru.to_back(&key);
+            }
+        }
+
+        // Drop the now-stale FIFO entry the overwritten re-push left behind
+        // (the slot is durable now), mirroring `insert_arc_entry`.
+        if overwrote_unflushed {
+            let mut fifo = self.unflushed_fifo.lock();
+            if let Some(pos) = fifo.iter().position(|(k, l)| *l == lsn && k == &key) {
+                fifo.remove(pos);
+            }
+        }
+        true
+    }
+
     /// Return rows for `key` at `lsn <= target_lsn`, LSN-descending.
     /// Includes unflushed. Does NOT touch the LRU position — LRU
     /// order tracks write recency only, which is sufficient: hot
@@ -434,6 +581,15 @@ impl UnifiedPages {
     /// between the anchor and `target_lsn`: if the key is here,
     /// every row for it that we ever cached is here too. Anchor
     /// presence is therefore both necessary and sufficient.
+    ///
+    /// This holds only because every mutator preserves "present key ⇒
+    /// complete suffix": head `push`, prefix `trim`, whole-key evict —
+    /// and, crucially, materialiser installs go through
+    /// `install_image_if_extends`, which REFUSES to seed an anchor that
+    /// would break it (an image below the lowest cached row, or into an
+    /// absent key). Were an image installed below the head with YB-only
+    /// rows above it, this fast path would anchor on it and silently drop
+    /// those rows.
     pub fn lookup_chain_if_complete(
         &self,
         key: &Key,
@@ -1295,9 +1451,8 @@ mod tests {
 
     /// Materialiser install at LSN N MUST drop every durable row with
     /// LSN ≤ N for that key so we can't fall into the "old image plus
-    /// new delta" trap. The install path goes via `trim_key_up_to` +
-    /// `push_durable`; this test exercises the combination from the
-    /// materialiser's perspective.
+    /// new delta" trap. Exercised through `install_image_if_extends`, the
+    /// atomic guarded install the materialiser actually uses.
     #[test]
     fn install_drops_all_older_durable_rows() {
         let u = UnifiedPages::new(4096);
@@ -1305,14 +1460,76 @@ mod tests {
         u.push(mk(b"k", 20, false, b"d20"));
         u.push(mk(b"k", 30, false, b"d30"));
         flush_first_n(&u, 3);
-        // Install fresh image at lsn 25.
-        u.trim_key_up_to(&tkey(b"k"), Lsn(25));
-        u.push_durable(mk(b"k", 25, true, b"materialised"));
+        // Install fresh image at lsn 25: key present, 25 ≥ min(10) → installs.
+        assert!(u.install_image_if_extends(Arc::new(mk(b"k", 25, true, b"materialised"))));
         let chain = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
         let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
         // The deltas/image ≤ 25 are gone; d30 stays because it's above
         // the new image.
         assert_eq!(lsns, vec![30, 25]);
+    }
+
+    /// The install guard refuses to seed an anchor into an ABSENT key.
+    /// That is the read-side-materialise hole: the materialiser folds an
+    /// image, the key gets evicted before the install lands, and a lone
+    /// `image@L` anchor would then serve a chain missing the rows above L
+    /// that live only in YB. Skipping leaves the key absent → reads fall
+    /// through to the YB blend, which is correct.
+    #[test]
+    fn install_skips_absent_key() {
+        let u = UnifiedPages::new(4096);
+        // Nothing cached for "k".
+        assert!(!u.install_image_if_extends(Arc::new(mk(b"k", 50, true, b"image"))));
+        assert_eq!(u.by_key_entries(), 0, "absent key must not be re-seeded");
+        assert!(u.lookup_chain_if_complete(&tkey(b"k"), Lsn(100)).is_none());
+    }
+
+    /// The install guard refuses to install an image BELOW the lowest
+    /// cached row: that would leave a gap `(image.lsn, min_cached)` living
+    /// only in YB, and the image would become a stale mid-chain anchor for
+    /// reads into the gap.
+    #[test]
+    fn install_skips_below_min_cached() {
+        let u = UnifiedPages::new(4096);
+        // Cache holds a complete suffix starting at lsn 30 (older rows
+        // already evicted/trimmed away — they live only in YB now).
+        u.push(mk(b"k", 30, true, b"image30"));
+        u.push(mk(b"k", 40, false, b"d40"));
+        flush_first_n(&u, 2);
+        // A stale image folded at lsn 20 (< min_cached 30) must be refused.
+        assert!(!u.install_image_if_extends(Arc::new(mk(b"k", 20, true, b"stale"))));
+        // The chain is untouched: still anchored at 30, no lsn-20 anchor.
+        let chain = u.lookup_chain_durable(&tkey(b"k"), Lsn(100));
+        let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
+        assert_eq!(lsns, vec![40, 30]);
+        // A read into the gap finds no fast-path anchor (≥ lsn 20, < 30)
+        // and correctly falls through to YB.
+        assert!(u.lookup_chain_if_complete(&tkey(b"k"), Lsn(25)).is_none());
+    }
+
+    /// A HISTORICAL image install is allowed (and useful — static/branch
+    /// readers anchor on it) as long as the key is present with a complete
+    /// suffix above the image: `image.lsn ≥ min_cached`. The result must
+    /// stay correct for reads both at/above and below the historical image.
+    #[test]
+    fn install_historical_when_suffix_complete() {
+        let u = UnifiedPages::new(4096);
+        u.push(mk(b"k", 10, true, b"image10"));
+        u.push(mk(b"k", 20, false, b"d20"));
+        u.push(mk(b"k", 30, false, b"d30"));
+        flush_first_n(&u, 3);
+        // Historical image at lsn 20: present, 20 ≥ min(10) → installs.
+        assert!(u.install_image_if_extends(Arc::new(mk(b"k", 20, true, b"hist20"))));
+        // Read at the head: anchor on the image@20 + d30 above it.
+        let at_head = u.lookup_chain_if_complete(&tkey(b"k"), Lsn(100)).unwrap();
+        let lsns: Vec<u64> = at_head.iter().map(|r| r.lsn.0).collect();
+        assert_eq!(lsns, vec![30, 20]);
+        // Read exactly at the image: just the image (a complete suffix).
+        let at_img = u.lookup_chain_if_complete(&tkey(b"k"), Lsn(20)).unwrap();
+        assert_eq!(at_img.iter().map(|r| r.lsn.0).collect::<Vec<_>>(), vec![20]);
+        // Read below the image (lsn 15): image@20 is excluded, image@10 was
+        // trimmed by the install, so no anchor remains → falls to YB.
+        assert!(u.lookup_chain_if_complete(&tkey(b"k"), Lsn(15)).is_none());
     }
 
     /// Concurrent reads on a hot key should not serialize. We can't

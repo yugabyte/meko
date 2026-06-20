@@ -1324,13 +1324,18 @@ name = "e2e_tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "e2e_common",
  "nix 0.30.1",
+ "pageserver_api",
+ "pageserver_client_grpc",
+ "pageserver_page_api",
  "regex",
  "reqwest",
  "serde_json",
  "tokio",
  "tokio-postgres",
+ "utils",
  "workspace_hack",
 ]
 

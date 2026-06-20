@@ -23,4 +23,10 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "io-util", "sync"] }
 tokio-postgres.workspace = true
 reqwest = { workspace = true, features = ["json"] }
+# Direct pageserver GetPage@LSN testing (direct_getpage scenario).
+pageserver_client_grpc.workspace = true
+pageserver_page_api.workspace = true
+pageserver_api.workspace = true
+utils.workspace = true
+bytes.workspace = true
 workspace_hack.workspace = true

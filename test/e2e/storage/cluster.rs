@@ -123,6 +123,18 @@ impl Cluster {
     pub fn ps_http_port(&self) -> u16 {
         self.port_base + 400
     }
+    /// gRPC page_service port of pageserver node 1 (`port_base + 500`;
+    /// node *i* adds *i*). This is the port the `direct_getpage` scenario
+    /// connects to in order to issue GetPage@LSN directly to the PS.
+    pub fn ps_grpc_port(&self) -> u16 {
+        self.port_base + 500
+    }
+    /// The (single) timeline id under the shared tenant, as a hex string.
+    /// Public wrapper over the PS timeline listing for scenarios that need
+    /// to address the timeline directly (e.g. the gRPC page client).
+    pub async fn timeline_id(&self) -> anyhow::Result<String> {
+        self.main_timeline_id().await
+    }
     pub fn repo_dir(&self) -> &Path {
         &self.repo_dir
     }

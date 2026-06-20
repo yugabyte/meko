@@ -540,6 +540,34 @@ image materialisation hint, but if the channel is full the hint is
 silently dropped — the next read of the same hot key will re-trigger.
 GetPage latency must not depend on materialiser progress.
 
+**Guarded image install (`install_image_if_extends`).** A materialised
+image is folded at `min(target_lsn, flush_horizon_lsn)` and `put` to YB,
+then offered to the in-RAM cache. The cache fast path
+(`lookup_chain_if_complete`) trusts any cached `will_init` row as an
+anchor with a *complete* chain above it, so the install must never seed
+an anchor that breaks "present key ⇒ complete suffix". It would break it
+if an image landed **below the head with rows above it living only in
+YB**: a later read at an intermediate LSN anchors on that image and
+silently drops the committed writes between it and the read's target — a
+lost-update. This happens when the read that triggered the materialise
+was at a historical LSN, *or* when the key is evicted between the fold
+and the install (a TOCTOU the old `trim` + `push` pairing had, since they
+took the key lock twice).
+
+`install_image_if_extends` closes both: under **one** hold of the key's
+shard mutex it installs only when the key is **present** and
+`image.lsn ≥ min(cached lsns)` — otherwise it skips (the image is already
+durable in YB, so reads just fall through to the YB blend, correct but
+un-accelerated). This is sufficient because `image.lsn ≤
+flush_horizon_lsn`: every cached row `≤ image.lsn` is durable and every
+unflushed row is strictly above it, and a present key's top row is never
+selectively removed, so a present key's chain is exactly the complete
+suffix `[min_cached, head]`. Note this *permits* a safe historical-LSN
+install (when the suffix above it is fully cached), preserving the cache
+speedup for static/branch readers. The `direct_getpage` e2e scenario
+reproduces the original lost-update deterministically under tiny
+cache/chain limits.
+
 ### Observability
 
 Three Prometheus metrics expose the backpressure state:
