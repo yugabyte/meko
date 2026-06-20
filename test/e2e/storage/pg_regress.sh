@@ -18,10 +18,13 @@
 # then points pg_regress at them with --dlpath, so the dynlib-gated tests
 # actually run rather than erroring on the restricted-loader path.
 #
-# Current expected baseline (PG17, see #119): 4 of 222 fail, all the one
-# by-design limitation — `CREATE TABLESPACE` unsupported — cascading from
-# `test_setup` (`tablespace`, `stats`, `database`, `test_setup`). That's a
-# known diff to allowlist, not a bug; no page-reconstruction or WAL bugs
+# Expected result (PG17, see #119): 0 failures. The only diffs the suite
+# produces are the one by-design limitation — `CREATE TABLESPACE`
+# unsupported — in 4 tests (`test_setup`, `tablespace`, `stats`,
+# `database`). Those are blessed via yb-light expected-output variants in
+# regress_yb_expected/ (overlaid onto pg_regress's expected/<test>_N.out
+# alternative-file mechanism, NOT by editing the upstream goldens), so a
+# clean tree is a genuine green. No page-reconstruction or WAL bugs
 # surface, and no genuine yb-light behavioral diffs remain.
 set -euo pipefail
 
@@ -70,6 +73,10 @@ done
 
 REG="$REPO/vendor/postgres-v17/src/test/regress"
 PGINST="$REPO/pg_install/v17"
+# yb-light expected-output variants for the by-design CREATE TABLESPACE
+# diffs; overlaid into the vendored expected/ at run time (see below).
+YBEXP="$REPO/test/e2e/storage/regress_yb_expected"
+OVERLAID=()   # variant files copied into expected/, removed by finish()
 
 # 1) Vendored Postgres source carries the suite (sql/expected/schedule).
 if [[ ! -f "$REG/parallel_schedule" ]]; then
@@ -161,6 +168,10 @@ clean() { bash "$REPO/test/e2e/storage/clean.sh" >/dev/null 2>&1 || true; }
 finish() {
     local rc=$?
     trap - EXIT INT TERM HUP
+    # Remove the overlaid expected variants so the vendored submodule is
+    # left pristine (do this even with --keep — it's a source-tree edit,
+    # not cluster state).
+    [[ ${#OVERLAID[@]} -gt 0 ]] && rm -f "${OVERLAID[@]}"
     if [[ $KEEP == 1 ]]; then
         echo ">>> --keep: cluster left up (compute 127.0.0.1:${COMPUTE:-?}, db=$YB_DBNAME); results in ${OUTDIR:-n/a}"
         echo "    tear down: YB_DBNAME=$YB_DBNAME YB_LIGHT_REPO_DIR=$YB_LIGHT_REPO_DIR COMPUTE_PORT=${COMPUTE:-} bash test/e2e/storage/clean.sh"
@@ -171,6 +182,21 @@ finish() {
 }
 trap finish EXIT INT TERM HUP
 clean   # clear any leftover state for this (db, dir) up front
+
+# Overlay the yb-light expected variants. pg_regress tries expected/<test>_N.out
+# (N=0..9) and passes if any matches, so these bless the by-design CREATE
+# TABLESPACE diffs as known-good without editing the upstream goldens. Copied
+# in here and removed by finish(), so the vendored submodule stays clean.
+# Regenerate after an intended change: cp "$OUTDIR"/results/<test>.out to
+# $YBEXP/<test>_<N>.out (N = an index not already used upstream).
+if [[ -d $YBEXP ]]; then
+    echo ">>> overlaying yb-light expected variants: $(cd "$YBEXP" && echo *.out)"
+    for v in "$YBEXP"/*.out; do
+        dst="$REG/expected/$(basename "$v")"
+        [[ -e $dst ]] && { echo "refusing to clobber existing $dst" >&2; exit 1; }
+        cp "$v" "$dst"; OVERLAID+=("$dst")
+    done
+fi
 
 echo ">>> bringing up yb-light cluster (db=$YB_DBNAME base=$BASE compute=$COMPUTE)"
 yb() { "$YB_LIGHT" "$@"; }
