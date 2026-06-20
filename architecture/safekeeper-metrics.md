@@ -31,6 +31,7 @@ timeline (single-SK), keeping cardinality low.
 | `safekeeper_misc_operation_seconds` | HistogramVec | `operation` | Seconds per miscellaneous operation. |
 | `safekeeper_wal_disk_io_errors` | IntCounter | — | Disk I/O errors creating/flushing WAL and control files. |
 | `safekeeper_wal_storage_limit_errors` | IntCounter | — | Errors from WAL storage exceeding the configured limit (backup/removal lag). |
+| `safekeeper_wal_reader_decode_errors_total` | IntCounter | — | WAL decode failures in the interpreted WAL reader (WAL-sender path). Treated as recoverable (reader exits, client reconnects + re-reads from YB) rather than fatal; a **sustained** rate indicates genuine corruption, not a transient torn read across a WAL rewrite window (#139). |
 | `safekeeper_proposer_acceptor_messages_total` | IntCounterVec | `outcome` | Total ProposerAcceptorMessage requests received. |
 
 ## WAL cache / YB mirror (global)

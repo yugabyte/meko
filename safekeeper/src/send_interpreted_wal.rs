@@ -1,6 +1,5 @@
 use std::fmt::Display;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
@@ -16,7 +15,6 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tracing::{Instrument, error, info, info_span};
-use utils::critical_timeline;
 use utils::lsn::Lsn;
 use utils::postgres_client::{Compression, InterpretedFormat};
 use wal_decoder::models::{InterpretedWalRecord, InterpretedWalRecords};
@@ -265,15 +263,20 @@ impl InterpretedWalReader {
                     .run_impl(start_pos)
                     .await
                     .inspect_err(|err| match err {
-                        // TODO: we may want to differentiate these errors further.
+                        // Recoverable in yb-light: a decode error is almost
+                        // always a transient torn read across a WAL
+                        // rewrite/truncation window, not durable corruption.
+                        // Exit cleanly so the client reconnects and re-reads
+                        // from YB rather than wedging the cluster via
+                        // `critical_timeline!` (panic in debug / corruption
+                        // flag in release). A sustained metric rate is the
+                        // real-corruption signal. See the `run()` arm and #139.
                         InterpretedWalReaderError::Decode(_) => {
-                            critical_timeline!(
-                                ttid.tenant_id,
-                                ttid.timeline_id,
-                                // The corruption flag is only used in PS so that it can feed this information back to SKs.
-                                // We do not use these flags in SKs.
-                                None::<&AtomicBool>,
-                                "failed to read WAL record: {err:?}"
+                            crate::metrics::WAL_READER_DECODE_ERRORS.inc();
+                            error!(
+                                "interpreted wal reader: decode error (tenant {}, timeline {}; \
+                                 recoverable — reconnect will re-read from YB): {err:?}",
+                                ttid.tenant_id, ttid.timeline_id
                             );
                         }
                         err => error!("failed to read WAL record: {err}"),
@@ -336,13 +339,29 @@ impl InterpretedWalReader {
         let ttid = self.wal_stream.ttid;
         let cause = match self.run_impl(start_pos).await {
             Err(err @ InterpretedWalReaderError::Decode(_)) => {
-                critical_timeline!(
-                    ttid.tenant_id,
-                    ttid.timeline_id,
-                    // The corruption flag is only used in PS so that it can feed this information back to SKs.
-                    // We do not use these flags in SKs.
-                    None::<&AtomicBool>,
-                    "interpreted wal reader: failed to decode WAL record at start_pos={start_pos}: {err:?}"
+                // A WAL *decode* error here is, in yb-light, almost always a
+                // TRANSIENT torn read rather than durable corruption: the WAL
+                // read path blends the in-memory `WalCache` with YB
+                // `safekeeper.wals` under concurrent writes, so a record can
+                // briefly span bytes from two write epochs across a WAL
+                // rewrite/truncation window (manifesting as an "invalid xlog
+                // page header" at a page boundary). Upstream Neon reads
+                // immutable object-storage WAL and so escalates a decode error
+                // to `critical_timeline!` (which panics in debug and flags
+                // corruption in release) — too aggressive here: it turns a
+                // recoverable hiccup into a cluster-wide wedge (the WAL sender
+                // dies, streaming to the pageserver stalls, every GetPage
+                // blocks in wait_lsn). Instead exit the reader cleanly and
+                // loudly; the pageserver walreceiver reconnects and re-reads
+                // from its last applied (record-boundary) LSN, re-fetching
+                // authoritative bytes from YB, which self-heals the transient
+                // case. A SUSTAINED rate on the metric is the real-corruption
+                // signal (#139).
+                crate::metrics::WAL_READER_DECODE_ERRORS.inc();
+                error!(
+                    "interpreted wal reader: decode error at start_pos={start_pos} \
+                     (tenant {}, timeline {}; recoverable — reconnect will re-read from YB): {err:?}",
+                    ttid.tenant_id, ttid.timeline_id
                 );
                 format!("decode error at start_pos={start_pos}: {err}")
             }

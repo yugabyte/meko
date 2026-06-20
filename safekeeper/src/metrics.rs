@@ -73,6 +73,18 @@ pub static WAL_DISK_IO_ERRORS: Lazy<IntCounter> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_wal_disk_io_errors counter")
 });
+pub static WAL_READER_DECODE_ERRORS: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "safekeeper_wal_reader_decode_errors_total",
+        concat!(
+            "WAL decode failures in the interpreted WAL reader (the WAL-sender path). ",
+            "Treated as recoverable in yb-light — the reader exits and the client ",
+            "reconnects + re-reads from YB. A sustained rate indicates genuine ",
+            "WAL corruption rather than a transient torn read across a rewrite window."
+        )
+    )
+    .expect("Failed to register safekeeper_wal_reader_decode_errors_total counter")
+});
 pub static WAL_STORAGE_LIMIT_ERRORS: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "safekeeper_wal_storage_limit_errors",

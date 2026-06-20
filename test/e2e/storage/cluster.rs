@@ -785,9 +785,25 @@ impl Cluster {
             .lines()
             .filter(|l| l.starts_with("pageserver_yb_correctness_errors_total{"))
             .collect();
-        if !hit.is_empty() {
+        // `durable_walk_unflushed_row` is documented-benign during attach /
+        // reconnect replay (#57): a scenario that restarts the safekeeper
+        // (e.g. sk_wal_cold) makes the pageserver walreceiver reconnect and
+        // replay over still-buffered rows, and the materialiser's durable
+        // walk briefly sees those re-pushed-as-unflushed rows. It bails to
+        // the YB read either way, so this kind is not corruption. Report it
+        // (so a sustained rate stays visible) but don't fail on it alone;
+        // every other kind remains fatal.
+        let (benign, fatal): (Vec<&str>, Vec<&str>) = hit
+            .iter()
+            .partition(|l| l.contains("kind=\"durable_walk_unflushed_row\""));
+        if !benign.is_empty() {
+            for l in &benign {
+                tee_println!("  (benign correctness counter — reconnect/attach replay #57: {l})");
+            }
+        }
+        if !fatal.is_empty() {
             eprintln!("FAIL — correctness counter non-zero:");
-            for l in hit {
+            for l in fatal {
                 eprintln!("{l}");
             }
             bail!("correctness counter non-zero");
