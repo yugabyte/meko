@@ -1091,9 +1091,15 @@ impl PageWriter {
         // walk in that case.
         if let Some(chain) = self.pages.lookup_chain_if_complete(&key, target_lsn) {
             if self.cache_anchor_covers_lineage(&chain) {
+                crate::metrics::PAGE_READS
+                    .with_label_values(&["getpage", "fast_cache"])
+                    .inc();
                 return Ok(chain);
             }
         }
+        crate::metrics::PAGE_READS
+            .with_label_values(&["getpage", "yb_blend"])
+            .inc();
         let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain(&key, target_lsn);
         let persisted = self
             .compute_page_store
@@ -1140,9 +1146,15 @@ impl PageWriter {
             .lookup_chain_durable_if_complete(&key, target_lsn)
         {
             if self.cache_anchor_covers_lineage(&chain) {
+                crate::metrics::PAGE_READS
+                    .with_label_values(&["materializer", "fast_cache"])
+                    .inc();
                 return Ok(chain);
             }
         }
+        crate::metrics::PAGE_READS
+            .with_label_values(&["materializer", "yb_blend"])
+            .inc();
         let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain_durable(&key, target_lsn);
         // Materialiser-side cache miss → the internal conn (same one
         // the materialiser's write path uses). Keeping this off

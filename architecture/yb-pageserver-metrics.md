@@ -101,6 +101,7 @@ variants add `tenant_id`.
 | `pageserver_yb_materializer_queue_depth` | UIntGauge | — | Image-materialiser jobs currently queued. |
 | `pageserver_yb_materializer_inflight_bytes` | UIntGauge | — | Bytes held by an in-progress materialiser batch (chain payloads + redone images). |
 | `pageserver_yb_materializer_read_side_dispatches_total` | IntCounter | — | Materialise jobs enqueued by the read path (chain exceeded `count_limit`). |
+| `pageserver_yb_page_reads_total` | IntCounter | `source`, `path` | Page-chain reads. `source` = `getpage` (`read_chain`) or `materializer` (`read_chain_durable`); `path` = `fast_cache` (cache held a complete chain) or `yb_blend` (fell through to YB). `{source=*, path=yb_blend}` is the count of reads that hit YB. |
 | `pageserver_yb_unified_pages_by_key_entries` | UIntGauge | — | Entries in `UnifiedPages.by_key` (write buffer + durable cache index). |
 | `pageserver_yb_correctness_errors_total` | IntCounter | `kind` | Correctness-fatal errors. **Any non-zero value is a corruption signal.** Kinds include `materializer_redo`, `materializer_setup`, `materializer_commit`, `set_yb_upsert_mode`, `write_path_roundtrip`, `pagewriter_flush`, `tenant_task_panic`. |
 

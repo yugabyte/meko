@@ -129,6 +129,12 @@ impl Cluster {
     pub fn ps_grpc_port(&self) -> u16 {
         self.port_base + 500
     }
+    /// Postgres replication port of safekeeper node 1 (`port_base + 100`).
+    /// The `sk_wal_*` scenarios connect here to read WAL directly via the
+    /// libpq replication protocol (`START_REPLICATION PHYSICAL`).
+    pub fn sk_pg_port(&self) -> u16 {
+        self.port_base + 100
+    }
     /// The (single) timeline id under the shared tenant, as a hex string.
     /// Public wrapper over the PS timeline listing for scenarios that need
     /// to address the timeline directly (e.g. the gRPC page client).

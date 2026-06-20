@@ -235,6 +235,28 @@ pub(crate) static MATERIALIZER_READ_SIDE_DISPATCHES: Lazy<metrics::IntCounter> =
     .expect("failed to define a metric")
 });
 
+/// Page-chain reads, split by which path served them. Labels:
+///
+/// - `source` — `getpage` (`PageWriter::read_chain`, the GetPage@LSN /
+///   vectored read path) vs `materializer`
+///   (`PageWriter::read_chain_durable`, the image-fold path).
+/// - `path` — `fast_cache` (the cache held a complete chain; no YB
+///   round trip) vs `yb_blend` (fell through to a YB read).
+///
+/// `{source=*, path=yb_blend}` is the count of reads that actually hit
+/// YB; the `fast_cache` / `yb_blend` ratio is the cache hit rate for
+/// each source. A rising getpage `yb_blend` rate means the cache fast
+/// path is being bypassed more (e.g. eviction pressure, or the install
+/// guard skipping more below-min-cached images).
+pub(crate) static PAGE_READS: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "pageserver_yb_page_reads_total",
+        "Page-chain reads by source (getpage|materializer) and path (fast_cache|yb_blend)",
+        &["source", "path"],
+    )
+    .expect("failed to define a metric")
+});
+
 /// Count of correctness-fatal errors observed across the pageserver
 /// hot path, broken down by `kind`. **Any non-zero value is a
 /// corruption signal**; this metric exists specifically so paging
