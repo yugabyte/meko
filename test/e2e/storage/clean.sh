@@ -4,7 +4,7 @@
 # `yb_light_local init + start` is a clean slate:
 #
 # - Kill the e2e cluster's neon-stack processes (yb-pageserver,
-#   safekeeper, endpoint_storage, storage_controller, compute_ctl). Kills
+#   yb-safekeeper, yb-endpoint-storage, storage_controller, yb-compute-ctl). Kills
 #   are SCOPED to THIS run — anchored on `$YB_LIGHT_REPO_DIR` (a unique
 #   `run_<id>/`, services) and the ephemeral `$YB_DBNAME` (controller) —
 #   so a concurrently-running e2e cluster (its own port block + run dir +
@@ -41,24 +41,14 @@ step "Stop e2e cluster processes (scoped — leaves a developer's .yb_light clus
 # run can't interfere either — it lives on a different port block — and its
 # dir is reaped by the 7-day GC.
 #
-# The storage-stack services carry their data dir in argv (`-D <dir>` /
-# `--pgdata <dir>` / the endpoint_storage json path), so the path anchor
-# matches them directly.
-pkill -9 -f "(yb-pageserver|safekeeper|endpoint_storage|compute_ctl).*${YB_LIGHT_REPO_DIR}" 2>/dev/null || true
+# Every process for THIS run carries the unique run dir ($YB_LIGHT_REPO_DIR)
+# in its argv, so one path anchor reaps them all (pageserver, safekeeper,
+# endpoint_storage, compute_ctl, compute postgres), scoped to this run.
+pkill -9 -f "${YB_LIGHT_REPO_DIR}" 2>/dev/null || true
 
-# The storage controller has no data dir in argv, but its --yb-config
-# carries this run's ephemeral db name as `dbname = "<db>"`. Anchor on
-# that exact quoted name so the kill stays scoped to THIS run and never
-# touches a concurrent e2e run (different ephemeral db) — a developer's
-# `.yb_light` cluster runs as `dbname = "yb_storage"`, which only matches
-# when YB_DBNAME is left at its destructive default (clean.sh already
-# drops that db below, so that case is intentional).
+# The storage_controller has no run dir in argv; anchor on this run's
+# ephemeral db name (from its --yb-config) instead.
 pkill -9 -f "storage_controller.*dbname = \"${YB_DBNAME}\"" 2>/dev/null || true
-
-# Compute postgres (a compute_ctl child) survives a hung pg_ctl shutdown
-# and squats on COMPUTE_PORT. It runs as
-# `postgres -D <run_dir>/endpoints/<id>/pgdata`, so anchor on the run dir.
-pkill -9 -f "postgres .*${YB_LIGHT_REPO_DIR}/endpoints" 2>/dev/null || true
 sleep 2
 # pkill -9 is async w.r.t. the kernel releasing the listen sockets; wait
 # for COMPUTE_PORT to actually free so `endpoint start` doesn't race a
