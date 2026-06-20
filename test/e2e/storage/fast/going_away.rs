@@ -103,12 +103,18 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 
     step("Confirm pageserver stop did not hang");
-    // Generous 3s ceiling for host noise; the per-connection task exits
-    // cleanly before the 1s shutdown budget with the frame in place.
-    if stop_secs < 3.0 {
-        tee_println!("  ok  — stop took {stop_secs:.2}s (< 3s)");
+    // This is a "did it hang?" guard, not a perf SLA. Graceful shutdown's
+    // own budget is ~1s and a healthy stop completes in well under a second
+    // (~0.6s observed), so a 10s ceiling still trips on a genuine wedge
+    // while tolerating heavy host contention — the old 3s bound was the
+    // sole source of this test's "flaky" reputation (it could be exceeded
+    // under CPU/IO pressure even when shutdown was otherwise fine). The
+    // load-bearing correctness signals are the GoingAway frame above and
+    // the clean SK log below, not the exact wall-clock.
+    if stop_secs < 10.0 {
+        tee_println!("  ok  — stop took {stop_secs:.2}s (< 10s)");
     } else {
-        bail!("pageserver stop took {stop_secs:.2}s, expected < 3s");
+        bail!("pageserver stop took {stop_secs:.2}s, expected < 10s (likely a shutdown hang)");
     }
 
     step("Confirm the safekeeper did not serve a stale WAL page across a truncation");

@@ -49,8 +49,8 @@ scopes teardown to itself — so suites can run CONCURRENTLY (and never
 touch a developer's local cluster). E2E_PORT_BASE=<n> pins the block.
 
 E2E_SKIP=<substr>[,<substr>...] drops matching tests from the run (e.g.
-E2E_SKIP=going_away to skip a known-flaky one); the skipped names are
-printed, never silently dropped.
+E2E_SKIP=going_away,restart_wal_replay_yb to skip some); the skipped names
+are printed, never silently dropped.
 
 Examples:
   test/e2e/storage/run.sh                       # fast suite, debug
