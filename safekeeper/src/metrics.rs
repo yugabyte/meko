@@ -85,6 +85,19 @@ pub static WAL_READER_DECODE_ERRORS: Lazy<IntCounter> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_wal_reader_decode_errors_total counter")
 });
+pub static WAL_READER_DECODE_TRIPWIRE: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "safekeeper_wal_reader_decode_tripwire_total",
+        concat!(
+            "Verdict of the decode-error tripwire: on a WAL decode failure the reader re-reads ",
+            "the failing range on a fresh YB snapshot and re-decodes. `transient` = the re-read ",
+            "decoded cleanly (the original was a read-time splice, #139); `durable` = it failed ",
+            "again (genuine WAL corruption — page!); `inconclusive` = couldn't re-read/decide."
+        ),
+        &["verdict"]
+    )
+    .expect("Failed to register safekeeper_wal_reader_decode_tripwire_total counter")
+});
 pub static WAL_STORAGE_LIMIT_ERRORS: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "safekeeper_wal_storage_limit_errors",

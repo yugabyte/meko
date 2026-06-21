@@ -22,7 +22,7 @@ use wal_decoder::models::{InterpretedWalRecord, InterpretedWalRecords};
 use crate::metrics::WAL_READERS;
 use crate::send_wal::{EndWatchView, WalSenderGuard};
 use crate::timeline::WalResidentTimeline;
-use crate::wal_reader_stream::{StreamingWalReader, WalBytes};
+use crate::wal_reader_stream::{StreamingWalReader, WalBytes, WalOrReset};
 
 /// Identifier used to differentiate between senders connected to the same
 /// reader.
@@ -402,6 +402,73 @@ impl InterpretedWalReader {
         )))
     }
 
+    /// Classify a WAL decode failure (#139). Re-reads the failing range from
+    /// `from_lsn` (the last good record boundary) on a FRESH read pass — a
+    /// new YB query/snapshot via the now-atomic chunk fetch — and tries to
+    /// decode past `failure_lsn`. Clean re-decode ⇒ the original read saw
+    /// spliced/stale bytes (a TRANSIENT read-time splice); fails again ⇒
+    /// DURABLE WAL corruption. Best-effort and diagnostic only: the reader is
+    /// already exiting, so a re-read stall/error just yields `inconclusive`.
+    async fn decode_error_tripwire(
+        &mut self,
+        from_lsn: Lsn,
+        failure_lsn: Lsn,
+        err: &WalDecodeError,
+    ) {
+        // `reset` drops the in-flight read so the next read issues a fresh YB
+        // query (a new snapshot) from `from_lsn`.
+        self.wal_stream.reset(from_lsn).await;
+        let mut redec = WalStreamDecoder::new(from_lsn, self.pg_version);
+
+        // Bounded: revisiting one record needs only a few batches, and we must
+        // not hang the (already-failing) reader.
+        for _ in 0..16 {
+            let wal = match tokio::time::timeout(Duration::from_secs(10), self.wal_stream.next())
+                .await
+            {
+                Ok(Some(WalOrReset::Wal(Ok(wb)))) => wb.wal,
+                // Reset / stream end / read error / timeout — can't decide.
+                _ => break,
+            };
+            redec.feed_bytes(&wal);
+            loop {
+                match redec.poll_decode() {
+                    Ok(Some((lsn, _))) => {
+                        if lsn >= failure_lsn {
+                            crate::metrics::WAL_READER_DECODE_TRIPWIRE
+                                .with_label_values(&["transient"])
+                                .inc();
+                            error!(
+                                "decode tripwire: re-read from {from_lsn} decoded cleanly past the \
+                                 failure at {failure_lsn} — original was a TRANSIENT read-time splice, \
+                                 not durable corruption (#139). original: {err:?}"
+                            );
+                            return;
+                        }
+                    }
+                    Ok(None) => break, // need more bytes
+                    Err(e2) => {
+                        crate::metrics::WAL_READER_DECODE_TRIPWIRE
+                            .with_label_values(&["durable"])
+                            .inc();
+                        error!(
+                            "decode tripwire: re-read from {from_lsn} FAILED AGAIN near {failure_lsn} \
+                             — likely DURABLE WAL corruption. original: {err:?}, re-read: {e2:?}"
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+        crate::metrics::WAL_READER_DECODE_TRIPWIRE
+            .with_label_values(&["inconclusive"])
+            .inc();
+        error!(
+            "decode tripwire: inconclusive re-reading from {from_lsn} for failure at {failure_lsn} \
+             (could not re-decode past it). original: {err:?}"
+        );
+    }
+
     /// Send interpreted WAL to one or more [`InterpretedWalSender`]s
     /// Stops when an error is encountered or when the [`InterpretedWalReaderHandle`]
     /// goes out of scope.
@@ -412,6 +479,9 @@ impl InterpretedWalReader {
         }
 
         let mut wal_decoder = WalStreamDecoder::new(start_pos, self.pg_version);
+        // Last record boundary we decoded successfully; the decode tripwire
+        // re-reads from here to classify a failure (splice vs corruption).
+        let mut last_good_record_lsn = start_pos;
 
         loop {
             tokio::select! {
@@ -441,11 +511,28 @@ impl InterpretedWalReader {
                     let mut records = Vec::new();
                     let mut max_next_record_lsn = None;
                     let mut max_end_record_lsn = None;
-                    while let Some((next_record_lsn, recdata)) = wal_decoder.poll_decode()?
-                    {
+                    loop {
+                        let decoded = match wal_decoder.poll_decode() {
+                            Ok(d) => d,
+                            Err(e) => {
+                                // Decode failed mid-stream. Before propagating
+                                // (the reader exits cleanly; the client
+                                // reconnects — see the `run` Decode arm),
+                                // classify it: re-read the failing range on a
+                                // fresh YB snapshot and re-decode.
+                                let failure_pos = wal_decoder.lsn();
+                                self.decode_error_tripwire(last_good_record_lsn, failure_pos, &e)
+                                    .await;
+                                return Err(e.into());
+                            }
+                        };
+                        let Some((next_record_lsn, recdata)) = decoded else {
+                            break;
+                        };
                         assert!(next_record_lsn.is_aligned());
                         max_next_record_lsn = Some(next_record_lsn);
                         max_end_record_lsn = Some(wal_decoder.lsn());
+                        last_good_record_lsn = wal_decoder.lsn();
 
                         let interpreted = InterpretedWalRecord::from_bytes(
                             recdata,
