@@ -118,6 +118,24 @@ RUN_ID="${EPOCHSECONDS:-$(date +%s)}_$$"
 export YB_LIGHT_REPO_DIR="${YB_LIGHT_REPO_DIR:-$REPO/.e2e-tests/run_${RUN_ID}}"
 export YB_DBNAME="${YB_DBNAME:-yb_storage_e2e_${RUN_ID}}"
 
+# Liveness lock for THIS run. We hold an exclusive flock on the run dir's
+# `.run.lock` for run.sh's whole lifetime; the kernel releases it when run.sh
+# exits OR is killed (SIGKILL / OOM included). So "lock held" reliably means
+# "this run is alive", which is what reap.sh keys on to tell a dead run's
+# orphans from a live concurrent run. Held by run.sh only — closed in the
+# harness child below — so an orphaned cluster process can never keep it held.
+mkdir -p "$YB_LIGHT_REPO_DIR"
+exec {RUN_LOCK_FD}>"$YB_LIGHT_REPO_DIR/.run.lock"
+flock -n "$RUN_LOCK_FD" \
+    || { echo "run.sh: $YB_LIGHT_REPO_DIR is locked by another run; aborting" >&2; exit 1; }
+
+# Reap orphans left by runs that are no longer alive (compute postgres that
+# outlived a hung `endpoint stop`, or anything from a SIGKILL'd/OOM'd run)
+# BEFORE we build and bring up — that is exactly when the box is most
+# starved. Scoped to dead runs; a live concurrent run holds its lock and is
+# skipped. Best-effort: never let a reap hiccup fail the run.
+bash "$REPO/test/e2e/storage/reap.sh" "$REPO/.e2e-tests" "$YB_LIGHT_REPO_DIR" || true
+
 # Backstop teardown for ABNORMAL termination only. A normal exit (success
 # or failure — including --no-fail-clean's deliberate keep-alive) is handled
 # by the harness's own Drop, so we do NOT trap EXIT; only the signals that
@@ -135,7 +153,11 @@ cleanup() {
 trap cleanup INT TERM HUP
 
 # Foreground (not exec) so the trap stays installed and fires on a signal.
-"$BIN" ${ARGS[@]+"${ARGS[@]}"} &
+# Close the run lock FD in the child before exec'ing the harness, so neither
+# the harness nor any cluster process it spawns (compute_ctl -> postgres, …)
+# inherits it. Otherwise an orphaned postgres would keep the lock held and
+# reap.sh could never tell the run had died.
+( exec {RUN_LOCK_FD}>&-; exec "$BIN" ${ARGS[@]+"${ARGS[@]}"} ) &
 HARNESS_PID=$!
 wait "$HARNESS_PID" || EXIT_CODE=$?
 exit "${EXIT_CODE:-0}"
