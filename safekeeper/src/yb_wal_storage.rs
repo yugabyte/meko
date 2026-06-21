@@ -1470,14 +1470,26 @@ async fn fetch_chunks_from_yb(
     segno: u64,
     byte_offset: u64,
 ) -> anyhow::Result<Vec<CurrentChunk>> {
+    // Fetch the covering chunk (the one starting before `byte_offset` that
+    // may span it) AND the forward chunks in ONE statement, so the whole
+    // fetch sees a single read snapshot. Splitting it into two autocommit
+    // SELECTs let a truncate+rewrite commit BETWEEN them and splice an
+    // old-term covering chunk onto new-term forward chunks — a torn read the
+    // interpreted-WAL decoder trips on ("invalid xlog page header", #139).
+    // Both arms stay index-tight on the (segno, chunk_offset) PK; the hot
+    // boundary-aligned path simply returns no covering row.
     let sql = bake_ttid(
         &format!(
-            "SELECT chunk_offset, chunk_size, data FROM {} \
-             WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
-               AND chunk_offset >= $4 AND chunk_offset < $5 \
-             ORDER BY chunk_offset ASC \
-             LIMIT $6",
-            quote_relation(table)
+            "(SELECT chunk_offset, chunk_size, data FROM {tbl} \
+                WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
+                  AND chunk_offset < $4 \
+                ORDER BY chunk_offset DESC LIMIT 1) \
+             UNION ALL \
+             (SELECT chunk_offset, chunk_size, data FROM {tbl} \
+                WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
+                  AND chunk_offset >= $4 AND chunk_offset < $5 \
+                ORDER BY chunk_offset ASC LIMIT $6)",
+            tbl = quote_relation(table)
         ),
         tenant_id,
         timeline_id,
@@ -1500,60 +1512,25 @@ async fn fetch_chunks_from_yb(
         let chunk_offset: i64 = row.get("chunk_offset");
         let chunk_size: i32 = row.get("chunk_size");
         let data: Vec<u8> = row.get("data");
-        let end = (chunk_offset as u64) + (chunk_size as u64);
+        let start = chunk_offset as u64;
+        let end = start + chunk_size as u64;
+        // The covering arm (`chunk_offset < byte_offset`) is only useful when
+        // it actually spans the position; a chunk ending at/before it leaves
+        // a real hole, not a cover. Forward chunks (`>= byte_offset`) are
+        // always kept.
+        if start < byte_offset && end <= byte_offset {
+            continue;
+        }
         total_bytes += chunk_size as u64;
         out.push(CurrentChunk {
-            chunk_offset: chunk_offset as u64,
+            chunk_offset: start,
             end_offset: end,
             data: Arc::new(data),
         });
     }
-
-    // Cold-reader mid-chunk resume: the forward SELECT only sees
-    // chunks at or after `byte_offset`, so if its first row doesn't
-    // begin exactly at `byte_offset` the covering chunk (if any) starts
-    // below it and was missed. Reverse-seek for the highest chunk at or
-    // before `byte_offset` and prepend it when it actually spans the
-    // position. Skipped on the steady-state boundary-aligned path
-    // (first row == byte_offset), so the hot path stays one round trip.
-    if out.first().map(|c| c.chunk_offset) != Some(byte_offset) {
-        let cov_sql = bake_ttid(
-            &format!(
-                "SELECT chunk_offset, chunk_size, data FROM {} \
-                 WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
-                   AND chunk_offset <= $4 \
-                 ORDER BY chunk_offset DESC \
-                 LIMIT 1",
-                quote_relation(table)
-            ),
-            tenant_id,
-            timeline_id,
-        );
-        let cov_params: [&(dyn ToSql + Sync); 2] = [&segno_i, &lo_i];
-        let cov_rows = client
-            .query(&cov_sql, &cov_params)
-            .await
-            .context("YB WAL fetch_chunks_from_yb covering")?;
-        if let Some(row) = cov_rows.into_iter().next() {
-            let chunk_offset: i64 = row.get("chunk_offset");
-            let chunk_size: i32 = row.get("chunk_size");
-            let data: Vec<u8> = row.get("data");
-            let end = (chunk_offset as u64) + (chunk_size as u64);
-            // Only prepend when it truly covers `byte_offset`; a chunk
-            // that ends at or before the position leaves a real hole.
-            if end > byte_offset {
-                total_bytes += chunk_size as u64;
-                out.insert(
-                    0,
-                    CurrentChunk {
-                        chunk_offset: chunk_offset as u64,
-                        end_offset: end,
-                        data: Arc::new(data),
-                    },
-                );
-            }
-        }
-    }
+    // UNION ALL does not guarantee overall ordering across the two arms;
+    // the covering chunk (lowest offset) must come first.
+    out.sort_by_key(|c| c.chunk_offset);
 
     crate::metrics::WAL_CACHE_YB_FETCH_SECONDS.observe(elapsed.as_secs_f64());
     crate::metrics::WAL_CACHE_YB_FETCH_CHUNKS.observe(out.len() as f64);
@@ -2167,6 +2144,63 @@ mod tests {
         let mut expected = chunk_a.clone();
         expected.extend_from_slice(&chunk_b);
         assert_eq!(got, expected, "round-trip bytes across chunks must match");
+
+        drop_wals_table(&fpu, &table).await;
+    }
+
+    /// Mid-chunk resume: starting a read partway into a chunk must return
+    /// the bytes from that offset onward — i.e. `fetch_chunks_from_yb` must
+    /// surface the *covering* chunk (the one starting before the position),
+    /// not just chunks at/after it. Exercises the covering arm of the single
+    /// atomic UNION query (#139).
+    #[tokio::test]
+    async fn segment_reader_mid_chunk_resume() {
+        use tokio::io::AsyncReadExt;
+
+        let table = format!("wals_test_midchunk_{}", rand_suffix());
+        let (fpu, _read, _system) = open_three_lanes().await;
+        make_wals_table(&fpu, &table).await;
+
+        let tenant = TenantId::generate();
+        let timeline = TimelineId::generate();
+        let ttid = TenantTimelineId::new(tenant, timeline);
+        let tenant_s = tenant.to_string();
+        let timeline_s = timeline.to_string();
+
+        // One chunk spanning [0, 2048).
+        let chunk: Vec<u8> = (0u8..=255).cycle().take(2048).collect();
+        fpu.execute(
+            &format!(
+                "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+                                 chunk_size, data, last_modified_us) \
+                 VALUES ($1, $2, 0, 0, 2048, $3, 0)",
+                quote_relation(&table)
+            ),
+            &[&tenant_s, &timeline_s, &chunk.as_slice()],
+        )
+        .await
+        .expect("INSERT chunk");
+
+        let yb_wal = Arc::new(YbWalConn {
+            fpu_client: fpu.clone(),
+            read_client: fpu.clone(),
+            system_client: fpu.clone(),
+            table: table.clone(),
+            cache: None,
+        });
+        // Start the reader at byte offset 1024 — partway into the chunk.
+        let mut reader = YbSegmentReader::new(yb_wal, &ttid, 0, SEG_SIZE as usize, 1024);
+
+        let mut got = vec![0u8; 1024];
+        reader
+            .read_exact(&mut got)
+            .await
+            .expect("read from mid-chunk offset");
+        assert_eq!(
+            got,
+            chunk[1024..2048],
+            "mid-chunk resume must return bytes from the requested offset"
+        );
 
         drop_wals_table(&fpu, &table).await;
     }
