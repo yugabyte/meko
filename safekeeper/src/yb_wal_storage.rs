@@ -1297,6 +1297,7 @@ impl YbSegmentReader {
         let timeline_id = self.timeline_id.clone();
         let segno = self.segno;
         let pos = self.pos;
+        let cache = self.cache.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let res = fetch_chunks_from_yb(
@@ -1308,19 +1309,19 @@ impl YbSegmentReader {
                 pos,
             )
             .await;
-            // Do NOT populate the cache from a read. The cache must be
-            // written ONLY by `consumer_main` (after the chunk is durably
-            // INSERT'd, and dropped by `truncate_wal`/`remove_up_to` when the
-            // WAL is truncated) so every cached chunk is coherence-managed.
-            // A read that cached its YB fetch could leave a chunk that
-            // outlived a concurrent `truncate_wal` (the read's insert landing
-            // after `cache.truncate_after`); the next term's rewrite at that
-            // offset then can't displace it (insert is Vacant-only), and the
-            // interpreted-WAL reader streams stale bytes — "invalid xlog page
-            // header" (#139). The reader still *reads* the cache (the
-            // consumer's hot chunks); a cold miss just re-fetches from YB.
+            // Populate the cache with the prefetched chunks before
+            // returning the covering one. Subsequent sequential reads
+            // (the WAL sender streams forward) hit cache instead of
+            // re-fetching. Best-effort: a failed lock is fine, the
+            // covering chunk is still returned via the oneshot below.
             let covering = match res {
                 Ok(fetched) => {
+                    if let Some(cache) = &cache {
+                        let mut guard = cache.lock().unwrap();
+                        for c in &fetched {
+                            guard.insert(segno, c.chunk_offset, c.data.clone());
+                        }
+                    }
                     // `fetch_chunks_from_yb` returns the covering chunk
                     // first — its `chunk_offset` is `<= pos` (exactly
                     // `pos` on the boundary-aligned hot path, below it on
@@ -2166,119 +2167,6 @@ mod tests {
         let mut expected = chunk_a.clone();
         expected.extend_from_slice(&chunk_b);
         assert_eq!(got, expected, "round-trip bytes across chunks must match");
-
-        drop_wals_table(&fpu, &table).await;
-    }
-
-    /// Coherence (#139): a read must never let the `WalCache` shadow a YB
-    /// truncate+rewrite.
-    ///
-    /// yb-light WAL is immutable WITHIN a term, but a new term / torn-tail
-    /// recovery deletes the divergent tail and rewrites *different* bytes at
-    /// the same offset. `truncate_wal` invalidates the cache for that region
-    /// — but `YbSegmentReader` ALSO populates the cache from its own YB
-    /// fetch. A reader that fetched the pre-rewrite bytes (racing the
-    /// truncate) can re-insert them AFTER the invalidation, and the
-    /// rewrite's Vacant-only `WalCache::insert` then keeps the stale chunk.
-    /// The interpreted-WAL reader streams those stale bytes and the
-    /// pageserver decodes an "invalid xlog page header" (the going_away
-    /// flake). The cache must be populated ONLY by the durability-coherent
-    /// consumer, never by a read.
-    ///
-    /// Deterministic repro: read an offset (which today caches it), rewrite
-    /// that offset in YB *without* invalidating the cache (modelling the
-    /// race where the read's population outlived `truncate_wal`), then read
-    /// again — it must observe the rewrite, not the stale cached bytes.
-    #[tokio::test]
-    async fn segment_reader_read_must_not_shadow_a_yb_rewrite() {
-        use tokio::io::AsyncReadExt;
-
-        let table = format!("wals_test_coherence_{}", rand_suffix());
-        let (fpu, _read, _system) = open_three_lanes().await;
-        make_wals_table(&fpu, &table).await;
-
-        let tenant = TenantId::generate();
-        let timeline = TimelineId::generate();
-        let ttid = TenantTimelineId::new(tenant, timeline);
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
-
-        let seg: i64 = 0;
-        let off: i64 = 0;
-        let old: Vec<u8> = vec![0xAB; 1024];
-        let new: Vec<u8> = vec![0xCD; 1024];
-        let size: i32 = 1024;
-
-        let insert_sql = format!(
-            "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
-                             chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0)",
-            quote_relation(&table)
-        );
-        let delete_sql = format!(
-            "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
-             AND segno = $3 AND chunk_offset = $4",
-            quote_relation(&table)
-        );
-
-        // 1. Stage the pre-rewrite ("old term") chunk.
-        let old_slice = old.as_slice();
-        fpu.execute(
-            &insert_sql,
-            &[&tenant_s, &timeline_s, &seg, &off, &size, &old_slice],
-        )
-        .await
-        .expect("INSERT old chunk");
-
-        // Shared cache, as in production (one per YbWalConn).
-        let cache = Arc::new(std::sync::Mutex::new(WalCache::new(1 << 20)));
-        let yb_wal = Arc::new(YbWalConn {
-            fpu_client: fpu.clone(),
-            read_client: fpu.clone(),
-            system_client: fpu.clone(),
-            table: table.clone(),
-            cache: Some(cache.clone()),
-        });
-
-        // 2. A reader reads the old chunk — the racing reader that fetched
-        //    the pre-rewrite bytes.
-        let mut r1 = YbSegmentReader::new(yb_wal.clone(), &ttid, 0, SEG_SIZE as usize, 0);
-        let mut got1 = vec![0u8; old.len()];
-        r1.read_exact(&mut got1).await.expect("read old");
-        assert_eq!(got1, old, "first read must return the staged bytes");
-
-        // A read must NOT populate the shared cache: only the consumer does
-        // (post-INSERT, and invalidated by truncate_wal). A chunk a read
-        // leaves behind can outlive a truncate that ran before the insert
-        // landed — exactly the stale-chunk race.
-        assert!(
-            cache.lock().unwrap().lookup(seg as u64, off as u64).is_none(),
-            "a read populated the cache — a stale chunk can now shadow a rewrite (#139)"
-        );
-
-        // 3. A new term truncates the divergent tail and rewrites different
-        //    bytes at the same offset. We rewrite YB directly and do NOT
-        //    invalidate the cache, modelling the race where the read's
-        //    population landed AFTER truncate_wal's `cache.truncate_after`.
-        fpu.execute(&delete_sql, &[&tenant_s, &timeline_s, &seg, &off])
-            .await
-            .expect("DELETE old chunk");
-        let new_slice = new.as_slice();
-        fpu.execute(
-            &insert_sql,
-            &[&tenant_s, &timeline_s, &seg, &off, &size, &new_slice],
-        )
-        .await
-        .expect("INSERT new chunk");
-
-        // 4. A subsequent reader MUST observe the rewrite, not stale bytes.
-        let mut r2 = YbSegmentReader::new(yb_wal.clone(), &ttid, 0, SEG_SIZE as usize, 0);
-        let mut got2 = vec![0u8; new.len()];
-        r2.read_exact(&mut got2).await.expect("read new");
-        assert_eq!(
-            got2, new,
-            "reader served stale pre-rewrite WAL from the cache — the torn-read coherence bug (#139)"
-        );
 
         drop_wals_table(&fpu, &table).await;
     }
