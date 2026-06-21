@@ -361,7 +361,10 @@ pub async fn calculate_digest(
         bail!("requested LSN is before the start of the timeline");
     }
 
-    let mut wal_reader = tli.get_walreader(request.from_lsn).await?;
+    // One-shot read of a fixed committed range — the trust boundary is simply
+    // the requested end; nothing past it is read.
+    let flush_lsn = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(request.until_lsn.0));
+    let mut wal_reader = tli.get_walreader(request.from_lsn, flush_lsn).await?;
 
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; MAX_SEND_SIZE];

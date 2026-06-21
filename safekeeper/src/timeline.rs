@@ -1013,15 +1013,19 @@ impl WalResidentTimeline {
         Ok(rmsg)
     }
 
-    pub async fn get_walreader(&self, start_lsn: Lsn) -> Result<WalReader> {
+    pub async fn get_walreader(
+        &self,
+        start_lsn: Lsn,
+        flush_lsn: Arc<std::sync::atomic::AtomicU64>,
+    ) -> Result<WalReader> {
         let (_, persisted_state) = self.get_state().await;
 
         WalReader::new(
             &self.ttid,
-            self.timeline_dir.clone(),
             &persisted_state,
             start_lsn,
             self.yb_wal.clone(),
+            flush_lsn,
         )
     }
 

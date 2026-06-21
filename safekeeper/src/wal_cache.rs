@@ -11,11 +11,18 @@
 //! This cache is populated by `consumer_main` *after* the chunk has been
 //! successfully INSERT'd into `safekeeper.wals` (NOT by the producer
 //! before the INSERT — see the durability discussion in the
-//! `yb_wal_storage` module docs). So the cache only ever holds chunks
-//! that are also durable in YB. Reads through [`YbSegmentReader`]
-//! consult the cache first; only if the chunk is no longer cached
-//! (evicted FIFO once the cache outgrows its byte budget) does the read
-//! fall through to YB, which has the chunk by construction.
+//! `yb_wal_storage` module docs), and by [`YbSegmentReader`] reads — but a
+//! read caches only chunks lying fully below the flush frontier live when it
+//! fetched them (`end_offset <= flush`). Both sources therefore insert only
+//! committed chunks, so the cache only ever holds bytes that are durable in
+//! YB *and* immutable: a later walproposer term can rewrite only
+//! above-flush bytes, and truncate never removes committed WAL, so a cached
+//! chunk can never be shadowed by a rewrite (#139). A read that cached an
+//! above-flush chunk could race a truncate+rewrite and pin a stale copy the
+//! Vacant-only insert can't displace — hence the committed-only rule. Reads
+//! consult the cache first; only if the chunk is no longer cached (evicted
+//! FIFO once the cache outgrows its byte budget) does the read fall through
+//! to YB, which has the chunk by construction.
 //!
 //! Why a plain `Mutex`: writes and reads naturally target disjoint
 //! offsets — writes append past `flush_lsn`, reads consume up to it — so

@@ -1,4 +1,6 @@
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 
 use crate::send_wal::EndWatch;
@@ -79,6 +81,7 @@ impl StreamingWalReader {
             end_watch,
             buffer: vec![0; buffer_size],
             buffer_size,
+            flush_lsn: Arc::new(AtomicU64::new(end.0)),
         };
 
         // When a change notification is received while polling the internal
@@ -150,6 +153,12 @@ struct WalReaderStreamState {
     end_watch: EndWatch,
     buffer: Vec<u8>,
     buffer_size: usize,
+    /// Live committed/flush frontier (`= wal_reader.end`), shared into the
+    /// `WalReader` and the `YbSegmentReader`s it opens so they never serve YB
+    /// bytes that were uncommitted when fetched — a later walproposer term can
+    /// rewrite those, and a stale held chunk would splice them in (#139). Kept
+    /// in step with `end` before each read.
+    flush_lsn: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl WalReaderStreamState {
@@ -158,7 +167,7 @@ impl WalReaderStreamState {
         if self.wal_reader.reader.is_none() {
             self.wal_reader.reader = self
                 .tli
-                .get_walreader(self.wal_reader.start)
+                .get_walreader(self.wal_reader.start, self.flush_lsn.clone())
                 .await
                 .map(Some)
                 .with_context(|| {
@@ -197,6 +206,12 @@ impl WalReaderStreamState {
             self.wal_reader.end > self.wal_reader.start,
             "nothing to send after waiting for WAL"
         );
+
+        // Publish the (possibly just-advanced) committed frontier to the YB
+        // readers before we read: each `YbSegmentReader` will only serve bytes
+        // it fetched at or below this, and re-fetch anything above — so a held
+        // chunk can't shadow a later term's rewrite of once-uncommitted bytes.
+        self.flush_lsn.store(self.wal_reader.end.0, Ordering::Release);
 
         // Calculate chunk size
         let mut chunk_end_pos = self.wal_reader.start + self.buffer_size as u64;

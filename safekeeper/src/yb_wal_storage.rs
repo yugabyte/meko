@@ -1255,6 +1255,24 @@ pub struct YbSegmentReader {
     /// query futures aren't `Sync`. The fetch runs on a spawned task and
     /// hands the result back through this channel.
     fetch: Option<tokio::sync::oneshot::Receiver<anyhow::Result<Option<CurrentChunk>>>>,
+
+    /// Live flush (durable/committed) frontier of the timeline. A read must
+    /// never SERVE bytes past the flush that was live when the serving chunk
+    /// was obtained: bytes above flush are not yet committed and a later
+    /// walproposer term can truncate+rewrite them, so a held `current` (or a
+    /// cached chunk) that extends past that flush would serve stale,
+    /// post-rewrite-shadowing bytes once flush advances (#139). Updated live
+    /// by the streaming reader as the frontier moves.
+    flush_lsn: Arc<std::sync::atomic::AtomicU64>,
+    /// The flush frontier that was live when `current` was acquired — the
+    /// trust boundary for it. `current` is served only up to here; past it we
+    /// re-acquire (re-fetch) so we never serve bytes that were uncommitted at
+    /// fetch time.
+    current_flush_bound: u64,
+    /// Flush frontier captured when the in-flight `fetch` was issued (its
+    /// bytes are a snapshot as of then), carried to `current_flush_bound` when
+    /// the fetch lands.
+    fetch_issued_flush: u64,
 }
 
 #[derive(Clone)]
@@ -1275,6 +1293,7 @@ impl YbSegmentReader {
         segno: XLogSegNo,
         wal_seg_size: usize,
         start_xlogoff: usize,
+        flush_lsn: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
         Self {
             segno,
@@ -1287,10 +1306,21 @@ impl YbSegmentReader {
             timeline_id: ttid.timeline_id.to_string(),
             current: None,
             fetch: None,
+            flush_lsn,
+            current_flush_bound: 0,
+            fetch_issued_flush: 0,
         }
     }
 
     fn start_fetch(&mut self) {
+        // Snapshot the flush frontier at issue time: the rows this fetch reads
+        // are committed at least up to here, and a walproposer term change can
+        // only rewrite bytes *above* the flush that is live now. So whatever
+        // this fetch returns is trustworthy up to `fetch_issued_flush`, which
+        // becomes the served chunk's trust boundary when it lands — and gates
+        // which chunks are safe to cache (below).
+        self.fetch_issued_flush = self.flush_lsn.load(std::sync::atomic::Ordering::Acquire);
+        let issued_flush = self.fetch_issued_flush;
         let client = self.read_client.clone();
         let table = self.table.clone();
         let tenant_id = self.tenant_id.clone();
@@ -1309,17 +1339,29 @@ impl YbSegmentReader {
                 pos,
             )
             .await;
-            // Populate the cache with the prefetched chunks before
-            // returning the covering one. Subsequent sequential reads
-            // (the WAL sender streams forward) hit cache instead of
-            // re-fetching. Best-effort: a failed lock is fine, the
-            // covering chunk is still returned via the oneshot below.
             let covering = match res {
                 Ok(fetched) => {
+                    // Warm the cache with what we just read — but ONLY chunks
+                    // lying fully below the flush frontier live when this fetch
+                    // was issued (`end_offset <= issued_flush`). Those are
+                    // committed, and committed WAL is immutable: a later term
+                    // can only truncate+rewrite bytes ABOVE flush, and truncate
+                    // never removes committed WAL, so a cached copy can never be
+                    // shadowed by a rewrite. A chunk straddling or past flush is
+                    // deliberately left out — its tail is still mutable, and a
+                    // read that cached it could race a truncate+rewrite (its
+                    // insert landing after `cache.truncate_after`) and pin a
+                    // stale chunk the Vacant-only insert can't displace: the
+                    // torn read of #139. The serve-side flush bound guards the
+                    // *held* chunk, but a cache *re-lookup* returns the same
+                    // bytes — so the cache must never take uncommitted bytes in
+                    // the first place.
                     if let Some(cache) = &cache {
                         let mut guard = cache.lock().unwrap();
                         for c in &fetched {
-                            guard.insert(segno, c.chunk_offset, c.data.clone());
+                            if c.end_offset <= issued_flush {
+                                guard.insert(segno, c.chunk_offset, c.data.clone());
+                            }
                         }
                     }
                     // `fetch_chunks_from_yb` returns the covering chunk
@@ -1353,10 +1395,19 @@ impl AsyncRead for YbSegmentReader {
             // 1. Serve from the current chunk if it covers self.pos.
             let me = self.as_mut().get_mut();
             if let Some(c) = &me.current {
-                if me.pos >= c.chunk_offset && me.pos < c.end_offset {
+                // Serve only up to the flush frontier that was live when this
+                // chunk was acquired. Bytes above that flush were not yet
+                // committed then, so a later walproposer term may have
+                // truncated+rewritten them in YB; serving them from a held
+                // (now-stale) chunk after flush advances is exactly the
+                // spliced "invalid xlog page header" read of #139. Past the
+                // boundary we drop the chunk and re-acquire, picking up the
+                // post-rewrite bytes (and a higher boundary).
+                let serve_end = c.end_offset.min(me.current_flush_bound);
+                if me.pos >= c.chunk_offset && me.pos < serve_end {
                     let chunk_idx = (me.pos - c.chunk_offset) as usize;
-                    let chunk_remaining = c.data.len().saturating_sub(chunk_idx);
-                    let want = dst.remaining().min(chunk_remaining);
+                    let serve_remaining = (serve_end - me.pos) as usize;
+                    let want = dst.remaining().min(serve_remaining);
                     if want == 0 {
                         return Poll::Ready(Ok(()));
                     }
@@ -1364,14 +1415,19 @@ impl AsyncRead for YbSegmentReader {
                     me.pos += want as u64;
                     return Poll::Ready(Ok(()));
                 }
-                // Walked past the current chunk's range — drop it.
+                // Walked past the current chunk's trusted range — drop it.
                 me.current = None;
             }
 
-            // 2. Try the in-memory cache. Fast O(log n), no I/O.
+            // 2. Try the in-memory cache. Fast O(log n), no I/O. The cached
+            // chunk is trusted only up to the flush frontier live right now;
+            // the consumer may have inserted it before flush caught up, so its
+            // tail can still be above the committed line.
             if let Some(cache) = me.cache.clone() {
                 let hit = cache.lock().unwrap().lookup(me.segno, me.pos);
                 if let Some((chunk_offset, end_offset, data)) = hit {
+                    me.current_flush_bound =
+                        me.flush_lsn.load(std::sync::atomic::Ordering::Acquire);
                     me.current = Some(CurrentChunk {
                         chunk_offset,
                         end_offset,
@@ -1390,6 +1446,7 @@ impl AsyncRead for YbSegmentReader {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Ok(Ok(Some(c)))) => {
                     me.fetch = None;
+                    me.current_flush_bound = me.fetch_issued_flush;
                     me.current = Some(c);
                     continue;
                 }
@@ -2134,7 +2191,14 @@ mod tests {
             table: table.clone(),
             cache: None,
         });
-        let mut reader = YbSegmentReader::new(yb_wal, &ttid, 0, SEG_SIZE as usize, 0);
+        let mut reader = YbSegmentReader::new(
+            yb_wal,
+            &ttid,
+            0,
+            SEG_SIZE as usize,
+            0,
+            Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
+        );
 
         let mut got = vec![0u8; chunk_a.len() + chunk_b.len()];
         reader
@@ -2189,7 +2253,14 @@ mod tests {
             cache: None,
         });
         // Start the reader at byte offset 1024 — partway into the chunk.
-        let mut reader = YbSegmentReader::new(yb_wal, &ttid, 0, SEG_SIZE as usize, 1024);
+        let mut reader = YbSegmentReader::new(
+            yb_wal,
+            &ttid,
+            0,
+            SEG_SIZE as usize,
+            1024,
+            Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX)),
+        );
 
         let mut got = vec![0u8; 1024];
         reader
@@ -2200,6 +2271,235 @@ mod tests {
             got,
             chunk[1024..2048],
             "mid-chunk resume must return bytes from the requested offset"
+        );
+
+        drop_wals_table(&fpu, &table).await;
+    }
+
+    /// Coherence (#139): reader-side cache population is allowed, but a read
+    /// may cache only chunks lying fully below the flush frontier live when it
+    /// fetched them. Committed WAL is immutable (a later term can only
+    /// truncate+rewrite bytes ABOVE flush, and truncate never removes committed
+    /// WAL), so a cached committed chunk can never be shadowed by a rewrite.
+    /// The once-dangerous chunk — one straddling/past flush whose tail a new
+    /// term rewrites — is never taken into the cache, so the racing-insert
+    /// hazard (insert landing after `cache.truncate_after`, pinned by the
+    /// Vacant-only insert) cannot arise. (The serve-side flush bound only
+    /// guards the *held* chunk; a cache re-lookup returns the same bytes, so
+    /// the cache must refuse uncommitted bytes at insert time.)
+    ///
+    /// Deterministic: a committed chunk `[0,1024)` and an uncommitted tail
+    /// `[1024,4096)` are staged with flush at 1024. A read of `[0,1024)` must
+    /// cache the committed chunk (warming) but NOT the tail. A new term then
+    /// rewrites the tail and flush advances; re-reading `[1024,4096)` must
+    /// observe the rewrite, never a stale cached copy.
+    #[tokio::test]
+    async fn segment_reader_caches_only_committed_chunks() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use tokio::io::AsyncReadExt;
+
+        let table = format!("wals_test_coherence_{}", rand_suffix());
+        let (fpu, _read, _system) = open_three_lanes().await;
+        make_wals_table(&fpu, &table).await;
+
+        let tenant = TenantId::generate();
+        let timeline = TimelineId::generate();
+        let ttid = TenantTimelineId::new(tenant, timeline);
+        let tenant_s = tenant.to_string();
+        let timeline_s = timeline.to_string();
+
+        let seg: i64 = 0;
+        let committed: Vec<u8> = vec![0xAA; 1024]; // [0,1024), below flush
+        let tail_old: Vec<u8> = vec![0xBB; 3072]; // [1024,4096), above flush
+        let tail_new: Vec<u8> = vec![0xCC; 3072]; // the rewrite
+
+        let insert_sql = format!(
+            "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+                             chunk_size, data, last_modified_us) \
+             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+            quote_relation(&table)
+        );
+        let delete_sql = format!(
+            "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
+             AND segno = $3 AND chunk_offset = $4",
+            quote_relation(&table)
+        );
+
+        // 1. Stage the committed chunk and the (still-uncommitted) tail.
+        for (off, bytes) in [(0i64, &committed), (1024i64, &tail_old)] {
+            let size = bytes.len() as i32;
+            let slice = bytes.as_slice();
+            fpu.execute(
+                &insert_sql,
+                &[&tenant_s, &timeline_s, &seg, &off, &size, &slice],
+            )
+            .await
+            .expect("INSERT chunk");
+        }
+
+        // Shared cache, as in production (one per YbWalConn).
+        let cache = Arc::new(std::sync::Mutex::new(WalCache::new(1 << 20)));
+        let yb_wal = Arc::new(YbWalConn {
+            fpu_client: fpu.clone(),
+            read_client: fpu.clone(),
+            system_client: fpu.clone(),
+            table: table.clone(),
+            cache: Some(cache.clone()),
+        });
+
+        // flush = 1024: [0,1024) committed, [1024,4096) not yet.
+        let flush = Arc::new(AtomicU64::new(1024));
+        let mut reader =
+            YbSegmentReader::new(yb_wal.clone(), &ttid, 0, SEG_SIZE as usize, 0, flush.clone());
+
+        // 2. Read the committed range. The fetch sees both chunks, but only the
+        //    committed one is cacheable.
+        let mut head = vec![0u8; 1024];
+        reader.read_exact(&mut head).await.expect("read committed head");
+        assert_eq!(head, committed, "committed range must read back");
+
+        {
+            let mut guard = cache.lock().unwrap();
+            assert!(
+                guard.lookup(0, 0).is_some(),
+                "committed chunk must be cached (reader-side warming)"
+            );
+            assert!(
+                guard.lookup(0, 1024).is_none(),
+                "uncommitted tail must NOT be cached — it could shadow a rewrite (#139)"
+            );
+        }
+
+        // 3. A new term rewrites the once-uncommitted tail; flush then advances
+        //    to cover it. (No cache invalidation is modeled — the point is that
+        //    the tail was never cached, so there is nothing stale to shadow.)
+        fpu.execute(&delete_sql, &[&tenant_s, &timeline_s, &seg, &1024i64])
+            .await
+            .expect("DELETE old tail");
+        let tail_new_slice = tail_new.as_slice();
+        let tail_size = tail_new.len() as i32;
+        fpu.execute(
+            &insert_sql,
+            &[&tenant_s, &timeline_s, &seg, &1024i64, &tail_size, &tail_new_slice],
+        )
+        .await
+        .expect("INSERT rewritten tail");
+        flush.store(4096, Ordering::Release);
+
+        // 4. The now-committed tail MUST come back as the rewrite.
+        let mut tail = vec![0u8; 3072];
+        reader.read_exact(&mut tail).await.expect("read rewritten tail");
+        assert_eq!(
+            tail, tail_new,
+            "reader served a stale cached tail after a term rewrite (#139)"
+        );
+
+        drop_wals_table(&fpu, &table).await;
+    }
+
+    /// Read-past-flush splice (the true root cause of #139). The YB fetch is
+    /// blind to the commit/flush frontier: it pulls a whole covering chunk,
+    /// including bytes that lie *above* flush and are therefore still
+    /// uncommitted. yb-light WAL is immutable only once committed — a later
+    /// walproposer term truncates+rewrites the uncommitted tail. If the reader
+    /// keeps serving the chunk it already holds as flush advances, it streams
+    /// the pre-rewrite (now-stale) bytes for the `[old_flush, new_flush)`
+    /// region and the interpreted-WAL decoder trips ("invalid xlog page
+    /// header"). The reader must serve a held chunk only up to the flush that
+    /// was live when it was fetched, and re-fetch past that.
+    ///
+    /// Deterministic model: one chunk spans `[0, 4096)`. With flush at 1024 we
+    /// read `[0, 1024)` (all that's committed). A new term then rewrites the
+    /// once-uncommitted tail `[1024, 4096)` in YB and flush advances to 4096.
+    /// Reading `[1024, 4096)` must now observe the rewrite — not the bytes the
+    /// reader fetched (and may still be holding) from before the rewrite.
+    #[tokio::test]
+    async fn segment_reader_must_not_serve_past_flush_after_rewrite() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use tokio::io::AsyncReadExt;
+
+        let table = format!("wals_test_pastflush_{}", rand_suffix());
+        let (fpu, _read, _system) = open_three_lanes().await;
+        make_wals_table(&fpu, &table).await;
+
+        let tenant = TenantId::generate();
+        let timeline = TimelineId::generate();
+        let ttid = TenantTimelineId::new(tenant, timeline);
+        let tenant_s = tenant.to_string();
+        let timeline_s = timeline.to_string();
+
+        let seg: i64 = 0;
+        let off: i64 = 0;
+        let size: i32 = 4096;
+        // Committed prefix [0,1024) is identical across terms (committed WAL is
+        // immutable); only the once-uncommitted tail [1024,4096) is rewritten.
+        let old: Vec<u8> = vec![0xAB; 4096];
+        let mut new: Vec<u8> = vec![0u8; 4096];
+        new[..1024].fill(0xAB); // committed prefix, unchanged
+        new[1024..].fill(0xCD); // rewritten tail
+
+        let insert_sql = format!(
+            "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+                             chunk_size, data, last_modified_us) \
+             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+            quote_relation(&table)
+        );
+        let delete_sql = format!(
+            "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
+             AND segno = $3 AND chunk_offset = $4",
+            quote_relation(&table)
+        );
+
+        // 1. Stage the chunk as written by the old term.
+        let old_slice = old.as_slice();
+        fpu.execute(
+            &insert_sql,
+            &[&tenant_s, &timeline_s, &seg, &off, &size, &old_slice],
+        )
+        .await
+        .expect("INSERT old chunk");
+
+        let yb_wal = Arc::new(YbWalConn {
+            fpu_client: fpu.clone(),
+            read_client: fpu.clone(),
+            system_client: fpu.clone(),
+            table: table.clone(),
+            cache: None,
+        });
+
+        // Live flush frontier, as the streaming reader would publish it.
+        let flush = Arc::new(AtomicU64::new(1024));
+        let mut reader =
+            YbSegmentReader::new(yb_wal.clone(), &ttid, 0, SEG_SIZE as usize, 0, flush.clone());
+
+        // 2. Read everything committed so far ([0,1024)). The reader fetches
+        //    the whole covering chunk [0,4096) but must trust it only to 1024.
+        let mut head = vec![0u8; 1024];
+        reader.read_exact(&mut head).await.expect("read committed head");
+        assert_eq!(head, old[..1024], "committed prefix must read back");
+
+        // 3. A new term rewrites the once-uncommitted tail; flush then advances
+        //    to cover it.
+        fpu.execute(&delete_sql, &[&tenant_s, &timeline_s, &seg, &off])
+            .await
+            .expect("DELETE old chunk");
+        let new_slice = new.as_slice();
+        fpu.execute(
+            &insert_sql,
+            &[&tenant_s, &timeline_s, &seg, &off, &size, &new_slice],
+        )
+        .await
+        .expect("INSERT rewritten chunk");
+        flush.store(4096, Ordering::Release);
+
+        // 4. The now-committed [1024,4096) MUST come back as the rewrite, not
+        //    the pre-rewrite bytes the reader fetched (and may still hold).
+        let mut tail = vec![0u8; 3072];
+        reader.read_exact(&mut tail).await.expect("read rewritten tail");
+        assert_eq!(
+            tail,
+            new[1024..],
+            "reader served stale past-flush WAL after a term rewrite — the read-past-flush splice (#139)"
         );
 
         drop_wals_table(&fpu, &table).await;

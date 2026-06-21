@@ -9,19 +9,17 @@
 
 use std::cmp::min;
 use std::future::Future;
-use std::io::{ErrorKind, SeekFrom};
 use std::pin::Pin;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use bytes::Bytes;
-use camino::{Utf8Path, Utf8PathBuf};
 use futures::future::BoxFuture;
 use postgres_ffi::waldecoder::WalStreamDecoder;
-use postgres_ffi::{PG_TLI, XLogFileName, XLogSegNo};
+use postgres_ffi::XLogSegNo;
 use postgres_versioninfo::{PgMajorVersion, PgVersionId};
 use pq_proto::SystemId;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::*;
 use utils::id::TenantTimelineId;
 use utils::lsn::Lsn;
@@ -270,17 +268,21 @@ impl Storage for PhysicalStorage {
 
 pub struct WalReader {
     ttid: TenantTimelineId,
-    timeline_dir: Utf8PathBuf,
     wal_seg_size: usize,
     pos: Lsn,
     wal_segment: Option<Pin<Box<dyn AsyncRead + Send + Sync>>>,
 
-    // S3 will be used to read WAL if LSN is not available locally
+    // WAL is read from YB (`safekeeper.wals`); yb-light writes no local files.
     yb_wal: Option<Arc<YbWalConn>>,
 
-    // We don't have WAL locally if LSN is less than local_start_lsn
-    local_start_lsn: Lsn,
-    // We will respond with zero-ed bytes before this Lsn as long as
+    // Live flush (committed) frontier, handed to every `YbSegmentReader` this
+    // reader opens so it never serves bytes that were uncommitted when fetched
+    // (which a later walproposer term may rewrite — #139). The streaming WAL
+    // reader keeps this advancing; a one-shot reader seeds it with its fixed
+    // end bound.
+    flush_lsn: Arc<std::sync::atomic::AtomicU64>,
+
+    // We respond with zero-ed bytes before this Lsn as long as
     // pos is in the same segment as timeline_start_lsn.
     timeline_start_lsn: Lsn,
     // integer version number of PostgreSQL, e.g. 14; 15; 16
@@ -292,10 +294,10 @@ pub struct WalReader {
 impl WalReader {
     pub fn new(
         ttid: &TenantTimelineId,
-        timeline_dir: Utf8PathBuf,
         state: &TimelinePersistentState,
         start_pos: Lsn,
         yb_wal: Option<Arc<YbWalConn>>,
+        flush_lsn: Arc<std::sync::atomic::AtomicU64>,
     ) -> Result<Self> {
         if state.server.wal_seg_size == 0 || state.local_start_lsn == Lsn(0) {
             bail!("state uninitialized, no data to read");
@@ -320,12 +322,11 @@ impl WalReader {
 
         Ok(Self {
             ttid: *ttid,
-            timeline_dir,
             wal_seg_size: state.server.wal_seg_size as usize,
             pos: start_pos,
             wal_segment: None,
+            flush_lsn,
             yb_wal,
-            local_start_lsn: state.local_start_lsn,
             timeline_start_lsn: state.timeline_start_lsn,
             pg_version: PgMajorVersion::try_from(state.server.pg_version).unwrap(),
             system_id: state.server.system_id,
@@ -413,32 +414,14 @@ impl WalReader {
     }
 
     /// Open WAL segment at the current position of the reader.
+    ///
+    /// WAL lives only in YB (`safekeeper.wals`) — yb-light writes no local
+    /// segment files. `YbSegmentReader` serves the segment lazily, hitting
+    /// the in-memory `WalCache` first and falling through to YB on a miss.
     async fn open_segment(&self) -> Result<Pin<Box<dyn AsyncRead + Send + Sync>>> {
         let xlogoff = self.pos.segment_offset(self.wal_seg_size);
         let segno = self.pos.segment_number(self.wal_seg_size);
-        let _wal_file_name = XLogFileName(PG_TLI, segno, self.wal_seg_size);
 
-        // Try to open local file, if we may have WAL locally
-        if self.pos >= self.local_start_lsn {
-            let res = open_wal_file(&self.timeline_dir, segno, self.wal_seg_size).await?;
-            if let Some((mut file, _)) = res {
-                file.seek(SeekFrom::Start(xlogoff as u64)).await?;
-                return Ok(Box::pin(file));
-            } else {
-                // NotFound is expected, fall through to remote read
-            }
-        }
-
-        // Phase 2: try the live-WAL YB mirror (`safekeeper.wals`). When the
-        // safekeeper writes WAL with `yb_storage_conn`, every byte is
-        // synchronously INSERT'd into that table — so an absent local file is
-        // not a data-loss event.
-        //
-        // The reader is *lazy*: it fetches chunks as the WAL sender walks
-        // forward, hitting the shared in-memory `WalCache` first and
-        // falling through to YB only on miss. This replaces the old
-        // snapshot-at-open `VecAsyncRead` which silently lost data added
-        // to `wals` after the segment was opened — see `wal_cache.rs`.
         if let Some(yb_wal) = self.yb_wal.clone() {
             tracing::info!(
                 "WalReader: serving segment {segno} (offset {xlogoff}) from YB table `{}` (cache {})",
@@ -455,59 +438,10 @@ impl WalReader {
                 segno,
                 self.wal_seg_size,
                 xlogoff,
+                self.flush_lsn.clone(),
             )));
         }
 
-        // yb-light's single-SK mode keeps every WAL byte in YB
-        // (safekeeper.wals) — the YB branch above is the only valid
-        // path. The legacy S3 WAL-segment fallback was deleted along
-        // with the S3 upload offloader; reaching here means the
-        // requested LSN really is missing.
-        bail!("WAL segment is not found")
+        bail!("WAL segment is not found (no YB WAL connection for this reader)")
     }
-}
-
-/// Helper function for opening WAL segment `segno` in `dir`. Returns file and
-/// whether it is .partial.
-pub(crate) async fn open_wal_file(
-    timeline_dir: &Utf8Path,
-    segno: XLogSegNo,
-    wal_seg_size: usize,
-) -> Result<Option<(tokio::fs::File, bool)>> {
-    let (wal_file_path, wal_file_partial_path) = wal_file_paths(timeline_dir, segno, wal_seg_size);
-
-    // First try to open the .partial file.
-    let mut partial_path = wal_file_path.to_owned();
-    partial_path.set_extension("partial");
-    if let Ok(opened_file) = tokio::fs::File::open(&wal_file_partial_path).await {
-        return Ok(Some((opened_file, true)));
-    }
-
-    // If that failed, try it without the .partial extension.
-    let pf_res = tokio::fs::File::open(&wal_file_path).await;
-    if let Err(e) = &pf_res {
-        if e.kind() == ErrorKind::NotFound {
-            return Ok(None);
-        }
-    }
-    let pf = pf_res
-        .with_context(|| format!("failed to open WAL file {wal_file_path:#}"))
-        .map_err(|e| {
-            warn!("{e}");
-            e
-        })?;
-
-    Ok(Some((pf, false)))
-}
-
-/// Helper returning full path to WAL segment file and its .partial brother.
-pub fn wal_file_paths(
-    timeline_dir: &Utf8Path,
-    segno: XLogSegNo,
-    wal_seg_size: usize,
-) -> (Utf8PathBuf, Utf8PathBuf) {
-    let wal_file_name = XLogFileName(PG_TLI, segno, wal_seg_size);
-    let wal_file_path = timeline_dir.join(wal_file_name.clone());
-    let wal_file_partial_path = timeline_dir.join(wal_file_name + ".partial");
-    (wal_file_path, wal_file_partial_path)
 }
