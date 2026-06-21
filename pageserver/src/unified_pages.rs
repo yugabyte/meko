@@ -256,7 +256,24 @@ impl UnifiedPages {
             }
             pageserver_api::write_trace::trace_stage("durable", &entry.row.key, entry.row.lsn);
             let size = row_size(&entry.row);
-            self.unflushed_bytes.fetch_sub(size, Ordering::Relaxed);
+            // `try_promote` above is the single owner of this entry's
+            // subtract: it CAS-claims `durable` false→true, and the overwrite
+            // paths (`insert_arc_entry`, `install_image_anchor`) claim the same
+            // CAS before removing an overwritten slot's bytes — so the byte
+            // accounting is now exactly balanced (no double subtract).
+            // The subtract stays saturating purely as defensive depth: a stray
+            // underflow here wraps `usize` to ~2^64, which pins
+            // `PageWriter::put` backpressure forever and deadlocks ingest →
+            // the recovering compute's basebackup `wait_lsn` never completes
+            // (#142). The counter is only a flush/backpressure heuristic
+            // (durability rides the `unflushed_fifo` + `durable` bits), so
+            // clamping at 0 is always safe; `unflushed_count` below saturates
+            // for the same reason.
+            let _ = self.unflushed_bytes.fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |v| Some(v.saturating_sub(size)),
+            );
             if let Some(node) = self.by_key.get(&entry.row.key) {
                 let mut ks = node.value().lock();
                 ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
@@ -498,7 +515,11 @@ impl UnifiedPages {
                     // image-LSN collision with a durable row would have been
                     // trimmed). Overwrite and reverse its unflushed pin.
                     let prev = row_size(&o.get().row);
-                    overwrote_unflushed = !o.get().is_durable();
+                    // Claim the promotion via mark_flushed's CAS (not a bare
+                    // is_durable() read) so exactly one of {this image install,
+                    // a racing mark_flushed} subtracts the overwritten slot's
+                    // unflushed bytes — see the #142 note in insert_arc_entry.
+                    overwrote_unflushed = o.get().try_promote();
                     ks.bytes = ks.bytes + size - prev;
                     total_sub += prev;
                     if overwrote_unflushed {
@@ -892,7 +913,16 @@ impl UnifiedPages {
                         // nothing. Record it so we reverse the unflushed
                         // accounting (count + bytes below, FIFO entry after
                         // the guard drops).
-                        overwrote_unflushed = !o.get().is_durable();
+                        // Claim the overwritten slot's promotion with the SAME
+                        // CAS mark_flushed uses, not a bare is_durable() read: a
+                        // flush snapshot may still hold this exact
+                        // Arc<PageEntry>. Whoever wins the CAS owns the single
+                        // unflushed-bytes subtract below; the loser skips. With a
+                        // bare read, both this overwrite AND a racing
+                        // mark_flushed promoted+subtracted the same bytes,
+                        // underflowing unflushed_bytes to ~2^64 and wedging
+                        // PageWriter::put backpressure forever (#142).
+                        overwrote_unflushed = o.get().try_promote();
                         o.insert(PageEntry::from_arc_row(row.take().unwrap(), durable));
                         (false, size, prev_size)
                     }
@@ -1343,6 +1373,47 @@ mod tests {
             u.snapshot_unflushed(None).len(),
             0,
             "nothing left to flush after the overwrite"
+        );
+    }
+
+    /// Regression (#142): a flush snapshot held across a `push_durable`
+    /// overwrite of the same still-unflushed `(key, lsn)` must not let the
+    /// later `mark_flushed` subtract that row's bytes a second time. The
+    /// overwrite removes the unflushed bytes AND claims the entry's promotion
+    /// (shared `try_promote` CAS), so `mark_flushed`'s promote of the stale
+    /// snapshot entry is a no-op. Before the fix both subtracted: the counter
+    /// underflowed `usize` to ~2^64 and pinned `PageWriter::put` backpressure
+    /// forever — the compute-crash-recovery ingest deadlock.
+    ///
+    /// Two extra keys stay unflushed so the double subtract lands on a
+    /// positive value the saturating clamp can't mask — the assert sees the
+    /// real accounting, not the clamp.
+    #[test]
+    fn mark_flushed_after_overwrite_does_not_double_subtract() {
+        let u = UnifiedPages::new(1 << 20);
+        u.push(mk(b"a", 10, false, &[0u8; 100]));
+        u.push(mk(b"b", 10, false, &[0u8; 100]));
+        u.push(mk(b"c", 10, false, &[0u8; 100]));
+
+        // The flusher snapshots just the first unflushed row ('a'), holding
+        // its Arc<PageEntry>.
+        let snap = u.snapshot_unflushed(Some(1));
+        assert_eq!(snap.len(), 1, "snapshot holds 'a'");
+
+        // A materialiser image overwrites the same (a, 10) before the flush
+        // completes: this removes 'a's unflushed bytes ('b' and 'c' remain).
+        u.push_durable(mk(b"a", 10, true, &[0u8; 100]));
+        let after_overwrite = u.unflushed_bytes();
+        assert!(after_overwrite > 0, "'b' and 'c' are still unflushed");
+
+        // The flush completes and marks its now-stale snapshot durable. With
+        // the overwrite having claimed 'a's promotion, this is a no-op for the
+        // byte tally; the buggy path re-subtracted 'a's bytes.
+        u.mark_flushed(&snap);
+        assert_eq!(
+            u.unflushed_bytes(),
+            after_overwrite,
+            "mark_flushed re-subtracted an already-overwritten row's bytes (#142 double-subtract)"
         );
     }
 
