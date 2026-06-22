@@ -80,6 +80,7 @@ fn default_yb_conn_config(target: &YbStoreTarget) -> ysql_client::YbConnConfig {
         password_env: None,
         sslmode: None,
         sslrootcert: None,
+        disable_transactional_writes: false,
     }
 }
 

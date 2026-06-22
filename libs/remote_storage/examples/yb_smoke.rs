@@ -42,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
             dbname,
             sslmode,
             sslrootcert: None,
+            disable_transactional_writes: false,
         }),
         timeout: Duration::from_secs(60),
         small_timeout: Duration::from_secs(10),

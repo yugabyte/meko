@@ -155,6 +155,16 @@ pub struct YbConnConfig {
     /// `None` the verifier falls back to AcceptAll (logged).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sslrootcert: Option<String>,
+    /// Whether fast-path-upsert connections also run
+    /// `SET yb_disable_transactional_writes = true` (see
+    /// [`set_fast_path_upsert_gucs`]). Only honored on the write
+    /// connections that already enable `yb_enable_upsert_mode`; read
+    /// connections never set it. Defaults to `false` (disabled) — the GUC
+    /// trades YB's transactional-write guarantees for speed, and a prior
+    /// WAL-durability incident makes "off" the safe default. Set to `true`
+    /// in the TOML connection block to re-enable it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_transactional_writes: bool,
 }
 
 impl YbConnConfig {
@@ -222,6 +232,9 @@ impl YbConnConfig {
         }
         if let Some(c) = &self.sslrootcert {
             parts.push(format!("sslrootcert = {}", q(c)));
+        }
+        if self.disable_transactional_writes {
+            parts.push("disable_transactional_writes = true".to_string());
         }
         format!("{{ {} }}", parts.join(", "))
     }
@@ -298,6 +311,9 @@ impl YbConnArgs {
             password_env: self.password_env.clone(),
             sslmode: self.sslmode.clone(),
             sslrootcert: self.sslrootcert.clone(),
+            // Diagnostic tools open read-only connections (no fast-path
+            // upsert), so the GUC is never set regardless; keep the default.
+            disable_transactional_writes: false,
         }
     }
 }
@@ -368,6 +384,7 @@ mod database_url_tests {
             password_env: None,
             sslmode: None,
             sslrootcert: None,
+            disable_transactional_writes: false,
         }
     }
 
@@ -425,6 +442,18 @@ mod database_url_tests {
         assert!(t.contains("sslmode = \"require\""));
         assert!(t.contains("password_env = \"YB_PW\""));
     }
+
+    #[test]
+    fn inline_toml_emits_disable_transactional_writes_only_when_on() {
+        // Off by default → omitted from the wire form (keeps existing
+        // configs byte-identical and round-trips through `#[serde(default)]`).
+        assert!(!cfg("127.0.0.1:5433").to_inline_toml().contains("disable_transactional_writes"));
+        // Enabled → emitted so it survives a re-serialize hop between
+        // components (pageserver → safekeeper, `--yb-config`, etc.).
+        let mut c = cfg("127.0.0.1:5433");
+        c.disable_transactional_writes = true;
+        assert!(c.to_inline_toml().contains("disable_transactional_writes = true"));
+    }
 }
 
 /// Future returned by the reconnect closure.
@@ -470,25 +499,31 @@ impl YsqlClient {
         config: tokio_postgres::Config,
         set_fast_path_upsert: bool,
     ) -> Result<Self> {
-        Self::connect_no_tls_pooled(config, 1, set_fast_path_upsert).await
+        Self::connect_no_tls_pooled(config, 1, set_fast_path_upsert, false).await
     }
 
     /// Build a `YsqlClient` that connects without TLS, with `pool_size`
     /// independent connections. Opens all connections eagerly so config
     /// errors surface at construction. When `set_fast_path_upsert` is true, each
     /// connection runs `SET yb_enable_upsert_mode = true` after opening
-    /// — see `set_fast_path_upsert_gucs` for why.
+    /// — see `set_fast_path_upsert_gucs` for why. `disable_transactional_writes`
+    /// additionally runs `SET yb_disable_transactional_writes = true` on those
+    /// fast-path connections (off by default; see [`YbConnConfig`]).
     pub async fn connect_no_tls_pooled(
         config: tokio_postgres::Config,
         pool_size: usize,
         set_fast_path_upsert: bool,
+        disable_transactional_writes: bool,
     ) -> Result<Self> {
         let config = Arc::new(config);
         let open: OpenFn = {
             let config = config.clone();
             Arc::new(move || {
                 let config = config.clone();
-                async move { open_no_tls(&config, set_fast_path_upsert).await }.boxed()
+                async move {
+                    open_no_tls(&config, set_fast_path_upsert, disable_transactional_writes).await
+                }
+                .boxed()
             })
         };
         Self::from_open(open, pool_size).await
@@ -501,17 +536,19 @@ impl YsqlClient {
         tls: crate::rustls_adapter::YbMakeRustlsConnect,
         set_fast_path_upsert: bool,
     ) -> Result<Self> {
-        Self::connect_rustls_pooled(config, tls, 1, set_fast_path_upsert).await
+        Self::connect_rustls_pooled(config, tls, 1, set_fast_path_upsert, false).await
     }
 
     /// Build a `YsqlClient` that connects via the supplied rustls
     /// connector with `pool_size` independent connections. Opens all
-    /// eagerly. `set_fast_path_upsert` behaves as in `connect_no_tls_pooled`.
+    /// eagerly. `set_fast_path_upsert` and `disable_transactional_writes`
+    /// behave as in `connect_no_tls_pooled`.
     pub async fn connect_rustls_pooled(
         config: tokio_postgres::Config,
         tls: crate::rustls_adapter::YbMakeRustlsConnect,
         pool_size: usize,
         set_fast_path_upsert: bool,
+        disable_transactional_writes: bool,
     ) -> Result<Self> {
         let config = Arc::new(config);
         let tls = Arc::new(tls);
@@ -521,7 +558,10 @@ impl YsqlClient {
             Arc::new(move || {
                 let config = config.clone();
                 let tls = tls.clone();
-                async move { open_tls(&config, &tls, set_fast_path_upsert).await }.boxed()
+                async move {
+                    open_tls(&config, &tls, set_fast_path_upsert, disable_transactional_writes).await
+                }
+                .boxed()
             })
         };
         Self::from_open(open, pool_size).await
@@ -540,6 +580,9 @@ impl YsqlClient {
     ///
     /// `set_fast_path_upsert` enables `SET yb_enable_upsert_mode =
     /// true` on each new connection — see [`Self::connect_no_tls_pooled`].
+    /// Whether those connections also `SET
+    /// yb_disable_transactional_writes = true` comes from
+    /// [`YbConnConfig::disable_transactional_writes`] (off by default).
     pub async fn from_yb_config(
         cfg: &YbConnConfig,
         application_name: &str,
@@ -559,13 +602,27 @@ impl YsqlClient {
         set_fast_path_upsert: bool,
     ) -> Result<Self> {
         let pg_config = build_pg_config(cfg, application_name)?;
+        let disable_transactional_writes = cfg.disable_transactional_writes;
         match cfg.sslmode.as_deref() {
             None | Some("disable") => {
-                Self::connect_no_tls_pooled(pg_config, pool_size, set_fast_path_upsert).await
+                Self::connect_no_tls_pooled(
+                    pg_config,
+                    pool_size,
+                    set_fast_path_upsert,
+                    disable_transactional_writes,
+                )
+                .await
             }
             Some(_mode) => {
                 let tls = build_yb_rustls_connector(cfg.sslrootcert.as_deref())?;
-                Self::connect_rustls_pooled(pg_config, tls, pool_size, set_fast_path_upsert).await
+                Self::connect_rustls_pooled(
+                    pg_config,
+                    tls,
+                    pool_size,
+                    set_fast_path_upsert,
+                    disable_transactional_writes,
+                )
+                .await
             }
         }
     }
@@ -1188,32 +1245,41 @@ fn build_pg_config(cfg: &YbConnConfig, application_name: &str) -> Result<tokio_p
 ///   ordering is established by the higher-level LSN scheme, not by
 ///   YB's transaction semantics.
 ///
+/// The second GUC is gated on `disable_transactional_writes` — wired
+/// from [`YbConnConfig::disable_transactional_writes`] and `false` by
+/// default. It is disabled by default because of a 500-conn-workload
+/// WAL-durability incident: under tablet rebalancing / RPC retries,
+/// batch INSERTs reported as success appeared to lose individual rows,
+/// leaving holes in `safekeeper.wals` that wedge pageserver restart.
+/// With the GUC off, INSERTs go through the standard transactional path
+/// on this connection — slower, atomic. Operators can opt back in via
+/// the TOML connection block once the incident is resolved.
+///
 /// Failure on either SET propagates: in production we only ever talk
 /// to YB, so a SET failure means the connection would silently fall
 /// back to the slow / transactional path. We'd rather refuse the
 /// connection here than carry a misconfigured client.
-async fn set_fast_path_upsert_gucs(client: &tokio_postgres::Client) -> Result<()> {
+async fn set_fast_path_upsert_gucs(
+    client: &tokio_postgres::Client,
+    disable_transactional_writes: bool,
+) -> Result<()> {
     client
         .execute("SET yb_enable_upsert_mode = true", &[])
         .await
         .context("YsqlClient: SET yb_enable_upsert_mode = true")?;
-    // `yb_disable_transactional_writes = true` is disabled while we
-    // investigate a 500-conn-workload WAL-durability incident: under
-    // tablet rebalancing / RPC retries, batch INSERTs reported as
-    // success appear to lose individual rows, leaving holes in
-    // `safekeeper.wals` that wedge pageserver restart. With the GUC
-    // off, INSERTs go through the standard transactional path on
-    // this connection — slower, atomic.
-    // client
-    //     .execute("SET yb_disable_transactional_writes = true", &[])
-    //     .await
-    //     .context("YsqlClient: SET yb_disable_transactional_writes = true")?;
+    if disable_transactional_writes {
+        client
+            .execute("SET yb_disable_transactional_writes = true", &[])
+            .await
+            .context("YsqlClient: SET yb_disable_transactional_writes = true")?;
+    }
     Ok(())
 }
 
 async fn open_no_tls(
     config: &tokio_postgres::Config,
     set_fast_path_upsert: bool,
+    disable_transactional_writes: bool,
 ) -> Result<tokio_postgres::Client> {
     let (client, connection) = config
         .connect(tokio_postgres::NoTls)
@@ -1225,7 +1291,7 @@ async fn open_no_tls(
         }
     });
     if set_fast_path_upsert {
-        set_fast_path_upsert_gucs(&client).await?;
+        set_fast_path_upsert_gucs(&client, disable_transactional_writes).await?;
     }
     Ok(client)
 }
@@ -1234,6 +1300,7 @@ async fn open_tls(
     config: &tokio_postgres::Config,
     tls: &crate::rustls_adapter::YbMakeRustlsConnect,
     set_fast_path_upsert: bool,
+    disable_transactional_writes: bool,
 ) -> Result<tokio_postgres::Client> {
     let (client, connection) = config
         .connect(tls.clone())
@@ -1245,7 +1312,7 @@ async fn open_tls(
         }
     });
     if set_fast_path_upsert {
-        set_fast_path_upsert_gucs(&client).await?;
+        set_fast_path_upsert_gucs(&client, disable_transactional_writes).await?;
     }
     Ok(client)
 }

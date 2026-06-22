@@ -2185,6 +2185,7 @@ mod tests {
             dbname: std::env::var("YB_TEST_DB").unwrap_or_else(|_| "yb_storage".to_string()),
             sslmode: None,
             sslrootcert: None,
+            disable_transactional_writes: false,
         }
     }
 

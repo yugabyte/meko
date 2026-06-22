@@ -345,6 +345,28 @@ don't leave subsequent inserts paying the read-before-write cost.
 It's harmless against vanilla Postgres (unknown GUC → SET fails → we log
 and continue), so the same code path works in mixed environments.
 
+### `yb_disable_transactional_writes`
+
+A second per-session GUC `SET` alongside `yb_enable_upsert_mode` on the
+fast-path-upsert (write) connections. When `true`, DocDB drops the
+transactional write fast path's read-modify-write guarantees — safe for
+our write paths because they're append-only `INSERT`s whose ordering
+comes from the higher-level LSN scheme, not YB transaction semantics.
+
+**Off by default.** It is gated by a config field on the TOML connection
+block — `disable_transactional_writes` in the `yb_storage_conn` /
+`[storage_controller.yb]` inline table
+([`YbConnConfig::disable_transactional_writes`]). Omit it (or set
+`false`) and the GUC is never sent; set `disable_transactional_writes =
+true` to re-enable it.
+
+It defaults to off because of a 500-conn-workload WAL-durability
+incident: under tablet rebalancing / RPC retries, batch `INSERT`s
+reported as success appeared to lose individual rows, leaving holes in
+`safekeeper.wals` that wedge pageserver restart. With the GUC off, those
+`INSERT`s take the standard transactional path — slower, but atomic.
+Operators can opt back in per-component once the incident is resolved.
+
 ### `yb_enable_read_committed_isolation = true`
 
 Set on the dev cluster. Required for the storage
