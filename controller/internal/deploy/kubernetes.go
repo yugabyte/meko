@@ -26,6 +26,11 @@ const defaultPgVersion = 17
 // the deployer then reports that IP as the endpoint's client address.
 const serviceTypeLoadBalancer = "LoadBalancer"
 
+// serviceTypeNodePort is the endpoint Service type reachable at every node's IP
+// on an allocated high port; the deployer reports "<nodeIP>:<nodePort>" as the
+// client address (no cloud LB to provision).
+const serviceTypeNodePort = "NodePort"
+
 // lbAddressPollTimeout bounds how long CreateEndpoint waits for a LoadBalancer
 // Service to receive its ingress IP before falling back to the Service DNS. A
 // short, fixed cap (independent of the longer helm --wait deploy timeout) so a
@@ -46,7 +51,7 @@ type KubernetesConfig struct {
 	EndpointImageTag  string // endpoint container image tag
 	PullSecret        string // imagePullSecrets name in the namespace (empty = none)
 	ComputePort       int    // compute Postgres port the endpoint Service publishes
-	ServiceType       string // endpoint Service type: "ClusterIP" (default) or "LoadBalancer"
+	ServiceType       string // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
 	// ServiceAnnotations are set on the endpoint Service (e.g. GKE internal-LB annotations).
 	ServiceAnnotations map[string]string
 
@@ -98,12 +103,12 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	}); err != nil {
 		return Endpoint{}, fmt.Errorf("helm deploy %s: %w", release, err)
 	}
-	// Resolve the client address. For a LoadBalancer Service it is the external
-	// LB IP (clients connect from outside the cluster); otherwise the pod IP (a
-	// demo convenience). Both fall back to the stable Service DNS. NB: this is
-	// only the *client* address — the controller reaches the endpoint's
-	// pageserver/safekeeper by the stable Service DNS (SC_REACHABLE_HOST set in
-	// the chart), so a pod reschedule re-registers the same address (no 409, #121).
+	// Resolve the client address by Service type: a LoadBalancer's external LB IP,
+	// a NodePort's "<nodeIP>:<nodePort>", or (ClusterIP) the pod IP — a demo
+	// convenience. All fall back to the stable Service DNS. NB: this is only the
+	// *client* address — the controller reaches the endpoint's pageserver/
+	// safekeeper by the stable Service DNS (SC_REACHABLE_HOST set in the chart),
+	// so a pod reschedule re-registers the same address (no 409, #121).
 	addr := k.address(release)
 	switch k.cfg.ServiceType {
 	case serviceTypeLoadBalancer:
@@ -111,6 +116,10 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 			addr = lb
 		} else if podAddr := k.podClientAddress(ctx, release); podAddr != "" {
 			addr = podAddr
+		}
+	case serviceTypeNodePort:
+		if np := k.nodePortClientAddress(ctx, release); np != "" {
+			addr = np
 		}
 	default:
 		if podAddr := k.podClientAddress(ctx, release); podAddr != "" {
@@ -231,6 +240,115 @@ func (k *KubernetesDeployer) serviceLBAddress(ctx context.Context, release strin
 	}
 }
 
+// nodePortClientAddress returns "<nodeIP>:<nodePort>" for the endpoint's
+// NodePort Service: the nodePort allocated for the compute port, on any cluster
+// node's address (an ExternalIP when the nodes have one, else an InternalIP /
+// VPC address). Returns "" when not in-cluster / on error (caller falls back to
+// the Service DNS). NB: reaching a NodePort may require a firewall rule allowing
+// the node-port range to the nodes.
+func (k *KubernetesDeployer) nodePortClientAddress(ctx context.Context, release string) string {
+	port := k.serviceNodePort(ctx, release)
+	if port == 0 {
+		return ""
+	}
+	ip := k.aNodeIP(ctx)
+	if ip == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", ip, port)
+}
+
+// serviceNodePort returns the nodePort allocated for the endpoint's compute port
+// (matched by service port number), or 0 on error / before it is assigned.
+func (k *KubernetesDeployer) serviceNodePort(ctx context.Context, release string) int {
+	body, ok := k.k8sAPIGet(ctx, fmt.Sprintf("/api/v1/namespaces/%s/services/%s", k.cfg.Namespace, release))
+	if !ok {
+		return 0
+	}
+	return parseServiceNodePort(body, k.cfg.ComputePort)
+}
+
+// parseServiceNodePort extracts the nodePort assigned to the service port whose
+// port number is computePort, from a Kubernetes Service JSON document.
+func parseServiceNodePort(body []byte, computePort int) int {
+	var out struct {
+		Spec struct {
+			Ports []struct {
+				Port     int `json:"port"`
+				NodePort int `json:"nodePort"`
+			} `json:"ports"`
+		} `json:"spec"`
+	}
+	if json.Unmarshal(body, &out) != nil {
+		return 0
+	}
+	for _, p := range out.Spec.Ports {
+		if p.Port == computePort {
+			return p.NodePort
+		}
+	}
+	return 0
+}
+
+// aNodeIP returns the address of any Ready cluster node, preferring an
+// ExternalIP (reachable from outside the cluster) over an InternalIP (VPC).
+// Returns "" when not in-cluster / on error.
+func (k *KubernetesDeployer) aNodeIP(ctx context.Context) string {
+	body, ok := k.k8sAPIGet(ctx, "/api/v1/nodes")
+	if !ok {
+		return ""
+	}
+	return parseANodeIP(body)
+}
+
+// parseANodeIP picks a node address from a Kubernetes NodeList JSON document:
+// the first ExternalIP of a Ready node, else the first InternalIP of a Ready node.
+func parseANodeIP(body []byte) string {
+	var out struct {
+		Items []struct {
+			Status struct {
+				Addresses []struct {
+					Type    string `json:"type"`
+					Address string `json:"address"`
+				} `json:"addresses"`
+				Conditions []struct {
+					Type   string `json:"type"`
+					Status string `json:"status"`
+				} `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(body, &out) != nil {
+		return ""
+	}
+	firstInternal := ""
+	for _, n := range out.Items {
+		ready := false
+		for _, c := range n.Status.Conditions {
+			if c.Type == "Ready" && c.Status == "True" {
+				ready = true
+				break
+			}
+		}
+		if !ready {
+			continue
+		}
+		for _, a := range n.Status.Addresses {
+			switch a.Type {
+			case "ExternalIP":
+				if a.Address != "" {
+					return a.Address
+				}
+			case "InternalIP":
+				if a.Address != "" && firstInternal == "" {
+					firstInternal = a.Address
+				}
+			}
+		}
+	}
+	return firstInternal
+}
+
 // DeleteEndpoint uninstalls the endpoint's Helm release (kill-before-create /
 // retire semantics: waits for the resources to be gone). id is the release name
 // returned by CreateEndpoint. Idempotent: an absent release is tolerated.
@@ -258,7 +376,7 @@ type chartValues struct {
 }
 
 type serviceValues struct {
-	// Type is the endpoint Service type ("ClusterIP" default, "LoadBalancer").
+	// Type is the endpoint Service type ("ClusterIP" default, "NodePort", "LoadBalancer").
 	Type string `json:"type,omitempty"`
 	// Annotations on the Service (e.g. internal-LB annotations for LoadBalancer).
 	Annotations map[string]string `json:"annotations,omitempty"`

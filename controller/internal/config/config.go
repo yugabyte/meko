@@ -66,7 +66,7 @@ type DeployConfig struct {
 	EndpointImageTag   string            // endpoint container image tag
 	PullSecret         string            // imagePullSecrets name in the namespace (empty = none)
 	ComputePort        int               // compute Postgres port the endpoint Service publishes
-	ServiceType        string            // endpoint Service type: "ClusterIP" (default) or "LoadBalancer"
+	ServiceType        string            // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
 	ServiceAnnotations map[string]string // annotations on the endpoint Service (e.g. GKE internal-LB)
 
 	// --- Docker runtime ---
@@ -162,7 +162,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.EndpointImageTag, "endpoint-image-tag", env("AMP_ENDPOINT_IMAGE_TAG", "latest"), "endpoint container image tag")
 	fs.StringVar(&d.PullSecret, "deploy-pull-secret", env("AMP_DEPLOY_PULL_SECRET", ""), "imagePullSecrets name in the namespace (empty = none)")
 	fs.IntVar(&d.ComputePort, "deploy-compute-port", envInt("AMP_DEPLOY_COMPUTE_PORT", 55433), "compute Postgres port the endpoint Service publishes")
-	fs.StringVar(&d.ServiceType, "deploy-service-type", env("AMP_DEPLOY_SERVICE_TYPE", "ClusterIP"), "k8s: endpoint Service type — ClusterIP (default) or LoadBalancer")
+	fs.StringVar(&d.ServiceType, "deploy-service-type", env("AMP_DEPLOY_SERVICE_TYPE", "ClusterIP"), "k8s: endpoint Service type — ClusterIP (default), NodePort, or LoadBalancer")
 	var serviceAnnotationsRaw string
 	fs.StringVar(&serviceAnnotationsRaw, "deploy-service-annotations", env("AMP_DEPLOY_SERVICE_ANNOTATIONS", ""), "k8s: comma-separated key=value annotations for the endpoint Service, e.g. internal-LB annotations (values cannot contain commas)")
 	fs.StringVar(&d.BackingYBHostPorts, "deploy-yb-host-ports", env("AMP_DEPLOY_YB_HOST_PORTS", ""), "backing YugabyteDB host:port[,...] as the deployed pods reach it")
@@ -285,14 +285,14 @@ func validateDeployKubernetes(d *DeployConfig) error {
 	if d.ComputePort < 1 || d.ComputePort > 65535 {
 		return fmt.Errorf("deploy compute port %d out of range", d.ComputePort)
 	}
-	// Only the two Service types the deployer resolves an address for are valid;
+	// Only the Service types the deployer resolves an address for are valid;
 	// reject typos up front rather than failing late at `kubectl apply`.
 	switch d.ServiceType {
 	case "", "ClusterIP":
 		d.ServiceType = "ClusterIP"
-	case "LoadBalancer":
+	case "NodePort", "LoadBalancer":
 	default:
-		return fmt.Errorf(`invalid deploy service type %q (want "ClusterIP" or "LoadBalancer")`, d.ServiceType)
+		return fmt.Errorf(`invalid deploy service type %q (want "ClusterIP", "NodePort", or "LoadBalancer")`, d.ServiceType)
 	}
 	return nil
 }

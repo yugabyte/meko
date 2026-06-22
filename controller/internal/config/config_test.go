@@ -266,6 +266,41 @@ func TestDeployRejectsUnknownDriver(t *testing.T) {
 	}
 }
 
+func TestDeployServiceType(t *testing.T) {
+	chart := t.TempDir()
+	args := func(svcType string) []string {
+		return []string{
+			"--database-url", "postgres://localhost/db",
+			"--deploy",
+			"--deploy-driver", "kubernetes",
+			"--deploy-namespace", "endpoints",
+			"--deploy-chart", chart,
+			"--endpoint-image-repo", "registry.example.com/endpoint",
+			"--endpoint-image-tag", "latest",
+			"--deploy-yb-host-ports", "yb-tserver:5433",
+			"--deploy-service-type", svcType,
+		}
+	}
+	for _, st := range []string{"ClusterIP", "NodePort", "LoadBalancer"} {
+		c, err := Load(args(st))
+		if err != nil {
+			t.Errorf("service type %q: unexpected error: %v", st, err)
+			continue
+		}
+		if c.Deploy.ServiceType != st {
+			t.Errorf("service type %q: ServiceType = %q", st, c.Deploy.ServiceType)
+		}
+	}
+	// Empty string defaults to ClusterIP.
+	if c, err := Load(args("")); err != nil || c.Deploy.ServiceType != "ClusterIP" {
+		t.Errorf("empty service type: ServiceType=%v err=%v, want ClusterIP/nil", c, err)
+	}
+	// An unknown type is rejected up front.
+	if _, err := Load(args("NodePortt")); err == nil {
+		t.Error("expected error for an invalid --deploy-service-type")
+	}
+}
+
 func TestDeployEnabledMissingRequired(t *testing.T) {
 	chart := t.TempDir()
 	// base: a fully-valid set of args; each subtest removes/breaks one field.

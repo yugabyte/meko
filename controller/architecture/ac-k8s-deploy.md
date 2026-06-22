@@ -29,7 +29,8 @@ The controller is a **single bundled container** — `controller` (the control-p
 - a **ServiceAccount** + namespaced **Role/RoleBinding** — the controller drives
   Helm to create/delete endpoint Deployments, Services, ConfigMaps, Secrets (and
   Helm's own release Secrets), and reads pods/services for address lookups — plus
-  a small **ClusterRole** for `namespaces` (Helm's `--create-namespace` probes it);
+  a small **ClusterRole** for `namespaces` (Helm's `--create-namespace` probes it)
+  and `nodes` (the NodePort address resolver reads a node IP);
 - the **Deployment**, wired for the Kubernetes driver (`AMP_DEPLOY_DRIVER=kubernetes`)
   and internal-LoadBalancer endpoints;
 - an in-cluster **Service** (`amp-controller`, ClusterIP) exposing the API (`8080`)
@@ -101,10 +102,18 @@ registers the timeline. Two distinct network paths:
   from the Kubernetes API once the release is ready, by `--deploy-service-type`:
   - `LoadBalancer` → the external **LB ingress IP** `<lbIP>:<computePort>` (the
     deployer polls until the cloud LB assigns it, ~2 min, then falls back);
+  - `NodePort` → **`<nodeIP>:<nodePort>`** — the nodePort allocated for the compute
+    port on any **Ready** node's address (an `ExternalIP` if the nodes have one,
+    else an `InternalIP`/VPC address). No cloud LB to provision; reaching it may
+    require a firewall rule allowing the node-port range to the nodes. Reading node
+    IPs needs the cluster-scoped `nodes` get/list grant in the controller's
+    ClusterRole (`redeploy.sh`). NB: a NodePort Service applies to *all* its ports,
+    so with SC coordination on (the default) the pageserver/safekeeper/endpoint_storage
+    HTTP ports are exposed on node ports too — demo-grade, like the rest of this path;
   - `ClusterIP` → the **pod IP** `<podIP>:<computePort>` (connect in-cluster).
 
-  Both fall back to the stable **Service DNS** when the lookup isn't possible. The
-  LB/pod IP is **not** stable across pod restarts; the Service DNS is.
+  All fall back to the stable **Service DNS** when the lookup isn't possible. The
+  LB/node/pod IP is **not** stable across pod (or node) restarts; the Service DNS is.
 
 The deployed endpoints reach their **backing YugabyteDB** by its in-cluster
 Service DNS (`--deploy-yb-host-ports`), which may differ from the controller's own
@@ -158,7 +167,7 @@ Kubernetes driver:
 | `--endpoint-image-repo` / `--endpoint-image-tag` | endpoint image (tag must be set) |
 | `--deploy-pull-secret` | `imagePullSecrets` name in the namespace |
 | `--deploy-compute-port` | compute Postgres port the Service publishes |
-| `--deploy-service-type` | endpoint Service type: `ClusterIP` (default) or `LoadBalancer` |
+| `--deploy-service-type` | endpoint Service type: `ClusterIP` (default), `NodePort`, or `LoadBalancer` |
 | `--deploy-service-annotations` | `k=v,k=v` annotations on the endpoint Service (e.g. internal-LB) |
 
 Docker driver: `--deploy-endpoint-image`, `--deploy-network`,

@@ -113,14 +113,35 @@ only.)
 
 [`redeploy.sh`](redeploy.sh) (re-)deploys the controller to a cluster: it applies
 the ServiceAccount + RBAC, the Deployment (wired for the Kubernetes/Helm endpoint
-driver, `AMP_DEPLOY_DRIVER=kubernetes`), an in-cluster Service (the API + the SC
-port endpoints register against), and an internal LoadBalancer for the UI/API. It
-reuses an existing namespace, backing YugabyteDB, and image pull secret; override
-defaults via env:
+driver, `AMP_DEPLOY_DRIVER=kubernetes`), the in-cluster Service (the API + the SC
+port endpoints register against), and an external-facing Service for the UI/API
+per `CONTROLLER_EXPOSE`. It reuses an existing namespace, backing YugabyteDB, and
+image pull secret; override defaults via env:
 
 ```sh
-NS=shubin-amp CONTROLLER_TAG=latest deploy/controller/redeploy.sh
+NS=amp CONTROLLER_TAG=latest deploy/controller/redeploy.sh   # namespace also reads AMP_NAMESPACE (default amp)
+
+# point at the amp/* ECR repos instead of the default controller/* paths:
+CONTROLLER_IMAGE_REPO=amp/controller ENDPOINT_IMAGE_REPO=amp/endpoint \
+  CONTROLLER_TAG=<tag> ENDPOINT_TAG=<tag> deploy/controller/redeploy.sh
 ```
+
+**Exposure** (defaults avoid slow per-Service cloud LBs):
+
+- `CONTROLLER_EXPOSE` — `internal-lb` (default), `external-lb`, `nodeport`
+  (`amp-controller-np`, node-ip:3xxxx, VPC-internal, no cloud LB), or `none`
+  (ClusterIP only → `kubectl port-forward`). Switching modes removes the
+  other mode's leftover Service.
+- `ENDPOINT_SERVICE_TYPE` — `ClusterIP` (default; no per-endpoint cloud LB,
+  reach via Service DNS / port-forward), `NodePort` (the controller records
+  `<nodeIP>:<nodePort>` as the endpoint's connection address), or `LoadBalancer`
+  (+ `ENDPOINT_SERVICE_ANNOTATIONS`). The deployer accepts no other value.
+
+(`deploy/up.sh` overrides these to `nodeport` + `ClusterIP` by default.)
+
+To stand the prerequisites up too (namespace, pull secret, and a single-node
+YugabyteDB) and then deploy the controller in one shot, use
+[`deploy/up.sh`](../README.md#one-shot-bring-up--upsh).
 
 ## Provisioning endpoints
 

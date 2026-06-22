@@ -141,6 +141,58 @@ func TestKubernetesValuesNoPullSecret(t *testing.T) {
 	}
 }
 
+func TestKubernetesValuesServiceType(t *testing.T) {
+	cfg := testKubernetesConfig()
+	cfg.ServiceType = "NodePort"
+	cfg.ServiceAnnotations = map[string]string{"example.com/k": "v"}
+	k := NewKubernetesDeployer(cfg, nil)
+
+	v := k.values(testEndpointSpec(), "yb-ep-rel")
+	if v.Service.Type != "NodePort" {
+		t.Errorf("Service.Type = %q, want NodePort", v.Service.Type)
+	}
+	if v.Service.Annotations["example.com/k"] != "v" {
+		t.Errorf("Service.Annotations = %v, want example.com/k=v", v.Service.Annotations)
+	}
+}
+
+func TestParseServiceNodePort(t *testing.T) {
+	body := []byte(`{"spec":{"ports":[
+		{"name":"pg-compute","port":55433,"nodePort":31234},
+		{"name":"ps-http","port":9898,"nodePort":31999}
+	]}}`)
+	if got := parseServiceNodePort(body, 55433); got != 31234 {
+		t.Errorf("parseServiceNodePort(compute) = %d, want 31234", got)
+	}
+	if got := parseServiceNodePort(body, 12345); got != 0 {
+		t.Errorf("parseServiceNodePort(no match) = %d, want 0", got)
+	}
+	if got := parseServiceNodePort([]byte("not json"), 55433); got != 0 {
+		t.Errorf("parseServiceNodePort(bad json) = %d, want 0", got)
+	}
+}
+
+func TestParseANodeIP(t *testing.T) {
+	// A non-Ready node is skipped; an ExternalIP is preferred over an InternalIP.
+	body := []byte(`{"items":[
+		{"status":{"conditions":[{"type":"Ready","status":"False"}],"addresses":[{"type":"ExternalIP","address":"9.9.9.9"}]}},
+		{"status":{"conditions":[{"type":"Ready","status":"True"}],"addresses":[{"type":"InternalIP","address":"10.0.0.5"},{"type":"ExternalIP","address":"34.1.2.3"}]}}
+	]}`)
+	if got := parseANodeIP(body); got != "34.1.2.3" {
+		t.Errorf("parseANodeIP = %q, want 34.1.2.3", got)
+	}
+	// Internal-only Ready node falls back to its InternalIP.
+	internalOnly := []byte(`{"items":[{"status":{"conditions":[{"type":"Ready","status":"True"}],"addresses":[{"type":"InternalIP","address":"10.150.0.7"}]}}]}`)
+	if got := parseANodeIP(internalOnly); got != "10.150.0.7" {
+		t.Errorf("parseANodeIP(internal) = %q, want 10.150.0.7", got)
+	}
+	// No Ready node yields no address.
+	notReady := []byte(`{"items":[{"status":{"conditions":[{"type":"Ready","status":"False"}],"addresses":[{"type":"InternalIP","address":"10.0.0.9"}]}}]}`)
+	if got := parseANodeIP(notReady); got != "" {
+		t.Errorf("parseANodeIP(not ready) = %q, want empty", got)
+	}
+}
+
 func TestKubernetesAddress(t *testing.T) {
 	cfg := testKubernetesConfig()
 	k := NewKubernetesDeployer(cfg, nil)

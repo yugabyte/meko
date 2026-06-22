@@ -6,14 +6,67 @@ Helm chart to run it on Kubernetes. It implements
 
 ```
 deploy/
+  up.sh             # one-shot bring-up: namespace + pull secret + YugabyteDB + controller (see below)
   endpoint/
     Dockerfile      # builds the single-container endpoint image
     supervisor.py   # PID-1 (under tini) process manager for the 5 services
   controller/
     Dockerfile      # the controller layer: controller + storage_controller bundled (see deploy/controller/README.md, #94)
+    redeploy.sh     # (re-)deploy just the controller (assumes ns/YB/pull-secret exist)
   helm/
     yb-light-endpoint/   # Helm chart (Deployment + ConfigMap + Secret + Service)
 ```
+
+## One-shot bring-up — `up.sh`
+
+[`up.sh`](up.sh) stands the whole stack up on Kubernetes **from nothing**, then
+prints the controller UI URL. It is the from-scratch companion to
+[`controller/redeploy.sh`](controller/README.md) (which redeploys only the
+controller and assumes its prerequisites already exist). In order, `up.sh`:
+
+1. creates the **namespace**;
+2. logs Docker in to ECR (`aws ecr get-login-password | docker login`) and mints a
+   k8s **docker-registry pull secret** from the same token, so the cluster can pull
+   `amp/controller` + `amp/endpoint`;
+3. deploys a **single-node YugabyteDB** (`yugabyted` StatefulSet + headless Service
+   + a PVC) and waits for it to be ready;
+4. creates the **`yb_storage` database** (the controller's `db.Connect` targets it
+   at startup, so it must exist first);
+5. runs `controller/redeploy.sh` to deploy the **amp controller** wired to that YB.
+
+It is idempotent (create-or-apply throughout) and does **not** wipe YugabyteDB
+data on re-run (the StatefulSet keeps its PVC).
+
+```sh
+# prereqs: kubectl (pointed at the target cluster), helm, docker, aws (with ECR creds)
+deploy/up.sh
+
+# common overrides:
+NS=amp deploy/up.sh
+CONTROLLER_TAG=<tag> ENDPOINT_TAG=<tag> deploy/up.sh        # else: most-recent ECR tag
+CONTROLLER_EXPOSE=internal-lb deploy/up.sh                  # controller via internal LB instead of NodePort
+ENDPOINT_SERVICE_TYPE=LoadBalancer deploy/up.sh            # per-endpoint LB instead of ClusterIP
+```
+
+### Exposure
+
+To avoid the slow per-Service cloud LB provisioning, the defaults use no cloud LBs:
+
+- **Controller** (`CONTROLLER_EXPOSE`, default `nodeport`): a NodePort Service
+  (`amp-controller-np`) reachable at any node IP (an `ExternalIP` if the nodes have
+  one, else an `InternalIP`/VPC address — may need a node-port firewall rule). Other
+  modes: `internal-lb` / `external-lb` (GKE LoadBalancer, private / public IP) and
+  `none` (in-cluster ClusterIP only). The in-cluster `amp-controller` Service
+  (API + the SC port endpoints register against) is always created.
+- **Endpoints** (`ENDPOINT_SERVICE_TYPE`, default `ClusterIP`): no per-endpoint
+  cloud LB — reach an endpoint's Postgres via its Service DNS in-cluster, or
+  `kubectl -n <ns> port-forward svc/<endpoint> 55433:55433` from outside.
+  `NodePort` is also supported (the controller records `<nodeIP>:<nodePort>` as the
+  endpoint's connection address, shown in the UI; may need a node-port firewall
+  rule), as is `LoadBalancer` (uses `ENDPOINT_SERVICE_ANNOTATIONS`).
+
+From outside the GCP VPC (e.g. a laptop or an AWS box), use `kubectl port-forward`
+for both. The UI/API is unauthenticated — do not expose it publicly.
 
 The **controller layer** — the `controller` plus the shared `storage_controller`
 this endpoint deliberately omits — has its own bundled image under

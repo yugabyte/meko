@@ -96,6 +96,7 @@ supervisor:
   restartWindowSeconds: 60
 
 service:
+  # -- Service type: ClusterIP (default), NodePort, or LoadBalancer.
   type: ClusterIP
   # -- Annotations for the Service. For an internal LoadBalancer on GKE, set e.g.
   # networking.gke.io/load-balancer-type: Internal (+ ...allow-global-access).
