@@ -12,8 +12,8 @@ Services (in start order):
   4. compute_ctl        - supervises Postgres v17 + the `neon` extension
 
 The storage_controller is NOT here: it is a shared, cluster-level control
-plane that lives in the AMP layer. This container assumes the `yb_storage`
-schema already exists (AMP/SC provisions it via diesel migrations). For
+plane that lives in the controller layer. This container assumes the `yb_storage`
+schema already exists (the controller/SC provisions it via diesel migrations). For
 standalone testing set DEV_PROVISION_SCHEMA=true to have the supervisor
 create the database + apply the migrations itself.
 
@@ -115,13 +115,13 @@ NODE_ID = env_int("NODE_ID", _derive_node_id(TIMELINE_ID))
 # The pageserver requires `control_plane_api` to be set ("pageservers cannot
 # run in isolation"), but this fork's pageserver no longer calls back to it at
 # runtime (controller_upcall_client was removed), so a placeholder is fine in
-# the SC-free pod. Point it at the AMP storage_controller if you have one.
+# the SC-free pod. Point it at the controller's storage_controller if you have one.
 CONTROL_PLANE_API = env("CONTROL_PLANE_API", "http://localhost:6666")
 
 # Storage-controller coordination (opt-in). When STORAGE_CONTROLLER_URL is set,
 # this endpoint registers its pageserver node + safekeeper with that controller
 # and takes its pageserver generation from the controller's attach-hook (instead
-# of the standalone GENERATION default) — the faithful AMP topology, where the
+# of the standalone GENERATION default) — the faithful controller topology, where the
 # controller is the tenant/node registry + generation-fencing authority. The
 # controller heartbeats and reconciles the nodes it knows about, so it must be
 # able to reach them: SC_REACHABLE_HOST + the *PUB ports are the host:port the
@@ -574,7 +574,7 @@ def main():
     signal.signal(signal.SIGINT, sup.shutdown)
 
     # BOOTSTRAP=true forces a fresh initdb of the *supplied* tenant/timeline,
-    # for when a control plane (AMP) allocated the ids but the timeline has not
+    # for when a control plane (the controller) allocated the ids but the timeline has not
     # been materialized yet. Default keeps the original behaviour: bootstrap only
     # when no ids are supplied, otherwise attach to an existing timeline.
     force_bootstrap = env("BOOTSTRAP", "false").lower() in ("1", "true", "yes")
@@ -759,7 +759,7 @@ def main():
         for _ in range(60):
             res = subprocess.run(cmd, capture_output=True, text=True)
             if res.returncode == 0:
-                # LOAD-BEARING: amp's Docker deployer (amp/internal/deploy/docker.go)
+                # LOAD-BEARING: controller's Docker deployer (controller/internal/deploy/docker.go)
                 # waits for this exact line as the endpoint's readiness signal.
                 # Keep the two in sync.
                 log("set cloud_admin password for remote auth")

@@ -29,10 +29,10 @@
 !workspace_hack/
 !build-tools/patches
 !deploy/endpoint/
-# deploy/amp bakes the endpoint Helm chart into the controller image (the k8s
+# deploy/controller bakes the endpoint Helm chart into the controller image (the k8s
 # deploy runtime installs it with `helm upgrade --install`).
 !deploy/helm/
-# deploy/amp packages the prebuilt bundle from `make amp-bundle`.
-!target/amp-bundle/
+# deploy/controller packages the prebuilt bundle from `make controller-bundle`.
+!target/controller-bundle/
 # cargo must read every workspace member's manifest to load the workspace.
 !test/e2e/

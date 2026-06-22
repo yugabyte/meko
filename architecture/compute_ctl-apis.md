@@ -102,7 +102,7 @@ Called by local processes (the `yb_amp` extension, `local_proxy`); no auth layer
 inherited as-is. yb-light's only relevant differences are operational: a single
 safekeeper means `/terminate` no longer runs a `sync-safekeepers` walproposer pass, and
 `/promote` / `/configure` / `/terminate` are the contact points the (future)
-`yblight-controller` uses to drive endpoints. The spec body (`ConfigurationRequest`)
+`amp-controller` uses to drive endpoints. The spec body (`ConfigurationRequest`)
 carries the YB-backed pageserver/safekeeper connstrings, `(tenant_id, timeline_id)`, the
 endpoint_storage address+token for LFC, and the JWKS used by this very auth layer. The
 sharding types were stripped fork-wide, so a `TenantId` (not `TenantShardId`) identifies

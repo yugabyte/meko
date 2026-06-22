@@ -9,15 +9,15 @@ deploy/
   endpoint/
     Dockerfile      # builds the single-container endpoint image
     supervisor.py   # PID-1 (under tini) process manager for the 5 services
-  amp/
-    Dockerfile      # the AMP layer: amp + storage_controller bundled (see deploy/amp/README.md, #94)
+  controller/
+    Dockerfile      # the controller layer: controller + storage_controller bundled (see deploy/controller/README.md, #94)
   helm/
     yb-light-endpoint/   # Helm chart (Deployment + ConfigMap + Secret + Service)
 ```
 
-The **AMP layer** — the `amp` controller plus the shared `storage_controller`
+The **controller layer** — the `controller` plus the shared `storage_controller`
 this endpoint deliberately omits — has its own bundled image under
-[`amp/`](amp/README.md).
+[`controller/`](controller/README.md).
 
 ## What's in the container
 
@@ -42,10 +42,10 @@ supervisor exits non-zero so the pod is recreated.
 The `storage_controller` is a **shared, cluster-level** control plane (it owns
 the pageserver node registry, generation/attach fencing, and the endpoint
 registry in YugabyteDB's `storage_controller` schema). It is **not** part of
-the endpoint pod — it lives in the AMP layer. The pod talks only to YugabyteDB.
+the endpoint pod — it lives in the controller layer. The pod talks only to YugabyteDB.
 
 A consequence: the `yb_storage` schema (created by the storage_controller's
-diesel migrations) must already exist. In production, AMP provisions it. For
+diesel migrations) must already exist. In production, the controller provisions it. For
 standalone testing, set `DEV_PROVISION_SCHEMA=true` and the supervisor will
 create the database and apply the bundled migrations itself.
 

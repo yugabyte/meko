@@ -6,7 +6,7 @@ and golden `.sql` workloads, scanning the pageserver log for corruption
 markers after every test. This is the verification gate the
 `e2e-before-corruption-claim` skill points at.
 
-> The companion **control-plane (amp-on-Docker)** suite lives in
+> The companion **control-plane (controller-on-Docker)** suite lives in
 > [`../control_plane`](../control_plane); Postgres assertion helpers
 > shared by both suites are in [`../libs/e2e_common`](../libs/e2e_common).
 
@@ -128,7 +128,7 @@ test/e2e/
     scenarios.rs           scenario registry (includes build.rs codegen)
     fast/  *.rs *.sql *.out  fast scenarios + golden workloads (same dir)
     slow/  *.rs *.sql *.out  slow scenarios + golden workloads (same dir)
-  control_plane/           the amp-on-Docker suite (`e2e_control_plane`)
+  control_plane/           the controller-on-Docker suite (`e2e_control_plane`)
   libs/e2e_common/         shared `db` helpers used by both suites
 ```
 

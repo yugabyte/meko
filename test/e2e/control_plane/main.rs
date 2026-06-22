@@ -9,7 +9,7 @@
 //!
 //! There is no container/Docker orchestration here — that is amp's job.
 //!
-//! amp itself is started by `test/e2e/control_plane/run-amp.sh`, which builds +
+//! amp itself is started by `test/e2e/control_plane/run-controller.sh`, which builds +
 //! runs this binary with amp's base URL in `AMP_BASE_URL`.
 
 use std::future::Future;
@@ -270,7 +270,7 @@ async fn resource_ladder(e: &Endpoint) -> Result<()> {
 /// amp must already be running; its base URL comes from `AMP_BASE_URL`.
 pub async fn run_suite(repeat: u32, fail_fast: bool) -> Result<()> {
     let base = std::env::var("AMP_BASE_URL")
-        .context("AMP_BASE_URL is not set — run via test/e2e/control_plane/run-amp.sh, which starts amp")?;
+        .context("AMP_BASE_URL is not set — run via test/e2e/control_plane/run-controller.sh, which starts amp")?;
     step(&format!("amp e2e: driving amp at {base}"));
     let client = AmpClient::new(&base);
     client.wait_ready(Duration::from_secs(60)).await.context("amp readiness")?;

@@ -28,9 +28,9 @@ upstream Neon can skim) and **changes in yb-light**.
 | [`single-container-endpoint.md`](single-container-endpoint.md) | Packaging an endpoint as one pod (`deploy/`): the supervisor, SC-free bootstrap |
 
 > **amp controller.** The standalone Go control plane being built for YB Light
-> (`yblight-controller` / `yblc`) is documented separately under
-> [`../amp/architecture/`](../amp/architecture/), with its own subproject guide
-> in [`../amp/AGENTS.md`](../amp/AGENTS.md). It is not yet wired into the cluster
+> (`amp-controller` / `ac`) is documented separately under
+> [`../controller/architecture/`](../controller/architecture/), with its own subproject guide
+> in [`../controller/AGENTS.md`](../controller/AGENTS.md). It is not yet wired into the cluster
 > topology below.
 
 ### HTTP APIs & metrics (per service)

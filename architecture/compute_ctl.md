@@ -7,9 +7,9 @@ pageserver, starts Postgres, applies the spec (roles / databases / extensions /
 grants), and then supervises the running compute while exposing an HTTP control API.
 
 It is the **single point of contact inside an endpoint** that the control plane talks
-to — the control plane (today `yb_light_local`; tomorrow `yblight-controller`) never
+to — the control plane (today `yb_light_local`; tomorrow `amp-controller`) never
 manages the Postgres / safekeeper / pageserver processes directly. See
-[`yblight-controller.md`](../amp/architecture/yblight-controller.md) §5.2
+[`amp-controller.md`](../controller/architecture/amp-controller.md) §5.2
 ("Per-endpoint services"), where `compute_ctl` is exactly this contact point.
 
 > **Scope note.** [`compute.md`](compute.md) covers the *compute itself* — Postgres
@@ -131,7 +131,7 @@ body of `POST /configure`. So the spec data is identical whether it arrives as a
 pull from the spec endpoint, or a push to `/configure` — the differences are delivery and
 trust (a file read with no auth vs. an authenticated, retried HTTP fetch carrying the
 `Empty`/`Attached` handshake), not content. See
-[yblight-controller §5.5](../amp/architecture/yblight-controller.md) for how the control
+[amp-controller §5.5](../controller/architecture/amp-controller.md) for how the control
 plane picks among the three.
 
 At load, the raw spec is wrapped in a `ParsedSpec` (`compute.rs`) that extracts and
@@ -261,12 +261,12 @@ commit and cold-read latency from the YB-backed storage tier. Remote-extension d
 is unaffected by the `remote_storage` strip — it goes through the `--remote-ext-base-url`
 HTTP gateway, not a cloud-storage backend.
 
-## How it fits yblight-controller
+## How it fits amp-controller
 
-The [yblight-controller design](../amp/architecture/yblight-controller.md) leans on
+The [amp-controller design](../controller/architecture/amp-controller.md) leans on
 `compute_ctl` in a few concrete places:
 
-- **Single point of contact (§5.2).** `yblight-controller` will drive endpoints purely
+- **Single point of contact (§5.2).** `amp-controller` will drive endpoints purely
   through `compute_ctl`'s HTTP API — `POST /configure` to push a spec, `GET /status` to
   observe, `POST /terminate` to retire, `POST /promote` for write-endpoint cut-over.
 - **The spec is the durable artifact (§5.3).** Statelessness works because everything
@@ -274,10 +274,10 @@ The [yblight-controller design](../amp/architecture/yblight-controller.md) leans
   `(tenant_id, timeline_id)` binding, role, version, TLS/cert refs, otel config,
   endpoint_storage address + token. `compute_ctl` holds none of this durably itself.
 - **endpoint_storage (§11.5).** The LFC prewarm/offload path is the live consumer of the
-  endpoint_storage address + scoped token that `yblight-controller` mints into every
+  endpoint_storage address + scoped token that `amp-controller` mints into every
   spec; losing that store costs only cache warmth.
 - **Control-plane signing key (§9.4).** `compute_ctl`'s external API verifies JWTs
-  against the JWKS embedded in its spec — the public half of the key `yblight-controller`
+  against the JWKS embedded in its spec — the public half of the key `amp-controller`
   signs with.
 - **Single-writer invariant (§4.4 / §7).** At most one Primary `compute_ctl` per
   timeline; upgrades and promotions are replace-and-cut-over via `/promote` +

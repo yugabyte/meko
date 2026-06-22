@@ -170,43 +170,43 @@ neon-pg-ext: $(foreach pg_version,$(POSTGRES_VERSIONS),neon-pg-ext-$(pg_version)
 
 ### amp controller (Go control plane)
 #
-# The amp controller is a self-contained Go module under amp/, independent of
+# The amp controller is a self-contained Go module under controller/, independent of
 # the Rust/C build above (and deliberately not part of `all`).
-.PHONY: amp
-amp:
+.PHONY: controller
+controller:
 	+@echo "Building amp controller"
-	go -C amp build ./...
+	go -C controller build ./...
 
-.PHONY: amp-test
-amp-test:
-	go -C amp test ./...
+.PHONY: controller-test
+controller-test:
+	go -C controller test ./...
 
-.PHONY: amp-vet
-amp-vet:
-	go -C amp vet ./...
+.PHONY: controller-vet
+controller-vet:
+	go -C controller vet ./...
 
 # Regenerate the API code (models, echo server, Go client) from the OpenAPI
-# spec (amp/internal/api/openapi_spec.yaml). Run after editing the spec; the
+# spec (controller/internal/api/openapi_spec.yaml). Run after editing the spec; the
 # generated api.gen.go is checked in. Uses the oapi-codegen tool pinned in
-# amp/go.mod.
-.PHONY: amp-generate
-amp-generate:
-	go -C amp generate ./...
+# controller/go.mod.
+.PHONY: controller-generate
+controller-generate:
+	go -C controller generate ./...
 
 # Bundle the amp controller and the storage controller it manages, side by side
-# in one directory, so amp resolves and runs the storage controller from its own
+# in one directory, so controller resolves and runs the storage controller from its own
 # location with no extra configuration (#94).
 #
 # storage_controller compiles against the Postgres v17 server headers (its
 # transitive postgres_ffi dependency), so this installs them first via
 # postgres-headers-install-v17 — headers only, no Postgres server built, and no
 # build-tools image: just the repo's normal toolchain (rust-toolchain.toml +
-# clang/libclang for bindgen). amp-bundle initializes the vendor/postgres-v17
+# clang/libclang for bindgen). controller-bundle initializes the vendor/postgres-v17
 # submodule itself (the postgres_ffi headers need it), so a fresh checkout builds
 # without a separate `git submodule update` step.
-# The Rust build follows BUILD_TYPE like the rest of the workspace; the deploy/amp
-# container packages the same layout. Output: $(AMP_BUNDLE_DIR)/{amp,storage_controller}.
-AMP_BUNDLE_DIR ?= $(ROOT_PROJECT_DIR)/target/amp-bundle
+# The Rust build follows BUILD_TYPE like the rest of the workspace; the deploy/controller
+# container packages the same layout. Output: $(CONTROLLER_BUNDLE_DIR)/{controller,storage_controller}.
+CONTROLLER_BUNDLE_DIR ?= $(ROOT_PROJECT_DIR)/target/controller-bundle
 
 # Initialize submodules (currently just vendor/postgres-v17). Idempotent: a no-op
 # when they are already present and at the recorded commit, so it is safe to run
@@ -215,34 +215,34 @@ AMP_BUNDLE_DIR ?= $(ROOT_PROJECT_DIR)/target/amp-bundle
 submodules:
 	git submodule update --init --recursive --depth 2 --progress .
 
-# amp-bundle initializes the submodule before building so the postgres-headers
+# controller-bundle initializes the submodule before building so the postgres-headers
 # step finds vendor/postgres-v17. The sub-make keeps that ordered ahead of the
 # headers build even under parallel make (-j), where listing it as a sibling
 # prerequisite would race the postgres configure check.
-.PHONY: amp-bundle
-amp-bundle:
+.PHONY: controller-bundle
+controller-bundle:
 	+$(MAKE) submodules
-	+$(MAKE) amp-bundle-build
+	+$(MAKE) controller-bundle-build
 
-.PHONY: amp-bundle-build
-amp-bundle-build: postgres-headers-install-v17 cargo-target-dir
-	+@echo "Bundling amp + storage_controller -> $(AMP_BUNDLE_DIR)"
-	mkdir -p "$(AMP_BUNDLE_DIR)"
-	# amp is built static (CGO off) so it runs unchanged in a slim runtime image.
-	CGO_ENABLED=0 go -C amp build -trimpath -o "$(AMP_BUNDLE_DIR)/amp" ./cmd/amp
+.PHONY: controller-bundle-build
+controller-bundle-build: postgres-headers-install-v17 cargo-target-dir
+	+@echo "Bundling controller + storage_controller -> $(CONTROLLER_BUNDLE_DIR)"
+	mkdir -p "$(CONTROLLER_BUNDLE_DIR)"
+	# controller is built static (CGO off) so it runs unchanged in a slim runtime image.
+	CGO_ENABLED=0 go -C controller build -trimpath -o "$(CONTROLLER_BUNDLE_DIR)/controller" ./cmd/controller
 	$(CARGO_CMD_PREFIX) cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE) --bin storage_controller
-	cp "$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)/storage_controller" "$(AMP_BUNDLE_DIR)/storage_controller"
+	cp "$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)/storage_controller" "$(CONTROLLER_BUNDLE_DIR)/storage_controller"
 
-# amp-only bundle: just the Go controller, no storage_controller. Needs no Rust
+# controller-only bundle: just the Go controller, no storage_controller. Needs no Rust
 # toolchain, no Postgres headers, and no vendor/postgres-v17 submodule — so it
-# builds in environments where the full bundle can't. Pair it with the deploy/amp
-# image run with AMP_STORAGE_CONTROLLER=false. Used by the docker e2e (amp/tasks).
-.PHONY: amp-bundle-amp-only
-amp-bundle-amp-only:
-	+@echo "Bundling amp (Go only, no storage controller) -> $(AMP_BUNDLE_DIR)"
-	$(RM) -r "$(AMP_BUNDLE_DIR)"
-	mkdir -p "$(AMP_BUNDLE_DIR)"
-	CGO_ENABLED=0 go -C amp build -trimpath -o "$(AMP_BUNDLE_DIR)/amp" ./cmd/amp
+# builds in environments where the full bundle can't. Pair it with the deploy/controller
+# image run with AMP_STORAGE_CONTROLLER=false. Used by the docker e2e (controller/tasks).
+.PHONY: controller-bundle-only
+controller-bundle-only:
+	+@echo "Bundling controller (Go only, no storage controller) -> $(CONTROLLER_BUNDLE_DIR)"
+	$(RM) -r "$(CONTROLLER_BUNDLE_DIR)"
+	mkdir -p "$(CONTROLLER_BUNDLE_DIR)"
+	CGO_ENABLED=0 go -C controller build -trimpath -o "$(CONTROLLER_BUNDLE_DIR)/controller" ./cmd/controller
 
 # This removes everything
 .PHONY: distclean
