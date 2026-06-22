@@ -3,10 +3,14 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 
 	"meko/api_server/internal/llm"
 	"meko/api_server/internal/models"
@@ -15,6 +19,16 @@ import (
 const (
 	memoriesTableSQL    = `datapacks.meko_mem0_collection`
 	knowledgeBasesTable = `datapacks.knowledge_bases`
+	// vertexEmbeddingsTable holds one row per (datapack, user, agent,
+	// graph_name, node_graphid). When a vertex becomes orphaned (no
+	// private memory in the datapack references it), every embedding row
+	// for that node_graphid in the datapack is stale and must be removed.
+	vertexEmbeddingsTable = `datapacks.meko_mem0_graph_vertex_embeddings`
+	// privateGraphName is the Apache AGE / Yugabyte MAGE graph that
+	// holds private (un-promoted) memory entities + relationships.
+	// Promoted memories live in a separate graph (meko_promoted_graph)
+	// that is copied during promote; nothing in this file touches it.
+	privateGraphName = "meko_multi_tenant_graph"
 )
 
 type MemoriesRepo struct {
@@ -180,16 +194,35 @@ func (repo *MemoriesRepo) CountLearningsByDatapack(ctx context.Context, datapack
 	return count, nil
 }
 
-// DeleteByIDForUser deletes a single mem0 memory, scoped to the given
-// (memoryID, datapackID, userID) triple. The userID predicate is the
-// authorization gate: it ensures a caller can only delete memories they
-// added themselves, even when other members of a shared datapack see
-// the row in the listing.
+// DeleteByIDForUser deletes a single private mem0 memory AND the graph
+// remnants that were exclusive to it, all in one transaction.
+// "Exclusive" means: no other memory in this datapack (private OR
+// promoted) references the same node_graphid / edge_graphid via its
+// payload's graph_nodes[] / graph_edges[].
 //
-// Returns (true, nil) when the row was deleted, (false, nil) when no row
-// matched (either the memory does not exist, lives in a different
-// datapack, or belongs to another user — collapsed to a single 404 on
-// the handler side so we don't leak existence to unauthorised callers).
+// Authorisation is enforced by the meko_user_id = $userID predicate on
+// the mem0 row — a caller can only delete memories they themselves
+// added.
+//
+// On the happy path the transaction runs:
+//  1. Fetch the target memory's (agent_id, payload, created_at) — also
+//     serves as existence + ownership gate. We extract node/edge ids
+//     from the payload in Go so the exclusivity check below only has
+//     to ask "are these specific ids referenced elsewhere?" instead of
+//     scanning every memory's array in the datapack.
+//  2. Compute exclusive node_graphids (point-lookup against the small
+//     target id set, not full-table expansion).
+//  3. Same for edge_graphids.
+//  4. Cypher DELETE exclusive edges from meko_multi_tenant_graph.
+//  5. Cypher DETACH DELETE exclusive vertices from the same graph.
+//  6. DELETE matching rows from meko_mem0_graph_vertex_embeddings.
+//  7. DELETE the memory row using the FULL primary key
+//     (datapack, user, agent, created_at, id) so YB resolves it as a
+//     single-row point delete rather than scanning the partition.
+//  8. COMMIT. Any error rolls everything back.
+//
+// Returns (true, nil) on success, (false, nil) when the row isn't ours
+// or doesn't exist (handler maps this to 404).
 func (repo *MemoriesRepo) DeleteByIDForUser(
 	ctx context.Context,
 	memoryID, datapackID, userID string,
@@ -210,26 +243,175 @@ func (repo *MemoriesRepo) DeleteByIDForUser(
 		return false, fmt.Errorf("user_id is required")
 	}
 
-	query := fmt.Sprintf(
-		`DELETE FROM %s WHERE id = $1::uuid AND meko_datapack_id = $2::uuid AND meko_user_id = $3::uuid`,
-		memoriesTableSQL,
-	)
-
-	// Single-row indexed DELETE — 10s is plenty even with light contention.
-	// Other queries in this file use 30s because they do vector ordering /
-	// chunk fetching; that bound doesn't apply here.
-	delCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// Single-row DELETE plus a handful of secondary lookups. 15s gives
+	// a comfortable margin for the Cypher round trips without holding
+	// row locks for too long under contention.
+	delCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	slog.Debug("executing SQL", "func", "DeleteByIDForUser", "query", query,
+	tx, err := repo.db.BeginTx(delCtx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// mag_catalog hosts the cypher() function in Yugabyte's MAGE
+	// extension. SET LOCAL scopes the change to this txn.
+	if _, err := tx.ExecContext(delCtx,
+		`SET LOCAL search_path = mag_catalog, datapacks, public`,
+	); err != nil {
+		return false, fmt.Errorf("set search_path: %w", err)
+	}
+
+	// DB-side statement-timeout backstop. Go's context.WithTimeout
+	// above bounds the request; this makes Postgres also bound each
+	// statement so a blocked Cypher can't outlive the Go side.
+	if _, err := tx.ExecContext(delCtx,
+		`SET LOCAL statement_timeout = '15s'`,
+	); err != nil {
+		return false, fmt.Errorf("set statement_timeout: %w", err)
+	}
+
+	// If api_server crashes mid-tx and the deferred Rollback never
+	// runs, Postgres terminates this connection's tx after 30s idle
+	// so the locks don't outlive the process.
+	if _, err := tx.ExecContext(delCtx,
+		`SET LOCAL idle_in_transaction_session_timeout = '30s'`,
+	); err != nil {
+		return false, fmt.Errorf("set idle_in_transaction_session_timeout: %w", err)
+	}
+
+	// 1. Fetch the target memory in one shot — payload (to extract
+	//    graph ids), agent_id + created_at (to enable the full-PK
+	//    DELETE in step 7), and the (id, datapack, user) tuple
+	//    doubles as the existence + ownership gate.
+	var (
+		agentID      string
+		payloadBytes []byte
+		createdAt    time.Time
+	)
+	fetchQ := fmt.Sprintf(
+		`SELECT meko_agent_id, payload, meko_created_at FROM %s
+		 WHERE id = $1::uuid AND meko_datapack_id = $2::uuid AND meko_user_id = $3::uuid`,
+		memoriesTableSQL,
+	)
+	slog.Debug("executing SQL", "func", "DeleteByIDForUser", "query", fetchQ,
 		"args", []any{memoryID, datapackID, userID})
-	result, err := repo.db.ExecContext(delCtx, query, memoryID, datapackID, userID)
+	err = tx.QueryRowContext(delCtx, fetchQ, memoryID, datapackID, userID).
+		Scan(&agentID, &payloadBytes, &createdAt)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("memories fetch payload: %w", err)
+	}
+
+	// Parse graph_nodes[] / graph_edges[] out of the payload locally.
+	// An absent / null payload (or absent arrays) yields empty
+	// slices — downstream steps become no-ops, which is the correct
+	// behaviour for memories without graph extraction.
+	var payload struct {
+		GraphNodes []struct {
+			NodeGraphID int64 `json:"node_graphid"`
+		} `json:"graph_nodes"`
+		GraphEdges []struct {
+			EdgeGraphID int64 `json:"edge_graphid"`
+		} `json:"graph_edges"`
+	}
+	if len(payloadBytes) > 0 {
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return false, fmt.Errorf("unmarshal memory payload: %w", err)
+		}
+	}
+	targetNodeIDs := make([]int64, 0, len(payload.GraphNodes))
+	for _, n := range payload.GraphNodes {
+		if n.NodeGraphID != 0 {
+			targetNodeIDs = append(targetNodeIDs, n.NodeGraphID)
+		}
+	}
+	targetEdgeIDs := make([]int64, 0, len(payload.GraphEdges))
+	for _, e := range payload.GraphEdges {
+		if e.EdgeGraphID != 0 {
+			targetEdgeIDs = append(targetEdgeIDs, e.EdgeGraphID)
+		}
+	}
+
+	excludeIDs := []string{memoryID}
+
+	// 2. Exclusive node_graphids — of the ids THIS memory references,
+	//    which ones are NOT referenced by any other memory in the
+	//    datapack (private or promoted)?
+	exclusiveNodes, err := collectExclusiveGraphIDs(
+		delCtx, tx, "graph_nodes", "node_graphid",
+		datapackID, excludeIDs, targetNodeIDs,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	// 3. Exclusive edge_graphids — same logic for relationships.
+	exclusiveEdges, err := collectExclusiveGraphIDs(
+		delCtx, tx, "graph_edges", "edge_graphid",
+		datapackID, excludeIDs, targetEdgeIDs,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	// 4. Drop exclusive edges first. Edges can span vertices we DON'T
+	//    own (e.g. a LIKES edge between two vertices that other
+	//    memories also reference). Step 5's DETACH DELETE only prunes
+	//    edges incident to vertices we're about to remove — explicit
+	//    edge cleanup catches the rest.
+	if err := cypherDeleteEdges(delCtx, tx, exclusiveEdges); err != nil {
+		return false, err
+	}
+
+	// 5. DETACH DELETE orphan vertices.
+	if err := cypherDeleteVertices(delCtx, tx, exclusiveNodes); err != nil {
+		return false, err
+	}
+
+	// 6. Embedding rows for the deleted vertices are now stale.
+	if err := deleteVertexEmbeddings(
+		delCtx, tx, vertexEmbeddingsTable, datapackID, exclusiveNodes,
+	); err != nil {
+		return false, err
+	}
+
+	// 7. Final DELETE using the full primary key
+	//    (meko_datapack_id, meko_user_id, meko_agent_id,
+	//    meko_created_at, id) so YB does a single-row point delete
+	//    instead of scanning the partition.
+	deleteQ := fmt.Sprintf(
+		`DELETE FROM %s
+		 WHERE id = $1::uuid
+		   AND meko_datapack_id = $2::uuid
+		   AND meko_user_id = $3::uuid
+		   AND meko_agent_id = $4
+		   AND meko_created_at = $5`,
+		memoriesTableSQL,
+	)
+	slog.Debug("executing SQL", "func", "DeleteByIDForUser", "query", deleteQ,
+		"args", []any{memoryID, datapackID, userID, agentID, createdAt})
+	result, err := tx.ExecContext(delCtx, deleteQ,
+		memoryID, datapackID, userID, agentID, createdAt)
 	if err != nil {
 		return false, fmt.Errorf("memories delete query: %w", err)
 	}
-	rows, err := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("memories delete rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		// Defensive — the fetch above already proved the row exists.
+		// If we land here something raced or the row was hand-deleted
+		// between steps; treat as no-op so the caller surfaces 404.
+		return false, nil
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit: %w", err)
 	}
 
 	slog.Info("deleting memory",
@@ -237,9 +419,198 @@ func (repo *MemoriesRepo) DeleteByIDForUser(
 		"memory_id", memoryID,
 		"datapack_id", datapackID,
 		"user_id", userID,
-		"rows_affected", rows,
+		"target_nodes", len(targetNodeIDs),
+		"target_edges", len(targetEdgeIDs),
+		"exclusive_nodes_deleted", len(exclusiveNodes),
+		"exclusive_edges_deleted", len(exclusiveEdges),
+		"rows_affected", rowsAffected,
 	)
-	return rows > 0, nil
+	return true, nil
+}
+
+// collectExclusiveGraphIDs returns the subset of `targetIDs` that are
+// NOT referenced by any memory in the same datapack OTHER than the ones
+// in `excludeMemoryIDs` — checked across BOTH meko_mem0_collection
+// (other private rows) and promoted_collection.
+//
+// Cross-table awareness matters: when a memory is promoted, its mem0
+// row is deleted but its graph entities stay in meko_multi_tenant_graph,
+// and the promoted_collection row still references those node_graphids.
+// Mem0 reuses those same ids when a new private memory mentions the
+// same entity, so a node can be referenced by both a private memory
+// and a promoted memory at once. Without the UNION, deleting that
+// private memory would compute the node as "exclusive" and orphan
+// the promoted memory's reference.
+//
+// The caller already extracted `targetIDs` from the relevant payloads
+// in Go, so this query only has to ask "which of THESE specific ids
+// are shared?" instead of expanding every memory's payload arrays.
+// With an empty `targetIDs` slice the function returns empty without
+// touching the DB — the right no-op for memories that lack
+// graph_nodes / graph_edges.
+//
+// `excludeMemoryIDs` is the set of mem0 rows being deleted (private-
+// delete passes one id; promote passes the whole batch). They're
+// excluded from the "shared" lookup so a memory doesn't appear to
+// share ids with itself.
+//
+// Used for both node and edge exclusivity (same query shape, just
+// different JSONB field + id key).
+func collectExclusiveGraphIDs(
+	ctx context.Context,
+	tx *sql.Tx,
+	arrayField, idKey string,
+	datapackID string,
+	excludeMemoryIDs []string,
+	targetIDs []int64,
+) ([]int64, error) {
+	if len(targetIDs) == 0 {
+		return nil, nil
+	}
+	query := fmt.Sprintf(`
+WITH shared AS (
+  -- of the target ids, which are referenced by another private memory?
+  SELECT DISTINCT (elem->>'%[1]s')::bigint AS gid
+  FROM %[2]s,
+       LATERAL jsonb_array_elements(COALESCE(payload->'%[4]s', '[]'::jsonb)) elem
+  WHERE id != ALL($1::uuid[])
+    AND meko_datapack_id = $2::uuid
+    AND (elem->>'%[1]s')::bigint = ANY($3::bigint[])
+  UNION
+  -- ... or by any promoted memory in this datapack
+  SELECT DISTINCT (elem->>'%[1]s')::bigint AS gid
+  FROM %[3]s,
+       LATERAL jsonb_array_elements(COALESCE(payload->'%[4]s', '[]'::jsonb)) elem
+  WHERE meko_datapack_id = $2::uuid
+    AND (elem->>'%[1]s')::bigint = ANY($3::bigint[])
+)
+-- target ids that are NOT shared = exclusive to the batch
+SELECT t.gid
+FROM unnest($3::bigint[]) AS t(gid)
+LEFT JOIN shared s USING (gid)
+WHERE s.gid IS NULL`,
+		idKey, memoriesTableSQL, promotedCollectionTable, arrayField)
+
+	slog.Debug("executing SQL", "func", "collectExclusiveGraphIDs",
+		"array_field", arrayField, "id_key", idKey,
+		"exclude_count", len(excludeMemoryIDs),
+		"target_count", len(targetIDs))
+	rows, err := tx.QueryContext(ctx, query,
+		pq.Array(excludeMemoryIDs), datapackID, pq.Array(targetIDs))
+	if err != nil {
+		return nil, fmt.Errorf("collect exclusive %s: %w", arrayField, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			slog.Warn("collectExclusiveGraphIDs close", "error", closeErr)
+		}
+	}()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan exclusive %s: %w", arrayField, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate exclusive %s: %w", arrayField, err)
+	}
+	return ids, nil
+}
+
+// cypherDeleteVertices removes the given node ids from the private
+// graph via DETACH DELETE. DETACH (vs plain DELETE) prunes incident
+// edges in the same statement so the graph never holds a dangling edge,
+// even in the edge case where graph_edges[] was missing or stale.
+//
+// IDs are inlined into the Cypher string — safe because they came from
+// a bigint column we just queried, not from user input. Cypher in
+// Apache AGE / MAGE does not accept Postgres parameters inside the
+// $cypher$ block.
+func cypherDeleteVertices(
+	ctx context.Context, tx *sql.Tx, ids []int64,
+) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	query := fmt.Sprintf(`
+		SELECT * FROM cypher('%s', $cypher$
+		  MATCH (n:Entity) WHERE id(n) IN [%s] DETACH DELETE n
+		$cypher$) AS (result agtype)`,
+		privateGraphName, joinBigints(ids),
+	)
+	slog.Debug("executing Cypher", "func", "cypherDeleteVertices",
+		"count", len(ids), "query", query)
+	if _, err := tx.ExecContext(ctx, query); err != nil {
+		return fmt.Errorf("cypher delete vertices: %w", err)
+	}
+	return nil
+}
+
+// cypherDeleteEdges removes the given relationship ids from the private
+// graph. Plain DELETE (not DETACH) — edges have no further attachments
+// to clean up. Same inlining rationale as cypherDeleteVertices.
+//
+// MATCH is label-agnostic (`-[e]->`, no `:CONNECTED_TO`) so cleanup
+// stays correct if mem0 introduces additional edge labels in the
+// future. Match still scopes by id, so it never touches edges other
+// than the ones we explicitly listed.
+func cypherDeleteEdges(
+	ctx context.Context, tx *sql.Tx, ids []int64,
+) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	query := fmt.Sprintf(`
+		SELECT * FROM cypher('%s', $cypher$
+		  MATCH ()-[e]->() WHERE id(e) IN [%s] DELETE e
+		$cypher$) AS (result agtype)`,
+		privateGraphName, joinBigints(ids),
+	)
+	slog.Debug("executing Cypher", "func", "cypherDeleteEdges",
+		"count", len(ids), "query", query)
+	if _, err := tx.ExecContext(ctx, query); err != nil {
+		return fmt.Errorf("cypher delete edges: %w", err)
+	}
+	return nil
+}
+
+// deleteVertexEmbeddings removes embedding rows for the given
+// node_graphids in the given datapack. Scoped by datapack only — the
+// embeddings table's PK includes user_id and agent_id, so the same
+// node_graphid can have multiple rows; once the vertex itself is gone
+// every embedding row pointing at it is an orphan regardless of who
+// added it.
+func deleteVertexEmbeddings(
+	ctx context.Context, tx *sql.Tx, embeddingsTable, datapackID string, nodeIDs []int64,
+) error {
+	if len(nodeIDs) == 0 {
+		return nil
+	}
+	query := fmt.Sprintf(
+		`DELETE FROM %s
+		 WHERE meko_datapack_id = $1::uuid AND node_graphid = ANY($2::bigint[])`,
+		embeddingsTable,
+	)
+	slog.Debug("executing SQL", "func", "deleteVertexEmbeddings",
+		"embeddings_table", embeddingsTable, "datapack_id", datapackID, "count", len(nodeIDs))
+	if _, err := tx.ExecContext(ctx, query, datapackID, pq.Array(nodeIDs)); err != nil {
+		return fmt.Errorf("delete graph vertex embeddings: %w", err)
+	}
+	return nil
+}
+
+// joinBigints renders a slice of int64 as a comma-separated list for
+// inlining into a Cypher IN [...] clause. Empty slice returns "" — the
+// caller must guard against len(ids) == 0 before building the query.
+func joinBigints(ids []int64) string {
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.FormatInt(id, 10)
+	}
+	return strings.Join(parts, ",")
 }
 
 func (repo *MemoriesRepo) ListByFilter(

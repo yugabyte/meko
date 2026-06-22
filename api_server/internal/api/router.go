@@ -425,7 +425,8 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	// (owner or accepted share) and (2) the row's meko_user_id matches the
 	// caller. Together these let any member delete their own rows while
 	// blocking revoked members and cross-member deletes.
-	g.DELETE("/memories/:memory_id", memoriesH.DeleteByID)
+	// Disabled until the private-memory delete flow has end-to-end testing.
+	// g.DELETE("/memories/:memory_id", memoriesH.DeleteByID)
 
 	patH := handlers.NewMCPPATHandler(reg.mcpPATSvc)
 	g.POST("/me/meko-tokens", patH.Create)

@@ -10,6 +10,9 @@ import (
 
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/service"
+	// NOTE: re-add "errors" and "meko/api_server/internal/repository" imports
+	// when the commented-out ErrMemoriesNotReady block in Promote() is re-enabled
+	// (after PromoteNew lands).
 )
 
 type PromoteMemoriesHandler struct {
@@ -48,6 +51,13 @@ func (h *PromoteMemoriesHandler) Promote(c echo.Context) error {
 
 	result, err := h.svc.Promote(c.Request().Context(), req)
 	if err != nil {
+		// Enable once the new promote-memories function (PromoteNew) is wired up.
+		// if errors.Is(err, repository.ErrMemoriesNotReady) {
+		// 	// Mem0 hasn't finished extracting graph entities for one
+		// 	// of the memories. UI maps this to a friendly retry toast.
+		// 	return apiError(c, http.StatusServiceUnavailable, "MEMORY_PROCESSING",
+		// 		"This memory is still being processed by mem0. Please wait a few seconds and try again.")
+		// }
 		if isValidationErr(err) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		}
