@@ -1,4 +1,4 @@
 [submodule "vendor/postgres-v17"]
 	path = vendor/postgres-v17
 	url = ../yb-amp-postgres.git
-	branch = REL_17_STABLE_neon
+	branch = REL_17_STABLE_amp

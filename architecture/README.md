@@ -47,7 +47,7 @@ upstream Neon can skim) and **changes in yb-light**.
 
 ```
                      +---------------------------+
-                     |  Compute (Postgres 17.5)  |   user-facing PG;
+                     |  Compute (Postgres 17.8)  |   user-facing PG;
                      |     NEON_SMGR + LFC       |   unchanged in yb-light
                      +---------------------------+
                         |               |

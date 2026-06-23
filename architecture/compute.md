@@ -1,6 +1,6 @@
 # Compute
 
-The compute is a vanilla Postgres 17.5 backend (built from `vendor/postgres-v17`)
+The compute is a vanilla Postgres 17.8 backend (built from `vendor/postgres-v17`)
 with Neon's smgr / extension patches applied. The Postgres source tree itself
 is unmodified; `compute_ctl` is upstream Neon. The `yb_amp` extension at
 `pgxn/yb_amp/` lives in this repo and has had a small number of wire-protocol
