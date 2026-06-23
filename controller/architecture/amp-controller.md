@@ -532,9 +532,9 @@ reclaims the task — re-stamping `owner` and resuming from the first non-`succe
 owner died converges rather than double-applying.
 
 The catalog of step kinds — which steps exist and their exact arguments — belongs to the
-task framework's own design doc. What is fixed here is the shape: a user-visible `task`
-plus its ordered, idempotent `task_step` rows, planned write-ahead and executed by a
-resume-safe loop under a lease.
+task framework's own design doc, [`ac-tasks.md`](ac-tasks.md). What is fixed here is the
+shape: a user-visible `task` plus its ordered, idempotent `task_step` rows, planned
+write-ahead and executed by a resume-safe loop under a lease.
 
 ## 9. Deployment configuration
 
@@ -842,7 +842,8 @@ cache warmth, nothing else — so it inherits the replacement-is-recovery postur
   (§4.1) with no grouping above them; what an "org" is, and how pools roll up into one,
   is undefined for now.
 - **Task framework step catalog** — the framework's shape is fixed here (§8); the
-  inventory of step kinds and their arguments is a separate design doc.
+  inventory of step kinds and their arguments is a separate design doc,
+  [`ac-tasks.md`](ac-tasks.md).
 - **VM runtime** — designed for, not built; Kubernetes first.
 - **Billing/metering, quotas** — will build on the tenancy model later.
 - **API authentication** — the user/grant model (§10.1) is designed; how callers

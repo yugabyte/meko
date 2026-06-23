@@ -53,6 +53,31 @@ func main() {
 	}
 }
 
+// scRecipeStore adapts the storage-controller client to the task framework's
+// task.RecipeStore port, converting the framework's decoupled TimelineRecipe
+// into the client's PendingTimelineInit. It is the bridge that keeps the task
+// package independent of the storage-controller client type.
+type scRecipeStore struct{ sc *storagecontroller.Client }
+
+// projectID and branchID are the 32-hex storage ids (the storage layer's
+// tenant_id / timeline_id) the controller maps a project/branch to.
+func (a scRecipeStore) RecordBranchRecipe(ctx context.Context, projectID, branchID string, r task.BranchRecipe) error {
+	var ancestor *string
+	if r.AncestorBranchID != "" {
+		ancestor = &r.AncestorBranchID
+	}
+	return a.sc.RecordPendingTimelineInit(ctx, projectID, branchID, storagecontroller.PendingTimelineInit{
+		BranchName:         r.BranchName,
+		PgVersion:          r.PgVersion,
+		AncestorTimelineID: ancestor,
+		StartLSN:           r.StartLSN,
+	})
+}
+
+func (a scRecipeStore) ClearBranchRecipe(ctx context.Context, projectID, branchID string) error {
+	return a.sc.DeletePendingTimelineInit(ctx, projectID, branchID)
+}
+
 // buildProvisioning assembles the create-timeline / create-endpoint workflow's
 // collaborators from config: the storage-controller client (when the managed
 // controller is on) and the endpoint deployer (when --deploy is on). The deploy
@@ -190,7 +215,6 @@ func runServe(args []string) error {
 	logger.Info("migrations applied", "schema", cfg.DB.Schema)
 
 	store := task.NewPgStore(pool)
-	worker := task.NewWorker(store, task.DefaultRegistry(), cfg.Task, logger)
 	backend := core.NewPgBackend(pool)
 
 	// The create-timeline / create-endpoint workflow's collaborators: the storage
@@ -200,6 +224,25 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// Wire the write-ahead task framework's step catalog against the same
+	// collaborators the synchronous create paths use. The registry is live, but
+	// no API path plans these task kinds yet (mutations still run synchronously
+	// in the handlers) — moving them onto tasks is #113, so the worker currently
+	// has nothing of these kinds to claim. *core.PgBackend supplies the
+	// idempotent, id-keyed state operations the steps need.
+	deps := task.Deps{
+		State:         backend,
+		Deployer:      prov.Deployer,
+		EndpointYB:    prov.EndpointYB,
+		SCEndpointURL: prov.SCEndpointURL,
+		Bootstrap:     prov.Bootstrap,
+	}
+	if prov.SC != nil {
+		deps.Recipes = scRecipeStore{sc: prov.SC}
+	}
+	worker := task.NewWorker(store, task.ProductionRegistry(deps), cfg.Task, logger)
+
 	srv := api.NewServer(cfg, backend, store, prov, logger)
 
 	// Managed services the controller owns as subprocesses (§11). The storage

@@ -29,11 +29,36 @@ func (r *Registry) Lookup(kind string) (Handler, bool) {
 	return h, ok
 }
 
-// DefaultRegistry returns the registry the worker uses by default. For now it
-// holds only the no-op step, enough to exercise the executor end-to-end.
+// DefaultRegistry returns a registry holding only the no-op step — enough to
+// exercise the executor end-to-end without any collaborators. Used when no
+// real provisioning dependencies are wired (e.g. the base skeleton).
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
 	r.Register(NoopHandler{})
+	return r
+}
+
+// ProductionRegistry returns the registry wired with the real step catalog
+// (steps.go), backed by deps. It is the registry the worker uses once the
+// controller has its provisioning collaborators. The endpoint steps require a
+// deployer; if deps.Deployer is nil they are still registered but will fail if
+// ever run — no endpoint task is planned without a deployer (see plan.go / the
+// API wiring, #113). The no-op step stays registered for diagnostics/tests.
+func ProductionRegistry(deps Deps) *Registry {
+	r := NewRegistry()
+	r.Register(NoopHandler{})
+	r.Register(CreateProjectHandler{State: deps.State})
+	r.Register(CreateBranchHandler{State: deps.State})
+	r.Register(RecordBranchRecipeHandler{Recipes: deps.Recipes})
+	r.Register(CreateEndpointHandler{
+		State:     deps.State,
+		Recipes:   deps.Recipes,
+		Deployer:  deps.Deployer,
+		YB:        deps.EndpointYB,
+		SCURL:     deps.SCEndpointURL,
+		Bootstrap: deps.Bootstrap,
+	})
+	r.Register(DeleteEndpointHandler{State: deps.State, Deployer: deps.Deployer})
 	return r
 }
 

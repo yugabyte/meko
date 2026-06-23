@@ -9,6 +9,9 @@ with the design docs in [`architecture/`](architecture/):
 - [`architecture/amp-controller.md`](architecture/amp-controller.md) —
   high-level design & guiding principles (API-first, the task framework,
   managed services, deployment).
+- [`architecture/ac-tasks.md`](architecture/ac-tasks.md) — the write-ahead task
+  framework's design and **step catalog** (kinds, args, idempotency contract, the
+  task plans that compose them) — what `amp-controller.md` §8 defers to.
 - [`architecture/ac-apis.md`](architecture/ac-apis.md) — the REST API: the
   OpenAPI v3 spec as source of truth, code generation, the served explorer, and
   how the API is tested through the generated client.

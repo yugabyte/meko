@@ -21,6 +21,12 @@ type Store interface {
 	// before any step runs.
 	Plan(ctx context.Context, kind string, params json.RawMessage, steps []StepPlan) (*Task, error)
 
+	// PlanFrom write-ahead-records a built Plan (see plan.go), stamping the
+	// task's target project/ref for the API's status monitoring. This is the
+	// entry point the API mutation handlers use once moved onto the framework
+	// (#113); Plan is the bare-kind shorthand that delegates here.
+	PlanFrom(ctx context.Context, p Plan) (*Task, error)
+
 	// ClaimNext atomically transitions one runnable task pending->running under
 	// a lease, returning nil if none is runnable. Tasks whose lease has expired
 	// are reclaimable (§8.2).
@@ -59,9 +65,18 @@ const taskColumns = `id::text, kind, status::text, project_id::text, target_ref,
 	params, error, owner, lease_expiry, created_at, updated_at`
 
 func (s *PgStore) Plan(ctx context.Context, kind string, params json.RawMessage, steps []StepPlan) (*Task, error) {
+	return s.PlanFrom(ctx, Plan{Kind: kind, Params: params, Steps: steps})
+}
+
+func (s *PgStore) PlanFrom(ctx context.Context, p Plan) (*Task, error) {
 	id := uuid.New()
+	params := p.Params
 	if len(params) == 0 {
 		params = json.RawMessage("{}")
+	}
+	var projectArg any
+	if p.ProjectID != nil {
+		projectArg = p.ProjectID.String()
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -71,14 +86,14 @@ func (s *PgStore) Plan(ctx context.Context, kind string, params json.RawMessage,
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO task (id, kind, status, params)
-		 VALUES ($1::uuid, $2, 'pending', $3::jsonb)
+		`INSERT INTO task (id, kind, status, project_id, target_ref, params)
+		 VALUES ($1::uuid, $2, 'pending', $3::uuid, $4, $5::jsonb)
 		 ON CONFLICT (id) DO NOTHING`,
-		id.String(), kind, []byte(params)); err != nil {
+		id.String(), p.Kind, projectArg, p.TargetRef, []byte(params)); err != nil {
 		return nil, fmt.Errorf("insert task: %w", err)
 	}
 
-	for i, sp := range steps {
+	for i, sp := range p.Steps {
 		args := sp.Args
 		if len(args) == 0 {
 			args = json.RawMessage("{}")

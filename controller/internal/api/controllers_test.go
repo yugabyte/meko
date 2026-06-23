@@ -476,6 +476,20 @@ func (f *fakeTaskStore) Plan(_ context.Context, kind string, params json.RawMess
 	f.tasks[tk.ID] = tk
 	return tk, nil
 }
+func (f *fakeTaskStore) PlanFrom(_ context.Context, p task.Plan) (*task.Task, error) {
+	tk := &task.Task{
+		ID:        uuid.New(),
+		Kind:      p.Kind,
+		Status:    task.StatusPending,
+		ProjectID: p.ProjectID,
+		TargetRef: p.TargetRef,
+		Params:    p.Params,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	f.tasks[tk.ID] = tk
+	return tk, nil
+}
 func (f *fakeTaskStore) ClaimNext(context.Context, string, time.Duration) (*task.Task, error) {
 	return nil, nil
 }

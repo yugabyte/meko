@@ -112,8 +112,21 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		if err := w.store.StartStep(ctx, t.ID, st.Ordinal); err != nil {
 			return fmt.Errorf("mark step running: %w", err)
 		}
-		result, err := handler.Run(ctx, StepInput{Task: *t, Step: st})
+		// Stamp the step-scoped logger onto the context so step handlers log
+		// through applog.FromContext with the task/step keys already attached
+		// (controller/AGENTS.md: log through internal/log, not slog directly).
+		stepCtx := applog.IntoContext(ctx, stepLog)
+		result, err := handler.Run(stepCtx, StepInput{Task: *t, Step: st})
 		if err != nil {
+			// A cancelled worker context means we are shutting down (or the parent
+			// was cancelled), not that the step genuinely failed. Leave the step and
+			// task `running` so the lease expires and another instance (or this one
+			// after restart) reclaims and replays the step (§8.2) — durably failing
+			// a task over a shutdown would strand it. (Only triggers when ctx is
+			// already cancelled; a real step error on a live ctx still fails below.)
+			if ctx.Err() != nil {
+				return fmt.Errorf("step %d (%s) interrupted: %w", st.Ordinal, st.Kind, ctx.Err())
+			}
 			_ = w.store.FailStep(ctx, t.ID, st.Ordinal, err)
 			return fmt.Errorf("step %d (%s): %w", st.Ordinal, st.Kind, err)
 		}
