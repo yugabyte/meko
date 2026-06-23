@@ -13,7 +13,7 @@ manages the Postgres / safekeeper / pageserver processes directly. See
 ("Per-endpoint services"), where `compute_ctl` is exactly this contact point.
 
 > **Scope note.** [`compute.md`](compute.md) covers the *compute itself* — Postgres
-> 17.8, the `neon` smgr hooks, LFC, walproposer. This doc covers the *supervisor* that
+> 17.5, the `neon` smgr hooks, LFC, walproposer. This doc covers the *supervisor* that
 > brings that compute up and keeps it configured. `compute_ctl` is upstream Neon code;
 > the YB-specific story is short and lives under "Changes in yb-light" below.
 
