@@ -4,8 +4,14 @@
 -- + tables) and controller/architecture/amp-controller.md §8 (write-ahead task log)
 -- and §10 (state). The
 -- load-bearing invariants (§10.2) are expressed here in the schema, not only in
--- API checks: tenant-scoped composite FKs, the single-writer partial unique
--- index, one-main-per-tenant, and RESTRICT (never CASCADE) deletes.
+-- API checks: project-scoped composite FKs, the single-writer partial unique
+-- index, one-default-per-project, and RESTRICT (never CASCADE) deletes.
+--
+-- The user-facing resource ladder is storage pool -> project -> branch ->
+-- endpoint. A project is the storage layer's tenant and a branch is its
+-- timeline: the controller keeps the storage ids verbatim (project.id is the
+-- tenant_id, branch.branch_id is the timeline_id) so the rename stops at the
+-- controller boundary and the storage layer keeps tenant/timeline.
 --
 -- Objects are unqualified and created in the search_path schema (controller).
 
@@ -26,9 +32,9 @@ CREATE TABLE storage_pool (
     created_at     timestamptz NOT NULL DEFAULT now()
 );
 
--- A tenant is a "database": one tenant, one main timeline. id is the
+-- A project is a "database": one project, one default branch. id is the
 -- storage-layer tenant_id.
-CREATE TABLE tenant (
+CREATE TABLE project (
     id               uuid PRIMARY KEY,
     storage_pool_id  uuid        NOT NULL REFERENCES storage_pool (id),
     name             text        NOT NULL,
@@ -36,7 +42,7 @@ CREATE TABLE tenant (
     UNIQUE (storage_pool_id, name)  -- name unique within its pool
 );
 
--- The "share": lets a non-owner create and see tenants in a pool.
+-- The "share": lets a non-owner create and see projects in a pool.
 CREATE TABLE user_pool_grant (
     user_id          uuid NOT NULL REFERENCES app_user (id),
     storage_pool_id  uuid NOT NULL REFERENCES storage_pool (id),
@@ -45,37 +51,37 @@ CREATE TABLE user_pool_grant (
 
 CREATE TYPE grant_role AS ENUM ('read_only', 'read_write');
 
--- Per-tenant access; revoke = drop the row.
-CREATE TABLE user_tenant_grant (
-    user_id    uuid       NOT NULL REFERENCES app_user (id),
-    tenant_id  uuid       NOT NULL REFERENCES tenant (id),
-    role       grant_role NOT NULL,
-    PRIMARY KEY (user_id, tenant_id)
+-- Per-project access; revoke = drop the row.
+CREATE TABLE user_project_grant (
+    user_id     uuid       NOT NULL REFERENCES app_user (id),
+    project_id  uuid       NOT NULL REFERENCES project (id),
+    role        grant_role NOT NULL,
+    PRIMARY KEY (user_id, project_id)
 );
 
 -- Physical -------------------------------------------------------------------
 
--- A pg_cluster *is* a timeline; identity is the (tenant_id, timeline_id) pair.
-CREATE TABLE pg_cluster (
-    tenant_id           uuid        NOT NULL REFERENCES tenant (id),
-    timeline_id         uuid        NOT NULL,
+-- A branch *is* a timeline; identity is the (project_id, branch_id) pair.
+CREATE TABLE branch (
+    project_id          uuid        NOT NULL REFERENCES project (id),
+    branch_id           uuid        NOT NULL,
     name                text        NOT NULL,
     pg_version          int         NOT NULL,
-    is_main             boolean     NOT NULL DEFAULT false,  -- the tenant's root cluster
+    is_default          boolean     NOT NULL DEFAULT false,  -- the project's root branch
 
-    parent_timeline_id  uuid,        -- fork ancestry; NULL for a root timeline
+    parent_branch_id    uuid,        -- fork ancestry; NULL for the default branch
     fork_lsn            pg_lsn,      -- the point the branch was taken at
 
     created_at          timestamptz NOT NULL DEFAULT now(),
 
-    PRIMARY KEY (tenant_id, timeline_id),
-    UNIQUE (tenant_id, name),        -- name unique within its tenant
-    FOREIGN KEY (tenant_id, parent_timeline_id)  -- a fork parent stays in-tenant
-        REFERENCES pg_cluster (tenant_id, timeline_id)
+    PRIMARY KEY (project_id, branch_id),
+    UNIQUE (project_id, name),       -- name unique within its project
+    FOREIGN KEY (project_id, parent_branch_id)  -- a fork parent stays in-project
+        REFERENCES branch (project_id, branch_id)
 );
 
--- Exactly one main cluster per tenant; the rest are branches.
-CREATE UNIQUE INDEX one_main_per_tenant ON pg_cluster (tenant_id) WHERE is_main;
+-- Exactly one default branch per project; the rest are branches off it.
+CREATE UNIQUE INDEX one_default_per_project ON branch (project_id) WHERE is_default;
 
 CREATE TYPE endpoint_role AS ENUM ('read_write', 'read_only');
 
@@ -83,8 +89,8 @@ CREATE TYPE endpoint_role AS ENUM ('read_write', 'read_only');
 CREATE TABLE endpoint (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    tenant_id    uuid          NOT NULL,
-    timeline_id  uuid          NOT NULL,
+    project_id   uuid          NOT NULL,
+    branch_id    uuid          NOT NULL,
     role         endpoint_role NOT NULL,
 
     address      text,         -- connection details returned to users
@@ -92,13 +98,13 @@ CREATE TABLE endpoint (
 
     created_at   timestamptz   NOT NULL DEFAULT now(),
 
-    FOREIGN KEY (tenant_id, timeline_id)  -- tenant-scoped binding
-        REFERENCES pg_cluster (tenant_id, timeline_id)
+    FOREIGN KEY (project_id, branch_id)  -- project-scoped binding
+        REFERENCES branch (project_id, branch_id)
 );
 
 -- The single-writer rule, enforced in the schema rather than only in code.
-CREATE UNIQUE INDEX one_writer_per_timeline
-    ON endpoint (tenant_id, timeline_id)
+CREATE UNIQUE INDEX one_writer_per_branch
+    ON endpoint (project_id, branch_id)
     WHERE role = 'read_write';
 
 -- Operational (write-ahead task log, amp-controller.md §8) ---------------
@@ -109,9 +115,9 @@ CREATE TYPE step_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
 -- One row per initiated operation; the user-visible, API-monitorable unit.
 CREATE TABLE task (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    kind         text        NOT NULL,  -- e.g. 'create_database', 'branch', 'scale'
+    kind         text        NOT NULL,  -- e.g. 'create_project', 'branch', 'scale'
     status       task_status NOT NULL DEFAULT 'pending',
-    tenant_id    uuid,                   -- target resource (for API monitoring); a
+    project_id   uuid,                   -- target resource (for API monitoring); a
                                          --   task may create its own target, so no FK
     target_ref   text,
     params       jsonb       NOT NULL DEFAULT '{}'::jsonb,  -- the originating request

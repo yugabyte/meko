@@ -22,15 +22,15 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/task"
 )
 
-// Provisioning holds the collaborators the create-timeline / create-endpoint
+// Provisioning holds the collaborators the create-project / create-endpoint
 // workflows use beyond the state store: the storage controller (to record the
-// pending-init recipe and, once an endpoint materializes the timeline, drop it)
+// pending-init recipe and, once an endpoint materializes the branch, drop it)
 // and the endpoint deployer (to provision the compute). Both are optional —
 // with no deployer the endpoint mutation routes refuse with 501, and with no SC
-// create-timeline records the control-plane rows only. SCEndpointURL is the
+// create-project records the control-plane rows only. SCEndpointURL is the
 // controller URL as a *launched endpoint* reaches it (e.g. over the shared
 // network); empty means the endpoint runs SC-free. Bootstrap forces initdb of
-// the recorded timeline on the first endpoint's deploy.
+// the recorded branch on the first endpoint's deploy.
 type Provisioning struct {
 	SC            *storagecontroller.Client
 	Deployer      deploy.Deployer
@@ -41,11 +41,11 @@ type Provisioning struct {
 
 // Controllers implements the generated StrictServerInterface: the controller's
 // HTTP behavior, decoupled from the wire format (which the generated code owns)
-// and from persistence (which the core.Backend owns). Timeline create and branch
+// and from persistence (which the core.Backend owns). Project create and branch
 // record the control rows plus the storage controller's pending-init recipe; the
-// timeline is materialized later by the first endpoint deployed on it (#108,
-// #130). Timeline delete still routes through the task framework eventually (§6)
-// and is logged-only for now (#92).
+// branch is materialized later by the first endpoint deployed on it (#108, #130).
+// Project and branch delete still route through the task framework eventually
+// (§6) and are logged-only for now (#92).
 type Controllers struct {
 	backend core.Backend
 	tasks   task.Store
@@ -154,23 +154,22 @@ func (c *Controllers) GetStoragePool(ctx context.Context, request GetStoragePool
 	return GetStoragePool200JSONResponse(poolToAPI(p)), nil
 }
 
-// --- Timelines -------------------------------------------------------------
-// Create records a tenant + its main timeline plus the storage controller's
-// pending-init recipe; the timeline is materialized later by the first endpoint
-// deployed on it. Delete and branch remain logged-only until the task framework
-// lands (#92).
+// --- Projects --------------------------------------------------------------
+// Create records a project + its default branch plus the storage controller's
+// pending-init recipe; the branch is materialized later by the first endpoint
+// deployed on it. Delete remains logged-only until the task framework lands (#92).
 
-// defaultPgVersion is used when a create-timeline request omits pg_version.
+// defaultPgVersion is used when a create-project request omits pg_version.
 // yb-light is Postgres v17 only.
 const defaultPgVersion = 17
 
-func (c *Controllers) CreateTimeline(ctx context.Context, request CreateTimelineRequestObject) (CreateTimelineResponseObject, error) {
+func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRequestObject) (CreateProjectResponseObject, error) {
 	if request.Body == nil {
-		return CreateTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
+		return CreateProject400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
 	}
 	name := strings.TrimSpace(request.Body.Name)
 	if name == "" {
-		return CreateTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
+		return CreateProject400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
 	}
 	pgVersion := defaultPgVersion
 	if request.Body.PgVersion != nil {
@@ -179,34 +178,36 @@ func (c *Controllers) CreateTimeline(ctx context.Context, request CreateTimeline
 	// yb-light is Postgres v17 only; reject anything else up front rather than
 	// failing opaquely when the endpoint image (v17) can't honor it.
 	if pgVersion != defaultPgVersion {
-		return CreateTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+		return CreateProject400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
 			fmt.Sprintf("unsupported pg_version %d (only %d is supported)", pgVersion, defaultPgVersion)))}, nil
 	}
-	tl, err := c.backend.CreateTimeline(ctx, request.PoolId, name, pgVersion)
+	p, err := c.backend.CreateProject(ctx, request.PoolId, name, pgVersion)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
-		return CreateTimeline404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
+		return CreateProject404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
 	case errors.Is(err, core.ErrConflict):
-		return CreateTimeline409JSONResponse{ConflictJSONResponse(apiError("conflict", "a timeline with that name already exists in the pool"))}, nil
+		return CreateProject409JSONResponse{ConflictJSONResponse(apiError("conflict", "a project with that name already exists in the pool"))}, nil
 	case err != nil:
-		return nil, fmt.Errorf("create timeline: %w", err)
+		return nil, fmt.Errorf("create project: %w", err)
 	}
 
-	// Record the pending-init recipe with the storage controller. The timeline is
-	// declared here, not yet materialized: the first endpoint deployed for it
-	// attaches a pageserver and bootstraps it (controller-timeline-create.md). The recipe
-	// lives in both the control DB (the pg_cluster row) and the storage controller.
-	// Storage-layer ids are 32-hex (no dashes); the control plane stores the same
-	// bytes as a SQL uuid. Synchronous for now — #113 moves this onto the
-	// write-ahead task framework. We do NOT eagerly create the tenant or deploy an
-	// endpoint here: compute is a separate resource (POST .../endpoints).
+	// Record the pending-init recipe for the project's default branch with the
+	// storage controller. The branch is declared here, not yet materialized: the
+	// first endpoint deployed for it attaches a pageserver and bootstraps it
+	// (controller-project-create.md). The recipe lives in both the control DB (the
+	// branch row) and the storage controller. Storage-layer ids are 32-hex (no
+	// dashes); the control plane stores the same bytes as a SQL uuid. Synchronous
+	// for now — #113 moves this onto the write-ahead task framework. We do NOT
+	// eagerly create the tenant or deploy an endpoint here: compute is a separate
+	// resource (POST .../endpoints).
+	def := p.DefaultBranch
 	if c.prov.SC != nil {
 		if err := c.prov.SC.RecordPendingTimelineInit(ctx,
-			hex32(tl.TenantID), hex32(tl.TimelineID),
+			hex32(def.ProjectID), hex32(def.BranchID),
 			storagecontroller.PendingTimelineInit{
-				BranchName:         tl.Name,
+				BranchName:         def.Name,
 				PgVersion:          pgVersion,
-				AncestorTimelineID: nil, // root (Bootstrap) timeline
+				AncestorTimelineID: nil, // default (Bootstrap) branch
 				StartLSN:           "0/0",
 			}); err != nil {
 			return nil, fmt.Errorf("storage controller record pending timeline init: %w", err)
@@ -215,14 +216,14 @@ func (c *Controllers) CreateTimeline(ctx context.Context, request CreateTimeline
 		c.logger.LogAttrs(ctx, slog.LevelWarn, "storage controller not available; recipe recorded in the control DB only")
 	}
 
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "timeline created",
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "project created",
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
-		slog.String(applog.KeyTenantID, tl.TenantID.String()),
-		slog.String(applog.KeyTimelineID, tl.TimelineID.String()),
-		slog.String("timeline_name", tl.Name),
+		slog.String(applog.KeyProjectID, p.ID.String()),
+		slog.String(applog.KeyBranchID, def.BranchID.String()),
+		slog.String("project_name", p.Name),
 		slog.Bool("recipe_recorded", c.prov.SC != nil))
 
-	return CreateTimeline201JSONResponse(timelineToAPI(tl)), nil
+	return CreateProject201JSONResponse(projectToAPI(p)), nil
 }
 
 // hex32 renders a UUID as the storage layer's 32-lowercase-hex TenantId/TimelineId.
@@ -232,7 +233,7 @@ func hex32(id uuid.UUID) string {
 
 // endpointDeployName is the deployer's stable instance handle for an endpoint
 // (the container/pod/Helm-release name). It is keyed by the endpoint id so each
-// endpoint on a timeline (a writer plus read replicas) gets a distinct
+// endpoint on a branch (a writer plus read replicas) gets a distinct
 // instance. "yb-ep-" + a lowercase-hyphen uuid is a valid DNS-1123 name (42
 // chars, under Helm's 53-char limit). CreateEndpoint and DeleteEndpoint must
 // agree on it so a retire targets the right instance.
@@ -240,52 +241,84 @@ func endpointDeployName(endpointID uuid.UUID) string {
 	return "yb-ep-" + endpointID.String()
 }
 
-func (c *Controllers) ListTimelines(ctx context.Context, request ListTimelinesRequestObject) (ListTimelinesResponseObject, error) {
+func (c *Controllers) ListProjects(ctx context.Context, request ListProjectsRequestObject) (ListProjectsResponseObject, error) {
 	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
-	timelines, total, err := c.backend.ListTimelines(ctx, request.PoolId, limit, offset)
+	projects, total, err := c.backend.ListProjects(ctx, request.PoolId, limit, offset)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
-		return ListTimelines404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
+		return ListProjects404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
 	case err != nil:
-		return nil, fmt.Errorf("list timelines: %w", err)
+		return nil, fmt.Errorf("list projects: %w", err)
 	}
-	out := make([]Timeline, 0, len(timelines))
-	for _, t := range timelines {
-		out = append(out, timelineToAPI(t))
+	out := make([]Project, 0, len(projects))
+	for _, p := range projects {
+		out = append(out, projectToAPI(p))
 	}
-	return ListTimelines200JSONResponse(TimelineList{Timelines: out, Total: total, Count: len(out)}), nil
+	return ListProjects200JSONResponse(ProjectList{Projects: out, Total: total, Count: len(out)}), nil
 }
 
-func (c *Controllers) DeleteTimeline(ctx context.Context, request DeleteTimelineRequestObject) (DeleteTimelineResponseObject, error) {
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete timeline requested (logged only; task framework pending)",
+func (c *Controllers) GetProject(ctx context.Context, request GetProjectRequestObject) (GetProjectResponseObject, error) {
+	p, err := c.backend.GetProject(ctx, request.PoolId, request.ProjectId)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return GetProject404JSONResponse{NotFoundJSONResponse(apiError("not_found", "project not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("get project: %w", err)
+	}
+	return GetProject200JSONResponse(projectToAPI(p)), nil
+}
+
+func (c *Controllers) DeleteProject(ctx context.Context, request DeleteProjectRequestObject) (DeleteProjectResponseObject, error) {
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete project requested (logged only; task framework pending)",
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
-		slog.String(applog.KeyTimelineID, request.TimelineId.String()))
-	return DeleteTimeline202JSONResponse(loggedAck("delete timeline")), nil
+		slog.String(applog.KeyProjectID, request.ProjectId.String()))
+	return DeleteProject202JSONResponse(loggedAck("delete project")), nil
 }
 
-// BranchTimeline forks the addressed timeline (the parent, in the path) into a
-// new branch timeline under the same tenant. Like create-timeline it records a
-// recipe — the control-plane row plus the storage controller's pending-init,
-// this time with the ancestor and fork LSN set — and materializes lazily at the
-// first endpoint deployed on the branch (controller-timeline-create.md). #113 moves the
-// recipe writes onto the write-ahead task framework.
-func (c *Controllers) BranchTimeline(ctx context.Context, request BranchTimelineRequestObject) (BranchTimelineResponseObject, error) {
+// --- Branches --------------------------------------------------------------
+
+// CreateBranch forks an existing branch (the parent) in the project into a new
+// branch. The parent defaults to the project's default branch; pass
+// parent_branch_id to fork off another branch (branch-of-branch). Like
+// create-project it records a recipe — the control-plane row plus the storage
+// controller's pending-init, this time with the ancestor and fork LSN set — and
+// materializes lazily at the first endpoint deployed on the branch
+// (controller-project-create.md). #113 moves the recipe writes onto the
+// write-ahead task framework.
+func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequestObject) (CreateBranchResponseObject, error) {
 	if request.Body == nil {
-		return BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
+		return CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
 	}
 	name := strings.TrimSpace(request.Body.Name)
 	if name == "" {
-		return BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
+		return CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
 	}
 
-	// The parent is addressed by the path. Resolve it within the pool (404 if
-	// absent); we also need its tenant and pg_version for the branch recipe.
-	parent, err := c.backend.GetTimeline(ctx, request.PoolId, request.TimelineId)
+	// Resolve the project (404 if absent); it carries the default branch we fall
+	// back to when no parent is given.
+	project, err := c.backend.GetProject(ctx, request.PoolId, request.ProjectId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
-		return BranchTimeline404JSONResponse{NotFoundJSONResponse(apiError("not_found", "parent timeline not found"))}, nil
+		return CreateBranch404JSONResponse{NotFoundJSONResponse(apiError("not_found", "project not found"))}, nil
 	case err != nil:
-		return nil, fmt.Errorf("get parent timeline: %w", err)
+		return nil, fmt.Errorf("get project: %w", err)
+	}
+
+	// The parent defaults to the project's default branch; an explicit
+	// parent_branch_id forks off another branch (branch-of-branch).
+	parentBranchID := project.DefaultBranch.BranchID
+	if request.Body.ParentBranchId != nil {
+		parentBranchID = *request.Body.ParentBranchId
+	}
+
+	// Resolve the parent branch (404 if absent); we need its ids and pg_version
+	// for the branch recipe.
+	parent, err := c.backend.GetBranch(ctx, request.PoolId, request.ProjectId, parentBranchID)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return CreateBranch404JSONResponse{NotFoundJSONResponse(apiError("not_found", "parent branch not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("get parent branch: %w", err)
 	}
 
 	// Resolve the fork point before mutating anything, so a bad LSN or an
@@ -295,24 +328,24 @@ func (c *Controllers) BranchTimeline(ctx context.Context, request BranchTimeline
 		return errResp, nil
 	}
 
-	tl, err := c.backend.BranchTimeline(ctx, request.PoolId, request.TimelineId, name, forkLSN)
+	br, err := c.backend.CreateBranch(ctx, request.PoolId, request.ProjectId, parentBranchID, name, forkLSN)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
-		return BranchTimeline404JSONResponse{NotFoundJSONResponse(apiError("not_found", "parent timeline not found"))}, nil
+		return CreateBranch404JSONResponse{NotFoundJSONResponse(apiError("not_found", "parent branch not found"))}, nil
 	case errors.Is(err, core.ErrConflict):
-		return BranchTimeline409JSONResponse{ConflictJSONResponse(apiError("conflict", "a timeline with that name already exists in the tenant"))}, nil
+		return CreateBranch409JSONResponse{ConflictJSONResponse(apiError("conflict", "a branch with that name already exists in the project"))}, nil
 	case err != nil:
-		return nil, fmt.Errorf("branch timeline: %w", err)
+		return nil, fmt.Errorf("create branch: %w", err)
 	}
 
-	// Record the branch recipe with the storage controller: same tenant, the
+	// Record the branch recipe with the storage controller: same project, the
 	// ancestor (the parent) and the fork LSN set. Synchronous for now (#113).
 	if c.prov.SC != nil {
-		ancestor := hex32(parent.TimelineID)
+		ancestor := hex32(parent.BranchID)
 		if err := c.prov.SC.RecordPendingTimelineInit(ctx,
-			hex32(tl.TenantID), hex32(tl.TimelineID),
+			hex32(br.ProjectID), hex32(br.BranchID),
 			storagecontroller.PendingTimelineInit{
-				BranchName:         tl.Name,
+				BranchName:         br.Name,
 				PgVersion:          parent.PgVersion, // a branch inherits the ancestor's version
 				AncestorTimelineID: &ancestor,
 				StartLSN:           forkLSN,
@@ -323,16 +356,51 @@ func (c *Controllers) BranchTimeline(ctx context.Context, request BranchTimeline
 		c.logger.LogAttrs(ctx, slog.LevelWarn, "storage controller not available; branch recipe recorded in the control DB only")
 	}
 
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "timeline branched",
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "branch created",
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
-		slog.String(applog.KeyTenantID, tl.TenantID.String()),
-		slog.String("parent_timeline_id", parent.TimelineID.String()),
-		slog.String(applog.KeyTimelineID, tl.TimelineID.String()),
-		slog.String("branch_name", tl.Name),
+		slog.String(applog.KeyProjectID, br.ProjectID.String()),
+		slog.String("parent_branch_id", parent.BranchID.String()),
+		slog.String(applog.KeyBranchID, br.BranchID.String()),
+		slog.String("branch_name", br.Name),
 		slog.String("fork_lsn", forkLSN),
 		slog.Bool("recipe_recorded", c.prov.SC != nil))
 
-	return BranchTimeline201JSONResponse(timelineToAPI(tl)), nil
+	return CreateBranch201JSONResponse(branchToAPI(br)), nil
+}
+
+func (c *Controllers) ListBranches(ctx context.Context, request ListBranchesRequestObject) (ListBranchesResponseObject, error) {
+	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
+	branches, total, err := c.backend.ListBranches(ctx, request.PoolId, request.ProjectId, limit, offset)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return ListBranches404JSONResponse{NotFoundJSONResponse(apiError("not_found", "project not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("list branches: %w", err)
+	}
+	out := make([]Branch, 0, len(branches))
+	for _, b := range branches {
+		out = append(out, branchToAPI(b))
+	}
+	return ListBranches200JSONResponse(BranchList{Branches: out, Total: total, Count: len(out)}), nil
+}
+
+func (c *Controllers) GetBranch(ctx context.Context, request GetBranchRequestObject) (GetBranchResponseObject, error) {
+	br, err := c.backend.GetBranch(ctx, request.PoolId, request.ProjectId, request.BranchId)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return GetBranch404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("get branch: %w", err)
+	}
+	return GetBranch200JSONResponse(branchToAPI(br)), nil
+}
+
+func (c *Controllers) DeleteBranch(ctx context.Context, request DeleteBranchRequestObject) (DeleteBranchResponseObject, error) {
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete branch requested (logged only; task framework pending)",
+		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
+		slog.String(applog.KeyProjectID, request.ProjectId.String()),
+		slog.String(applog.KeyBranchID, request.BranchId.String()))
+	return DeleteBranch202JSONResponse(loggedAck("delete branch")), nil
 }
 
 // lsnRE matches the storage layer's "X/X" LSN form, e.g. "0/16ABCD0". Each half
@@ -353,29 +421,29 @@ var lsnRE = regexp.MustCompile(`^[0-9a-fA-F]{1,8}/[0-9a-fA-F]{1,8}$`)
 // which can lag the safekeeper's durable flush_lsn that yb_light_local branches
 // at; the controller does not expose flush_lsn, so an exact point needs
 // fork_point_lsn (#130).
-func (c *Controllers) resolveForkLSN(ctx context.Context, parent core.Timeline, requested *string) (string, BranchTimelineResponseObject) {
+func (c *Controllers) resolveForkLSN(ctx context.Context, parent core.Branch, requested *string) (string, CreateBranchResponseObject) {
 	if requested != nil {
 		if lsn := strings.TrimSpace(*requested); lsn != "" {
 			if !lsnRE.MatchString(lsn) {
-				return "", BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+				return "", CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
 					"fork_point_lsn must be an LSN of the form X/X (hex), e.g. 0/16ABCD0"))}
 			}
 			return lsn, nil
 		}
 	}
 	if c.prov.SC == nil {
-		return "", BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+		return "", CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
 			"fork_point_lsn is required when no storage controller is configured"))}
 	}
-	lsn, err := c.prov.SC.TimelineLatestLSN(ctx, hex32(parent.TenantID), hex32(parent.TimelineID))
+	lsn, err := c.prov.SC.TimelineLatestLSN(ctx, hex32(parent.ProjectID), hex32(parent.BranchID))
 	if err != nil {
 		// No usable LSN: the parent has not been materialized (no endpoint ever
 		// deployed on it) or the controller is unreachable — there is nothing to
 		// branch from. Steer the caller rather than branching at a wrong point.
 		c.logger.LogAttrs(ctx, slog.LevelWarn, "could not resolve default fork point",
-			slog.String(applog.KeyTimelineID, parent.TimelineID.String()), slog.String("error", err.Error()))
-		return "", BranchTimeline400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
-			"cannot determine a fork point for the parent timeline (deploy an endpoint on it first, or pass fork_point_lsn)"))}
+			slog.String(applog.KeyBranchID, parent.BranchID.String()), slog.String("error", err.Error()))
+		return "", CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+			"cannot determine a fork point for the parent branch (deploy an endpoint on it first, or pass fork_point_lsn)"))}
 	}
 	return lsn, nil
 }
@@ -394,21 +462,21 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "role must be read_write or read_only"))}, nil
 	}
 
-	tl, err := c.backend.GetTimeline(ctx, request.PoolId, request.TimelineId)
+	br, err := c.backend.GetBranch(ctx, request.PoolId, request.ProjectId, request.BranchId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
-		return CreateEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "timeline not found"))}, nil
+		return CreateEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
 	case err != nil:
-		return nil, fmt.Errorf("get timeline: %w", err)
+		return nil, fmt.Errorf("get branch: %w", err)
 	}
 
 	// config records the spec used to (re)create the endpoint (the endpoint's
 	// own id is the row id, so it is not part of the recreate spec).
 	config, err := json.Marshal(map[string]any{
-		"tenant_id":   tl.TenantID,
-		"timeline_id": tl.TimelineID,
-		"role":        role,
-		"pg_version":  tl.PgVersion,
+		"project_id": br.ProjectID,
+		"branch_id":  br.BranchID,
+		"role":       role,
+		"pg_version": br.PgVersion,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode endpoint config: %w", err)
@@ -417,28 +485,30 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	// Record the row first: it enforces the single-writer rule (409) before we
 	// spend a deploy, and gives the deploy a stable endpoint id. The address is
 	// filled in after the deploy reports ready.
-	ep, err := c.backend.CreateEndpoint(ctx, tl.TenantID, tl.TimelineID, role, config)
+	ep, err := c.backend.CreateEndpoint(ctx, br.ProjectID, br.BranchID, role, config)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
-		return CreateEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "timeline not found"))}, nil
+		return CreateEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
 	case errors.Is(err, core.ErrConflict):
-		return CreateEndpoint409JSONResponse{ConflictJSONResponse(apiError("conflict", "a read_write endpoint already exists for this timeline"))}, nil
+		return CreateEndpoint409JSONResponse{ConflictJSONResponse(apiError("conflict", "a read_write endpoint already exists for this branch"))}, nil
 	case err != nil:
 		return nil, fmt.Errorf("create endpoint: %w", err)
 	}
 
 	// Deploy synchronously. The deployer launches the endpoint, which (in SC mode,
-	// with bootstrap) materializes the timeline and registers/attaches to the
+	// with bootstrap) materializes the branch and registers/attaches to the
 	// controller, then returns the address clients connect to. On failure, remove
 	// the row we just committed so it doesn't linger with nothing deployed — a
 	// background context so cleanup runs even if the request ctx was cancelled.
 	// The instance name is keyed by the endpoint id (unique per endpoint), since a
-	// timeline can carry more than one endpoint (a writer plus read replicas).
+	// branch can carry more than one endpoint (a writer plus read replicas). The
+	// deploy spec speaks the storage layer's tenant/timeline ids, which are the
+	// project/branch ids verbatim.
 	spec := deploy.EndpointSpec{
 		Name:                 endpointDeployName(ep.ID),
-		TenantID:             hex32(tl.TenantID),
-		TimelineID:           hex32(tl.TimelineID),
-		PgVersion:            tl.PgVersion,
+		TenantID:             hex32(br.ProjectID),
+		TimelineID:           hex32(br.BranchID),
+		PgVersion:            br.PgVersion,
 		YB:                   c.prov.EndpointYB,
 		StorageControllerURL: c.prov.SCEndpointURL,
 		Bootstrap:            c.prov.Bootstrap,
@@ -447,9 +517,9 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	// timeline — otherwise it comes up empty. The deployer relays the ancestor to
 	// the endpoint, whose pageserver writes a Branch init recipe (lineage reads
 	// serve the pre-fork pages from shared storage). Bootstrap is forced off.
-	if tl.ParentTimelineID != nil {
-		spec.AncestorTimelineID = hex32(*tl.ParentTimelineID)
-		spec.AncestorLSN = tl.ForkLSN
+	if br.ParentBranchID != nil {
+		spec.AncestorTimelineID = hex32(*br.ParentBranchID)
+		spec.AncestorLSN = br.ForkLSN
 		spec.Bootstrap = false
 	}
 	deployed, err := c.prov.Deployer.CreateEndpoint(ctx, spec)
@@ -481,28 +551,28 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	}
 	ep.Address = deployed.Address
 
-	// The endpoint has materialized the timeline (its supervisor ran initdb and
+	// The endpoint has materialized the branch (its supervisor ran initdb and
 	// registered it with the storage controller), so drop the pending-init recipe.
 	// On recCtx so a cancelled request still consumes it. Best-effort and
-	// idempotent: a no-op for a timeline an earlier endpoint already materialized,
+	// idempotent: a no-op for a branch an earlier endpoint already materialized,
 	// and a lingering recipe is harmless (nothing reads it).
 	if c.prov.SC != nil {
-		if err := c.prov.SC.DeletePendingTimelineInit(recCtx, hex32(tl.TenantID), hex32(tl.TimelineID)); err != nil {
+		if err := c.prov.SC.DeletePendingTimelineInit(recCtx, hex32(br.ProjectID), hex32(br.BranchID)); err != nil {
 			c.logger.LogAttrs(recCtx, slog.LevelWarn, "failed to delete pending timeline init (continuing)",
 				slog.String(applog.KeyEndpointID, ep.ID.String()), slog.String("error", err.Error()))
 		}
 	}
 
 	c.logger.LogAttrs(recCtx, slog.LevelInfo, "endpoint created and deployed",
-		slog.String(applog.KeyTenantID, tl.TenantID.String()),
-		slog.String(applog.KeyTimelineID, request.TimelineId.String()),
+		slog.String(applog.KeyProjectID, br.ProjectID.String()),
+		slog.String(applog.KeyBranchID, request.BranchId.String()),
 		slog.String(applog.KeyEndpointID, ep.ID.String()),
 		slog.String("address", deployed.Address))
 	return CreateEndpoint201JSONResponse(endpointToAPI(ep)), nil
 }
 
 func (c *Controllers) GetEndpoint(ctx context.Context, request GetEndpointRequestObject) (GetEndpointResponseObject, error) {
-	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.TimelineId, request.EndpointId)
+	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ProjectId, request.BranchId, request.EndpointId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return GetEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "endpoint not found"))}, nil
@@ -514,10 +584,10 @@ func (c *Controllers) GetEndpoint(ctx context.Context, request GetEndpointReques
 
 func (c *Controllers) ListEndpoints(ctx context.Context, request ListEndpointsRequestObject) (ListEndpointsResponseObject, error) {
 	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
-	endpoints, total, err := c.backend.ListEndpoints(ctx, request.PoolId, request.TimelineId, limit, offset)
+	endpoints, total, err := c.backend.ListEndpoints(ctx, request.PoolId, request.ProjectId, request.BranchId, limit, offset)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
-		return ListEndpoints404JSONResponse{NotFoundJSONResponse(apiError("not_found", "timeline not found"))}, nil
+		return ListEndpoints404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
 	case err != nil:
 		return nil, fmt.Errorf("list endpoints: %w", err)
 	}
@@ -532,7 +602,7 @@ func (c *Controllers) DeleteEndpoint(ctx context.Context, request DeleteEndpoint
 	if c.prov.Deployer == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
 	}
-	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.TimelineId, request.EndpointId)
+	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ProjectId, request.BranchId, request.EndpointId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return DeleteEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "endpoint not found"))}, nil
@@ -583,30 +653,40 @@ func poolToAPI(p core.StoragePool) StoragePool {
 	return StoragePool{Id: p.ID, Name: p.Name, OwnerUserId: p.OwnerUserID, CreatedAt: p.CreatedAt}
 }
 
-func timelineToAPI(t core.Timeline) Timeline {
-	out := Timeline{
-		TenantId:         t.TenantID,
-		TimelineId:       t.TimelineID,
-		Name:             t.Name,
-		PgVersion:        t.PgVersion,
-		IsMain:           t.IsMain,
-		ParentTimelineId: t.ParentTimelineID, // nil for a root (main) timeline
-		CreatedAt:        t.CreatedAt,
+func projectToAPI(p core.Project) Project {
+	return Project{
+		Id:            p.ID,
+		StoragePoolId: p.StoragePoolID,
+		Name:          p.Name,
+		CreatedAt:     p.CreatedAt,
+		DefaultBranch: branchToAPI(p.DefaultBranch),
 	}
-	if t.ForkLSN != "" {
-		out.ForkLsn = &t.ForkLSN
+}
+
+func branchToAPI(b core.Branch) Branch {
+	out := Branch{
+		ProjectId:      b.ProjectID,
+		BranchId:       b.BranchID,
+		Name:           b.Name,
+		PgVersion:      b.PgVersion,
+		IsDefault:      b.IsDefault,
+		ParentBranchId: b.ParentBranchID, // nil for a project's default branch
+		CreatedAt:      b.CreatedAt,
+	}
+	if b.ForkLSN != "" {
+		out.ForkLsn = &b.ForkLSN
 	}
 	return out
 }
 
 func endpointToAPI(e core.Endpoint) Endpoint {
 	return Endpoint{
-		Id:         e.ID,
-		TenantId:   e.TenantID,
-		TimelineId: e.TimelineID,
-		Role:       EndpointRole(e.Role),
-		Address:    e.Address,
-		CreatedAt:  e.CreatedAt,
+		Id:        e.ID,
+		ProjectId: e.ProjectID,
+		BranchId:  e.BranchID,
+		Role:      EndpointRole(e.Role),
+		Address:   e.Address,
+		CreatedAt: e.CreatedAt,
 	}
 }
 
@@ -640,7 +720,7 @@ func taskToAPI(t *task.Task) Task {
 		Id:        t.ID,
 		Kind:      t.Kind,
 		Status:    TaskStatus(t.Status),
-		TenantId:  t.TenantID,
+		ProjectId: t.ProjectID,
 		TargetRef: t.TargetRef,
 		Error:     t.Error,
 		CreatedAt: t.CreatedAt,

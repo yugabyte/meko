@@ -96,7 +96,7 @@
       font-size: 12px; font-weight: 600; line-height: 1.6;
     }
     .badge.admin { background: var(--accent-soft); color: var(--accent); }
-    .badge.main { background: var(--info-soft); color: var(--info); }
+    .badge.default { background: var(--info-soft); color: var(--info); }
     .badge.rw { background: var(--ok-soft); color: var(--ok); }
     .badge.ro { background: var(--info-soft); color: var(--info); }
     .badge.muted { background: #eef1f4; color: var(--muted); }
@@ -134,11 +134,16 @@
     .nowrap { white-space: nowrap; }
 
     .pool { margin-top: 14px; }
-    .pool .timelines { padding: 0; }
-    .timeline { border-top: 1px solid var(--border); padding: 14px 16px; }
-    .timeline:first-child { border-top: none; }
-    .timeline .tl-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .timeline .tl-name { font-weight: 600; }
+    .pool .projects { padding: 0; }
+    .project { border-top: 1px solid var(--border); padding: 14px 16px; }
+    .project:first-child { border-top: none; }
+    .project .pj-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .project .pj-name { font-weight: 600; }
+    .branches { margin-top: 10px; padding-left: 14px; border-left: 2px solid var(--border); }
+    .branch { padding: 10px 0; border-top: 1px dashed var(--border); }
+    .branch:first-child { border-top: none; }
+    .branch .br-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .branch .br-name { font-weight: 600; }
     .meta { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; gap: 16px; flex-wrap: wrap; }
     .meta .k { color: var(--muted); }
     .endpoints { margin-top: 10px; padding-left: 14px; border-left: 2px solid var(--border); }
@@ -257,15 +262,23 @@
     const createUser    = (isAdmin) => api("POST", "/users", { is_admin: isAdmin });
     const listPools     = () => api("GET", `/storage-pools${PAGE}`);
     const createPool    = (name, owner) => api("POST", "/storage-pools", { name, owner_user_id: owner });
-    const listTimelines = (poolId) => api("GET", `/storage-pools/${poolId}/timelines${PAGE}`);
-    const createTimeline= (poolId, name) => api("POST", `/storage-pools/${poolId}/timelines`, { name });
-    const listEndpoints = (poolId, tlId) => api("GET", `/storage-pools/${poolId}/timelines/${tlId}/endpoints${PAGE}`);
-    const createEndpoint= (poolId, tlId, role) => api("POST", `/storage-pools/${poolId}/timelines/${tlId}/endpoints`, { role });
-    // Fork a timeline into a new branch. forkLsn is optional (defaults to the
-    // parent's latest LSN server-side); pass it only when set.
-    const branchTimeline= (poolId, parentTlId, name, forkLsn) =>
-      api("POST", `/storage-pools/${poolId}/timelines/${parentTlId}/branch`,
-          forkLsn ? { name, fork_point_lsn: forkLsn } : { name });
+    // A project (database) is created with its default branch automatically.
+    const listProjects  = (poolId) => api("GET", `/storage-pools/${poolId}/projects${PAGE}`);
+    const createProject = (poolId, name) => api("POST", `/storage-pools/${poolId}/projects`, { name });
+    const listBranches  = (poolId, projectId) => api("GET", `/storage-pools/${poolId}/projects/${projectId}/branches${PAGE}`);
+    const listEndpoints = (poolId, projectId, branchId) =>
+      api("GET", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints${PAGE}`);
+    const createEndpoint= (poolId, projectId, branchId, role) =>
+      api("POST", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints`, { role });
+    // Fork a branch into a new branch. parentBranchId is the branch to fork off
+    // (the default branch or another branch — branch-of-branch). forkLsn is
+    // optional (defaults to the parent's latest LSN server-side); pass it only
+    // when set.
+    const createBranch  = (poolId, projectId, parentBranchId, name, forkLsn) => {
+      const body = { name, parent_branch_id: parentBranchId };
+      if (forkLsn) body.fork_point_lsn = forkLsn;
+      return api("POST", `/storage-pools/${poolId}/projects/${projectId}/branches`, body);
+    };
 
     // --- router --------------------------------------------------------------
 
@@ -319,7 +332,7 @@
 
       app.innerHTML = `
         <h1>Users</h1>
-        <p class="sub">Select a user to manage its storage pools, timelines, and endpoints.</p>
+        <p class="sub">Select a user to manage its storage pools, projects, and branches.</p>
 
         <div class="card">
           <div class="card-head">
@@ -364,7 +377,7 @@
       bind();
     }
 
-    // --- user detail: pools -> timelines -> endpoints ------------------------
+    // --- user detail: pools -> projects -> branches -> endpoints -------------
 
     async function renderUser(userId) {
       app.innerHTML = `<div class="spinner">Loading user…</div>`;
@@ -413,7 +426,7 @@
         } catch (err) { toast(err.message); btn.disabled = false; }
       });
 
-      // Hydrate each pool's timelines (and their endpoints) independently.
+      // Hydrate each pool's projects (and their branches/endpoints) independently.
       pools.forEach((p) => hydratePool(p.id, userId));
       bindPoolForms(userId);
       bind();
@@ -429,28 +442,28 @@
           </div>
           <div class="card-body">
             <div class="inline-form">
-              <input type="text" class="new-timeline" data-pool="${esc(p.id)}" placeholder="New timeline (database) name" />
-              <button class="btn primary create-timeline" data-pool="${esc(p.id)}">Create timeline</button>
-              <span class="muted">pg 17</span>
+              <input type="text" class="new-project" data-pool="${esc(p.id)}" placeholder="New project (database) name" />
+              <button class="btn primary create-project" data-pool="${esc(p.id)}">Create project</button>
+              <span class="muted">pg 17 · creates a default branch</span>
             </div>
           </div>
-          <div class="timelines" id="tl-${esc(p.id)}">
-            <div class="spinner">Loading timelines…</div>
+          <div class="projects" id="proj-${esc(p.id)}">
+            <div class="spinner">Loading projects…</div>
           </div>
         </div>`;
     }
 
     function bindPoolForms(userId) {
-      app.querySelectorAll(".create-timeline").forEach((btn) => {
+      app.querySelectorAll(".create-project").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const poolId = btn.getAttribute("data-pool");
-          const input = app.querySelector(`.new-timeline[data-pool="${poolId}"]`);
+          const input = app.querySelector(`.new-project[data-pool="${poolId}"]`);
           const name = input.value.trim();
-          if (!name) { toast("Enter a timeline name"); return; }
+          if (!name) { toast("Enter a project name"); return; }
           btn.disabled = true;
           try {
-            await createTimeline(poolId, name);
-            toast("Timeline created", true);
+            await createProject(poolId, name);
+            toast("Project created", true);
             input.value = "";
             await hydratePool(poolId, userId);
           } catch (err) { toast(err.message); }
@@ -460,52 +473,84 @@
     }
 
     async function hydratePool(poolId, userId) {
-      const host = document.getElementById(`tl-${poolId}`);
+      const host = document.getElementById(`proj-${poolId}`);
       if (!host) return;
-      let tldata;
-      try { tldata = await listTimelines(poolId); }
-      catch (e) { host.innerHTML = `<div class="empty">Failed to load timelines: ${esc(e.message)}</div>`; return; }
+      let data;
+      try { data = await listProjects(poolId); }
+      catch (e) { host.innerHTML = `<div class="empty">Failed to load projects: ${esc(e.message)}</div>`; return; }
 
-      const timelines = tldata.timelines || [];
-      if (!timelines.length) {
-        host.innerHTML = `<div class="empty">No timelines yet.</div>`;
+      const projects = data.projects || [];
+      if (!projects.length) {
+        host.innerHTML = `<div class="empty">No projects yet.</div>`;
         return;
       }
-      host.innerHTML = timelines.map((t) => {
-        // A branch shows where it forked from; a main timeline has no ancestry.
-        const lineage = t.parent_timeline_id
-          ? `<span><span class="k">forked from</span> ${idChip(t.parent_timeline_id)}` +
-            `${t.fork_lsn ? ` @ <code>${esc(t.fork_lsn)}</code>` : ""}</span>`
-          : "";
-        return `
-        <div class="timeline" id="tlrow-${esc(t.timeline_id)}">
-          <div class="tl-head">
-            <span class="tl-name">${esc(t.name)}</span>
-            ${t.is_main ? '<span class="badge main">main</span>' : '<span class="badge muted">branch</span>'}
-            <span class="badge muted">pg ${esc(t.pg_version)}</span>
+      host.innerHTML = projects.map((p) => `
+        <div class="project" id="pj-${esc(p.id)}">
+          <div class="pj-head">
+            <span class="pj-name">${esc(p.name)}</span>
+            <span class="badge muted">project</span>
           </div>
           <div class="meta">
-            <span><span class="k">tenant</span> ${idChip(t.tenant_id)}</span>
-            <span><span class="k">timeline</span> ${idChip(t.timeline_id)}</span>
+            <span><span class="k">project</span> ${idChip(p.id)}</span>
+            <span><span class="k">created</span> ${fmtDate(p.created_at)}</span>
+          </div>
+          <div class="branches" id="br-${esc(p.id)}">
+            <div class="muted" style="font-size:12px">Loading branches…</div>
+          </div>
+        </div>`).join("");
+
+      bind();
+      // Branches per project, in parallel.
+      projects.forEach((p) => hydrateBranches(poolId, p.id, userId));
+    }
+
+    async function hydrateBranches(poolId, projectId, userId) {
+      const host = document.getElementById(`br-${projectId}`);
+      if (!host) return;
+      let data;
+      try { data = await listBranches(poolId, projectId); }
+      catch (e) { host.innerHTML = `<div class="empty">Failed to load branches: ${esc(e.message)}</div>`; return; }
+
+      const branches = data.branches || [];
+      if (!branches.length) {
+        host.innerHTML = `<div class="muted" style="font-size:12px">No branches yet.</div>`;
+        return;
+      }
+      host.innerHTML = branches.map((b) => {
+        // A non-default branch shows where it forked from.
+        const lineage = b.parent_branch_id
+          ? `<span><span class="k">forked from</span> ${idChip(b.parent_branch_id)}` +
+            `${b.fork_lsn ? ` @ <code>${esc(b.fork_lsn)}</code>` : ""}</span>`
+          : "";
+        return `
+        <div class="branch" id="brrow-${esc(b.branch_id)}">
+          <div class="br-head">
+            <span class="br-name">${esc(b.name)}</span>
+            ${b.is_default ? '<span class="badge default">default</span>' : '<span class="badge muted">branch</span>'}
+            <span class="badge muted">pg ${esc(b.pg_version)}</span>
+          </div>
+          <div class="meta">
+            <span><span class="k">branch</span> ${idChip(b.branch_id)}</span>
             ${lineage}
-            <span><span class="k">created</span> ${fmtDate(t.created_at)}</span>
+            <span><span class="k">created</span> ${fmtDate(b.created_at)}</span>
           </div>
           <div class="inline-form" style="margin-top:8px">
-            <input type="text" class="branch-name" data-parent="${esc(t.timeline_id)}" placeholder="New branch name" style="min-width:160px" />
-            <input type="text" class="branch-lsn" data-parent="${esc(t.timeline_id)}" placeholder="fork LSN (optional)" style="min-width:150px" />
-            <button class="btn branch-timeline" data-parent="${esc(t.timeline_id)}">Branch</button>
+            <input type="text" class="branch-name" data-parent="${esc(b.branch_id)}" placeholder="New branch name" style="min-width:160px" />
+            <input type="text" class="branch-lsn" data-parent="${esc(b.branch_id)}" placeholder="fork LSN (optional)" style="min-width:150px" />
+            <button class="btn create-branch" data-parent="${esc(b.branch_id)}">Branch</button>
           </div>
-          <div class="endpoints" id="ep-${esc(t.timeline_id)}">
+          <div class="endpoints" id="ep-${esc(b.branch_id)}">
             <div class="muted" style="font-size:12px">Loading endpoints…</div>
           </div>
         </div>`;
       }).join("");
 
       bind();
-      // Wire each timeline's "Branch" button: fork it into a new timeline, then
-      // re-hydrate the pool so the branch (and its lineage) shows up. An empty
-      // fork-LSN field defaults to the parent's latest LSN server-side.
-      host.querySelectorAll(".branch-timeline").forEach((btn) => {
+      // Wire each branch's "Branch" button: fork it into a new branch off this
+      // one (branch-of-branch), then re-hydrate the project so the new branch
+      // (and its lineage) shows up. An empty fork-LSN field defaults to the
+      // parent's latest LSN server-side.
+      host.querySelectorAll(".create-branch").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const parent = btn.getAttribute("data-parent");
           const nameEl = host.querySelector(`.branch-name[data-parent="${parent}"]`);
@@ -514,21 +559,21 @@
           const forkLsn = host.querySelector(`.branch-lsn[data-parent="${parent}"]`).value.trim();
           btn.disabled = true;
           try {
-            await branchTimeline(poolId, parent, name, forkLsn);
+            await createBranch(poolId, projectId, parent, name, forkLsn);
             toast("Branch created", true);
-            await hydratePool(poolId, userId);
+            await hydrateBranches(poolId, projectId, userId);
           } catch (err) { toast(err.message); btn.disabled = false; }
         });
       });
-      // Endpoints per timeline, in parallel.
-      timelines.forEach((t) => hydrateEndpoints(poolId, t.timeline_id));
+      // Endpoints per branch, in parallel.
+      branches.forEach((b) => hydrateEndpoints(poolId, projectId, b.branch_id));
     }
 
-    async function hydrateEndpoints(poolId, tlId) {
-      const host = document.getElementById(`ep-${tlId}`);
+    async function hydrateEndpoints(poolId, projectId, branchId) {
+      const host = document.getElementById(`ep-${branchId}`);
       if (!host) return;
       let data;
-      try { data = await listEndpoints(poolId, tlId); }
+      try { data = await listEndpoints(poolId, projectId, branchId); }
       catch (e) { host.innerHTML = `<div class="muted" style="font-size:12px">Failed to load endpoints: ${esc(e.message)}</div>`; return; }
 
       const eps = data.endpoints || [];
@@ -558,7 +603,7 @@
             <option value="read_write">read-write</option>
             <option value="read_only">read-only</option>
           </select>
-          <button class="btn create-endpoint" data-pool="${esc(poolId)}" data-timeline="${esc(tlId)}">Provision compute</button>
+          <button class="btn create-endpoint" data-branch="${esc(branchId)}">Provision compute</button>
         </div>`;
       host.innerHTML = list + provision;
       bind();
@@ -571,9 +616,9 @@
           epBtn.disabled = true;
           epBtn.textContent = "Provisioning… (~30–60s)";
           try {
-            await createEndpoint(poolId, tlId, role);
+            await createEndpoint(poolId, projectId, branchId, role);
             toast("Endpoint provisioned", true);
-            await hydrateEndpoints(poolId, tlId);
+            await hydrateEndpoints(poolId, projectId, branchId);
           } catch (err) {
             toast(err.message);
             epBtn.disabled = false;

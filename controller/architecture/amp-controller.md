@@ -12,7 +12,7 @@ stay consistent with the principles laid out here.
 
 amp-controller is the control plane for a **single placement group**. It lives within the
 placement group it manages and owns the full lifecycle of everything inside it:
-tenancy (storage pools, tenants), PG clusters and their timelines, and the endpoints
+tenancy (storage pools, projects), PG clusters and their branches, and the endpoints
 that serve traffic. It provisions capacity ahead of demand, drives YBA for YBDB
 universe management, and exposes an API for all of it.
 
@@ -29,8 +29,8 @@ instances; amp-controller creates, configures, tracks, and retires them.
 
 - **amp-controller is self-built and standalone, not a YBA fork.** It runs alongside YBA;
   YBA continues to manage the YBDB universes, and amp-controller drives YBA via its REST API.
-- **The tenancy model is the core reason a fork was rejected.** amp-controller owns tenants,
-  service instances, and instance→universe pinning. Multiple tenants share one
+- **The tenancy model is the core reason a fork was rejected.** amp-controller owns projects,
+  service instances, and instance→universe pinning. Multiple projects share one
   universe, which inverts YBA's Customer-owns-Universe model — retrofitting that
   inversion into YBA would fight its data model everywhere.
 - **VM provisioning reuses ybops** — the existing ybops PEX artifact, repackaged and
@@ -66,11 +66,11 @@ instances; amp-controller creates, configures, tracks, and retires them.
    interface, endpoint spec, task framework) are designed so a new runtime — VMs,
    another cloud — is a new `Deployer`, not a change to the model.
 4. **The control plane enforces invariants; it doesn't just hope the data plane does.**
-   Even where YB Light enforces a rule internally (e.g. a single writer per timeline),
+   Even where YB Light enforces a rule internally (e.g. a single writer per branch),
    amp-controller independently enforces it at the API layer so users can never get into a bad
    position. Defense in depth, with amp-controller as the first line.
 5. **All mutations go through the task framework.** Any action that changes the world
-   — create a database, branch a timeline, add an endpoint — is a task composed of
+   — create a project, branch a branch, add an endpoint — is a task composed of
    re-usable, idempotent **steps** (§8). Nothing mutates state out-of-band.
 6. **amp-controller is the source of truth for intent; the world is the source of truth for
    reality.** amp-controller records what *should* exist; reconciliation against what actually
@@ -88,14 +88,14 @@ The hierarchy:
 ```
 Placement Group ──── YBDB Universe (managed by YBA)
   └── Storage Pools (0+)       ≈ a Meko datapack; created by any user, shared to others
-        └── Tenants (0+)       each is a "database": a tenant + its one main PG cluster
-              └── PG Clusters   the main (root) cluster + its branches (0+ forks)
+        └── Projects (0+)      each is a "database": a project + its one default PG cluster
+              └── PG Clusters   the default (root) cluster + its branches (0+ forks)
                     └── Endpoints (0+)
 ```
 
 Most levels may be empty: a fresh placement group has no storage pools yet, a fresh
-pool no tenants, a cluster no endpoints (§4.4). The tenant is the exception — it is
-created together with its main PG cluster (§6), so a tenant always has at least that
+pool no projects, a cluster no endpoints (§4.4). The project is the exception — it is
+created together with its default PG cluster (§6), so a project always has at least that
 one cluster. Empty is both a valid resting state and what top-down teardown (§10.2)
 passes through.
 
@@ -110,17 +110,19 @@ These exist only in amp-controller's state store; they have no physical footprin
 - **Placement group** — top-level unit, and the scope of a amp-controller deployment. Each
   placement group has exactly one YBDB universe (managed by a YBA; one YBA can manage
   multiple universes) and holds zero or more storage pools.
-- **Storage pool** — a grouping of tenants, modeled to map roughly onto a **Meko
+- **Storage pool** — a grouping of projects, modeled to map roughly onto a **Meko
   datapack**. It is *not* an "org" — the org level above pools is currently undefined
   (§12). Any user can create a storage pool and becomes its **owner**; a user who did
   not create it reaches it only if the pool is **shared** with them (a pool grant,
   §10.1). A user can own, or be shared into, many pools.
-- **Tenant** — a **database**: the unit a client creates, scoped to one storage pool. A
-  tenant maps ~1:1 to its **main PG cluster** — creating a database creates the tenant
-  and that main cluster together (§6) — and every branch of that cluster lives under the
-  same tenant (§4.3). The tenant is the unit of timeline ownership (§4.3) and the finest
-  grain of user access (§10.1); that timeline scoping is what isolates tenants from each
-  other structurally, with access granted per tenant.
+- **Project** — a **database**: the unit a client creates, scoped to one storage pool. A
+  project maps ~1:1 to its **default PG cluster** — creating a database creates the project
+  and that default cluster together (§6) — and every branch of that cluster lives under the
+  same project (§4.3). The project is the unit of branch ownership (§4.3) and the finest
+  grain of user access (§10.1); that branch scoping is what isolates projects from each
+  other structurally, with access granted per project. A project *is* the storage layer's
+  **tenant** (§4.3): the controller carries the storage-layer id verbatim and maps
+  project→tenant only at the storage boundary.
 
 ### 4.2 Physical constructs
 
@@ -129,27 +131,31 @@ These correspond to real data or real running processes, and amp-controller trac
 - **YBDB universe** — the shared storage layer for a placement group; managed by YBA,
   driven by amp-controller through YBA's API.
 - **PG cluster** — a logical Postgres database backed by physical data in YBDB; that
-  data is the cluster's timeline, exactly one per cluster (§4.3). Each tenant has one
-  **main** (root) cluster, created with the tenant; every other cluster under the tenant
-  is a **branch**, produced by forking another cluster's timeline (§4.3).
+  data is the cluster's branch (the storage layer's timeline), exactly one per cluster
+  (§4.3). Each project has one **default** (root) cluster, created with the project; every
+  other cluster under the project is a **branch**, produced by forking another cluster's
+  branch (§4.3).
 - **Endpoint** — a self-contained YB Light instance serving a PG cluster; runs on a
   pod (or, later, a VM). Endpoints are what users actually connect to, so the API
   must return endpoint connection details (host, port, TLS state) to users.
   Endpoints are **stateless** (§5.3): "physical" here means they consume hardware,
   not that they hold durable data.
 
-### 4.3 Timelines
+### 4.3 Branches
 
-A PG cluster's data is its **timeline** — the two are synonyms for one entity,
-viewed from two angles: we say "timeline" when talking about the data, and "PG
-cluster" when talking about the compute serving it. Timelines are uniquely identified
-by the pair **(tenant_id, timeline_id)** — a timeline cannot be named, resolved, or
-attached to outside its owning tenant. This scoping is structural: every API and internal
-interface that touches a timeline takes the tenant as part of the key, so cross-tenant
-timeline use is unrepresentable, not merely forbidden.
+A PG cluster's data is its **branch** — the two are synonyms for one entity,
+viewed from two angles: we say "branch" when talking about the data, and "PG
+cluster" when talking about the compute serving it. A branch *is* the storage layer's
+**timeline**: the controller maps branch→timeline only at the storage boundary, and
+carries the storage-layer id verbatim. Branches are uniquely identified by the pair
+**(project_id, branch_id)** — the storage layer's **(tenant_id, timeline_id)** — so a
+branch cannot be named, resolved, or attached to outside its owning project. This scoping
+is structural: every API and internal interface that touches a branch takes the project as
+part of the key, so cross-project branch use is unrepresentable, not merely forbidden.
 
-Forking a timeline produces a new timeline (same tenant) and a new PG cluster bound
-to it; the parent/child relationship is tracked so branch ancestry is queryable.
+Forking a branch — the default branch or another branch — produces a new branch (same
+project) and a new PG cluster bound to it; the parent/child relationship is tracked so
+branch ancestry is queryable.
 
 ### 4.4 Endpoint cardinality and the single-writer invariant
 
@@ -170,14 +176,14 @@ to it; the parent/child relationship is tracked so branch ancestry is queryable.
 
 Headroom — the spare capacity kept on hand so new endpoints and PG clusters never
 block on provisioning — is modeled at the **placement group level**: one pool of
-spare capacity per placement group, not per storage pool or tenant. Subdividing it
+spare capacity per placement group, not per storage pool or project. Subdividing it
 between storage pools is a later refinement, possible if and when it's needed,
 precisely because we start with the coarser unit.
 
 This works because endpoints are stateless (§5.3) and carry no hardware affinity:
-an endpoint may be scheduled next to endpoints of other tenants — including tenants
-in other storage pools. Isolation between tenants is enforced by timeline scoping
-(§4.3), with user access granted per tenant (§10.1) — not by dedicated
+an endpoint may be scheduled next to endpoints of other projects — including projects
+in other storage pools. Isolation between projects is enforced by branch scoping
+(§4.3), with user access granted per project (§10.1) — not by dedicated
 hardware.
 
 ## 5. Service topology
@@ -255,9 +261,10 @@ distributes — observability is provisioned with the endpoint, not bolted on af
 
 All durable data lives in YBDB. An endpoint's access to that data is purely
 **configuration** — the YBDB connection in its spec, plus its (tenant_id, timeline_id)
-binding. Nothing on the endpoint's node or pod is precious: if an endpoint goes away,
-creating a new one with the same spec — on a completely different node, pod, or even
-runtime — serves exactly the same data.
+binding (the storage-layer ids of the project/branch it serves). Nothing on the
+endpoint's node or pod is precious: if an endpoint goes away, creating a new one with the
+same spec — on a completely different node, pod, or even runtime — serves exactly the
+same data.
 
 Statelessness is a property of **YB Light's own design**, owned and guaranteed by
 YB Light, not something amp-controller provides or enforces — the control plane assumes
@@ -276,13 +283,13 @@ This property does a lot of work, and the rest of the design leans on it:
 
 The corollary obligation for amp-controller: the endpoint **spec** is the durable artifact.
 Everything needed to recreate an endpoint from nothing — YBDB connection config,
-timeline binding, role, version, TLS/cert references, otel config — must live in
+branch binding, role, version, TLS/cert references, otel config — must live in
 amp-controller's database, never only on the endpoint itself.
 
 Per-endpoint configuration that amp-controller owns and tracks includes (non-exhaustive):
 
 - the YBDB connection config through which the endpoint accesses its data;
-- which PG cluster / timeline it serves, and whether it is the write endpoint;
+- which PG cluster / branch it serves, and whether it is the write endpoint;
 - TLS state (enabled/disabled) and the certificates backing it (§7);
 - software version (for upgrades, §7);
 - otel configuration;
@@ -366,8 +373,9 @@ this interface, not a change to the workflow.
   cluster API — a pod per endpoint, a Service for the address — reusing the
   `deploy/helm/yb-light-endpoint` chart. VMs (via ybops) follow the same shape.
 
-The endpoint spec carried in `EndpointSpec` (tenant/timeline ids, PG version, the YBDB
-connection, the storage-controller URL, bootstrap flag) is delivered to the endpoint as
+The endpoint spec carried in `EndpointSpec` (the project/branch ids rendered as the
+storage layer's tenant/timeline ids, PG version, the YBDB connection, the
+storage-controller URL, bootstrap flag) is delivered to the endpoint as
 environment today; §5.5's `compute_ctl` transports are the longer-term refinement.
 
 ## 6. Core workflows
@@ -377,14 +385,14 @@ re-usable steps (§8); none is a special case.
 
 1. **Create a storage pool** — any user can create a pool and becomes its owner;
    reaching a pool created by someone else requires a share (a pool grant, §10.1).
-2. **Create a database** — the primary entry point. In one task this creates the
-   **tenant**, its **main PG cluster** (a fresh timeline), and optionally that cluster's
-   first (write) endpoint, all under a storage pool the caller can reach. Tenants are
-   never created on their own — a database *is* a tenant plus its main cluster. Access
-   to the new tenant is then granted per tenant (§10.1).
-3. **Branch a database (fork a timeline)** — fork an existing cluster's timeline at a
-   point, creating a new branch cluster and timeline linked to its parent, under the
-   same tenant (§4.3).
+2. **Create a project** — the primary entry point. In one task this creates the
+   **project**, its **default PG cluster** (a fresh branch), and optionally that cluster's
+   first (write) endpoint, all under a storage pool the caller can reach. The default
+   branch is never created on its own — a project *is* a project record plus its default
+   cluster. Access to the new project is then granted per project (§10.1).
+3. **Branch a project (fork a branch)** — fork an existing cluster's branch at a
+   point — the default branch or another branch — creating a new branch cluster linked to
+   its parent, under the same project (§4.3).
 4. **Add/remove endpoints on a PG cluster** — scale endpoints up and down, including
    down to **zero**. Adding a write endpoint is only valid when none exists; removing
    the write endpoint leaves a read-only (or empty) cluster.
@@ -392,14 +400,14 @@ re-usable steps (§8); none is a special case.
 Implied operator-facing workflows (capacity headroom, node/pool provisioning, universe
 creation through YBA) follow the same pattern but are not user-facing.
 
-**Implemented today (create-database).** `POST .../timelines` runs workflow 2 end to
-end inside the controller: it creates the tenant + main timeline (state store),
-registers the tenant with the managed storage controller (§11.1), and provisions the
-write endpoint through the deployer (§5.6), returning the endpoint's connection
-address. It currently runs **synchronously** (the call blocks while the endpoint comes
-up) rather than through the write-ahead task framework — moving it onto a task
-(principle 5, §8) so it is async, durable, and resumable is the planned next step. See
-[`ac-apis.md`](ac-apis.md) for the API shape.
+**Implemented today (create-project).** `POST .../projects` runs workflow 2 end to
+end inside the controller: it creates the project + default branch (state store),
+records the storage-controller pending-init recipe — keyed by the storage-layer
+tenant_id/timeline_id (§11.1) — and provisions the write endpoint through the deployer
+(§5.6), returning the endpoint's connection address. It currently runs **synchronously**
+(the call blocks while the endpoint comes up) rather than through the write-ahead task
+framework — moving it onto a task (principle 5, §8) so it is async, durable, and
+resumable is the planned next step. See [`ac-apis.md`](ac-apis.md) for the API shape.
 
 ## 7. Longer-term requirements (designed for now, built later)
 
@@ -461,7 +469,7 @@ control-plane operations.
 
 Two record types, both rows in amp-controller's schema (§10):
 
-- **`task`** — one row per initiated operation (create database, branch, scale, a
+- **`task`** — one row per initiated operation (create project, branch, scale, a
   reconciliation repair). This is the **user-visible** unit: the API exposes task status
   so a caller can monitor or poll a long-running operation. It carries the task kind, a
   coarse status, the resource it targets, the originating request, and (on failure) the
@@ -485,9 +493,9 @@ CREATE TYPE step_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
 
 CREATE TABLE task (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    kind         text        NOT NULL,        -- e.g. 'create_database', 'branch', 'scale'
+    kind         text        NOT NULL,        -- e.g. 'create_project', 'branch', 'scale'
     status       task_status NOT NULL DEFAULT 'pending',
-    tenant_id    uuid,                         -- the resource the task is about, for API
+    project_id   uuid,                         -- the resource the task is about, for API
     target_ref   text,                         --   monitoring; nullable (a task may create
                                                --   its own target, absent when planned)
     params       jsonb       NOT NULL,        -- the request that created the task
@@ -612,7 +620,7 @@ universe**, accessed over YSQL — the same universe whose PG clusters it manage
 consequences worth stating up front:
 
 - **Isolation.** amp-controller's control-plane tables live in their own database within the
-  universe, with RBAC keeping them strictly apart from tenant data. Tenants must have
+  universe, with RBAC keeping them strictly apart from project data. Projects must have
   no path to control-plane state.
 - **Coupling.** The control plane's availability is tied to its universe's
   availability. Within a single placement group this coupling is mostly tolerable —
@@ -623,13 +631,13 @@ consequences worth stating up front:
 
 The state store tracks both halves of the model:
 
-- **Logical:** storage pools (each with an owner), tenants, and users — users are either
-  **admin** (placement-group-wide, all pools and tenants) or non-admin. A non-admin
+- **Logical:** storage pools (each with an owner), projects, and users — users are either
+  **admin** (placement-group-wide, all pools and projects) or non-admin. A non-admin
   reaches a pool they created (as owner) or one **shared** with them via a **pool grant**,
-  and reaches a tenant through **per-tenant grants** (read-only or read-write access to
-  specific tenants), see §10.1 — plus the RBAC bindings at each level.
-- **Physical:** PG clusters and their timelines (which is the tenant's main cluster, plus
-  fork ancestry), and endpoints (timeline binding and r/w vs. read-only role, exposed
+  and reaches a project through **per-project grants** (read-only or read-write access to
+  specific projects), see §10.1 — plus the RBAC bindings at each level.
+- **Physical:** PG clusters and their branches (which is the project's default cluster, plus
+  fork ancestry), and endpoints (branch binding and r/w vs. read-only role, exposed
   ports/address, placement, version, TLS/cert state, otel config). Endpoint records must
   be complete enough to recreate the endpoint from scratch (§5.3).
 - **Operational:** tasks and their ordered task steps (§8), with enough state to resume
@@ -641,41 +649,42 @@ reconciliation has something to reconcile against.
 ### 10.1 Entities
 
 ```
-user ──< user_pool_grant >── storage_pool ──< tenant ──< pg_cluster (timeline) ──< endpoint
- │           (a "share")          ▲             │         one main cluster + its branches
+user ──< user_pool_grant >── storage_pool ──< project ──< branch (= timeline) ──< endpoint
+ │           (a "share")          ▲             │       one default branch + its forks
  │       owner_user_id ───────────┘             │
- └──< user_tenant_grant >───────────────────────┘   (role: read_only | read_write)
+ └──< user_project_grant >───────────────────────┘   (role: read_only | read_write)
 
 admin users skip both grants; a pool's owner needs no share for that pool
 ```
 
-- **storage_pool / tenant** — the ownership hierarchy. A storage pool maps roughly to a
+- **storage_pool / project** — the ownership hierarchy. A storage pool maps roughly to a
   **Meko datapack** and carries an **owner** (`owner_user_id`, the user who created it);
   it is *not* an "org" (that level is undefined for now, §12). Names are unique within
-  their parent scope (pool within placement group, tenant within pool), not globally, so
-  tenants can't collide with or probe each other's names.
-- **pg_cluster** — carries its timeline (the two are synonyms, §4.3), keyed by the
-  composite **(tenant_id, timeline_id)**; plus name (unique within its tenant), an
-  `is_main` flag (exactly one main cluster per tenant, created with the tenant, §6; the
-  rest are branches), fork ancestry (parent timeline + fork point), and lifecycle state.
-  There is no separate timelines table.
+  their parent scope (pool within placement group, project within pool), not globally, so
+  projects can't collide with or probe each other's names.
+- **branch** — the PG cluster's data; a branch *is* the storage layer's timeline (the two
+  are synonyms, §4.3), keyed by the composite **(project_id, branch_id)** = storage-layer
+  **(tenant_id, timeline_id)**; plus name (unique within its project), an `is_default` flag
+  (exactly one default branch per project, created with the project, §6; the rest are
+  forks), fork ancestry (parent branch + fork point), and lifecycle state. There is no
+  separate timelines table.
 - **endpoint** — durable **record**, ephemeral **instance**. The record is what users
   address through the API ("add/remove endpoint"), by id — endpoints have no names.
-  The record carries the spec: timeline
+  The record carries the spec: branch
   binding, `read_write` | `read_only` role, version, TLS/cert ref, otel config. Its
   runtime columns — state, address, exposed ports, runtime ref (pod/VM handle),
   last-seen — are observed data. Replacing a failed instance keeps the endpoint id
   (new pod, same record); scale-to-zero deletes records, not just instances.
   Address + ports + TLS state form the connection details returned to users.
-- **user / user_pool_grant / user_tenant_grant** — users are either **admin** (all
-  pools and tenants, no grants needed) or non-admin. Any user may **create** a storage
+- **user / user_pool_grant / user_project_grant** — users are either **admin** (all
+  pools and projects, no grants needed) or non-admin. Any user may **create** a storage
   pool and is recorded as its **owner**, which needs no grant. To reach a pool they did
   not create, a non-admin needs a **pool grant** (the "share"), keyed
-  `(user_id, storage_pool_id)`, that lets them create and see tenants in it; and
-  **tenant grants**, keyed `(user_id, tenant_id)` with a `read_only` | `read_write` role,
-  that govern access to specific tenants. Effective access is the union of the tenant
+  `(user_id, storage_pool_id)`, that lets them create and see projects in it; and
+  **project grants**, keyed `(user_id, project_id)` with a `read_only` | `read_write` role,
+  that govern access to specific projects. Effective access is the union of the project
   grants. Revocation is dropping the relevant row; a non-admin with zero grants (and no
-  pools of their own) is valid and can access nothing. The tenant is the finest grain of
+  pools of their own) is valid and can access nothing. The project is the finest grain of
   user access (decided).
 - The **placement group has no table** — a controller instance *is* one placement
   group (§4); its identity and connection-mode configuration are deployment config,
@@ -686,20 +695,20 @@ admin users skip both grants; a pool's owner needs no share for that pool
 Per principle 4, the load-bearing rules are expressed in the schema itself, not only
 in API-layer validation (full DDL lives with the code and its migrations):
 
-1. **Timelines are tenant-scoped structurally.** Every timeline reference — endpoint
-   binding, fork parent — is a composite foreign key carrying `tenant_id`, so
-   cross-tenant timeline use (including cross-tenant forks) is unrepresentable.
+1. **Branches are project-scoped structurally.** Every branch reference — endpoint
+   binding, fork parent — is a composite foreign key carrying `project_id`, so
+   cross-project branch use (including cross-project forks) is unrepresentable.
 2. **Single writer per PG cluster.** A partial unique index —
-   `UNIQUE (tenant_id, timeline_id) WHERE role = 'read_write'` — so two write
+   `UNIQUE (project_id, branch_id) WHERE role = 'read_write'` — so two write
    endpoints cannot exist no matter what code path tries.
-3. **One main cluster per tenant.** A partial unique index on `pg_cluster` —
-   `UNIQUE (tenant_id) WHERE is_main` — so a tenant cannot acquire a second main
-   cluster; every other cluster under it is a branch.
+3. **One default branch per project.** A partial unique index on `branch` —
+   `UNIQUE (project_id) WHERE is_default` — so a project cannot acquire a second default
+   branch; every other branch under it is a fork.
 4. **Access is explicit rows.** Pool grants key on `(user_id, storage_pool_id)` and
-   tenant grants on `(user_id, tenant_id)`; a grant at either level either exists or it
+   project grants on `(user_id, project_id)`; a grant at either level either exists or it
    doesn't. A pool's `owner_user_id` is access in its own right and needs no grant row.
-5. **Deletes are restricted, not cascaded.** Removing a pool with tenants, a tenant
-   with clusters, a cluster with endpoints, or a cluster whose timeline has fork
+5. **Deletes are restricted, not cascaded.** Removing a pool with projects, a project
+   with clusters, a cluster with endpoints, or a cluster whose branch has fork
    children is a constraint violation; teardown happens top-down through tasks,
    never via `ON DELETE CASCADE` surprises.
 
@@ -838,10 +847,10 @@ cache warmth, nothing else — so it inherits the replacement-is-recovery postur
 - **Billing/metering, quotas** — will build on the tenancy model later.
 - **API authentication** — the user/grant model (§10.1) is designed; how callers
   authenticate as users is not.
-- **Timeline data GC** — deleting a PG cluster removes control-plane records;
-  reclaiming the timeline's physical data in YBDB is a future design.
+- **Branch data GC** — deleting a branch (PG cluster) removes control-plane records;
+  reclaiming the underlying timeline's physical data in YBDB is a future design.
 - **Data-plane credential isolation** — pageservers and safekeepers across all
-  tenants currently share one set of universe credentials on the shared storage
-  tables; tenant-scoped data-plane credentials (or row-level security) are a
+  storage-layer tenants currently share one set of universe credentials on the shared
+  storage tables; tenant-scoped data-plane credentials (or row-level security) are a
   future design.
 

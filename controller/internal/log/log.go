@@ -15,8 +15,8 @@ import (
 const (
 	KeyUserID        = "user_id"
 	KeyStoragePoolID = "storage_pool_id"
-	KeyTenantID      = "tenant_id"
-	KeyTimelineID    = "timeline_id"
+	KeyProjectID     = "project_id"
+	KeyBranchID      = "branch_id"
 	KeyEndpointID    = "endpoint_id"
 	KeyTaskID        = "task_id"
 	KeyStep          = "step"

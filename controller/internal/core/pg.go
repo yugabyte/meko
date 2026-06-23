@@ -144,89 +144,229 @@ func (b *PgBackend) GetStoragePool(ctx context.Context, poolID uuid.UUID) (Stora
 	return p, err
 }
 
-func (b *PgBackend) CreateTimeline(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (Timeline, error) {
-	tenantID := uuid.New()
-	timelineID := uuid.New()
+func (b *PgBackend) CreateProject(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (Project, error) {
+	projectID := uuid.New()
+	branchID := uuid.New()
 
-	// The tenant and its main cluster are written together: a tenant with no
-	// timeline is not a valid resource. Both inserts are ON CONFLICT (pk) DO
+	// The project and its default branch are written together: a project with no
+	// branch is not a valid resource. Both inserts are ON CONFLICT (pk) DO
 	// NOTHING so re-executing the same statement (same ids) converges; the
-	// tenant-name collision surfaces as 23505 on the (storage_pool_id, name)
+	// project-name collision surfaces as 23505 on the (storage_pool_id, name)
 	// unique constraint, which is not the conflict target and so still errors.
 	tx, err := b.pool.Begin(ctx)
 	if err != nil {
-		return Timeline{}, fmt.Errorf("begin: %w", err)
+		return Project{}, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO tenant (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)
+		`INSERT INTO project (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)
 		 ON CONFLICT (id) DO NOTHING`,
-		tenantID.String(), poolID.String(), name); err != nil {
-		return Timeline{}, mapTimelineErr("insert tenant", err)
+		projectID.String(), poolID.String(), name); err != nil {
+		return Project{}, mapProjectErr("insert project", err)
 	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO pg_cluster (tenant_id, timeline_id, name, pg_version, is_main)
+		`INSERT INTO branch (project_id, branch_id, name, pg_version, is_default)
 		 VALUES ($1::uuid, $2::uuid, $3, $4, true)
-		 ON CONFLICT (tenant_id, timeline_id) DO NOTHING`,
-		tenantID.String(), timelineID.String(), name, pgVersion); err != nil {
-		return Timeline{}, mapTimelineErr("insert pg_cluster", err)
+		 ON CONFLICT (project_id, branch_id) DO NOTHING`,
+		projectID.String(), branchID.String(), name, pgVersion); err != nil {
+		return Project{}, mapProjectErr("insert default branch", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return Timeline{}, fmt.Errorf("commit create timeline: %w", err)
+		return Project{}, fmt.Errorf("commit create project: %w", err)
 	}
-	return b.getTimeline(ctx, tenantID, timelineID)
+	return b.getProject(ctx, poolID, projectID)
 }
 
-func (b *PgBackend) getTimeline(ctx context.Context, tenantID, timelineID uuid.UUID) (Timeline, error) {
+// projectSelect joins project -> storage_pool and its default branch so a
+// project is only visible through the pool it belongs to, and always carries
+// its default branch. Pools are top-level, so this is not owner-scoped.
+const projectSelect = `SELECT p.id::text, p.storage_pool_id::text, p.name, p.created_at,
+		b.project_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.created_at
+	FROM project p
+	JOIN storage_pool sp ON sp.id = p.storage_pool_id
+	JOIN branch b ON b.project_id = p.id AND b.is_default`
+
+func (b *PgBackend) getProject(ctx context.Context, poolID, projectID uuid.UUID) (Project, error) {
 	row := b.pool.QueryRow(ctx,
-		`SELECT tenant_id::text, timeline_id::text, name, pg_version, is_main, parent_timeline_id::text, fork_lsn::text, created_at
-		 FROM pg_cluster WHERE tenant_id = $1::uuid AND timeline_id = $2::uuid`,
-		tenantID.String(), timelineID.String())
-	t, err := scanTimeline(row)
+		projectSelect+` WHERE p.id = $1::uuid AND sp.id = $2::uuid`,
+		projectID.String(), poolID.String())
+	p, err := scanProject(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Timeline{}, ErrNotFound
+		return Project{}, ErrNotFound
 	}
-	return t, err
+	return p, err
 }
 
-func (b *PgBackend) BranchTimeline(ctx context.Context, poolID, parentTimelineID uuid.UUID, name, forkLSN string) (Timeline, error) {
-	// Resolve the parent within the pool: this validates that the pool and the
-	// parent timeline exist (a missing parent 404s) and yields the tenant the
-	// branch lives under (a branch stays in its ancestor's tenant).
-	tenantID, err := b.timelineTenant(ctx, poolID, parentTimelineID)
+func (b *PgBackend) GetProject(ctx context.Context, poolID, projectID uuid.UUID) (Project, error) {
+	return b.getProject(ctx, poolID, projectID)
+}
+
+func (b *PgBackend) ListProjects(ctx context.Context, poolID uuid.UUID, limit, offset int) ([]Project, int, error) {
+	// A missing pool 404s rather than returning an empty page.
+	if _, err := b.GetStoragePool(ctx, poolID); err != nil {
+		return nil, 0, err
+	}
+	total, err := b.count(ctx,
+		`SELECT count(*) FROM project WHERE storage_pool_id = $1::uuid`,
+		poolID.String())
 	if err != nil {
-		return Timeline{}, err
+		return nil, 0, fmt.Errorf("count projects: %w", err)
+	}
+	rows, err := b.pool.Query(ctx,
+		projectSelect+` WHERE sp.id = $1::uuid
+		 ORDER BY p.created_at, p.id LIMIT $2 OFFSET $3`,
+		poolID.String(), limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list projects: %w", err)
+	}
+	defer rows.Close()
+
+	var projects []Project
+	for rows.Next() {
+		p, err := scanProject(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		projects = append(projects, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("list projects: %w", err)
+	}
+	return projects, total, nil
+}
+
+func (b *PgBackend) CreateBranch(ctx context.Context, poolID, projectID, parentBranchID uuid.UUID, name, forkLSN string) (Branch, error) {
+	// Validate the project within the pool first (a project not in the pool 404s).
+	if err := b.projectInPool(ctx, poolID, projectID); err != nil {
+		return Branch{}, err
 	}
 
 	branchID := uuid.New()
-	// is_main = false; record the fork ancestry. pg_version is inherited from the
-	// parent (the SELECT source) so a branch and its ancestor never drift.
-	// ON CONFLICT (pk) DO NOTHING makes a same-id retry converge; a duplicate name
-	// surfaces as 23505 on UNIQUE (tenant_id, name) -> ErrConflict, and the
-	// in-tenant parent FK as 23503 -> ErrNotFound. forkLSN is validated to be a
+	// is_default = false; record the fork ancestry. pg_version is inherited from
+	// the parent (the SELECT source) so a branch and its ancestor never drift.
+	// The SELECT is keyed by the parent within the project; a missing parent
+	// inserts nothing, so the read-back 404s. ON CONFLICT (pk) DO NOTHING makes a
+	// same-id retry converge; a duplicate name surfaces as 23505 on
+	// UNIQUE (project_id, name) -> ErrConflict. forkLSN is validated to be a
 	// well-formed LSN by the caller before it reaches the pg_lsn cast.
 	if _, err := b.pool.Exec(ctx,
-		`INSERT INTO pg_cluster (tenant_id, timeline_id, name, pg_version, is_main, parent_timeline_id, fork_lsn)
+		`INSERT INTO branch (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn)
 		 SELECT $1::uuid, $2::uuid, $3, p.pg_version, false, $4::uuid, $5::pg_lsn
-		 FROM pg_cluster p WHERE p.tenant_id = $1::uuid AND p.timeline_id = $4::uuid
-		 ON CONFLICT (tenant_id, timeline_id) DO NOTHING`,
-		tenantID.String(), branchID.String(), name, parentTimelineID.String(), forkLSN); err != nil {
-		return Timeline{}, mapTimelineErr("insert branch pg_cluster", err)
+		 FROM branch p WHERE p.project_id = $1::uuid AND p.branch_id = $4::uuid
+		 ON CONFLICT (project_id, branch_id) DO NOTHING`,
+		projectID.String(), branchID.String(), name, parentBranchID.String(), forkLSN); err != nil {
+		return Branch{}, mapBranchErr("insert branch", err)
 	}
-	return b.getTimeline(ctx, tenantID, branchID)
+	return b.getBranchByID(ctx, projectID, branchID)
 }
 
-// mapTimelineErr translates the constraint violations the timeline writes can
-// raise: a duplicate tenant name (unique storage_pool_id, name) -> ErrConflict,
-// and a missing pool (foreign key on tenant.storage_pool_id) -> ErrNotFound.
-func mapTimelineErr(what string, err error) error {
+func (b *PgBackend) getBranchByID(ctx context.Context, projectID, branchID uuid.UUID) (Branch, error) {
+	row := b.pool.QueryRow(ctx,
+		`SELECT project_id::text, branch_id::text, name, pg_version, is_default, parent_branch_id::text, fork_lsn::text, created_at
+		 FROM branch WHERE project_id = $1::uuid AND branch_id = $2::uuid`,
+		projectID.String(), branchID.String())
+	br, err := scanBranch(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Branch{}, ErrNotFound
+	}
+	return br, err
+}
+
+// branchSelect joins branch -> project -> storage_pool so a branch is only
+// visible through the project (and pool) it belongs to.
+const branchSelect = `SELECT b.project_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.created_at
+	FROM branch b
+	JOIN project p ON p.id = b.project_id
+	JOIN storage_pool sp ON sp.id = p.storage_pool_id`
+
+func (b *PgBackend) GetBranch(ctx context.Context, poolID, projectID, branchID uuid.UUID) (Branch, error) {
+	row := b.pool.QueryRow(ctx,
+		branchSelect+` WHERE b.branch_id = $1::uuid AND b.project_id = $2::uuid AND sp.id = $3::uuid`,
+		branchID.String(), projectID.String(), poolID.String())
+	br, err := scanBranch(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Branch{}, ErrNotFound
+	}
+	return br, err
+}
+
+func (b *PgBackend) ListBranches(ctx context.Context, poolID, projectID uuid.UUID, limit, offset int) ([]Branch, int, error) {
+	// A missing pool or project 404s rather than returning an empty page.
+	if err := b.projectInPool(ctx, poolID, projectID); err != nil {
+		return nil, 0, err
+	}
+	total, err := b.count(ctx,
+		`SELECT count(*) FROM branch WHERE project_id = $1::uuid`,
+		projectID.String())
+	if err != nil {
+		return nil, 0, fmt.Errorf("count branches: %w", err)
+	}
+	rows, err := b.pool.Query(ctx,
+		`SELECT project_id::text, branch_id::text, name, pg_version, is_default, parent_branch_id::text, fork_lsn::text, created_at
+		 FROM branch WHERE project_id = $1::uuid
+		 ORDER BY created_at, branch_id LIMIT $2 OFFSET $3`,
+		projectID.String(), limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list branches: %w", err)
+	}
+	defer rows.Close()
+
+	var branches []Branch
+	for rows.Next() {
+		br, err := scanBranch(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		branches = append(branches, br)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("list branches: %w", err)
+	}
+	return branches, total, nil
+}
+
+// projectInPool returns ErrNotFound unless projectID exists under poolID.
+func (b *PgBackend) projectInPool(ctx context.Context, poolID, projectID uuid.UUID) error {
+	var x int
+	err := b.pool.QueryRow(ctx,
+		`SELECT 1 FROM project WHERE id = $1::uuid AND storage_pool_id = $2::uuid`,
+		projectID.String(), poolID.String()).Scan(&x)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("resolve project in pool: %w", err)
+	}
+	return nil
+}
+
+// mapProjectErr translates the constraint violations the project writes can
+// raise: a duplicate project name (unique storage_pool_id, name) -> ErrConflict,
+// and a missing pool (foreign key on project.storage_pool_id) -> ErrNotFound.
+func mapProjectErr(what string, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
-		case "23505": // unique_violation: the tenant name is already taken in the pool
+		case "23505": // unique_violation: the project name is already taken in the pool
 			return ErrConflict
 		case "23503": // foreign_key_violation: the pool no longer exists
+			return ErrNotFound
+		}
+	}
+	return fmt.Errorf("%s: %w", what, err)
+}
+
+// mapBranchErr translates the constraint violations a branch write can raise: a
+// duplicate branch name (unique project_id, name) -> ErrConflict, and a missing
+// in-project parent (foreign key) -> ErrNotFound.
+func mapBranchErr(what string, err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505": // unique_violation: the branch name is already taken in the project
+			return ErrConflict
+		case "23503": // foreign_key_violation: the in-project parent does not exist
 			return ErrNotFound
 		}
 	}
@@ -241,84 +381,24 @@ func (b *PgBackend) getStoragePoolByID(ctx context.Context, id uuid.UUID) (Stora
 	return scanPool(row)
 }
 
-func (b *PgBackend) ListTimelines(ctx context.Context, poolID uuid.UUID, limit, offset int) ([]Timeline, int, error) {
-	// A missing pool 404s rather than returning an empty page.
-	if _, err := b.GetStoragePool(ctx, poolID); err != nil {
-		return nil, 0, err
-	}
-	total, err := b.count(ctx,
-		`SELECT count(*) FROM pg_cluster c
-		 JOIN tenant t ON c.tenant_id = t.id
-		 WHERE t.storage_pool_id = $1::uuid`,
-		poolID.String())
-	if err != nil {
-		return nil, 0, fmt.Errorf("count timelines: %w", err)
-	}
-	rows, err := b.pool.Query(ctx,
-		`SELECT c.tenant_id::text, c.timeline_id::text, c.name, c.pg_version, c.is_main, c.parent_timeline_id::text, c.fork_lsn::text, c.created_at
-		 FROM pg_cluster c
-		 JOIN tenant t ON c.tenant_id = t.id
-		 WHERE t.storage_pool_id = $1::uuid
-		 ORDER BY c.created_at, c.timeline_id LIMIT $2 OFFSET $3`,
-		poolID.String(), limit, offset)
-	if err != nil {
-		return nil, 0, fmt.Errorf("list timelines: %w", err)
-	}
-	defer rows.Close()
-
-	var timelines []Timeline
-	for rows.Next() {
-		t, err := scanTimeline(rows)
-		if err != nil {
-			return nil, 0, err
-		}
-		timelines = append(timelines, t)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("list timelines: %w", err)
-	}
-	return timelines, total, nil
-}
-
-// timelineSelect joins pg_cluster -> tenant -> storage_pool so a timeline is
-// only visible through the pool its tenant belongs to. The API addresses a
-// timeline by id alone (no tenant in the path); timeline_id is a random 16-byte
-// storage id, so it is treated as globally unique. Pools are top-level, so this
-// is not owner-scoped.
-const timelineSelect = `SELECT c.tenant_id::text, c.timeline_id::text, c.name, c.pg_version, c.is_main, c.parent_timeline_id::text, c.fork_lsn::text, c.created_at
-	FROM pg_cluster c
-	JOIN tenant t ON t.id = c.tenant_id
-	JOIN storage_pool sp ON sp.id = t.storage_pool_id`
-
-func (b *PgBackend) GetTimeline(ctx context.Context, poolID, timelineID uuid.UUID) (Timeline, error) {
-	row := b.pool.QueryRow(ctx,
-		timelineSelect+` WHERE c.timeline_id = $1::uuid AND sp.id = $2::uuid`,
-		timelineID.String(), poolID.String())
-	tl, err := scanTimeline(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Timeline{}, ErrNotFound
-	}
-	return tl, err
-}
-
-func (b *PgBackend) CreateEndpoint(ctx context.Context, tenantID, timelineID uuid.UUID, role string, config []byte) (Endpoint, error) {
+func (b *PgBackend) CreateEndpoint(ctx context.Context, projectID, branchID uuid.UUID, role string, config []byte) (Endpoint, error) {
 	id := uuid.New()
 	var cfg any
 	if len(config) > 0 {
 		cfg = config
 	}
 	_, err := b.pool.Exec(ctx,
-		`INSERT INTO endpoint (id, tenant_id, timeline_id, role, config)
+		`INSERT INTO endpoint (id, project_id, branch_id, role, config)
 		 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::endpoint_role, $5::jsonb)
 		 ON CONFLICT (id) DO NOTHING`,
-		id.String(), tenantID.String(), timelineID.String(), role, cfg)
+		id.String(), projectID.String(), branchID.String(), role, cfg)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			switch pgErr.Code {
-			case "23505": // unique_violation: a read_write endpoint already exists (one_writer_per_timeline)
+			case "23505": // unique_violation: a read_write endpoint already exists (one_writer_per_branch)
 				return Endpoint{}, ErrConflict
-			case "23503": // foreign_key_violation: the (tenant_id, timeline_id) timeline does not exist
+			case "23503": // foreign_key_violation: the (project_id, branch_id) branch does not exist
 				return Endpoint{}, ErrNotFound
 			}
 		}
@@ -330,7 +410,7 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, tenantID, timelineID uui
 // endpointSelect projects an endpoint row; address is NULL until the endpoint
 // is deployed (SetEndpointAddress), so it is coalesced to the empty string to
 // match Endpoint.Address being a plain string.
-const endpointSelect = `SELECT e.id::text, e.tenant_id::text, e.timeline_id::text, e.role::text, COALESCE(e.address, ''), e.created_at
+const endpointSelect = `SELECT e.id::text, e.project_id::text, e.branch_id::text, e.role::text, COALESCE(e.address, ''), e.created_at
 	FROM endpoint e`
 
 func (b *PgBackend) getEndpointByID(ctx context.Context, id uuid.UUID) (Endpoint, error) {
@@ -338,14 +418,14 @@ func (b *PgBackend) getEndpointByID(ctx context.Context, id uuid.UUID) (Endpoint
 	return scanEndpoint(row)
 }
 
-func (b *PgBackend) GetEndpoint(ctx context.Context, poolID, timelineID, endpointID uuid.UUID) (Endpoint, error) {
+func (b *PgBackend) GetEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (Endpoint, error) {
 	row := b.pool.QueryRow(ctx,
 		endpointSelect+`
-		 JOIN pg_cluster c ON c.tenant_id = e.tenant_id AND c.timeline_id = e.timeline_id
-		 JOIN tenant t ON t.id = c.tenant_id
-		 JOIN storage_pool sp ON sp.id = t.storage_pool_id
-		 WHERE e.id = $1::uuid AND c.timeline_id = $2::uuid AND sp.id = $3::uuid`,
-		endpointID.String(), timelineID.String(), poolID.String())
+		 JOIN branch b ON b.project_id = e.project_id AND b.branch_id = e.branch_id
+		 JOIN project p ON p.id = b.project_id
+		 JOIN storage_pool sp ON sp.id = p.storage_pool_id
+		 WHERE e.id = $1::uuid AND b.branch_id = $2::uuid AND b.project_id = $3::uuid AND sp.id = $4::uuid`,
+		endpointID.String(), branchID.String(), projectID.String(), poolID.String())
 	ep, err := scanEndpoint(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Endpoint{}, ErrNotFound
@@ -353,24 +433,22 @@ func (b *PgBackend) GetEndpoint(ctx context.Context, poolID, timelineID, endpoin
 	return ep, err
 }
 
-func (b *PgBackend) ListEndpoints(ctx context.Context, poolID, timelineID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
-	// Resolve the timeline within the pool (it's addressed by id under the pool,
-	// but the storage layer keys it by (tenant_id, timeline_id)). No row means
-	// the pool or the timeline does not exist -> 404.
-	tenantID, err := b.timelineTenant(ctx, poolID, timelineID)
-	if err != nil {
+func (b *PgBackend) ListEndpoints(ctx context.Context, poolID, projectID, branchID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
+	// Resolve the branch within the project and pool first. No row means the
+	// pool, project, or branch does not exist -> 404.
+	if _, err := b.GetBranch(ctx, poolID, projectID, branchID); err != nil {
 		return nil, 0, err
 	}
 	total, err := b.count(ctx,
-		`SELECT count(*) FROM endpoint WHERE tenant_id = $1::uuid AND timeline_id = $2::uuid`,
-		tenantID.String(), timelineID.String())
+		`SELECT count(*) FROM endpoint WHERE project_id = $1::uuid AND branch_id = $2::uuid`,
+		projectID.String(), branchID.String())
 	if err != nil {
 		return nil, 0, fmt.Errorf("count endpoints: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
-		endpointSelect+` WHERE e.tenant_id = $1::uuid AND e.timeline_id = $2::uuid
+		endpointSelect+` WHERE e.project_id = $1::uuid AND e.branch_id = $2::uuid
 		 ORDER BY e.created_at, e.id LIMIT $3 OFFSET $4`,
-		tenantID.String(), timelineID.String(), limit, offset)
+		projectID.String(), branchID.String(), limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list endpoints: %w", err)
 	}
@@ -406,30 +484,6 @@ func (b *PgBackend) DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) er
 		return fmt.Errorf("delete endpoint: %w", err)
 	}
 	return nil
-}
-
-// timelineTenant resolves the storage-layer tenant id of the timeline addressed
-// by timelineID within poolID, or ErrNotFound if the pool or the timeline does
-// not exist. timeline_id is a generated UUID, so it is unique within a pool.
-func (b *PgBackend) timelineTenant(ctx context.Context, poolID, timelineID uuid.UUID) (uuid.UUID, error) {
-	var tenantStr string
-	err := b.pool.QueryRow(ctx,
-		`SELECT c.tenant_id::text
-		 FROM pg_cluster c
-		 JOIN tenant t ON c.tenant_id = t.id
-		 WHERE t.storage_pool_id = $1::uuid AND c.timeline_id = $2::uuid`,
-		poolID.String(), timelineID.String()).Scan(&tenantStr)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, ErrNotFound
-	}
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("resolve timeline tenant: %w", err)
-	}
-	tenantID, err := uuid.Parse(tenantStr)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("parse tenant id: %w", err)
-	}
-	return tenantID, nil
 }
 
 // count runs a scalar COUNT(*) query and returns its result.
@@ -484,62 +538,111 @@ func scanPool(r scanRow) (StoragePool, error) {
 	return p, nil
 }
 
-func scanTimeline(r scanRow) (Timeline, error) {
+// scanProject scans a project row joined with its default branch (projectSelect).
+func scanProject(r scanRow) (Project, error) {
 	var (
-		tenantStr   string
-		timelineStr string
-		parentStr   sql.NullString // NULL for a root (main) timeline
-		forkLSN     sql.NullString // NULL for a root (main) timeline
-		t           Timeline
+		idStr   string
+		poolStr string
+		p       Project
+		def     Branch
+		// default-branch columns
+		defProjectStr string
+		defBranchStr  string
+		defParentStr  sql.NullString
+		defForkLSN    sql.NullString
 	)
-	if err := r.Scan(&tenantStr, &timelineStr, &t.Name, &t.PgVersion, &t.IsMain, &parentStr, &forkLSN, &t.CreatedAt); err != nil {
-		return Timeline{}, err
+	if err := r.Scan(&idStr, &poolStr, &p.Name, &p.CreatedAt,
+		&defProjectStr, &defBranchStr, &def.Name, &def.PgVersion, &def.IsDefault, &defParentStr, &defForkLSN, &def.CreatedAt); err != nil {
+		return Project{}, err
 	}
-	tenantID, err := uuid.Parse(tenantStr)
+	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return Timeline{}, fmt.Errorf("parse tenant id: %w", err)
+		return Project{}, fmt.Errorf("parse project id: %w", err)
 	}
-	timelineID, err := uuid.Parse(timelineStr)
+	poolID, err := uuid.Parse(poolStr)
 	if err != nil {
-		return Timeline{}, fmt.Errorf("parse timeline id: %w", err)
+		return Project{}, fmt.Errorf("parse storage pool id: %w", err)
 	}
-	t.TenantID = tenantID
-	t.TimelineID = timelineID
+	defProjectID, err := uuid.Parse(defProjectStr)
+	if err != nil {
+		return Project{}, fmt.Errorf("parse default branch project id: %w", err)
+	}
+	defBranchID, err := uuid.Parse(defBranchStr)
+	if err != nil {
+		return Project{}, fmt.Errorf("parse default branch id: %w", err)
+	}
+	p.ID = id
+	p.StoragePoolID = poolID
+	def.ProjectID = defProjectID
+	def.BranchID = defBranchID
+	if defParentStr.Valid {
+		parentID, err := uuid.Parse(defParentStr.String)
+		if err != nil {
+			return Project{}, fmt.Errorf("parse default branch parent id: %w", err)
+		}
+		def.ParentBranchID = &parentID
+	}
+	def.ForkLSN = defForkLSN.String // "" when NULL
+	p.DefaultBranch = def
+	return p, nil
+}
+
+func scanBranch(r scanRow) (Branch, error) {
+	var (
+		projectStr string
+		branchStr  string
+		parentStr  sql.NullString // NULL for the default branch
+		forkLSN    sql.NullString // NULL for the default branch
+		br         Branch
+	)
+	if err := r.Scan(&projectStr, &branchStr, &br.Name, &br.PgVersion, &br.IsDefault, &parentStr, &forkLSN, &br.CreatedAt); err != nil {
+		return Branch{}, err
+	}
+	projectID, err := uuid.Parse(projectStr)
+	if err != nil {
+		return Branch{}, fmt.Errorf("parse project id: %w", err)
+	}
+	branchID, err := uuid.Parse(branchStr)
+	if err != nil {
+		return Branch{}, fmt.Errorf("parse branch id: %w", err)
+	}
+	br.ProjectID = projectID
+	br.BranchID = branchID
 	if parentStr.Valid {
 		parentID, err := uuid.Parse(parentStr.String)
 		if err != nil {
-			return Timeline{}, fmt.Errorf("parse parent timeline id: %w", err)
+			return Branch{}, fmt.Errorf("parse parent branch id: %w", err)
 		}
-		t.ParentTimelineID = &parentID
+		br.ParentBranchID = &parentID
 	}
-	t.ForkLSN = forkLSN.String // "" when NULL
-	return t, nil
+	br.ForkLSN = forkLSN.String // "" when NULL
+	return br, nil
 }
 
 func scanEndpoint(r scanRow) (Endpoint, error) {
 	var (
-		idStr       string
-		tenantStr   string
-		timelineStr string
-		ep          Endpoint
+		idStr      string
+		projectStr string
+		branchStr  string
+		ep         Endpoint
 	)
-	if err := r.Scan(&idStr, &tenantStr, &timelineStr, &ep.Role, &ep.Address, &ep.CreatedAt); err != nil {
+	if err := r.Scan(&idStr, &projectStr, &branchStr, &ep.Role, &ep.Address, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
 	}
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("parse endpoint id: %w", err)
 	}
-	tenant, err := uuid.Parse(tenantStr)
+	project, err := uuid.Parse(projectStr)
 	if err != nil {
-		return Endpoint{}, fmt.Errorf("parse tenant id: %w", err)
+		return Endpoint{}, fmt.Errorf("parse project id: %w", err)
 	}
-	timeline, err := uuid.Parse(timelineStr)
+	branch, err := uuid.Parse(branchStr)
 	if err != nil {
-		return Endpoint{}, fmt.Errorf("parse timeline id: %w", err)
+		return Endpoint{}, fmt.Errorf("parse branch id: %w", err)
 	}
 	ep.ID = id
-	ep.TenantID = tenant
-	ep.TimelineID = timeline
+	ep.ProjectID = project
+	ep.BranchID = branch
 	return ep, nil
 }

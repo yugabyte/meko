@@ -4,12 +4,18 @@
 // database. The real implementation (PgBackend) persists to YBDB, the
 // controller's only state store (amp-controller.md §10).
 //
-// Scope: users (no auth), storage pools, timeline create (which provisions a
-// tenant + its main timeline, #92) and branch (which forks an existing timeline,
-// #130), and endpoints on a timeline (#108: create records the row and the API
-// synchronously deploys it; get/list/delete round out the lifecycle). Timeline
-// delete remains logged-only in the API for now (no task framework yet), so it
-// has no Backend method.
+// The user-facing resource ladder is storage pool -> project -> branch ->
+// endpoint. A project is the storage layer's tenant and a branch is its
+// timeline: the controller keeps the storage ids verbatim (Project.ID is the
+// tenant_id, Branch.BranchID is the timeline_id) so the rename stops here and
+// the storage layer keeps tenant/timeline.
+//
+// Scope: users (no auth), storage pools, project create (which provisions the
+// project and its default branch, #92) and branch (which forks an existing
+// branch, #130), and endpoints on a branch (#108: create records the row and the
+// API synchronously deploys it; get/list/delete round out the lifecycle).
+// Project and branch delete remain logged-only in the API for now (no task
+// framework yet), so they have no Backend method.
 package core
 
 import (
@@ -39,7 +45,7 @@ type User struct {
 	CreatedAt time.Time
 }
 
-// StoragePool is a grouping of tenants, owned by the user that created it
+// StoragePool is a grouping of projects, owned by the user that created it
 // (amp-controller.md §4.1). Sharing (pool grants) is out of scope for #92.
 type StoragePool struct {
 	ID          uuid.UUID
@@ -48,37 +54,51 @@ type StoragePool struct {
 	CreatedAt   time.Time
 }
 
-// Timeline is a PG cluster: identity is the (TenantID, TimelineID) pair
-// (ac-highlvl.md §6). Creating a tenant (a "database") creates its main
-// timeline at the same time (IsMain), which is what CreateTimeline returns;
-// BranchTimeline forks an existing timeline into a non-main one.
-type Timeline struct {
-	TenantID   uuid.UUID
-	TimelineID uuid.UUID
-	Name       string
-	PgVersion  int
-	IsMain     bool
-	// ParentTimelineID is the in-tenant timeline this one was forked from (a
-	// branch), or nil for a tenant's root (main) timeline.
-	ParentTimelineID *uuid.UUID
+// Project is a "database" under a storage pool: ID is the storage-layer tenant
+// id (ac-highlvl.md §6). Creating a project creates its default branch at the
+// same time, returned in DefaultBranch (always populated on reads). A project
+// has exactly one default branch and zero or more branches off it.
+type Project struct {
+	ID            uuid.UUID // the storage-layer tenant id
+	StoragePoolID uuid.UUID
+	Name          string
+	CreatedAt     time.Time
+	// DefaultBranch is the project's root branch (IsDefault). It is created with
+	// the project and always exists; reads populate it.
+	DefaultBranch Branch
+}
+
+// Branch is a PG cluster (a timeline): identity is the (ProjectID, BranchID)
+// pair, which are the storage-layer (tenant_id, timeline_id). The project's
+// first branch is its default (IsDefault); CreateBranch forks an existing
+// branch into a non-default one.
+type Branch struct {
+	ProjectID uuid.UUID // the storage-layer tenant id
+	BranchID  uuid.UUID // the storage-layer timeline id
+	Name      string
+	PgVersion int
+	IsDefault bool
+	// ParentBranchID is the in-project branch this one was forked from, or nil
+	// for the project's default branch.
+	ParentBranchID *uuid.UUID
 	// ForkLSN is the ancestor LSN the branch was taken at (the storage layer's
-	// "X/X" pg_lsn form), or "" for a root timeline.
+	// "X/X" pg_lsn form), or "" for the default branch.
 	ForkLSN   string
 	CreatedAt time.Time
 }
 
-// Endpoint is the durable record of a compute endpoint on a timeline. Address
+// Endpoint is the durable record of a compute endpoint on a branch. Address
 // is the connection target returned to users; it is empty until the endpoint is
 // deployed (set via SetEndpointAddress once Helm/Docker reports the endpoint
 // ready). Role is the endpoint_role (read_write | read_only) with the
 // single-writer rule enforced in the schema.
 type Endpoint struct {
-	ID         uuid.UUID
-	TenantID   uuid.UUID
-	TimelineID uuid.UUID
-	Role       string
-	Address    string
-	CreatedAt  time.Time
+	ID        uuid.UUID
+	ProjectID uuid.UUID
+	BranchID  uuid.UUID
+	Role      string
+	Address   string
+	CreatedAt time.Time
 }
 
 // Endpoint roles (the endpoint_role enum).
@@ -120,50 +140,57 @@ type Backend interface {
 	// than the one user who created it.
 	GetStoragePool(ctx context.Context, poolID uuid.UUID) (StoragePool, error)
 
-	// CreateTimeline creates a tenant (a "database") named name in the pool,
-	// together with its main timeline at Postgres major version pgVersion, and
-	// returns the timeline. Returns ErrNotFound if the pool does not exist, or
-	// ErrConflict if a tenant with that name already exists in the pool.
-	CreateTimeline(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (Timeline, error)
-	// ListTimelines returns a page of the timelines across all tenants in the
-	// pool ordered by (created_at, timeline_id), and the total number of
-	// timelines in the pool (ignoring limit/offset). Returns ErrNotFound if the
-	// pool does not exist.
-	ListTimelines(ctx context.Context, poolID uuid.UUID, limit, offset int) ([]Timeline, int, error)
+	// CreateProject creates a project (a "database") named name in the pool,
+	// together with its default branch at Postgres major version pgVersion, and
+	// returns the project with DefaultBranch populated. Returns ErrNotFound if
+	// the pool does not exist, or ErrConflict if a project with that name already
+	// exists in the pool.
+	CreateProject(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (Project, error)
+	// ListProjects returns a page of the projects in the pool ordered by
+	// (created_at, id), each with DefaultBranch populated, and the total number
+	// of projects in the pool (ignoring limit/offset). Returns ErrNotFound if
+	// the pool does not exist.
+	ListProjects(ctx context.Context, poolID uuid.UUID, limit, offset int) ([]Project, int, error)
+	// GetProject returns the project addressed by (poolID, projectID) with
+	// DefaultBranch populated, validating that the project belongs to the pool.
+	// Returns ErrNotFound if any link is missing.
+	GetProject(ctx context.Context, poolID, projectID uuid.UUID) (Project, error)
 
-	// BranchTimeline forks the timeline addressed by (poolID, parentTimelineID)
-	// into a new branch timeline (a non-main pg_cluster) under the same tenant,
-	// named name and recording its fork ancestry (parent_timeline_id, fork_lsn).
-	// The Postgres version is inherited from the parent. forkLSN is the ancestor
-	// LSN to branch at (the storage layer's "X/X" pg_lsn form). Returns
-	// ErrNotFound if the pool or the parent timeline does not exist, or
-	// ErrConflict if a timeline named name already exists in the parent's tenant.
-	BranchTimeline(ctx context.Context, poolID, parentTimelineID uuid.UUID, name, forkLSN string) (Timeline, error)
+	// CreateBranch forks the branch addressed by (poolID, projectID,
+	// parentBranchID) into a new branch in the same project, named name and
+	// recording its fork ancestry (parent_branch_id, fork_lsn). The Postgres
+	// version is inherited from the parent. forkLSN is the ancestor LSN to
+	// branch at (the storage layer's "X/X" pg_lsn form). Returns ErrNotFound if
+	// the pool, project, or parent branch does not exist, or ErrConflict if a
+	// branch named name already exists in the project.
+	CreateBranch(ctx context.Context, poolID, projectID, parentBranchID uuid.UUID, name, forkLSN string) (Branch, error)
+	// ListBranches returns a page of the branches in the project ordered by
+	// (created_at, branch_id), and the total number of branches in the project
+	// (ignoring limit/offset). Returns ErrNotFound if the pool or project does
+	// not exist.
+	ListBranches(ctx context.Context, poolID, projectID uuid.UUID, limit, offset int) ([]Branch, int, error)
+	// GetBranch returns the branch addressed by (poolID, projectID, branchID),
+	// validating the pool->project->branch chain by ids. Returns ErrNotFound if
+	// any link is missing.
+	GetBranch(ctx context.Context, poolID, projectID, branchID uuid.UUID) (Branch, error)
 
-	// GetTimeline returns the timeline addressed by (poolID, timelineID),
-	// validating that the timeline's tenant belongs to the pool. Pools are
-	// top-level, so this is not owner-scoped. Returns ErrNotFound if any link is
-	// missing.
-	GetTimeline(ctx context.Context, poolID, timelineID uuid.UUID) (Timeline, error)
-
-	// CreateEndpoint records an endpoint on the (tenantID, timelineID) timeline.
+	// CreateEndpoint records an endpoint on the (projectID, branchID) branch.
 	// config is the deploy spec stored for (re)creation. The address is set
 	// later (SetEndpointAddress) once the endpoint is deployed. Returns
-	// ErrNotFound if the timeline does not exist, or ErrConflict if a read_write
-	// endpoint already exists for the timeline (the single-writer rule).
-	CreateEndpoint(ctx context.Context, tenantID, timelineID uuid.UUID, role string, config []byte) (Endpoint, error)
+	// ErrNotFound if the branch does not exist, or ErrConflict if a read_write
+	// endpoint already exists for the branch (the single-writer rule).
+	CreateEndpoint(ctx context.Context, projectID, branchID uuid.UUID, role string, config []byte) (Endpoint, error)
 
-	// GetEndpoint returns the endpoint addressed by (poolID, timelineID,
-	// endpointID), validating the pool->timeline->endpoint chain by ids. Pools
-	// are top-level, so this is not owner-scoped. Returns ErrNotFound if any
-	// link is missing.
-	GetEndpoint(ctx context.Context, poolID, timelineID, endpointID uuid.UUID) (Endpoint, error)
+	// GetEndpoint returns the endpoint addressed by (poolID, projectID,
+	// branchID, endpointID), validating the pool->project->branch->endpoint
+	// chain by ids. Returns ErrNotFound if any link is missing.
+	GetEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (Endpoint, error)
 
-	// ListEndpoints returns a page of the endpoints bound to the timeline
-	// (addressed by its id within the pool) ordered by (created_at, id), and the
-	// total number of endpoints for the timeline (ignoring limit/offset).
-	// Returns ErrNotFound if the pool or the timeline does not exist.
-	ListEndpoints(ctx context.Context, poolID, timelineID uuid.UUID, limit, offset int) ([]Endpoint, int, error)
+	// ListEndpoints returns a page of the endpoints bound to the branch
+	// (addressed by (poolID, projectID, branchID)) ordered by (created_at, id),
+	// and the total number of endpoints for the branch (ignoring limit/offset).
+	// Returns ErrNotFound if the pool, project, or branch does not exist.
+	ListEndpoints(ctx context.Context, poolID, projectID, branchID uuid.UUID, limit, offset int) ([]Endpoint, int, error)
 
 	// SetEndpointAddress records an endpoint's client address. Idempotent
 	// (absolute UPDATE keyed by id); a missing endpoint is not an error.

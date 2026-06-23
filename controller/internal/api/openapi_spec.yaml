@@ -7,9 +7,9 @@ info:
     Control-plane REST API for the **amp controller** (amp-controller): the
     control plane for a single placement group. See `controller/architecture/`.
 
-    The resource ladder is **storage pool → timeline → endpoint**. Users are a
-    basic, *unauthenticated* notion of an identity; there is no auth yet (the
-    user/grant model is designed but authentication is deferred).
+    The resource ladder is **storage pool → project → branch → endpoint**. Users
+    are a basic, *unauthenticated* notion of an identity; there is no auth yet
+    (the user/grant model is designed but authentication is deferred).
 
     - **Users** — created and fetched by id, and listed. A user owns the storage
       pools it creates.
@@ -18,15 +18,20 @@ info:
       Pool sharing (pool grants) is out of scope here, but a pool is addressed by
       its own id because multiple users will eventually act on it. Listing
       returns every pool.
-    - **Timelines** — create / list / delete / branch a timeline in a pool.
-      *Create* provisions the control-plane record: it creates a tenant (a
-      "database") and its main timeline under the pool and returns their
-      storage-layer ids (`tenant_id`, `timeline_id`). *Branch* forks an existing
-      timeline into a new (non-main) timeline under the same tenant, recording
-      its fork ancestry (`parent_timeline_id`, `fork_lsn`). *Delete* is still
-      **logged only** (202): the write-ahead task framework that will execute it
-      is not yet wired up.
-    - **Endpoints** — the compute bound to a timeline; listed under the timeline.
+    - **Projects** — a project (a "database") in a pool. *Create* provisions the
+      control-plane record: it creates the project **and its default branch**
+      together and returns the project with its `default_branch`. A project has
+      exactly one default branch, created with it. The project id and branch ids
+      are the storage-layer ids (a project is a tenant, a branch is a timeline).
+      *Delete* is **logged only** (202): the write-ahead task framework that will
+      execute it is not yet wired up.
+    - **Branches** — create / list / get / delete a branch in a project. *Create*
+      forks an existing branch (the parent, defaulting to the project's default
+      branch) into a new branch, recording its fork ancestry
+      (`parent_branch_id`, `fork_lsn`) and inheriting the parent's Postgres
+      version. Branches can fork off the default branch or off another branch.
+      *Delete* is **logged only** (202).
+    - **Endpoints** — the compute bound to a branch; listed under the branch.
 
     **Pagination.** List endpoints take `limit` and `offset` query parameters
     (values outside the documented range are clamped) and return a `total` (the
@@ -51,10 +56,12 @@ tags:
     description: A basic, unauthenticated notion of a user.
   - name: storage-pools
     description: Storage pools (≈ a Meko datapack); top-level, created and owned by a user.
-  - name: timelines
-    description: Timelines (PG clusters) in a pool. Create and branch are real; delete is logged only for now.
+  - name: projects
+    description: Projects (databases) in a pool. Create provisions the project and its default branch; delete is logged only for now.
+  - name: branches
+    description: Branches (PG cluster timelines) in a project. Create forks an existing branch; delete is logged only for now.
   - name: endpoints
-    description: Compute endpoints bound to a timeline; deployed synchronously (one container/pod per endpoint).
+    description: Compute endpoints bound to a branch; deployed synchronously (one container/pod per endpoint).
   - name: tasks
     description: Status of long-running operations (the write-ahead task log).
 
@@ -190,31 +197,32 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/timelines:
+  /storage-pools/{poolId}/projects:
     parameters:
       - $ref: '#/components/parameters/PoolId'
     post:
-      tags: [timelines]
-      operationId: createTimeline
-      summary: Create a tenant and its main timeline in a pool
+      tags: [projects]
+      operationId: createProject
+      summary: Create a project (and its default branch) in a pool
       description: |
-        Creates a tenant (a "database") in the pool together with its main
-        timeline (a PG cluster), and returns their storage-layer ids
-        (`tenant_id`, `timeline_id`). The name is unique within the pool. Returns
-        404 if the pool does not exist.
+        Creates a project (a "database") in the pool together with its default
+        branch (a PG cluster), and returns the project with its `default_branch`
+        populated. The project id is the storage-layer tenant id; the default
+        branch id is the storage-layer timeline id. The name is unique within the
+        pool. Returns 404 if the pool does not exist.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateTimelineRequest'
+              $ref: '#/components/schemas/CreateProjectRequest'
       responses:
         '201':
-          description: Tenant and main timeline created.
+          description: Project and its default branch created.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Timeline'
+                $ref: '#/components/schemas/Project'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -224,20 +232,20 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
     get:
-      tags: [timelines]
-      operationId: listTimelines
-      summary: List the timelines in a pool
-      description: Lists the timelines across all tenants in the pool. Returns 404 if the pool does not exist.
+      tags: [projects]
+      operationId: listProjects
+      summary: List the projects in a pool
+      description: Lists the projects in the pool, each with its default branch. Returns 404 if the pool does not exist.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
         '200':
-          description: A page of timelines.
+          description: A page of projects.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TimelineList'
+                $ref: '#/components/schemas/ProjectList'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -245,15 +253,33 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/timelines/{timelineId}:
+  /storage-pools/{poolId}/projects/{projectId}:
     parameters:
       - $ref: '#/components/parameters/PoolId'
-      - $ref: '#/components/parameters/TimelineId'
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [projects]
+      operationId: getProject
+      summary: Get a project
+      description: Returns the project (with its default branch). Returns 404 if the pool or project does not exist.
+      responses:
+        '200':
+          description: The project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
     delete:
-      tags: [timelines]
-      operationId: deleteTimeline
-      summary: Delete a timeline (logged only)
-      description: Records the intent to delete a timeline and returns 202. Logged only for now (see createTimeline); the timeline is not validated.
+      tags: [projects]
+      operationId: deleteProject
+      summary: Delete a project (logged only)
+      description: Records the intent to delete a project and returns 202. Logged only for now (the task framework that will execute it is not yet wired up); the project is not validated.
       responses:
         '202':
           description: Request accepted and logged.
@@ -266,38 +292,38 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/timelines/{timelineId}/branch:
+  /storage-pools/{poolId}/projects/{projectId}/branches:
     parameters:
       - $ref: '#/components/parameters/PoolId'
-      - $ref: '#/components/parameters/TimelineId'
+      - $ref: '#/components/parameters/ProjectId'
     post:
-      tags: [timelines]
-      operationId: branchTimeline
-      summary: Branch (fork) a timeline into a new timeline
+      tags: [branches]
+      operationId: createBranch
+      summary: Branch (fork) a branch into a new branch
       description: |
-        Forks the addressed timeline (the parent) into a new branch timeline
-        under the same tenant and returns it. The branch records its fork
-        ancestry (`parent_timeline_id`, `fork_lsn`) and inherits the parent's
-        Postgres version; branching is explicit (it is not part of timeline
-        create). The fork point defaults to the parent's latest LSN; pass
-        `fork_point_lsn` to branch at an earlier point. Like create-timeline, the
-        branch is recorded as a recipe and materialized lazily by the first
-        endpoint deployed on it — no compute is started here. Returns 404 if the
-        pool or the parent timeline does not exist, or 409 if a timeline with the
-        given name already exists in the tenant.
+        Forks a branch (the parent) in the project into a new branch and returns
+        it. The parent defaults to the project's default branch; pass
+        `parent_branch_id` to fork off another branch (branch-of-branch). The new
+        branch records its fork ancestry (`parent_branch_id`, `fork_lsn`) and
+        inherits the parent's Postgres version. The fork point defaults to the
+        parent's latest LSN; pass `fork_point_lsn` to branch at an earlier point.
+        Like create-project, the branch is recorded as a recipe and materialized
+        lazily by the first endpoint deployed on it — no compute is started here.
+        Returns 404 if the pool, project, or parent branch does not exist, or 409
+        if a branch with the given name already exists in the project.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/BranchTimelineRequest'
+              $ref: '#/components/schemas/CreateBranchRequest'
       responses:
         '201':
-          description: Branch timeline created.
+          description: Branch created.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Timeline'
+                $ref: '#/components/schemas/Branch'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -306,19 +332,81 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
+    get:
+      tags: [branches]
+      operationId: listBranches
+      summary: List the branches in a project
+      description: Lists the branches in the project (the default branch plus its forks). Returns 404 if the pool or project does not exist.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of branches.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/timelines/{timelineId}/endpoints:
+  /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}:
     parameters:
       - $ref: '#/components/parameters/PoolId'
-      - $ref: '#/components/parameters/TimelineId'
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/BranchId'
+    get:
+      tags: [branches]
+      operationId: getBranch
+      summary: Get a branch
+      description: Returns the branch. Returns 404 if the pool, project, or branch does not exist.
+      responses:
+        '200':
+          description: The branch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Branch'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [branches]
+      operationId: deleteBranch
+      summary: Delete a branch (logged only)
+      description: Records the intent to delete a branch and returns 202. Logged only for now (see createBranch); the branch is not validated.
+      responses:
+        '202':
+          description: Request accepted and logged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationAck'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/BranchId'
     post:
       tags: [endpoints]
       operationId: createEndpoint
-      summary: Create and deploy an endpoint on a timeline
+      summary: Create and deploy an endpoint on a branch
       description: |
-        Records an endpoint on the addressed timeline and synchronously deploys
+        Records an endpoint on the addressed branch and synchronously deploys
         it (one container/pod per endpoint). Returns 201 with the deployed
-        endpoint, its `address` populated. A timeline admits at most one
+        endpoint, its `address` populated. A branch admits at most one
         `read_write` endpoint (the single-writer rule). Requires the endpoint
         deployer (`--deploy`); returns 501 otherwise.
       requestBody:
@@ -345,8 +433,8 @@ paths:
     get:
       tags: [endpoints]
       operationId: listEndpoints
-      summary: List the endpoints bound to a timeline
-      description: Lists the compute endpoints bound to the timeline. Returns 404 if the pool or timeline does not exist.
+      summary: List the endpoints bound to a branch
+      description: Lists the compute endpoints bound to the branch. Returns 404 if the pool, project, or branch does not exist.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
@@ -364,10 +452,11 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/timelines/{timelineId}/endpoints/{endpointId}:
+  /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId}:
     parameters:
       - $ref: '#/components/parameters/PoolId'
-      - $ref: '#/components/parameters/TimelineId'
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/BranchId'
       - $ref: '#/components/parameters/EndpointId'
     get:
       tags: [endpoints]
@@ -444,11 +533,19 @@ components:
       schema:
         type: string
         format: uuid
-    TimelineId:
-      name: timelineId
+    ProjectId:
+      name: projectId
       in: path
       required: true
-      description: The timeline's id.
+      description: The project's id (the storage-layer tenant id).
+      schema:
+        type: string
+        format: uuid
+    BranchId:
+      name: branchId
+      in: path
+      required: true
+      description: The branch's id (the storage-layer timeline id).
       schema:
         type: string
         format: uuid
@@ -524,7 +621,7 @@ components:
           format: uuid
         is_admin:
           type: boolean
-          description: Admins skip all pool/tenant grants. Until auth lands, anyone may create an admin.
+          description: Admins skip all pool/project grants. Until auth lands, anyone may create an admin.
         created_at:
           type: string
           format: date-time
@@ -593,71 +690,108 @@ components:
           format: uuid
           description: The user that will own the pool.
 
-    CreateTimelineRequest:
+    CreateProjectRequest:
       type: object
       required: [name]
       properties:
         name:
           type: string
           minLength: 1
-          description: Tenant (database) name; unique within the pool. Also names the main timeline.
+          description: Project (database) name; unique within the pool. Also names the default branch.
         pg_version:
           type: integer
-          description: Postgres major version for the timeline's cluster. Defaults to 17.
+          description: Postgres major version for the project's default branch. Defaults to 17.
 
-    Timeline:
+    Project:
       type: object
-      required: [tenant_id, timeline_id, name, pg_version, is_main, created_at]
+      required: [id, storage_pool_id, name, created_at, default_branch]
       properties:
-        tenant_id:
+        id:
           type: string
           format: uuid
-          description: The storage-layer tenant id this timeline belongs to.
-        timeline_id:
+          description: The project id (the storage-layer tenant id).
+        storage_pool_id:
           type: string
           format: uuid
-          description: The storage-layer timeline id.
+          description: The storage pool this project belongs to.
         name:
           type: string
-        pg_version:
-          type: integer
-        is_main:
-          type: boolean
-          description: True for a tenant's root (main) timeline.
-        parent_timeline_id:
-          type: string
-          format: uuid
-          nullable: true
-          description: The timeline this one was forked from (a branch), or null for a root (main) timeline. Always in the same tenant.
-        fork_lsn:
-          type: string
-          nullable: true
-          description: The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a root (main) timeline.
         created_at:
           type: string
           format: date-time
+        default_branch:
+          $ref: '#/components/schemas/Branch'
 
-    TimelineList:
+    ProjectList:
       type: object
-      required: [timelines, total, count]
+      required: [projects, total, count]
       properties:
-        timelines:
+        projects:
           type: array
           items:
-            $ref: '#/components/schemas/Timeline'
+            $ref: '#/components/schemas/Project'
         total:
           $ref: '#/components/schemas/TotalCount'
         count:
           $ref: '#/components/schemas/PageCount'
 
-    BranchTimelineRequest:
+    Branch:
+      type: object
+      required: [project_id, branch_id, name, pg_version, is_default, created_at]
+      properties:
+        project_id:
+          type: string
+          format: uuid
+          description: The project (storage-layer tenant) this branch belongs to.
+        branch_id:
+          type: string
+          format: uuid
+          description: The branch id (the storage-layer timeline id).
+        name:
+          type: string
+        pg_version:
+          type: integer
+        is_default:
+          type: boolean
+          description: True for a project's default (root) branch.
+        parent_branch_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The branch this one was forked from, or null for a project's default branch. Always in the same project.
+        fork_lsn:
+          type: string
+          nullable: true
+          description: The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a default branch.
+        created_at:
+          type: string
+          format: date-time
+
+    BranchList:
+      type: object
+      required: [branches, total, count]
+      properties:
+        branches:
+          type: array
+          items:
+            $ref: '#/components/schemas/Branch'
+        total:
+          $ref: '#/components/schemas/TotalCount'
+        count:
+          $ref: '#/components/schemas/PageCount'
+
+    CreateBranchRequest:
       type: object
       required: [name]
       properties:
         name:
           type: string
           minLength: 1
-          description: Name for the new branch timeline; unique within the parent's tenant.
+          description: Name for the new branch; unique within the project.
+        parent_branch_id:
+          type: string
+          format: uuid
+          description: The branch to fork from. Defaults to the project's default branch; set it to branch off another branch.
         fork_point_lsn:
           type: string
           description: |
@@ -666,19 +800,19 @@ components:
 
     Endpoint:
       type: object
-      required: [id, tenant_id, timeline_id, role, address, created_at]
+      required: [id, project_id, branch_id, role, address, created_at]
       properties:
         id:
           type: string
           format: uuid
-        tenant_id:
+        project_id:
           type: string
           format: uuid
-          description: The storage-layer tenant id this endpoint is bound to.
-        timeline_id:
+          description: The project (storage-layer tenant) this endpoint is bound to.
+        branch_id:
           type: string
           format: uuid
-          description: The storage-layer timeline id this endpoint is bound to.
+          description: The branch (storage-layer timeline) this endpoint is bound to.
         role:
           type: string
           enum: [read_write, read_only]
@@ -709,7 +843,7 @@ components:
           type: string
           enum: [read_write, read_only]
           default: read_write
-          description: The endpoint's role. A timeline admits at most one read_write endpoint.
+          description: The endpoint's role. A branch admits at most one read_write endpoint.
 
     OperationAck:
       type: object
@@ -734,7 +868,7 @@ components:
         status:
           type: string
           enum: [pending, running, succeeded, failed]
-        tenant_id:
+        project_id:
           type: string
           format: uuid
           nullable: true

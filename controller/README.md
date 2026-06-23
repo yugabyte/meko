@@ -2,7 +2,7 @@
 
 `controller` is the **amp controller** (the `amp-controller` / `ac`): the control
 plane for a single placement group. It owns the lifecycle of storage pools,
-tenants, PG clusters/timelines, and endpoints, and exposes all of it through a
+projects, PG clusters/branches, and endpoints, and exposes all of it through a
 REST API. Its only state store is the placement group's YBDB universe, reached
 over YSQL.
 
@@ -15,22 +15,22 @@ Design docs (read these first):
 - [`ac-k8s-deploy.md`](architecture/ac-k8s-deploy.md) — deploying endpoints: the
   Helm-backed Kubernetes deployer and its Docker sibling, the synchronous
   deploy/retire path, and the `--deploy-driver` selector.
-- [`controller-timeline-create.md`](architecture/controller-timeline-create.md) — creating a
-  timeline (patterned on `yb_light_local`): declare a recipe at create, materialize
+- [`controller-project-create.md`](architecture/controller-project-create.md) — creating a
+  project (patterned on `yb_light_local`): declare a recipe at create, materialize
   the storage layer at the first endpoint.
 
 It started as the **base framework** ([#84](https://github.com/yugabyte/yb-light/issues/84)):
 a runnable skeleton — `slog` logging, the write-ahead task framework, and the
 YBDB connection + initial migrations. On top of it, the **initial APIs**
 ([#92](https://github.com/yugabyte/yb-light/issues/92)) add the OpenAPI v3-driven
-REST surface (users, storage pools, timelines) below. The **Kubernetes endpoint
+REST surface (users, storage pools, projects, branches) below. The **Kubernetes endpoint
 deploy** ([#108](https://github.com/yugabyte/yb-light/issues/108)) adds endpoints
 as a resource: `createEndpoint` synchronously shells out to the configured driver
 — Docker by default, or Helm on Kubernetes via `--deploy-driver kubernetes` — to
 bring up one pod/container per endpoint (see
 [`ac-k8s-deploy.md`](architecture/ac-k8s-deploy.md)). Moving the deploy onto
-the write-ahead task framework, along with the remaining timeline calls
-(create-database, branch, scale), lands later.
+the write-ahead task framework, along with the remaining project/branch calls
+(create-project, branch, scale), lands later.
 
 ## Layout
 
@@ -85,7 +85,7 @@ controller serve   --database-url postgres://yugabyte@127.0.0.1:5433/amp_control
 ```
 
 Control-plane tables live in their own schema (`--db-schema`, default `controller`),
-isolated from tenant data. Configuration is read from flags or the matching
+isolated from project data. Configuration is read from flags or the matching
 environment variables (`AMP_DATABASE_URL`, `AMP_LISTEN`, `AMP_DB_SCHEMA`,
 `AMP_LOG_LEVEL`, `AMP_LOG_FORMAT`, `AMP_TASK_POLL_INTERVAL`, `AMP_TASK_LEASE_TTL`,
 `AMP_SIGNING_KEY_PATH`); flags win.
@@ -98,7 +98,7 @@ interface the controllers implement, and the Go client the tests drive (run
 `make controller-generate` after editing the spec). The controller also serves the spec
 and an interactive explorer, plus an embedded **admin console** at `/` (open the
 listen address, e.g. `http://localhost:8080/`): a static page to manage users
-and, per user, their storage pools, timelines, and endpoints. See
+and, per user, their storage pools, projects, branches, and endpoints. See
 [`architecture/ac-apis.md`](architecture/ac-apis.md) for the full design.
 
 ## Managed services
@@ -148,12 +148,16 @@ ships controller + storage controller together, so controller finds it with no c
 - `POST|GET /api/v1/storage-pools`, `GET …/storage-pools/:poolId` — storage pools,
   top-level (#109): create names the owner in the body (`owner_user_id`); list
   returns every pool; get is by id (not owner-scoped)
-- `POST|GET …/storage-pools/:poolId/timelines` — create a timeline (creates a tenant
-  (a "database") + its main timeline and returns `(tenant_id, timeline_id)`, `201`);
-  list the pool's timelines (paginated)
-- `DELETE …/timelines/:timelineId`, `POST …/timelines/:timelineId/branch` —
-  delete / branch a timeline; **logged only** (`202`) until the task framework lands
-- `GET …/timelines/:timelineId/endpoints` — list the timeline's endpoints (paginated)
+- `POST|GET …/storage-pools/:poolId/projects` — create a project (creates a project
+  (a "database") + its default branch and returns a `Project` with its embedded
+  `default_branch`, `201`); list the pool's projects (paginated)
+- `GET …/projects/:projectId`, `DELETE …/projects/:projectId` — get a project /
+  delete it (**logged only**, `202`, until the task framework lands)
+- `POST|GET …/projects/:projectId/branches` — branch (fork) an existing branch into a
+  new branch (`201`); list the project's branches (paginated)
+- `GET …/branches/:branchId`, `DELETE …/branches/:branchId` — get a branch /
+  delete it (**logged only**, `202`, until the task framework lands)
+- `GET …/branches/:branchId/endpoints` — list the branch's endpoints (paginated)
 - `GET /api/v1/tasks/:taskId` — task status (a real read path)
 
 List endpoints take `limit`/`offset` query params and return `total` (all matches)

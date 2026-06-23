@@ -200,64 +200,68 @@ func TestCreateStoragePoolTrimsName(t *testing.T) {
 	}
 }
 
-func TestCreateTimeline(t *testing.T) {
+func TestCreateProject(t *testing.T) {
 	client, _, _ := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
-	// Create timeline -> 201 with real (tenant_id, timeline_id).
+	// Create project -> 201 with a real id and its auto-created default branch.
 	pgv := 17
-	ct, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "main", PgVersion: &pgv})
+	cp, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "main", PgVersion: &pgv})
 	if err != nil {
-		t.Fatalf("CreateTimeline: %v", err)
+		t.Fatalf("CreateProject: %v", err)
 	}
-	if ct.StatusCode() != http.StatusCreated || ct.JSON201 == nil {
-		t.Fatalf("CreateTimeline status = %d, body = %s", ct.StatusCode(), ct.Body)
+	if cp.StatusCode() != http.StatusCreated || cp.JSON201 == nil {
+		t.Fatalf("CreateProject status = %d, body = %s", cp.StatusCode(), cp.Body)
 	}
-	tl := *ct.JSON201
-	if tl.TenantId == uuid.Nil || tl.TimelineId == uuid.Nil {
-		t.Errorf("timeline has nil ids: tenant=%s timeline=%s", tl.TenantId, tl.TimelineId)
+	p := *cp.JSON201
+	if p.Id == uuid.Nil {
+		t.Errorf("project has nil id")
 	}
-	if !tl.IsMain || tl.Name != "main" || tl.PgVersion != 17 {
-		t.Errorf("timeline = %+v, want {is_main name=main pg_version=17}", tl)
+	def := p.DefaultBranch
+	if def.ProjectId != p.Id || def.BranchId == uuid.Nil {
+		t.Errorf("default branch ids = (%s,%s), want project %s and a non-nil branch", def.ProjectId, def.BranchId, p.Id)
+	}
+	if !def.IsDefault || def.Name != "main" || def.PgVersion != 17 {
+		t.Errorf("default branch = %+v, want {is_default name=main pg_version=17}", def)
 	}
 
 	// Empty name -> 400.
-	ctBad, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: ""})
+	cpBad, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: ""})
 	if err != nil {
-		t.Fatalf("CreateTimeline(empty): %v", err)
+		t.Fatalf("CreateProject(empty): %v", err)
 	}
-	if ctBad.StatusCode() != http.StatusBadRequest {
-		t.Fatalf("CreateTimeline(empty) status = %d, body = %s", ctBad.StatusCode(), ctBad.Body)
+	if cpBad.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("CreateProject(empty) status = %d, body = %s", cpBad.StatusCode(), cpBad.Body)
 	}
 
 	// Duplicate name in the same pool -> 409.
-	dup, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "main"})
+	dup, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "main"})
 	if err != nil {
-		t.Fatalf("CreateTimeline(dup): %v", err)
+		t.Fatalf("CreateProject(dup): %v", err)
 	}
 	if dup.StatusCode() != http.StatusConflict || dup.JSON409 == nil {
-		t.Fatalf("CreateTimeline(dup) status = %d, body = %s", dup.StatusCode(), dup.Body)
+		t.Fatalf("CreateProject(dup) status = %d, body = %s", dup.StatusCode(), dup.Body)
 	}
 
 	// Unknown pool -> 404.
-	missing, err := client.CreateTimelineWithResponse(ctx, uuid.New(), api.CreateTimelineRequest{Name: "x"})
+	missing, err := client.CreateProjectWithResponse(ctx, uuid.New(), api.CreateProjectRequest{Name: "x"})
 	if err != nil {
-		t.Fatalf("CreateTimeline(missing pool): %v", err)
+		t.Fatalf("CreateProject(missing pool): %v", err)
 	}
 	if missing.StatusCode() != http.StatusNotFound || missing.JSON404 == nil {
-		t.Fatalf("CreateTimeline(missing pool) status = %d, body = %s", missing.StatusCode(), missing.Body)
+		t.Fatalf("CreateProject(missing pool) status = %d, body = %s", missing.StatusCode(), missing.Body)
 	}
 
 	// Unsupported pg_version -> 400 (yb-light is v17 only).
 	badVer := 15
-	bv, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "pg15", PgVersion: &badVer})
+	bv, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "pg15", PgVersion: &badVer})
 	if err != nil {
-		t.Fatalf("CreateTimeline(bad version): %v", err)
+		t.Fatalf("CreateProject(bad version): %v", err)
 	}
 	if bv.StatusCode() != http.StatusBadRequest {
-		t.Fatalf("CreateTimeline(pg_version=15) status = %d, want 400, body = %s", bv.StatusCode(), bv.Body)
+		t.Fatalf("CreateProject(pg_version=15) status = %d, want 400, body = %s", bv.StatusCode(), bv.Body)
 	}
 }
 
@@ -295,11 +299,12 @@ func TestCreateEndpointDeployFailureCompensates(t *testing.T) {
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	timelineID := uuid.New()
-	backend.SeedTimeline(pool.Id, core.Timeline{TenantID: uuid.New(), TimelineID: timelineID, Name: "main", PgVersion: 17, IsMain: true})
+	projectID := uuid.New()
+	branchID := uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, timelineID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -310,7 +315,7 @@ func TestCreateEndpointDeployFailureCompensates(t *testing.T) {
 		t.Fatalf("CreateEndpoint deploy calls = %d, want 1", len(dep.created))
 	}
 	// The committed row must have been removed so it doesn't linger undeployed.
-	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, timelineID, nil)
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -340,11 +345,12 @@ func TestCreateEndpointAddressRecordFailureCompensates(t *testing.T) {
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	timelineID := uuid.New()
-	mem.SeedTimeline(pool.Id, core.Timeline{TenantID: uuid.New(), TimelineID: timelineID, Name: "main", PgVersion: 17, IsMain: true})
+	projectID := uuid.New()
+	branchID := uuid.New()
+	mem.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, timelineID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -356,7 +362,7 @@ func TestCreateEndpointAddressRecordFailureCompensates(t *testing.T) {
 		t.Fatalf("deployer calls: created=%d deleted=%d, want 1 and 1 (retired on compensation)", len(dep.created), len(dep.deleted))
 	}
 	// The row must be gone so the writer slot is freed for a retry.
-	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, timelineID, nil)
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -365,37 +371,44 @@ func TestCreateEndpointAddressRecordFailureCompensates(t *testing.T) {
 	}
 }
 
-func TestTimelineDeleteLoggedOnlyAndBranchValidation(t *testing.T) {
+func TestProjectBranchDeleteLoggedOnlyAndBranchValidation(t *testing.T) {
 	client, _, _ := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
-	// Delete timeline -> 202 (logged only, parent not validated).
-	del, err := client.DeleteTimelineWithResponse(ctx, pool.Id, uuid.New())
+	// Delete project / branch -> 202 (logged only, target not validated).
+	delP, err := client.DeleteProjectWithResponse(ctx, pool.Id, uuid.New())
 	if err != nil {
-		t.Fatalf("DeleteTimeline: %v", err)
+		t.Fatalf("DeleteProject: %v", err)
 	}
-	if del.StatusCode() != http.StatusAccepted || del.JSON202 == nil {
-		t.Fatalf("DeleteTimeline status = %d, body = %s", del.StatusCode(), del.Body)
+	if delP.StatusCode() != http.StatusAccepted || delP.JSON202 == nil {
+		t.Fatalf("DeleteProject status = %d, body = %s", delP.StatusCode(), delP.Body)
+	}
+	delB, err := client.DeleteBranchWithResponse(ctx, pool.Id, uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatalf("DeleteBranch: %v", err)
+	}
+	if delB.StatusCode() != http.StatusAccepted || delB.JSON202 == nil {
+		t.Fatalf("DeleteBranch status = %d, body = %s", delB.StatusCode(), delB.Body)
 	}
 
-	// Branch is real now (#130): a nonexistent parent -> 404, and an empty name
-	// -> 400. The happy path (a real parent + the recipe) lives in
-	// timeline_storage_test.go, where a fake storage controller is wired.
-	br, err := client.BranchTimelineWithResponse(ctx, pool.Id, uuid.New(), api.BranchTimelineRequest{Name: "feature"})
+	// Branch is real now (#130): an empty name -> 400, and a nonexistent project
+	// -> 404. The happy path (a real project + the recipe) lives in
+	// project_storage_test.go, where a fake storage controller is wired.
+	brBad, err := client.CreateBranchWithResponse(ctx, pool.Id, uuid.New(), api.CreateBranchRequest{Name: ""})
 	if err != nil {
-		t.Fatalf("BranchTimeline: %v", err)
-	}
-	if br.StatusCode() != http.StatusNotFound {
-		t.Fatalf("BranchTimeline(missing parent) status = %d, body = %s", br.StatusCode(), br.Body)
-	}
-	brBad, err := client.BranchTimelineWithResponse(ctx, pool.Id, uuid.New(), api.BranchTimelineRequest{Name: ""})
-	if err != nil {
-		t.Fatalf("BranchTimeline(empty): %v", err)
+		t.Fatalf("CreateBranch(empty): %v", err)
 	}
 	if brBad.StatusCode() != http.StatusBadRequest {
-		t.Fatalf("BranchTimeline(empty) status = %d, body = %s", brBad.StatusCode(), brBad.Body)
+		t.Fatalf("CreateBranch(empty) status = %d, body = %s", brBad.StatusCode(), brBad.Body)
+	}
+	br, err := client.CreateBranchWithResponse(ctx, pool.Id, uuid.New(), api.CreateBranchRequest{Name: "feature"})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	if br.StatusCode() != http.StatusNotFound {
+		t.Fatalf("CreateBranch(missing project) status = %d, body = %s", br.StatusCode(), br.Body)
 	}
 }
 
@@ -416,7 +429,7 @@ func TestGetTask(t *testing.T) {
 	id := uuid.New()
 	tasks.put(&task.Task{
 		ID:        id,
-		Kind:      "create_database",
+		Kind:      "create_project",
 		Status:    task.StatusRunning,
 		Params:    json.RawMessage(`{"name":"db1"}`),
 		CreatedAt: time.Now(),
@@ -429,8 +442,8 @@ func TestGetTask(t *testing.T) {
 	if got.StatusCode() != http.StatusOK || got.JSON200 == nil {
 		t.Fatalf("GetTask status = %d, body = %s", got.StatusCode(), got.Body)
 	}
-	if got.JSON200.Kind != "create_database" || got.JSON200.Status != api.Running {
-		t.Errorf("task = {kind:%q status:%q}, want {create_database running}", got.JSON200.Kind, got.JSON200.Status)
+	if got.JSON200.Kind != "create_project" || got.JSON200.Status != api.Running {
+		t.Errorf("task = {kind:%q status:%q}, want {create_project running}", got.JSON200.Kind, got.JSON200.Status)
 	}
 }
 

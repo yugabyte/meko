@@ -45,7 +45,7 @@ secret — those pre-exist (see Assumptions). Everything is env-overridable
 ## The shape — one endpoint = one Helm release = one pod
 
 ```
-POST …/storage-pools/{pool}/timelines/{tl}/endpoints
+POST …/storage-pools/{pool}/projects/{proj}/branches/{br}/endpoints
    │  (handlers.go: CreateEndpoint)
    ├─ core.Backend.CreateEndpoint              → inserts the endpoint row (address empty)
    ├─ deploy.KubernetesDeployer.CreateEndpoint → helm upgrade --install --wait
@@ -64,24 +64,26 @@ Retire is the mirror (`DELETE …/endpoints/{id}`): `helm uninstall
 kill-before-create retire (ac-highlvl.md §4); `--wait` blocks until the
 resources are gone.
 
-## Materializing a timeline: the recipe + bootstrap
+## Materializing a branch: the recipe + bootstrap
 
-Timeline creation and endpoint creation are **separate** steps, joined by a
-**recipe** (full detail in [controller-timeline-create.md](controller-timeline-create.md)):
+Project/branch creation and endpoint creation are **separate** steps, joined by a
+**recipe** (full detail in [controller-project-create.md](controller-project-create.md)):
 
-- **create-timeline** records the timeline in the control-plane DB (`pg_cluster`)
-  **and** a `pending_init` *recipe* in the storage controller. It does **not**
-  deploy anything or eagerly create the tenant.
+- **create-project** (and **create-branch**) records the branch in the
+  control-plane DB (`branch`) **and** a `pending_init` *recipe* in the storage
+  controller. It does **not** deploy anything or eagerly create the storage-layer
+  tenant.
 - **create-endpoint** deploys the endpoint with `BOOTSTRAP=true`. On first
   materialization the pod's supervisor runs `initdb` for the recipe's
-  tenant/timeline, registers + attaches to the storage controller (below), and
-  registers the timeline; the controller then **consumes** the recipe
-  (`DeletePendingTimelineInit`). There is no separate create-database call —
-  the first endpoint is what turns the declared timeline into real storage.
+  tenant/timeline (the storage-layer ids of the project/branch), registers +
+  attaches to the storage controller (below), and registers the timeline; the
+  controller then **consumes** the recipe (`DeletePendingTimelineInit`). There is
+  no separate create-database call — the first endpoint is what turns the declared
+  branch into real storage.
 
 The storage layer identifies a tenant/timeline by 32 lowercase hex chars; the
-control plane stores the same 16 bytes as a SQL `uuid` and converts with
-`hex.EncodeToString(id[:])` when rendering chart values.
+control plane stores the same 16 bytes (the project/branch id) as a SQL `uuid` and
+converts with `hex.EncodeToString(id[:])` when rendering chart values.
 
 ## Storage-controller coordination + addressing
 
@@ -193,16 +195,16 @@ The deploy is **demo-grade**. What it currently takes for granted:
   any authn/authz. Do not expose publicly.
 - **Shared, well-known endpoint credentials.** Every endpoint's compute uses the
   same `cloud_admin` / `cloud_admin` superuser (the `COMPUTE_PASSWORD` default);
-  there is no per-endpoint credential generation or tenant isolation at the SQL
+  there is no per-endpoint credential generation or project isolation at the SQL
   layer.
-- **Postgres v17 only.** create-timeline rejects any other `pg_version`.
+- **Postgres v17 only.** create-project rejects any other `pg_version`.
 - **One pageserver+safekeeper per endpoint pod**, registered with a **unique SC
   node id derived from the timeline id** (a 31-bit hash). Collision-resistant, not
-  collision-proof. One `read_write` endpoint per timeline (single-writer).
-- **Bootstrap-on-first-endpoint.** Timelines are materialized by the first
+  collision-proof. One `read_write` endpoint per branch (single-writer).
+- **Bootstrap-on-first-endpoint.** Branches are materialized by the first
   endpoint's `initdb` (`BOOTSTRAP=true`), driven by the recipe — there is no
-  standalone create-database/branch flow yet.
-- **Synchronous, non-atomic provisioning.** create-timeline / create-endpoint run
+  standalone create-project/branch flow yet.
+- **Synchronous, non-atomic provisioning.** create-project / create-endpoint run
   inline on the request (no executing write-ahead task framework —
   [#84](https://github.com/yugabyte/yb-light/issues/84) /
   [#113](https://github.com/yugabyte/yb-light/issues/113)); a crash mid-flow can

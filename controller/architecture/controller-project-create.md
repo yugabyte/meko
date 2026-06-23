@@ -1,60 +1,67 @@
-# Amp Controller — Creating a timeline
+# Amp Controller — Creating a project
 
 **Status:** Draft
 **Last updated:** 2026-06-18
 
-How the Amp Controller ("cAmp") creates a new timeline. It follows the
-`yb_light_local` workflow (`control_plane/src/bin/yb_light_local.rs`), expressed
-in cAmp's resource model. **Precondition:** the storage pool already exists.
+How the Amp Controller ("cAmp") creates a new project (and its default branch). It
+follows the `yb_light_local` workflow (`control_plane/src/bin/yb_light_local.rs`),
+expressed in cAmp's resource model. **Precondition:** the storage pool already exists.
 
 ## Resource model
 
-`app_user` → **storage pool** → **tenant** → **timeline** (`pg_cluster`) →
+`app_user` → **storage pool** → **project** → **branch** (`pg_cluster`) →
 **endpoint**.
 
-- A **tenant** is the storage-layer unit; a **timeline** (`pg_cluster`) is a line
-  of history within it (`main`, plus branches).
+- A **project** is the user-facing "database"; it *is* the storage layer's
+  **tenant** — cAmp carries the storage id verbatim (`project.id` is the
+  `tenant_id`) and maps project→tenant only at the storage boundary. A **branch**
+  (`pg_cluster`) is a line of history within the project (the default branch, plus
+  its forks); a branch *is* the storage layer's **timeline**
+  (`branch.branch_id` is the `timeline_id`).
 - An **endpoint** is a single-container pod (or Docker container) — compute plus
   its *own* pageserver and safekeeper — deployed by cAmp's provisioner
   (`internal/deploy`).
 - The **storage controller** — which cAmp runs as a managed subprocess; client in
   `internal/storagecontroller` — is the tenant/node registry and the
-  generation-fencing authority.
+  generation-fencing authority. Its API is unchanged by the rename: cAmp still
+  drives it over the `/v1/tenant/{tenant}/timeline` surface.
 
 ## Principle: declare at create, materialize at the first endpoint
 
-cAmp records a new timeline as a **recipe** and builds its storage layer lazily,
-when the first endpoint for that timeline is deployed. The endpoint's own
+cAmp records a new branch as a **recipe** and builds its storage layer lazily,
+when the first endpoint for that branch is deployed. The endpoint's own
 pageserver bootstraps the timeline (`initdb`); the storage controller **records**
 the result — it does not run `initdb` itself.
 
-## Step 1 — `create-timeline`
+## Step 1 — `create-project`
 
-`POST /users/{u}/storage-pools/{p}/timelines`. cAmp:
+`POST /storage-pools/{p}/projects`. cAmp:
 
-1. Allocates `tenant_id` and `timeline_id`.
-2. Writes the control-plane rows to its database: `tenant` (under the pool) and
-   `pg_cluster` (`name`, `pg_version`, `is_main = true`,
-   `parent_timeline_id = NULL` for a root timeline).
-3. Records the same recipe in the storage controller:
-   `record_pending_timeline_init(tenant_id, timeline_id, { branch_name,
+1. Allocates the project id (= the storage layer's `tenant_id`) and the default
+   branch id (= the `timeline_id`).
+2. Writes the control-plane rows to its database: `project` (under the pool) and
+   its default `branch` (`name`, `pg_version`, `is_default = true`,
+   `parent_branch_id = NULL` for the default branch).
+3. Records the same recipe in the storage controller, keyed by the storage-layer
+   ids: `record_pending_timeline_init(tenant_id, timeline_id, { branch_name,
    pg_version, ancestor_timeline_id = NULL, start_lsn = 0 })`.
-4. Returns the timeline.
+4. Returns the project, with its embedded `default_branch`.
 
 No tenant is attached, no `initdb` runs, and no compute is started. The recipe
-now lives in **both** cAmp's database (`pg_cluster`) and the storage controller
+now lives in **both** cAmp's database (`branch`) and the storage controller
 (`pending_timeline_inits`).
 
 ## Step 2 — Materialize at the first endpoint
 
-`POST …/timelines/{t}/endpoints`. cAmp deploys the endpoint, the endpoint
-materializes the timeline, and cAmp finalizes.
+`POST …/projects/{proj}/branches/{br}/endpoints`. cAmp deploys the endpoint, the
+endpoint materializes the timeline, and cAmp finalizes.
 
 **cAmp deploys:**
 - Records the `endpoint` row.
 - Deploys the endpoint (Helm pod or Docker container) with `tenant_id`,
-  `timeline_id`, `pg_version`, `STORAGE_CONTROLLER_URL` (the cAmp-managed storage
-  controller), and `BOOTSTRAP=true`.
+  `timeline_id` (the storage-layer ids of the project/branch), `pg_version`,
+  `STORAGE_CONTROLLER_URL` (the cAmp-managed storage controller), and
+  `BOOTSTRAP=true`.
 
 **The endpoint materializes** (its supervisor, during bring-up):
 1. Registers its safekeeper and its pageserver node with the storage controller
@@ -71,7 +78,7 @@ materializes the timeline, and cAmp finalizes.
 - Reads the endpoint's address from the provisioner, records it on the
   `endpoint` row, and returns it to the caller.
 - Clears the recipe: deletes the storage controller's `pending_timeline_init`
-  and marks the timeline materialized.
+  and marks the branch materialized.
 
 ## What actually creates the timeline
 
@@ -79,19 +86,20 @@ The **endpoint's pageserver** runs `initdb` (driven by `BOOTSTRAP=true`) — the
 same role `yb_light_local`'s pageserver `Bootstrap` identity plays. The storage
 controller is **not** asked to create the timeline (there is no
 `tenant_timeline_create` call); it is *told* the timeline exists, through
-`timeline_register`. A **branch** timeline (`parent_timeline_id` set) is
-identical, except the pageserver clones from the ancestor at `fork_lsn` instead
-of running `initdb`.
+`timeline_register`. A forked branch (`parent_branch_id` set, so the recipe's
+`ancestor_timeline_id` is set) is identical, except the pageserver clones from the
+ancestor at `fork_lsn` instead of running `initdb`.
 
-## Branching a timeline
+## Forking a branch
 
-`POST …/timelines/{parent}/branch` (#130) is the same recipe-then-materialize
-flow, forking an existing timeline instead of bootstrapping a fresh one:
+`POST …/projects/{proj}/branches` (#130) is the same recipe-then-materialize
+flow, forking an existing branch instead of bootstrapping a fresh one:
 
-1. cAmp resolves the **parent** (the timeline in the path) within the pool, then
-   writes a `pg_cluster` row under the **same tenant** with a new `timeline_id`,
-   `is_main = false`, `parent_timeline_id = parent`, the inherited `pg_version`,
-   and `fork_lsn` (`core.Backend.BranchTimeline`).
+1. cAmp resolves the **parent** branch within the project — the project's default
+   branch, or any branch named with `parent_branch_id` (branch-of-branch) — then
+   writes a `branch` row under the **same project** with a new branch id (=
+   `timeline_id`), `is_default = false`, `parent_branch_id = parent`, the
+   inherited `pg_version`, and `fork_lsn` (`core.Backend.CreateBranch`).
 2. The **fork point** defaults to the parent's latest LSN — read from the storage
    controller (`GetTimeline`'s `last_record_lsn`) — or an explicit
    `fork_point_lsn`. (`last_record_lsn` is the pageserver's ingested position,
@@ -99,7 +107,7 @@ flow, forking an existing timeline instead of bootstrapping a fresh one:
    branches at; the controller doesn't expose `flush_lsn`, so an exact point
    needs `fork_point_lsn`.)
 3. cAmp records the pending-init recipe with `ancestor_timeline_id = parent` and
-   `start_lsn = fork_lsn` (vs. `null` / `0` for a root timeline).
+   `start_lsn = fork_lsn` (vs. `null` / `0` for the default branch).
 
 Materialization is unchanged (Step 2): the first endpoint deployed on the branch
 brings up its pageserver/safekeeper and registers the timeline — except the
@@ -112,13 +120,13 @@ writes are synchronous today and move onto the task framework under #113.
 
 | `yb_light_local` | Amp Controller (cAmp) |
 |---|---|
-| `tenant create` → `pending_timeline_inits` | `create-timeline` → `tenant` + `pg_cluster` (cAmp DB) **and** `record_pending_timeline_init` (storage controller) |
+| `tenant create` → `pending_timeline_inits` | `create-project` → `project` + default `branch` (cAmp DB) **and** `record_pending_timeline_init` (storage controller) |
 | control plane starts SK + `register_safekeeper` | the **endpoint** registers its safekeeper |
 | control plane inits PS + `register_and_attach` | the **endpoint** registers its pageserver + runs the attach-hook (generation) |
 | PS `Bootstrap` runs `initdb` | the **endpoint** runs `initdb` (`BOOTSTRAP=true`) |
 | SK `create_timeline` + SC `timeline_register` | the **endpoint** creates the timeline on its safekeeper, then calls `timeline_register` |
 | `endpoint.start` after provisioning | the endpoint starts compute once the timeline is `Active` |
-| `delete_pending_timeline_init` | **cAmp** deletes the pending init and marks the timeline materialized |
+| `delete_pending_timeline_init` | **cAmp** deletes the pending init and marks the branch materialized |
 
 ## Notes
 

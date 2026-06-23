@@ -2,7 +2,7 @@
 // (amp-controller.md §8): every mutation is a durable, idempotent task
 // built from ordered steps, persisted to YBDB so a crash resumes rather than
 // corrupts. This package holds the stubs/skeleton the API mutation paths plug
-// into; the real step catalog (create-database, branch, scale) lands later.
+// into; the real step catalog (create-project, branch, scale) lands later.
 package task
 
 import (
@@ -28,7 +28,7 @@ type Task struct {
 	ID          uuid.UUID
 	Kind        string
 	Status      Status
-	TenantID    *uuid.UUID
+	ProjectID   *uuid.UUID
 	TargetRef   *string
 	Params      json.RawMessage
 	Error       *string

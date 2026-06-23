@@ -55,7 +55,7 @@ func NewPgStore(pool *db.Pool) *PgStore {
 	return &PgStore{pool: pool}
 }
 
-const taskColumns = `id::text, kind, status::text, tenant_id::text, target_ref,
+const taskColumns = `id::text, kind, status::text, project_id::text, target_ref,
 	params, error, owner, lease_expiry, created_at, updated_at`
 
 func (s *PgStore) Plan(ctx context.Context, kind string, params json.RawMessage, steps []StepPlan) (*Task, error) {
@@ -226,13 +226,13 @@ type row interface {
 // scanTask scans the taskColumns projection (uuid columns cast to text).
 func scanTask(r row) (*Task, error) {
 	var (
-		idStr     string
-		statusStr string
-		tenantStr *string
-		params    []byte
-		t         Task
+		idStr      string
+		statusStr  string
+		projectStr *string
+		params     []byte
+		t          Task
 	)
-	if err := r.Scan(&idStr, &t.Kind, &statusStr, &tenantStr, &t.TargetRef,
+	if err := r.Scan(&idStr, &t.Kind, &statusStr, &projectStr, &t.TargetRef,
 		&params, &t.Error, &t.Owner, &t.LeaseExpiry, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -243,12 +243,12 @@ func scanTask(r row) (*Task, error) {
 	t.ID = id
 	t.Status = Status(statusStr)
 	t.Params = json.RawMessage(params)
-	if tenantStr != nil {
-		tid, err := uuid.Parse(*tenantStr)
+	if projectStr != nil {
+		pid, err := uuid.Parse(*projectStr)
 		if err != nil {
-			return nil, fmt.Errorf("parse tenant id: %w", err)
+			return nil, fmt.Errorf("parse project id: %w", err)
 		}
-		t.TenantID = &tid
+		t.ProjectID = &pid
 	}
 	return &t, nil
 }

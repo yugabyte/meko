@@ -101,7 +101,7 @@ func (c *Client) TimelineLatestLSN(ctx context.Context, tenantID, timelineID str
 // PendingTimelineInit is the recipe for a timeline that has been declared but
 // not yet materialized: the storage controller stores it until an endpoint's
 // pageserver attaches and bootstraps the timeline (controller/architecture/
-// controller-timeline-create.md). ancestor_timeline_id is null for a root (Bootstrap)
+// controller-project-create.md). ancestor_timeline_id is null for a root (Bootstrap)
 // timeline; set, with start_lsn, for a branch. start_lsn is the controller's
 // Lsn string form ("hi/lo" uppercase hex, e.g. "0/0"); pg_version is the bare
 // major version (17).

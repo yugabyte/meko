@@ -14,7 +14,8 @@ import (
 // TestEndpointFlow drives the endpoint workflow through the generated client:
 // create (which synchronously deploys), get, list, the single-writer rule,
 // read-only endpoints, and retire. The backend is the in-memory fake; the
-// timeline is seeded directly because timeline creation is logged-only (#92).
+// branch is seeded directly so the test exercises the endpoint lifecycle
+// without going through create-project/create-branch.
 func TestEndpointFlow(t *testing.T) {
 	client, backend, _ := newTestServer(t)
 	ctx := context.Background()
@@ -22,21 +23,21 @@ func TestEndpointFlow(t *testing.T) {
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "ep-pool")
 
-	tenantID := uuid.New()
-	timelineID := uuid.New()
-	backend.SeedTimeline(pool.Id, core.Timeline{
-		TenantID:   tenantID,
-		TimelineID: timelineID,
-		Name:       "main",
-		PgVersion:  17,
-		IsMain:     true,
+	projectID := uuid.New()
+	branchID := uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{
+		ProjectID: projectID,
+		BranchID:  branchID,
+		Name:      "main",
+		PgVersion: 17,
+		IsDefault: true,
 	})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 	ro := api.CreateEndpointRequestRoleReadOnly
 
 	// Create a read_write endpoint -> 201 with the deployed endpoint (address set).
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, timelineID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -44,8 +45,8 @@ func TestEndpointFlow(t *testing.T) {
 		t.Fatalf("CreateEndpoint status = %d, body = %s", created.StatusCode(), created.Body)
 	}
 	ep := *created.JSON201
-	if ep.TenantId != tenantID || ep.TimelineId != timelineID {
-		t.Errorf("endpoint binding = (%s,%s), want (%s,%s)", ep.TenantId, ep.TimelineId, tenantID, timelineID)
+	if ep.ProjectId != projectID || ep.BranchId != branchID {
+		t.Errorf("endpoint binding = (%s,%s), want (%s,%s)", ep.ProjectId, ep.BranchId, projectID, branchID)
 	}
 	if ep.Role != api.EndpointRoleReadWrite {
 		t.Errorf("role = %q, want read_write", ep.Role)
@@ -55,7 +56,7 @@ func TestEndpointFlow(t *testing.T) {
 	}
 
 	// Get it back -> 200.
-	got, err := client.GetEndpointWithResponse(ctx, pool.Id, timelineID, ep.Id)
+	got, err := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
 	if err != nil {
 		t.Fatalf("GetEndpoint: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestEndpointFlow(t *testing.T) {
 	}
 
 	// List -> exactly one endpoint.
-	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, timelineID, nil)
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -72,8 +73,8 @@ func TestEndpointFlow(t *testing.T) {
 		t.Fatalf("ListEndpoints status = %d, body = %s", list.StatusCode(), list.Body)
 	}
 
-	// A second read_write on the same timeline violates the single-writer rule -> 409.
-	dup, err := client.CreateEndpointWithResponse(ctx, pool.Id, timelineID, api.CreateEndpointRequest{Role: &rw})
+	// A second read_write on the same branch violates the single-writer rule -> 409.
+	dup, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(dup writer): %v", err)
 	}
@@ -82,7 +83,7 @@ func TestEndpointFlow(t *testing.T) {
 	}
 
 	// A read_only endpoint is allowed alongside the writer -> 201.
-	roResp, err := client.CreateEndpointWithResponse(ctx, pool.Id, timelineID, api.CreateEndpointRequest{Role: &ro})
+	roResp, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &ro})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(read_only): %v", err)
 	}
@@ -91,7 +92,7 @@ func TestEndpointFlow(t *testing.T) {
 	}
 
 	// Retire the writer -> 204.
-	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, timelineID, ep.Id)
+	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
 	if err != nil {
 		t.Fatalf("DeleteEndpoint: %v", err)
 	}
@@ -100,7 +101,7 @@ func TestEndpointFlow(t *testing.T) {
 	}
 
 	// It is gone now -> get 404.
-	gone, err := client.GetEndpointWithResponse(ctx, pool.Id, timelineID, ep.Id)
+	gone, err := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
 	if err != nil {
 		t.Fatalf("GetEndpoint(after retire): %v", err)
 	}
@@ -118,19 +119,20 @@ func TestEndpointErrors(t *testing.T) {
 	pool := mustCreatePool(t, client, user.Id, "err-pool")
 	rw := api.CreateEndpointRequestRoleReadWrite
 
-	// Create against a timeline that does not exist -> 404.
-	missing, err := client.CreateEndpointWithResponse(ctx, pool.Id, uuid.New(), api.CreateEndpointRequest{Role: &rw})
+	// Create against a branch that does not exist -> 404.
+	missing, err := client.CreateEndpointWithResponse(ctx, pool.Id, uuid.New(), uuid.New(), api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
-		t.Fatalf("CreateEndpoint(missing timeline): %v", err)
+		t.Fatalf("CreateEndpoint(missing branch): %v", err)
 	}
 	if missing.StatusCode() != http.StatusNotFound || missing.JSON404 == nil {
-		t.Fatalf("missing timeline status = %d, body = %s", missing.StatusCode(), missing.Body)
+		t.Fatalf("missing branch status = %d, body = %s", missing.StatusCode(), missing.Body)
 	}
 
-	// Get against a missing endpoint (timeline seeded) -> 404.
-	timelineID := uuid.New()
-	backend.SeedTimeline(pool.Id, core.Timeline{TenantID: uuid.New(), TimelineID: timelineID, Name: "main", PgVersion: 17, IsMain: true})
-	getMissing, err := client.GetEndpointWithResponse(ctx, pool.Id, timelineID, uuid.New())
+	// Get against a missing endpoint (branch seeded) -> 404.
+	projectID := uuid.New()
+	branchID := uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	getMissing, err := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, uuid.New())
 	if err != nil {
 		t.Fatalf("GetEndpoint(missing): %v", err)
 	}
@@ -148,11 +150,12 @@ func TestEndpointDeployDisabled(t *testing.T) {
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "off-pool")
-	timelineID := uuid.New()
-	backend.SeedTimeline(pool.Id, core.Timeline{TenantID: uuid.New(), TimelineID: timelineID, Name: "main", PgVersion: 17, IsMain: true})
+	projectID := uuid.New()
+	branchID := uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, timelineID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -161,7 +164,7 @@ func TestEndpointDeployDisabled(t *testing.T) {
 	}
 
 	// No endpoint row was committed.
-	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, timelineID, nil)
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -169,7 +172,7 @@ func TestEndpointDeployDisabled(t *testing.T) {
 		t.Fatalf("ListEndpoints after refused create = %d / %v", list.StatusCode(), list.Body)
 	}
 
-	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, timelineID, uuid.New())
+	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, projectID, branchID, uuid.New())
 	if err != nil {
 		t.Fatalf("DeleteEndpoint: %v", err)
 	}

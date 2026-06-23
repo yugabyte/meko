@@ -79,7 +79,7 @@ type DeployConfig struct {
 	// controller-managed storage controller (e.g. http://host.docker.internal:50051).
 	// When set, the endpoint registers its pageserver + safekeeper, takes its
 	// generation from the attach-hook, and registers the timeline — the
-	// storage-controller-coordinated path (controller-timeline-create.md). Empty = the
+	// storage-controller-coordinated path (controller-project-create.md). Empty = the
 	// endpoint runs storage-controller-free with a pinned generation.
 	StorageControllerURL string
 

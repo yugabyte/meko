@@ -20,34 +20,34 @@ type MemBackend struct {
 	users        map[uuid.UUID]User
 	pools        map[uuid.UUID]StoragePool
 	names        map[string]struct{} // pool names are unique across the placement group
-	timelines    map[uuid.UUID]Timeline
-	timelinePool map[uuid.UUID]uuid.UUID     // timeline id -> the pool it lives in (pg joins tenant.storage_pool_id)
-	tenantNames  map[tenantNameKey]struct{}  // tenant names are unique within their pool
-	clusterNames map[clusterNameKey]struct{} // timeline names are unique within their tenant
+	projects     map[uuid.UUID]Project
+	branches     map[uuid.UUID]Branch
+	projectNames map[projectNameKey]struct{} // project names are unique within their pool
+	branchNames  map[branchNameKey]struct{}  // branch names are unique within their project
 	endpoints    map[uuid.UUID]Endpoint
-	writers      map[timelineKey]struct{} // at most one read_write endpoint per timeline
+	writers      map[branchKey]struct{} // at most one read_write endpoint per branch
 	now          func() time.Time
 }
 
-// tenantNameKey makes a tenant name unique within its pool (the schema's
+// projectNameKey makes a project name unique within its pool (the schema's
 // UNIQUE (storage_pool_id, name)).
-type tenantNameKey struct {
+type projectNameKey struct {
 	poolID uuid.UUID
 	name   string
 }
 
-// clusterNameKey makes a timeline name unique within its tenant (the schema's
-// pg_cluster UNIQUE (tenant_id, name)): a tenant's main timeline plus its
+// branchNameKey makes a branch name unique within its project (the schema's
+// branch UNIQUE (project_id, name)): a project's default branch plus its
 // branches all share one name space.
-type clusterNameKey struct {
-	tenantID uuid.UUID
-	name     string
+type branchNameKey struct {
+	projectID uuid.UUID
+	name      string
 }
 
-// timelineKey identifies a timeline (the schema's (tenant_id, timeline_id) PK).
-type timelineKey struct {
-	tenantID   uuid.UUID
-	timelineID uuid.UUID
+// branchKey identifies a branch (the schema's (project_id, branch_id) PK).
+type branchKey struct {
+	projectID uuid.UUID
+	branchID  uuid.UUID
 }
 
 // NewMemBackend returns an empty in-memory backend.
@@ -56,26 +56,29 @@ func NewMemBackend() *MemBackend {
 		users:        make(map[uuid.UUID]User),
 		pools:        make(map[uuid.UUID]StoragePool),
 		names:        make(map[string]struct{}),
-		timelines:    make(map[uuid.UUID]Timeline),
-		timelinePool: make(map[uuid.UUID]uuid.UUID),
-		tenantNames:  make(map[tenantNameKey]struct{}),
-		clusterNames: make(map[clusterNameKey]struct{}),
+		projects:     make(map[uuid.UUID]Project),
+		branches:     make(map[uuid.UUID]Branch),
+		projectNames: make(map[projectNameKey]struct{}),
+		branchNames:  make(map[branchNameKey]struct{}),
 		endpoints:    make(map[uuid.UUID]Endpoint),
-		writers:      make(map[timelineKey]struct{}),
+		writers:      make(map[branchKey]struct{}),
 		now:          time.Now,
 	}
 }
 
-// SeedTimeline registers a timeline under a pool. Endpoint tests (#108) seed a
-// timeline directly when they want to exercise the endpoint lifecycle without
-// going through CreateTimeline, mirroring how a real timeline is provisioned
-// out-of-band.
-func (m *MemBackend) SeedTimeline(poolID uuid.UUID, tl Timeline) {
+// SeedBranch registers a branch (and a stub project for it, if absent) under a
+// pool. Endpoint tests (#108) seed a branch directly when they want to exercise
+// the endpoint lifecycle without going through CreateProject/CreateBranch,
+// mirroring how a real branch is provisioned out-of-band.
+func (m *MemBackend) SeedBranch(poolID uuid.UUID, b Branch) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.timelines[tl.TimelineID] = tl
-	m.timelinePool[tl.TimelineID] = poolID
-	m.clusterNames[clusterNameKey{tenantID: tl.TenantID, name: tl.Name}] = struct{}{}
+	if _, ok := m.projects[b.ProjectID]; !ok {
+		m.projects[b.ProjectID] = Project{ID: b.ProjectID, StoragePoolID: poolID, Name: b.Name, CreatedAt: b.CreatedAt}
+		m.projectNames[projectNameKey{poolID: poolID, name: b.Name}] = struct{}{}
+	}
+	m.branches[b.BranchID] = b
+	m.branchNames[branchNameKey{projectID: b.ProjectID, name: b.Name}] = struct{}{}
 }
 
 func (m *MemBackend) Healthy(context.Context) error { return nil }
@@ -149,111 +152,174 @@ func (m *MemBackend) GetStoragePool(_ context.Context, poolID uuid.UUID) (Storag
 	return p, nil
 }
 
-func (m *MemBackend) CreateTimeline(_ context.Context, poolID uuid.UUID, name string, pgVersion int) (Timeline, error) {
+func (m *MemBackend) CreateProject(_ context.Context, poolID uuid.UUID, name string, pgVersion int) (Project, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.pools[poolID]; !ok {
-		return Timeline{}, ErrNotFound
+		return Project{}, ErrNotFound
 	}
-	key := tenantNameKey{poolID: poolID, name: name}
-	if _, taken := m.tenantNames[key]; taken {
-		return Timeline{}, ErrConflict
+	key := projectNameKey{poolID: poolID, name: name}
+	if _, taken := m.projectNames[key]; taken {
+		return Project{}, ErrConflict
 	}
-	t := Timeline{
-		TenantID:   uuid.New(),
-		TimelineID: uuid.New(),
-		Name:       name,
-		PgVersion:  pgVersion,
-		IsMain:     true,
-		CreatedAt:  m.now(),
+	now := m.now()
+	// The project and its default branch are created together: a project with no
+	// branch is not a valid resource.
+	p := Project{ID: uuid.New(), StoragePoolID: poolID, Name: name, CreatedAt: now}
+	def := Branch{
+		ProjectID: p.ID,
+		BranchID:  uuid.New(),
+		Name:      name,
+		PgVersion: pgVersion,
+		IsDefault: true,
+		CreatedAt: now,
 	}
-	m.timelines[t.TimelineID] = t
-	m.timelinePool[t.TimelineID] = poolID
-	m.tenantNames[key] = struct{}{}
-	m.clusterNames[clusterNameKey{tenantID: t.TenantID, name: name}] = struct{}{}
-	return t, nil
+	// Populate DefaultBranch before storing so the map entry is self-consistent
+	// (the read paths re-derive it from m.branches, but a partially-initialized
+	// stored struct is a footgun for any future direct access to m.projects).
+	p.DefaultBranch = def
+	m.projects[p.ID] = p
+	m.branches[def.BranchID] = def
+	m.projectNames[key] = struct{}{}
+	m.branchNames[branchNameKey{projectID: p.ID, name: name}] = struct{}{}
+	return p, nil
 }
 
-func (m *MemBackend) BranchTimeline(_ context.Context, poolID, parentTimelineID uuid.UUID, name, forkLSN string) (Timeline, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	parent, ok := m.timelineInPool(poolID, parentTimelineID)
-	if !ok {
-		return Timeline{}, ErrNotFound
-	}
-	ck := clusterNameKey{tenantID: parent.TenantID, name: name}
-	if _, taken := m.clusterNames[ck]; taken {
-		return Timeline{}, ErrConflict
-	}
-	parentID := parent.TimelineID
-	// A branch stays in its ancestor's tenant and inherits its Postgres version.
-	t := Timeline{
-		TenantID:         parent.TenantID,
-		TimelineID:       uuid.New(),
-		Name:             name,
-		PgVersion:        parent.PgVersion,
-		IsMain:           false,
-		ParentTimelineID: &parentID,
-		ForkLSN:          forkLSN,
-		CreatedAt:        m.now(),
-	}
-	m.timelines[t.TimelineID] = t
-	m.timelinePool[t.TimelineID] = poolID
-	m.clusterNames[ck] = struct{}{}
-	return t, nil
-}
-
-func (m *MemBackend) ListTimelines(_ context.Context, poolID uuid.UUID, limit, offset int) ([]Timeline, int, error) {
+func (m *MemBackend) ListProjects(_ context.Context, poolID uuid.UUID, limit, offset int) ([]Project, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.pools[poolID]; !ok {
 		return nil, 0, ErrNotFound
 	}
-	var timelines []Timeline
-	for id, tl := range m.timelines {
-		if m.timelinePool[id] == poolID {
-			timelines = append(timelines, tl)
+	var projects []Project
+	for _, p := range m.projects {
+		if p.StoragePoolID == poolID {
+			p.DefaultBranch = m.defaultBranchOf(p.ID)
+			projects = append(projects, p)
 		}
 	}
-	sort.SliceStable(timelines, func(i, j int) bool {
-		return createdBefore(timelines[i].CreatedAt, timelines[j].CreatedAt, timelines[i].TimelineID, timelines[j].TimelineID)
+	sort.SliceStable(projects, func(i, j int) bool {
+		return createdBefore(projects[i].CreatedAt, projects[j].CreatedAt, projects[i].ID, projects[j].ID)
 	})
-	return page(timelines, limit, offset), len(timelines), nil
+	return page(projects, limit, offset), len(projects), nil
 }
 
-// timelineInPool returns the timeline addressed by (poolID, timelineID) if the
-// timeline's tenant belongs to the pool. Pools are top-level, so this is not
-// owner-scoped. Caller holds m.mu.
-func (m *MemBackend) timelineInPool(poolID, timelineID uuid.UUID) (Timeline, bool) {
-	tl, ok := m.timelines[timelineID]
-	if !ok || m.timelinePool[timelineID] != poolID {
-		return Timeline{}, false
-	}
-	if _, ok := m.pools[poolID]; !ok {
-		return Timeline{}, false
-	}
-	return tl, true
-}
-
-func (m *MemBackend) GetTimeline(_ context.Context, poolID, timelineID uuid.UUID) (Timeline, error) {
+func (m *MemBackend) GetProject(_ context.Context, poolID, projectID uuid.UUID) (Project, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	tl, ok := m.timelineInPool(poolID, timelineID)
+	p, ok := m.projectInPool(poolID, projectID)
 	if !ok {
-		return Timeline{}, ErrNotFound
+		return Project{}, ErrNotFound
 	}
-	return tl, nil
+	p.DefaultBranch = m.defaultBranchOf(p.ID)
+	return p, nil
 }
 
-func (m *MemBackend) CreateEndpoint(_ context.Context, tenantID, timelineID uuid.UUID, role string, _ []byte) (Endpoint, error) {
+func (m *MemBackend) CreateBranch(_ context.Context, poolID, projectID, parentBranchID uuid.UUID, name, forkLSN string) (Branch, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	tl, ok := m.timelines[timelineID]
-	if !ok || tl.TenantID != tenantID {
+	if _, ok := m.projectInPool(poolID, projectID); !ok {
+		return Branch{}, ErrNotFound
+	}
+	parent, ok := m.branches[parentBranchID]
+	if !ok || parent.ProjectID != projectID {
+		return Branch{}, ErrNotFound
+	}
+	nk := branchNameKey{projectID: projectID, name: name}
+	if _, taken := m.branchNames[nk]; taken {
+		return Branch{}, ErrConflict
+	}
+	parentID := parent.BranchID
+	// A branch stays in its project and inherits the parent's Postgres version.
+	b := Branch{
+		ProjectID:      projectID,
+		BranchID:       uuid.New(),
+		Name:           name,
+		PgVersion:      parent.PgVersion,
+		IsDefault:      false,
+		ParentBranchID: &parentID,
+		ForkLSN:        forkLSN,
+		CreatedAt:      m.now(),
+	}
+	m.branches[b.BranchID] = b
+	m.branchNames[nk] = struct{}{}
+	return b, nil
+}
+
+func (m *MemBackend) ListBranches(_ context.Context, poolID, projectID uuid.UUID, limit, offset int) ([]Branch, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.projectInPool(poolID, projectID); !ok {
+		return nil, 0, ErrNotFound
+	}
+	var branches []Branch
+	for _, b := range m.branches {
+		if b.ProjectID == projectID {
+			branches = append(branches, b)
+		}
+	}
+	sort.SliceStable(branches, func(i, j int) bool {
+		return createdBefore(branches[i].CreatedAt, branches[j].CreatedAt, branches[i].BranchID, branches[j].BranchID)
+	})
+	return page(branches, limit, offset), len(branches), nil
+}
+
+func (m *MemBackend) GetBranch(_ context.Context, poolID, projectID, branchID uuid.UUID) (Branch, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.branchInProject(poolID, projectID, branchID)
+	if !ok {
+		return Branch{}, ErrNotFound
+	}
+	return b, nil
+}
+
+// projectInPool returns the project addressed by (poolID, projectID) if the
+// project belongs to the pool. Caller holds m.mu.
+func (m *MemBackend) projectInPool(poolID, projectID uuid.UUID) (Project, bool) {
+	if _, ok := m.pools[poolID]; !ok {
+		return Project{}, false
+	}
+	p, ok := m.projects[projectID]
+	if !ok || p.StoragePoolID != poolID {
+		return Project{}, false
+	}
+	return p, true
+}
+
+// branchInProject returns the branch addressed by (poolID, projectID, branchID)
+// if the pool->project->branch chain holds. Caller holds m.mu.
+func (m *MemBackend) branchInProject(poolID, projectID, branchID uuid.UUID) (Branch, bool) {
+	if _, ok := m.projectInPool(poolID, projectID); !ok {
+		return Branch{}, false
+	}
+	b, ok := m.branches[branchID]
+	if !ok || b.ProjectID != projectID {
+		return Branch{}, false
+	}
+	return b, true
+}
+
+// defaultBranchOf returns the project's default branch (the one with IsDefault),
+// or a zero Branch if absent. Caller holds m.mu.
+func (m *MemBackend) defaultBranchOf(projectID uuid.UUID) Branch {
+	for _, b := range m.branches {
+		if b.ProjectID == projectID && b.IsDefault {
+			return b
+		}
+	}
+	return Branch{}
+}
+
+func (m *MemBackend) CreateEndpoint(_ context.Context, projectID, branchID uuid.UUID, role string, _ []byte) (Endpoint, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.branches[branchID]
+	if !ok || b.ProjectID != projectID {
 		return Endpoint{}, ErrNotFound
 	}
 	if role == RoleReadWrite {
-		k := timelineKey{tenantID: tenantID, timelineID: timelineID}
+		k := branchKey{projectID: projectID, branchID: branchID}
 		if _, taken := m.writers[k]; taken {
 			return Endpoint{}, ErrConflict
 		}
@@ -261,41 +327,40 @@ func (m *MemBackend) CreateEndpoint(_ context.Context, tenantID, timelineID uuid
 	}
 	// Address is set later via SetEndpointAddress, once the endpoint is deployed.
 	e := Endpoint{
-		ID:         uuid.New(),
-		TenantID:   tenantID,
-		TimelineID: timelineID,
-		Role:       role,
-		CreatedAt:  m.now(),
+		ID:        uuid.New(),
+		ProjectID: projectID,
+		BranchID:  branchID,
+		Role:      role,
+		CreatedAt: m.now(),
 	}
 	m.endpoints[e.ID] = e
 	return e, nil
 }
 
-func (m *MemBackend) GetEndpoint(_ context.Context, poolID, timelineID, endpointID uuid.UUID) (Endpoint, error) {
+func (m *MemBackend) GetEndpoint(_ context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (Endpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	tl, ok := m.timelineInPool(poolID, timelineID)
-	if !ok {
+	if _, ok := m.branchInProject(poolID, projectID, branchID); !ok {
 		return Endpoint{}, ErrNotFound
 	}
 	ep, ok := m.endpoints[endpointID]
-	// Match PgBackend, which joins on (tenant_id, timeline_id): the endpoint must
-	// belong to this timeline's tenant, not just share its timeline id.
-	if !ok || ep.TimelineID != timelineID || ep.TenantID != tl.TenantID {
+	// Match PgBackend, which joins on (project_id, branch_id): the endpoint must
+	// belong to this branch, not just share its branch id.
+	if !ok || ep.BranchID != branchID || ep.ProjectID != projectID {
 		return Endpoint{}, ErrNotFound
 	}
 	return ep, nil
 }
 
-func (m *MemBackend) ListEndpoints(_ context.Context, poolID, timelineID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
+func (m *MemBackend) ListEndpoints(_ context.Context, poolID, projectID, branchID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.timelineInPool(poolID, timelineID); !ok {
+	if _, ok := m.branchInProject(poolID, projectID, branchID); !ok {
 		return nil, 0, ErrNotFound
 	}
 	var endpoints []Endpoint
 	for _, e := range m.endpoints {
-		if e.TimelineID == timelineID {
+		if e.BranchID == branchID && e.ProjectID == projectID {
 			endpoints = append(endpoints, e)
 		}
 	}
@@ -320,7 +385,7 @@ func (m *MemBackend) DeleteEndpoint(_ context.Context, endpointID uuid.UUID) err
 	defer m.mu.Unlock()
 	if ep, ok := m.endpoints[endpointID]; ok {
 		if ep.Role == RoleReadWrite {
-			delete(m.writers, timelineKey{tenantID: ep.TenantID, timelineID: ep.TimelineID})
+			delete(m.writers, branchKey{projectID: ep.ProjectID, branchID: ep.BranchID})
 		}
 		delete(m.endpoints, endpointID)
 	}

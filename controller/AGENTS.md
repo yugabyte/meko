@@ -17,8 +17,8 @@ with the design docs in [`architecture/`](architecture/):
   Docker sibling behind `deploy.Deployer`, the synchronous deploy/retire path,
   the `--deploy-driver` selector, the recipe/bootstrap model, internal-LoadBalancer
   endpoints, and the current deployment assumptions).
-- [`architecture/controller-timeline-create.md`](architecture/controller-timeline-create.md) —
-  creating a timeline, patterned on `yb_light_local`: declare a recipe at create,
+- [`architecture/controller-project-create.md`](architecture/controller-project-create.md) —
+  creating a project, patterned on `yb_light_local`: declare a recipe at create,
   materialize the storage layer at the first endpoint.
 
 This guide is scoped to `controller/`. The repo-wide guide is the top-level
@@ -32,7 +32,7 @@ under `controller/`.
   request/task-scoped logger) — never `slog.New`, a hand-built `slog.Handler`,
   or `slog.Default()` as your source. Stamp scoped loggers onto the context with
   `log.IntoContext`, and use the canonical attribute-key constants
-  (`log.KeyTaskID`, `log.KeyTenantID`, `log.KeyRequestID`, …) so records stay
+  (`log.KeyTaskID`, `log.KeyProjectID`, `log.KeyRequestID`, …) so records stay
   consistent and queryable. You'll still use the `slog.Attr` / `slog.Level`
   value types and `*slog.Logger` is what `internal/log` hands back — that's
   expected; the rule is about where the logger *comes from*, so every component

@@ -3,7 +3,7 @@
 ## The one-paragraph version
 
 **amp-controller (ac) is the control plane for YB Light.** It owns the full
-lifecycle of everything a customer cares about — tenants, databases (timelines),
+lifecycle of everything a customer cares about — projects, their databases (branches),
 the read/write compute "endpoints" that serve them, and the branching between them —
 and exposes all of it through a single REST API. It keeps its own state in YBDB
 it manages and reuses YB Light's existing storage components rather than 
@@ -33,7 +33,7 @@ These parts split into two planes — control and data — with the MCP server s
 front of the control plane, and the rule for reaching each is different.
 
 **Control plane — always through the Controller.** Anything that changes the shape of
-the world — create a database, branch a timeline, add/remove/pause an
+the world — create a project, branch a branch, add/remove/pause an
 endpoint, scale — is a **control-plane mutation**, and the only way to perform one is
 a Controller API call. Agents, the MCP server, future automation — they are all just
 API consumers of the Controller. Neither the data nor the compute layer has the
@@ -42,7 +42,7 @@ the control plane today.
 
 **An MCP server ships with YBLC.** Alongside the REST API, YBLC exposes its control
 plane as an MCP server so that AI agents can drive lifecycle operations — create a
-database, branch a timeline, stand up or pause an endpoint, scale — through
+project, branch a branch, stand up or pause an endpoint, scale — through
 tool calls. The MCP server is a thin adapter over the same Controller API; it grants
 no special privileges and bypasses nothing, it simply makes the control plane
 directly consumable by agents.
@@ -84,28 +84,33 @@ exists. Requirements are cumulative going down the table.
 ```
 Foundation (= one YugabyteDB universe, one Controller)
   └── Storage Pool       ≈ a Meko datapack; any user can create one (becomes owner)
-        └── Tenant       a "database": created with its one main timeline (PG cluster)
-              └── Timeline (PG cluster)   the main timeline + its branches (forks)
-                    └── Endpoint          a running Postgres serving that timeline
+        └── Project      a "database": created with its one default branch (PG cluster)
+              └── Branch (PG cluster)   the default branch + its forks
+                    └── Endpoint        a running Postgres serving that branch
 ```
 
 | To create… | You need (cumulatively)… | Notes |
 |---|---|---|
 | **Storage pool** | A user account | Any user can create a pool and becomes its owner. It maps roughly to a Meko datapack; reaching someone else's pool requires it to be **shared** with you. |
-| **Database** (tenant + main timeline) | Access to the pool | Creating a database creates the tenant *and* its one **main** timeline together, and optionally that timeline's first (write) endpoint. A tenant is never created on its own. Access is then granted per tenant. |
-| **Branch** (another timeline) | Write access to the tenant | Fork an existing timeline into a new one under the same tenant. |
-| **Endpoint** | An existing timeline | A *write* endpoint is only allowed if the timeline has no writer yet (single-writer rule); all others are read-only. |
+| **Project** (with its default branch) | Access to the pool | Creating a project creates the project *and* its one **default** branch together, and optionally that branch's first (write) endpoint. The default branch is never created on its own. Access is then granted per project. |
+| **Branch** (another branch) | Write access to the project | Fork an existing branch into a new one under the same project — off the default branch or off another branch (branch-of-branch). |
+| **Endpoint** | An existing branch | A *write* endpoint is only allowed if the branch has no writer yet (single-writer rule); all others are read-only. |
 
-Branching is the action of creating a new timeline (a branch) from an existing one;
-once created, a branch is an ordinary timeline under the same tenant. (Merging timelines
-is future work.)
+Branching is the action of creating a new branch from an existing one (the default
+branch or another branch); once created, a branch is an ordinary branch under the same
+project. (Merging branches is future work.)
 
-Creating databases, branches, and endpoints can all be driven through the **MCP server**.
+Creating projects, branches, and endpoints can all be driven through the **MCP server**.
 
-Some notes on timelines and endpoints:
+Under the hood a project *is* the storage layer's **tenant** and a branch *is* its
+**timeline**: the Controller carries the storage-layer ids verbatim and maps
+project→tenant, branch→timeline only when talking to the storage controller.
 
-- **Timelines are tenant-scoped.** A timeline is identified by *(tenant, timeline)*.
-- **One writer per database.** A second write endpoint cannot exist.
+Some notes on branches and endpoints:
+
+- **Branches are project-scoped.** A branch is identified by *(project, branch)* — the
+  storage layer's *(tenant, timeline)* pair.
+- **One writer per branch.** A second write endpoint cannot exist.
 
 ## 3. Main Workflows
 
@@ -116,26 +121,28 @@ steps, so a crash mid-operation resumes rather than leaving a mess.
 1. **Create storage pool.** Any user can create a storage pool and becomes its **owner**;
    it maps roughly to a Meko datapack. A user who did not create a pool reaches it only if
    it is **shared** with them.
-2. **Create database.** (Tenant/Timeline) The primary entry point. Under a storage pool the caller can
-   reach, the Controller — in one task — creates a **tenant** (assigning its
-   **`tenant_id`**, the identifier every resource below it is scoped by), creates that
-   tenant's one **main timeline (PG cluster)** *scoped to that `tenant_id`* (assigning its
-   **`timeline_id`**; a timeline is identified by the pair **(tenant_id, timeline_id)**,
-   never globally), registers the timeline with the storage layer, creates the database
-   record, and can stand up its first write endpoint. A tenant is never created on its
-   own — a database *is* a tenant plus its main timeline. Access to the new tenant is then
-   granted per user.
-3. **Create endpoint.** On an existing timeline — addressed by its **(tenant_id,
-   timeline_id)** — the Controller assembles the endpoint *spec* (DB connection, timeline
-   binding, read/write role, version, TLS, telemetry), assigns the endpoint its own unique
-   **`endpoint_id`** (endpoints have no names; they are addressed by id), provisions the
-   compute, and hands the spec to that endpoint's `compute_ctl`. A write endpoint is
-   rejected if the timeline already has one (single-writer rule). The id is durable:
-   replacing a failed compute reuses the same `endpoint_id` (new instance, same record).
-4. **Branch.** Fork an existing timeline at a chosen point, producing a *new* timeline —
-   with its own `timeline_id` under the same tenant — and database linked to their parent,
-   and, optionally, a first endpoint on the branch. The pre-branch history is shared, not
-   copied.
+2. **Create project.** The primary entry point. Under a storage pool the caller can
+   reach, the Controller — in one task — creates a **project** (assigning its **id**,
+   which *is* the storage layer's **`tenant_id`**, the identifier every resource below it
+   is scoped by), creates that project's one **default branch (PG cluster)** *scoped to
+   that project* (assigning its **branch id**, which *is* the storage layer's
+   **`timeline_id`**; a branch is identified by the pair **(project, branch)** =
+   **(tenant_id, timeline_id)**, never globally), registers the branch with the storage
+   layer, creates the database record, and can stand up its first write endpoint. The
+   default branch is never created on its own — a project *is* a tenant plus its default
+   branch (its main timeline). Access to the new project is then granted per user.
+3. **Create endpoint.** On an existing branch — addressed by its **(project, branch)** =
+   storage-layer **(tenant_id, timeline_id)** — the Controller assembles the endpoint
+   *spec* (DB connection, branch/timeline binding, read/write role, version, TLS,
+   telemetry), assigns the endpoint its own unique **`endpoint_id`** (endpoints have no
+   names; they are addressed by id), provisions the compute, and hands the spec to that
+   endpoint's `compute_ctl`. A write endpoint is rejected if the branch already has one
+   (single-writer rule). The id is durable: replacing a failed compute reuses the same
+   `endpoint_id` (new instance, same record).
+4. **Branch.** Fork an existing branch at a chosen point — the default branch or another
+   branch — producing a *new* branch (with its own branch/`timeline_id` under the same
+   project) and database linked to their parent, and, optionally, a first endpoint on the
+   branch. The pre-fork history is shared, not copied.
 5. **Pause / resume.** A Controller API call targeting an endpoint. Pause suspends the
    compute while the endpoint record and its spec survive; resume recreates the running
    instance from that stored spec. Because endpoints are stateless, "resume" is just
@@ -146,20 +153,20 @@ steps, so a crash mid-operation resumes rather than leaving a mess.
 
 ## 4. The Controller as the writer authority
 
-The single-writer rule — one writer per database — is a correctness requirement, not
-just a convenience: two endpoints writing the same database at once would corrupt it.
+The single-writer rule — one writer per branch — is a correctness requirement, not
+just a convenience: two endpoints writing the same branch at once would corrupt it.
 The hard case is an endpoint that has gone **bad but is still running** — its process is
 up and may still accept writes, yet the Controller has decided to replace it.
 
 Two facts make this tractable: the Controller knows every endpoint and which one holds
-the write role for each timeline, and the Controller is the only thing that creates
+the write role for each branch, and the Controller is the only thing that creates
 endpoints. A second writer can therefore only appear if the Controller itself creates
 one so the whole problem reduces to the Controller ordering its own actions.
 
 **Kill before create.** When the Controller replaces a write endpoint's compute, it fully
 retires the old **instance** — and *confirms* it is gone — before a new instance takes
 over the write role, so there is never a window in which two live computes write the same
-timeline. (The endpoint *record* and its `endpoint_id` persist across the swap; it is the
+branch's timeline. (The endpoint *record* and its `endpoint_id` persist across the swap; it is the
 running instance that changes — see §3.) On Kubernetes "retire" means **removing the
 pod**, and for a bad-but-running endpoint this is a forceful termination — a bounded
 graceful window, then a hard kill. The Controller does not fire-and-forget: it waits for the kill to complete
@@ -173,7 +180,7 @@ never depends on that cooperation.
 
 > **The cost:** Kill-before-create means a brief **write-availability gap**: no
 > writer exists between the confirmed kill and the promoted replacement. For a
-> single-writer database this is better than the possibility of 2 writers.
+> single-writer branch this is better than the possibility of 2 writers.
 
 **No second layer in storage today.** The safekeeper's term check only
 serializes proposers *within one safekeeper process*, and each endpoint runs its **own**
@@ -211,13 +218,15 @@ three properties:
 
 Everything the Controller knows lives as rows in **its own schema in the managed
 YugabyteDB universe**. The schema falls into three buckets: the **ownership/access**
-hierarchy, the **physical** resources (timelines and endpoints), and the **operational**
+hierarchy, the **physical** resources (branches and endpoints), and the **operational**
 task log. A sketch in PostgreSQL DDL follows — a first cut to show the shape; authoritative
 DDL lives with the code and its migrations.
 
-`tenant_id` and `timeline_id` are the storage layer's 128-bit ids, carried here as `uuid`.
-All foreign keys are `RESTRICT` (the PG default) unless noted: teardown is top-down through
-tasks, never via `ON DELETE CASCADE` surprises.
+A project's id *is* the storage layer's `tenant_id` and a branch's id *is* its
+`timeline_id` — the storage layer's 128-bit ids, carried here verbatim as `uuid`; the
+rename to project/branch stops at the controller boundary. All foreign keys are
+`RESTRICT` (the PG default) unless noted: teardown is top-down through tasks, never via
+`ON DELETE CASCADE` surprises.
 
 **Ownership & access**
 
@@ -235,52 +244,53 @@ CREATE TABLE storage_pool (
     owner_user_id  uuid NOT NULL REFERENCES app_user(id)
 );
 
-CREATE TABLE tenant (                          -- a "database": one tenant, one main timeline
+CREATE TABLE project (                         -- a "database": one project, one default branch
     id               uuid PRIMARY KEY,   -- the storage-layer tenant_id
     storage_pool_id  uuid NOT NULL REFERENCES storage_pool(id),
     name             text NOT NULL,
     UNIQUE (storage_pool_id, name)             -- name unique within its pool
 );
 
-CREATE TABLE user_pool_grant (                 -- the "share": create/see tenants in a pool
+CREATE TABLE user_pool_grant (                 -- the "share": create/see projects in a pool
     user_id          uuid NOT NULL REFERENCES app_user(id),
     storage_pool_id  uuid NOT NULL REFERENCES storage_pool(id),
     PRIMARY KEY (user_id, storage_pool_id)
 );
 
 CREATE TYPE grant_role AS ENUM ('read_only', 'read_write');
-CREATE TABLE user_tenant_grant (               -- per-tenant access; revoke = drop the row
-    user_id    uuid NOT NULL REFERENCES app_user(id),
-    tenant_id  uuid NOT NULL REFERENCES tenant(id),
-    role       grant_role NOT NULL,
-    PRIMARY KEY (user_id, tenant_id)
+CREATE TABLE user_project_grant (              -- per-project access; revoke = drop the row
+    user_id     uuid NOT NULL REFERENCES app_user(id),
+    project_id  uuid NOT NULL REFERENCES project(id),
+    role        grant_role NOT NULL,
+    PRIMARY KEY (user_id, project_id)
 );
 ```
 
 **Physical**
 
 ```sql
--- A pg_cluster *is* a timeline (the two are synonyms); there is no separate
--- timelines table. Identity is the (tenant_id, timeline_id) pair.
-CREATE TABLE pg_cluster (
-    tenant_id           uuid NOT NULL REFERENCES tenant(id),
-    timeline_id         uuid NOT NULL,
+-- A branch *is* a timeline (the two are synonyms); there is no separate
+-- timelines table. Identity is the (project_id, branch_id) pair — the storage
+-- layer's (tenant_id, timeline_id).
+CREATE TABLE branch (
+    project_id          uuid NOT NULL REFERENCES project(id),  -- = storage tenant_id
+    branch_id           uuid NOT NULL,                         -- = storage timeline_id
     name                text NOT NULL,
     pg_version          int  NOT NULL, -- Is PG Version needed?
-    is_main             boolean NOT NULL DEFAULT false,  -- the tenant's main (root) cluster
+    is_default          boolean NOT NULL DEFAULT false,  -- the project's default (root) branch
 
-    -- Branching timelines
-    parent_timeline_id  uuid,                  -- fork ancestry; NULL for a root timeline
+    -- Branching
+    parent_branch_id    uuid,                  -- fork ancestry; NULL for the default branch
     fork_lsn            pg_lsn,                -- the point the branch was taken at
 
-    PRIMARY KEY (tenant_id, timeline_id),
-    UNIQUE (tenant_id, name),                  -- name unique within its tenant
-    FOREIGN KEY (tenant_id, parent_timeline_id)   -- a fork parent stays in-tenant
-        REFERENCES pg_cluster (tenant_id, timeline_id)
+    PRIMARY KEY (project_id, branch_id),
+    UNIQUE (project_id, name),                 -- name unique within its project
+    FOREIGN KEY (project_id, parent_branch_id)    -- a fork parent stays in-project
+        REFERENCES branch (project_id, branch_id)
 );
 
--- Exactly one main cluster per tenant (created with the tenant); the rest are branches.
-CREATE UNIQUE INDEX one_main_per_tenant ON pg_cluster (tenant_id) WHERE is_main;
+-- Exactly one default branch per project (created with the project); the rest are forks.
+CREATE UNIQUE INDEX one_default_per_project ON branch (project_id) WHERE is_default;
 
 CREATE TYPE endpoint_role  AS ENUM ('read_write', 'read_only');
 
@@ -289,8 +299,8 @@ CREATE TABLE endpoint (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- the spec: complete enough to recreate the endpoint from scratch
-    tenant_id       uuid NOT NULL,
-    timeline_id     uuid NOT NULL,
+    project_id      uuid NOT NULL,
+    branch_id       uuid NOT NULL,
     role            endpoint_role  NOT NULL,
 
     -- Access to the endpoint
@@ -298,13 +308,13 @@ CREATE TABLE endpoint (
     
     config          jsonb, -- The config used to create an endpoint
 
-    FOREIGN KEY (tenant_id, timeline_id)       -- tenant-scoped binding
-        REFERENCES pg_cluster (tenant_id, timeline_id)
+    FOREIGN KEY (project_id, branch_id)        -- project-scoped binding
+        REFERENCES branch (project_id, branch_id)
 );
 
 -- The single-writer rule, enforced in the schema rather than only in code.
-CREATE UNIQUE INDEX one_writer_per_timeline
-    ON endpoint (tenant_id, timeline_id)
+CREATE UNIQUE INDEX one_writer_per_branch
+    ON endpoint (project_id, branch_id)
     WHERE role = 'read_write';
 ```
 
@@ -317,7 +327,7 @@ run, written before execution and marked complete as it goes.
 ```sql
 CREATE TABLE task (                            -- one per operation; status is exposed via API
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    kind         text        NOT NULL,         -- 'create_database', 'branch', 'scale', ...
+    kind         text        NOT NULL,         -- 'create_project', 'branch', 'scale', ...
     status       text        NOT NULL DEFAULT 'pending',
     params       jsonb       NOT NULL,         -- the originating request
     error        text,                          -- set when status = 'failed'
@@ -336,9 +346,9 @@ CREATE TABLE task_step (                        -- the write-ahead steps of one 
 );
 ```
 
-The load-bearing rules are in the DDL above, not just in API checks: timeline references
-are **tenant-scoped composite FKs** (cross-tenant use or forks are unrepresentable), the
-**single-writer** partial unique index, **one main cluster per tenant**,
+The load-bearing rules are in the DDL above, not just in API checks: branch references
+are **project-scoped composite FKs** (cross-project use or forks are unrepresentable), the
+**single-writer** partial unique index, **one default branch per project**,
 **scoped-not-global names**, and **restrict (not cascade) deletes** across the resource
 hierarchy.
 

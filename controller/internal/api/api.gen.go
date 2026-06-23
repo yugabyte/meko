@@ -40,24 +40,68 @@ const (
 	Succeeded TaskStatus = "succeeded"
 )
 
-// BranchTimelineRequest defines model for BranchTimelineRequest.
-type BranchTimelineRequest struct {
+// Branch defines model for Branch.
+type Branch struct {
+	// BranchId The branch id (the storage-layer timeline id).
+	BranchId  openapi_types.UUID `json:"branch_id"`
+	CreatedAt time.Time          `json:"created_at"`
+
+	// ForkLsn The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a default branch.
+	ForkLsn *string `json:"fork_lsn"`
+
+	// IsDefault True for a project's default (root) branch.
+	IsDefault bool   `json:"is_default"`
+	Name      string `json:"name"`
+
+	// ParentBranchId The branch this one was forked from, or null for a project's default branch. Always in the same project.
+	ParentBranchId *openapi_types.UUID `json:"parent_branch_id"`
+	PgVersion      int                 `json:"pg_version"`
+
+	// ProjectId The project (storage-layer tenant) this branch belongs to.
+	ProjectId openapi_types.UUID `json:"project_id"`
+}
+
+// BranchList defines model for BranchList.
+type BranchList struct {
+	Branches []Branch `json:"branches"`
+
+	// Count The number of items returned in this response (this page).
+	Count PageCount `json:"count"`
+
+	// Total The number of items matching the request across all pages (ignores limit/offset).
+	Total TotalCount `json:"total"`
+}
+
+// CreateBranchRequest defines model for CreateBranchRequest.
+type CreateBranchRequest struct {
 	// ForkPointLsn The ancestor LSN to branch at (storage-layer "X/X" form, e.g.
 	// "0/16ABCD0"). Omit to branch at the parent's latest LSN.
 	ForkPointLsn *string `json:"fork_point_lsn,omitempty"`
 
-	// Name Name for the new branch timeline; unique within the parent's tenant.
+	// Name Name for the new branch; unique within the project.
 	Name string `json:"name"`
+
+	// ParentBranchId The branch to fork from. Defaults to the project's default branch; set it to branch off another branch.
+	ParentBranchId *openapi_types.UUID `json:"parent_branch_id,omitempty"`
 }
 
 // CreateEndpointRequest defines model for CreateEndpointRequest.
 type CreateEndpointRequest struct {
-	// Role The endpoint's role. A timeline admits at most one read_write endpoint.
+	// Role The endpoint's role. A branch admits at most one read_write endpoint.
 	Role *CreateEndpointRequestRole `json:"role,omitempty"`
 }
 
-// CreateEndpointRequestRole The endpoint's role. A timeline admits at most one read_write endpoint.
+// CreateEndpointRequestRole The endpoint's role. A branch admits at most one read_write endpoint.
 type CreateEndpointRequestRole string
+
+// CreateProjectRequest defines model for CreateProjectRequest.
+type CreateProjectRequest struct {
+	// Name Project (database) name; unique within the pool. Also names the default branch.
+	Name string `json:"name"`
+
+	// PgVersion Postgres major version for the project's default branch. Defaults to 17.
+	PgVersion *int `json:"pg_version,omitempty"`
+}
 
 // CreateStoragePoolRequest defines model for CreateStoragePoolRequest.
 type CreateStoragePoolRequest struct {
@@ -66,15 +110,6 @@ type CreateStoragePoolRequest struct {
 
 	// OwnerUserId The user that will own the pool.
 	OwnerUserId openapi_types.UUID `json:"owner_user_id"`
-}
-
-// CreateTimelineRequest defines model for CreateTimelineRequest.
-type CreateTimelineRequest struct {
-	// Name Tenant (database) name; unique within the pool. Also names the main timeline.
-	Name string `json:"name"`
-
-	// PgVersion Postgres major version for the timeline's cluster. Defaults to 17.
-	PgVersion *int `json:"pg_version,omitempty"`
 }
 
 // CreateUserRequest defines model for CreateUserRequest.
@@ -86,16 +121,16 @@ type CreateUserRequest struct {
 // Endpoint defines model for Endpoint.
 type Endpoint struct {
 	// Address Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed.
-	Address   string             `json:"address"`
+	Address string `json:"address"`
+
+	// BranchId The branch (storage-layer timeline) this endpoint is bound to.
+	BranchId  openapi_types.UUID `json:"branch_id"`
 	CreatedAt time.Time          `json:"created_at"`
 	Id        openapi_types.UUID `json:"id"`
+
+	// ProjectId The project (storage-layer tenant) this endpoint is bound to.
+	ProjectId openapi_types.UUID `json:"project_id"`
 	Role      EndpointRole       `json:"role"`
-
-	// TenantId The storage-layer tenant id this endpoint is bound to.
-	TenantId openapi_types.UUID `json:"tenant_id"`
-
-	// TimelineId The storage-layer timeline id this endpoint is bound to.
-	TimelineId openapi_types.UUID `json:"timeline_id"`
 }
 
 // EndpointRole defines model for Endpoint.Role.
@@ -137,6 +172,29 @@ type OperationAck struct {
 // PageCount The number of items returned in this response (this page).
 type PageCount = int
 
+// Project defines model for Project.
+type Project struct {
+	CreatedAt     time.Time `json:"created_at"`
+	DefaultBranch Branch    `json:"default_branch"`
+
+	// Id The project id (the storage-layer tenant id).
+	Id   openapi_types.UUID `json:"id"`
+	Name string             `json:"name"`
+
+	// StoragePoolId The storage pool this project belongs to.
+	StoragePoolId openapi_types.UUID `json:"storage_pool_id"`
+}
+
+// ProjectList defines model for ProjectList.
+type ProjectList struct {
+	// Count The number of items returned in this response (this page).
+	Count    PageCount `json:"count"`
+	Projects []Project `json:"projects"`
+
+	// Total The number of items matching the request across all pages (ignores limit/offset).
+	Total TotalCount `json:"total"`
+}
+
 // StoragePool defines model for StoragePool.
 type StoragePool struct {
 	CreatedAt   time.Time          `json:"created_at"`
@@ -164,46 +222,14 @@ type Task struct {
 
 	// Params The originating request, as opaque JSON.
 	Params    *interface{}        `json:"params,omitempty"`
+	ProjectId *openapi_types.UUID `json:"project_id"`
 	Status    TaskStatus          `json:"status"`
 	TargetRef *string             `json:"target_ref"`
-	TenantId  *openapi_types.UUID `json:"tenant_id"`
 	UpdatedAt time.Time           `json:"updated_at"`
 }
 
 // TaskStatus defines model for Task.Status.
 type TaskStatus string
-
-// Timeline defines model for Timeline.
-type Timeline struct {
-	CreatedAt time.Time `json:"created_at"`
-
-	// ForkLsn The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a root (main) timeline.
-	ForkLsn *string `json:"fork_lsn"`
-
-	// IsMain True for a tenant's root (main) timeline.
-	IsMain bool   `json:"is_main"`
-	Name   string `json:"name"`
-
-	// ParentTimelineId The timeline this one was forked from (a branch), or null for a root (main) timeline. Always in the same tenant.
-	ParentTimelineId *openapi_types.UUID `json:"parent_timeline_id"`
-	PgVersion        int                 `json:"pg_version"`
-
-	// TenantId The storage-layer tenant id this timeline belongs to.
-	TenantId openapi_types.UUID `json:"tenant_id"`
-
-	// TimelineId The storage-layer timeline id.
-	TimelineId openapi_types.UUID `json:"timeline_id"`
-}
-
-// TimelineList defines model for TimelineList.
-type TimelineList struct {
-	// Count The number of items returned in this response (this page).
-	Count     PageCount  `json:"count"`
-	Timelines []Timeline `json:"timelines"`
-
-	// Total The number of items matching the request across all pages (ignores limit/offset).
-	Total TotalCount `json:"total"`
-}
 
 // TotalCount The number of items matching the request across all pages (ignores limit/offset).
 type TotalCount = int
@@ -213,7 +239,7 @@ type User struct {
 	CreatedAt time.Time          `json:"created_at"`
 	Id        openapi_types.UUID `json:"id"`
 
-	// IsAdmin Admins skip all pool/tenant grants. Until auth lands, anyone may create an admin.
+	// IsAdmin Admins skip all pool/project grants. Until auth lands, anyone may create an admin.
 	IsAdmin bool `json:"is_admin"`
 }
 
@@ -227,6 +253,9 @@ type UserList struct {
 	Users []User     `json:"users"`
 }
 
+// BranchId defines model for BranchId.
+type BranchId = openapi_types.UUID
+
 // EndpointId defines model for EndpointId.
 type EndpointId = openapi_types.UUID
 
@@ -239,11 +268,11 @@ type Offset = int
 // PoolId defines model for PoolId.
 type PoolId = openapi_types.UUID
 
+// ProjectId defines model for ProjectId.
+type ProjectId = openapi_types.UUID
+
 // TaskId defines model for TaskId.
 type TaskId = openapi_types.UUID
-
-// TimelineId defines model for TimelineId.
-type TimelineId = openapi_types.UUID
 
 // UserId defines model for UserId.
 type UserId = openapi_types.UUID
@@ -269,8 +298,17 @@ type ListStoragePoolsParams struct {
 	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
-// ListTimelinesParams defines parameters for ListTimelines.
-type ListTimelinesParams struct {
+// ListProjectsParams defines parameters for ListProjects.
+type ListProjectsParams struct {
+	// Limit Maximum number of items to return. Clamped to 1..1000; defaults to 100.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
+	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// ListBranchesParams defines parameters for ListBranches.
+type ListBranchesParams struct {
 	// Limit Maximum number of items to return. Clamped to 1..1000; defaults to 100.
 	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
 
@@ -299,11 +337,11 @@ type ListUsersParams struct {
 // CreateStoragePoolJSONRequestBody defines body for CreateStoragePool for application/json ContentType.
 type CreateStoragePoolJSONRequestBody = CreateStoragePoolRequest
 
-// CreateTimelineJSONRequestBody defines body for CreateTimeline for application/json ContentType.
-type CreateTimelineJSONRequestBody = CreateTimelineRequest
+// CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
+type CreateProjectJSONRequestBody = CreateProjectRequest
 
-// BranchTimelineJSONRequestBody defines body for BranchTimeline for application/json ContentType.
-type BranchTimelineJSONRequestBody = BranchTimelineRequest
+// CreateBranchJSONRequestBody defines body for CreateBranch for application/json ContentType.
+type CreateBranchJSONRequestBody = CreateBranchRequest
 
 // CreateEndpointJSONRequestBody defines body for CreateEndpoint for application/json ContentType.
 type CreateEndpointJSONRequestBody = CreateEndpointRequest
@@ -395,35 +433,47 @@ type ClientInterface interface {
 	// GetStoragePool request
 	GetStoragePool(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ListTimelines request
-	ListTimelines(ctx context.Context, poolId PoolId, params *ListTimelinesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// ListProjects request
+	ListProjects(ctx context.Context, poolId PoolId, params *ListProjectsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// CreateTimelineWithBody request with any body
-	CreateTimelineWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// CreateProjectWithBody request with any body
+	CreateProjectWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	CreateTimeline(ctx context.Context, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateProject(ctx context.Context, poolId PoolId, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// DeleteTimeline request
-	DeleteTimeline(ctx context.Context, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// DeleteProject request
+	DeleteProject(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// BranchTimelineWithBody request with any body
-	BranchTimelineWithBody(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// GetProject request
+	GetProject(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	BranchTimeline(ctx context.Context, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// ListBranches request
+	ListBranches(ctx context.Context, poolId PoolId, projectId ProjectId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateBranchWithBody request with any body
+	CreateBranchWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateBranch(ctx context.Context, poolId PoolId, projectId ProjectId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteBranch request
+	DeleteBranch(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetBranch request
+	GetBranch(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListEndpoints request
-	ListEndpoints(ctx context.Context, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListEndpoints(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateEndpointWithBody request with any body
-	CreateEndpointWithBody(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateEndpointWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	CreateEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DeleteEndpoint request
-	DeleteEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	DeleteEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetEndpoint request
-	GetEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	GetEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetTask request
 	GetTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -488,8 +538,8 @@ func (c *Client) GetStoragePool(ctx context.Context, poolId PoolId, reqEditors .
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListTimelines(ctx context.Context, poolId PoolId, params *ListTimelinesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListTimelinesRequest(c.Server, poolId, params)
+func (c *Client) ListProjects(ctx context.Context, poolId PoolId, params *ListProjectsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListProjectsRequest(c.Server, poolId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -500,8 +550,8 @@ func (c *Client) ListTimelines(ctx context.Context, poolId PoolId, params *ListT
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateTimelineWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateTimelineRequestWithBody(c.Server, poolId, contentType, body)
+func (c *Client) CreateProjectWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateProjectRequestWithBody(c.Server, poolId, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -512,8 +562,8 @@ func (c *Client) CreateTimelineWithBody(ctx context.Context, poolId PoolId, cont
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateTimeline(ctx context.Context, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateTimelineRequest(c.Server, poolId, body)
+func (c *Client) CreateProject(ctx context.Context, poolId PoolId, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateProjectRequest(c.Server, poolId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -524,8 +574,8 @@ func (c *Client) CreateTimeline(ctx context.Context, poolId PoolId, body CreateT
 	return c.Client.Do(req)
 }
 
-func (c *Client) DeleteTimeline(ctx context.Context, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewDeleteTimelineRequest(c.Server, poolId, timelineId)
+func (c *Client) DeleteProject(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteProjectRequest(c.Server, poolId, projectId)
 	if err != nil {
 		return nil, err
 	}
@@ -536,8 +586,8 @@ func (c *Client) DeleteTimeline(ctx context.Context, poolId PoolId, timelineId T
 	return c.Client.Do(req)
 }
 
-func (c *Client) BranchTimelineWithBody(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewBranchTimelineRequestWithBody(c.Server, poolId, timelineId, contentType, body)
+func (c *Client) GetProject(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetProjectRequest(c.Server, poolId, projectId)
 	if err != nil {
 		return nil, err
 	}
@@ -548,8 +598,8 @@ func (c *Client) BranchTimelineWithBody(ctx context.Context, poolId PoolId, time
 	return c.Client.Do(req)
 }
 
-func (c *Client) BranchTimeline(ctx context.Context, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewBranchTimelineRequest(c.Server, poolId, timelineId, body)
+func (c *Client) ListBranches(ctx context.Context, poolId PoolId, projectId ProjectId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListBranchesRequest(c.Server, poolId, projectId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -560,8 +610,8 @@ func (c *Client) BranchTimeline(ctx context.Context, poolId PoolId, timelineId T
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListEndpoints(ctx context.Context, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListEndpointsRequest(c.Server, poolId, timelineId, params)
+func (c *Client) CreateBranchWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateBranchRequestWithBody(c.Server, poolId, projectId, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -572,8 +622,8 @@ func (c *Client) ListEndpoints(ctx context.Context, poolId PoolId, timelineId Ti
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateEndpointWithBody(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateEndpointRequestWithBody(c.Server, poolId, timelineId, contentType, body)
+func (c *Client) CreateBranch(ctx context.Context, poolId PoolId, projectId ProjectId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateBranchRequest(c.Server, poolId, projectId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -584,8 +634,8 @@ func (c *Client) CreateEndpointWithBody(ctx context.Context, poolId PoolId, time
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateEndpointRequest(c.Server, poolId, timelineId, body)
+func (c *Client) DeleteBranch(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteBranchRequest(c.Server, poolId, projectId, branchId)
 	if err != nil {
 		return nil, err
 	}
@@ -596,8 +646,8 @@ func (c *Client) CreateEndpoint(ctx context.Context, poolId PoolId, timelineId T
 	return c.Client.Do(req)
 }
 
-func (c *Client) DeleteEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewDeleteEndpointRequest(c.Server, poolId, timelineId, endpointId)
+func (c *Client) GetBranch(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetBranchRequest(c.Server, poolId, projectId, branchId)
 	if err != nil {
 		return nil, err
 	}
@@ -608,8 +658,56 @@ func (c *Client) DeleteEndpoint(ctx context.Context, poolId PoolId, timelineId T
 	return c.Client.Do(req)
 }
 
-func (c *Client) GetEndpoint(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetEndpointRequest(c.Server, poolId, timelineId, endpointId)
+func (c *Client) ListEndpoints(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListEndpointsRequest(c.Server, poolId, projectId, branchId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateEndpointWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateEndpointRequestWithBody(c.Server, poolId, projectId, branchId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateEndpointRequest(c.Server, poolId, projectId, branchId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteEndpointRequest(c.Server, poolId, projectId, branchId, endpointId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetEndpointRequest(c.Server, poolId, projectId, branchId, endpointId)
 	if err != nil {
 		return nil, err
 	}
@@ -819,8 +917,8 @@ func NewGetStoragePoolRequest(server string, poolId PoolId) (*http.Request, erro
 	return req, nil
 }
 
-// NewListTimelinesRequest generates requests for ListTimelines
-func NewListTimelinesRequest(server string, poolId PoolId, params *ListTimelinesParams) (*http.Request, error) {
+// NewListProjectsRequest generates requests for ListProjects
+func NewListProjectsRequest(server string, poolId PoolId, params *ListProjectsParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -835,7 +933,7 @@ func NewListTimelinesRequest(server string, poolId PoolId, params *ListTimelines
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/timelines", pathParam0)
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -891,19 +989,19 @@ func NewListTimelinesRequest(server string, poolId PoolId, params *ListTimelines
 	return req, nil
 }
 
-// NewCreateTimelineRequest calls the generic CreateTimeline builder with application/json body
-func NewCreateTimelineRequest(server string, poolId PoolId, body CreateTimelineJSONRequestBody) (*http.Request, error) {
+// NewCreateProjectRequest calls the generic CreateProject builder with application/json body
+func NewCreateProjectRequest(server string, poolId PoolId, body CreateProjectJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewCreateTimelineRequestWithBody(server, poolId, "application/json", bodyReader)
+	return NewCreateProjectRequestWithBody(server, poolId, "application/json", bodyReader)
 }
 
-// NewCreateTimelineRequestWithBody generates requests for CreateTimeline with any type of body
-func NewCreateTimelineRequestWithBody(server string, poolId PoolId, contentType string, body io.Reader) (*http.Request, error) {
+// NewCreateProjectRequestWithBody generates requests for CreateProject with any type of body
+func NewCreateProjectRequestWithBody(server string, poolId PoolId, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -918,7 +1016,7 @@ func NewCreateTimelineRequestWithBody(server string, poolId PoolId, contentType 
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/timelines", pathParam0)
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -938,8 +1036,8 @@ func NewCreateTimelineRequestWithBody(server string, poolId PoolId, contentType 
 	return req, nil
 }
 
-// NewDeleteTimelineRequest generates requests for DeleteTimeline
-func NewDeleteTimelineRequest(server string, poolId PoolId, timelineId TimelineId) (*http.Request, error) {
+// NewDeleteProjectRequest generates requests for DeleteProject
+func NewDeleteProjectRequest(server string, poolId PoolId, projectId ProjectId) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -951,7 +1049,7 @@ func NewDeleteTimelineRequest(server string, poolId PoolId, timelineId TimelineI
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "projectId", runtime.ParamLocationPath, projectId)
 	if err != nil {
 		return nil, err
 	}
@@ -961,7 +1059,7 @@ func NewDeleteTimelineRequest(server string, poolId PoolId, timelineId TimelineI
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s", pathParam0, pathParam1)
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s", pathParam0, pathParam1)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -979,19 +1077,8 @@ func NewDeleteTimelineRequest(server string, poolId PoolId, timelineId TimelineI
 	return req, nil
 }
 
-// NewBranchTimelineRequest calls the generic BranchTimeline builder with application/json body
-func NewBranchTimelineRequest(server string, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewBranchTimelineRequestWithBody(server, poolId, timelineId, "application/json", bodyReader)
-}
-
-// NewBranchTimelineRequestWithBody generates requests for BranchTimeline with any type of body
-func NewBranchTimelineRequestWithBody(server string, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader) (*http.Request, error) {
+// NewGetProjectRequest generates requests for GetProject
+func NewGetProjectRequest(server string, poolId PoolId, projectId ProjectId) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1003,7 +1090,7 @@ func NewBranchTimelineRequestWithBody(server string, poolId PoolId, timelineId T
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "projectId", runtime.ParamLocationPath, projectId)
 	if err != nil {
 		return nil, err
 	}
@@ -1013,7 +1100,138 @@ func NewBranchTimelineRequestWithBody(server string, poolId PoolId, timelineId T
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s/branch", pathParam0, pathParam1)
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListBranchesRequest generates requests for ListBranches
+func NewListBranchesRequest(server string, poolId PoolId, projectId ProjectId, params *ListBranchesParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "projectId", runtime.ParamLocationPath, projectId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "limit", runtime.ParamLocationQuery, *params.Limit); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Offset != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "offset", runtime.ParamLocationQuery, *params.Offset); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateBranchRequest calls the generic CreateBranch builder with application/json body
+func NewCreateBranchRequest(server string, poolId PoolId, projectId ProjectId, body CreateBranchJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateBranchRequestWithBody(server, poolId, projectId, "application/json", bodyReader)
+}
+
+// NewCreateBranchRequestWithBody generates requests for CreateBranch with any type of body
+func NewCreateBranchRequestWithBody(server string, poolId PoolId, projectId ProjectId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "projectId", runtime.ParamLocationPath, projectId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches", pathParam0, pathParam1)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1033,8 +1251,8 @@ func NewBranchTimelineRequestWithBody(server string, poolId PoolId, timelineId T
 	return req, nil
 }
 
-// NewListEndpointsRequest generates requests for ListEndpoints
-func NewListEndpointsRequest(server string, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams) (*http.Request, error) {
+// NewDeleteBranchRequest generates requests for DeleteBranch
+func NewDeleteBranchRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1046,7 +1264,14 @@ func NewListEndpointsRequest(server string, poolId PoolId, timelineId TimelineId
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "projectId", runtime.ParamLocationPath, projectId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "branchId", runtime.ParamLocationPath, branchId)
 	if err != nil {
 		return nil, err
 	}
@@ -1056,7 +1281,103 @@ func NewListEndpointsRequest(server string, poolId PoolId, timelineId TimelineId
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s/endpoints", pathParam0, pathParam1)
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetBranchRequest generates requests for GetBranch
+func NewGetBranchRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "projectId", runtime.ParamLocationPath, projectId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "branchId", runtime.ParamLocationPath, branchId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListEndpointsRequest generates requests for ListEndpoints
+func NewListEndpointsRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId, params *ListEndpointsParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "projectId", runtime.ParamLocationPath, projectId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "branchId", runtime.ParamLocationPath, branchId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s/endpoints", pathParam0, pathParam1, pathParam2)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1113,18 +1434,18 @@ func NewListEndpointsRequest(server string, poolId PoolId, timelineId TimelineId
 }
 
 // NewCreateEndpointRequest calls the generic CreateEndpoint builder with application/json body
-func NewCreateEndpointRequest(server string, poolId PoolId, timelineId TimelineId, body CreateEndpointJSONRequestBody) (*http.Request, error) {
+func NewCreateEndpointRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId, body CreateEndpointJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewCreateEndpointRequestWithBody(server, poolId, timelineId, "application/json", bodyReader)
+	return NewCreateEndpointRequestWithBody(server, poolId, projectId, branchId, "application/json", bodyReader)
 }
 
 // NewCreateEndpointRequestWithBody generates requests for CreateEndpoint with any type of body
-func NewCreateEndpointRequestWithBody(server string, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader) (*http.Request, error) {
+func NewCreateEndpointRequestWithBody(server string, poolId PoolId, projectId ProjectId, branchId BranchId, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1136,7 +1457,14 @@ func NewCreateEndpointRequestWithBody(server string, poolId PoolId, timelineId T
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "projectId", runtime.ParamLocationPath, projectId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "branchId", runtime.ParamLocationPath, branchId)
 	if err != nil {
 		return nil, err
 	}
@@ -1146,7 +1474,7 @@ func NewCreateEndpointRequestWithBody(server string, poolId PoolId, timelineId T
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s/endpoints", pathParam0, pathParam1)
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s/endpoints", pathParam0, pathParam1, pathParam2)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1167,7 +1495,7 @@ func NewCreateEndpointRequestWithBody(server string, poolId PoolId, timelineId T
 }
 
 // NewDeleteEndpointRequest generates requests for DeleteEndpoint
-func NewDeleteEndpointRequest(server string, poolId PoolId, timelineId TimelineId, endpointId EndpointId) (*http.Request, error) {
+func NewDeleteEndpointRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1179,14 +1507,21 @@ func NewDeleteEndpointRequest(server string, poolId PoolId, timelineId TimelineI
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "projectId", runtime.ParamLocationPath, projectId)
 	if err != nil {
 		return nil, err
 	}
 
 	var pathParam2 string
 
-	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "endpointId", runtime.ParamLocationPath, endpointId)
+	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "branchId", runtime.ParamLocationPath, branchId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithLocation("simple", false, "endpointId", runtime.ParamLocationPath, endpointId)
 	if err != nil {
 		return nil, err
 	}
@@ -1196,7 +1531,7 @@ func NewDeleteEndpointRequest(server string, poolId PoolId, timelineId TimelineI
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s/endpoints/%s", pathParam0, pathParam1, pathParam2)
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s/endpoints/%s", pathParam0, pathParam1, pathParam2, pathParam3)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1215,7 +1550,7 @@ func NewDeleteEndpointRequest(server string, poolId PoolId, timelineId TimelineI
 }
 
 // NewGetEndpointRequest generates requests for GetEndpoint
-func NewGetEndpointRequest(server string, poolId PoolId, timelineId TimelineId, endpointId EndpointId) (*http.Request, error) {
+func NewGetEndpointRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1227,14 +1562,21 @@ func NewGetEndpointRequest(server string, poolId PoolId, timelineId TimelineId, 
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "timelineId", runtime.ParamLocationPath, timelineId)
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "projectId", runtime.ParamLocationPath, projectId)
 	if err != nil {
 		return nil, err
 	}
 
 	var pathParam2 string
 
-	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "endpointId", runtime.ParamLocationPath, endpointId)
+	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "branchId", runtime.ParamLocationPath, branchId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithLocation("simple", false, "endpointId", runtime.ParamLocationPath, endpointId)
 	if err != nil {
 		return nil, err
 	}
@@ -1244,7 +1586,7 @@ func NewGetEndpointRequest(server string, poolId PoolId, timelineId TimelineId, 
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/timelines/%s/endpoints/%s", pathParam0, pathParam1, pathParam2)
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s/endpoints/%s", pathParam0, pathParam1, pathParam2, pathParam3)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1489,35 +1831,47 @@ type ClientWithResponsesInterface interface {
 	// GetStoragePoolWithResponse request
 	GetStoragePoolWithResponse(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*GetStoragePoolResponse, error)
 
-	// ListTimelinesWithResponse request
-	ListTimelinesWithResponse(ctx context.Context, poolId PoolId, params *ListTimelinesParams, reqEditors ...RequestEditorFn) (*ListTimelinesResponse, error)
+	// ListProjectsWithResponse request
+	ListProjectsWithResponse(ctx context.Context, poolId PoolId, params *ListProjectsParams, reqEditors ...RequestEditorFn) (*ListProjectsResponse, error)
 
-	// CreateTimelineWithBodyWithResponse request with any body
-	CreateTimelineWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error)
+	// CreateProjectWithBodyWithResponse request with any body
+	CreateProjectWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error)
 
-	CreateTimelineWithResponse(ctx context.Context, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error)
+	CreateProjectWithResponse(ctx context.Context, poolId PoolId, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error)
 
-	// DeleteTimelineWithResponse request
-	DeleteTimelineWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*DeleteTimelineResponse, error)
+	// DeleteProjectWithResponse request
+	DeleteProjectWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*DeleteProjectResponse, error)
 
-	// BranchTimelineWithBodyWithResponse request with any body
-	BranchTimelineWithBodyWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error)
+	// GetProjectWithResponse request
+	GetProjectWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*GetProjectResponse, error)
 
-	BranchTimelineWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error)
+	// ListBranchesWithResponse request
+	ListBranchesWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*ListBranchesResponse, error)
+
+	// CreateBranchWithBodyWithResponse request with any body
+	CreateBranchWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error)
+
+	CreateBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error)
+
+	// DeleteBranchWithResponse request
+	DeleteBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*DeleteBranchResponse, error)
+
+	// GetBranchWithResponse request
+	GetBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*GetBranchResponse, error)
 
 	// ListEndpointsWithResponse request
-	ListEndpointsWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*ListEndpointsResponse, error)
+	ListEndpointsWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*ListEndpointsResponse, error)
 
 	// CreateEndpointWithBodyWithResponse request with any body
-	CreateEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error)
+	CreateEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error)
 
-	CreateEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error)
+	CreateEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error)
 
 	// DeleteEndpointWithResponse request
-	DeleteEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*DeleteEndpointResponse, error)
+	DeleteEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*DeleteEndpointResponse, error)
 
 	// GetEndpointWithResponse request
-	GetEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error)
+	GetEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error)
 
 	// GetTaskWithResponse request
 	GetTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*GetTaskResponse, error)
@@ -1609,17 +1963,17 @@ func (r GetStoragePoolResponse) StatusCode() int {
 	return 0
 }
 
-type ListTimelinesResponse struct {
+type ListProjectsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON200      *TimelineList
+	JSON200      *ProjectList
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
 }
 
 // Status returns HTTPResponse.Status
-func (r ListTimelinesResponse) Status() string {
+func (r ListProjectsResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -1627,17 +1981,17 @@ func (r ListTimelinesResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r ListTimelinesResponse) StatusCode() int {
+func (r ListProjectsResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
 	return 0
 }
 
-type CreateTimelineResponse struct {
+type CreateProjectResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON201      *Timeline
+	JSON201      *Project
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON409      *Conflict
@@ -1645,7 +1999,7 @@ type CreateTimelineResponse struct {
 }
 
 // Status returns HTTPResponse.Status
-func (r CreateTimelineResponse) Status() string {
+func (r CreateProjectResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -1653,14 +2007,14 @@ func (r CreateTimelineResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r CreateTimelineResponse) StatusCode() int {
+func (r CreateProjectResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
 	return 0
 }
 
-type DeleteTimelineResponse struct {
+type DeleteProjectResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON202      *OperationAck
@@ -1669,7 +2023,7 @@ type DeleteTimelineResponse struct {
 }
 
 // Status returns HTTPResponse.Status
-func (r DeleteTimelineResponse) Status() string {
+func (r DeleteProjectResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -1677,17 +2031,67 @@ func (r DeleteTimelineResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r DeleteTimelineResponse) StatusCode() int {
+func (r DeleteProjectResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
 	return 0
 }
 
-type BranchTimelineResponse struct {
+type GetProjectResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON201      *Timeline
+	JSON200      *Project
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetProjectResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetProjectResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ListBranchesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *BranchList
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListBranchesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListBranchesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateBranchResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Branch
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON409      *Conflict
@@ -1695,7 +2099,7 @@ type BranchTimelineResponse struct {
 }
 
 // Status returns HTTPResponse.Status
-func (r BranchTimelineResponse) Status() string {
+func (r CreateBranchResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -1703,7 +2107,56 @@ func (r BranchTimelineResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r BranchTimelineResponse) StatusCode() int {
+func (r CreateBranchResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type DeleteBranchResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *OperationAck
+	JSON400      *BadRequest
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteBranchResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteBranchResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetBranchResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Branch
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetBranchResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetBranchResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -1943,61 +2396,97 @@ func (c *ClientWithResponses) GetStoragePoolWithResponse(ctx context.Context, po
 	return ParseGetStoragePoolResponse(rsp)
 }
 
-// ListTimelinesWithResponse request returning *ListTimelinesResponse
-func (c *ClientWithResponses) ListTimelinesWithResponse(ctx context.Context, poolId PoolId, params *ListTimelinesParams, reqEditors ...RequestEditorFn) (*ListTimelinesResponse, error) {
-	rsp, err := c.ListTimelines(ctx, poolId, params, reqEditors...)
+// ListProjectsWithResponse request returning *ListProjectsResponse
+func (c *ClientWithResponses) ListProjectsWithResponse(ctx context.Context, poolId PoolId, params *ListProjectsParams, reqEditors ...RequestEditorFn) (*ListProjectsResponse, error) {
+	rsp, err := c.ListProjects(ctx, poolId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseListTimelinesResponse(rsp)
+	return ParseListProjectsResponse(rsp)
 }
 
-// CreateTimelineWithBodyWithResponse request with arbitrary body returning *CreateTimelineResponse
-func (c *ClientWithResponses) CreateTimelineWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error) {
-	rsp, err := c.CreateTimelineWithBody(ctx, poolId, contentType, body, reqEditors...)
+// CreateProjectWithBodyWithResponse request with arbitrary body returning *CreateProjectResponse
+func (c *ClientWithResponses) CreateProjectWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error) {
+	rsp, err := c.CreateProjectWithBody(ctx, poolId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseCreateTimelineResponse(rsp)
+	return ParseCreateProjectResponse(rsp)
 }
 
-func (c *ClientWithResponses) CreateTimelineWithResponse(ctx context.Context, poolId PoolId, body CreateTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateTimelineResponse, error) {
-	rsp, err := c.CreateTimeline(ctx, poolId, body, reqEditors...)
+func (c *ClientWithResponses) CreateProjectWithResponse(ctx context.Context, poolId PoolId, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error) {
+	rsp, err := c.CreateProject(ctx, poolId, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseCreateTimelineResponse(rsp)
+	return ParseCreateProjectResponse(rsp)
 }
 
-// DeleteTimelineWithResponse request returning *DeleteTimelineResponse
-func (c *ClientWithResponses) DeleteTimelineWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, reqEditors ...RequestEditorFn) (*DeleteTimelineResponse, error) {
-	rsp, err := c.DeleteTimeline(ctx, poolId, timelineId, reqEditors...)
+// DeleteProjectWithResponse request returning *DeleteProjectResponse
+func (c *ClientWithResponses) DeleteProjectWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*DeleteProjectResponse, error) {
+	rsp, err := c.DeleteProject(ctx, poolId, projectId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseDeleteTimelineResponse(rsp)
+	return ParseDeleteProjectResponse(rsp)
 }
 
-// BranchTimelineWithBodyWithResponse request with arbitrary body returning *BranchTimelineResponse
-func (c *ClientWithResponses) BranchTimelineWithBodyWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error) {
-	rsp, err := c.BranchTimelineWithBody(ctx, poolId, timelineId, contentType, body, reqEditors...)
+// GetProjectWithResponse request returning *GetProjectResponse
+func (c *ClientWithResponses) GetProjectWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*GetProjectResponse, error) {
+	rsp, err := c.GetProject(ctx, poolId, projectId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseBranchTimelineResponse(rsp)
+	return ParseGetProjectResponse(rsp)
 }
 
-func (c *ClientWithResponses) BranchTimelineWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, body BranchTimelineJSONRequestBody, reqEditors ...RequestEditorFn) (*BranchTimelineResponse, error) {
-	rsp, err := c.BranchTimeline(ctx, poolId, timelineId, body, reqEditors...)
+// ListBranchesWithResponse request returning *ListBranchesResponse
+func (c *ClientWithResponses) ListBranchesWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*ListBranchesResponse, error) {
+	rsp, err := c.ListBranches(ctx, poolId, projectId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseBranchTimelineResponse(rsp)
+	return ParseListBranchesResponse(rsp)
+}
+
+// CreateBranchWithBodyWithResponse request with arbitrary body returning *CreateBranchResponse
+func (c *ClientWithResponses) CreateBranchWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error) {
+	rsp, err := c.CreateBranchWithBody(ctx, poolId, projectId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateBranchResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error) {
+	rsp, err := c.CreateBranch(ctx, poolId, projectId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateBranchResponse(rsp)
+}
+
+// DeleteBranchWithResponse request returning *DeleteBranchResponse
+func (c *ClientWithResponses) DeleteBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*DeleteBranchResponse, error) {
+	rsp, err := c.DeleteBranch(ctx, poolId, projectId, branchId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteBranchResponse(rsp)
+}
+
+// GetBranchWithResponse request returning *GetBranchResponse
+func (c *ClientWithResponses) GetBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*GetBranchResponse, error) {
+	rsp, err := c.GetBranch(ctx, poolId, projectId, branchId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetBranchResponse(rsp)
 }
 
 // ListEndpointsWithResponse request returning *ListEndpointsResponse
-func (c *ClientWithResponses) ListEndpointsWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*ListEndpointsResponse, error) {
-	rsp, err := c.ListEndpoints(ctx, poolId, timelineId, params, reqEditors...)
+func (c *ClientWithResponses) ListEndpointsWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*ListEndpointsResponse, error) {
+	rsp, err := c.ListEndpoints(ctx, poolId, projectId, branchId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -2005,16 +2494,16 @@ func (c *ClientWithResponses) ListEndpointsWithResponse(ctx context.Context, poo
 }
 
 // CreateEndpointWithBodyWithResponse request with arbitrary body returning *CreateEndpointResponse
-func (c *ClientWithResponses) CreateEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error) {
-	rsp, err := c.CreateEndpointWithBody(ctx, poolId, timelineId, contentType, body, reqEditors...)
+func (c *ClientWithResponses) CreateEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error) {
+	rsp, err := c.CreateEndpointWithBody(ctx, poolId, projectId, branchId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
 	return ParseCreateEndpointResponse(rsp)
 }
 
-func (c *ClientWithResponses) CreateEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error) {
-	rsp, err := c.CreateEndpoint(ctx, poolId, timelineId, body, reqEditors...)
+func (c *ClientWithResponses) CreateEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error) {
+	rsp, err := c.CreateEndpoint(ctx, poolId, projectId, branchId, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -2022,8 +2511,8 @@ func (c *ClientWithResponses) CreateEndpointWithResponse(ctx context.Context, po
 }
 
 // DeleteEndpointWithResponse request returning *DeleteEndpointResponse
-func (c *ClientWithResponses) DeleteEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*DeleteEndpointResponse, error) {
-	rsp, err := c.DeleteEndpoint(ctx, poolId, timelineId, endpointId, reqEditors...)
+func (c *ClientWithResponses) DeleteEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*DeleteEndpointResponse, error) {
+	rsp, err := c.DeleteEndpoint(ctx, poolId, projectId, branchId, endpointId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -2031,8 +2520,8 @@ func (c *ClientWithResponses) DeleteEndpointWithResponse(ctx context.Context, po
 }
 
 // GetEndpointWithResponse request returning *GetEndpointResponse
-func (c *ClientWithResponses) GetEndpointWithResponse(ctx context.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error) {
-	rsp, err := c.GetEndpoint(ctx, poolId, timelineId, endpointId, reqEditors...)
+func (c *ClientWithResponses) GetEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error) {
+	rsp, err := c.GetEndpoint(ctx, poolId, projectId, branchId, endpointId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -2224,22 +2713,22 @@ func ParseGetStoragePoolResponse(rsp *http.Response) (*GetStoragePoolResponse, e
 	return response, nil
 }
 
-// ParseListTimelinesResponse parses an HTTP response from a ListTimelinesWithResponse call
-func ParseListTimelinesResponse(rsp *http.Response) (*ListTimelinesResponse, error) {
+// ParseListProjectsResponse parses an HTTP response from a ListProjectsWithResponse call
+func ParseListProjectsResponse(rsp *http.Response) (*ListProjectsResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &ListTimelinesResponse{
+	response := &ListProjectsResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest TimelineList
+		var dest ProjectList
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -2271,22 +2760,22 @@ func ParseListTimelinesResponse(rsp *http.Response) (*ListTimelinesResponse, err
 	return response, nil
 }
 
-// ParseCreateTimelineResponse parses an HTTP response from a CreateTimelineWithResponse call
-func ParseCreateTimelineResponse(rsp *http.Response) (*CreateTimelineResponse, error) {
+// ParseCreateProjectResponse parses an HTTP response from a CreateProjectWithResponse call
+func ParseCreateProjectResponse(rsp *http.Response) (*CreateProjectResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &CreateTimelineResponse{
+	response := &CreateProjectResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
-		var dest Timeline
+		var dest Project
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -2325,15 +2814,15 @@ func ParseCreateTimelineResponse(rsp *http.Response) (*CreateTimelineResponse, e
 	return response, nil
 }
 
-// ParseDeleteTimelineResponse parses an HTTP response from a DeleteTimelineWithResponse call
-func ParseDeleteTimelineResponse(rsp *http.Response) (*DeleteTimelineResponse, error) {
+// ParseDeleteProjectResponse parses an HTTP response from a DeleteProjectWithResponse call
+func ParseDeleteProjectResponse(rsp *http.Response) (*DeleteProjectResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &DeleteTimelineResponse{
+	response := &DeleteProjectResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -2365,22 +2854,116 @@ func ParseDeleteTimelineResponse(rsp *http.Response) (*DeleteTimelineResponse, e
 	return response, nil
 }
 
-// ParseBranchTimelineResponse parses an HTTP response from a BranchTimelineWithResponse call
-func ParseBranchTimelineResponse(rsp *http.Response) (*BranchTimelineResponse, error) {
+// ParseGetProjectResponse parses an HTTP response from a GetProjectWithResponse call
+func ParseGetProjectResponse(rsp *http.Response) (*GetProjectResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &BranchTimelineResponse{
+	response := &GetProjectResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Project
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListBranchesResponse parses an HTTP response from a ListBranchesWithResponse call
+func ParseListBranchesResponse(rsp *http.Response) (*ListBranchesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListBranchesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest BranchList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateBranchResponse parses an HTTP response from a CreateBranchWithResponse call
+func ParseCreateBranchResponse(rsp *http.Response) (*CreateBranchResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateBranchResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
-		var dest Timeline
+		var dest Branch
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -2406,6 +2989,93 @@ func ParseBranchTimelineResponse(rsp *http.Response) (*BranchTimelineResponse, e
 			return nil, err
 		}
 		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteBranchResponse parses an HTTP response from a DeleteBranchWithResponse call
+func ParseDeleteBranchResponse(rsp *http.Response) (*DeleteBranchResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteBranchResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest OperationAck
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetBranchResponse parses an HTTP response from a GetBranchWithResponse call
+func ParseGetBranchResponse(rsp *http.Response) (*GetBranchResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetBranchResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Branch
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -2792,30 +3462,42 @@ type ServerInterface interface {
 	// Get a storage pool
 	// (GET /storage-pools/{poolId})
 	GetStoragePool(ctx echo.Context, poolId PoolId) error
-	// List the timelines in a pool
-	// (GET /storage-pools/{poolId}/timelines)
-	ListTimelines(ctx echo.Context, poolId PoolId, params ListTimelinesParams) error
-	// Create a tenant and its main timeline in a pool
-	// (POST /storage-pools/{poolId}/timelines)
-	CreateTimeline(ctx echo.Context, poolId PoolId) error
-	// Delete a timeline (logged only)
-	// (DELETE /storage-pools/{poolId}/timelines/{timelineId})
-	DeleteTimeline(ctx echo.Context, poolId PoolId, timelineId TimelineId) error
-	// Branch (fork) a timeline into a new timeline
-	// (POST /storage-pools/{poolId}/timelines/{timelineId}/branch)
-	BranchTimeline(ctx echo.Context, poolId PoolId, timelineId TimelineId) error
-	// List the endpoints bound to a timeline
-	// (GET /storage-pools/{poolId}/timelines/{timelineId}/endpoints)
-	ListEndpoints(ctx echo.Context, poolId PoolId, timelineId TimelineId, params ListEndpointsParams) error
-	// Create and deploy an endpoint on a timeline
-	// (POST /storage-pools/{poolId}/timelines/{timelineId}/endpoints)
-	CreateEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId) error
+	// List the projects in a pool
+	// (GET /storage-pools/{poolId}/projects)
+	ListProjects(ctx echo.Context, poolId PoolId, params ListProjectsParams) error
+	// Create a project (and its default branch) in a pool
+	// (POST /storage-pools/{poolId}/projects)
+	CreateProject(ctx echo.Context, poolId PoolId) error
+	// Delete a project (logged only)
+	// (DELETE /storage-pools/{poolId}/projects/{projectId})
+	DeleteProject(ctx echo.Context, poolId PoolId, projectId ProjectId) error
+	// Get a project
+	// (GET /storage-pools/{poolId}/projects/{projectId})
+	GetProject(ctx echo.Context, poolId PoolId, projectId ProjectId) error
+	// List the branches in a project
+	// (GET /storage-pools/{poolId}/projects/{projectId}/branches)
+	ListBranches(ctx echo.Context, poolId PoolId, projectId ProjectId, params ListBranchesParams) error
+	// Branch (fork) a branch into a new branch
+	// (POST /storage-pools/{poolId}/projects/{projectId}/branches)
+	CreateBranch(ctx echo.Context, poolId PoolId, projectId ProjectId) error
+	// Delete a branch (logged only)
+	// (DELETE /storage-pools/{poolId}/projects/{projectId}/branches/{branchId})
+	DeleteBranch(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error
+	// Get a branch
+	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId})
+	GetBranch(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error
+	// List the endpoints bound to a branch
+	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints)
+	ListEndpoints(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params ListEndpointsParams) error
+	// Create and deploy an endpoint on a branch
+	// (POST /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints)
+	CreateEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error
 	// Retire an endpoint
-	// (DELETE /storage-pools/{poolId}/timelines/{timelineId}/endpoints/{endpointId})
-	DeleteEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId) error
+	// (DELETE /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
+	DeleteEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error
 	// Get an endpoint
-	// (GET /storage-pools/{poolId}/timelines/{timelineId}/endpoints/{endpointId})
-	GetEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId) error
+	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
+	GetEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error
 	// Get the status of a task
 	// (GET /tasks/{taskId})
 	GetTask(ctx echo.Context, taskId TaskId) error
@@ -2885,8 +3567,8 @@ func (w *ServerInterfaceWrapper) GetStoragePool(ctx echo.Context) error {
 	return err
 }
 
-// ListTimelines converts echo context to params.
-func (w *ServerInterfaceWrapper) ListTimelines(ctx echo.Context) error {
+// ListProjects converts echo context to params.
+func (w *ServerInterfaceWrapper) ListProjects(ctx echo.Context) error {
 	var err error
 	// ------------- Path parameter "poolId" -------------
 	var poolId PoolId
@@ -2897,7 +3579,7 @@ func (w *ServerInterfaceWrapper) ListTimelines(ctx echo.Context) error {
 	}
 
 	// Parameter object where we will unmarshal all parameters from the context
-	var params ListTimelinesParams
+	var params ListProjectsParams
 	// ------------- Optional query parameter "limit" -------------
 
 	err = runtime.BindQueryParameter("form", true, false, "limit", ctx.QueryParams(), &params.Limit)
@@ -2913,12 +3595,12 @@ func (w *ServerInterfaceWrapper) ListTimelines(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.ListTimelines(ctx, poolId, params)
+	err = w.Handler.ListProjects(ctx, poolId, params)
 	return err
 }
 
-// CreateTimeline converts echo context to params.
-func (w *ServerInterfaceWrapper) CreateTimeline(ctx echo.Context) error {
+// CreateProject converts echo context to params.
+func (w *ServerInterfaceWrapper) CreateProject(ctx echo.Context) error {
 	var err error
 	// ------------- Path parameter "poolId" -------------
 	var poolId PoolId
@@ -2929,12 +3611,12 @@ func (w *ServerInterfaceWrapper) CreateTimeline(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.CreateTimeline(ctx, poolId)
+	err = w.Handler.CreateProject(ctx, poolId)
 	return err
 }
 
-// DeleteTimeline converts echo context to params.
-func (w *ServerInterfaceWrapper) DeleteTimeline(ctx echo.Context) error {
+// DeleteProject converts echo context to params.
+func (w *ServerInterfaceWrapper) DeleteProject(ctx echo.Context) error {
 	var err error
 	// ------------- Path parameter "poolId" -------------
 	var poolId PoolId
@@ -2944,21 +3626,21 @@ func (w *ServerInterfaceWrapper) DeleteTimeline(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "timelineId" -------------
-	var timelineId TimelineId
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.DeleteTimeline(ctx, poolId, timelineId)
+	err = w.Handler.DeleteProject(ctx, poolId, projectId)
 	return err
 }
 
-// BranchTimeline converts echo context to params.
-func (w *ServerInterfaceWrapper) BranchTimeline(ctx echo.Context) error {
+// GetProject converts echo context to params.
+func (w *ServerInterfaceWrapper) GetProject(ctx echo.Context) error {
 	var err error
 	// ------------- Path parameter "poolId" -------------
 	var poolId PoolId
@@ -2968,16 +3650,144 @@ func (w *ServerInterfaceWrapper) BranchTimeline(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "timelineId" -------------
-	var timelineId TimelineId
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.BranchTimeline(ctx, poolId, timelineId)
+	err = w.Handler.GetProject(ctx, poolId, projectId)
+	return err
+}
+
+// ListBranches converts echo context to params.
+func (w *ServerInterfaceWrapper) ListBranches(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListBranchesParams
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "limit", ctx.QueryParams(), &params.Limit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter limit: %s", err))
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "offset", ctx.QueryParams(), &params.Offset)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter offset: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.ListBranches(ctx, poolId, projectId, params)
+	return err
+}
+
+// CreateBranch converts echo context to params.
+func (w *ServerInterfaceWrapper) CreateBranch(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.CreateBranch(ctx, poolId, projectId)
+	return err
+}
+
+// DeleteBranch converts echo context to params.
+func (w *ServerInterfaceWrapper) DeleteBranch(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.DeleteBranch(ctx, poolId, projectId, branchId)
+	return err
+}
+
+// GetBranch converts echo context to params.
+func (w *ServerInterfaceWrapper) GetBranch(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetBranch(ctx, poolId, projectId, branchId)
 	return err
 }
 
@@ -2992,12 +3802,20 @@ func (w *ServerInterfaceWrapper) ListEndpoints(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "timelineId" -------------
-	var timelineId TimelineId
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
 	}
 
 	// Parameter object where we will unmarshal all parameters from the context
@@ -3017,7 +3835,7 @@ func (w *ServerInterfaceWrapper) ListEndpoints(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.ListEndpoints(ctx, poolId, timelineId, params)
+	err = w.Handler.ListEndpoints(ctx, poolId, projectId, branchId, params)
 	return err
 }
 
@@ -3032,16 +3850,24 @@ func (w *ServerInterfaceWrapper) CreateEndpoint(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "timelineId" -------------
-	var timelineId TimelineId
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.CreateEndpoint(ctx, poolId, timelineId)
+	err = w.Handler.CreateEndpoint(ctx, poolId, projectId, branchId)
 	return err
 }
 
@@ -3056,12 +3882,20 @@ func (w *ServerInterfaceWrapper) DeleteEndpoint(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "timelineId" -------------
-	var timelineId TimelineId
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
 	}
 
 	// ------------- Path parameter "endpointId" -------------
@@ -3073,7 +3907,7 @@ func (w *ServerInterfaceWrapper) DeleteEndpoint(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.DeleteEndpoint(ctx, poolId, timelineId, endpointId)
+	err = w.Handler.DeleteEndpoint(ctx, poolId, projectId, branchId, endpointId)
 	return err
 }
 
@@ -3088,12 +3922,20 @@ func (w *ServerInterfaceWrapper) GetEndpoint(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "timelineId" -------------
-	var timelineId TimelineId
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "timelineId", ctx.Param("timelineId"), &timelineId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter timelineId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
 	}
 
 	// ------------- Path parameter "endpointId" -------------
@@ -3105,7 +3947,7 @@ func (w *ServerInterfaceWrapper) GetEndpoint(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.GetEndpoint(ctx, poolId, timelineId, endpointId)
+	err = w.Handler.GetEndpoint(ctx, poolId, projectId, branchId, endpointId)
 	return err
 }
 
@@ -3206,14 +4048,18 @@ func RegisterHandlersWithBaseURL(router EchoRouter, si ServerInterface, baseURL 
 	router.GET(baseURL+"/storage-pools", wrapper.ListStoragePools)
 	router.POST(baseURL+"/storage-pools", wrapper.CreateStoragePool)
 	router.GET(baseURL+"/storage-pools/:poolId", wrapper.GetStoragePool)
-	router.GET(baseURL+"/storage-pools/:poolId/timelines", wrapper.ListTimelines)
-	router.POST(baseURL+"/storage-pools/:poolId/timelines", wrapper.CreateTimeline)
-	router.DELETE(baseURL+"/storage-pools/:poolId/timelines/:timelineId", wrapper.DeleteTimeline)
-	router.POST(baseURL+"/storage-pools/:poolId/timelines/:timelineId/branch", wrapper.BranchTimeline)
-	router.GET(baseURL+"/storage-pools/:poolId/timelines/:timelineId/endpoints", wrapper.ListEndpoints)
-	router.POST(baseURL+"/storage-pools/:poolId/timelines/:timelineId/endpoints", wrapper.CreateEndpoint)
-	router.DELETE(baseURL+"/storage-pools/:poolId/timelines/:timelineId/endpoints/:endpointId", wrapper.DeleteEndpoint)
-	router.GET(baseURL+"/storage-pools/:poolId/timelines/:timelineId/endpoints/:endpointId", wrapper.GetEndpoint)
+	router.GET(baseURL+"/storage-pools/:poolId/projects", wrapper.ListProjects)
+	router.POST(baseURL+"/storage-pools/:poolId/projects", wrapper.CreateProject)
+	router.DELETE(baseURL+"/storage-pools/:poolId/projects/:projectId", wrapper.DeleteProject)
+	router.GET(baseURL+"/storage-pools/:poolId/projects/:projectId", wrapper.GetProject)
+	router.GET(baseURL+"/storage-pools/:poolId/projects/:projectId/branches", wrapper.ListBranches)
+	router.POST(baseURL+"/storage-pools/:poolId/projects/:projectId/branches", wrapper.CreateBranch)
+	router.DELETE(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId", wrapper.DeleteBranch)
+	router.GET(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId", wrapper.GetBranch)
+	router.GET(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints", wrapper.ListEndpoints)
+	router.POST(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints", wrapper.CreateEndpoint)
+	router.DELETE(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints/:endpointId", wrapper.DeleteEndpoint)
+	router.GET(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints/:endpointId", wrapper.GetEndpoint)
 	router.GET(baseURL+"/tasks/:taskId", wrapper.GetTask)
 	router.GET(baseURL+"/users", wrapper.ListUsers)
 	router.POST(baseURL+"/users", wrapper.CreateUser)
@@ -3361,190 +4207,364 @@ func (response GetStoragePool500JSONResponse) VisitGetStoragePoolResponse(w http
 	return json.NewEncoder(w).Encode(response)
 }
 
-type ListTimelinesRequestObject struct {
+type ListProjectsRequestObject struct {
 	PoolId PoolId `json:"poolId"`
-	Params ListTimelinesParams
+	Params ListProjectsParams
 }
 
-type ListTimelinesResponseObject interface {
-	VisitListTimelinesResponse(w http.ResponseWriter) error
+type ListProjectsResponseObject interface {
+	VisitListProjectsResponse(w http.ResponseWriter) error
 }
 
-type ListTimelines200JSONResponse TimelineList
+type ListProjects200JSONResponse ProjectList
 
-func (response ListTimelines200JSONResponse) VisitListTimelinesResponse(w http.ResponseWriter) error {
+func (response ListProjects200JSONResponse) VisitListProjectsResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type ListTimelines400JSONResponse struct{ BadRequestJSONResponse }
+type ListProjects400JSONResponse struct{ BadRequestJSONResponse }
 
-func (response ListTimelines400JSONResponse) VisitListTimelinesResponse(w http.ResponseWriter) error {
+func (response ListProjects400JSONResponse) VisitListProjectsResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type ListTimelines404JSONResponse struct{ NotFoundJSONResponse }
+type ListProjects404JSONResponse struct{ NotFoundJSONResponse }
 
-func (response ListTimelines404JSONResponse) VisitListTimelinesResponse(w http.ResponseWriter) error {
+func (response ListProjects404JSONResponse) VisitListProjectsResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type ListTimelines500JSONResponse struct{ InternalErrorJSONResponse }
+type ListProjects500JSONResponse struct{ InternalErrorJSONResponse }
 
-func (response ListTimelines500JSONResponse) VisitListTimelinesResponse(w http.ResponseWriter) error {
+func (response ListProjects500JSONResponse) VisitListProjectsResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type CreateTimelineRequestObject struct {
+type CreateProjectRequestObject struct {
 	PoolId PoolId `json:"poolId"`
-	Body   *CreateTimelineJSONRequestBody
+	Body   *CreateProjectJSONRequestBody
 }
 
-type CreateTimelineResponseObject interface {
-	VisitCreateTimelineResponse(w http.ResponseWriter) error
+type CreateProjectResponseObject interface {
+	VisitCreateProjectResponse(w http.ResponseWriter) error
 }
 
-type CreateTimeline201JSONResponse Timeline
+type CreateProject201JSONResponse Project
 
-func (response CreateTimeline201JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+func (response CreateProject201JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(201)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type CreateTimeline400JSONResponse struct{ BadRequestJSONResponse }
+type CreateProject400JSONResponse struct{ BadRequestJSONResponse }
 
-func (response CreateTimeline400JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+func (response CreateProject400JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type CreateTimeline404JSONResponse struct{ NotFoundJSONResponse }
+type CreateProject404JSONResponse struct{ NotFoundJSONResponse }
 
-func (response CreateTimeline404JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+func (response CreateProject404JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type CreateTimeline409JSONResponse struct{ ConflictJSONResponse }
+type CreateProject409JSONResponse struct{ ConflictJSONResponse }
 
-func (response CreateTimeline409JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+func (response CreateProject409JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type CreateTimeline500JSONResponse struct{ InternalErrorJSONResponse }
+type CreateProject500JSONResponse struct{ InternalErrorJSONResponse }
 
-func (response CreateTimeline500JSONResponse) VisitCreateTimelineResponse(w http.ResponseWriter) error {
+func (response CreateProject500JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type DeleteTimelineRequestObject struct {
-	PoolId     PoolId     `json:"poolId"`
-	TimelineId TimelineId `json:"timelineId"`
+type DeleteProjectRequestObject struct {
+	PoolId    PoolId    `json:"poolId"`
+	ProjectId ProjectId `json:"projectId"`
 }
 
-type DeleteTimelineResponseObject interface {
-	VisitDeleteTimelineResponse(w http.ResponseWriter) error
+type DeleteProjectResponseObject interface {
+	VisitDeleteProjectResponse(w http.ResponseWriter) error
 }
 
-type DeleteTimeline202JSONResponse OperationAck
+type DeleteProject202JSONResponse OperationAck
 
-func (response DeleteTimeline202JSONResponse) VisitDeleteTimelineResponse(w http.ResponseWriter) error {
+func (response DeleteProject202JSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(202)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type DeleteTimeline400JSONResponse struct{ BadRequestJSONResponse }
+type DeleteProject400JSONResponse struct{ BadRequestJSONResponse }
 
-func (response DeleteTimeline400JSONResponse) VisitDeleteTimelineResponse(w http.ResponseWriter) error {
+func (response DeleteProject400JSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type DeleteTimeline500JSONResponse struct{ InternalErrorJSONResponse }
+type DeleteProject500JSONResponse struct{ InternalErrorJSONResponse }
 
-func (response DeleteTimeline500JSONResponse) VisitDeleteTimelineResponse(w http.ResponseWriter) error {
+func (response DeleteProject500JSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type BranchTimelineRequestObject struct {
-	PoolId     PoolId     `json:"poolId"`
-	TimelineId TimelineId `json:"timelineId"`
-	Body       *BranchTimelineJSONRequestBody
+type GetProjectRequestObject struct {
+	PoolId    PoolId    `json:"poolId"`
+	ProjectId ProjectId `json:"projectId"`
 }
 
-type BranchTimelineResponseObject interface {
-	VisitBranchTimelineResponse(w http.ResponseWriter) error
+type GetProjectResponseObject interface {
+	VisitGetProjectResponse(w http.ResponseWriter) error
 }
 
-type BranchTimeline201JSONResponse Timeline
+type GetProject200JSONResponse Project
 
-func (response BranchTimeline201JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
+func (response GetProject200JSONResponse) VisitGetProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(201)
+	w.WriteHeader(200)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type BranchTimeline400JSONResponse struct{ BadRequestJSONResponse }
+type GetProject400JSONResponse struct{ BadRequestJSONResponse }
 
-func (response BranchTimeline400JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
+func (response GetProject400JSONResponse) VisitGetProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type BranchTimeline404JSONResponse struct{ NotFoundJSONResponse }
+type GetProject404JSONResponse struct{ NotFoundJSONResponse }
 
-func (response BranchTimeline404JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
+func (response GetProject404JSONResponse) VisitGetProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type BranchTimeline409JSONResponse struct{ ConflictJSONResponse }
+type GetProject500JSONResponse struct{ InternalErrorJSONResponse }
 
-func (response BranchTimeline409JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
+func (response GetProject500JSONResponse) VisitGetProjectResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListBranchesRequestObject struct {
+	PoolId    PoolId    `json:"poolId"`
+	ProjectId ProjectId `json:"projectId"`
+	Params    ListBranchesParams
+}
+
+type ListBranchesResponseObject interface {
+	VisitListBranchesResponse(w http.ResponseWriter) error
+}
+
+type ListBranches200JSONResponse BranchList
+
+func (response ListBranches200JSONResponse) VisitListBranchesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListBranches400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListBranches400JSONResponse) VisitListBranchesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListBranches404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListBranches404JSONResponse) VisitListBranchesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListBranches500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListBranches500JSONResponse) VisitListBranchesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateBranchRequestObject struct {
+	PoolId    PoolId    `json:"poolId"`
+	ProjectId ProjectId `json:"projectId"`
+	Body      *CreateBranchJSONRequestBody
+}
+
+type CreateBranchResponseObject interface {
+	VisitCreateBranchResponse(w http.ResponseWriter) error
+}
+
+type CreateBranch201JSONResponse Branch
+
+func (response CreateBranch201JSONResponse) VisitCreateBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateBranch400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateBranch400JSONResponse) VisitCreateBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateBranch404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CreateBranch404JSONResponse) VisitCreateBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateBranch409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateBranch409JSONResponse) VisitCreateBranchResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type BranchTimeline500JSONResponse struct{ InternalErrorJSONResponse }
+type CreateBranch500JSONResponse struct{ InternalErrorJSONResponse }
 
-func (response BranchTimeline500JSONResponse) VisitBranchTimelineResponse(w http.ResponseWriter) error {
+func (response CreateBranch500JSONResponse) VisitCreateBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteBranchRequestObject struct {
+	PoolId    PoolId    `json:"poolId"`
+	ProjectId ProjectId `json:"projectId"`
+	BranchId  BranchId  `json:"branchId"`
+}
+
+type DeleteBranchResponseObject interface {
+	VisitDeleteBranchResponse(w http.ResponseWriter) error
+}
+
+type DeleteBranch202JSONResponse OperationAck
+
+func (response DeleteBranch202JSONResponse) VisitDeleteBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteBranch400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response DeleteBranch400JSONResponse) VisitDeleteBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteBranch500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response DeleteBranch500JSONResponse) VisitDeleteBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetBranchRequestObject struct {
+	PoolId    PoolId    `json:"poolId"`
+	ProjectId ProjectId `json:"projectId"`
+	BranchId  BranchId  `json:"branchId"`
+}
+
+type GetBranchResponseObject interface {
+	VisitGetBranchResponse(w http.ResponseWriter) error
+}
+
+type GetBranch200JSONResponse Branch
+
+func (response GetBranch200JSONResponse) VisitGetBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetBranch400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetBranch400JSONResponse) VisitGetBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetBranch404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetBranch404JSONResponse) VisitGetBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetBranch500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetBranch500JSONResponse) VisitGetBranchResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -3552,9 +4572,10 @@ func (response BranchTimeline500JSONResponse) VisitBranchTimelineResponse(w http
 }
 
 type ListEndpointsRequestObject struct {
-	PoolId     PoolId     `json:"poolId"`
-	TimelineId TimelineId `json:"timelineId"`
-	Params     ListEndpointsParams
+	PoolId    PoolId    `json:"poolId"`
+	ProjectId ProjectId `json:"projectId"`
+	BranchId  BranchId  `json:"branchId"`
+	Params    ListEndpointsParams
 }
 
 type ListEndpointsResponseObject interface {
@@ -3598,9 +4619,10 @@ func (response ListEndpoints500JSONResponse) VisitListEndpointsResponse(w http.R
 }
 
 type CreateEndpointRequestObject struct {
-	PoolId     PoolId     `json:"poolId"`
-	TimelineId TimelineId `json:"timelineId"`
-	Body       *CreateEndpointJSONRequestBody
+	PoolId    PoolId    `json:"poolId"`
+	ProjectId ProjectId `json:"projectId"`
+	BranchId  BranchId  `json:"branchId"`
+	Body      *CreateEndpointJSONRequestBody
 }
 
 type CreateEndpointResponseObject interface {
@@ -3654,7 +4676,8 @@ func (response CreateEndpoint500JSONResponse) VisitCreateEndpointResponse(w http
 
 type DeleteEndpointRequestObject struct {
 	PoolId     PoolId     `json:"poolId"`
-	TimelineId TimelineId `json:"timelineId"`
+	ProjectId  ProjectId  `json:"projectId"`
+	BranchId   BranchId   `json:"branchId"`
 	EndpointId EndpointId `json:"endpointId"`
 }
 
@@ -3699,7 +4722,8 @@ func (response DeleteEndpoint500JSONResponse) VisitDeleteEndpointResponse(w http
 
 type GetEndpointRequestObject struct {
 	PoolId     PoolId     `json:"poolId"`
-	TimelineId TimelineId `json:"timelineId"`
+	ProjectId  ProjectId  `json:"projectId"`
+	BranchId   BranchId   `json:"branchId"`
 	EndpointId EndpointId `json:"endpointId"`
 }
 
@@ -3912,29 +4936,41 @@ type StrictServerInterface interface {
 	// Get a storage pool
 	// (GET /storage-pools/{poolId})
 	GetStoragePool(ctx context.Context, request GetStoragePoolRequestObject) (GetStoragePoolResponseObject, error)
-	// List the timelines in a pool
-	// (GET /storage-pools/{poolId}/timelines)
-	ListTimelines(ctx context.Context, request ListTimelinesRequestObject) (ListTimelinesResponseObject, error)
-	// Create a tenant and its main timeline in a pool
-	// (POST /storage-pools/{poolId}/timelines)
-	CreateTimeline(ctx context.Context, request CreateTimelineRequestObject) (CreateTimelineResponseObject, error)
-	// Delete a timeline (logged only)
-	// (DELETE /storage-pools/{poolId}/timelines/{timelineId})
-	DeleteTimeline(ctx context.Context, request DeleteTimelineRequestObject) (DeleteTimelineResponseObject, error)
-	// Branch (fork) a timeline into a new timeline
-	// (POST /storage-pools/{poolId}/timelines/{timelineId}/branch)
-	BranchTimeline(ctx context.Context, request BranchTimelineRequestObject) (BranchTimelineResponseObject, error)
-	// List the endpoints bound to a timeline
-	// (GET /storage-pools/{poolId}/timelines/{timelineId}/endpoints)
+	// List the projects in a pool
+	// (GET /storage-pools/{poolId}/projects)
+	ListProjects(ctx context.Context, request ListProjectsRequestObject) (ListProjectsResponseObject, error)
+	// Create a project (and its default branch) in a pool
+	// (POST /storage-pools/{poolId}/projects)
+	CreateProject(ctx context.Context, request CreateProjectRequestObject) (CreateProjectResponseObject, error)
+	// Delete a project (logged only)
+	// (DELETE /storage-pools/{poolId}/projects/{projectId})
+	DeleteProject(ctx context.Context, request DeleteProjectRequestObject) (DeleteProjectResponseObject, error)
+	// Get a project
+	// (GET /storage-pools/{poolId}/projects/{projectId})
+	GetProject(ctx context.Context, request GetProjectRequestObject) (GetProjectResponseObject, error)
+	// List the branches in a project
+	// (GET /storage-pools/{poolId}/projects/{projectId}/branches)
+	ListBranches(ctx context.Context, request ListBranchesRequestObject) (ListBranchesResponseObject, error)
+	// Branch (fork) a branch into a new branch
+	// (POST /storage-pools/{poolId}/projects/{projectId}/branches)
+	CreateBranch(ctx context.Context, request CreateBranchRequestObject) (CreateBranchResponseObject, error)
+	// Delete a branch (logged only)
+	// (DELETE /storage-pools/{poolId}/projects/{projectId}/branches/{branchId})
+	DeleteBranch(ctx context.Context, request DeleteBranchRequestObject) (DeleteBranchResponseObject, error)
+	// Get a branch
+	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId})
+	GetBranch(ctx context.Context, request GetBranchRequestObject) (GetBranchResponseObject, error)
+	// List the endpoints bound to a branch
+	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints)
 	ListEndpoints(ctx context.Context, request ListEndpointsRequestObject) (ListEndpointsResponseObject, error)
-	// Create and deploy an endpoint on a timeline
-	// (POST /storage-pools/{poolId}/timelines/{timelineId}/endpoints)
+	// Create and deploy an endpoint on a branch
+	// (POST /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints)
 	CreateEndpoint(ctx context.Context, request CreateEndpointRequestObject) (CreateEndpointResponseObject, error)
 	// Retire an endpoint
-	// (DELETE /storage-pools/{poolId}/timelines/{timelineId}/endpoints/{endpointId})
+	// (DELETE /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
 	DeleteEndpoint(ctx context.Context, request DeleteEndpointRequestObject) (DeleteEndpointResponseObject, error)
 	// Get an endpoint
-	// (GET /storage-pools/{poolId}/timelines/{timelineId}/endpoints/{endpointId})
+	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
 	GetEndpoint(ctx context.Context, request GetEndpointRequestObject) (GetEndpointResponseObject, error)
 	// Get the status of a task
 	// (GET /tasks/{taskId})
@@ -4041,115 +5077,222 @@ func (sh *strictHandler) GetStoragePool(ctx echo.Context, poolId PoolId) error {
 	return nil
 }
 
-// ListTimelines operation middleware
-func (sh *strictHandler) ListTimelines(ctx echo.Context, poolId PoolId, params ListTimelinesParams) error {
-	var request ListTimelinesRequestObject
+// ListProjects operation middleware
+func (sh *strictHandler) ListProjects(ctx echo.Context, poolId PoolId, params ListProjectsParams) error {
+	var request ListProjectsRequestObject
 
 	request.PoolId = poolId
 	request.Params = params
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.ListTimelines(ctx.Request().Context(), request.(ListTimelinesRequestObject))
+		return sh.ssi.ListProjects(ctx.Request().Context(), request.(ListProjectsRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "ListTimelines")
+		handler = middleware(handler, "ListProjects")
 	}
 
 	response, err := handler(ctx, request)
 
 	if err != nil {
 		return err
-	} else if validResponse, ok := response.(ListTimelinesResponseObject); ok {
-		return validResponse.VisitListTimelinesResponse(ctx.Response())
+	} else if validResponse, ok := response.(ListProjectsResponseObject); ok {
+		return validResponse.VisitListProjectsResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}
 	return nil
 }
 
-// CreateTimeline operation middleware
-func (sh *strictHandler) CreateTimeline(ctx echo.Context, poolId PoolId) error {
-	var request CreateTimelineRequestObject
+// CreateProject operation middleware
+func (sh *strictHandler) CreateProject(ctx echo.Context, poolId PoolId) error {
+	var request CreateProjectRequestObject
 
 	request.PoolId = poolId
 
-	var body CreateTimelineJSONRequestBody
+	var body CreateProjectJSONRequestBody
 	if err := ctx.Bind(&body); err != nil {
 		return err
 	}
 	request.Body = &body
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.CreateTimeline(ctx.Request().Context(), request.(CreateTimelineRequestObject))
+		return sh.ssi.CreateProject(ctx.Request().Context(), request.(CreateProjectRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "CreateTimeline")
+		handler = middleware(handler, "CreateProject")
 	}
 
 	response, err := handler(ctx, request)
 
 	if err != nil {
 		return err
-	} else if validResponse, ok := response.(CreateTimelineResponseObject); ok {
-		return validResponse.VisitCreateTimelineResponse(ctx.Response())
+	} else if validResponse, ok := response.(CreateProjectResponseObject); ok {
+		return validResponse.VisitCreateProjectResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}
 	return nil
 }
 
-// DeleteTimeline operation middleware
-func (sh *strictHandler) DeleteTimeline(ctx echo.Context, poolId PoolId, timelineId TimelineId) error {
-	var request DeleteTimelineRequestObject
+// DeleteProject operation middleware
+func (sh *strictHandler) DeleteProject(ctx echo.Context, poolId PoolId, projectId ProjectId) error {
+	var request DeleteProjectRequestObject
 
 	request.PoolId = poolId
-	request.TimelineId = timelineId
+	request.ProjectId = projectId
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.DeleteTimeline(ctx.Request().Context(), request.(DeleteTimelineRequestObject))
+		return sh.ssi.DeleteProject(ctx.Request().Context(), request.(DeleteProjectRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "DeleteTimeline")
+		handler = middleware(handler, "DeleteProject")
 	}
 
 	response, err := handler(ctx, request)
 
 	if err != nil {
 		return err
-	} else if validResponse, ok := response.(DeleteTimelineResponseObject); ok {
-		return validResponse.VisitDeleteTimelineResponse(ctx.Response())
+	} else if validResponse, ok := response.(DeleteProjectResponseObject); ok {
+		return validResponse.VisitDeleteProjectResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}
 	return nil
 }
 
-// BranchTimeline operation middleware
-func (sh *strictHandler) BranchTimeline(ctx echo.Context, poolId PoolId, timelineId TimelineId) error {
-	var request BranchTimelineRequestObject
+// GetProject operation middleware
+func (sh *strictHandler) GetProject(ctx echo.Context, poolId PoolId, projectId ProjectId) error {
+	var request GetProjectRequestObject
 
 	request.PoolId = poolId
-	request.TimelineId = timelineId
+	request.ProjectId = projectId
 
-	var body BranchTimelineJSONRequestBody
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetProject(ctx.Request().Context(), request.(GetProjectRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetProject")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetProjectResponseObject); ok {
+		return validResponse.VisitGetProjectResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// ListBranches operation middleware
+func (sh *strictHandler) ListBranches(ctx echo.Context, poolId PoolId, projectId ProjectId, params ListBranchesParams) error {
+	var request ListBranchesRequestObject
+
+	request.PoolId = poolId
+	request.ProjectId = projectId
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListBranches(ctx.Request().Context(), request.(ListBranchesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListBranches")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(ListBranchesResponseObject); ok {
+		return validResponse.VisitListBranchesResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// CreateBranch operation middleware
+func (sh *strictHandler) CreateBranch(ctx echo.Context, poolId PoolId, projectId ProjectId) error {
+	var request CreateBranchRequestObject
+
+	request.PoolId = poolId
+	request.ProjectId = projectId
+
+	var body CreateBranchJSONRequestBody
 	if err := ctx.Bind(&body); err != nil {
 		return err
 	}
 	request.Body = &body
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.BranchTimeline(ctx.Request().Context(), request.(BranchTimelineRequestObject))
+		return sh.ssi.CreateBranch(ctx.Request().Context(), request.(CreateBranchRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "BranchTimeline")
+		handler = middleware(handler, "CreateBranch")
 	}
 
 	response, err := handler(ctx, request)
 
 	if err != nil {
 		return err
-	} else if validResponse, ok := response.(BranchTimelineResponseObject); ok {
-		return validResponse.VisitBranchTimelineResponse(ctx.Response())
+	} else if validResponse, ok := response.(CreateBranchResponseObject); ok {
+		return validResponse.VisitCreateBranchResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// DeleteBranch operation middleware
+func (sh *strictHandler) DeleteBranch(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error {
+	var request DeleteBranchRequestObject
+
+	request.PoolId = poolId
+	request.ProjectId = projectId
+	request.BranchId = branchId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteBranch(ctx.Request().Context(), request.(DeleteBranchRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteBranch")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(DeleteBranchResponseObject); ok {
+		return validResponse.VisitDeleteBranchResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetBranch operation middleware
+func (sh *strictHandler) GetBranch(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error {
+	var request GetBranchRequestObject
+
+	request.PoolId = poolId
+	request.ProjectId = projectId
+	request.BranchId = branchId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetBranch(ctx.Request().Context(), request.(GetBranchRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetBranch")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetBranchResponseObject); ok {
+		return validResponse.VisitGetBranchResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}
@@ -4157,11 +5300,12 @@ func (sh *strictHandler) BranchTimeline(ctx echo.Context, poolId PoolId, timelin
 }
 
 // ListEndpoints operation middleware
-func (sh *strictHandler) ListEndpoints(ctx echo.Context, poolId PoolId, timelineId TimelineId, params ListEndpointsParams) error {
+func (sh *strictHandler) ListEndpoints(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params ListEndpointsParams) error {
 	var request ListEndpointsRequestObject
 
 	request.PoolId = poolId
-	request.TimelineId = timelineId
+	request.ProjectId = projectId
+	request.BranchId = branchId
 	request.Params = params
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
@@ -4184,11 +5328,12 @@ func (sh *strictHandler) ListEndpoints(ctx echo.Context, poolId PoolId, timeline
 }
 
 // CreateEndpoint operation middleware
-func (sh *strictHandler) CreateEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId) error {
+func (sh *strictHandler) CreateEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error {
 	var request CreateEndpointRequestObject
 
 	request.PoolId = poolId
-	request.TimelineId = timelineId
+	request.ProjectId = projectId
+	request.BranchId = branchId
 
 	var body CreateEndpointJSONRequestBody
 	if err := ctx.Bind(&body); err != nil {
@@ -4216,11 +5361,12 @@ func (sh *strictHandler) CreateEndpoint(ctx echo.Context, poolId PoolId, timelin
 }
 
 // DeleteEndpoint operation middleware
-func (sh *strictHandler) DeleteEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId) error {
+func (sh *strictHandler) DeleteEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error {
 	var request DeleteEndpointRequestObject
 
 	request.PoolId = poolId
-	request.TimelineId = timelineId
+	request.ProjectId = projectId
+	request.BranchId = branchId
 	request.EndpointId = endpointId
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
@@ -4243,11 +5389,12 @@ func (sh *strictHandler) DeleteEndpoint(ctx echo.Context, poolId PoolId, timelin
 }
 
 // GetEndpoint operation middleware
-func (sh *strictHandler) GetEndpoint(ctx echo.Context, poolId PoolId, timelineId TimelineId, endpointId EndpointId) error {
+func (sh *strictHandler) GetEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error {
 	var request GetEndpointRequestObject
 
 	request.PoolId = poolId
-	request.TimelineId = timelineId
+	request.ProjectId = projectId
+	request.BranchId = branchId
 	request.EndpointId = endpointId
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {

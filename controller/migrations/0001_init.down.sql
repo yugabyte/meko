@@ -8,11 +8,11 @@ DROP TYPE  IF EXISTS task_status;
 DROP TABLE IF EXISTS endpoint;
 DROP TYPE  IF EXISTS endpoint_role;
 
-DROP TABLE IF EXISTS pg_cluster;
+DROP TABLE IF EXISTS branch;
 
-DROP TABLE IF EXISTS user_tenant_grant;
+DROP TABLE IF EXISTS user_project_grant;
 DROP TYPE  IF EXISTS grant_role;
 DROP TABLE IF EXISTS user_pool_grant;
-DROP TABLE IF EXISTS tenant;
+DROP TABLE IF EXISTS project;
 DROP TABLE IF EXISTS storage_pool;
 DROP TABLE IF EXISTS app_user;

@@ -1,7 +1,7 @@
-// Tests for the paginated list endpoints (users, storage pools, timelines,
-// endpoints): the limit/offset contract, the total (all matches) vs count
-// (this page) fields, and parent 404s on the nested lists. They drive the real
-// controllers + generated client over MemBackend, like the other api tests.
+// Tests for the paginated list endpoints (users, storage pools, projects,
+// branches, endpoints): the limit/offset contract, the total (all matches) vs
+// count (this page) fields, and parent 404s on the nested lists. They drive the
+// real controllers + generated client over MemBackend, like the other api tests.
 package api_test
 
 import (
@@ -118,7 +118,7 @@ func TestListStoragePoolsPaginationClamps(t *testing.T) {
 	}
 }
 
-func TestListTimelines(t *testing.T) {
+func TestListProjects(t *testing.T) {
 	client, _, _ := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
@@ -126,18 +126,18 @@ func TestListTimelines(t *testing.T) {
 	other := mustCreatePool(t, client, u.Id, "other")
 
 	// Unknown pool -> 404.
-	miss, err := client.ListTimelinesWithResponse(ctx, uuid.New(), nil)
+	miss, err := client.ListProjectsWithResponse(ctx, uuid.New(), nil)
 	if err != nil {
-		t.Fatalf("ListTimelines(missing pool): %v", err)
+		t.Fatalf("ListProjects(missing pool): %v", err)
 	}
 	if miss.StatusCode() != http.StatusNotFound || miss.JSON404 == nil {
 		t.Fatalf("missing pool status = %d, body = %s", miss.StatusCode(), miss.Body)
 	}
 
 	// Empty pool -> 200 with total 0.
-	empty, err := client.ListTimelinesWithResponse(ctx, pool.Id, nil)
+	empty, err := client.ListProjectsWithResponse(ctx, pool.Id, nil)
 	if err != nil {
-		t.Fatalf("ListTimelines(empty): %v", err)
+		t.Fatalf("ListProjects(empty): %v", err)
 	}
 	if empty.StatusCode() != http.StatusOK || empty.JSON200 == nil {
 		t.Fatalf("empty list status = %d, body = %s", empty.StatusCode(), empty.Body)
@@ -146,17 +146,17 @@ func TestListTimelines(t *testing.T) {
 		t.Errorf("empty pool = {total:%d count:%d}, want {0 0}", empty.JSON200.Total, empty.JSON200.Count)
 	}
 
-	// Create three timelines in pool, one in the other pool.
+	// Create three projects in pool, one in the other pool.
 	want := []string{"a", "b", "c"}
 	for _, name := range want {
-		mustCreateTimeline(t, client, pool.Id, name)
+		mustCreateProject(t, client, pool.Id, name)
 	}
-	mustCreateTimeline(t, client, other.Id, "z")
+	mustCreateProject(t, client, other.Id, "z")
 
 	// The pool lists exactly its own three, scoped away from the other pool.
-	got, err := client.ListTimelinesWithResponse(ctx, pool.Id, nil)
+	got, err := client.ListProjectsWithResponse(ctx, pool.Id, nil)
 	if err != nil {
-		t.Fatalf("ListTimelines: %v", err)
+		t.Fatalf("ListProjects: %v", err)
 	}
 	if got.StatusCode() != http.StatusOK || got.JSON200 == nil {
 		t.Fatalf("list status = %d, body = %s", got.StatusCode(), got.Body)
@@ -164,13 +164,69 @@ func TestListTimelines(t *testing.T) {
 	if got.JSON200.Total != 3 || got.JSON200.Count != 3 {
 		t.Errorf("list = {total:%d count:%d}, want {3 3}", got.JSON200.Total, got.JSON200.Count)
 	}
-	gotNames := make([]string, 0, len(got.JSON200.Timelines))
-	for _, tl := range got.JSON200.Timelines {
-		gotNames = append(gotNames, tl.Name)
+	gotNames := make([]string, 0, len(got.JSON200.Projects))
+	for _, p := range got.JSON200.Projects {
+		gotNames = append(gotNames, p.Name)
+		// Every project carries its auto-created default branch.
+		if !p.DefaultBranch.IsDefault {
+			t.Errorf("project %q default branch is_default = false", p.Name)
+		}
 	}
 	sort.Strings(gotNames)
 	if !equalStrings(gotNames, want) {
-		t.Errorf("timeline names = %v, want %v", gotNames, want)
+		t.Errorf("project names = %v, want %v", gotNames, want)
+	}
+}
+
+func TestListBranches(t *testing.T) {
+	client, _, _ := newTestServer(t)
+	ctx := context.Background()
+	u := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, u.Id, "pool")
+	project := mustCreateProject(t, client, pool.Id, "main")
+
+	// A fresh project lists exactly its default branch.
+	only, err := client.ListBranchesWithResponse(ctx, pool.Id, project.Id, nil)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	if only.StatusCode() != http.StatusOK || only.JSON200 == nil || only.JSON200.Total != 1 {
+		t.Fatalf("fresh project branches = %d (status %d), want 1", only.JSON200.Total, only.StatusCode())
+	}
+
+	// Fork a branch off the default with an explicit fork point (no storage
+	// controller is wired here, so the LSN must be explicit).
+	lsn := "0/16ABCD0"
+	br, err := client.CreateBranchWithResponse(ctx, pool.Id, project.Id, api.CreateBranchRequest{Name: "feature", ForkPointLsn: &lsn})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	if br.StatusCode() != http.StatusCreated || br.JSON201 == nil {
+		t.Fatalf("CreateBranch status = %d, body = %s", br.StatusCode(), br.Body)
+	}
+	if br.JSON201.IsDefault {
+		t.Error("forked branch is_default = true, want false")
+	}
+	if br.JSON201.ParentBranchId == nil || *br.JSON201.ParentBranchId != project.DefaultBranch.BranchId {
+		t.Errorf("parent_branch_id = %v, want the default branch %v", br.JSON201.ParentBranchId, project.DefaultBranch.BranchId)
+	}
+
+	// Now the project lists both branches.
+	both, err := client.ListBranchesWithResponse(ctx, pool.Id, project.Id, nil)
+	if err != nil {
+		t.Fatalf("ListBranches(after fork): %v", err)
+	}
+	if both.JSON200 == nil || both.JSON200.Total != 2 {
+		t.Errorf("branches after fork = %d, want 2", both.JSON200.Total)
+	}
+
+	// Unknown project under a real pool -> 404.
+	missing, err := client.ListBranchesWithResponse(ctx, pool.Id, uuid.New(), nil)
+	if err != nil {
+		t.Fatalf("ListBranches(missing project): %v", err)
+	}
+	if missing.StatusCode() != http.StatusNotFound {
+		t.Errorf("missing project status = %d, want 404", missing.StatusCode())
 	}
 }
 
@@ -181,20 +237,14 @@ func TestListEndpoints(t *testing.T) {
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
-	// Create-timeline records the tenant + main timeline only; compute is a
+	// Create-project records the project + default branch only; compute is a
 	// separate resource. The first endpoint is deployed by POSTing it.
-	ct, err := client.CreateTimelineWithResponse(ctx, pool.Id, api.CreateTimelineRequest{Name: "main"})
-	if err != nil {
-		t.Fatalf("CreateTimeline: %v", err)
-	}
-	if ct.StatusCode() != http.StatusCreated || ct.JSON201 == nil {
-		t.Fatalf("CreateTimeline status = %d, body = %s", ct.StatusCode(), ct.Body)
-	}
-	tl := *ct.JSON201
+	project := mustCreateProject(t, client, pool.Id, "main")
+	branchID := project.DefaultBranch.BranchId
 
-	// Deploy a read_write endpoint on the timeline (the deployer is set).
+	// Deploy a read_write endpoint on the default branch (the deployer is set).
 	rw := api.CreateEndpointRequestRoleReadWrite
-	cep, err := client.CreateEndpointWithResponse(ctx, pool.Id, tl.TimelineId, api.CreateEndpointRequest{Role: &rw})
+	cep, err := client.CreateEndpointWithResponse(ctx, pool.Id, project.Id, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -202,7 +252,7 @@ func TestListEndpoints(t *testing.T) {
 		t.Fatalf("CreateEndpoint status = %d, body = %s", cep.StatusCode(), cep.Body)
 	}
 
-	eps, err := client.ListEndpointsWithResponse(ctx, pool.Id, tl.TimelineId, nil)
+	eps, err := client.ListEndpointsWithResponse(ctx, pool.Id, project.Id, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -216,17 +266,17 @@ func TestListEndpoints(t *testing.T) {
 		t.Errorf("endpoint = {role:%q addr:%q}, want {read_write 127.0.0.1:5555}", got.Role, got.Address)
 	}
 
-	// Unknown timeline under a real pool -> 404.
-	missTl, err := client.ListEndpointsWithResponse(ctx, pool.Id, uuid.New(), nil)
+	// Unknown branch under a real pool/project -> 404.
+	missBr, err := client.ListEndpointsWithResponse(ctx, pool.Id, project.Id, uuid.New(), nil)
 	if err != nil {
-		t.Fatalf("ListEndpoints(missing timeline): %v", err)
+		t.Fatalf("ListEndpoints(missing branch): %v", err)
 	}
-	if missTl.StatusCode() != http.StatusNotFound {
-		t.Errorf("missing timeline status = %d, want 404", missTl.StatusCode())
+	if missBr.StatusCode() != http.StatusNotFound {
+		t.Errorf("missing branch status = %d, want 404", missBr.StatusCode())
 	}
 
 	// Unknown pool -> 404.
-	missPool, err := client.ListEndpointsWithResponse(ctx, uuid.New(), tl.TimelineId, nil)
+	missPool, err := client.ListEndpointsWithResponse(ctx, uuid.New(), project.Id, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints(missing pool): %v", err)
 	}
@@ -234,15 +284,15 @@ func TestListEndpoints(t *testing.T) {
 		t.Errorf("missing pool status = %d, want 404", missPool.StatusCode())
 	}
 
-	// A real but *different* pool must not see another pool's timeline endpoints:
-	// the timeline is resolved within the addressed pool, so this 404s (no leak).
+	// A real but *different* pool must not see another pool's branch endpoints:
+	// the branch is resolved within the addressed pool/project, so this 404s.
 	poolB := mustCreatePool(t, client, u.Id, "poolB")
-	crossPool, err := client.ListEndpointsWithResponse(ctx, poolB.Id, tl.TimelineId, nil)
+	crossPool, err := client.ListEndpointsWithResponse(ctx, poolB.Id, project.Id, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints(cross pool): %v", err)
 	}
 	if crossPool.StatusCode() != http.StatusNotFound {
-		t.Errorf("cross-pool endpoint list status = %d, want 404 (timeline not in poolB)", crossPool.StatusCode())
+		t.Errorf("cross-pool endpoint list status = %d, want 404 (project not in poolB)", crossPool.StatusCode())
 	}
 }
 
@@ -251,9 +301,10 @@ func TestListEndpointsEmpty(t *testing.T) {
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	tl := mustCreateTimeline(t, client, pool.Id, "main")
+	project := mustCreateProject(t, client, pool.Id, "main")
+	branchID := project.DefaultBranch.BranchId
 
-	eps, err := client.ListEndpointsWithResponse(ctx, pool.Id, tl.TimelineId, nil)
+	eps, err := client.ListEndpointsWithResponse(ctx, pool.Id, project.Id, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -266,14 +317,14 @@ func TestListEndpointsEmpty(t *testing.T) {
 	}
 }
 
-func mustCreateTimeline(t *testing.T, client *api.ClientWithResponses, poolID uuid.UUID, name string) api.Timeline {
+func mustCreateProject(t *testing.T, client *api.ClientWithResponses, poolID uuid.UUID, name string) api.Project {
 	t.Helper()
-	resp, err := client.CreateTimelineWithResponse(context.Background(), poolID, api.CreateTimelineRequest{Name: name})
+	resp, err := client.CreateProjectWithResponse(context.Background(), poolID, api.CreateProjectRequest{Name: name})
 	if err != nil {
-		t.Fatalf("CreateTimeline(%q): %v", name, err)
+		t.Fatalf("CreateProject(%q): %v", name, err)
 	}
 	if resp.StatusCode() != http.StatusCreated || resp.JSON201 == nil {
-		t.Fatalf("CreateTimeline(%q) status = %d, body = %s", name, resp.StatusCode(), resp.Body)
+		t.Fatalf("CreateProject(%q) status = %d, body = %s", name, resp.StatusCode(), resp.Body)
 	}
 	return *resp.JSON201
 }
