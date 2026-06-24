@@ -220,6 +220,19 @@ type messageWindow struct {
 	MessageID string
 	Start     time.Time
 	NextStart *time.Time
+	// CaptureLeading attributes observations that start *before* Start to
+	// this window. Only valid when this is the genuine first bookmark of
+	// the trace (full-thread query from offset 0, or a single-message
+	// trace whose target is turn 1). When the window is the target turn of
+	// a single-message trace that is NOT the first turn, leaving this false
+	// stops every prior turn's spans (memory/kb searches) from leaking in
+	// — the cause of the per-turn kb-chunk inflation (50 → 100 → 150).
+	CaptureLeading bool
+	// CaptureTrailing attributes observations that start *after* NextStart
+	// (or after Start when NextStart is nil) to this window. Only valid
+	// when this is the genuine last bookmark of the trace. Prevents later
+	// turns' rows from leaking into a single-message trace's target turn.
+	CaptureTrailing bool
 }
 
 // ConversationDetail is the full envelope returned by
@@ -1206,6 +1219,16 @@ LIMIT  $3 OFFSET $4`
 	header.ThreadOffset = messagesOffset
 	header.ThreadHasMore = len(header.Thread) == messagesLimit
 
+	// Enable leading/trailing span capture only when this page actually
+	// bounds the trace: the first window owns pre-first-bookmark spans only
+	// when we start from offset 0, and the last window owns post-last-bookmark
+	// spans only when this is the final page. Off-page windows must NOT sweep
+	// up neighbouring turns' spans.
+	if len(windows) > 0 {
+		windows[0].CaptureLeading = messagesOffset == 0
+		windows[len(windows)-1].CaptureTrailing = !header.ThreadHasMore
+	}
+
 	// Populate per-message persisted-memory counts and IDs from mem0 so
 	// the thread chips reflect actual extracted rows (aligning with the
 	// conversation-level MemoriesAdded metric), and the UI can deep-link
@@ -1270,6 +1293,33 @@ type memoryWindowResult struct {
 	promotedMemoryTexts map[string][]string
 }
 
+// windowScanBounds returns the inclusive lower / exclusive upper time bounds
+// for fetching only the observations the given windows can actually consume,
+// so a per-message trace doesn't scan the whole conversation. The bounds key
+// off the capture flags rather than the raw window edges:
+//   - lower is nil when the first window captures leading (pre-first-bookmark)
+//     spans — i.e. it's the genuine first turn of the trace — otherwise it's
+//     the first window's Start.
+//   - upper is nil when the last window captures trailing (post-last-bookmark)
+//     spans, otherwise it's the last window's NextStart.
+//
+// A nil bound disables that side of the filter (`$n IS NULL OR ...`), so the
+// full-thread query (which captures at both ends) reads the whole trace
+// exactly as before.
+func windowScanBounds(windows []messageWindow) (lower, upper *time.Time) {
+	n := len(windows)
+	if n == 0 {
+		return nil, nil
+	}
+	if !windows[0].CaptureLeading {
+		lower = &windows[0].Start
+	}
+	if !windows[n-1].CaptureTrailing {
+		upper = windows[n-1].NextStart
+	}
+	return lower, upper
+}
+
 // attributeTimeToMessageWindow walks the ordered bookmark windows in
 // lockstep with chronologically-sorted events and returns the message
 // turn whose window contains `at`. `winIdx` is advanced in place so
@@ -1282,7 +1332,7 @@ func attributeTimeToMessageWindow(windows []messageWindow, winIdx *int, at time.
 	for *winIdx < len(windows) {
 		w := windows[*winIdx]
 		if at.Before(w.Start) {
-			if *winIdx == 0 {
+			if *winIdx == 0 && w.CaptureLeading {
 				return w.MessageID
 			}
 			return ""
@@ -1293,7 +1343,7 @@ func attributeTimeToMessageWindow(windows []messageWindow, winIdx *int, at time.
 		}
 		return w.MessageID
 	}
-	if len(windows) > 0 {
+	if len(windows) > 0 && windows[len(windows)-1].CaptureTrailing {
 		return windows[len(windows)-1].MessageID
 	}
 	return ""
@@ -1362,6 +1412,14 @@ func (r *LangfuseRepo) mem0PerMessageWindow(
 	// e.g. mem0 yields [A@10:00 (promoted=false)] and promoted_collection
 	// yields [B@10:05 (promoted=true)]; UNION ALL stacks them and ORDER BY
 	// returns [A@10:00 false, B@10:05 true] — one pass over each table.
+	// Same time-bounding as agentReasoningPerMessageWindow: a single-message
+	// window only needs mem0 rows created within [Start, NextStart), so we
+	// avoid scanning the whole conversation's memories per lazy trace fetch.
+	// NULL bounds (full-thread query) keep the original "scan everything"
+	// behaviour. Attribution below still drops anything outside the window,
+	// so this only trims fetch cost.
+	lower, upper := windowScanBounds(windows)
+
 	const q = `
 SELECT id::text AS memory_id,
        COALESCE(payload->>'data', '') AS memory_text,
@@ -1371,6 +1429,8 @@ FROM   datapacks.meko_mem0_collection
 WHERE  meko_datapack_id = $1::uuid
   AND  meko_conversation_id = $2::uuid
   AND  meko_promotion_user_action IS DISTINCT FROM 'keep_as_memory'::datapacks.meko_promotion_user_action
+  AND  ($3::timestamptz IS NULL OR meko_created_at >= $3)
+  AND  ($4::timestamptz IS NULL OR meko_created_at <  $4)
 UNION ALL
 SELECT id::text AS memory_id,
        COALESCE(payload->>'data', '') AS memory_text,
@@ -1379,9 +1439,11 @@ SELECT id::text AS memory_id,
 FROM   datapacks.promoted_collection
 WHERE  meko_datapack_id = $1::uuid
   AND  meko_conversation_id = $2::uuid
+  AND  ($3::timestamptz IS NULL OR meko_created_at >= $3)
+  AND  ($4::timestamptz IS NULL OR meko_created_at <  $4)
 ORDER  BY meko_created_at ASC, memory_id ASC`
 
-	rows, err := r.dataDB.Query(q, dpUUID, convUUID)
+	rows, err := r.dataDB.Query(q, dpUUID, convUUID, lower, upper)
 	if err != nil {
 		return empty, fmt.Errorf("meta db: list mem0 rows for message windows: %w", err)
 	}
@@ -1492,6 +1554,17 @@ func (r *LangfuseRepo) agentReasoningPerMessageWindow(
 		return emptyResult, nil
 	}
 
+	// Time-bound the scan to exactly the turns this call needs. Derived from
+	// the window capture flags: the full-thread query (offset 0, last page)
+	// has leading+trailing capture on at its ends, so both bounds resolve to
+	// NULL and we fetch the whole trace as before. A single-message trace for
+	// a middle turn has both flags off, so we only read [Start, NextStart) —
+	// turning the per-bubble lazy fetch from O(all spans in trace) into
+	// O(spans in this turn) and avoiding the O(M^2) blow-up when every turn's
+	// trace is opened in WorkbenchLM. Spans outside the bound would be dropped
+	// by the attribution loop anyway, so this is purely a fetch-cost win.
+	lower, upper := windowScanBounds(windows)
+
 	// TODO(MEKO): Replace name ILIKE '%...%' matching below with a structured
 	// step marker (metadata/tag/category) emitted at trace-write time.
 	// Currently we use the name field for this, but this is not ideal for large tables and can degrade query performance.
@@ -1509,6 +1582,8 @@ SELECT id,
        COALESCE(output::text, '') AS output
 FROM   clickhouse.observations
 WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
+  AND  ($3::timestamptz IS NULL OR start_time >= $3)
+  AND  ($4::timestamptz IS NULL OR start_time <  $4)
   AND  (
         (type = 'TOOL' AND (
              name ILIKE '%memory%search%'
@@ -1527,7 +1602,7 @@ WHERE  project_id = $1 AND trace_id = $2 AND is_deleted = false
        )
 ORDER  BY start_time ASC`
 
-	rows, err := r.langfuseDB.Query(q, projectID, sessionID)
+	rows, err := r.langfuseDB.Query(q, projectID, sessionID, lower, upper)
 	if err != nil {
 		return emptyResult, fmt.Errorf("langfuse db: load agent reasoning observations: %w", err)
 	}
@@ -1649,7 +1724,7 @@ ORDER  BY start_time ASC`
 		for winIdx < len(windows) {
 			w := windows[winIdx]
 			if obs.StartTime.Before(w.Start) {
-				if winIdx == 0 {
+				if winIdx == 0 && w.CaptureLeading {
 					assign(w.MessageID, obs)
 				}
 				break
@@ -2447,6 +2522,8 @@ SELECT t.msg_id,
        t.bm_time,
        s.root_start,
        n.next_root_start,
+       (t.prev_bm_time IS NULL) AS is_first,
+       t.is_last AS is_last,
        COALESCE(r.thinking, '') AS reasoning,
        r.plan_json AS plan_json,
        mp.model AS model,
@@ -2466,6 +2543,8 @@ LEFT JOIN next_root  n  ON true`
 		bmTime        time.Time
 		rootStart     sql.NullTime
 		nextRootStart sql.NullTime
+		isFirst       bool
+		isLast        bool
 		reasoningStr  string
 		planJSON      sql.NullString
 		model         sql.NullString
@@ -2476,6 +2555,7 @@ LEFT JOIN next_root  n  ON true`
 	)
 	err := r.langfuseDB.QueryRow(q, projectID, sessionID, messageID).Scan(
 		&msgID, &bookmarkID, &bmTime, &rootStart, &nextRootStart,
+		&isFirst, &isLast,
 		&reasoningStr, &planJSON, &model,
 		&latencyMs, &llmCalls, &totalTokens,
 		&userMetaJSON,
@@ -2516,6 +2596,12 @@ LEFT JOIN next_root  n  ON true`
 		MessageID: msgID,
 		Start:     winStart,
 		NextStart: nextPtr,
+		// Only sweep up out-of-window spans when the target turn genuinely
+		// bounds the trace. Without these guards, a single-message trace for
+		// turn N pulls in every earlier turn's kb/memory search spans (the
+		// 50 → 100 → 150 chunk inflation seen in WorkbenchLM).
+		CaptureLeading:  isFirst,
+		CaptureTrailing: isLast,
 	}}
 
 	memRes, err := r.mem0PerMessageWindow(datapackID, sessionID, windows)
