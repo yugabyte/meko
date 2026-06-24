@@ -77,7 +77,7 @@ You can also configure clients by manually adding this configuration to your cod
 
 Manage your datapacks from the **Datapacks** page in the Meko portal. **Datapacks** lists all your datapacks. From here you can add and share datapacks.
 
-Select a datapack to view the conversations, memories, learnings, knowledge the datapack holds.
+Select a datapack to view the conversations, memories, learnings, and knowledge the datapack holds.
 
 From here, you can review and promote learnings to [knowledge](../knowledgebase/).
 

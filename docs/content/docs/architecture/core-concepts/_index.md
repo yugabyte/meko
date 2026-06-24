@@ -18,7 +18,7 @@ Meko organizes agent data around a few key concepts. Understanding these will he
   {{< card
     href="architecture/core-concepts/memory/"
     title="Memory"
-    desc="Extracted memories from conversations are specific pieces of information or preferences that are explicitly stored persistently for the long term. Memories are stored as entity and relationship, powered by Meko's graph storage, also called MAGE.  Agent memories can be promoted to a shared knowledge base, so all agents can learn from each other's learnings."
+    desc="Extracted memories from conversations are specific pieces of information or preferences that are explicitly stored persistently for the long term. Memories are stored as entity and relationship, powered by Meko's graph storage, also called MAGE. Agent memories can be promoted to a shared knowledge base, so all agents can learn from each other's learnings."
   >}}
   {{< card
     href="architecture/core-concepts/knowledgebase/"

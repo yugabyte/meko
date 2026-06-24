@@ -21,7 +21,9 @@ As an agent has conversations, Meko extracts entities, relationships, and facts 
 
 ### 2. Learning identification
 
-A subset of memories is flagged as a _learning_, meaning it is a candidate for sharing across agents. Today this identification is a manual step performed in the Meko UI; the **Learnings** tab surfaces candidates and shows whether each candidate has already been promoted. Future releases will introduce automated identification heuristics.
+Meko summarizes the datapack's knowledge base and identifies the memories that are semantically closest to the knowledge base summary. These memories are then ranked, and the top 5 results are returned as _learnings_, meaning they are candidates for sharing across agents. The **Learnings Summary** lists the candidates and shows whether each candidate has already been promoted.
+
+**Coming soon**: You will be able to tune the thresholds for identifying learnings from memories.
 
 ### 3. Promotion
 

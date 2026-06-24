@@ -8,7 +8,7 @@ Meko's memory system gives agents persistent recall across sessions.
 
 This guide covers per-agent memory operations you drive from a coding agent over MCP: add a memory, search for relevant memories, and list everything stored for a user or agent.
 
-Meko can also move memories into shared, institutional knowledge through a separate review flow (learnings, collective memory, and shared knowledge). That lifecycle, including how candidates are identified and promoted from the **Learnings** tab in the Meko UI, is described in [Learnings](../../architecture/core-concepts/learnings/). For how extraction and dual storage (vectors + graph) work under the hood, see [Memory](../../architecture/core-concepts/memory/).
+Meko can also move memories into shared, institutional knowledge through a separate review flow (learnings, collective memory, and shared knowledge). That lifecycle, including how candidates are identified and promoted from **Learnings** in the Meko UI, is described in [Learnings](../../architecture/core-concepts/learnings/). For how extraction and dual storage (vectors + graph) work under the hood, see [Memory](../../architecture/core-concepts/memory/).
 
 > [!NOTE] Knowledge base composition
 >
