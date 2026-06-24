@@ -22,8 +22,24 @@ import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 import { setLocalItem } from "@/lib/browserStorage";
 import { ROUTES } from "@/app/routes/paths";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
+import { GoogleIcon } from "@/components/icons/GoogleIcon";
 
 const MEKO_REQUEST_ACCESS_URL = "https://info.yugabyte.com/meko-request-access" as const;
+
+// Base for app-driven OAuth redirects. Defaults to the same-origin /api/v1 the
+// rest of the SPA uses, so the Google sign-in redirect targets the api_server.
+const API_BASE = (import.meta.env.VITE_MEKO_API_BASE_URL || "/api/v1").replace(/\/$/, "");
+
+// Friendly messages for the ?error=<reason> codes the Google callback appends
+// when it bounces back to /signin. google_* are app-internal reasons; the rest
+// are OAuth2 codes Cognito/Google may forward.
+const OAUTH_ERROR_REASONS: Record<string, string> = {
+  google_state: "Your Google sign-in session expired. Please try again.",
+  google_no_code: "Google sign-in didn't complete. Please try again.",
+  google_exchange: "We couldn't finish signing you in with Google. Please try again.",
+  google_provision: "We couldn't finish setting up your account. Please try again.",
+  access_denied: "Google sign-in was cancelled.",
+};
 
 /** Query flag used with {@link ROUTES.signup} so the sign-up page opens on the “enter code” step. */
 const SIGNUP_RESUME_CONFIRM_QUERY = "resume" as const;
@@ -43,6 +59,7 @@ export default function SignInPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Set only after Cognito returns “user not confirmed” for this sign-in attempt. */
   const [showUnconfirmedRecovery, setShowUnconfirmedRecovery] = useState(false);
@@ -60,6 +77,27 @@ export default function SignInPage() {
     next.delete("reset");
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
+
+  // Surface ?error=<reason> appended by the Google callback when sign-in fails,
+  // then strip it from the URL so a refresh doesn't re-show the message.
+  useEffect(() => {
+    const reason = searchParams.get("error");
+    if (!reason) return;
+    setError(OAUTH_ERROR_REASONS[reason] ?? "Sign in failed. Please try again.");
+    const next = new URLSearchParams(searchParams);
+    next.delete("error");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const handleGoogleSignIn = () => {
+    if (loading || googleLoading) return;
+    trackEvent(TELEMETRY_EVENTS.SIGN_IN_CLICKED);
+    setError(null);
+    setGoogleLoading(true);
+    // App-driven Google sign-in: hand off to the api_server, which builds the
+    // Cognito /oauth2/authorize redirect (identity_provider=Google).
+    window.location.href = `${API_BASE}/auth/google/login`;
+  };
 
   const resetRecoveryUi = () => {
     setShowUnconfirmedRecovery(false);
@@ -210,11 +248,29 @@ export default function SignInPage() {
           <Button
             type="submit"
             className="h-12 w-full bg-primary text-primary-foreground hover:bg-primary/90"
-            disabled={loading}
+            disabled={loading || googleLoading}
           >
             {loading ? "Please wait..." : "Continue"}
           </Button>
         </form>
+
+        <div className="my-5 flex items-center gap-3">
+          <div className="h-px flex-1 bg-border" />
+          <span className="text-xs text-muted-foreground">or</span>
+          <div className="h-px flex-1 bg-border" />
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          className="h-12 w-full border-border bg-input text-foreground hover:bg-white/10"
+          disabled={loading || googleLoading}
+          onClick={handleGoogleSignIn}
+        >
+          <GoogleIcon className="mr-2 h-5 w-5" />
+          {googleLoading ? "Redirecting to Google…" : "Continue with Google"}
+        </Button>
+
         {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
 
         {showUnconfirmedRecovery ? (
@@ -266,15 +322,6 @@ export default function SignInPage() {
               Sign up
             </Link>
           </p>
-          <Button
-            variant="outline"
-            className="h-11 w-full border-border bg-input text-foreground hover:bg-white/10"
-            asChild
-          >
-            <a href={MEKO_REQUEST_ACCESS_URL} target="_blank" rel="noopener noreferrer">
-              Request Access
-            </a>
-          </Button>
         </div>
       </div>
     </AuthPageShell>

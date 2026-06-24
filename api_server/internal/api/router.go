@@ -368,14 +368,32 @@ func registerAuthRoutes(
 	authGroup.POST("/login", authH.Login)
 	authGroup.POST("/complete-new-password", authH.CompleteNewPassword)
 	authGroup.POST("/logout", authH.Logout)
+	// App-driven Google sign-in. The browser hits /google/login and we
+	// redirect straight to Google via Cognito's /oauth2/authorize
+	// (identity_provider=Google) — no Hosted UI login screen. The OAuth2
+	// callback lands on /google/callback, which exchanges the code, sets the
+	// auth cookies, and redirects into the SPA. Requires the Cognito domain.
+	if cfg.CognitoDomain != "" {
+		authGroup.GET("/google/login", handlers.GoogleLoginHandler(handlers.GoogleLoginConfig{
+			CognitoDomain: cfg.CognitoDomain,
+			ClientID:      cfg.CognitoClientID,
+		}))
+		authGroup.GET("/google/callback", handlers.GoogleCallbackHandler(handlers.GoogleCallbackConfig{
+			CognitoClient: cognitoClient,
+			AuthService:   authSvc,
+			CognitoDomain: cfg.CognitoDomain,
+		}))
+	}
 	// Change password is gated by requireAuth so the access-token cookie
 	// is guaranteed present when the handler runs; Cognito then verifies
 	// the previous-password against the user resolved from that token.
 	authGroup.POST("/change-password", authH.ChangePassword, requireAuth)
 	authGroup.GET("/me", authH.Me, requireAuth)
 	authGroup.PATCH("/me", authH.UpdateOnboardingStatus, requireAuth)
+	authGroup.PATCH("/me/profile", authH.UpdateProfile, requireAuth)
 	// Free-tier usage counters; see AuthHandler.GetUsage for shape.
 	authGroup.GET("/me/usage", authH.GetUsage, requireAuth)
+
 
 	*datapackGroup = v1.Group("", requireAuth)
 	*dpDirect = v1.Group("",

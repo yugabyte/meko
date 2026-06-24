@@ -439,6 +439,50 @@ func (h *AuthHandler) GetUsage(c echo.Context) error {
 	return ok(c, http.StatusOK, usage)
 }
 
+// UpdateProfile handles PATCH /api/v1/auth/me/profile. It updates the
+// authenticated user's first/last name — used by the post-social-signup
+// name-confirmation step (Google's name data may be incomplete).
+//
+//	@Summary	Update the authenticated user's name
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		service.UpdateProfileRequest	true	"Profile payload"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/auth/me/profile [patch]
+func (h *AuthHandler) UpdateProfile(c echo.Context) error {
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+
+	var req service.UpdateProfileRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest,
+			"INVALID_JSON", "malformed request body")
+	}
+
+	if err := h.svc.UpdateProfile(
+		c.Request().Context(),
+		account.ID,
+		req,
+	); err != nil {
+		if errors.Is(err, service.ErrInvalidProfileName) {
+			return apiError(c, http.StatusBadRequest,
+				"VALIDATION_ERROR", err.Error())
+		}
+		return h.classifyAuthErr(c, err)
+	}
+
+	return ok(c, http.StatusOK, map[string]any{
+		"message": "profile updated",
+	})
+}
+
 // classifyAuthErr maps auth/cognito sentinel errors to the appropriate
 // HTTP status and error code.
 func (h *AuthHandler) classifyAuthErr(
@@ -509,7 +553,9 @@ func (h *AuthHandler) classifyAuthErr(
 }
 
 func setAuthCookie(c echo.Context, name, value string) {
-	secure := c.Scheme() == "https"
+	// isSecure honors X-Forwarded-Proto so cookies stay Secure behind a
+	// TLS-terminating proxy (where c.Scheme() would see plain HTTP).
+	secure := isSecure(c)
 	cookie := &http.Cookie{
 		Name:     name,
 		Value:    value,
@@ -522,7 +568,7 @@ func setAuthCookie(c echo.Context, name, value string) {
 }
 
 func clearAuthCookie(c echo.Context, name string) {
-	secure := c.Scheme() == "https"
+	secure := isSecure(c)
 	cookie := &http.Cookie{
 		Name:     name,
 		Value:    "",

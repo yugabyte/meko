@@ -148,6 +148,12 @@ func (m *handlerMockCognito) ChangePassword(
 	return nil
 }
 
+func (m *handlerMockCognito) UpdateUserName(
+	_ context.Context, _, _, _ string,
+) error {
+	return nil
+}
+
 // --- mock AccountStore for handler tests ---
 
 type handlerMockAccountStore struct {
@@ -169,6 +175,12 @@ func (m *handlerMockAccountStore) GetByCognitoSub(
 	return m.getByCognitoSubFn(ctx, sub)
 }
 
+func (m *handlerMockAccountStore) GetByID(
+	_ context.Context, _ string,
+) (*models.Account, error) {
+	return nil, nil
+}
+
 func (m *handlerMockAccountStore) VerifyEmail(
 	ctx context.Context, email string,
 ) error {
@@ -182,6 +194,12 @@ func (m *handlerMockAccountStore) SetHasCompletedOnboarding(
 		return nil
 	}
 	return m.setOnboardingFn(ctx, accountID, completed)
+}
+
+func (m *handlerMockAccountStore) UpdateProfile(
+	_ context.Context, _, _, _ string,
+) error {
+	return nil
 }
 
 // setupAuthTestServer creates an Echo instance with auth routes wired

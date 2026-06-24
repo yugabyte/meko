@@ -45,11 +45,21 @@ type CognitoProvider interface {
 		ctx context.Context,
 		accessToken, previousPassword, proposedPassword string,
 	) error
+	// UpdateUserName syncs the given_name/family_name a user confirms during
+	// onboarding back to Cognito (addressed by pool sub) so the user pool stays
+	// consistent with the local account.
+	UpdateUserName(
+		ctx context.Context, sub, firstName, lastName string,
+	) error
 }
 
 // ErrForgotPasswordNoAccount is returned when Cognito has no user for this email
 // on the forgot-password flow (mapped to HTTP 404 in the auth handler).
 var ErrForgotPasswordNoAccount = errors.New("no account exists for this email address")
+
+// ErrInvalidProfileName is returned by UpdateProfile when first/last name
+// is blank after trimming. Cognito mandates both, so we reject empties.
+var ErrInvalidProfileName = errors.New("first name and last name are required")
 
 // ErrInvitePasswordExpired is returned by Login when an admin-created user's
 // temporary password has expired. Login rescues the account by re-sending a
@@ -85,8 +95,10 @@ type AccountStore interface {
 	GetByCognitoSub(
 		ctx context.Context, sub string,
 	) (*models.Account, error)
+	GetByID(ctx context.Context, id string) (*models.Account, error)
 	VerifyEmail(ctx context.Context, email string) error
 	SetHasCompletedOnboarding(ctx context.Context, accountID string, completed bool) error
+	UpdateProfile(ctx context.Context, userID, firstName, lastName string) error
 }
 
 // Provisioner abstracts post-signup account provisioning (default
@@ -420,7 +432,9 @@ func (s *AuthService) Login(
 		}, nil
 	}
 
-	s.EnsureAccountFromIDToken(ctx, result.IDToken)
+	if _, err := s.EnsureAccountFromIDToken(ctx, result.IDToken); err != nil {
+		return nil, fmt.Errorf("provisioning local account: %w", err)
+	}
 
 	slog.Info("user login succeeded", "email", req.Email)
 
@@ -493,7 +507,9 @@ func (s *AuthService) CompleteNewPassword(
 		return nil, fmt.Errorf("cognito complete new password: %w", err)
 	}
 
-	s.EnsureAccountFromIDToken(ctx, result.IDToken)
+	if _, err := s.EnsureAccountFromIDToken(ctx, result.IDToken); err != nil {
+		return nil, fmt.Errorf("provisioning local account: %w", err)
+	}
 
 	slog.Info("complete new password succeeded", "email", email)
 
@@ -602,19 +618,44 @@ type idTokenClaims struct {
 	FamilyName string `json:"family_name"`
 }
 
+// federatedNamePlaceholder is the value the Cognito inbound-federation Lambda
+// injects for given_name/family_name that the IdP didn't supply, so Cognito's
+// required-attribute check passes (see cognito-inbound-federation/).
+const federatedNamePlaceholder = "-"
+
+// normalizeFederatedName maps that placeholder back to an empty string for the
+// local account. The app reads names from the local DB and the onboarding
+// name-confirmation modal triggers on an empty first/last name, so storing ""
+// (not "-") is what prompts the user to enter their real name. A genuine
+// single-character name is implausible here and not worth special-casing.
+func normalizeFederatedName(v string) string {
+	if strings.TrimSpace(v) == federatedNamePlaceholder {
+		return ""
+	}
+	return v
+}
+
 // EnsureAccountFromIDToken parses the Cognito ID token (without
 // cryptographic verification — the token came directly from the
 // Cognito API) and creates a local account if one does not already
 // exist for the user's cognito sub.
+//
+// The bool is true only when a brand-new local account was created in this
+// call; the social callbacks use it to show the one-time name-confirmation
+// step on first signup only — an existing user signing in again returns
+// (false, nil). The error is non-nil only on a genuine failure (malformed
+// token, DB lookup/insert error); callers MUST surface it (fail the
+// login / redirect to sign-in) rather than proceeding, otherwise the user
+// gets auth cookies but no local account and every subsequent API call 401s.
 func (s *AuthService) EnsureAccountFromIDToken(
 	ctx context.Context, rawIDToken string,
-) {
+) (bool, error) {
 	claims, err := parseIDTokenClaims(rawIDToken)
 	if err != nil {
 		slog.Warn("could not parse id token for JIT provisioning",
 			"error", err,
 		)
-		return
+		return false, fmt.Errorf("parse id token: %w", err)
 	}
 
 	existing, err := s.accounts.GetByCognitoSub(ctx, claims.Sub)
@@ -622,15 +663,15 @@ func (s *AuthService) EnsureAccountFromIDToken(
 		slog.Error("JIT account lookup failed",
 			"cognito_sub", claims.Sub, "error", err,
 		)
-		return
+		return false, fmt.Errorf("account lookup: %w", err)
 	}
 	if existing != nil {
-		return
+		return false, nil
 	}
 
 	acct, err := s.accounts.Create(ctx, repository.CreateAccountParams{
-		FirstName:  claims.GivenName,
-		LastName:   claims.FamilyName,
+		FirstName:  normalizeFederatedName(claims.GivenName),
+		LastName:   normalizeFederatedName(claims.FamilyName),
 		Email:      claims.Email,
 		CognitoSub: claims.Sub,
 	})
@@ -640,7 +681,7 @@ func (s *AuthService) EnsureAccountFromIDToken(
 			"email", claims.Email,
 			"error", err,
 		)
-		return
+		return false, fmt.Errorf("account creation: %w", err)
 	}
 
 	slog.Info("JIT account created on login",
@@ -657,6 +698,57 @@ func (s *AuthService) EnsureAccountFromIDToken(
 		)
 		go s.provisioner.ProvisionNewAccount(context.Background(), acct.ID)
 	}
+
+	return true, nil
+}
+
+// UpdateProfileRequest holds the input for updating a user's display name.
+type UpdateProfileRequest struct {
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+}
+
+// UpdateProfile updates the local account's first/last name and syncs it back
+// to Cognito so the user pool stays consistent with the local account.
+//
+// The local DB is the source of truth the app reads from (see Me), so the local
+// write is what matters for the UI. The Cognito write exists for federated
+// (Google) users: Google never sends family_name, so the inbound-federation
+// Lambda seeds a "-" placeholder in the pool; pushing the confirmed name here
+// overwrites that placeholder, and the Lambda's idempotent no-op on later
+// sign-ins preserves it. The Cognito sync is best-effort — a failure there must
+// not block onboarding, since the app reads names from the local DB.
+func (s *AuthService) UpdateProfile(
+	ctx context.Context,
+	accountID string,
+	req UpdateProfileRequest,
+) error {
+	if accountID == "" {
+		return fmt.Errorf("account id is required")
+	}
+	first := strings.TrimSpace(req.FirstName)
+	last := strings.TrimSpace(req.LastName)
+	if first == "" || last == "" {
+		return ErrInvalidProfileName
+	}
+	if err := s.accounts.UpdateProfile(ctx, accountID, first, last); err != nil {
+		return fmt.Errorf("updating profile: %w", err)
+	}
+
+	acct, err := s.accounts.GetByID(ctx, accountID)
+	if err != nil {
+		slog.Warn("update profile: could not load account to sync name to cognito",
+			"account_id", accountID, "error", err)
+		return nil
+	}
+	if acct == nil || strings.TrimSpace(acct.CognitoSub) == "" {
+		return nil
+	}
+	if err := s.cognito.UpdateUserName(ctx, acct.CognitoSub, first, last); err != nil {
+		slog.Warn("update profile: failed to sync name to cognito",
+			"account_id", accountID, "error", err)
+	}
+	return nil
 }
 
 // parseIDTokenClaims extracts claims from the JWT payload without

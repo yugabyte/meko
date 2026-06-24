@@ -74,6 +74,14 @@ type mockCognitoAPI struct {
 		ctx context.Context, params *cip.AdminGetUserInput,
 		optFns ...cipOpt,
 	) (*cip.AdminGetUserOutput, error)
+	adminUpdateUserAttributesFn func(
+		ctx context.Context, params *cip.AdminUpdateUserAttributesInput,
+		optFns ...cipOpt,
+	) (*cip.AdminUpdateUserAttributesOutput, error)
+	listUsersFn func(
+		ctx context.Context, params *cip.ListUsersInput,
+		optFns ...cipOpt,
+	) (*cip.ListUsersOutput, error)
 }
 
 func (m *mockCognitoAPI) SignUp(
@@ -194,6 +202,28 @@ func (m *mockCognitoAPI) AdminGetUser(
 		return m.adminGetUserFn(ctx, params, optFns...)
 	}
 	return &cip.AdminGetUserOutput{}, nil
+}
+
+func (m *mockCognitoAPI) AdminUpdateUserAttributes(
+	ctx context.Context,
+	params *cip.AdminUpdateUserAttributesInput,
+	optFns ...func(*cip.Options),
+) (*cip.AdminUpdateUserAttributesOutput, error) {
+	if m.adminUpdateUserAttributesFn != nil {
+		return m.adminUpdateUserAttributesFn(ctx, params, optFns...)
+	}
+	return &cip.AdminUpdateUserAttributesOutput{}, nil
+}
+
+func (m *mockCognitoAPI) ListUsers(
+	ctx context.Context,
+	params *cip.ListUsersInput,
+	optFns ...func(*cip.Options),
+) (*cip.ListUsersOutput, error) {
+	if m.listUsersFn != nil {
+		return m.listUsersFn(ctx, params, optFns...)
+	}
+	return &cip.ListUsersOutput{}, nil
 }
 
 func strPtr(s string) *string { return &s }

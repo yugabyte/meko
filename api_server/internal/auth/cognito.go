@@ -111,6 +111,24 @@ type CognitoAPI interface {
 		params *cip.AdminGetUserInput,
 		optFns ...func(*cip.Options),
 	) (*cip.AdminGetUserOutput, error)
+
+	// AdminUpdateUserAttributes updates a user's attributes (e.g.
+	// given_name/family_name) without requiring them to be signed in. Used to
+	// sync the name a user confirms during onboarding back to Cognito.
+	AdminUpdateUserAttributes(
+		ctx context.Context,
+		params *cip.AdminUpdateUserAttributesInput,
+		optFns ...func(*cip.Options),
+	) (*cip.AdminUpdateUserAttributesOutput, error)
+
+	// ListUsers searches the pool (e.g. filtered by sub) to resolve a user's
+	// canonical username, which is the only reliable handle for admin writes to
+	// federated users.
+	ListUsers(
+		ctx context.Context,
+		params *cip.ListUsersInput,
+		optFns ...func(*cip.Options),
+	) (*cip.ListUsersOutput, error)
 }
 
 // UserStatus is a Cognito account status, returned by GetUserStatus. It wraps
@@ -546,9 +564,14 @@ func (c *CognitoClient) ChangePassword(
 // ExchangeCode exchanges an OAuth2 authorization code (from the
 // Cognito Hosted UI redirect) for tokens by calling the Cognito
 // /oauth2/token endpoint.
+//
+// codeVerifier is the PKCE code verifier. Pass it (non-empty) when the
+// matching /oauth2/authorize request included a code_challenge — Cognito's
+// Managed Login requires PKCE for public app clients (no secret). Pass ""
+// for flows that did not use PKCE.
 func (c *CognitoClient) ExchangeCode(
 	ctx context.Context,
-	code, cognitoDomain, redirectURI string,
+	code, cognitoDomain, redirectURI, codeVerifier string,
 ) (*Result, error) {
 	tokenURL := fmt.Sprintf("https://%s/oauth2/token", cognitoDomain)
 
@@ -560,6 +583,9 @@ func (c *CognitoClient) ExchangeCode(
 	}
 	if c.clientSecret != "" {
 		form.Set("client_secret", c.clientSecret)
+	}
+	if codeVerifier != "" {
+		form.Set("code_verifier", codeVerifier)
 	}
 
 	req, err := http.NewRequestWithContext(
@@ -665,6 +691,67 @@ func (c *CognitoClient) CreateUser(
 	}
 	slog.Info("cognito create user succeeded", "email", email, "sub", sub)
 	return sub, nil
+}
+
+// usernameBySub resolves a user's canonical Cognito username from their pool
+// sub via ListUsers. This indirection is required for federated users: their
+// username is provider-prefixed (e.g. "Google_1114959..."), and Cognito's admin
+// APIs reject the email alias and the sub itself with UserNotFoundException, so
+// we can't address them directly by anything we store locally.
+func (c *CognitoClient) usernameBySub(ctx context.Context, sub string) (string, error) {
+	filter := fmt.Sprintf("sub = %q", sub)
+	var limit int32 = 1
+	out, err := c.api.ListUsers(ctx, &cip.ListUsersInput{
+		UserPoolId: &c.poolID,
+		Filter:     &filter,
+		Limit:      &limit,
+	})
+	if err != nil {
+		return "", fmt.Errorf("cognito list users: %w", err)
+	}
+	if len(out.Users) == 0 || out.Users[0].Username == nil {
+		return "", fmt.Errorf("no cognito user for sub %s", sub)
+	}
+	return *out.Users[0].Username, nil
+}
+
+// UpdateUserName sets the given_name/family_name attributes for the user with
+// the given pool sub, without requiring them to be signed in. It first resolves
+// the canonical username from the sub (see usernameBySub) because federated
+// users can't be addressed by email or sub directly.
+//
+// Used after onboarding to push the name a user confirmed back to Cognito so
+// the user pool stays consistent with the local account. For federated users
+// this matters because Google never sends family_name, so the inbound-federation
+// Lambda seeds a "-" placeholder; this overwrites it with the real value, and
+// the Lambda's idempotent no-op on later sign-ins preserves it.
+func (c *CognitoClient) UpdateUserName(
+	ctx context.Context,
+	sub, firstName, lastName string,
+) error {
+	sub = strings.TrimSpace(sub)
+	if sub == "" {
+		return fmt.Errorf("sub is required")
+	}
+	username, err := c.usernameBySub(ctx, sub)
+	if err != nil {
+		slog.Error("cognito update user name: resolve username failed", "sub", sub, "error", err)
+		return err
+	}
+	_, err = c.api.AdminUpdateUserAttributes(ctx, &cip.AdminUpdateUserAttributesInput{
+		UserPoolId: &c.poolID,
+		Username:   &username,
+		UserAttributes: []types.AttributeType{
+			{Name: strPtr("given_name"), Value: &firstName},
+			{Name: strPtr("family_name"), Value: &lastName},
+		},
+	})
+	if err != nil {
+		slog.Error("cognito update user name failed", "username", username, "error", err)
+		return fmt.Errorf("cognito admin update user attributes: %w", err)
+	}
+	slog.Info("cognito update user name succeeded", "username", username)
+	return nil
 }
 
 // ResetTempPassword sets a new temporary password for an existing unconfirmed

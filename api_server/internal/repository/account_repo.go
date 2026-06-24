@@ -199,6 +199,32 @@ func (r *AccountRepo) EnsureAccount(
 	})
 }
 
+// UpdateProfile overwrites a user's first/last name. Used by the post-social-
+// signup name-confirmation step (the IdP's name data may be incomplete).
+func (r *AccountRepo) UpdateProfile(
+	ctx context.Context,
+	userID, firstName, lastName string,
+) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE meko_system.users
+		 SET user_first_name = $1, user_last_name = $2, updated_at = NOW()
+		 WHERE user_id = $3`,
+		firstName, lastName, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update profile: %w", err)
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("user %q not found", userID)
+	}
+	return nil
+}
+
 // MCPCredentials holds the YSQL role name and password for the
 // user-level MCP role. Stored on meko_system.users.user_details JSONB
 // under the `mcp_credentials` key.

@@ -26,6 +26,7 @@ import { dispatchAppEvent } from "@/lib/browserEvents";
 import { ROUTES } from "@/app/routes/paths";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { cn } from "@/lib/utils";
+import ConfirmNameModal from "@/features/onboarding/components/ConfirmNameModal";
 
 // "How it works" storyboard. Hoisted out of the component so the array
 // isn't re-allocated on every render. Each entry maps to one numbered
@@ -145,12 +146,31 @@ export default function OnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   /** From server: drives first-time vs returning copy; “Choose your tool” path uses configure for first-time only. */
   const [serverOnboardingDone, setServerOnboardingDone] = useState<boolean | null>(null);
+  /**
+   * Pre-fill values + visibility for the name-confirmation modal. Driven
+   * purely by server state (`/auth/me`, no cookie): the modal shows only when
+   * a name part is missing. Email/password signup requires both names, so
+   * those users never see it — even if they later sign in with Google before
+   * finishing onboarding (the PreSignUp link resolves the Google login to
+   * their existing account, which already has the names). In practice the
+   * modal only appears for a social signup whose IdP returned an incomplete
+   * name. When shown, it BLOCKS the page until both parts are filled (no
+   * skip); a user who abandons it is re-prompted next visit because the DB
+   * still has the gap.
+   */
+  const [confirmName, setConfirmName] = useState<{ first: string; last: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     void getCurrentUser()
       .then((u) => {
-        if (!cancelled) setServerOnboardingDone(u.has_completed_onboarding);
+        if (cancelled) return;
+        setServerOnboardingDone(u.has_completed_onboarding);
+        const first = u.first_name ?? "";
+        const last = u.last_name ?? "";
+        if (first.trim() === "" || last.trim() === "") {
+          setConfirmName({ first, last });
+        }
       })
       .catch(() => {
         if (!cancelled) setServerOnboardingDone(false);
@@ -159,6 +179,12 @@ export default function OnboardingPage() {
       cancelled = true;
     };
   }, []);
+
+  // Only called after a successful save (the modal can't be dismissed any
+  // other way), so by the time we clear it the DB has both name parts.
+  const dismissConfirmName = () => {
+    setConfirmName(null);
+  };
 
   const finishAndGo = async (target: "workbenchLm" | "datapacks" | "skip") => {
     setError(null);
@@ -211,6 +237,13 @@ export default function OnboardingPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
+      {confirmName ? (
+        <ConfirmNameModal
+          initialFirstName={confirmName.first}
+          initialLastName={confirmName.last}
+          onDone={dismissConfirmName}
+        />
+      ) : null}
       <AppWorkspaceHeader padding="page" className="pl-4 pr-8" />
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col items-center px-8 pb-16 pt-8">

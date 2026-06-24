@@ -267,7 +267,7 @@ func SuccessHandler(cfg *SuccessConfig) echo.HandlerFunc {
 
 		result, err := cfg.CognitoClient.ExchangeCode(
 			c.Request().Context(),
-			code, cfg.CognitoDomain, redirectURI,
+			code, cfg.CognitoDomain, redirectURI, "",
 		)
 		if err != nil {
 			slog.Error("oauth2 code exchange failed",
@@ -276,9 +276,14 @@ func SuccessHandler(cfg *SuccessConfig) echo.HandlerFunc {
 			return c.HTML(http.StatusOK, staticSuccessHTML)
 		}
 
-		cfg.AuthService.EnsureAccountFromIDToken(
+		if _, err := cfg.AuthService.EnsureAccountFromIDToken(
 			c.Request().Context(), result.IDToken,
-		)
+		); err != nil {
+			slog.Error("oauth2 success: local account provisioning failed",
+				"error", err,
+			)
+			return c.HTML(http.StatusOK, staticSuccessHTML)
+		}
 
 		return renderSuccessWithToken(c, result.AccessToken)
 	}

@@ -48,6 +48,7 @@ type mockCognito struct {
 	changePasswordFn        func(ctx context.Context, accessToken, previousPassword, proposedPassword string) error
 	getUserStatusFn         func(ctx context.Context, email string) (auth.UserStatus, error)
 	resendInviteFn          func(ctx context.Context, email string) error
+	updateUserNameFn        func(ctx context.Context, username, firstName, lastName string) error
 }
 
 func (m *mockCognito) SignUp(
@@ -135,11 +136,21 @@ func (m *mockCognito) ChangePassword(
 	return nil
 }
 
+func (m *mockCognito) UpdateUserName(
+	ctx context.Context, username, firstName, lastName string,
+) error {
+	if m.updateUserNameFn != nil {
+		return m.updateUserNameFn(ctx, username, firstName, lastName)
+	}
+	return nil
+}
+
 // --- mock AccountStore ---
 
 type mockAccountStore struct {
 	createFn          func(ctx context.Context, params repository.CreateAccountParams) (*models.Account, error)
 	getByCognitoSubFn func(ctx context.Context, sub string) (*models.Account, error)
+	getByIDFn         func(ctx context.Context, id string) (*models.Account, error)
 	verifyEmailFn     func(ctx context.Context, email string) error
 	setOnboardingFn   func(ctx context.Context, accountID string, completed bool) error
 }
@@ -156,6 +167,15 @@ func (m *mockAccountStore) GetByCognitoSub(
 	return m.getByCognitoSubFn(ctx, sub)
 }
 
+func (m *mockAccountStore) GetByID(
+	ctx context.Context, id string,
+) (*models.Account, error) {
+	if m.getByIDFn != nil {
+		return m.getByIDFn(ctx, id)
+	}
+	return nil, nil
+}
+
 func (m *mockAccountStore) VerifyEmail(
 	ctx context.Context, email string,
 ) error {
@@ -169,6 +189,12 @@ func (m *mockAccountStore) SetHasCompletedOnboarding(
 		return nil
 	}
 	return m.setOnboardingFn(ctx, accountID, completed)
+}
+
+func (m *mockAccountStore) UpdateProfile(
+	_ context.Context, _, _, _ string,
+) error {
+	return nil
 }
 
 // --- Signup tests ---

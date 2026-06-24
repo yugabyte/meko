@@ -829,6 +829,16 @@ export async function updateOnboardingStatus(hasCompletedOnboarding: boolean) {
   });
 }
 
+// Update the authenticated user's first/last name. Used by the one-time
+// name-confirmation step shown after a first Google signup (the IdP's name
+// data may be incomplete).
+export async function updateProfile(firstName: string, lastName: string) {
+  return request<{ message: string }>("/auth/me/profile", "PATCH", {
+    first_name: firstName,
+    last_name: lastName,
+  });
+}
+
 // --- Meko personal access tokens (MCP PATs) ---
 //
 // Self-service tokens minted from Settings → Security. Used in place of
