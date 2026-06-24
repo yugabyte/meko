@@ -1,4 +1,4 @@
-"""Smoke test for the 6-step chain.
+"""Smoke test for the chat chain.
 
 Mocks the LLM and the MCP tools so the test runs without any network or
 provider credentials. Verifies:
@@ -7,13 +7,15 @@ provider credentials. Verifies:
   - `memory_search` runs every turn with the right scope/query/conversation_id
   - the LLM receives `[system, ...history, user]` in that order
   - `conversation_add_message` records both user input and assistant output
-  - `memory_add` is fired (fire-and-forget) with the right messages payload
   - the session store accumulates the turn correctly
+
+Memory extraction is now handled inside the MCP server's `conversation_add_message`
+implementation (background thread, `infer=True`). The gateway no longer runs a
+second LLM extraction call or calls `memory_add` directly.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -21,21 +23,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from inference_gateway import chain as chain_module
 from inference_gateway.chain import run_chat_turn
 from inference_gateway.config import AppConfig
 from inference_gateway.session_store import InMemorySessionStore
-
-
-async def _drain_background_tasks() -> None:
-    """Wait for all `_spawn_background`-scheduled tasks to finish.
-
-    `memory_add` is now fire-and-forget so we have to explicitly drain
-    those tasks before asserting on their mock invocations.
-    """
-    pending = list(chain_module._BACKGROUND_TASKS)
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
 
 
 def _make_cfg() -> AppConfig:
@@ -65,90 +55,36 @@ def _mock_tool(response: Any) -> MagicMock:
 class _FakeLLM:
     """Minimal stand-in for `BaseChatModel`.
 
-    Each scripted entry in `responses` may be either:
-      - a `str`  — text content of the reply, no tool calls
-      - a `dict` — `{"content": "...", "tool_calls": [ToolCall, ...]}`
-                   exercise the `save_user_facts` extraction flow
-
-    `bind_tools(...)` returns `self` (no-op) so production code paths
-    like `llm.bind_tools([...]).ainvoke(...)` work — tests opt into a
-    tool-call response by scripting a dict at the right position.
-
-    The chain calls `ainvoke` TWICE per turn now (main reply + the
-    fire-and-forget extraction call inside `_add_memory`), so tests
-    should script two responses per `run_chat_turn` invocation.
+    The chain calls `ainvoke` once per turn (main chat reply only —
+    memory extraction is now inside the MCP server, not here).
     """
 
-    def __init__(self, responses: "list[str | dict]") -> None:
+    def __init__(self, responses: "list[str]") -> None:
         self._responses = list(responses)
         self.calls: list[list[Any]] = []
-
-    def bind_tools(self, _tools: Any) -> "_FakeLLM":
-        # No-op binding: scripted response queue is consumed regardless
-        # of whether a tool was bound. Tests opt in to tool-call shape
-        # by scripting a dict response.
-        return self
 
     async def ainvoke(self, messages: list[Any], *_, **__) -> AIMessage:
         self.calls.append(messages)
         if not self._responses:
-            # Empty queue: return a neutral AIMessage so background tasks
-            # that need a 2nd response can still finish without raising
-            # IndexError. Tests asserting on exact call counts should
-            # script enough responses to cover both the main and
-            # extraction calls.
             return AIMessage(content="")
-        resp = self._responses.pop(0)
-        if isinstance(resp, dict):
-            return AIMessage(
-                content=resp.get("content", ""),
-                tool_calls=resp.get("tool_calls", []),
-            )
-        return AIMessage(content=resp)
+        return AIMessage(content=self._responses.pop(0))
 
 
 async def test_full_turn_wires_everything() -> None:
     cfg = _make_cfg()
-    # Two scripted LLM responses:
-    #   1) Main chat reply ("hello back")
-    #   2) Extraction call — returns a `save_user_facts` tool call
-    #      that the fire-and-forget memory pipeline parses and forwards
-    #      to Mem0.
-    llm = _FakeLLM(
-        [
-            "hello back",
-            {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "name": "save_user_facts",
-                        "args": {
-                            "facts": [
-                                "User is planning a trip",
-                                "User wants budget travel",
-                            ],
-                        },
-                        "id": "tc-1",
-                        "type": "tool_call",
-                    }
-                ],
-            },
-        ]
-    )
+    llm = _FakeLLM(["hello back"])
     create = _mock_tool({"conversation_id": "conv-uuid-1"})
     mem_search = _mock_tool({"results": [{"memory": "user prefers hiking"}]})
     kb_search = _mock_tool(
         {"results": [{"document_name": "europe.md", "text": "Patagonia trek W circuit"}]}
     )
     addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
-    addmem = _mock_tool({"status": "accepted"})
 
     tools = {
         "conversation_create": create,
         "memory_search": mem_search,
         "knowledgebase_search": kb_search,
         "conversation_add_message": addmsg,
-        "memory_add": addmem,
     }
     store = InMemorySessionStore(max_messages_per_session=10)
 
@@ -205,43 +141,13 @@ async def test_full_turn_wires_everything() -> None:
             "agent_id": "agent",
             "input": "plan a trip",
             "output": "hello back",
-            # Normal-path turns ask MCP to embed + cache the Q&A for future
-            # conversation-history reuse.
             "index_for_search": True,
             "datapack_id": "dp-1",
         }
     )
 
-    # memory_add is fire-and-forget — wait for the background task to finish
-    # before we assert on the mock's invocation.
-    await _drain_background_tasks()
-
-    # memory_add — verify the messages JSON shape Mem0 expects.
-    addmem.ainvoke.assert_awaited_once()
-    addmem_args = addmem.ainvoke.call_args.args[0]
-    assert addmem_args["scope"] == "write"
-    assert addmem_args["conversation_id"] == "conv-uuid-1"
-    assert addmem_args["agent_id"] == "agent"
-    assert addmem_args["datapack_id"] == "dp-1"
-    parsed = json.loads(addmem_args["messages"])
-    # memory_add now receives the user message PLUS the user-attributed
-    # facts the extraction LLM call surfaced via `save_user_facts`.
-    # The facts are bulleted underneath so Mem0's extractor sees clean
-    # user-perspective input and labels every resulting memory with
-    # "User …" — sidestepping the speaker-attribution pollution Mem0
-    # produced when we fed it the raw assistant reply.
-    assert len(parsed) == 1
-    assert parsed[0]["role"] == "user"
-    content = parsed[0]["content"]
-    assert "plan a trip" in content
-    assert "- User is planning a trip" in content
-    assert "- User wants budget travel" in content
-    # Two LLM calls: main chat (index 0) + background extraction (index 1).
-    assert len(llm.calls) == 2
-
-    # The MAIN call saw [system, user]; system contains BOTH memory and
-    # KB context. The extraction call has its own system prompt — we
-    # only assert on the main call here.
+    # One LLM call: main chat only. Memory extraction is now inside the MCP server.
+    assert len(llm.calls) == 1
     main_msgs = llm.calls[0]
     assert isinstance(main_msgs[0], SystemMessage)
     assert "user prefers hiking" in main_msgs[0].content       # memory_context
@@ -259,22 +165,17 @@ async def test_full_turn_wires_everything() -> None:
 async def test_second_turn_reuses_conversation_and_includes_history() -> None:
     """conversation_create runs once; everything else runs every turn."""
     cfg = _make_cfg()
-    # Four scripted responses across two turns: main reply + extraction
-    # call per turn. Both extraction calls return empty tool_calls so
-    # `_add_memory` skips Mem0 (still exercises the call path).
-    llm = _FakeLLM(["a", "", "b", ""])
+    llm = _FakeLLM(["a", "b"])
     create = _mock_tool({"conversation_id": "conv-uuid-1"})
     mem_search = _mock_tool({"results": []})
     kb_search = _mock_tool({"results": []})
     addmsg = _mock_tool({"status": "accepted", "message_id": "m"})
-    addmem = _mock_tool({"status": "accepted"})
 
     tools = {
         "conversation_create": create,
         "memory_search": mem_search,
         "knowledgebase_search": kb_search,
         "conversation_add_message": addmsg,
-        "memory_add": addmem,
     }
     store = InMemorySessionStore(max_messages_per_session=10)
 
@@ -286,8 +187,6 @@ async def test_second_turn_reuses_conversation_and_includes_history() -> None:
         cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
         session_id="s1", user_message="second", datapack_id="dp-1",
     )
-    # Drain fire-and-forget memory_add tasks before asserting their counts.
-    await _drain_background_tasks()
 
     # conversation_create only on the first turn.
     create.ainvoke.assert_awaited_once()
@@ -295,45 +194,32 @@ async def test_second_turn_reuses_conversation_and_includes_history() -> None:
     assert mem_search.ainvoke.await_count == 2
     assert kb_search.ainvoke.await_count == 2
     assert addmsg.ainvoke.await_count == 2
-    # memory_add is gated on the extraction LLM call emitting
-    # `save_user_facts` tool calls. The two extraction responses here
-    # are empty strings (no tool calls), so Mem0 is skipped both times.
-    # That's the new expected behaviour.
-    assert addmem.ainvoke.await_count == 0
 
-    # The MAIN LLM call is what we inspect for history. The fire-and-forget
-    # extraction calls also land in `llm.calls`, but as background tasks they
-    # can interleave with the main calls in a non-deterministic order — so we
-    # select the main calls by their system prompt rather than a fixed index.
-    main_calls = [c for c in llm.calls if "Meko playground assistant" in c[0].content]
-    assert len(main_calls) == 2
-    second_main_call = main_calls[1]
-    roles = [type(m).__name__ for m in second_main_call]
+    # One LLM call per turn (no extraction call).
+    assert len(llm.calls) == 2
+    second_call = llm.calls[1]
+    roles = [type(m).__name__ for m in second_call]
     # system, user(first), assistant(a), user(second)
     assert roles == ["SystemMessage", "HumanMessage", "AIMessage", "HumanMessage"]
-    assert second_main_call[1].content == "first"
-    assert second_main_call[2].content == "a"
-    assert second_main_call[3].content == "second"
+    assert second_call[1].content == "first"
+    assert second_call[2].content == "a"
+    assert second_call[3].content == "second"
 
 
 async def test_kb_search_skipped_when_no_datapack_id() -> None:
     """kb_search requires datapack_id; gateway must skip it (not error) when missing."""
     cfg = _make_cfg()
-    # Two responses: main reply + extraction call (returns no tool_calls,
-    # so memory_add is skipped — not what this test cares about).
-    llm = _FakeLLM(["fine", ""])
+    llm = _FakeLLM(["fine"])
     create = _mock_tool({"conversation_id": "c1"})
     mem_search = _mock_tool({"results": []})
     kb_search = _mock_tool({"results": []})
     addmsg = _mock_tool({"status": "accepted"})
-    addmem = _mock_tool({"status": "accepted"})
 
     tools = {
         "conversation_create": create,
         "memory_search": mem_search,
         "knowledgebase_search": kb_search,
         "conversation_add_message": addmsg,
-        "memory_add": addmem,
     }
     store = InMemorySessionStore()
 
@@ -355,14 +241,12 @@ async def test_kb_search_skipped_when_no_datapack_id() -> None:
 
 
 async def test_search_failure_does_not_break_turn() -> None:
-    """A flaky `memory_search` should degrade to no-context, not blow up.
-
-    Also covers `knowledgebase_search` failure and `memory_add` failure —
-    all three are best-effort and must not fail the user's request.
+    """A flaky `memory_search` or `knowledgebase_search` should degrade to
+    no-context, not blow up. Both are best-effort and must not fail the
+    user's request.
     """
     cfg = _make_cfg()
-    # Two responses: main reply + extraction call (no tool_calls).
-    llm = _FakeLLM(["ok", ""])
+    llm = _FakeLLM(["ok"])
     create = _mock_tool({"conversation_id": "c1"})
     addmsg = _mock_tool({"status": "accepted"})
 
@@ -370,15 +254,12 @@ async def test_search_failure_does_not_break_turn() -> None:
     flaky_mem.ainvoke = AsyncMock(side_effect=RuntimeError("memory upstream 500"))
     flaky_kb = MagicMock()
     flaky_kb.ainvoke = AsyncMock(side_effect=RuntimeError("kb upstream 500"))
-    flaky_addmem = MagicMock()
-    flaky_addmem.ainvoke = AsyncMock(side_effect=RuntimeError("memory_add 500"))
 
     tools = {
         "conversation_create": create,
         "memory_search": flaky_mem,
         "knowledgebase_search": flaky_kb,
         "conversation_add_message": addmsg,
-        "memory_add": flaky_addmem,
     }
     store = InMemorySessionStore()
 
@@ -391,11 +272,6 @@ async def test_search_failure_does_not_break_turn() -> None:
     # System message should still render with empty placeholders for both.
     sys_content = llm.calls[0][0].content
     assert sys_content.count("(none yet)") == 2  # memory + kb
-    # Drain the fire-and-forget memory_add task (which raised internally —
-    # _add_memory's try/except catches it; this just makes sure the task
-    # is fully resolved before the test ends so pytest doesn't see a
-    # warning about pending tasks).
-    await _drain_background_tasks()
 
 
 async def test_unwraps_langchain_mcp_content_block_format() -> None:
@@ -406,8 +282,7 @@ async def test_unwraps_langchain_mcp_content_block_format() -> None:
     and the parser returned the outer list unchanged.
     """
     cfg = _make_cfg()
-    # Main reply + extraction call (no tool_calls).
-    llm = _FakeLLM(["wrapped-ok", ""])
+    llm = _FakeLLM(["wrapped-ok"])
 
     inner_payload = {
         "id": "1c9f1fb23f2146ca8b79e3071fabe41c",
@@ -445,14 +320,12 @@ async def test_unwraps_langchain_mcp_content_block_format() -> None:
     )
 
     addmsg = _mock_tool({"status": "accepted"})
-    addmem = _mock_tool({"status": "accepted"})
 
     tools = {
         "conversation_create": wrapped_create,
         "memory_search": wrapped_mem,
         "knowledgebase_search": wrapped_kb,
         "conversation_add_message": addmsg,
-        "memory_add": addmem,
     }
     store = InMemorySessionStore()
 
@@ -477,8 +350,7 @@ async def test_trivial_query_short_circuits_retrieval() -> None:
     (which renders as `(none yet)` in the prompt).
     """
     cfg = _make_cfg()
-    # Main reply + extraction call (no tool_calls).
-    llm = _FakeLLM(["hi back", ""])
+    llm = _FakeLLM(["hi back"])
     create = _mock_tool({"conversation_id": "c1"})
     # The mocks would error if invoked — we want to PROVE they aren't.
     mem_search = MagicMock()
@@ -486,14 +358,12 @@ async def test_trivial_query_short_circuits_retrieval() -> None:
     kb_search = MagicMock()
     kb_search.ainvoke = AsyncMock(side_effect=AssertionError("kb_search must not be called for trivial query"))
     addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
-    addmem = _mock_tool({"status": "accepted"})
 
     tools = {
         "conversation_create": create,
         "memory_search": mem_search,
         "knowledgebase_search": kb_search,
         "conversation_add_message": addmsg,
-        "memory_add": addmem,
     }
     store = InMemorySessionStore()
 
@@ -511,15 +381,8 @@ async def test_trivial_query_short_circuits_retrieval() -> None:
     sys_content = llm.calls[0][0].content
     assert sys_content.count("(none yet)") == 2  # memory + kb
 
-    # memory_add is gated on the extraction LLM call returning facts.
-    # The scripted extraction response here has no tool_calls, so
-    # `_add_memory` skips the Mem0 round-trip. In production, "hi"
-    # would likely produce no facts either — so this matches reality.
-    await _drain_background_tasks()
-    addmem.ainvoke.assert_not_awaited()
-
-    # And the returned ChatTurnResult still carries empty context for the
-    # UI's Agent Reasoning panel — which self-hides when both are empty.
+    # The returned ChatTurnResult carries empty context for the UI's Agent
+    # Reasoning panel — which self-hides when both are empty.
     assert out.memory_context == ""
     assert out.kb_context == ""
 
@@ -529,20 +392,17 @@ async def test_real_question_still_triggers_retrieval() -> None:
     doesn't accidentally skip legitimate prompts. A genuine question must
     still hit both searches."""
     cfg = _make_cfg()
-    # Main reply + extraction call (no tool_calls).
-    llm = _FakeLLM(["ok", ""])
+    llm = _FakeLLM(["ok"])
     create = _mock_tool({"conversation_id": "c1"})
     mem_search = _mock_tool({"results": []})
     kb_search = _mock_tool({"results": []})
     addmsg = _mock_tool({"status": "accepted"})
-    addmem = _mock_tool({"status": "accepted"})
 
     tools = {
         "conversation_create": create,
         "memory_search": mem_search,
         "knowledgebase_search": kb_search,
         "conversation_add_message": addmsg,
-        "memory_add": addmem,
     }
     store = InMemorySessionStore()
 
@@ -553,7 +413,6 @@ async def test_real_question_still_triggers_retrieval() -> None:
 
     mem_search.ainvoke.assert_awaited_once()
     kb_search.ainvoke.assert_awaited_once()
-    await _drain_background_tasks()
 
 
 async def test_processing_steps_capture_tool_args_for_observability() -> None:
@@ -563,19 +422,17 @@ async def test_processing_steps_capture_tool_args_for_observability() -> None:
     Reasoning panel. Locks in what the UI relies on so a future refactor
     doesn't silently drop these fields from the response."""
     cfg = _make_cfg()
-    llm = _FakeLLM(["ok", ""])  # main reply + empty extraction
+    llm = _FakeLLM(["ok"])
     create = _mock_tool({"conversation_id": "conv-uuid-tools"})
     mem_search = _mock_tool({"results": []})
     kb_search = _mock_tool({"results": []})
     addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
-    addmem = _mock_tool({"status": "accepted"})
 
     tools = {
         "conversation_create": create,
         "memory_search": mem_search,
         "knowledgebase_search": kb_search,
         "conversation_add_message": addmsg,
-        "memory_add": addmem,
     }
     store = InMemorySessionStore()
 
@@ -583,7 +440,6 @@ async def test_processing_steps_capture_tool_args_for_observability() -> None:
         cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
         session_id="s1", user_message="plan a trip to spain", datapack_id="dp-x",
     )
-    await _drain_background_tasks()
 
     by_name = {s.name: s for s in out.processing_steps}
 
@@ -640,8 +496,7 @@ async def test_resume_conversation_id_skips_create_and_seeds_session() -> None:
         this turn references the SAME conversation row.
     """
     cfg = _make_cfg()
-    # Main reply + extraction call with no facts (memory_add skipped).
-    llm = _FakeLLM(["resumed-ok", ""])
+    llm = _FakeLLM(["resumed-ok"])
     # conversation_create must NEVER be invoked here. Wire it as an
     # AssertionError so a regression that calls it loudly fails the test.
     create = MagicMock()
@@ -653,14 +508,12 @@ async def test_resume_conversation_id_skips_create_and_seeds_session() -> None:
     mem_search = _mock_tool({"results": []})
     kb_search = _mock_tool({"results": []})
     addmsg = _mock_tool({"status": "accepted", "message_id": "m-resume-1"})
-    addmem = _mock_tool({"status": "accepted"})
 
     tools = {
         "conversation_create": create,
         "memory_search": mem_search,
         "knowledgebase_search": kb_search,
         "conversation_add_message": addmsg,
-        "memory_add": addmem,
     }
     store = InMemorySessionStore(max_messages_per_session=10)
 
@@ -694,8 +547,6 @@ async def test_resume_conversation_id_skips_create_and_seeds_session() -> None:
     assert "resumed" in cc_step.detail.lower()
     assert cc_step.tool_args == {"conversation_id": resumed_id}
 
-    await _drain_background_tasks()
-
 
 async def test_resume_conversation_id_ignored_when_session_already_has_one() -> None:
     """Once the session store already has a conversation_id for a session
@@ -704,19 +555,17 @@ async def test_resume_conversation_id_ignored_when_session_already_has_one() -> 
     mapping wins. Prevents a misbehaving client from switching the
     conversation row mid-session and orphaning earlier messages."""
     cfg = _make_cfg()
-    llm = _FakeLLM(["ok", ""])
+    llm = _FakeLLM(["ok"])
     create = _mock_tool({"conversation_id": "minted-on-first-turn"})
     mem_search = _mock_tool({"results": []})
     kb_search = _mock_tool({"results": []})
     addmsg = _mock_tool({"status": "accepted"})
-    addmem = _mock_tool({"status": "accepted"})
 
     tools = {
         "conversation_create": create,
         "memory_search": mem_search,
         "knowledgebase_search": kb_search,
         "conversation_add_message": addmsg,
-        "memory_add": addmem,
     }
     store = InMemorySessionStore()
     # Pre-seed the session store as if a previous turn had minted an id.
@@ -734,7 +583,6 @@ async def test_resume_conversation_id_ignored_when_session_already_has_one() -> 
     assert (await store.get_conversation_id("s1")) == "minted-on-first-turn"
     # Downstream calls use the existing id, not the supplied one.
     assert mem_search.ainvoke.call_args.args[0]["conversation_id"] == "minted-on-first-turn"
-    await _drain_background_tasks()
 
 
 async def test_missing_conversation_create_raises_clearly() -> None:
