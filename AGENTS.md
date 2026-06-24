@@ -1,16 +1,16 @@
 # Agent guide — yb-amp
 
-This is **yb-amp**: a fork of [Neon](https://github.com/neondatabase/neon)
-that points every durable byte at **YugabyteDB** instead of S3/Azure/GCS
-and instead of the storage controller's local Postgres. If you're new to
-the codebase, read `architecture/high-level.md` first, then the
-subsystem doc that matches whatever you're touching.
+This is **yb-amp**: a
+serverless Postgres-compatible storage system that runs PostgreSQL
+computes over **YugabyteDB** as the durable backing store. If 
+you're new to the codebase, read `architecture/high-level.md` first,
+then the subsystem doc that matches whatever you're touching.
 
 ## Meko datapack
 
 This repo has a Meko datapack for agent memory:
 
-- **Name**: `yb-amp`
+- **Name**: `YugabyteDB AMP`
 - **ID**: `fd3b43a0-ebd6-4732-958b-fae9a50a0505`
 
 Use it when storing repo-scoped memories.
@@ -82,8 +82,6 @@ Code anchors:
 - **Don't commit or push unless explicitly asked.** The user controls
   when commits land; do the work, show diffs, wait for "commit" /
   "push".
-- **Match Neon upstream conventions** for code style and module layout.
-  Don't reformat or rename unrelated things while making a change.
 - **Editing existing files is preferred over creating new ones.** Don't
   spin up a parallel module for a small change.
 - **No comments unless the *why* is non-obvious.** Identifiers should
