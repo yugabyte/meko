@@ -1744,23 +1744,65 @@ impl PageWriter {
             }
         }
 
-        let mut out = self
+        // Sample the in-RAM aux rows BEFORE the YB round-trip, not
+        // after. `flush()` writes a meta row to YB (`try_write_rows`)
+        // and only THEN drains it from `aux.meta_buffer` — so a row is
+        // never absent from both sources at one instant. But readers
+        // must sample them in that same order: aux first, then YB.
+        // Sampling YB first (aux second) opens a window where, between
+        // the two reads, a concurrent flush commits the row to YB and
+        // drains it from aux — so the stale YB read misses it and the
+        // post-drain aux read misses it too. The row falls through the
+        // crack and `get_rel_size` lags a freshly-ingested extend: the
+        // beyond-EOF check then serves a zeroed page for a block that
+        // exists (#141). Reading aux first closes the window — if a row
+        // has left aux it is already durable in YB (the drain strictly
+        // follows the commit), and if it is still in aux we capture it
+        // directly. This matches `read_slru_chain` below, which already
+        // reads aux before PageStore. The merge keeps the highest LSN
+        // per key, so YB still wins where it holds a newer version.
+        //
+        // Tie-break: on EQUAL LSN, durable YB wins (aux wins only when
+        // STRICTLY newer). On a walreceiver reconnect the WAL stream
+        // rewinds and re-pushes already-durable rows back into aux at
+        // their original LSNs (see `flush()`'s #57-part-2 note). Such a
+        // re-pushed meta row can carry a stale payload at the SAME LSN
+        // as the durable row — letting it win would regress a rel-size
+        // back to a smaller value mid-recovery and serve a zero page
+        // for a block that exists (observed as torn_wal_write mode-A
+        // data loss). Preferring the durable row on ties avoids that
+        // while still closing the #141 window, where the missing row is
+        // STRICTLY newer in aux than the stale YB row.
+        let mut out: HashMap<Bytes, MetaRow> = {
+            let aux = self.aux.lock();
+            let mut acc: HashMap<Bytes, MetaRow> = HashMap::new();
+            for row in aux.meta_buffer.iter() {
+                if row.key.len() != KEY_SIZE || row.lsn > target_lsn {
+                    continue;
+                }
+                let k = Key::from_slice(&row.key);
+                if k < range.start || k >= range.end {
+                    continue;
+                }
+                match acc.get(&row.key) {
+                    Some(existing) if existing.lsn >= row.lsn => continue,
+                    _ => {
+                        acc.insert(row.key.clone(), row.clone());
+                    }
+                }
+            }
+            acc
+        };
+        let yb = self
             .compute_page_store
             .scan_meta_range_lineage(self.tenant_id, &self.lineage, range.clone(), target_lsn)
             .await?;
-        let aux = self.aux.lock();
-        for row in aux.meta_buffer.iter() {
-            if row.key.len() != KEY_SIZE || row.lsn > target_lsn {
-                continue;
-            }
-            let k = Key::from_slice(&row.key);
-            if k < range.start || k >= range.end {
-                continue;
-            }
-            match out.get(&row.key) {
-                Some(existing) if existing.lsn >= row.lsn => continue,
+        for (k, v) in yb {
+            match out.get(&k) {
+                // aux wins only when STRICTLY newer; YB (durable) wins ties.
+                Some(existing) if existing.lsn > v.lsn => continue,
                 _ => {
-                    out.insert(row.key.clone(), row.clone());
+                    out.insert(k, v);
                 }
             }
         }
