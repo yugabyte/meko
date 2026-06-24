@@ -30,12 +30,15 @@ import {
   getApiErrorMessage,
   getDatapack,
   getDatapackProvisionStatus,
+  listDatapacks,
   requestUploadURL,
   sha256Hex,
   updateDatapack,
   type CurrentUser,
   type ProvisionStatus,
 } from "@/lib/api/mekoApi";
+import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
+import { trackEvent } from "@/lib/telemetry/rudderstack";
 import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
   filterFilesForKnowledgeUploadBatch,
@@ -410,6 +413,22 @@ export default function DatapackConfigureWizardPage({
         setConfigureDraftName(resolved);
         setConfigureInitialName(resolved);
         setConfigureInitialDescription(configureDraftDescription);
+        // Fire datapack_created. Count datapacks fresh: every account has an
+        // auto-provisioned default datapack, so the first user-created one
+        // makes the total 2 → is_first. Best-effort: a count failure must not
+        // block the wizard.
+        try {
+          const total = (await listDatapacks()).length;
+          trackEvent(TELEMETRY_EVENTS.DATAPACK_CREATED, {
+            email: currentUser.email,
+            datapack_id: resolvedId,
+            datapack_name: resolved,
+            total_datapacks: total,
+            is_first: total === 2,
+          });
+        } catch {
+          // ignore — telemetry should never interrupt datapack creation
+        }
         setStepId(WIZARD_STEP_ID.install);
         return;
       }

@@ -17,16 +17,28 @@ import { DATAPACK_SHARE_GRANT_CONTRIBUTOR } from "@/lib/datapackShareGrants";
 import { getApiErrorMessage, inviteDatapackShare } from "@/lib/api/mekoApi";
 import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { trackEvent } from "@/lib/telemetry/rudderstack";
+import { nowIso } from "@/lib/telemetry/helpers";
+import { type DatapackShareGrant } from "@/lib/datapackShareGrants";
 import { toast } from "@/hooks/use-toast";
 
 type Props = {
   datapackId: string;
   /** Email of the currently signed-in user — used to block self-invites client-side. */
   currentUserEmail?: string;
+  /** The signed-in sharer's role on this datapack (telemetry shared_by_role). */
+  sharedByRole?: DatapackShareGrant | null;
+  /** Existing shares before this invite (members excl. owner + pending), for is_first_share / total_shares. */
+  priorShareCount?: number;
   onInviteSent: () => void | Promise<void>;
 };
 
-export function InviteByEmailSection({ datapackId, currentUserEmail, onInviteSent }: Props) {
+export function InviteByEmailSection({
+  datapackId,
+  currentUserEmail,
+  sharedByRole,
+  priorShareCount = 0,
+  onInviteSent,
+}: Props) {
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState<string | null>(null);
   const [inviteRole, setInviteRole] = useState<ShareInviteRoleId>(DATAPACK_SHARE_GRANT_CONTRIBUTOR);
@@ -67,10 +79,15 @@ export function InviteByEmailSection({ datapackId, currentUserEmail, onInviteSen
         recipient_email: parsed?.email?.toLowerCase(),
         grant: inviteRole,
       }, {});
-      trackEvent(TELEMETRY_EVENTS.DATAPACK_SHARE_INVITE_SENT, {
-        datapackId,
-        grant: inviteRole,
-        recipientEmail: parsed?.email?.toLowerCase(),
+      trackEvent(TELEMETRY_EVENTS.DATAPACK_SHARED, {
+        datapack_id: datapackId,
+        shared_by_email: currentUserEmail,
+        invited_email: parsed?.email?.toLowerCase(),
+        shared_by_role: sharedByRole ?? undefined,
+        invited_role: inviteRole,
+        is_first_share: priorShareCount === 0,
+        total_shares: priorShareCount + 1,
+        shared_timestamp: nowIso(),
       });
       setEmail("");
       toast({ title: "Invite sent" });

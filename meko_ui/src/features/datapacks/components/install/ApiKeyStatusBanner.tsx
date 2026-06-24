@@ -116,6 +116,7 @@ export function ApiKeyStatusBanner() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={() => void load()}
+        existingKeyCount={activeKeys?.length ?? 0}
       />
     </>
   );

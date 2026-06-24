@@ -140,7 +140,7 @@ export default function Sidebar() {
   const handleLogout = async () => {
     // Fire the logout event while the user is still identified, then reset
     // telemetry so later (anonymous) activity isn't attributed to them.
-    trackEvent(TELEMETRY_EVENTS.LOGGED_OUT);
+    trackEvent(TELEMETRY_EVENTS.USER_LOGGED_OUT);
     resetTelemetry();
     // Best-effort server logout: even if it fails (network, expired
     // session, server down) we must still clear local state and send

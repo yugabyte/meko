@@ -103,6 +103,7 @@ func (r *SharingRepo) GetPendingInvitesByEmail(email string) ([]models.IncomingS
 	rows, err := r.db.Query(
 		`SELECT i.invite_id, i.owner_user_id,
 		        CONCAT(u.user_first_name, ' ', u.user_last_name),
+		        u.user_email,
 		        i.grant_role, i.datapack_id, d.datapack_name
 		 FROM meko_system.datapack_invites i
 		 JOIN meko_system.users u ON u.user_id = i.owner_user_id
@@ -120,7 +121,7 @@ func (r *SharingRepo) GetPendingInvitesByEmail(email string) ([]models.IncomingS
 	for rows.Next() {
 		var s models.IncomingShare
 		if err := rows.Scan(
-			&s.InviteID, &s.OwnerUserID, &s.OwnerName,
+			&s.InviteID, &s.OwnerUserID, &s.OwnerName, &s.OwnerEmail,
 			&s.GrantRole, &s.DatapackID, &s.DatapackName,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan incoming share: %w", err)

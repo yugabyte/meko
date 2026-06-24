@@ -21,6 +21,10 @@ import {
 import { formatFileSize } from "@/lib/fileSize";
 import { uploadFileToS3 } from "@/lib/uploadFileToS3";
 import { KNOWLEDGE_UPLOAD_STATUS, type KnowledgeUploadStatus } from "@/lib/knowledgeUploadStatus";
+import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
+import { trackEvent } from "@/lib/telemetry/rudderstack";
+import { bytesToKb, fileTypeFromName } from "@/lib/telemetry/helpers";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 
 type FileEntry = {
   file: File;
@@ -54,6 +58,7 @@ type Props = {
 };
 
 export default function FileUpload({ datapackName, datapackId, initialFiles, onKnowledgeBaseCreated }: Props) {
+  const { data: currentUser } = useCurrentUser();
   const [files, setFiles] = useState<FileEntry[]>(() =>
     (initialFiles ?? []).map((file) => ({
       file,
@@ -86,6 +91,14 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
   const pendingKBReadyNotificationRef = useRef(false);
   const [newUploadsAfterKB, setNewUploadsAfterKB] = useState(0);
   const pollGraceRef = useRef(0);
+  // Names + byte sizes of the files in the batch currently being processed, so
+  // the document_uploaded telemetry (fired once processing completes) can report
+  // file_size and emit only for THIS batch's docs (pipeline_details also includes
+  // previously-indexed docs once a KB exists).
+  const justUploadedRef = useRef<{ names: Set<string>; sizes: Map<string, number> }>({
+    names: new Set(),
+    sizes: new Map(),
+  });
 
   const showWarning = useCallback((msg: string) => {
     setWarning(msg);
@@ -209,9 +222,13 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
   };
 
   const handleCreateKB = async () => {
-    const queuedNames = files
-      .filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.DONE)
-      .map((f) => f.file.name);
+    const queuedEntries = files.filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.DONE);
+    const queuedNames = queuedEntries.map((f) => f.file.name);
+    // Snapshot this batch's names + sizes for the document_uploaded telemetry.
+    justUploadedRef.current = {
+      names: new Set(queuedNames),
+      sizes: new Map(queuedEntries.map((f) => [f.file.name, f.file.size])),
+    };
     const previousKbCreated = kbCreated;
 
     // Flip UI state immediately so users see progress feedback right away.
@@ -240,6 +257,39 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
       setCreatingKB(false);
     }
   };
+
+  // Fire document_uploaded once per successfully-processed doc in the current
+  // batch. pipeline_details can also list previously-indexed docs, so we filter
+  // to this batch's names and clear the snapshot to avoid re-emitting.
+  const emitDocumentUploadedEvents = useCallback(
+    (details: PipelineDetail[]) => {
+      const batch = justUploadedRef.current;
+      if (batch.names.size === 0) return;
+      const batchDetails = details.filter((d) =>
+        batch.names.has(pipelineDocumentDisplayName(d.document_name)),
+      );
+      const totalDocs = details.length;
+      // First docs in the datapack when nothing pre-existed this batch.
+      const isFirstBatch = totalDocs === batchDetails.length;
+      batchDetails
+        .filter((d) => d.document_status === "COMPLETED")
+        .forEach((d) => {
+          const name = pipelineDocumentDisplayName(d.document_name);
+          const sizeBytes = batch.sizes.get(name);
+          trackEvent(TELEMETRY_EVENTS.DOCUMENT_UPLOADED, {
+            email: currentUser?.email,
+            datapack_id: datapackId,
+            document_id: name,
+            file_type: fileTypeFromName(name),
+            file_size_kb: sizeBytes !== undefined ? bytesToKb(sizeBytes) : undefined,
+            is_first: isFirstBatch,
+            total_docs: totalDocs,
+          });
+        });
+      justUploadedRef.current = { names: new Set(), sizes: new Map() };
+    },
+    [datapackId, currentUser?.email],
+  );
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -273,13 +323,14 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
         // dialog reopens that find an already-done KB don't re-fire).
         if (pendingKBReadyNotificationRef.current) {
           pendingKBReadyNotificationRef.current = false;
+          emitDocumentUploadedEvents(details);
           onKnowledgeBaseCreated?.();
         }
       }
     } catch {
       // silently retry on next interval
     }
-  }, [datapackId, kbCreated, onKnowledgeBaseCreated]);
+  }, [datapackId, kbCreated, onKnowledgeBaseCreated, emitDocumentUploadedEvents]);
 
   useEffect(() => {
     fetchStatus();

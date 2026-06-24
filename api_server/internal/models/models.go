@@ -342,6 +342,7 @@ type IncomingShare struct {
 	InviteID     string `json:"invite_id"`
 	OwnerUserID  string `json:"owner_user_id"`
 	OwnerName    string `json:"owner_name"`
+	OwnerEmail   string `json:"owner_email"`
 	GrantRole    string `json:"grant"`
 	DatapackID   string `json:"datapack_id"`
 	DatapackName string `json:"datapack_name"`

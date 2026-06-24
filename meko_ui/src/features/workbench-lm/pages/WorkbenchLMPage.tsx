@@ -478,6 +478,8 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
           loadedConversationId={loadedConversationId}
           loadedThread={loadedThread}
           loadedLangfuseProjectId={loadedLangfuseProjectId}
+          datapackGrant={selectedDatapack?.grant ?? null}
+          conversationCount={sessions.length}
         />
         <WorkbenchLMLiveObservationPanel
           datapackId={selectedDatapack?.datapack_id ?? null}

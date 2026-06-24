@@ -528,6 +528,8 @@ export type DatapackIncomingShare = {
   invite_id: string;
   owner_user_id: string;
   owner_name: string;
+  /** Email of the datapack owner who sent the invite. */
+  owner_email: string;
   grant: DatapackShareGrant;
   datapack_name: string;
   datapack_id: string;

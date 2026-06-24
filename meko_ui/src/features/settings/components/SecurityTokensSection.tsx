@@ -203,6 +203,7 @@ export function SecurityTokensSection() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={() => void load()}
+        existingKeyCount={tokens.length}
       />
 
       <AlertDialog

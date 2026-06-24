@@ -13,6 +13,10 @@ import {
 } from "@/lib/api/mekoApi";
 import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { shareGrantLabel } from "@/features/datapacks/components/datapack-share/shareInviteRoles";
+import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
+import { trackEvent } from "@/lib/telemetry/rudderstack";
+import { nowIso } from "@/lib/telemetry/helpers";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/use-toast";
 import {
   formatIncomingShareInviteMessage,
@@ -40,6 +44,7 @@ type Props = {
 const AUTO_OPENED_STORAGE_KEY = "meko:notifications-bell:auto-opened-this-session";
 
 export function IncomingShareNotificationsBell({ recipientUserId }: Props) {
+  const { data: currentUser } = useCurrentUser();
   const [open, setOpen] = useState(false);
   const [invites, setInvites] = useState<DatapackIncomingShare[]>([]);
   const [loading, setLoading] = useState(false);
@@ -84,6 +89,17 @@ export function IncomingShareNotificationsBell({ recipientUserId }: Props) {
       });
       setInvites((prev) => prev.filter((r) => r.invite_id !== invite.invite_id));
       if (user_action === "accept") {
+        trackEvent(TELEMETRY_EVENTS.INVITE_ACCEPTED, {
+          datapack_id: invite.datapack_id,
+          recipient_email: currentUser?.email,
+          recipient_role: invite.grant,
+          // shared_by is the datapack owner shown in the invite ("Raj added you…").
+          // Role is intentionally omitted — the invite doesn't record the actual
+          // sharer (a maintainer can share), so a role here would be misleading.
+          shared_by_email: invite.owner_email,
+          shared_by_user_id: invite.owner_user_id,
+          accepted_timestamp: nowIso(),
+        });
         notifyDatapacksListChanged(`share-accepted:${invite.datapack_name || invite.invite_id}`);
       }
       toast({

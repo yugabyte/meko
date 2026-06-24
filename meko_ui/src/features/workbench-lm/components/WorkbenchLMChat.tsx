@@ -15,6 +15,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Download } from "lucide-react";
 import { getInferenceGatewayErrorMessage, postChat } from "@/lib/inferenceGateway";
 import type { DatapackThreadMessage } from "@/lib/api/mekoApi";
+import type { DatapackShareGrant } from "@/lib/datapackShareGrants";
+import { TELEMETRY_CLIENT_WORKBENCH, TELEMETRY_EVENTS } from "@/lib/telemetry/events";
+import { trackEvent } from "@/lib/telemetry/rudderstack";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { ChatBubble, ThinkingBubble } from "./workbench-lm-chat/ChatBubble";
 import { ChatInput } from "./workbench-lm-chat/ChatInput";
 import { EmptyState } from "./workbench-lm-chat/EmptyState";
@@ -66,6 +70,10 @@ export type WorkbenchLMChatProps = {
    *  Forwarded into each historical bubble's DecisionTrace so its
    *  "open in Langfuse" deep-links resolve. */
   loadedLangfuseProjectId?: string | null;
+  /** Signed-in user's role on this datapack — telemetry `role` on conversation_started. */
+  datapackGrant?: DatapackShareGrant | null;
+  /** Count of the user's existing conversations in this datapack, for total_conversations / is_first. */
+  conversationCount?: number;
 };
 
 export function WorkbenchLMChat({
@@ -80,7 +88,10 @@ export function WorkbenchLMChat({
   loadedConversationId = null,
   loadedThread = null,
   loadedLangfuseProjectId = null,
+  datapackGrant = null,
+  conversationCount = 0,
 }: WorkbenchLMChatProps) {
+  const { data: currentUser } = useCurrentUser();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -212,6 +223,8 @@ export function WorkbenchLMChat({
         return;
       }
       const bypass = opts?.bypassConversationCache ?? false;
+      // A brand-new conversation is being started when neither id exists yet.
+      const isFirstMessage = conversationId === null && sessionId === null;
 
       setError(null);
       const userMsg: Message = {
@@ -245,6 +258,19 @@ export function WorkbenchLMChat({
         });
         if (resp.session_id) setSessionId(resp.session_id);
         if (resp.conversation_id) setConversationId(resp.conversation_id);
+        // conversation_started: only on the first turn, once the gateway has
+        // minted the new conversation_id.
+        if (isFirstMessage && resp.conversation_id) {
+          trackEvent(TELEMETRY_EVENTS.CONVERSATION_STARTED, {
+            email: currentUser?.email,
+            conversation_id: resp.conversation_id,
+            datapack_id: datapackId ?? undefined,
+            client: TELEMETRY_CLIENT_WORKBENCH,
+            role: datapackGrant ?? undefined,
+            total_conversations: conversationCount + 1,
+            is_first: conversationCount === 0,
+          });
+        }
         // A conversation-cache hit shows up as a `conversation_summarize` step
         // in the gateway's per-turn timeline — detect it immediately (no need
         // to wait for the Langfuse decision-trace fetch) so the bubble can
@@ -287,6 +313,9 @@ export function WorkbenchLMChat({
       conversationId,
       gatedReadiness,
       onTurnComplete,
+      datapackGrant,
+      conversationCount,
+      currentUser?.email,
     ],
   );
 

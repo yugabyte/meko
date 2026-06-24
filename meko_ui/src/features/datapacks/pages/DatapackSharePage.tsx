@@ -44,6 +44,13 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
   const members = data?.members ?? [];
   const pendingInvites = data?.pending_invites ?? [];
 
+  // Telemetry inputs for the datapack_shared event: the sharer's own role on this
+  // datapack, and how many shares already exist (accepted members excl. owner +
+  // pending invites) — drives is_first_share / total_shares.
+  const sharedByRole =
+    members.find((m) => m.user_email_id === currentUser?.email)?.grant ?? null;
+  const priorShareCount = members.filter((m) => !m.is_owner).length + pendingInvites.length;
+
   /** After invites or member mutations, refresh lists without toggling the global loading skeleton. */
   const refreshShares = () => void refetch({ silent: true });
 
@@ -154,7 +161,13 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
               </CardHeader>
               <CardContent className="p-6 pt-6">
                 <TabsContent value="person" className="mt-0 outline-none focus-visible:outline-none">
-                  <InviteByEmailSection datapackId={datapackId} currentUserEmail={currentUser?.email} onInviteSent={refreshShares} />
+                  <InviteByEmailSection
+                    datapackId={datapackId}
+                    currentUserEmail={currentUser?.email}
+                    sharedByRole={sharedByRole}
+                    priorShareCount={priorShareCount}
+                    onInviteSent={refreshShares}
+                  />
                 </TabsContent>
                 <TabsContent value="agent" className="mt-0 outline-none focus-visible:outline-none">
                   <ShareComingSoonPlaceholder

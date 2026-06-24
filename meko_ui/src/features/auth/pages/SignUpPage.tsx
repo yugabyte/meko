@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getApiErrorMessage, signup, confirmSignup } from "@/lib/api/mekoApi";
-import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
+import { AUTH_METHODS, TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { trackEvent } from "@/lib/telemetry/rudderstack";
 import { Eye, EyeOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -41,7 +41,6 @@ export default function SignUpPage() {
 
   const handleSignup = async (e: FormEvent) => {
     e.preventDefault();
-    trackEvent(TELEMETRY_EVENTS.SIGN_UP_CLICKED);
     const passwordErr = getPasswordPolicyError(password);
     if (passwordErr) {
       setError(passwordErr);
@@ -56,6 +55,10 @@ export default function SignUpPage() {
         last_name: lastName.trim(),
         email: email.trim(),
         password,
+      });
+      trackEvent(TELEMETRY_EVENTS.USER_SIGNED_UP, {
+        email: email.trim(),
+        signup_method: AUTH_METHODS.EMAIL_PASSWORD,
       });
       setAwaitingCode(true);
     } catch (err) {

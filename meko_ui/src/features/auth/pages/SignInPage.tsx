@@ -16,7 +16,7 @@ import {
   resendSignupConfirmation,
 } from "@/lib/api/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
-import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
+import { AUTH_METHODS, TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { identifyUser, trackEvent } from "@/lib/telemetry/rudderstack";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 import { setLocalItem } from "@/lib/browserStorage";
@@ -69,7 +69,6 @@ export default function SignInPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    trackEvent(TELEMETRY_EVENTS.SIGN_IN_CLICKED);
     setLoading(true);
     setError(null);
     setShowInviteExpired(false);
@@ -93,7 +92,10 @@ export default function SignInPage() {
           lastName: user.last_name,
           userType: user.user_type,
         });
-        trackEvent(TELEMETRY_EVENTS.SIGNED_IN);
+        trackEvent(TELEMETRY_EVENTS.USER_SIGNED_IN, {
+          email: user.email,
+          login_method: AUTH_METHODS.EMAIL_PASSWORD,
+        });
         setLocalItem(ONBOARDING_STATUS_CACHE_KEY, String(user.has_completed_onboarding));
         dispatchAppEvent(ONBOARDING_STATUS_UPDATED_EVENT, {
           has_completed_onboarding: user.has_completed_onboarding,

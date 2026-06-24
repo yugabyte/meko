@@ -33,15 +33,21 @@ import {
   MEKO_TOKEN_NAME_MIN_LENGTH,
   mekoTokenDownloadFilename,
 } from "@/lib/mekoTokens";
+import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
+import { trackEvent } from "@/lib/telemetry/rudderstack";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Fired after a successful create so the caller can refetch the list. */
   onCreated: () => void;
+  /** Number of keys the user already has, for the api_key_generated is_first flag. */
+  existingKeyCount?: number;
 };
 
-export function MekoTokenCreateDialog({ open, onOpenChange, onCreated }: Props) {
+export function MekoTokenCreateDialog({ open, onOpenChange, onCreated, existingKeyCount = 0 }: Props) {
+  const { data: currentUser } = useCurrentUser();
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +92,12 @@ export function MekoTokenCreateDialog({ open, onOpenChange, onCreated }: Props) 
         ttl_days: MEKO_TOKEN_DEFAULT_TTL_DAYS,
       });
       setRevealed(resp);
+      trackEvent(TELEMETRY_EVENTS.API_KEY_GENERATED, {
+        user_id: currentUser?.account_id,
+        email: currentUser?.email,
+        key_label: trimmedName,
+        is_first: existingKeyCount === 0,
+      });
       // Refetch the list immediately so the new row appears behind the
       // reveal dialog (no spinner gap once the user closes it).
       onCreated();
@@ -94,7 +106,7 @@ export function MekoTokenCreateDialog({ open, onOpenChange, onCreated }: Props) 
     } finally {
       setSubmitting(false);
     }
-  }, [nameValid, submitting, trimmedName, onCreated]);
+  }, [nameValid, submitting, trimmedName, onCreated, existingKeyCount, currentUser]);
 
   const handleCopy = useCallback(async () => {
     if (!revealed) return;
