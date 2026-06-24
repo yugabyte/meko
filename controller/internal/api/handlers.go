@@ -18,6 +18,7 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/core"
 	"github.com/yugabyte/yb-amp/controller/internal/deploy"
 	applog "github.com/yugabyte/yb-amp/controller/internal/log"
+	"github.com/yugabyte/yb-amp/controller/internal/node"
 	"github.com/yugabyte/yb-amp/controller/internal/storagecontroller"
 	"github.com/yugabyte/yb-amp/controller/internal/task"
 )
@@ -32,8 +33,13 @@ import (
 // network); empty means the endpoint runs SC-free. Bootstrap forces initdb of
 // the recorded branch on the first endpoint's deploy.
 type Provisioning struct {
-	SC            *storagecontroller.Client
-	Deployer      deploy.Deployer
+	SC       *storagecontroller.Client
+	Deployer deploy.Deployer
+	// Node reads LSNs from an endpoint's co-located safekeeper to resolve a
+	// branch's default fork point (#133). Paired with the Deployer (which yields
+	// the safekeeper's address); without both, a default fork point can't be
+	// resolved and branching requires an explicit fork_point_lsn.
+	Node          *node.Client
 	EndpointYB    deploy.YBConn
 	SCEndpointURL string
 	Bootstrap     bool
@@ -323,7 +329,7 @@ func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequ
 
 	// Resolve the fork point before mutating anything, so a bad LSN or an
 	// unmaterialized parent 400s without leaving a half-created branch behind.
-	forkLSN, errResp := c.resolveForkLSN(ctx, parent, request.Body.ForkPointLsn)
+	forkLSN, errResp := c.resolveForkLSN(ctx, request.PoolId, parent, request.Body.ForkPointLsn)
 	if errResp != nil {
 		return errResp, nil
 	}
@@ -412,16 +418,18 @@ var lsnRE = regexp.MustCompile(`^[0-9a-fA-F]{1,8}/[0-9a-fA-F]{1,8}$`)
 
 // resolveForkLSN determines the LSN a branch forks at, or a 400 response to
 // return as-is. An explicit, well-formed fork_point_lsn wins. Otherwise it
-// defaults to the parent's latest LSN, read from the storage controller. Without
-// a storage controller there is no way to resolve a default (and no recipe to
-// materialize the branch), so an explicit fork_point_lsn is required rather than
-// silently forking at 0/0.
-//
-// NOTE: the default is the pageserver's last_record_lsn, the ingested position,
-// which can lag the safekeeper's durable flush_lsn that yb_light_local branches
-// at; the controller does not expose flush_lsn, so an exact point needs
-// fork_point_lsn (#130).
-func (c *Controllers) resolveForkLSN(ctx context.Context, parent core.Branch, requested *string) (string, CreateBranchResponseObject) {
+// defaults to the parent's durable WAL end — the safekeeper's flush_lsn — read
+// from the parent branch's own read_write endpoint, whose co-located safekeeper
+// is the WAL authority for the parent timeline. Reading the ancestor's own node
+// (rather than the storage controller's per-tenant describe) is routing-correct
+// in the co-located topology, where each endpoint has its own pageserver +
+// safekeeper but the SC tracks one attachment per tenant — so describe routes to
+// whichever pageserver attached last and misses the parent timeline once the
+// tenant has more than one endpoint (#133). flush_lsn also never lags durable
+// WAL the way a pageserver's last_record_lsn can (#130). Without a deployer +
+// node client there is no safekeeper address to read, so an explicit
+// fork_point_lsn is required rather than silently forking at 0/0.
+func (c *Controllers) resolveForkLSN(ctx context.Context, poolID uuid.UUID, parent core.Branch, requested *string) (string, CreateBranchResponseObject) {
 	if requested != nil {
 		if lsn := strings.TrimSpace(*requested); lsn != "" {
 			if !lsnRE.MatchString(lsn) {
@@ -431,21 +439,51 @@ func (c *Controllers) resolveForkLSN(ctx context.Context, parent core.Branch, re
 			return lsn, nil
 		}
 	}
-	if c.prov.SC == nil {
+	if c.prov.Deployer == nil || c.prov.Node == nil {
 		return "", CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
-			"fork_point_lsn is required when no storage controller is configured"))}
+			"fork_point_lsn is required when endpoint deployment is not configured"))}
 	}
-	lsn, err := c.prov.SC.TimelineLatestLSN(ctx, hex32(parent.ProjectID), hex32(parent.BranchID))
+	rw, errResp := c.parentWriterEndpoint(ctx, poolID, parent)
+	if errResp != nil {
+		return "", errResp
+	}
+	skURL := c.prov.Deployer.EndpointSafekeeperURL(endpointDeployName(rw.ID))
+	lsn, err := c.prov.Node.TimelineFlushLSN(ctx, skURL, hex32(parent.ProjectID), hex32(parent.BranchID))
 	if err != nil {
-		// No usable LSN: the parent has not been materialized (no endpoint ever
-		// deployed on it) or the controller is unreachable — there is nothing to
-		// branch from. Steer the caller rather than branching at a wrong point.
-		c.logger.LogAttrs(ctx, slog.LevelWarn, "could not resolve default fork point",
+		// The parent's safekeeper is unreachable, does not serve the timeline, or
+		// reports no flush_lsn — there is nothing to branch from. Steer the caller
+		// rather than branching at a wrong point.
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "could not resolve default fork point from parent safekeeper",
 			slog.String(applog.KeyBranchID, parent.BranchID.String()), slog.String("error", err.Error()))
 		return "", CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
 			"cannot determine a fork point for the parent branch (deploy an endpoint on it first, or pass fork_point_lsn)"))}
 	}
 	return lsn, nil
+}
+
+// parentWriterEndpoint returns the parent branch's read_write endpoint, whose
+// co-located safekeeper holds the parent timeline's durable WAL. It returns a
+// 400 response (to return as-is) when the parent has no read_write endpoint —
+// not yet materialized, so there is nothing to branch from — or when the lookup
+// fails, steering the caller to deploy one or pass an explicit fork_point_lsn.
+func (c *Controllers) parentWriterEndpoint(ctx context.Context, poolID uuid.UUID, parent core.Branch) (core.Endpoint, CreateBranchResponseObject) {
+	steer := CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+		"cannot determine a fork point for the parent branch (deploy an endpoint on it first, or pass fork_point_lsn)"))}
+	// The single-writer rule caps a branch at one read_write endpoint; a generous
+	// page covers any read_only replicas alongside it without a role filter on the
+	// backend.
+	eps, _, err := c.backend.ListEndpoints(ctx, poolID, parent.ProjectID, parent.BranchID, 100, 0)
+	if err != nil {
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "could not list parent branch endpoints for fork point",
+			slog.String(applog.KeyBranchID, parent.BranchID.String()), slog.String("error", err.Error()))
+		return core.Endpoint{}, steer
+	}
+	for _, ep := range eps {
+		if ep.Role == core.RoleReadWrite {
+			return ep, nil
+		}
+	}
+	return core.Endpoint{}, steer
 }
 
 // --- Endpoints (synchronously deployed, #108) ------------------------------

@@ -203,3 +203,23 @@ func TestKubernetesAddress(t *testing.T) {
 		t.Errorf("address(%s) = %q, want %q", release, got, want)
 	}
 }
+
+// EndpointSafekeeperURL addresses the endpoint's safekeeper at the same stable
+// host the storage controller dials (SC_REACHABLE_HOST): the Service DNS in k8s,
+// the container name on Docker — both at the fixed safekeeper HTTP port.
+func TestEndpointSafekeeperURL(t *testing.T) {
+	id := "yb-ep-92331eedafb2a0ef3b2d724d649bee78"
+
+	cfg := testKubernetesConfig()
+	k := NewKubernetesDeployer(cfg, nil)
+	wantK8s := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", id, cfg.Namespace, safekeeperHTTPPort)
+	if got := k.EndpointSafekeeperURL(id); got != wantK8s {
+		t.Errorf("kubernetes EndpointSafekeeperURL(%s) = %q, want %q", id, got, wantK8s)
+	}
+
+	d := NewDockerDeployer(DockerConfig{}, nil)
+	wantDocker := fmt.Sprintf("http://%s:%d", id, safekeeperHTTPPort)
+	if got := d.EndpointSafekeeperURL(id); got != wantDocker {
+		t.Errorf("docker EndpointSafekeeperURL(%s) = %q, want %q", id, got, wantDocker)
+	}
+}

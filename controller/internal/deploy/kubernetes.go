@@ -362,6 +362,13 @@ func (k *KubernetesDeployer) address(release string) string {
 	return fmt.Sprintf("%s.%s.svc.cluster.local:%d", release, k.cfg.Namespace, k.cfg.ComputePort)
 }
 
+// EndpointSafekeeperURL: the endpoint's safekeeper HTTP API is published on its
+// Service (ports.safekeeperHttp), reachable at the same stable Service DNS the
+// storage controller dials (SC_REACHABLE_HOST). id is the release name.
+func (k *KubernetesDeployer) EndpointSafekeeperURL(id string) string {
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", id, k.cfg.Namespace, safekeeperHTTPPort)
+}
+
 // chartValues mirrors the subset of deploy/helm/yb-light-endpoint values.yaml
 // the controller drives. JSON tags match the chart keys; helm reads the
 // marshaled document as a values file.

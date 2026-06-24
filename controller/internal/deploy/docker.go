@@ -52,10 +52,10 @@ var _ Deployer = (*DockerDeployer)(nil)
 const (
 	endpointComputePort = 55433
 	// Internal endpoint ports. With a shared network the storage controller
-	// reaches these by container name, so they need no host remapping.
+	// reaches these by container name, so they need no host remapping. The
+	// safekeeper HTTP port is the package-shared safekeeperHTTPPort.
 	endpointPSHTTPPort = 9898
 	endpointPSPGPort   = 64000
-	endpointSKHTTPPort = 7676
 	endpointSKPGPort   = 5454
 )
 
@@ -98,7 +98,7 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		env["DEV_PROVISION_SCHEMA"] = "false" // the controller already provisioned it
 		env["PAGESERVER_HTTP_PUB_PORT"] = strconv.Itoa(endpointPSHTTPPort)
 		env["PAGESERVER_PG_PUB_PORT"] = strconv.Itoa(endpointPSPGPort)
-		env["SAFEKEEPER_HTTP_PUB_PORT"] = strconv.Itoa(endpointSKHTTPPort)
+		env["SAFEKEEPER_HTTP_PUB_PORT"] = strconv.Itoa(safekeeperHTTPPort)
 		env["SAFEKEEPER_PG_PUB_PORT"] = strconv.Itoa(endpointSKPGPort)
 	} else {
 		env["DEV_PROVISION_SCHEMA"] = "true" // SC-free: the endpoint provisions the schema
@@ -134,6 +134,13 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 func (d *DockerDeployer) DeleteEndpoint(_ context.Context, id string) error {
 	d.rmForce(context.Background(), id)
 	return nil
+}
+
+// EndpointSafekeeperURL: with a shared network the endpoint's safekeeper is
+// reachable by the container name (= id, the SC_REACHABLE_HOST the endpoint
+// registered) at the fixed safekeeper HTTP port.
+func (d *DockerDeployer) EndpointSafekeeperURL(id string) string {
+	return fmt.Sprintf("http://%s:%d", id, safekeeperHTTPPort)
 }
 
 // waitReady blocks until the endpoint's supervisor reports the compute is up and

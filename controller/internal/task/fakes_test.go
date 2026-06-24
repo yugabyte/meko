@@ -197,6 +197,10 @@ func (f *fakeDeployer) DeleteEndpoint(_ context.Context, id string) error {
 	return f.deleteErr
 }
 
+func (f *fakeDeployer) EndpointSafekeeperURL(id string) string {
+	return "http://" + id + ":7676"
+}
+
 // --- fakeHandler: a configurable task.Handler for worker tests --------------
 
 // fakeHandler records each invocation (and the step ordinal it saw) and can be

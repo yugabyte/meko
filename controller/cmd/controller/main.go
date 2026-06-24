@@ -23,6 +23,7 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/db"
 	"github.com/yugabyte/yb-amp/controller/internal/deploy"
 	applog "github.com/yugabyte/yb-amp/controller/internal/log"
+	"github.com/yugabyte/yb-amp/controller/internal/node"
 	"github.com/yugabyte/yb-amp/controller/internal/process"
 	"github.com/yugabyte/yb-amp/controller/internal/storagecontroller"
 	"github.com/yugabyte/yb-amp/controller/internal/task"
@@ -158,6 +159,11 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				"backing_yb", cfg.Deploy.BackingYBHostPorts,
 				"sc_endpoint_url", prov.SCEndpointURL)
 		}
+
+		// The node client reads a branch's default fork point from the parent's own
+		// safekeeper (addressed via the deployer); it is only useful with a deployer,
+		// so it is wired here alongside one (#133).
+		prov.Node = node.NewClient()
 
 		// Both drivers attach the launched compute to the backing YugabyteDB and
 		// (when bootstrap is on) initdb the recorded tenant/timeline. This flows

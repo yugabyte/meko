@@ -152,47 +152,17 @@ func TestClientDeleteTimeline(t *testing.T) {
 	}
 }
 
-func TestClientTimelineLatestLSN(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/control/v1/tenant/tenant-1/timeline/tl-1" {
-			t.Errorf("path = %q", r.URL.Path)
-		}
-		// The describe response nests LSNs per shard.
-		io.WriteString(w, `{"shards":[{"last_record_lsn":"0/16ABCD0"}]}`)
-	}))
-	defer srv.Close()
-
-	lsn, err := clientForServer(t, srv).TimelineLatestLSN(context.Background(), "tenant-1", "tl-1")
-	if err != nil {
-		t.Fatalf("TimelineLatestLSN: %v", err)
-	}
-	if lsn != "0/16ABCD0" {
-		t.Errorf("lsn = %q, want 0/16ABCD0", lsn)
-	}
-}
-
-func TestClientTimelineLatestLSNNoShards(t *testing.T) {
-	// No shards / no last_record_lsn (e.g. an unmaterialized timeline) is an
-	// error, not an empty LSN, so the caller can surface a clear failure.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		io.WriteString(w, `{"shards":[]}`)
-	}))
-	defer srv.Close()
-
-	if _, err := clientForServer(t, srv).TimelineLatestLSN(context.Background(), "tenant-1", "tl-1"); err == nil {
-		t.Fatal("expected an error when the describe response has no shards")
-	}
-}
-
 func TestClientErrorsOnEmptyBodyWhenResultExpected(t *testing.T) {
 	// 2xx with no body: a method that expects a JSON result must surface the
 	// empty response as an error, not return a silently-unpopulated value.
+	// CreateTenant decodes the controller's {"shards":[...]} reply, so an empty
+	// body is a decode error.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	if _, err := clientForServer(t, srv).TimelineLatestLSN(context.Background(), "tenant-1", "tl-1"); err == nil {
+	if err := clientForServer(t, srv).CreateTenant(context.Background(), "tenant-1"); err == nil {
 		t.Fatal("expected an error decoding an empty body into a requested result")
 	}
 }

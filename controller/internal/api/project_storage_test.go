@@ -16,6 +16,7 @@ import (
 
 	"github.com/yugabyte/yb-amp/controller/internal/api"
 	"github.com/yugabyte/yb-amp/controller/internal/core"
+	"github.com/yugabyte/yb-amp/controller/internal/node"
 	"github.com/yugabyte/yb-amp/controller/internal/storagecontroller"
 )
 
@@ -34,40 +35,23 @@ type fakeSCServer struct {
 	recordedReq      storagecontroller.PendingTimelineInit
 	deleteHit        bool
 	failRecord       bool
-	// lastRecordLSN is what GetTimeline reports as the timeline's latest LSN —
-	// the default branch fork point. Empty omits the field (so the handler's
-	// "no usable LSN" path can be exercised).
-	lastRecordLSN  string
-	getTimelineHit bool
 }
 
 // start stands up the httptest server and returns a storagecontroller.Client
 // pointed at it. It serves the pending-init recipe endpoints
-// (POST/DELETE /control/v1/tenant/{tenant}/timeline/{timeline}/pending_init)
-// and GetTimeline (GET /control/v1/tenant/{tenant}/timeline/{timeline}), which
-// the branch handler reads to default the fork point.
+// (POST/DELETE /control/v1/tenant/{tenant}/timeline/{timeline}/pending_init).
+// The default branch fork point is no longer read from the controller — it comes
+// from the parent's own safekeeper (see fakeSafekeeper, #133).
 func (f *fakeSCServer) start(t *testing.T) *storagecontroller.Client {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/control/v1/tenant/", func(w http.ResponseWriter, r *http.Request) {
-		// /control/v1/tenant/{tenant}/timeline/{timeline}[/pending_init]
+		// /control/v1/tenant/{tenant}/timeline/{timeline}/pending_init
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/control/v1/tenant/"), "/")
 		f.mu.Lock()
 		defer f.mu.Unlock()
 
 		if !strings.HasSuffix(r.URL.Path, "/pending_init") {
-			// GetTimeline: report the latest LSN so the branch handler can default
-			// the fork point. Any other shape/method is a 404.
-			if r.Method == http.MethodGet && len(parts) == 3 && parts[1] == "timeline" {
-				f.getTimelineHit = true
-				w.Header().Set("Content-Type", "application/json")
-				// Mirror the real controller's describe shape: the timeline's LSNs
-				// are nested per shard under "shards", not at the top level.
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"shards": []map[string]any{{"last_record_lsn": f.lastRecordLSN}},
-				})
-				return
-			}
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -98,9 +82,60 @@ func (f *fakeSCServer) start(t *testing.T) *storagecontroller.Client {
 
 func newProjectControllers(t *testing.T, sc *storagecontroller.Client) (*api.Controllers, *core.MemBackend) {
 	t.Helper()
+	return newProjectControllersProv(t, api.Provisioning{SC: sc})
+}
+
+func newProjectControllersProv(t *testing.T, prov api.Provisioning) (*api.Controllers, *core.MemBackend) {
+	t.Helper()
 	backend := core.NewMemBackend()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return api.NewControllers(backend, nil, api.Provisioning{SC: sc}, logger), backend
+	return api.NewControllers(backend, nil, prov, logger), backend
+}
+
+// fakeSafekeeper is an httptest stand-in for an endpoint's co-located safekeeper.
+// It serves GET /v1/tenant/{tenant}/timeline/{timeline} reporting flushLSN, which
+// the branch handler reads from the parent's read_write endpoint to default the
+// fork point (#133). flushLSN empty => 404 (the safekeeper does not serve the
+// timeline), exercising the "no usable LSN" path.
+type fakeSafekeeper struct {
+	mu       sync.Mutex
+	flushLSN string
+	hit      bool
+}
+
+func (f *fakeSafekeeper) start(t *testing.T) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/tenant/", func(w http.ResponseWriter, _ *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.hit = true
+		if f.flushLSN == "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"flush_lsn": f.flushLSN, "commit_lsn": f.flushLSN})
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return ts.URL
+}
+
+func (f *fakeSafekeeper) wasHit() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hit
+}
+
+// seedWriter records a read_write endpoint on the branch so resolveForkLSN finds
+// a node to read the fork point from. The endpoint's safekeeper address comes
+// from the fakeDeployer's EndpointSafekeeperURL.
+func seedWriter(t *testing.T, backend *core.MemBackend, projectID, branchID uuid.UUID) {
+	t.Helper()
+	if _, err := backend.CreateEndpoint(context.Background(), projectID, branchID, core.RoleReadWrite, nil); err != nil {
+		t.Fatalf("seed read_write endpoint: %v", err)
+	}
 }
 
 func seedUserPool(t *testing.T, backend *core.MemBackend) uuid.UUID {
@@ -218,17 +253,23 @@ func mustCreateProjectC(t *testing.T, c *api.Controllers, poolID uuid.UUID, name
 	return api.Project(created)
 }
 
-// TestCreateBranchDefaultsForkToLatestLSN: branching with no fork_point_lsn and
-// no explicit parent reads the project's default-branch latest LSN from the
-// storage controller, returns a non-default branch carrying the parent + fork
-// LSN, and records a branch recipe whose ancestor + start_lsn are set (keyed by
-// the branch's 32-hex id).
-func TestCreateBranchDefaultsForkToLatestLSN(t *testing.T) {
-	sc := &fakeSCServer{lastRecordLSN: "0/16ABCD0"}
-	c, backend := newProjectControllers(t, sc.start(t))
+// TestCreateBranchDefaultsForkToFlushLSN: branching with no fork_point_lsn and
+// no explicit parent defaults the fork point to the parent's durable WAL end
+// (the safekeeper's flush_lsn), read from the parent's read_write endpoint;
+// returns a non-default branch carrying the parent + fork LSN, and records a
+// branch recipe whose ancestor + start_lsn are set (keyed by the branch's 32-hex
+// id).
+func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
+	sc := &fakeSCServer{}
+	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
+	dep := &fakeDeployer{skURL: sk.start(t)}
+	c, backend := newProjectControllersProv(t, api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()})
 	poolID := seedUserPool(t, backend)
 	project := mustCreateProjectC(t, c, poolID, "main")
 	def := project.DefaultBranch
+	// The parent (default branch) must have a read_write endpoint whose
+	// safekeeper holds the fork point.
+	seedWriter(t, backend, project.Id, def.BranchId)
 
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
@@ -244,8 +285,8 @@ func TestCreateBranchDefaultsForkToLatestLSN(t *testing.T) {
 	}
 	br := api.Branch(created)
 
-	if !sc.getTimelineHit {
-		t.Error("GetTimeline was not called to default the fork point")
+	if !sk.wasHit() {
+		t.Error("the parent safekeeper was not queried to default the fork point")
 	}
 	if br.IsDefault {
 		t.Error("branch is_default = true, want false")
@@ -284,10 +325,12 @@ func TestCreateBranchDefaultsForkToLatestLSN(t *testing.T) {
 }
 
 // TestCreateBranchExplicitForkLSN: an explicit fork_point_lsn is used verbatim
-// and the storage controller is not consulted for a default.
+// and no node is consulted for a default (so it works without a deployer).
 func TestCreateBranchExplicitForkLSN(t *testing.T) {
 	sc := &fakeSCServer{}
-	c, backend := newProjectControllers(t, sc.start(t))
+	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
+	dep := &fakeDeployer{skURL: sk.start(t)}
+	c, backend := newProjectControllersProv(t, api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()})
 	poolID := seedUserPool(t, backend)
 	project := mustCreateProjectC(t, c, poolID, "main")
 
@@ -307,8 +350,8 @@ func TestCreateBranchExplicitForkLSN(t *testing.T) {
 	if got := api.Branch(created).ForkLsn; got == nil || *got != lsn {
 		t.Errorf("fork_lsn = %v, want %q", got, lsn)
 	}
-	if sc.getTimelineHit {
-		t.Error("describe was called despite an explicit fork_point_lsn")
+	if sk.wasHit() {
+		t.Error("the parent safekeeper was queried despite an explicit fork_point_lsn")
 	}
 	if sc.recordedReq.StartLSN != lsn {
 		t.Errorf("recipe start_lsn = %q, want %q", sc.recordedReq.StartLSN, lsn)
@@ -341,12 +384,16 @@ func TestCreateBranchInvalidForkLSN(t *testing.T) {
 }
 
 // TestCreateBranchDuplicateName: a branch whose name is already taken in the
-// project (here, the default branch's own name) conflicts -> 409.
+// project (here, the default branch's own name) conflicts -> 409. The fork point
+// resolves first, so the parent needs a read_write endpoint + safekeeper.
 func TestCreateBranchDuplicateName(t *testing.T) {
-	sc := &fakeSCServer{lastRecordLSN: "0/10"}
-	c, backend := newProjectControllers(t, sc.start(t))
+	sc := &fakeSCServer{}
+	sk := &fakeSafekeeper{flushLSN: "0/10"}
+	dep := &fakeDeployer{skURL: sk.start(t)}
+	c, backend := newProjectControllersProv(t, api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()})
 	poolID := seedUserPool(t, backend)
 	project := mustCreateProjectC(t, c, poolID, "main")
+	seedWriter(t, backend, project.Id, project.DefaultBranch.BranchId)
 
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
@@ -468,14 +515,46 @@ func TestCreateBranchNoStorageController(t *testing.T) {
 	}
 }
 
-// TestCreateBranchDefaultForkUnavailable: with a controller that reports no
-// last_record_lsn for the parent (e.g. not yet materialized), a default branch
-// (no fork_point_lsn) is rejected with a clear 400 rather than a wrong fork.
-func TestCreateBranchDefaultForkUnavailable(t *testing.T) {
-	sc := &fakeSCServer{lastRecordLSN: ""} // describe -> shards[0].last_record_lsn = ""
-	c, backend := newProjectControllers(t, sc.start(t))
+// TestCreateBranchDefaultForkNoEndpoint: a default branch (no fork_point_lsn) off
+// a parent that has no read_write endpoint (not yet materialized) is rejected
+// with a clear 400 rather than a wrong fork — there is no safekeeper to read.
+func TestCreateBranchDefaultForkNoEndpoint(t *testing.T) {
+	sc := &fakeSCServer{}
+	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
+	dep := &fakeDeployer{skURL: sk.start(t)}
+	c, backend := newProjectControllersProv(t, api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()})
 	poolID := seedUserPool(t, backend)
 	project := mustCreateProjectC(t, c, poolID, "main")
+	// No endpoint seeded on the default branch.
+
+	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
+		PoolId:    poolID,
+		ProjectId: project.Id,
+		Body:      &api.CreateBranchJSONRequestBody{Name: "feature"},
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	if _, ok := resp.(api.CreateBranch400JSONResponse); !ok {
+		t.Fatalf("response = %T, want CreateBranch400JSONResponse (no endpoint to read)", resp)
+	}
+	if sk.wasHit() {
+		t.Error("the safekeeper was queried even though the parent has no read_write endpoint")
+	}
+}
+
+// TestCreateBranchDefaultForkSafekeeperUnavailable: with a read_write endpoint on
+// the parent but its safekeeper reporting no flush_lsn (e.g. the timeline is not
+// yet there), a default branch is rejected with a clear 400 rather than a wrong
+// fork.
+func TestCreateBranchDefaultForkSafekeeperUnavailable(t *testing.T) {
+	sc := &fakeSCServer{}
+	sk := &fakeSafekeeper{flushLSN: ""} // 404: the safekeeper does not serve the timeline
+	dep := &fakeDeployer{skURL: sk.start(t)}
+	c, backend := newProjectControllersProv(t, api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()})
+	poolID := seedUserPool(t, backend)
+	project := mustCreateProjectC(t, c, poolID, "main")
+	seedWriter(t, backend, project.Id, project.DefaultBranch.BranchId)
 
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
@@ -488,7 +567,7 @@ func TestCreateBranchDefaultForkUnavailable(t *testing.T) {
 	if _, ok := resp.(api.CreateBranch400JSONResponse); !ok {
 		t.Fatalf("response = %T, want CreateBranch400JSONResponse (no usable LSN)", resp)
 	}
-	if !sc.getTimelineHit {
-		t.Error("describe (TimelineLatestLSN) was not called")
+	if !sk.wasHit() {
+		t.Error("the parent safekeeper was not queried")
 	}
 }

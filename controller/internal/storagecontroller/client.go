@@ -75,29 +75,6 @@ func (c *Client) DeleteTimeline(ctx context.Context, tenantID, timelineID string
 		"/v1/tenant/"+url.PathEscape(tenantID)+"/timeline/"+url.PathEscape(timelineID), nil, nil)
 }
 
-// TimelineLatestLSN returns the timeline's latest LSN — the pageserver's
-// last_record_lsn — from the describe endpoint
-// (GET /control/v1/tenant/{tenant}/timeline/{timeline}). It is the default
-// branch fork point. The describe response nests LSNs per shard
-// ({"shards":[{"last_record_lsn":"X/Y", ...}], ...}); yb-light timelines are
-// single-shard (each gets its own co-located pageserver + safekeeper), so the
-// one shard's tip is the latest LSN. ids are 32 lowercase hex digits.
-func (c *Client) TimelineLatestLSN(ctx context.Context, tenantID, timelineID string) (string, error) {
-	var resp struct {
-		Shards []struct {
-			LastRecordLSN string `json:"last_record_lsn"`
-		} `json:"shards"`
-	}
-	if err := c.do(ctx, http.MethodGet,
-		"/control/v1/tenant/"+url.PathEscape(tenantID)+"/timeline/"+url.PathEscape(timelineID), nil, &resp); err != nil {
-		return "", err
-	}
-	if len(resp.Shards) == 0 || resp.Shards[0].LastRecordLSN == "" {
-		return "", fmt.Errorf("no last_record_lsn for timeline %s", timelineID)
-	}
-	return resp.Shards[0].LastRecordLSN, nil
-}
-
 // PendingTimelineInit is the recipe for a timeline that has been declared but
 // not yet materialized: the storage controller stores it until an endpoint's
 // pageserver attaches and bootstraps the timeline (controller/architecture/

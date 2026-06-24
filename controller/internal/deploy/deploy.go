@@ -7,6 +7,12 @@ package deploy
 
 import "context"
 
+// safekeeperHTTPPort is the port every endpoint's co-located safekeeper serves
+// its HTTP API on. The same in both runtimes — the Docker container's internal
+// port and the Helm chart's ports.safekeeperHttp — so the controller can address
+// it uniformly from an endpoint's reachable host.
+const safekeeperHTTPPort = 7676
+
 // YBConn is how an endpoint reaches the YugabyteDB storage universe.
 type YBConn struct {
 	HostPorts string // host:port[,host:port] as the endpoint sees YB
@@ -53,4 +59,12 @@ type Endpoint struct {
 type Deployer interface {
 	CreateEndpoint(ctx context.Context, spec EndpointSpec) (Endpoint, error)
 	DeleteEndpoint(ctx context.Context, id string) error
+	// EndpointSafekeeperURL returns the base URL of the co-located safekeeper's
+	// HTTP API for the endpoint identified by id (the Endpoint.ID CreateEndpoint
+	// returned — the deploy/release name). The controller reaches it over the same
+	// network/DNS the storage controller dials (SC_REACHABLE_HOST), at the fixed
+	// safekeeper HTTP port, to resolve a branch's default fork point from the
+	// ancestor's own safekeeper (#133). It is a pure function of id and the
+	// deployer's static config; it does not check that the endpoint is live.
+	EndpointSafekeeperURL(id string) string
 }

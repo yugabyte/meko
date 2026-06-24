@@ -271,6 +271,7 @@ func TestCreateProject(t *testing.T) {
 // exercise the handler's compensating row delete).
 type fakeDeployer struct {
 	addr      string
+	skURL     string // safekeeper base URL EndpointSafekeeperURL returns (fork-point resolution)
 	created   []deploy.EndpointSpec
 	deleted   []string
 	createErr error
@@ -291,6 +292,10 @@ func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpe
 func (f *fakeDeployer) DeleteEndpoint(_ context.Context, id string) error {
 	f.deleted = append(f.deleted, id)
 	return nil
+}
+
+func (f *fakeDeployer) EndpointSafekeeperURL(string) string {
+	return f.skURL
 }
 
 func TestCreateEndpointDeployFailureCompensates(t *testing.T) {

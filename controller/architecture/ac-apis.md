@@ -161,17 +161,21 @@ project's default branch, or any branch named with `parent_branch_id`
 (branch-of-branch); the new branch is a non-default `branch` under the **same
 project**, inheriting the parent's `pg_version` and recording its fork ancestry
 (`parent_branch_id`, `fork_lsn`) — `core.Backend.CreateBranch`. The fork point
-defaults to the parent's latest LSN, read from the storage controller
-(`GetTimeline`'s `last_record_lsn`); a caller can pin an earlier point with
+defaults to the parent's durable WAL end — the `flush_lsn` of the safekeeper
+co-located with the parent's `read_write` endpoint, read directly from that node
+(`node.Client.TimelineFlushLSN`); a caller can pin an earlier point with
 `fork_point_lsn`. Like create-project, it then records the storage controller's
 **pending-init recipe**, this time with the ancestor and `start_lsn` set, and the
 branch is materialized lazily by the first endpoint deployed on it (the
 pageserver clones from the ancestor at `fork_lsn` instead of running `initdb`).
 It returns the branch (`201`); a missing pool/project/parent `404`s and a
-duplicate name within the project `409`s. *(`last_record_lsn` is the pageserver's
-ingested position, which can lag the safekeeper's durable `flush_lsn` that
-`yb_light_local` branches at; the controller doesn't expose `flush_lsn`, so an
-exact point needs `fork_point_lsn`.)*
+duplicate name within the project `409`s. *(Reading the ancestor's own node is
+routing-correct where the storage controller's per-tenant `describe` is not — it
+routes to whichever pageserver attached the tenant last and misses the parent
+timeline once the tenant has multiple endpoints, #133; `flush_lsn` also never lags
+durable WAL the way a pageserver's `last_record_lsn` can, #130. The parent must
+have a `read_write` endpoint to resolve a default — otherwise pass
+`fork_point_lsn`.)*
 
 **`deleteProject` and `deleteBranch` are still logged-only.** They are meant to run
 through the write-ahead task framework (amp-controller.md §5, §8), whose step

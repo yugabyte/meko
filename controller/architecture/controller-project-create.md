@@ -100,12 +100,19 @@ flow, forking an existing branch instead of bootstrapping a fresh one:
    writes a `branch` row under the **same project** with a new branch id (=
    `timeline_id`), `is_default = false`, `parent_branch_id = parent`, the
    inherited `pg_version`, and `fork_lsn` (`core.Backend.CreateBranch`).
-2. The **fork point** defaults to the parent's latest LSN — read from the storage
-   controller (`GetTimeline`'s `last_record_lsn`) — or an explicit
-   `fork_point_lsn`. (`last_record_lsn` is the pageserver's ingested position,
-   which can lag the safekeeper's durable `flush_lsn` that `yb_light_local`
-   branches at; the controller doesn't expose `flush_lsn`, so an exact point
-   needs `fork_point_lsn`.)
+2. The **fork point** defaults to the parent's durable WAL end — the
+   `flush_lsn` of the safekeeper co-located with the parent's `read_write`
+   endpoint, read directly from that node (`node.Client.TimelineFlushLSN` via
+   `deploy.Deployer.EndpointSafekeeperURL`) — or an explicit `fork_point_lsn`.
+   Reading the ancestor's **own** node is routing-correct in the co-located
+   topology, where each endpoint has its own pageserver + safekeeper but the
+   storage controller tracks one attachment per tenant; its per-tenant
+   `describe` routes to whichever pageserver attached last and misses the parent
+   timeline once the tenant has more than one endpoint (#133). `flush_lsn` also
+   never lags durable WAL the way a pageserver's `last_record_lsn` can (#130).
+   The parent must therefore have a `read_write` endpoint; without one (or
+   without a deployer configured) a default fork point can't be resolved and
+   `fork_point_lsn` is required.
 3. cAmp records the pending-init recipe with `ancestor_timeline_id = parent` and
    `start_lsn = fork_lsn` (vs. `null` / `0` for the default branch).
 
