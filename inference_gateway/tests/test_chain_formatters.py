@@ -27,7 +27,6 @@ in milliseconds.
 from __future__ import annotations
 
 from inference_gateway.chain import (
-    KB_MAX_DISTANCE,
     MEMORY_MIN_SCORE,
     _format_knowledge_context,
     _format_memory_context,
@@ -278,23 +277,20 @@ def test_memory_threshold_does_not_affect_relations() -> None:
     assert "john LIKES soccer" in rendered
 
 
-def test_kb_threshold_drops_high_distance_chunks() -> None:
-    """KB hits with `distance > KB_MAX_DISTANCE` are dropped. The default is
-    intentionally permissive because Meko KB distances cluster near 1.0
-    even for clearly-relevant chunks — so the threshold catches truly
-    orthogonal noise (~1.5+) without false-negating the real hits."""
-    assert KB_MAX_DISTANCE == 1.2  # update both if the default changes
+def test_kb_renders_all_chunks_regardless_of_distance() -> None:
+    """KB relevance is owned by the MCP's hybrid search — the gateway no longer
+    filters by distance and renders every chunk it's given, even high-distance ones."""
     payload = {
         "results": [
             {"chunk_text": "Strong hit",   "distance": 0.4},
-            {"chunk_text": "Marginal hit", "distance": 1.05},  # below threshold
-            {"chunk_text": "Noise chunk",  "distance": 1.5},   # beyond threshold
+            {"chunk_text": "Marginal hit", "distance": 1.05},
+            {"chunk_text": "Far chunk",    "distance": 1.5},
         ],
     }
     rendered = _format_knowledge_context(payload)
     assert "Strong hit" in rendered
     assert "Marginal hit" in rendered
-    assert "Noise chunk" not in rendered
+    assert "Far chunk" in rendered
 
 
 def test_kb_threshold_keeps_items_without_distance() -> None:

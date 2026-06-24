@@ -106,6 +106,10 @@ type CreateRequest struct {
 	UserID      string `json:"user_id"`
 	AgentID     string `json:"agent_id,omitempty"`
 	Description string `json:"description,omitempty"`
+	// UserType is the requester's `meko_system.users.user_type` ("free"
+	// / "pro" / "enterprise"). Populated by the handler from the auth
+	// context; paid tiers skip the free-tier datapack count cap.
+	UserType string `json:"-"`
 }
 
 // MCPServerInfo holds the MCP server connection details returned after
@@ -149,6 +153,19 @@ func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 	}
 	if req.UserID == "" {
 		return nil, fmt.Errorf("user_id is required")
+	}
+
+	// Free-tier cap. Applies ONLY when user_type is explicitly "free";
+	// every other tier (Pro / Enterprise / unknown) skips this block.
+	// Up front so the failure is cheap for free tier.
+	if IsFreeUserType(req.UserType) {
+		if n, err := s.repo.CountByOwner(req.UserID); err != nil {
+			return nil, fmt.Errorf("free-tier cap check: %w", err)
+		} else if n >= FreeTierMaxDatapacks {
+			slog.Info("datapack create blocked by free-tier cap",
+				"user_id", req.UserID, "count", n, "cap", FreeTierMaxDatapacks)
+			return nil, ErrFreeTierDatapackLimit
+		}
 	}
 
 	agentID := strings.TrimSpace(req.AgentID)

@@ -7,6 +7,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { setCachedDatapackName } from "@/features/datapacks/hooks/useDatapackName";
+import { queryClient } from "@/lib/queryClient";
+import { ACCOUNT_USAGE_QUERY_KEY } from "@/hooks/useAccountUsage";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { DatapackConfigureWizardStepper } from "@/features/datapacks/components/configure-wizard/DatapackConfigureWizardStepper";
@@ -326,6 +328,9 @@ export default function DatapackConfigureWizardPage({
             );
           });
           await confirmUpload(pack, key, file.name, file.size);
+          // KB storage counter changed → invalidate so gates flip on
+          // the next read.
+          void queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] });
           setKnowledgeItems((prev) =>
             prev.map((x) =>
               x.id === item.id
@@ -403,6 +408,9 @@ export default function DatapackConfigureWizardPage({
         if (created?.name) {
           notifyDatapacksListChanged(`create:${created.name}`);
         }
+        // Bumps datapack_count → recompute free-tier gates so the next
+        // overview-page visit reflects the new total immediately.
+        void queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] });
         if (created.mcp_server?.api_key) {
           localStorage.setItem("meko_latest_api_key", created.mcp_server.api_key);
         }

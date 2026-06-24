@@ -230,7 +230,7 @@ export default function OnboardingPage() {
             </div>
 
             <h1 className="mb-3 text-center text-3xl font-bold tracking-tight text-foreground md:text-4xl">
-              One memory for all your agents.
+              Shared Context across all your agents.
             </h1>
             {/* Tagline subhead — single-sentence framing that sits between
                 the punchy headline and the longer body paragraph. Same

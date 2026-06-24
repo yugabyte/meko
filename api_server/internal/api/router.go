@@ -24,6 +24,14 @@ type serviceRegistry struct {
 	ybaSvc             *service.YBAService
 	dpRepo             *repository.DatapackRepo
 	dpSvc              *service.DatapackService
+	// kbRepo: shared by kbSvc and the AccountUsageService (which is
+	// what the /auth/me/usage handler depends on — handlers never touch
+	// repos directly).
+	kbRepo             *repository.KnowledgeBaseRepo
+	// freeTierRepo: read by AccountUsageService for /auth/me/usage's
+	// num_conversations counter. Written by meko-mcp-server's quota gate.
+	freeTierRepo       *repository.FreeTierUsageRepo
+	accountUsageSvc    *service.AccountUsageService
 	langfuseSvc        *service.LangfuseService
 	agentSvc           *service.AgentService
 	kbSvc              *service.KnowledgeBaseService
@@ -57,6 +65,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	kbRepo := repository.NewKnowledgeBaseRepo(cfg.SystemDB, cfg.DB)
 	kbSvc := service.NewKnowledgeBaseService(kbRepo, cfg.S3Bucket)
+	freeTierRepo := repository.NewFreeTierUsageRepo(cfg.SystemDB)
 	ragSvc := service.NewRagService(cfg.DB, service.DatapackIndexSchema, service.DatapackIndexName)
 
 	memoriesRepo := repository.NewMemoriesRepo(
@@ -140,6 +149,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		slog.Warn("billing routes disabled (stripe secret/webhook/price ids not all set)")
 	}
 
+	accountUsageSvc := service.NewAccountUsageService(dpRepo, kbRepo, langfuseSvc.Repo(), freeTierRepo)
+
 	slog.Info("service registry initialized")
 	return &serviceRegistry{
 		accountRepo:        accountRepo,
@@ -147,6 +158,9 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		ybaSvc:             ybaSvc,
 		dpRepo:             dpRepo,
 		dpSvc:              dpSvc,
+		kbRepo:             kbRepo,
+		freeTierRepo:       freeTierRepo,
+		accountUsageSvc:    accountUsageSvc,
 		langfuseSvc:        langfuseSvc,
 		agentSvc:           agentSvc,
 		kbSvc:              kbSvc,
@@ -303,7 +317,7 @@ func registerAuthRoutes(
 	reg.sharingSvc.SetCognito(cognitoClient)
 
 	authSvc := service.NewAuthService(cognitoClient, reg.accountRepo, authOpts...)
-	authH := handlers.NewAuthHandler(authSvc)
+	authH := handlers.NewAuthHandler(authSvc, reg.accountUsageSvc)
 
 	jwtValidator := auth.NewJWTValidator(
 		cfg.CognitoRegion,
@@ -360,6 +374,8 @@ func registerAuthRoutes(
 	authGroup.POST("/change-password", authH.ChangePassword, requireAuth)
 	authGroup.GET("/me", authH.Me, requireAuth)
 	authGroup.PATCH("/me", authH.UpdateOnboardingStatus, requireAuth)
+	// Free-tier usage counters; see AuthHandler.GetUsage for shape.
+	authGroup.GET("/me/usage", authH.GetUsage, requireAuth)
 
 	*datapackGroup = v1.Group("", requireAuth)
 	*dpDirect = v1.Group("",

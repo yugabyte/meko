@@ -11,6 +11,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DATAPACKS_LIST_UPDATED_EVENT,
   getApiErrorMessage,
@@ -20,6 +21,9 @@ import {
   type Datapack,
   type ProvisionStatus,
 } from "@/lib/api/mekoApi";
+import { useAccountUsage } from "@/hooks/useAccountUsage";
+import { FREE_TIER_BLOCKED_MESSAGES, getFreeTierStatus } from "@/lib/freeTier";
+import { FreeTierLimitBanner } from "@/lib/freeTierBanner";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
 import {
   DEFAULT_ACCOUNT_DATAPACK_NAME,
@@ -53,6 +57,15 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
   // result for free until `staleTime` (30s) elapses or
   // `DATAPACKS_LIST_UPDATED_EVENT` invalidates it.
   const { data: datapacks = [], isLoading, error: datapacksQueryError } = useDatapacks();
+  // Free-tier usage counters — drive the "Add Datapack" cap below.
+  // Hook errors fail soft (status defaults to all-false on undefined),
+  // so a usage-API outage doesn't lock users out of creating datapacks
+  // — the BE re-enforces the cap on POST /datapacks if it's hit.
+  const { data: usage } = useAccountUsage();
+  const freeTier = useMemo(
+    () => getFreeTierStatus(usage, currentUser?.user_type),
+    [usage, currentUser?.user_type],
+  );
   const [isProvisioningDefaultDatapack, setIsProvisioningDefaultDatapack] = useState(false);
   const [pollError, setPollError] = useState<string | null>(null);
   const error =
@@ -295,14 +308,39 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                 <LinkIcon className="w-4 h-4 shrink-0" aria-hidden />
                 Connect
               </Button>
-              <Button
-                size="lg"
-                className="gap-2 font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-70"
-                onClick={() => navigate(datapackNewConfigurePath())}
-              >
-                <Plus className="w-5 h-5 shrink-0" aria-hidden />
-                Add Datapack
-              </Button>
+              {/* Free-tier datapack cap. Tooltip mounts only when the
+                  cap is hit, so Radix has a well-formed (trigger +
+                  content) tree in both states. Disabled button is
+                  wrapped in a span so hover events still fire. */}
+              {freeTier.hasHitDatapackCount ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Button
+                        size="lg"
+                        className="gap-2 font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-70"
+                        onClick={() => navigate(datapackNewConfigurePath())}
+                        disabled
+                      >
+                        <Plus className="w-5 h-5 shrink-0" aria-hidden />
+                        Add Datapack
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[280px] text-center">
+                    {FREE_TIER_BLOCKED_MESSAGES.datapack}
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                <Button
+                  size="lg"
+                  className="gap-2 font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-70"
+                  onClick={() => navigate(datapackNewConfigurePath())}
+                >
+                  <Plus className="w-5 h-5 shrink-0" aria-hidden />
+                  Add Datapack
+                </Button>
+              )}
             </div>
           </div>
 
@@ -431,6 +469,10 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
               aria-hidden
             />
           </a>
+        ) : null}
+
+        {freeTier.hasHitDatapackCount ? (
+          <FreeTierLimitBanner kind="datapack" className="mb-4" />
         ) : null}
 
         <DatapacksTilesSection

@@ -27,11 +27,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DatapackKnowledgeUploadDialog } from "@/features/datapacks/components/datapack-detail/dialogs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   buildSampleKnowledgeFile,
   openSampleKnowledgePreview,
   SAMPLE_KNOWLEDGE_FILENAME,
 } from "@/features/workbench-lm/data/sampleKnowledge";
+import { useAccountUsage } from "@/hooks/useAccountUsage";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { FREE_TIER_BLOCKED_MESSAGES, getFreeTierStatus } from "@/lib/freeTier";
 
 type Props = {
   datapackName: string | null;
@@ -89,6 +93,12 @@ export function WorkbenchLMKnowledgePanel({
   const [docs, setDocs] = useState<KnowledgeBaseDocument[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [docsError, setDocsError] = useState<string | null>(null);
+  // Free-tier KB-storage cap. Reads from the same react-query cache
+  // as the other gated surfaces; the per-component subscription is
+  // cheap (single fetch shared via `useAccountUsage`).
+  const { data: accountUsage } = useAccountUsage();
+  const { data: currentUser } = useCurrentUser();
+  const freeTier = getFreeTierStatus(accountUsage, currentUser?.user_type);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [sampleSeed, setSampleSeed] = useState<File[] | undefined>(undefined);
 
@@ -271,15 +281,39 @@ export function WorkbenchLMKnowledgePanel({
             <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Add your own
             </h3>
-            <button
-              type="button"
-              onClick={openOwnUpload}
-              disabled={!datapackId}
-              className="group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 bg-card px-3 py-3 text-sm font-medium text-foreground transition-colors hover:border-blue-400/70 hover:bg-blue-500/5 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Upload className="h-4 w-4 text-blue-400" aria-hidden />
-              File
-            </button>
+            {/* Free-tier KB-storage cap: mount the Tooltip only when
+                the cap is hit so Radix always sees a complete
+                (trigger + content) tree. */}
+            {freeTier.hasHitKbStorageFileSize ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex w-full">
+                    <button
+                      type="button"
+                      onClick={openOwnUpload}
+                      disabled
+                      className="group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 bg-card px-3 py-3 text-sm font-medium text-foreground transition-colors hover:border-blue-400/70 hover:bg-blue-500/5 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Upload className="h-4 w-4 text-blue-400" aria-hidden />
+                      File
+                    </button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[280px] text-center">
+                  {FREE_TIER_BLOCKED_MESSAGES.knowledgeUpload}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <button
+                type="button"
+                onClick={openOwnUpload}
+                disabled={!datapackId}
+                className="group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 bg-card px-3 py-3 text-sm font-medium text-foreground transition-colors hover:border-blue-400/70 hover:bg-blue-500/5 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Upload className="h-4 w-4 text-blue-400" aria-hidden />
+                File
+              </button>
+            )}
           </section>
 
           {/*

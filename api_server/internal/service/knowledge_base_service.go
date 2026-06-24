@@ -36,6 +36,12 @@ func (s *KnowledgeBaseService) Bucket() string {
 	return s.bucket
 }
 
+// SumDocumentSizesByOwner returns total KB document bytes for `userID`,
+// used by the upload-URL handler for free-tier cap enforcement.
+func (s *KnowledgeBaseService) SumDocumentSizesByOwner(userID string) (int64, error) {
+	return s.repo.SumDocumentSizesByOwner(userID)
+}
+
 // BuildDatapackPrefix returns the canonical S3 prefix for the given
 // (user_id, datapack_id) pair: "s3://<bucket>/<user_id>/<datapack_id>/".
 // Used both by the upload flow and CreateKB to construct a single

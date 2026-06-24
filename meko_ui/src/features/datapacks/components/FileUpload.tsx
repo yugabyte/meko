@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Upload, X, FileText, CheckCircle2, AlertCircle, Loader2, Database } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { cn } from "@/lib/utils";
 import {
   getApiErrorMessage,
@@ -21,10 +22,11 @@ import {
 import { formatFileSize } from "@/lib/fileSize";
 import { uploadFileToS3 } from "@/lib/uploadFileToS3";
 import { KNOWLEDGE_UPLOAD_STATUS, type KnowledgeUploadStatus } from "@/lib/knowledgeUploadStatus";
+import { queryClient } from "@/lib/queryClient";
+import { ACCOUNT_USAGE_QUERY_KEY } from "@/hooks/useAccountUsage";
 import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { trackEvent } from "@/lib/telemetry/rudderstack";
 import { bytesToKb, fileTypeFromName } from "@/lib/telemetry/helpers";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
 
 type FileEntry = {
   file: File;
@@ -57,7 +59,12 @@ type Props = {
   onKnowledgeBaseCreated?: () => void;
 };
 
-export default function FileUpload({ datapackName, datapackId, initialFiles, onKnowledgeBaseCreated }: Props) {
+export default function FileUpload({
+  datapackName,
+  datapackId,
+  initialFiles,
+  onKnowledgeBaseCreated,
+}: Props) {
   const { data: currentUser } = useCurrentUser();
   const [files, setFiles] = useState<FileEntry[]>(() =>
     (initialFiles ?? []).map((file) => ({
@@ -109,29 +116,40 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
   const pendingCount = files.filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING).length;
   const isUploading = files.some((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING);
   const batchUsed = files.filter(
-    (f) => f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING || f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING,
+    (f) =>
+      f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
+      f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING,
   ).length;
   const batchRemaining = KNOWLEDGE_UPLOAD_MAX_BATCH - batchUsed;
   const batchFull = batchRemaining <= 0;
 
-  const addFiles = useCallback((incoming: FileList | File[]) => {
-    const all = Array.from(incoming);
-    setFiles((prev) => {
-      // No filename/metadata dedupe here: same-name, different-content files
-      // must reach the upload flow. True duplicates are caught server-side by
-      // content hash, which reports already-uploaded back to the UI.
-      const currentBatch = prev.filter(
-        (f) => f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING || f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING,
-      ).length;
-      const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(all, currentBatch);
-      if (warningParts.length > 0) showWarning(warningParts.join(". "));
-      if (accepted.length === 0) return prev;
-      return [
-        ...prev,
-        ...accepted.map((f) => ({ file: f, status: KNOWLEDGE_UPLOAD_STATUS.PENDING, progress: 0 })),
-      ];
-    });
-  }, [showWarning]);
+  const addFiles = useCallback(
+    (incoming: FileList | File[]) => {
+      const all = Array.from(incoming);
+      setFiles((prev) => {
+        // No filename/metadata dedupe here: same-name, different-content files
+        // must reach the upload flow. True duplicates are caught server-side by
+        // content hash, which reports already-uploaded back to the UI.
+        const currentBatch = prev.filter(
+          (f) =>
+            f.status === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
+            f.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING,
+        ).length;
+        const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(all, currentBatch);
+        if (warningParts.length > 0) showWarning(warningParts.join(". "));
+        if (accepted.length === 0) return prev;
+        return [
+          ...prev,
+          ...accepted.map((f) => ({
+            file: f,
+            status: KNOWLEDGE_UPLOAD_STATUS.PENDING,
+            progress: 0,
+          })),
+        ];
+      });
+    },
+    [showWarning],
+  );
 
   const removeFile = useCallback((index: number) => {
     setFiles((prev) => prev.filter((_, i) => i !== index));
@@ -163,7 +181,9 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
       if (entry.status !== KNOWLEDGE_UPLOAD_STATUS.PENDING) continue;
 
       setFiles((prev) =>
-        prev.map((f, idx) => (idx === i ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.UPLOADING, progress: 0 } : f)),
+        prev.map((f, idx) =>
+          idx === i ? { ...f, status: KNOWLEDGE_UPLOAD_STATUS.UPLOADING, progress: 0 } : f,
+        ),
       );
 
       try {
@@ -192,6 +212,10 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
 
         await uploadFile(url, entry.file, i);
         await confirmUpload(datapackId, key, entry.file.name, entry.file.size);
+        // Bumps the KB storage counter the gating logic reads. Invalidate
+        // here (post-confirm) rather than after each successful S3 PUT —
+        // confirm is what marks the bytes as "yours" on the BE.
+        void queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] });
 
         uploaded++;
         setFiles((prev) =>
@@ -204,11 +228,11 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
           prev.map((f, idx) =>
             idx === i
               ? {
-                ...f,
-                status: KNOWLEDGE_UPLOAD_STATUS.ERROR,
-                progress: 0,
-                error: getApiErrorMessage(err, "Upload failed."),
-              }
+                  ...f,
+                  status: KNOWLEDGE_UPLOAD_STATUS.ERROR,
+                  progress: 0,
+                  error: getApiErrorMessage(err, "Upload failed."),
+                }
               : f,
           ),
         );
@@ -349,8 +373,10 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
   const errorCount = files.filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.ERROR).length;
 
   // Phase computation
-  const sourcesDiscovering = sourceStatuses.length > 0 && sourceStatuses.some((s) => s.status !== "COMPLETED");
-  const sourcesReady = sourceStatuses.length > 0 && sourceStatuses.every((s) => s.status === "COMPLETED");
+  const sourcesDiscovering =
+    sourceStatuses.length > 0 && sourceStatuses.some((s) => s.status !== "COMPLETED");
+  const sourcesReady =
+    sourceStatuses.length > 0 && sourceStatuses.every((s) => s.status === "COMPLETED");
 
   const docsTotal = pipelineDetails.length;
   const docsCompleted = pipelineDetails.filter((d) => d.document_status === "COMPLETED").length;
@@ -377,7 +403,9 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
               <Upload className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <h3 className="text-sm font-medium text-foreground">Upload files to Knowledge Base</h3>
+              <h3 className="text-sm font-medium text-foreground">
+                Upload files to Knowledge Base
+              </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
                 PDF, TXT, MD, JSON, CSV — up to {KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}MB each,{" "}
                 {KNOWLEDGE_UPLOAD_MAX_BATCH} per batch.
@@ -392,8 +420,14 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
                 onClick={handleUpload}
                 disabled={isUploading}
               >
-                {isUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                {isUploading ? "Uploading..." : `Upload ${pendingCount} file${pendingCount > 1 ? "s" : ""}`}
+                {isUploading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Upload className="w-4 h-4" />
+                )}
+                {isUploading
+                  ? "Uploading..."
+                  : `Upload ${pendingCount} file${pendingCount > 1 ? "s" : ""}`}
               </Button>
             )}
           </div>
@@ -422,11 +456,15 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
         >
           <Upload className="w-8 h-8 text-muted-foreground mb-2" />
           <p className="text-sm text-muted-foreground">
-            {kbBusy
-              ? "Knowledge base is processing — wait for it to finish before adding more files"
-              : batchFull
-                ? "Batch full — upload or remove files to add more"
-                : <>Drag & drop files here, or <span className="text-blue-400 underline">browse</span></>}
+            {kbBusy ? (
+              "Knowledge base is processing — wait for it to finish before adding more files"
+            ) : batchFull ? (
+              "Batch full — upload or remove files to add more"
+            ) : (
+              <>
+                Drag & drop files here, or <span className="text-blue-400 underline">browse</span>
+              </>
+            )}
           </p>
           {!batchFull && !kbBusy && batchUsed > 0 && (
             <p className="text-xs text-muted-foreground/60 mt-1">
@@ -463,8 +501,7 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
           <div className="flex items-center gap-2 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-2 text-xs text-green-700 dark:text-green-300">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             {doneCount} file{doneCount > 1 ? "s" : ""} uploaded successfully.
-            {errorCount > 0 && ` ${errorCount} failed.`}
-            {" "}You can add more files.
+            {errorCount > 0 && ` ${errorCount} failed.`} You can add more files.
           </div>
         )}
 
@@ -491,7 +528,9 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING && (
-                      <span className="text-xs text-blue-700 dark:text-blue-400 tabular-nums">{entry.progress}%</span>
+                      <span className="text-xs text-blue-700 dark:text-blue-400 tabular-nums">
+                        {entry.progress}%
+                      </span>
                     )}
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.DONE && (
                       <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
@@ -504,20 +543,23 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
                         so a long string can't fight the filename for
                         horizontal space and visually overlap it. */}
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && (
-                      <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400" aria-label="Upload failed" />
+                      <AlertCircle
+                        className="w-4 h-4 text-red-600 dark:text-red-400"
+                        aria-label="Upload failed"
+                      />
                     )}
                     {(entry.status === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
                       entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED ||
                       entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR) && (
-                        <button
-                          type="button"
-                          aria-label="Remove file"
-                          className="text-muted-foreground hover:text-foreground transition-colors"
-                          onClick={() => removeFile(i)}
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        aria-label="Remove file"
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={() => removeFile(i)}
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
                 {entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR && entry.error ? (
@@ -559,7 +601,11 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
                   onClick={handleCreateKB}
                   disabled={creatingKB}
                 >
-                  {creatingKB ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+                  {creatingKB ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Database className="w-4 h-4" />
+                  )}
                   {creatingKB ? "Creating..." : "Create Knowledge Base"}
                 </Button>
               )}
@@ -569,7 +615,11 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
                   onClick={handleCreateKB}
                   disabled={creatingKB}
                 >
-                  {creatingKB ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+                  {creatingKB ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Database className="w-4 h-4" />
+                  )}
                   {creatingKB ? "Adding..." : "Add to Knowledge Base"}
                 </Button>
               )}
@@ -605,7 +655,9 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
           )}
 
           {!kbCreated && !creatingKB && (
-            <p className="text-xs text-muted-foreground">Upload files and create a knowledge base to get started.</p>
+            <p className="text-xs text-muted-foreground">
+              Upload files and create a knowledge base to get started.
+            </p>
           )}
 
           {!kbCreated && creatingKB && (
@@ -617,7 +669,8 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
 
           {kbCreated && allDone && newUploadsAfterKB > 0 && (
             <p className="text-xs text-muted-foreground">
-              {newUploadsAfterKB} new file{newUploadsAfterKB !== 1 ? "s" : ""} uploaded. Click "Add to Knowledge Base" to process.
+              {newUploadsAfterKB} new file{newUploadsAfterKB !== 1 ? "s" : ""} uploaded. Click "Add
+              to Knowledge Base" to process.
             </p>
           )}
 
@@ -627,7 +680,10 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
             <div className="max-h-36 space-y-1.5 overflow-y-auto pr-1">
               {pipelineDetails.length === 0 &&
                 queuedDocNames.map((name, i) => (
-                  <div key={`queued-${i}-${name}`} className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2">
+                  <div
+                    key={`queued-${i}-${name}`}
+                    className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2"
+                  >
                     <div className="flex items-center gap-2 min-w-0">
                       <Loader2 className="w-3.5 h-3.5 text-yellow-400 animate-spin shrink-0" />
                       <span className="text-xs text-foreground truncate">{name}</span>
@@ -662,15 +718,20 @@ export default function FileUpload({ datapackName, datapackId, initialFiles, onK
                       )}
                       <span className="text-xs text-foreground truncate">{displayName}</span>
                     </div>
-                    <span className={cn(
-                      "text-xs font-medium shrink-0 ml-3",
-                      d.document_status === "COMPLETED" ? "text-green-600 dark:text-green-400" :
-                        d.document_status === "FAILED" ? "text-red-600 dark:text-red-400" :
-                          "text-yellow-600 dark:text-yellow-400",
-                    )}>
+                    <span
+                      className={cn(
+                        "text-xs font-medium shrink-0 ml-3",
+                        d.document_status === "COMPLETED"
+                          ? "text-green-600 dark:text-green-400"
+                          : d.document_status === "FAILED"
+                            ? "text-red-600 dark:text-red-400"
+                            : "text-yellow-600 dark:text-yellow-400",
+                      )}
+                    >
                       {d.document_status === "COMPLETED"
                         ? `Ready${d.chunks_processed ? ` · ${d.chunks_processed} ${d.chunks_processed === 1 ? "chunk" : "chunks"}` : ""}`
-                        : d.document_status === "FAILED" ? "Failed"
+                        : d.document_status === "FAILED"
+                          ? "Failed"
                           : "Processing"}
                     </span>
                   </div>

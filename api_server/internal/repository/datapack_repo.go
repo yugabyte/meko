@@ -285,6 +285,19 @@ func (r *DatapackRepo) List(userID string) ([]models.Datapack, error) {
 	return result, nil
 }
 
+// CountByOwner returns the number of datapacks owned by `userID`.
+// Shared-in datapacks are NOT counted (input to the free-tier cap).
+func (r *DatapackRepo) CountByOwner(userID string) (int64, error) {
+	var n int64
+	if err := r.db.QueryRow(
+		`SELECT COUNT(*) FROM meko_system.datapacks WHERE user_id = $1`,
+		userID,
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count datapacks for user %s: %w", userID, err)
+	}
+	return n, nil
+}
+
 // GetByName returns a single datapack by user and name. Relies on the
 // UNIQUE (user_id, datapack_name) constraint on meko_system.datapacks.
 // Grant is set to "owner" since this path only matches owned datapacks.

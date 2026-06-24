@@ -194,7 +194,8 @@ func setupAuthTestServer(
 	t.Helper()
 
 	authSvc := service.NewAuthService(cog, store)
-	authH := handlers.NewAuthHandler(authSvc)
+	// Tests don't exercise /auth/me/usage; pass nil for the usage service.
+	authH := handlers.NewAuthHandler(authSvc, nil)
 
 	e := echo.New()
 	e.HideBanner = true

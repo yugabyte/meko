@@ -55,6 +55,15 @@ func (s *LangfuseService) LangfuseDBConfigured() bool {
 	return s != nil && s.repo.LangfuseDBConfigured()
 }
 
+// Repo exposes the underlying LangfuseRepo so cross-package callers
+// (e.g. the /auth/me/usage handler) can compose new queries.
+func (s *LangfuseService) Repo() *repository.LangfuseRepo {
+	if s == nil {
+		return nil
+	}
+	return s.repo
+}
+
 // orgMapping is an alias for the repo type so internal call sites
 // (ensureOrgMapping etc.) keep their existing signatures.
 type orgMapping = repository.LangfuseOrgMapping

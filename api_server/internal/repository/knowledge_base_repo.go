@@ -552,6 +552,57 @@ func (r *KnowledgeBaseRepo) GetSourceIDs(
 	return ids, rows.Err()
 }
 
+// SumDocumentSizesByOwner returns total KB document bytes across every
+// datapack owned by `userID`. Two-step (systemDB → dataDB) because
+// meko_system and dist_rag live on separate physical databases.
+func (r *KnowledgeBaseRepo) SumDocumentSizesByOwner(userID string) (int64, error) {
+	// Step 1 (systemDB): rag_source_ids for the user's owned datapacks.
+	rows, err := r.systemDB.Query(
+		`SELECT kb.rag_source_id
+		 FROM   meko_system.knowledge_bases kb
+		 JOIN   meko_system.datapacks      dp ON dp.datapack_id = kb.datapack_id
+		 WHERE  dp.user_id = $1`,
+		userID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sum kb sizes: source ids for %s: %w", userID, err)
+	}
+	defer rows.Close()
+
+	var sourceIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, fmt.Errorf("sum kb sizes: scan source id: %w", err)
+		}
+		sourceIDs = append(sourceIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("sum kb sizes: source ids iter: %w", err)
+	}
+	if len(sourceIDs) == 0 {
+		return 0, nil
+	}
+
+	// Step 2 (dataDB): sum size across documents in those sources.
+	var total int64
+	if err := r.dataDB.QueryRow(
+		`SELECT COALESCE(SUM(
+		           CASE
+		             WHEN d.document_details->'meko' ? 'size'
+		               THEN (d.document_details->'meko'->>'size')::bigint
+		             ELSE 0
+		           END
+		        ), 0)
+		 FROM   dist_rag.documents d
+		 WHERE  d.source_id = ANY($1::uuid[])`,
+		pq.Array(sourceIDs),
+	).Scan(&total); err != nil {
+		return 0, fmt.Errorf("sum kb sizes: aggregate for %s: %w", userID, err)
+	}
+	return total, nil
+}
+
 // GetSourceURIs returns the knowledge_base_url values for a datapack,
 // ordered by created_at descending.
 func (r *KnowledgeBaseRepo) GetSourceURIs(

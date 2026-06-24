@@ -36,7 +36,12 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAccountUsage } from "@/hooks/useAccountUsage";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { FREE_TIER_BLOCKED_MESSAGES, getFreeTierStatus } from "@/lib/freeTier";
 import { cn } from "@/lib/utils";
+import { formatFileSize } from "@/lib/fileSize";
 import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
 import FileUpload from "@/features/datapacks/components/FileUpload";
 import {
@@ -68,17 +73,6 @@ function canDeleteKBDocumentClient(
   if (g === "owner" || g === "maintainer") return true;
   if (!callerUserId || !fileUploaderUserId) return false;
   return callerUserId === fileUploaderUserId;
-}
-
-function formatBytes(n: number | null | undefined): string {
-  if (n == null) return "—";
-  if (n < 1024) return `${n} B`;
-  const k = n / 1024;
-  if (k < 1024) return `${k.toFixed(2)} KB`;
-  const m = k / 1024;
-  if (m < 1024) return `${m.toFixed(2)} MB`;
-  const g = m / 1024;
-  return `${g.toFixed(2)} GB`;
 }
 
 /** Per-extension icon tone for the file row. Color alone signals the
@@ -322,6 +316,12 @@ function SummaryCard({
   onUploadClick: () => void;
   uploadOpen: boolean;
 }) {
+  // Free-tier KB-storage cap. We only gate the "Upload file" affordance
+  // (the open-panel button) — the "Close" variant stays enabled so a
+  // user mid-flow can dismiss the panel even if a cap is hit by then.
+  const { data: accountUsage } = useAccountUsage();
+  const { data: currentUser } = useCurrentUser();
+  const freeTier = getFreeTierStatus(accountUsage, currentUser?.user_type);
   // Split the BE-rendered summary into the head sentence + the
   // "Heaviest source" sentence so the latter renders on its own line.
   // The BE composes them as "N files totaling M chunks. Heaviest
@@ -355,6 +355,25 @@ function SummaryCard({
             <X className="h-3.5 w-3.5" aria-hidden />
             Close
           </Button>
+        ) : freeTier.hasHitKbStorageFileSize ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex shrink-0">
+                <Button
+                  type="button"
+                  onClick={onUploadClick}
+                  disabled
+                  className="shrink-0 gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  <Upload className="h-3.5 w-3.5" aria-hidden />
+                  Upload file
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[280px] text-center">
+              {FREE_TIER_BLOCKED_MESSAGES.knowledgeUpload}
+            </TooltipContent>
+          </Tooltip>
         ) : (
           <Button
             type="button"
@@ -603,7 +622,7 @@ const FileRow = memo(function FileRow({
           </span>
         </button>
         <span className="self-center text-sm tabular-nums text-muted-foreground">
-          {formatBytes(doc.size_bytes)}
+          {formatFileSize(doc.size_bytes)}
         </span>
         <span className="self-center text-sm tabular-nums text-foreground/90">
           {chunks == null ? "—" : chunks.toLocaleString()}
@@ -724,7 +743,7 @@ function FileExpandPanel({
               value={embeddingDimensions != null ? embeddingDimensions.toLocaleString() : "—"}
             />
             <KvRow label="md5" value={doc.document_checksum ?? "—"} mono />
-            <KvRow label="size" value={formatBytes(doc.size_bytes)} />
+            <KvRow label="size" value={formatFileSize(doc.size_bytes)} />
             <KvRow label="by" value={doc.uploaded_by_email ?? "—"} />
           </dl>
         </section>

@@ -284,12 +284,44 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 			"unsupported file type: "+ext+
 				"; allowed: .pdf, .txt, .md, .json, .mp4")
 	}
+	// `size <= 0` is rejected explicitly: otherwise a negative payload
+	// could wrap the int64 free-tier-cap arithmetic below and let an
+	// uncapped upload through, and a zero size is a clear client bug.
+	if req.Size <= 0 {
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", "size must be greater than 0")
+	}
 	if req.Size > maxFileSizeBytes {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "file too large; maximum 5 MB")
 	}
 	if req.ContentType == "" {
 		req.ContentType = "application/octet-stream"
+	}
+
+	// Free-tier storage cap. Applies ONLY when the requester's user_type
+	// is explicitly "free"; Pro / Enterprise / unknown all skip the
+	// block. Pre-presign so no bytes hit S3 against a doomed upload.
+	// We gate on the REQUESTER's tier (not the owner's) to stay
+	// consistent with the FE — a Pro user uploading to a shared
+	// Free-owner datapack does not see the cap on either side.
+	account, _ := auth.GetAccount(c)
+	if account != nil && service.IsFreeUserType(account.AccountType) {
+		if currentBytes, err := h.knowledgeBaseSvc.SumDocumentSizesByOwner(dp.UserID); err != nil {
+			slog.Error("kb upload cap: sum sizes",
+				"user_id", dp.UserID, "datapack_id", dp.ID, "error", err)
+			return apiError(c, http.StatusInternalServerError,
+				"INTERNAL_ERROR", "failed to read free-tier storage usage")
+		} else if currentBytes+req.Size > service.FreeTierMaxKBStorageBytes {
+			slog.Info("kb upload blocked by free-tier cap",
+				"user_id", dp.UserID,
+				"current_bytes", currentBytes,
+				"incoming_bytes", req.Size,
+				"cap", service.FreeTierMaxKBStorageBytes,
+			)
+			return apiError(c, http.StatusPaymentRequired,
+				"FREE_TIER_KB_STORAGE_LIMIT", service.FreeTierUpgradeMessageKBUpload)
+		}
 	}
 
 	result, err := h.s3Svc.GenerateUploadURL(

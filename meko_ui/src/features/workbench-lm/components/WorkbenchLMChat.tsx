@@ -15,10 +15,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Download } from "lucide-react";
 import { getInferenceGatewayErrorMessage, postChat } from "@/lib/inferenceGateway";
 import type { DatapackThreadMessage } from "@/lib/api/mekoApi";
+import { useAccountUsage, ACCOUNT_USAGE_QUERY_KEY } from "@/hooks/useAccountUsage";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { FREE_TIER_BLOCKED_MESSAGES, getFreeTierStatus } from "@/lib/freeTier";
+import { FreeTierLimitBanner } from "@/lib/freeTierBanner";
+import { queryClient } from "@/lib/queryClient";
 import type { DatapackShareGrant } from "@/lib/datapackShareGrants";
 import { TELEMETRY_CLIENT_WORKBENCH, TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { trackEvent } from "@/lib/telemetry/rudderstack";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { ChatBubble, ThinkingBubble } from "./workbench-lm-chat/ChatBubble";
 import { ChatInput } from "./workbench-lm-chat/ChatInput";
 import { EmptyState } from "./workbench-lm-chat/EmptyState";
@@ -192,21 +196,32 @@ export function WorkbenchLMChat({
     ? knowledgeReadiness
     : "ready";
 
+  // Free-tier usage caps (WorkbenchLM conversations + token burn).
+  // Surfaced as the highest-priority blockers so a user who's hit the
+  // cap sees the upgrade message instead of a lower-priority hint like
+  // "Select a datapack" — the cap matters even after they've picked one.
+  const { data: accountUsage } = useAccountUsage();
+  const freeTier = getFreeTierStatus(accountUsage, currentUser?.user_type);
+
   // Order matters: report the blocker the user can act on first.
-  // datapack → account → token → knowledge readiness.
-  const blockedReason = !datapackName
-    ? "Select a datapack from the header to start chatting."
-    : !userId
-      ? "Loading your account…"
-      : !userToken
-        ? "MCP token unavailable. Set VITE_MEKO_MCP_BEARER (dev) or wire token retrieval."
-        : gatedReadiness === "loading"
-          ? "Checking your knowledge base…"
-          : gatedReadiness === "absent"
-            ? "Upload a file under Knowledge to start chatting."
-            : gatedReadiness === "processing"
-              ? "Knowledge is processing — chat will enable when it's ready."
-              : null;
+  // free-tier caps → datapack → account → token → knowledge readiness.
+  const blockedReason = freeTier.hasHitNumConversations
+    ? FREE_TIER_BLOCKED_MESSAGES.conversations
+    : freeTier.hasHitTokenBurn
+      ? FREE_TIER_BLOCKED_MESSAGES.tokenBurn
+      : !datapackName
+        ? "Select a datapack from the header to start chatting."
+        : !userId
+          ? "Loading your account…"
+          : !userToken
+            ? "MCP token unavailable. Set VITE_MEKO_MCP_BEARER (dev) or wire token retrieval."
+            : gatedReadiness === "loading"
+              ? "Checking your knowledge base…"
+              : gatedReadiness === "absent"
+                ? "Upload a file under Knowledge to start chatting."
+                : gatedReadiness === "processing"
+                  ? "Knowledge is processing — chat will enable when it's ready."
+                  : null;
   const inputDisabled = blockedReason !== null || sending;
 
   const send = useCallback(
@@ -298,6 +313,12 @@ export function WorkbenchLMChat({
         };
         setMessages((prev) => [...prev, assistantMsg]);
         onTurnComplete?.();
+        // Bumps num_conversations + token_burn on the BE. Invalidate
+        // here so the cap-derived `blockedReason` re-evaluates on the
+        // next render instead of waiting out the 60s staleTime — gives
+        // the user immediate feedback if their next turn would put
+        // them over.
+        void queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] });
       } catch (err) {
         setError(getInferenceGatewayErrorMessage(err));
       } finally {
@@ -422,6 +443,12 @@ export function WorkbenchLMChat({
           </div>
         </div>
       )}
+
+      {freeTier.hasHitNumConversations ? (
+        <FreeTierLimitBanner kind="conversations" className="mx-1" />
+      ) : freeTier.hasHitTokenBurn ? (
+        <FreeTierLimitBanner kind="tokenBurn" className="mx-1" />
+      ) : null}
 
       <ChatInput
         value={input}

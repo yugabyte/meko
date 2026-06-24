@@ -20,9 +20,9 @@ DEFAULT_BEDROCK_MODEL = "us.amazon.nova-2-lite-v1:0"
 DEFAULT_CONV_SUMMARY_BEDROCK_MODEL = "mistral.ministral-3-3b-instruct"
 
 # MCP / network defaults.
-DEFAULT_MCP_ENDPOINT = "https://mcp.mekodata.ai/mcp"
+# DEFAULT_MCP_ENDPOINT = "https://mcp.mekodata.ai/mcp"
 # DEFAULT_MCP_ENDPOINT = "https://mcp.mekodev.com/mcp"
-# DEFAULT_MCP_ENDPOINT = "http://localhost:8000/mcp"
+DEFAULT_MCP_ENDPOINT = "http://localhost:8000/mcp"
 DEFAULT_PORT = 8088
 DEFAULT_AWS_REGION = "us-east-1"
 
@@ -34,8 +34,8 @@ DEFAULT_AWS_REGION = "us-east-1"
 DEFAULT_CORS_ORIGINS: tuple[str, ...] = (
     "https://app.mekodev.com",
     "https://cloud.mekodata.ai",
-    # "http://localhost:5173",
-    # "http://localhost:3010",
+    "http://localhost:5173",
+    "http://localhost:3010",
 )
 
 # Per the SessionStart hook from the meko MCP server: always use "agent".
@@ -60,7 +60,7 @@ DEFAULT_MAX_HISTORY_MESSAGES = 6
 # tight window risks the right chunk landing just outside it. After
 # threshold filtering you typically still end up with ~3–5 final hits,
 # and the prompt cost of the extra raw rows is negligible.
-DEFAULT_MEMORY_TOP_K = 50
+DEFAULT_MEMORY_TOP_K = 5
 
 # Max output tokens we ask the LLM to budget for. Bedrock's `Converse`
 # API and OpenAI's chat completions both honor this — when the model

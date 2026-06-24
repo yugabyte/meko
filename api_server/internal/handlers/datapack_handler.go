@@ -65,9 +65,15 @@ func (h *DatapackHandler) Create(c echo.Context) error {
 			"UNAUTHORIZED", "missing account context")
 	}
 	req.UserID = account.ID
+	req.UserType = account.AccountType
 
 	resp, err := h.svc.Create(req)
 	if err != nil {
+		// Free-tier cap → 402 + FREE_TIER_DATAPACK_LIMIT code.
+		if errors.Is(err, service.ErrFreeTierDatapackLimit) {
+			return apiError(c, http.StatusPaymentRequired,
+				"FREE_TIER_DATAPACK_LIMIT", service.FreeTierUpgradeMessageDatapack)
+		}
 		if isDatapackValidationErr(err) {
 			return apiError(c, http.StatusBadRequest,
 				"VALIDATION_ERROR", err.Error())

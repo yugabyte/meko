@@ -17,6 +17,16 @@ import {
   formatDatapackShareGrantCamelCase,
   type DatapackShareGrant,
 } from "@/lib/datapackShareGrants";
+import { useAccountUsage } from "@/hooks/useAccountUsage";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { FREE_TIER_LIMITS, FREE_TIER_QUOTA_ENABLED, isFreeTier } from "@/lib/freeTier";
+
+// Compact integer formatter — 1234 → "1.2K", 10_000_000 → "10M".
+// Single shared instance so we don't allocate per render.
+const COMPACT_NUMBER = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
 
 type Props = {
   /** Datapacks the signed-in user can use in the WorkbenchLM: own + shared
@@ -59,6 +69,24 @@ export function WorkbenchLMHeader({
   const selectedDatapackName =
     accessibleDatapacks.find((dp) => dp.datapack_id === selectedDatapackId)?.datapack_name ??
     null;
+
+  // WorkbenchLM token-burn usage indicator. Reads from the same shared
+  // react-query cache that drives the chat-composer gate, so this is a
+  // free read. Hidden until the first /auth/me/usage response so the
+  // header doesn't flicker "—/10M" → "1.2K/10M" on mount. Also hidden
+  // for paid tiers entirely — Pro / Enterprise have no token cap, so
+  // the "x / 10M" framing would be misleading.
+  const { data: accountUsage } = useAccountUsage();
+  const { data: currentUser } = useCurrentUser();
+  const showTokenBurn =
+    FREE_TIER_QUOTA_ENABLED && !!accountUsage && isFreeTier(currentUser?.user_type);
+  const tokenBurnLabel = showTokenBurn
+    ? `${COMPACT_NUMBER.format(accountUsage.token_burn)} / ${COMPACT_NUMBER.format(FREE_TIER_LIMITS.tokenBurn)}`
+    : null;
+  const tokenBurnAtCap = showTokenBurn
+    ? accountUsage.token_burn >= FREE_TIER_LIMITS.tokenBurn
+    : false;
+
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex min-w-0 items-center gap-2.5">
@@ -126,6 +154,19 @@ export function WorkbenchLMHeader({
           "Pick a datapack to start exploring."
         )}
       </p>
+      {tokenBurnLabel ? (
+        <p className="text-xs text-muted-foreground">
+          Tokens burned:{" "}
+          <span
+            className={cn(
+              "font-mono font-medium",
+              tokenBurnAtCap ? "text-amber-700 dark:text-amber-300" : "text-foreground",
+            )}
+          >
+            {tokenBurnLabel}
+          </span>
+        </p>
+      ) : null}
     </div>
   );
 }

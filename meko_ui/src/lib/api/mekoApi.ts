@@ -801,6 +801,28 @@ export async function getCurrentUser(options: { signal?: AbortSignal } = {}) {
   return request<CurrentUser>("/auth/me", "GET", undefined, options);
 }
 
+/**
+ * Per-account usage counters used by the free-tier gating. Numbers only
+ * — the limit thresholds live FE-side in `freeTier.ts` so we can tune
+ * them without redeploying the BE.
+ *
+ * `num_conversations` and `token_burn` are scoped to WorkbenchLM
+ * specifically (`agent_id = "WorkbenchLM"`); third-party agents the
+ * user has connected over MCP are NOT included.
+ */
+export type AccountUsage = {
+  datapack_count: number;
+  kb_storage_file_size: number;
+  num_conversations: number;
+  token_burn: number;
+};
+
+export async function getCurrentUserUsage(
+  options: { signal?: AbortSignal } = {},
+) {
+  return request<AccountUsage>("/auth/me/usage", "GET", undefined, options);
+}
+
 export async function updateOnboardingStatus(hasCompletedOnboarding: boolean) {
   return request<{ message: string; has_completed_onboarding: boolean }>("/auth/me", "PATCH", {
     has_completed_onboarding: hasCompletedOnboarding,

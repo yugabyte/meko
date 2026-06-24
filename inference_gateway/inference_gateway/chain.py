@@ -7,8 +7,10 @@
     2. **PARALLEL** retrieval — `asyncio.gather`:
          - `memory_search` (Mem0 long-term)
          - `knowledgebase_search` (per-datapack RAG; skipped if no datapack_id)
-    3. Load the last ≤N prior messages from the session store.
-    4. LLM call with: system + memory_context + kb_context + history + user.
+    3. LLM call with: system + memory_context + kb_context + user.
+       Prior turns are NOT replayed — Mem0 is the long-term memory; the
+       session store still records turns but they aren't fed back to the
+       model (saves input tokens; relies on Mem0 to surface what matters).
     5. Persistence:
          - `conversation_add_message` is awaited (fast, ~0.5s; guarantees
            the new conversation row is in Langfuse before the right-rail
@@ -35,7 +37,7 @@ import time
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
 from .config import AppConfig
@@ -44,38 +46,108 @@ from .session_store import InMemorySessionStore
 logger = logging.getLogger(__name__)
 
 
+async def _track_token_usage(
+    tools_by_name: Dict[str, BaseTool],
+    *,
+    conversation_id: str,
+    name: str,
+    input_tokens: int,
+    output_tokens: int,
+    total_tokens: int,
+    model: Optional[str] = None,
+    message_id: Optional[str] = None,
+    datapack_id: Optional[str] = None,
+) -> None:
+    """Fire-and-forget call to the MCP `track_token_usage` tool so the
+    GENERATION shows up in Langfuse and per-user SUM picks it up.
+    Failures log + swallow — token accounting must never break a chat turn."""
+    in_tok = int(input_tokens or 0)
+    out_tok = int(output_tokens or 0)
+    tot_tok = int(total_tokens or 0)
+    # Always log the spend even when the MCP tool is unavailable — gives
+    # ops a record of token cost per turn straight from the gateway log,
+    # independent of Langfuse availability.
+    logger.info(
+        "token_usage name=%s message_id=%s input=%d output=%d total=%d model=%s",
+        name, message_id or "-", in_tok, out_tok, tot_tok, model or "-",
+    )
+    tool = tools_by_name.get("track_token_usage")
+    if tool is None:
+        logger.debug("track_token_usage tool unavailable; skipping (name=%s)", name)
+        return
+    args: Dict[str, Any] = {
+        "scope": "write",
+        "conversation_id": conversation_id,
+        "name": name,
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "total_tokens": tot_tok,
+    }
+    if model:
+        args["model"] = model
+    if message_id:
+        args["message_id"] = message_id
+    if datapack_id:
+        args["datapack_id"] = datapack_id
+    try:
+        await tool.ainvoke(args)
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        logger.warning("track_token_usage(%s) failed: %s", name, exc)
+
+
+def _usage_from_langchain_result(result: Any) -> Tuple[int, int, int, Optional[str]]:
+    """Extract `(input, output, total, model)` from a langchain AIMessage.
+    Tries, in order:
+      1. `result.usage_metadata` — canonical LangChain 0.2+ field,
+         standardized across providers (OpenAI, Bedrock, Anthropic, …)
+      2. `response_metadata.usage` / `response_metadata.token_usage` —
+         provider-specific raw payload (OpenAI prompt_/completion_tokens,
+         Bedrock input_/output_tokens)."""
+    meta = getattr(result, "response_metadata", None) or {}
+
+    # 1. Canonical LangChain field — populated by chat models that adopt
+    #    the standard interface (most do as of langchain-core 0.2).
+    usage_md = getattr(result, "usage_metadata", None) or {}
+    input_tokens = int(usage_md.get("input_tokens") or 0)
+    output_tokens = int(usage_md.get("output_tokens") or 0)
+    total_tokens = int(usage_md.get("total_tokens") or 0)
+
+    # 2. Fall back to provider-specific shapes in response_metadata.
+    if not (input_tokens or output_tokens or total_tokens):
+        usage = meta.get("usage") or meta.get("token_usage") or {}
+        input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+        output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+        total_tokens = int(usage.get("total_tokens") or (input_tokens + output_tokens))
+
+    if not total_tokens:
+        total_tokens = input_tokens + output_tokens
+
+    model = meta.get("model_name") or meta.get("model") or meta.get("model_id")
+
+    # Debug: dump raw shapes when we still can't find tokens, so we can see
+    # exactly which provider field the model is actually using. Log keys
+    # only (no values) to avoid leaking message content.
+    if not (input_tokens or output_tokens):
+        logger.warning(
+            "usage extract miss: response_metadata keys=%s usage_metadata=%s response_metadata=%s",
+            list(meta.keys()), usage_md, meta,
+        )
+
+    return input_tokens, output_tokens, total_tokens, model
+
+
 # --------------------------------------------------------------------------- #
 # Retrieval relevance tuning
 # --------------------------------------------------------------------------- #
 #
-# `memory_search` and `knowledgebase_search` both return top-K results sorted
-# by vector similarity, with no built-in relevance floor — so for a vague
-# query like "hi" they happily return five basically-unrelated hits and we
-# render them as if they were grounding context. These two thresholds clip
-# the long tail in the formatters: anything weaker gets dropped before the
-# LLM (or the Agent Reasoning panel) sees it.
+# memory_search returns top-K by similarity with no relevance floor, so a vague
+# query like "hi" returns basically-unrelated hits. MEMORY_MIN_SCORE clips that
+# long tail before the LLM sees it. KB relevance + result count are owned by the
+# MCP's hybrid search, so the gateway neither filters nor caps KB results.
 #
-# Tune from observation:
-#   - Bump `MEMORY_MIN_SCORE` up if you see Mem0 hits the agent shouldn't have used.
-#   - Lower it if relevant memories disappear from the panel.
-#   - Same logic mirror-flipped for `KB_MAX_DISTANCE`.
-
-# Mem0 score is cosine similarity in [0, 1] — higher is better. 0.3 is
-# conservative: drops near-orthogonal hits (the "hi" failure mode) while
-# keeping moderately-related hits like "Name is John Doe" → "what does John Doe like"
-# (score ~0.34) which are useful even though their score is modest.
+# Mem0 score is cosine similarity in [0, 1]; 0.3 drops near-orthogonal hits (the
+# "hi" failure mode) while keeping moderately-related ones (~0.34). Tune via obs.
 MEMORY_MIN_SCORE = 0.3
-
-# pgvector cosine distance is in [0, 2] — lower is better. Empirically
-# Meko's KB returns distances clustered near 1.0 even for clearly-relevant
-# chunks (we captured 1.0166 for a hit that was textually a perfect match),
-# probably because the embedding model produces under-spread distances on
-# short queries. So this threshold is intentionally permissive — it guards
-# against truly orthogonal noise (~1.5+) while keeping the cluster-near-1.0
-# real hits. Tune DOWN if you see KB junk leak through; the memory-score
-# threshold does most of the relevance work today because Mem0 scores are
-# better-spread than KB distances.
-KB_MAX_DISTANCE = 1.2
 
 
 # Greetings / acknowledgements that don't need any retrieval grounding —
@@ -93,22 +165,13 @@ _TRIVIAL_QUERY_RX = re.compile(
 _MIN_QUERY_LENGTH_FOR_RETRIEVAL = 4
 
 
-# Defensive backstop on how many hits we'll iterate over when extracting
-# structured rows from a search response — only kicks in if the MCP
-# server ignores our `limit` and returns an unbounded list. The normal
-# path is bounded by the caller's `top_k` (currently `cfg.memory_top_k`,
-# default 10). Generous so legitimate top_k bumps don't get silently
-# truncated; tight enough that a misbehaving server can't blow up the
-# prompt with thousands of rows.
-MAX_RETRIEVAL_ITEMS = 50
-
 # Prior-conversation turns fed to the SUMMARY model on a cache hit. The MCP
 # server already caps the thread it returns (CONVERSATION_MAX_THREAD_TURNS);
 # this is the gateway-side bound applied when building the summary prompt.
-CONV_SUMMARY_MAX_TURNS = 50
+CONV_SUMMARY_MAX_TURNS = 8
 # Reused turns surfaced in the decision-trace "REUSED CONVERSATIONS" card —
 # observability only; does not affect the answer.
-CONV_TRACE_MAX_CHUNKS = 50
+CONV_TRACE_MAX_CHUNKS = 8
 
 
 def _is_trivial_query(message: str) -> bool:
@@ -128,35 +191,23 @@ def _is_trivial_query(message: str) -> bool:
     return False
 
 
-SYSTEM_TEMPLATE = """You are the Meko playground assistant.
+SYSTEM_TEMPLATE = """You are the Meko playground assistant. Be concise and helpful.
 
-Use the relevant memories and knowledge sources below to ground your answer
-when they apply, and ignore them when they don't. Be concise and helpful.
+Ground your answer in the memories and knowledge below when relevant;
+ignore them when they don't apply.
 
-Source priority — IMPORTANT:
-  - The knowledge base is content the user has curated and treats as
-    authoritative for this conversation — uploaded documents, guides,
-    specs, references, or any material they've added. Treat it as the
-    source of truth on whatever topics it covers. When a KB chunk and
-    a memory disagree on something covered by the KB, the KB wins.
-  - Memories capture the user's intents, preferences, plans, and personal
-    context (extracted from prior chat turns). Use them to TAILOR the
-    answer to who the user is and what they're trying to do — not to
-    contradict ground-truth content from the KB.
-  - If a memory looks stale or contradicts a KB chunk on a factual
-    matter, prefer the KB and don't surface the contradiction unless the
-    user asks.
+Sources — when they conflict, the KB wins:
+  - KB = user-curated documents; authoritative on whatever it covers.
+  - Memories = user intent/preferences/context; use to tailor the
+    answer, not to override KB facts.
 
-Response length: keep your reply complete and self-contained. You have a
-finite output budget of roughly {max_tokens} tokens (~{max_chars} characters).
-If you have a lot to cover, prioritize the most important points and finish
-your thought rather than running long and getting cut off mid-sentence. Prefer
-a brief, complete answer to a sprawling one that hits the ceiling.
+Response budget: ~{max_tokens} tokens (~{max_chars} chars). Prefer a
+complete brief answer to a sprawling one that gets cut off.
 
-Relevant memories (from `memory_search`) — user intent/context:
+Memories (from `memory_search`):
 {memory_context}
 
-Relevant knowledge (from `knowledgebase_search`) — source of truth:
+Knowledge (from `knowledgebase_search`):
 {kb_context}
 """
 
@@ -302,6 +353,11 @@ async def _summarize_conversation_hits(
     ]
     try:
         result = await summary_llm.ainvoke(messages)
+        in_tok, out_tok, tot_tok, model_id = _usage_from_langchain_result(result)
+        logger.info(
+            "token_usage name=Conversation Summary input=%d output=%d total=%d model=%s turns=%d",
+            in_tok, out_tok, tot_tok, model_id or "-", len(hits),
+        )
         text = _coerce_text(result.content).strip()
         if not text:
             logger.warning("conversation summary returned empty; falling back to closest answer")
@@ -502,7 +558,6 @@ async def run_chat_turn(
             query=user_message,
             conversation_id=conversation_id,
             datapack_id=datapack_id,
-            top_k=cfg.memory_top_k,
             steps=steps,
             skip_conversation=bypass,
         )
@@ -598,15 +653,11 @@ async def run_chat_turn(
     memory_context = _memory_hits_to_bullets(memory_hits)
     kb_context = _kb_hits_to_bullets(kb_hits)
 
-    # 3. Load history (≤max_history messages, oldest first).
-    history = await session_store.get_messages(session_id)
-
-    # 4. LLM call.
-    #
-    # The system prompt's "response length" hint advertises the same budget
-    # we set in `cfg.llm_max_tokens` so the model self-paces. Rough char
-    # conversion: ~4 chars per English token; sufficient for the hint
-    # (the model doesn't need exact precision, just an order-of-magnitude).
+    # 3. LLM call. Prior turns from the session store are NOT replayed —
+    # Mem0 + KB carry the cross-turn context we care about and replaying
+    # full history per turn was the dominant input-token cost. The system
+    # prompt's "response length" hint advertises the same budget set in
+    # `cfg.llm_max_tokens` so the model self-paces (~4 chars per token).
     messages: List[BaseMessage] = [
         SystemMessage(
             content=SYSTEM_TEMPLATE.format(
@@ -615,10 +666,9 @@ async def run_chat_turn(
                 max_tokens=cfg.llm_max_tokens,
                 max_chars=cfg.llm_max_tokens * 4,
             )
-        )
+        ),
+        HumanMessage(content=user_message),
     ]
-    messages.extend(_to_lc_message(role, content) for role, content in history)
-    messages.append(HumanMessage(content=user_message))
 
     llm_start = time.monotonic()
     try:
@@ -637,6 +687,16 @@ async def run_chat_turn(
         ProcessingStep("llm_invoke", int((time.monotonic() - llm_start) * 1000), "ok")
     )
     assistant_text = _coerce_text(result.content)
+
+    # Capture token usage from the main LLM call here, but DEFER the
+    # `track_token_usage` invocation until after `_add_message` returns
+    # — we want to stamp the observation with the conversation's
+    # `message_id` so the token observation correlates to a specific
+    # turn in Langfuse. The same prompt also subsumes "conversation
+    # summarization" when KB search returns conversation-history hits
+    # (they're rendered into `kb_context` and synthesised inline), so
+    # one observation covers both.
+    in_tok, out_tok, tot_tok, model_id = _usage_from_langchain_result(result)
 
     # 5. Persistence.
     #
@@ -681,6 +741,20 @@ async def run_chat_turn(
             )
         )
         message_id = ""
+    # Token accounting for the just-completed main LLM call, stamped
+    # with the message_id so the GENERATION row in Langfuse correlates
+    # to this specific turn.
+    await _track_token_usage(
+        tools_by_name,
+        conversation_id=conversation_id,
+        name="LLM Response",
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+        total_tokens=tot_tok,
+        model=model_id,
+        message_id=message_id or None,
+        datapack_id=datapack_id,
+    )
     steps.append(
         ProcessingStep("memory_add", 0, "skipped", "handled inside MCP conversation_add_message")
     )
@@ -802,7 +876,9 @@ async def _search_memories(
                 )
             )
         return []
-    hits = _extract_memory_hits(_parse_json(raw))
+    # Vector hits are capped by `top_k` server-side; graph/promoted relations
+    # are not, so cap them at 2× top_k to bound the prompt.
+    hits = _extract_memory_hits(_parse_json(raw), relation_cap=2 * top_k)
     if steps is not None:
         steps.append(
             ProcessingStep(
@@ -824,7 +900,6 @@ async def _search_knowledge(
     query: str,
     conversation_id: str,
     datapack_id: Optional[str],
-    top_k: int,
     steps: Optional[List[ProcessingStep]] = None,
     skip_conversation: bool = False,
 ) -> Tuple[List[KbHit], Optional[Dict[str, Any]]]:
@@ -847,7 +922,6 @@ async def _search_knowledge(
         "scope": "read",
         "conversation_id": conversation_id,
         "agent_id": agent_id,
-        "limit": top_k,
     }
     if datapack_id:
         kb_tool_args["datapack_id"] = datapack_id
@@ -878,7 +952,6 @@ async def _search_knowledge(
         "conversation_id": conversation_id,
         "datapack_id": datapack_id,
         "agent_id": agent_id,
-        "limit": top_k,
     }
     # User rejected the cache → force pure KB (no internal conversation search).
     if skip_conversation:
@@ -1031,7 +1104,7 @@ async def _add_message(
 # --------------------------------------------------------------------------- #
 
 
-def _extract_memory_hits(payload: object) -> List[MemoryHit]:
+def _extract_memory_hits(payload: object, relation_cap: Optional[int] = None) -> List[MemoryHit]:
     """Pull structured memory hits out of whatever `memory_search` returned.
 
     Meko's `memory_search` returns three parallel arrays — all worth
@@ -1076,10 +1149,9 @@ def _extract_memory_hits(payload: object) -> List[MemoryHit]:
     promoted_hits: List[MemoryHit] = []
 
     # Vector hits — `memory` is the documented Meko key; the others are
-    # kept for shape-tolerance against older MCP servers. The slice is
-    # only a backstop in case the server ignored our `limit` — the
-    # normal path is already bounded by `top_k` upstream.
-    for item in vector_items[:MAX_RETRIEVAL_ITEMS]:
+    # kept for shape-tolerance against older MCP servers. Bounded upstream by
+    # memory_top_k (the limit sent to memory_search), so we iterate all returned.
+    for item in vector_items:
         if isinstance(item, dict):
             raw_score = item.get("score")
             score: Optional[float] = (
@@ -1109,17 +1181,20 @@ def _extract_memory_hits(payload: object) -> List[MemoryHit]:
         reverse=True,
     )
 
-    # Graph triples — flatten subject ─predicate→ object.
-    # Order is the MCP response order (relations aren't scored, so we
-    # have nothing better to sort on).
-    for item in relations[:MAX_RETRIEVAL_ITEMS]:
+    # Graph triples — flatten subject ─predicate→ object. Relations aren't
+    # bounded by the vector `limit`, so cap them (relation_cap) to keep the
+    # prompt from ballooning. Order is the MCP response order (unscored).
+    if relation_cap is not None:
+        relations = relations[:relation_cap]
+        promoted_relations = promoted_relations[:relation_cap]
+    for item in relations:
         triple = _format_relation_triple(item)
         if triple:
             graph_hits.append(MemoryHit(kind="graph", text=triple, score=None, char_count=len(triple)))
 
     # Promoted relations — same shape, different provenance tag so the
     # UI (and a future debugger) can tell them apart.
-    for item in promoted_relations[:MAX_RETRIEVAL_ITEMS]:
+    for item in promoted_relations:
         triple = _format_relation_triple(item)
         if triple:
             promoted_hits.append(
@@ -1138,10 +1213,9 @@ def _extract_kb_hits(payload: object) -> List[KbHit]:
     or a bare list of chunks. `chunk_text` is the current Meko key; the
     others are fallbacks for older / alternate MCP servers.
 
-    Distance filtering: drops hits beyond `KB_MAX_DISTANCE`. Distance is
-    cosine distance (lower = better); we also compute a `score = max(0,
-    1 - distance)` for UI display so memory and KB hits both sort by the
-    same "higher = better" convention.
+    Relevance + result count are owned by the MCP's hybrid search — the gateway
+    neither filters by distance nor caps the count; it renders all returned
+    chunks. `score = max(0, 1 - distance)` is computed only for UI sort order.
     """
     items: list[Any] = []
     if isinstance(payload, dict):
@@ -1154,14 +1228,12 @@ def _extract_kb_hits(payload: object) -> List[KbHit]:
         items = payload
 
     hits: List[KbHit] = []
-    for item in items[:MAX_RETRIEVAL_ITEMS]:
+    for item in items:
         if isinstance(item, dict):
             raw_distance = item.get("distance")
             distance: Optional[float] = (
                 float(raw_distance) if isinstance(raw_distance, (int, float)) else None
             )
-            if distance is not None and distance > KB_MAX_DISTANCE:
-                continue
             # Cosine distance → similarity score in [0..1] (clamp the
             # negative tail that orthogonal-or-beyond vectors produce).
             score: Optional[float] = (
@@ -1282,14 +1354,6 @@ def _format_memory_context(payload: object) -> str:
 
 def _format_knowledge_context(payload: object) -> str:
     return _kb_hits_to_bullets(_extract_kb_hits(payload))
-
-
-def _to_lc_message(role: str, content: str) -> BaseMessage:
-    if role == "user":
-        return HumanMessage(content=content)
-    if role == "assistant":
-        return AIMessage(content=content)
-    return SystemMessage(content=content)
 
 
 def _truncate(s: str, n: int) -> str:

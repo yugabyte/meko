@@ -1,10 +1,14 @@
 import { FileText, Link2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { KnowledgeBaseDocument } from "@/lib/api/mekoApi";
 import { datapackKnowledgePath } from "@/app/routes/paths";
 import { documentNameLastSegment } from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentName";
 import { kbDocumentStatusLabel } from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentStatus";
+import { useAccountUsage } from "@/hooks/useAccountUsage";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { FREE_TIER_BLOCKED_MESSAGES, getFreeTierStatus } from "@/lib/freeTier";
 
 export const KNOWLEDGE_PREVIEW_LIMIT = 3;
 
@@ -32,6 +36,18 @@ export function DatapackDetailKnowledgeTile({
   canAddSource,
   className,
 }: Props) {
+  // Free-tier KB-storage cap. Read from the shared react-query cache
+  // so this is a free read after any other gated surface has fetched.
+  // Disable up front rather than rely on the BE 402 firing later —
+  // catches the click earlier in the flow and stays consistent with
+  // the DropdownMenuItem / FilesTab / WorkbenchLM gates.
+  const { data: accountUsage } = useAccountUsage();
+  const { data: currentUser } = useCurrentUser();
+  const freeTier = getFreeTierStatus(accountUsage, currentUser?.user_type);
+  const blockedByFreeTier = freeTier.hasHitKbStorageFileSize;
+  // Final disabled state: either the share-grant says no, or the
+  // free-tier cap is hit. Two distinct reasons, one final flag.
+  const addDisabled = !canAddSource || blockedByFreeTier;
   const previewLen = documents.length;
   const preview = documents.slice(0, KNOWLEDGE_PREVIEW_LIMIT);
 
@@ -89,19 +105,45 @@ export function DatapackDetailKnowledgeTile({
         )}
       </ul>
       <div className="border-t border-border">
-        <button
-          type="button"
-          className={cn(
-            "w-full py-3 text-center text-sm font-normal transition-colors",
-            canAddSource
-              ? "cursor-pointer text-foreground/90 hover:text-foreground"
-              : "cursor-not-allowed text-muted-foreground/55 opacity-60 hover:text-muted-foreground/55",
-          )}
-          disabled={!canAddSource}
-          onClick={onAddSource}
-        >
-          + Add Knowledge
-        </button>
+        {/* Tooltip is only useful when the free-tier cap is hit — the
+            share-grant disabled state has its own meaning (no upload
+            permission) that the tooltip would conflate. So we only
+            wrap in Tooltip when `blockedByFreeTier` is the reason. */}
+        {blockedByFreeTier ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex w-full">
+                <button
+                  type="button"
+                  className={cn(
+                    "w-full py-3 text-center text-sm font-normal transition-colors",
+                    "cursor-not-allowed text-muted-foreground/55 opacity-60 hover:text-muted-foreground/55",
+                  )}
+                  disabled
+                >
+                  + Add Knowledge
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[280px] text-center">
+              {FREE_TIER_BLOCKED_MESSAGES.knowledgeUpload}
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <button
+            type="button"
+            className={cn(
+              "w-full py-3 text-center text-sm font-normal transition-colors",
+              addDisabled
+                ? "cursor-not-allowed text-muted-foreground/55 opacity-60 hover:text-muted-foreground/55"
+                : "cursor-pointer text-foreground/90 hover:text-foreground",
+            )}
+            disabled={addDisabled}
+            onClick={onAddSource}
+          >
+            + Add Knowledge
+          </button>
+        )}
       </div>
     </aside>
   );

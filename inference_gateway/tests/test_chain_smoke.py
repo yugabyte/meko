@@ -123,6 +123,9 @@ async def test_full_turn_wires_everything() -> None:
         }
     )
 
+    # `limit` is intentionally NOT sent — KB count is owned by the
+    # MCP's hybrid search; the gateway sends agent_id / conversation_id
+    # / datapack_id / query / scope only.
     kb_search.ainvoke.assert_awaited_once_with(
         {
             "scope": "read",
@@ -130,7 +133,6 @@ async def test_full_turn_wires_everything() -> None:
             "conversation_id": "conv-uuid-1",
             "datapack_id": "dp-1",
             "agent_id": "agent",
-            "limit": 5,
         }
     )
 
@@ -162,8 +164,10 @@ async def test_full_turn_wires_everything() -> None:
     assert (await store.get_conversation_id("s1")) == "conv-uuid-1"
 
 
-async def test_second_turn_reuses_conversation_and_includes_history() -> None:
-    """conversation_create runs once; everything else runs every turn."""
+async def test_second_turn_reuses_conversation_and_skips_history_replay() -> None:
+    """conversation_create runs once; everything else runs every turn.
+    Prior turns are NOT replayed into the second LLM call — Mem0 + KB
+    own cross-turn context now (was the dominant input-token cost)."""
     cfg = _make_cfg()
     llm = _FakeLLM(["a", "b"])
     create = _mock_tool({"conversation_id": "conv-uuid-1"})
@@ -195,15 +199,15 @@ async def test_second_turn_reuses_conversation_and_includes_history() -> None:
     assert kb_search.ainvoke.await_count == 2
     assert addmsg.ainvoke.await_count == 2
 
-    # One LLM call per turn (no extraction call).
+    # One LLM call per turn (no extraction call). Second turn's prompt
+    # is just [system, current-user-message] — NO replay of the prior
+    # user/assistant pair (PR #289 dropped history replay; Mem0/KB are
+    # expected to surface anything cross-turn that matters).
     assert len(llm.calls) == 2
     second_call = llm.calls[1]
     roles = [type(m).__name__ for m in second_call]
-    # system, user(first), assistant(a), user(second)
-    assert roles == ["SystemMessage", "HumanMessage", "AIMessage", "HumanMessage"]
-    assert second_call[1].content == "first"
-    assert second_call[2].content == "a"
-    assert second_call[3].content == "second"
+    assert roles == ["SystemMessage", "HumanMessage"]
+    assert second_call[1].content == "second"
 
 
 async def test_kb_search_skipped_when_no_datapack_id() -> None:
@@ -475,7 +479,7 @@ async def test_processing_steps_capture_tool_args_for_observability() -> None:
     assert ks_args["scope"] == "read"
     assert ks_args["conversation_id"] == "conv-uuid-tools"
     assert ks_args["agent_id"] == "agent"
-    assert ks_args["limit"] == cfg.memory_top_k
+    assert "limit" not in ks_args  # KB count is owned by the MCP, not the gateway
     assert ks_args["datapack_id"] == "dp-x"
     assert "query" not in ks_args
 

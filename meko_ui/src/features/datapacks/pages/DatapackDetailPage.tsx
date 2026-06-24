@@ -11,6 +11,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { WarningBanner } from "@/components/ui/warning-banner";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
+import { useAccountUsage } from "@/hooks/useAccountUsage";
+import { FREE_TIER_BLOCKED_MESSAGES, getFreeTierStatus } from "@/lib/freeTier";
+import { FreeTierLimitBanner } from "@/lib/freeTierBanner";
 import {
   DEFAULT_ACCOUNT_DATAPACK_NAME,
   ROUTES,
@@ -105,6 +108,11 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
+  // Free-tier KB storage cap — gates the "Add Knowledge" dropdown item
+  // below. Shared react-query cache with the rest of the app, so this
+  // is a free read after any other page has fetched it.
+  const { data: accountUsage } = useAccountUsage();
+  const freeTier = getFreeTierStatus(accountUsage, currentUser?.user_type);
 
   // Each tile in CollectiveLearningPipeline routes directly to its dedicated
   // summary page — no inline preview list is rendered on the detail page.
@@ -392,6 +400,10 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
       <AppWorkspaceHeader />
 
       <main className="flex-1 pr-1 pt-6 pl-1 pb-3 max-w-7xl mx-auto w-full space-y-8">
+        {freeTier.hasHitKbStorageFileSize ? (
+          <FreeTierLimitBanner kind="kbStorage" />
+        ) : null}
+
         {/* DatapackDetailHero: breadcrumbs, title/badges/description, ID/created; actions = Share (if eligible), upload dialog, settings menu (maintainer/owner only).
             Connect used to live up here but has been demoted to the body-level
             "Connect" tile + the high-level Connect CTA on /datapacks — Meko
@@ -461,12 +473,29 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-[14rem] bg-card border-border text-foreground">
                     {isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant }) && (
+                      // Free-tier KB-storage cap: disable the item when the
+                      // user has hit the byte limit. We can't render a
+                      // floating tooltip on a DropdownMenuItem cleanly (the
+                      // menu auto-closes on hover-out), so the disabled
+                      // state + the appended muted-text hint conveys
+                      // "you can't click this, here's why."
                       <DropdownMenuItem
-                        className="gap-2 cursor-pointer focus:bg-muted/20"
+                        className="gap-2 cursor-pointer focus:bg-muted/20 data-[disabled]:cursor-not-allowed"
                         onSelect={() => setIsUploadOpen(true)}
+                        disabled={freeTier.hasHitKbStorageFileSize}
+                        title={
+                          freeTier.hasHitKbStorageFileSize
+                            ? FREE_TIER_BLOCKED_MESSAGES.knowledgeUpload
+                            : undefined
+                        }
                       >
                         <Upload className="h-4 w-4 shrink-0" aria-hidden />
                         Add Knowledge
+                        {freeTier.hasHitKbStorageFileSize ? (
+                          <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                            limit hit
+                          </span>
+                        ) : null}
                       </DropdownMenuItem>
                     )}
                     {showActionsDropdownDangerSeparator ? <DropdownMenuSeparator className="bg-border" /> : null}

@@ -15,6 +15,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { UpdatePasswordDialog } from "@/features/settings/components/UpdatePasswordDialog";
 import { SecurityTokensSection } from "@/features/settings/components/SecurityTokensSection";
+import { PricingSection } from "@/features/settings/components/PricingSection";
 
 export default function SettingsPage() {
   // Shared, session-cached identity — usually already warmed by the
@@ -135,6 +136,8 @@ export default function SettingsPage() {
               </section>
 
               <SecurityTokensSection />
+
+              <PricingSection />
             </>
           ) : null}
         </div>

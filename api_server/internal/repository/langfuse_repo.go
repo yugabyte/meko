@@ -646,6 +646,40 @@ func (r *LangfuseRepo) CountDistinctSessionsForProject(projectID string) (int64,
 	return total, nil
 }
 
+// SumTokenUsageByUserAndAgent sums `usage_details.total` across GENERATION
+// observations whose parent trace matches (user, agent).
+//
+// TODO(scaling): full-scans `traces` + `observations` — neither
+// `idx_traces_user_id` nor `idx_observations_trace_id` is enabled in
+// the langfuse schema.
+func (r *LangfuseRepo) SumTokenUsageByUserAndAgent(userID, agentID string) (int64, error) {
+	if !r.LangfuseDBConfigured() {
+		return 0, ErrLangfuseDBNotConfigured
+	}
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(agentID) == "" {
+		return 0, fmt.Errorf("user_id and agent_id are required")
+	}
+	const query = `
+		SELECT COALESCE(SUM(
+		           CASE WHEN o.type = 'GENERATION' AND o.usage_details ? 'total'
+		                THEN (o.usage_details ->> 'total')::bigint
+		                ELSE 0 END
+		       ), 0)
+		FROM   clickhouse.traces       t
+		JOIN   clickhouse.observations o
+		  ON   o.project_id = t.project_id
+		  AND  o.trace_id   = t.id
+		WHERE  t.user_id              = $1
+		  AND  (t.metadata->>'agent_id') = $2
+		  AND  t.is_deleted = false
+	`
+	var total int64
+	if err := r.langfuseDB.QueryRow(query, userID, agentID).Scan(&total); err != nil {
+		return 0, fmt.Errorf("langfuse db: sum token usage for user %s agent %s: %w", userID, agentID, err)
+	}
+	return total, nil
+}
+
 // ListConversationsForProject returns one page of Langfuse sessions
 // (= chat conversations) for the project, newest first. Pagination is
 // offset-based.

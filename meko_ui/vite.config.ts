@@ -34,6 +34,10 @@ export default defineConfig({
     },
   },
   root: path.resolve(import.meta.dirname),
+  // Expose MEKO_FREE_TIER_* env vars (in addition to the default VITE_*
+  // ones) so api_server's `free_tier.go` and `src/lib/freeTier.ts` can
+  // share a single env-var name per cap. See free_tier.go for the names.
+  envPrefix: ["VITE_", "MEKO_FREE_TIER_"],
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,

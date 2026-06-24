@@ -13,13 +13,18 @@ import (
 )
 
 // AuthHandler holds Echo handlers for authentication endpoints.
+// `usageSvc` is used by GetUsage (`/auth/me/usage`).
 type AuthHandler struct {
-	svc *service.AuthService
+	svc      *service.AuthService
+	usageSvc *service.AccountUsageService
 }
 
 // NewAuthHandler creates a new AuthHandler.
-func NewAuthHandler(svc *service.AuthService) *AuthHandler {
-	return &AuthHandler{svc: svc}
+func NewAuthHandler(
+	svc *service.AuthService,
+	usageSvc *service.AccountUsageService,
+) *AuthHandler {
+	return &AuthHandler{svc: svc, usageSvc: usageSvc}
 }
 
 // Signup handles POST /api/v1/auth/signup.
@@ -398,6 +403,40 @@ func (h *AuthHandler) UpdateOnboardingStatus(c echo.Context) error {
 		"message":                  "onboarding status updated",
 		"has_completed_onboarding": req.HasCompletedOnboarding,
 	})
+}
+
+// GetUsage handles GET /api/v1/auth/me/usage. Returns the 4 raw
+// free-tier counters; FE pairs them with FREE_TIER_LIMITS for gating.
+// Langfuse counters degrade to 0 if the Langfuse DB isn't configured.
+//
+//	@Summary	Get free-tier usage counters for the authenticated user
+//	@Tags		auth
+//	@Produce	json
+//	@Success	200	{object}	APIResponse
+//	@Failure	401	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/auth/me/usage [get]
+func (h *AuthHandler) GetUsage(c echo.Context) error {
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "missing account context")
+	}
+
+	// Defensive: NewAuthHandler allows a nil usage service for minimal
+	// wiring (early bootstrap). Production router.go always passes it.
+	if h.usageSvc == nil || !h.usageSvc.Configured() {
+		return apiError(c, http.StatusInternalServerError,
+			"USAGE_SERVICE_NOT_CONFIGURED", "usage service is not configured")
+	}
+
+	usage, err := h.usageSvc.GetUsage(account.ID)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"USAGE_LOOKUP_FAILED", "failed to read usage counters")
+	}
+	return ok(c, http.StatusOK, usage)
 }
 
 // classifyAuthErr maps auth/cognito sentinel errors to the appropriate
