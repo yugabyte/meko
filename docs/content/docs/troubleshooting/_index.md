@@ -22,12 +22,11 @@ If you have problems with your setup, check the following common issues:
     - Restart is required after editing your configuration.
     - `--allow-http` flag is required in [manual setup](../../integrations/connect-to-ai-agent/#manual-setup-1).
 
-<!--
-- OAuth datapack-tools caveat (per outcome of the OAuth docs ticket)
--->
 - Agent answers but never calls Meko tools.
 
     The Meko skills are not installed; see **Connect>Manual MCP Install** in the portal.
+
+    Note that if you installed Meko using OAuth alone to authenticate (that is, you didn't use the automatic installer), your agent interacts with Meko _on demand_ only: you need to mention "Meko" in your prompt (for example, _"save this to Meko,"_ _"search my Meko knowledge base"_) for the agent to call the tools. The agent won't proactively save conversations or capture memories unless you ask. To get automatic behavior, use the [Automated install](../quick-start/#connect-your-ai-client), or write your own skills to teach your agent when to call Meko tools.
 
 ## Report an issue
 

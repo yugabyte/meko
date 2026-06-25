@@ -9,8 +9,8 @@ type: docs
 Meko provides a persistent datastore for the full spectrum of information that AI agents need, from raw to refined:
 
 - **Conversations** are a form of episodic information. They are raw, verbatim recordings, unfiltered and comprehensive. 
-- **Memory** is derived from conversations: extracted, condensed, and stored for associative retrieval. Memory begins as private and can be promoted to shared.  Memory trades completeness for efficiency and recallability.
-- **Knowledge** is confirmed information — curated documents and facts (e.g. from text, PDF, or other files).
+- **Memory** is derived from conversations: extracted, condensed, and stored for associative retrieval. Memory begins as private and can be promoted to shared. Memory trades completeness for efficiency and recallability.
+- **Knowledge** is confirmed information — curated documents and facts (such as from text, PDF, or other files).
 
 We'll start by adding knowledge, then move on to creating memories.
 
@@ -125,23 +125,23 @@ With Meko, however, your AI can remember your vacation preferences, and use them
 
 2.  Now, verify that your memory reached Meko (in the cloud) by retrieving the memory from another independent session.
 
-In your original session (from the previous step), retrieve your agent-id by typing:
+    In your original session (from the previous step), retrieve your agent-id by typing:
 
     ```text
     What is my agent-id for Meko?
     ``` 
 
- Start a new separate session (e.g. in Claude, open a separate instance of Claude Code in another terminal window.   In Cursor, create a New Agent.   Etc.).   Type the following (use the agent ID just retrieved):
+    Start a new separate session (for example, in Claude, open a separate instance of Claude Code in another terminal window; in Cursor, create a New Agent). Type the following (use the agent ID just retrieved):
 
     ```text
     Access my preferences using <insert_your_agent_id>.
     Propose a 5 day vacation for me.
 
-Your AI leverages the memory (extracted automatically by Meko from your first session’s conversation) to provide an personalized response.  
+Your AI leverages the memory (extracted automatically by Meko from your first session's conversation) to provide a personalized response.  
 
-Without Meko, AI will suggest a random vacation destination, or will ask clarifying questions (what vacation budget?  what type of destination?)  
+Without Meko, AI will suggest a random vacation destination, or will ask clarifying questions (such as, what vacation budget? what type of destination?).
 
-With Meko, you will see a personalized, more optimal response such as the following.   Memory saves on tokens consumed, gets more optimal, more accurate results, and can be shared with and augmented by other agents so that knowledge compounds across the system.
+With Meko, you will see a personalized, more optimal response such as the following.
 
 ```text
 Here’s a 5-day plan tuned to what you’ve saved: tropical beach + budget.
@@ -170,6 +170,8 @@ Thailand or Nusa Penida + Sanur, Bali if you’re already closer to Asia.)
 ## If you tell me your month, home airport region, and solo vs. group, I can
 ## narrow this to one place, rough daily spend, and a rain-day backup.
 ```
+
+Memory saves on tokens consumed, gets more optimal, accurate results, and can be shared with and augmented by other agents so that knowledge compounds across the system.
 
 ### Check your memories
 

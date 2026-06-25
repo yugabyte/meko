@@ -14,7 +14,7 @@ Meko uses long-lived API keys (personal access tokens) to authenticate MCP clien
 
 1. In the Meko portal, open **Settings**.
 2. In the **API Keys** section, click **Generate API key**.
-3. Enter a **Name** that identifies the client (e.g., `laptop/claude-desktop`, `laptop/cursor`). This is a label only — pick something that tells you where the key is used.
+3. Enter a **Name** that identifies the client (for example, `laptop/claude-desktop`, `laptop/cursor`). This is a label only; pick something that tells you where the key is used.
 4. Click **Generate API key**.
 5. **Copy** or **Download .txt** before closing the dialog. The full key is shown exactly once.
 
@@ -42,6 +42,6 @@ Revocation is **immediate and permanent** — any MCP client using that key stop
 
 ## Best practices
 
-- **One key per client.** Name keys after the machine and client they're used with (e.g., `laptop/cursor`, `workstation/claude-code`). This makes it easy to revoke a single client without disrupting others.
-- **Rotate before expiry.** Generate a new key, update your client config, then revoke the old one.
+- **One key per client.** Name keys after the machine and client they're used with (for example, `laptop/cursor`, `workstation/claude-code`). This makes it easy to revoke a single client without disrupting others.
+- **Rotate before expiry.** Generate a new key, update your client configuration, then revoke the old one.
 - **Download the .txt** as a backup when generating. You can't retrieve the full key later.

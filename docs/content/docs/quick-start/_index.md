@@ -32,13 +32,13 @@ See [WorkbenchLM](../guides/workbench-lm/) for what's loaded, when to use it ver
 
 ## Connect your AI client
 
-External AI clients (Cursor, Claude Code, Claude Desktop, Codex, VS Code, etc.) connect to Meko through one shared MCP endpoint:
+External AI clients (Cursor, Claude Code, Claude Desktop, Codex, VS Code, and so on) connect to Meko through one shared MCP endpoint:
 
 ```text
 https://mcp.mekodata.ai/mcp
 ```
 
-You don't need a different URL per datapack. Your agent picks the datapack at call time by passing a `datapack_id` (or datapack name) into MCP tool calls. API keys and the MCP connection are scoped to your account, not to a single datapack — once connected, your agent can see and act on every datapack you own.
+You don't need a different URL per datapack. Your agent picks the datapack at call time by passing a `datapack_id` (or datapack name) into MCP tool calls. API keys and the MCP connection are scoped to your account, not to a single datapack. Once connected, your agent can see and act on every datapack you own.
 
 There are three ways to connect. Pick the one that fits your workflow.
 
@@ -47,9 +47,9 @@ There are three ways to connect. Pick the one that fits your workflow.
 
 _Recommended for Cursor, Claude Code, and Claude Desktop._
 
-The portal gives you a one-line `npx` command per client. It registers the Meko MCP server **and** installs an agent behavioral skill that teaches your agent _when_ to use Meko tools automatically — saving conversations, capturing memories, and searching knowledge without you having to ask each time. In harnesses that support it (e.g., Claude Code), the skill also hooks into session lifecycle events to capture context at session start and end.
+The portal gives you a one-line `npx` command per client. It registers the Meko MCP server _and_ installs an agent behavioral skill that teaches your agent _when_ to use Meko tools automatically, saving conversations, capturing memories, and searching knowledge without you having to ask each time. In harnesses that support it (such as Claude Code), the skill also hooks into session lifecycle events to capture context at session start and end.
 
-1. Generate an API key from **Settings > API Keys**. Name it for the client that will use it (e.g., `laptop/claude-desktop`). The key starts with `mko_tkn_` and is shown exactly once — copy or download before closing.
+1. Generate an API key from **Settings > API Keys**. Name it for the client that will use it (for example, `laptop/claude-desktop`). The key starts with `mko_tkn_` and is shown exactly once: copy or download it before closing.
 2. Open the **Connect** dialog on any datapack, or go to the **Connect** page in the sidebar. Select your client tab (Claude Code, Claude Desktop, or Cursor).
 3. Run the install command shown. It looks like this:
 
@@ -61,9 +61,9 @@ The portal gives you a one-line `npx` command per client. It registers the Meko 
 
 4. Restart your client if the new MCP server doesn't show up automatically.
 
-The portal also has a **Manual MCP Install** tab for other clients — it walks through `nvm`, `mcp-add`, and the skills package step by step.
+The portal also has a **Manual MCP Install** tab for other clients, which walks through running nvm commands and adding the skills package step by step.
 
-See [@yugabytedb/meko-mcp on npm](https://www.npmjs.com/package/@yugabytedb/meko-mcp) for what the installer does under the hood.
+See [@yugabytedb/meko-mcp on npm](https://www.npmjs.com/package/@yugabytedb/meko-mcp) to see what the installer does under the hood.
 
 {{% /tab %}}
 {{% tab header="OAuth" %}}
@@ -76,9 +76,9 @@ If your client supports adding a custom remote MCP connector, you can connect Me
 2. Complete the OAuth handshake when the browser opens.
 3. The MCP server returns its tool list to the client automatically.
 
-With OAuth alone, your agent interacts with Meko **on demand** — you need to mention "Meko" in your prompt (e.g., _"save this to Meko,"_ _"search my Meko knowledge base"_) for the agent to call the tools. The agent won't proactively save conversations or capture memories unless you ask.
+With OAuth alone, your agent interacts with Meko _on demand_: you need to mention "Meko" in your prompt for the agent to call the tools. For example, _"save this to Meko"_, _"search my Meko knowledge base"_. The agent won't proactively save conversations or capture memories unless you ask.
 
-To get automatic behavior, use the **Automated install** tab instead, or write your own skills to teach your agent when to call Meko tools.
+To get automatic behavior, use the **Automated install** instead, or write your own skills to teach your agent when to call Meko tools.
 
 {{% /tab %}}
 {{% tab header="Manual API key" %}}
@@ -87,7 +87,7 @@ _For any MCP-compatible client — no npx, no installer._
 
 Add the Meko MCP server directly to your client's config file with your API key. This gives you the same on-demand MCP tools as OAuth, but authenticated with a long-lived key instead of a browser handshake.
 
-1. Go to **Settings > API Keys** and click **Generate API key**. Name it for the client that will use it (e.g., `laptop/cursor`). The full key is shown exactly once — **Copy** or **Download .txt** before closing.
+1. Go to **Settings > API Keys** and click **Generate API key**. Name it for the client that will use it (for example, `laptop/cursor`). The full key is shown exactly once: click **Copy** or **Download .txt** before closing.
 2. Edit your client's MCP config to add the Meko server. For example, in Cursor's `mcp.json`:
 
     ```json
@@ -105,7 +105,7 @@ Add the Meko MCP server directly to your client's config file with your API key.
 
 3. Restart your client.
 
-Like OAuth, this is **on demand** — your agent calls Meko tools when you ask. For per-client config paths and examples (Claude Desktop, Claude Code, Codex, VS Code), see [Connect to an AI agent](../integrations/connect-to-ai-agent/).
+Like OAuth, this is _on demand_: your agent calls Meko tools when you ask. For per-client configuration paths and examples (Claude Desktop, Claude Code, Codex, VS Code), see [Connect to an AI agent](../integrations/connect-to-ai-agent/).
 
 {{% /tab %}}
 {{< /tabpane >}}
