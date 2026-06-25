@@ -1,7 +1,8 @@
 # controller-on-Docker e2e suite. A thin driver binary that drives controller's REST
-# API (user -> storage pool -> timeline -> endpoint) and runs Postgres
-# against the endpoint controller provisions. Invoked via test/e2e/control_plane/run-controller.sh,
-# which starts controller in Docker and passes its base URL in AMP_BASE_URL.
+# API (user -> storage pool -> project -> branch -> endpoint) and runs Postgres
+# against the endpoints controller provisions, validating copy-on-write branch
+# isolation. Invoked via test/e2e/control_plane/run-controller.sh, which starts
+# controller in Docker and passes its base URL in AMP_BASE_URL.
 [package]
 name = "e2e_control_plane"
 version = "0.1.0"

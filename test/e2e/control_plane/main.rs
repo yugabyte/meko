@@ -1,19 +1,29 @@
-//! The amp-on-Docker e2e suite (`e2e_control_plane`) — deliberately thin.
+//! The controller-on-Docker e2e suite (`e2e_control_plane`) — a thin driver.
 //!
-//! Provisioning lives in **amp**, across two REST calls: `POST .../timelines`
-//! records the tenant + its main timeline, then `POST .../endpoints` deploys a
-//! compute endpoint for it (synchronously, via amp's Docker provisioner) and
-//! returns its connection address. So this suite only:
-//!   1. calls amp's REST API (user -> storage pool -> timeline -> endpoint), and
-//!   2. runs PG against the endpoint address amp hands back.
+//! Provisioning lives in the **controller**: this suite only drives its REST
+//! API (user → storage pool → project → branch → endpoint) and runs Postgres
+//! against the endpoint addresses the controller hands back. There is no
+//! container/Docker orchestration here — that is the controller's job.
 //!
-//! There is no container/Docker orchestration here — that is amp's job.
+//! The centrepiece is [`branching_run`]: it creates a project (a storage-layer
+//! tenant + its default branch `main`), deploys an endpoint on `main`, seeds
+//! data, then forks a branch tree —
 //!
-//! amp itself is started by `test/e2e/control_plane/run-controller.sh`, which builds +
-//! runs this binary with amp's base URL in `AMP_BASE_URL`.
+//! ```text
+//!   main ──┬── b1 ── b2     (b2 forks the branch b1)
+//!          └── b3           (b3 forks the root main, a second time)
+//! ```
+//!
+//! — deploying an endpoint per branch and asserting copy-on-write isolation at
+//! every fork point: each branch reads its ancestors' pre-fork rows via lineage
+//! reads (nothing copied), never its ancestors' post-fork writes, and its own
+//! writes never leak to a sibling or an ancestor. It also checks the
+//! control-plane metadata (fork ancestry, branch count) and that each compute
+//! serves the exact tenant/timeline the controller bound it to.
+//!
+//! The controller itself is started by `test/e2e/control_plane/run-controller.sh`,
+//! which builds + runs this binary with the controller base URL in `AMP_BASE_URL`.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -22,15 +32,15 @@ use serde_json::{Value, json};
 
 use e2e_common::db;
 
-/// Print a step banner. (The storage suite's `step` also tees to a run
-/// log; this suite just prints to stdout.)
+/// Print a step banner. (The storage suite's `step` also tees to a run log;
+/// this suite just prints to stdout.)
 fn step(msg: &str) {
     println!();
     println!("=== {msg} ===");
 }
 
-/// `e2e_control_plane [-n <count>]` — run the amp suite once, or `<count>`
-/// times with `-n` (run-all + tally, which also disables fail-fast).
+/// `e2e_control_plane [-n <count>]` — run the suite once, or `<count>` times
+/// with `-n` (run-all + tally, which also disables fail-fast).
 #[tokio::main]
 async fn main() -> ExitCode {
     let mut repeat: u32 = 1;
@@ -63,13 +73,13 @@ async fn main() -> ExitCode {
     match run_suite(repeat, fail_fast).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("\nAMP E2E FAILED: {e:#}");
+            eprintln!("\nCONTROLLER E2E FAILED: {e:#}");
             ExitCode::FAILURE
         }
     }
 }
 
-// --- amp REST client --------------------------------------------------------
+// --- controller REST client -------------------------------------------------
 
 struct AmpClient {
     root: String,
@@ -77,11 +87,21 @@ struct AmpClient {
     http: reqwest::Client,
 }
 
-/// What amp returns from create-timeline: the storage-layer tenant id (hex) and
-/// the timeline id (used to address the endpoint sub-resource).
-struct TimelineResult {
+/// A branch as the controller addresses + identifies it. `id` is the path id
+/// (a UUID); `timeline_hex` is the same id with dashes stripped — how the
+/// compute reports the timeline it serves via `yb_amp.timeline_id`.
+#[derive(Clone)]
+struct BranchRef {
+    id: String,
+    timeline_hex: String,
+}
+
+/// A project: its path id (UUID = the storage-layer tenant id), the tenant hex
+/// the compute reports (`yb_amp.tenant_id`), and its default branch.
+struct ProjectRef {
+    id: String,
     tenant_hex: String,
-    timeline_id: String,
+    default_branch: BranchRef,
 }
 
 impl AmpClient {
@@ -90,8 +110,9 @@ impl AmpClient {
         Self {
             base: format!("{root}/api/v1"),
             root,
-            // No client-wide timeout: the create-timeline call blocks while amp
-            // provisions the endpoint (tens of seconds).
+            // No client-wide timeout: create-endpoint blocks while the
+            // controller deploys (and materializes) the compute — tens of
+            // seconds, longer for a branch clone.
             http: reqwest::Client::new(),
         }
     }
@@ -108,7 +129,7 @@ impl AmpClient {
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        bail!("amp {url} not ready within {timeout:?}: {last}");
+        bail!("controller {url} not ready within {timeout:?}: {last}");
     }
 
     async fn post(&self, path: &str, body: Value, want: u16) -> Result<Value> {
@@ -118,6 +139,17 @@ impl AmpClient {
         let text = resp.text().await.unwrap_or_default();
         if status != want {
             bail!("POST {url} -> {status} (want {want}): {text}");
+        }
+        serde_json::from_str(&text).with_context(|| format!("decoding {url} response: {text}"))
+    }
+
+    async fn get(&self, path: &str) -> Result<Value> {
+        let url = format!("{}{path}", self.base);
+        let resp = self.http.get(&url).send().await.with_context(|| format!("GET {url}"))?;
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap_or_default();
+        if status != 200 {
+            bail!("GET {url} -> {status} (want 200): {text}");
         }
         serde_json::from_str(&text).with_context(|| format!("decoding {url} response: {text}"))
     }
@@ -135,33 +167,83 @@ impl AmpClient {
         field(&v, "id")
     }
 
-    /// Create a tenant + its main timeline. Returns the storage-layer tenant id
-    /// (hex) and the timeline id. Compute is a separate resource (create_endpoint).
-    async fn create_timeline(&self, pool: &str, name: &str, pg_version: u32) -> Result<TimelineResult> {
+    /// Create a project (a tenant) and its default branch. Returns the project
+    /// path id, its tenant hex, and the default branch. Does not deploy compute.
+    async fn create_project(&self, pool: &str, name: &str, pg_version: u32) -> Result<ProjectRef> {
         let v = self
             .post(
-                &format!("/storage-pools/{pool}/timelines"),
+                &format!("/storage-pools/{pool}/projects"),
                 json!({ "name": name, "pg_version": pg_version }),
                 201,
             )
             .await?;
-        let tenant_hex = field(&v, "tenant_id")?.replace('-', "");
-        let timeline_id = field(&v, "timeline_id")?;
-        Ok(TimelineResult { tenant_hex, timeline_id })
+        let id = field(&v, "id")?;
+        let tenant_hex = id.replace('-', "");
+        let default = v.get("default_branch").context("project response missing default_branch")?;
+        let default_branch = branch_ref(default)?;
+        Ok(ProjectRef { id, tenant_hex, default_branch })
     }
 
-    /// Deploy a read_write compute endpoint on the timeline and return its
-    /// connection address. amp deploys synchronously, so the `201` response
-    /// already carries the address. Endpoints are top-level under the timeline.
-    async fn create_endpoint(&self, pool: &str, timeline: &str) -> Result<String> {
+    /// Fork a branch into a new one and return the created `Branch` JSON (so the
+    /// caller can assert fork ancestry). `parent` defaults to the project's
+    /// default branch; `fork_point_lsn` defaults to the parent's latest durable
+    /// LSN (read from the safekeeper co-located with the parent's read_write
+    /// endpoint — so the parent must have one). No compute is started.
+    async fn create_branch(
+        &self,
+        pool: &str,
+        project: &str,
+        name: &str,
+        parent: Option<&str>,
+        fork_point_lsn: Option<&str>,
+    ) -> Result<Value> {
+        let mut body = json!({ "name": name });
+        if let Some(p) = parent {
+            body["parent_branch_id"] = json!(p);
+        }
+        if let Some(l) = fork_point_lsn {
+            body["fork_point_lsn"] = json!(l);
+        }
+        self.post(&format!("/storage-pools/{pool}/projects/{project}/branches"), body, 201).await
+    }
+
+    /// Deploy a read_write endpoint on a branch (synchronously) and return its
+    /// `(endpoint_id, address)`. The first endpoint on a branch materializes it.
+    async fn create_endpoint(&self, pool: &str, project: &str, branch: &str) -> Result<(String, String)> {
         let v = self
             .post(
-                &format!("/storage-pools/{pool}/timelines/{timeline}/endpoints"),
+                &format!("/storage-pools/{pool}/projects/{project}/branches/{branch}/endpoints"),
                 json!({ "role": "read_write" }),
                 201,
             )
             .await?;
-        field(&v, "address")
+        Ok((field(&v, "id")?, field(&v, "address")?))
+    }
+
+    /// Synchronously retire an endpoint (best-effort cleanup between iterations).
+    async fn delete_endpoint(&self, pool: &str, project: &str, branch: &str, endpoint: &str) -> Result<()> {
+        let url = format!(
+            "{}/storage-pools/{pool}/projects/{project}/branches/{branch}/endpoints/{endpoint}",
+            self.base
+        );
+        let resp = self.http.delete(&url).send().await.with_context(|| format!("DELETE {url}"))?;
+        let status = resp.status().as_u16();
+        if status != 204 {
+            let text = resp.text().await.unwrap_or_default();
+            bail!("DELETE {url} -> {status} (want 204): {text}");
+        }
+        Ok(())
+    }
+
+    /// Get one branch's JSON, by path id.
+    async fn get_branch(&self, pool: &str, project: &str, branch: &str) -> Result<Value> {
+        self.get(&format!("/storage-pools/{pool}/projects/{project}/branches/{branch}")).await
+    }
+
+    /// The `total` from listBranches (count of all branches in the project).
+    async fn count_branches(&self, pool: &str, project: &str) -> Result<i64> {
+        let v = self.get(&format!("/storage-pools/{pool}/projects/{project}/branches?limit=1000")).await?;
+        v.get("total").and_then(Value::as_i64).context("branch list missing total")
     }
 }
 
@@ -172,153 +254,353 @@ fn field(v: &Value, key: &str) -> Result<String> {
         .with_context(|| format!("response missing string field {key:?}: {v}"))
 }
 
-// --- the endpoint under test ------------------------------------------------
-
-/// The compute endpoint amp provisioned: how to connect, and which tenant it
-/// should be serving.
-struct Endpoint {
-    compute_conn: String,
-    tenant_hex: String,
+fn branch_ref(v: &Value) -> Result<BranchRef> {
+    let id = field(v, "branch_id")?;
+    let timeline_hex = id.replace('-', "");
+    Ok(BranchRef { id, timeline_hex })
 }
 
-impl Endpoint {
-    /// Connection string for the address amp returned (`host:port`), with the
-    /// endpoint's md5 password (set by the endpoint supervisor).
-    fn from_address(addr: &str, tenant_hex: String) -> Result<Self> {
+/// Assert a branch's fork-ancestry metadata: its `is_default` flag, its parent
+/// (`None` for a root/default branch), and that the `fork_lsn` is present iff
+/// it is a fork.
+fn assert_branch_meta(v: &Value, is_default: bool, parent: Option<&str>) -> Result<()> {
+    let got_default = v.get("is_default").and_then(Value::as_bool).context("branch missing is_default")?;
+    if got_default != is_default {
+        bail!("branch is_default = {got_default}, want {is_default}: {v}");
+    }
+    let got_parent = v.get("parent_branch_id").and_then(Value::as_str);
+    if got_parent != parent {
+        bail!("branch parent_branch_id = {got_parent:?}, want {parent:?}: {v}");
+    }
+    let fork_lsn = v.get("fork_lsn").and_then(Value::as_str);
+    match (is_default, fork_lsn) {
+        (true, Some(l)) => bail!("default branch has fork_lsn {l:?}, want null"),
+        (false, None) => bail!("forked branch has null fork_lsn: {v}"),
+        _ => Ok(()),
+    }
+}
+
+// --- the deployed endpoint under test ---------------------------------------
+
+/// A compute endpoint the controller deployed on a branch: how to connect, and
+/// the storage tenant + timeline it must be serving.
+struct BranchEndpoint {
+    label: &'static str,
+    conn: String,
+    tenant_hex: String,
+    timeline_hex: String,
+}
+
+impl BranchEndpoint {
+    /// Build from the `host:port` the controller returned, with the endpoint's
+    /// `cloud_admin` password (set by the endpoint supervisor).
+    fn from_address(label: &'static str, addr: &str, tenant_hex: String, timeline_hex: String) -> Result<Self> {
         let (host, port) = addr
             .rsplit_once(':')
             .with_context(|| format!("endpoint address {addr:?} is not host:port"))?;
-        let conn = format!(
-            "host={host} port={port} user=cloud_admin password=cloud_admin dbname=postgres"
-        );
-        Ok(Self { compute_conn: conn, tenant_hex })
+        let conn = format!("host={host} port={port} user=cloud_admin password=cloud_admin dbname=postgres");
+        Ok(Self { label, conn, tenant_hex, timeline_hex })
     }
 
     async fn wait_ready(&self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
         let mut last = String::from("(no attempt yet)");
         while Instant::now() < deadline {
-            match db::query_i64(&self.compute_conn, "SELECT 1::bigint").await {
+            match db::query_i64(&self.conn, "SELECT 1::bigint").await {
                 Ok(1) => return Ok(()),
                 Ok(other) => last = format!("readiness probe returned {other}"),
                 Err(e) => last = format!("{e:#}"),
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        bail!("compute not ready within {timeout:?}: {last}");
+        bail!("{} compute not ready within {timeout:?}: {last}", self.label);
+    }
+
+    /// The compute is a real Postgres, and — when it exposes the `yb_amp.*`
+    /// GUCs — serves exactly the tenant + timeline the controller bound it to.
+    /// The data-lineage checks below are the real proof the right storage was
+    /// wired in; the GUC asserts are a cheap corroboration when available.
+    async fn assert_identity(&self) -> Result<()> {
+        let version = db::query_text(&self.conn, "SELECT version()").await?;
+        if !version.contains("PostgreSQL") {
+            bail!("{}: unexpected version banner: {version}", self.label);
+        }
+        self.assert_guc("yb_amp.tenant_id", &self.tenant_hex).await?;
+        self.assert_guc("yb_amp.timeline_id", &self.timeline_hex).await?;
+        Ok(())
+    }
+
+    /// Assert a `yb_amp.*` GUC equals `want`, but only when the compute exposes
+    /// it: the GUC is registered by the `yb_amp` extension and isn't always
+    /// queryable in the deployed endpoint image, so the `missing_ok` form of
+    /// `current_setting` returns NULL (→ skip) rather than erroring.
+    async fn assert_guc(&self, guc: &str, want: &str) -> Result<()> {
+        let sql = format!("SELECT current_setting('{guc}', true)");
+        if let Some(got) = db::query_text_opt(&self.conn, &sql).await? {
+            if !got.is_empty() && got != want {
+                bail!("{}: serves {guc} {got}, want {want}", self.label);
+            }
+        }
+        Ok(())
+    }
+
+    /// The compute's durable WAL end — the point a branch forked here will
+    /// inherit up to. Passed as the branch's explicit `fork_point_lsn`.
+    async fn flush_lsn(&self) -> Result<String> {
+        db::query_text(&self.conn, "SELECT pg_current_wal_flush_lsn()::text").await
+    }
+
+    async fn total(&self) -> Result<i64> {
+        db::query_i64(&self.conn, "SELECT count(*) FROM lineage").await
+    }
+
+    async fn tag_count(&self, tag: &str) -> Result<i64> {
+        // Tags are controlled constants in this suite (no untrusted input).
+        db::query_i64(&self.conn, &format!("SELECT count(*) FROM lineage WHERE tag = '{tag}'")).await
+    }
+
+    /// Whole-table checksum over the inherited `main-pre` rows, for value-level
+    /// (not just count-level) inheritance checks.
+    async fn pre_checksum(&self) -> Result<String> {
+        db::query_text(
+            &self.conn,
+            "SELECT coalesce(md5(string_agg(payload, ',' ORDER BY id)), '') FROM lineage WHERE tag = 'main-pre'",
+        )
+        .await
     }
 }
 
-// --- scenarios --------------------------------------------------------------
-
-type ScenarioFut<'a> = Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
-
-fn scenarios(e: &Endpoint) -> Vec<(&'static str, ScenarioFut<'_>)> {
-    vec![
-        ("smoke", Box::pin(smoke(e))),
-        ("resource_ladder", Box::pin(resource_ladder(e))),
-    ]
-}
-
-/// The endpoint is a working Postgres: DDL + DML, read back.
-async fn smoke(e: &Endpoint) -> Result<()> {
-    let conn = &e.compute_conn;
-    let version = db::query_text(conn, "SELECT version()").await?;
-    if !version.contains("PostgreSQL") {
-        bail!("unexpected version banner: {version}");
-    }
-    db::batch(
-        conn,
-        "CREATE TABLE amp_smoke (id int PRIMARY KEY, note text); \
-         INSERT INTO amp_smoke VALUES (1, 'hello'), (2, 'world');",
-    )
-    .await?;
-    let n = db::query_i64(conn, "SELECT count(*) FROM amp_smoke").await?;
-    if n != 2 {
-        bail!("amp_smoke row count = {n}, want 2");
-    }
-    let note = db::query_text(conn, "SELECT note FROM amp_smoke WHERE id = 1").await?;
-    if note != "hello" {
-        bail!("amp_smoke id=1 note = {note:?}, want \"hello\"");
-    }
-    Ok(())
-}
-
-/// The compute serves exactly the tenant amp created, and writes are YB-backed
-/// (durable across a CHECKPOINT).
-async fn resource_ladder(e: &Endpoint) -> Result<()> {
-    let conn = &e.compute_conn;
-    let served = db::query_text(conn, "SELECT current_setting('yb_amp.tenant_id')").await?;
-    if served != e.tenant_hex {
-        bail!("compute serves tenant {served}, but amp created {}", e.tenant_hex);
-    }
-    db::batch(
-        conn,
-        "CREATE TABLE amp_ladder (k int); INSERT INTO amp_ladder SELECT generate_series(1, 100); CHECKPOINT;",
-    )
-    .await?;
-    let sum = db::query_i64(conn, "SELECT sum(k) FROM amp_ladder").await?;
-    if sum != 5050 {
-        bail!("amp_ladder sum = {sum}, want 5050");
+/// Assert a count, attributing failures to a labelled endpoint.
+fn expect(ep: &BranchEndpoint, what: &str, got: i64, want: i64) -> Result<()> {
+    if got != want {
+        bail!("{}: {what} = {got}, want {want}", ep.label);
     }
     Ok(())
 }
 
 // --- run loop ---------------------------------------------------------------
 
-/// Drive amp's API to provision an endpoint, then run the scenarios against it.
-/// amp must already be running; its base URL comes from `AMP_BASE_URL`.
+/// Drive the controller's API end to end. The controller must already be
+/// running; its base URL comes from `AMP_BASE_URL`.
 pub async fn run_suite(repeat: u32, fail_fast: bool) -> Result<()> {
     let base = std::env::var("AMP_BASE_URL")
-        .context("AMP_BASE_URL is not set — run via test/e2e/control_plane/run-controller.sh, which starts amp")?;
-    step(&format!("amp e2e: driving amp at {base}"));
+        .context("AMP_BASE_URL is not set — run via test/e2e/control_plane/run-controller.sh, which starts the controller")?;
+    step(&format!("controller e2e: driving the controller at {base}"));
     let client = AmpClient::new(&base);
-    client.wait_ready(Duration::from_secs(60)).await.context("amp readiness")?;
+    client.wait_ready(Duration::from_secs(60)).await.context("controller readiness")?;
 
-    step("amp e2e: create user -> storage pool -> timeline -> endpoint (amp deploys the compute)");
+    step("controller e2e: create user -> storage pool");
     let user = client.create_user(true).await?;
     let pool = client.create_storage_pool(&user, "e2e-pool").await?;
-    let tl = client.create_timeline(&pool, "main", 17).await.context("create timeline")?;
-    let addr = client
-        .create_endpoint(&pool, &tl.timeline_id)
-        .await
-        .context("create endpoint — start amp with --deploy (AMP_DEPLOY=true)")?;
-    step(&format!("amp e2e: amp deployed endpoint at {addr} (tenant {})", tl.tenant_hex));
-
-    let endpoint = Endpoint::from_address(&addr, tl.tenant_hex)?;
-    endpoint.wait_ready(Duration::from_secs(60)).await.context("endpoint readiness")?;
 
     let mut passed = 0u64;
     let mut failed = 0u64;
     let mut fatal: Option<anyhow::Error> = None;
-    'outer: for iter in 1..=repeat {
+    for iter in 1..=repeat {
         if repeat > 1 {
-            step(&format!("amp iteration {iter}/{repeat}"));
+            step(&format!("branch_lineage iteration {iter}/{repeat}"));
         }
-        for (name, fut) in scenarios(&endpoint) {
-            match fut.await {
-                Ok(()) => {
-                    passed += 1;
-                    println!("PASS — amp/{name}");
-                }
-                Err(e) => {
-                    failed += 1;
-                    eprintln!("FAIL — amp/{name}: {e:#}");
-                    if fail_fast {
-                        fatal = Some(e);
-                        break 'outer;
-                    }
+        match branching_run(&client, &pool, iter).await {
+            Ok(()) => {
+                passed += 1;
+                println!("PASS — controller/branch_lineage (iter {iter})");
+            }
+            Err(e) => {
+                failed += 1;
+                eprintln!("FAIL — controller/branch_lineage (iter {iter}): {e:#}");
+                if fail_fast {
+                    fatal = Some(e);
+                    break;
                 }
             }
         }
     }
 
-    step(&format!("amp e2e: {passed} passed, {failed} failed"));
+    step(&format!("controller e2e: {passed} passed, {failed} failed"));
     if let Some(e) = fatal {
         return Err(e);
     }
     if failed > 0 {
-        bail!("{failed} amp test(s) failed");
+        bail!("{failed} controller test(s) failed");
     }
+    Ok(())
+}
+
+/// One full create-project → branch-tree → validate run. Each iteration uses a
+/// fresh project (so `-n` repeats are independent) and retires its endpoints at
+/// the end (best-effort).
+async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> {
+    let proj_name = if iter == 1 { "ampbr".to_string() } else { format!("ampbr-{iter}") };
+    // (branch_id, endpoint_id) of every endpoint we deploy, for end-of-run retire.
+    let mut deployed: Vec<(String, String)> = Vec::new();
+    let readiness = Duration::from_secs(90);
+
+    step("controller: create project (tenant + default branch 'main')");
+    let project = client.create_project(pool, &proj_name, 17).await.context("create project")?;
+    let main_b = project.default_branch.clone();
+    let main_meta = client.get_branch(pool, &project.id, &main_b.id).await.context("get default branch")?;
+    assert_branch_meta(&main_meta, true, None).context("default branch metadata")?;
+
+    step("controller: deploy endpoint on main; verify it serves the project's tenant+timeline");
+    let (main_ep, main_addr) =
+        client.create_endpoint(pool, &project.id, &main_b.id).await.context("deploy main endpoint")?;
+    deployed.push((main_b.id.clone(), main_ep));
+    let main = BranchEndpoint::from_address("main", &main_addr, project.tenant_hex.clone(), main_b.timeline_hex.clone())?;
+    main.wait_ready(readiness).await.context("main endpoint readiness")?;
+    main.assert_identity().await.context("main identity")?;
+
+    step("main: seed pre-fork data");
+    db::batch(
+        &main.conn,
+        "DROP TABLE IF EXISTS lineage;
+         CREATE TABLE lineage (id int PRIMARY KEY, tag text NOT NULL, payload text NOT NULL);
+         INSERT INTO lineage SELECT g, 'main-pre', md5(g::text) FROM generate_series(1, 100) g;
+         CHECKPOINT;",
+    )
+    .await?;
+    let pre_checksum = main.pre_checksum().await?;
+    if pre_checksum.is_empty() {
+        bail!("main: empty pre-fork checksum (seed failed?)");
+    }
+    expect(&main, "pre-fork rows", main.total().await?, 100)?;
+
+    step("controller: branch b1 off main at main's current flush LSN");
+    let main_fork1 = main.flush_lsn().await.context("read main flush_lsn for b1")?;
+    let b1_json = client
+        .create_branch(pool, &project.id, "b1", None, Some(&main_fork1))
+        .await
+        .context("create branch b1")?;
+    assert_branch_meta(&b1_json, false, Some(&main_b.id)).context("b1 metadata (forked off main)")?;
+    let b1_b = branch_ref(&b1_json)?;
+
+    step("main: write post-fork data (must NOT appear on b1)");
+    db::batch(
+        &main.conn,
+        "INSERT INTO lineage SELECT g, 'main-post1', md5(g::text) FROM generate_series(101, 150) g;
+         CHECKPOINT;",
+    )
+    .await?;
+    expect(&main, "rows after main-post1", main.total().await?, 150)?;
+
+    step("controller: deploy b1 endpoint; validate lineage isolation from main");
+    let (b1_ep, b1_addr) =
+        client.create_endpoint(pool, &project.id, &b1_b.id).await.context("deploy b1 endpoint")?;
+    deployed.push((b1_b.id.clone(), b1_ep));
+    let b1 = BranchEndpoint::from_address("b1", &b1_addr, project.tenant_hex.clone(), b1_b.timeline_hex.clone())?;
+    b1.wait_ready(readiness).await.context("b1 endpoint readiness")?;
+    b1.assert_identity().await.context("b1 identity")?;
+    expect(&b1, "inherited main-pre rows", b1.tag_count("main-pre").await?, 100)?;
+    expect(&b1, "main's post-fork rows (must be 0)", b1.tag_count("main-post1").await?, 0)?;
+    expect(&b1, "total", b1.total().await?, 100)?;
+    if b1.pre_checksum().await? != pre_checksum {
+        bail!("b1: inherited main-pre checksum mismatch vs main (value-level corruption)");
+    }
+
+    step("b1: write own data, then branch b2 off b1 (branch-of-branch)");
+    db::batch(
+        &b1.conn,
+        "INSERT INTO lineage SELECT g, 'b1-own', md5(g::text) FROM generate_series(201, 260) g;
+         CHECKPOINT;",
+    )
+    .await?;
+    expect(&b1, "rows after b1-own", b1.total().await?, 160)?;
+    let b1_fork = b1.flush_lsn().await.context("read b1 flush_lsn for b2")?;
+    let b2_json = client
+        .create_branch(pool, &project.id, "b2", Some(&b1_b.id), Some(&b1_fork))
+        .await
+        .context("create branch b2 off b1")?;
+    assert_branch_meta(&b2_json, false, Some(&b1_b.id)).context("b2 metadata (forked off b1)")?;
+    let b2_b = branch_ref(&b2_json)?;
+
+    step("b1: write more (post-b2-fork; must NOT appear on b2)");
+    db::batch(
+        &b1.conn,
+        "INSERT INTO lineage SELECT g, 'b1-post2', md5(g::text) FROM generate_series(261, 300) g;
+         CHECKPOINT;",
+    )
+    .await?;
+    expect(&b1, "rows after b1-post2", b1.total().await?, 200)?;
+
+    step("controller: branch b3 off main again at main's post-main-post1 flush LSN (second fork off the root)");
+    let main_fork2 = main.flush_lsn().await.context("read main flush_lsn for b3")?;
+    let b3_json = client
+        .create_branch(pool, &project.id, "b3", None, Some(&main_fork2))
+        .await
+        .context("create branch b3 off main")?;
+    assert_branch_meta(&b3_json, false, Some(&main_b.id)).context("b3 metadata (forked off main)")?;
+    let b3_b = branch_ref(&b3_json)?;
+
+    step("controller: deploy b2 + b3 endpoints");
+    let (b2_ep, b2_addr) =
+        client.create_endpoint(pool, &project.id, &b2_b.id).await.context("deploy b2 endpoint")?;
+    deployed.push((b2_b.id.clone(), b2_ep));
+    let b2 = BranchEndpoint::from_address("b2", &b2_addr, project.tenant_hex.clone(), b2_b.timeline_hex.clone())?;
+    b2.wait_ready(readiness).await.context("b2 endpoint readiness")?;
+    b2.assert_identity().await.context("b2 identity")?;
+
+    let (b3_ep, b3_addr) =
+        client.create_endpoint(pool, &project.id, &b3_b.id).await.context("deploy b3 endpoint")?;
+    deployed.push((b3_b.id.clone(), b3_ep));
+    let b3 = BranchEndpoint::from_address("b3", &b3_addr, project.tenant_hex.clone(), b3_b.timeline_hex.clone())?;
+    b3.wait_ready(readiness).await.context("b3 endpoint readiness")?;
+    b3.assert_identity().await.context("b3 identity")?;
+
+    step("validate b2 lineage (branch-of-branch): main-pre + b1-own, none of main-post1 / b1-post2");
+    expect(&b2, "inherited main-pre (grandparent)", b2.tag_count("main-pre").await?, 100)?;
+    expect(&b2, "inherited b1-own (parent, pre-fork)", b2.tag_count("b1-own").await?, 60)?;
+    expect(&b2, "main-post1 (off b2's line; must be 0)", b2.tag_count("main-post1").await?, 0)?;
+    expect(&b2, "b1-post2 (parent post-fork; must be 0)", b2.tag_count("b1-post2").await?, 0)?;
+    expect(&b2, "total", b2.total().await?, 160)?;
+    if b2.pre_checksum().await? != pre_checksum {
+        bail!("b2: inherited main-pre checksum mismatch (two-level lineage corruption)");
+    }
+
+    step("validate b3 lineage (second fork off main): main-pre + main-post1, none of b1/b2 writes");
+    expect(&b3, "inherited main-pre", b3.tag_count("main-pre").await?, 100)?;
+    expect(&b3, "inherited main-post1 (committed before b3's fork)", b3.tag_count("main-post1").await?, 50)?;
+    expect(&b3, "b1-own (off b3's line; must be 0)", b3.tag_count("b1-own").await?, 0)?;
+    expect(&b3, "b1-post2 (must be 0)", b3.tag_count("b1-post2").await?, 0)?;
+    expect(&b3, "total", b3.total().await?, 150)?;
+    if b3.pre_checksum().await? != pre_checksum {
+        bail!("b3: inherited main-pre checksum mismatch");
+    }
+
+    step("write on b2 + b3, then assert full cross-branch isolation");
+    db::batch(&b2.conn, "INSERT INTO lineage SELECT g, 'b2-own', md5(g::text) FROM generate_series(401, 410) g;").await?;
+    db::batch(&b3.conn, "INSERT INTO lineage SELECT g, 'b3-own', md5(g::text) FROM generate_series(501, 510) g;").await?;
+
+    // main (the root) is untouched by any descendant's writes.
+    expect(&main, "total unchanged by descendants", main.total().await?, 150)?;
+    expect(&main, "b1-own leaked onto main (must be 0)", main.tag_count("b1-own").await?, 0)?;
+    expect(&main, "b2-own leaked onto main (must be 0)", main.tag_count("b2-own").await?, 0)?;
+    expect(&main, "b3-own leaked onto main (must be 0)", main.tag_count("b3-own").await?, 0)?;
+
+    // b1 sees only its own line.
+    expect(&b1, "total", b1.total().await?, 200)?;
+    expect(&b1, "b2-own visible on b1 (must be 0)", b1.tag_count("b2-own").await?, 0)?;
+    expect(&b1, "b3-own visible on b1 (must be 0)", b1.tag_count("b3-own").await?, 0)?;
+
+    // b2 sees its fork plus its own writes.
+    expect(&b2, "total", b2.total().await?, 170)?;
+    expect(&b2, "b3-own visible on b2 (must be 0)", b2.tag_count("b3-own").await?, 0)?;
+
+    // b3 sees its fork plus its own writes.
+    expect(&b3, "total", b3.total().await?, 160)?;
+    expect(&b3, "b1-own visible on b3 (must be 0)", b3.tag_count("b1-own").await?, 0)?;
+    expect(&b3, "b2-own visible on b3 (must be 0)", b3.tag_count("b2-own").await?, 0)?;
+
+    step("controller: listBranches reports all 4 (main + b1 + b2 + b3)");
+    let n = client.count_branches(pool, &project.id).await?;
+    if n != 4 {
+        bail!("project has {n} branches, want 4 (main + b1 + b2 + b3)");
+    }
+
+    step("controller: retire endpoints (best-effort cleanup)");
+    for (branch, endpoint) in &deployed {
+        if let Err(e) = client.delete_endpoint(pool, &project.id, branch, endpoint).await {
+            eprintln!("warn: retire endpoint {endpoint} failed: {e:#}");
+        }
+    }
+
     Ok(())
 }

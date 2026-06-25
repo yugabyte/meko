@@ -2,11 +2,12 @@
 #
 # controller-on-Docker end-to-end entry point. Starts the controller control plane as a
 # container (with its Docker endpoint provisioner enabled) and runs the thin e2e
-# suite against it. Provisioning lives in controller, across two REST calls: create the
-# timeline, then create an endpoint on it — controller deploys the compute container
-# synchronously (via the Docker provisioner, over the daemon socket mounted here)
-# and returns its address. The e2e only calls controller's REST API and runs psql
-# against that address.
+# suite against it. Provisioning lives in controller: the suite drives its REST API
+# (create a project, fork branches off it, then create an endpoint on each branch) —
+# controller deploys the compute container synchronously (via the Docker provisioner,
+# over the daemon socket mounted here) and returns its address. The e2e only calls
+# controller's REST API and runs Postgres against those addresses; it validates
+# copy-on-write branch isolation (see test/e2e/control_plane/README.md).
 #
 # This drives the SC-free self-bootstrap path: controller runs the endpoint with
 # --deploy-bootstrap, so it provisions the storage schema and initdb's the
@@ -23,9 +24,10 @@ usage() {
 Usage: test/e2e/control_plane/run-controller.sh [-n <count>] [-h|--help]
 
 Starts controller with the Docker endpoint provisioner and runs the controller e2e suite
-(create user -> storage pool -> timeline -> endpoint, then psql the endpoint).
+(create user -> storage pool -> project -> branch tree -> endpoints, then validate
+copy-on-write branch isolation over Postgres).
 
-  -n <count>    repeat the suite <count> times (forwarded to the harness).
+  -n <count>    repeat the scenario <count> times, fresh project each (forwarded to the harness).
 
 Builds yb-light/controller:dev locally each run. Requires yb-light/neon-endpoint:dev and
 a YugabyteDB on the host (:5433).
@@ -98,6 +100,16 @@ yb -c "CREATE DATABASE \"$STORE_DB\"" >/dev/null
 echo "==> Starting controller ($AMP_NAME) on port $AMP_HOST_PORT (docker runtime)"
 # --user root + the mounted socket let controller's Docker provisioner launch endpoints;
 # the endpoints join $NET so controller and the client can reach them.
+# AMP_STORAGE_CONTROLLER=false selects the SC-free self-bootstrap path: the
+# controller-only image (make controller-bundle-only) ships no storage_controller
+# binary, but the image defaults AMP_STORAGE_CONTROLLER=true — left on, the
+# controller would loop trying to spawn a missing binary and /readyz never goes
+# green. The fork point + ancestor still flow to the endpoint from the control DB.
+# AMP_DEPLOY_SUPERVISOR_PATH bind-mounts the repo's current supervisor.py into
+# each endpoint (the controller passes it to `docker run -v`, resolved by the
+# host daemon). The pre-built endpoint image is only rebuilt by hand, so its
+# baked supervisor goes stale; without this, a supervisor predating branch
+# support (#134) ignores ANCESTOR_TIMELINE_ID and branch endpoints come up empty.
 docker run -d --name "$AMP_NAME" --hostname "$AMP_NAME" --network "$NET" \
     --user root \
     -p "${AMP_HOST_PORT}:8080" \
@@ -105,6 +117,7 @@ docker run -d --name "$AMP_NAME" --hostname "$AMP_NAME" --network "$NET" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -e "AMP_DATABASE_URL=postgres://yugabyte@host.docker.internal:5433/${CTL_DB}" \
     -e AMP_LOG_FORMAT=text \
+    -e AMP_STORAGE_CONTROLLER=false \
     -e AMP_DEPLOY=true \
     -e AMP_DEPLOY_DRIVER=docker \
     -e AMP_DEPLOY_NETWORK="$NET" \
@@ -113,6 +126,7 @@ docker run -d --name "$AMP_NAME" --hostname "$AMP_NAME" --network "$NET" \
     -e AMP_DEPLOY_BOOTSTRAP=true \
     -e AMP_DEPLOY_YB_HOST_PORTS=host.docker.internal:5433 \
     -e AMP_DEPLOY_YB_DBNAME="$STORE_DB" \
+    -e AMP_DEPLOY_SUPERVISOR_PATH="$REPO/deploy/endpoint/supervisor.py" \
     "$AMP_IMAGE" >/dev/null
 
 echo "==> Waiting for controller to be ready"
