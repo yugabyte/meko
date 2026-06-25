@@ -1235,9 +1235,8 @@ async fn flush_batch(
 /// future until it resolves.
 pub struct YbSegmentReader {
     segno: u64,
-    /// Kept for symmetry with the local-FS reader and for future
-    /// segment-boundary assertions; not currently read.
-    #[allow(dead_code)]
+    /// Segment size, used to convert the segment-relative chunk offsets into
+    /// absolute LSNs when comparing against the (absolute) flush bound.
     wal_seg_size: u64,
     pos: u64,
 
@@ -1327,6 +1326,9 @@ impl YbSegmentReader {
         let timeline_id = self.timeline_id.clone();
         let segno = self.segno;
         let pos = self.pos;
+        // Base LSN of this segment, to bring segment-relative chunk offsets into
+        // the same (absolute) frame as `issued_flush` for the cache-warm gate.
+        let seg_base = self.segno * self.wal_seg_size;
         let cache = self.cache.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
@@ -1356,10 +1358,17 @@ impl YbSegmentReader {
                     // *held* chunk, but a cache *re-lookup* returns the same
                     // bytes — so the cache must never take uncommitted bytes in
                     // the first place.
+                    //
+                    // `c.end_offset` is a SEGMENT-relative offset; `issued_flush`
+                    // is an ABSOLUTE LSN. Compare in the same (absolute) frame —
+                    // `seg_base + c.end_offset <= issued_flush` — or the gate is a
+                    // no-op for any segment ≥ 1 (a within-segment offset is always
+                    // below an absolute LSN), caching uncommitted-tail chunks that
+                    // a later term can rewrite (the other half of the #139 splice).
                     if let Some(cache) = &cache {
                         let mut guard = cache.lock().unwrap();
                         for c in &fetched {
-                            if c.end_offset <= issued_flush {
+                            if seg_base + c.end_offset <= issued_flush {
                                 guard.insert(segno, c.chunk_offset, c.data.clone());
                             }
                         }
@@ -1403,7 +1412,23 @@ impl AsyncRead for YbSegmentReader {
                 // spliced "invalid xlog page header" read of #139. Past the
                 // boundary we drop the chunk and re-acquire, picking up the
                 // post-rewrite bytes (and a higher boundary).
-                let serve_end = c.end_offset.min(me.current_flush_bound);
+                // `pos`, `chunk_offset` and `end_offset` are SEGMENT-relative
+                // byte offsets, but `current_flush_bound` is an ABSOLUTE LSN
+                // (it comes from the `flush_lsn` atomic = `wal_reader.end`).
+                // Bring the bound into this segment's frame before the min, or
+                // the comparison is a no-op: a within-segment offset (< 16 MiB)
+                // is always smaller than an absolute LSN for any segment ≥ 1, so
+                // `end_offset.min(absolute_bound)` always returns `end_offset`
+                // and the chunk is served in full — including bytes that were
+                // uncommitted when fetched, which a later term can rewrite. That
+                // was the #139 splice: an old-term held chunk served its stale
+                // tail across a truncate. `saturating_sub` clamps a bound below
+                // this segment to 0 (serve nothing, re-acquire); a bound in a
+                // later segment exceeds `end_offset`, so the min keeps the whole
+                // (fully-committed) chunk.
+                let seg_base = me.segno * me.wal_seg_size;
+                let bound_in_seg = me.current_flush_bound.saturating_sub(seg_base);
+                let serve_end = c.end_offset.min(bound_in_seg);
                 if me.pos >= c.chunk_offset && me.pos < serve_end {
                     let chunk_idx = (me.pos - c.chunk_offset) as usize;
                     let serve_remaining = (serve_end - me.pos) as usize;
@@ -2500,6 +2525,101 @@ mod tests {
             tail,
             new[1024..],
             "reader served stale past-flush WAL after a term rewrite — the read-past-flush splice (#139)"
+        );
+
+        drop_wals_table(&fpu, &table).await;
+    }
+
+    /// Same read-past-flush rewrite as above, but on a NON-ZERO segment. This
+    /// is the regression guard for the #139 root cause: the flush bound is an
+    /// ABSOLUTE LSN while chunk offsets are SEGMENT-relative, so the serve guard
+    /// (`end_offset.min(bound)`) and the cache-warm gate (`end_offset <= flush`)
+    /// were no-ops for any segment ≥ 1 — a within-segment offset (< 16 MiB) is
+    /// always below an absolute LSN. The seg-0 test can't catch this because
+    /// there segment-relative == absolute. With the bug, the reader serves the
+    /// stale pre-rewrite tail (the splice); with the fix it re-fetches and
+    /// serves the rewrite.
+    #[tokio::test]
+    async fn segment_reader_must_not_serve_past_flush_after_rewrite_seg1() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use tokio::io::AsyncReadExt;
+
+        let table = format!("wals_test_pastflush_seg1_{}", rand_suffix());
+        let (fpu, _read, _system) = open_three_lanes().await;
+        make_wals_table(&fpu, &table).await;
+
+        let tenant = TenantId::generate();
+        let timeline = TimelineId::generate();
+        let ttid = TenantTimelineId::new(tenant, timeline);
+        let tenant_s = tenant.to_string();
+        let timeline_s = timeline.to_string();
+
+        // Segment 1: absolute LSN = SEG_SIZE + offset.
+        let seg: i64 = 1;
+        let seg_base: u64 = SEG_SIZE; // 1 * SEG_SIZE
+        let off: i64 = 0;
+        let size: i32 = 4096;
+        let old: Vec<u8> = vec![0xAB; 4096];
+        let mut new: Vec<u8> = vec![0u8; 4096];
+        new[..1024].fill(0xAB); // committed prefix, unchanged
+        new[1024..].fill(0xCD); // rewritten tail
+
+        let insert_sql = format!(
+            "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+                             chunk_size, data, last_modified_us) \
+             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+            quote_relation(&table)
+        );
+        let delete_sql = format!(
+            "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
+             AND segno = $3 AND chunk_offset = $4",
+            quote_relation(&table)
+        );
+
+        let old_slice = old.as_slice();
+        fpu.execute(
+            &insert_sql,
+            &[&tenant_s, &timeline_s, &seg, &off, &size, &old_slice],
+        )
+        .await
+        .expect("INSERT old chunk");
+
+        let yb_wal = Arc::new(YbWalConn {
+            fpu_client: fpu.clone(),
+            read_client: fpu.clone(),
+            system_client: fpu.clone(),
+            table: table.clone(),
+            cache: None,
+        });
+
+        // Flush frontier is ABSOLUTE: committed up to offset 1024 in segment 1.
+        let flush = Arc::new(AtomicU64::new(seg_base + 1024));
+        let mut reader =
+            YbSegmentReader::new(yb_wal.clone(), &ttid, 1, SEG_SIZE as usize, 0, flush.clone());
+
+        let mut head = vec![0u8; 1024];
+        reader.read_exact(&mut head).await.expect("read committed head");
+        assert_eq!(head, old[..1024], "committed prefix must read back");
+
+        fpu.execute(&delete_sql, &[&tenant_s, &timeline_s, &seg, &off])
+            .await
+            .expect("DELETE old chunk");
+        let new_slice = new.as_slice();
+        fpu.execute(
+            &insert_sql,
+            &[&tenant_s, &timeline_s, &seg, &off, &size, &new_slice],
+        )
+        .await
+        .expect("INSERT rewritten chunk");
+        flush.store(seg_base + 4096, Ordering::Release);
+
+        let mut tail = vec![0u8; 3072];
+        reader.read_exact(&mut tail).await.expect("read rewritten tail");
+        assert_eq!(
+            tail,
+            new[1024..],
+            "seg-1 reader served stale past-flush WAL after a term rewrite — \
+             the absolute-vs-segment-relative flush-bound no-op (#139)"
         );
 
         drop_wals_table(&fpu, &table).await;
