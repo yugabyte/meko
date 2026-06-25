@@ -145,9 +145,16 @@ def _usage_from_langchain_result(result: Any) -> Tuple[int, int, int, Optional[s
 # long tail before the LLM sees it. KB relevance + result count are owned by the
 # MCP's hybrid search, so the gateway neither filters nor caps KB results.
 #
-# Mem0 score is cosine similarity in [0, 1]; 0.3 drops near-orthogonal hits (the
-# "hi" failure mode) while keeping moderately-related ones (~0.34). Tune via obs.
-MEMORY_MIN_SCORE = 0.3
+# Tune from observation:
+#   - Bump `MEMORY_MIN_SCORE` up if you see Mem0 hits the agent shouldn't have used.
+#   - Lower it if relevant memories disappear from the panel.
+#   - Same logic mirror-flipped for `KB_MAX_DISTANCE`.
+
+# Mem0 score is cosine similarity in [0, 1] — higher is better. 0.45 keeps
+# moderately-relevant memories while dropping near-orthogonal hits. Short
+# factual memories ("Editor is Marcus Thompson") score 0.5–0.65 against
+# queries like "Who is my editor?" — 0.7 was dropping these correct hits.
+MEMORY_MIN_SCORE = 0.5
 
 
 # Greetings / acknowledgements that don't need any retrieval grounding —
