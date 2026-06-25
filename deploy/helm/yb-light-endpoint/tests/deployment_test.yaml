@@ -106,7 +106,7 @@ tests:
             containerPort: 9898
             protocol: TCP
 
-  - it: mounts an emptyDir scratch volume at /data
+  - it: mounts an emptyDir scratch volume at /data by default
     template: templates/deployment.yaml
     asserts:
       - contains:
@@ -119,6 +119,37 @@ tests:
           value: run
       - exists:
           path: spec.template.spec.volumes[0].emptyDir
+      # No persistent volume => no Recreate strategy.
+      - notExists:
+          path: spec.strategy
+
+  - it: sets fsGroup from podSecurityContext (the image's gid) by default
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 1000
+
+  - it: backs /data with a PVC and Recreate when a storage class is set
+    template: templates/deployment.yaml
+    set:
+      persistence.storageClass: yb-standard
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: run
+      - equal:
+          path: spec.template.spec.volumes[0].persistentVolumeClaim.claimName
+          value: RELEASE-NAME-yb-light-endpoint-data
+      - notExists:
+          path: spec.template.spec.volumes[0].emptyDir
+      # fsGroup still makes the root-owned PVC writable (from podSecurityContext).
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 1000
 
   - it: rolls pods when the ConfigMap changes (checksum annotation)
     template: templates/deployment.yaml

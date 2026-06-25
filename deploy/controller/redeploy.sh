@@ -26,6 +26,11 @@
 # Exposure (avoid slow cloud LBs):
 #   CONTROLLER_EXPOSE   nodeport | internal-lb | external-lb | none   (default: internal-lb)
 #   ENDPOINT_SERVICE_TYPE  ClusterIP | NodePort | LoadBalancer        (default: ClusterIP)
+#
+# Endpoint data volume:
+#   ENDPOINT_STORAGE_CLASS  storage class for each endpoint's /data PVC (EBS/PD);
+#                           empty (default) => an ephemeral emptyDir
+#   ENDPOINT_DISK_SIZE      PVC size when ENDPOINT_STORAGE_CLASS is set (default: 10Gi)
 # The in-cluster ClusterIP Service (amp-controller, API + SC port) is always
 # created. ClusterIP endpoints avoid a per-endpoint cloud LB entirely (reach via
 # Service DNS in-cluster, or `kubectl port-forward` from outside).
@@ -64,6 +69,13 @@ ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE:-ClusterIP}"
 # Annotations for a LoadBalancer endpoint Service (e.g. internal-LB); empty for ClusterIP.
 ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
 
+# Endpoint data volume: the storage class each endpoint's /data PVC is
+# provisioned from (a network block volume — EBS on AWS, Persistent Disk on GCP),
+# of size ENDPOINT_DISK_SIZE. Empty => an ephemeral emptyDir (no persistent
+# volume). The class must exist in the cluster (`kubectl get storageclass`).
+ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS:-}"
+ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
+
 # Image repo paths within the registry. Override for the amp/* ECR repos, e.g.
 # CONTROLLER_IMAGE_REPO=amp/controller ENDPOINT_IMAGE_REPO=amp/endpoint.
 CONTROLLER_IMAGE_REPO="${CONTROLLER_IMAGE_REPO:-controller/controller}"
@@ -73,6 +85,7 @@ CONTROLLER_IMAGE="${ECR}/${CONTROLLER_IMAGE_REPO}:${CONTROLLER_TAG}"
 ENDPOINT_REPO="${ECR}/${ENDPOINT_IMAGE_REPO}"
 
 echo ">> namespace=${NS}  controller=${CONTROLLER_IMAGE}  endpoint=${ENDPOINT_REPO}:${ENDPOINT_TAG}"
+echo ">> endpoint storage class=${ENDPOINT_STORAGE_CLASS:-<emptyDir>}  disk size=${ENDPOINT_DISK_SIZE}"
 
 # Sanity: warn (don't fail) if expected prerequisites are missing.
 kubectl get ns "${NS}" >/dev/null 2>&1 || echo "WARN: namespace ${NS} not found"
@@ -242,6 +255,9 @@ spec:
             # cloud LB; LoadBalancer uses ENDPOINT_SERVICE_ANNOTATIONS (e.g. internal-LB).
             - { name: AMP_DEPLOY_SERVICE_TYPE, value: "${ENDPOINT_SERVICE_TYPE}" }
             - { name: AMP_DEPLOY_SERVICE_ANNOTATIONS, value: "${ENDPOINT_SERVICE_ANNOTATIONS}" }
+            # Endpoint data volume: a PVC of this storage class (empty => emptyDir).
+            - { name: AMP_DEPLOY_STORAGE_CLASS, value: "${ENDPOINT_STORAGE_CLASS}" }
+            - { name: AMP_DEPLOY_DISK_SIZE, value: "${ENDPOINT_DISK_SIZE}" }
           readinessProbe:
             httpGet: { path: /readyz, port: 8080 }
             initialDelaySeconds: 5

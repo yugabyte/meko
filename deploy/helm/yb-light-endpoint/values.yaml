@@ -104,8 +104,20 @@ service:
   # -- Also publish the internal HTTP APIs (pageserver/safekeeper/endpoint_storage) on the Service.
   exposeInternalHttp: false
 
-# Ephemeral scratch for logs, pidfiles and the compute's pgdata. All durable
-# state is in YugabyteDB, so this does not need a PersistentVolume.
+# Endpoint data volume (/data: the compute's pgdata, the LFC cache, logs and
+# pidfiles). All durable state is in YugabyteDB, so by default this is ephemeral
+# scratch (emptyDir). Set persistence.storageClass to back /data with a
+# PersistentVolumeClaim of that class (a network block volume — EBS on AWS,
+# Persistent Disk on GCP) instead; the Deployment then uses the Recreate strategy
+# because the ReadWriteOnce volume attaches to only one pod at a time.
+persistence:
+  # -- StorageClass for the /data PersistentVolumeClaim. Empty => an ephemeral
+  # emptyDir (no persistent volume).
+  storageClass: ""
+  # -- Requested size of the /data PVC when storageClass is set.
+  size: 10Gi
+
+# Ephemeral scratch for /data when persistence.storageClass is unset.
 runDir:
   # -- emptyDir size limit for the scratch volume.
   sizeLimit: 10Gi
@@ -130,4 +142,10 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 securityContext: {}
-podSecurityContext: {}
+# Pod-level security context. fsGroup defaults to the endpoint image's "yugabyte"
+# gid (uid/gid 1000 in deploy/endpoint/Dockerfile): a provisioned PVC for /data
+# mounts root-owned, and this gid makes it group-writable for the non-root
+# process (an emptyDir is world-writable and unaffected). Keep it matching the
+# image's run-as group.
+podSecurityContext:
+  fsGroup: 1000

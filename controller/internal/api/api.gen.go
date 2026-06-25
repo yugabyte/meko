@@ -20,6 +20,12 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for CreateEndpointRequestDiskType.
+const (
+	Local   CreateEndpointRequestDiskType = "local"
+	Network CreateEndpointRequestDiskType = "network"
+)
+
 // Defines values for CreateEndpointRequestRole.
 const (
 	CreateEndpointRequestRoleReadOnly  CreateEndpointRequestRole = "read_only"
@@ -87,9 +93,23 @@ type CreateBranchRequest struct {
 
 // CreateEndpointRequest defines model for CreateEndpointRequest.
 type CreateEndpointRequest struct {
+	// DiskType Backing disk for the endpoint's data volume. `network` (the default)
+	// provisions a network-attached block volume from the controller's
+	// configured storage class (e.g. EBS on AWS, Persistent Disk on GCP).
+	// `local` (a node-local instance SSD, typically NVMe) is not yet
+	// supported and is rejected with 400.
+	DiskType *CreateEndpointRequestDiskType `json:"disk_type,omitempty"`
+
 	// Role The endpoint's role. A branch admits at most one read_write endpoint.
 	Role *CreateEndpointRequestRole `json:"role,omitempty"`
 }
+
+// CreateEndpointRequestDiskType Backing disk for the endpoint's data volume. `network` (the default)
+// provisions a network-attached block volume from the controller's
+// configured storage class (e.g. EBS on AWS, Persistent Disk on GCP).
+// `local` (a node-local instance SSD, typically NVMe) is not yet
+// supported and is rejected with 400.
+type CreateEndpointRequestDiskType string
 
 // CreateEndpointRequestRole The endpoint's role. A branch admits at most one read_write endpoint.
 type CreateEndpointRequestRole string

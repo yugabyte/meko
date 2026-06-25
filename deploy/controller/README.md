@@ -136,6 +136,9 @@ CONTROLLER_IMAGE_REPO=amp/controller ENDPOINT_IMAGE_REPO=amp/endpoint \
   reach via Service DNS / port-forward), `NodePort` (the controller records
   `<nodeIP>:<nodePort>` as the endpoint's connection address), or `LoadBalancer`
   (+ `ENDPOINT_SERVICE_ANNOTATIONS`). The deployer accepts no other value.
+- `ENDPOINT_STORAGE_CLASS` — storage class for each endpoint's `/data` volume; a
+  PVC of that class (EBS/PD), sized by `ENDPOINT_DISK_SIZE` (default `10Gi`).
+  Empty (default) ⇒ an ephemeral `emptyDir`.
 
 (`deploy/up.sh` overrides these to `nodeport` + `ClusterIP` by default.)
 
@@ -191,6 +194,8 @@ the storage-controller knobs the image cares about:
 | `AMP_DEPLOY_BOOTSTRAP` | _(unset → false)_ | docker: dev/e2e — initdb the recorded tenant/timeline on deploy (no create-database flow yet) |
 | `AMP_DEPLOY_YB_HOST_PORTS` | _(required if `AMP_DEPLOY`)_ | how an endpoint reaches the backing YB storage universe |
 | `AMP_DEPLOY_YB_DBNAME` | `yb_storage` | the storage database the endpoints use |
+| `AMP_DEPLOY_STORAGE_CLASS` | _(empty)_ | k8s: storage class for the endpoint `/data` PVC (EBS/PD); empty ⇒ ephemeral `emptyDir` |
+| `AMP_DEPLOY_DISK_SIZE` | `10Gi` | k8s: size of the `/data` PVC when `AMP_DEPLOY_STORAGE_CLASS` is set |
 
 A Helm chart for the controller layer (mirroring
 [`helm/yb-light-endpoint`](../helm/yb-light-endpoint)) is not part of this change.

@@ -500,6 +500,19 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "role must be read_write or read_only"))}, nil
 	}
 
+	// Disk type defaults to network (the configured storage class). A local
+	// instance SSD is not yet supported and is rejected up front rather than
+	// silently provisioning the default.
+	if request.Body != nil && request.Body.DiskType != nil {
+		switch *request.Body.DiskType {
+		case Network:
+		case Local:
+			return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("unsupported_disk_type", "local-disk-backed endpoints are not yet supported"))}, nil
+		default:
+			return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "disk_type must be network or local"))}, nil
+		}
+	}
+
 	br, err := c.backend.GetBranch(ctx, request.PoolId, request.ProjectId, request.BranchId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):

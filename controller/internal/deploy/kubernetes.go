@@ -55,6 +55,12 @@ type KubernetesConfig struct {
 	// ServiceAnnotations are set on the endpoint Service (e.g. GKE internal-LB annotations).
 	ServiceAnnotations map[string]string
 
+	// StorageClass, when non-empty, provisions the endpoint's data volume as a
+	// PersistentVolumeClaim of that class (a network block volume — EBS/PD) of
+	// size DiskSize, instead of an ephemeral emptyDir. Empty = emptyDir.
+	StorageClass string
+	DiskSize     string
+
 	// Optional: deliver the backing YugabyteDB password from a pre-existing
 	// Secret in the namespace instead of inline (keeps the plaintext off the
 	// controller). When ExistingSecret is empty, the spec's inline YB.Password
@@ -380,6 +386,17 @@ type chartValues struct {
 	Endpoint          endpointValues          `json:"endpoint"`
 	StorageController storageControllerValues `json:"storageController"`
 	Service           serviceValues           `json:"service"`
+	// Persistence is nil (omitted) for the chart's emptyDir default; set to
+	// provision the endpoint's data volume as a PVC of a storage class.
+	Persistence *persistenceValues `json:"persistence,omitempty"`
+}
+
+type persistenceValues struct {
+	// StorageClass provisions the endpoint's data volume as a PVC of that class;
+	// empty leaves the chart's emptyDir default in place.
+	StorageClass string `json:"storageClass,omitempty"`
+	// Size is the PVC's requested storage when StorageClass is set.
+	Size string `json:"size,omitempty"`
 }
 
 type serviceValues struct {
@@ -463,6 +480,11 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 	}
 	if k.cfg.PullSecret != "" {
 		v.ImagePullSecrets = []map[string]string{{"name": k.cfg.PullSecret}}
+	}
+	// A storage class turns the endpoint's data volume into a PVC of that class
+	// (EBS/PD); without one the chart keeps its ephemeral emptyDir default.
+	if k.cfg.StorageClass != "" {
+		v.Persistence = &persistenceValues{StorageClass: k.cfg.StorageClass, Size: k.cfg.DiskSize}
 	}
 	return v
 }

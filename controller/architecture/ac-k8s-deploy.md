@@ -1,7 +1,7 @@
 # controller — Kubernetes endpoint deploy
 
 **Status:** Current (demo-grade — see Assumptions)
-**Last updated:** 2026-06-18
+**Last updated:** 2026-06-24
 
 How the **amp controller** runs on Kubernetes and deploys compute **endpoints**
 there ([#108](https://github.com/yugabyte/yb-light/issues/108)). The k8s deployer
@@ -122,6 +122,29 @@ Service DNS (`--deploy-yb-host-ports`), which may differ from the controller's o
 `--database-url` path to its state. The `(tenant_id, timeline_id)` pair is the
 shared key.
 
+## Endpoint data volume (`--deploy-storage-class`)
+
+Each endpoint's `/data` (the compute's `pgdata`, the LFC cache, logs and
+pidfiles) is provisioned from a storage class when `--deploy-storage-class` is
+set: the chart renders a `ReadWriteOnce` **PersistentVolumeClaim** of that class
+(a network block volume — **EBS** on AWS, **Persistent Disk** on GCP) of size
+`--deploy-disk-size` (default `10Gi`) and mounts it at `/data`. Because the
+ReadWriteOnce volume attaches to one pod at a time, the Deployment switches to the
+**`Recreate`** strategy (stop the old pod before starting the new one). The pod's
+**`podSecurityContext.fsGroup`** (default `1000`, the endpoint image's `yugabyte`
+gid) makes the otherwise root-owned provisioned volume writable by the non-root
+process — a single source for the fsGroup, applied whether or not a PVC is used (an
+`emptyDir` is world-writable and unaffected). The PVC is part of the Helm release,
+so `helm uninstall` on retire frees the volume. With the flag **empty**, `/data`
+falls back to the current ephemeral **`emptyDir`** (no persistent volume). All durable state still lives in YugabyteDB; the volume is
+local scratch + cache, so a pod (or PVC) reset is safe.
+
+`createEndpoint` carries a per-endpoint **`disk_type`** (`network` default,
+`local`). `network` uses the configured storage class above; `local` (a
+node-local instance SSD, typically NVMe) is **not yet supported** and is rejected
+with `400` before any row is committed — tracked as a follow-up (the deployer has
+no local-disk path yet).
+
 ## Packages
 
 - **`internal/helm`** — a thin, one-shot wrapper over the `helm` CLI
@@ -171,6 +194,8 @@ Kubernetes driver:
 | `--deploy-compute-port` | compute Postgres port the Service publishes |
 | `--deploy-service-type` | endpoint Service type: `ClusterIP` (default), `NodePort`, or `LoadBalancer` |
 | `--deploy-service-annotations` | `k=v,k=v` annotations on the endpoint Service (e.g. internal-LB) |
+| `--deploy-storage-class` | storage class for the endpoint `/data` PVC (EBS/PD); empty = ephemeral `emptyDir` |
+| `--deploy-disk-size` | requested size of the `/data` PVC when `--deploy-storage-class` is set (default `10Gi`) |
 
 Docker driver: `--deploy-endpoint-image`, `--deploy-network`,
 `--deploy-external-host`, `--deploy-supervisor-path`.

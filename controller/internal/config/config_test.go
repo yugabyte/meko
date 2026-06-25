@@ -301,6 +301,47 @@ func TestDeployServiceType(t *testing.T) {
 	}
 }
 
+func TestDeployStorageClass(t *testing.T) {
+	chart := t.TempDir()
+	base := func() []string {
+		return []string{
+			"--database-url", "postgres://localhost/db",
+			"--deploy",
+			"--deploy-driver", "kubernetes",
+			"--deploy-namespace", "endpoints",
+			"--deploy-chart", chart,
+			"--endpoint-image-repo", "registry.example.com/endpoint",
+			"--deploy-yb-host-ports", "yb-tserver:5433",
+		}
+	}
+
+	// No storage class: empty (emptyDir fallback), but a disk size default is set.
+	c, err := Load(base())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Deploy.StorageClass != "" {
+		t.Errorf("StorageClass = %q, want empty by default", c.Deploy.StorageClass)
+	}
+	if c.Deploy.DiskSize != "10Gi" {
+		t.Errorf("DiskSize = %q, want default 10Gi", c.Deploy.DiskSize)
+	}
+
+	// Storage class set: carried through, with the size default.
+	c, err = Load(append(base(), "--deploy-storage-class", "yb-standard"))
+	if err != nil {
+		t.Fatalf("Load(storage class): %v", err)
+	}
+	if c.Deploy.StorageClass != "yb-standard" {
+		t.Errorf("StorageClass = %q, want yb-standard", c.Deploy.StorageClass)
+	}
+
+	// Storage class set with an empty disk size is rejected.
+	if _, err := Load(append(base(), "--deploy-storage-class", "yb-standard", "--deploy-disk-size", "")); err == nil {
+		t.Error("expected error when --deploy-storage-class is set and --deploy-disk-size is empty")
+	}
+}
+
 func TestDeployEnabledMissingRequired(t *testing.T) {
 	chart := t.TempDir()
 	// base: a fully-valid set of args; each subtest removes/breaks one field.

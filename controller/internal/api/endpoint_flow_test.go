@@ -141,6 +141,48 @@ func TestEndpointErrors(t *testing.T) {
 	}
 }
 
+// TestEndpointDiskType: disk_type=network (or omitted) deploys; disk_type=local
+// is rejected with 400 before any row is committed (local disks not yet supported).
+func TestEndpointDiskType(t *testing.T) {
+	client, backend, _ := newTestServer(t)
+	ctx := context.Background()
+
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "disk-pool")
+	projectID := uuid.New()
+	branchID := uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+
+	rw := api.CreateEndpointRequestRoleReadWrite
+	network := api.Network
+	local := api.Local
+
+	// disk_type=local -> 400, and no row is committed.
+	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &local})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(local): %v", err)
+	}
+	if bad.StatusCode() != http.StatusBadRequest || bad.JSON400 == nil {
+		t.Fatalf("local status = %d, want 400; body = %s", bad.StatusCode(), bad.Body)
+	}
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	if err != nil {
+		t.Fatalf("ListEndpoints: %v", err)
+	}
+	if list.StatusCode() != http.StatusOK || list.JSON200 == nil || len(list.JSON200.Endpoints) != 0 {
+		t.Fatalf("after rejected local create, endpoints = %v (want none)", list.Body)
+	}
+
+	// disk_type=network -> 201 (the default disk).
+	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &network})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(network): %v", err)
+	}
+	if ok.StatusCode() != http.StatusCreated {
+		t.Fatalf("network status = %d, want 201; body = %s", ok.StatusCode(), ok.Body)
+	}
+}
+
 // TestEndpointDeployDisabled: with the provisioner off, endpoint create/retire
 // refuse with 501 rather than committing a row + planning a task no worker can
 // run.

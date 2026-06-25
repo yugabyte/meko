@@ -6,11 +6,19 @@ metadata:
     {{- include "yb-light-endpoint.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if .Values.persistence.storageClass }}
+  # The /data PVC is ReadWriteOnce — it attaches to one pod at a time — so a new
+  # pod can't mount it while the old one still holds it. Recreate (stop the old
+  # pod before starting the new one) instead of surging a second pod.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "yb-light-endpoint.selectorLabels" . | nindent 6 }}
   # PGDATA is ephemeral (compute_ctl re-fetches a basebackup each start) and all
-  # durable state lives in YugabyteDB, so a rolling pod is safe.
+  # durable state lives in YugabyteDB; the /data volume (emptyDir or a PVC) is
+  # local scratch + cache, so replacing the pod is safe.
   template:
     metadata:
       annotations:
@@ -104,8 +112,13 @@ spec:
               mountPath: /data
       volumes:
         - name: run
+        {{- if .Values.persistence.storageClass }}
+          persistentVolumeClaim:
+            claimName: {{ include "yb-light-endpoint.fullname" . }}-data
+        {{- else }}
           emptyDir:
             sizeLimit: {{ .Values.runDir.sizeLimit }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

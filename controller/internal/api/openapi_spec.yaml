@@ -844,6 +844,16 @@ components:
           enum: [read_write, read_only]
           default: read_write
           description: The endpoint's role. A branch admits at most one read_write endpoint.
+        disk_type:
+          type: string
+          enum: [network, local]
+          default: network
+          description: |
+            Backing disk for the endpoint's data volume. `network` (the default)
+            provisions a network-attached block volume from the controller's
+            configured storage class (e.g. EBS on AWS, Persistent Disk on GCP).
+            `local` (a node-local instance SSD, typically NVMe) is not yet
+            supported and is rejected with 400.
 
     OperationAck:
       type: object

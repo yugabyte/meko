@@ -136,6 +136,8 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				ComputePort:                cfg.Deploy.ComputePort,
 				ServiceType:                cfg.Deploy.ServiceType,
 				ServiceAnnotations:         cfg.Deploy.ServiceAnnotations,
+				StorageClass:               cfg.Deploy.StorageClass,
+				DiskSize:                   cfg.Deploy.DiskSize,
 				BackingYBExistingSecret:    cfg.Deploy.BackingYBExistingSecret,
 				BackingYBExistingSecretKey: cfg.Deploy.BackingYBExistingSecretKey,
 				Timeout:                    cfg.Deploy.Timeout,
@@ -145,6 +147,7 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				"chart", cfg.Deploy.ChartPath,
 				"image", cfg.Deploy.EndpointImageRepo+":"+cfg.Deploy.EndpointImageTag,
 				"backing_yb", cfg.Deploy.BackingYBHostPorts,
+				"storage_class", cfg.Deploy.StorageClass,
 				"sc_endpoint_url", prov.SCEndpointURL)
 		default: // config.DriverDocker
 			prov.Deployer = deploy.NewDockerDeployer(deploy.DockerConfig{

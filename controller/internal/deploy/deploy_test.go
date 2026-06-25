@@ -156,6 +156,46 @@ func TestKubernetesValuesServiceType(t *testing.T) {
 	}
 }
 
+func TestKubernetesValuesPersistence(t *testing.T) {
+	cfg := testKubernetesConfig()
+	cfg.StorageClass = "yb-standard"
+	cfg.DiskSize = "20Gi"
+	k := NewKubernetesDeployer(cfg, nil)
+
+	v := k.values(testEndpointSpec(), "yb-ep-rel")
+	if v.Persistence == nil {
+		t.Fatal("Persistence = nil, want it populated when StorageClass is set")
+	}
+	if v.Persistence.StorageClass != "yb-standard" {
+		t.Errorf("Persistence.StorageClass = %q, want yb-standard", v.Persistence.StorageClass)
+	}
+	if v.Persistence.Size != "20Gi" {
+		t.Errorf("Persistence.Size = %q, want 20Gi", v.Persistence.Size)
+	}
+}
+
+func TestKubernetesValuesNoPersistence(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil) // StorageClass empty
+
+	v := k.values(testEndpointSpec(), "yb-ep-rel")
+	if v.Persistence != nil {
+		t.Errorf("Persistence = %v, want nil when StorageClass is empty", v.Persistence)
+	}
+	// The key must be omitted from the marshaled values document entirely so the
+	// chart keeps its emptyDir default.
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal values: %v", err)
+	}
+	var asMap map[string]any
+	if err := json.Unmarshal(data, &asMap); err != nil {
+		t.Fatalf("unmarshal values: %v", err)
+	}
+	if _, present := asMap["persistence"]; present {
+		t.Errorf("persistence should be omitted from %s", data)
+	}
+}
+
 func TestParseServiceNodePort(t *testing.T) {
 	body := []byte(`{"spec":{"ports":[
 		{"name":"pg-compute","port":55433,"nodePort":31234},

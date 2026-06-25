@@ -46,6 +46,7 @@ NS=amp deploy/up.sh
 CONTROLLER_TAG=<tag> ENDPOINT_TAG=<tag> deploy/up.sh        # else: most-recent ECR tag
 CONTROLLER_EXPOSE=internal-lb deploy/up.sh                  # controller via internal LB instead of NodePort
 ENDPOINT_SERVICE_TYPE=LoadBalancer deploy/up.sh            # per-endpoint LB instead of ClusterIP
+ENDPOINT_STORAGE_CLASS=yb-standard deploy/up.sh            # endpoints get a /data PVC (EBS/PD) instead of emptyDir
 ```
 
 ### Exposure

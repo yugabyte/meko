@@ -90,7 +90,7 @@ branch → endpoint** (the user is not in the path). The error envelope is `{ "e
 | `GET …/projects/{projectId}/branches` | listBranches | Paginated; the project's branches (default branch + forks). `404` if the pool/project is unknown. |
 | `GET …/branches/{branchId}` | getBranch | One branch. `404` if the pool/project/branch is unknown. |
 | `DELETE …/branches/{branchId}` | deleteBranch | **Logged only** → `202`. |
-| `POST …/branches/{branchId}/endpoints` | createEndpoint | Creates the endpoint and **synchronously deploys** it → `201 {endpoint}` (its `address` set). `501` if `--deploy` is off. |
+| `POST …/branches/{branchId}/endpoints` | createEndpoint | Creates the endpoint and **synchronously deploys** it → `201 {endpoint}` (its `address` set). Optional `disk_type` (`network` default = the configured storage class; `local` not yet supported → `400`). `501` if `--deploy` is off. |
 | `GET …/branches/{branchId}/endpoints` | listEndpoints | Paginated; the branch's endpoints. `404` if the pool/project/branch is unknown. |
 | `GET …/endpoints/{endpointId}` | getEndpoint | One endpoint (its `address` is set once deployed). |
 | `DELETE …/endpoints/{endpointId}` | deleteEndpoint | **Synchronously retires** the endpoint → `204`. `501` if `--deploy` is off. |

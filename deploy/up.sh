@@ -58,6 +58,10 @@ YB_FQDN="yugabyted-0.yugabyted.${NS}.svc.cluster.local"
 #   ENDPOINT_SERVICE_TYPE ClusterIP (default) | NodePort | LoadBalancer
 CONTROLLER_EXPOSE="${CONTROLLER_EXPOSE:-nodeport}"
 ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE:-ClusterIP}"
+# Endpoint data volume: a storage class backs each endpoint's /data with a PVC
+# (EBS/PD); empty (default) => an ephemeral emptyDir. ENDPOINT_DISK_SIZE sizes the PVC.
+ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS:-}"
+ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
 # Internal-LB annotations (used only for *-lb / LoadBalancer modes).
 LB_ANNOTATIONS="${LB_ANNOTATIONS:-networking.gke.io/load-balancer-type=Internal,networking.gke.io/internal-load-balancer-allow-global-access=true}"
 # Endpoint LB annotations default to LB_ANNOTATIONS only when endpoints use a LoadBalancer.
@@ -239,6 +243,8 @@ DB_URL="postgres://yugabyte@${YB_FQDN}:5433/yb_storage?sslmode=disable" \
 CONTROLLER_EXPOSE="${CONTROLLER_EXPOSE}" \
 ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE}" \
 ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS}" \
+ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS}" \
+ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE}" \
 LB_ANNOTATIONS="${LB_ANNOTATIONS}" \
   "${SCRIPT_DIR}/controller/redeploy.sh"
 
