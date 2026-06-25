@@ -127,7 +127,7 @@ export const FREE_TIER_BLOCKED_MESSAGES = {
 /** External marketing contact page for the "Upgrade to Pro" CTA on the
  *  banner + the PricingSection card. Single point of update when sales
  *  prefers a different URL (Cal.com booking, HubSpot form, etc.). */
-export const SALES_CONTACT_URL = "https://info.yugabyte.com/meko-request-access";
+export const SALES_CONTACT_URL = "https://share-na2.hsforms.com/16H0_N54LT0WVNmcALDOFIwbutl6";
 
 /** Long-form banner copy shown at the top of gated pages — more
  *  prominent than the tooltip/under-input message. Each surface picks
