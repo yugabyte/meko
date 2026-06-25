@@ -67,7 +67,7 @@ func BuildCreateProject(in CreateProjectInput) (Plan, error) {
 		mustStep(StepRecordBranchRecipe, RecordBranchRecipeArgs{
 			ProjectID:  projectID,
 			BranchID:   branchID,
-			BranchName: in.Name,
+			BranchName: defaultBranchName, // the default branch is always "main", not the project name
 			PgVersion:  in.PgVersion,
 			StartLSN:   "0/0", // a default (Bootstrap) branch starts at the origin
 		}),
@@ -199,6 +199,11 @@ func EndpointDeployName(endpointID uuid.UUID) string {
 // package stays independent of the domain layer). The value is the endpoint_role
 // enum literal the schema and core agree on.
 const roleReadWrite = "read_write"
+
+// defaultBranchName mirrors core.DefaultBranchName without importing core: a
+// project's default branch is always named "main", independent of the project
+// name. The create_project step (EnsureProject) names the branch the same way.
+const defaultBranchName = "main"
 
 // plan finishes a Plan: it marshals the originating request as params and stamps
 // the task's target project (project_id, exposed by the task API for monitoring).

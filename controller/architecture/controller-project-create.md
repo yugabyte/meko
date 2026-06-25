@@ -40,8 +40,10 @@ the result — it does not run `initdb` itself.
 1. Allocates the project id (= the storage layer's `tenant_id`) and the default
    branch id (= the `timeline_id`).
 2. Writes the control-plane rows to its database: `project` (under the pool) and
-   its default `branch` (`name`, `pg_version`, `is_default = true`,
-   `parent_branch_id = NULL` for the default branch).
+   its default `branch` (`name = "main"`, `pg_version`, `is_default = true`,
+   `parent_branch_id = NULL` for the default branch). The default branch is always
+   named `main`, independent of the project name; forks off it choose their own
+   names (unique within the project).
 3. Records the same recipe in the storage controller, keyed by the storage-layer
    ids: `record_pending_timeline_init(tenant_id, timeline_id, { branch_name,
    pg_version, ancestor_timeline_id = NULL, start_lsn = 0 })`.

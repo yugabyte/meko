@@ -207,8 +207,10 @@ func TestCreateProject(t *testing.T) {
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
 	// Create project -> 201 with a real id and its auto-created default branch.
+	// The project carries the chosen name; its default branch is always "main"
+	// (independent of the project name), so use a distinct project name here.
 	pgv := 17
-	cp, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "main", PgVersion: &pgv})
+	cp, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "shop", PgVersion: &pgv})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -218,6 +220,9 @@ func TestCreateProject(t *testing.T) {
 	p := *cp.JSON201
 	if p.Id == uuid.Nil {
 		t.Errorf("project has nil id")
+	}
+	if p.Name != "shop" {
+		t.Errorf("project name = %q, want %q", p.Name, "shop")
 	}
 	def := p.DefaultBranch
 	if def.ProjectId != p.Id || def.BranchId == uuid.Nil {
@@ -237,7 +242,7 @@ func TestCreateProject(t *testing.T) {
 	}
 
 	// Duplicate name in the same pool -> 409.
-	dup, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "main"})
+	dup, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "shop"})
 	if err != nil {
 		t.Fatalf("CreateProject(dup): %v", err)
 	}

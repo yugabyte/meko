@@ -101,6 +101,12 @@ type Endpoint struct {
 	CreatedAt time.Time
 }
 
+// DefaultBranchName is the name given to a project's default (root) branch. The
+// project carries its own user-chosen name; its default branch is always "main"
+// (the trunk line of history), independent of the project name, matching the
+// convention users expect from git/Neon. Forks off it choose their own names.
+const DefaultBranchName = "main"
+
 // Endpoint roles (the endpoint_role enum).
 const (
 	RoleReadWrite = "read_write"

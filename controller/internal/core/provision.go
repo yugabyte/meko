@@ -44,7 +44,7 @@ func (b *PgBackend) EnsureProject(ctx context.Context, poolID, projectID, branch
 		`INSERT INTO branch (project_id, branch_id, name, pg_version, is_default)
 		 VALUES ($1::uuid, $2::uuid, $3, $4, true)
 		 ON CONFLICT (project_id, branch_id) DO NOTHING`,
-		projectID.String(), branchID.String(), name, pgVersion); err != nil {
+		projectID.String(), branchID.String(), DefaultBranchName, pgVersion); err != nil {
 		return mapBranchErr("insert default branch", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

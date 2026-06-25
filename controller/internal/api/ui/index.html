@@ -22,6 +22,8 @@
       --danger-soft: #fbeaea;
       --radius: 8px;
       --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+      /* A serif display face sets a project (database) name apart from the sans UI. */
+      --font-display: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
@@ -127,6 +129,11 @@
       font-size: 13px; min-width: 200px; color: var(--text); background: var(--surface);
     }
     input[type="text"]:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+    select {
+      border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px;
+      font-size: 13px; color: var(--text); background: var(--surface); cursor: pointer;
+    }
+    select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
     label.check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
 
     .empty { color: var(--muted); padding: 18px 16px; font-size: 13px; }
@@ -138,12 +145,15 @@
     .project { border-top: 1px solid var(--border); padding: 14px 16px; }
     .project:first-child { border-top: none; }
     .project .pj-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .project .pj-name { font-weight: 600; }
+    .project .pj-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; letter-spacing: 0.01em; }
     .branches { margin-top: 10px; padding-left: 14px; border-left: 2px solid var(--border); }
+    .branch-bar { margin-bottom: 4px; }
+    .branch-switch { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
     .branch { padding: 10px 0; border-top: 1px dashed var(--border); }
     .branch:first-child { border-top: none; }
     .branch .br-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .branch .br-name { font-weight: 600; }
+    .br-ref { color: var(--text); font-weight: 600; }
     .meta { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; gap: 16px; flex-wrap: wrap; }
     .meta .k { color: var(--muted); }
     .endpoints { margin-top: 10px; padding-left: 14px; border-left: 2px solid var(--border); }
@@ -157,6 +167,23 @@
       font-size: 13px; max-width: 80vw; display: none; z-index: 50;
     }
     #toast.ok { background: var(--ok-soft); color: var(--ok); border-color: #bfe6d3; }
+
+    dialog.modal {
+      border: 1px solid var(--border); border-radius: var(--radius); padding: 0;
+      box-shadow: 0 12px 32px rgba(16, 24, 40, 0.18); width: calc(100% - 32px); max-width: 420px;
+      color: var(--text); background: var(--surface);
+    }
+    dialog.modal::backdrop { background: rgba(16, 24, 40, 0.35); }
+    .modal form { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+    .modal h3 { margin: 0; font-size: 16px; }
+    .modal .sub { margin: 0; }
+    .modal .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+    .modal .field input[type="text"] { width: 100%; min-width: 0; }
+    .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+    .modal .form-error {
+      background: var(--danger-soft); color: var(--danger); border: 1px solid #f1c7c7;
+      border-radius: 6px; padding: 8px 10px; font-size: 13px;
+    }
 
     .spinner { color: var(--muted); padding: 24px 16px; font-size: 13px; }
     .section-actions { margin-bottom: 12px; }
@@ -173,6 +200,26 @@
   </header>
   <main id="app"><div class="spinner">Loading…</div></main>
   <div id="toast"></div>
+
+  <!-- Create-branch modal. Lives outside #app so a route re-render can't wipe it;
+       its inputs/parent are populated each time it is opened. -->
+  <dialog id="branch-dialog" class="modal" aria-labelledby="bd-title">
+    <form id="bd-form">
+      <h3 id="bd-title">Create branch</h3>
+      <p class="sub muted">Forking from <strong id="bd-parent" class="br-ref"></strong></p>
+      <label class="field">Branch name
+        <input type="text" id="bd-name" placeholder="e.g. feature-login" autocomplete="off" />
+      </label>
+      <label class="field">Fork point LSN <span class="muted">(optional)</span>
+        <input type="text" id="bd-lsn" placeholder="e.g. 0/16ABCD0 — defaults to latest" autocomplete="off" />
+      </label>
+      <div id="bd-error" class="form-error" hidden></div>
+      <div class="actions">
+        <button type="button" class="btn" id="bd-cancel">Cancel</button>
+        <button type="submit" class="btn primary" id="bd-submit">Create branch</button>
+      </div>
+    </form>
+  </dialog>
 
   <script>
     "use strict";
@@ -504,7 +551,12 @@
       projects.forEach((p) => hydrateBranches(poolId, p.id, userId));
     }
 
-    async function hydrateBranches(poolId, projectId, userId) {
+    // A project's branches are shown one at a time: the default branch ("main")
+    // is selected by default, with a dropdown to switch to any other branch.
+    // Only the selected branch's detail (lineage, fork form, endpoints) is shown.
+    // selectBranchId optionally pre-selects a branch after a re-hydrate (e.g. the
+    // one just created) instead of falling back to the default.
+    async function hydrateBranches(poolId, projectId, userId, selectBranchId) {
       const host = document.getElementById(`br-${projectId}`);
       if (!host) return;
       let data;
@@ -516,57 +568,82 @@
         host.innerHTML = `<div class="muted" style="font-size:12px">No branches yet.</div>`;
         return;
       }
-      host.innerHTML = branches.map((b) => {
-        // A non-default branch shows where it forked from.
-        const lineage = b.parent_branch_id
-          ? `<span><span class="k">forked from</span> ${idChip(b.parent_branch_id)}` +
-            `${b.fork_lsn ? ` @ <code>${esc(b.fork_lsn)}</code>` : ""}</span>`
-          : "";
-        return `
-        <div class="branch" id="brrow-${esc(b.branch_id)}">
-          <div class="br-head">
-            <span class="br-name">${esc(b.name)}</span>
-            ${b.is_default ? '<span class="badge default">default</span>' : '<span class="badge muted">branch</span>'}
-            <span class="badge muted">pg ${esc(b.pg_version)}</span>
-          </div>
-          <div class="meta">
-            <span><span class="k">branch</span> ${idChip(b.branch_id)}</span>
-            ${lineage}
-            <span><span class="k">created</span> ${fmtDate(b.created_at)}</span>
-          </div>
-          <div class="inline-form" style="margin-top:8px">
-            <input type="text" class="branch-name" data-parent="${esc(b.branch_id)}" placeholder="New branch name" style="min-width:160px" />
-            <input type="text" class="branch-lsn" data-parent="${esc(b.branch_id)}" placeholder="fork LSN (optional)" style="min-width:150px" />
-            <button class="btn create-branch" data-parent="${esc(b.branch_id)}">Branch</button>
-          </div>
-          <div class="endpoints" id="ep-${esc(b.branch_id)}">
-            <div class="muted" style="font-size:12px">Loading endpoints…</div>
-          </div>
-        </div>`;
-      }).join("");
 
-      bind();
-      // Wire each branch's "Branch" button: fork it into a new branch off this
-      // one (branch-of-branch), then re-hydrate the project so the new branch
-      // (and its lineage) shows up. An empty fork-LSN field defaults to the
-      // parent's latest LSN server-side.
-      host.querySelectorAll(".create-branch").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const parent = btn.getAttribute("data-parent");
-          const nameEl = host.querySelector(`.branch-name[data-parent="${parent}"]`);
-          const name = nameEl.value.trim();
-          if (!name) { toast("Enter a branch name"); return; }
-          const forkLsn = host.querySelector(`.branch-lsn[data-parent="${parent}"]`).value.trim();
-          btn.disabled = true;
-          try {
-            await createBranch(poolId, projectId, parent, name, forkLsn);
-            toast("Branch created", true);
-            await hydrateBranches(poolId, projectId, userId);
-          } catch (err) { toast(err.message); btn.disabled = false; }
-        });
+      // Index by id so lineage can be shown by parent *name* (not just its id),
+      // and so switching the dropdown can render a branch without refetching.
+      const byId = {};
+      branches.forEach((b) => { byId[b.branch_id] = b; });
+
+      // The default branch is the project's trunk, so list it first; the rest
+      // follow in creation order (the API returns them sorted by created_at).
+      const def = branches.find((b) => b.is_default) || branches[0];
+      const ordered = [def, ...branches.filter((b) => b.branch_id !== def.branch_id)];
+      const options = ordered.map((b) =>
+        `<option value="${esc(b.branch_id)}">${esc(b.name)}${b.is_default ? " · default" : ""}</option>`).join("");
+
+      const count = branches.length;
+      host.innerHTML = `
+        <div class="branch-bar inline-form">
+          <label class="branch-switch">Branch
+            <select class="branch-select" aria-label="Select branch">${options}</select>
+          </label>
+          <button class="btn primary create-branch">Create branch…</button>
+          <span class="muted nowrap" style="font-size:12px; margin-left:auto">${count} branch${count === 1 ? "" : "es"} in this project</span>
+        </div>
+        <div class="branch-detail"></div>`;
+
+      const select = host.querySelector(".branch-select");
+      const detail = host.querySelector(".branch-detail");
+
+      // The "Create branch…" button sits next to the dropdown and forks whichever
+      // branch is currently selected (read at click time, so it tracks the dropdown).
+      host.querySelector(".create-branch").addEventListener("click", () => {
+        const cur = byId[select.value];
+        if (!cur) return;
+        openBranchDialog({ poolId, projectId, userId, parentId: cur.branch_id, parentName: cur.name });
       });
-      // Endpoints per branch, in parallel.
-      branches.forEach((b) => hydrateEndpoints(poolId, projectId, b.branch_id));
+
+      // Render the panel for one branch: its metadata (the fork point shown by the
+      // parent branch's name) and its endpoints. Forking is driven from the
+      // "Create branch…" button in the branch bar above.
+      function renderDetail(branchId) {
+        const b = byId[branchId];
+        if (!b) return;
+
+        let lineage = "";
+        if (b.parent_branch_id) {
+          const parent = byId[b.parent_branch_id];
+          const pname = parent ? parent.name : shortId(b.parent_branch_id);
+          lineage = `<span><span class="k">forked from</span> ` +
+            `<span class="br-ref">${esc(pname)}</span> ${idChip(b.parent_branch_id)}` +
+            `${b.fork_lsn ? ` @ <code>${esc(b.fork_lsn)}</code>` : ""}</span>`;
+        }
+
+        detail.innerHTML = `
+          <div class="branch" id="brrow-${esc(b.branch_id)}">
+            <div class="br-head">
+              <span class="br-name">${esc(b.name)}</span>
+              ${b.is_default ? '<span class="badge default">default</span>' : '<span class="badge muted">branch</span>'}
+              <span class="badge muted">pg ${esc(b.pg_version)}</span>
+            </div>
+            <div class="meta">
+              <span><span class="k">branch</span> ${idChip(b.branch_id)}</span>
+              ${lineage}
+              <span><span class="k">created</span> ${fmtDate(b.created_at)}</span>
+            </div>
+            <div class="endpoints" id="ep-${esc(b.branch_id)}">
+              <div class="muted" style="font-size:12px">Loading endpoints…</div>
+            </div>
+          </div>`;
+        bind();
+
+        hydrateEndpoints(poolId, projectId, b.branch_id);
+      }
+
+      const initial = selectBranchId && byId[selectBranchId] ? selectBranchId : def.branch_id;
+      select.value = initial;
+      select.addEventListener("change", () => renderDetail(select.value));
+      renderDetail(initial);
     }
 
     async function hydrateEndpoints(poolId, projectId, branchId) {
@@ -637,6 +714,60 @@
         <p class="muted">${esc(msg)}</p>
       </div></div>`;
     }
+
+    // --- create-branch modal -------------------------------------------------
+    // One shared <dialog> serves every branch panel; openBranchDialog stashes the
+    // context (which branch to fork, in which project) the submit handler reads.
+
+    const branchDialog = document.getElementById("branch-dialog");
+    const bdForm   = document.getElementById("bd-form");
+    const bdParent = document.getElementById("bd-parent");
+    const bdName   = document.getElementById("bd-name");
+    const bdLsn    = document.getElementById("bd-lsn");
+    const bdError  = document.getElementById("bd-error");
+    const bdSubmit = document.getElementById("bd-submit");
+    let bdCtx = null;
+
+    function bdShowError(msg) { bdError.textContent = msg; bdError.hidden = false; }
+
+    function openBranchDialog(ctx) {
+      bdCtx = ctx;
+      bdParent.textContent = ctx.parentName;
+      bdName.value = "";
+      bdLsn.value = "";
+      bdError.hidden = true;
+      bdSubmit.disabled = false;
+      branchDialog.showModal();
+      bdName.focus();
+    }
+
+    document.getElementById("bd-cancel").addEventListener("click", () => branchDialog.close());
+    // Click on the backdrop (the dialog element itself, outside the form) closes it.
+    branchDialog.addEventListener("click", (e) => {
+      const rect = branchDialog.getBoundingClientRect();
+      if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+        branchDialog.close();
+      }
+    });
+
+    bdForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!bdCtx) return;
+      const name = bdName.value.trim();
+      if (!name) { bdShowError("Enter a branch name"); bdName.focus(); return; }
+      const forkLsn = bdLsn.value.trim();
+      bdSubmit.disabled = true;
+      bdError.hidden = true;
+      try {
+        const created = await createBranch(bdCtx.poolId, bdCtx.projectId, bdCtx.parentId, name, forkLsn);
+        branchDialog.close();
+        toast("Branch created", true);
+        await hydrateBranches(bdCtx.poolId, bdCtx.projectId, bdCtx.userId, created.branch_id);
+      } catch (err) {
+        bdShowError(err.message);
+        bdSubmit.disabled = false;
+      }
+    });
 
     // --- boot ----------------------------------------------------------------
 

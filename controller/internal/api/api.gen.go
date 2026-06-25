@@ -96,7 +96,7 @@ type CreateEndpointRequestRole string
 
 // CreateProjectRequest defines model for CreateProjectRequest.
 type CreateProjectRequest struct {
-	// Name Project (database) name; unique within the pool. Also names the default branch.
+	// Name Project (database) name; unique within the pool. The project's default branch is always named "main".
 	Name string `json:"name"`
 
 	// PgVersion Postgres major version for the project's default branch. Defaults to 17.

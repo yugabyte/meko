@@ -169,7 +169,7 @@ func (b *PgBackend) CreateProject(ctx context.Context, poolID uuid.UUID, name st
 		`INSERT INTO branch (project_id, branch_id, name, pg_version, is_default)
 		 VALUES ($1::uuid, $2::uuid, $3, $4, true)
 		 ON CONFLICT (project_id, branch_id) DO NOTHING`,
-		projectID.String(), branchID.String(), name, pgVersion); err != nil {
+		projectID.String(), branchID.String(), DefaultBranchName, pgVersion); err != nil {
 		return Project{}, mapProjectErr("insert default branch", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

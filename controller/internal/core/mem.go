@@ -169,7 +169,7 @@ func (m *MemBackend) CreateProject(_ context.Context, poolID uuid.UUID, name str
 	def := Branch{
 		ProjectID: p.ID,
 		BranchID:  uuid.New(),
-		Name:      name,
+		Name:      DefaultBranchName,
 		PgVersion: pgVersion,
 		IsDefault: true,
 		CreatedAt: now,
@@ -181,7 +181,7 @@ func (m *MemBackend) CreateProject(_ context.Context, poolID uuid.UUID, name str
 	m.projects[p.ID] = p
 	m.branches[def.BranchID] = def
 	m.projectNames[key] = struct{}{}
-	m.branchNames[branchNameKey{projectID: p.ID, name: name}] = struct{}{}
+	m.branchNames[branchNameKey{projectID: p.ID, name: def.Name}] = struct{}{}
 	return p, nil
 }
 
