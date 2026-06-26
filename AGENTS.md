@@ -82,6 +82,9 @@ Code anchors:
 - **Don't commit or push unless explicitly asked.** The user controls
   when commits land; do the work, show diffs, wait for "commit" /
   "push".
+- **Never add yourself (the agent) as a commit co-author.** Don't append
+  `Co-Authored-By:` lines or any agent/assistant signature to commit
+  messages. Commits are authored by the user alone.
 - **Editing existing files is preferred over creating new ones.** Don't
   spin up a parallel module for a small change.
 - **No comments unless the *why* is non-obvious.** Identifiers should
