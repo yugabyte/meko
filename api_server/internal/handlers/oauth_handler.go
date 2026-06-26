@@ -188,13 +188,27 @@ func buildAuthorizeURL(cognitoDomain, clientID, provider, redirectURI, state, co
 }
 
 // requestOrigin reconstructs scheme://host from the incoming request,
-// honoring X-Forwarded-Proto so it works behind the local nginx proxy.
+// honoring X-Forwarded-Proto and X-Forwarded-Host so it works behind
+// the K8s ingress (which rewrites Host to the internal service name).
+//
+// X-Forwarded-Host may be a comma-separated list when the request has
+// passed through multiple proxies (e.g. "app.mekodev.com, proxy1.example.com").
+// Only the first entry is used to avoid malformed redirect URIs.
+//
+// SECURITY: ensure the ingress/reverse-proxy strips or overwrites
+// X-Forwarded-Host from untrusted clients to prevent Host Header
+// Injection / OAuth redirect-URI hijacking.
 func requestOrigin(c echo.Context) string {
 	scheme := c.Scheme()
-	if fwd := c.Request().Header.Get("X-Forwarded-Proto"); fwd != "" {
+	if fwd := strings.TrimSpace(strings.SplitN(c.Request().Header.Get("X-Forwarded-Proto"), ",", 2)[0]); fwd != "" {
 		scheme = fwd
 	}
-	return scheme + "://" + c.Request().Host
+	host := c.Request().Host
+	if fwdHost := strings.TrimSpace(strings.SplitN(c.Request().Header.Get("X-Forwarded-Host"), ",", 2)[0]); fwdHost != "" {
+		// Use only the first entry in a potentially comma-separated list.
+		host = fwdHost
+	}
+	return scheme + "://" + host
 }
 
 // isSecure reports whether the original client request was HTTPS, honoring
