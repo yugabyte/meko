@@ -1410,7 +1410,11 @@ impl ComputeNode {
         let mut tasks = FuturesUnordered::new();
         let quorum = sk_configs.len() / 2 + 1;
         for (id, config) in sk_configs {
-            let timeout = tokio::time::Duration::from_millis(100);
+            // 100ms is far too tight when the safekeeper is busy recovering
+            // after a restart (the #71 churn window): the TIMELINE_STATUS ping
+            // times out and the whole check fails. Give it room; the happy
+            // path still answers in single-digit ms.
+            let timeout = tokio::time::Duration::from_secs(2);
             let task = tokio::time::timeout(timeout, ping_safekeeper(id, config));
             tasks.push(tokio::spawn(task));
         }
@@ -1499,9 +1503,47 @@ impl ComputeNode {
                 // TIMELINE_STATUS check always yields the durable LSN. There is
                 // no multi-safekeeper consensus to drive, so we never run
                 // `postgres --sync-safekeepers`.
-                let lsn = self
-                    .check_safekeepers_synced(compute_state)?
-                    .context("safekeeper did not report a flush LSN")?;
+                //
+                // Retry on a transient miss. During crash recovery — e.g. a
+                // compute recycle after a safekeeper/pageserver restart — the
+                // check can yield `None`: the 100ms TIMELINE_STATUS ping times
+                // out under load, or the safekeeper briefly reports NotFound /
+                // flush != commit during a walproposer term transition. A
+                // single miss MUST NOT fail compute startup — that exits
+                // compute_ctl, the orchestrator respawns it, and the restart
+                // churn feeds a self-sustaining walproposer election storm
+                // (#71). Retry with backoff (mirroring `get_basebackup`) so a
+                // transient miss rides through the churn instead of aborting.
+                let mut retry_period_ms = 500.0;
+                let mut attempts = 0u16;
+                const SK_SYNC_ATTEMPTS: u16 = 10;
+                let lsn = loop {
+                    match self.check_safekeepers_synced(compute_state) {
+                        Ok(Some(lsn)) => break lsn,
+                        Ok(None) if attempts < SK_SYNC_ATTEMPTS => {
+                            warn!(
+                                "safekeeper did not report a flush LSN yet \
+                                 (attempt {attempts}/{SK_SYNC_ATTEMPTS}); retrying"
+                            );
+                        }
+                        Err(ref e) if attempts < SK_SYNC_ATTEMPTS => {
+                            warn!(
+                                "safekeeper sync check failed: {e:?} \
+                                 (attempt {attempts}/{SK_SYNC_ATTEMPTS}); retrying"
+                            );
+                        }
+                        Ok(None) => {
+                            anyhow::bail!(
+                                "safekeeper did not report a flush LSN after \
+                                 {SK_SYNC_ATTEMPTS} attempts"
+                            )
+                        }
+                        Err(e) => return Err(e).context("safekeeper sync check"),
+                    }
+                    std::thread::sleep(Duration::from_millis(retry_period_ms as u64));
+                    retry_period_ms *= 1.5;
+                    attempts += 1;
+                };
                 info!("safekeeper at LSN {}", lsn);
                 lsn
             }
