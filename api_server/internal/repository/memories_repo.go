@@ -637,6 +637,18 @@ func (repo *MemoriesRepo) ListByFilter(
 	args := []any{datapackID}
 	n := 2
 
+	// Per-user scoping. `meko_user_id` is a first-class column on
+	// `datapacks.meko_mem0_collection` (same predicate used on the
+	// single-row lookups at GetByID / DeleteByID); guarding on the empty
+	// string keeps admin / cross-user callers working when they omit
+	// the field. The FE (WorkbenchLM observation panel) always passes
+	// it, so the typical request is now strictly user-scoped.
+	if uid := strings.TrimSpace(filter.UserID); uid != "" {
+		whereSQL += fmt.Sprintf(" AND m.meko_user_id = $%d::uuid", n)
+		args = append(args, uid)
+		n++
+	}
+
 	if q := strings.TrimSpace(filter.Q); q != "" {
 		whereSQL += fmt.Sprintf(" AND (m.payload->>'data') ILIKE '%%' || $%d || '%%'", n)
 		args = append(args, q)

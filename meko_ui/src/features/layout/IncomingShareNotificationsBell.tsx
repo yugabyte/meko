@@ -146,7 +146,7 @@ export function IncomingShareNotificationsBell({ recipientUserId }: Props) {
           ) : null}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[min(22rem,calc(100vw-2rem))] p-0" sideOffset={8}>
+      <PopoverContent align="end" className="w-[min(22rem,calc(100vw-2rem))] p-0" sideOffset={8}>
         <div className="border-b border-border px-3 py-2">
           <p className="text-sm font-semibold text-foreground">{INCOMING_SHARE_NOTIFICATION_TITLE}</p>
         </div>

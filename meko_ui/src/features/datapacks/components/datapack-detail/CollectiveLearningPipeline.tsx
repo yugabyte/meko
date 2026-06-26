@@ -23,7 +23,10 @@ import {
   listMemories,
   MEMORY_LIST_DEFAULT_USER_TYPE,
 } from "@/lib/api/mekoApi";
-import { DATAPACK_DETAIL_TAB, type DatapackDetailTab } from "@/features/datapacks/components/datapack-detail/types";
+import {
+  DATAPACK_DETAIL_TAB,
+  type DatapackDetailTab,
+} from "@/features/datapacks/components/datapack-detail/types";
 
 // Tile gradient tones — one per tab. Theme-aware: the default (light
 // mode) is a soft tinted card with the accent colour suggesting which
@@ -113,7 +116,7 @@ function StageShell({
     flexGrow ? "flex-1" : "w-full flex-none",
     toneStyles[tone],
     interactive &&
-    "cursor-pointer transition hover:brightness-[1.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50",
+      "cursor-pointer transition hover:brightness-[1.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50",
   );
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -144,11 +147,11 @@ function StageShell({
             "absolute right-2 top-2 z-[1] inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-semibold tabular-nums tracking-wide",
             badgeClass,
             cornerBadgePulse &&
-            cornerBadgeTone === "purple" &&
-            "animate-pulse shadow-[0_0_14px_rgba(168,85,247,0.55)] ring-1 ring-purple-400/30",
+              cornerBadgeTone === "purple" &&
+              "animate-pulse shadow-[0_0_14px_rgba(168,85,247,0.55)] ring-1 ring-purple-400/30",
             cornerBadgePulse &&
-            cornerBadgeTone === "green" &&
-            "animate-pulse shadow-[0_0_12px_rgba(52,211,153,0.35)] ring-1 ring-emerald-400/25",
+              cornerBadgeTone === "green" &&
+              "animate-pulse shadow-[0_0_12px_rgba(52,211,153,0.35)] ring-1 ring-emerald-400/25",
           )}
         >
           {cornerBadge}
@@ -167,17 +170,29 @@ function StageShell({
         />
       ) : null}
       {eyebrow ? (
-        <div className={cn("text-center text-[10px] font-semibold uppercase tracking-[0.18em]", titleTone[tone])}>
+        <div
+          className={cn(
+            "text-center text-[10px] font-semibold uppercase tracking-[0.18em]",
+            titleTone[tone],
+          )}
+        >
           {eyebrow}
         </div>
       ) : null}
       <div className={cn("flex w-full min-w-0 flex-col items-center gap-2", eyebrow ? "mt-1" : "")}>
         {titleIcon ? <span className="inline-flex shrink-0">{titleIcon}</span> : null}
         <div className="flex w-full min-w-0 flex-wrap items-baseline justify-center gap-2">
-          <span className={cn("text-center text-base font-semibold tracking-tight text-foreground", titleClassName)}>
+          <span
+            className={cn(
+              "text-center text-base font-semibold tracking-tight text-foreground",
+              titleClassName,
+            )}
+          >
             {title}
           </span>
-          {delta ? <span className="text-xs font-medium text-blue-700 dark:text-blue-300/90">{delta}</span> : null}
+          {delta ? (
+            <span className="text-xs font-medium text-blue-700 dark:text-blue-300/90">{delta}</span>
+          ) : null}
         </div>
       </div>
       {loading ? (
@@ -192,7 +207,9 @@ function StageShell({
             </div>
           ) : null}
           {afterValue ? <div className="mt-2 w-full min-w-0">{afterValue}</div> : null}
-          {subtitle ? <p className="mt-1.5 text-xs leading-snug text-muted-foreground">{subtitle}</p> : null}
+          {subtitle ? (
+            <p className="mt-1.5 text-xs leading-snug text-muted-foreground">{subtitle}</p>
+          ) : null}
           {children ? <div className="mt-3 min-h-0">{children}</div> : null}
         </>
       )}
@@ -202,13 +219,23 @@ function StageShell({
 
 function TileSpinner({ label = "Loading" }: { label?: string }) {
   return (
-    <span role="status" aria-label={label} className="inline-flex items-center text-muted-foreground/80">
+    <span
+      role="status"
+      aria-label={label}
+      className="inline-flex items-center text-muted-foreground/80"
+    >
       <Loader2 className="h-6 w-6 animate-spin" aria-hidden />
     </span>
   );
 }
 
-function FlowArrow({ label, direction = "horizontal" }: { label: string; direction?: "horizontal" | "vertical" }) {
+function FlowArrow({
+  label,
+  direction = "horizontal",
+}: {
+  label: string;
+  direction?: "horizontal" | "vertical";
+}) {
   const vertical = direction === "vertical";
   return (
     <div
@@ -238,7 +265,10 @@ function FlowArrow({ label, direction = "horizontal" }: { label: string; directi
 function PromoteFlowBracket() {
   const line = "bg-muted-foreground/45";
   return (
-    <div className="relative mx-1 hidden h-[92px] w-[4.25rem] shrink-0 self-center lg:block" aria-hidden>
+    <div
+      className="relative mx-1 hidden h-[92px] w-[4.25rem] shrink-0 self-center lg:block"
+      aria-hidden
+    >
       {/* Learnings → spine */}
       <div className={`absolute left-0 top-[40px] z-[1] h-px w-[18px] ${line}`} />
       {/* Single short spine (runs behind the pill) */}
@@ -247,7 +277,9 @@ function PromoteFlowBracket() {
       <div className={`absolute left-2 top-4 h-px w-2 ${line}`} />
       {/* PROMOTE (covers middle of spine) */}
       <div className="absolute left-1/2 top-[30px] z-[2] flex -translate-x-1/2 flex-col items-center rounded-md border border-border/70 bg-input/95 px-2 py-1 shadow-md backdrop-blur-sm">
-        <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Promote</span>
+        <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+          Promote
+        </span>
       </div>
       {/* Lower tee toward Shared Knowledge */}
       <div className={`absolute left-2 top-[60px] h-px w-2 ${line}`} />
@@ -287,7 +319,9 @@ export function CollectiveLearningPipeline({
   onUploadKnowledgeFiles,
   statusLoading = false,
 }: Props) {
-  const [totalPromotionProposals, setTotalPromotionProposals] = useState<number | undefined>(undefined);
+  const [totalPromotionProposals, setTotalPromotionProposals] = useState<number | undefined>(
+    undefined,
+  );
   const [learningsCountLoading, setLearningsCountLoading] = useState(false);
 
   useEffect(() => {
@@ -301,11 +335,9 @@ export function CollectiveLearningPipeline({
     setTotalPromotionProposals(undefined);
     const run = async () => {
       try {
-        const user = currentUser ?? (await getCurrentUser({ signal: ac.signal }));
         const resp = await listMemories(
           {
             datapack_id: datapackId,
-            user_id: user.account_id,
             user_type: MEMORY_LIST_DEFAULT_USER_TYPE,
             page: 1,
             page_size: 1,
@@ -330,7 +362,7 @@ export function CollectiveLearningPipeline({
     ? learningsCount
     : learningsCountLoading
       ? 0
-      : learningsCount
+      : learningsCount;
 
   const learningsReadyBadge =
     !statusLoading &&
@@ -341,8 +373,8 @@ export function CollectiveLearningPipeline({
   const knowledgeFileBadge =
     !statusLoading && knowledgeFileCount >= 1 ? (
       <span className="inline-flex items-center gap-0.5">
-        <Upload className="size-3 shrink-0 opacity-90" aria-hidden />
-        +{knowledgeFileCount} file{knowledgeFileCount === 1 ? "" : "s"}
+        <Upload className="size-3 shrink-0 opacity-90" aria-hidden />+{knowledgeFileCount} file
+        {knowledgeFileCount === 1 ? "" : "s"}
       </span>
     ) : undefined;
 
@@ -357,11 +389,13 @@ export function CollectiveLearningPipeline({
       <section className="overflow-hidden rounded-2xl border border-border bg-gradient-to-b from-card via-input to-input">
         <div className="border-b border-border/60 bg-card/40 px-5 py-4 sm:px-6">
           <div className="min-w-0 space-y-1">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">Collective learning</h2>
+            <h2 className="text-lg font-semibold tracking-tight text-foreground sm:text-xl">
+              Collective learning
+            </h2>
             <p className="text-sm leading-normal text-muted-foreground text-pretty">
-              How memory from individual agents flows into shared knowledge everyone can read. Each promotion
-              populates <span className="font-semibold text-sky-400/95">both</span> destinations; Shared Knowledge can
-              also receive files directly.
+              How memory from individual agents flows into shared knowledge everyone can read. Each
+              promotion populates <span className="font-semibold text-sky-400/95">both</span>{" "}
+              destinations; Shared Knowledge can also receive files directly.
             </p>
           </div>
         </div>
@@ -375,7 +409,9 @@ export function CollectiveLearningPipeline({
               value={conversationsCount}
               delta=""
               subtitle=""
-              titleIcon={<MessageSquare className="h-4 w-4 text-foreground" strokeWidth={2} aria-hidden />}
+              titleIcon={
+                <MessageSquare className="h-4 w-4 text-foreground" strokeWidth={2} aria-hidden />
+              }
               // No `titleClassName` override — let it inherit the
               // default `text-foreground` so the Conversations title
               // matches the visual weight of the other accent titles
@@ -384,7 +420,11 @@ export function CollectiveLearningPipeline({
               // in light mode, throwing off the row balance.
               loading={statusLoading}
               loadingLabel="Loading conversations count"
-              onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.conversations) : undefined}
+              onSelect={
+                onSelectSection
+                  ? () => onSelectSection(DATAPACK_DETAIL_TAB.conversations)
+                  : undefined
+              }
             />
 
             <FlowArrow label="extract" />
@@ -399,7 +439,9 @@ export function CollectiveLearningPipeline({
               titleIcon={<Sparkles className="h-4 w-4 text-sky-400" aria-hidden />}
               loading={statusLoading}
               loadingLabel="Loading memories count"
-              onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.memories) : undefined}
+              onSelect={
+                onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.memories) : undefined
+              }
             />
 
             <FlowArrow label="extract" />
@@ -415,7 +457,9 @@ export function CollectiveLearningPipeline({
               titleIcon={<ArrowLeftRight className="h-4 w-4 text-violet-400" aria-hidden />}
               loading={statusLoading || learningsCountLoading}
               loadingLabel="Loading learnings count"
-              onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.learnings) : undefined}
+              onSelect={
+                onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.learnings) : undefined
+              }
             >
               <Button
                 type="button"
@@ -496,7 +540,11 @@ export function CollectiveLearningPipeline({
                     </p>
                   ) : null
                 }
-                onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.collectiveMemory) : undefined}
+                onSelect={
+                  onSelectSection
+                    ? () => onSelectSection(DATAPACK_DETAIL_TAB.collectiveMemory)
+                    : undefined
+                }
               />
 
               <StageShell
@@ -512,7 +560,9 @@ export function CollectiveLearningPipeline({
                 titleIcon={<BookOpen className="h-4 w-4 text-emerald-400" aria-hidden />}
                 loading={statusLoading}
                 loadingLabel="Loading knowledge count"
-                onSelect={onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.knowledge) : undefined}
+                onSelect={
+                  onSelectSection ? () => onSelectSection(DATAPACK_DETAIL_TAB.knowledge) : undefined
+                }
               />
             </div>
           </div>

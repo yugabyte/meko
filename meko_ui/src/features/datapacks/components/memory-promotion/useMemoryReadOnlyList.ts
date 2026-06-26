@@ -62,7 +62,7 @@ export function useMemoryReadOnlyList({
     try {
       const resp = await listMemories({
         datapack_id: datapackId,
-        user_id: accountId,
+        // user_id: accountId,
         user_type: MEMORY_LIST_DEFAULT_USER_TYPE,
         page,
         page_size: pageSize,

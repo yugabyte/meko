@@ -19,7 +19,7 @@ func IsFreeUserType(userType string) bool {
 // read the same env vars (MEKO_FREE_TIER_*) with these defaults, so
 // tuning a cap is a one-line env change. Storage is bytes.
 var (
-	FreeTierMaxDatapacks      = envInt64("MEKO_FREE_TIER_DATAPACKS", 3)
+	FreeTierMaxDatapacks      = envInt64("MEKO_FREE_TIER_DATAPACKS", 10)
 	FreeTierMaxKBStorageBytes = envInt64("MEKO_FREE_TIER_KB_BYTES", 100*1024*1024) // 100 MiB
 
 	// Conversations / token-burn caps live here for documentation

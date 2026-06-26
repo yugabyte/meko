@@ -77,6 +77,7 @@ export function AppWorkspaceHeader({
                 >
                   {currentUser.email}
                 </span>
+                <TierBadge userType={currentUser.user_type} />
               </>
             ) : (
               <span className="text-muted-foreground">Signed in</span>
@@ -86,5 +87,34 @@ export function AppWorkspaceHeader({
         </div>
       ) : null}
     </header>
+  );
+}
+
+/**
+ * Tier chip shown next to the signed-in email. Renders only for paid
+ * tiers (`pro` / `enterprise`) — free users see nothing so the chip
+ * doesn't become noise. Source of truth: `currentUser.user_type` from
+ * `/auth/me`.
+ */
+function TierBadge({ userType }: { userType?: string | null }) {
+  const t = (userType ?? "").trim().toLowerCase();
+  if (t !== "pro" && t !== "enterprise") return null;
+  const label = t === "enterprise" ? "ENTERPRISE" : "PRO";
+  // Pro = blue (matches the existing CTA / Pricing accents).
+  // Enterprise = purple so it reads as one tier above Pro.
+  const tone =
+    t === "enterprise"
+      ? "border-purple-500/40 bg-purple-500/10 text-purple-700 dark:text-purple-300"
+      : "border-blue-500/40 bg-blue-500/10 text-blue-700 dark:text-blue-300";
+  return (
+    <span
+      className={cn(
+        "ml-1 inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+        tone,
+      )}
+      aria-label={`${label} tier`}
+    >
+      {label}
+    </span>
   );
 }

@@ -41,18 +41,18 @@ type Row = {
 // enterprise-only rows at the bottom. Matches what the user
 // expects to scan top-to-bottom.
 const TIER_ROWS: ReadonlyArray<Row> = [
-  { label: "Datapacks",                freeValue: "3",          proValue: "Unlimited" },
-  { label: "Add Conversations",        freeValue: "1,000",      proValue: "Unlimited" },
-  { label: "Retrieval Requests",       freeValue: "10,000",     proValue: "Unlimited" },
-  { label: "Workbench Tokens",         freeValue: "10M",        proValue: "Unlimited" },
-  { label: "Knowledge Base Storage",   freeValue: "100 MB",     proValue: "Unlimited" },
-  { label: "Max KB file size",         freeValue: "5 MB",       proValue: "Unlimited" },
-  { label: "Support",                  freeValue: "COMMUNITY",  proValue: "PRIORITY"  },
-  { label: "Decision Trace",           freeValue: "Supported",  proValue: "Supported" },
-  { label: "On-Prem Deployment",       freeValue: null,         proValue: "Included"  },
-  { label: "Audit Logs",               freeValue: null,         proValue: "Included"  },
-  { label: "Custom Integrations",      freeValue: null,         proValue: "Included"  },
-  { label: "SSO",                      freeValue: null,         proValue: "Included"  },
+  { label: "Datapacks", freeValue: "10", proValue: "Unlimited" },
+  { label: "Add Conversations", freeValue: "1,000", proValue: "Custom" },
+  { label: "Retrieval Requests", freeValue: "10,000", proValue: "Custom" },
+  { label: "Workbench Tokens", freeValue: "10M", proValue: "Custom" },
+  { label: "Knowledge Base Storage", freeValue: "100 MB", proValue: "Custom" },
+  { label: "Max KB file size", freeValue: "5 MB", proValue: "Custom" },
+  { label: "Support", freeValue: "COMMUNITY", proValue: "PRIORITY" },
+  { label: "Decision Trace", freeValue: "Supported", proValue: "Supported" },
+  { label: "On-Prem Deployment", freeValue: null, proValue: "Included" },
+  { label: "Audit Logs", freeValue: null, proValue: "Included" },
+  { label: "Custom Integrations", freeValue: null, proValue: "Included" },
+  { label: "SSO", freeValue: null, proValue: "Included" },
 ];
 
 export function PricingSection() {

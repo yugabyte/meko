@@ -92,7 +92,7 @@ export function useMemoryPromotion({
     try {
       const resp = await listMemories({
         datapack_id: datapackId,
-        user_id: accountId,
+        // user_id: accountId,
         user_type: MEMORY_LIST_DEFAULT_USER_TYPE,
         page,
         page_size: pageSize,
@@ -164,13 +164,16 @@ export function useMemoryPromotion({
   const allChecked = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
   const someChecked = selected.size > 0 && !allChecked;
 
-  const toggleAll = useCallback((_checked?: boolean | "indeterminate") => {
-    if (allChecked) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(selectableIds));
-    }
-  }, [allChecked, selectableIds]);
+  const toggleAll = useCallback(
+    (_checked?: boolean | "indeterminate") => {
+      if (allChecked) {
+        setSelected(new Set());
+      } else {
+        setSelected(new Set(selectableIds));
+      }
+    },
+    [allChecked, selectableIds],
+  );
 
   const promoteMemoryIds = useCallback(
     async (memoryIds: string[]) => {

@@ -397,27 +397,14 @@ function datapackRoute(datapackId: string): string {
 
 /** GET /datapacks/:datapack_id — full datapack row (includes `description` when set). */
 export async function getDatapack(datapackId: string, options: DatapackRouteOptions = {}) {
-  return request<Datapack>(
-    datapackRoute(datapackId),
-    "GET",
-    undefined,
-    options,
-  );
+  return request<Datapack>(datapackRoute(datapackId), "GET", undefined, options);
 }
 
 export async function listAgents(datapackId: string, options: DatapackRouteOptions = {}) {
-  return request<Agent[]>(
-    `${datapackRoute(datapackId)}/agents`,
-    "GET",
-    undefined,
-    options,
-  );
+  return request<Agent[]>(`${datapackRoute(datapackId)}/agents`, "GET", undefined, options);
 }
 
-export async function listKnowledgeBases(
-  datapackId: string,
-  options: DatapackRouteOptions = {},
-) {
+export async function listKnowledgeBases(datapackId: string, options: DatapackRouteOptions = {}) {
   return request<KnowledgeBase[]>(
     `${datapackRoute(datapackId)}/knowledge-bases`,
     "GET",
@@ -461,21 +448,11 @@ export async function updateDatapack(
   payload: UpdateDatapackPayload,
   options: DatapackRouteOptions = {},
 ) {
-  return request<UpdateDatapackResponse>(
-    datapackRoute(datapackId),
-    "PATCH",
-    payload,
-    options,
-  );
+  return request<UpdateDatapackResponse>(datapackRoute(datapackId), "PATCH", payload, options);
 }
 
 export async function deleteDatapack(datapackId: string, options: DatapackRouteOptions = {}) {
-  return request<DeleteDatapackResponse>(
-    datapackRoute(datapackId),
-    "DELETE",
-    undefined,
-    options,
-  );
+  return request<DeleteDatapackResponse>(datapackRoute(datapackId), "DELETE", undefined, options);
 }
 
 // --- Datapack share / invites (paths are under `API_BASE`, typically `/api/v1`) ---
@@ -608,10 +585,7 @@ export async function listDatapackOutgoingShares(
  * List accepted members for a datapack (including owner row).
  * Any grant with datapack access. GET /datapacks/:datapack_id/member-list
  */
-export async function listDatapackMembers(
-  datapackId: string,
-  options: DatapackRouteOptions = {},
-) {
+export async function listDatapackMembers(datapackId: string, options: DatapackRouteOptions = {}) {
   return request<DatapackMembersResponse>(
     `${datapackRoute(datapackId)}/member-list`,
     "GET",
@@ -817,9 +791,7 @@ export type AccountUsage = {
   token_burn: number;
 };
 
-export async function getCurrentUserUsage(
-  options: { signal?: AbortSignal } = {},
-) {
+export async function getCurrentUserUsage(options: { signal?: AbortSignal } = {}) {
   return request<AccountUsage>("/auth/me/usage", "GET", undefined, options);
 }
 
@@ -1091,12 +1063,7 @@ export async function getDatapackConversation(
   if (params.messagesOffset !== undefined) qs.set("messages_offset", String(params.messagesOffset));
   const base = `${datapackRoute(datapackId)}/conversations/${encodeURIComponent(conversationId)}`;
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  return request<GetDatapackConversationResponse>(
-    `${base}${suffix}`,
-    "GET",
-    undefined,
-    options,
-  );
+  return request<GetDatapackConversationResponse>(`${base}${suffix}`, "GET", undefined, options);
 }
 
 /** One observation in the windowed span tree for a single message turn.
@@ -1314,21 +1281,13 @@ export async function confirmUpload(
   );
 }
 
-export async function createKnowledgeBase(
-  datapackId: string,
-  options: DatapackRouteOptions = {},
-) {
+export async function createKnowledgeBase(datapackId: string, options: DatapackRouteOptions = {}) {
   return request<{
     source_id: string;
     index_name: string;
     source_uri: string;
     status: string;
-  }>(
-    `${datapackRoute(datapackId)}/knowledge-bases/create`,
-    "POST",
-    undefined,
-    options,
-  );
+  }>(`${datapackRoute(datapackId)}/knowledge-bases/create`, "POST", undefined, options);
 }
 
 export type SourceStatus = {
@@ -1662,7 +1621,7 @@ export function formatMemoryAuthor(
  */
 export type MemoryListFilter = {
   datapack_id: string;
-  user_id: string;
+  user_id?: string;
   user_type?: MemoryUserType;
   page: number;
   page_size: number;
@@ -1706,7 +1665,7 @@ export async function listMemories(
 ): Promise<MemoryListResponse> {
   const qs = new URLSearchParams();
   qs.set("datapack_id", params.datapack_id);
-  qs.set("user_id", params.user_id);
+  if (params.user_id) qs.set("user_id", params.user_id);
   qs.set("user_type", params.user_type ?? MEMORY_LIST_DEFAULT_USER_TYPE);
   qs.set("page", String(params.page));
   qs.set("page_size", String(params.page_size));

@@ -43,7 +43,7 @@ export const FREE_TIER_QUOTA_ENABLED: boolean = (() => {
 })();
 
 export const FREE_TIER_LIMITS = {
-  datapacks: envInt("MEKO_FREE_TIER_DATAPACKS", 3),
+  datapacks: envInt("MEKO_FREE_TIER_DATAPACKS", 10),
   kbStorageBytes: envInt("MEKO_FREE_TIER_KB_BYTES", MB(100)),
   conversations: envInt("MEKO_FREE_TIER_CONVERSATIONS", 1000),
   tokenBurn: envInt("MEKO_FREE_TIER_TOKEN_BURN", 10_000_000),
