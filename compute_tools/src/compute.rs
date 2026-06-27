@@ -663,34 +663,93 @@ impl ComputeNode {
         let mut vm_monitor = None;
         let mut pg_process: Option<PostgresHandle> = None;
 
-        match this.start_compute(&mut pg_process) {
-            Ok(()) => {
-                // Success! Launch remaining services (just vm-monitor currently)
-                vm_monitor =
-                    Some(this.start_vm_monitor(pspec.spec.disable_lfc_resizing.unwrap_or(false)));
-            }
-            Err(err) => {
-                // Something went wrong with the startup. Log it and expose the error to
-                // HTTP status requests.
-                error!("could not start the compute node: {:#}", err);
-                this.set_failed_status(err);
-                delay_exit = true;
-
-                // If the error happened after starting PostgreSQL, kill it
-                if let Some(ref pg_process) = pg_process {
-                    kill(pg_process.pid(), Signal::SIGQUIT).ok();
+        // #71: the walproposer deliberately PANICs ("collected propTermStartLsn
+        // ..., but basebackup LSN ...") when WAL advanced between the basebackup
+        // and its election, expecting PG to be restarted with a fresh basebackup.
+        // With restart_after_crash=off (see control_plane endpoint.rs — an
+        // in-place restart would just replay the same stale basebackup and
+        // re-PANIC) PG exits cleanly instead, so it falls to compute_ctl to
+        // re-run startup, which re-basebackups at the advanced LSN. Without this,
+        // a compute recycle while WAL is in flight (torn_wal_write) crash-loops
+        // into a walproposer election storm and the test wedges. Retry a bounded
+        // number of times on a startup-phase crash (a non-zero exit within the
+        // grace window); a clean stop (code 0), a long-lived run, or an external
+        // signal kill (test teardown) is NOT retried, so we never fight an
+        // intentional shutdown.
+        const STARTUP_RETRIES: u32 = 5;
+        let startup_grace = Duration::from_secs(30);
+        let mut startup_attempt: u32 = 0;
+        let exit_code = loop {
+            let attempt_started = Instant::now();
+            match this.start_compute(&mut pg_process) {
+                Ok(()) => {
+                    // Success! Launch remaining services (just vm-monitor currently)
+                    vm_monitor = Some(
+                        this.start_vm_monitor(pspec.spec.disable_lfc_resizing.unwrap_or(false)),
+                    );
+                }
+                Err(err) => {
+                    // If PostgreSQL was started before the failure, kill and reap it.
+                    if let Some(pg_process) = pg_process.take() {
+                        kill(pg_process.pid(), Signal::SIGQUIT).ok();
+                        this.wait_postgres(pg_process);
+                    }
+                    if startup_attempt < STARTUP_RETRIES {
+                        startup_attempt += 1;
+                        warn!(
+                            "compute startup failed (attempt {startup_attempt}/{STARTUP_RETRIES}), \
+                             retrying with a fresh basebackup: {err:#}"
+                        );
+                        continue;
+                    }
+                    // Out of retries: log it and expose the error to HTTP status.
+                    error!("could not start the compute node: {:#}", err);
+                    this.set_failed_status(err);
+                    delay_exit = true;
+                    break None;
                 }
             }
-        }
 
-        // If startup was successful, or it failed in the late stages,
-        // PostgreSQL is now running. Wait until it exits.
-        let exit_code = if let Some(pg_handle) = pg_process {
+            // start_compute succeeded; PostgreSQL is running. Wait until it exits.
+            let pg_handle = pg_process
+                .take()
+                .expect("start_compute Ok must set pg_process");
             let exit_status = this.wait_postgres(pg_handle);
+            let uptime = attempt_started.elapsed();
+
+            // A walproposer "retake basebackup" PANIC (and similar startup-recovery
+            // crashes) bring PG down within seconds of start via a clean postmaster
+            // shutdown — a NON-ZERO exit code. A clean stop (code 0), an external
+            // signal kill (code None, e.g. the test's SIGKILL), or a long-lived run
+            // is left alone so we don't fight an intentional shutdown.
+            if uptime < startup_grace
+                && exit_status.code().is_some_and(|c| c != 0)
+                && startup_attempt < STARTUP_RETRIES
+            {
+                startup_attempt += 1;
+                warn!(
+                    "postgres exited ({exit_status}) {}s after start (attempt \
+                     {startup_attempt}/{STARTUP_RETRIES}), retrying with a fresh basebackup",
+                    uptime.as_secs()
+                );
+                // Tear down this attempt's vm-monitor before retrying.
+                if let Some(vm_monitor) = vm_monitor.take() {
+                    cfg_if::cfg_if! {
+                        if #[cfg(target_os = "linux")] {
+                            vm_monitor.token.cancel();
+                            if let Some(handle) = vm_monitor.vm_monitor {
+                                handle.abort();
+                            }
+                        } else {
+                            _ = vm_monitor;
+                        }
+                    }
+                }
+                continue;
+            }
+
             info!("Postgres exited with code {}, shutting down", exit_status);
-            exit_status.code()
-        } else {
-            None
+            break exit_status.code();
         };
 
         this.terminate_extension_stats_task();
