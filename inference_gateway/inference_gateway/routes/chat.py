@@ -168,7 +168,6 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
             tools_by_name=tools,
             session_store=session_store,
             session_id=session_id,
-            user_id=req.user_id,
             user_message=req.message,
             datapack_id=req.datapack_id,
             resume_conversation_id=req.conversation_id,

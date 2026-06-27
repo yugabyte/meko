@@ -21,8 +21,6 @@ DEFAULT_CONV_SUMMARY_BEDROCK_MODEL = "mistral.ministral-3-3b-instruct"
 
 # MCP / network defaults.
 DEFAULT_MCP_ENDPOINT = "https://mcp.mekodata.ai/mcp"
-# DEFAULT_MCP_ENDPOINT = "https://mcp.mekodev.com/mcp"
-# DEFAULT_MCP_ENDPOINT = "http://localhost:8000/mcp"
 DEFAULT_PORT = 8088
 DEFAULT_AWS_REGION = "us-east-1"
 

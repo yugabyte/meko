@@ -413,7 +413,6 @@ async def run_chat_turn(
     session_id: str,
     user_message: str,
     datapack_id: Optional[str],
-    user_id: Optional[str] = None,
     resume_conversation_id: Optional[str] = None,
     summary_llm: Optional[BaseChatModel] = None,
     bypass_conversation_cache: bool = False,
@@ -652,7 +651,6 @@ async def run_chat_turn(
             conversation_id=conversation_id,
             datapack_id=datapack_id,
             top_k=cfg.memory_top_k,
-            user_id=user_id,
             steps=steps,
         )
 
@@ -827,17 +825,9 @@ async def _search_memories(
     conversation_id: str,
     datapack_id: Optional[str],
     top_k: int,
-    user_id: Optional[str] = None,
     steps: Optional[List[ProcessingStep]] = None,
 ) -> List[MemoryHit]:
     """Run `memory_search` and return the structured hits.
-
-    `user_id` (logged-in account UUID, forwarded from the FE chat
-    request via `run_chat_turn`) is added to the MCP args explicitly so
-    Mem0 scopes the search to that user's private memories. MCP also
-    resolves the user from its auth context (the forwarded bearer
-    token), so this is belt-and-suspenders — but explicit args make
-    the data flow auditable in the Decision Trace panel.
 
     Best-effort: a missing tool / transient failure logs a warning and
     returns []. Appends a step to `steps` if provided so the per-turn
@@ -856,8 +846,6 @@ async def _search_memories(
     }
     if datapack_id:
         mem_tool_args["datapack_id"] = datapack_id
-    if user_id:
-        mem_tool_args["user_id"] = user_id
 
     tool = tools_by_name.get("memory_search")
     if tool is None:
@@ -879,8 +867,6 @@ async def _search_memories(
     }
     if datapack_id:
         args["datapack_id"] = datapack_id
-    if user_id:
-        args["user_id"] = user_id
     try:
         raw = await tool.ainvoke(args)
     except Exception as exc:  # noqa: BLE001 — MCP failure must not break chat
