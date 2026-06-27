@@ -220,13 +220,40 @@ async fn verify(c: &Cluster, conn: &str, table: &str, label: &str) -> anyhow::Re
     // genuine hole (scenario A) stays a hole once settled.
     let mut prev: Option<(i64, i64)> = None;
     let (cnt, mx) = loop {
-        let cnt = db::query_i64(conn, &format!("SELECT count(*) FROM {table}")).await?;
-        let mx = db::query_i64(conn, &format!("SELECT COALESCE(max(id), 0) FROM {table}")).await?;
-        if prev == Some((cnt, mx)) || Instant::now() > deadline {
-            break (cnt, mx);
+        // The recycled compute can transiently accept a connection and then
+        // crash during startup recovery (the walproposer "retake basebackup"
+        // PANIC, #71) — compute_ctl re-basebackups and brings PG back up. So a
+        // read here can hit a closing connection even though `SELECT 1` just
+        // succeeded against the about-to-crash incarnation. Treat a query error
+        // as "not settled yet" and retry within the deadline, the same way the
+        // readiness loop above does; a fresh `query_i64` reconnects to the
+        // restarted compute and the durable data is intact there. A genuine
+        // hole stays a hole once the reads settle.
+        let read = async {
+            let cnt = db::query_i64(conn, &format!("SELECT count(*) FROM {table}")).await?;
+            let mx =
+                db::query_i64(conn, &format!("SELECT COALESCE(max(id), 0) FROM {table}")).await?;
+            anyhow::Ok((cnt, mx))
         }
-        prev = Some((cnt, mx));
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        .await;
+        match read {
+            Ok((cnt, mx)) => {
+                if prev == Some((cnt, mx)) || Instant::now() > deadline {
+                    break (cnt, mx);
+                }
+                prev = Some((cnt, mx));
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+            }
+            Err(_) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            Err(e) => {
+                return Err(e).context(format!(
+                    "{label}: durable read never settled within timeout \
+                     (compute recycle did not converge)"
+                ));
+            }
+        }
     };
 
     scan_for_wal_hole(c, label)?;
