@@ -44,24 +44,22 @@ endpoint:
   pgVersion: "17"
   # -- Postgres port the compute listens on (exposed by the Service).
   computePort: 55433
-  # -- Tenant id to serve. Empty => the pod bootstraps a fresh tenant on first start.
-  tenantId: ""
-  # -- Timeline id to serve. Empty => generated during bootstrap.
-  timelineId: ""
+  # -- Branch id to serve. Empty => the pod bootstraps a fresh branch on first start.
+  branchId: ""
   # -- Postgres shared_preload_libraries for the compute.
-  sharedPreloadLibraries: "neon"
+  sharedPreloadLibraries: "yb_amp"
   # -- Extra Postgres GUCs, as a name: value map.
   extraSettings: {}
-  # -- initdb the supplied tenant/timeline on first start, instead of attaching
-  # an existing one. Used with storageController.url for the controller-
-  # coordinated flow (the controller allocates the ids; the endpoint materializes
-  # them). Off => attach an existing (already-materialized) tenant/timeline.
+  # -- initdb the supplied branch on first start, instead of attaching an
+  # existing one. Used with storageController.url for the controller-
+  # coordinated flow (the controller allocates the id; the endpoint materializes
+  # it). Off => attach an existing (already-materialized) branch.
   bootstrap: false
-  # -- Branch ancestry. When ancestorTimelineId is set, the endpoint forks that
-  # ancestor timeline at ancestorLsn (the pageserver writes a branch init recipe;
+  # -- Branch ancestry. When ancestorBranchId is set, the endpoint forks that
+  # ancestor branch at ancestorLsn (the pageserver writes a branch init recipe;
   # lineage reads serve the pre-fork pages) instead of running initdb. Empty for
-  # a root (main) timeline. ancestorLsn is the storage layer's "X/Y" LSN form.
-  ancestorTimelineId: ""
+  # a root (main) branch. ancestorLsn is the storage layer's "X/Y" LSN form.
+  ancestorBranchId: ""
   ancestorLsn: ""
 
 # Storage-controller coordination. Empty url => the endpoint runs

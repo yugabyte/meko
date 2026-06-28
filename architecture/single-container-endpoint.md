@@ -52,35 +52,35 @@ the bundled migrations with `psql`).
 
 ### Bootstrap/attach happen without the controller
 
-`yb_light_local`'s `tenant create` / `endpoint create` route through the
+`yb_light_local`'s `branch create` / `endpoint create` route through the
 storage_controller (it records a pending init, registers the node, grants a
-generation via the attach-hook, and registers the timeline). The pod reproduces
+generation via the attach-hook, and registers the branch). The pod reproduces
 the **SC-free subset** of that flow:
 
-- **Pageserver attach + initial timeline.** The pageserver's single-timeline
-  identity (`tenant_id` / `timeline_id` / `generation`) is baked into
+- **Pageserver attach + initial branch.** The pageserver's single-branch
+  identity (`branch_id` / `generation`) is baked into
   `pageserver.toml`; `register_and_attach` (the only step that calls the
   controller) is skipped because the supervisor runs the `yb-pageserver` binary
-  directly rather than via the launcher. For a fresh tenant the supervisor also
+  directly rather than via the launcher. For a fresh branch the supervisor also
   bakes `[timeline_init] mode = "bootstrap"`, which makes the pageserver run
   `initdb` and import the initial page set on start. The generation is pinned
   (default `1`) — safe because each endpoint pod is the sole attacher of its
-  tenant, so there is no concurrent process to fence. `control_plane_api` is set
+  branch, so there is no concurrent process to fence. `control_plane_api` is set
   to a placeholder (the pageserver requires it, but this fork no longer calls
   back to it — `controller_upcall_client` was removed).
 - **Safekeeper timeline.** Created directly against the safekeeper's HTTP API
-  (`POST /v1/tenant/timeline`) with a single-member membership configuration
+  (`POST /v1/branch`) with a single-member membership configuration
   (generation 1), matching what the launcher does minus the controller's
   `timeline_register` bookkeeping.
 - **Compute.** `compute_ctl` is given a generated spec (`ComputeConfig`) whose
   `yb_amp.pageserver_connstring` / `yb_amp.safekeepers` (with the `g#1:` membership
-  prefix) / `yb_amp.tenant_id` / `yb_amp.timeline_id` point at the co-located
-  services over `localhost`. It fetches a basebackup from the pageserver and
-  starts Postgres as usual.
+  prefix) / `yb_amp.branch_id` (from the spec's `storage_branch_id`) point at the
+  co-located services over `localhost`. It fetches a basebackup from the pageserver
+  and starts Postgres as usual.
 
-A pod with `TENANT_ID` unset bootstraps a fresh tenant on first start; with
-`TENANT_ID` / `TIMELINE_ID` set (the production case, supplied by AMP) it
-attaches an existing one (no `initdb`).
+A pod with `BRANCH_ID` unset bootstraps a fresh branch on first start; with
+`BRANCH_ID` set (the production case, supplied by AMP) it attaches an existing
+one (no `initdb`).
 
 ## Image notes
 

@@ -45,8 +45,8 @@ The chart renders:
 | `yugabyte.existingSecret` / `existingSecretKey` | _(empty)_ / `password` | use an existing Secret instead |
 | `endpoint.pgVersion` | `17` | compute Postgres version |
 | `endpoint.computePort` | `55433` | compute Postgres port (exposed by the Service) |
-| `endpoint.tenantId` / `timelineId` | _(empty)_ | serve an existing tenant; empty ⇒ bootstrap |
-| `endpoint.sharedPreloadLibraries` | `neon` | compute `shared_preload_libraries` |
+| `endpoint.branchId` | _(empty)_ | serve an existing branch; empty ⇒ bootstrap |
+| `endpoint.sharedPreloadLibraries` | `yb_amp` | compute `shared_preload_libraries` |
 | `endpoint.extraSettings` | `{}` | extra Postgres GUCs (`name: value`) |
 | `service.type` | `ClusterIP` | Service type |
 | `service.exposeInternalHttp` | `false` | also publish pageserver/safekeeper/endpoint_storage HTTP |

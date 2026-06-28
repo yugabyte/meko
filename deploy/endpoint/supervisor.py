@@ -9,7 +9,7 @@ Services (in start order):
   1. endpoint_storage   - LFC scratch blobs           (YugabyteDB-backed)
   2. safekeeper         - WAL                          (YugabyteDB-backed)
   3. yb-pageserver      - page service                 (YugabyteDB-backed)
-  4. compute_ctl        - supervises Postgres v17 + the `neon` extension
+  4. compute_ctl        - supervises Postgres v17 + the `yb_amp` extension
 
 The storage_controller is NOT here: it is a shared, cluster-level control
 plane that lives in the controller layer. This container assumes the `yb_storage`
@@ -73,9 +73,8 @@ PG_VERSION = env("ENDPOINT_PG_VERSION", "17")
 COMPUTE_PORT = env_int("COMPUTE_PORT", 55433)
 COMPUTE_CTL_HTTP_PORT = env_int("COMPUTE_CTL_HTTP_PORT", 3080)
 COMPUTE_PASSWORD = env("COMPUTE_PASSWORD", "cloud_admin")
-SHARED_PRELOAD_LIBRARIES = env("SHARED_PRELOAD_LIBRARIES", "neon")
-TENANT_ID = env("TENANT_ID")
-TIMELINE_ID = env("TIMELINE_ID")
+SHARED_PRELOAD_LIBRARIES = env("SHARED_PRELOAD_LIBRARIES", "yb_amp")
+BRANCH_ID = env("BRANCH_ID")
 GENERATION = env_int("GENERATION", 1)
 
 # Internal service ports.
@@ -89,28 +88,28 @@ ENDPOINT_STORAGE_HTTP_PORT = env_int("ENDPOINT_STORAGE_HTTP_PORT", 9993)
 LISTEN_HOST = "127.0.0.1"
 
 
-def _derive_node_id(timeline_id):
+def _derive_node_id(branch_id):
     """Each endpoint pod runs its own pageserver + safekeeper. When many
     endpoints register with one shared storage controller, a fixed id collides:
     the controller rejects re-registering node 1 at a new address with 409, so
     every endpoint after the first crash-loops. Derive a stable id from the
-    timeline id (one endpoint per timeline) — a 31-bit hash of its first 8 hex
-    digits, so distinct per timeline with overwhelming probability — so the
+    branch id (one endpoint per branch) — a 31-bit hash of its first 8 hex
+    digits, so distinct per branch with overwhelming probability — so the
     controller tracks each endpoint's PS/SK as distinct nodes. Masked positive,
     comfortably within the controller's NodeId (i64) and any i32 column. An
     explicit NODE_ID env (e.g. an allocator) overrides; SC-free pods keep 1.
     Falls back to 1 for a missing or non-hex id (ids are 32-hex in practice)."""
-    if not timeline_id:
+    if not branch_id:
         return 1
     try:
-        return (int(timeline_id[:8], 16) & 0x7FFFFFFF) or 1
+        return (int(branch_id[:8], 16) & 0x7FFFFFFF) or 1
     except ValueError:
         return 1
 
 
 # one pageserver + one safekeeper per endpoint pod; unique per endpoint so a
 # shared storage controller can tell co-located endpoints apart (see above).
-NODE_ID = env_int("NODE_ID", _derive_node_id(TIMELINE_ID))
+NODE_ID = env_int("NODE_ID", _derive_node_id(BRANCH_ID))
 
 # The pageserver requires `control_plane_api` to be set ("pageservers cannot
 # run in isolation"), but this fork's pageserver no longer calls back to it at
@@ -260,7 +259,7 @@ def psql(dbname, sql=None, file=None, ignore_errors=False):
 # exact compute spec shape are verified against `yb_light_local`-generated
 # configs during bring-up testing.
 
-def write_pageserver_config(datadir, bootstrap, ancestor_timeline_id=None, ancestor_lsn=None):
+def write_pageserver_config(datadir, bootstrap, ancestor_branch_id=None, ancestor_lsn=None):
     datadir.mkdir(parents=True, exist_ok=True)
     (datadir / "identity.toml").write_text(f"id={NODE_ID}\n")
 
@@ -275,19 +274,18 @@ def write_pageserver_config(datadir, bootstrap, ancestor_timeline_id=None, ances
         "availability_zone='local'",
         f"control_plane_api='{STORAGE_CONTROLLER_URL or CONTROL_PLANE_API}'",
         f"yb_storage_conn={yb_conn_inline_toml()}",
-        f"tenant_id='{TENANT_ID}'",
-        f"timeline_id='{TIMELINE_ID}'",
+        f"branch_id='{BRANCH_ID}'",
         f"generation={GENERATION}",
     ]
     # TimelineInitConfig is internally tagged (`tag = "mode"`, rename_all =
     # snake_case); PgMajorVersion serializes as its integer.
-    if ancestor_timeline_id:
-        # Branch: fork the ancestor at ancestor_lsn instead of initdb. The
-        # pageserver writes a timeline_state row pointing at the ancestor;
-        # pre-fork pages stay under the ancestor's timeline_id and are reached
+    if ancestor_branch_id:
+        # Fork: fork the ancestor at ancestor_lsn instead of initdb. The
+        # pageserver writes a branch_state row pointing at the ancestor;
+        # pre-fork pages stay under the ancestor's branch_id and are reached
         # via lineage-aware reads from shared storage (nothing is copied).
         lines += ["", "[timeline_init]", 'mode = "branch"',
-                  f'ancestor_timeline_id = "{ancestor_timeline_id}"',
+                  f'ancestor_branch_id = "{ancestor_branch_id}"',
                   f'ancestor_lsn = "{ancestor_lsn}"']
     elif bootstrap:
         # Tell the pageserver to run initdb + import for a fresh timeline.
@@ -299,8 +297,7 @@ def write_safekeeper_config(datadir):
     datadir.mkdir(parents=True, exist_ok=True)
     lines = [
         f"id = {NODE_ID}",
-        f"tenant_id = {_toml_quote(TENANT_ID)}",
-        f"timeline_id = {_toml_quote(TIMELINE_ID)}",
+        f"branch_id = {_toml_quote(BRANCH_ID)}",
         f"listen_pg = {_toml_quote(f'{BIND_HOST}:{SAFEKEEPER_PG_PORT}')}",
         f"listen_http = {_toml_quote(f'{BIND_HOST}:{SAFEKEEPER_HTTP_PORT}')}",
         f"availability_zone = {_toml_quote(f'sk-{NODE_ID}')}",
@@ -351,10 +348,9 @@ def render_compute_spec(specfile):
         {"name": "restart_after_crash", "value": "off", "vartype": "bool"},
         {"name": "synchronous_standby_names", "value": "walproposer", "vartype": "string"},
         {"name": "shared_preload_libraries", "value": SHARED_PRELOAD_LIBRARIES, "vartype": "string"},
-        {"name": "neon.safekeepers", "value": f"{LISTEN_HOST}:{SAFEKEEPER_PG_PORT}", "vartype": "string"},
-        {"name": "neon.timeline_id", "value": TIMELINE_ID, "vartype": "string"},
-        {"name": "neon.tenant_id", "value": TENANT_ID, "vartype": "string"},
-        {"name": "neon.pageserver_connstring",
+        {"name": "yb_amp.safekeepers", "value": f"{LISTEN_HOST}:{SAFEKEEPER_PG_PORT}", "vartype": "string"},
+        {"name": "yb_amp.branch_id", "value": BRANCH_ID, "vartype": "string"},
+        {"name": "yb_amp.pageserver_connstring",
          "value": f"host={LISTEN_HOST} port={PAGESERVER_PG_PORT}", "vartype": "string"},
     ]
     for k, v in json.loads(env("COMPUTE_EXTRA_SETTINGS_JSON", "{}")).items():
@@ -380,12 +376,11 @@ def render_compute_spec(specfile):
         "delta_operations": [],
         "skip_pg_catalog_updates": True,
         "mode": "Primary",
-        "tenant_id": TENANT_ID,
-        "timeline_id": TIMELINE_ID,
+        "storage_branch_id": BRANCH_ID,
         "pageserver_connstring": f"host={LISTEN_HOST} port={PAGESERVER_PG_PORT}",
         "safekeeper_connstrings": [f"{LISTEN_HOST}:{SAFEKEEPER_PG_PORT}"],
         # Membership generation of the safekeeper timeline (created with
-        # mconf generation=1). Emitted as the `g#1:` prefix on neon.safekeepers.
+        # mconf generation=1). Emitted as the `g#1:` prefix on yb_amp.safekeepers.
         "safekeepers_generation": 1,
     }
     config = {
@@ -557,55 +552,48 @@ def sc_register_and_attach():
         "listen_http_port": PAGESERVER_HTTP_PUB_PORT,
     })
     _, resp = http_request("POST", f"{base}/debug/v1/attach-hook",
-                           body={"tenant_id": TENANT_ID, "node_id": NODE_ID})
+                           body={"branch_id": BRANCH_ID, "node_id": NODE_ID})
     gen = (resp or {}).get("gen")
     if gen is None:
         raise RuntimeError(f"attach-hook did not return a generation: {resp}")
     log(f"storage controller granted pageserver generation {gen} "
-        f"for tenant {TENANT_ID} on node {NODE_ID}")
+        f"for branch {BRANCH_ID} on node {NODE_ID}")
     return gen
 
 
 def main():
-    global TENANT_ID, TIMELINE_ID, GENERATION
+    global BRANCH_ID, GENERATION
 
     sup = Supervisor()
     signal.signal(signal.SIGTERM, sup.shutdown)
     signal.signal(signal.SIGINT, sup.shutdown)
 
-    # BOOTSTRAP=true forces a fresh initdb of the *supplied* tenant/timeline,
-    # for when a control plane (the controller) allocated the ids but the timeline has not
+    # BOOTSTRAP=true forces a fresh initdb of the *supplied* branch, for when a
+    # control plane (the controller) allocated the id but the branch has not
     # been materialized yet. Default keeps the original behaviour: bootstrap only
-    # when no ids are supplied, otherwise attach to an existing timeline.
+    # when no id is supplied, otherwise attach to an existing branch.
     force_bootstrap = env("BOOTSTRAP", "false").lower() in ("1", "true", "yes")
-    # Branch ancestry (set by the controller for a branch timeline): fork the
-    # ancestor at ANCESTOR_LSN instead of initdb'ing a fresh, empty timeline.
-    ancestor_timeline_id = env("ANCESTOR_TIMELINE_ID", "").strip() or None
+    # Branch ancestry (set by the controller for a forked branch): fork the
+    # ancestor at ANCESTOR_LSN instead of initdb'ing a fresh, empty branch.
+    ancestor_branch_id = env("ANCESTOR_BRANCH_ID", "").strip() or None
     ancestor_lsn = env("ANCESTOR_LSN", "").strip() or None
-    if TENANT_ID is None:
-        TENANT_ID = os.urandom(16).hex()
-        TIMELINE_ID = os.urandom(16).hex()
+    if BRANCH_ID is None:
+        BRANCH_ID = os.urandom(16).hex()
         bootstrap = True
-        log(f"no TENANT_ID supplied; bootstrapping fresh tenant {TENANT_ID} "
-            f"timeline {TIMELINE_ID}")
-    elif ancestor_timeline_id:
-        if TIMELINE_ID is None:
-            raise SystemExit("TENANT_ID set but TIMELINE_ID missing")
+        log(f"no BRANCH_ID supplied; bootstrapping fresh branch {BRANCH_ID}")
+    elif ancestor_branch_id:
         if not ancestor_lsn:
-            raise SystemExit("ANCESTOR_TIMELINE_ID set but ANCESTOR_LSN missing")
-        # A branch clones from its ancestor; it must not initdb.
+            raise SystemExit("ANCESTOR_BRANCH_ID set but ANCESTOR_LSN missing")
+        # A fork clones from its ancestor; it must not initdb.
         bootstrap = False
-        log(f"branch: forking ancestor {ancestor_timeline_id} at {ancestor_lsn} "
-            f"into tenant {TENANT_ID} timeline {TIMELINE_ID}")
+        log(f"fork: forking ancestor {ancestor_branch_id} at {ancestor_lsn} "
+            f"into branch {BRANCH_ID}")
     else:
-        if TIMELINE_ID is None:
-            raise SystemExit("TENANT_ID set but TIMELINE_ID missing")
         bootstrap = force_bootstrap
         if bootstrap:
-            log(f"BOOTSTRAP=true; initializing supplied tenant {TENANT_ID} "
-                f"timeline {TIMELINE_ID}")
+            log(f"BOOTSTRAP=true; initializing supplied branch {BRANCH_ID}")
         else:
-            log(f"serving tenant {TENANT_ID} timeline {TIMELINE_ID}")
+            log(f"serving branch {BRANCH_ID}")
 
     if DEV_PROVISION_SCHEMA:
         provision_schema()
@@ -645,7 +633,7 @@ def main():
 
     # 3. pageserver (runs initdb for a Bootstrap recipe, or forks the ancestor
     #    for a Branch recipe, on first start)
-    write_pageserver_config(ps_dir, bootstrap, ancestor_timeline_id, ancestor_lsn)
+    write_pageserver_config(ps_dir, bootstrap, ancestor_branch_id, ancestor_lsn)
     ps = Service(
         "yb-pageserver",
         [BIN_DIR / "yb-pageserver", "-D", ps_dir],
@@ -658,22 +646,21 @@ def main():
         svc.start()
         svc.wait_healthy(timeout=120)
 
-    # Wait for the pageserver's timeline to come up Active and read its start LSN.
-    ps_tl = f"http://{LISTEN_HOST}:{PAGESERVER_HTTP_PORT}/v1/tenant/{TENANT_ID}/timeline/{TIMELINE_ID}"
+    # Wait for the pageserver's branch to come up Active and read its start LSN.
+    ps_tl = f"http://{LISTEN_HOST}:{PAGESERVER_HTTP_PORT}/v1/branch/{BRANCH_ID}"
 
     def timeline_active():
         st, body = http_request("GET", ps_tl)
         return st == 200 and body and body.get("state") == "Active"
 
-    wait_for("pageserver timeline Active", timeline_active, timeout=180)
+    wait_for("pageserver branch Active", timeline_active, timeout=180)
     _, tl = http_request("GET", ps_tl)
     start_lsn = tl.get("last_record_lsn", "0/0")
-    log(f"pageserver timeline Active at LSN {start_lsn}")
+    log(f"pageserver branch Active at LSN {start_lsn}")
 
-    # Create the timeline on the safekeeper (single-member membership).
+    # Create the branch on the safekeeper (single-member membership).
     sk_create = {
-        "tenant_id": TENANT_ID,
-        "timeline_id": TIMELINE_ID,
+        "branch_id": BRANCH_ID,
         "mconf": {
             "generation": 1,
             "members": [{"id": NODE_ID, "host": LISTEN_HOST, "pg_port": SAFEKEEPER_PG_PORT}],
@@ -683,17 +670,17 @@ def main():
         "start_lsn": start_lsn,
     }
     try:
-        http_request("POST", f"http://{LISTEN_HOST}:{SAFEKEEPER_HTTP_PORT}/v1/tenant/timeline", body=sk_create)
-        log("created timeline on safekeeper")
+        http_request("POST", f"http://{LISTEN_HOST}:{SAFEKEEPER_HTTP_PORT}/v1/branch", body=sk_create)
+        log("created branch on safekeeper")
     except urllib.error.HTTPError as e:
         # 409/already-exists is fine on restart.
         if e.code not in (409,):
-            log(f"safekeeper create_timeline returned {e.code}: {e.read()[:200]}")
+            log(f"safekeeper create_branch returned {e.code}: {e.read()[:200]}")
 
     # Under controller coordination, tell the storage controller where this
-    # timeline's WAL lives (this endpoint's safekeeper). Mirrors control_plane's
+    # branch's WAL lives (this endpoint's safekeeper). Mirrors control_plane's
     # timeline_register (control_plane/src/storage_controller.rs): the controller
-    # is the source of truth for the timeline's safekeeper placement. Reuse the
+    # is the source of truth for the branch's safekeeper placement. Reuse the
     # exact start LSN already given to the safekeeper create above; the pageserver
     # API returns it as the controller's `Lsn` "hi/lo" string, so pass it through
     # (only convert if we somehow hold it as an integer).
@@ -705,19 +692,19 @@ def main():
         try:
             http_request(
                 "POST",
-                f"{base}/control/v1/tenant/{TENANT_ID}/timeline/{TIMELINE_ID}/register",
+                f"{base}/control/v1/branch/{BRANCH_ID}/register",
                 body={"start_lsn": sc_start_lsn, "sk_set": [NODE_ID]},
             )
-            log("registered timeline with storage controller")
+            log("registered branch with storage controller")
         except urllib.error.HTTPError as e:
             # 409/already-registered is fine on restart.
             if e.code not in (409,):
-                log(f"storage controller timeline_register returned {e.code}: {e.read()[:200]}")
+                log(f"storage controller branch register returned {e.code}: {e.read()[:200]}")
         except Exception as e:  # noqa: BLE001 - registry update is best-effort, never fatal
-            # The safekeeper already has the timeline (created above) and serves the
+            # The safekeeper already has the branch (created above) and serves the
             # compute; registering it with the controller is bookkeeping, so a
             # transient connection error must not crash the pod.
-            log(f"WARNING: storage controller timeline_register failed (continuing): {e}")
+            log(f"WARNING: storage controller branch register failed (continuing): {e}")
 
     # 4. compute_ctl + postgres
     spec = render_compute_spec(RUN_DIR / "compute_spec.json")

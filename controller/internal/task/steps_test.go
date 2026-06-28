@@ -214,15 +214,15 @@ func TestCreateEndpointHandlerDefaultBranchBootstrap(t *testing.T) {
 	if spec.Name != EndpointDeployName(epID) {
 		t.Errorf("deploy name = %q, want %q", spec.Name, EndpointDeployName(epID))
 	}
-	// The deploy spec speaks storage ids: project->tenant, branch->timeline.
-	if spec.TenantID != hex32(projectID) || spec.TimelineID != hex32(branchID) {
-		t.Errorf("deploy spec storage ids = (%s,%s), want hex32(project),hex32(branch)", spec.TenantID, spec.TimelineID)
+	// The deploy spec speaks the single storage branch id: branch->branch.
+	if spec.BranchID != hex32(branchID) {
+		t.Errorf("deploy spec storage branch id = %s, want hex32(branch) %s", spec.BranchID, hex32(branchID))
 	}
 	if !spec.Bootstrap {
 		t.Error("default-branch endpoint spec Bootstrap = false, want true (handler bootstrap set, no ancestor)")
 	}
-	if spec.AncestorTimelineID != "" {
-		t.Errorf("default-branch endpoint spec ancestor = %q, want empty", spec.AncestorTimelineID)
+	if spec.AncestorBranchID != "" {
+		t.Errorf("default-branch endpoint spec ancestor = %q, want empty", spec.AncestorBranchID)
 	}
 	wantAddr := EndpointDeployName(epID) + ".endpoints.svc:55433"
 	if state.endpointAddresses[epID] != wantAddr {
@@ -251,8 +251,8 @@ func TestCreateEndpointHandlerForkNoBootstrap(t *testing.T) {
 	if spec.Bootstrap {
 		t.Error("fork endpoint spec Bootstrap = true, want false (a fork clones from its ancestor)")
 	}
-	if spec.AncestorTimelineID != hex32(ancestor) || spec.AncestorLSN != "0/16ABCD0" {
-		t.Errorf("fork spec ancestor = (%s, %s), want (hex32 %s, 0/16ABCD0)", spec.AncestorTimelineID, spec.AncestorLSN, hex32(ancestor))
+	if spec.AncestorBranchID != hex32(ancestor) || spec.AncestorLSN != "0/16ABCD0" {
+		t.Errorf("fork spec ancestor = (%s, %s), want (hex32 %s, 0/16ABCD0)", spec.AncestorBranchID, spec.AncestorLSN, hex32(ancestor))
 	}
 }
 

@@ -16,11 +16,11 @@ Connect to the compute Postgres:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "yb-light-endpoint.fullname" . }} {{ .Values.endpoint.computePort }}:{{ .Values.endpoint.computePort }}
   psql -h 127.0.0.1 -p {{ .Values.endpoint.computePort }} -U cloud_admin postgres
 
-{{- if .Values.endpoint.tenantId }}
+{{- if .Values.endpoint.branchId }}
 
-Serving tenant {{ .Values.endpoint.tenantId }}{{ if .Values.endpoint.timelineId }} / timeline {{ .Values.endpoint.timelineId }}{{ end }}.
+Serving branch {{ .Values.endpoint.branchId }}.
 {{- else }}
 
-No tenant id set: the pod bootstrapped a fresh tenant on first start. Check the
-pod logs for the generated tenant/timeline ids.
+No branch id set: the pod bootstrapped a fresh branch on first start. Check the
+pod logs for the generated branch id.
 {{- end }}

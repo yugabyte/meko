@@ -23,13 +23,12 @@ func testKubernetesConfig() KubernetesConfig {
 }
 
 // testEndpointSpec returns an EndpointSpec as the API handler builds it: the
-// storage ids are already 32-hex strings, and the YB connection is populated.
+// storage branch id is already a 32-hex string, and the YB connection is populated.
 func testEndpointSpec() EndpointSpec {
 	return EndpointSpec{
-		Name:       "yb-ep-92331eedafb2a0ef3b2d724d649bee78",
-		TenantID:   "92331eedafb2a0ef3b2d724d649bee78",
-		TimelineID: "11112222333344445555666677778888",
-		PgVersion:  15,
+		Name:      "yb-ep-92331eedafb2a0ef3b2d724d649bee78",
+		BranchID:  "92331eedafb2a0ef3b2d724d649bee78",
+		PgVersion: 15,
 		YB: YBConn{
 			HostPorts: "yb-tserver:5433",
 			User:      "yugabyte",
@@ -79,11 +78,8 @@ func TestKubernetesValues(t *testing.T) {
 	if v.Endpoint.ComputePort != cfg.ComputePort {
 		t.Errorf("Endpoint.ComputePort = %d, want %d", v.Endpoint.ComputePort, cfg.ComputePort)
 	}
-	if v.Endpoint.TenantId != spec.TenantID {
-		t.Errorf("Endpoint.TenantId = %q, want %q", v.Endpoint.TenantId, spec.TenantID)
-	}
-	if v.Endpoint.TimelineId != spec.TimelineID {
-		t.Errorf("Endpoint.TimelineId = %q, want %q", v.Endpoint.TimelineId, spec.TimelineID)
+	if v.Endpoint.BranchId != spec.BranchID {
+		t.Errorf("Endpoint.BranchId = %q, want %q", v.Endpoint.BranchId, spec.BranchID)
 	}
 }
 

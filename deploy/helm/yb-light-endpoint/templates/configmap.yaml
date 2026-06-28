@@ -19,16 +19,15 @@ data:
   # --- Endpoint / compute settings ---
   ENDPOINT_PG_VERSION: {{ .Values.endpoint.pgVersion | quote }}
   COMPUTE_PORT: {{ .Values.endpoint.computePort | quote }}
-  TENANT_ID: {{ .Values.endpoint.tenantId | quote }}
-  TIMELINE_ID: {{ .Values.endpoint.timelineId | quote }}
+  BRANCH_ID: {{ .Values.endpoint.branchId | quote }}
   SHARED_PRELOAD_LIBRARIES: {{ .Values.endpoint.sharedPreloadLibraries | quote }}
   COMPUTE_EXTRA_SETTINGS_JSON: {{ .Values.endpoint.extraSettings | toJson | quote }}
-  # initdb the supplied tenant/timeline on first start (vs. attach an existing).
+  # initdb the supplied branch on first start (vs. attach an existing).
   BOOTSTRAP: {{ .Values.endpoint.bootstrap | quote }}
-  # Branch ancestry: when ANCESTOR_TIMELINE_ID is set, the endpoint forks the
+  # Branch ancestry: when ANCESTOR_BRANCH_ID is set, the endpoint forks the
   # ancestor at ANCESTOR_LSN (lineage reads serve pre-fork pages) instead of
-  # initdb'ing a fresh timeline. Empty for a root (main) timeline.
-  ANCESTOR_TIMELINE_ID: {{ .Values.endpoint.ancestorTimelineId | quote }}
+  # initdb'ing a fresh branch. Empty for a root (main) branch.
+  ANCESTOR_BRANCH_ID: {{ .Values.endpoint.ancestorBranchId | quote }}
   ANCESTOR_LSN: {{ .Values.endpoint.ancestorLsn | quote }}
 
   {{- if .Values.storageController.url }}

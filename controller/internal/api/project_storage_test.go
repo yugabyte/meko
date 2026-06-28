@@ -433,8 +433,8 @@ func TestCreateEndpointOnBranchPassesAncestor(t *testing.T) {
 		t.Fatalf("deploy calls = %d, want 1", len(dep.created))
 	}
 	spec := dep.created[0]
-	if want := hex.EncodeToString(parentID[:]); spec.AncestorTimelineID != want {
-		t.Errorf("AncestorTimelineID = %q, want the parent %q", spec.AncestorTimelineID, want)
+	if want := hex.EncodeToString(parentID[:]); spec.AncestorBranchID != want {
+		t.Errorf("AncestorBranchID = %q, want the parent %q", spec.AncestorBranchID, want)
 	}
 	if spec.AncestorLSN != "0/236A730" {
 		t.Errorf("AncestorLSN = %q, want 0/236A730", spec.AncestorLSN)
@@ -464,8 +464,8 @@ func TestCreateEndpointOnDefaultHasNoAncestor(t *testing.T) {
 	if len(dep.created) != 1 {
 		t.Fatalf("deploy calls = %d, want 1", len(dep.created))
 	}
-	if spec := dep.created[0]; spec.AncestorTimelineID != "" || spec.AncestorLSN != "" {
-		t.Errorf("default-branch endpoint carried ancestry %q@%q, want none", spec.AncestorTimelineID, spec.AncestorLSN)
+	if spec := dep.created[0]; spec.AncestorBranchID != "" || spec.AncestorLSN != "" {
+		t.Errorf("default-branch endpoint carried ancestry %q@%q, want none", spec.AncestorBranchID, spec.AncestorLSN)
 	}
 }
 

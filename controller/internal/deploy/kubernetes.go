@@ -39,7 +39,7 @@ const lbAddressPollTimeout = 2 * time.Minute
 
 // KubernetesConfig is the static configuration of the Helm-backed deployer: the
 // cluster/chart/image coordinates that are the same for every endpoint. The
-// per-endpoint identity (tenant/timeline/pg version, the backing YB connection,
+// per-endpoint identity (branch id/pg version, the backing YB connection,
 // the storage-controller URL, bootstrap) arrives in the EndpointSpec.
 type KubernetesConfig struct {
 	Namespace      string // namespace endpoints are deployed into
@@ -428,20 +428,19 @@ type yugabyteValues struct {
 type endpointValues struct {
 	PgVersion   string `json:"pgVersion"`
 	ComputePort int    `json:"computePort"`
-	TenantId    string `json:"tenantId"`
-	TimelineId  string `json:"timelineId"`
+	BranchId    string `json:"branchId"`
 	Bootstrap   bool   `json:"bootstrap"`
-	// Branch ancestry: empty for a root timeline. When set, the endpoint forks
+	// Branch ancestry: empty for a root branch. When set, the endpoint forks
 	// the ancestor at AncestorLsn instead of running initdb.
-	AncestorTimelineId string `json:"ancestorTimelineId,omitempty"`
-	AncestorLsn        string `json:"ancestorLsn,omitempty"`
+	AncestorBranchId string `json:"ancestorBranchId,omitempty"`
+	AncestorLsn      string `json:"ancestorLsn,omitempty"`
 }
 
 // values builds the per-endpoint Helm values. With spec.StorageControllerURL set
 // (and spec.Bootstrap=true), the endpoint registers its pageserver+safekeeper
-// with the controller, attaches the tenant (generation via the attach-hook),
-// runs initdb for the supplied tenant/timeline, and registers the timeline.
-// Without it, the endpoint attaches an already-materialized tenant/timeline.
+// with the controller, attaches the branch (generation via the attach-hook),
+// runs initdb for the supplied branch, and registers it.
+// Without it, the endpoint attaches an already-materialized branch.
 func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValues {
 	pgVersion := spec.PgVersion
 	if pgVersion <= 0 {
@@ -459,13 +458,12 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Dbname:    spec.YB.DBName,
 		},
 		Endpoint: endpointValues{
-			PgVersion:          strconv.Itoa(pgVersion),
-			ComputePort:        k.cfg.ComputePort,
-			TenantId:           spec.TenantID,
-			TimelineId:         spec.TimelineID,
-			Bootstrap:          spec.Bootstrap,
-			AncestorTimelineId: spec.AncestorTimelineID,
-			AncestorLsn:        spec.AncestorLSN,
+			PgVersion:        strconv.Itoa(pgVersion),
+			ComputePort:      k.cfg.ComputePort,
+			BranchId:         spec.BranchID,
+			Bootstrap:        spec.Bootstrap,
+			AncestorBranchId: spec.AncestorBranchID,
+			AncestorLsn:      spec.AncestorLSN,
 		},
 		StorageController: storageControllerValues{URL: spec.StorageControllerURL},
 		Service:           serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},

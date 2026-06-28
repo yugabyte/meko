@@ -556,23 +556,22 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	// background context so cleanup runs even if the request ctx was cancelled.
 	// The instance name is keyed by the endpoint id (unique per endpoint), since a
 	// branch can carry more than one endpoint (a writer plus read replicas). The
-	// deploy spec speaks the storage layer's tenant/timeline ids, which are the
-	// project/branch ids verbatim.
+	// deploy spec speaks the storage layer's single branch id, which is the
+	// product branch id verbatim.
 	spec := deploy.EndpointSpec{
 		Name:                 endpointDeployName(ep.ID),
-		TenantID:             hex32(br.ProjectID),
-		TimelineID:           hex32(br.BranchID),
+		BranchID:             hex32(br.BranchID),
 		PgVersion:            br.PgVersion,
 		YB:                   c.prov.EndpointYB,
 		StorageControllerURL: c.prov.SCEndpointURL,
 		Bootstrap:            c.prov.Bootstrap,
 	}
-	// A branch must clone from its ancestor at the fork LSN, not initdb a fresh
-	// timeline — otherwise it comes up empty. The deployer relays the ancestor to
+	// A fork must clone from its ancestor at the fork LSN, not initdb a fresh
+	// branch — otherwise it comes up empty. The deployer relays the ancestor to
 	// the endpoint, whose pageserver writes a Branch init recipe (lineage reads
 	// serve the pre-fork pages from shared storage). Bootstrap is forced off.
 	if br.ParentBranchID != nil {
-		spec.AncestorTimelineID = hex32(*br.ParentBranchID)
+		spec.AncestorBranchID = hex32(*br.ParentBranchID)
 		spec.AncestorLSN = br.ForkLSN
 		spec.Bootstrap = false
 	}

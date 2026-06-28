@@ -191,12 +191,11 @@ func (h CreateEndpointHandler) Run(ctx context.Context, in StepInput) (json.RawM
 		return nil, fmt.Errorf("ensure endpoint record: %w", err)
 	}
 
-	// The deploy spec speaks the storage layer's tenant/timeline ids: a project is
-	// the storage tenant and a branch its timeline, mapped here via hex32.
+	// The deploy spec speaks the storage layer's single branch id: a branch maps
+	// to one storage branch, mapped here via hex32.
 	spec := deploy.EndpointSpec{
 		Name:                 EndpointDeployName(args.EndpointID),
-		TenantID:             hex32(args.ProjectID),
-		TimelineID:           hex32(args.BranchID),
+		BranchID:             hex32(args.BranchID),
 		PgVersion:            args.PgVersion,
 		YB:                   h.YB,
 		StorageControllerURL: h.SCURL,
@@ -204,7 +203,7 @@ func (h CreateEndpointHandler) Run(ctx context.Context, in StepInput) (json.RawM
 		Bootstrap: h.Bootstrap && args.AncestorBranchID == nil,
 	}
 	if args.AncestorBranchID != nil {
-		spec.AncestorTimelineID = hex32(*args.AncestorBranchID)
+		spec.AncestorBranchID = hex32(*args.AncestorBranchID)
 		spec.AncestorLSN = args.AncestorLSN
 		spec.Bootstrap = false
 	}

@@ -80,14 +80,13 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		"YB_USER":             spec.YB.User,
 		"YB_PASSWORD":         spec.YB.Password,
 		"YB_DBNAME":           spec.YB.DBName,
-		"TENANT_ID":           spec.TenantID,
-		"TIMELINE_ID":         spec.TimelineID,
+		"BRANCH_ID":           spec.BranchID,
 		"ENDPOINT_PG_VERSION": strconv.Itoa(spec.PgVersion),
 		"BOOTSTRAP":           strconv.FormatBool(spec.Bootstrap),
 	}
-	// Branch: relay the ancestor so the endpoint forks it instead of initdb'ing.
-	if spec.AncestorTimelineID != "" {
-		env["ANCESTOR_TIMELINE_ID"] = spec.AncestorTimelineID
+	// Fork: relay the ancestor so the endpoint forks it instead of initdb'ing.
+	if spec.AncestorBranchID != "" {
+		env["ANCESTOR_BRANCH_ID"] = spec.AncestorBranchID
 		env["ANCESTOR_LSN"] = spec.AncestorLSN
 	}
 	if spec.StorageControllerURL != "" {
