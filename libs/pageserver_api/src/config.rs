@@ -22,7 +22,7 @@ use postgres_backend::AuthType;
 use postgres_versioninfo::PgMajorVersion;
 use remote_storage::RemoteStorageConfig;
 use serde_with::serde_as;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::logging::LogFormat;
 use utils::lsn::Lsn;
 
@@ -159,16 +159,13 @@ impl Display for NodeMetadata {
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct ConfigToml {
-    /// Single-timeline identity: the one tenant this pageserver
+    /// Single-branch identity: the one branch this pageserver
     /// process serves for its entire lifetime. Set by the launcher
     /// (neon_local / storage_controller) before spawning the process.
-    /// All three of `tenant_id` / `timeline_id` / `generation` must be
+    /// Both `branch_id` / `generation` must be
     /// present together (validated in `PageServerConf::parse_and_validate`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant_id: Option<TenantId>,
-    /// The one timeline this process serves. See [`Self::tenant_id`].
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timeline_id: Option<TimelineId>,
+    pub branch_id: Option<BranchId>,
     /// Generation number for this attachment. The launcher bumps the
     /// generation in `storage_controller.tenants` on every spawn and
     /// writes the fresh value here; the pageserver CAS-installs it on
@@ -210,7 +207,7 @@ pub struct ConfigToml {
     pub grpc_auth_type: AuthType,
     pub auth_validation_public_key_path: Option<Utf8PathBuf>,
     pub yb_storage_conn: Option<RemoteStorageConfig>,
-    pub tenant_config: TenantConfigToml,
+    pub tenant_config: BranchConfigToml,
     /// libpq connection string of the single safekeeper, e.g.
     /// `host=127.0.0.1 port=5484`. The walreceiver opens its WAL
     /// streaming connection against this address.
@@ -308,7 +305,7 @@ pub struct ConfigToml {
 /// ```toml
 /// [timeline_init]
 /// mode                 = "branch"
-/// ancestor_timeline_id = "77ffde89f43d4ca08ef0a0ed1f089eaa"
+/// ancestor_branch_id = "77ffde89f43d4ca08ef0a0ed1f089eaa"
 /// ancestor_lsn         = "0/169AD58"
 /// ```
 #[serde_as]
@@ -320,9 +317,9 @@ pub enum TimelineInitConfig {
     Bootstrap { pg_version: PgMajorVersion },
     /// Create a branch: write a `timeline_state` row pointing at the
     /// ancestor at `ancestor_lsn`. Pre-branch pages stay under the
-    /// ancestor's timeline_id and are reached via lineage-aware reads.
+    /// ancestor's branch_id and are reached via lineage-aware reads.
     Branch {
-        ancestor_timeline_id: TimelineId,
+        ancestor_branch_id: BranchId,
         #[serde_as(as = "serde_with::DisplayFromStr")]
         ancestor_lsn: Lsn,
     },
@@ -804,8 +801,7 @@ impl Default for ConfigToml {
         use defaults::*;
 
         Self {
-            tenant_id: None,
-            timeline_id: None,
+            branch_id: None,
             generation: None,
             timeline_init: None,
             listen_pg_addr: (DEFAULT_PG_LISTEN_ADDR.to_string()),
@@ -871,7 +867,7 @@ impl Default for ConfigToml {
             timeline_offloading: true,
             ephemeral_bytes_per_memory_kb: (DEFAULT_EPHEMERAL_BYTES_PER_MEMORY_KB),
             l0_flush: None,
-            tenant_config: TenantConfigToml::default(),
+            tenant_config: BranchConfigToml::default(),
             no_sync: None,
             page_service_pipelining: PageServicePipeliningConfig::Pipelined(
                 PageServicePipeliningConfigPipelined {
@@ -908,10 +904,10 @@ impl Default for ConfigToml {
     }
 }
 
-/// Tenant-level configuration values, used for various purposes.
+/// Branch-level configuration values, used for various purposes.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub struct TenantConfigToml {
+pub struct BranchConfigToml {
     /// How much WAL history to retain for branching / replicas at an
     /// older LSN. Page versions older than this become eligible for
     /// garbage collection.
@@ -973,7 +969,7 @@ pub mod tenant_conf_defaults {
     pub const DEFAULT_RELSIZE_SNAPSHOT_CACHE_CAPACITY: usize = 1000;
 }
 
-impl Default for TenantConfigToml {
+impl Default for BranchConfigToml {
     fn default() -> Self {
         use tenant_conf_defaults::*;
         Self {

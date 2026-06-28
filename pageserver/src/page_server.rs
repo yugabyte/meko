@@ -5,7 +5,7 @@
 //! the correct layer for the get/put call, walking back the timeline branching
 //! history as needed.
 //!
-//! The files are stored in the .yb_light/tenants/<tenant_id>/timelines/<timeline_id>
+//! The files are stored in the .yb_light/branches/<branch_id>
 //! directory. See docs/pageserver-storage.md for how the files are managed.
 //! In addition to the layer files, there is a metadata file in the same
 //! directory that contains information about the timeline, in particular its
@@ -22,7 +22,7 @@ use anyhow::Context;
 use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use once_cell::sync::Lazy;
-pub use pageserver_api::models::TenantState;
+pub use pageserver_api::models::BranchState;
 use pageserver_api::models::RelSizeMigration;
 use pageserver_api::models::TimelineState;
 use postgres_ffi::PgMajorVersion;
@@ -50,7 +50,7 @@ use crate::metrics::{
 };
 use crate::task_mgr::TaskKind;
 use crate::page_server::gc_result::GcResult;
-use initdb_storage::{INITDB_PATH, remote_initdb_archive_path};
+use initdb_storage::INITDB_PATH;
 
 use crate::page_server::timeline::uninit::cleanup_timeline_directory;
 use crate::walingest::WalLagCooldown;
@@ -60,7 +60,7 @@ use crate::{TEMP_FILE_SUFFIX, import_datadir, span, task_mgr, walredo};
 static INIT_DB_SEMAPHORE: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(8));
 use utils::crashsafe;
 use utils::generation::Generation;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 pub mod metadata;
@@ -77,15 +77,12 @@ pub(crate) mod throttle;
 
 pub(crate) use timeline::{PageReconstructError, Timeline};
 
-pub(crate) use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
+pub(crate) use crate::span::debug_assert_current_span_has_branch_id;
 // re-export for use in walreceiver
 pub use crate::page_server::timeline::WalReceiverInfo;
 
-/// The "tenants" part of `tenants/<tenant>/timelines...`
-pub const TENANTS_SEGMENT_NAME: &str = "tenants";
-
-/// Parts of the `.yb_light/tenants/<tenant_id>/timelines/<timeline_id>` directory prefix.
-pub const TIMELINES_SEGMENT_NAME: &str = "timelines";
+/// The "branches" segment of `.yb_light/branches/<branch_id>`.
+pub const BRANCHES_SEGMENT_NAME: &str = "branches";
 
 /// References to shared objects that are passed into each tenant, such
 /// as the shared remote storage client and process initialization state.
@@ -110,7 +107,7 @@ pub struct TenantSharedResources {
 /// of pageserver.toml plus the launcher-assigned generation.
 #[derive(Clone)]
 pub(super) struct AttachedTenantConf {
-    tenant_conf: pageserver_api::models::TenantConfig,
+    tenant_conf: pageserver_api::models::BranchConfig,
     /// storage_controller-assigned generation used to fence YB writes.
     pub(super) generation: Generation,
     /// The deadline before which we are blocked from GC so that
@@ -121,7 +118,7 @@ pub(super) struct AttachedTenantConf {
 impl AttachedTenantConf {
     fn new(
         conf: &'static PageServerConf,
-        tenant_conf: pageserver_api::models::TenantConfig,
+        tenant_conf: pageserver_api::models::BranchConfig,
         generation: Generation,
     ) -> Self {
         // Sets a deadline before which we cannot proceed to GC due to lsn lease.
@@ -154,7 +151,7 @@ struct TimelinePreload {
 pub(crate) struct TenantPreload {
     /// The timeline's preload, or `None` if no `pageserver.timeline_state`
     /// row exists yet (attach then runs the create-if-missing path).
-    timeline: Option<(TimelineId, TimelinePreload)>,
+    timeline: Option<(BranchId, TimelinePreload)>,
 }
 
 /// Build a `TimelineMetadata` from a `pageserver.timeline_state` row.
@@ -174,7 +171,7 @@ fn synth_timeline_metadata_from_row(
         // NULL falls through as None and the walreceiver re-derives
         // prev from the SK stream.
         row.prev_record_lsn,
-        row.ancestor_timeline_id,
+        row.ancestor_branch_id,
         row.ancestor_lsn.unwrap_or(Lsn(0)),
         row.applied_gc_cutoff_lsn,
         // initdb_lsn falls back to disk_consistent_lsn — only consulted
@@ -192,12 +189,12 @@ pub struct PageServer {
     pub conf: &'static PageServerConf,
 
     // Overridden tenant-specific config parameters.
-    // We keep pageserver_api::models::TenantConfig sturct here to preserve the information
+    // We keep pageserver_api::models::BranchConfig sturct here to preserve the information
     // about parameters that are not set.
     // This is necessary to allow global config updates.
     tenant_conf: Arc<ArcSwap<AttachedTenantConf>>,
 
-    id: TenantId,
+    id: BranchId,
 
     /// The launcher-assigned generation, used to fence YB writes against
     /// stale pageservers. Does not change over the lifetime of the process.
@@ -211,7 +208,7 @@ pub struct PageServer {
     /// again on the same id). Held as a set for the `TimelineCreateGuard`
     /// release-on-drop protocol.
     /// The timeline currently being created, if any.
-    timelines_creating: std::sync::Mutex<Option<TimelineId>>,
+    timelines_creating: std::sync::Mutex<Option<BranchId>>,
 
     // This mutex prevents creation of new timelines during GC.
     gc_cs: tokio::sync::Mutex<()>,
@@ -351,16 +348,14 @@ impl WalRedoManager {
 pub enum GetTimelineError {
     #[error("Timeline is shutting down")]
     ShuttingDown,
-    #[error("Timeline {tenant_id}/{timeline_id} is not active, state: {state:?}")]
+    #[error("Timeline {branch_id} is not active, state: {state:?}")]
     NotActive {
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         state: TimelineState,
     },
-    #[error("Timeline {tenant_id}/{timeline_id} was not found")]
+    #[error("Timeline {branch_id} was not found")]
     NotFound {
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     },
 }
 
@@ -397,7 +392,7 @@ pub(crate) enum CreateTimelineIdempotency {
     /// exists as a field, and is set by cplane, it has always been ignored by pageserver when
     /// determining the child branch pg_version.
     Branch {
-        ancestor_timeline_id: TimelineId,
+        ancestor_branch_id: BranchId,
         ancestor_start_lsn: Lsn,
     },
 }
@@ -495,22 +490,20 @@ impl PageServer {
     /// it is marked as Active.
     async fn timeline_init_and_sync(
         self: &Arc<Self>,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         resources: TimelineResources,
         metadata: TimelineMetadata,
         ancestor: Option<Arc<Timeline>>,
         cause: LoadTimelineCause,
         ctx: &RequestContext,
     ) -> anyhow::Result<TimelineInitAndSyncResult> {
-        let tenant_id = self.id;
-
         let idempotency = if metadata.ancestor_timeline().is_none() {
             CreateTimelineIdempotency::Bootstrap {
                 pg_version: metadata.pg_version(),
             }
         } else {
             CreateTimelineIdempotency::Branch {
-                ancestor_timeline_id: metadata.ancestor_timeline().unwrap(),
+                ancestor_branch_id: metadata.ancestor_timeline().unwrap(),
                 ancestor_start_lsn: metadata.ancestor_lsn(),
             }
         };
@@ -521,13 +514,13 @@ impl PageServer {
         let mut resources = resources;
         resources.lineage = Some(
             self.compute_page_store
-                .load_lineage(tenant_id, timeline_id)
+                .load_lineage(branch_id)
                 .await
                 .context("load timeline lineage")?,
         );
 
         let (timeline, _timeline_ctx) = self.create_timeline_struct(
-            timeline_id,
+            branch_id,
             &metadata,
             ancestor.clone(),
             resources,
@@ -539,7 +532,7 @@ impl PageServer {
         let consistent_lsn_seed = timeline.get_applied_lsn();
 
         if !consistent_lsn_seed.is_valid() {
-            anyhow::bail!("Timeline {tenant_id}/{timeline_id} has invalid consistent_lsn seed");
+            anyhow::bail!("Timeline {branch_id} has invalid consistent_lsn seed");
         }
 
         assert_eq!(
@@ -575,7 +568,7 @@ impl PageServer {
         self.timeline
             .set(Arc::clone(&timeline))
             .unwrap_or_else(|_| {
-                unreachable!("Timeline {tenant_id}/{timeline_id} already exists in the tenant slot")
+                unreachable!("Timeline {branch_id} already exists in the tenant slot")
             });
         timeline.maybe_spawn_flush_loop();
 
@@ -593,13 +586,13 @@ impl PageServer {
     /// listener accepts traffic; failure is fatal to the process.
     pub(crate) async fn open(
         conf: &'static PageServerConf,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         resources: TenantSharedResources,
         attached_conf: AttachedTenantConf,
         ctx: &RequestContext,
     ) -> anyhow::Result<Arc<PageServer>> {
         let wal_redo_manager =
-            WalRedoManager::new(PostgresRedoManager::new(conf, tenant_id))
+            WalRedoManager::new(PostgresRedoManager::new(conf, branch_id))
                 .map_err(|GlobalShutDown| anyhow::anyhow!("pageserver is shutting down"))?;
 
         let TenantSharedResources {
@@ -615,7 +608,7 @@ impl PageServer {
             conf,
             attached_conf,
             Some(wal_redo_manager),
-            tenant_id,
+            branch_id,
             remote_storage.clone(),
             basebackup_cache,
             compute_page_store,
@@ -649,7 +642,7 @@ impl PageServer {
             anyhow::Ok(())
         }
         .instrument(
-            tracing::info_span!(parent: None, "attach", tenant_id=%tenant_id, gen=?generation),
+            tracing::info_span!(parent: None, "attach", branch_id=%branch_id, gen=?generation),
         )
         .await?;
         Ok(tenant)
@@ -661,26 +654,26 @@ impl PageServer {
         _remote_storage: &GenericRemoteStorage,
         cancel: CancellationToken,
     ) -> anyhow::Result<TenantPreload> {
-        span::debug_assert_current_span_has_tenant_id();
+        span::debug_assert_current_span_has_branch_id();
 
         // Single-timeline pageserver: load ONLY the configured
         // timeline's row. The tenant may have other rows in
         // `pageserver.timeline_state` (ancestors and branches served
         // by other pageserver processes) — those are reached through
         // lineage-aware PageStore reads, never hosted here.
-        let tenant_id = self.id;
+        let branch_id = self.id;
         let identity = self
             .conf
             .timeline_identity
             .context("preload requires a timeline identity in pageserver.toml")?;
         anyhow::ensure!(
-            identity.tenant_id == tenant_id,
+            identity.branch_id == branch_id,
             "preload: tenant {} does not match configured identity {}",
-            tenant_id,
-            identity.tenant_id,
+            branch_id,
+            identity.branch_id,
         );
         let row = tokio::select! {
-            r = self.compute_page_store.get_timeline(tenant_id, identity.timeline_id) => r?,
+            r = self.compute_page_store.get_timeline(branch_id) => r?,
             _ = cancel.cancelled() => anyhow::bail!("cancelled"),
         };
         let timeline = match row {
@@ -688,12 +681,12 @@ impl PageServer {
                 if row.deleted_at.is_some() {
                     anyhow::bail!(
                         "timeline {} is marked deleted (deleted_at = {:?}); refusing to open",
-                        row.timeline_id,
+                        row.branch_id,
                         row.deleted_at,
                     );
                 }
                 info!(
-                    timeline_id = %row.timeline_id,
+                    branch_id = %row.branch_id,
                     consistent_lsn = %row.consistent_lsn,
                     prev_record_lsn = ?row.prev_record_lsn,
                     applied_gc_cutoff_lsn = %row.applied_gc_cutoff_lsn,
@@ -703,7 +696,7 @@ impl PageServer {
                 );
                 let metadata = synth_timeline_metadata_from_row(&row)?;
                 Some((
-                    row.timeline_id,
+                    row.branch_id,
                     TimelinePreload {
                         metadata: Ok(metadata),
                     },
@@ -713,7 +706,7 @@ impl PageServer {
                 // Row absent: attach() runs the [timeline_init]
                 // create-if-missing path (bootstrap or branch).
                 info!(
-                    timeline_id = %identity.timeline_id,
+                    branch_id = %identity.branch_id,
                     "preload: no timeline_state row yet; will create at attach if configured"
                 );
                 None
@@ -732,7 +725,7 @@ impl PageServer {
         preload: Option<TenantPreload>,
         ctx: &RequestContext,
     ) -> anyhow::Result<()> {
-        span::debug_assert_current_span_has_tenant_id();
+        span::debug_assert_current_span_has_branch_id();
 
         failpoint_support::sleep_millis_async!("before-attaching-tenant");
 
@@ -745,14 +738,14 @@ impl PageServer {
         // The timeline to load, if its row already existed; the
         // create-if-missing path below fills it for a fresh branch.
         let mut timeline_ancestors = None;
-        if let Some((timeline_id, preload)) = preload.timeline {
+        if let Some((branch_id, preload)) = preload.timeline {
             // `preload.metadata` is synthesised from
             // `pageserver.timeline_state` in `Tenant::preload`, so it's
             // always `Ok(_)` — no remote blob download path remains in yb-light.
             let metadata = preload
                 .metadata
                 .expect("yb-light preload always builds an Ok TimelineMetadata");
-            timeline_ancestors = Some((timeline_id, metadata));
+            timeline_ancestors = Some((branch_id, metadata));
         }
 
         // Create-if-missing: the configured timeline has no
@@ -772,7 +765,7 @@ impl PageServer {
                 None => anyhow::bail!(
                     "timeline {} has no timeline_state row and no [timeline_init] is \
                      configured in pageserver.toml",
-                    identity.timeline_id,
+                    identity.branch_id,
                 ),
                 Some(TimelineInitConfig::Bootstrap { pg_version }) => {
                     // Crash-retry idempotency: if a previous bootstrap
@@ -781,10 +774,7 @@ impl PageServer {
                     // not bit-deterministic, and the orphan page rows
                     // from the failed import must be overwritten with
                     // identical payloads on retry.
-                    let initdb_blob = initdb_storage::remote_initdb_archive_path(
-                        &self.id,
-                        &identity.timeline_id,
-                    );
+                    let initdb_blob = initdb_storage::remote_initdb_archive_path(&self.id);
                     let load_existing_initdb = match self
                         .remote_storage
                         .head_object(&initdb_blob, &self.cancel)
@@ -792,10 +782,10 @@ impl PageServer {
                     {
                         Ok(_) => {
                             info!(
-                                timeline_id = %identity.timeline_id,
+                                branch_id = %identity.branch_id,
                                 "bootstrap: reusing initdb tar from a previous attempt"
                             );
-                            Some(identity.timeline_id)
+                            Some(identity.branch_id)
                         }
                         Err(DownloadError::NotFound) => None,
                         Err(e) => {
@@ -804,23 +794,22 @@ impl PageServer {
                         }
                     };
                     info!(
-                        timeline_id = %identity.timeline_id,
+                        branch_id = %identity.branch_id,
                         pg_version = %pg_version,
                         "bootstrapping configured timeline (initdb + import)"
                     );
-                    // The nested span carries timeline_id: the timeline
+                    // The nested span carries branch_id: the timeline
                     // creation internals (UninitializedTimeline::write,
-                    // flush loop spawn) debug-assert that both tenant_id
-                    // and timeline_id are on the current span. The
-                    // surrounding attach span only has tenant_id.
+                    // flush loop spawn) debug-assert that branch_id is on
+                    // the current span.
                     let result = self
                         .bootstrap_timeline(
-                            identity.timeline_id,
+                            identity.branch_id,
                             *pg_version,
                             load_existing_initdb,
                             ctx,
                         )
-                        .instrument(info_span!("bootstrap_timeline", timeline_id = %identity.timeline_id))
+                        .instrument(info_span!("bootstrap_timeline", branch_id = %identity.branch_id))
                         .await
                         .map_err(|e| anyhow::anyhow!("bootstrap configured timeline: {e}"))?;
                     // finish_creation inserted the timeline into
@@ -828,10 +817,10 @@ impl PageServer {
                     // activation happens in PageServer::activate.
                     let (CreateTimelineResult::Created(t)
                     | CreateTimelineResult::Idempotent(t)) = result;
-                    bootstrapped_timeline = Some(t.timeline_id);
+                    bootstrapped_timeline = Some(t.branch_id);
                 }
                 Some(TimelineInitConfig::Branch {
-                    ancestor_timeline_id,
+                    ancestor_branch_id,
                     ancestor_lsn,
                 }) => {
                     let generation_i32: i32 = self
@@ -840,8 +829,8 @@ impl PageServer {
                         .map(|g: u32| g as i32)
                         .unwrap_or(0);
                     info!(
-                        timeline_id = %identity.timeline_id,
-                        ancestor = %ancestor_timeline_id,
+                        branch_id = %identity.branch_id,
+                        ancestor = %ancestor_branch_id,
                         %ancestor_lsn,
                         "creating branch timeline row"
                     );
@@ -857,9 +846,8 @@ impl PageServer {
                         match self
                             .fpu_page_store
                             .create_branch_row(
-                                self.id,
-                                identity.timeline_id,
-                                *ancestor_timeline_id,
+                                identity.branch_id,
+                                *ancestor_branch_id,
                                 *ancestor_lsn,
                                 generation_i32,
                             )
@@ -877,7 +865,7 @@ impl PageServer {
                         }
                     };
                     let metadata = synth_timeline_metadata_from_row(&row)?;
-                    timeline_ancestors = Some((identity.timeline_id, metadata));
+                    timeline_ancestors = Some((identity.branch_id, metadata));
                 }
             }
         }
@@ -886,21 +874,21 @@ impl PageServer {
         // Single-timeline pageserver: at most one timeline loads here,
         // and a branch's ancestor is served by a DIFFERENT process —
         // no in-process ancestor ordering to respect.
-        if let Some((timeline_id, remote_metadata)) = timeline_ancestors {
+        if let Some((branch_id, remote_metadata)) = timeline_ancestors {
             // TODO again handle early failure
             let effect = self
                 .load_remote_timeline(
-                    timeline_id,
+                    branch_id,
                     remote_metadata,
-                    self.build_timeline_resources(timeline_id),
+                    self.build_timeline_resources(branch_id),
                     LoadTimelineCause::Attach,
                     ctx,
                 )
                 .await
                 .with_context(|| {
                     format!(
-                        "failed to load remote timeline {} for tenant {}",
-                        timeline_id, self.id
+                        "failed to load remote timeline {} for branch {}",
+                        branch_id, self.id
                     )
                 })?;
 
@@ -950,28 +938,28 @@ impl PageServer {
         0
     }
 
-    #[instrument(skip_all, fields(timeline_id=%timeline_id))]
+    #[instrument(skip_all, fields(branch_id=%branch_id))]
     async fn load_remote_timeline(
         self: &Arc<Self>,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         remote_metadata: TimelineMetadata,
         resources: TimelineResources,
         cause: LoadTimelineCause,
         ctx: &RequestContext,
     ) -> anyhow::Result<TimelineInitAndSyncResult> {
-        span::debug_assert_current_span_has_tenant_id();
+        span::debug_assert_current_span_has_branch_id();
 
-        info!("loading timeline {}", timeline_id);
+        info!("loading timeline {}", branch_id);
 
         // Single-timeline pageserver: a branch's ancestor is served by
         // a DIFFERENT pageserver process and is never hosted here; reads
         // below the branch point go through lineage-aware PageStore reads.
-        self.timeline_init_and_sync(timeline_id, resources, remote_metadata, None, cause, ctx)
+        self.timeline_init_and_sync(branch_id, resources, remote_metadata, None, cause, ctx)
             .await
     }
 
     #[allow(dead_code)]
-    pub(crate) fn tenant_id(&self) -> TenantId {
+    pub(crate) fn branch_id(&self) -> BranchId {
         self.id
     }
 
@@ -984,22 +972,20 @@ impl PageServer {
     /// This function is idempotent. It doesn't change internal state in any way.
     pub fn get_timeline(
         &self,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         active_only: bool,
     ) -> Result<Arc<Timeline>, GetTimelineError> {
         let timeline = self
             .timeline
             .get()
-            .filter(|tl| tl.timeline_id == timeline_id)
+            .filter(|tl| tl.branch_id == branch_id)
             .ok_or(GetTimelineError::NotFound {
-                tenant_id: self.id,
-                timeline_id,
+                branch_id,
             })?;
 
         if active_only && !timeline.is_active() {
             Err(GetTimelineError::NotActive {
-                tenant_id: self.id,
-                timeline_id,
+                branch_id,
                 state: timeline.current_state(),
             })
         } else {
@@ -1013,10 +999,10 @@ impl PageServer {
         self.timeline().into_iter().collect()
     }
 
-    pub fn list_timeline_ids(&self) -> Vec<TimelineId> {
+    pub fn list_timeline_ids(&self) -> Vec<BranchId> {
         self.timeline
             .get()
-            .map(|tl| tl.timeline_id)
+            .map(|tl| tl.branch_id)
             .into_iter()
             .collect()
     }
@@ -1036,7 +1022,7 @@ impl PageServer {
     //
     pub(crate) async fn gc_iteration(
         &self,
-        target_timeline_id: Option<TimelineId>,
+        target_timeline_id: Option<BranchId>,
         horizon: u64,
         pitr: Duration,
         cancel: &CancellationToken,
@@ -1074,7 +1060,7 @@ impl PageServer {
         // open indefinitely.
         if let Some(timeline) = self.timeline().filter(|tl| tl.is_active()) {
             let span =
-                info_span!("maybe_freeze_ephemeral_layer", timeline_id = %timeline.timeline_id);
+                info_span!("maybe_freeze_ephemeral_layer", branch_id = %timeline.branch_id);
             timeline
                 .maybe_freeze_ephemeral_layer()
                 .instrument(span)
@@ -1096,7 +1082,7 @@ impl PageServer {
     /// tenant background loops. Runs synchronously at the end of startup,
     /// before listeners accept traffic.
     fn activate(self: &Arc<Self>, ctx: &RequestContext) {
-        span::debug_assert_current_span_has_tenant_id();
+        span::debug_assert_current_span_has_branch_id();
 
         // Spawn gc and housekeeping loops. The loops will shut themselves
         // down when they notice that the tenant is shutting down.
@@ -1106,7 +1092,7 @@ impl PageServer {
             .timeline()
             .expect("activate runs after attach has set the timeline");
         timeline.activate(self.clone(), &ctx.with_scope_timeline(&timeline));
-        info!(tenant_id = %self.id, "tenant active");
+        info!(branch_id = %self.id, "tenant active");
     }
 
     /// Shutdown the tenant and join all of the spawned tasks.
@@ -1115,13 +1101,13 @@ impl PageServer {
     /// cancellation to the WAL receiver (joined below, so no new data
     /// arrives before the final flush) and the background loops.
     async fn shutdown(&self, shutdown_mode: timeline::ShutdownMode) {
-        span::debug_assert_current_span_has_tenant_id();
+        span::debug_assert_current_span_has_branch_id();
 
         if let Some(timeline) = self.timeline().filter(|tl| !tl.is_broken()) {
             timeline.set_state(TimelineState::Stopping);
 
-            let timeline_id = timeline.timeline_id;
-            let span = tracing::info_span!("timeline_shutdown", %timeline_id, ?shutdown_mode);
+            let branch_id = timeline.branch_id;
+            let span = tracing::info_span!("timeline_shutdown", %branch_id, ?shutdown_mode);
             timeline.shutdown(shutdown_mode).instrument(span).await;
         }
 
@@ -1134,7 +1120,7 @@ impl PageServer {
         //
         // this will additionally shutdown and await all timeline tasks.
         tracing::debug!("Waiting for tasks...");
-        task_mgr::shutdown_tasks(None, Some(self.id), None).await;
+        task_mgr::shutdown_tasks(None, Some(self.id)).await;
 
         if let Some(walredo_mgr) = self.walredo_mgr.as_ref() {
             walredo_mgr.shutdown().await;
@@ -1149,11 +1135,11 @@ impl PageServer {
 }
 
 impl PageServer {
-    pub fn tenant_specific_overrides(&self) -> pageserver_api::models::TenantConfig {
+    pub fn tenant_specific_overrides(&self) -> pageserver_api::models::BranchConfig {
         self.tenant_conf.load().tenant_conf.clone()
     }
 
-    pub fn effective_config(&self) -> pageserver_api::config::TenantConfigToml {
+    pub fn effective_config(&self) -> pageserver_api::config::BranchConfigToml {
         self.tenant_specific_overrides()
             .merge(self.conf.default_tenant_conf.clone())
     }
@@ -1192,7 +1178,7 @@ impl PageServer {
 
     pub fn get_lsn_lease_length_impl(
         conf: &'static PageServerConf,
-        tenant_conf: &pageserver_api::models::TenantConfig,
+        tenant_conf: &pageserver_api::models::BranchConfig,
     ) -> Duration {
         tenant_conf
             .lsn_lease_length
@@ -1201,7 +1187,7 @@ impl PageServer {
 
     fn get_pagestream_throttle_config(
         psconf: &'static PageServerConf,
-        overrides: &pageserver_api::models::TenantConfig,
+        overrides: &pageserver_api::models::BranchConfig,
     ) -> throttle::Config {
         overrides
             .timeline_get_throttle
@@ -1221,7 +1207,7 @@ impl PageServer {
     #[allow(clippy::too_many_arguments)]
     fn create_timeline_struct(
         &self,
-        new_timeline_id: TimelineId,
+        new_branch_id: BranchId,
         new_metadata: &TimelineMetadata,
         ancestor: Option<Arc<Timeline>>,
         resources: TimelineResources,
@@ -1236,10 +1222,10 @@ impl PageServer {
         // through lineage-aware PageStore reads, not an in-process link.
         if let Some(ancestor) = ancestor.as_ref() {
             anyhow::ensure!(
-                ancestor_id == Some(ancestor.timeline_id),
-                "Timeline's {new_timeline_id} ancestor {ancestor_id:?} does not match \
+                ancestor_id == Some(ancestor.branch_id),
+                "Timeline's {new_branch_id} ancestor {ancestor_id:?} does not match \
                  supplied ancestor {}",
-                ancestor.timeline_id,
+                ancestor.branch_id,
             );
         }
         let state = TimelineState::Loading;
@@ -1251,8 +1237,7 @@ impl PageServer {
             Arc::clone(&self.tenant_conf),
             new_metadata,
             ancestor,
-            new_timeline_id,
-            self.id,
+            new_branch_id,
             self.generation,
             self.walredo_mgr.clone(),
             resources,
@@ -1282,7 +1267,7 @@ impl PageServer {
         conf: &'static PageServerConf,
         attached_conf: AttachedTenantConf,
         walredo_mgr: Option<Arc<WalRedoManager>>,
-        id: TenantId,
+        id: BranchId,
         remote_storage: GenericRemoteStorage,
         basebackup_cache: Arc<BasebackupCache>,
         compute_page_store: Arc<crate::page_store::PageStore>,
@@ -1343,7 +1328,7 @@ impl PageServer {
     //   we do.
     async fn gc_iteration_internal(
         &self,
-        target_timeline_id: Option<TimelineId>,
+        target_timeline_id: Option<BranchId>,
         horizon: u64,
         pitr: Duration,
         cancel: &CancellationToken,
@@ -1425,7 +1410,7 @@ impl PageServer {
 
     async fn refresh_gc_info_internal(
         &self,
-        target_timeline_id: Option<TimelineId>,
+        target_timeline_id: Option<BranchId>,
         horizon: u64,
         pitr: Duration,
         cancel: &CancellationToken,
@@ -1436,7 +1421,7 @@ impl PageServer {
         let timelines = self
             .timeline()
             .filter(|tl| match target_timeline_id.as_ref() {
-                Some(target) => &tl.timeline_id == target,
+                Some(target) => &tl.branch_id == target,
                 None => true,
             })
             .into_iter()
@@ -1447,7 +1432,7 @@ impl PageServer {
             return Err(GcError::TimelineNotFound);
         }
 
-        let mut gc_cutoffs: Option<(TimelineId, GcCutoffs)> = None;
+        let mut gc_cutoffs: Option<(BranchId, GcCutoffs)> = None;
 
         // Ensures all timelines use the same start time when computing the time cutoff.
         let now_ts_for_pitr_calc = SystemTime::now();
@@ -1461,7 +1446,7 @@ impl PageServer {
             let cutoffs = timeline
                 .find_gc_cutoffs(now_ts_for_pitr_calc, cutoff, pitr, cancel, ctx)
                 .await?;
-            let old = gc_cutoffs.replace((timeline.timeline_id, cutoffs));
+            let old = gc_cutoffs.replace((timeline.branch_id, cutoffs));
             assert!(old.is_none());
         }
 
@@ -1479,7 +1464,7 @@ impl PageServer {
         for timeline in timelines {
             // We filtered the timeline list above
             if let Some(target_timeline_id) = target_timeline_id {
-                assert_eq!(target_timeline_id, timeline.timeline_id);
+                assert_eq!(target_timeline_id, timeline.branch_id);
             }
 
             {
@@ -1495,7 +1480,7 @@ impl PageServer {
                     .set(target.leases.len() as u64);
 
                 // Look up parent's PITR cutoff to update the child's knowledge of whether it is within parent's PITR
-                if let Some(ancestor_id) = timeline.get_ancestor_timeline_id() {
+                if let Some(ancestor_id) = timeline.get_ancestor_branch_id() {
                     if let Some((_, ancestor_gc_cutoffs)) =
                         gc_cutoffs.as_ref().filter(|(id, _)| *id == ancestor_id)
                     {
@@ -1527,7 +1512,7 @@ impl PageServer {
                 // - this timeline was created while we were finding cutoffs
                 // - lsn for timestamp search fails for this timeline repeatedly
                 if let Some((_, cutoffs)) =
-                    gc_cutoffs.as_ref().filter(|(id, _)| *id == timeline.timeline_id)
+                    gc_cutoffs.as_ref().filter(|(id, _)| *id == timeline.branch_id)
                 {
                     let original_cutoffs = target.cutoffs.clone();
                     // GC cutoffs should never go back
@@ -1555,11 +1540,11 @@ impl PageServer {
     /// request conflicts or is idempotent , based on `state`.
     async fn start_creating_timeline(
         self: &Arc<Self>,
-        new_timeline_id: TimelineId,
+        new_branch_id: BranchId,
         idempotency: CreateTimelineIdempotency,
     ) -> Result<StartCreatingTimelineResult, CreateTimelineError> {
         let allow_offloaded = false;
-        match self.create_timeline_create_guard(new_timeline_id, idempotency, allow_offloaded) {
+        match self.create_timeline_create_guard(new_branch_id, idempotency, allow_offloaded) {
             Ok(create_guard) => {
                 pausable_failpoint!("timeline-creation-after-uninit");
                 Ok(StartCreatingTimelineResult::CreateGuard(create_guard))
@@ -1600,12 +1585,12 @@ impl PageServer {
 
     async fn upload_initdb(
         &self,
-        timelines_path: &Utf8PathBuf,
+        branch_dir: &Utf8PathBuf,
         pgdata_path: &Utf8PathBuf,
-        timeline_id: &TimelineId,
+        branch_id: &BranchId,
     ) -> anyhow::Result<()> {
-        let temp_path = timelines_path.join(format!(
-            "{INITDB_PATH}.upload-{timeline_id}.{TEMP_FILE_SUFFIX}"
+        let temp_path = branch_dir.join(format!(
+            "{INITDB_PATH}.upload-{branch_id}.{TEMP_FILE_SUFFIX}"
         ));
 
         scopeguard::defer! {
@@ -1628,8 +1613,7 @@ impl PageServer {
             || async {
                 initdb_storage::upload_initdb_dir(
                     &self.remote_storage,
-                    &self.id,
-                    timeline_id,
+                    branch_id,
                     pgdata_zstd.try_clone().await?,
                     tar_zst_size,
                     &self.cancel,
@@ -1651,14 +1635,14 @@ impl PageServer {
     /// - after initialization completes, tar up the temp dir and upload it to S3.
     async fn bootstrap_timeline(
         self: &Arc<Self>,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         pg_version: PgMajorVersion,
-        load_existing_initdb: Option<TimelineId>,
+        load_existing_initdb: Option<BranchId>,
         ctx: &RequestContext,
     ) -> Result<CreateTimelineResult, CreateTimelineError> {
         let timeline_create_guard = match self
             .start_creating_timeline(
-                timeline_id,
+                branch_id,
                 CreateTimelineIdempotency::Bootstrap { pg_version },
             )
             .await?
@@ -1669,12 +1653,12 @@ impl PageServer {
             }
         };
 
-        // create a `tenant/{tenant_id}/timelines/basebackup-{timeline_id}.{TEMP_FILE_SUFFIX}/`
+        // create a `branches/{branch_id}/basebackup-{branch_id}.{TEMP_FILE_SUFFIX}/`
         // temporary directory for basebackup files for the given timeline.
 
-        let timelines_path = self.conf.timelines_path(&self.id);
+        let branch_dir = self.conf.branch_path(&self.id);
         let pgdata_path = path_with_suffix_extension(
-            timelines_path.join(format!("basebackup-{timeline_id}")),
+            branch_dir.join(format!("basebackup-{branch_id}")),
             TEMP_FILE_SUFFIX,
         );
 
@@ -1697,24 +1681,14 @@ impl PageServer {
                 tracing::info!("removed temporary initdb directory '{pgdata_path_deferred}'");
             }
         }
-        if let Some(existing_initdb_timeline_id) = load_existing_initdb {
-            if existing_initdb_timeline_id != timeline_id {
-                let source_path =
-                    &remote_initdb_archive_path(&self.id, &existing_initdb_timeline_id);
-                let dest_path = &remote_initdb_archive_path(&self.id, &timeline_id);
-
-                // if this fails, it will get retried by retried control plane requests
-                self.remote_storage
-                    .copy_object(source_path, dest_path, &self.cancel)
-                    .await
-                    .context("copy initdb tar")?;
-            }
-            let timeline_path = self.conf.timelines_path(&self.id);
+        if let Some(_existing_initdb_branch_id) = load_existing_initdb {
+            // Single-branch pageserver: the existing initdb tar belongs to
+            // this very branch, so there is no cross-branch copy to do.
+            let branch_path = self.conf.branch_path(&self.id);
             let (initdb_tar_zst_path, initdb_tar_zst) = initdb_storage::download_initdb_tar_zst(
-                &timeline_path,
+                &branch_path,
                 &self.remote_storage,
                 &self.id,
-                &existing_initdb_timeline_id,
                 &self.cancel,
             )
             .await
@@ -1737,7 +1711,7 @@ impl PageServer {
                 .context("run initdb")?;
 
             // Upload the created data dir to S3
-            self.upload_initdb(&timelines_path, &pgdata_path, &timeline_id)
+            self.upload_initdb(&branch_dir, &pgdata_path, &branch_id)
                 .await?;
         }
         let pgdata_lsn = import_datadir::get_lsn_from_controlfile(&pgdata_path)?.align();
@@ -1757,7 +1731,7 @@ impl PageServer {
         );
         let (mut raw_timeline, timeline_ctx) = self
             .prepare_new_timeline(
-                timeline_id,
+                branch_id,
                 &new_metadata,
                 timeline_create_guard,
                 pgdata_lsn,
@@ -1768,7 +1742,7 @@ impl PageServer {
             )
             .await?;
 
-        let tenant_id = raw_timeline.owning_tenant.id;
+        let branch_id = raw_timeline.owning_tenant.id;
         raw_timeline
             .write(|unfinished_timeline| async move {
                 import_datadir::import_timeline_from_postgres_datadir(
@@ -1780,7 +1754,7 @@ impl PageServer {
                 .await
                 .with_context(|| {
                     format!(
-                        "Failed to import pgdatadir for timeline {tenant_id}/{timeline_id}"
+                        "Failed to import pgdatadir for timeline {branch_id}"
                     )
                 })?;
 
@@ -1803,7 +1777,7 @@ impl PageServer {
     }
 
     /// Builds required resources for a new timeline.
-    pub(crate) fn build_timeline_resources(&self, _timeline_id: TimelineId) -> TimelineResources {
+    pub(crate) fn build_timeline_resources(&self, _timeline_id: BranchId) -> TimelineResources {
         TimelineResources {
             pagestream_throttle: self.pagestream_throttle.clone(),
             pagestream_throttle_metrics: self.pagestream_throttle_metrics.clone(),
@@ -1822,7 +1796,7 @@ impl PageServer {
     #[allow(clippy::too_many_arguments)]
     async fn prepare_new_timeline<'a>(
         &'a self,
-        new_timeline_id: TimelineId,
+        new_branch_id: BranchId,
         new_metadata: &TimelineMetadata,
         create_guard: TimelineCreateGuard,
         start_lsn: Lsn,
@@ -1831,14 +1805,14 @@ impl PageServer {
         rel_size_migrated_at: Option<Lsn>,
         ctx: &RequestContext,
     ) -> anyhow::Result<(UninitializedTimeline<'a>, RequestContext)> {
-        let tenant_id = self.id;
+        let branch_id = self.id;
 
-        let resources = self.build_timeline_resources(new_timeline_id);
+        let resources = self.build_timeline_resources(new_branch_id);
         let _ = (new_metadata, &rel_size_v2_status, rel_size_migrated_at);
 
         let (timeline_struct, timeline_ctx) = self
             .create_timeline_struct(
-                new_timeline_id,
+                new_branch_id,
                 new_metadata,
                 ancestor,
                 resources,
@@ -1856,20 +1830,20 @@ impl PageServer {
             .await
         {
             error!(
-                "Failed to create initial files for timeline {tenant_id}/{new_timeline_id}, cleaning up: {e:?}"
+                "Failed to create initial files for timeline {branch_id}/{new_branch_id}, cleaning up: {e:?}"
             );
             cleanup_timeline_directory(create_guard);
             return Err(e);
         }
 
         debug!(
-            "Successfully created initial files for timeline {tenant_id}/{new_timeline_id}"
+            "Successfully created initial files for timeline {branch_id}/{new_branch_id}"
         );
 
         Ok((
             UninitializedTimeline::new(
                 self,
-                new_timeline_id,
+                new_branch_id,
                 Some((timeline_struct, create_guard)),
             ),
             timeline_ctx,
@@ -1877,7 +1851,13 @@ impl PageServer {
     }
 
     async fn create_timeline_files(&self, timeline_path: &Utf8Path) -> anyhow::Result<()> {
-        crashsafe::create_dir(timeline_path).context("Failed to create timeline directory")?;
+        // Flat branch model: the branch dir is the pageserver's working/
+        // cache dir, already created at attach (see mgr.rs). It is no longer
+        // a fresh per-timeline subdir, so tolerate its presence instead of
+        // failing on it.
+        if !timeline_path.exists() {
+            crashsafe::create_dir(timeline_path).context("Failed to create timeline directory")?;
+        }
 
         fail::fail_point!("after-timeline-dir-creation", |_| {
             anyhow::bail!("failpoint after-timeline-dir-creation");
@@ -1893,35 +1873,28 @@ impl PageServer {
     /// offloaded timelines or not.
     fn create_timeline_create_guard(
         self: &Arc<Self>,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         idempotency: CreateTimelineIdempotency,
         allow_offloaded: bool,
     ) -> Result<TimelineCreateGuard, TimelineExclusionError> {
-        let tenant_id = self.id;
-
-        let timeline_path = self.conf.timeline_path(&tenant_id, &timeline_id);
+        let timeline_path = self.conf.branch_path(&branch_id);
 
         let create_guard = TimelineCreateGuard::new(
             self,
-            timeline_id,
+            branch_id,
             timeline_path.clone(),
             idempotency,
             allow_offloaded,
         )?;
 
-        // At this stage, we have got exclusive access to in-memory state for this timeline ID
+        // At this stage, we have got exclusive access to in-memory state for this branch
         // for creation.
-        // A timeline directory should never exist on disk already:
-        // - a previous failed creation would have cleaned up after itself
-        // - a pageserver restart would clean up timeline directories that don't have valid remote state
         //
-        // Therefore it is an unexpected internal error to encounter a timeline directory already existing here,
-        // this error may indicate a bug in cleanup on failed creations.
-        if timeline_path.exists() {
-            return Err(TimelineExclusionError::Other(anyhow::anyhow!(
-                "Timeline directory already exists! This is a bug."
-            )));
-        }
+        // In the flat branch model the on-disk branch dir is the pageserver's
+        // working/cache dir, created once at attach (see mgr.rs) and expected
+        // to already exist here — so its presence is NOT a bug (unlike the old
+        // per-timeline subdir, which had to be absent). In-memory exclusivity is
+        // still enforced by `TimelineCreateGuard::new` above.
 
         Ok(create_guard)
     }

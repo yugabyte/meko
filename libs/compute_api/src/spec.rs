@@ -12,7 +12,7 @@ use regex::Regex;
 use remote_storage::RemotePath;
 use serde::{Deserialize, Serialize};
 use url::Url;
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
 use crate::responses::TlsConfig;
@@ -93,18 +93,21 @@ pub struct ComputeSpec {
 
     // Information needed to connect to the storage layer.
     //
-    // `tenant_id`, `timeline_id` and `pageserver_connstring` are always needed.
+    // `storage_branch_id` and `pageserver_connstring` are always needed.
     //
     // Depending on `mode`, this can be a primary read-write node, a read-only
     // replica, or a read-only node pinned at an older LSN.
     // `safekeeper_connstrings` must be set for a primary.
     //
     // For backwards compatibility, the control plane may leave out all of
-    // these, and instead set the "yb_amp.tenant_id", "yb_amp.timeline_id",
-    // etc. GUCs in cluster.settings. TODO: Once the control plane has been
-    // updated to fill these fields, we can make these non optional.
-    pub tenant_id: Option<TenantId>,
-    pub timeline_id: Option<TimelineId>,
+    // these, and instead set the "yb_amp.branch_id" etc. GUCs in
+    // cluster.settings. TODO: Once the control plane has been updated to fill
+    // these fields, we can make these non optional.
+    //
+    // Note: this is the storage-layer branch identifier (the 128-bit id,
+    // formerly `timeline_id`), distinct from the product/control-plane
+    // `branch_id: Option<String>` field below.
+    pub storage_branch_id: Option<BranchId>,
 
     /// Pageserver information can be passed in three different ways:
     /// 1. Here in `pageserver_connection_info`

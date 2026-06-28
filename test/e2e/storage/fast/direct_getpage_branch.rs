@@ -23,7 +23,6 @@ const M_AFTER: u32 = 30;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
-    let tid = c.tid();
     // Distinct from branch_ancestor's +158/+168 compute lanes.
     let br_port = c.compute_port() + 178;
 
@@ -52,10 +51,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     )
     .context("parse branch lsn")?;
 
-    step("branch dgp_br off main + provision its endpoint (attaches the branch timeline)");
-    c.yb(&["timeline", "branch", "--tenant-id", tid, "--branch-name", "dgp_br"])?;
+    step("branch dgp_br off main + provision its endpoint (attaches the branch)");
+    c.yb(&["branch", "create", "--branch-name", "dgp_br", "--ancestor-branch-name", "main"])?;
     c.yb(&[
-        "endpoint", "create", "ep_dgp_br", "--tenant-id", tid, "--branch-name", "dgp_br",
+        "endpoint", "create", "ep_dgp_br", "--branch-name", "dgp_br",
         "--pg-version", "17", "--pg-port", &br_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_dgp_br"])?;
@@ -76,15 +75,15 @@ async fn run_branch_checks(
     relnode: u32,
     branch_lsn: Lsn,
 ) -> anyhow::Result<()> {
-    // The branch compute knows its own timeline id (it sends it to the PS).
+    // The branch compute knows its own branch id (it sends it to the PS).
     let branch = db::compute_conn(br_port);
-    let branch_tl = db::query_text(&branch, "SHOW yb_amp.timeline_id")
+    let branch_id = db::query_text(&branch, "SHOW yb_amp.branch_id")
         .await
-        .context("read branch timeline id from the branch endpoint")?;
-    let branch_tl = branch_tl.trim().to_string();
+        .context("read branch id from the branch endpoint")?;
+    let branch_id = branch_id.trim().to_string();
     ensure!(
-        branch_tl.len() == 32,
-        "unexpected branch timeline id {branch_tl:?}"
+        branch_id.len() == 32,
+        "unexpected branch id {branch_id:?}"
     );
     // This cluster runs one pageserver per endpoint, so the branch timeline
     // is served by the BRANCH endpoint's own PS — address it via the
@@ -104,7 +103,7 @@ async fn run_branch_checks(
     let rel = page_api::heap_rel(dbnode, relnode);
 
     step("GetPage@branch-point on the BRANCH timeline sees only the ancestor's rows");
-    let branch_client = page_api::client_at_connstring(c, &branch_tl, &branch_connstr)?;
+    let branch_client = page_api::client_at_connstring(c, &branch_id, &branch_connstr)?;
     // Provisioning a branch endpoint can re-attach the tenant; a fresh gRPC
     // client may briefly see "not found" until the attach settles. Retry.
     let mut bpage = None;

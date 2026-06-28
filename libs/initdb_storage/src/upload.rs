@@ -7,7 +7,7 @@ use remote_storage::GenericRemoteStorage;
 use tokio::fs::File;
 use tokio::io::AsyncSeekExt;
 use tokio_util::sync::CancellationToken;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 
 use crate::{BUFFER_SIZE, remote_initdb_archive_path};
 
@@ -16,8 +16,7 @@ use crate::{BUFFER_SIZE, remote_initdb_archive_path};
 /// `download_initdb_tar_zst` instead of re-running `initdb`.
 pub async fn upload_initdb_dir(
     storage: &GenericRemoteStorage,
-    tenant_id: &TenantId,
-    timeline_id: &TimelineId,
+    branch_id: &BranchId,
     mut initdb_tar_zst: File,
     size: u64,
     cancel: &CancellationToken,
@@ -29,9 +28,9 @@ pub async fn upload_initdb_dir(
 
     let file = tokio_util::io::ReaderStream::with_capacity(initdb_tar_zst, BUFFER_SIZE);
 
-    let remote_path = remote_initdb_archive_path(tenant_id, timeline_id);
+    let remote_path = remote_initdb_archive_path(branch_id);
     storage
         .upload_storage_object(file, size as usize, &remote_path, cancel)
         .await
-        .with_context(|| format!("upload initdb dir for '{tenant_id} / {timeline_id}'"))
+        .with_context(|| format!("upload initdb dir for '{branch_id}'"))
 }

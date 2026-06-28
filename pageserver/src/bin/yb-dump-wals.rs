@@ -13,19 +13,16 @@
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use ysql_client::{YbConnArgs, YsqlClient};
 
 #[derive(Parser)]
 #[command(about = "Dump safekeeper.wals (safekeeper WAL-in-YB chunks)")]
 struct Args {
-    /// Tenant id (32 hex chars).
+    /// Branch id (32 hex chars).
     #[arg(long)]
-    tenant: TenantId,
-    /// Timeline id (32 hex chars).
-    #[arg(long)]
-    timeline: TimelineId,
+    branch: BranchId,
 
     /// Single segment.
     #[arg(long)]
@@ -84,8 +81,8 @@ async fn main() -> Result<()> {
 
     // WHERE — interpolating only clap-parsed ids (hex) and integers.
     let mut w = format!(
-        "WHERE tenant_id='{}' AND timeline_id='{}'",
-        args.tenant, args.timeline
+        "WHERE branch_id='{}'",
+        args.branch
     );
     if let Some(s) = args.segno {
         w += &format!(" AND segno = {s}");

@@ -9,7 +9,7 @@ use once_cell::sync::Lazy;
 use pem::Pem;
 use tokio::runtime::Runtime;
 use utils::auth::SwappableJwtAuth;
-use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::logging::SecretString;
 
 mod auth;
@@ -84,13 +84,12 @@ pub struct SafeKeeperConf {
     /// table in addition to being written to the local-FS shadow. When
     /// `None`, WAL only lives on local FS (default).
     pub yb_storage_conn: Option<ysql_client::YbConnConfig>,
-    /// The single (tenant_id, timeline_id) this process serves for its
-    /// lifetime. Set from `--tenant-id`/`--timeline-id`; required in
-    /// YB-WAL mode (see [`Self::yb_ttid`]). `safekeeper.timeline_state`
-    /// is shared across the cluster, so this baked identity scopes the
-    /// startup load and gates connections to a single timeline.
-    pub tenant_id: Option<TenantId>,
-    pub timeline_id: Option<TimelineId>,
+    /// The single branch this process serves for its lifetime. Set from
+    /// `--branch-id`; required in YB-WAL mode (see [`Self::yb_branch_id`]).
+    /// `safekeeper.timeline_state` is shared across the cluster, so this
+    /// baked identity scopes the startup load and gates connections to a
+    /// single branch.
+    pub branch_id: Option<BranchId>,
     /// In-memory cache capacity (MiB) for recent WAL chunks in YB-WAL
     /// mode. See [`crate::wal_cache`]. Ignored when
     /// [`Self::yb_storage_conn`] is `None`. Set to 0 to disable the cache.
@@ -130,17 +129,15 @@ impl SafeKeeperConf {
         self.yb_storage_conn.is_some()
     }
 
-    /// The single timeline this process is dedicated to. Required in
+    /// The single branch this process is dedicated to. Required in
     /// YB-WAL mode — `safekeeper.timeline_state` is cluster-shared, so a
-    /// process with no baked identity couldn't tell its own timeline from
-    /// the others. Errors if `--tenant-id`/`--timeline-id` weren't given.
-    pub fn yb_ttid(&self) -> anyhow::Result<TenantTimelineId> {
-        match (self.tenant_id, self.timeline_id) {
-            (Some(tenant_id), Some(timeline_id)) => {
-                Ok(TenantTimelineId::new(tenant_id, timeline_id))
-            }
-            _ => anyhow::bail!(
-                "YB-WAL mode requires --tenant-id and --timeline-id (single-timeline-per-process)"
+    /// process with no baked identity couldn't tell its own branch from
+    /// the others. Errors if `--branch-id` wasn't given.
+    pub fn yb_branch_id(&self) -> anyhow::Result<BranchId> {
+        match self.branch_id {
+            Some(branch_id) => Ok(branch_id),
+            None => anyhow::bail!(
+                "YB-WAL mode requires --branch-id (single-branch-per-process)"
             ),
         }
     }
@@ -190,8 +187,7 @@ impl SafeKeeperConf {
             advertise_pg_addr: None,
             availability_zone: None,
             yb_storage_conn: None,
-            tenant_id: None,
-            timeline_id: None,
+            branch_id: None,
             wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
             my_id: NodeId(0),
             pg_auth: None,
@@ -313,24 +309,16 @@ mod yb_light_tests {
     }
 
     #[test]
-    fn yb_ttid_requires_both_ids() {
+    fn yb_branch_id_requires_id() {
         use super::SafeKeeperConf;
-        use utils::id::{TenantId, TenantTimelineId, TimelineId};
+        use utils::id::BranchId;
 
         let mut conf = SafeKeeperConf::dummy();
         // Missing identity: error.
-        assert!(conf.yb_ttid().is_err());
+        assert!(conf.yb_branch_id().is_err());
 
-        let tenant_id = TenantId::generate();
-        conf.tenant_id = Some(tenant_id);
-        // Only tenant set: still an error.
-        assert!(conf.yb_ttid().is_err());
-
-        let timeline_id = TimelineId::generate();
-        conf.timeline_id = Some(timeline_id);
-        assert_eq!(
-            conf.yb_ttid().unwrap(),
-            TenantTimelineId::new(tenant_id, timeline_id)
-        );
+        let branch_id = BranchId::generate();
+        conf.branch_id = Some(branch_id);
+        assert_eq!(conf.yb_branch_id().unwrap(), branch_id);
     }
 }

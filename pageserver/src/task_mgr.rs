@@ -47,7 +47,7 @@ use tokio::task_local;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use utils::env;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 
 use crate::metrics::set_tokio_runtime_setup;
 
@@ -375,10 +375,9 @@ struct PageServerTask {
     // To request task shutdown, just cancel this token.
     cancel: CancellationToken,
 
-    /// Tasks may optionally be launched for a particular tenant/timeline, enabling
-    /// later cancelling tasks for that tenant/timeline in [`shutdown_tasks`]
-    tenant_id: TenantId,
-    timeline_id: Option<TimelineId>,
+    /// Tasks may optionally be launched for a particular branch, enabling
+    /// later cancelling tasks for that branch in [`shutdown_tasks`]
+    branch_id: Option<BranchId>,
 
     mutable: Mutex<MutableTaskState>,
 }
@@ -389,8 +388,7 @@ struct PageServerTask {
 pub fn spawn<F>(
     runtime: &tokio::runtime::Handle,
     kind: TaskKind,
-    tenant_id: TenantId,
-    timeline_id: Option<TimelineId>,
+    branch_id: Option<BranchId>,
     name: &str,
     future: F,
 ) -> PageserverTaskId
@@ -404,8 +402,7 @@ where
         kind,
         name: name.to_string(),
         cancel: cancel.clone(),
-        tenant_id,
-        timeline_id,
+        branch_id,
         mutable: Mutex::new(MutableTaskState { join_handle: None }),
     });
 
@@ -443,8 +440,7 @@ async fn task_wrapper<F>(
     debug!("Starting task '{}'", task_name);
 
     // wrap the future so we log panics and errors
-    let tenant_id = task.tenant_id;
-    let timeline_id = task.timeline_id;
+    let branch_id = task.branch_id;
     let fut = async move {
         // We use AssertUnwindSafe here so that the payload function
         // doesn't need to be UnwindSafe. We don't do anything after the
@@ -456,14 +452,14 @@ async fn task_wrapper<F>(
             }
             Ok(Err(err)) => {
                 error!(
-                    "Task '{}' tenant_id: {:?}, timeline_id: {:?} exited with error: {:?}",
-                    task_name, tenant_id, timeline_id, err
+                    "Task '{}' branch_id: {:?} exited with error: {:?}",
+                    task_name, branch_id, err
                 );
             }
             Err(err) => {
                 error!(
-                    "Task '{}' tenant_id: {:?}, timeline_id: {:?} panicked: {:?}",
-                    task_name, tenant_id, timeline_id, err
+                    "Task '{}' branch_id: {:?} panicked: {:?}",
+                    task_name, branch_id, err
                 );
             }
         }
@@ -517,16 +513,15 @@ where
 /// The arguments are used to select the tasks to kill. Any None arguments are
 /// ignored. For example, to shut down all WalReceiver tasks:
 ///
-///   shutdown_tasks(Some(TaskKind::WalReceiver), None, None)
+///   shutdown_tasks(Some(TaskKind::WalReceiver), None)
 ///
-/// Or to shut down all tasks for given timeline:
+/// Or to shut down all tasks for given branch:
 ///
-///   shutdown_tasks(None, Some(tenant_id), Some(timeline_id))
+///   shutdown_tasks(None, Some(branch_id))
 ///
 pub async fn shutdown_tasks(
     kind: Option<TaskKind>,
-    tenant_id: Option<TenantId>,
-    timeline_id: Option<TimelineId>,
+    branch_id: Option<BranchId>,
 ) {
     let mut victim_tasks = Vec::new();
 
@@ -534,23 +529,21 @@ pub async fn shutdown_tasks(
         let tasks = TASKS.lock().unwrap();
         for task in tasks.values() {
             if (kind.is_none() || Some(task.kind) == kind)
-                && (tenant_id.is_none() || Some(task.tenant_id) == tenant_id)
-                && (timeline_id.is_none() || task.timeline_id == timeline_id)
+                && (branch_id.is_none() || task.branch_id == branch_id)
             {
                 task.cancel.cancel();
                 victim_tasks.push((
                     Arc::clone(task),
                     task.kind,
-                    task.tenant_id,
-                    task.timeline_id,
+                    task.branch_id,
                 ));
             }
         }
     }
 
-    let log_all = kind.is_none() && tenant_id.is_none() && timeline_id.is_none();
+    let log_all = kind.is_none() && branch_id.is_none();
 
-    for (task, task_kind, tenant_id, timeline_id) in victim_tasks {
+    for (task, task_kind, branch_id) in victim_tasks {
         let join_handle = {
             let mut task_mut = task.mutable.lock().unwrap();
             task_mut.join_handle.take()
@@ -558,7 +551,7 @@ pub async fn shutdown_tasks(
         if let Some(mut join_handle) = join_handle {
             if log_all {
                 // warn to catch these in tests; there shouldn't be any
-                warn!(name = task.name, tenant_id = ?tenant_id, timeline_id = ?timeline_id, kind = ?task_kind, "stopping left-over");
+                warn!(name = task.name, branch_id = ?branch_id, kind = ?task_kind, "stopping left-over");
             }
             const INITIAL_COMPLAIN_TIMEOUT: Duration = Duration::from_secs(1);
             const PERIODIC_COMPLAIN_TIMEOUT: Duration = Duration::from_secs(60);
@@ -668,14 +661,12 @@ pub fn request_global_shutdown() {
 /// Logs at error level with the diagnostic detail then delegates to
 /// [`request_global_shutdown`]. Idempotent.
 pub fn shutdown_for_stale_generation(
-    tenant: utils::id::TenantId,
-    timeline: utils::id::TimelineId,
+    branch_id: utils::id::BranchId,
     our_generation: utils::generation::Generation,
     live_generation: u32,
 ) {
     tracing::error!(
-        %tenant,
-        %timeline,
+        %branch_id,
         ?our_generation,
         live_generation,
         "stale generation detected during durability commit — shutting down pageserver"

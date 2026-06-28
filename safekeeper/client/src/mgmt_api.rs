@@ -10,7 +10,7 @@ use reqwest::{IntoUrl, Method, Response, StatusCode};
 use safekeeper_api::models::{
     self, SafekeeperStatus, SafekeeperUtilization, TimelineCreateRequest,
 };
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::logging::SecretString;
 
 #[derive(Debug, Clone)]
@@ -80,55 +80,35 @@ impl Client {
     }
 
     pub async fn create_timeline(&self, req: &TimelineCreateRequest) -> Result<reqwest::Response> {
-        let uri = format!("{}/v1/tenant/timeline", self.mgmt_api_endpoint);
+        let uri = format!("{}/v1/branch", self.mgmt_api_endpoint);
         let resp = self.post(&uri, req).await?;
         Ok(resp)
     }
 
     pub async fn delete_timeline(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<models::TimelineDeleteResult> {
-        let uri = format!(
-            "{}/v1/tenant/{}/timeline/{}",
-            self.mgmt_api_endpoint, tenant_id, timeline_id
-        );
+        let uri = format!("{}/v1/branch/{}", self.mgmt_api_endpoint, branch_id);
         let resp = self
             .request_maybe_body(Method::DELETE, &uri, None::<()>)
             .await?;
         resp.json().await.map_err(Error::ReceiveBody)
     }
 
-    pub async fn delete_tenant(&self, tenant_id: TenantId) -> Result<models::TenantDeleteResult> {
-        let uri = format!("{}/v1/tenant/{}", self.mgmt_api_endpoint, tenant_id);
-        let resp = self
-            .request_maybe_body(Method::DELETE, &uri, None::<()>)
-            .await?;
-        resp.json().await.map_err(Error::ReceiveBody)
-    }
-
-    pub async fn timeline_status(
-        &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-    ) -> Result<Response> {
-        let uri = format!(
-            "{}/v1/tenant/{}/timeline/{}",
-            self.mgmt_api_endpoint, tenant_id, timeline_id
-        );
+    pub async fn timeline_status(&self, branch_id: BranchId) -> Result<Response> {
+        let uri = format!("{}/v1/branch/{}", self.mgmt_api_endpoint, branch_id);
         self.get(&uri).await
     }
 
     pub async fn snapshot(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         stream_to: NodeId,
     ) -> Result<reqwest::Response> {
         let uri = format!(
-            "{}/v1/tenant/{}/timeline/{}/snapshot/{}",
-            self.mgmt_api_endpoint, tenant_id, timeline_id, stream_to.0
+            "{}/v1/branch/{}/snapshot/{}",
+            self.mgmt_api_endpoint, branch_id, stream_to.0
         );
         self.get(&uri).await
     }

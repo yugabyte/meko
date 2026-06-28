@@ -6,11 +6,11 @@ use anyhow::Context;
 use camino::Utf8PathBuf;
 use tracing::{error, info, info_span};
 use utils::fs_ext;
-use utils::id::TimelineId;
+use utils::id::BranchId;
 use utils::sync::gate::GateGuard;
 
 use super::Timeline;
-use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
+use crate::span::debug_assert_current_span_has_branch_id;
 use crate::page_server::{CreateTimelineError, CreateTimelineIdempotency, PageServer};
 
 /// A timeline with some of its files on disk, being initialized.
@@ -22,7 +22,7 @@ use crate::page_server::{CreateTimelineError, CreateTimelineIdempotency, PageSer
 #[must_use]
 pub struct UninitializedTimeline<'t> {
     pub(crate) owning_tenant: &'t PageServer,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     raw_timeline: Option<(Arc<Timeline>, TimelineCreateGuard)>,
     /// Whether we spawned the inner Timeline's tasks such that we must later shut it down
     /// if aborting the timeline creation
@@ -32,12 +32,12 @@ pub struct UninitializedTimeline<'t> {
 impl<'t> UninitializedTimeline<'t> {
     pub(crate) fn new(
         owning_tenant: &'t PageServer,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         raw_timeline: Option<(Arc<Timeline>, TimelineCreateGuard)>,
     ) -> Self {
         Self {
             owning_tenant,
-            timeline_id,
+            branch_id,
             raw_timeline,
             needs_shutdown: false,
         }
@@ -51,7 +51,7 @@ impl<'t> UninitializedTimeline<'t> {
         F: FnOnce(Arc<Timeline>) -> Fut,
         Fut: Future<Output = Result<(), CreateTimelineError>>,
     {
-        debug_assert_current_span_has_tenant_and_timeline_id();
+        debug_assert_current_span_has_branch_id();
 
         // Remember that we did I/O (spawned the flush loop), so that we can check we shut it down on drop
         self.needs_shutdown = true;
@@ -92,14 +92,13 @@ impl<'t> UninitializedTimeline<'t> {
     ///
     /// The caller is responsible for activating the timeline (function `.activate()`).
     pub(crate) async fn finish_creation(mut self) -> anyhow::Result<Arc<Timeline>> {
-        let timeline_id = self.timeline_id;
-        let tenant_id = self.owning_tenant.id;
+        let branch_id = self.branch_id;
 
         if self.raw_timeline.is_none() {
             self.abort().await;
 
             return Err(anyhow::anyhow!(
-                "No timeline for initialization found for {tenant_id}/{timeline_id}"
+                "No timeline for initialization found for {branch_id}"
             ));
         }
 
@@ -115,7 +114,7 @@ impl<'t> UninitializedTimeline<'t> {
             self.abort().await;
 
             return Err(anyhow::anyhow!(
-                "new timeline {tenant_id}/{timeline_id} has invalid consistent_lsn seed"
+                "new timeline {branch_id} has invalid consistent_lsn seed"
             ));
         }
 
@@ -165,7 +164,7 @@ impl<'t> UninitializedTimeline<'t> {
             // We do not call Self::abort here.  Because we don't cleanly shut down our Timeline, [`Self::drop`] should
             // skip trying to delete the timeline directory too.
             anyhow::bail!(
-                "Found freshly initialized timeline {tenant_id}/{timeline_id} in the tenant slot"
+                "Found freshly initialized timeline {branch_id} in the tenant slot"
             )
         }
 
@@ -180,8 +179,8 @@ impl<'t> UninitializedTimeline<'t> {
             .as_ref()
             .with_context(|| {
                 format!(
-                    "No raw timeline {}/{} found",
-                    self.owning_tenant.id, self.timeline_id
+                    "No raw timeline {} found",
+                    self.branch_id
                 )
             })?
             .0)
@@ -191,7 +190,7 @@ impl<'t> UninitializedTimeline<'t> {
 impl Drop for UninitializedTimeline<'_> {
     fn drop(&mut self) {
         if let Some((timeline, create_guard)) = self.raw_timeline.take() {
-            let _entered = info_span!("drop_uninitialized_timeline", tenant_id = %self.owning_tenant.id, timeline_id = %self.timeline_id).entered();
+            let _entered = info_span!("drop_uninitialized_timeline", branch_id = %self.branch_id).entered();
             if self.needs_shutdown && !timeline.gate.close_complete() {
                 // This should not happen: caller should call [`Self::abort`] on failures
                 tracing::warn!(
@@ -217,8 +216,8 @@ pub(crate) fn cleanup_timeline_directory(create_guard: TimelineCreateGuard) {
             error!("Failed to clean up uninitialized timeline directory {timeline_path:?}: {e:?}")
         }
     }
-    // Having cleaned up, we can release this TimelineId in `[PageServer::timelines_creating]` to allow other
-    // timeline creation attempts under this TimelineId to proceed
+    // Having cleaned up, we can release this BranchId in `[PageServer::timelines_creating]` to allow other
+    // timeline creation attempts under this BranchId to proceed
     drop(create_guard);
 }
 
@@ -228,7 +227,7 @@ pub(crate) fn cleanup_timeline_directory(create_guard: TimelineCreateGuard) {
 pub(crate) struct TimelineCreateGuard {
     pub(crate) _tenant_gate_guard: GateGuard,
     pub(crate) owning_tenant: Arc<PageServer>,
-    pub(crate) timeline_id: TimelineId,
+    pub(crate) branch_id: BranchId,
     pub(crate) timeline_path: Utf8PathBuf,
     pub(crate) idempotency: CreateTimelineIdempotency,
 }
@@ -254,7 +253,7 @@ pub(crate) enum TimelineExclusionError {
 impl TimelineCreateGuard {
     pub(crate) fn new(
         owning_tenant: &Arc<PageServer>,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         timeline_path: Utf8PathBuf,
         idempotency: CreateTimelineIdempotency,
         _allow_offloaded: bool,
@@ -264,28 +263,28 @@ impl TimelineCreateGuard {
             .enter()
             .map_err(|_| TimelineExclusionError::ShuttingDown)?;
 
-        let mut creating_timeline: std::sync::MutexGuard<'_, Option<TimelineId>> =
+        let mut creating_timeline: std::sync::MutexGuard<'_, Option<BranchId>> =
             owning_tenant.timelines_creating.lock().unwrap();
 
         if let Some(existing) = owning_tenant
             .timeline
             .get()
-            .filter(|tl| tl.timeline_id == timeline_id)
+            .filter(|tl| tl.branch_id == branch_id)
         {
             return Err(TimelineExclusionError::AlreadyExists {
                 existing: existing.clone(),
                 arg: idempotency,
             });
         }
-        if *creating_timeline == Some(timeline_id) {
+        if *creating_timeline == Some(branch_id) {
             return Err(TimelineExclusionError::AlreadyCreating);
         }
-        *creating_timeline = Some(timeline_id);
+        *creating_timeline = Some(branch_id);
         drop(creating_timeline);
         Ok(Self {
             _tenant_gate_guard,
             owning_tenant: Arc::clone(owning_tenant),
-            timeline_id,
+            branch_id,
             timeline_path,
             idempotency,
         })
@@ -295,7 +294,7 @@ impl TimelineCreateGuard {
 impl Drop for TimelineCreateGuard {
     fn drop(&mut self) {
         let mut creating = self.owning_tenant.timelines_creating.lock().unwrap();
-        if *creating == Some(self.timeline_id) {
+        if *creating == Some(self.branch_id) {
             *creating = None;
         }
     }

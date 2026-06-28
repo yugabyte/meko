@@ -35,12 +35,7 @@ pub static COMPUTE_ATTACHED: Lazy<IntGaugeVec> = Lazy::new(|| {
     register_int_gauge_vec!(
         "pg_cctl_attached",
         "Compute node attached status (1 if attached)",
-        &[
-            "pg_compute_id",
-            "pg_instance_id",
-            "tenant_id",
-            "timeline_id"
-        ]
+        &["pg_compute_id", "pg_instance_id", "branch_id"]
     )
     .expect("failed to define a metric")
 });

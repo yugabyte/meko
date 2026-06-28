@@ -9,12 +9,12 @@ use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint};
 
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 
 use crate::model::*;
 use crate::proto;
 
-/// A basic Pageserver gRPC client, for a single tenant shard. This API uses native Rust domain
+/// A basic Pageserver gRPC client, for a single branch. This API uses native Rust domain
 /// types from `model` rather than generated Protobuf types.
 pub struct Client {
     inner: proto::PageServiceClient<InterceptedService<Channel, AuthInterceptor>>,
@@ -24,8 +24,7 @@ impl Client {
     /// Connects to the given gRPC endpoint.
     pub async fn connect<E>(
         endpoint: E,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         auth_token: Option<String>,
         compression: Option<CompressionEncoding>,
     ) -> anyhow::Result<Self>
@@ -35,18 +34,17 @@ impl Client {
     {
         let endpoint: Endpoint = endpoint.try_into().context("invalid endpoint")?;
         let channel = endpoint.connect().await?;
-        Self::new(channel, tenant_id, timeline_id, auth_token, compression)
+        Self::new(channel, branch_id, auth_token, compression)
     }
 
     /// Creates a new client using the given gRPC channel.
     pub fn new(
         channel: Channel,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         auth_token: Option<String>,
         compression: Option<CompressionEncoding>,
     ) -> anyhow::Result<Self> {
-        let auth = AuthInterceptor::new(tenant_id, timeline_id, auth_token)?;
+        let auth = AuthInterceptor::new(branch_id, auth_token)?;
         let mut inner = proto::PageServiceClient::with_interceptor(channel, auth);
 
         if let Some(compression) = compression {
@@ -130,20 +128,14 @@ impl Client {
 /// Adds authentication metadata to gRPC requests.
 #[derive(Clone)]
 struct AuthInterceptor {
-    tenant_id: AsciiMetadataValue,
-    timeline_id: AsciiMetadataValue,
+    branch_id: AsciiMetadataValue,
     auth_header: Option<AsciiMetadataValue>, // including "Bearer " prefix
 }
 
 impl AuthInterceptor {
-    fn new(
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-        auth_token: Option<String>,
-    ) -> anyhow::Result<Self> {
+    fn new(branch_id: BranchId, auth_token: Option<String>) -> anyhow::Result<Self> {
         Ok(Self {
-            tenant_id: tenant_id.to_string().try_into()?,
-            timeline_id: timeline_id.to_string().try_into()?,
+            branch_id: branch_id.to_string().try_into()?,
             auth_header: auth_token
                 .map(|token| format!("Bearer {token}").try_into())
                 .transpose()?,
@@ -154,8 +146,7 @@ impl AuthInterceptor {
 impl Interceptor for AuthInterceptor {
     fn call(&mut self, mut req: tonic::Request<()>) -> tonic::Result<tonic::Request<()>> {
         let metadata = req.metadata_mut();
-        metadata.insert("neon-tenant-id", self.tenant_id.clone());
-        metadata.insert("neon-timeline-id", self.timeline_id.clone());
+        metadata.insert("yb-light-branch-id", self.branch_id.clone());
         if let Some(ref auth_header) = self.auth_header {
             metadata.insert("authorization", auth_header.clone());
         }

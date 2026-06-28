@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use utils::id::TenantTimelineId;
+use utils::id::BranchId;
 
 use crate::timeline::Timeline;
 
@@ -12,7 +12,7 @@ use crate::timeline::Timeline;
 ///
 /// Usually used for keeping subset of timelines. For example active timelines that require broker push.
 pub struct TimelinesSet {
-    timelines: std::sync::Mutex<HashMap<TenantTimelineId, Arc<Timeline>>>,
+    timelines: std::sync::Mutex<HashMap<BranchId, Arc<Timeline>>>,
 }
 
 impl Default for TimelinesSet {
@@ -25,11 +25,11 @@ impl Default for TimelinesSet {
 
 impl TimelinesSet {
     pub fn insert(&self, tli: Arc<Timeline>) {
-        self.timelines.lock().unwrap().insert(tli.ttid, tli);
+        self.timelines.lock().unwrap().insert(tli.branch_id, tli);
     }
 
-    pub fn delete(&self, ttid: &TenantTimelineId) {
-        self.timelines.lock().unwrap().remove(ttid);
+    pub fn delete(&self, branch_id: &BranchId) {
+        self.timelines.lock().unwrap().remove(branch_id);
     }
 
     /// If present is true, adds timeline to the set, otherwise removes it.
@@ -37,12 +37,12 @@ impl TimelinesSet {
         if present {
             self.insert(tli);
         } else {
-            self.delete(&tli.ttid);
+            self.delete(&tli.branch_id);
         }
     }
 
-    pub fn is_present(&self, ttid: &TenantTimelineId) -> bool {
-        self.timelines.lock().unwrap().contains_key(ttid)
+    pub fn is_present(&self, branch_id: &BranchId) -> bool {
+        self.timelines.lock().unwrap().contains_key(branch_id)
     }
 
     /// Returns all timelines in the set.
@@ -52,7 +52,7 @@ impl TimelinesSet {
 
     /// Returns a timeline guard for easy presence control.
     pub fn guard(self: &Arc<Self>, tli: Arc<Timeline>) -> TimelineSetGuard {
-        let is_present = self.is_present(&tli.ttid);
+        let is_present = self.is_present(&tli.branch_id);
         TimelineSetGuard {
             timelines_set: self.clone(),
             tli,
@@ -91,6 +91,6 @@ impl TimelineSetGuard {
 impl Drop for TimelineSetGuard {
     fn drop(&mut self) {
         // remove timeline from the map on drop
-        self.timelines_set.delete(&self.tli.ttid);
+        self.timelines_set.delete(&self.tli.branch_id);
     }
 }

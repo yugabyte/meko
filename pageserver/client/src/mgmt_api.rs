@@ -9,7 +9,7 @@ use pageserver_api::models::*;
 use postgres_versioninfo::PgMajorVersion;
 pub use reqwest::Body as ReqwestBody;
 use reqwest::{IntoUrl, Method, StatusCode, Url};
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::BlockUnblock;
@@ -81,8 +81,8 @@ impl Client {
         }
     }
 
-    pub async fn list_tenants(&self) -> Result<Vec<pageserver_api::models::TenantInfo>> {
-        let uri = format!("{}/v1/tenant", self.mgmt_api_endpoint);
+    pub async fn list_branches(&self) -> Result<Vec<pageserver_api::models::BranchInfo>> {
+        let uri = format!("{}/v1/branch", self.mgmt_api_endpoint);
         let resp = self.get(&uri).await?;
         resp.json().await.map_err(Error::ReceiveBody)
     }
@@ -104,27 +104,12 @@ impl Client {
         req.send().await.map_err(Error::ReceiveBody)
     }
 
-    pub async fn tenant_details(
+    pub async fn branch_details(
         &self,
-        tenant_id: TenantId,
-    ) -> Result<pageserver_api::models::TenantDetails> {
-        let uri = format!("{}/v1/tenant/{tenant_id}", self.mgmt_api_endpoint);
+        branch_id: BranchId,
+    ) -> Result<pageserver_api::models::BranchDetails> {
+        let uri = format!("{}/v1/branch/{branch_id}", self.mgmt_api_endpoint);
         self.get(uri)
-            .await?
-            .json()
-            .await
-            .map_err(Error::ReceiveBody)
-    }
-
-    pub async fn list_timelines(
-        &self,
-        tenant_id: TenantId,
-    ) -> Result<Vec<pageserver_api::models::TimelineInfo>> {
-        let uri = format!(
-            "{}/v1/tenant/{tenant_id}/timeline",
-            self.mgmt_api_endpoint
-        );
-        self.get(&uri)
             .await?
             .json()
             .await
@@ -133,14 +118,10 @@ impl Client {
 
     pub async fn timeline_info(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         force_await_logical_size: ForceAwaitLogicalSize,
     ) -> Result<pageserver_api::models::TimelineInfo> {
-        let uri = format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}",
-            self.mgmt_api_endpoint
-        );
+        let uri = format!("{}/v1/branch/{branch_id}", self.mgmt_api_endpoint);
 
         let uri = match force_await_logical_size {
             ForceAwaitLogicalSize::Yes => format!("{}?force-await-logical-size={}", uri, true),
@@ -156,11 +137,10 @@ impl Client {
 
     pub async fn keyspace(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<pageserver_api::models::partitioning::Partitioning> {
         let uri = format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}/keyspace",
+            "{}/v1/branch/{branch_id}/keyspace",
             self.mgmt_api_endpoint
         );
         self.get(&uri)
@@ -217,11 +197,11 @@ impl Client {
         Ok(())
     }
 
-    /// The tenant deletion API can return 202 if deletion is incomplete, or
+    /// The branch deletion API can return 202 if deletion is incomplete, or
     /// 404 if it is complete.  Callers are responsible for checking the status
     /// code and retrying.  Error codes other than 404 will return Err().
-    pub async fn tenant_delete(&self, tenant_id: TenantId) -> Result<StatusCode> {
-        let uri = format!("{}/v1/tenant/{tenant_id}", self.mgmt_api_endpoint);
+    pub async fn branch_delete(&self, branch_id: BranchId) -> Result<StatusCode> {
+        let uri = format!("{}/v1/branch/{branch_id}", self.mgmt_api_endpoint);
 
         match self.request(Method::DELETE, &uri, ()).await {
             Err(Error::ApiError(status_code, msg)) => {
@@ -236,31 +216,30 @@ impl Client {
         }
     }
 
-    pub async fn tenant_time_travel_remote_storage(
+    pub async fn branch_time_travel_remote_storage(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         timestamp: &str,
         done_if_after: &str,
     ) -> Result<()> {
         let uri = format!(
-            "{}/v1/tenant/{tenant_id}/time_travel_remote_storage?travel_to={timestamp}&done_if_after={done_if_after}",
+            "{}/v1/branch/{branch_id}/time_travel_remote_storage?travel_to={timestamp}&done_if_after={done_if_after}",
             self.mgmt_api_endpoint
         );
         self.request(Method::PUT, &uri, ()).await?;
         Ok(())
     }
 
-    pub async fn tenant_timeline_compact(
+    pub async fn branch_compact(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         force_image_layer_creation: bool,
         must_force_image_layer_creation: bool,
         scheduled: bool,
         wait_until_done: bool,
     ) -> Result<()> {
         let mut path = reqwest::Url::parse(&format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}/compact",
+            "{}/v1/branch/{branch_id}/compact",
             self.mgmt_api_endpoint
         ))
         .expect("Cannot build URL");
@@ -288,13 +267,12 @@ impl Client {
         Ok(())
     }
 
-    pub async fn tenant_timeline_describe(
+    pub async fn branch_describe(
         &self,
-        tenant_id: &TenantId,
-        timeline_id: &TimelineId,
+        branch_id: &BranchId,
     ) -> Result<TimelineInfo> {
         let mut path = reqwest::Url::parse(&format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}",
+            "{}/v1/branch/{branch_id}",
             self.mgmt_api_endpoint
         ))
         .expect("Cannot build URL");
@@ -306,12 +284,12 @@ impl Client {
         Ok(body)
     }
 
-    pub async fn tenant_scan_remote_storage(
+    pub async fn branch_scan_remote_storage(
         &self,
-        tenant_id: TenantId,
-    ) -> Result<TenantScanRemoteStorageResponse> {
+        branch_id: BranchId,
+    ) -> Result<BranchScanRemoteStorageResponse> {
         let uri = format!(
-            "{}/v1/tenant/{tenant_id}/scan_remote_storage",
+            "{}/v1/branch/{branch_id}/scan_remote_storage",
             self.mgmt_api_endpoint
         );
         let response = self.request(Method::GET, &uri, ()).await?;
@@ -319,26 +297,26 @@ impl Client {
         Ok(body)
     }
 
-    pub async fn set_tenant_config(&self, req: &TenantConfigRequest) -> Result<()> {
-        let uri = format!("{}/v1/tenant/config", self.mgmt_api_endpoint);
+    pub async fn set_branch_config(&self, req: &BranchConfigRequest) -> Result<()> {
+        let uri = format!("{}/v1/branch/config", self.mgmt_api_endpoint);
         self.request(Method::PUT, &uri, req).await?;
         Ok(())
     }
 
-    pub async fn patch_tenant_config(&self, req: &TenantConfigPatchRequest) -> Result<()> {
-        let uri = format!("{}/v1/tenant/config", self.mgmt_api_endpoint);
+    pub async fn patch_branch_config(&self, req: &BranchConfigPatchRequest) -> Result<()> {
+        let uri = format!("{}/v1/branch/config", self.mgmt_api_endpoint);
         self.request(Method::PATCH, &uri, req).await?;
         Ok(())
     }
 
-    pub async fn tenant_secondary_download(
+    pub async fn branch_secondary_download(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         wait: Option<std::time::Duration>,
     ) -> Result<(StatusCode, SecondaryProgress)> {
         let mut path = reqwest::Url::parse(&format!(
-            "{}/v1/tenant/{}/secondary/download",
-            self.mgmt_api_endpoint, tenant_id
+            "{}/v1/branch/{}/secondary/download",
+            self.mgmt_api_endpoint, branch_id
         ))
         .expect("Cannot build URL");
 
@@ -353,13 +331,13 @@ impl Client {
         Ok((status, progress))
     }
 
-    pub async fn tenant_secondary_status(
+    pub async fn branch_secondary_status(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
     ) -> Result<SecondaryProgress> {
         let path = reqwest::Url::parse(&format!(
-            "{}/v1/tenant/{}/secondary/status",
-            self.mgmt_api_endpoint, tenant_id
+            "{}/v1/branch/{}/secondary/status",
+            self.mgmt_api_endpoint, branch_id
         ))
         .expect("Cannot build URL");
 
@@ -370,10 +348,10 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn tenant_heatmap_upload(&self, tenant_id: TenantId) -> Result<()> {
+    pub async fn branch_heatmap_upload(&self, branch_id: BranchId) -> Result<()> {
         let path = reqwest::Url::parse(&format!(
-            "{}/v1/tenant/{}/heatmap_upload",
-            self.mgmt_api_endpoint, tenant_id
+            "{}/v1/branch/{}/heatmap_upload",
+            self.mgmt_api_endpoint, branch_id
         ))
         .expect("Cannot build URL");
 
@@ -383,16 +361,16 @@ impl Client {
 
     pub async fn location_config(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         config: LocationConfig,
         flush_ms: Option<std::time::Duration>,
         lazy: bool,
     ) -> Result<()> {
-        let req_body = TenantLocationConfigRequest { config };
+        let req_body = BranchLocationConfigRequest { config };
 
         let mut path = reqwest::Url::parse(&format!(
-            "{}/v1/tenant/{}/location_config",
-            self.mgmt_api_endpoint, tenant_id
+            "{}/v1/branch/{}/location_config",
+            self.mgmt_api_endpoint, branch_id
         ))
         // Should always work: mgmt_api_endpoint is configuration, not user input.
         .expect("Cannot build URL");
@@ -421,10 +399,10 @@ impl Client {
 
     pub async fn get_location_config(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
     ) -> Result<Option<LocationConfig>> {
         let path = format!(
-            "{}/v1/location_config/{tenant_id}",
+            "{}/v1/location_config/{branch_id}",
             self.mgmt_api_endpoint
         );
         self.request(Method::GET, &path, ())
@@ -434,15 +412,11 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn timeline_create(
+    pub async fn branch_create(
         &self,
-        tenant_id: TenantId,
         req: &TimelineCreateRequest,
     ) -> Result<TimelineInfo> {
-        let uri = format!(
-            "{}/v1/tenant/{}/timeline",
-            self.mgmt_api_endpoint, tenant_id
-        );
+        let uri = format!("{}/v1/branch", self.mgmt_api_endpoint);
         self.request(Method::POST, &uri, req)
             .await?
             .json()
@@ -450,39 +424,12 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    /// The timeline deletion API can return 201 if deletion is incomplete, or
-    /// 403 if it is complete.  Callers are responsible for checking the status
-    /// code and retrying.  Error codes other than 403 will return Err().
-    pub async fn timeline_delete(
+    pub async fn branch_detail(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-    ) -> Result<StatusCode> {
-        let uri = format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}",
-            self.mgmt_api_endpoint
-        );
-
-        match self.request(Method::DELETE, &uri, ()).await {
-            Err(Error::ApiError(status_code, msg)) => {
-                if status_code == StatusCode::NOT_FOUND {
-                    Ok(StatusCode::NOT_FOUND)
-                } else {
-                    Err(Error::ApiError(status_code, msg))
-                }
-            }
-            Err(e) => Err(e),
-            Ok(response) => Ok(response.status()),
-        }
-    }
-
-    pub async fn timeline_detail(
-        &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<TimelineInfo> {
         let uri = format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}",
+            "{}/v1/branch/{branch_id}",
             self.mgmt_api_endpoint
         );
 
@@ -493,14 +440,13 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn timeline_archival_config(
+    pub async fn branch_archival_config(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         req: &TimelineArchivalConfigRequest,
     ) -> Result<()> {
         let uri = format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}/archival_config",
+            "{}/v1/branch/{branch_id}/archival_config",
             self.mgmt_api_endpoint
         );
 
@@ -511,14 +457,13 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn timeline_detach_ancestor(
+    pub async fn branch_detach_ancestor(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         behavior: Option<DetachBehavior>,
     ) -> Result<AncestorDetached> {
         let uri = format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}/detach_ancestor",
+            "{}/v1/branch/{branch_id}/detach_ancestor",
             self.mgmt_api_endpoint
         );
         let mut uri = Url::parse(&uri)
@@ -536,33 +481,31 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn timeline_block_unblock_gc(
+    pub async fn branch_block_unblock_gc(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         dir: BlockUnblock,
     ) -> Result<()> {
         let uri = format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}/{dir}_gc",
+            "{}/v1/branch/{branch_id}/{dir}_gc",
             self.mgmt_api_endpoint,
         );
 
         self.request(Method::POST, &uri, ()).await.map(|_| ())
     }
 
-    /// Flush the timeline's pages to YB, advancing its durable
+    /// Flush the branch's pages to YB, advancing its durable
     /// `consistent_lsn`. With `wait_lsn`, the pageserver first waits for WAL
     /// ingest to reach that LSN so the post-flush `consistent_lsn` covers it —
     /// used to flush an ancestor at branch time so the branch's durability
     /// barrier clears without waiting for the periodic flush.
-    pub async fn timeline_flush(
+    pub async fn branch_flush(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         wait_lsn: Option<Lsn>,
     ) -> Result<()> {
         let mut url = reqwest::Url::parse(&format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}/flush",
+            "{}/v1/branch/{branch_id}/flush",
             self.mgmt_api_endpoint,
         ))
         .expect("Cannot build URL");
@@ -572,16 +515,15 @@ impl Client {
         self.request(Method::PUT, url, ()).await.map(|_| ())
     }
 
-    pub async fn timeline_download_heatmap_layers(
+    pub async fn branch_download_heatmap_layers(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         concurrency: Option<usize>,
         recurse: bool,
     ) -> Result<()> {
         let mut path = reqwest::Url::parse(&format!(
-            "{}/v1/tenant/{}/timeline/{}/download_heatmap_layers",
-            self.mgmt_api_endpoint, tenant_id, timeline_id
+            "{}/v1/branch/{}/download_heatmap_layers",
+            self.mgmt_api_endpoint, branch_id
         ))
         .expect("Cannot build URL");
 
@@ -596,10 +538,10 @@ impl Client {
         self.request(Method::POST, path, ()).await.map(|_| ())
     }
 
-    pub async fn tenant_reset(&self, tenant_id: TenantId) -> Result<()> {
+    pub async fn branch_reset(&self, branch_id: BranchId) -> Result<()> {
         let uri = format!(
-            "{}/v1/tenant/{}/reset",
-            self.mgmt_api_endpoint, tenant_id
+            "{}/v1/branch/{}/reset",
+            self.mgmt_api_endpoint, branch_id
         );
         self.request(Method::POST, &uri, ())
             .await?
@@ -608,25 +550,13 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn timeline_list(&self, tenant_id: &TenantId) -> Result<Vec<TimelineInfo>> {
-        let uri = format!(
-            "{}/v1/tenant/{}/timeline",
-            self.mgmt_api_endpoint, tenant_id
-        );
-        self.get(&uri)
-            .await?
-            .json()
-            .await
-            .map_err(Error::ReceiveBody)
-    }
-
-    pub async fn tenant_synthetic_size(
+    pub async fn branch_synthetic_size(
         &self,
-        tenant_id: TenantId,
-    ) -> Result<TenantHistorySize> {
+        branch_id: BranchId,
+    ) -> Result<BranchHistorySize> {
         let uri = format!(
-            "{}/v1/tenant/{}/synthetic_size",
-            self.mgmt_api_endpoint, tenant_id
+            "{}/v1/branch/{}/synthetic_size",
+            self.mgmt_api_endpoint, branch_id
         );
         self.get(&uri)
             .await?
@@ -644,11 +574,11 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn top_tenants(
+    pub async fn top_branches(
         &self,
-        request: TopTenantShardsRequest,
-    ) -> Result<TopTenantShardsResponse> {
-        let uri = format!("{}/v1/top_tenants", self.mgmt_api_endpoint);
+        request: TopBranchesRequest,
+    ) -> Result<TopBranchesResponse> {
+        let uri = format!("{}/v1/top_branches", self.mgmt_api_endpoint);
         self.request(Method::POST, uri, request)
             .await?
             .json()
@@ -658,13 +588,12 @@ impl Client {
 
     pub async fn ingest_aux_files(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         aux_files: HashMap<String, String>,
     ) -> Result<bool> {
         let uri = format!(
-            "{}/v1/tenant/{}/timeline/{}/ingest_aux_files",
-            self.mgmt_api_endpoint, tenant_id, timeline_id
+            "{}/v1/branch/{}/ingest_aux_files",
+            self.mgmt_api_endpoint, branch_id
         );
         let resp = self
             .request_noerror(Method::POST, &uri, IngestAuxFilesRequest { aux_files })
@@ -682,13 +611,12 @@ impl Client {
 
     pub async fn list_aux_files(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         lsn: Lsn,
     ) -> Result<HashMap<String, Bytes>> {
         let uri = format!(
-            "{}/v1/tenant/{}/timeline/{}/list_aux_files",
-            self.mgmt_api_endpoint, tenant_id, timeline_id
+            "{}/v1/branch/{}/list_aux_files",
+            self.mgmt_api_endpoint, branch_id
         );
         let resp = self
             .request_noerror(Method::POST, &uri, ListAuxFilesRequest { lsn })
@@ -711,8 +639,7 @@ impl Client {
 
     pub async fn import_basebackup(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         base_lsn: Lsn,
         end_lsn: Lsn,
         pg_version: PgMajorVersion,
@@ -721,7 +648,7 @@ impl Client {
         let pg_version = pg_version.major_version_num();
 
         let uri = format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}/import_basebackup?base_lsn={base_lsn}&end_lsn={end_lsn}&pg_version={pg_version}",
+            "{}/v1/branch/{branch_id}/import_basebackup?base_lsn={base_lsn}&end_lsn={end_lsn}&pg_version={pg_version}",
             self.mgmt_api_endpoint,
         );
         self.start_request(Method::PUT, uri)
@@ -738,14 +665,13 @@ impl Client {
 
     pub async fn import_wal(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         start_lsn: Lsn,
         end_lsn: Lsn,
         wal_tarball: ReqwestBody,
     ) -> Result<()> {
         let uri = format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}/import_wal?start_lsn={start_lsn}&end_lsn={end_lsn}",
+            "{}/v1/branch/{branch_id}/import_wal?start_lsn={start_lsn}&end_lsn={end_lsn}",
             self.mgmt_api_endpoint,
         );
         self.start_request(Method::PUT, uri)
@@ -760,14 +686,13 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn timeline_init_lsn_lease(
+    pub async fn branch_init_lsn_lease(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         lsn: Lsn,
     ) -> Result<LsnLease> {
         let uri = format!(
-            "{}/v1/tenant/{tenant_id}/timeline/{timeline_id}/lsn_lease",
+            "{}/v1/branch/{branch_id}/lsn_lease",
             self.mgmt_api_endpoint,
         );
 
@@ -780,11 +705,10 @@ impl Client {
 
     pub async fn wait_lsn(
         &self,
-        tenant_id: TenantId,
-        request: TenantWaitLsnRequest,
+        request: BranchWaitLsnRequest,
     ) -> Result<StatusCode> {
         let uri = format!(
-            "{}/v1/tenant/{tenant_id}/wait_lsn",
+            "{}/v1/branch/wait_lsn",
             self.mgmt_api_endpoint,
         );
 
@@ -795,15 +719,13 @@ impl Client {
 
     pub async fn activate_post_import(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         activate_timeline_timeout: Duration,
     ) -> Result<TimelineInfo> {
         let uri = format!(
-            "{}/v1/tenant/{}/timeline/{}/activate_post_import?timeline_activate_timeout_ms={}",
+            "{}/v1/branch/{}/activate_post_import?timeline_activate_timeout_ms={}",
             self.mgmt_api_endpoint,
-            tenant_id,
-            timeline_id,
+            branch_id,
             activate_timeline_timeout.as_millis()
         );
 

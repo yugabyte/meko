@@ -16,7 +16,6 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
     let b1 = db::compute_conn(b1_port);
     let b2 = db::compute_conn(b2_port);
-    let tid = c.tid();
 
     step("Seed ancestor data on main (known values + whole-table checksum)");
     db::batch(
@@ -38,9 +37,9 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 
     step("Branch anc_b1 off main, provision + start its endpoint");
-    c.yb(&["timeline", "branch", "--tenant-id", tid, "--branch-name", "anc_b1"])?;
+    c.yb(&["branch", "create", "--branch-name", "anc_b1", "--ancestor-branch-name", "main"])?;
     c.yb(&[
-        "endpoint", "create", "ep_anc_b1", "--tenant-id", tid, "--branch-name", "anc_b1",
+        "endpoint", "create", "ep_anc_b1", "--branch-name", "anc_b1",
         "--pg-version", "17", "--pg-port", &b1_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_anc_b1"])?;
@@ -71,11 +70,11 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     )
     .await?;
     c.yb(&[
-        "timeline", "branch", "--tenant-id", tid, "--branch-name", "anc_b2",
+        "branch", "create", "--branch-name", "anc_b2",
         "--ancestor-branch-name", "anc_b1",
     ])?;
     c.yb(&[
-        "endpoint", "create", "ep_anc_b2", "--tenant-id", tid, "--branch-name", "anc_b2",
+        "endpoint", "create", "ep_anc_b2", "--branch-name", "anc_b2",
         "--pg-version", "17", "--pg-port", &b2_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_anc_b2"])?;

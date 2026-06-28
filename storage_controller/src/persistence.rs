@@ -22,14 +22,14 @@ use pageserver_api::controller_api::{
     ComputeEndpoint, MetadataHealthRecord, NodeLifecycle, NodeSchedulingPolicy, PlacementPolicy,
     SafekeeperDescribeResponse, ShardSchedulingPolicy, SkSchedulingPolicy,
 };
-use pageserver_api::models::{ShardImportStatus, TenantConfig};
+use pageserver_api::models::{BranchConfig, BranchImportStatus};
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::ring;
 use scoped_futures::ScopedBoxFuture;
 use serde::{Deserialize, Serialize};
 use utils::generation::Generation;
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
 use crate::metrics::{
@@ -47,7 +47,7 @@ const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
 ///
 /// The essential things to store durably are:
 /// - generation numbers, as these must always advance monotonically to ensure data safety.
-/// - Tenant's PlacementPolicy and TenantConfig, as the source of truth for these is something external.
+/// - Branch's PlacementPolicy and BranchConfig, as the source of truth for these is something external.
 /// - Node's scheduling policies, as the source of truth for these is something external.
 ///
 /// Other things we store durably as an implementation detail:
@@ -82,7 +82,7 @@ pub(crate) const SC_SCHEMA: &str = "storage_controller";
 /// Legacy format, for use in JSON compat objects in test environment
 #[derive(Serialize, Deserialize)]
 struct JsonPersistence {
-    tenants: HashMap<TenantId, TenantPersistence>,
+    branches: HashMap<BranchId, BranchPersistence>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -109,14 +109,13 @@ pub(crate) enum DatabaseOperation {
     Detach,
     ReAttach,
     IncrementGeneration,
-    TenantGenerations,
-    ShardGenerations,
-    ListTenantShards,
-    LoadTenant,
-    InsertTenantShards,
-    UpdateTenant,
-    DeleteTenant,
-    UpdateTenantConfig,
+    BranchGenerations,
+    ListBranches,
+    LoadBranch,
+    InsertBranches,
+    UpdateBranch,
+    DeleteBranch,
+    UpdateBranchConfig,
     UpdateMetadataHealth,
     ListMetadataHealth,
     ListMetadataHealthUnhealthy,
@@ -132,7 +131,7 @@ pub(crate) enum DatabaseOperation {
     UpdateTimelineImport,
     DeleteTimelineImport,
     ListTimelineImports,
-    IsTenantImportingTimeline,
+    IsBranchImporting,
     InsertEndpoint,
     ListEndpoints,
     DeleteEndpoint,
@@ -140,16 +139,15 @@ pub(crate) enum DatabaseOperation {
 
 pub(crate) type DatabaseResult<T> = Result<T, DatabaseError>;
 
-/// Some methods can operate on either a whole tenant or a single shard
+/// Selects the branch row(s) a mutation applies to.
 #[derive(Clone)]
-pub(crate) enum TenantFilter {
-    Tenant(TenantId),
-    Shard(TenantId),
+pub(crate) enum BranchFilter {
+    Branch(BranchId),
 }
 
-/// Represents the results of looking up generation+pageserver for the shards of a tenant
-pub(crate) struct ShardGenerationState {
-    pub(crate) tenant_id: TenantId,
+/// Represents the results of looking up generation+pageserver for a branch
+pub(crate) struct BranchGenerationState {
+    pub(crate) branch_id: BranchId,
     pub(crate) generation: Option<Generation>,
     pub(crate) generation_pageserver: Option<NodeId>,
 }
@@ -426,8 +424,7 @@ impl Persistence {
                     .on_conflict(endpoint_id)
                     .do_update()
                     .set((
-                        tenant_id.eq(&endpoint.tenant_id),
-                        timeline_id.eq(&endpoint.timeline_id),
+                        branch_id.eq(&endpoint.branch_id),
                         spec.eq(&endpoint.spec),
                     ))
                     .execute(conn)
@@ -470,25 +467,20 @@ impl Persistence {
         .await
     }
 
-    /// Delete every compute endpoint record belonging to a single timeline.
-    /// Used by `timeline drop` to tear down all of a branch's endpoints at
+    /// Delete every compute endpoint record belonging to a single branch.
+    /// Used by `branch drop` to tear down all of a branch's endpoints at
     /// once. Returns the number of rows removed. Idempotent.
-    pub(crate) async fn delete_endpoints_for_timeline(
+    pub(crate) async fn delete_endpoints_for_branch(
         &self,
-        tid: &str,
-        tlid: &str,
+        bid: &str,
     ) -> DatabaseResult<usize> {
         use crate::schema::endpoints::dsl::*;
 
         self.with_measured_conn(DatabaseOperation::DeleteEndpoint, move |conn| {
             Box::pin(async move {
-                let deleted = diesel::delete(
-                    endpoints
-                        .filter(tenant_id.eq(tid))
-                        .filter(timeline_id.eq(tlid)),
-                )
-                .execute(conn)
-                .await?;
+                let deleted = diesel::delete(endpoints.filter(branch_id.eq(bid)))
+                    .execute(conn)
+                    .await?;
                 Ok(deleted)
             })
         })
@@ -634,16 +626,16 @@ impl Persistence {
     ///
     /// We exclude shards configured to be detached.  During startup, if we see any attached locations
     /// for such shards, they will automatically be detached as 'orphans'.
-    pub(crate) async fn load_active_tenants(
+    pub(crate) async fn load_active_branches(
         &self,
-    ) -> DatabaseResult<Vec<TenantPersistence>> {
-        use crate::schema::tenants::dsl::*;
-        self.with_measured_conn(DatabaseOperation::ListTenantShards, move |conn| {
+    ) -> DatabaseResult<Vec<BranchPersistence>> {
+        use crate::schema::branches::dsl::*;
+        self.with_measured_conn(DatabaseOperation::ListBranches, move |conn| {
             Box::pin(async move {
-                let query = tenants.filter(
+                let query = branches.filter(
                     placement_policy.ne(serde_json::to_string(&PlacementPolicy::Detached).unwrap()),
                 );
-                let result = query.load::<TenantPersistence>(conn).await?;
+                let result = query.load::<BranchPersistence>(conn).await?;
 
                 Ok(result)
             })
@@ -651,16 +643,16 @@ impl Persistence {
         .await
     }
 
-    /// When restoring a previously detached tenant into memory, load it from the database
-    pub(crate) async fn load_tenant(
+    /// When restoring a previously detached branch into memory, load it from the database
+    pub(crate) async fn load_branch(
         &self,
-        filter_tenant_id: TenantId,
-    ) -> DatabaseResult<Vec<TenantPersistence>> {
-        use crate::schema::tenants::dsl::*;
-        self.with_measured_conn(DatabaseOperation::LoadTenant, move |conn| {
+        filter_branch_id: BranchId,
+    ) -> DatabaseResult<Vec<BranchPersistence>> {
+        use crate::schema::branches::dsl::*;
+        self.with_measured_conn(DatabaseOperation::LoadBranch, move |conn| {
             Box::pin(async move {
-                let query = tenants.filter(tenant_id.eq(filter_tenant_id.to_string()));
-                let result = query.load::<TenantPersistence>(conn).await?;
+                let query = branches.filter(branch_id.eq(filter_branch_id.to_string()));
+                let result = query.load::<BranchPersistence>(conn).await?;
 
                 Ok(result)
             })
@@ -668,31 +660,31 @@ impl Persistence {
         .await
     }
 
-    /// Tenants must be persisted before we schedule them for the first time.  This enables us
+    /// Branches must be persisted before we schedule them for the first time.  This enables us
     /// to correctly retain generation monotonicity, and the externally provided placement policy & config.
-    pub(crate) async fn insert_tenants(
+    pub(crate) async fn insert_branches(
         &self,
-        shards: Vec<TenantPersistence>,
+        new_branches: Vec<BranchPersistence>,
     ) -> DatabaseResult<()> {
-        use crate::schema::{metadata_health, tenants};
+        use crate::schema::{branches, metadata_health};
 
         let now = chrono::Utc::now();
 
-        let metadata_health_records = shards
+        let metadata_health_records = new_branches
             .iter()
             .map(|t| MetadataHealthPersistence {
-                tenant_id: t.tenant_id.clone(),
+                branch_id: t.branch_id.clone(),
                 healthy: true,
                 last_scrubbed_at: now,
             })
             .collect::<Vec<_>>();
 
-        let shards = &shards;
+        let new_branches = &new_branches;
         let metadata_health_records = &metadata_health_records;
-        self.with_measured_conn(DatabaseOperation::InsertTenantShards, move |conn| {
+        self.with_measured_conn(DatabaseOperation::InsertBranches, move |conn| {
             Box::pin(async move {
-                diesel::insert_into(tenants::table)
-                    .values(shards)
+                diesel::insert_into(branches::table)
+                    .values(new_branches)
                     .execute(conn)
                     .await?;
 
@@ -706,15 +698,15 @@ impl Persistence {
         .await
     }
 
-    /// Ordering: call this _after_ deleting the tenant on pageservers, but _before_ dropping state for
-    /// the tenant from memory on this server.
-    pub(crate) async fn delete_tenant(&self, del_tenant_id: TenantId) -> DatabaseResult<()> {
-        use crate::schema::tenants::dsl::*;
-        self.with_measured_conn(DatabaseOperation::DeleteTenant, move |conn| {
+    /// Ordering: call this _after_ deleting the branch on pageservers, but _before_ dropping state for
+    /// the branch from memory on this server.
+    pub(crate) async fn delete_branch(&self, del_branch_id: BranchId) -> DatabaseResult<()> {
+        use crate::schema::branches::dsl::*;
+        self.with_measured_conn(DatabaseOperation::DeleteBranch, move |conn| {
             Box::pin(async move {
                 // `metadata_health` status (if exists) is also deleted based on the cascade behavior.
-                diesel::delete(tenants)
-                    .filter(tenant_id.eq(del_tenant_id.to_string()))
+                diesel::delete(branches)
+                    .filter(branch_id.eq(del_branch_id.to_string()))
                     .execute(conn)
                     .await?;
                 Ok(())
@@ -730,9 +722,9 @@ impl Persistence {
     pub(crate) async fn re_attach(
         &self,
         input_node_id: NodeId,
-    ) -> DatabaseResult<HashMap<TenantId, Generation>> {
+    ) -> DatabaseResult<HashMap<BranchId, Generation>> {
+        use crate::schema::branches::dsl::*;
         use crate::schema::nodes::dsl::{scheduling_policy, *};
-        use crate::schema::tenants::dsl::*;
         let updated = self
             .with_measured_conn(DatabaseOperation::ReAttach, move |conn| {
                 Box::pin(async move {
@@ -754,19 +746,19 @@ impl Persistence {
                         }
                     };
 
-                    let rows_updated = diesel::update(tenants)
+                    let rows_updated = diesel::update(branches)
                         .filter(generation_pageserver.eq(input_node_id.0 as i64))
                         .set(generation.eq(generation + 1))
                         .execute(conn)
                         .await?;
 
-                    tracing::info!("Incremented {} tenants' generations", rows_updated);
+                    tracing::info!("Incremented {} branches' generations", rows_updated);
 
                     // TODO: UPDATE+SELECT in one query
 
-                    let updated = tenants
+                    let updated = branches
                         .filter(generation_pageserver.eq(input_node_id.0 as i64))
-                        .select(TenantPersistence::as_select())
+                        .select(BranchPersistence::as_select())
                         .load(conn)
                         .await?;
 
@@ -795,8 +787,8 @@ impl Persistence {
 
         let mut result = HashMap::new();
         for tsp in updated {
-            let parsed_tenant_id = TenantId::from_str(tsp.tenant_id.as_str())
-                .map_err(|e| DatabaseError::Logical(format!("Malformed tenant id: {e}")))?;
+            let parsed_branch_id = BranchId::from_str(tsp.branch_id.as_str())
+                .map_err(|e| DatabaseError::Logical(format!("Malformed branch id: {e}")))?;
 
             let Some(g) = tsp.generation else {
                 // If the generation_pageserver column was non-NULL, then the generation column should also be non-NULL:
@@ -805,7 +797,7 @@ impl Persistence {
                     "Generation should always be set after incrementing".to_string(),
                 ));
             };
-            result.insert(parsed_tenant_id, Generation::new(g as u32));
+            result.insert(parsed_branch_id, Generation::new(g as u32));
         }
 
         Ok(result)
@@ -816,21 +808,21 @@ impl Persistence {
     /// so that in [`Self::re_attach`] we can do a bulk UPDATE on the generations for that node.
     pub(crate) async fn increment_generation(
         &self,
-        input_tenant_id: TenantId,
+        input_branch_id: BranchId,
         node_id: NodeId,
     ) -> anyhow::Result<Generation> {
-        use crate::schema::tenants::dsl::*;
+        use crate::schema::branches::dsl::*;
         let updated = self
             .with_measured_conn(DatabaseOperation::IncrementGeneration, move |conn| {
                 Box::pin(async move {
-                    let updated = diesel::update(tenants)
-                        .filter(tenant_id.eq(input_tenant_id.to_string()))
+                    let updated = diesel::update(branches)
+                        .filter(branch_id.eq(input_branch_id.to_string()))
                         .set((
                             generation.eq(generation + 1),
                             generation_pageserver.eq(node_id.0 as i64),
                         ))
                         // TODO: only returning() the generation column
-                        .returning(TenantPersistence::as_returning())
+                        .returning(BranchPersistence::as_returning())
                         .get_result(conn)
                         .await?;
 
@@ -857,20 +849,18 @@ impl Persistence {
     /// afterwards to confirm that our timeline CRUD operation is truly persistent (it must have happened in the
     /// latest generation)
     ///
-    /// If the tenant doesn't exist, an empty vector is returned.
-    ///
-    /// Output is sorted by shard number
-    pub(crate) async fn tenant_generations(
+    /// If the branch doesn't exist, an empty vector is returned.
+    pub(crate) async fn branch_generations(
         &self,
-        filter_tenant_id: TenantId,
-    ) -> Result<Vec<ShardGenerationState>, DatabaseError> {
-        use crate::schema::tenants::dsl::*;
+        filter_branch_id: BranchId,
+    ) -> Result<Vec<BranchGenerationState>, DatabaseError> {
+        use crate::schema::branches::dsl::*;
         let rows = self
-            .with_measured_conn(DatabaseOperation::TenantGenerations, move |conn| {
+            .with_measured_conn(DatabaseOperation::BranchGenerations, move |conn| {
                 Box::pin(async move {
-                    let result = tenants
-                        .filter(tenant_id.eq(filter_tenant_id.to_string()))
-                        .select(TenantPersistence::as_select())
+                    let result = branches
+                        .filter(branch_id.eq(filter_branch_id.to_string()))
+                        .select(BranchPersistence::as_select())
                         .load(conn)
                         .await?;
                     Ok(result)
@@ -880,37 +870,36 @@ impl Persistence {
 
         Ok(rows
             .into_iter()
-            .map(|p| ShardGenerationState {
-                tenant_id: p
-                    .get_tenant_id()
-                    .expect("Corrupt tenant id in database"),
+            .map(|p| BranchGenerationState {
+                branch_id: p
+                    .get_branch_id()
+                    .expect("Corrupt branch id in database"),
                 generation: p.generation.map(|g| Generation::new(g as u32)),
                 generation_pageserver: p.generation_pageserver.map(|n| NodeId(n as u64)),
             })
             .collect())
     }
 
-    /// Read the generation number of specific tenant shards
+    /// Read the generation number of specific branches
     ///
     /// Output is unsorted.  Output may not include values for all inputs, if they are missing in the database.
-    pub(crate) async fn shard_generations(
+    pub(crate) async fn branches_generations(
         &self,
-        mut tenant_ids: impl Iterator<Item = &TenantId>,
-    ) -> Result<Vec<(TenantId, Option<Generation>)>, DatabaseError> {
-        let mut rows = Vec::with_capacity(tenant_ids.size_hint().0);
+        mut branch_ids: impl Iterator<Item = &BranchId>,
+    ) -> Result<Vec<(BranchId, Option<Generation>)>, DatabaseError> {
+        let mut rows = Vec::with_capacity(branch_ids.size_hint().0);
 
         // We will chunk our input to avoid composing arbitrarily long `IN` clauses.  Typically we are
         // called with a single digit number of IDs, but in principle we could be called with tens
-        // of thousands (all the shards on one pageserver) from the generation validation API.
+        // of thousands (all the branches on one pageserver) from the generation validation API.
         loop {
             // A modest hardcoded chunk size to handle typical cases in a single query but never generate particularly
             // large query strings.
-            let chunk_ids = tenant_ids.by_ref().take(32);
+            let chunk_ids = branch_ids.by_ref().take(32);
 
-            // Compose a comma separated list of tenant ids to match on. The
-            // `tenants` table is keyed by `tenant_id` alone (no shards in yb-light).
+            // Compose a comma separated list of branch ids to match on.
             let in_clause = chunk_ids
-                .map(|tsid| format!("'{tsid}'"))
+                .map(|bid| format!("'{bid}'"))
                 .join(",");
 
             // We are done when our iterator gives us nothing to filter on
@@ -920,10 +909,10 @@ impl Persistence {
 
             let in_clause = &in_clause;
             let chunk_rows = self
-                .with_measured_conn(DatabaseOperation::ShardGenerations, move |conn| {
+                .with_measured_conn(DatabaseOperation::BranchGenerations, move |conn| {
                     Box::pin(async move {
-                        let result : Vec<TenantPersistence> = diesel::sql_query(
-                            format!("SELECT * from tenants where tenant_id in ({in_clause});").as_str()
+                        let result : Vec<BranchPersistence> = diesel::sql_query(
+                            format!("SELECT * from branches where branch_id in ({in_clause});").as_str()
                         ).load(conn).await?;
 
                         Ok(result)
@@ -937,8 +926,8 @@ impl Persistence {
             .into_iter()
             .map(|tsp| {
                 (
-                    tsp.get_tenant_id()
-                        .expect("Bad tenant ID in database"),
+                    tsp.get_branch_id()
+                        .expect("Bad branch ID in database"),
                     tsp.generation.map(|g| Generation::new(g as u32)),
                 )
             })
@@ -946,34 +935,31 @@ impl Persistence {
     }
 
     #[allow(non_local_definitions)]
-    /// For use when updating a persistent property of a tenant, such as its config or placement_policy.
+    /// For use when updating a persistent property of a branch, such as its config or placement_policy.
     ///
     /// Do not use this for settting generation, unless in the special onboarding code path (/location_config)
     /// API: use [`Self::increment_generation`] instead.  Setting the generation via this route is a one-time thing
-    /// that we only do the first time a tenant is set to an attached policy via /location_config.
-    pub(crate) async fn update_tenant(
+    /// that we only do the first time a branch is set to an attached policy via /location_config.
+    pub(crate) async fn update_branch(
         &self,
-        tenant: TenantFilter,
+        branch: BranchFilter,
         input_placement_policy: Option<PlacementPolicy>,
-        input_config: Option<TenantConfig>,
+        input_config: Option<BranchConfig>,
         input_generation: Option<Generation>,
         input_scheduling_policy: Option<ShardSchedulingPolicy>,
     ) -> DatabaseResult<()> {
-        use crate::schema::tenants::dsl::*;
+        use crate::schema::branches::dsl::*;
 
-        let tenant = &tenant;
+        let branch = &branch;
         let input_placement_policy = &input_placement_policy;
         let input_config = &input_config;
         let input_generation = &input_generation;
         let input_scheduling_policy = &input_scheduling_policy;
-        self.with_measured_conn(DatabaseOperation::UpdateTenant, move |conn| {
+        self.with_measured_conn(DatabaseOperation::UpdateBranch, move |conn| {
             Box::pin(async move {
-                let query = match tenant {
-                    TenantFilter::Shard(input_tenant_id) => diesel::update(tenants)
-                        .filter(tenant_id.eq(input_tenant_id.to_string()))
-                        .into_boxed(),
-                    TenantFilter::Tenant(input_tenant_id) => diesel::update(tenants)
-                        .filter(tenant_id.eq(input_tenant_id.to_string()))
+                let query = match branch {
+                    BranchFilter::Branch(input_branch_id) => diesel::update(branches)
+                        .filter(branch_id.eq(input_branch_id.to_string()))
                         .into_boxed(),
                 };
 
@@ -985,8 +971,8 @@ impl Persistence {
                 };
 
                 #[derive(AsChangeset)]
-                #[diesel(table_name = crate::schema::tenants)]
-                struct ShardUpdate {
+                #[diesel(table_name = crate::schema::branches)]
+                struct BranchUpdate {
                     generation: Option<i32>,
                     placement_policy: Option<String>,
                     config: Option<serde_json::Value>,
@@ -994,7 +980,7 @@ impl Persistence {
                     generation_pageserver: Option<Option<i64>>,
                 }
 
-                let update = ShardUpdate {
+                let update = BranchUpdate {
                     generation: input_generation.map(|g| g.into().unwrap() as i32),
                     placement_policy: input_placement_policy
                         .as_ref()
@@ -1017,12 +1003,12 @@ impl Persistence {
         Ok(())
     }
 
-    pub(crate) async fn detach(&self, input_tenant_id: TenantId) -> anyhow::Result<()> {
-        use crate::schema::tenants::dsl::*;
+    pub(crate) async fn detach(&self, input_branch_id: BranchId) -> anyhow::Result<()> {
+        use crate::schema::branches::dsl::*;
         self.with_measured_conn(DatabaseOperation::Detach, move |conn| {
             Box::pin(async move {
-                let updated = diesel::update(tenants)
-                    .filter(tenant_id.eq(input_tenant_id.to_string()))
+                let updated = diesel::update(branches)
+                    .filter(branch_id.eq(input_branch_id.to_string()))
                     .set((
                         generation_pageserver.eq(Option::<i64>::None),
                         placement_policy
@@ -1063,7 +1049,7 @@ impl Persistence {
             Box::pin(async move {
                 diesel::insert_into(metadata_health)
                     .values(healthy_records)
-                    .on_conflict(tenant_id)
+                    .on_conflict(branch_id)
                     .do_update()
                     .set((healthy.eq(true), last_scrubbed_at.eq(now)))
                     .execute(conn)
@@ -1071,7 +1057,7 @@ impl Persistence {
 
                 diesel::insert_into(metadata_health)
                     .values(unhealthy_records)
-                    .on_conflict(tenant_id)
+                    .on_conflict(branch_id)
                     .do_update()
                     .set((healthy.eq(false), last_scrubbed_at.eq(now)))
                     .execute(conn)
@@ -1273,7 +1259,7 @@ impl Persistence {
             Box::pin(async move {
                 let inserted_updated = diesel::insert_into(timelines::table)
                     .values(entry)
-                    .on_conflict((timelines::tenant_id, timelines::timeline_id))
+                    .on_conflict(timelines::branch_id)
                     .do_nothing()
                     .execute(conn)
                     .await?;
@@ -1302,8 +1288,7 @@ impl Persistence {
         self.with_measured_conn(DatabaseOperation::UpdateTimeline, move |conn| {
             Box::pin(async move {
                 let inserted_updated = diesel::update(timelines::table)
-                    .filter(timelines::tenant_id.eq(&entry.tenant_id))
-                    .filter(timelines::timeline_id.eq(&entry.timeline_id))
+                    .filter(timelines::branch_id.eq(&entry.branch_id))
                     .set(entry)
                     .execute(conn)
                     .await?;
@@ -1324,22 +1309,16 @@ impl Persistence {
     /// Load timeline from db. Returns `None` if not present.
     pub(crate) async fn get_timeline(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> DatabaseResult<Option<TimelinePersistence>> {
         use crate::schema::timelines::dsl;
 
-        let tenant_id = &tenant_id;
-        let timeline_id = &timeline_id;
+        let branch_id = &branch_id;
         let timeline_from_db = self
             .with_measured_conn(DatabaseOperation::GetTimeline, move |conn| {
                 Box::pin(async move {
                     let mut from_db: Vec<TimelineFromDb> = dsl::timelines
-                        .filter(
-                            dsl::tenant_id
-                                .eq(&tenant_id.to_string())
-                                .and(dsl::timeline_id.eq(&timeline_id.to_string())),
-                        )
+                        .filter(dsl::branch_id.eq(&branch_id.to_string()))
                         .load(conn)
                         .await?;
                     if from_db.is_empty() {
@@ -1363,8 +1342,7 @@ impl Persistence {
     /// Set `delete_at` for the given timeline
     pub(crate) async fn timeline_set_deleted_at(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> DatabaseResult<()> {
         use crate::schema::timelines;
 
@@ -1372,8 +1350,7 @@ impl Persistence {
         self.with_measured_conn(DatabaseOperation::InsertTimeline, move |conn| {
             Box::pin(async move {
                 let updated = diesel::update(timelines::table)
-                    .filter(timelines::tenant_id.eq(tenant_id.to_string()))
-                    .filter(timelines::timeline_id.eq(timeline_id.to_string()))
+                    .filter(timelines::branch_id.eq(branch_id.to_string()))
                     .set(timelines::deleted_at.eq(Some(deletion_time)))
                     .execute(conn)
                     .await?;
@@ -1395,18 +1372,15 @@ impl Persistence {
     /// Only works if `deleted_at` is set, so you should call [`Self::timeline_set_deleted_at`] before.
     pub(crate) async fn delete_timeline(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> DatabaseResult<()> {
         use crate::schema::timelines::dsl;
 
-        let tenant_id = &tenant_id;
-        let timeline_id = &timeline_id;
+        let branch_id = &branch_id;
         self.with_measured_conn(DatabaseOperation::GetTimeline, move |conn| {
             Box::pin(async move {
                 diesel::delete(dsl::timelines)
-                    .filter(dsl::tenant_id.eq(&tenant_id.to_string()))
-                    .filter(dsl::timeline_id.eq(&timeline_id.to_string()))
+                    .filter(dsl::branch_id.eq(&branch_id.to_string()))
                     .filter(dsl::deleted_at.is_not_null())
                     .execute(conn)
                     .await?;
@@ -1418,19 +1392,19 @@ impl Persistence {
         Ok(())
     }
 
-    /// Loads a list of all timelines from database.
-    pub(crate) async fn list_timelines_for_tenant(
+    /// Loads the timeline row for a branch (at most one, since `branch_id` is the PK).
+    pub(crate) async fn list_timelines_for_branch(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
     ) -> DatabaseResult<Vec<TimelinePersistence>> {
         use crate::schema::timelines::dsl;
 
-        let tenant_id = &tenant_id;
+        let branch_id = &branch_id;
         let timelines = self
             .with_measured_conn(DatabaseOperation::GetTimeline, move |conn| {
                 Box::pin(async move {
                     let timelines: Vec<TimelineFromDb> = dsl::timelines
-                        .filter(dsl::tenant_id.eq(&tenant_id.to_string()))
+                        .filter(dsl::branch_id.eq(&branch_id.to_string()))
                         .load(conn)
                         .await?;
                     Ok(timelines)
@@ -1448,24 +1422,20 @@ impl Persistence {
     /// Set or clear the `branch_name` column on a timeline row. Returns whether the row existed.
     pub(crate) async fn set_timeline_branch_name(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         branch_name: Option<String>,
     ) -> DatabaseResult<bool> {
         use crate::schema::timelines::dsl;
 
-        let tenant_id = tenant_id.to_string();
-        let timeline_id = timeline_id.to_string();
+        let branch_id = branch_id.to_string();
         let branch_name = &branch_name;
-        let tenant_id = &tenant_id;
-        let timeline_id = &timeline_id;
+        let branch_id = &branch_id;
 
         let updated = self
             .with_measured_conn(DatabaseOperation::UpdateTimeline, move |conn| {
                 Box::pin(async move {
                     let updated = diesel::update(dsl::timelines)
-                        .filter(dsl::tenant_id.eq(tenant_id))
-                        .filter(dsl::timeline_id.eq(timeline_id))
+                        .filter(dsl::branch_id.eq(branch_id))
                         .set(dsl::branch_name.eq(branch_name))
                         .execute(conn)
                         .await?;
@@ -1483,23 +1453,23 @@ impl Persistence {
         }
     }
 
-    /// List every timeline with a non-NULL `branch_name`.
+    /// List every timeline with a non-NULL `branch_name`, as `(branch_id, branch_name)`.
     pub(crate) async fn list_timeline_branch_names(
         &self,
-    ) -> DatabaseResult<Vec<(String, String, String)>> {
+    ) -> DatabaseResult<Vec<(String, String)>> {
         use crate::schema::timelines::dsl;
 
         self.with_measured_conn(DatabaseOperation::GetTimeline, move |conn| {
             Box::pin(async move {
-                let rows: Vec<(String, String, Option<String>)> = dsl::timelines
+                let rows: Vec<(String, Option<String>)> = dsl::timelines
                     .filter(dsl::branch_name.is_not_null())
                     .filter(dsl::deleted_at.is_null())
-                    .select((dsl::tenant_id, dsl::timeline_id, dsl::branch_name))
+                    .select((dsl::branch_id, dsl::branch_name))
                     .load(conn)
                     .await?;
                 Ok(rows
                     .into_iter()
-                    .filter_map(|(t, tl, n)| n.map(|n| (t, tl, n)))
+                    .filter_map(|(b, n)| n.map(|n| (b, n)))
                     .collect())
             })
         })
@@ -1507,8 +1477,7 @@ impl Persistence {
     }
 
     /// Record (or overwrite) a pending timeline init recipe. Idempotent on
-    /// the `(tenant_id, timeline_id)` key — re-recording the same timeline
-    /// replaces the recipe.
+    /// the `branch_id` key — re-recording the same branch replaces the recipe.
     pub(crate) async fn insert_pending_timeline_init(
         &self,
         entry: PendingTimelineInitPersistence,
@@ -1520,10 +1489,7 @@ impl Persistence {
             Box::pin(async move {
                 diesel::insert_into(pending_timeline_inits::table)
                     .values(entry)
-                    .on_conflict((
-                        pending_timeline_inits::tenant_id,
-                        pending_timeline_inits::timeline_id,
-                    ))
+                    .on_conflict(pending_timeline_inits::branch_id)
                     .do_update()
                     .set(entry)
                     .execute(conn)
@@ -1534,20 +1500,20 @@ impl Persistence {
         .await
     }
 
-    /// Load every pending timeline init recorded for a tenant.
-    pub(crate) async fn list_pending_timeline_inits_for_tenant(
+    /// Load the pending timeline init recorded for a branch (at most one).
+    pub(crate) async fn list_all_pending_timeline_inits(
         &self,
-        tenant_id: TenantId,
     ) -> DatabaseResult<Vec<PendingTimelineInitPersistence>> {
         use crate::schema::pending_timeline_inits::dsl;
 
-        let tenant_id = &tenant_id;
+        // Flat model: no tenant to scope by, and a name→branch_id lookup can't
+        // know the branch_id up front — so list every pending init and let the
+        // caller filter (by branch_id or branch_name). The table only holds
+        // not-yet-provisioned branches, so it stays small.
         self.with_measured_conn(DatabaseOperation::ListPendingTimelineInits, move |conn| {
             Box::pin(async move {
-                let rows: Vec<PendingTimelineInitPersistence> = dsl::pending_timeline_inits
-                    .filter(dsl::tenant_id.eq(&tenant_id.to_string()))
-                    .load(conn)
-                    .await?;
+                let rows: Vec<PendingTimelineInitPersistence> =
+                    dsl::pending_timeline_inits.load(conn).await?;
                 Ok(rows)
             })
         })
@@ -1558,18 +1524,15 @@ impl Persistence {
     /// been materialized. No-op if the row is already gone.
     pub(crate) async fn delete_pending_timeline_init(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> DatabaseResult<()> {
         use crate::schema::pending_timeline_inits::dsl;
 
-        let tenant_id = &tenant_id;
-        let timeline_id = &timeline_id;
+        let branch_id = &branch_id;
         self.with_measured_conn(DatabaseOperation::DeletePendingTimelineInit, move |conn| {
             Box::pin(async move {
                 diesel::delete(dsl::pending_timeline_inits)
-                    .filter(dsl::tenant_id.eq(&tenant_id.to_string()))
-                    .filter(dsl::timeline_id.eq(&timeline_id.to_string()))
+                    .filter(dsl::branch_id.eq(&branch_id.to_string()))
                     .execute(conn)
                     .await?;
                 Ok(())
@@ -1623,16 +1586,14 @@ impl Persistence {
 
     pub(crate) async fn get_timeline_import(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> DatabaseResult<Option<TimelineImport>> {
         use crate::schema::timeline_imports::dsl;
         let persistent_import = self
             .with_measured_conn(DatabaseOperation::ListTimelineImports, move |conn| {
                 Box::pin(async move {
                     let mut from_db: Vec<TimelineImportPersistence> = dsl::timeline_imports
-                        .filter(dsl::tenant_id.eq(tenant_id.to_string()))
-                        .filter(dsl::timeline_id.eq(timeline_id.to_string()))
+                        .filter(dsl::branch_id.eq(branch_id.to_string()))
                         .load(conn)
                         .await?;
 
@@ -1656,19 +1617,14 @@ impl Persistence {
 
     pub(crate) async fn delete_timeline_import(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> DatabaseResult<()> {
         use crate::schema::timeline_imports::dsl;
 
         self.with_measured_conn(DatabaseOperation::DeleteTimelineImport, move |conn| {
             Box::pin(async move {
                 diesel::delete(crate::schema::timeline_imports::table)
-                    .filter(
-                        dsl::tenant_id
-                            .eq(tenant_id.to_string())
-                            .and(dsl::timeline_id.eq(timeline_id.to_string())),
-                    )
+                    .filter(dsl::branch_id.eq(branch_id.to_string()))
                     .execute(conn)
                     .await?;
 
@@ -1686,9 +1642,8 @@ impl Persistence {
     /// are covered by the outer [`DatabaseError`].
     pub(crate) async fn update_timeline_import(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-        shard_status: ShardImportStatus,
+        branch_id: BranchId,
+        shard_status: BranchImportStatus,
     ) -> DatabaseResult<Result<Option<TimelineImport>, TimelineImportUpdateError>> {
         use crate::schema::timeline_imports::dsl;
 
@@ -1698,11 +1653,7 @@ impl Persistence {
                 async move {
                     // Load the current state from the database
                     let mut from_db: Vec<TimelineImportPersistence> = dsl::timeline_imports
-                        .filter(
-                            dsl::tenant_id
-                                .eq(tenant_id.to_string())
-                                .and(dsl::timeline_id.eq(timeline_id.to_string())),
-                        )
+                        .filter(dsl::branch_id.eq(branch_id.to_string()))
                         .load(conn)
                         .await?;
 
@@ -1712,8 +1663,7 @@ impl Persistence {
                         Some(some) => TimelineImport::from_persistent(some).unwrap(),
                         None => {
                             return Ok(Err(TimelineImportUpdateError::ImportNotFound {
-                                tenant_id,
-                                timeline_id,
+                                branch_id,
                             }));
                         }
                     };
@@ -1732,19 +1682,14 @@ impl Persistence {
                     match follow_up {
                         TimelineImportUpdateFollowUp::Persist => {
                             let updated = diesel::update(dsl::timeline_imports)
-                                .filter(
-                                    dsl::tenant_id
-                                        .eq(tenant_id.to_string())
-                                        .and(dsl::timeline_id.eq(timeline_id.to_string())),
-                                )
+                                .filter(dsl::branch_id.eq(branch_id.to_string()))
                                 .set(dsl::shard_statuses.eq(new_persistent.shard_statuses))
                                 .execute(conn)
                                 .await?;
 
                             if updated != 1 {
                                 return Ok(Err(TimelineImportUpdateError::ImportNotFound {
-                                    tenant_id,
-                                    timeline_id,
+                                    branch_id,
                                 }));
                             }
 
@@ -1759,15 +1704,15 @@ impl Persistence {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn is_tenant_importing_timeline(
+    pub(crate) async fn is_branch_importing(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
     ) -> DatabaseResult<bool> {
         use crate::schema::timeline_imports::dsl;
-        self.with_measured_conn(DatabaseOperation::IsTenantImportingTimeline, move |conn| {
+        self.with_measured_conn(DatabaseOperation::IsBranchImporting, move |conn| {
             Box::pin(async move {
                 let imports: i64 = dsl::timeline_imports
-                    .filter(dsl::tenant_id.eq(tenant_id.to_string()))
+                    .filter(dsl::branch_id.eq(branch_id.to_string()))
                     .count()
                     .get_result(conn)
                     .await?;
@@ -1968,22 +1913,22 @@ fn log_postgres_connstr_info(config_str: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Parts of [`crate::tenant::Tenant`] that are stored durably
+/// Parts of [`crate::branch::Branch`] that are stored durably
 ///
 /// No `Eq`: `config` is a `serde_json::Value` (JSONB column), which is only
 /// `PartialEq`.
 #[derive(
     QueryableByName, Queryable, Selectable, Insertable, Serialize, Deserialize, Clone, PartialEq,
 )]
-#[diesel(table_name = crate::schema::tenants)]
-pub(crate) struct TenantPersistence {
+#[diesel(table_name = crate::schema::branches)]
+pub(crate) struct BranchPersistence {
     #[serde(default)]
-    pub(crate) tenant_id: String,
+    pub(crate) branch_id: String,
 
     // Latest generation number: next time we attach, increment this
     // and use the incremented number when attaching.
     //
-    // Generation is only None when first onboarding a tenant, where it may
+    // Generation is only None when first onboarding a branch, where it may
     // be in PlacementPolicy::Secondary and therefore have no valid generation state.
     pub(crate) generation: Option<i32>,
 
@@ -1993,17 +1938,17 @@ pub(crate) struct TenantPersistence {
 
     #[serde(default)]
     pub(crate) placement_policy: String,
-    /// JSON-encoded `TenantConfig`, stored in a JSONB column. Opaque to the
-    /// controller's relational logic — encoded/decoded by `Tenant`.
+    /// JSON-encoded `BranchConfig`, stored in a JSONB column. Opaque to the
+    /// controller's relational logic — encoded/decoded by `Branch`.
     #[serde(default)]
     pub(crate) config: serde_json::Value,
     #[serde(default)]
     pub(crate) scheduling_policy: String,
 }
 
-impl TenantPersistence {
-    pub(crate) fn get_tenant_id(&self) -> anyhow::Result<TenantId> {
-        Ok(TenantId::from_str(self.tenant_id.as_str())?)
+impl BranchPersistence {
+    pub(crate) fn get_branch_id(&self) -> anyhow::Result<BranchId> {
+        Ok(BranchId::from_str(self.branch_id.as_str())?)
     }
 }
 
@@ -2023,12 +1968,12 @@ pub(crate) struct NodePersistence {
     pub(crate) listen_grpc_port: Option<i32>,
 }
 
-/// Tenant metadata health status that are stored durably.
+/// Branch metadata health status that are stored durably.
 #[derive(Queryable, Selectable, Insertable, Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[diesel(table_name = crate::schema::metadata_health)]
 pub(crate) struct MetadataHealthPersistence {
     #[serde(default)]
-    pub(crate) tenant_id: String,
+    pub(crate) branch_id: String,
 
     pub(crate) healthy: bool,
     pub(crate) last_scrubbed_at: chrono::DateTime<chrono::Utc>,
@@ -2036,29 +1981,29 @@ pub(crate) struct MetadataHealthPersistence {
 
 impl MetadataHealthPersistence {
     pub fn new(
-        tenant_id: TenantId,
+        branch_id: BranchId,
         healthy: bool,
         last_scrubbed_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         MetadataHealthPersistence {
-            tenant_id: tenant_id.to_string(),
+            branch_id: branch_id.to_string(),
             healthy,
             last_scrubbed_at,
         }
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get_tenant_id(&self) -> Result<TenantId, hex::FromHexError> {
-        TenantId::from_str(self.tenant_id.as_str())
+    pub(crate) fn get_branch_id(&self) -> Result<BranchId, hex::FromHexError> {
+        BranchId::from_str(self.branch_id.as_str())
     }
 }
 
 impl From<MetadataHealthPersistence> for MetadataHealthRecord {
     fn from(value: MetadataHealthPersistence) -> Self {
         MetadataHealthRecord {
-            tenant_id: value
-                .get_tenant_id()
-                .expect("stored tenant id should be valid"),
+            branch_id: value
+                .get_branch_id()
+                .expect("stored branch id should be valid"),
             healthy: value.healthy,
             last_scrubbed_at: value.last_scrubbed_at,
         }
@@ -2074,8 +2019,7 @@ impl From<MetadataHealthPersistence> for MetadataHealthRecord {
 #[diesel(table_name = crate::schema::endpoints)]
 pub(crate) struct EndpointPersistence {
     pub(crate) endpoint_id: String,
-    pub(crate) tenant_id: String,
-    pub(crate) timeline_id: String,
+    pub(crate) branch_id: String,
     pub(crate) spec: serde_json::Value,
 }
 
@@ -2083,8 +2027,7 @@ impl From<ComputeEndpoint> for EndpointPersistence {
     fn from(e: ComputeEndpoint) -> Self {
         EndpointPersistence {
             endpoint_id: e.endpoint_id,
-            tenant_id: e.tenant_id,
-            timeline_id: e.timeline_id,
+            branch_id: e.branch_id,
             spec: e.spec,
         }
     }
@@ -2094,8 +2037,7 @@ impl From<EndpointPersistence> for ComputeEndpoint {
     fn from(e: EndpointPersistence) -> Self {
         ComputeEndpoint {
             endpoint_id: e.endpoint_id,
-            tenant_id: e.tenant_id,
-            timeline_id: e.timeline_id,
+            branch_id: e.branch_id,
             spec: e.spec,
         }
     }
@@ -2265,8 +2207,7 @@ impl ToSql<crate::schema::sql_types::PgLsn, Pg> for LsnWrapper {
 #[derive(Insertable, AsChangeset, Clone)]
 #[diesel(table_name = crate::schema::timelines)]
 pub(crate) struct TimelinePersistence {
-    pub(crate) tenant_id: String,
-    pub(crate) timeline_id: String,
+    pub(crate) branch_id: String,
     pub(crate) start_lsn: LsnWrapper,
     pub(crate) generation: i32,
     pub(crate) sk_set: Vec<i64>,
@@ -2274,22 +2215,21 @@ pub(crate) struct TimelinePersistence {
     pub(crate) branch_name: Option<String>,
 }
 
-/// The init recipe for a timeline whose ids + branch name are allocated
-/// (at `tenant create` / `timeline branch`) but whose pageserver +
-/// safekeeper aren't provisioned yet. `endpoint create` reads it back to
-/// materialize the pair, then deletes the row. A NULL `ancestor_timeline_id`
-/// marks a Bootstrap recipe; a non-NULL one marks a Branch off that
-/// ancestor at `start_lsn`. `treat_none_as_null` so re-recording overwrites
-/// the ancestor column rather than leaving a stale value.
+/// The init recipe for a branch whose id + branch name are allocated
+/// (at `branch create`) but whose pageserver + safekeeper aren't provisioned
+/// yet. `endpoint create` reads it back to materialize the branch, then
+/// deletes the row. A NULL `ancestor_branch_id` marks a Bootstrap recipe; a
+/// non-NULL one marks a Branch off that ancestor at `start_lsn`.
+/// `treat_none_as_null` so re-recording overwrites the ancestor column rather
+/// than leaving a stale value.
 #[derive(Insertable, AsChangeset, Queryable, Selectable, Clone)]
 #[diesel(table_name = crate::schema::pending_timeline_inits)]
 #[diesel(treat_none_as_null = true)]
 pub(crate) struct PendingTimelineInitPersistence {
-    pub(crate) tenant_id: String,
-    pub(crate) timeline_id: String,
+    pub(crate) branch_id: String,
     pub(crate) branch_name: String,
     pub(crate) pg_version: i32,
-    pub(crate) ancestor_timeline_id: Option<String>,
+    pub(crate) ancestor_branch_id: Option<String>,
     pub(crate) start_lsn: LsnWrapper,
 }
 
@@ -2301,8 +2241,7 @@ pub(crate) struct PendingTimelineInitPersistence {
 #[derive(Queryable, Selectable)]
 #[diesel(table_name = crate::schema::timelines)]
 pub(crate) struct TimelineFromDb {
-    pub(crate) tenant_id: String,
-    pub(crate) timeline_id: String,
+    pub(crate) branch_id: String,
     pub(crate) start_lsn: LsnWrapper,
     pub(crate) generation: i32,
     pub(crate) sk_set: Vec<Option<i64>>,
@@ -2316,8 +2255,7 @@ impl TimelineFromDb {
         // There is no way to forbid this in the schema that diesel recognizes (to our knowledge).
         let sk_set = self.sk_set.into_iter().flatten().collect::<Vec<_>>();
         TimelinePersistence {
-            tenant_id: self.tenant_id,
-            timeline_id: self.timeline_id,
+            branch_id: self.branch_id,
             start_lsn: self.start_lsn,
             generation: self.generation,
             sk_set,
@@ -2332,8 +2270,7 @@ impl TimelineFromDb {
 #[diesel(table_name = crate::schema::timelines)]
 #[diesel(treat_none_as_null = true)]
 pub(crate) struct TimelineUpdate {
-    pub(crate) tenant_id: String,
-    pub(crate) timeline_id: String,
+    pub(crate) branch_id: String,
     pub(crate) start_lsn: LsnWrapper,
     pub(crate) sk_set: Vec<i64>,
 }
@@ -2341,7 +2278,6 @@ pub(crate) struct TimelineUpdate {
 #[derive(Serialize, Deserialize, Queryable, Selectable, Insertable, Eq, PartialEq, Clone)]
 #[diesel(table_name = crate::schema::timeline_imports)]
 pub(crate) struct TimelineImportPersistence {
-    pub(crate) tenant_id: String,
-    pub(crate) timeline_id: String,
+    pub(crate) branch_id: String,
     pub(crate) shard_statuses: serde_json::Value,
 }

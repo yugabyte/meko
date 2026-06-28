@@ -70,7 +70,7 @@ use pageserver_api::key::Key;
 use postgres_ffi::{BLCKSZ, PgMajorVersion};
 use tokio::sync::Barrier;
 use tokio::task::JoinSet;
-use utils::id::TenantId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use wal_decoder::models::record::NeonWalRecord;
 
@@ -132,7 +132,7 @@ where
 
     let conf = PageServerConf::dummy_conf(repo_dir.path().to_path_buf());
     let conf = Box::leak(Box::new(conf));
-    let tenant_id = TenantId::generate();
+    let branch_id = BranchId::generate();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -143,7 +143,7 @@ where
 
     let mut tasks = JoinSet::new();
 
-    let manager = PostgresRedoManager::new(conf, tenant_id);
+    let manager = PostgresRedoManager::new(conf, branch_id);
     let manager = Arc::new(manager);
 
     // divide the amount of work equally among the clients.

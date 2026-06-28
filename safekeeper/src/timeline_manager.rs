@@ -204,7 +204,7 @@ pub(crate) struct Manager {
 /// This task gets spawned alongside each timeline and is responsible for managing the timeline's
 /// background tasks.
 /// Be careful, this task is not respawned on panic, so it should not panic.
-#[instrument(name = "manager", skip_all, fields(ttid = %tli.ttid))]
+#[instrument(name = "manager", skip_all, fields(branch_id = %tli.branch_id))]
 pub async fn main_task(
     tli: ManagerTimeline,
     conf: SafeKeeperConf,
@@ -454,7 +454,7 @@ impl Manager {
                     remover.await?;
                     Ok(removal_horizon_segno)
                 }
-                .instrument(info_span!("WAL removal", ttid=%self.tli.ttid)),
+                .instrument(info_span!("WAL removal", branch_id=%self.tli.branch_id)),
             ));
         }
     }

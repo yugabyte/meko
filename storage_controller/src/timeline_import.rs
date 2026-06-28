@@ -5,9 +5,9 @@ use http_utils::error::ApiError;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
-use pageserver_api::models::{ShardImportProgress, ShardImportStatus};
+use pageserver_api::models::{BranchImportProgress, BranchImportStatus};
 use tokio_util::sync::CancellationToken;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::sync::gate::Gate;
 
 use crate::{persistence::TimelineImportPersistence, service::Config};
@@ -18,21 +18,20 @@ pub(crate) enum TimelineImportState {
     Idle,
 }
 
-/// yb-light: a tenant has exactly one shard, so the per-shard import status
+/// yb-light: a branch maps 1:1 to a pageserver, so the per-shard import status
 /// map collapses to a single status.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub(crate) struct ShardImportStatuses(pub(crate) ShardImportStatus);
+pub(crate) struct ShardImportStatuses(pub(crate) BranchImportStatus);
 
 impl ShardImportStatuses {
     pub(crate) fn new() -> Self {
-        ShardImportStatuses(ShardImportStatus::InProgress(None::<ShardImportProgress>))
+        ShardImportStatuses(BranchImportStatus::InProgress(None::<BranchImportProgress>))
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct TimelineImport {
-    pub(crate) tenant_id: TenantId,
-    pub(crate) timeline_id: TimelineId,
+    pub(crate) branch_id: BranchId,
     pub(crate) shard_statuses: ShardImportStatuses,
 }
 
@@ -51,8 +50,7 @@ pub(crate) enum TimelineImportFinalizeError {
 
 pub(crate) enum TimelineImportUpdateError {
     ImportNotFound {
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     },
     UnexpectedUpdate,
 }
@@ -61,10 +59,9 @@ impl From<TimelineImportUpdateError> for ApiError {
     fn from(err: TimelineImportUpdateError) -> ApiError {
         match err {
             TimelineImportUpdateError::ImportNotFound {
-                tenant_id,
-                timeline_id,
+                branch_id,
             } => ApiError::NotFound(
-                anyhow::anyhow!("Import for {tenant_id}/{timeline_id} not found").into(),
+                anyhow::anyhow!("Import for {branch_id} not found").into(),
             ),
             TimelineImportUpdateError::UnexpectedUpdate => {
                 ApiError::InternalServerError(anyhow::anyhow!("Update request is unexpected"))
@@ -75,28 +72,25 @@ impl From<TimelineImportUpdateError> for ApiError {
 
 impl TimelineImport {
     pub(crate) fn from_persistent(persistent: TimelineImportPersistence) -> anyhow::Result<Self> {
-        let tenant_id = TenantId::from_str(persistent.tenant_id.as_str())?;
-        let timeline_id = TimelineId::from_str(persistent.timeline_id.as_str())?;
+        let branch_id = BranchId::from_str(persistent.branch_id.as_str())?;
         let shard_statuses = serde_json::from_value(persistent.shard_statuses)?;
 
         Ok(TimelineImport {
-            tenant_id,
-            timeline_id,
+            branch_id,
             shard_statuses,
         })
     }
 
     pub(crate) fn to_persistent(&self) -> TimelineImportPersistence {
         TimelineImportPersistence {
-            tenant_id: self.tenant_id.to_string(),
-            timeline_id: self.timeline_id.to_string(),
+            branch_id: self.branch_id.to_string(),
             shard_statuses: serde_json::to_value(self.shard_statuses.clone()).unwrap(),
         }
     }
 
     pub(crate) fn update(
         &mut self,
-        status: ShardImportStatus,
+        status: BranchImportStatus,
     ) -> Result<TimelineImportUpdateFollowUp, TimelineImportUpdateError> {
         let crnt = &mut self.shard_statuses.0;
         if *crnt == status {
@@ -117,7 +111,7 @@ impl TimelineImport {
         assert!(self.is_complete());
 
         match &self.shard_statuses.0 {
-            ShardImportStatus::Error(err) => Some(err.clone()),
+            BranchImportStatus::Error(err) => Some(err.clone()),
             _ => None,
         }
     }
@@ -141,8 +135,7 @@ const IMPORT_COMPLETE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ImportCompleteRequest {
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     error: Option<String>,
 }
 
@@ -177,8 +170,7 @@ impl UpcallClient {
     /// eventual cplane availability. The cplane API is idempotent.
     pub(crate) async fn notify_import_complete(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         import_result: ImportResult,
     ) -> anyhow::Result<()> {
         let endpoint = if self.base_url.ends_with('/') {
@@ -191,8 +183,7 @@ impl UpcallClient {
             .client
             .request(Method::PUT, endpoint)
             .json(&ImportCompleteRequest {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 error: import_result.err(),
             })
             .timeout(IMPORT_COMPLETE_REQUEST_TIMEOUT);

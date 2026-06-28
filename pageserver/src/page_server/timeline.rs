@@ -32,7 +32,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::generation::Generation;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::logging::{MonitorSlowFutureCallback, monitor_slow_future};
 use utils::lsn::{AtomicLsn, Lsn, RecordLsn};
 use utils::postgres_client::PostgresClientProtocol;
@@ -44,7 +44,7 @@ use wal_decoder::serialized_batch::SerializedValueBatch;
 
 use self::logical_size::LogicalSize;
 use self::walreceiver::{WalReceiver, WalReceiverConf};
-use super::{AttachedTenantConf, GcError, debug_assert_current_span_has_tenant_and_timeline_id};
+use super::{AttachedTenantConf, GcError, debug_assert_current_span_has_branch_id};
 use crate::aux_file::AuxFileSizeEstimator;
 use crate::basebackup_cache::BasebackupCache;
 use crate::config::PageServerConf;
@@ -89,8 +89,7 @@ pub struct Timeline {
 
     myself: Weak<Self>,
 
-    pub(crate) tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
 
     /// The generation of the tenant that instantiated us: this is used for safety when writing remote objects.
     /// Never changes for the lifetime of this [`Timeline`] object.
@@ -165,7 +164,7 @@ pub struct Timeline {
     // metadata and is authoritative — a branch's ancestor is served by
     // a different pageserver process and reached via lineage reads.
     ancestor_timeline: Option<Arc<Timeline>>,
-    ancestor_timeline_id: Option<TimelineId>,
+    ancestor_branch_id: Option<BranchId>,
     ancestor_lsn: Lsn,
 
     pub(crate) metrics: Arc<TimelineMetrics>,
@@ -280,7 +279,7 @@ pub(crate) struct GcInfo {
     /// Currently, this includes all points where child branches have
     /// been forked off from. In the future, could also include
     /// explicit user-defined snapshot points.
-    pub(crate) retain_lsns: Vec<(Lsn, TimelineId)>,
+    pub(crate) retain_lsns: Vec<(Lsn, BranchId)>,
 
     /// The cutoff coordinates, which are combined by selecting the minimum.
     pub(crate) cutoffs: GcCutoffs,
@@ -297,12 +296,12 @@ impl GcInfo {
         self.cutoffs.select_min()
     }
 
-    pub(super) fn insert_child(&mut self, child_id: TimelineId, child_lsn: Lsn) {
+    pub(super) fn insert_child(&mut self, child_id: BranchId, child_lsn: Lsn) {
         self.retain_lsns.push((child_lsn, child_id));
         self.retain_lsns.sort_by_key(|i| i.0);
     }
 
-    pub(super) fn remove_child_not_offloaded(&mut self, child_id: TimelineId) -> bool {
+    pub(super) fn remove_child_not_offloaded(&mut self, child_id: BranchId) -> bool {
         // Remove at most one element. Needed for correctness if there is two live `Timeline` objects referencing
         // the same timeline. Shouldn't but maybe can occur when Arc's live longer than intended.
         let mut removed = false;
@@ -327,11 +326,11 @@ impl GcInfo {
 /// between time-based and space-based retention for observability and consumption metrics purposes.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GcCutoffs {
-    /// Calculated from the [`pageserver_api::models::TenantConfig::gc_horizon`], this LSN indicates how much
+    /// Calculated from the [`pageserver_api::models::BranchConfig::gc_horizon`], this LSN indicates how much
     /// history we must keep to retain a specified number of bytes of WAL.
     pub(crate) space: Lsn,
 
-    /// Calculated from [`pageserver_api::models::TenantConfig::pitr_interval`], this LSN indicates
+    /// Calculated from [`pageserver_api::models::BranchConfig::pitr_interval`], this LSN indicates
     /// how much history we must keep to enable reading back at least the PITR interval duration.
     ///
     /// None indicates that the PITR cutoff has not been computed. A PITR interval of 0 will yield
@@ -500,9 +499,9 @@ pub enum GetReadyAncestorError {
     #[error("ancestor LSN wait error")]
     AncestorLsnTimeout(#[from] WaitLsnError),
 
-    #[error("bad state on timeline {timeline_id}: {state:?}")]
+    #[error("bad state on timeline {branch_id}: {state:?}")]
     BadState {
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         state: TimelineState,
     },
 
@@ -522,7 +521,7 @@ pub enum GetLogicalSizePriority {
 
 impl std::fmt::Debug for Timeline {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Timeline<{}>", self.timeline_id)
+        write!(f, "Timeline<{}>", self.branch_id)
     }
 }
 
@@ -660,8 +659,8 @@ impl Timeline {
     }
 
     /// Get the ancestor's timeline id
-    pub(crate) fn get_ancestor_timeline_id(&self) -> Option<TimelineId> {
-        self.ancestor_timeline_id
+    pub(crate) fn get_ancestor_branch_id(&self) -> Option<BranchId> {
+        self.ancestor_branch_id
     }
 
     /// Get the bytes written since the PITR cutoff on this branch, and
@@ -1081,18 +1080,17 @@ impl Timeline {
         };
         let dc_lsn = self.get_applied_lsn();
         let gc_cutoff = *self.get_applied_gc_cutoff_lsn();
-        let ancestor_id = self.get_ancestor_timeline_id();
+        let ancestor_id = self.get_ancestor_branch_id();
         let ancestor_lsn = if ancestor_id.is_some() {
             Some(self.get_ancestor_lsn())
         } else {
             None
         };
         let row = crate::page_store::TimelineRow {
-            tenant_id: self.tenant_id,
-            timeline_id: self.timeline_id,
+            branch_id: self.branch_id,
             consistent_lsn: dc_lsn,
             applied_gc_cutoff_lsn: gc_cutoff,
-            ancestor_timeline_id: ancestor_id,
+            ancestor_branch_id: ancestor_id,
             ancestor_lsn,
             // Generation::into() returns None for `Generation::None`; in
             // attached state we always have a Valid generation from the
@@ -1147,7 +1145,7 @@ impl Timeline {
         };
         match pw
             .fpu_page_store()
-            .cas_bump_generation_on_attach(self.tenant_id, self.timeline_id, self.generation)
+            .cas_bump_generation_on_attach(self.branch_id, self.generation)
             .await?
         {
             crate::page_store::CasBumpOutcome::Bumped
@@ -1160,8 +1158,8 @@ impl Timeline {
                 // shutdown via stale_gen detection on the live PS.
                 anyhow::bail!(
                     "attach refused: timeline {tenant}/{timeline} has live generation {live} > our generation {ours:?}",
-                    tenant = self.tenant_id,
-                    timeline = self.timeline_id,
+                    tenant = self.branch_id,
+                    timeline = self.branch_id,
                     live = live_generation,
                     ours = self.generation,
                 )
@@ -1441,7 +1439,7 @@ impl Timeline {
     /// durable" is just flushing that buffer, and YB's Raft replication
     /// takes it from there. No-op if there's no `PageWriter` (a
     /// yb-pageserver with no page stores wouldn't accept writes anyway).
-    #[instrument(skip(self), fields(tenant_id=%self.tenant_id, timeline_id=%self.timeline_id))]
+    #[instrument(skip(self), fields(branch_id=%self.branch_id))]
     pub(crate) async fn flush(&self) -> Result<(), FlushLayerError> {
         if let Some(pw) = &self.page_writer {
             pw.flush()
@@ -1508,7 +1506,7 @@ impl Timeline {
     ///   instead of spawning directly on a runtime. It is a more composable / testable pattern.
     ///
     /// For legacy reasons, we still have multiple tasks spawned using
-    /// `task_mgr::spawn(X, Some(tenant_id), Some(timeline_id))`.
+    /// `task_mgr::spawn(X, Some(branch_id))`.
     /// We refer to these as "timeline-scoped task_mgr tasks".
     /// Some of these tasks are already sensitive to Timeline::cancel while others are
     /// not sensitive to Timeline::cancel and instead respect [`task_mgr::shutdown_token`]
@@ -1525,7 +1523,7 @@ impl Timeline {
     /// - [`TaskKind::OndemandLogicalSizeCalculation`]
     /// - [`TaskKind::GarbageCollector`] (immediate_gc is timeline-scoped)
     pub(crate) async fn shutdown(&self, mode: ShutdownMode) {
-        debug_assert_current_span_has_tenant_and_timeline_id();
+        debug_assert_current_span_has_branch_id();
 
         // Regardless of whether we're going to flush (Flush mode),
         // cancel walreceiver to stop ingesting more data asap.
@@ -1629,7 +1627,7 @@ impl Timeline {
 
         // TODO: work toward making this a no-op. See this function's doc comment for more context.
         tracing::debug!("Waiting for tasks...");
-        task_mgr::shutdown_tasks(None, Some(self.tenant_id), Some(self.timeline_id)).await;
+        task_mgr::shutdown_tasks(None, Some(self.branch_id)).await;
 
         {
             // yb-light: no in-memory layers to drop. The write_lock is
@@ -1730,7 +1728,7 @@ impl Timeline {
     /// Try to get a basebackup from the on-disk cache.
     pub(crate) async fn get_cached_basebackup(&self, lsn: Lsn) -> Option<tokio::fs::File> {
         self.basebackup_cache
-            .get(self.tenant_id, self.timeline_id, lsn)
+            .get(self.branch_id, lsn)
             .await
     }
 
@@ -1775,7 +1773,7 @@ impl Timeline {
         }
 
         self.basebackup_cache
-            .send_prepare(self.tenant_id, self.timeline_id, lsn);
+            .send_prepare(self.branch_id, lsn);
     }
 }
 
@@ -1860,8 +1858,7 @@ impl Timeline {
         tenant_conf: Arc<ArcSwap<AttachedTenantConf>>,
         metadata: &TimelineMetadata,
         ancestor: Option<Arc<Timeline>>,
-        timeline_id: TimelineId,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         generation: Generation,
         walredo_mgr: Option<Arc<super::WalRedoManager>>,
         resources: TimelineResources,
@@ -1885,7 +1882,7 @@ impl Timeline {
 
         if let Some(ancestor) = &ancestor {
             let mut ancestor_gc_info = ancestor.gc_info.write().unwrap();
-            ancestor_gc_info.insert_child(timeline_id, metadata.ancestor_lsn());
+            ancestor_gc_info.insert_child(branch_id, metadata.ancestor_lsn());
         }
 
         let relsize_snapshot_cache_capacity = {
@@ -1904,8 +1901,7 @@ impl Timeline {
             let internal_ps = &resources.fpu_page_store;
             let pw_cfg = &conf.yb_page_writer;
             let mut writer = crate::page_writer::PageWriter::new(
-                tenant_id,
-                timeline_id,
+                branch_id,
                 generation,
                 compute_ps.clone(),
                 internal_ps.clone(),
@@ -1957,8 +1953,7 @@ impl Timeline {
                 (Some((rx, in_flight)), Some(wr)) => {
                     let pg_major = pg_version;
                     Some(crate::image_materializer::ImageMaterializer::spawn(
-                        tenant_id,
-                        timeline_id,
+                        branch_id,
                         writer.clone(),
                         internal_ps.clone(),
                         wr,
@@ -1976,8 +1971,7 @@ impl Timeline {
 
         Arc::new_cyclic(|myself| {
             let metrics = Arc::new(TimelineMetrics::new(
-                &tenant_id,
-                &timeline_id,
+                &branch_id,
                 crate::metrics::EvictionsWithLowResidenceDurationBuilder::new(
                     "mtime",
                     evictions_low_residence_duration_metric_threshold,
@@ -1989,8 +1983,7 @@ impl Timeline {
                 conf,
                 tenant_conf,
                 myself: myself.clone(),
-                timeline_id,
-                tenant_id,
+                branch_id,
                 generation,
                 pg_version,
 
@@ -2020,14 +2013,13 @@ impl Timeline {
                 applied_lsn: AtomicLsn::new(disk_consistent_lsn.0),
 
                 ancestor_timeline: ancestor,
-                ancestor_timeline_id: metadata.ancestor_timeline(),
+                ancestor_branch_id: metadata.ancestor_timeline(),
                 ancestor_lsn: metadata.ancestor_lsn(),
 
                 metrics,
 
                 query_metrics: crate::metrics::SmgrQueryTimePerTimeline::new(
-                    &tenant_id,
-                    &timeline_id,
+                    &branch_id,
                     resources.pagestream_throttle_metrics,
                 ),
 
@@ -2125,8 +2117,8 @@ impl Timeline {
     /// when the timeline is activated.
     fn launch_wal_receiver(self: &Arc<Self>, ctx: &RequestContext) {
         info!(
-            "launching WAL receiver for timeline {} of tenant {}",
-            self.timeline_id, self.tenant_id
+            "launching WAL receiver for branch {}",
+            self.branch_id
         );
 
         let tenant_conf = self.tenant_conf.load();
@@ -2279,8 +2271,7 @@ impl Timeline {
         task_mgr::spawn(
             task_mgr::BACKGROUND_RUNTIME.handle(),
             task_mgr::TaskKind::InitialLogicalSizeCalculation,
-            self.tenant_id,
-            Some(self.timeline_id),
+            Some(self.branch_id),
             "initial size calculation",
             // NB: don't log errors here, task_mgr will do that.
             async move {
@@ -2293,7 +2284,7 @@ impl Timeline {
                     .await;
                 Ok(())
             }
-            .instrument(info_span!(parent: None, "initial_size_calculation", tenant_id=%self.tenant_id, timeline_id=%self.timeline_id)),
+            .instrument(info_span!(parent: None, "initial_size_calculation", branch_id=%self.branch_id)),
         );
     }
 
@@ -2435,7 +2426,7 @@ impl Timeline {
         cause: LogicalSizeCalculationCause,
         ctx: &RequestContext,
     ) -> Result<u64, CalculateLogicalSizeError> {
-        crate::span::debug_assert_current_span_has_tenant_and_timeline_id();
+        crate::span::debug_assert_current_span_has_branch_id();
         // We should never be calculating logical sizes on shard !=0, because these shards do not have
         // accurate relation sizes, and they do not emit consumption metrics.
         let guard = self
@@ -2459,7 +2450,7 @@ impl Timeline {
     ) -> Result<u64, CalculateLogicalSizeError> {
         info!(
             "Calculating logical size for timeline {} at {}",
-            self.timeline_id, up_to_lsn
+            self.branch_id, up_to_lsn
         );
 
         if let Err(()) = pausable_failpoint!("timeline-calculate-logical-size-pause", &self.cancel)
@@ -2761,15 +2752,15 @@ impl Drop for Timeline {
             // This lock should never be poisoned, but in case it is we do a .map() instead of
             // an unwrap(), to avoid panicking in a destructor and thereby aborting the process.
             if let Ok(mut gc_info) = ancestor.gc_info.write() {
-                if !gc_info.remove_child_not_offloaded(self.timeline_id) {
-                    tracing::error!(tenant_id = %self.tenant_id, timeline_id = %self.timeline_id,
+                if !gc_info.remove_child_not_offloaded(self.branch_id) {
+                    tracing::error!(branch_id = %self.branch_id,
                         "Couldn't remove retain_lsn entry from timeline's parent on drop: already removed");
                 }
             }
         }
         info!(
-            "Timeline {} for tenant {} is being dropped",
-            self.timeline_id, self.tenant_id
+            "Timeline {} is being dropped",
+            self.branch_id
         );
     }
 }
@@ -2787,7 +2778,7 @@ impl Timeline {
         cancel: &CancellationToken,
         ctx: &RequestContext,
     ) -> Result<Option<Lsn>, PageReconstructError> {
-        debug_assert_current_span_has_tenant_and_timeline_id();
+        debug_assert_current_span_has_branch_id();
         // yb-light: single-shard, so we always have the SLRU data
         // locally and compute the PITR time -> LSN mapping ourselves.
         let time_range = if pitr == Duration::ZERO {
@@ -2829,7 +2820,7 @@ impl Timeline {
     /// the LSN for a time point isn't possible.  Therefore the GcCutoffs::horizon in the response might
     /// be different to the `space_cutoff` input.  Callers should treat the min() of the two cutoffs
     /// in the response as the GC cutoff point for the timeline.
-    #[instrument(skip_all, fields(timeline_id=%self.timeline_id))]
+    #[instrument(skip_all, fields(branch_id=%self.branch_id))]
     pub(super) async fn find_gc_cutoffs(
         &self,
         now: SystemTime,
@@ -2979,8 +2970,7 @@ impl Timeline {
                     Err(walredo::Error::Other(err)) => {
                         if fire_critical_error {
                             critical_timeline!(
-                                self.tenant_id,
-                                self.timeline_id,
+                                self.branch_id,
                                 Some(&self.corruption_detected),
                                 "walredo failure during page reconstruction: {err:?}"
                             );

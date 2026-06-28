@@ -21,7 +21,7 @@ use pq_proto::SystemId;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::*;
-use utils::id::TenantTimelineId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::metrics::{WAL_STORAGE_OPERATION_SECONDS, WalStorageMetrics};
@@ -101,14 +101,14 @@ impl PhysicalStorage {
     /// (`YbWalStorage` rehydrates it from `safekeeper.wals`); all watermarks
     /// start there.
     pub fn new(
-        ttid: &TenantTimelineId,
+        branch_id: &BranchId,
         state: &TimelinePersistentState,
         write_lsn: Lsn,
     ) -> Result<PhysicalStorage> {
         let wal_seg_size = state.server.wal_seg_size as usize;
         debug!(
-            "initialized WAL bookkeeping for timeline {}, write_lsn={}",
-            ttid.timeline_id, write_lsn,
+            "initialized WAL bookkeeping for branch {}, write_lsn={}",
+            branch_id, write_lsn,
         );
         Ok(PhysicalStorage {
             metrics: WalStorageMetrics::default(),
@@ -267,7 +267,7 @@ impl Storage for PhysicalStorage {
 }
 
 pub struct WalReader {
-    ttid: TenantTimelineId,
+    branch_id: BranchId,
     wal_seg_size: usize,
     pos: Lsn,
     wal_segment: Option<Pin<Box<dyn AsyncRead + Send + Sync>>>,
@@ -293,7 +293,7 @@ pub struct WalReader {
 
 impl WalReader {
     pub fn new(
-        ttid: &TenantTimelineId,
+        branch_id: &BranchId,
         state: &TimelinePersistentState,
         start_pos: Lsn,
         yb_wal: Option<Arc<YbWalConn>>,
@@ -321,7 +321,7 @@ impl WalReader {
         }
 
         Ok(Self {
-            ttid: *ttid,
+            branch_id: *branch_id,
             wal_seg_size: state.server.wal_seg_size as usize,
             pos: start_pos,
             wal_segment: None,
@@ -434,7 +434,7 @@ impl WalReader {
             );
             return Ok(Box::pin(crate::yb_wal_storage::YbSegmentReader::new(
                 yb_wal,
-                &self.ttid,
+                &self.branch_id,
                 segno,
                 self.wal_seg_size,
                 xlogoff,

@@ -27,7 +27,7 @@ use crate::{db, sk_api};
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
-    let tl = c.timeline_id().await?;
+    let branch = c.branch_id().await?;
 
     step("generate WAL on the compute; capture the [start, target) flush range");
     let start = Lsn::from_str(
@@ -49,7 +49,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     ensure!(target > start, "no WAL generated ({start}..{target}); raise the INSERT size");
 
     step(&format!("hot read of WAL [{start}, {target}) from the safekeeper cache"));
-    let hot = sk_api::read_committed_wal(c, &tl, start, target)
+    let hot = sk_api::read_committed_wal(c, &branch, start, target)
         .await
         .context("hot WAL read")?;
     ensure!(hot > 0, "hot WAL read reached the target but delivered no records");
@@ -60,7 +60,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     step(&format!("cold read of the SAME range [{start}, {target}) — served from YB"));
-    let cold = sk_api::read_committed_wal(c, &tl, start, target)
+    let cold = sk_api::read_committed_wal(c, &branch, start, target)
         .await
         .context("cold WAL read (after SK restart, from YB)")?;
     ensure!(cold > 0, "cold WAL read reached the target but delivered no records");

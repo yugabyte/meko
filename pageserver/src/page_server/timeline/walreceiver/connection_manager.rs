@@ -11,7 +11,7 @@ use pageserver_api::models::TimelineState;
 use postgres_connection::PgConnectionConfig;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
-use utils::id::{NodeId, TenantTimelineId};
+use utils::id::NodeId;
 use utils::postgres_client::{ConnectionConfigArgs, wal_stream_connection_config};
 
 use super::walreceiver_connection::{WalConnectionStatus, WalReceiverError};
@@ -19,7 +19,7 @@ use super::{TaskEvent, TaskHandle, TaskStateUpdate, WalReceiverConf};
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::{WALRECEIVER_ACTIVE_MANAGERS, WALRECEIVER_SWITCHES};
 use crate::task_mgr::TaskKind;
-use crate::page_server::{Timeline, debug_assert_current_span_has_tenant_and_timeline_id};
+use crate::page_server::{Timeline, debug_assert_current_span_has_branch_id};
 
 pub(crate) struct Cancelled;
 
@@ -293,13 +293,10 @@ impl ConnectionManagerState {
         conf: &WalReceiverConf,
         safekeeper_pg_addr: &str,
     ) -> anyhow::Result<PgConnectionConfig> {
-        let ttid = TenantTimelineId {
-            tenant_id: timeline.tenant_id,
-            timeline_id: timeline.timeline_id,
-        };
+        let branch_id = timeline.branch_id;
         let connection_conf_args = ConnectionConfigArgs {
             protocol: conf.protocol,
-            ttid,
+            branch_id,
             // Single-shard yb-light: carry the unsharded constants.
             shard_number: Some(0),
             shard_count: Some(0),
@@ -349,7 +346,7 @@ impl ConnectionManagerState {
         let connection_handle =
             TaskHandle::spawn(&self.cancel, move |events_sender, cancellation| {
                 async move {
-                    debug_assert_current_span_has_tenant_and_timeline_id();
+                    debug_assert_current_span_has_branch_id();
 
                     let res = super::walreceiver_connection::handle_walreceiver_connection(
                         timeline,

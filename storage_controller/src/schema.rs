@@ -7,17 +7,27 @@ pub mod sql_types {
 }
 
 diesel::table! {
+    branches (branch_id) {
+        branch_id -> Varchar,
+        generation -> Nullable<Int4>,
+        generation_pageserver -> Nullable<Int8>,
+        placement_policy -> Varchar,
+        config -> Jsonb,
+        scheduling_policy -> Varchar,
+    }
+}
+
+diesel::table! {
     endpoints (endpoint_id) {
         endpoint_id -> Varchar,
-        tenant_id -> Varchar,
-        timeline_id -> Varchar,
+        branch_id -> Varchar,
         spec -> Jsonb,
     }
 }
 
 diesel::table! {
-    metadata_health (tenant_id) {
-        tenant_id -> Varchar,
+    metadata_health (branch_id) {
+        branch_id -> Varchar,
         healthy -> Bool,
         last_scrubbed_at -> Timestamptz,
     }
@@ -53,20 +63,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    tenants (tenant_id) {
-        tenant_id -> Varchar,
-        generation -> Nullable<Int4>,
-        generation_pageserver -> Nullable<Int8>,
-        placement_policy -> Varchar,
-        config -> Jsonb,
-        scheduling_policy -> Varchar,
-    }
-}
-
-diesel::table! {
-    timeline_imports (tenant_id, timeline_id) {
-        tenant_id -> Varchar,
-        timeline_id -> Varchar,
+    timeline_imports (branch_id) {
+        branch_id -> Varchar,
         shard_statuses -> Jsonb,
     }
 }
@@ -75,9 +73,8 @@ diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::PgLsn;
 
-    timelines (tenant_id, timeline_id) {
-        tenant_id -> Varchar,
-        timeline_id -> Varchar,
+    timelines (branch_id) {
+        branch_id -> Varchar,
         start_lsn -> PgLsn,
         generation -> Int4,
         sk_set -> Array<Nullable<Int8>>,
@@ -90,23 +87,22 @@ diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::PgLsn;
 
-    pending_timeline_inits (tenant_id, timeline_id) {
-        tenant_id -> Varchar,
-        timeline_id -> Varchar,
+    pending_timeline_inits (branch_id) {
+        branch_id -> Varchar,
         branch_name -> Varchar,
         pg_version -> Int4,
-        ancestor_timeline_id -> Nullable<Varchar>,
+        ancestor_branch_id -> Nullable<Varchar>,
         start_lsn -> PgLsn,
     }
 }
 
 diesel::allow_tables_to_appear_in_same_query!(
+    branches,
     endpoints,
     metadata_health,
     nodes,
     pending_timeline_inits,
     safekeepers,
-    tenants,
     timeline_imports,
     timelines,
 );

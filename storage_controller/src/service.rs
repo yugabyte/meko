@@ -21,19 +21,19 @@ use pageserver_api::controller_api::{
     NodeRegisterRequest, NodeSchedulingPolicy, NodeShard, NodeShardResponse, PlacementPolicy,
     PendingTimelineInit, PendingTimelineInitRequest,
     ShardSchedulingPolicy,
-    SkSchedulingPolicy, TenantCreateRequest, TenantCreateResponse, TenantCreateResponseShard,
-    TenantDescribeResponse, TenantDescribeResponseShard, TenantLocateResponse, TenantPolicyRequest, TenantTimelineDescribeResponse,
+    SkSchedulingPolicy, BranchCreateRequest, BranchCreateResponse, BranchCreateResponseShard,
+    BranchDescribeResponse, BranchDescribeResponseShard, BranchLocateResponse, BranchPolicyRequest, BranchTimelineDescribeResponse,
     TimelineBranchName,
 };
 use pageserver_api::models::{
     self, DetachBehavior, LsnLease,
-    PageserverUtilization, ShardImportStatus, TenantConfig, TenantTimeTravelRequest,
+    PageserverUtilization, BranchImportStatus, BranchConfig, BranchTimeTravelRequest,
     TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateResponseStorcon,
     TimelineInfo,
 };
 use pageserver_api::upcall_api::{
-    PutTimelineImportStatusRequest, ReAttachRequest, ReAttachResponse, ReAttachResponseTenant,
-    TimelineImportStatusRequest, ValidateRequest, ValidateResponse, ValidateResponseTenant,
+    PutTimelineImportStatusRequest, ReAttachRequest, ReAttachResponse, ReAttachResponseBranch,
+    TimelineImportStatusRequest, ValidateRequest, ValidateResponse, ValidateResponseBranch,
 };
 use pageserver_client::{BlockUnblock, mgmt_api};
 use reqwest::{Certificate, StatusCode};
@@ -43,7 +43,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, instrument};
 use utils::completion::Barrier;
 use utils::generation::Generation;
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 use utils::sync::gate::Gate;
 use utils::{failpoint_support, pausable_failpoint};
@@ -58,25 +58,25 @@ use crate::pageserver_client::PageserverClient;
 use crate::persistence::split_state::SplitState;
 use crate::persistence::{
     DatabaseError, MetadataHealthPersistence, PendingTimelineInitPersistence, Persistence,
-    ShardGenerationState, TenantFilter, TenantPersistence,
+    BranchGenerationState, BranchFilter, BranchPersistence,
 };
 use crate::safekeeper::Safekeeper;
 use crate::scheduler::{ScheduleContext, ScheduleError, Scheduler};
-use crate::tenant::{IntentState, ObservedStateLocation, Tenant};
+use crate::branch::{Branch, IntentState, ObservedStateLocation};
 use crate::timeline_import::{
     FinalizingImport, ImportResult, ShardImportStatuses, TimelineImport,
     TimelineImportFinalizeError, TimelineImportState, UpcallClient,
 };
 
-// For operations that should be quick, like attaching a new tenant
+// For operations that should be quick, like attaching a new branch
 const SHORT_RECONCILE_TIMEOUT: Duration = Duration::from_secs(5);
 
-// For operations that might be slow, like migrating a tenant with
+// For operations that might be slow, like migrating a branch with
 // some data in it.
 pub const RECONCILE_TIMEOUT: Duration = Duration::from_secs(30);
 
 // If we receive a call using Secondary mode initially, it will omit generation.  We will initialize
-// tenant shards into this generation, and as long as it remains in this generation, we will accept
+// branches into this generation, and as long as it remains in this generation, we will accept
 // input generation from future requests as authoritative.
 const INITIAL_GENERATION: Generation = Generation::new(0);
 
@@ -100,7 +100,7 @@ pub const MAX_WARMING_UP_INTERVAL_DEFAULT: Duration = Duration::from_secs(300);
 pub const HEARTBEAT_INTERVAL_DEFAULT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, strum_macros::Display)]
-enum TenantOperations {
+enum BranchOperations {
     Create,
     TimeTravelRemoteStorage,
     Delete,
@@ -121,7 +121,7 @@ enum NodeOperations {
     DeleteTombstone,
 }
 
-enum ShardGenerationValidity {
+enum BranchGenerationValidity {
     Valid,
     Mismatched {
         claimed: Generation,
@@ -131,7 +131,7 @@ enum ShardGenerationValidity {
 
 // Top level state available to all HTTP handlers
 struct ServiceState {
-    tenants: BTreeMap<TenantId, Tenant>,
+    branches: BTreeMap<BranchId, Branch>,
 
     nodes: Arc<HashMap<NodeId, Node>>,
 
@@ -140,7 +140,7 @@ struct ServiceState {
     scheduler: Scheduler,
 
     /// Tracks ongoing timeline import finalization tasks
-    imports_finalizing: BTreeMap<(TenantId, TimelineId), FinalizingImport>,
+    imports_finalizing: BTreeMap<BranchId, FinalizingImport>,
 }
 
 /// Transform an error from a pageserver into an error to return to callers of a storage
@@ -200,11 +200,11 @@ impl ServiceState {
     fn new(
         nodes: HashMap<NodeId, Node>,
         safekeepers: HashMap<NodeId, Safekeeper>,
-        tenants: BTreeMap<TenantId, Tenant>,
+        branches: BTreeMap<BranchId, Branch>,
         scheduler: Scheduler,
     ) -> Self {
         Self {
-            tenants,
+            branches,
             nodes: Arc::new(nodes),
             safekeepers: Arc::new(safekeepers),
             scheduler,
@@ -216,10 +216,10 @@ impl ServiceState {
         &mut self,
     ) -> (
         &mut Arc<HashMap<NodeId, Node>>,
-        &mut BTreeMap<TenantId, Tenant>,
+        &mut BTreeMap<BranchId, Branch>,
         &mut Scheduler,
     ) {
-        (&mut self.nodes, &mut self.tenants, &mut self.scheduler)
+        (&mut self.nodes, &mut self.branches, &mut self.scheduler)
     }
 
     #[allow(clippy::type_complexity)]
@@ -228,13 +228,13 @@ impl ServiceState {
     ) -> (
         &mut Arc<HashMap<NodeId, Node>>,
         &mut Arc<HashMap<NodeId, Safekeeper>>,
-        &mut BTreeMap<TenantId, Tenant>,
+        &mut BTreeMap<BranchId, Branch>,
         &mut Scheduler,
     ) {
         (
             &mut self.nodes,
             &mut self.safekeepers,
-            &mut self.tenants,
+            &mut self.branches,
             &mut self.scheduler,
         )
     }
@@ -270,8 +270,8 @@ pub struct Config {
     /// and/or upon handling the re-attach request from a node.
     pub max_warming_up_interval: Duration,
 
-    /// How many API requests per second to allow per tenant, across all
-    /// tenant-scoped API endpoints. Further API requests queue until ready.
+    /// How many API requests per second to allow per branch, across all
+    /// branch-scoped API endpoints. Further API requests queue until ready.
     pub tenant_rate_limit: NonZeroU32,
 
     pub heartbeat_interval: Duration,
@@ -305,7 +305,7 @@ impl From<DatabaseError> for ApiError {
 }
 
 enum InitialShardScheduleOutcome {
-    Scheduled(TenantCreateResponseShard),
+    Scheduled(BranchCreateResponseShard),
     NotScheduled,
     ShardScheduleError(ScheduleError),
 }
@@ -318,10 +318,10 @@ pub struct Service {
     heartbeater_ps: Heartbeater<Node, PageserverState>,
     heartbeater_sk: Heartbeater<Safekeeper, SafekeeperState>,
 
-    // Locking on a tenant granularity (covers all shards in the tenant):
-    // - Take exclusively for rare operations that mutate the tenant's persistent state (e.g. create/delete/split)
-    // - Take in shared mode for operations that need the set of shards to stay the same to complete reliably (e.g. timeline CRUD)
-    tenant_op_locks: IdLockMap<TenantId, TenantOperations>,
+    // Locking on a branch granularity:
+    // - Take exclusively for rare operations that mutate the branch's persistent state (e.g. create/delete)
+    // - Take in shared mode for operations that need the branch to stay the same to complete reliably (e.g. timeline CRUD)
+    branch_op_locks: IdLockMap<BranchId, BranchOperations>,
 
     // Locking for node-mutating operations: take exclusively for operations that modify the node's persistent state, or
     // that transition it to/from Active.
@@ -334,16 +334,16 @@ pub struct Service {
     gate: Gate,
 
     /// This waits for initial sync with pageservers to complete.  Until this barrier
-    /// passes, it isn't safe to do any actions that mutate tenants.
+    /// passes, it isn't safe to do any actions that mutate branches.
     pub(crate) startup_complete: Barrier,
 
     /// HTTP client with proper CA certs.
     http_client: reqwest::Client,
 }
 
-// yb-light: tenants are single-shard; shard-split scaffolding
+// yb-light: branches are single-shard; shard-split scaffolding
 // (ShardSplitParams / ShardSplitAction / ShardSplitTarget /
-// TenantShardSplitAbort / ShardSplitInputs and the compute_split_shards
+// BranchShardSplitAbort / ShardSplitInputs and the compute_split_shards
 // helper) has been removed.
 
 #[derive(Clone)]
@@ -358,23 +358,7 @@ pub(crate) struct ShardMutationLocations {
 }
 
 #[derive(Default, Clone)]
-pub(crate) struct TenantMutationLocations(pub BTreeMap<TenantId, ShardMutationLocations>);
-
-// yb-light: TenantId is now TenantId, so the upstream
-// TenantId/TenantId discriminator is redundant — there's only a
-// single tenant id space. The wrapper is kept to minimize churn at
-// call-sites.
-struct TenantIdOrShardId(TenantId);
-
-impl TenantIdOrShardId {
-    fn tenant_id(&self) -> TenantId {
-        self.0
-    }
-
-    fn matches(&self, tenant_id: &TenantId) -> bool {
-        &self.0 == tenant_id
-    }
-}
+pub(crate) struct BranchMutationLocations(pub BTreeMap<BranchId, ShardMutationLocations>);
 
 impl Service {
     pub fn get_config(&self) -> &Config {
@@ -386,7 +370,7 @@ impl Service {
     }
 
     /// Called once on startup: heartbeat all known nodes/safekeepers so that ones which are
-    /// already responsive come up Active immediately, schedule loaded tenants, and resume any
+    /// already responsive come up Active immediately, schedule loaded branches, and resume any
     /// in-flight timeline import finalization.
     #[instrument(skip_all)]
     async fn startup_reconcile(self: &Arc<Service>) {
@@ -398,9 +382,9 @@ impl Service {
         let (mut nodes_online, mut sks_online) =
             self.initial_heartbeat_round(all_nodes.keys()).await;
 
-        let tenant_count = {
+        let branch_count = {
             let mut locked = self.inner.write().unwrap();
-            let (nodes, safekeepers, tenants, scheduler) = locked.parts_mut_sk();
+            let (nodes, safekeepers, branches, scheduler) = locked.parts_mut_sk();
 
             // Mark nodes online if they responded to us: nodes are offline by default after a restart.
             let mut new_nodes = (**nodes).clone();
@@ -423,23 +407,23 @@ impl Service {
             }
             *safekeepers = Arc::new(new_sks);
 
-            // Populate each tenant's intent state: intent was pre-seeded from
+            // Populate each branch's intent state: intent was pre-seeded from
             // generation_pageserver in [`Self::spawn`]; scheduling fills in the rest.
-            for (tenant_id, tenant) in tenants.iter_mut() {
+            for (branch_id, branch) in branches.iter_mut() {
                 let mut schedule_context = ScheduleContext::default();
-                if let Err(e) = tenant.schedule(scheduler, &mut schedule_context) {
-                    // Non-fatal error: we are unable to properly schedule the tenant, perhaps because
-                    // not enough pageservers are available.  The tenant may well still be available
+                if let Err(e) = branch.schedule(scheduler, &mut schedule_context) {
+                    // Non-fatal error: we are unable to properly schedule the branch, perhaps because
+                    // not enough pageservers are available.  The branch may well still be available
                     // to clients.
-                    tracing::error!("Failed to schedule tenant {tenant_id} at startup: {e}");
+                    tracing::error!("Failed to schedule branch {branch_id} at startup: {e}");
                 }
             }
 
-            tenants.len()
+            branches.len()
         };
 
         // Resume timeline imports:
-        // 1. Mark each tenant with an importing timeline as importing.
+        // 1. Mark each branch with an importing timeline as importing.
         // 2. Finalize the completed imports in the background. This handles the case where
         //    the previous storage controller instance shut down whilst finalizing imports.
         let imports = self.persistence.list_timeline_imports().await;
@@ -449,10 +433,10 @@ impl Service {
                     let mut locked = self.inner.write().unwrap();
                     for import in &imports {
                         locked
-                            .tenants
-                            .range_mut(import.tenant_id..=import.tenant_id)
-                            .for_each(|(_id, shard)| {
-                                shard.importing = TimelineImportState::Importing
+                            .branches
+                            .range_mut(import.branch_id..=import.branch_id)
+                            .for_each(|(_id, branch)| {
+                                branch.importing = TimelineImportState::Importing
                             });
                     }
                 }
@@ -472,7 +456,7 @@ impl Service {
             }
         }
 
-        tracing::info!("Startup complete ({tenant_count} tenants total)");
+        tracing::info!("Startup complete ({branch_count} branches total)");
     }
 
     async fn initial_heartbeat_round<'a>(
@@ -784,27 +768,27 @@ impl Service {
             .storage_controller_https_safekeeper_nodes
             .set(safekeepers.values().filter(|s| s.has_https_port()).count() as i64);
 
-        tracing::info!("Loading tenants from database...");
-        let tenant_persistence = persistence.load_active_tenants().await?;
+        tracing::info!("Loading branches from database...");
+        let branch_persistence = persistence.load_active_branches().await?;
         tracing::info!(
-            "Loaded {} tenants from database.",
-            tenant_persistence.len()
+            "Loaded {} branches from database.",
+            branch_persistence.len()
         );
 
         // yb-light: shard splits don't exist; the recovery dance for
         // mid-split states is gone with the split machinery.
 
-        let mut tenants = BTreeMap::new();
+        let mut branches = BTreeMap::new();
 
         let mut scheduler = Scheduler::new(nodes.values());
 
         #[cfg(feature = "testing")]
         {
-            // Hack: insert scheduler state for all nodes referenced by shards, as compatibility
-            // tests only store the shards, not the nodes.  The nodes will be loaded shortly
+            // Hack: insert scheduler state for all nodes referenced by branches, as compatibility
+            // tests only store the branches, not the nodes.  The nodes will be loaded shortly
             // after when pageservers start up and register.
             let mut node_ids = HashSet::new();
-            for tsp in &tenant_persistence {
+            for tsp in &branch_persistence {
                 if let Some(node_id) = tsp.generation_pageserver {
                     node_ids.insert(node_id);
                 }
@@ -827,8 +811,8 @@ impl Service {
                 scheduler.node_upsert(&node);
             }
         }
-        for tsp in tenant_persistence {
-            let tenant_id = tsp.get_tenant_id()?;
+        for tsp in branch_persistence {
+            let branch_id = tsp.get_branch_id()?;
 
             // We will populate intent properly later in [`Self::startup_reconcile`], initially populate
             // it with what we can infer: the node for which a generation was most recently issued.
@@ -842,13 +826,13 @@ impl Service {
                     // to a non-existent node, because node deletion doesn't block on completing the reconciliations that will issue new generations
                     // on different pageservers.
                     tracing::warn!(
-                        "Tenant {tenant_id} references non-existent node {generation_pageserver} in database, will be rescheduled"
+                        "Branch {branch_id} references non-existent node {generation_pageserver} in database, will be rescheduled"
                     );
                 }
             }
-            let new_tenant = Tenant::from_persistent(tsp, intent)?;
+            let new_branch = Branch::from_persistent(tsp, intent)?;
 
-            tenants.insert(tenant_id, new_tenant);
+            branches.insert(branch_id, new_branch);
         }
 
         let (startup_completion, startup_complete) = utils::completion::channel();
@@ -894,7 +878,7 @@ impl Service {
             inner: Arc::new(std::sync::RwLock::new(ServiceState::new(
                 nodes,
                 safekeepers,
-                tenants,
+                branches,
                 scheduler,
             ))),
             config: config.clone(),
@@ -904,7 +888,7 @@ impl Service {
             startup_complete: startup_complete.clone(),
             cancel,
             gate: Gate::default(),
-            tenant_op_locks: Default::default(),
+            branch_op_locks: Default::default(),
             node_op_locks: Default::default(),
             http_client,
         });
@@ -920,7 +904,7 @@ impl Service {
                             },
                             _ = tokio::time::sleep(Duration::from_secs(60)) => {}
                         };
-                        this.tenant_op_locks.housekeeping();
+                        this.branch_op_locks.housekeeping();
                     }
                 }
             }
@@ -970,19 +954,20 @@ impl Service {
         &self,
         attach_req: AttachHookRequest,
     ) -> anyhow::Result<AttachHookResponse> {
-        let _tenant_lock = trace_exclusive_lock(
-            &self.tenant_op_locks,
-            attach_req.tenant_id,
-            TenantOperations::AttachHook,
+        let branch_id = attach_req.branch_id;
+        let _branch_lock = trace_exclusive_lock(
+            &self.branch_op_locks,
+            branch_id,
+            BranchOperations::AttachHook,
         )
         .await;
 
-        // This is a test hook.  To enable using it on tenants that were created directly with
-        // the pageserver API (not via this service), we will auto-create any missing tenant
-        // shards with default state.
+        // This is a test hook.  To enable using it on branches that were created directly with
+        // the pageserver API (not via this service), we will auto-create any missing branch
+        // with default state.
         let insert = {
             match self
-                .maybe_load_tenant(attach_req.tenant_id, &_tenant_lock)
+                .maybe_load_branch(branch_id, &_branch_lock)
                 .await
             {
                 Ok(_) => false,
@@ -993,8 +978,8 @@ impl Service {
 
         if insert {
             let config = attach_req.config.clone().unwrap_or_default();
-            let tsp = TenantPersistence {
-                tenant_id: attach_req.tenant_id.to_string(),
+            let tsp = BranchPersistence {
+                branch_id: branch_id.to_string(),
                 generation: attach_req.generation_override.or(Some(0)),
                 generation_pageserver: None,
                 placement_policy: serde_json::to_string(&PlacementPolicy::Attached(0)).unwrap(),
@@ -1003,56 +988,56 @@ impl Service {
                     .unwrap(),
             };
 
-            match self.persistence.insert_tenants(vec![tsp]).await {
+            match self.persistence.insert_branches(vec![tsp]).await {
                 Err(e) => match e {
                     DatabaseError::Query(diesel::result::Error::DatabaseError(
                         DatabaseErrorKind::UniqueViolation,
                         _,
                     )) => {
                         tracing::info!(
-                            "Raced with another request to insert tenant {}",
-                            attach_req.tenant_id
+                            "Raced with another request to insert branch {}",
+                            branch_id
                         )
                     }
                     _ => return Err(e.into()),
                 },
                 Ok(()) => {
-                    tracing::info!("Inserted tenant {} in database", attach_req.tenant_id);
+                    tracing::info!("Inserted branch {} in database", branch_id);
 
-                    let mut shard = Tenant::new(
-                        attach_req.tenant_id,
+                    let mut branch = Branch::new(
+                        branch_id,
                         PlacementPolicy::Attached(0),
                     );
-                    shard.config = config;
+                    branch.config = config;
 
                     let mut locked = self.inner.write().unwrap();
-                    locked.tenants.insert(attach_req.tenant_id, shard);
-                    tracing::info!("Inserted tenant {} in memory", attach_req.tenant_id);
+                    locked.branches.insert(branch_id, branch);
+                    tracing::info!("Inserted branch {} in memory", branch_id);
                 }
             }
         }
 
         let new_generation = if let Some(req_node_id) = attach_req.node_id {
-            let maybe_tenant_conf = {
+            let maybe_branch_conf = {
                 let locked = self.inner.write().unwrap();
                 locked
-                    .tenants
-                    .get(&attach_req.tenant_id)
+                    .branches
+                    .get(&branch_id)
                     .map(|t| t.config.clone())
             };
 
-            match maybe_tenant_conf {
+            match maybe_branch_conf {
                 Some(conf) => {
                     let new_generation = self
                         .persistence
-                        .increment_generation(attach_req.tenant_id, req_node_id)
+                        .increment_generation(branch_id, req_node_id)
                         .await?;
 
                     // Persist the placement policy update. This is required
-                    // when we reattaching a detached tenant.
+                    // when we reattaching a detached branch.
                     self.persistence
-                        .update_tenant(
-                            TenantFilter::Shard(attach_req.tenant_id),
+                        .update_branch(
+                            BranchFilter::Branch(branch_id),
                             Some(PlacementPolicy::Attached(0)),
                             Some(conf),
                             None,
@@ -1062,98 +1047,98 @@ impl Service {
                     Some(new_generation)
                 }
                 None => {
-                    anyhow::bail!("Attach hook handling raced with tenant removal")
+                    anyhow::bail!("Attach hook handling raced with branch removal")
                 }
             }
         } else {
-            self.persistence.detach(attach_req.tenant_id).await?;
+            self.persistence.detach(branch_id).await?;
             None
         };
 
         let mut locked = self.inner.write().unwrap();
-        let (_nodes, tenants, scheduler) = locked.parts_mut();
+        let (_nodes, branches, scheduler) = locked.parts_mut();
 
-        let tenant = tenants
-            .get_mut(&attach_req.tenant_id)
+        let branch = branches
+            .get_mut(&branch_id)
             .expect("Checked for existence above");
 
         if let Some(new_generation) = new_generation {
-            tenant.generation = Some(new_generation);
-            tenant.policy = PlacementPolicy::Attached(0);
+            branch.generation = Some(new_generation);
+            branch.policy = PlacementPolicy::Attached(0);
         } else {
             // This is a detach notification.  We must update placement policy to avoid re-attaching
             // during background scheduling/reconciliation, or during storage controller restart.
             assert!(attach_req.node_id.is_none());
-            tenant.policy = PlacementPolicy::Detached;
+            branch.policy = PlacementPolicy::Detached;
         }
 
         if let Some(attaching_pageserver) = attach_req.node_id.as_ref() {
             tracing::info!(
-                tenant_id = %attach_req.tenant_id,
+                branch_id = %branch_id,
                 ps_id = %attaching_pageserver,
-                generation = ?tenant.generation,
+                generation = ?branch.generation,
                 "issuing",
             );
-        } else if let Some(ps_id) = tenant.intent.get_attached() {
+        } else if let Some(ps_id) = branch.intent.get_attached() {
             tracing::info!(
-                tenant_id = %attach_req.tenant_id,
+                branch_id = %branch_id,
                 %ps_id,
-                generation = ?tenant.generation,
+                generation = ?branch.generation,
                 "dropping",
             );
         } else {
             tracing::info!(
-            tenant_id = %attach_req.tenant_id,
-            "no-op: tenant already has no pageserver");
+            branch_id = %branch_id,
+            "no-op: branch already has no pageserver");
         }
-        tenant
+        branch
             .intent
             .set_attached(scheduler, attach_req.node_id);
 
         tracing::info!(
-            "attach_hook: tenant {} set generation {:?}, pageserver {}, config {:?}",
-            attach_req.tenant_id,
-            tenant.generation,
+            "attach_hook: branch {} set generation {:?}, pageserver {}, config {:?}",
+            branch_id,
+            branch.generation,
             // TODO: this is an odd number of 0xf's
             attach_req.node_id.unwrap_or(utils::id::NodeId(0xfffffff)),
             attach_req.config,
         );
 
         // Record the attached location as observed, so that tests which manually configure a
-        // tenant on the pageserver and then call this attach hook see a consistent state.
+        // branch on the pageserver and then call this attach hook see a consistent state.
         #[cfg(feature = "testing")]
         {
             if let Some(node_id) = attach_req.node_id {
-                tenant.observed.locations = HashMap::from([(
+                branch.observed.locations = HashMap::from([(
                     node_id,
                     ObservedStateLocation {
                         conf: Some(models::LocationConfig {
-                            generation: tenant.generation.unwrap().into(),
+                            generation: branch.generation.unwrap().into(),
                         }),
                     },
                 )]);
             } else {
-                tenant.observed.locations.clear();
+                branch.observed.locations.clear();
             }
         }
 
         Ok(AttachHookResponse {
             generation: attach_req
                 .node_id
-                .map(|_| tenant.generation.expect("Test hook, not used on tenants that are mid-onboarding with a NULL generation").into().unwrap()),
+                .map(|_| branch.generation.expect("Test hook, not used on branches that are mid-onboarding with a NULL generation").into().unwrap()),
         })
     }
 
     pub(crate) fn inspect(&self, inspect_req: InspectRequest) -> InspectResponse {
         let locked = self.inner.read().unwrap();
 
-        let tenant = locked.tenants.get(&inspect_req.tenant_id);
+        let branch = locked.branches.get(&inspect_req.branch_id);
 
         InspectResponse {
-            attachment: tenant.and_then(|s| {
+            attachment: branch.and_then(|s| {
                 s.intent
                     .get_attached()
-                    .map(|ps| (s.generation.expect("Test hook, not used on tenants that are mid-onboarding with a NULL generation").into().unwrap(), ps))
+                    .map(|ps| (s.generation.expect("Test hook, not used on branches that are mid-onboarding with a NULL generation").into().unwrap(), ps))
             }),
         }
     }
@@ -1171,76 +1156,76 @@ impl Service {
 
         tracing::info!(
             node_id=%reattach_req.node_id,
-            "Incremented {} tenants' generations",
+            "Incremented {} branches' generations",
             incremented_generations.len()
         );
 
         // Apply the updated generation to our in-memory state, and
         // gather discover secondary locations.
         let mut locked = self.inner.write().unwrap();
-        let (nodes, tenants, scheduler) = locked.parts_mut();
+        let (nodes, branches, scheduler) = locked.parts_mut();
 
         let mut response = ReAttachResponse {
-            tenants: Vec::new(),
+            branches: Vec::new(),
         };
 
-        // yb-light: pageservers carry no authoritative local tenant state — the
+        // yb-light: pageservers carry no authoritative local branch state — the
         // re-attach response is what they'll honor, and any prior observed
         // location for this node is stale, so clear it.
         tracing::info!(
-            "Pageserver {node_id} re-attached, clearing observed locations referencing the pageserver for all tenants",
+            "Pageserver {node_id} re-attached, clearing observed locations referencing the pageserver for all branches",
             node_id = reattach_req.node_id
         );
-        let mut num_tenants_affected = 0;
-        for (tenant_id, shard) in tenants.iter_mut() {
-            if shard
+        let mut num_branches_affected = 0;
+        for (branch_id, branch) in branches.iter_mut() {
+            if branch
                 .observed
                 .locations
                 .remove(&reattach_req.node_id)
                 .is_some()
             {
-                tracing::info!("Cleared observed location for tenant {tenant_id}");
-                num_tenants_affected += 1;
+                tracing::info!("Cleared observed location for branch {branch_id}");
+                num_branches_affected += 1;
             }
         }
         tracing::info!(
-            "Cleared observed locations for {num_tenants_affected} tenants"
+            "Cleared observed locations for {num_branches_affected} branches"
         );
 
-        // Scan through all shards, applying updates for ones where we updated generation
-        // and identifying shards that intend to have a secondary location on this node.
-        for (tenant_id, shard) in tenants {
-            if let Some(new_gen) = incremented_generations.get(tenant_id) {
+        // Scan through all branches, applying updates for ones where we updated generation
+        // and identifying branches that intend to have a secondary location on this node.
+        for (branch_id, branch) in branches {
+            if let Some(new_gen) = incremented_generations.get(branch_id) {
                 let new_gen = *new_gen;
-                response.tenants.push(ReAttachResponseTenant {
-                    id: *tenant_id,
+                response.branches.push(ReAttachResponseBranch {
+                    id: *branch_id,
                     r#gen: Some(new_gen.into().unwrap()),
                 });
 
-                shard.generation = std::cmp::max(shard.generation, Some(new_gen));
-                if let Some(observed) = shard.observed.locations.get_mut(&reattach_req.node_id) {
+                branch.generation = std::cmp::max(branch.generation, Some(new_gen));
+                if let Some(observed) = branch.observed.locations.get_mut(&reattach_req.node_id) {
                     // Why can we update `observed` even though we're not sure our response will be received
                     // by the pageserver?  Because the pageserver will not proceed with startup until
                     // it has processed response: if it loses it, we'll see another request and increment
-                    // generation again, avoiding any uncertainty about dirtiness of tenant's state.
+                    // generation again, avoiding any uncertainty about dirtiness of branch's state.
                     if let Some(conf) = observed.conf.as_mut() {
                         conf.generation = new_gen.into();
                     }
                 } else {
-                    // This node has no observed state for the shard: perhaps it was offline
+                    // This node has no observed state for the branch: perhaps it was offline
                     // when the pageserver restarted.  Insert a None to record that the
                     // location's state is unknown.
-                    shard
+                    branch
                         .observed
                         .locations
                         .insert(reattach_req.node_id, ObservedStateLocation { conf: None });
                 }
-            } else if shard.intent.get_secondary().contains(&reattach_req.node_id) {
+            } else if branch.intent.get_secondary().contains(&reattach_req.node_id) {
                 // Ordering: pageserver will not accept /location_config requests until it has
                 // finished processing the response from re-attach.  So we can update our in-memory state
                 // now, and be confident that we are not stamping on the result of some later location config.
-                response.tenants.push(ReAttachResponseTenant {
-                    id: *tenant_id,
+                response.branches.push(ReAttachResponseBranch {
+                    id: *branch_id,
                     r#gen: None,
                 });
 
@@ -1291,32 +1276,32 @@ impl Service {
         validate_req: ValidateRequest,
     ) -> Result<ValidateResponse, DatabaseError> {
         // Fast in-memory check: we may reject validation on anything that doesn't match our
-        // in-memory generation for a shard
+        // in-memory generation for a branch
         let in_memory_result = {
             let mut in_memory_result = Vec::new();
             let locked = self.inner.read().unwrap();
-            for req_tenant in validate_req.tenants {
-                if let Some(tenant) = locked.tenants.get(&req_tenant.id) {
-                    let valid = tenant.generation == Some(Generation::new(req_tenant.r#gen));
+            for req_branch in validate_req.branches {
+                if let Some(branch) = locked.branches.get(&req_branch.id) {
+                    let valid = branch.generation == Some(Generation::new(req_branch.r#gen));
                     tracing::info!(
                         "handle_validate: {}(gen {}): valid={valid} (latest {:?})",
-                        req_tenant.id,
-                        req_tenant.r#gen,
-                        tenant.generation
+                        req_branch.id,
+                        req_branch.r#gen,
+                        branch.generation
                     );
 
                     in_memory_result.push((
-                        req_tenant.id,
-                        Generation::new(req_tenant.r#gen),
+                        req_branch.id,
+                        Generation::new(req_branch.r#gen),
                         valid,
                     ));
                 } else {
-                    // This is legal: for example during a shard split the pageserver may still
-                    // have deletions in its queue from the old pre-split shard, or after deletion
-                    // of a tenant that was busy with compaction/gc while being deleted.
+                    // This is legal: for example after deletion of a branch that was busy with
+                    // compaction/gc while being deleted, the pageserver may still have deletions
+                    // in its queue.
                     tracing::info!(
-                        "Refusing deletion validation for missing tenant {}",
-                        req_tenant.id
+                        "Refusing deletion validation for missing branch {}",
+                        req_branch.id
                     );
                 }
             }
@@ -1328,7 +1313,7 @@ impl Service {
         // in case of controller split-brain, where some other controller process might have incremented the generation.
         let db_generations = self
             .persistence
-            .shard_generations(
+            .branches_generations(
                 in_memory_result
                     .iter()
                     .filter_map(|i| if i.2 { Some(&i.0) } else { None }),
@@ -1337,11 +1322,11 @@ impl Service {
         let db_generations = db_generations.into_iter().collect::<HashMap<_, _>>();
 
         let mut response = ValidateResponse {
-            tenants: Vec::new(),
+            branches: Vec::new(),
         };
-        for (tenant_id, validate_generation, valid) in in_memory_result.into_iter() {
+        for (branch_id, validate_generation, valid) in in_memory_result.into_iter() {
             let valid = if valid {
-                let db_generation = db_generations.get(&tenant_id);
+                let db_generation = db_generations.get(&branch_id);
                 db_generation == Some(&Some(validate_generation))
             } else {
                 // If in-memory state says it's invalid, trust that.  It's always safe to fail a validation, at worst
@@ -1349,8 +1334,8 @@ impl Service {
                 false
             };
 
-            response.tenants.push(ValidateResponseTenant {
-                id: tenant_id,
+            response.branches.push(ValidateResponseBranch {
+                id: branch_id,
                 valid,
             })
         }
@@ -1360,32 +1345,32 @@ impl Service {
 
     pub(crate) async fn tenant_create(
         &self,
-        create_req: TenantCreateRequest,
-    ) -> Result<TenantCreateResponse, ApiError> {
-        let tenant_id = create_req.new_tenant_id;
+        create_req: BranchCreateRequest,
+    ) -> Result<BranchCreateResponse, ApiError> {
+        let branch_id = create_req.new_branch_id;
 
-        // Exclude any concurrent attempts to create/access the same tenant ID
-        let _tenant_lock =
-            trace_exclusive_lock(&self.tenant_op_locks, tenant_id, TenantOperations::Create).await;
+        // Exclude any concurrent attempts to create/access the same branch ID
+        let _branch_lock =
+            trace_exclusive_lock(&self.branch_op_locks, branch_id, BranchOperations::Create).await;
         self.do_tenant_create(create_req).await
     }
 
     pub(crate) async fn do_tenant_create(
         &self,
-        create_req: TenantCreateRequest,
-    ) -> Result<TenantCreateResponse, ApiError> {
+        create_req: BranchCreateRequest,
+    ) -> Result<BranchCreateResponse, ApiError> {
         let placement_policy = create_req
             .placement_policy
             .clone()
             // As a default, zero secondaries is convenient for tests that don't choose a policy.
             .unwrap_or(PlacementPolicy::Attached(0));
 
-        let tenant_id = create_req.new_tenant_id;
+        let branch_id = create_req.new_branch_id;
 
-        tracing::info!("Creating tenant {}", create_req.new_tenant_id);
+        tracing::info!("Creating branch {}", create_req.new_branch_id);
 
         // yb-light: always single shard regardless of requested count.
-        let create_ids = vec![tenant_id];
+        let create_ids = vec![branch_id];
 
         // If the caller specifies a None generation, it means "start from default".
         let initial_generation = if matches!(placement_policy, PlacementPolicy::Secondary) {
@@ -1407,13 +1392,13 @@ impl Service {
             )
         };
 
-        // Ordering: we persist tenant shards before creating them on the pageserver.  This enables a caller
-        // to clean up after themselves by issuing a tenant deletion if something goes wrong and we restart
+        // Ordering: we persist branches before creating them on the pageserver.  This enables a caller
+        // to clean up after themselves by issuing a branch deletion if something goes wrong and we restart
         // during the creation, rather than risking leaving orphan objects in S3.
-        let persist_tenants = create_ids
+        let persist_branches = create_ids
             .iter()
-            .map(|tenant_id| TenantPersistence {
-                tenant_id: tenant_id.to_string(),
+            .map(|branch_id| BranchPersistence {
+                branch_id: branch_id.to_string(),
                 generation: initial_generation.map(|g| g.into().unwrap() as i32),
                 // The pageserver is not known until scheduling happens: we will set this column when
                 // incrementing the generation the first time we attach to a pageserver.
@@ -1427,7 +1412,7 @@ impl Service {
 
         match self
             .persistence
-            .insert_tenants(persist_tenants)
+            .insert_branches(persist_branches)
             .await
         {
             Ok(_) => {}
@@ -1435,11 +1420,10 @@ impl Service {
                 DatabaseErrorKind::UniqueViolation,
                 _,
             ))) => {
-                // Unique key violation: this is probably a retry.  Because the shard count is part of the unique key,
-                // if we see a unique key violation it means that the creation request's shard count matches the previous
-                // creation's shard count.
+                // Unique key violation: this is probably a retry, and the branch id is the unique
+                // key, so a violation means the same branch is being created again.
                 tracing::info!(
-                    "Tenant already present in database, proceeding with idempotent creation..."
+                    "Branch already present in database, proceeding with idempotent creation..."
                 );
             }
             // Any other database error is unexpected and a bug.
@@ -1449,12 +1433,12 @@ impl Service {
         let mut schedule_context = ScheduleContext::default();
         let mut schedule_error = None;
         let mut response_shards = Vec::new();
-        for tenant_id in create_ids {
-            tracing::info!("Creating tenant {tenant_id}...");
+        for branch_id in create_ids {
+            tracing::info!("Creating branch {branch_id}...");
 
             let outcome = self
                 .do_initial_shard_scheduling(
-                    tenant_id,
+                    branch_id,
                     initial_generation,
                     create_req.config.clone(),
                     placement_policy.clone(),
@@ -1471,40 +1455,39 @@ impl Service {
             }
         }
 
-        // If we failed to schedule shards, then they are still created in the controller,
+        // If we failed to schedule the branch, then it is still created in the controller,
         // but we return an error to the requester to avoid a silent failure when someone
-        // tries to e.g. create a tenant whose placement policy requires more nodes than
-        // are present in the system.  We do this here rather than in the above loop, to
-        // avoid situations where we only create a subset of shards in the tenant.
+        // tries to e.g. create a branch whose placement policy requires more nodes than
+        // are present in the system.
         if let Some(e) = schedule_error {
             return Err(ApiError::Conflict(format!(
-                "Failed to schedule tenant(s): {e}"
+                "Failed to schedule branch(es): {e}"
             )));
         }
 
-        Ok(TenantCreateResponse {
+        Ok(BranchCreateResponse {
             shards: response_shards,
         })
     }
 
-    /// Helper for tenant creation that does the scheduling for an individual shard. Covers both the
-    /// case of a new tenant and a pre-existing one.
+    /// Helper for branch creation that does the scheduling for the branch. Covers both the
+    /// case of a new branch and a pre-existing one.
     #[allow(clippy::too_many_arguments)]
     async fn do_initial_shard_scheduling(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         initial_generation: Option<Generation>,
-        config: TenantConfig,
+        config: BranchConfig,
         placement_policy: PlacementPolicy,
         schedule_context: &mut ScheduleContext,
     ) -> InitialShardScheduleOutcome {
         let mut locked = self.inner.write().unwrap();
-        let (_nodes, tenants, scheduler) = locked.parts_mut();
+        let (_nodes, branches, scheduler) = locked.parts_mut();
 
         use std::collections::btree_map::Entry;
-        match tenants.entry(tenant_id) {
+        match branches.entry(branch_id) {
             Entry::Occupied(mut entry) => {
-                tracing::info!("Tenant {tenant_id} already exists while creating");
+                tracing::info!("Branch {branch_id} already exists while creating");
 
                 if let Err(err) = entry.get_mut().schedule(scheduler, schedule_context) {
                     return InitialShardScheduleOutcome::ShardScheduleError(err);
@@ -1515,8 +1498,8 @@ impl Service {
                         .get()
                         .generation
                         .expect("Generation is set when in attached mode");
-                    InitialShardScheduleOutcome::Scheduled(TenantCreateResponseShard {
-                        shard_id: tenant_id,
+                    InitialShardScheduleOutcome::Scheduled(BranchCreateResponseShard {
+                        branch_id,
                         node_id: *node_id,
                         generation: generation.into().unwrap(),
                     })
@@ -1525,8 +1508,8 @@ impl Service {
                 }
             }
             Entry::Vacant(entry) => {
-                let state = entry.insert(Tenant::new(
-                    tenant_id,
+                let state = entry.insert(Branch::new(
+                    branch_id,
                     placement_policy,
                 ));
 
@@ -1536,14 +1519,14 @@ impl Service {
                     return InitialShardScheduleOutcome::ShardScheduleError(e);
                 }
 
-                // Only include shards in result if we are attaching: the purpose
-                // of the response is to tell the caller where the shards are attached.
+                // Only include the branch in result if we are attaching: the purpose
+                // of the response is to tell the caller where the branch is attached.
                 if let Some(node_id) = state.intent.get_attached() {
                     let generation = state
                         .generation
                         .expect("Generation is set when in attached mode");
-                    InitialShardScheduleOutcome::Scheduled(TenantCreateResponseShard {
-                        shard_id: tenant_id,
+                    InitialShardScheduleOutcome::Scheduled(BranchCreateResponseShard {
+                        branch_id,
                         node_id: *node_id,
                         generation: generation.into().unwrap(),
                     })
@@ -1554,68 +1537,68 @@ impl Service {
         }
     }
 
-    /// For APIs that might act on tenants with [`PlacementPolicy::Detached`], first check if
-    /// the tenant is present in memory. If not, load it from the database.  If it is found
+    /// For APIs that might act on branches with [`PlacementPolicy::Detached`], first check if
+    /// the branch is present in memory. If not, load it from the database.  If it is found
     /// in neither location, return a NotFound error.
     ///
     /// Caller must demonstrate they hold a lock guard, as otherwise two callers might try and load
     /// it at the same time.
-    async fn maybe_load_tenant(
+    async fn maybe_load_branch(
         &self,
-        tenant_id: TenantId,
-        _guard: &TracingExclusiveGuard<TenantOperations>,
+        branch_id: BranchId,
+        _guard: &TracingExclusiveGuard<BranchOperations>,
     ) -> Result<(), ApiError> {
-        // Check if the tenant is present in memory, and select an AZ to use when loading
+        // Check if the branch is present in memory, and select an AZ to use when loading
         // if we will load it.
         {
             let locked = self.inner.read().unwrap();
             let existing = locked
-                .tenants
-                .range(tenant_id..=tenant_id)
+                .branches
+                .range(branch_id..=branch_id)
                 .next();
 
             if existing.is_some() {
-                // We already have this tenant in memory
+                // We already have this branch in memory
                 return Ok(());
             }
 
             if locked.nodes.is_empty() {
                 return Err(ApiError::BadRequest(anyhow::anyhow!(
-                    "No nodes found to load tenant"
+                    "No nodes found to load branch"
                 )));
             }
         };
 
-        let tenants = self.persistence.load_tenant(tenant_id).await?;
-        if tenants.is_empty() {
+        let branches = self.persistence.load_branch(branch_id).await?;
+        if branches.is_empty() {
             return Err(ApiError::NotFound(
-                anyhow::anyhow!("Tenant {} not found", tenant_id).into(),
+                anyhow::anyhow!("Branch {} not found", branch_id).into(),
             ));
         }
 
         let mut locked = self.inner.write().unwrap();
         tracing::info!(
-            "Loaded {} entries for tenant {}",
-            tenants.len(),
-            tenant_id
+            "Loaded {} entries for branch {}",
+            branches.len(),
+            branch_id
         );
 
-        locked.tenants.extend(tenants.into_iter().map(|p| {
+        locked.branches.extend(branches.into_iter().map(|p| {
             let intent = IntentState::new();
-            let shard =
-                Tenant::from_persistent(p, intent).expect("Corrupt tenant row in database");
+            let branch =
+                Branch::from_persistent(p, intent).expect("Corrupt branch row in database");
 
             // Sanity check: when loading on-demand, we should always be loaded something Detached
-            debug_assert!(shard.policy == PlacementPolicy::Detached);
-            if shard.policy != PlacementPolicy::Detached {
+            debug_assert!(branch.policy == PlacementPolicy::Detached);
+            if branch.policy != PlacementPolicy::Detached {
                 tracing::error!(
-                    "Tenant {} loaded on-demand, but has non-Detached policy {:?}",
-                    shard.tenant_id,
-                    shard.policy
+                    "Branch {} loaded on-demand, but has non-Detached policy {:?}",
+                    branch.branch_id,
+                    branch.policy
                 );
             }
 
-            (shard.tenant_id, shard)
+            (branch.branch_id, branch)
         }));
 
         Ok(())
@@ -1623,34 +1606,34 @@ impl Service {
 
     pub(crate) async fn tenant_time_travel_remote_storage(
         &self,
-        time_travel_req: &TenantTimeTravelRequest,
-        tenant_id: TenantId,
+        time_travel_req: &BranchTimeTravelRequest,
+        branch_id: BranchId,
         timestamp: Cow<'_, str>,
         done_if_after: Cow<'_, str>,
     ) -> Result<(), ApiError> {
-        let _tenant_lock = trace_exclusive_lock(
-            &self.tenant_op_locks,
-            tenant_id,
-            TenantOperations::TimeTravelRemoteStorage,
+        let _branch_lock = trace_exclusive_lock(
+            &self.branch_op_locks,
+            branch_id,
+            BranchOperations::TimeTravelRemoteStorage,
         )
         .await;
 
         let node = {
             let mut locked = self.inner.write().unwrap();
-            // Just a sanity check to prevent misuse: the API expects that the tenant is fully
+            // Just a sanity check to prevent misuse: the API expects that the branch is fully
             // detached everywhere, and nothing writes to S3 storage. Here, we verify that,
             // but only at the start of the process, so it's really just to prevent operator
             // mistakes.
-            for (id, tenant) in locked.tenants.range(tenant_id..=tenant_id) {
-                if tenant.intent.get_attached().is_some()
-                    || !tenant.intent.get_secondary().is_empty()
+            for (id, branch) in locked.branches.range(branch_id..=branch_id) {
+                if branch.intent.get_attached().is_some()
+                    || !branch.intent.get_secondary().is_empty()
                 {
                     return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                        "We want tenant to be detached, but it is attached: tenant_id={id}"
+                        "We want branch to be detached, but it is attached: branch_id={id}"
                     )));
                 }
                 let maybe_attached =
-                    tenant
+                    branch
                         .observed
                         .locations
                         .iter()
@@ -1662,7 +1645,7 @@ impl Service {
                         });
                 if let Some((node_id, _observed_location)) = maybe_attached {
                     return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                        "Observed attached tenant on node_id={node_id} tenant_id={id}"
+                        "Observed attached branch on node_id={node_id} branch_id={id}"
                     )));
                 }
             }
@@ -1690,58 +1673,55 @@ impl Service {
         for count in counts {
             // yb-light: always single shard regardless of the historical shard counts.
             let _ = count;
-            let shard_ids = vec![tenant_id];
-            for tenant_id in shard_ids {
-                let client = PageserverClient::new(
-                    node.get_id(),
-                    self.http_client.clone(),
-                    node.base_url(),
-                    self.config.pageserver_jwt_token.as_deref(),
-                );
+            let client = PageserverClient::new(
+                node.get_id(),
+                self.http_client.clone(),
+                node.base_url(),
+                self.config.pageserver_jwt_token.as_deref(),
+            );
 
-                tracing::info!("Doing time travel recovery for tenant {tenant_id}",);
+            tracing::info!("Doing time travel recovery for branch {branch_id}",);
 
-                client
-                    .tenant_time_travel_remote_storage(
-                        tenant_id,
-                        &timestamp,
-                        &done_if_after,
-                    )
-                    .await
-                    .map_err(|e| {
-                        ApiError::InternalServerError(anyhow::anyhow!(
-                            "Error doing time travel recovery for tenant {tenant_id} on node {}: {e}",
-                            node
-                        ))
-                    })?;
-            }
+            client
+                .branch_time_travel_remote_storage(
+                    branch_id,
+                    &timestamp,
+                    &done_if_after,
+                )
+                .await
+                .map_err(|e| {
+                    ApiError::InternalServerError(anyhow::anyhow!(
+                        "Error doing time travel recovery for branch {branch_id} on node {}: {e}",
+                        node
+                    ))
+                })?;
         }
         Ok(())
     }
 
     pub(crate) async fn tenant_delete(
         self: &Arc<Self>,
-        tenant_id: TenantId,
+        branch_id: BranchId,
     ) -> Result<StatusCode, ApiError> {
-        let _tenant_lock =
-            trace_exclusive_lock(&self.tenant_op_locks, tenant_id, TenantOperations::Delete).await;
+        let _branch_lock =
+            trace_exclusive_lock(&self.branch_op_locks, branch_id, BranchOperations::Delete).await;
 
-        self.maybe_load_tenant(tenant_id, &_tenant_lock).await?;
+        self.maybe_load_branch(branch_id, &_branch_lock).await?;
 
-        // Detach all shards: update the tenant's intent to remove all attachments.
+        // Detach the branch: update its intent to remove all attachments.
         let node = {
             let mut locked = self.inner.write().unwrap();
-            let (nodes, tenants, scheduler) = locked.parts_mut();
-            for (_, shard) in tenants.range_mut(tenant_id..=tenant_id) {
-                shard.policy = PlacementPolicy::Detached;
-                shard
+            let (nodes, branches, scheduler) = locked.parts_mut();
+            for (_, branch) in branches.range_mut(branch_id..=branch_id) {
+                branch.policy = PlacementPolicy::Detached;
+                branch
                     .schedule(scheduler, &mut ScheduleContext::default())
                     .expect("De-scheduling is infallible");
-                debug_assert!(shard.intent.get_attached().is_none());
-                debug_assert!(shard.intent.get_secondary().is_empty());
+                debug_assert!(branch.intent.get_attached().is_none());
+                debug_assert!(branch.intent.get_secondary().is_empty());
             }
 
-            // Pick an arbitrary node to use for remote deletions (does not have to be where the tenant
+            // Pick an arbitrary node to use for remote deletions (does not have to be where the branch
             // was attached, just has to be able to see the S3 content)
             let node_id = scheduler.any_available_node()?;
             let node = nodes
@@ -1750,12 +1730,12 @@ impl Service {
             node.clone()
         };
 
-        // Delete the entire tenant (all shards) from remote storage via a random pageserver.
-        // Passing an unsharded tenant ID will cause the pageserver to remove all remote paths with
-        // the tenant ID prefix, including all shards (even possibly stale ones).
+        // Delete the entire branch from remote storage via a random pageserver.
+        // The branch id prefix causes the pageserver to remove all remote paths with
+        // that prefix.
         match node
             .with_client_retries(
-                |client| async move { client.tenant_delete(tenant_id).await },
+                |client| async move { client.branch_delete(branch_id).await },
                 &self.http_client,
                 &self.config.pageserver_jwt_token,
                 1,
@@ -1778,67 +1758,67 @@ impl Service {
             }
         }
 
-        // Fall through: deletion of the tenant on pageservers is complete, we may proceed to drop
+        // Fall through: deletion of the branch on pageservers is complete, we may proceed to drop
         // our in-memory state and database state.
 
         // Ordering: we delete persistent state first: if we then
         // crash, we will drop the in-memory state.
 
         // Drop persistent state.
-        self.persistence.delete_tenant(tenant_id).await?;
+        self.persistence.delete_branch(branch_id).await?;
 
         // Drop in-memory state
         {
             let mut locked = self.inner.write().unwrap();
-            let (_nodes, tenants, scheduler) = locked.parts_mut();
+            let (_nodes, branches, scheduler) = locked.parts_mut();
 
-            // Dereference Scheduler from shards before dropping them
-            for (_tenant_id, shard) in tenants.range_mut(tenant_id..=tenant_id) {
-                shard.intent.clear(scheduler);
+            // Dereference Scheduler from the branch before dropping it
+            for (_branch_id, branch) in branches.range_mut(branch_id..=branch_id) {
+                branch.intent.clear(scheduler);
             }
 
-            tenants.retain(|id, _shard| *id != tenant_id);
+            branches.retain(|id, _branch| *id != branch_id);
             tracing::info!(
-                "Deleted tenant {tenant_id}, now have {} tenants",
-                locked.tenants.len()
+                "Deleted branch {branch_id}, now have {} branches",
+                locked.branches.len()
             );
         };
 
-        // Delete the tenant from safekeepers (if needed)
-        self.tenant_delete_safekeepers(tenant_id)
-            .instrument(tracing::info_span!("tenant_delete_safekeepers", %tenant_id))
+        // Delete the branch from safekeepers (if needed)
+        self.branch_delete_safekeepers(branch_id)
+            .instrument(tracing::info_span!("branch_delete_safekeepers", %branch_id))
             .await?;
 
         // Success is represented as 404, to imitate the existing pageserver deletion API
         Ok(StatusCode::NOT_FOUND)
     }
 
-    /// Modifies the tenant's policies (placement/scheduling configuration) within the
+    /// Modifies the branch's policies (placement/scheduling configuration) within the
     /// storage controller; nothing is pushed to pageservers.
     pub(crate) async fn tenant_update_policy(
         &self,
-        tenant_id: TenantId,
-        req: TenantPolicyRequest,
+        branch_id: BranchId,
+        req: BranchPolicyRequest,
     ) -> Result<(), ApiError> {
         // We require an exclusive lock, because we are updating persistent and in-memory state
-        let _tenant_lock = trace_exclusive_lock(
-            &self.tenant_op_locks,
-            tenant_id,
-            TenantOperations::UpdatePolicy,
+        let _branch_lock = trace_exclusive_lock(
+            &self.branch_op_locks,
+            branch_id,
+            BranchOperations::UpdatePolicy,
         )
         .await;
 
-        self.maybe_load_tenant(tenant_id, &_tenant_lock).await?;
+        self.maybe_load_branch(branch_id, &_branch_lock).await?;
 
         failpoint_support::sleep_millis_async!("tenant-update-policy-exclusive-lock");
 
-        let TenantPolicyRequest {
+        let BranchPolicyRequest {
             placement,
             mut scheduling,
         } = req;
 
         if let Some(PlacementPolicy::Detached | PlacementPolicy::Secondary) = placement {
-            // When someone configures a tenant to detach, we force the scheduling policy to enable
+            // When someone configures a branch to detach, we force the scheduling policy to enable
             // this to take effect.
             if scheduling.is_none() {
                 scheduling = Some(ShardSchedulingPolicy::Active);
@@ -1846,8 +1826,8 @@ impl Service {
         }
 
         self.persistence
-            .update_tenant(
-                TenantFilter::Tenant(tenant_id),
+            .update_branch(
+                BranchFilter::Branch(branch_id),
                 placement.clone(),
                 None,
                 None,
@@ -1857,24 +1837,24 @@ impl Service {
 
         let mut schedule_context = ScheduleContext::default();
         let mut locked = self.inner.write().unwrap();
-        let (_nodes, tenants, scheduler) = locked.parts_mut();
-        for (id, tenant) in tenants.range_mut(tenant_id..=tenant_id) {
+        let (_nodes, branches, scheduler) = locked.parts_mut();
+        for (id, branch) in branches.range_mut(branch_id..=branch_id) {
             if let Some(placement) = &placement {
-                tenant.policy = placement.clone();
+                branch.policy = placement.clone();
 
-                tracing::info!(tenant_id=%id,
+                tracing::info!(branch_id=%id,
                                "Updated placement policy to {placement:?}");
             }
 
             if let Some(scheduling) = &scheduling {
-                tenant.set_scheduling_policy(*scheduling);
+                branch.set_scheduling_policy(*scheduling);
 
-                tracing::info!(tenant_id=%id,
+                tracing::info!(branch_id=%id,
                                "Updated scheduling policy to {scheduling:?}");
             }
 
             // In case scheduling is being switched back on, try it now.
-            tenant.schedule(scheduler, &mut schedule_context).ok();
+            branch.schedule(scheduler, &mut schedule_context).ok();
         }
 
         Ok(())
@@ -1891,26 +1871,27 @@ impl Service {
     /// consumes `last_record_lsn` from it.
     pub(crate) async fn tenant_timeline_create_pageservers(
         &self,
-        tenant_id: TenantId,
-        create_req: TimelineCreateRequest,
+        branch_id: BranchId,
+        // The pageserver creates its single timeline itself at startup, so the
+        // request body is not consumed here; we only observe the result.
+        _create_req: TimelineCreateRequest,
     ) -> Result<TimelineInfo, ApiError> {
         const OBSERVE_TIMEOUT: Duration = Duration::from_secs(180);
         const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-        let timeline_id = create_req.new_timeline_id;
         tracing::info!(
-            "Waiting for timeline {tenant_id}/{timeline_id} to become active on its pageserver",
+            "Waiting for branch {branch_id} to become active on its pageserver",
         );
 
-        self.tenant_remote_mutation(tenant_id, move |mut targets| async move {
+        self.tenant_remote_mutation(branch_id, move |mut targets| async move {
             if targets.0.is_empty() {
                 return Err(ApiError::NotFound(
-                    anyhow::anyhow!("Tenant not found").into(),
+                    anyhow::anyhow!("Branch not found").into(),
                 ));
             };
 
-            let (shard_zero_tid, shard_zero_locations) =
-                targets.0.pop_first().expect("Must have at least one tenant");
+            let (shard_zero_bid, shard_zero_locations) =
+                targets.0.pop_first().expect("Must have at least one branch");
 
             let node = shard_zero_locations.latest.node;
             let client = PageserverClient::new(
@@ -1922,28 +1903,28 @@ impl Service {
 
             let deadline = tokio::time::Instant::now() + OBSERVE_TIMEOUT;
             loop {
-                match client.timeline_detail(shard_zero_tid, timeline_id).await {
+                match client.branch_detail(shard_zero_bid).await {
                     Ok(info) if matches!(info.state, models::TimelineState::Active) => {
                         return Ok(info);
                     }
                     Ok(info) => {
                         tracing::info!(
                             state = ?info.state,
-                            "timeline present on pageserver, waiting for Active",
+                            "branch present on pageserver, waiting for Active",
                         );
                     }
                     Err(e) => {
-                        // Bootstrap still running (404), tenant still
+                        // Bootstrap still running (404), branch still
                         // attaching (503), or the process is mid-start
                         // (transport error) — all retryable until the
                         // deadline. Genuine failures surface as a
                         // timeout with the last error attached.
-                        tracing::info!("timeline not ready on {node}: {e}");
+                        tracing::info!("branch not ready on {node}: {e}");
                         if tokio::time::Instant::now() >= deadline {
                             return Err(ApiError::Timeout(
                                 format!(
-                                    "timed out waiting for timeline \
-                                     {tenant_id}/{timeline_id} on {node}: {e}"
+                                    "timed out waiting for branch \
+                                     {branch_id} on {node}: {e}"
                                 )
                                 .into(),
                             ));
@@ -1953,7 +1934,7 @@ impl Service {
                 if tokio::time::Instant::now() >= deadline {
                     return Err(ApiError::Timeout(
                         format!(
-                            "timed out waiting for timeline {tenant_id}/{timeline_id} \
+                            "timed out waiting for branch {branch_id} \
                              to become Active on {node}"
                         )
                         .into(),
@@ -1967,24 +1948,22 @@ impl Service {
 
     pub(crate) async fn tenant_timeline_create(
         self: &Arc<Self>,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         create_req: TimelineCreateRequest,
     ) -> Result<TimelineCreateResponseStorcon, ApiError> {
         let safekeepers = self.config.timelines_onto_safekeepers;
-        let timeline_id = create_req.new_timeline_id;
 
         tracing::info!(
             mode=%create_req.mode_tag(),
             %safekeepers,
-            "Creating timeline {}/{}",
-            tenant_id,
-            timeline_id,
+            "Creating branch {}",
+            branch_id,
         );
 
-        let _tenant_lock = trace_shared_lock(
-            &self.tenant_op_locks,
-            tenant_id,
-            TenantOperations::TimelineCreate,
+        let _branch_lock = trace_shared_lock(
+            &self.branch_op_locks,
+            branch_id,
+            BranchOperations::TimelineCreate,
         )
         .await;
         failpoint_support::sleep_millis_async!("tenant-create-timeline-shared-lock");
@@ -2001,23 +1980,22 @@ impl Service {
             // Ensure that there is no split on-going.
             let locked = self.inner.read().unwrap();
             let splitting = locked
-                .tenants
-                .range(tenant_id..=tenant_id)
-                .any(|(_id, shard)| shard.splitting != SplitState::Idle);
+                .branches
+                .range(branch_id..=branch_id)
+                .any(|(_id, branch)| branch.splitting != SplitState::Idle);
 
             if splitting {
-                return Err(ApiError::Conflict("Tenant is splitting".to_string()));
+                return Err(ApiError::Conflict("Branch is splitting".to_string()));
             }
         }
 
         let timeline_info = self
-            .tenant_timeline_create_pageservers(tenant_id, create_req)
+            .tenant_timeline_create_pageservers(branch_id, create_req)
             .await?;
 
         let selected_safekeepers = if is_import {
             let import = TimelineImport {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 shard_statuses: ShardImportStatuses::new(),
             };
 
@@ -2028,32 +2006,32 @@ impl Service {
                 .context("timeline import insert")
                 .map_err(ApiError::InternalServerError)?;
 
-            // Set the importing flag on the tenant shards
+            // Set the importing flag on the branch
             self.inner
                 .write()
                 .unwrap()
-                .tenants
-                .range_mut(tenant_id..=tenant_id)
-                .for_each(|(_id, shard)| shard.importing = TimelineImportState::Importing);
+                .branches
+                .range_mut(branch_id..=branch_id)
+                .for_each(|(_id, branch)| branch.importing = TimelineImportState::Importing);
 
             match inserted {
                 true => {
-                    tracing::info!(%tenant_id, %timeline_id, "Inserted timeline import");
+                    tracing::info!(%branch_id, "Inserted timeline import");
                 }
                 false => {
-                    tracing::info!(%tenant_id, %timeline_id, "Timeline import entry already present");
+                    tracing::info!(%branch_id, "Timeline import entry already present");
                 }
             }
 
             None
         } else if safekeepers || read_only {
-            // Note that for imported timelines, we do not create the timeline on the safekeepers
+            // Note that for imported branches, we do not create the timeline on the safekeepers
             // straight away. Instead, we do it once the import finalized such that we know what
             // start LSN to provide for the safekeepers. This is done in
             // [`Self::finalize_timeline_import`].
             let res = self
-                .tenant_timeline_create_safekeepers(tenant_id, &timeline_info, read_only)
-                .instrument(tracing::info_span!("timeline_create_safekeepers", %tenant_id, timeline_id=%timeline_info.timeline_id))
+                .tenant_timeline_create_safekeepers(&timeline_info, read_only)
+                .instrument(tracing::info_span!("timeline_create_safekeepers", %branch_id))
                 .await?;
             Some(res)
         } else {
@@ -2067,21 +2045,20 @@ impl Service {
     }
 
     #[instrument(skip_all, fields(
-        tenant_id=%req.tenant_id,
-        timeline_id=%req.timeline_id,
+        branch_id=%req.branch_id,
     ))]
     pub(crate) async fn handle_timeline_shard_import_progress(
         self: &Arc<Self>,
         req: TimelineImportStatusRequest,
-    ) -> Result<ShardImportStatus, ApiError> {
+    ) -> Result<BranchImportStatus, ApiError> {
         let validity = self
-            .validate_shard_generation(req.tenant_id, req.generation)
+            .validate_shard_generation(req.branch_id, req.generation)
             .await?;
         match validity {
-            ShardGenerationValidity::Valid => {
+            BranchGenerationValidity::Valid => {
                 // fallthrough
             }
-            ShardGenerationValidity::Mismatched { claimed, actual } => {
+            BranchGenerationValidity::Mismatched { claimed, actual } => {
                 tracing::info!(
                     claimed=?claimed.into(),
                     actual=?actual.and_then(|g| g.into()),
@@ -2094,14 +2071,14 @@ impl Service {
 
         let maybe_import = self
             .persistence
-            .get_timeline_import(req.tenant_id, req.timeline_id)
+            .get_timeline_import(req.branch_id)
             .await?;
 
         let import = maybe_import.ok_or_else(|| {
             ApiError::NotFound(
                 format!(
-                    "import for {}/{} not found",
-                    req.tenant_id, req.timeline_id
+                    "import for {} not found",
+                    req.branch_id
                 )
                 .into(),
             )
@@ -2111,21 +2088,20 @@ impl Service {
     }
 
     #[instrument(skip_all, fields(
-        tenant_id=%req.tenant_id,
-        timeline_id=%req.timeline_id,
+        branch_id=%req.branch_id,
     ))]
     pub(crate) async fn handle_timeline_shard_import_progress_upcall(
         self: &Arc<Self>,
         req: PutTimelineImportStatusRequest,
     ) -> Result<(), ApiError> {
         let validity = self
-            .validate_shard_generation(req.tenant_id, req.generation)
+            .validate_shard_generation(req.branch_id, req.generation)
             .await?;
         match validity {
-            ShardGenerationValidity::Valid => {
+            BranchGenerationValidity::Valid => {
                 // fallthrough
             }
-            ShardGenerationValidity::Mismatched { claimed, actual } => {
+            BranchGenerationValidity::Mismatched { claimed, actual } => {
                 tracing::info!(
                     claimed=?claimed.into(),
                     actual=?actual.and_then(|g| g.into()),
@@ -2138,7 +2114,7 @@ impl Service {
 
         let res = self
             .persistence
-            .update_timeline_import(req.tenant_id, req.timeline_id, req.status)
+            .update_timeline_import(req.branch_id, req.status)
             .await;
         let timeline_import = match res {
             Ok(Ok(Some(timeline_import))) => timeline_import,
@@ -2155,8 +2131,7 @@ impl Service {
         };
 
         tracing::info!(
-            tenant_id=%req.tenant_id,
-            timeline_id=%req.timeline_id,
+            branch_id=%req.branch_id,
             "Updated timeline import status to: {timeline_import:?}");
 
         if timeline_import.is_complete() {
@@ -2169,54 +2144,54 @@ impl Service {
         Ok(())
     }
 
-    /// Check that a provided generation for some tenant shard is the most recent one.
+    /// Check that a provided generation for some branch is the most recent one.
     ///
     /// Validate with the in-mem state first, and, if that passes, validate with the
     /// database state which is authoritative.
     async fn validate_shard_generation(
         self: &Arc<Self>,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         generation: Generation,
-    ) -> Result<ShardGenerationValidity, ApiError> {
+    ) -> Result<BranchGenerationValidity, ApiError> {
         {
             let locked = self.inner.read().unwrap();
-            let tenant =
+            let branch =
                 locked
-                    .tenants
-                    .get(&tenant_id)
+                    .branches
+                    .get(&branch_id)
                     .ok_or(ApiError::InternalServerError(anyhow::anyhow!(
-                        "{} tenant not found",
-                        tenant_id
+                        "{} branch not found",
+                        branch_id
                     )))?;
 
-            if tenant.generation != Some(generation) {
-                return Ok(ShardGenerationValidity::Mismatched {
+            if branch.generation != Some(generation) {
+                return Ok(BranchGenerationValidity::Mismatched {
                     claimed: generation,
-                    actual: tenant.generation,
+                    actual: branch.generation,
                 });
             }
         }
 
         let mut db_generations = self
             .persistence
-            .shard_generations(std::iter::once(&tenant_id))
+            .branches_generations(std::iter::once(&branch_id))
             .await?;
-        let (_tid, db_generation) =
+        let (_bid, db_generation) =
             db_generations
                 .pop()
                 .ok_or(ApiError::InternalServerError(anyhow::anyhow!(
-                    "{} tenant not found",
-                    tenant_id
+                    "{} branch not found",
+                    branch_id
                 )))?;
 
         if db_generation != Some(generation) {
-            return Ok(ShardGenerationValidity::Mismatched {
+            return Ok(BranchGenerationValidity::Mismatched {
                 claimed: generation,
                 actual: db_generation,
             });
         }
 
-        Ok(ShardGenerationValidity::Valid)
+        Ok(BranchGenerationValidity::Valid)
     }
 
     /// Finalize the import of a timeline
@@ -2235,15 +2210,14 @@ impl Service {
     /// If the caller stops polling, the import will not be removed from
     /// [`ServiceState::imports_finalizing`].
     #[instrument(skip_all, fields(
-        tenant_id=%import.tenant_id,
-        timeline_id=%import.timeline_id,
+        branch_id=%import.branch_id,
     ))]
 
     async fn finalize_timeline_import(
         self: &Arc<Self>,
         import: TimelineImport,
     ) -> Result<(), TimelineImportFinalizeError> {
-        let tenant_timeline = (import.tenant_id, import.timeline_id);
+        let import_branch_id = import.branch_id;
 
         let (_finalize_import_guard, cancel) = {
             let mut locked = self.inner.write().unwrap();
@@ -2253,7 +2227,7 @@ impl Service {
             let guard = gate.enter().unwrap();
 
             locked.imports_finalizing.insert(
-                tenant_timeline,
+                import_branch_id,
                 FinalizingImport {
                     gate,
                     cancel: cancel.clone(),
@@ -2273,7 +2247,7 @@ impl Service {
         };
 
         let mut locked = self.inner.write().unwrap();
-        locked.imports_finalizing.remove(&tenant_timeline);
+        locked.imports_finalizing.remove(&import_branch_id);
 
         res
     }
@@ -2286,13 +2260,12 @@ impl Service {
 
         pausable_failpoint!("timeline-import-pre-cplane-notification");
 
-        let tenant_id = import.tenant_id;
-        let timeline_id = import.timeline_id;
+        let branch_id = import.branch_id;
 
         let import_error = import.completion_error();
         match import_error {
             Some(err) => {
-                self.notify_cplane_and_delete_import(tenant_id, timeline_id, Err(err))
+                self.notify_cplane_and_delete_import(branch_id, Err(err))
                     .await?;
                 tracing::warn!("Timeline import completed with errors");
                 Ok(())
@@ -2304,14 +2277,11 @@ impl Service {
                     if self.config.timelines_onto_safekeepers {
                         // Now that we know the start LSN of this timeline, create it on the
                         // safekeepers.
-                        self.tenant_timeline_create_safekeepers_until_success(
-                            import.tenant_id,
-                            timeline_info,
-                        )
-                        .await?;
+                        self.tenant_timeline_create_safekeepers_until_success(timeline_info)
+                            .await?;
                     }
 
-                    self.notify_cplane_and_delete_import(tenant_id, timeline_id, Ok(()))
+                    self.notify_cplane_and_delete_import(branch_id, Ok(()))
                         .await?;
 
                     tracing::info!("Timeline import completed successfully");
@@ -2326,8 +2296,7 @@ impl Service {
                     // cplane such that it can clean up.
                     tracing::error!("Import finalize failed with permanent error: {err}");
                     self.notify_cplane_and_delete_import(
-                        tenant_id,
-                        timeline_id,
+                        branch_id,
                         Err(err.to_string()),
                     )
                     .await?;
@@ -2339,8 +2308,7 @@ impl Service {
 
     async fn notify_cplane_and_delete_import(
         self: &Arc<Self>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         import_result: ImportResult,
     ) -> Result<(), TimelineImportFinalizeError> {
         let import_failed = import_result.is_err();
@@ -2348,13 +2316,13 @@ impl Service {
 
         let client = UpcallClient::new(self.get_config(), self.cancel.child_token());
         client
-            .notify_import_complete(tenant_id, timeline_id, import_result)
+            .notify_import_complete(branch_id, import_result)
             .await
             .map_err(|_err| TimelineImportFinalizeError::ShuttingDown)?;
 
         if let Err(err) = self
             .persistence
-            .delete_timeline_import(tenant_id, timeline_id)
+            .delete_timeline_import(branch_id)
             .await
         {
             tracing::warn!("Failed to delete timeline import entry from database: {err}");
@@ -2363,14 +2331,14 @@ impl Service {
         self.inner
             .write()
             .unwrap()
-            .tenants
-            .range_mut(tenant_id..=tenant_id)
-            .for_each(|(_id, shard)| shard.importing = TimelineImportState::Idle);
+            .branches
+            .range_mut(branch_id..=branch_id)
+            .for_each(|(_id, branch)| branch.importing = TimelineImportState::Idle);
 
         Ok(())
     }
 
-    /// Activate an imported timeline on all shards once the import is complete.
+    /// Activate an imported timeline on its branch once the import is complete.
     /// Returns the [`TimelineInfo`] reported by shard zero.
     async fn activate_timeline_post_import(
         self: &Arc<Self>,
@@ -2389,15 +2357,15 @@ impl Service {
                 let locked = self.inner.read().unwrap();
                 let mut targets = Vec::new();
 
-                for (tenant_id, shard) in
-                    locked.tenants.range(import.tenant_id..=import.tenant_id)
+                for (branch_id, branch) in
+                    locked.branches.range(import.branch_id..=import.branch_id)
                 {
-                    if let Some(node_id) = shard.intent.get_attached() {
+                    if let Some(node_id) = branch.intent.get_attached() {
                         let node = locked
                             .nodes
                             .get(node_id)
                             .expect("Pageservers may not be deleted while referenced");
-                        targets.push((*tenant_id, node.clone()));
+                        targets.push((*branch_id, node.clone()));
                     }
                 }
 
@@ -2407,11 +2375,10 @@ impl Service {
             let results = self
                 .tenant_for_shards_api(
                     targets,
-                    |tenant_id, client| async move {
+                    |branch_id, client| async move {
                         client
                             .activate_post_import(
-                                tenant_id,
-                                import.timeline_id,
+                                branch_id,
                                 TIMELINE_ACTIVATE_TIMEOUT,
                             )
                             .await
@@ -2469,28 +2436,27 @@ impl Service {
     /// Secondly, cancel the finalization if one is in progress.
     pub(crate) async fn maybe_delete_timeline_import(
         self: &Arc<Self>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<(), DatabaseError> {
-        let tenant_has_ongoing_import = {
+        let branch_has_ongoing_import = {
             let locked = self.inner.read().unwrap();
             locked
-                .tenants
-                .range(tenant_id..=tenant_id)
-                .any(|(_tid, shard)| shard.importing == TimelineImportState::Importing)
+                .branches
+                .range(branch_id..=branch_id)
+                .any(|(_bid, branch)| branch.importing == TimelineImportState::Importing)
         };
 
-        if !tenant_has_ongoing_import {
+        if !branch_has_ongoing_import {
             return Ok(());
         }
 
         self.persistence
-            .delete_timeline_import(tenant_id, timeline_id)
+            .delete_timeline_import(branch_id)
             .await?;
 
         let maybe_finalizing = {
             let mut locked = self.inner.write().unwrap();
-            locked.imports_finalizing.remove(&(tenant_id, timeline_id))
+            locked.imports_finalizing.remove(&branch_id)
         };
 
         if let Some(finalizing) = maybe_finalizing {
@@ -2503,44 +2469,42 @@ impl Service {
 
     pub(crate) async fn tenant_timeline_archival_config(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         req: TimelineArchivalConfigRequest,
     ) -> Result<(), ApiError> {
         tracing::info!(
-            "Setting archival config of timeline {tenant_id}/{timeline_id} to '{:?}'",
+            "Setting archival config of branch {branch_id} to '{:?}'",
             req.state
         );
 
-        let _tenant_lock = trace_shared_lock(
-            &self.tenant_op_locks,
-            tenant_id,
-            TenantOperations::TimelineArchivalConfig,
+        let _branch_lock = trace_shared_lock(
+            &self.branch_op_locks,
+            branch_id,
+            BranchOperations::TimelineArchivalConfig,
         )
         .await;
 
-        self.tenant_remote_mutation(tenant_id, move |targets| async move {
+        self.tenant_remote_mutation(branch_id, move |targets| async move {
             if targets.0.is_empty() {
                 return Err(ApiError::NotFound(
-                    anyhow::anyhow!("Tenant not found").into(),
+                    anyhow::anyhow!("Branch not found").into(),
                 ));
             }
             async fn config_one(
-                tenant_id: TenantId,
-                timeline_id: TimelineId,
+                branch_id: BranchId,
                 node: Node,
                 http_client: reqwest::Client,
                 jwt: Option<String>,
                 req: TimelineArchivalConfigRequest,
             ) -> Result<(), ApiError> {
                 tracing::info!(
-                    "Setting archival config of timeline on shard {tenant_id}/{timeline_id}, attached to node {node}",
+                    "Setting archival config of branch {branch_id}, attached to node {node}",
                 );
 
                 let client = PageserverClient::new(node.get_id(),  http_client, node.base_url(), jwt.as_deref());
 
                 client
-                    .timeline_archival_config(tenant_id, timeline_id, &req)
+                    .branch_archival_config(branch_id, &req)
                     .await
                     .map_err(|e| match e {
                         mgmt_api::Error::ApiError(StatusCode::PRECONDITION_FAILED, msg) => {
@@ -2554,10 +2518,9 @@ impl Service {
             // TODO: it would be great to ensure that all shards return the same error
             let locations = targets.0.iter().map(|t| (*t.0, t.1.latest.node.clone())).collect();
             let results = self
-                .tenant_for_shards(locations, |tenant_id, node| {
+                .tenant_for_shards(locations, |branch_id, node| {
                     futures::FutureExt::boxed(config_one(
-                        tenant_id,
-                        timeline_id,
+                        branch_id,
                         node,
                         self.http_client.clone(),
                         self.config.pageserver_jwt_token.clone(),
@@ -2573,42 +2536,40 @@ impl Service {
 
     pub(crate) async fn tenant_timeline_detach_ancestor(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         behavior: Option<DetachBehavior>,
     ) -> Result<models::detach_ancestor::AncestorDetached, ApiError> {
-        tracing::info!("Detaching timeline {tenant_id}/{timeline_id}",);
+        tracing::info!("Detaching branch {branch_id}",);
 
-        let _tenant_lock = trace_shared_lock(
-            &self.tenant_op_locks,
-            tenant_id,
-            TenantOperations::TimelineDetachAncestor,
+        let _branch_lock = trace_shared_lock(
+            &self.branch_op_locks,
+            branch_id,
+            BranchOperations::TimelineDetachAncestor,
         )
         .await;
 
-        self.tenant_remote_mutation(tenant_id, move |targets| async move {
+        self.tenant_remote_mutation(branch_id, move |targets| async move {
             if targets.0.is_empty() {
                 return Err(ApiError::NotFound(
-                    anyhow::anyhow!("Tenant not found").into(),
+                    anyhow::anyhow!("Branch not found").into(),
                 ));
             }
 
             async fn detach_one(
-                tenant_id: TenantId,
-                timeline_id: TimelineId,
+                branch_id: BranchId,
                 node: Node,
                 http_client: reqwest::Client,
                 jwt: Option<String>,
                 behavior: Option<DetachBehavior>,
             ) -> Result<models::detach_ancestor::AncestorDetached, ApiError> {
                 tracing::info!(
-                    "Detaching timeline on shard {tenant_id}/{timeline_id}, attached to node {node}",
+                    "Detaching branch {branch_id}, attached to node {node}",
                 );
 
                 let client = PageserverClient::new(node.get_id(), http_client, node.base_url(), jwt.as_deref());
 
                 client
-                    .timeline_detach_ancestor(tenant_id, timeline_id, behavior)
+                    .branch_detach_ancestor(branch_id, behavior)
                     .await
                     .map_err(|e| {
                         use mgmt_api::Error;
@@ -2638,10 +2599,9 @@ impl Service {
             // no shard needs to go first/last; the operation should be idempotent
             let locations = targets.0.iter().map(|t| (*t.0, t.1.latest.node.clone())).collect();
             let mut results = self
-                .tenant_for_shards(locations, |tenant_id, node| {
+                .tenant_for_shards(locations, |branch_id, node| {
                     futures::FutureExt::boxed(detach_one(
-                        tenant_id,
-                        timeline_id,
+                        branch_id,
                         node,
                         self.http_client.clone(),
                         self.config.pageserver_jwt_token.clone(),
@@ -2675,27 +2635,25 @@ impl Service {
 
     pub(crate) async fn tenant_timeline_block_unblock_gc(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         dir: BlockUnblock,
     ) -> Result<(), ApiError> {
-        let _tenant_lock = trace_shared_lock(
-            &self.tenant_op_locks,
-            tenant_id,
-            TenantOperations::TimelineGcBlockUnblock,
+        let _branch_lock = trace_shared_lock(
+            &self.branch_op_locks,
+            branch_id,
+            BranchOperations::TimelineGcBlockUnblock,
         )
         .await;
 
-        self.tenant_remote_mutation(tenant_id, move |targets| async move {
+        self.tenant_remote_mutation(branch_id, move |targets| async move {
             if targets.0.is_empty() {
                 return Err(ApiError::NotFound(
-                    anyhow::anyhow!("Tenant not found").into(),
+                    anyhow::anyhow!("Branch not found").into(),
                 ));
             }
 
             async fn do_one(
-                tenant_id: TenantId,
-                timeline_id: TimelineId,
+                branch_id: BranchId,
                 node: Node,
                 http_client: reqwest::Client,
                 jwt: Option<String>,
@@ -2709,7 +2667,7 @@ impl Service {
                 );
 
                 client
-                    .timeline_block_unblock_gc(tenant_id, timeline_id, dir)
+                    .branch_block_unblock_gc(branch_id, dir)
                     .await
                     .map_err(|e| passthrough_api_error(&node, e))
             }
@@ -2720,10 +2678,9 @@ impl Service {
                 .iter()
                 .map(|t| (*t.0, t.1.latest.node.clone()))
                 .collect();
-            self.tenant_for_shards(locations, |tenant_id, node| {
+            self.tenant_for_shards(locations, |branch_id, node| {
                 futures::FutureExt::boxed(do_one(
-                    tenant_id,
-                    timeline_id,
+                    branch_id,
                     node,
                     self.http_client.clone(),
                     self.config.pageserver_jwt_token.clone(),
@@ -2736,13 +2693,13 @@ impl Service {
         Ok(())
     }
 
-    pub(crate) fn is_tenant_not_found_error(body: &str, tenant_id: TenantId) -> bool {
-        body.contains(&format!("tenant {tenant_id}"))
+    pub(crate) fn is_branch_not_found_error(body: &str, branch_id: BranchId) -> bool {
+        body.contains(&format!("branch {branch_id}"))
     }
 
     fn process_result_and_passthrough_errors<T>(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         results: Vec<(Node, Result<T, mgmt_api::Error>)>,
     ) -> Result<Vec<(Node, T)>, ApiError> {
         let mut processed_results: Vec<(Node, T)> = Vec::with_capacity(results.len());
@@ -2750,13 +2707,13 @@ impl Service {
             match res {
                 Ok(res) => processed_results.push((node, res)),
                 Err(mgmt_api::Error::ApiError(StatusCode::NOT_FOUND, body))
-                    if Self::is_tenant_not_found_error(&body, tenant_id) =>
+                    if Self::is_branch_not_found_error(&body, branch_id) =>
                 {
-                    // If there's a tenant not found, we are still in the process of attaching the tenant.
+                    // If there's a branch not found, we are still in the process of attaching the branch.
                     // Return 503 so that the client can retry.
                     return Err(ApiError::ResourceUnavailable(
                         format!(
-                            "Timeline is not attached to the pageserver {} yet, please retry",
+                            "Branch is not attached to the pageserver {} yet, please retry",
                             node.get_id()
                         )
                         .into(),
@@ -2770,21 +2727,20 @@ impl Service {
 
     pub(crate) async fn tenant_timeline_lsn_lease(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         lsn: Lsn,
     ) -> Result<LsnLease, ApiError> {
-        let _tenant_lock = trace_shared_lock(
-            &self.tenant_op_locks,
-            tenant_id,
-            TenantOperations::TimelineLsnLease,
+        let _branch_lock = trace_shared_lock(
+            &self.branch_op_locks,
+            branch_id,
+            BranchOperations::TimelineLsnLease,
         )
         .await;
 
-        self.tenant_remote_mutation(tenant_id, |locations| async move {
+        self.tenant_remote_mutation(branch_id, |locations| async move {
             if locations.0.is_empty() {
                 return Err(ApiError::NotFound(
-                    anyhow::anyhow!("Tenant not found").into(),
+                    anyhow::anyhow!("Branch not found").into(),
                 ));
             }
 
@@ -2793,13 +2749,13 @@ impl Service {
                     locations
                         .0
                         .iter()
-                        .map(|(tenant_id, ShardMutationLocations { latest, .. })| {
-                            (*tenant_id, latest.node.clone())
+                        .map(|(branch_id, ShardMutationLocations { latest, .. })| {
+                            (*branch_id, latest.node.clone())
                         })
                         .collect(),
-                    |tenant_id, client| async move {
+                    |branch_id, client| async move {
                         client
-                            .timeline_lease_lsn(tenant_id, timeline_id, lsn)
+                            .branch_lease_lsn(branch_id, lsn)
                             .await
                     },
                     1,
@@ -2809,7 +2765,7 @@ impl Service {
                 )
                 .await;
 
-            let leases = self.process_result_and_passthrough_errors(tenant_id, results)?;
+            let leases = self.process_result_and_passthrough_errors(branch_id, results)?;
             let mut valid_until = None;
             for (_, lease) in leases {
                 if let Some(ref mut valid_until) = valid_until {
@@ -2831,12 +2787,12 @@ impl Service {
     /// and returned element at index `i` is the result for `req_fn(op(locations[i])`.
     async fn tenant_for_shards<F, R>(
         &self,
-        locations: Vec<(TenantId, Node)>,
+        locations: Vec<(BranchId, Node)>,
         mut req_fn: F,
     ) -> Result<Vec<R>, ApiError>
     where
         F: FnMut(
-            TenantId,
+            BranchId,
             Node,
         )
             -> std::pin::Pin<Box<dyn futures::Future<Output = Result<R, ApiError>> + Send>>,
@@ -2844,8 +2800,8 @@ impl Service {
         let mut futs = FuturesUnordered::new();
         let mut results = Vec::with_capacity(locations.len());
 
-        for (idx, (tenant_id, node)) in locations.into_iter().enumerate() {
-            let fut = req_fn(tenant_id, node);
+        for (idx, (branch_id, node)) in locations.into_iter().enumerate() {
+            let fut = req_fn(branch_id, node);
             futs.push(async move { (idx, fut.await) });
         }
 
@@ -2863,7 +2819,7 @@ impl Service {
     /// and returned element at index `i` is the result for `op(locations[i])`.
     pub(crate) async fn tenant_for_shards_api<T, O, F>(
         &self,
-        locations: Vec<(TenantId, Node)>,
+        locations: Vec<(BranchId, Node)>,
         op: O,
         warn_threshold: u32,
         max_retries: u32,
@@ -2871,17 +2827,17 @@ impl Service {
         cancel: &CancellationToken,
     ) -> Vec<(Node, mgmt_api::Result<T>)>
     where
-        O: Fn(TenantId, PageserverClient) -> F + Copy,
+        O: Fn(BranchId, PageserverClient) -> F + Copy,
         F: std::future::Future<Output = mgmt_api::Result<T>>,
     {
         let mut futs = FuturesUnordered::new();
         let mut results = Vec::with_capacity(locations.len());
 
-        for (idx, (tenant_id, node)) in locations.into_iter().enumerate() {
+        for (idx, (branch_id, node)) in locations.into_iter().enumerate() {
             futs.push(async move {
                 let r = node
                     .with_client_retries(
-                        |client| op(tenant_id, client),
+                        |client| op(branch_id, client),
                         &self.http_client,
                         &self.config.pageserver_jwt_token,
                         warn_threshold,
@@ -2902,117 +2858,103 @@ impl Service {
         results.into_iter().map(|(_, node, r)| (node, r)).collect()
     }
 
-    /// Helper for safely working with the shards in a tenant remotely on pageservers, for example
+    /// Helper for safely working with a branch remotely on pageservers, for example
     /// when creating and deleting timelines:
-    /// - Makes sure shards are attached somewhere if they weren't already
-    /// - Looks up the shards and the nodes where they were most recently attached
-    /// - Guarantees that after the inner function returns, the shards' generations haven't moved on: this
+    /// - Makes sure the branch is attached somewhere if it weren't already
+    /// - Looks up the branch and the node where it was most recently attached
+    /// - Guarantees that after the inner function returns, the branch's generation hasn't moved on: this
     ///   ensures that the remote operation acted on the most recent generation, and is therefore durable.
     pub(crate) async fn tenant_remote_mutation<R, O, F>(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         op: O,
     ) -> Result<R, ApiError>
     where
-        O: FnOnce(TenantMutationLocations) -> F,
-        F: std::future::Future<Output = R>,
-    {
-        self.tenant_remote_mutation_inner(TenantIdOrShardId(tenant_id), op)
-            .await
-    }
-
-    async fn tenant_remote_mutation_inner<R, O, F>(
-        &self,
-        tenant_id_or_shard_id: TenantIdOrShardId,
-        op: O,
-    ) -> Result<R, ApiError>
-    where
-        O: FnOnce(TenantMutationLocations) -> F,
+        O: FnOnce(BranchMutationLocations) -> F,
         F: std::future::Future<Output = R>,
     {
         let mutation_locations = {
-            let mut locations = TenantMutationLocations::default();
+            let mut locations = BranchMutationLocations::default();
 
-            // Load the currently attached pageservers for the latest generation of each shard.  This can
+            // Load the currently attached pageservers for the latest generation of the branch.  This can
             // run concurrently with reconciliations, and it is not guaranteed that the node we find here
             // will still be the latest when we're done: we will check generations again at the end of
             // this function to handle that.
             let generations = self
                 .persistence
-                .tenant_generations(tenant_id_or_shard_id.tenant_id())
+                .branch_generations(branch_id)
                 .await?
                 .into_iter()
-                .filter(|i| tenant_id_or_shard_id.matches(&i.tenant_id))
+                .filter(|i| i.branch_id == branch_id)
                 .collect::<Vec<_>>();
 
             if generations
                 .iter()
                 .any(|i| i.generation.is_none() || i.generation_pageserver.is_none())
             {
-                let shard_generations = generations
+                let branch_generations = generations
                     .into_iter()
-                    .map(|i| (i.tenant_id, (i.generation, i.generation_pageserver)))
+                    .map(|i| (i.branch_id, (i.generation, i.generation_pageserver)))
                     .collect::<HashMap<_, _>>();
 
-                // One or more shards has not been attached to a pageserver.  Check if this is because it's configured
+                // The branch has not been attached to a pageserver.  Check if this is because it's configured
                 // to be detached (409: caller should give up), or because it's meant to be attached but isn't yet (503: caller should retry)
                 let locked = self.inner.read().unwrap();
-                let tenants = locked
-                    .tenants
-                    .range({ let t = tenant_id_or_shard_id.tenant_id(); t..=t })
-                    .filter(|(shard_id, _)| tenant_id_or_shard_id.matches(shard_id))
+                let branches = locked
+                    .branches
+                    .range(branch_id..=branch_id)
                     .collect::<Vec<_>>();
-                for (shard_id, shard) in tenants {
-                    match shard.policy {
+                for (id, branch) in branches {
+                    match branch.policy {
                         PlacementPolicy::Attached(_) => {
-                            // This shard is meant to be attached: the caller is not wrong to try and
+                            // This branch is meant to be attached: the caller is not wrong to try and
                             // use this function, but we can't service the request right now.
-                            let Some(generation) = shard_generations.get(shard_id) else {
+                            let Some(generation) = branch_generations.get(id) else {
                                 // This can only happen if there is a split brain controller modifying the database.  This should
                                 // never happen when testing, and if it happens in production we can only log the issue.
                                 debug_assert!(false);
                                 tracing::error!(
-                                    "Shard {shard_id} not found in generation state!  Is another rogue controller running?"
+                                    "Branch {id} not found in generation state!  Is another rogue controller running?"
                                 );
                                 continue;
                             };
                             let (generation, generation_pageserver) = generation;
                             if let Some(generation) = generation {
                                 if generation_pageserver.is_none() {
-                                    // This is legitimate only in a very narrow window where the shard was only just configured into
+                                    // This is legitimate only in a very narrow window where the branch was only just configured into
                                     // Attached mode after being created in Secondary or Detached mode: generation_pageserver is set
                                     // alongside the generation by attach_hook/re-attach.
                                     tracing::warn!(
-                                        "Shard {shard_id} generation is set ({generation:?}) but generation_pageserver is None, not attached yet?"
+                                        "Branch {id} generation is set ({generation:?}) but generation_pageserver is None, not attached yet?"
                                     );
                                 }
                             } else {
-                                // This should never happen: a shard with no generation is only permitted when it was created in some state
+                                // This should never happen: a branch with no generation is only permitted when it was created in some state
                                 // other than PlacementPolicy::Attached (and generation is always written to DB before setting Attached in memory)
                                 debug_assert!(false);
                                 tracing::error!(
-                                    "Shard {shard_id} generation is None, but it is in PlacementPolicy::Attached mode!"
+                                    "Branch {id} generation is None, but it is in PlacementPolicy::Attached mode!"
                                 );
                                 continue;
                             }
                         }
                         PlacementPolicy::Secondary | PlacementPolicy::Detached => {
                             return Err(ApiError::Conflict(format!(
-                                "Shard {shard_id} tenant has policy {:?}",
-                                shard.policy
+                                "Branch {id} has policy {:?}",
+                                branch.policy
                             )));
                         }
                     }
                 }
 
                 return Err(ApiError::ResourceUnavailable(
-                    "One or more shards in tenant is not yet attached".into(),
+                    "Branch is not yet attached".into(),
                 ));
             }
 
             let locked = self.inner.read().unwrap();
-            for ShardGenerationState {
-                tenant_id,
+            for BranchGenerationState {
+                branch_id,
                 generation,
                 generation_pageserver,
             } in generations
@@ -3032,7 +2974,7 @@ impl Service {
                         generation,
                     },
                 };
-                locations.0.insert(tenant_id, location);
+                locations.0.insert(branch_id, location);
             }
 
             locations
@@ -3040,25 +2982,25 @@ impl Service {
 
         let result = op(mutation_locations.clone()).await;
 
-        // Post-check: are all the generations of all the shards the same as they were initially?  This proves that
+        // Post-check: are all the generations of the branch the same as they were initially?  This proves that
         // our remote operation executed on the latest generation and is therefore persistent.
         {
             let latest_generations = self
                 .persistence
-                .tenant_generations(tenant_id_or_shard_id.tenant_id())
+                .branch_generations(branch_id)
                 .await?
                 .into_iter()
-                .filter(|i| tenant_id_or_shard_id.matches(&i.tenant_id))
+                .filter(|i| i.branch_id == branch_id)
                 .collect::<Vec<_>>();
 
             if latest_generations
                 .into_iter()
                 .map(
-                    |ShardGenerationState {
-                         tenant_id,
+                    |BranchGenerationState {
+                         branch_id,
                          generation,
                          generation_pageserver: _,
-                     }| (tenant_id, generation),
+                     }| (branch_id, generation),
                 )
                 .collect::<Vec<_>>()
                 != mutation_locations
@@ -3072,7 +3014,7 @@ impl Service {
                 //
                 // This is safe but requires a retry: ask the client to do that by giving them a 503 response.
                 return Err(ApiError::ResourceUnavailable(
-                    "Tenant attachment changed, please retry".into(),
+                    "Branch attachment changed, please retry".into(),
                 ));
             }
         }
@@ -3082,53 +3024,51 @@ impl Service {
 
     pub(crate) async fn tenant_timeline_delete(
         self: &Arc<Self>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<StatusCode, ApiError> {
-        tracing::info!("Deleting timeline {}/{}", tenant_id, timeline_id,);
-        let _tenant_lock = trace_shared_lock(
-            &self.tenant_op_locks,
-            tenant_id,
-            TenantOperations::TimelineDelete,
+        tracing::info!("Deleting branch {}", branch_id,);
+        let _branch_lock = trace_shared_lock(
+            &self.branch_op_locks,
+            branch_id,
+            BranchOperations::TimelineDelete,
         )
         .await;
 
-        let status_code = self.tenant_remote_mutation(tenant_id, move |mut targets| async move {
+        let status_code = self.tenant_remote_mutation(branch_id, move |mut targets| async move {
             if targets.0.is_empty() {
                 return Err(ApiError::NotFound(
-                    anyhow::anyhow!("Tenant not found").into(),
+                    anyhow::anyhow!("Branch not found").into(),
                 ));
             }
 
-            let (shard_zero_tid, shard_zero_locations) = targets.0.pop_first().expect("Must have at least one tenant");
+            let (shard_zero_bid, shard_zero_locations) = targets.0.pop_first().expect("Must have at least one branch");
 
             async fn delete_one(
-                tenant_id: TenantId,
-                timeline_id: TimelineId,
+                branch_id: BranchId,
                 node: Node,
                 http_client: reqwest::Client,
                 jwt: Option<String>,
             ) -> Result<StatusCode, ApiError> {
                 tracing::info!(
-                    "Deleting timeline on shard {tenant_id}/{timeline_id}, attached to node {node}",
+                    "Deleting branch {branch_id}, attached to node {node}",
                 );
 
                 let client = PageserverClient::new(node.get_id(), http_client, node.base_url(), jwt.as_deref());
                 let res = client
-                    .timeline_delete(tenant_id, timeline_id)
+                    .branch_delete(branch_id)
                     .await;
 
                 match res {
                     Ok(ok) => Ok(ok),
                     Err(mgmt_api::Error::ApiError(StatusCode::CONFLICT, _)) => Ok(StatusCode::CONFLICT),
-                    Err(mgmt_api::Error::ApiError(StatusCode::PRECONDITION_FAILED, msg)) if msg.contains("Requested tenant is missing") => {
-                        Err(ApiError::ResourceUnavailable("Tenant migration in progress".into()))
+                    Err(mgmt_api::Error::ApiError(StatusCode::PRECONDITION_FAILED, msg)) if msg.contains("Requested branch is missing") => {
+                        Err(ApiError::ResourceUnavailable("Branch migration in progress".into()))
                     },
                     Err(mgmt_api::Error::ApiError(StatusCode::SERVICE_UNAVAILABLE, msg)) => Err(ApiError::ResourceUnavailable(msg.into())),
                     Err(e) => {
                         Err(
                             ApiError::InternalServerError(anyhow::anyhow!(
-                                "Error deleting timeline {timeline_id} on {tenant_id} on node {node}: {e}",
+                                "Error deleting branch {branch_id} on node {node}: {e}",
                             ))
                         )
                     }
@@ -3137,10 +3077,9 @@ impl Service {
 
             let locations = targets.0.iter().map(|t| (*t.0, t.1.latest.node.clone())).collect();
             let statuses = self
-                .tenant_for_shards(locations, |tenant_id: TenantId, node: Node| {
+                .tenant_for_shards(locations, |branch_id: BranchId, node: Node| {
                     Box::pin(delete_one(
-                        tenant_id,
-                        timeline_id,
+                        branch_id,
                         node,
                         self.http_client.clone(),
                         self.config.pageserver_jwt_token.clone(),
@@ -3148,9 +3087,9 @@ impl Service {
                 })
                 .await?;
 
-            // If any shards >0 haven't finished deletion yet, don't start deletion on shard zero.
-            // We return 409 (Conflict) if deletion was already in progress on any of the shards
-            // and 202 (Accepted) if deletion was not already in progress on any of the shards.
+            // If any extra targets haven't finished deletion yet, don't start deletion on shard zero.
+            // We return 409 (Conflict) if deletion was already in progress on any of them
+            // and 202 (Accepted) if deletion was not already in progress on any of them.
             if statuses.iter().any(|s| s == &StatusCode::CONFLICT) {
                 return Ok(StatusCode::CONFLICT);
             }
@@ -3159,11 +3098,10 @@ impl Service {
                 return Ok(StatusCode::ACCEPTED);
             }
 
-            // Delete shard zero last: this is not strictly necessary, but since a caller's GET on a timeline will be routed
+            // Delete shard zero last: this is not strictly necessary, but since a caller's GET on a branch will be routed
             // to shard zero, it gives a more obvious behavior that a GET returns 404 once the deletion is done.
             let shard_zero_status = delete_one(
-                shard_zero_tid,
-                timeline_id,
+                shard_zero_bid,
                 shard_zero_locations.latest.node,
                 self.http_client.clone(),
                 self.config.pageserver_jwt_token.clone(),
@@ -3172,63 +3110,63 @@ impl Service {
             Ok(shard_zero_status)
         }).await?;
 
-        self.tenant_timeline_delete_safekeepers(tenant_id, timeline_id)
+        self.tenant_timeline_delete_safekeepers(branch_id)
             .await?;
 
         status_code
     }
-    /// When you know the TenantId but not a specific shard, and would like to get the node holding shard 0.
+    /// When you know the BranchId, get the node holding the branch.
     ///
-    /// Returns the node, tenant shard id, and whether it is consistent with the observed state.
+    /// Returns the node and branch id.
     pub(crate) async fn tenant0_node(
         &self,
-        tenant_id: TenantId,
-    ) -> Result<(Node, TenantId), ApiError> {
-        let tenant_id = {
+        branch_id: BranchId,
+    ) -> Result<(Node, BranchId), ApiError> {
+        let branch_id = {
             let locked = self.inner.read().unwrap();
-            let Some((tenant_id, _shard)) = locked
-                .tenants
-                .range(tenant_id..=tenant_id)
+            let Some((branch_id, _branch)) = locked
+                .branches
+                .range(branch_id..=branch_id)
                 .next()
             else {
                 return Err(ApiError::NotFound(
-                    anyhow::anyhow!("Tenant {tenant_id} not found").into(),
+                    anyhow::anyhow!("Branch {branch_id} not found").into(),
                 ));
             };
 
-            *tenant_id
+            *branch_id
         };
 
-        self.tenant_node(tenant_id)
+        self.tenant_node(branch_id)
             .await
-            .map(|node| (node, tenant_id))
+            .map(|node| (node, branch_id))
     }
 
-    /// When you need to send an HTTP request to the pageserver that holds a shard of a tenant, this
-    /// function looks up and returns node. If the shard isn't found, returns Err(ApiError::NotFound)
+    /// When you need to send an HTTP request to the pageserver that holds a branch, this
+    /// function looks up and returns node. If the branch isn't found, returns Err(ApiError::NotFound)
     ///
     /// Returns the intent node and whether it is consistent with the observed state.
     pub(crate) async fn tenant_node(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
     ) -> Result<Node, ApiError> {
         // Look up in-memory state and maybe use the node from there.
         {
             let locked = self.inner.read().unwrap();
-            let Some(shard) = locked.tenants.get(&tenant_id) else {
+            let Some(branch) = locked.branches.get(&branch_id) else {
                 return Err(ApiError::NotFound(
-                    anyhow::anyhow!("Tenant shard {tenant_id} not found").into(),
+                    anyhow::anyhow!("Branch {branch_id} not found").into(),
                 ));
             };
 
-            let Some(intent_node_id) = shard.intent.get_attached() else {
+            let Some(intent_node_id) = branch.intent.get_attached() else {
                 tracing::warn!(
-                    tenant_id=%tenant_id,
-                    "Shard not scheduled (policy {:?}), cannot generate pass-through URL",
-                    shard.policy
+                    branch_id=%branch_id,
+                    "Branch not scheduled (policy {:?}), cannot generate pass-through URL",
+                    branch.policy
                 );
                 return Err(ApiError::Conflict(
-                    "Cannot call timeline API on non-attached tenant".to_string(),
+                    "Cannot call timeline API on non-attached branch".to_string(),
                 ));
             };
 
@@ -3236,7 +3174,7 @@ impl Service {
             let Some(node) = locked.nodes.get(intent_node_id) else {
                 // This should never happen
                 return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                    "Shard refers to nonexistent node"
+                    "Branch refers to nonexistent node"
                 )));
             };
             Ok(node.clone())
@@ -3245,20 +3183,20 @@ impl Service {
 
     pub(crate) fn tenant_locate(
         &self,
-        tenant_id: TenantId,
-    ) -> Result<TenantLocateResponse, ApiError> {
+        branch_id: BranchId,
+    ) -> Result<BranchLocateResponse, ApiError> {
         let locked = self.inner.read().unwrap();
-        tracing::info!("Locating tenant {tenant_id}");
+        tracing::info!("Locating branch {branch_id}");
 
         let mut result = Vec::new();
 
-        for (tenant_id, shard) in locked.tenants.range(tenant_id..=tenant_id) {
+        for (branch_id, branch) in locked.branches.range(branch_id..=branch_id) {
             let node_id =
-                shard
+                branch
                     .intent
                     .get_attached()
                     .ok_or(ApiError::BadRequest(anyhow::anyhow!(
-                        "Cannot locate a tenant that is not attached"
+                        "Cannot locate a branch that is not attached"
                     )))?;
 
             let node = locked
@@ -3266,17 +3204,17 @@ impl Service {
                 .get(&node_id)
                 .expect("Pageservers may not be deleted while referenced");
 
-            result.push(node.shard_location(*tenant_id));
+            result.push(node.branch_location(*branch_id));
         }
 
         if result.is_empty() {
             return Err(ApiError::NotFound(
-                anyhow::anyhow!("No shards for this tenant ID found").into(),
+                anyhow::anyhow!("No locations for this branch ID found").into(),
             ));
         }
         tracing::info!(
-            "Located tenant {} on shards {}",
-            tenant_id,
+            "Located branch {} on {}",
+            branch_id,
             result
                 .iter()
                 .map(|s| format!("{s:?}"))
@@ -3284,38 +3222,38 @@ impl Service {
                 .join(",")
         );
 
-        Ok(TenantLocateResponse { shards: result })
+        Ok(BranchLocateResponse { shards: result })
     }
 
-    /// Returns None if the input iterator of shards does not include a shard with number=0
+    /// Returns None if the input iterator is empty.
     fn tenant_describe_impl<'a>(
         &self,
-        shards: impl Iterator<Item = &'a Tenant>,
-    ) -> Option<TenantDescribeResponse> {
+        branches: impl Iterator<Item = &'a Branch>,
+    ) -> Option<BranchDescribeResponse> {
         let mut shard_zero = None;
         let mut describe_shards = Vec::new();
 
-        for shard in shards {
-            // yb-light: every tenant has exactly one shard, which is shard zero.
-            shard_zero = Some(shard);
+        for branch in branches {
+            // yb-light: every branch has exactly one shard, which is shard zero.
+            shard_zero = Some(branch);
 
-            describe_shards.push(TenantDescribeResponseShard {
-                tenant_id: shard.tenant_id,
-                node_attached: *shard.intent.get_attached(),
-                node_secondary: shard.intent.get_secondary().to_vec(),
+            describe_shards.push(BranchDescribeResponseShard {
+                branch_id: branch.branch_id,
+                node_attached: *branch.intent.get_attached(),
+                node_secondary: branch.intent.get_secondary().to_vec(),
                 last_error: String::new(),
                 is_reconciling: false,
                 is_pending_compute_notification: false,
-                is_splitting: matches!(shard.splitting, SplitState::Splitting),
-                is_importing: shard.importing == TimelineImportState::Importing,
-                scheduling_policy: shard.get_scheduling_policy(),
+                is_splitting: matches!(branch.splitting, SplitState::Splitting),
+                is_importing: branch.importing == TimelineImportState::Importing,
+                scheduling_policy: branch.get_scheduling_policy(),
             })
         }
 
         let shard_zero = shard_zero?;
 
-        Some(TenantDescribeResponse {
-            tenant_id: shard_zero.tenant_id,
+        Some(BranchDescribeResponse {
+            branch_id: shard_zero.branch_id,
             shards: describe_shards,
             policy: shard_zero.policy.clone(),
             config: shard_zero.config.clone(),
@@ -3324,46 +3262,45 @@ impl Service {
 
     pub(crate) fn tenant_describe(
         &self,
-        tenant_id: TenantId,
-    ) -> Result<TenantDescribeResponse, ApiError> {
+        branch_id: BranchId,
+    ) -> Result<BranchDescribeResponse, ApiError> {
         let locked = self.inner.read().unwrap();
 
         self.tenant_describe_impl(
             locked
-                .tenants
-                .range(tenant_id..=tenant_id)
+                .branches
+                .range(branch_id..=branch_id)
                 .map(|(_k, v)| v),
         )
-        .ok_or_else(|| ApiError::NotFound(anyhow::anyhow!("Tenant {tenant_id} not found").into()))
+        .ok_or_else(|| ApiError::NotFound(anyhow::anyhow!("Branch {branch_id} not found").into()))
     }
 
     pub(crate) async fn tenant_timeline_describe(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-    ) -> Result<TenantTimelineDescribeResponse, ApiError> {
-        self.tenant_remote_mutation(tenant_id, |locations| async move {
+        branch_id: BranchId,
+    ) -> Result<BranchTimelineDescribeResponse, ApiError> {
+        self.tenant_remote_mutation(branch_id, |locations| async move {
             if locations.0.is_empty() {
                 return Err(ApiError::NotFound(
-                    anyhow::anyhow!("Tenant not found").into(),
+                    anyhow::anyhow!("Branch not found").into(),
                 ));
             };
 
-            let locations: Vec<(TenantId, Node)> = locations
+            let locations: Vec<(BranchId, Node)> = locations
                 .0
                 .iter()
                 .map(|t| (*t.0, t.1.latest.node.clone()))
                 .collect();
             let mut futs = FuturesUnordered::new();
 
-            for (shard_id, node) in locations {
+            for (branch_id, node) in locations {
                 futs.push({
                     async move {
                         let result = node
                             .with_client_retries(
                                 |client| async move {
                                     client
-                                        .tenant_timeline_describe(&shard_id, &timeline_id)
+                                        .branch_describe(&branch_id)
                                         .await
                                 },
                                 &self.http_client,
@@ -3374,20 +3311,19 @@ impl Service {
                                 &self.cancel,
                             )
                             .await;
-                        (result, shard_id, node.get_id())
+                        (result, branch_id, node.get_id())
                     }
                 });
             }
 
             let mut results: Vec<TimelineInfo> = Vec::new();
-            while let Some((result, tenant_id, node_id)) = futs.next().await {
+            while let Some((result, branch_id, node_id)) = futs.next().await {
                 match result {
                     Some(Ok(timeline_info)) => results.push(timeline_info),
                     Some(Err(e)) => {
                         tracing::warn!(
-                            "Failed to describe tenant {} timeline {} for pageserver {}: {e}",
-                            tenant_id,
-                            timeline_id,
+                            "Failed to describe branch {} for pageserver {}: {e}",
+                            branch_id,
                             node_id,
                         );
                         return Err(ApiError::ResourceUnavailable(format!("{e}").into()));
@@ -3404,16 +3340,15 @@ impl Service {
                     ));
                 } else {
                     tracing::warn!(
-                        "Timeline {} on shard {} does not have image consistent lsn",
-                        timeline_info.timeline_id,
-                        timeline_info.tenant_id
+                        "Branch {} does not have image consistent lsn",
+                        timeline_info.branch_id,
                     );
                     image_consistent_lsn = None;
                     break;
                 }
             }
 
-            Ok(TenantTimelineDescribeResponse {
+            Ok(BranchTimelineDescribeResponse {
                 shards: results,
                 image_consistent_lsn,
             })
@@ -3421,37 +3356,33 @@ impl Service {
         .await?
     }
 
-    /// Set (or clear) the human-readable branch name attached to a timeline.
+    /// Set (or clear) the human-readable branch name attached to a branch.
     pub(crate) async fn set_timeline_branch_name(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         branch_name: Option<String>,
     ) -> Result<(), ApiError> {
         let existed = self
             .persistence
-            .set_timeline_branch_name(tenant_id, timeline_id, branch_name)
+            .set_timeline_branch_name(branch_id, branch_name)
             .await?;
         if !existed {
             return Err(ApiError::NotFound(
-                anyhow::anyhow!("Timeline {tenant_id}/{timeline_id} not found").into(),
+                anyhow::anyhow!("Branch {branch_id} not found").into(),
             ));
         }
         Ok(())
     }
 
-    /// List every timeline that has a branch_name set.
+    /// List every branch that has a branch_name set.
     pub(crate) async fn list_timeline_branch_names(
         &self,
     ) -> Result<Vec<TimelineBranchName>, ApiError> {
         let rows = self.persistence.list_timeline_branch_names().await?;
         let mut out = Vec::with_capacity(rows.len());
-        for (tenant_id, timeline_id, branch_name) in rows {
+        for (branch_id, branch_name) in rows {
             out.push(TimelineBranchName {
-                tenant_id: tenant_id
-                    .parse()
-                    .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("{e}")))?,
-                timeline_id: timeline_id
+                branch_id: branch_id
                     .parse()
                     .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("{e}")))?,
                 branch_name,
@@ -3460,39 +3391,35 @@ impl Service {
         Ok(out)
     }
 
-    /// Record (or overwrite) a pending timeline init recipe. `tenant create`
-    /// and `timeline branch` allocate a timeline's ids + branch name before
-    /// its pageserver + safekeeper exist; the recipe says how `endpoint
-    /// create` should later bring the pair up. Idempotent on the (tenant,
-    /// timeline) key.
+    /// Record (or overwrite) a pending timeline init recipe. `branch create`
+    /// allocates a branch's id + branch name before its pageserver +
+    /// safekeeper exist; the recipe says how `endpoint create` should later
+    /// bring the branch up. Idempotent on the branch key.
     pub(crate) async fn record_pending_timeline_init(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         req: PendingTimelineInitRequest,
     ) -> Result<(), ApiError> {
         let entry = PendingTimelineInitPersistence {
-            tenant_id: tenant_id.to_string(),
-            timeline_id: timeline_id.to_string(),
+            branch_id: branch_id.to_string(),
             branch_name: req.branch_name,
             pg_version: req.pg_version.major_version_num() as i32,
-            ancestor_timeline_id: req.ancestor_timeline_id.map(|id| id.to_string()),
+            ancestor_branch_id: req.ancestor_branch_id.map(|id| id.to_string()),
             start_lsn: req.start_lsn.into(),
         };
         self.persistence.insert_pending_timeline_init(entry).await?;
         Ok(())
     }
 
-    /// List the pending timeline inits recorded for a tenant. `endpoint
+    /// List the pending timeline inits recorded for a branch. `endpoint
     /// create` uses this both to resolve a branch name to its (not-yet-
-    /// materialized) timeline and to read the recipe for materializing it.
+    /// materialized) branch and to read the recipe for materializing it.
     pub(crate) async fn list_pending_timeline_inits(
         &self,
-        tenant_id: TenantId,
     ) -> Result<Vec<PendingTimelineInit>, ApiError> {
         let rows = self
             .persistence
-            .list_pending_timeline_inits_for_tenant(tenant_id)
+            .list_all_pending_timeline_inits()
             .await?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
@@ -3507,18 +3434,14 @@ impl Service {
                     ))
                 })?;
             out.push(PendingTimelineInit {
-                tenant_id: r
-                    .tenant_id
-                    .parse()
-                    .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("{e}")))?,
-                timeline_id: r
-                    .timeline_id
+                branch_id: r
+                    .branch_id
                     .parse()
                     .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("{e}")))?,
                 branch_name: r.branch_name,
                 pg_version,
-                ancestor_timeline_id: r
-                    .ancestor_timeline_id
+                ancestor_branch_id: r
+                    .ancestor_branch_id
                     .map(|s| s.parse())
                     .transpose()
                     .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("{e}")))?,
@@ -3532,11 +3455,10 @@ impl Service {
     /// been materialized. No-op if the row is already gone.
     pub(crate) async fn delete_pending_timeline_init(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<(), ApiError> {
         self.persistence
-            .delete_pending_timeline_init(tenant_id, timeline_id)
+            .delete_pending_timeline_init(branch_id)
             .await?;
         Ok(())
     }
@@ -3548,23 +3470,23 @@ impl Service {
     pub(crate) fn tenant_list(
         &self,
         limit: Option<usize>,
-        start_after: Option<TenantId>,
-    ) -> Vec<TenantDescribeResponse> {
+        start_after: Option<BranchId>,
+    ) -> Vec<BranchDescribeResponse> {
         let locked = self.inner.read().unwrap();
 
         // Apply start_from parameter
-        let shard_range = match start_after {
-            None => locked.tenants.range(..),
-            Some(tenant_id) => locked.tenants.range((
-                std::ops::Bound::Excluded(tenant_id),
+        let branch_range = match start_after {
+            None => locked.branches.range(..),
+            Some(branch_id) => locked.branches.range((
+                std::ops::Bound::Excluded(branch_id),
                 std::ops::Bound::Unbounded,
             )),
         };
 
         let mut result = Vec::new();
-        for (_tenant_id, tenants) in &shard_range.group_by(|(id, _shard)| **id) {
+        for (_branch_id, branches) in &branch_range.group_by(|(id, _branch)| **id) {
             result.push(
-                self.tenant_describe_impl(tenants.map(|(_k, v)| v))
+                self.tenant_describe_impl(branches.map(|(_k, v)| v))
                     .expect("Groups are always non-empty"),
             );
 
@@ -3579,36 +3501,36 @@ impl Service {
         result
     }
 
-    /// This is for debug/support only: we simply drop all state for a tenant, without
+    /// This is for debug/support only: we simply drop all state for a branch, without
     /// detaching or deleting it on pageservers.
-    pub(crate) async fn tenant_drop(&self, tenant_id: TenantId) -> Result<(), ApiError> {
-        self.persistence.delete_tenant(tenant_id).await?;
+    pub(crate) async fn tenant_drop(&self, branch_id: BranchId) -> Result<(), ApiError> {
+        self.persistence.delete_branch(branch_id).await?;
 
         let mut locked = self.inner.write().unwrap();
-        let (_nodes, tenants, scheduler) = locked.parts_mut();
-        let mut shards = Vec::new();
-        for (tenant_id, _) in tenants.range(tenant_id..=tenant_id) {
-            shards.push(*tenant_id);
+        let (_nodes, branches, scheduler) = locked.parts_mut();
+        let mut ids = Vec::new();
+        for (id, _) in branches.range(branch_id..=branch_id) {
+            ids.push(*id);
         }
 
-        for shard_id in shards {
-            if let Some(mut shard) = tenants.remove(&shard_id) {
-                shard.intent.clear(scheduler);
+        for id in ids {
+            if let Some(mut branch) = branches.remove(&id) {
+                branch.intent.clear(scheduler);
             }
         }
 
         Ok(())
     }
 
-    /// This is for debug/support only: assuming tenant data is already present in S3, we "create" a
-    /// tenant with a very high generation number so that it will see the existing data.
+    /// This is for debug/support only: assuming branch data is already present in S3, we "create" a
+    /// branch with a very high generation number so that it will see the existing data.
     /// It does not create timelines on safekeepers, because they might already exist on some
     /// safekeeper set. So, the timelines are not storcon-managed after the import.
     pub(crate) async fn tenant_import(
         &self,
-        tenant_id: TenantId,
-    ) -> Result<TenantCreateResponse, ApiError> {
-        // Pick an arbitrary available pageserver to use for scanning the tenant in remote storage
+        branch_id: BranchId,
+    ) -> Result<BranchCreateResponse, ApiError> {
+        // Pick an arbitrary available pageserver to use for scanning the branch in remote storage
         let maybe_node = {
             self.inner
                 .read()
@@ -3630,7 +3552,7 @@ impl Service {
         );
 
         let scan_result = client
-            .tenant_scan_remote_storage(tenant_id)
+            .branch_scan_remote_storage(branch_id)
             .await
             .map_err(|e| passthrough_api_error(&node, e))?;
 
@@ -3650,24 +3572,24 @@ impl Service {
             .expect("We already validated >0 shards");
 
         let response = self
-            .do_tenant_create(TenantCreateRequest {
-                new_tenant_id: tenant_id,
+            .do_tenant_create(BranchCreateRequest {
+                new_branch_id: branch_id,
                 generation,
 
                 placement_policy: Some(PlacementPolicy::Attached(0)), // No secondaries, for convenient debug/hacking
-                config: TenantConfig::default(),
+                config: BranchConfig::default(),
             })
             .await?;
 
         Ok(response)
     }
 
-    /// For debug/support: a full JSON dump of TenantShards.  Returns a response so that
-    /// we don't have to make Tenant clonable in the return path.
+    /// For debug/support: a full JSON dump of Branches.  Returns a response so that
+    /// we don't have to make Branch clonable in the return path.
     pub(crate) fn tenants_dump(&self) -> Result<hyper::Response<hyper::Body>, ApiError> {
         let serialized = {
             let locked = self.inner.read().unwrap();
-            let result = locked.tenants.values().collect::<Vec<_>>();
+            let result = locked.branches.values().collect::<Vec<_>>();
             serde_json::to_string(&result).map_err(|e| ApiError::InternalServerError(e.into()))?
         };
 
@@ -3685,12 +3607,12 @@ impl Service {
     /// we run, then we can falsely indicate a consistency issue.  This is sufficient for end-of-test
     /// checks, but not suitable for running continuously in the background in the field.
     pub(crate) async fn consistency_check(&self) -> Result<(), ApiError> {
-        let (mut expect_nodes, mut expect_shards) = {
+        let (mut expect_nodes, mut expect_branches) = {
             let locked = self.inner.read().unwrap();
 
             locked
                 .scheduler
-                .consistency_check(locked.nodes.values(), locked.tenants.values())
+                .consistency_check(locked.nodes.values(), locked.branches.values())
                 .context("Scheduler checks")
                 .map_err(ApiError::InternalServerError)?;
 
@@ -3700,20 +3622,20 @@ impl Service {
                 .map(|n| n.to_persistent())
                 .collect::<Vec<_>>();
 
-            let expect_shards = locked
-                .tenants
+            let expect_branches = locked
+                .branches
                 .values()
                 .map(|t| t.to_persistent())
                 .collect::<Vec<_>>();
 
-            (expect_nodes, expect_shards)
+            (expect_nodes, expect_branches)
         };
 
         let mut nodes = self.persistence.list_nodes().await?;
         expect_nodes.sort_by_key(|n| n.node_id);
         nodes.sort_by_key(|n| n.node_id);
 
-        // Errors relating to nodes are deferred so that we don't skip the shard checks below if we have a node error
+        // Errors relating to nodes are deferred so that we don't skip the branch checks below if we have a node error
         let node_result = if nodes != expect_nodes {
             tracing::error!("Consistency check failed on nodes.");
             tracing::error!(
@@ -3733,58 +3655,58 @@ impl Service {
             Ok(())
         };
 
-        let mut persistent_tenants = self.persistence.load_active_tenants().await?;
-        persistent_tenants.sort_by_key(|tsp| tsp.tenant_id.clone());
+        let mut persistent_branches = self.persistence.load_active_branches().await?;
+        persistent_branches.sort_by_key(|tsp| tsp.branch_id.clone());
 
-        expect_shards.sort_by_key(|tsp| tsp.tenant_id.clone());
+        expect_branches.sort_by_key(|tsp| tsp.branch_id.clone());
 
-        // Because JSON contents of persistent tenants might disagree with the fields in current `TenantConfig`
+        // Because JSON contents of persistent branches might disagree with the fields in current `BranchConfig`
         // definition, we will do an encode/decode cycle to ensure any legacy fields are dropped and any new
         // fields are added, before doing a comparison.
-        for tsp in &mut persistent_tenants {
-            let config: TenantConfig = serde_json::from_value(tsp.config.clone())
+        for tsp in &mut persistent_branches {
+            let config: BranchConfig = serde_json::from_value(tsp.config.clone())
                 .map_err(|e| ApiError::InternalServerError(e.into()))?;
             tsp.config = serde_json::to_value(&config).expect("Encoding config is infallible");
         }
 
-        if persistent_tenants != expect_shards {
-            tracing::error!("Consistency check failed on tenants.");
+        if persistent_branches != expect_branches {
+            tracing::error!("Consistency check failed on branches.");
 
             tracing::error!(
-                "Shards in memory: {}",
-                serde_json::to_string(&expect_shards)
+                "Branches in memory: {}",
+                serde_json::to_string(&expect_branches)
                     .map_err(|e| ApiError::InternalServerError(e.into()))?
             );
             tracing::error!(
-                "Shards in database: {}",
-                serde_json::to_string(&persistent_tenants)
+                "Branches in database: {}",
+                serde_json::to_string(&persistent_branches)
                     .map_err(|e| ApiError::InternalServerError(e.into()))?
             );
 
             // The total dump log lines above are useful in testing but in the field grafana will
             // usually just drop them because they're so large. So we also do some explicit logging
             // of just the diffs.
-            let persistent_tenants = persistent_tenants
+            let persistent_branches = persistent_branches
                 .into_iter()
-                .map(|tsp| (tsp.get_tenant_id().unwrap(), tsp))
+                .map(|tsp| (tsp.get_branch_id().unwrap(), tsp))
                 .collect::<HashMap<_, _>>();
-            let expect_shards = expect_shards
+            let expect_branches = expect_branches
                 .into_iter()
-                .map(|tsp| (tsp.get_tenant_id().unwrap(), tsp))
+                .map(|tsp| (tsp.get_branch_id().unwrap(), tsp))
                 .collect::<HashMap<_, _>>();
-            for (tenant_id, persistent_tsp) in &persistent_tenants {
-                match expect_shards.get(tenant_id) {
+            for (branch_id, persistent_tsp) in &persistent_branches {
+                match expect_branches.get(branch_id) {
                     None => {
                         tracing::error!(
-                            "Shard {} found in database but not in memory",
-                            tenant_id
+                            "Branch {} found in database but not in memory",
+                            branch_id
                         );
                     }
                     Some(expect_tsp) => {
                         if expect_tsp != persistent_tsp {
                             tracing::error!(
-                                "Shard {} is inconsistent.  In memory: {}, database has: {}",
-                                tenant_id,
+                                "Branch {} is inconsistent.  In memory: {}, database has: {}",
+                                branch_id,
                                 serde_json::to_string(expect_tsp).unwrap(),
                                 serde_json::to_string(&persistent_tsp).unwrap()
                             );
@@ -3793,12 +3715,12 @@ impl Service {
                 }
             }
 
-            // Having already logged any differences, log any shards that simply aren't present in the database
-            for (tenant_id, memory_tsp) in &expect_shards {
-                if !persistent_tenants.contains_key(tenant_id) {
+            // Having already logged any differences, log any branches that simply aren't present in the database
+            for (branch_id, memory_tsp) in &expect_branches {
+                if !persistent_branches.contains_key(branch_id) {
                     tracing::error!(
-                        "Shard {} found in memory but not in database: {}",
-                        tenant_id,
+                        "Branch {} found in memory but not in database: {}",
+                        branch_id,
                         serde_json::to_string(memory_tsp)
                             .map_err(|e| ApiError::InternalServerError(e.into()))?
                     );
@@ -3806,7 +3728,7 @@ impl Service {
             }
 
             return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                "Shard consistency failure"
+                "Branch consistency failure"
             )));
         }
 
@@ -3814,7 +3736,7 @@ impl Service {
     }
 
     /// For debug/support: a JSON dump of the [`Scheduler`].  Returns a response so that
-    /// we don't have to make Tenant clonable in the return path.
+    /// we don't have to make Branch clonable in the return path.
     pub(crate) fn scheduler_dump(&self) -> Result<hyper::Response<hyper::Body>, ApiError> {
         let serialized = {
             let locked = self.inner.read().unwrap();
@@ -3829,17 +3751,17 @@ impl Service {
             .map_err(|e| ApiError::InternalServerError(e.into()))
     }
 
-    /// This is for debug/support only: we simply drop all state for a tenant, without
-    /// detaching or deleting it on pageservers.  We do not try and re-schedule any
-    /// tenants that were on this node.
+    /// This is for debug/support only: we simply drop the node, without
+    /// detaching or deleting branches on pageservers.  We do not try and re-schedule any
+    /// branches that were on this node.
     pub(crate) async fn node_drop(&self, node_id: NodeId) -> Result<(), ApiError> {
         self.persistence.set_tombstone(node_id).await?;
 
         let mut locked = self.inner.write().unwrap();
 
-        for shard in locked.tenants.values_mut() {
-            shard.deref_node(node_id);
-            shard.observed.locations.remove(&node_id);
+        for branch in locked.branches.values_mut() {
+            branch.deref_node(node_id);
+            branch.observed.locations.remove(&node_id);
         }
 
         let mut nodes = (*locked.nodes).clone();
@@ -3898,8 +3820,8 @@ impl Service {
         Ok(())
     }
 
-    /// Drop a branch: delete every compute endpoint record for the timeline,
-    /// discard any un-materialized init recipe, and mark the timeline as
+    /// Drop a branch: delete every compute endpoint record for the branch,
+    /// discard any un-materialized init recipe, and mark the branch as
     /// dropped (sets `deleted_at`) so it no longer surfaces as a live branch
     /// and is not brought back on restart. The actual pageserver/safekeeper
     /// data + the `timelines` row itself are left for a later GC pass. Compute
@@ -3907,17 +3829,16 @@ impl Service {
     /// durable cleanup here is idempotent and order-independent.
     pub(crate) async fn timeline_drop(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<(), ApiError> {
         self.persistence
-            .delete_endpoints_for_timeline(&tenant_id.to_string(), &timeline_id.to_string())
+            .delete_endpoints_for_branch(&branch_id.to_string())
             .await?;
         self.persistence
-            .delete_pending_timeline_init(tenant_id, timeline_id)
+            .delete_pending_timeline_init(branch_id)
             .await?;
         self.persistence
-            .timeline_set_deleted_at(tenant_id, timeline_id)
+            .timeline_set_deleted_at(branch_id)
             .await?;
         Ok(())
     }
@@ -3968,15 +3889,15 @@ impl Service {
     ) -> Result<NodeShardResponse, ApiError> {
         let locked = self.inner.read().unwrap();
         let mut shards = Vec::new();
-        for (tid, tenant) in locked.tenants.iter() {
+        for (bid, branch) in locked.branches.iter() {
             let is_intended_secondary = match (
-                tenant.intent.get_attached() == &Some(node_id),
-                tenant.intent.get_secondary().contains(&node_id),
+                branch.intent.get_attached() == &Some(node_id),
+                branch.intent.get_secondary().contains(&node_id),
             ) {
                 (true, true) => {
                     return Err(ApiError::InternalServerError(anyhow::anyhow!(
                         "{} attached as primary+secondary on the same node",
-                        tid
+                        bid
                     )));
                 }
                 (true, false) => Some(false),
@@ -3987,7 +3908,7 @@ impl Service {
             // side is always either attached (`generation: Some`) or
             // absent. Always emit `Some(false)` when we have an
             // observation so the response shape stays stable.
-            let is_observed_secondary = tenant
+            let is_observed_secondary = branch
                 .observed
                 .locations
                 .get(&node_id)
@@ -3995,7 +3916,7 @@ impl Service {
                 .map(|_| false);
             if is_intended_secondary.is_some() || is_observed_secondary.is_some() {
                 shards.push(NodeShard {
-                    tenant_id: *tid,
+                    branch_id: *bid,
                     is_intended_secondary,
                     is_observed_secondary,
                 });
@@ -4230,7 +4151,7 @@ impl Service {
 
         // Apply changes from the request to our in-memory state for the Node
         let mut locked = self.inner.write().unwrap();
-        let (nodes, _tenants, scheduler) = locked.parts_mut();
+        let (nodes, _branches, scheduler) = locked.parts_mut();
 
         let mut new_nodes = (**nodes).clone();
 
@@ -4274,10 +4195,10 @@ impl Service {
                 tracing::info!("Node {} transition to offline", node_id);
 
                 let mut locked = self.inner.write().unwrap();
-                let (_nodes, tenants, _scheduler) = locked.parts_mut();
+                let (_nodes, branches, _scheduler) = locked.parts_mut();
 
-                for tenant in tenants.values_mut() {
-                    if let Some(observed_loc) = tenant.observed.locations.get_mut(&node_id) {
+                for branch in branches.values_mut() {
+                    if let Some(observed_loc) = branch.observed.locations.get_mut(&node_id) {
                         // When a node goes offline, we set its observed configuration to None, indicating unknown: we will
                         // not assume our knowledge of the node's configuration is accurate until it comes back online
                         observed_loc.conf = None;
@@ -4359,7 +4280,7 @@ impl Service {
         self.node_configure(node_id, availability, scheduling).await
     }
 
-    // yb-light: automatic shard-splitting is gone (tenants are
+    // yb-light: automatic shard-splitting is gone (branches are
     // single-shard). The upstream `compute_split_shards` /
     // `tenant_shard_split` orchestration has been removed.
 
@@ -4380,17 +4301,17 @@ impl Service {
         let (healthy_records, unhealthy_records) = {
             let locked = self.inner.read().unwrap();
             let healthy_records = update_req
-                .healthy_tenants
+                .healthy_branches
                 .into_iter()
-                // Retain only health records associated with tenant shards managed by storage controller.
-                .filter(|tenant_id| locked.tenants.contains_key(tenant_id))
-                .map(|tenant_id| MetadataHealthPersistence::new(tenant_id, true, now))
+                // Retain only health records associated with branches managed by storage controller.
+                .filter(|branch_id| locked.branches.contains_key(branch_id))
+                .map(|branch_id| MetadataHealthPersistence::new(branch_id, true, now))
                 .collect();
             let unhealthy_records = update_req
-                .unhealthy_tenants
+                .unhealthy_branches
                 .into_iter()
-                .filter(|tenant_id| locked.tenants.contains_key(tenant_id))
-                .map(|tenant_id| MetadataHealthPersistence::new(tenant_id, false, now))
+                .filter(|branch_id| locked.branches.contains_key(branch_id))
+                .map(|branch_id| MetadataHealthPersistence::new(branch_id, false, now))
                 .collect();
 
             (healthy_records, unhealthy_records)
@@ -4402,20 +4323,20 @@ impl Service {
         Ok(())
     }
 
-    /// Lists the tenant shards that has unhealthy metadata status.
-    pub(crate) async fn metadata_health_list_unhealthy(&self) -> Result<Vec<TenantId>, ApiError> {
+    /// Lists the branches that have unhealthy metadata status.
+    pub(crate) async fn metadata_health_list_unhealthy(&self) -> Result<Vec<BranchId>, ApiError> {
         let result = self
             .persistence
             .list_unhealthy_metadata_health_records()
             .await?
             .iter()
-            .map(|p| p.get_tenant_id().unwrap())
+            .map(|p| p.get_branch_id().unwrap())
             .collect();
 
         Ok(result)
     }
 
-    /// Lists the tenant shards that have not been scrubbed for some duration.
+    /// Lists the branches that have not been scrubbed for some duration.
     pub(crate) async fn metadata_health_list_outdated(
         &self,
         not_scrubbed_for: Duration,

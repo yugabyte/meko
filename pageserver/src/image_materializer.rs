@@ -33,7 +33,7 @@ use postgres_ffi::PgMajorVersion;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, info, info_span};
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use wal_decoder::models::record::NeonWalRecord;
 
@@ -108,8 +108,7 @@ struct RedoOutcome {
 
 /// Background materialiser for one timeline.
 pub struct ImageMaterializer {
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     page_writer: Arc<PageWriter>,
     /// Internal-traffic `PageStore` (own YSQL connection, shared
     /// with the walreceiver's `PageWriter::flush` write path and
@@ -149,8 +148,7 @@ impl ImageMaterializer {
     // Wide signature: spawn wires up all collaborators in one place.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn spawn(
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         page_writer: Arc<PageWriter>,
         fpu_page_store: Arc<PageStore>,
         walredo_mgr: Arc<WalRedoManager>,
@@ -166,8 +164,7 @@ impl ImageMaterializer {
         let max_inflight_inserts =
             pageserver_api::config::scale_count(BASE_MAX_INFLIGHT_INSERTS, scale_factor);
         let me = Arc::new(Self {
-            tenant_id,
-            timeline_id,
+            branch_id,
             page_writer,
             fpu_page_store,
             walredo_mgr,
@@ -178,8 +175,7 @@ impl ImageMaterializer {
         });
         let span = info_span!(
             "image_materializer",
-            tenant_id = %tenant_id,
-            timeline_id = %timeline_id,
+            branch_id = %branch_id,
         );
         let handle = tokio::spawn(
             async move {
@@ -228,8 +224,7 @@ impl ImageMaterializer {
                                         .with_label_values(&["materializer_setup"])
                                         .inc();
                                     tracing::error!(
-                                        tenant_id = %me.tenant_id,
-                                        timeline_id = %me.timeline_id,
+                                        branch_id = %me.branch_id,
                                         batch_size = batch.len(),
                                         "MATERIALIZER REDO-PHASE SETUP ERROR — \
                                          entire batch un-materialised: {e:#}"
@@ -278,8 +273,7 @@ impl ImageMaterializer {
                 // the gauge frozen at a stale value.
                 crate::metrics::MATERIALIZER_QUEUE_DEPTH.set(0);
                 info!(
-                    tenant_id = %me.tenant_id,
-                    timeline_id = %me.timeline_id,
+                    branch_id = %me.branch_id,
                     "image materialiser exited",
                 );
             }
@@ -366,10 +360,9 @@ impl ImageMaterializer {
                         .with_label_values(&["materializer_redo"])
                         .inc();
                     utils::abort::fatal_abort(format_args!(
-                        "MATERIALIZER REDO ERROR tenant={} timeline={} \
+                        "MATERIALIZER REDO ERROR branch={} \
                          target_lsn={} key={:?}: {:#}",
-                        self.tenant_id,
-                        self.timeline_id,
+                        self.branch_id,
                         job.target_lsn,
                         job.key,
                         e,
@@ -431,8 +424,7 @@ impl ImageMaterializer {
                 .with_label_values(&["materializer_commit"])
                 .inc();
             tracing::error!(
-                tenant_id = %self.tenant_id,
-                timeline_id = %self.timeline_id,
+                branch_id = %self.branch_id,
                 batch_size = batch.len(),
                 "MATERIALIZER COMMIT ERROR — batch images NOT written to YB; \
                  those keys stay un-trimmed in cache and may build deep chains \
@@ -475,7 +467,7 @@ impl ImageMaterializer {
         let t_insert_start = std::time::Instant::now();
         if !rel_images.is_empty() {
             self.fpu_page_store
-                .put_pages(self.tenant_id, self.timeline_id, &rel_images)
+                .put_pages(self.branch_id, &rel_images)
                 .await
                 .context("put_pages")?;
         }
@@ -496,7 +488,7 @@ impl ImageMaterializer {
                 })
                 .collect::<Result<Vec<_>>>()?;
             self.fpu_page_store
-                .put_slru_pages(self.tenant_id, self.timeline_id, &slru_rows)
+                .put_slru_pages(self.branch_id, &slru_rows)
                 .await
                 .context("put_slru_pages")?;
         }
@@ -530,8 +522,7 @@ impl ImageMaterializer {
             );
         }
         debug!(
-            tenant_id = %self.tenant_id,
-            timeline_id = %self.timeline_id,
+            branch_id = %self.branch_id,
             batch_size = batch.len(),
             images = images.len(),
             "materialised image batch",
@@ -571,8 +562,7 @@ impl ImageMaterializer {
             match self
                 .fpu_page_store
                 .read_slru_chain(
-                    self.tenant_id,
-                    self.timeline_id,
+                    self.branch_id,
                     kind,
                     segno,
                     blknum,
@@ -594,8 +584,7 @@ impl ImageMaterializer {
                     .collect(),
                 Err(e) => {
                     tracing::error!(
-                        tenant_id = %self.tenant_id,
-                        timeline_id = %self.timeline_id,
+                        branch_id = %self.branch_id,
                         target_lsn = %job.target_lsn,
                         key = %job.key,
                         "read_slru_chain failed; skipping materialise of this page: {e:#}"
@@ -612,8 +601,7 @@ impl ImageMaterializer {
                 Ok(chain) => chain,
                 Err(e) => {
                     tracing::error!(
-                        tenant_id = %self.tenant_id,
-                        timeline_id = %self.timeline_id,
+                        branch_id = %self.branch_id,
                         target_lsn = %job.target_lsn,
                         key = %job.key,
                         "read_chain_durable failed; skipping materialise of this page: {e:#}"
@@ -623,8 +611,7 @@ impl ImageMaterializer {
             }
         };
         tracing::debug!(
-            tenant_id = %self.tenant_id,
-            timeline_id = %self.timeline_id,
+            branch_id = %self.branch_id,
             target_lsn = %job.target_lsn,
             key = %job.key,
             chain_len = chain.len(),

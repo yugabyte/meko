@@ -693,10 +693,10 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		switch (yb_amp_protocol_version)
 		{
 		case 3:
-			pagestream_query = psprintf("pagestream_v3 %s %s", yb_amp_tenant, yb_amp_timeline);
+			pagestream_query = psprintf("pagestream_v3 %s", yb_amp_branch_id);
 			break;
 		case 2:
-			pagestream_query = psprintf("pagestream_v2 %s %s", yb_amp_tenant, yb_amp_timeline);
+			pagestream_query = psprintf("pagestream_v2 %s", yb_amp_branch_id);
 			break;
 		default:
 			elog(ERROR, "unexpected yb_amp_protocol_version %d", yb_amp_protocol_version);
@@ -1549,7 +1549,7 @@ pg_init_libpagestore(void)
 							   "",
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */
-							   NULL, NULL, NULL);
+							   check_yb_amp_id, NULL, NULL);
 	DefineCustomStringVariable("yb_amp.endpoint_id",
 							   "YbAmp endpoint_id the server is running on",
 							   NULL,

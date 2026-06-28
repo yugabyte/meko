@@ -116,7 +116,7 @@ fn main() -> anyhow::Result<()> {
     //
     // Regarding tracing_error enablement: at this time, we only use the
     // tracing_error crate to debug_assert that log spans contain tenant and timeline ids.
-    // See `debug_assert_current_span_has_tenant_and_timeline_id` in the timeline module
+    // See `debug_assert_current_span_has_branch_id` in the timeline module
     let tracing_error_layer_enablement = if cfg!(debug_assertions) {
         TracingErrorLayerEnablement::EnableWithRustLogFilter
     } else {
@@ -179,11 +179,11 @@ fn main() -> anyhow::Result<()> {
     // Ensuring durability eliminates a whole bug class where we come up after an unclean shutdown.
     // After unclea shutdown, we don't know if all the filesystem content we can read via syscalls is actually durable or not.
     // Examples for that: OOM kill, systemd killing us during shutdown, self abort due to unrecoverable IO error.
-    let tenants_path = conf.tenants_path();
+    let branches_path = conf.branches_path();
     {
         let open = || {
             nix::dir::Dir::open(
-                tenants_path.as_std_path(),
+                branches_path.as_std_path(),
                 nix::fcntl::OFlag::O_DIRECTORY | nix::fcntl::OFlag::O_RDONLY,
                 nix::sys::stat::Mode::empty(),
             )
@@ -192,10 +192,10 @@ fn main() -> anyhow::Result<()> {
             Ok(dirfd) => dirfd,
             Err(e) => match e {
                 nix::errno::Errno::ENOENT => {
-                    utils::crashsafe::create_dir_all(&tenants_path).with_context(|| {
-                        format!("Failed to create tenants root dir at '{tenants_path}'")
+                    utils::crashsafe::create_dir_all(&branches_path).with_context(|| {
+                        format!("Failed to create branches root dir at '{branches_path}'")
                     })?;
-                    open().context("open tenants dir after creating it")?
+                    open().context("open branches dir after creating it")?
                 }
                 e => anyhow::bail!(e),
             },

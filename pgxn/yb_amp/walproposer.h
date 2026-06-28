@@ -188,12 +188,11 @@ typedef struct ProposerGreeting
 	ProposerAcceptorMessage pam;	/* message tag */
 
 	/*
-	 * tenant/timeline ids as C strings with standard hex notation for ease of
-	 * printing. In principle they are not strictly needed as ttid is also
-	 * passed as libpq options.
+	 * branch id as a C string with standard hex notation for ease of
+	 * printing. In principle it is not strictly needed as the branch id is
+	 * also passed as a libpq option.
 	 */
-	char	   *tenant_id;
-	char	   *timeline_id;
+	char	   *branch_id;
 	/* Full conf is carried to allow safekeeper switch */
 	MembershipConfiguration mconf;
 
@@ -710,11 +709,8 @@ typedef struct walproposer_api
  */
 typedef struct WalProposerConfig
 {
-	/* hex-encoded TenantId cstr */
-	char	   *yb_amp_tenant;
-
-	/* hex-encoded TimelineId cstr */
-	char	   *yb_amp_timeline;
+	/* hex-encoded BranchId cstr */
+	char	   *branch_id;
 
 	/*
 	 * Comma-separated list of safekeepers, in the following format:

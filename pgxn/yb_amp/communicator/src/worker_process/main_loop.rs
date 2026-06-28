@@ -6,7 +6,7 @@ use measured::MetricGroup;
 use measured::metric::MetricEncoding;
 use measured::metric::gauge::GaugeState;
 use measured::metric::group::Encoding;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 
 pub struct CommunicatorWorkerProcessStruct {
     runtime: tokio::runtime::Runtime,
@@ -17,18 +17,13 @@ pub struct CommunicatorWorkerProcessStruct {
 
 /// Launch the communicator process's Rust subsystems
 pub(super) fn init(
-    tenant_id: Option<&str>,
-    timeline_id: Option<&str>,
+    branch_id: Option<&str>,
 ) -> Result<&'static CommunicatorWorkerProcessStruct, String> {
-    // The caller validated these already
-    let _tenant_id = tenant_id
-        .map(TenantId::from_str)
+    // The caller validated this already
+    let _branch_id = branch_id
+        .map(BranchId::from_str)
         .transpose()
-        .map_err(|e| format!("invalid tenant ID: {e}"))?;
-    let _timeline_id = timeline_id
-        .map(TimelineId::from_str)
-        .transpose()
-        .map_err(|e| format!("invalid timeline ID: {e}"))?;
+        .map_err(|e| format!("invalid branch ID: {e}"))?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

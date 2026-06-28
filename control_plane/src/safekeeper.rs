@@ -177,8 +177,7 @@ impl SafekeeperNode {
 
         let toml_cfg = SafekeeperConfigToml {
             id,
-            tenant_id: self.conf.tenant_id,
-            timeline_id: self.conf.timeline_id,
+            branch_id: self.conf.branch_id,
             listen_pg: format!("{}:{}", self.listen_addr, self.conf.pg_port),
             listen_pg_tenant_only: self
                 .conf

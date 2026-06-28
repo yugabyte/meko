@@ -23,7 +23,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use url::Url;
-use utils::id::TenantTimelineId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::util::tokio_thread_local_stats::AllThreadLocalStats;
@@ -84,7 +84,7 @@ pub(crate) struct Args {
     #[clap(long)]
     only_relnode: Option<u32>,
 
-    targets: Option<Vec<TenantTimelineId>>,
+    targets: Option<Vec<BranchId>>,
 }
 
 /// State shared by all clients
@@ -111,8 +111,8 @@ impl LiveStats {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct KeyRange {
-    timeline: TenantTimelineId,
-    timeline_lsn: Lsn,
+    branch_id: BranchId,
+    branch_lsn: Lsn,
     start: i128,
     end: i128,
 }
@@ -125,7 +125,7 @@ impl KeyRange {
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone)]
 struct WorkerId {
-    timeline: TenantTimelineId,
+    branch_id: BranchId,
     num_client: usize, // from 0..args.num_clients
 }
 
@@ -155,7 +155,7 @@ async fn main_impl(
     ));
 
     // discover targets
-    let timelines: Vec<TenantTimelineId> = crate::util::cli::targets::discover(
+    let branches: Vec<BranchId> = crate::util::cli::targets::discover(
         &mgmt_api_client,
         crate::util::cli::targets::Spec {
             limit_to_first_n_targets: args.limit_to_first_n_targets,
@@ -166,12 +166,12 @@ async fn main_impl(
 
     #[derive(serde::Deserialize)]
     struct KeyspaceCacheDe {
-        tag: Vec<TenantTimelineId>,
+        tag: Vec<BranchId>,
         data: Vec<KeyRange>,
     }
     #[derive(serde::Serialize)]
     struct KeyspaceCacheSer<'a> {
-        tag: &'a [TenantTimelineId],
+        tag: &'a [BranchId],
         data: &'a [KeyRange],
     }
     let cache = args
@@ -186,8 +186,8 @@ async fn main_impl(
             };
             let cache: KeyspaceCacheDe =
                 serde_json::from_slice(&contents).context("deserialize cache file")?;
-            let tag_ok = HashSet::<TenantTimelineId>::from_iter(cache.tag.into_iter())
-                == HashSet::from_iter(timelines.iter().cloned());
+            let tag_ok = HashSet::<BranchId>::from_iter(cache.tag.into_iter())
+                == HashSet::from_iter(branches.iter().cloned());
             info!("keyspace cache file matches tag: {tag_ok}");
             anyhow::Ok(if tag_ok { Some(cache.data) } else { None })
         })
@@ -198,17 +198,12 @@ async fn main_impl(
         cached
     } else {
         let mut js = JoinSet::new();
-        for timeline in &timelines {
+        for branch_id in &branches {
             js.spawn({
                 let mgmt_api_client = Arc::clone(&mgmt_api_client);
-                let timeline = *timeline;
+                let branch_id = *branch_id;
                 async move {
-                    let partitioning = mgmt_api_client
-                        .keyspace(
-                            timeline.tenant_id,
-                            timeline.timeline_id,
-                        )
-                        .await?;
+                    let partitioning = mgmt_api_client.keyspace(branch_id).await?;
                     let lsn = partitioning.at_lsn;
                     let start = Instant::now();
                     let mut filtered = KeySpaceAccum::new();
@@ -234,8 +229,8 @@ async fn main_impl(
                     anyhow::Ok((
                         filter_duration,
                         filtered.ranges.into_iter().map(move |r| KeyRange {
-                            timeline,
-                            timeline_lsn: lsn,
+                            branch_id,
+                            branch_lsn: lsn,
                             start: r.start.to_i128(),
                             end: r.end.to_i128(),
                         }),
@@ -253,7 +248,7 @@ async fn main_impl(
         info!("filter duration: {}", total_filter_duration.as_secs_f64());
         if let Some(cachefile) = args.keyspace_cache.as_ref() {
             let cache = KeyspaceCacheSer {
-                tag: &timelines,
+                tag: &branches,
                 data: &all_ranges,
             };
             let bytes = serde_json::to_vec(&cache).context("serialize keyspace for cache file")?;
@@ -264,7 +259,7 @@ async fn main_impl(
     };
 
     let num_live_stats_dump = 1;
-    let num_work_sender_tasks = args.num_clients.get() * timelines.len();
+    let num_work_sender_tasks = args.num_clients.get() * branches.len();
     let num_main_impl = 1;
 
     let shared_state = Arc::new(SharedState {
@@ -303,7 +298,7 @@ async fn main_impl(
         let cancel = cancel.clone();
         let ranges: Vec<KeyRange> = all_ranges
             .iter()
-            .filter(|r| r.timeline == worker_id.timeline)
+            .filter(|r| r.branch_id == worker_id.branch_id)
             .cloned()
             .collect();
         let weights =
@@ -320,7 +315,7 @@ async fn main_impl(
                     assert!(!args.compression, "libpq does not support compression");
                     assert!(!args.rich_client, "rich client requires grpc://");
                     Box::new(
-                        LibpqClient::new(&args.page_service_connstring, worker_id.timeline)
+                        LibpqClient::new(&args.page_service_connstring, worker_id.branch_id)
                             .await
                             .unwrap(),
                     )
@@ -329,7 +324,7 @@ async fn main_impl(
                 "grpc" if args.rich_client => Box::new(
                     RichGrpcClient::new(
                         &args.page_service_connstring,
-                        worker_id.timeline,
+                        worker_id.branch_id,
                         args.compression,
                     )
                     .await
@@ -339,7 +334,7 @@ async fn main_impl(
                 "grpc" => Box::new(
                     GrpcClient::new(
                         &args.page_service_connstring,
-                        worker_id.timeline,
+                        worker_id.branch_id,
                         args.compression,
                     )
                     .await
@@ -354,10 +349,10 @@ async fn main_impl(
 
     info!("spawning workers");
     let mut workers = JoinSet::new();
-    for timeline in timelines.iter().cloned() {
+    for branch_id in branches.iter().cloned() {
         for num_client in 0..args.num_clients.get() {
             let worker_id = WorkerId {
-                timeline,
+                branch_id,
                 num_client,
             };
             workers.spawn(make_worker(worker_id));
@@ -485,9 +480,9 @@ async fn run_worker(
                 let req_lsn = if rng.random_bool(args.req_latest_probability) {
                     Lsn::MAX
                 } else {
-                    r.timeline_lsn
+                    r.branch_lsn
                 };
-                (req_lsn, r.timeline_lsn, rel_tag, blks.into())
+                (req_lsn, r.branch_lsn, rel_tag, blks.into())
             };
             client
                 .send_get_page(req_id, req_lsn, mod_lsn, rel, blks)
@@ -553,10 +548,10 @@ struct LibpqClient {
 }
 
 impl LibpqClient {
-    async fn new(connstring: &str, ttid: TenantTimelineId) -> anyhow::Result<Self> {
+    async fn new(connstring: &str, branch_id: BranchId) -> anyhow::Result<Self> {
         let inner = pageserver_client::page_service::Client::new(connstring.to_string())
             .await?
-            .pagestream(ttid.tenant_id, ttid.timeline_id)
+            .pagestream(branch_id)
             .await?;
         Ok(Self {
             inner,
@@ -619,13 +614,12 @@ struct GrpcClient {
 impl GrpcClient {
     async fn new(
         connstring: &str,
-        ttid: TenantTimelineId,
+        branch_id: BranchId,
         compression: bool,
     ) -> anyhow::Result<Self> {
         let mut client = page_api::Client::connect(
             connstring.to_string(),
-            ttid.tenant_id,
-            ttid.timeline_id,
+            branch_id,
             None,
             compression.then_some(tonic::codec::CompressionEncoding::Zstd),
         )
@@ -691,12 +685,11 @@ struct RichGrpcClient {
 impl RichGrpcClient {
     async fn new(
         connstring: &str,
-        ttid: TenantTimelineId,
+        branch_id: BranchId,
         compression: bool,
     ) -> anyhow::Result<Self> {
         let inner = Arc::new(client_grpc::PageserverClient::new(
-            ttid.tenant_id,
-            ttid.timeline_id,
+            branch_id,
             connstring.to_string(),
             None,
             compression.then_some(tonic::codec::CompressionEncoding::Zstd),

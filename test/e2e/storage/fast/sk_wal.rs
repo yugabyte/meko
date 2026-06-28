@@ -28,7 +28,7 @@ use crate::{db, sk_api};
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
-    let tl = c.timeline_id().await?;
+    let branch = c.branch_id().await?;
 
     step("generate WAL on the compute; capture the [start, target) flush range");
     let start = Lsn::from_str(
@@ -50,7 +50,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     ensure!(target > start, "no WAL generated ({start}..{target}); raise the INSERT size");
 
     step(&format!("read WAL [{start}, {target}) directly from the safekeeper"));
-    let bytes = sk_api::read_committed_wal(c, &tl, start, target)
+    let bytes = sk_api::read_committed_wal(c, &branch, start, target)
         .await
         .context("safekeeper WAL read")?;
     ensure!(

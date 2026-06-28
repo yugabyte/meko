@@ -24,7 +24,7 @@ use self::connection_manager::ConnectionManagerStatus;
 use super::Timeline;
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::task_mgr::{TaskKind, WALRECEIVER_RUNTIME};
-use crate::page_server::debug_assert_current_span_has_tenant_and_timeline_id;
+use crate::page_server::debug_assert_current_span_has_branch_id;
 use crate::page_server::timeline::walreceiver::connection_manager::{
     ConnectionManagerState, connection_manager_loop_step,
 };
@@ -52,8 +52,7 @@ pub struct WalReceiver {
 
 impl WalReceiver {
     pub fn start(timeline: Arc<Timeline>, conf: WalReceiverConf, ctx: &RequestContext) -> Self {
-        let tenant_id = timeline.tenant_id;
-        let timeline_id = timeline.timeline_id;
+        let branch_id = timeline.branch_id;
         let walreceiver_ctx =
             ctx.detached_child(TaskKind::WalReceiverManager, DownloadBehavior::Error);
         let loop_status = Arc::new(std::sync::RwLock::new(None));
@@ -64,7 +63,7 @@ impl WalReceiver {
         let _task = WALRECEIVER_RUNTIME.spawn({
             let cancel = cancel.clone();
             async move {
-                debug_assert_current_span_has_tenant_and_timeline_id();
+                debug_assert_current_span_has_branch_id();
                 // acquire timeline gate so we know the task doesn't outlive the Timeline
                 let Ok(_guard) = timeline.gate.enter() else {
                     debug!("WAL receiver manager could not enter the gate timeline gate, it's closed already");
@@ -118,7 +117,7 @@ impl WalReceiver {
                 *loop_status.write().unwrap() = None;
                 info!("task exits");
             }
-            .instrument(info_span!(parent: None, "wal_connection_manager", tenant_id = %tenant_id, timeline_id = %timeline_id))
+            .instrument(info_span!(parent: None, "wal_connection_manager", branch_id = %branch_id))
         });
 
         Self {
@@ -129,7 +128,7 @@ impl WalReceiver {
 
     #[instrument(skip_all, level = tracing::Level::DEBUG)]
     pub async fn cancel(self) {
-        debug_assert_current_span_has_tenant_and_timeline_id();
+        debug_assert_current_span_has_branch_id();
         debug!("cancelling walreceiver tasks");
         self.cancel.cancel();
     }

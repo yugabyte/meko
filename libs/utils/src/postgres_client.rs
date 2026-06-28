@@ -5,7 +5,7 @@
 use anyhow::Context;
 use postgres_connection::{PgConnectionConfig, parse_host_port};
 
-use crate::id::TenantTimelineId;
+use crate::id::BranchId;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -47,7 +47,7 @@ pub enum PostgresClientProtocol {
 pub struct ConnectionConfigArgs<'a> {
     pub protocol: PostgresClientProtocol,
 
-    pub ttid: TenantTimelineId,
+    pub branch_id: BranchId,
     pub shard_number: Option<u8>,
     pub shard_count: Option<u8>,
     pub shard_stripe_size: Option<u32>,
@@ -61,8 +61,7 @@ impl<'a> ConnectionConfigArgs<'a> {
     fn options(&'a self) -> Vec<String> {
         let mut options = vec![
             "-c".to_owned(),
-            format!("timeline_id={}", self.ttid.timeline_id),
-            format!("tenant_id={}", self.ttid.tenant_id),
+            format!("branch_id={}", self.branch_id),
             format!(
                 "protocol={}",
                 serde_json::to_string(&self.protocol).unwrap()

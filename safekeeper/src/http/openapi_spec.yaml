@@ -33,49 +33,13 @@ paths:
           $ref: "#/components/responses/GenericError"
 
 
-  /v1/tenant/{tenant_id}:
-    parameters:
-      - name: tenant_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
-
-    delete:
-      tags:
-      - "Tenant"
-      summary: Delete tenant and all its timelines
-      description: "Deletes tenant and returns a map of timelines that were deleted along with their statuses"
-      operationId: v1DeleteTenant
-      responses:
-        "200":
-          description: Tenant deleted
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TenantDeleteResult"
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
-        default:
-          $ref: "#/components/responses/GenericError"
-
-
-  /v1/tenant/{tenant_id}/timeline:
-    parameters:
-      - name: tenant_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
-
+  /v1/branch:
     post:
       tags:
-      - "Timeline"
-      summary: Register new timeline
+      - "Branch"
+      summary: Register new branch
       description: ""
-      operationId: v1CreateTenantTimeline
+      operationId: v1CreateBranch
       requestBody:
         content:
           application/json:
@@ -83,22 +47,16 @@ paths:
               $ref: "#/components/schemas/TimelineCreateRequest"
       responses:
         "201":
-          description: Timeline created
-          # TODO: return timeline info?
+          description: Branch created
+          # TODO: return branch info?
         "403":
           $ref: "#/components/responses/ForbiddenError"
         default:
           $ref: "#/components/responses/GenericError"
 
-  /v1/tenant/{tenant_id}/timeline/{timeline_id}:
+  /v1/branch/{branch_id}:
     parameters:
-      - name: tenant_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
-      - name: timeline_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -107,13 +65,13 @@ paths:
 
     get:
       tags:
-      - "Timeline"
-      summary: Get timeline information and status
+      - "Branch"
+      summary: Get branch information and status
       description: ""
-      operationId: v1GetTenantTimeline
+      operationId: v1GetBranch
       responses:
         "200":
-          description: Timeline status
+          description: Branch status
           content:
             application/json:
               schema:
@@ -123,7 +81,7 @@ paths:
         default:
           $ref: "#/components/responses/GenericError"
         "404":
-          description: Timeline not found
+          description: Branch not found
           content:
             application/json:
               schema:
@@ -131,52 +89,17 @@ paths:
 
     delete:
       tags:
-      - "Timeline"
-      summary: Delete timeline
+      - "Branch"
+      summary: Delete branch
       description: ""
-      operationId: v1DeleteTenantTimeline
+      operationId: v1DeleteBranch
       responses:
         "200":
-          description: Timeline deleted
+          description: Branch deleted
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/TimelineDeleteResult"
-        "403":
-          $ref: "#/components/responses/ForbiddenError"
-        default:
-          $ref: "#/components/responses/GenericError"
-
-  /v1/tenant/{tenant_id}/timeline/{source_timeline_id}/copy:
-    parameters:
-      - name: tenant_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
-      - name: source_timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
-
-    post:
-      tags:
-      - "Timeline"
-      summary: Register new timeline as copy of existing timeline
-      description: ""
-      operationId: v1CopyTenantTimeline
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TimelineCopyRequest"
-      responses:
-        "201":
-          description: Timeline created
-          # TODO: return timeline info?
         "403":
           $ref: "#/components/responses/ForbiddenError"
         default:
@@ -200,10 +123,10 @@ components:
     TimelineCreateRequest:
       type: object
       required:
-        - timeline_id
+        - branch_id
         - peer_ids
       properties:
-        timeline_id:
+        branch_id:
           type: string
           format: hex
         peer_ids:
@@ -211,18 +134,6 @@ components:
           items:
             type: integer
             minimum: 0
-
-    TimelineCopyRequest:
-      type: object
-      required:
-        - target_timeline_id
-        - until_lsn
-      properties:
-        target_timeline_id:
-          type: string
-          format: hex
-        until_lsn:
-          type: string
 
     #
     # Responses
@@ -240,13 +151,9 @@ components:
     TimelineStatus:
       type: object
       required:
-        - timeline_id
-        - tenant_id
+        - branch_id
       properties:
-        timeline_id:
-          type: string
-          format: hex
-        tenant_id:
+        branch_id:
           type: string
           format: hex
         acceptor_state:
@@ -301,18 +208,6 @@ components:
           type: boolean
         was_active:
           type: boolean
-
-    TenantDeleteResult:
-      type: object
-      additionalProperties:
-        $ref: "#/components/schemas/TimelineDeleteResult"
-      example:
-       57fd1b39f23704a63423de0a8435d85c:
-        dir_existed: true
-        was_active: false
-       67fd1b39f23704a63423gb8435d85c33:
-        dir_existed: false
-        was_active: false
 
     #
     # Errors

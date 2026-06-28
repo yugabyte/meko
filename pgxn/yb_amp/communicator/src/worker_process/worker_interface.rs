@@ -11,7 +11,7 @@ use crate::worker_process::main_loop::CommunicatorWorkerProcessStruct;
 /// process.
 ///
 /// Inputs:
-///   `tenant_id` and `timeline_id` can be NULL, if we're been launched in "non-YbAmp" mode,
+///   `branch_id` can be NULL, if we're been launched in "non-YbAmp" mode,
 ///   where we use local storage instead of connecting to remote yb_amp storage. That's
 ///   currently only used in some unit tests.
 ///
@@ -24,26 +24,19 @@ use crate::worker_process::main_loop::CommunicatorWorkerProcessStruct;
 /// case of failure, are simply leaked.
 #[unsafe(no_mangle)]
 pub extern "C" fn communicator_worker_launch(
-    tenant_id: *const c_char,
-    timeline_id: *const c_char,
+    branch_id: *const c_char,
     error_p: *mut *const c_char,
 ) -> Option<&'static CommunicatorWorkerProcessStruct> {
     // Convert the arguments into more convenient Rust types
-    let tenant_id = if tenant_id.is_null() {
+    let branch_id = if branch_id.is_null() {
         None
     } else {
-        let cstr = unsafe { CStr::from_ptr(tenant_id) };
-        Some(cstr.to_str().expect("assume UTF-8"))
-    };
-    let timeline_id = if timeline_id.is_null() {
-        None
-    } else {
-        let cstr = unsafe { CStr::from_ptr(timeline_id) };
+        let cstr = unsafe { CStr::from_ptr(branch_id) };
         Some(cstr.to_str().expect("assume UTF-8"))
     };
 
     // The `init` function does all the work.
-    let result = main_loop::init(tenant_id, timeline_id);
+    let result = main_loop::init(branch_id);
 
     // On failure, return the error message to the C caller in *error_p.
     match result {

@@ -25,10 +25,10 @@ use postgres_ffi::PgMajorVersion;
 use remote_storage::{RemotePath, RemoteStorageConfig};
 use reqwest::Url;
 use utils::generation::Generation;
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::logging::{LogFormat, SecretString};
 
-use crate::page_server::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
+use crate::page_server::BRANCHES_SEGMENT_NAME;
 
 /// Global state of pageserver.
 ///
@@ -45,14 +45,13 @@ use crate::page_server::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME};
 ///
 /// For fields that require additional validation or filling in of defaults at runtime,
 /// check for examples in the [`PageServerConf::parse_and_validate`] method.
-/// The single (tenant, timeline) a pageserver process serves for its
+/// The single branch a pageserver process serves for its
 /// entire lifetime, plus the generation granted by the launcher for
-/// this attachment. Parsed from the `tenant_id` / `timeline_id` /
+/// this attachment. Parsed from the `branch_id` /
 /// `generation` fields of `pageserver.toml` (all-or-nothing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimelineIdentity {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub generation: Generation,
 }
 
@@ -134,7 +133,7 @@ pub struct PageServerConf {
 
     pub remote_storage_config: Option<RemoteStorageConfig>,
 
-    pub default_tenant_conf: pageserver_api::config::TenantConfigToml,
+    pub default_tenant_conf: pageserver_api::config::BranchConfigToml,
 
     /// libpq connection string of the single safekeeper that the
     /// walreceiver streams WAL from, e.g. `host=127.0.0.1 port=5484`.
@@ -256,8 +255,8 @@ impl PageServerConf {
     // Repository paths, relative to workdir.
     //
 
-    pub fn tenants_path(&self) -> Utf8PathBuf {
-        self.workdir.join(TENANTS_SEGMENT_NAME)
+    pub fn branches_path(&self) -> Utf8PathBuf {
+        self.workdir.join(BRANCHES_SEGMENT_NAME)
     }
 
     pub fn deletion_prefix(&self) -> Utf8PathBuf {
@@ -289,22 +288,8 @@ impl PageServerConf {
         self.deletion_prefix().join(format!("header-{VERSION:02x}"))
     }
 
-    pub fn tenant_path(&self, tenant_id: &TenantId) -> Utf8PathBuf {
-        self.tenants_path().join(tenant_id.to_string())
-    }
-
-    pub fn timelines_path(&self, tenant_id: &TenantId) -> Utf8PathBuf {
-        self.tenant_path(tenant_id)
-            .join(TIMELINES_SEGMENT_NAME)
-    }
-
-    pub fn timeline_path(
-        &self,
-        tenant_id: &TenantId,
-        timeline_id: &TimelineId,
-    ) -> Utf8PathBuf {
-        self.timelines_path(tenant_id)
-            .join(timeline_id.to_string())
+    pub fn branch_path(&self, branch_id: &BranchId) -> Utf8PathBuf {
+        self.branches_path().join(branch_id.to_string())
     }
 
     /// Turns storage remote path of a file into its local path.
@@ -338,8 +323,7 @@ impl PageServerConf {
         workdir: &Utf8Path,
     ) -> anyhow::Result<Self> {
         let pageserver_api::config::ConfigToml {
-            tenant_id,
-            timeline_id,
+            branch_id,
             generation,
             timeline_init,
             listen_pg_addr,
@@ -403,23 +387,21 @@ impl PageServerConf {
             scale_factor,
         } = config_toml;
 
-        let timeline_identity = match (tenant_id, timeline_id, generation) {
-            (Some(tenant_id), Some(timeline_id), Some(generation)) => Some(TimelineIdentity {
-                tenant_id,
-                timeline_id,
+        let timeline_identity = match (branch_id, generation) {
+            (Some(branch_id), Some(generation)) => Some(TimelineIdentity {
+                branch_id,
                 generation: Generation::new(generation),
             }),
-            (None, None, None) => None,
+            (None, None) => None,
             _ => anyhow::bail!(
-                "tenant_id, timeline_id and generation must be set together in pageserver.toml \
-                 (got tenant_id: {}, timeline_id: {}, generation: {})",
-                tenant_id.is_some(),
-                timeline_id.is_some(),
+                "branch_id and generation must be set together in pageserver.toml \
+                 (got branch_id: {}, generation: {})",
+                branch_id.is_some(),
                 generation.is_some(),
             ),
         };
         if timeline_init.is_some() && timeline_identity.is_none() {
-            anyhow::bail!("[timeline_init] requires tenant_id/timeline_id/generation to be set");
+            anyhow::bail!("[timeline_init] requires branch_id/generation to be set");
         }
 
         let yb_page_writer = yb_page_writer.resolve(scale_factor);
@@ -639,8 +621,7 @@ mod tests {
     fn test_timeline_identity_round_trip() {
         let input = r#"
             control_plane_api = "http://localhost:6666"
-            tenant_id   = "c8178f5ed40cf94a9b3a23b4f9e1f966"
-            timeline_id = "77ffde89f43d4ca08ef0a0ed1f089eaa"
+            branch_id   = "77ffde89f43d4ca08ef0a0ed1f089eaa"
             generation  = 7
 
             [timeline_init]
@@ -654,11 +635,7 @@ mod tests {
             .expect("parse_and_validate");
         let ident = conf.timeline_identity.expect("identity parsed");
         assert_eq!(
-            ident.tenant_id.to_string(),
-            "c8178f5ed40cf94a9b3a23b4f9e1f966"
-        );
-        assert_eq!(
-            ident.timeline_id.to_string(),
+            ident.branch_id.to_string(),
             "77ffde89f43d4ca08ef0a0ed1f089eaa"
         );
         assert_eq!(ident.generation, utils::generation::Generation::new(7));
@@ -682,13 +659,12 @@ mod tests {
     fn test_timeline_init_branch_parses_lsn() {
         let input = r#"
             control_plane_api = "http://localhost:6666"
-            tenant_id   = "c8178f5ed40cf94a9b3a23b4f9e1f966"
-            timeline_id = "11ffde89f43d4ca08ef0a0ed1f089eaa"
+            branch_id   = "11ffde89f43d4ca08ef0a0ed1f089eaa"
             generation  = 1
 
             [timeline_init]
             mode                 = "branch"
-            ancestor_timeline_id = "77ffde89f43d4ca08ef0a0ed1f089eaa"
+            ancestor_branch_id = "77ffde89f43d4ca08ef0a0ed1f089eaa"
             ancestor_lsn         = "0/169AD58"
         "#;
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
@@ -698,11 +674,11 @@ mod tests {
             .expect("parse_and_validate");
         match conf.timeline_init {
             Some(pageserver_api::config::TimelineInitConfig::Branch {
-                ancestor_timeline_id,
+                ancestor_branch_id,
                 ancestor_lsn,
             }) => {
                 assert_eq!(
-                    ancestor_timeline_id.to_string(),
+                    ancestor_branch_id.to_string(),
                     "77ffde89f43d4ca08ef0a0ed1f089eaa"
                 );
                 assert_eq!(ancestor_lsn, utils::lsn::Lsn::from_str("0/169AD58").unwrap());
@@ -713,10 +689,10 @@ mod tests {
 
     #[test]
     fn test_partial_timeline_identity_is_rejected() {
-        // tenant_id without timeline_id/generation must fail validation
+        // branch_id without generation must fail validation
         let input = r#"
             control_plane_api = "http://localhost:6666"
-            tenant_id = "c8178f5ed40cf94a9b3a23b4f9e1f966"
+            branch_id = "c8178f5ed40cf94a9b3a23b4f9e1f966"
         "#;
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("fields parse");

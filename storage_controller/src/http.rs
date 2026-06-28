@@ -21,12 +21,12 @@ use pageserver_api::controller_api::{
     MetadataHealthListUnhealthyResponse, MetadataHealthUpdateRequest, MetadataHealthUpdateResponse,
     NodeAvailability, NodeConfigureRequest, NodeRegisterRequest, PendingTimelineInitRequest,
     SafekeeperSchedulingPolicyRequest,
-    SetTimelineBranchNameRequest, TenantCreateRequest,
-    TenantPolicyRequest, TimelineBranchName, TimelineImportRequest,
+    SetTimelineBranchNameRequest, BranchCreateRequest,
+    BranchPolicyRequest, TimelineBranchName, TimelineImportRequest,
  TimelineRegisterRequest,
 };
 use pageserver_api::models::{
-    DetachBehavior, LsnLeaseRequest, TenantTimeTravelRequest, TimelineArchivalConfigRequest,
+    DetachBehavior, LsnLeaseRequest, BranchTimeTravelRequest, TimelineArchivalConfigRequest,
     TimelineCreateRequest,
 };
 use pageserver_api::upcall_api::{
@@ -38,7 +38,7 @@ use routerify::Middleware;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use utils::auth::{Scope, SwappableJwtAuth};
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 
 use crate::metrics::{
     HttpRequestLatencyLabelGroup, HttpRequestStatusLabelGroup, METRICS_REGISTRY,
@@ -46,15 +46,14 @@ use crate::metrics::{
 };
 use crate::persistence::SafekeeperUpsert;
 use crate::service::{
-    STARTUP_RECONCILE_TIMEOUT, Service,
-    TenantMutationLocations,
+    BranchMutationLocations, STARTUP_RECONCILE_TIMEOUT, Service,
 };
 
 /// State available to HTTP request handlers
 pub struct HttpState {
     service: Arc<crate::service::Service>,
     auth: Option<Arc<SwappableJwtAuth>>,
-    rate_limiter: governor::DefaultKeyedRateLimiter<TenantId>,
+    rate_limiter: governor::DefaultKeyedRateLimiter<BranchId>,
     neon_metrics: NeonMetrics,
     allowlist_routes: &'static [&'static str],
 }
@@ -91,16 +90,16 @@ fn get_state(request: &Request<Body>) -> &HttpState {
         .as_ref()
 }
 
-/// Rate limits tenant requests.
+/// Rate limits branch requests.
 ///
-/// TODO: this should be a request middleware, but requires us to extract the tenant ID from
+/// TODO: this should be a request middleware, but requires us to extract the branch ID from
 /// different URLs in a systematic way.
 ///
 /// TODO: consider returning a 429 response if these start piling up.
-async fn maybe_rate_limit(request: &Request<Body>, tenant_id: TenantId) {
-    // Check if the tenant should be rate-limited.
+async fn maybe_rate_limit(request: &Request<Body>, branch_id: BranchId) {
+    // Check if the branch should be rate-limited.
     let rate_limiter = &get_state(request).rate_limiter;
-    if rate_limiter.check_key(&tenant_id).is_ok() {
+    if rate_limiter.check_key(&branch_id).is_ok() {
         return;
     }
 
@@ -110,22 +109,22 @@ async fn maybe_rate_limit(request: &Request<Body>, tenant_id: TenantId) {
         .storage_controller_http_request_rate_limited
         .start_timer();
 
-    // Log rate limited tenants once every 10 seconds.
-    static LOG_RATE_LIMITER: LazyLock<governor::DefaultKeyedRateLimiter<TenantId>> =
+    // Log rate limited branches once every 10 seconds.
+    static LOG_RATE_LIMITER: LazyLock<governor::DefaultKeyedRateLimiter<BranchId>> =
         LazyLock::new(|| {
             let quota = governor::Quota::with_period(Duration::from_secs(10)).unwrap();
             governor::RateLimiter::keyed(quota)
         });
 
-    if LOG_RATE_LIMITER.check_key(&tenant_id).is_ok() {
-        warn!("tenant {tenant_id} is rate limited")
+    if LOG_RATE_LIMITER.check_key(&branch_id).is_ok() {
+        warn!("branch {branch_id} is rate limited")
     }
 
     // Wait for quota.
-    rate_limiter.until_key_ready(&tenant_id).await;
+    rate_limiter.until_key_ready(&branch_id).await;
 }
 
-/// Pageserver calls into this on startup, to learn which tenants it should attach
+/// Pageserver calls into this on startup, to learn which branches it should attach
 async fn handle_re_attach(req: Request<Body>) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::GenerationsApi)?;
 
@@ -136,7 +135,7 @@ async fn handle_re_attach(req: Request<Body>) -> Result<Response<Body>, ApiError
 }
 
 /// Pageserver calls into this before doing deletions, to confirm that it still
-/// holds the latest generation for the tenants with deletions enqueued
+/// holds the latest generation for the branches with deletions enqueued
 async fn handle_validate(req: Request<Body>) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::GenerationsApi)?;
 
@@ -179,7 +178,7 @@ async fn handle_put_timeline_import_status(req: Request<Body>) -> Result<Respons
     )
 }
 
-/// Call into this before attaching a tenant to a pageserver, to acquire a generation number
+/// Call into this before attaching a branch to a pageserver, to acquire a generation number
 /// (in the real control plane this is unnecessary, because the same program is managing
 ///  generation numbers and doing attachments).
 async fn handle_attach_hook(req: Request<Body>) -> Result<Response<Body>, ApiError> {
@@ -217,7 +216,7 @@ async fn handle_tenant_create(
     check_permissions(&req, Scope::PageServerApi)?;
 
     let mut req = req;
-    let create_req = json_request::<TenantCreateRequest>(&mut req).await?;
+    let create_req = json_request::<BranchCreateRequest>(&mut req).await?;
 
     json_response(
         StatusCode::CREATED,
@@ -229,12 +228,12 @@ async fn handle_tenant_time_travel_remote_storage(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
     let mut req = req;
-    let time_travel_req = json_request::<TenantTimeTravelRequest>(&mut req).await?;
+    let time_travel_req = json_request::<BranchTimeTravelRequest>(&mut req).await?;
 
     let timestamp_raw = must_get_query_param(&req, "travel_to")?;
     let _timestamp = humantime::parse_rfc3339(&timestamp_raw).map_err(|_e| {
@@ -253,7 +252,7 @@ async fn handle_tenant_time_travel_remote_storage(
     service
         .tenant_time_travel_remote_storage(
             &time_travel_req,
-            tenant_id,
+            branch_id,
             timestamp_raw,
             done_if_after_raw,
         )
@@ -271,12 +270,12 @@ async fn handle_tenant_delete(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
     let status_code = service
-        .tenant_delete(tenant_id)
+        .tenant_delete(branch_id)
         .await
         .and_then(map_reqwest_hyper_status)?;
 
@@ -292,16 +291,16 @@ async fn handle_tenant_timeline_create(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
     let mut req = req;
     let create_req = json_request::<TimelineCreateRequest>(&mut req).await?;
     json_response(
         StatusCode::CREATED,
         service
-            .tenant_timeline_create(tenant_id, create_req)
+            .tenant_timeline_create(branch_id, create_req)
             .await?,
     )
 }
@@ -310,15 +309,12 @@ async fn handle_tenant_timeline_delete(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
 
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
-    service
-        .maybe_delete_timeline_import(tenant_id, timeline_id)
-        .await?;
+    service.maybe_delete_timeline_import(branch_id).await?;
 
     // For timeline deletions, which both implement an "initially return 202, then 404 once
     // we're done" semantic, we wrap with a retry loop to expose a simpler API upstream.
@@ -334,7 +330,7 @@ async fn handle_tenant_timeline_delete(
 
         let started_at = Instant::now();
 
-        // To keep deletion reasonably snappy for small tenants, initially check after 1 second if deletion
+        // To keep deletion reasonably snappy for small branches, initially check after 1 second if deletion
         // completed.
         let mut retry_period = Duration::from_secs(1);
 
@@ -373,7 +369,7 @@ async fn handle_tenant_timeline_delete(
 
     deletion_wrapper(service, move |service| async move {
         service
-            .tenant_timeline_delete(tenant_id, timeline_id)
+            .tenant_timeline_delete(branch_id)
             .await
             .and_then(map_reqwest_hyper_status)
     })
@@ -384,17 +380,16 @@ async fn handle_tenant_timeline_archival_config(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
 
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
     let mut req = req;
     let create_req = json_request::<TimelineArchivalConfigRequest>(&mut req).await?;
 
     service
-        .tenant_timeline_archival_config(tenant_id, timeline_id, create_req)
+        .tenant_timeline_archival_config(branch_id, create_req)
         .await?;
 
     json_response(StatusCode::OK, ())
@@ -404,15 +399,14 @@ async fn handle_tenant_timeline_detach_ancestor(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     let behavior: Option<DetachBehavior> = parse_query_param(&req, "detach_behavior")?;
 
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
     let res = service
-        .tenant_timeline_detach_ancestor(tenant_id, timeline_id, behavior)
+        .tenant_timeline_detach_ancestor(branch_id, behavior)
         .await?;
 
     json_response(StatusCode::OK, res)
@@ -423,14 +417,12 @@ async fn handle_tenant_timeline_block_unblock_gc(
     req: Request<Body>,
     dir: BlockUnblock,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
-
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    maybe_rate_limit(&req, branch_id).await;
 
     service
-        .tenant_timeline_block_unblock_gc(tenant_id, timeline_id, dir)
+        .tenant_timeline_block_unblock_gc(branch_id, dir)
         .await?;
 
     json_response(StatusCode::OK, ())
@@ -440,24 +432,23 @@ async fn handle_tenant_timeline_lsn_lease(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
 
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
     let mut req = req;
     let lsn_lease_request = json_request::<LsnLeaseRequest>(&mut req).await?;
 
     service
-        .tenant_timeline_lsn_lease(tenant_id, timeline_id, lsn_lease_request.lsn)
+        .tenant_timeline_lsn_lease(branch_id, lsn_lease_request.lsn)
         .await?;
 
     json_response(StatusCode::OK, ())
 }
 
 // For metric labels where we would like to include the approximate path, but exclude high-cardinality fields like query parameters
-// and tenant/timeline IDs.  Since we are proxying to arbitrary paths, we don't have routing templates to
+// and branch IDs.  Since we are proxying to arbitrary paths, we don't have routing templates to
 // compare to, so we can just filter out our well known ID format with regexes.
 fn path_without_ids(path: &str) -> String {
     static ID_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
@@ -471,9 +462,9 @@ async fn handle_tenant_timeline_passthrough(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
     let Some(path) = req.uri().path_and_query() else {
         // This should never happen, our request router only calls us if there is a path
@@ -489,20 +480,20 @@ async fn handle_tenant_timeline_passthrough(
         _ => return Err(ApiError::BadRequest(anyhow::anyhow!("Unsupported method"))),
     };
 
-    tracing::info!("Proxying request for tenant {} ({})", tenant_id, path);
+    tracing::info!("Proxying request for branch {} ({})", branch_id, path);
 
-    // yb-light: find the node that holds the tenant.
-    let (_, tenant_id) = service.tenant0_node(tenant_id).await?;
+    // yb-light: find the node that holds the branch.
+    let (_, branch_id) = service.tenant0_node(branch_id).await?;
 
     let service_inner = service.clone();
 
-    service.tenant_remote_mutation(tenant_id, |locations| async move {
-        let TenantMutationLocations(locations) = locations;
+    service.tenant_remote_mutation(branch_id, |locations| async move {
+        let BranchMutationLocations(locations) = locations;
         if locations.is_empty() {
-            return Err(ApiError::NotFound(anyhow::anyhow!("Tenant {} not found", tenant_id).into()));
+            return Err(ApiError::NotFound(anyhow::anyhow!("Branch {} not found", branch_id).into()));
         }
 
-        let (_tenant_id, locations) = locations.into_iter().next().unwrap();
+        let (_branch_id, locations) = locations.into_iter().next().unwrap();
         let node = locations.latest.node;
 
         let path = format!("{path}");
@@ -551,22 +542,22 @@ async fn handle_tenant_timeline_passthrough(
             .bytes()
             .await
             .map_err(|e| ApiError::InternalServerError(e.into()))?;
-        // Inspect 404 errors: at this point, we know that the tenant exists, but the pageserver we route
-        // the request to might not yet be ready. Therefore, if it is a _tenant_ not found error, we can
+        // Inspect 404 errors: at this point, we know that the branch exists, but the pageserver we route
+        // the request to might not yet be ready. Therefore, if it is a _branch_ not found error, we can
         // convert it into a 503. TODO: we should make this part of the check in `tenant_remote_mutation`.
         // However, `tenant_remote_mutation` currently cannot inspect the HTTP error response body,
         // so we have to do it here instead.
         if resp_staus == reqwest::StatusCode::NOT_FOUND {
             let resp_str = std::str::from_utf8(&resp_bytes)
                 .map_err(|e| ApiError::InternalServerError(e.into()))?;
-            // We only handle "tenant not found" errors; other 404s like timeline not found should
+            // We only handle "branch not found" errors; other 404s should
             // be forwarded as-is.
-            if Service::is_tenant_not_found_error(resp_str, tenant_id) {
+            if Service::is_branch_not_found_error(resp_str, branch_id) {
                 // Rather than retry here, send the client a 503 to prompt a retry: this matches
                 // the pageserver's use of 503, and all clients calling this API should retry on 503.
                 return Err(ApiError::ResourceUnavailable(
                     format!(
-                        "Pageserver {node} returned tenant 404 due to ongoing migration, retry later"
+                        "Pageserver {node} returned branch 404 due to ongoing migration, retry later"
                     )
                     .into(),
                 ));
@@ -583,23 +574,23 @@ async fn handle_tenant_locate(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
 
     check_permissions(&req, Scope::Admin)?;
     // NB: don't rate limit: admin operation.
 
-    json_response(StatusCode::OK, service.tenant_locate(tenant_id)?)
+    json_response(StatusCode::OK, service.tenant_locate(branch_id)?)
 }
 
 async fn handle_tenant_describe(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     check_permissions(&req, Scope::Scrubber)?;
     // NB: don't rate limit: scrubber operation.
 
-    json_response(StatusCode::OK, service.tenant_describe(tenant_id)?)
+    json_response(StatusCode::OK, service.tenant_describe(branch_id)?)
 }
 
 async fn handle_tenant_timeline_describe(
@@ -608,13 +599,10 @@ async fn handle_tenant_timeline_describe(
 ) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::Scrubber)?;
 
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     json_response(
         StatusCode::OK,
-        service
-            .tenant_timeline_describe(tenant_id, timeline_id)
-            .await?,
+        service.tenant_timeline_describe(branch_id).await?,
     )
 }
 
@@ -624,13 +612,12 @@ async fn handle_set_timeline_branch_name(
 ) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::Admin)?;
 
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     let mut req = req;
     let body = json_request::<SetTimelineBranchNameRequest>(&mut req).await?;
 
     service
-        .set_timeline_branch_name(tenant_id, timeline_id, body.branch_name)
+        .set_timeline_branch_name(branch_id, body.branch_name)
         .await?;
     json_response(StatusCode::OK, ())
 }
@@ -645,10 +632,9 @@ async fn handle_timeline_drop(
 ) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::Admin)?;
 
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
 
-    service.timeline_drop(tenant_id, timeline_id).await?;
+    service.timeline_drop(branch_id).await?;
     json_response(StatusCode::OK, ())
 }
 
@@ -658,13 +644,12 @@ async fn handle_timeline_register(
 ) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::Admin)?;
 
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     let mut req = req;
     let body = json_request::<TimelineRegisterRequest>(&mut req).await?;
 
     service
-        .timeline_register(tenant_id, timeline_id, body.start_lsn, body.sk_set, body.branch_name)
+        .timeline_register(branch_id, body.start_lsn, body.sk_set, body.branch_name)
         .await?;
     json_response(StatusCode::OK, ())
 }
@@ -684,13 +669,12 @@ async fn handle_record_pending_timeline_init(
 ) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::Admin)?;
 
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     let mut req = req;
     let body = json_request::<PendingTimelineInitRequest>(&mut req).await?;
 
     service
-        .record_pending_timeline_init(tenant_id, timeline_id, body)
+        .record_pending_timeline_init(branch_id, body)
         .await?;
     json_response(StatusCode::OK, ())
 }
@@ -700,8 +684,7 @@ async fn handle_list_pending_timeline_inits(
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::Admin)?;
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let inits = service.list_pending_timeline_inits(tenant_id).await?;
+    let inits = service.list_pending_timeline_inits().await?;
     json_response(StatusCode::OK, inits)
 }
 
@@ -710,11 +693,8 @@ async fn handle_delete_pending_timeline_init(
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::Admin)?;
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
-    service
-        .delete_pending_timeline_init(tenant_id, timeline_id)
-        .await?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
+    service.delete_pending_timeline_init(branch_id).await?;
     json_response(StatusCode::OK, ())
 }
 
@@ -725,7 +705,7 @@ async fn handle_tenant_list(
     check_permissions(&req, Scope::Admin)?;
 
     let limit: Option<usize> = parse_query_param(&req, "limit")?;
-    let start_after: Option<TenantId> = parse_query_param(&req, "start_after")?;
+    let start_after: Option<BranchId> = parse_query_param(&req, "start_after")?;
     tracing::info!("start_after: {:?}", start_after);
 
     json_response(StatusCode::OK, service.tenant_list(limit, start_after))
@@ -886,12 +866,12 @@ async fn handle_metadata_health_list_unhealthy(
     check_permissions(&req, Scope::Admin)?;
 
     let state = get_state(&req);
-    let unhealthy_tenants = state.service.metadata_health_list_unhealthy().await?;
+    let unhealthy_branches = state.service.metadata_health_list_unhealthy().await?;
 
     json_response(
         StatusCode::OK,
         MetadataHealthListUnhealthyResponse {
-            unhealthy_tenants,
+            unhealthy_branches,
         },
     )
 }
@@ -919,83 +899,72 @@ async fn handle_tenant_update_policy(req: Request<Body>) -> Result<Response<Body
     // NB: don't rate limit: admin operation.
 
     let mut req = req;
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let update_req = json_request::<TenantPolicyRequest>(&mut req).await?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
+    let update_req = json_request::<BranchPolicyRequest>(&mut req).await?;
     let state = get_state(&req);
 
     json_response(
         StatusCode::OK,
         state
             .service
-            .tenant_update_policy(tenant_id, update_req)
+            .tenant_update_policy(branch_id, update_req)
             .await?,
     )
 }
 
 
 async fn handle_tenant_drop(req: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
     let state = get_state(&req);
 
-    json_response(StatusCode::OK, state.service.tenant_drop(tenant_id).await?)
+    json_response(StatusCode::OK, state.service.tenant_drop(branch_id).await?)
 }
 
 async fn handle_tenant_import(req: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
     let state = get_state(&req);
 
-    json_response(
-        StatusCode::OK,
-        state.service.tenant_import(tenant_id).await?,
-    )
+    json_response(StatusCode::OK, state.service.tenant_import(branch_id).await?)
 }
 
 async fn handle_timeline_import(req: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     check_permissions(&req, Scope::PageServerApi)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
     let mut req = req;
     let import_req = json_request::<TimelineImportRequest>(&mut req).await?;
 
     let state = get_state(&req);
 
-    if import_req.tenant_id != tenant_id || import_req.timeline_id != timeline_id {
+    if import_req.branch_id != branch_id {
         return Err(ApiError::BadRequest(anyhow::anyhow!(
-            "tenant id or timeline id mismatch: url={tenant_id}/{timeline_id}, body={}/{}",
-            import_req.tenant_id,
-            import_req.timeline_id
+            "branch id mismatch: url={branch_id}, body={}",
+            import_req.branch_id
         )));
     }
 
-    json_response(
-        StatusCode::OK,
-        state.service.timeline_import(import_req).await?,
-    )
+    json_response(StatusCode::OK, state.service.timeline_import(import_req).await?)
 }
 
 async fn handle_tenant_timeline_locate(
     service: Arc<Service>,
     req: Request<Body>,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&req, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&req, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
 
     check_permissions(&req, Scope::Admin)?;
-    maybe_rate_limit(&req, tenant_id).await;
+    maybe_rate_limit(&req, branch_id).await;
 
     json_response(
         StatusCode::OK,
-        service
-            .tenant_timeline_locate(tenant_id, timeline_id)
-            .await?,
+        service.tenant_timeline_locate(branch_id).await?,
     )
 }
 
@@ -1129,7 +1098,7 @@ async fn handle_safekeeper_scheduling_policy(
     json_response(StatusCode::OK, ())
 }
 
-/// Common wrapper for request handlers that call into Service and will operate on tenants: they must only
+/// Common wrapper for request handlers that call into Service and will operate on branches: they must only
 /// be allowed to run if Service has finished its initial reconciliation.
 async fn tenant_service_handler<R, H>(
     request: Request<Body>,
@@ -1331,8 +1300,8 @@ pub fn make_router(
         .post("/debug/v1/inspect", |r| {
             named_request_span(r, handle_inspect, RequestName("debug_v1_inspect"))
         })
-        .post("/debug/v1/tenant/:tenant_id/drop", |r| {
-            named_request_span(r, handle_tenant_drop, RequestName("debug_v1_tenant_drop"))
+        .post("/debug/v1/branch/:branch_id/drop", |r| {
+            named_request_span(r, handle_tenant_drop, RequestName("debug_v1_branch_drop"))
         })
         .post("/debug/v1/node/:node_id/drop", |r| {
             named_request_span(r, handle_node_drop, RequestName("debug_v1_node_drop"))
@@ -1351,43 +1320,37 @@ pub fn make_router(
                 RequestName("debug_v1_tombstone_list"),
             )
         })
-        .post("/debug/v1/tenant/:tenant_id/import", |r| {
+        .post("/debug/v1/branch/:branch_id/import", |r| {
             named_request_span(
                 r,
                 handle_tenant_import,
-                RequestName("debug_v1_tenant_import"),
+                RequestName("debug_v1_branch_import"),
             )
         })
-        .get("/debug/v1/tenant", |r| {
-            named_request_span(r, handle_tenants_dump, RequestName("debug_v1_tenant"))
+        .get("/debug/v1/branch", |r| {
+            named_request_span(r, handle_tenants_dump, RequestName("debug_v1_branch"))
         })
-        .get("/debug/v1/tenant/:tenant_id/locate", |r| {
+        .get("/debug/v1/branch/:branch_id/locate", |r| {
             tenant_service_handler(
                 r,
                 handle_tenant_locate,
-                RequestName("debug_v1_tenant_locate"),
+                RequestName("debug_v1_branch_locate"),
             )
         })
-        .post(
-            "/debug/v1/tenant/:tenant_id/timeline/:timeline_id/import",
-            |r| {
-                named_request_span(
-                    r,
-                    handle_timeline_import,
-                    RequestName("debug_v1_timeline_import"),
-                )
-            },
-        )
-        .get(
-            "/debug/v1/tenant/:tenant_id/timeline/:timeline_id/locate",
-            |r| {
-                tenant_service_handler(
-                    r,
-                    handle_tenant_timeline_locate,
-                    RequestName("v1_tenant_timeline_locate"),
-                )
-            },
-        )
+        .post("/debug/v1/branch/:branch_id/import_timeline", |r| {
+            named_request_span(
+                r,
+                handle_timeline_import,
+                RequestName("debug_v1_timeline_import"),
+            )
+        })
+        .get("/debug/v1/branch/:branch_id/locate_timeline", |r| {
+            tenant_service_handler(
+                r,
+                handle_tenant_timeline_locate,
+                RequestName("v1_branch_timeline_locate"),
+            )
+        })
         .get("/debug/v1/scheduler", |r| {
             named_request_span(r, handle_scheduler_dump, RequestName("debug_v1_scheduler"))
         })
@@ -1491,74 +1454,65 @@ pub fn make_router(
                 RequestName("v1_safekeeper_scheduling_policy"),
             )
         })
-        // Tenant Shard operations
-        .get("/control/v1/tenant/:tenant_id", |r| {
+        // Branch operations
+        .get("/control/v1/branch/:branch_id", |r| {
             tenant_service_handler(
                 r,
                 handle_tenant_describe,
-                RequestName("control_v1_tenant_describe"),
+                RequestName("control_v1_branch_describe"),
             )
         })
-        .get("/control/v1/tenant", |r| {
-            tenant_service_handler(r, handle_tenant_list, RequestName("control_v1_tenant_list"))
+        .get("/control/v1/branch", |r| {
+            tenant_service_handler(r, handle_tenant_list, RequestName("control_v1_branch_list"))
         })
-        .put("/control/v1/tenant/:tenant_id/policy", |r| {
+        .put("/control/v1/branch/:branch_id/policy", |r| {
             named_request_span(
                 r,
                 handle_tenant_update_policy,
-                RequestName("control_v1_tenant_policy"),
+                RequestName("control_v1_branch_policy"),
             )
         })
-        // Tenant operations
+        // Branch operations
         // The ^/v1/ endpoints act as a "Virtual Pageserver", enabling shard-naive clients to call into
-        // this service to manage tenants that actually consist of many tenant shards, as if they are a single entity.
-        .post("/v1/tenant", |r| {
-            tenant_service_handler(r, handle_tenant_create, RequestName("v1_tenant"))
+        // this service to manage branches that actually consist of many shards, as if they are a single entity.
+        .post("/v1/branch", |r| {
+            tenant_service_handler(r, handle_tenant_create, RequestName("v1_branch"))
         })
-        .delete("/v1/tenant/:tenant_id", |r| {
-            tenant_service_handler(r, handle_tenant_delete, RequestName("v1_tenant"))
+        .delete("/v1/branch/:branch_id", |r| {
+            tenant_service_handler(r, handle_tenant_delete, RequestName("v1_branch"))
         })
-        .put("/v1/tenant/:tenant_id/time_travel_remote_storage", |r| {
+        .put("/v1/branch/:branch_id/time_travel_remote_storage", |r| {
             tenant_service_handler(
                 r,
                 handle_tenant_time_travel_remote_storage,
-                RequestName("v1_tenant_time_travel_remote_storage"),
+                RequestName("v1_branch_time_travel_remote_storage"),
             )
         })
         // Timeline operations
-        .get("/control/v1/tenant/:tenant_id/timeline/:timeline_id", |r| {
+        .get("/control/v1/branch/:branch_id/timeline", |r| {
             tenant_service_handler(
                 r,
                 handle_tenant_timeline_describe,
-                RequestName("v1_tenant_timeline_describe"),
+                RequestName("v1_branch_timeline_describe"),
             )
         })
-        .put(
-            "/control/v1/tenant/:tenant_id/timeline/:timeline_id/branch_name",
-            |r| {
-                tenant_service_handler(
-                    r,
-                    handle_set_timeline_branch_name,
-                    RequestName("v1_set_timeline_branch_name"),
-                )
-            },
-        )
-        .post(
-            "/control/v1/tenant/:tenant_id/timeline/:timeline_id/register",
-            |r| {
-                tenant_service_handler(
-                    r,
-                    handle_timeline_register,
-                    RequestName("v1_timeline_register"),
-                )
-            },
-        )
-        .put(
-            "/control/v1/tenant/:tenant_id/timeline/:timeline_id/drop",
-            |r| {
-                tenant_service_handler(r, handle_timeline_drop, RequestName("v1_timeline_drop"))
-            },
-        )
+        .put("/control/v1/branch/:branch_id/branch_name", |r| {
+            tenant_service_handler(
+                r,
+                handle_set_timeline_branch_name,
+                RequestName("v1_set_timeline_branch_name"),
+            )
+        })
+        .post("/control/v1/branch/:branch_id/register", |r| {
+            tenant_service_handler(
+                r,
+                handle_timeline_register,
+                RequestName("v1_timeline_register"),
+            )
+        })
+        .put("/control/v1/branch/:branch_id/drop", |r| {
+            tenant_service_handler(r, handle_timeline_drop, RequestName("v1_timeline_drop"))
+        })
         .get("/control/v1/timeline_branch_names", |r| {
             tenant_service_handler(
                 r,
@@ -1566,125 +1520,101 @@ pub fn make_router(
                 RequestName("v1_list_timeline_branch_names"),
             )
         })
-        .post(
-            "/control/v1/tenant/:tenant_id/timeline/:timeline_id/pending_init",
-            |r| {
-                tenant_service_handler(
-                    r,
-                    handle_record_pending_timeline_init,
-                    RequestName("v1_record_pending_timeline_init"),
-                )
-            },
-        )
-        .delete(
-            "/control/v1/tenant/:tenant_id/timeline/:timeline_id/pending_init",
-            |r| {
-                tenant_service_handler(
-                    r,
-                    handle_delete_pending_timeline_init,
-                    RequestName("v1_delete_pending_timeline_init"),
-                )
-            },
-        )
-        .get("/control/v1/tenant/:tenant_id/pending_timeline_inits", |r| {
+        .post("/control/v1/branch/:branch_id/pending_init", |r| {
+            tenant_service_handler(
+                r,
+                handle_record_pending_timeline_init,
+                RequestName("v1_record_pending_timeline_init"),
+            )
+        })
+        .delete("/control/v1/branch/:branch_id/pending_init", |r| {
+            tenant_service_handler(
+                r,
+                handle_delete_pending_timeline_init,
+                RequestName("v1_delete_pending_timeline_init"),
+            )
+        })
+        .get("/control/v1/pending_timeline_inits", |r| {
             tenant_service_handler(
                 r,
                 handle_list_pending_timeline_inits,
                 RequestName("v1_list_pending_timeline_inits"),
             )
         })
-        .delete("/v1/tenant/:tenant_id/timeline/:timeline_id", |r| {
+        .delete("/v1/branch/:branch_id/timeline", |r| {
             tenant_service_handler(
                 r,
                 handle_tenant_timeline_delete,
-                RequestName("v1_tenant_timeline"),
+                RequestName("v1_branch_timeline"),
             )
         })
-        .post("/v1/tenant/:tenant_id/timeline", |r| {
+        .post("/v1/branch/:branch_id/timeline", |r| {
             tenant_service_handler(
                 r,
                 handle_tenant_timeline_create,
-                RequestName("v1_tenant_timeline"),
+                RequestName("v1_branch_timeline"),
             )
         })
-        .put(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/archival_config",
-            |r| {
-                tenant_service_handler(
-                    r,
-                    handle_tenant_timeline_archival_config,
-                    RequestName("v1_tenant_timeline_archival_config"),
-                )
-            },
-        )
-        .put(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/detach_ancestor",
-            |r| {
-                tenant_service_handler(
-                    r,
-                    handle_tenant_timeline_detach_ancestor,
-                    RequestName("v1_tenant_timeline_detach_ancestor"),
-                )
-            },
-        )
-        .post(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/block_gc",
-            |r| {
-                tenant_service_handler(
-                    r,
-                    |s, r| handle_tenant_timeline_block_unblock_gc(s, r, BlockUnblock::Block),
-                    RequestName("v1_tenant_timeline_block_unblock_gc"),
-                )
-            },
-        )
-        .post(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/unblock_gc",
-            |r| {
-                tenant_service_handler(
-                    r,
-                    |s, r| handle_tenant_timeline_block_unblock_gc(s, r, BlockUnblock::Unblock),
-                    RequestName("v1_tenant_timeline_block_unblock_gc"),
-                )
-            },
-        )
+        .put("/v1/branch/:branch_id/archival_config", |r| {
+            tenant_service_handler(
+                r,
+                handle_tenant_timeline_archival_config,
+                RequestName("v1_branch_timeline_archival_config"),
+            )
+        })
+        .put("/v1/branch/:branch_id/detach_ancestor", |r| {
+            tenant_service_handler(
+                r,
+                handle_tenant_timeline_detach_ancestor,
+                RequestName("v1_branch_timeline_detach_ancestor"),
+            )
+        })
+        .post("/v1/branch/:branch_id/block_gc", |r| {
+            tenant_service_handler(
+                r,
+                |s, r| handle_tenant_timeline_block_unblock_gc(s, r, BlockUnblock::Block),
+                RequestName("v1_branch_timeline_block_unblock_gc"),
+            )
+        })
+        .post("/v1/branch/:branch_id/unblock_gc", |r| {
+            tenant_service_handler(
+                r,
+                |s, r| handle_tenant_timeline_block_unblock_gc(s, r, BlockUnblock::Unblock),
+                RequestName("v1_branch_timeline_block_unblock_gc"),
+            )
+        })
         // LSN lease passthrough to all shards
-        .post(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/lsn_lease",
-            |r| {
-                tenant_service_handler(
-                    r,
-                    handle_tenant_timeline_lsn_lease,
-                    RequestName("v1_tenant_timeline_lsn_lease"),
-                )
-            },
-        )
-        // Tenant timeline mark_invisible passthrough to shard zero
-        .put(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/mark_invisible",
-            |r| {
-                tenant_service_handler(
-                    r,
-                    handle_tenant_timeline_passthrough,
-                    RequestName("v1_tenant_timeline_mark_invisible_passthrough"),
-                )
-            },
-        )
-        // Tenant detail GET passthrough to shard zero:
-        .get("/v1/tenant/:tenant_id", |r| {
+        .post("/v1/branch/:branch_id/lsn_lease", |r| {
+            tenant_service_handler(
+                r,
+                handle_tenant_timeline_lsn_lease,
+                RequestName("v1_branch_timeline_lsn_lease"),
+            )
+        })
+        // Branch timeline mark_invisible passthrough to shard zero
+        .put("/v1/branch/:branch_id/mark_invisible", |r| {
             tenant_service_handler(
                 r,
                 handle_tenant_timeline_passthrough,
-                RequestName("v1_tenant_passthrough"),
+                RequestName("v1_branch_timeline_mark_invisible_passthrough"),
             )
         })
-        // The `*` in the  URL is a wildcard: any tenant/timeline GET APIs on the pageserver
+        // Branch detail GET passthrough to shard zero:
+        .get("/v1/branch/:branch_id", |r| {
+            tenant_service_handler(
+                r,
+                handle_tenant_timeline_passthrough,
+                RequestName("v1_branch_passthrough"),
+            )
+        })
+        // The `*` in the  URL is a wildcard: any branch GET APIs on the pageserver
         // are implicitly exposed here.  This must be last in the list to avoid
         // taking precedence over other GET methods we might implement by hand.
-        .get("/v1/tenant/:tenant_id/*", |r| {
+        .get("/v1/branch/:branch_id/*", |r| {
             tenant_service_handler(
                 r,
                 handle_tenant_timeline_passthrough,
-                RequestName("v1_tenant_passthrough"),
+                RequestName("v1_branch_passthrough"),
             )
         })
 }
@@ -1698,21 +1628,21 @@ mod test {
     fn test_path_without_ids() {
         assert_eq!(
             path_without_ids(
-                "/v1/tenant/1a2b3344556677881122334455667788/timeline/AA223344556677881122334455667788"
+                "/v1/branch/1a2b3344556677881122334455667788/timeline/AA223344556677881122334455667788"
             ),
-            "/v1/tenant//timeline/"
+            "/v1/branch//timeline/"
         );
         assert_eq!(
             path_without_ids(
-                "/v1/tenant/1a2b3344556677881122334455667788-0108/timeline/AA223344556677881122334455667788"
+                "/v1/branch/1a2b3344556677881122334455667788-0108/timeline/AA223344556677881122334455667788"
             ),
-            "/v1/tenant//timeline/"
+            "/v1/branch//timeline/"
         );
         assert_eq!(
             path_without_ids(
-                "/v1/tenant/1a2b3344556677881122334455667788-0108/timeline/AA223344556677881122334455667788?parameter=foo"
+                "/v1/branch/1a2b3344556677881122334455667788-0108/timeline/AA223344556677881122334455667788?parameter=foo"
             ),
-            "/v1/tenant//timeline/"
+            "/v1/branch//timeline/"
         );
     }
 }

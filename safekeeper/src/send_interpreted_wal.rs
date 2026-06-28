@@ -234,7 +234,7 @@ impl InterpretedWalReader {
         let (sender_notification_tx, sender_notification_rx) =
             tokio::sync::mpsc::unbounded_channel();
 
-        let ttid = wal_stream.ttid;
+        let branch_id = wal_stream.branch_id;
 
         let reader = InterpretedWalReader {
             wal_stream,
@@ -274,9 +274,9 @@ impl InterpretedWalReader {
                         InterpretedWalReaderError::Decode(_) => {
                             crate::metrics::WAL_READER_DECODE_ERRORS.inc();
                             error!(
-                                "interpreted wal reader: decode error (tenant {}, timeline {}; \
+                                "interpreted wal reader: decode error (branch {}; \
                                  recoverable — reconnect will re-read from YB): {err:?}",
-                                ttid.tenant_id, ttid.timeline_id
+                                branch_id
                             );
                         }
                         err => error!("failed to read WAL record: {err}"),
@@ -336,7 +336,7 @@ impl InterpretedWalReader {
             metric.dec();
         }
 
-        let ttid = self.wal_stream.ttid;
+        let branch_id = self.wal_stream.branch_id;
         let cause = match self.run_impl(start_pos).await {
             Err(err @ InterpretedWalReaderError::Decode(_)) => {
                 // A WAL *decode* error here is, in yb-light, almost always a
@@ -360,8 +360,7 @@ impl InterpretedWalReader {
                 crate::metrics::WAL_READER_DECODE_ERRORS.inc();
                 error!(
                     "interpreted wal reader: decode error at start_pos={start_pos} \
-                     (tenant {}, timeline {}; recoverable — reconnect will re-read from YB): {err:?}",
-                    ttid.tenant_id, ttid.timeline_id
+                     (branch {branch_id}; recoverable — reconnect will re-read from YB): {err:?}",
                 );
                 format!("decode error at start_pos={start_pos}: {err}")
             }

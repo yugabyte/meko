@@ -16,14 +16,13 @@
 //!
 //! ```sql
 //! CREATE TABLE safekeeper.wals (
-//!     tenant_id        TEXT    NOT NULL,
-//!     timeline_id      TEXT    NOT NULL,
+//!     branch_id        TEXT    NOT NULL,
 //!     segno            BIGINT  NOT NULL,
 //!     chunk_offset     BIGINT  NOT NULL,   -- byte offset of `data` within the segment
 //!     chunk_size       INT     NOT NULL,   -- redundant: length(data)
 //!     data             BYTEA   NOT NULL,
 //!     last_modified_us BIGINT  NOT NULL,
-//!     PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_offset)
+//!     PRIMARY KEY ((branch_id) HASH, segno, chunk_offset)
 //! );
 //! ```
 //!
@@ -93,7 +92,7 @@ use futures::future::{BoxFuture, FutureExt};
 use postgres_ffi::XLogSegNo;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{mpsc, watch};
-use utils::id::TenantTimelineId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use yb_tokio_postgres::types::ToSql;
 
@@ -153,7 +152,7 @@ pub struct YbWalConn {
     /// [`load_min_segno`]), the GC DELETE
     /// ([`YbWalStorage::remove_up_to`]), and the idempotent
     /// control-file ops (`restore_new` SELECT, `persist` UPDATE,
-    /// `delete` DELETE, `list_all_ttids` SELECT). The non-idempotent
+    /// `delete` DELETE, `list_all_branch_ids` SELECT). The non-idempotent
     /// `create_new` INSERT runs on the FPU lane.
     pub system_client: Arc<YsqlClient>,
     /// Name of the YB table that backs the WAL mirror. Always
@@ -198,7 +197,7 @@ impl YbWalConn {
         //   downstream pageserver "relation already exists" panic.
         // - Read lane (no GUC): exclusively the segment reader.
         // - System lane (no GUC): startup SELECTs (`load_write_lsn` /
-        //   `load_min_segno` / `list_all_ttids`), the GC DELETE
+        //   `load_min_segno` / `list_all_branch_ids`), the GC DELETE
         //   (`remove_up_to`), and idempotent control-file ops
         //   (`restore_new` SELECT, `persist` UPDATE, `delete` DELETE).
         let fpu_client = Arc::new(
@@ -296,8 +295,7 @@ pub struct YbWalStorage {
     /// run on the FPU lane owned by the consumer task; SELECTs run on
     /// the read lane (held by [`YbSegmentReader`]).
     ysql_system_client: Arc<YsqlClient>,
-    tenant_id: String,
-    timeline_id: String,
+    branch_id: String,
     table_name: String,
     wal_seg_size: usize,
     /// Producer side of the chunk channel.
@@ -343,7 +341,7 @@ pub struct YbWalStorage {
 
 impl YbWalStorage {
     pub async fn new(
-        ttid: &TenantTimelineId,
+        branch_id: &BranchId,
         state: &TimelinePersistentState,
         yb_wal: Arc<YbWalConn>,
     ) -> Result<Self> {
@@ -356,18 +354,16 @@ impl YbWalStorage {
         let table_name = yb_wal.table.clone();
         let cache = yb_wal.cache.clone();
         let wal_seg_size = state.server.wal_seg_size as usize;
-        let tenant_id_str = ttid.tenant_id.to_string();
-        let timeline_id_str = ttid.timeline_id.to_string();
+        let branch_id_str = branch_id.to_string();
 
         // Rehydrate `write_lsn` from YB rather than scanning local FS. Take
         // the highest `chunk_offset + chunk_size` across all segnos for this
-        // (tenant, timeline) as the end-of-WAL position. Startup work →
+        // branch as the end-of-WAL position. Startup work →
         // system lane so it doesn't share the streaming-read connection.
         let max_offset = Self::load_write_lsn(
             &system_client,
             &table_name,
-            &tenant_id_str,
-            &timeline_id_str,
+            &branch_id_str,
             wal_seg_size,
             state.timeline_start_lsn,
         )
@@ -388,8 +384,7 @@ impl YbWalStorage {
             let src = YbWalSource {
                 client: &system_client,
                 table: &table_name,
-                tenant_id: &tenant_id_str,
-                timeline_id: &timeline_id_str,
+                branch_id: &branch_id_str,
                 seg: wal_seg_size as u64,
             };
             // YB keeps no persisted record-boundary flush_lsn to start from
@@ -410,8 +405,7 @@ impl YbWalStorage {
             match scanned {
                 Ok(end) if end < max_offset => {
                     tracing::warn!(
-                        tenant_id = %tenant_id_str,
-                        timeline_id = %timeline_id_str,
+                        branch_id = %branch_id_str,
                         torn_end = %max_offset,
                         valid_end = %end,
                         "YbWalStorage::new — truncated torn WAL tail to the last valid record boundary",
@@ -421,8 +415,7 @@ impl YbWalStorage {
                 Ok(_) => max_offset,
                 Err(e) => {
                     tracing::warn!(
-                        tenant_id = %tenant_id_str,
-                        timeline_id = %timeline_id_str,
+                        branch_id = %branch_id_str,
                         %max_offset,
                         "YbWalStorage::new — end-of-WAL record-boundary scan failed, using raw max offset: {e:#}",
                     );
@@ -441,16 +434,14 @@ impl YbWalStorage {
             if let Err(e) = truncate_wals_above(
                 &system_client,
                 &table_name,
-                &tenant_id_str,
-                &timeline_id_str,
+                &branch_id_str,
                 wal_seg_size,
                 write_lsn,
             )
             .await
             {
                 tracing::warn!(
-                    tenant_id = %tenant_id_str,
-                    timeline_id = %timeline_id_str,
+                    branch_id = %branch_id_str,
                     %write_lsn,
                     %max_offset,
                     "YbWalStorage::new — failed to delete torn WAL tail (harmless; retried next restart): {e:#}",
@@ -458,8 +449,7 @@ impl YbWalStorage {
             }
         }
         tracing::info!(
-            tenant_id = %tenant_id_str,
-            timeline_id = %timeline_id_str,
+            branch_id = %branch_id_str,
             %write_lsn,
             cfile_local_start_lsn = %state.local_start_lsn,
             cfile_timeline_start_lsn = %state.timeline_start_lsn,
@@ -469,7 +459,7 @@ impl YbWalStorage {
 
         // PhysicalStorage holds the LSN tracker + WAL decoder for this
         // stream — durability is our job.
-        let inner = PhysicalStorage::new(ttid, state, write_lsn)?;
+        let inner = PhysicalStorage::new(branch_id, state, write_lsn)?;
 
         // Producer/consumer plumbing. The watermark starts at
         // `write_lsn` so an immediately-following `flush_wal()` with
@@ -483,8 +473,7 @@ impl YbWalStorage {
             rx,
             fpu_client,
             table_name.clone(),
-            tenant_id_str.clone(),
-            timeline_id_str.clone(),
+            branch_id_str.clone(),
             watermark_tx,
             flush_notify.clone(),
             durable_lsn.clone(),
@@ -493,20 +482,14 @@ impl YbWalStorage {
 
         // Seed the DELETE lower bound from YB so post-restart removals
         // don't scan/tombstone the empty range below the first surviving
-        // segno. Cheap: one tablet lookup keyed on (tenant, timeline).
-        let min_segno = Self::load_min_segno(
-            &system_client,
-            &table_name,
-            &tenant_id_str,
-            &timeline_id_str,
-        )
-        .await?;
+        // segno. Cheap: one tablet lookup keyed on branch.
+        let min_segno =
+            Self::load_min_segno(&system_client, &table_name, &branch_id_str).await?;
 
         let me = YbWalStorage {
             inner,
             ysql_system_client: system_client,
-            tenant_id: tenant_id_str,
-            timeline_id: timeline_id_str,
+            branch_id: branch_id_str,
             table_name,
             wal_seg_size,
             tx,
@@ -533,20 +516,18 @@ impl YbWalStorage {
     async fn load_write_lsn(
         client: &YsqlClient,
         table: &str,
-        tenant_id: &str,
-        timeline_id: &str,
+        branch_id: &str,
         wal_seg_size: usize,
         commit_lsn: Lsn,
     ) -> Result<Lsn> {
-        let sql = bake_ttid(
+        let sql = bake_branch_id(
             &format!(
                 "SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM {} \
-                 WHERE tenant_id = $1 AND timeline_id = $2 \
+                 WHERE branch_id = $1 \
                  GROUP BY segno ORDER BY segno DESC LIMIT 1",
                 quote_relation(table)
             ),
-            tenant_id,
-            timeline_id,
+            branch_id,
         );
         let row_opt = client
             .query_opt(&sql, &[])
@@ -567,20 +548,14 @@ impl YbWalStorage {
     /// seed [`Self::delete_lower_bound`] at construction so the first
     /// `remove_up_to(N)` DELETE after a safekeeper restart is bounded
     /// from below rather than scanning from 0.
-    async fn load_min_segno(
-        client: &YsqlClient,
-        table: &str,
-        tenant_id: &str,
-        timeline_id: &str,
-    ) -> Result<u64> {
-        let sql = bake_ttid(
+    async fn load_min_segno(client: &YsqlClient, table: &str, branch_id: &str) -> Result<u64> {
+        let sql = bake_branch_id(
             &format!(
                 "SELECT min(segno) AS m FROM {} \
-                 WHERE tenant_id = $1 AND timeline_id = $2",
+                 WHERE branch_id = $1",
                 quote_relation(table)
             ),
-            tenant_id,
-            timeline_id,
+            branch_id,
         );
         // Aggregate over an empty set still returns one row (NULL); a
         // missing row would mean the query itself didn't run.
@@ -786,8 +761,7 @@ impl Storage for YbWalStorage {
         truncate_wals_above(
             &self.ysql_system_client,
             &self.table_name,
-            &self.tenant_id,
-            &self.timeline_id,
+            &self.branch_id,
             self.wal_seg_size,
             end_pos,
         )
@@ -826,8 +800,7 @@ impl Storage for YbWalStorage {
         let inner_fut = self.inner.remove_up_to(segno_up_to);
         let system_client = self.ysql_system_client.clone();
         let table = self.table_name.clone();
-        let tenant_id = self.tenant_id.clone();
-        let timeline_id = self.timeline_id.clone();
+        let branch_id = self.branch_id.clone();
         let cache = self.cache.clone();
         let delete_lower_bound = self.delete_lower_bound.clone();
         async move {
@@ -848,14 +821,13 @@ impl Storage for YbWalStorage {
             // `segno_up_to <= lower`: the predicate is unsatisfiable and
             // the DELETE is a no-op.
             let lower = delete_lower_bound.load(Ordering::Relaxed);
-            let sql = bake_ttid(
+            let sql = bake_branch_id(
                 &format!(
-                    "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
-                     AND segno >= $3 AND segno < $4",
+                    "DELETE FROM {} WHERE branch_id = $1 \
+                     AND segno >= $2 AND segno < $3",
                     quote_relation(&table)
                 ),
-                &tenant_id,
-                &timeline_id,
+                &branch_id,
             );
             let lower_i: i64 = lower as i64;
             let upper_i: i64 = segno_up_to as i64;
@@ -901,8 +873,7 @@ fn quote_one(ident: &str) -> String {
 struct YbWalSource<'a> {
     client: &'a YsqlClient,
     table: &'a str,
-    tenant_id: &'a str,
-    timeline_id: &'a str,
+    branch_id: &'a str,
     seg: u64,
 }
 
@@ -916,11 +887,11 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
         let off = (lsn.0 % self.seg) as i64;
         let sql = format!(
             "SELECT chunk_offset, data FROM {} \
-             WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 AND chunk_offset <= $4 \
+             WHERE branch_id = $1 AND segno = $2 AND chunk_offset <= $3 \
              ORDER BY chunk_offset DESC LIMIT 1",
             quote_relation(self.table)
         );
-        let params: [&(dyn ToSql + Sync); 4] = [&self.tenant_id, &self.timeline_id, &segno, &off];
+        let params: [&(dyn ToSql + Sync); 3] = [&self.branch_id, &segno, &off];
         let row = self
             .client
             .query_opt(&sql, &params)
@@ -941,27 +912,24 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
     }
 }
 
-/// Bake the per-instance `(tenant_id, timeline_id)` into a `wals` query
-/// whose `$1` is `tenant_id` and `$2` is `timeline_id` (the convention
-/// here): replace those two binds with quoted literals and shift every
-/// remaining `$N` (N ≥ 3) down by two. Each `YbWalStorage` is bound to one
-/// `(tenant, timeline)` for its lifetime and the safekeeper does no
-/// lineage/ancestor reads, so the ids are fixed for every query on this
-/// instance — baking drops the two binds from the wire. The ids render as
-/// fixed-width hex (`TenantId`/`TimelineId` `Display`), so the literals are
-/// injection-safe.
-fn bake_ttid(sql: &str, tenant_id: &str, timeline_id: &str) -> String {
-    let with_ids = sql
-        .replace("tenant_id = $1", &format!("tenant_id = '{tenant_id}'"))
-        .replace("timeline_id = $2", &format!("timeline_id = '{timeline_id}'"));
-    // No bare `$1`/`$2` may remain — they're tenant_id/timeline_id only.
+/// Bake the per-instance `branch_id` into a `wals` query whose `$1` is
+/// `branch_id` (the convention here): replace that bind with a quoted
+/// literal and shift every remaining `$N` (N ≥ 2) down by one. Each
+/// `YbWalStorage` is bound to one branch for its lifetime and the
+/// safekeeper does no lineage/ancestor reads, so the id is fixed for
+/// every query on this instance — baking drops the bind from the wire.
+/// The id renders as fixed-width hex (`BranchId` `Display`), so the
+/// literal is injection-safe.
+fn bake_branch_id(sql: &str, branch_id: &str) -> String {
+    let with_id = sql.replace("branch_id = $1", &format!("branch_id = '{branch_id}'"));
+    // No bare `$1` may remain — it's branch_id only.
     regex::Regex::new(r"\$(\d+)")
         .expect("static regex")
-        .replace_all(&with_ids, |c: &regex::Captures<'_>| {
+        .replace_all(&with_id, |c: &regex::Captures<'_>| {
             let n: u32 = c[1].parse().expect("param index");
             let shifted = n
-                .checked_sub(2)
-                .expect("wals query must use $1=tenant_id, $2=timeline_id only");
+                .checked_sub(1)
+                .expect("wals query must use $1=branch_id only");
             format!("${shifted}")
         })
         .into_owned()
@@ -978,20 +946,19 @@ fn bake_ttid(sql: &str, tenant_id: &str, timeline_id: &str) -> String {
 async fn truncate_wals_above(
     client: &YsqlClient,
     table: &str,
-    tenant_id: &str,
-    timeline_id: &str,
+    branch_id: &str,
     wal_seg_size: usize,
     end_pos: Lsn,
 ) -> Result<()> {
     let table = quote_relation(table);
     let seg = wal_seg_size as i64;
     let end = end_pos.0 as i64;
-    let params: [&(dyn ToSql + Sync); 3] = [&tenant_id, &timeline_id, &end];
+    let params: [&(dyn ToSql + Sync); 2] = [&branch_id, &end];
 
     // Chunks that begin at or after end_pos are entirely torn — drop them.
     let del = format!(
-        "DELETE FROM {table} WHERE tenant_id = $1 AND timeline_id = $2 \
-         AND segno * {seg} + chunk_offset >= $3"
+        "DELETE FROM {table} WHERE branch_id = $1 \
+         AND segno * {seg} + chunk_offset >= $2"
     );
     client
         .execute(&del, &params)
@@ -1002,11 +969,11 @@ async fn truncate_wals_above(
     // torn remainder so its end aligns exactly with end_pos.
     let upd = format!(
         "UPDATE {table} SET \
-           data = substring(data FROM 1 FOR ($3 - (segno * {seg} + chunk_offset))::int), \
-           chunk_size = ($3 - (segno * {seg} + chunk_offset))::int \
-         WHERE tenant_id = $1 AND timeline_id = $2 \
-           AND segno * {seg} + chunk_offset < $3 \
-           AND segno * {seg} + chunk_offset + chunk_size > $3"
+           data = substring(data FROM 1 FOR ($2 - (segno * {seg} + chunk_offset))::int), \
+           chunk_size = ($2 - (segno * {seg} + chunk_offset))::int \
+         WHERE branch_id = $1 \
+           AND segno * {seg} + chunk_offset < $2 \
+           AND segno * {seg} + chunk_offset + chunk_size > $2"
     );
     client
         .execute(&upd, &params)
@@ -1044,8 +1011,7 @@ async fn consumer_main(
     mut rx: mpsc::Receiver<PendingChunk>,
     ysql_fpu_client: Arc<YsqlClient>,
     table_name: String,
-    tenant_id: String,
-    timeline_id: String,
+    branch_id: String,
     watermark_tx: watch::Sender<DurableState>,
     flush_notify: Arc<tokio::sync::Notify>,
     durable_lsn: Arc<AtomicU64>,
@@ -1096,15 +1062,7 @@ async fn consumer_main(
 
         let highest_lsn = batch.last().map(|c| c.end_lsn).expect("batch is non-empty");
 
-        match flush_batch(
-            &ysql_fpu_client,
-            &table_name,
-            &tenant_id,
-            &timeline_id,
-            &batch,
-        )
-        .await
-        {
+        match flush_batch(&ysql_fpu_client, &table_name, &branch_id, &batch).await {
             Ok(()) => {
                 // Populate the read-side cache from the batch BEFORE
                 // publishing the durability advance. The cache is the
@@ -1150,8 +1108,7 @@ async fn consumer_main(
 async fn flush_batch(
     ysql_fpu_client: &YsqlClient,
     table_name: &str,
-    tenant_id: &str,
-    timeline_id: &str,
+    branch_id: &str,
     batch: &[PendingChunk],
 ) -> Result<()> {
     if batch.is_empty() {
@@ -1167,7 +1124,7 @@ async fn flush_batch(
     sql.push_str("INSERT INTO ");
     sql.push_str(&quote_relation(table_name));
     sql.push_str(
-        " (tenant_id, timeline_id, segno, chunk_offset, \
+        " (branch_id, segno, chunk_offset, \
           chunk_size, data, last_modified_us) VALUES ",
     );
     for i in 0..n {
@@ -1176,11 +1133,11 @@ async fn flush_batch(
         }
         let b = i * 5;
         use std::fmt::Write as _;
-        // tenant_id/timeline_id baked as literals (fixed for this
-        // instance's lifetime); only the 5 per-row columns bind.
+        // branch_id baked as a literal (fixed for this instance's
+        // lifetime); only the 5 per-row columns bind.
         let _ = write!(
             sql,
-            "('{tenant_id}','{timeline_id}',${},${},${},${},${})",
+            "('{branch_id}',${},${},${},${},${})",
             b + 1,
             b + 2,
             b + 3,
@@ -1244,8 +1201,7 @@ pub struct YbSegmentReader {
     /// Dedicated read lane (no upsert GUC). See [`YbWalConn::read_client`].
     read_client: Arc<YsqlClient>,
     table: String,
-    tenant_id: String,
-    timeline_id: String,
+    branch_id: String,
 
     current: Option<CurrentChunk>,
     /// In-flight YB fetch. A `oneshot::Receiver` (not a raw `BoxFuture`)
@@ -1288,7 +1244,7 @@ impl YbSegmentReader {
     /// sender stack like the `tokio::fs::File` it replaces.
     pub fn new(
         yb_wal: Arc<YbWalConn>,
-        ttid: &TenantTimelineId,
+        branch_id: &BranchId,
         segno: XLogSegNo,
         wal_seg_size: usize,
         start_xlogoff: usize,
@@ -1301,8 +1257,7 @@ impl YbSegmentReader {
             cache: yb_wal.cache.clone(),
             read_client: yb_wal.read_client.clone(),
             table: yb_wal.table.clone(),
-            tenant_id: ttid.tenant_id.to_string(),
-            timeline_id: ttid.timeline_id.to_string(),
+            branch_id: branch_id.to_string(),
             current: None,
             fetch: None,
             flush_lsn,
@@ -1322,8 +1277,7 @@ impl YbSegmentReader {
         let issued_flush = self.fetch_issued_flush;
         let client = self.read_client.clone();
         let table = self.table.clone();
-        let tenant_id = self.tenant_id.clone();
-        let timeline_id = self.timeline_id.clone();
+        let branch_id = self.branch_id.clone();
         let segno = self.segno;
         let pos = self.pos;
         // Base LSN of this segment, to bring segment-relative chunk offsets into
@@ -1332,14 +1286,7 @@ impl YbSegmentReader {
         let cache = self.cache.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let res = fetch_chunks_from_yb(
-                &client,
-                &table,
-                &tenant_id,
-                &timeline_id,
-                segno,
-                pos,
-            )
+            let res = fetch_chunks_from_yb(&client, &table, &branch_id, segno, pos)
             .await;
             let covering = match res {
                 Ok(fetched) => {
@@ -1547,8 +1494,7 @@ const FETCH_FORWARD_BYTES: u64 = 4 * 1024 * 1024;
 async fn fetch_chunks_from_yb(
     client: &YsqlClient,
     table: &str,
-    tenant_id: &str,
-    timeline_id: &str,
+    branch_id: &str,
     segno: u64,
     byte_offset: u64,
 ) -> anyhow::Result<Vec<CurrentChunk>> {
@@ -1560,21 +1506,20 @@ async fn fetch_chunks_from_yb(
     // interpreted-WAL decoder trips on ("invalid xlog page header", #139).
     // Both arms stay index-tight on the (segno, chunk_offset) PK; the hot
     // boundary-aligned path simply returns no covering row.
-    let sql = bake_ttid(
+    let sql = bake_branch_id(
         &format!(
             "(SELECT chunk_offset, chunk_size, data FROM {tbl} \
-                WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
-                  AND chunk_offset < $4 \
+                WHERE branch_id = $1 AND segno = $2 \
+                  AND chunk_offset < $3 \
                 ORDER BY chunk_offset DESC LIMIT 1) \
              UNION ALL \
              (SELECT chunk_offset, chunk_size, data FROM {tbl} \
-                WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
-                  AND chunk_offset >= $4 AND chunk_offset < $5 \
-                ORDER BY chunk_offset ASC LIMIT $6)",
+                WHERE branch_id = $1 AND segno = $2 \
+                  AND chunk_offset >= $3 AND chunk_offset < $4 \
+                ORDER BY chunk_offset ASC LIMIT $5)",
             tbl = quote_relation(table)
         ),
-        tenant_id,
-        timeline_id,
+        branch_id,
     );
     let segno_i: i64 = segno as i64;
     let lo_i: i64 = byte_offset as i64;
@@ -1640,14 +1585,14 @@ mod tests {
     use crate::state::TimelinePersistentState;
     use crate::wal_storage::Storage;
     use camino_tempfile::Utf8TempDir;
-    use utils::id::{TenantId, TenantTimelineId, TimelineId};
+    use utils::id::BranchId;
     // Tests build a `yb_tokio_postgres::Config` via `tokio_postgres::*`
     // type paths; the production code in this module doesn't need the
     // alias.
     use yb_tokio_postgres as tokio_postgres;
 
-    /// `bake_ttid` inlines tenant/timeline as literals and shifts the
-    /// remaining params down by two — no live YB needed. Locks the
+    /// `bake_branch_id` inlines branch_id as a literal and shifts the
+    /// remaining params down by one — no live YB needed. Locks the
     /// numbering the `wals` query call sites depend on.
     #[test]
     fn quote_relation_splits_schema_qualified_names() {
@@ -1663,24 +1608,20 @@ mod tests {
     }
 
     #[test]
-    fn bake_ttid_bakes_and_shifts() {
-        let t = "00112233445566778899aabbccddeeff";
-        let tl = "ffeeddccbbaa99887766554433221100";
-        let sql = bake_ttid(
+    fn bake_branch_id_bakes_and_shifts() {
+        let b = "00112233445566778899aabbccddeeff";
+        let sql = bake_branch_id(
             "SELECT chunk_offset FROM \"wals\" \
-             WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 \
-               AND chunk_offset >= $4 AND chunk_offset < $5 LIMIT $6",
-            t,
-            tl,
+             WHERE branch_id = $1 AND segno = $2 \
+               AND chunk_offset >= $3 AND chunk_offset < $4 LIMIT $5",
+            b,
         );
-        assert!(sql.contains(&format!("tenant_id = '{t}'")));
-        assert!(sql.contains(&format!("timeline_id = '{tl}'")));
-        // $3..$6 shifted to $1..$4; no $5/$6 and no bare $1/$2 left.
+        assert!(sql.contains(&format!("branch_id = '{b}'")));
+        // $2..$5 shifted to $1..$4; no $5 and no bare $1 (branch) left.
         assert!(sql.contains("segno = $1"));
         assert!(sql.contains("chunk_offset >= $2 AND chunk_offset < $3"));
         assert!(sql.contains("LIMIT $4"));
         assert!(!sql.contains("$5"));
-        assert!(!sql.contains("$6"));
     }
 
     fn pgcfg() -> tokio_postgres::Config {
@@ -1710,14 +1651,13 @@ mod tests {
             .execute(
                 &format!(
                     "CREATE TABLE {q} (\
-                       tenant_id        TEXT    NOT NULL,\
-                       timeline_id      TEXT    NOT NULL,\
+                       branch_id        TEXT    NOT NULL,\
                        segno            BIGINT  NOT NULL,\
                        chunk_offset     BIGINT  NOT NULL,\
                        chunk_size       INT     NOT NULL,\
                        data             BYTEA   NOT NULL,\
                        last_modified_us BIGINT  NOT NULL,\
-                       PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_offset)\
+                       PRIMARY KEY ((branch_id) HASH, segno, chunk_offset)\
                      )"
                 ),
                 &[],
@@ -1749,12 +1689,9 @@ mod tests {
         );
         make_wals_table(&client, table).await;
 
-        let tenant = TenantId::generate();
-        let timeline = TimelineId::generate();
-        let ttid = TenantTimelineId::new(tenant, timeline);
+        let branch_id = BranchId::generate();
         let mut state = TimelinePersistentState::empty();
-        state.tenant_id = ttid.tenant_id;
-        state.timeline_id = ttid.timeline_id;
+        state.branch_id = branch_id;
         state.timeline_start_lsn = start_lsn;
         state.local_start_lsn = start_lsn;
 
@@ -1766,7 +1703,7 @@ mod tests {
             table: table.to_string(),
             cache: None,
         });
-        let storage = YbWalStorage::new(&ttid, &state, yb_wal)
+        let storage = YbWalStorage::new(&branch_id, &state, yb_wal)
             .await
             .expect("YbWalStorage::new");
         (storage, tmp)
@@ -1785,12 +1722,9 @@ mod tests {
         );
         make_wals_table(&client, table).await;
 
-        let tenant = TenantId::generate();
-        let timeline = TimelineId::generate();
-        let ttid = TenantTimelineId::new(tenant, timeline);
+        let branch_id = BranchId::generate();
         let mut state = TimelinePersistentState::empty();
-        state.tenant_id = ttid.tenant_id;
-        state.timeline_id = ttid.timeline_id;
+        state.branch_id = branch_id;
         state.timeline_start_lsn = start_lsn;
         state.local_start_lsn = start_lsn;
         // truncate_wal decomposes end_pos with this, so it must be real.
@@ -1804,7 +1738,7 @@ mod tests {
             table: table.to_string(),
             cache: Some(Arc::new(std::sync::Mutex::new(WalCache::new(64 * 1024 * 1024)))),
         });
-        let storage = YbWalStorage::new(&ttid, &state, yb_wal)
+        let storage = YbWalStorage::new(&branch_id, &state, yb_wal)
             .await
             .expect("YbWalStorage::new");
         (storage, tmp)
@@ -2016,8 +1950,7 @@ mod tests {
         let (fpu, _read, system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
 
-        let tenant = TenantId::generate().to_string();
-        let timeline = TimelineId::generate().to_string();
+        let branch_s = BranchId::generate().to_string();
         // Two non-overlapping chunks in segno 0. Highest end-offset
         // should be 8192 + 256 = 8448.
         let rows: &[(i64, i64, i32)] = &[(0, 0, 1024), (0, 8192, 256)];
@@ -2032,12 +1965,12 @@ mod tests {
             };
             fpu.execute(
                 &format!(
-                    "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+                    "INSERT INTO {} (branch_id, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                     VALUES ($1, $2, $3, $4, $5, $6)",
                     quote_relation(&table)
                 ),
-                &[&tenant, &timeline, segno, offset, size, &blob, &now_us],
+                &[&branch_s, segno, offset, size, &blob, &now_us],
             )
             .await
             .expect("INSERT via fpu");
@@ -2048,8 +1981,7 @@ mod tests {
         let lsn = YbWalStorage::load_write_lsn(
             &system,
             &table,
-            &tenant,
-            &timeline,
+            &branch_s,
             SEG_SIZE as usize,
             Lsn(0),
         )
@@ -2063,7 +1995,7 @@ mod tests {
         );
 
         // And load_min_segno — same cross-connection contract.
-        let min_segno = YbWalStorage::load_min_segno(&system, &table, &tenant, &timeline)
+        let min_segno = YbWalStorage::load_min_segno(&system, &table, &branch_s)
             .await
             .expect("load_min_segno via system_client");
         assert_eq!(min_segno, 0, "min(segno) across lanes");
@@ -2080,8 +2012,7 @@ mod tests {
         let table = format!("wals_test_trunc_above_{}", rand_suffix());
         let (fpu, _read, system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
-        let tenant = TenantId::generate().to_string();
-        let timeline = TimelineId::generate().to_string();
+        let branch_s = BranchId::generate().to_string();
 
         // Three chunks in segno 0 spanning [0, 20480): two full pages + a
         // partial. Cut at 10000 — mid the second chunk [8192, 16384).
@@ -2090,24 +2021,24 @@ mod tests {
             let blob = vec![0x5au8; *size as usize];
             fpu.execute(
                 &format!(
-                    "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+                    "INSERT INTO {} (branch_id, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                     VALUES ($1, $2, $3, $4, $5, $6)",
                     quote_relation(&table)
                 ),
-                &[&tenant, &timeline, segno, offset, size, &blob, &0i64],
+                &[&branch_s, segno, offset, size, &blob, &0i64],
             )
             .await
             .expect("insert chunk");
         }
 
-        truncate_wals_above(&system, &table, &tenant, &timeline, SEG_SIZE as usize, Lsn(10000))
+        truncate_wals_above(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(10000))
             .await
             .expect("truncate_wals_above");
 
         // End of WAL is now exactly the cut.
         let lsn =
-            YbWalStorage::load_write_lsn(&system, &table, &tenant, &timeline, SEG_SIZE as usize, Lsn(0))
+            YbWalStorage::load_write_lsn(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(0))
                 .await
                 .expect("load_write_lsn");
         assert_eq!(lsn, Lsn(10000), "end of WAL must equal the truncation point");
@@ -2116,10 +2047,10 @@ mod tests {
         let count: i64 = system
             .query_opt(
                 &format!(
-                    "SELECT count(*) FROM {} WHERE tenant_id=$1 AND timeline_id=$2",
+                    "SELECT count(*) FROM {} WHERE branch_id=$1",
                     quote_relation(&table)
                 ),
-                &[&tenant, &timeline],
+                &[&branch_s],
             )
             .await
             .expect("count")
@@ -2132,10 +2063,10 @@ mod tests {
             .query_opt(
                 &format!(
                     "SELECT chunk_size, octet_length(data) FROM {} \
-                     WHERE tenant_id=$1 AND timeline_id=$2 AND chunk_offset=8192",
+                     WHERE branch_id=$1 AND chunk_offset=8192",
                     quote_relation(&table)
                 ),
-                &[&tenant, &timeline],
+                &[&branch_s],
             )
             .await
             .expect("straddling chunk")
@@ -2144,11 +2075,11 @@ mod tests {
         assert_eq!(row.get::<_, i32>(1), 1808, "data trimmed to the cut");
 
         // Idempotent: a second call is a no-op.
-        truncate_wals_above(&system, &table, &tenant, &timeline, SEG_SIZE as usize, Lsn(10000))
+        truncate_wals_above(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(10000))
             .await
             .expect("truncate_wals_above (idempotent)");
         let lsn2 =
-            YbWalStorage::load_write_lsn(&system, &table, &tenant, &timeline, SEG_SIZE as usize, Lsn(0))
+            YbWalStorage::load_write_lsn(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(0))
                 .await
                 .expect("load_write_lsn after re-run");
         assert_eq!(lsn2, Lsn(10000), "re-run must not change the end of WAL");
@@ -2171,11 +2102,8 @@ mod tests {
         let (fpu, _read, _system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
 
-        let tenant = TenantId::generate();
-        let timeline = TimelineId::generate();
-        let ttid = TenantTimelineId::new(tenant, timeline);
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let branch_id = BranchId::generate();
+        let branch_s = branch_id.to_string();
 
         let chunk_a: Vec<u8> = (0u8..=255).cycle().take(1024).collect();
         let chunk_b: Vec<u8> = (0u8..=255).cycle().take(2048).map(|b| b ^ 0xa5).collect();
@@ -2187,14 +2115,13 @@ mod tests {
         ] {
             fpu.execute(
                 &format!(
-                    "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+                    "INSERT INTO {} (branch_id, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                     VALUES ($1, $2, $3, $4, $5, $6)",
                     quote_relation(&table)
                 ),
                 &[
-                    &tenant_s,
-                    &timeline_s,
+                    &branch_s,
                     &segno_i,
                     &offset_i,
                     &size_i,
@@ -2218,7 +2145,7 @@ mod tests {
         });
         let mut reader = YbSegmentReader::new(
             yb_wal,
-            &ttid,
+            &branch_id,
             0,
             SEG_SIZE as usize,
             0,
@@ -2250,22 +2177,19 @@ mod tests {
         let (fpu, _read, _system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
 
-        let tenant = TenantId::generate();
-        let timeline = TimelineId::generate();
-        let ttid = TenantTimelineId::new(tenant, timeline);
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let branch_id = BranchId::generate();
+        let branch_s = branch_id.to_string();
 
         // One chunk spanning [0, 2048).
         let chunk: Vec<u8> = (0u8..=255).cycle().take(2048).collect();
         fpu.execute(
             &format!(
-                "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+                "INSERT INTO {} (branch_id, segno, chunk_offset, \
                                  chunk_size, data, last_modified_us) \
-                 VALUES ($1, $2, 0, 0, 2048, $3, 0)",
+                 VALUES ($1, 0, 0, 2048, $2, 0)",
                 quote_relation(&table)
             ),
-            &[&tenant_s, &timeline_s, &chunk.as_slice()],
+            &[&branch_s, &chunk.as_slice()],
         )
         .await
         .expect("INSERT chunk");
@@ -2280,7 +2204,7 @@ mod tests {
         // Start the reader at byte offset 1024 — partway into the chunk.
         let mut reader = YbSegmentReader::new(
             yb_wal,
-            &ttid,
+            &branch_id,
             0,
             SEG_SIZE as usize,
             1024,
@@ -2327,11 +2251,8 @@ mod tests {
         let (fpu, _read, _system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
 
-        let tenant = TenantId::generate();
-        let timeline = TimelineId::generate();
-        let ttid = TenantTimelineId::new(tenant, timeline);
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let branch_id = BranchId::generate();
+        let branch_s = branch_id.to_string();
 
         let seg: i64 = 0;
         let committed: Vec<u8> = vec![0xAA; 1024]; // [0,1024), below flush
@@ -2339,14 +2260,14 @@ mod tests {
         let tail_new: Vec<u8> = vec![0xCC; 3072]; // the rewrite
 
         let insert_sql = format!(
-            "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+            "INSERT INTO {} (branch_id, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+             VALUES ($1, $2, $3, $4, $5, 0)",
             quote_relation(&table)
         );
         let delete_sql = format!(
-            "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
-             AND segno = $3 AND chunk_offset = $4",
+            "DELETE FROM {} WHERE branch_id = $1 \
+             AND segno = $2 AND chunk_offset = $3",
             quote_relation(&table)
         );
 
@@ -2356,7 +2277,7 @@ mod tests {
             let slice = bytes.as_slice();
             fpu.execute(
                 &insert_sql,
-                &[&tenant_s, &timeline_s, &seg, &off, &size, &slice],
+                &[&branch_s, &seg, &off, &size, &slice],
             )
             .await
             .expect("INSERT chunk");
@@ -2375,7 +2296,7 @@ mod tests {
         // flush = 1024: [0,1024) committed, [1024,4096) not yet.
         let flush = Arc::new(AtomicU64::new(1024));
         let mut reader =
-            YbSegmentReader::new(yb_wal.clone(), &ttid, 0, SEG_SIZE as usize, 0, flush.clone());
+            YbSegmentReader::new(yb_wal.clone(), &branch_id, 0, SEG_SIZE as usize, 0, flush.clone());
 
         // 2. Read the committed range. The fetch sees both chunks, but only the
         //    committed one is cacheable.
@@ -2398,14 +2319,14 @@ mod tests {
         // 3. A new term rewrites the once-uncommitted tail; flush then advances
         //    to cover it. (No cache invalidation is modeled — the point is that
         //    the tail was never cached, so there is nothing stale to shadow.)
-        fpu.execute(&delete_sql, &[&tenant_s, &timeline_s, &seg, &1024i64])
+        fpu.execute(&delete_sql, &[&branch_s, &seg, &1024i64])
             .await
             .expect("DELETE old tail");
         let tail_new_slice = tail_new.as_slice();
         let tail_size = tail_new.len() as i32;
         fpu.execute(
             &insert_sql,
-            &[&tenant_s, &timeline_s, &seg, &1024i64, &tail_size, &tail_new_slice],
+            &[&branch_s, &seg, &1024i64, &tail_size, &tail_new_slice],
         )
         .await
         .expect("INSERT rewritten tail");
@@ -2447,11 +2368,8 @@ mod tests {
         let (fpu, _read, _system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
 
-        let tenant = TenantId::generate();
-        let timeline = TimelineId::generate();
-        let ttid = TenantTimelineId::new(tenant, timeline);
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let branch_id = BranchId::generate();
+        let branch_s = branch_id.to_string();
 
         let seg: i64 = 0;
         let off: i64 = 0;
@@ -2464,14 +2382,14 @@ mod tests {
         new[1024..].fill(0xCD); // rewritten tail
 
         let insert_sql = format!(
-            "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+            "INSERT INTO {} (branch_id, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+             VALUES ($1, $2, $3, $4, $5, 0)",
             quote_relation(&table)
         );
         let delete_sql = format!(
-            "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
-             AND segno = $3 AND chunk_offset = $4",
+            "DELETE FROM {} WHERE branch_id = $1 \
+             AND segno = $2 AND chunk_offset = $3",
             quote_relation(&table)
         );
 
@@ -2479,7 +2397,7 @@ mod tests {
         let old_slice = old.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&tenant_s, &timeline_s, &seg, &off, &size, &old_slice],
+            &[&branch_s, &seg, &off, &size, &old_slice],
         )
         .await
         .expect("INSERT old chunk");
@@ -2495,7 +2413,7 @@ mod tests {
         // Live flush frontier, as the streaming reader would publish it.
         let flush = Arc::new(AtomicU64::new(1024));
         let mut reader =
-            YbSegmentReader::new(yb_wal.clone(), &ttid, 0, SEG_SIZE as usize, 0, flush.clone());
+            YbSegmentReader::new(yb_wal.clone(), &branch_id, 0, SEG_SIZE as usize, 0, flush.clone());
 
         // 2. Read everything committed so far ([0,1024)). The reader fetches
         //    the whole covering chunk [0,4096) but must trust it only to 1024.
@@ -2505,13 +2423,13 @@ mod tests {
 
         // 3. A new term rewrites the once-uncommitted tail; flush then advances
         //    to cover it.
-        fpu.execute(&delete_sql, &[&tenant_s, &timeline_s, &seg, &off])
+        fpu.execute(&delete_sql, &[&branch_s, &seg, &off])
             .await
             .expect("DELETE old chunk");
         let new_slice = new.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&tenant_s, &timeline_s, &seg, &off, &size, &new_slice],
+            &[&branch_s, &seg, &off, &size, &new_slice],
         )
         .await
         .expect("INSERT rewritten chunk");
@@ -2548,11 +2466,8 @@ mod tests {
         let (fpu, _read, _system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
 
-        let tenant = TenantId::generate();
-        let timeline = TimelineId::generate();
-        let ttid = TenantTimelineId::new(tenant, timeline);
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let branch_id = BranchId::generate();
+        let branch_s = branch_id.to_string();
 
         // Segment 1: absolute LSN = SEG_SIZE + offset.
         let seg: i64 = 1;
@@ -2565,21 +2480,21 @@ mod tests {
         new[1024..].fill(0xCD); // rewritten tail
 
         let insert_sql = format!(
-            "INSERT INTO {} (tenant_id, timeline_id, segno, chunk_offset, \
+            "INSERT INTO {} (branch_id, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+             VALUES ($1, $2, $3, $4, $5, 0)",
             quote_relation(&table)
         );
         let delete_sql = format!(
-            "DELETE FROM {} WHERE tenant_id = $1 AND timeline_id = $2 \
-             AND segno = $3 AND chunk_offset = $4",
+            "DELETE FROM {} WHERE branch_id = $1 \
+             AND segno = $2 AND chunk_offset = $3",
             quote_relation(&table)
         );
 
         let old_slice = old.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&tenant_s, &timeline_s, &seg, &off, &size, &old_slice],
+            &[&branch_s, &seg, &off, &size, &old_slice],
         )
         .await
         .expect("INSERT old chunk");
@@ -2595,19 +2510,19 @@ mod tests {
         // Flush frontier is ABSOLUTE: committed up to offset 1024 in segment 1.
         let flush = Arc::new(AtomicU64::new(seg_base + 1024));
         let mut reader =
-            YbSegmentReader::new(yb_wal.clone(), &ttid, 1, SEG_SIZE as usize, 0, flush.clone());
+            YbSegmentReader::new(yb_wal.clone(), &branch_id, 1, SEG_SIZE as usize, 0, flush.clone());
 
         let mut head = vec![0u8; 1024];
         reader.read_exact(&mut head).await.expect("read committed head");
         assert_eq!(head, old[..1024], "committed prefix must read back");
 
-        fpu.execute(&delete_sql, &[&tenant_s, &timeline_s, &seg, &off])
+        fpu.execute(&delete_sql, &[&branch_s, &seg, &off])
             .await
             .expect("DELETE old chunk");
         let new_slice = new.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&tenant_s, &timeline_s, &seg, &off, &size, &new_slice],
+            &[&branch_s, &seg, &off, &size, &new_slice],
         )
         .await
         .expect("INSERT rewritten chunk");

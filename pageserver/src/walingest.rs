@@ -49,7 +49,7 @@ use crate::ZERO_PAGE;
 use crate::context::RequestContext;
 use crate::metrics::WAL_INGEST;
 use crate::pgdatadir_mapping::{DatadirModification, Version};
-use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
+use crate::span::debug_assert_current_span_has_branch_id;
 use crate::page_server::{PageReconstructError, Timeline};
 
 enum_pgversion! {CheckPoint, pgv::CheckPoint}
@@ -418,8 +418,7 @@ impl WalIngest {
         // https://github.com/neondatabase/neon/pull/10634.
         let Some(vm_size) = get_relsize(modification, vm_rel, ctx).await? else {
             critical_timeline!(
-                modification.tline.tenant_id,
-                modification.tline.timeline_id,
+                modification.tline.branch_id,
                 // No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                 None::<&AtomicBool>,
                 "clear_vm_bits for unknown VM relation {vm_rel}"
@@ -429,8 +428,7 @@ impl WalIngest {
         if let Some(blknum) = new_vm_blk {
             if blknum >= vm_size {
                 critical_timeline!(
-                    modification.tline.tenant_id,
-                    modification.tline.timeline_id,
+                    modification.tline.branch_id,
                     // No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                     None::<&AtomicBool>,
                     "new_vm_blk {blknum} not in {vm_rel} of size {vm_size}"
@@ -441,8 +439,7 @@ impl WalIngest {
         if let Some(blknum) = old_vm_blk {
             if blknum >= vm_size {
                 critical_timeline!(
-                    modification.tline.tenant_id,
-                    modification.tline.timeline_id,
+                    modification.tline.branch_id,
                     // No need to raise the corruption flag here; the caller of `ingest_record()` will do it.
                     None::<&AtomicBool>,
                     "old_vm_blk {blknum} not in {vm_rel} of size {vm_size}"
@@ -716,7 +713,7 @@ impl WalIngest {
         conf: &crate::config::PageServerConf,
         wal_timestamp: TimestampTz,
     ) {
-        debug_assert_current_span_has_tenant_and_timeline_id();
+        debug_assert_current_span_has_branch_id();
         let now = SystemTime::now();
         let rate_limits = &mut self.warn_ingest_lag;
 

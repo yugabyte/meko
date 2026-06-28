@@ -16,15 +16,11 @@ pub fn app(state: Arc<Storage>) -> Router<()> {
     // in /endpoint_storage/src/openapi_spec.yml.
     Router::new()
         .route(
-            "/{tenant_id}/{timeline_id}/{endpoint_id}/{*path}",
+            "/{branch_id}/{endpoint_id}/{*path}",
             _get(get).put(set).delete(delete),
         )
-        .route(
-            "/{tenant_id}/{timeline_id}/{endpoint_id}",
-            delete_prefix.clone(),
-        )
-        .route("/{tenant_id}/{timeline_id}", delete_prefix.clone())
-        .route("/{tenant_id}", delete_prefix)
+        .route("/{branch_id}/{endpoint_id}", delete_prefix.clone())
+        .route("/{branch_id}", delete_prefix)
         .route("/metrics", _get(metrics))
         .route("/status", _get(async || StatusCode::OK.into_response()))
         .with_state(state)

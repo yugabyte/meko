@@ -110,21 +110,11 @@ pub fn write_postgres_conf(
             escape_conf_value(&neon_safekeepers_value)
         )?;
     }
-    if let Some(s) = &spec.tenant_id {
-        writeln!(file, "yb_amp.tenant_id={}", escape_conf_value(&s.to_string()))?;
-    }
-    if let Some(s) = &spec.timeline_id {
-        writeln!(
-            file,
-            "yb_amp.timeline_id={}",
-            escape_conf_value(&s.to_string())
-        )?;
+    if let Some(s) = &spec.storage_branch_id {
+        writeln!(file, "yb_amp.branch_id={}", escape_conf_value(&s.to_string()))?;
     }
     if let Some(s) = &spec.project_id {
         writeln!(file, "yb_amp.project_id={}", escape_conf_value(s))?;
-    }
-    if let Some(s) = &spec.branch_id {
-        writeln!(file, "yb_amp.branch_id={}", escape_conf_value(s))?;
     }
     if let Some(s) = &spec.endpoint_id {
         writeln!(file, "yb_amp.endpoint_id={}", escape_conf_value(s))?;

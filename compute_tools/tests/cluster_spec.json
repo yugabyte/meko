@@ -156,19 +156,14 @@
         "vartype": "integer"
       },
       {
-        "name": "yb_amp.tenant_id",
-        "value": "b0554b632bd4d547a63b86c3630317e8",
+        "name": "yb_amp.branch_id",
+        "value": "2414a61ffc94e428f14b5758fe308e13",
         "vartype": "string"
       },
       {
         "name": "max_replication_slots",
         "value": "10",
         "vartype": "integer"
-      },
-      {
-        "name": "yb_amp.timeline_id",
-        "value": "2414a61ffc94e428f14b5758fe308e13",
-        "vartype": "string"
       },
       {
         "name": "shared_preload_libraries",

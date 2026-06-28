@@ -16,7 +16,7 @@ use safekeeper_api::models::ConnectionId;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{Instrument, debug, info, info_span};
 use utils::auth::{Claims, JwtAuth, Scope};
-use utils::id::{TenantId, TenantTimelineId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::postgres_client::PostgresClientProtocol;
 
@@ -30,9 +30,10 @@ pub struct SafekeeperPostgresHandler {
     pub conf: Arc<SafeKeeperConf>,
     /// assigned application name
     pub appname: Option<String>,
-    pub tenant_id: Option<TenantId>,
-    pub timeline_id: Option<TimelineId>,
-    pub ttid: TenantTimelineId,
+    /// `branch_id` parsed from the libpq startup options (`branch_id=<id>`),
+    /// before it's validated and promoted to [`Self::branch_id`].
+    pub parsed_branch_id: Option<BranchId>,
+    pub branch_id: BranchId,
     pub protocol: Option<PostgresClientProtocol>,
     /// Unique connection id is logged in spans for observability.
     pub conn_id: ConnectionId,
@@ -142,7 +143,7 @@ fn cmd_to_string(cmd: &SafekeeperPostgresCommand) -> &str {
 impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
     for SafekeeperPostgresHandler
 {
-    // tenant_id and timeline_id are passed in connection string params
+    // branch_id is passed in connection string params
     fn startup(
         &mut self,
         _pgb: &mut PostgresBackend<IO>,
@@ -152,9 +153,6 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
             if let Some(options) = params.options_raw() {
 
                 for opt in options {
-                    // FIXME `ztenantid` and `ztimelineid` left for compatibility during deploy,
-                    // remove these after the PR gets deployed:
-                    // https://github.com/neondatabase/neon/pull/2433#discussion_r970005064
                     match opt.split_once('=') {
                         Some(("protocol", value)) => {
                             self.protocol =
@@ -162,14 +160,9 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
                                     format!("Failed to parse {value} as protocol")
                                 })?);
                         }
-                        Some(("ztenantid", value)) | Some(("tenant_id", value)) => {
-                            self.tenant_id = Some(value.parse().with_context(|| {
-                                format!("Failed to parse {value} as tenant id")
-                            })?);
-                        }
-                        Some(("ztimelineid", value)) | Some(("timeline_id", value)) => {
-                            self.timeline_id = Some(value.parse().with_context(|| {
-                                format!("Failed to parse {value} as timeline id")
+                        Some(("branch_id", value)) => {
+                            self.parsed_branch_id = Some(value.parse().with_context(|| {
+                                format!("Failed to parse {value} as branch id")
                             })?);
                         }
                         Some(("availability_zone", client_az)) => {
@@ -192,12 +185,11 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
                 }
             }
 
-            let ttid = TenantTimelineId::new(
-                self.tenant_id.unwrap_or(TenantId::from([0u8; 16])),
-                self.timeline_id.unwrap_or(TimelineId::from([0u8; 16])),
-            );
+            let branch_id = self
+                .parsed_branch_id
+                .unwrap_or(BranchId::from([0u8; 16]));
             tracing::Span::current()
-                .record("ttid", tracing::field::display(ttid))
+                .record("branch_id", tracing::field::display(branch_id))
                 .record(
                     "application_name",
                     tracing::field::debug(self.appname.clone()),
@@ -235,15 +227,15 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
             ));
         }
 
-        if matches!(data.claims.scope, Scope::Tenant) && data.claims.tenant_id.is_none() {
+        if matches!(data.claims.scope, Scope::Tenant) && data.claims.branch_id.is_none() {
             return Err(QueryError::Unauthorized(
-                "jwt token scope is Tenant, but tenant id is missing".into(),
+                "jwt token scope is Tenant, but branch id is missing".into(),
             ));
         }
 
         debug!(
-            "jwt scope check succeeded for scope: {:#?} by tenant id: {:?}",
-            data.claims.scope, data.claims.tenant_id,
+            "jwt scope check succeeded for scope: {:#?} by branch id: {:?}",
+            data.claims.scope, data.claims.branch_id,
         );
 
         self.claims = Some(data.claims);
@@ -272,22 +264,20 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
 
             info!("got query {:?}", query_string);
 
-            let tenant_id = self.tenant_id.context("tenantid is required")?;
-            let timeline_id = self.timeline_id.context("timelineid is required")?;
-            self.check_permission(Some(tenant_id))?;
-            self.ttid = TenantTimelineId::new(tenant_id, timeline_id);
+            let branch_id = self.parsed_branch_id.context("branch_id is required")?;
+            self.check_permission(Some(branch_id))?;
+            self.branch_id = branch_id;
 
-            // This process serves a single timeline (single-timeline-per-
-            // process). Reject a connection for any other timeline before it
+            // This process serves a single branch (single-branch-per-
+            // process). Reject a connection for any other branch before it
             // can touch the registry — `safekeeper.timeline_state` is shared
             // across the cluster, so a misrouted walproposer must not create
-            // or mutate a foreign timeline here.
-            if let (Some(t), Some(tl)) = (self.conf.tenant_id, self.conf.timeline_id) {
-                let baked = TenantTimelineId::new(t, tl);
-                if self.ttid != baked {
+            // or mutate a foreign branch here.
+            if let Some(baked) = self.conf.branch_id {
+                if self.branch_id != baked {
                     return Err(QueryError::Other(anyhow::anyhow!(
                         "this safekeeper serves {baked}, refusing connection for {}",
-                        self.ttid
+                        self.branch_id
                     )));
                 }
             }
@@ -324,9 +314,8 @@ impl SafekeeperPostgresHandler {
         SafekeeperPostgresHandler {
             conf,
             appname: None,
-            tenant_id: None,
-            timeline_id: None,
-            ttid: TenantTimelineId::empty(),
+            parsed_branch_id: None,
+            branch_id: BranchId::from_array([0u8; 16]),
             protocol: None,
             conn_id,
             claims: None,
@@ -348,8 +337,8 @@ impl SafekeeperPostgresHandler {
     }
 
     // when accessing management api supply None as an argument
-    // when using to authorize tenant pass corresponding tenant id
-    fn check_permission(&self, tenant_id: Option<TenantId>) -> Result<(), QueryError> {
+    // when using to authorize a branch pass the corresponding branch id
+    fn check_permission(&self, branch_id: Option<BranchId>) -> Result<(), QueryError> {
         if self.auth.is_none() {
             // auth is set to Trust, nothing to check so just return ok
             return Ok(());
@@ -361,7 +350,7 @@ impl SafekeeperPostgresHandler {
             .claims
             .as_ref()
             .expect("claims presence already checked");
-        check_permission(claims, tenant_id).map_err(|e| QueryError::Unauthorized(e.0))
+        check_permission(claims, branch_id).map_err(|e| QueryError::Unauthorized(e.0))
     }
 
     async fn handle_timeline_status<IO: AsyncRead + AsyncWrite + Unpin>(
@@ -369,7 +358,7 @@ impl SafekeeperPostgresHandler {
         pgb: &mut PostgresBackend<IO>,
     ) -> Result<(), QueryError> {
         // Get timeline, handling "not found" error
-        let tli = match self.global_timelines.get(self.ttid) {
+        let tli = match self.global_timelines.get(self.branch_id) {
             Ok(tli) => Ok(Some(tli)),
             Err(TimelineError::NotFound(_)) => Ok(None),
             Err(e) => Err(QueryError::Other(e.into())),
@@ -402,7 +391,7 @@ impl SafekeeperPostgresHandler {
         &mut self,
         pgb: &mut PostgresBackend<IO>,
     ) -> Result<(), QueryError> {
-        let tli = self.global_timelines.get(self.ttid)?;
+        let tli = self.global_timelines.get(self.branch_id)?;
 
         // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum), so both
         // branches return the same value.

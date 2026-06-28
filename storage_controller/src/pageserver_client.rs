@@ -2,14 +2,13 @@ use std::time::Duration;
 
 use pageserver_api::models::detach_ancestor::AncestorDetached;
 use pageserver_api::models::{
-    DetachBehavior, LsnLease, PageserverUtilization, TenantScanRemoteStorageResponse,
-    TimelineArchivalConfigRequest, TimelineInfo, TopTenantShardsRequest,
-    TopTenantShardsResponse,
+    BranchScanRemoteStorageResponse, DetachBehavior, LsnLease, PageserverUtilization,
+    TimelineArchivalConfigRequest, TimelineInfo, TopBranchesRequest, TopBranchesResponse,
 };
 use pageserver_client::BlockUnblock;
 use pageserver_client::mgmt_api::{Client, Result};
 use reqwest::StatusCode;
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
 /// Thin wrapper around [`pageserver_client::mgmt_api::Client`]. It allows the storage
@@ -59,47 +58,45 @@ impl PageserverClient {
         }
     }
 
-    pub(crate) async fn tenant_delete(&self, tenant_id: TenantId) -> Result<StatusCode> {
+    pub(crate) async fn branch_delete(&self, branch_id: BranchId) -> Result<StatusCode> {
         measured_request!(
-            "tenant",
+            "branch",
             crate::metrics::Method::Delete,
             &self.node_id_label,
-            self.inner.tenant_delete(tenant_id).await
+            self.inner.branch_delete(branch_id).await
         )
     }
 
-    pub(crate) async fn tenant_time_travel_remote_storage(
+    pub(crate) async fn branch_time_travel_remote_storage(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         timestamp: &str,
         done_if_after: &str,
     ) -> Result<()> {
         measured_request!(
-            "tenant_time_travel_remote_storage",
+            "branch_time_travel_remote_storage",
             crate::metrics::Method::Put,
             &self.node_id_label,
             self.inner
-                .tenant_time_travel_remote_storage(tenant_id, timestamp, done_if_after)
+                .branch_time_travel_remote_storage(branch_id, timestamp, done_if_after)
                 .await
         )
     }
 
     #[expect(dead_code)]
-    pub(crate) async fn tenant_timeline_compact(
+    pub(crate) async fn branch_compact(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         force_image_layer_creation: bool,
         wait_until_done: bool,
     ) -> Result<()> {
         measured_request!(
-            "tenant_timeline_compact",
+            "branch_compact",
             crate::metrics::Method::Put,
             &self.node_id_label,
             self.inner
-                .tenant_timeline_compact(
-                    tenant_id,
-                    timeline_id,
+                .branch_compact(
+                    branch_id,
                     force_image_layer_creation,
                     true,
                     false,
@@ -109,126 +106,101 @@ impl PageserverClient {
         )
     }
 
-    pub(crate) async fn tenant_timeline_describe(
+    pub(crate) async fn branch_describe(
         &self,
-        tenant_id: &TenantId,
-        timeline_id: &TimelineId,
+        branch_id: &BranchId,
     ) -> Result<TimelineInfo> {
         measured_request!(
-            "tenant_timeline_describe",
+            "branch_describe",
             crate::metrics::Method::Get,
             &self.node_id_label,
-            self.inner
-                .tenant_timeline_describe(tenant_id, timeline_id,)
-                .await
+            self.inner.branch_describe(branch_id).await
         )
     }
 
-    pub(crate) async fn tenant_scan_remote_storage(
+    pub(crate) async fn branch_scan_remote_storage(
         &self,
-        tenant_id: TenantId,
-    ) -> Result<TenantScanRemoteStorageResponse> {
+        branch_id: BranchId,
+    ) -> Result<BranchScanRemoteStorageResponse> {
         measured_request!(
-            "tenant_scan_remote_storage",
+            "branch_scan_remote_storage",
             crate::metrics::Method::Get,
             &self.node_id_label,
-            self.inner.tenant_scan_remote_storage(tenant_id).await
+            self.inner.branch_scan_remote_storage(branch_id).await
         )
     }
 
-    pub(crate) async fn timeline_delete(
+    pub(crate) async fn branch_lease_lsn(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-    ) -> Result<StatusCode> {
-        measured_request!(
-            "timeline",
-            crate::metrics::Method::Delete,
-            &self.node_id_label,
-            self.inner
-                .timeline_delete(tenant_id, timeline_id)
-                .await
-        )
-    }
-
-    pub(crate) async fn timeline_lease_lsn(
-        &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         lsn: Lsn,
     ) -> Result<LsnLease> {
         measured_request!(
-            "timeline_lease_lsn",
+            "branch_lease_lsn",
             crate::metrics::Method::Post,
             &self.node_id_label,
             self.inner
-                .timeline_init_lsn_lease(tenant_id, timeline_id, lsn)
+                .branch_init_lsn_lease(branch_id, lsn)
                 .await
         )
     }
 
     #[allow(unused)]
-    pub(crate) async fn timeline_detail(
+    pub(crate) async fn branch_detail(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<TimelineInfo> {
         measured_request!(
-            "timeline_detail",
+            "branch_detail",
             crate::metrics::Method::Get,
             &self.node_id_label,
-            self.inner
-                .timeline_detail(tenant_id, timeline_id)
-                .await
+            self.inner.branch_detail(branch_id).await
         )
     }
 
-    pub(crate) async fn timeline_archival_config(
+    pub(crate) async fn branch_archival_config(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         req: &TimelineArchivalConfigRequest,
     ) -> Result<()> {
         measured_request!(
-            "timeline_archival_config",
+            "branch_archival_config",
             crate::metrics::Method::Put,
             &self.node_id_label,
             self.inner
-                .timeline_archival_config(tenant_id, timeline_id, req)
+                .branch_archival_config(branch_id, req)
                 .await
         )
     }
 
-    pub(crate) async fn timeline_detach_ancestor(
+    pub(crate) async fn branch_detach_ancestor(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         behavior: Option<DetachBehavior>,
     ) -> Result<AncestorDetached> {
         measured_request!(
-            "timeline_detach_ancestor",
+            "branch_detach_ancestor",
             crate::metrics::Method::Put,
             &self.node_id_label,
             self.inner
-                .timeline_detach_ancestor(tenant_id, timeline_id, behavior)
+                .branch_detach_ancestor(branch_id, behavior)
                 .await
         )
     }
 
-    pub(crate) async fn timeline_block_unblock_gc(
+    pub(crate) async fn branch_block_unblock_gc(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         dir: BlockUnblock,
     ) -> Result<()> {
         // measuring these makes no sense because we synchronize with the gc loop and remote
         // storage on block_gc so there should be huge outliers
         measured_request!(
-            "timeline_block_unblock_gc",
+            "branch_block_unblock_gc",
             crate::metrics::Method::Post,
             &self.node_id_label,
             self.inner
-                .timeline_block_unblock_gc(tenant_id, timeline_id, dir)
+                .branch_block_unblock_gc(branch_id, dir)
                 .await
         )
     }
@@ -243,22 +215,21 @@ impl PageserverClient {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn top_tenants(
+    pub(crate) async fn top_branches(
         &self,
-        request: TopTenantShardsRequest,
-    ) -> Result<TopTenantShardsResponse> {
+        request: TopBranchesRequest,
+    ) -> Result<TopBranchesResponse> {
         measured_request!(
-            "top_tenants",
+            "top_branches",
             crate::metrics::Method::Post,
             &self.node_id_label,
-            self.inner.top_tenants(request).await
+            self.inner.top_branches(request).await
         )
     }
 
     pub(crate) async fn activate_post_import(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         timeline_activate_timeout: Duration,
     ) -> Result<TimelineInfo> {
         measured_request!(
@@ -266,7 +237,7 @@ impl PageserverClient {
             crate::metrics::Method::Put,
             &self.node_id_label,
             self.inner
-                .activate_post_import(tenant_id, timeline_id, timeline_activate_timeout)
+                .activate_post_import(branch_id, timeline_activate_timeout)
                 .await
         )
     }

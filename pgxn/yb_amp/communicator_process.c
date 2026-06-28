@@ -109,8 +109,7 @@ communicator_new_bgworker_main(Datum main_arg)
 	logging = communicator_worker_configure_logging();
 
 	proc_handle = communicator_worker_launch(
-		yb_amp_tenant[0] == '\0' ? NULL : yb_amp_tenant,
-		yb_amp_timeline[0] == '\0' ? NULL : yb_amp_timeline,
+		yb_amp_branch_id[0] == '\0' ? NULL : yb_amp_branch_id,
 		&errmsg
 		);
 	if (proc_handle == NULL)

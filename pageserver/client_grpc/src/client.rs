@@ -13,7 +13,7 @@ use crate::pool::{ChannelPool, ClientGuard, ClientPool, StreamGuard, StreamPool}
 use crate::retry::Retry;
 use compute_api::spec::PageserverProtocol;
 use pageserver_page_api as page_api;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 
 /// Max number of concurrent clients per channel (i.e. TCP connection). New channels will be spun up
 /// when full.
@@ -53,7 +53,7 @@ const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// Threshold and interval for warning about slow operation.
 const SLOW_THRESHOLD: Duration = Duration::from_secs(3);
 
-/// A rich Pageserver gRPC client for a single tenant timeline. This client is more capable than the
+/// A rich Pageserver gRPC client for a single branch. This client is more capable than the
 /// basic `page_api::Client` gRPC client, and supports:
 ///
 /// * Pooling of connections, clients, and streams for efficient resource use.
@@ -74,32 +74,28 @@ const SLOW_THRESHOLD: Duration = Duration::from_secs(3);
 /// TODO: this client does not support base backups or LSN leases, as these are only used by
 /// compute_ctl. Consider adding this.
 pub struct PageserverClient {
-    /// The tenant ID.
-    tenant_id: TenantId,
-    /// The timeline ID.
-    timeline_id: TimelineId,
-    /// The JWT auth token for this tenant, if any.
+    /// The branch ID.
+    branch_id: BranchId,
+    /// The JWT auth token for this branch, if any.
     auth_token: Option<String>,
     /// The compression to use, if any.
     compression: Option<CompressionEncoding>,
-    /// The pageserver for this timeline.
+    /// The pageserver for this branch.
     shard: ArcSwap<Shard>,
 }
 
 impl PageserverClient {
-    /// Creates a new Pageserver client for a given tenant and timeline. Connects to the given gRPC
+    /// Creates a new Pageserver client for a given branch. Connects to the given gRPC
     /// URL.
     pub fn new(
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         url: String,
         auth_token: Option<String>,
         compression: Option<CompressionEncoding>,
     ) -> anyhow::Result<Self> {
-        let shard = Shard::new(url, tenant_id, timeline_id, auth_token.clone(), compression)?;
+        let shard = Shard::new(url, branch_id, auth_token.clone(), compression)?;
         Ok(Self {
-            tenant_id,
-            timeline_id,
+            branch_id,
             auth_token,
             compression,
             shard: ArcSwap::new(Arc::new(shard)),
@@ -114,8 +110,7 @@ impl PageserverClient {
     pub fn update_shards(&self, url: String) -> anyhow::Result<()> {
         let shard = Shard::new(
             url,
-            self.tenant_id,
-            self.timeline_id,
+            self.branch_id,
             self.auth_token.clone(),
             self.compression,
         )?;
@@ -322,8 +317,7 @@ impl Shard {
     /// use the gRPC scheme.
     fn new(
         url: String,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         auth_token: Option<String>,
         compression: Option<CompressionEncoding>,
     ) -> anyhow::Result<Self> {
@@ -334,8 +328,7 @@ impl Shard {
         // Pools for unary requests and non-bulk GetPage requests.
         let client_pool = ClientPool::new(
             ChannelPool::new(url.clone(), MAX_CLIENTS_PER_CHANNEL)?,
-            tenant_id,
-            timeline_id,
+            branch_id,
             auth_token.clone(),
             compression,
             None, // unbounded
@@ -346,8 +339,7 @@ impl Shard {
         let bulk_stream_pool = StreamPool::new(
             ClientPool::new(
                 ChannelPool::new(url, MAX_BULK_CLIENTS_PER_CHANNEL)?,
-                tenant_id,
-                timeline_id,
+                branch_id,
                 auth_token,
                 compression,
                 None, // unbounded,

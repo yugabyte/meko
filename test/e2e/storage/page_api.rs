@@ -14,7 +14,7 @@ use anyhow::{Context, ensure};
 use pageserver_api::reltag::RelTag;
 use pageserver_client_grpc::PageserverClient;
 use pageserver_page_api as page_api;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::cluster::{Cluster, step};
@@ -27,20 +27,19 @@ pub const ITEM_ID_SIZE: usize = 4;
 /// pg_default tablespace oid (`spcnode` for a normal relation).
 pub const DEFAULT_TABLESPACE: u32 = 1663;
 
-/// Build a gRPC `PageserverClient` to node 1 for the cluster's tenant and
-/// the given timeline (hex). Use [`client`] for the main timeline, or pass
-/// a branch's timeline id (see [`Cluster::branch_timeline_id`]).
-pub fn client_for_timeline(c: &Cluster, timeline_hex: &str) -> anyhow::Result<PageserverClient> {
-    let tenant_id = TenantId::from_str(c.tid()).context("parse tenant id")?;
-    let timeline_id = TimelineId::from_str(timeline_hex).context("parse timeline id")?;
+/// Build a gRPC `PageserverClient` to node 1 for the given branch (hex).
+/// Use [`client`] for the main branch, or pass a branch's id (see
+/// [`Cluster::branch_id`]).
+pub fn client_for_branch(c: &Cluster, branch_hex: &str) -> anyhow::Result<PageserverClient> {
+    let branch_id = BranchId::from_str(branch_hex).context("parse branch id")?;
     let url = format!("grpc://127.0.0.1:{}", c.ps_grpc_port());
-    PageserverClient::new(tenant_id, timeline_id, url, None, None).context("connect PS gRPC")
+    PageserverClient::new(branch_id, url, None, None).context("connect PS gRPC")
 }
 
-/// A gRPC `PageserverClient` for the cluster's main timeline.
+/// A gRPC `PageserverClient` for the cluster's main branch.
 pub async fn client(c: &Cluster) -> anyhow::Result<PageserverClient> {
-    let tl = c.timeline_id().await?;
-    client_for_timeline(c, &tl)
+    let br = c.branch_id().await?;
+    client_for_branch(c, &br)
 }
 
 /// Build a client for the pageserver behind a compute's
@@ -55,12 +54,11 @@ pub async fn client(c: &Cluster) -> anyhow::Result<PageserverClient> {
 /// every per-instance bump shifts both equally), so we derive the gRPC URL
 /// from it.
 pub fn client_at_connstring(
-    c: &Cluster,
-    timeline_hex: &str,
+    _c: &Cluster,
+    branch_hex: &str,
     connstring: &str,
 ) -> anyhow::Result<PageserverClient> {
-    let tenant_id = TenantId::from_str(c.tid()).context("parse tenant id")?;
-    let timeline_id = TimelineId::from_str(timeline_hex).context("parse timeline id")?;
+    let branch_id = BranchId::from_str(branch_hex).context("parse branch id")?;
 
     let raw = connstring.split(',').next().unwrap_or(connstring).trim();
     let after_scheme = raw.split("://").nth(1).unwrap_or(raw);
@@ -74,7 +72,7 @@ pub fn client_at_connstring(
         .with_context(|| format!("parse pageserver pg port from {raw:?}"))?;
     let url = format!("grpc://{host}:{}", pg_port + 200);
 
-    PageserverClient::new(tenant_id, timeline_id, url, None, None).context("connect branch PS gRPC")
+    PageserverClient::new(branch_id, url, None, None).context("connect branch PS gRPC")
 }
 
 /// A heap/relation `RelTag` in the default tablespace, main fork.

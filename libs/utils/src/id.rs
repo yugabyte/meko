@@ -240,7 +240,10 @@ macro_rules! id_newtype {
     };
 }
 
-/// Neon timeline ID.
+/// yb-light branch ID. Globally unique 128-bit identifier of a branch
+/// (one branch == one history of a cluster). Formerly `TimelineId`;
+/// the storage model is now flat (one branch, no enclosing tenant),
+/// so this single id identifies a branch end to end.
 ///
 /// They are different from PostgreSQL timeline
 /// IDs, but serve a similar purpose: they differentiate
@@ -269,84 +272,23 @@ macro_rules! id_newtype {
 /// like `[173,80,132,115,129,226,72,254,170,201,135,108,199,26,228,24]`.
 /// See [`Id`] for alternative ways to serialize it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
-pub struct TimelineId(Id);
+pub struct BranchId(Id);
 
-id_newtype!(TimelineId);
+id_newtype!(BranchId);
 
-impl TryFrom<Option<&str>> for TimelineId {
+impl TryFrom<Option<&str>> for BranchId {
     type Error = anyhow::Error;
 
     fn try_from(value: Option<&str>) -> Result<Self, Self::Error> {
         value
             .unwrap_or_default()
-            .parse::<TimelineId>()
-            .with_context(|| format!("Could not parse timeline id from {value:?}"))
+            .parse::<BranchId>()
+            .with_context(|| format!("Could not parse branch id from {value:?}"))
     }
 }
-
-/// Neon Tenant Id represents identifiar of a particular tenant.
-/// Is used for distinguishing requests and data belonging to different users.
-///
-/// NOTE: It (de)serializes as an array of hex bytes, so the string representation would look
-/// like `[173,80,132,115,129,226,72,254,170,201,135,108,199,26,228,24]`.
-/// See [`Id`] for alternative ways to serialize it.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
-pub struct TenantId(Id);
-
-id_newtype!(TenantId);
 
 /// If needed, reuse small string from proxy/src/types.rc
 pub type EndpointId = String;
-
-// A pair uniquely identifying Neon instance.
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TenantTimelineId {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
-}
-
-impl TenantTimelineId {
-    pub fn new(tenant_id: TenantId, timeline_id: TimelineId) -> Self {
-        TenantTimelineId {
-            tenant_id,
-            timeline_id,
-        }
-    }
-
-    pub fn generate() -> Self {
-        Self::new(TenantId::generate(), TimelineId::generate())
-    }
-
-    pub fn empty() -> Self {
-        Self::new(TenantId::from([0u8; 16]), TimelineId::from([0u8; 16]))
-    }
-}
-
-impl fmt::Display for TenantTimelineId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}/{}", self.tenant_id, self.timeline_id)
-    }
-}
-
-impl FromStr for TenantTimelineId {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut parts = s.split('/');
-        let tenant_id = parts
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("TenantTimelineId must contain tenant_id"))?
-            .parse()?;
-        let timeline_id = parts
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("TenantTimelineId must contain timeline_id"))?
-            .parse()?;
-        if parts.next().is_some() {
-            anyhow::bail!("TenantTimelineId must contain only tenant_id and timeline_id");
-        }
-        Ok(TenantTimelineId::new(tenant_id, timeline_id))
-    }
-}
 
 // Unique ID of a storage node (safekeeper or pageserver). Supposed to be issued
 // by the console.
@@ -457,20 +399,11 @@ mod tests {
     }
 
     #[test]
-    fn test_tenant_id_bincode_serde() {
+    fn test_branch_id_bincode_serde() {
         let expected_bytes = [
             173, 80, 132, 115, 129, 226, 72, 254, 170, 201, 135, 108, 199, 26, 228, 24,
         ];
 
-        roundtrip_type!(TenantId, expected_bytes);
-    }
-
-    #[test]
-    fn test_timeline_id_bincode_serde() {
-        let expected_bytes = [
-            173, 80, 132, 115, 129, 226, 72, 254, 170, 201, 135, 108, 199, 26, 228, 24,
-        ];
-
-        roundtrip_type!(TimelineId, expected_bytes);
+        roundtrip_type!(BranchId, expected_bytes);
     }
 }

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use pageserver_api::models::{TenantConfig, TenantConfigRequest};
-use utils::id::TenantTimelineId;
+use pageserver_api::models::{BranchConfig, BranchConfigRequest};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 /// Ingest aux files into the pageserver.
@@ -16,7 +16,7 @@ pub(crate) struct Args {
     #[clap(long)]
     pageserver_jwt: Option<String>,
 
-    targets: Option<Vec<TenantTimelineId>>,
+    targets: Option<Vec<BranchId>>,
 }
 
 pub(crate) fn main(args: Args) -> anyhow::Result<()> {
@@ -39,7 +39,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
     ));
 
     // discover targets
-    let timelines: Vec<TenantTimelineId> = crate::util::cli::targets::discover(
+    let branches: Vec<BranchId> = crate::util::cli::targets::discover(
         &mgmt_api_client,
         crate::util::cli::targets::Spec {
             limit_to_first_n_targets: None,
@@ -57,16 +57,14 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
     )
     .await?;
 
-    let timeline = timelines[0];
-    let tenant_id = timeline.tenant_id;
-    let timeline_id = timeline.timeline_id;
+    let branch_id = branches[0];
 
-    println!("operating on timeline {timeline}");
+    println!("operating on branch {branch_id}");
 
     mgmt_api_client
-        .set_tenant_config(&TenantConfigRequest {
-            tenant_id: timeline.tenant_id,
-            config: TenantConfig::default(),
+        .set_branch_config(&BranchConfigRequest {
+            branch_id,
+            config: BranchConfig::default(),
         })
         .await?;
 
@@ -81,7 +79,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
             .collect::<HashMap<_, _>>();
         let file_cnt = items.len();
         mgmt_api_client
-            .ingest_aux_files(tenant_id, timeline_id, items)
+            .ingest_aux_files(branch_id, items)
             .await?;
         println!("ingested {file_cnt} files");
     }
@@ -89,7 +87,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
     for _ in 0..100 {
         let start = Instant::now();
         let files = mgmt_api_client
-            .list_aux_files(tenant_id, timeline_id, Lsn(Lsn::MAX.0 - 1))
+            .list_aux_files(branch_id, Lsn(Lsn::MAX.0 - 1))
             .await?;
         println!(
             "{} files found in {}s",

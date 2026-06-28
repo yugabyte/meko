@@ -40,7 +40,7 @@ use crate::metrics::{LIVE_CONNECTIONS, WAL_INGEST, WALRECEIVER_STARTED_CONNECTIO
 use crate::pgdatadir_mapping::DatadirModification;
 use crate::task_mgr::{TaskKind, WALRECEIVER_RUNTIME};
 use crate::page_server::{
-    Timeline, WalReceiverInfo, debug_assert_current_span_has_tenant_and_timeline_id,
+    Timeline, WalReceiverInfo, debug_assert_current_span_has_branch_id,
 };
 use crate::walingest::WalIngest;
 
@@ -125,7 +125,7 @@ pub(super) async fn handle_walreceiver_connection(
     ingest_batch_size: u64,
     validate_wal_contiguity: bool,
 ) -> Result<(), WalReceiverError> {
-    debug_assert_current_span_has_tenant_and_timeline_id();
+    debug_assert_current_span_has_branch_id();
 
     // prevent timeline shutdown from finishing until we have exited
     let _guard = timeline.gate.enter().map_err(|e| match e {
@@ -190,7 +190,7 @@ pub(super) async fn handle_walreceiver_connection(
     let connection_cancellation = cancellation.clone();
     WALRECEIVER_RUNTIME.spawn(
         async move {
-            debug_assert_current_span_has_tenant_and_timeline_id();
+            debug_assert_current_span_has_branch_id();
             select! {
                 connection_result = connection => match connection_result {
                     Ok(()) => debug!("Walreceiver db connection closed"),
@@ -366,8 +366,7 @@ pub(super) async fn handle_walreceiver_connection(
                                     "Gap in streamed WAL: [{expected_wal_start}, {raw_wal_start_lsn}"
                                 );
                                 critical_timeline!(
-                                    timeline.tenant_id,
-                                    timeline.timeline_id,
+                                    timeline.branch_id,
                                     Some(&timeline.corruption_detected),
                                     "{msg}"
                                 );
@@ -384,8 +383,7 @@ pub(super) async fn handle_walreceiver_connection(
                                             first_rec.next_record_lsn, expected_wal_start
                                         );
                                         critical_timeline!(
-                                            timeline.tenant_id,
-                                            timeline.timeline_id,
+                                            timeline.branch_id,
                                             Some(&timeline.corruption_detected),
                                             "{msg}"
                                         );
@@ -458,8 +456,7 @@ pub(super) async fn handle_walreceiver_connection(
                             // anyhow::Error, so just ignore it if we're cancelled.
                             if !cancellation.is_cancelled() && !timeline.is_stopping() {
                                 critical_timeline!(
-                                    timeline.tenant_id,
-                                    timeline.timeline_id,
+                                    timeline.branch_id,
                                     Some(&timeline.corruption_detected),
                                     "{err:?}"
                                 );

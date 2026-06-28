@@ -10,7 +10,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use utils::{
-    id::{TenantId, TenantTimelineId, TimelineId},
+    id::BranchId,
     lsn::Lsn,
 };
 
@@ -26,8 +26,7 @@ use crate::{
 };
 
 pub struct BasebackupPrepareRequest {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub lsn: Lsn,
 }
 
@@ -58,7 +57,7 @@ pub struct BasebackupCache {
     data_dir: Utf8PathBuf,
     config: Option<BasebackupCacheConfig>,
 
-    entries: std::sync::Mutex<Option<(TenantTimelineId, CacheEntry)>>,
+    entries: std::sync::Mutex<Option<(BranchId, CacheEntry)>>,
 
     prepare_sender: BasebackupPrepareSender,
 
@@ -134,10 +133,9 @@ impl BasebackupCache {
     /// Send a basebackup prepare request to the background task.
     /// The basebackup will be prepared asynchronously, it does not block the caller.
     /// The request will be skipped if any cache limits are exceeded.
-    pub fn send_prepare(&self, tenant_id: TenantId, timeline_id: TimelineId, lsn: Lsn) {
+    pub fn send_prepare(&self, branch_id: BranchId, lsn: Lsn) {
         let req = BasebackupPrepareRequest {
-            tenant_id,
-            timeline_id,
+            branch_id,
             lsn,
         };
 
@@ -151,8 +149,7 @@ impl BasebackupCache {
                 TrySendError::Full(_) => {
                     // Basebackup prepares are pretty rare, normally we should not hit this.
                     tracing::info!(
-                        tenant_id = %tenant_id,
-                        %timeline_id,
+                        branch_id = %branch_id,
                         %lsn,
                         "Basebackup prepare channel is full, skipping the request"
                     );
@@ -160,8 +157,7 @@ impl BasebackupCache {
                 TrySendError::Closed(_) => {
                     // Normal during shutdown, not critical.
                     tracing::info!(
-                        tenant_id = %tenant_id,
-                        %timeline_id,
+                        branch_id = %branch_id,
                         %lsn,
                         "Basebackup prepare channel is closed, skipping the request"
                     );
@@ -176,8 +172,7 @@ impl BasebackupCache {
     /// even if the entry is removed from the cache in the background.
     pub async fn get(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         lsn: Lsn,
     ) -> Option<tokio::fs::File> {
         if !self.is_enabled() {
@@ -185,20 +180,19 @@ impl BasebackupCache {
         }
 
         // Fast path. Check if the entry exists using the in-memory state.
-        let tti = TenantTimelineId::new(tenant_id, timeline_id);
         let cached_lsn = self
             .entries
             .lock()
             .unwrap()
             .as_ref()
-            .filter(|(k, _)| *k == tti)
+            .filter(|(k, _)| *k == branch_id)
             .map(|(_, e)| e.lsn);
         if cached_lsn != Some(lsn) {
             self.read_miss_count.inc();
             return None;
         }
 
-        let path = self.entry_path(tenant_id, timeline_id, lsn);
+        let path = self.entry_path(branch_id, lsn);
 
         match tokio::fs::File::open(path).await {
             Ok(file) => {
@@ -224,16 +218,16 @@ impl BasebackupCache {
 
     // Private methods.
 
-    fn entry_filename(tenant_id: TenantId, timeline_id: TimelineId, lsn: Lsn) -> String {
+    fn entry_filename(branch_id: BranchId, lsn: Lsn) -> String {
         // The default format for LSN is 0/ABCDEF.
         // The backslash is not filename friendly, so serialize it as plain hex.
         let lsn = lsn.0;
-        format!("basebackup_{tenant_id}_{timeline_id}_{lsn:016X}.tar.gz")
+        format!("basebackup_{branch_id}_{lsn:016X}.tar.gz")
     }
 
-    fn entry_path(&self, tenant_id: TenantId, timeline_id: TimelineId, lsn: Lsn) -> Utf8PathBuf {
+    fn entry_path(&self, branch_id: BranchId, lsn: Lsn) -> Utf8PathBuf {
         self.data_dir
-            .join(Self::entry_filename(tenant_id, timeline_id, lsn))
+            .join(Self::entry_filename(branch_id, lsn))
     }
 }
 
@@ -274,28 +268,26 @@ impl BackgroundTask {
 
     fn entry_tmp_path(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         lsn: Lsn,
     ) -> Utf8PathBuf {
         self.tmp_dir()
-            .join(BasebackupCache::entry_filename(tenant_id, timeline_id, lsn))
+            .join(BasebackupCache::entry_filename(branch_id, lsn))
     }
 
-    fn parse_entry_filename(filename: &str) -> Option<(TenantId, TimelineId, Lsn)> {
+    fn parse_entry_filename(filename: &str) -> Option<(BranchId, Lsn)> {
         let parts: Vec<&str> = filename
             .strip_prefix("basebackup_")?
             .strip_suffix(".tar.gz")?
             .split('_')
             .collect();
-        if parts.len() != 3 {
+        if parts.len() != 2 {
             return None;
         }
-        let tenant_id = parts[0].parse::<TenantId>().ok()?;
-        let timeline_id = parts[1].parse::<TimelineId>().ok()?;
-        let lsn = Lsn(u64::from_str_radix(parts[2], 16).ok()?);
+        let branch_id = parts[0].parse::<BranchId>().ok()?;
+        let lsn = Lsn(u64::from_str_radix(parts[1], 16).ok()?);
 
-        Some((tenant_id, timeline_id, lsn))
+        Some((branch_id, lsn))
     }
 
     // Recreate the tmp directory to clear all files in it.
@@ -314,22 +306,21 @@ impl BackgroundTask {
         // Leave only up-to-date entries.
         let entries_old = self.c.entries.lock().unwrap().clone();
         let mut entries_new = None;
-        for (tenant_id, tenant) in self.tenant_manager.list() {
-            for timeline in tenant.list_timelines() {
-                let tti = TenantTimelineId::new(tenant_id, timeline.timeline_id);
-                if let Some((old_tti, entry)) = &entries_old {
-                    if *old_tti == tti && timeline.get_last_record_lsn() <= entry.lsn {
-                        entries_new = Some((tti, entry.clone()));
+        for (_branch_id, ps) in self.tenant_manager.list() {
+            for timeline in ps.list_timelines() {
+                let branch_id = timeline.branch_id;
+                if let Some((old_branch_id, entry)) = &entries_old {
+                    if *old_branch_id == branch_id && timeline.get_last_record_lsn() <= entry.lsn {
+                        entries_new = Some((branch_id, entry.clone()));
                     }
                 }
             }
         }
 
         // Remove the cached entry if it is not the up-to-date one we kept.
-        if let Some((tti, entry)) = &entries_old {
-            if entries_new.as_ref().map(|(k, _)| k) != Some(tti) {
-                self.try_remove_entry(tti.tenant_id, tti.timeline_id, entry)
-                    .await;
+        if let Some((branch_id, entry)) = &entries_old {
+            if entries_new.as_ref().map(|(k, _)| k) != Some(branch_id) {
+                self.try_remove_entry(*branch_id, entry).await;
             }
         }
 
@@ -351,7 +342,7 @@ impl BackgroundTask {
             .context("Failed to clean tmp directory")?;
 
         // Read existing entries from the data_dir and add them to in-memory state.
-        let mut entries: Option<(TenantTimelineId, CacheEntry)> = None;
+        let mut entries: Option<(BranchId, CacheEntry)> = None;
         let mut dir = tokio::fs::read_dir(&self.c.data_dir).await?;
         while let Some(dir_entry) = dir.next_entry().await? {
             let filename = dir_entry.file_name();
@@ -376,27 +367,23 @@ impl BackgroundTask {
             BASEBACKUP_CACHE_SIZE.set(self.total_size_bytes);
 
             let parsed = Self::parse_entry_filename(filename.to_string_lossy().as_ref());
-            let Some((tenant_id, timeline_id, lsn)) = parsed else {
+            let Some((branch_id, lsn)) = parsed else {
                 tracing::warn!("Invalid basebackup cache file name: {:?}", filename);
                 continue;
             };
 
             let cur_entry = CacheEntry { lsn, size_bytes };
 
-            let tti = TenantTimelineId::new(tenant_id, timeline_id);
-
             match &mut entries {
-                Some((k, found_entry)) if *k == tti => {
+                Some((k, found_entry)) if *k == branch_id => {
                     // Leave only the latest entry, remove the old one.
                     if cur_entry.lsn < found_entry.lsn {
-                        self.try_remove_entry(tenant_id, timeline_id, &cur_entry)
-                            .await;
+                        self.try_remove_entry(branch_id, &cur_entry).await;
                     } else if cur_entry.lsn > found_entry.lsn {
-                        self.try_remove_entry(tenant_id, timeline_id, found_entry)
-                            .await;
+                        self.try_remove_entry(branch_id, found_entry).await;
                         *found_entry = cur_entry;
                     } else {
-                        // Two different filenames parsed to the same timline_id and LSN.
+                        // Two different filenames parsed to the same branch_id and LSN.
                         // Should never happen.
                         return Err(anyhow::anyhow!(
                             "Duplicate basebackup cache entry with the same LSN: {:?}",
@@ -405,13 +392,12 @@ impl BackgroundTask {
                     }
                 }
                 Some(_) => {
-                    // A file for a different (tenant, timeline) left over in
+                    // A file for a different branch left over in
                     // this data_dir; drop the stale file.
-                    self.try_remove_entry(tenant_id, timeline_id, &cur_entry)
-                        .await;
+                    self.try_remove_entry(branch_id, &cur_entry).await;
                 }
                 None => {
-                    entries = Some((tti, cur_entry));
+                    entries = Some((branch_id, cur_entry));
                 }
             }
         }
@@ -436,8 +422,7 @@ impl BackgroundTask {
                 Some(req) = prepare_receiver.recv() => {
                     BASEBACKUP_CACHE_PREPARE_QUEUE_SIZE.dec();
                     if let Err(err) = self.prepare_basebackup(
-                        req.tenant_id,
-                        req.timeline_id,
+                        req.branch_id,
                         req.lsn,
                     ).await {
                         tracing::info!("Failed to prepare basebackup: {:#}", err);
@@ -466,20 +451,18 @@ impl BackgroundTask {
     /// towards the size limits.
     async fn try_remove_entry(
         &mut self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         entry: &CacheEntry,
     ) {
-        let entry_path = self.c.entry_path(tenant_id, timeline_id, entry.lsn);
+        let entry_path = self.c.entry_path(branch_id, entry.lsn);
 
         match tokio::fs::remove_file(&entry_path).await {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
                 tracing::warn!(
-                    "Failed to remove basebackup cache file for tenant {} timeline {} LSN {}: {:#}",
-                    tenant_id,
-                    timeline_id,
+                    "Failed to remove basebackup cache file for branch {} LSN {}: {:#}",
+                    branch_id,
                     entry.lsn,
                     e
                 );
@@ -499,23 +482,19 @@ impl BackgroundTask {
     /// If the entry already exists with previous LSN, it will be removed.
     async fn upsert_entry(
         &mut self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         entry: CacheEntry,
     ) {
-        let tti = TenantTimelineId::new(tenant_id, timeline_id);
-
         self.entry_count += 1;
         BASEBACKUP_CACHE_ENTRIES.set(self.entry_count as u64);
 
         self.total_size_bytes += entry.size_bytes;
         BASEBACKUP_CACHE_SIZE.set(self.total_size_bytes);
 
-        let old_entry = self.c.entries.lock().unwrap().replace((tti, entry)).map(|(_, e)| e);
+        let old_entry = self.c.entries.lock().unwrap().replace((branch_id, entry)).map(|(_, e)| e);
 
         if let Some(old_entry) = old_entry {
-            self.try_remove_entry(tenant_id, timeline_id, &old_entry)
-                .await;
+            self.try_remove_entry(branch_id, &old_entry).await;
         }
     }
 
@@ -528,25 +507,20 @@ impl BackgroundTask {
     /// location to make the operation atomic.
     async fn prepare_basebackup(
         &mut self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         req_lsn: Lsn,
     ) -> anyhow::Result<()> {
         tracing::info!(
-            tenant_id = %tenant_id,
-            %timeline_id,
+            branch_id = %branch_id,
             %req_lsn,
             "Preparing basebackup for timeline",
         );
-
-        let tti = TenantTimelineId::new(tenant_id, timeline_id);
 
         // TODO(diko): I don't think we will hit the limit,
         // but if we do, it makes sense to try to evict oldest entries. here
         if self.entry_count >= self.config.max_size_entries {
             tracing::info!(
-                %tenant_id,
-                %timeline_id,
+                %branch_id,
                 %req_lsn,
                 "Basebackup cache is full (max_size_entries), skipping basebackup",
             );
@@ -556,8 +530,7 @@ impl BackgroundTask {
 
         if self.total_size_bytes >= self.config.max_total_size_bytes {
             tracing::info!(
-                %tenant_id,
-                %timeline_id,
+                %branch_id,
                 %req_lsn,
                 "Basebackup cache is full (max_total_size_bytes), skipping basebackup",
             );
@@ -567,10 +540,10 @@ impl BackgroundTask {
 
         {
             let entries = self.c.entries.lock().unwrap();
-            if let Some((_, entry)) = entries.as_ref().filter(|(k, _)| *k == tti) {
+            if let Some((_, entry)) = entries.as_ref().filter(|(k, _)| *k == branch_id) {
                 if entry.lsn >= req_lsn {
                     tracing::info!(
-                        %timeline_id,
+                        %branch_id,
                         %req_lsn,
                         %entry.lsn,
                         "Basebackup entry already exists for timeline with higher LSN, skipping basebackup",
@@ -581,16 +554,16 @@ impl BackgroundTask {
             }
         }
 
-        let tenant = self
+        let ps = self
             .tenant_manager
-            .get_attached_tenant_shard(tenant_id)?;
+            .get_attached_tenant_shard(branch_id)?;
 
-        let timeline = tenant.get_timeline(timeline_id, true)?;
+        let timeline = ps.get_timeline(branch_id, true)?;
 
         let last_record_lsn = timeline.get_last_record_lsn();
         if last_record_lsn > req_lsn {
             tracing::info!(
-                %timeline_id,
+                %branch_id,
                 %req_lsn,
                 %last_record_lsn,
                 "Timeline has a higher LSN than the requested one, skipping basebackup",
@@ -599,7 +572,7 @@ impl BackgroundTask {
             return Ok(());
         }
 
-        let entry_tmp_path = self.entry_tmp_path(tenant_id, timeline_id, req_lsn);
+        let entry_tmp_path = self.entry_tmp_path(branch_id, req_lsn);
 
         let res = self
             .prepare_basebackup_tmp(&entry_tmp_path, &timeline, req_lsn)
@@ -627,10 +600,10 @@ impl BackgroundTask {
         // It's not necessary to fsync the inode after renaming, because the worst case is that
         // the rename operation will be rolled back on the disk failure, the entry will disappear
         // from the main directory, and the entry access will cause a cache miss.
-        let entry_path = self.c.entry_path(tenant_id, timeline_id, req_lsn);
+        let entry_path = self.c.entry_path(branch_id, req_lsn);
         tokio::fs::rename(&entry_tmp_path, &entry_path).await?;
 
-        self.upsert_entry(tenant_id, timeline_id, entry).await;
+        self.upsert_entry(branch_id, entry).await;
 
         self.prepare_ok_count.inc();
         Ok(())

@@ -11,8 +11,7 @@
 //! Schema:
 //! ```sql
 //! CREATE TABLE pageserver.pages (
-//!     tenant_id   TEXT     NOT NULL,
-//!     timeline_id TEXT     NOT NULL,
+//!     branch_id   TEXT     NOT NULL,
 //!     spcnode     BIGINT   NOT NULL,
 //!     dbnode      BIGINT   NOT NULL,
 //!     relnode     BIGINT   NOT NULL,
@@ -22,12 +21,12 @@
 //!     lsn         BIGINT   NOT NULL,
 //!     will_init   BOOLEAN  NOT NULL,
 //!     payload     BYTEA    NOT NULL,
-//!     PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
+//!     PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
 //!                  blknum, lsn DESC, is_image)
 //! );
 //! ```
 //!
-//! Hash partition `(tenant, timeline, spcnode, dbnode, relnode, forknum)`
+//! Hash partition `(branch, spcnode, dbnode, relnode, forknum)`
 //! means each fork's whole block-set lives on one tablet. Per-block
 //! reads are one tablet hash lookup; per-fork range scans (basebackup,
 //! image-layer materialisation) are one tablet's range scan.
@@ -60,7 +59,7 @@ use remote_storage::{YbConnConfig, YsqlClient};
 // per-callsite churn. The Neon fork of tokio-postgres survives
 // elsewhere in the workspace for the walproposer/walreceiver
 // replication path.
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use yb_tokio_postgres as tokio_postgres;
 use yb_tokio_postgres::types::ToSql;
@@ -228,7 +227,7 @@ fn slru_kind_from_i16(v: i16) -> Result<SlruKind> {
 /// (segment 0 is the timeline itself with `cap_lsn = Lsn::MAX`).
 ///
 /// A branch's pre-branch-point pages live in YB under the ANCESTOR's
-/// `timeline_id`; lineage-aware reads walk these segments so a branch
+/// `branch_id`; lineage-aware reads walk these segments so a branch
 /// pageserver can serve reads without hosting the ancestor timeline
 /// in-process. `cap_lsn` is the highest LSN at which the segment's
 /// rows are visible to the descendant: `min` of every `ancestor_lsn`
@@ -240,16 +239,16 @@ fn slru_kind_from_i16(v: i16) -> Result<SlruKind> {
 /// for a live timeline (detach-ancestor is unsupported in yb-light).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineageSegment {
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub cap_lsn: Lsn,
 }
 
 impl LineageSegment {
     /// The trivial single-segment lineage of a timeline with no
     /// ancestor (and the safe default before `load_lineage` runs).
-    pub fn single(timeline_id: TimelineId) -> Vec<LineageSegment> {
+    pub fn single(branch_id: BranchId) -> Vec<LineageSegment> {
         vec![LineageSegment {
-            timeline_id,
+            branch_id,
             cap_lsn: Lsn::MAX,
         }]
     }
@@ -257,15 +256,14 @@ impl LineageSegment {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineRow {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     /// Highest LSN durably present in `pageserver.pages`/`slru_pages`/`meta`.
     /// Advances on every successful `PageWriter::flush`. Drives both
     /// safekeeper WAL truncation (SK keeps WAL ≥ this) and ingest
     /// resume on restart (walreceiver replays from this LSN forward).
     pub consistent_lsn: Lsn,
     pub applied_gc_cutoff_lsn: Lsn,
-    pub ancestor_timeline_id: Option<TimelineId>,
+    pub ancestor_branch_id: Option<BranchId>,
     pub ancestor_lsn: Option<Lsn>,
     pub current_generation: i32,
     pub pg_version: u32,
@@ -380,13 +378,13 @@ pub struct PageStore {
     ysql_client: Arc<YsqlClient>,
     schema: Arc<str>,
     scale_factor: f64,
-    /// Full-chunk INSERT SQL with the `(tenant, timeline)` baked in as
-    /// literals, memoized per `(tenant, timeline)` on first flush and
+    /// Full-chunk INSERT SQL with the `branch_id` baked in as a
+    /// literal, memoized per `branch_id` on first flush and
     /// shared across clones. In production this holds exactly one entry
-    /// (a process serves a single tenant/timeline, #16); keying the map
+    /// (a process serves a single branch, #16); keying the map
     /// rather than asserting a single slot also lets the shared-store
-    /// test harness drive many tenant/timelines through one `PageStore`.
-    baked: Arc<DashMap<(TenantId, TimelineId), Arc<BakedSql>>>,
+    /// test harness drive many branches through one `PageStore`.
+    baked: Arc<DashMap<BranchId, Arc<BakedSql>>>,
 }
 
 /// Decompose an 18-byte relation-page Key into the typed columns.
@@ -425,33 +423,33 @@ fn columns_to_key_bytes(sp: i64, db: i64, rel: i64, fork: i16, blk: i64) -> Byte
 }
 
 /// Rows per multi-row INSERT in `put_pages` / `put_slru_pages`.
-/// PostgreSQL caps a query at 65535 parameters; with `tenant_id` /
-/// `timeline_id` baked into the SQL as literals (this is a
-/// single-(tenant,timeline) pageserver — see #16), the largest fan-out
+/// PostgreSQL caps a query at 65535 parameters; with `branch_id`
+/// baked into the SQL as a literal (this is a single-branch
+/// pageserver — see #16), the largest fan-out
 /// is `pages` at 9 params/row → 500×9 = 4500 params, well under.
 /// Chunks dispatch in parallel — tokio-postgres pipelines them on the
 /// shared connection so YB absorbs them concurrently.
 const ROWS_PER_INSERT: usize = 500;
 
 const PAGES_COLUMNS: &str =
-    "tenant_id, timeline_id, spcnode, dbnode, relnode, forknum, blknum, lsn, is_image, will_init, payload";
+    "branch_id, spcnode, dbnode, relnode, forknum, blknum, lsn, is_image, will_init, payload";
 /// Per-row bound columns for `pages` (everything after the baked
-/// `tenant_id`/`timeline_id` literals): spcnode, dbnode, relnode,
+/// `branch_id` literal): spcnode, dbnode, relnode,
 /// forknum, blknum, lsn, is_image, will_init, payload.
 const PAGES_PER_ROW: usize = 9;
 
 const SLRU_COLUMNS: &str =
-    "tenant_id, timeline_id, kind, segno, blknum, is_image, lsn, will_init, payload";
+    "branch_id, kind, segno, blknum, is_image, lsn, will_init, payload";
 /// Per-row bound columns for `slru_pages`: kind, segno, blknum,
 /// is_image, lsn, will_init, payload.
 const SLRU_PER_ROW: usize = 7;
 
-/// Build a multi-row `INSERT ... VALUES`. `tenant`/`timeline` are baked
-/// into every row tuple as quoted literals — they are fixed for the
-/// process lifetime (single-(tenant,timeline) pageserver, #16), so
-/// there is no point round-tripping them as bind params. Both render as
-/// fixed-width hex (`TenantId`/`TimelineId` `Display`), so the literals
-/// are injection-safe. The `per_row` per-row columns bind `$1..`.
+/// Build a multi-row `INSERT ... VALUES`. `branch_id` is baked
+/// into every row tuple as a quoted literal — it is fixed for the
+/// process lifetime (single-branch pageserver, #16), so
+/// there is no point round-tripping it as a bind param. It renders as
+/// fixed-width hex (`BranchId` `Display`), so the literal
+/// is injection-safe. The `per_row` per-row columns bind `$1..`.
 ///
 /// The result is a pure function of its inputs and stable across
 /// flushes, so the common full-chunk shape is built once (memoized on
@@ -461,20 +459,19 @@ fn build_insert_sql(
     schema: &str,
     table: &str,
     columns: &str,
-    tenant: TenantId,
-    timeline: TimelineId,
+    branch_id: BranchId,
     per_row: usize,
     n_rows: usize,
 ) -> String {
     use std::fmt::Write as _;
-    // ~6 chars per "$NNNN," placeholder + the baked id literals.
+    // ~6 chars per "$NNNN," placeholder + the baked id literal.
     let mut sql = String::with_capacity(64 + columns.len() + n_rows * (per_row * 6 + 80));
     write!(sql, "INSERT INTO \"{schema}\".{table} ({columns}) VALUES ").unwrap();
     for i in 0..n_rows {
         if i > 0 {
             sql.push(',');
         }
-        write!(sql, "('{tenant}','{timeline}'").unwrap();
+        write!(sql, "('{branch_id}'").unwrap();
         let base = i * per_row + 1;
         for j in 0..per_row {
             write!(sql, ",${}", base + j).unwrap();
@@ -484,40 +481,40 @@ fn build_insert_sql(
     sql
 }
 
-/// Single-key chain read (`read_chain`). `$1`=tenant_id, `$2`=timeline_id;
-/// `$3..$8` = spcnode, dbnode, relnode, forknum, blknum, target_lsn.
+/// Single-key chain read (`read_chain`). `$1`=branch_id;
+/// `$2..$7` = spcnode, dbnode, relnode, forknum, blknum, target_lsn.
 fn build_read_chain_sql(schema: &str) -> String {
     format!(
         "SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                 p.lsn, p.is_image, p.will_init, p.payload \
          FROM \"{schema}\".pages p \
-         WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
-           AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
-           AND p.forknum=$6 AND p.blknum=$7 \
-           AND p.lsn <= $8 \
+         WHERE p.branch_id=$1 \
+           AND p.spcnode=$2 AND p.dbnode=$3 AND p.relnode=$4 \
+           AND p.forknum=$5 AND p.blknum=$6 \
+           AND p.lsn <= $7 \
            AND p.lsn >= COALESCE(( \
                  SELECT a.lsn FROM \"{schema}\".pages a \
-                 WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
-                   AND a.spcnode=$3 AND a.dbnode=$4 AND a.relnode=$5 \
-                   AND a.forknum=$6 AND a.blknum=$7 \
-                   AND a.is_image=TRUE AND a.lsn <= $8 \
+                 WHERE a.branch_id=$1 \
+                   AND a.spcnode=$2 AND a.dbnode=$3 AND a.relnode=$4 \
+                   AND a.forknum=$5 AND a.blknum=$6 \
+                   AND a.is_image=TRUE AND a.lsn <= $7 \
                  ORDER BY a.lsn DESC LIMIT 1), 0) \
          ORDER BY p.lsn DESC, p.is_image DESC"
     )
 }
 
-/// One-fork range scan (`scan_range`). `$1`=tenant_id, `$2`=timeline_id;
-/// `$3..$9` = spcnode, dbnode, relnode, forknum, blknum_lo, blknum_hi,
+/// One-fork range scan (`scan_range`). `$1`=branch_id;
+/// `$2..$8` = spcnode, dbnode, relnode, forknum, blknum_lo, blknum_hi,
 /// target_lsn.
 fn build_scan_one_fork_sql(schema: &str) -> String {
     format!(
         "WITH blocks AS ( \
              SELECT DISTINCT blknum FROM \"{schema}\".pages \
-             WHERE tenant_id=$1 AND timeline_id=$2 \
-               AND spcnode=$3 AND dbnode=$4 AND relnode=$5 \
-               AND forknum=$6 \
-               AND blknum >= $7 AND blknum < $8 \
-               AND lsn <= $9 \
+             WHERE branch_id=$1 \
+               AND spcnode=$2 AND dbnode=$3 AND relnode=$4 \
+               AND forknum=$5 \
+               AND blknum >= $6 AND blknum < $7 \
+               AND lsn <= $8 \
          ) \
          SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                 p.lsn, p.is_image, p.will_init, p.payload \
@@ -526,16 +523,16 @@ fn build_scan_one_fork_sql(schema: &str) -> String {
              SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                     p.lsn, p.is_image, p.will_init, p.payload \
              FROM \"{schema}\".pages p \
-             WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
-               AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5 \
-               AND p.forknum=$6 AND p.blknum = b.blknum \
-               AND p.lsn <= $9 \
+             WHERE p.branch_id=$1 \
+               AND p.spcnode=$2 AND p.dbnode=$3 AND p.relnode=$4 \
+               AND p.forknum=$5 AND p.blknum = b.blknum \
+               AND p.lsn <= $8 \
                AND p.lsn >= COALESCE(( \
                      SELECT a.lsn FROM \"{schema}\".pages a \
-                     WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
-                       AND a.spcnode=$3 AND a.dbnode=$4 AND a.relnode=$5 \
-                       AND a.forknum=$6 AND a.blknum = b.blknum \
-                       AND a.is_image=TRUE AND a.lsn <= $9 \
+                     WHERE a.branch_id=$1 \
+                       AND a.spcnode=$2 AND a.dbnode=$3 AND a.relnode=$4 \
+                       AND a.forknum=$5 AND a.blknum = b.blknum \
+                       AND a.is_image=TRUE AND a.lsn <= $8 \
                      ORDER BY a.lsn DESC LIMIT 1), 0) \
              ORDER BY p.lsn DESC, p.is_image DESC \
          ) p \
@@ -543,18 +540,18 @@ fn build_scan_one_fork_sql(schema: &str) -> String {
     )
 }
 
-/// Cross-fork range scan (`scan_range`). `$1`=tenant_id, `$2`=timeline_id;
-/// `$3..$13` = (spc,db,rel,fork,blk)_lo, (spc,db,rel,fork,blk)_hi,
+/// Cross-fork range scan (`scan_range`). `$1`=branch_id;
+/// `$2..$12` = (spc,db,rel,fork,blk)_lo, (spc,db,rel,fork,blk)_hi,
 /// target_lsn.
 fn build_scan_cross_fork_sql(schema: &str) -> String {
     format!(
         "WITH blocks AS ( \
              SELECT DISTINCT spcnode, dbnode, relnode, forknum, blknum \
              FROM \"{schema}\".pages \
-             WHERE tenant_id=$1 AND timeline_id=$2 \
-               AND (spcnode, dbnode, relnode, forknum, blknum) >= ($3, $4, $5, $6, $7) \
-               AND (spcnode, dbnode, relnode, forknum, blknum) <  ($8, $9, $10, $11, $12) \
-               AND lsn <= $13 \
+             WHERE branch_id=$1 \
+               AND (spcnode, dbnode, relnode, forknum, blknum) >= ($2, $3, $4, $5, $6) \
+               AND (spcnode, dbnode, relnode, forknum, blknum) <  ($7, $8, $9, $10, $11) \
+               AND lsn <= $12 \
          ) \
          SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                 p.lsn, p.is_image, p.will_init, p.payload \
@@ -563,18 +560,18 @@ fn build_scan_cross_fork_sql(schema: &str) -> String {
              SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                     p.lsn, p.is_image, p.will_init, p.payload \
              FROM \"{schema}\".pages p \
-             WHERE p.tenant_id=$1 AND p.timeline_id=$2 \
+             WHERE p.branch_id=$1 \
                AND p.spcnode = b.spcnode AND p.dbnode = b.dbnode \
                AND p.relnode = b.relnode AND p.forknum = b.forknum \
                AND p.blknum = b.blknum \
-               AND p.lsn <= $13 \
+               AND p.lsn <= $12 \
                AND p.lsn >= COALESCE(( \
                      SELECT a.lsn FROM \"{schema}\".pages a \
-                     WHERE a.tenant_id=$1 AND a.timeline_id=$2 \
+                     WHERE a.branch_id=$1 \
                        AND a.spcnode = b.spcnode AND a.dbnode = b.dbnode \
                        AND a.relnode = b.relnode AND a.forknum = b.forknum \
                        AND a.blknum = b.blknum \
-                       AND a.is_image=TRUE AND a.lsn <= $13 \
+                       AND a.is_image=TRUE AND a.lsn <= $12 \
                      ORDER BY a.lsn DESC LIMIT 1), 0) \
              ORDER BY p.lsn DESC, p.is_image DESC \
          ) p \
@@ -582,11 +579,11 @@ fn build_scan_cross_fork_sql(schema: &str) -> String {
     )
 }
 
-/// Memoized full-chunk INSERT SQL for a `(tenant, timeline)`, with the
-/// ids baked in as literals. Writes only ever target the primary
+/// Memoized full-chunk INSERT SQL for a `branch_id`, with the
+/// id baked in as a literal. Writes only ever target the primary
 /// timeline, so baking is safe here (unlike the read path, where lineage
 /// spans ancestor timelines). Built once on first flush, keyed by
-/// `(tenant, timeline)` in `PageStore::baked`.
+/// `branch_id` in `PageStore::baked`.
 struct BakedSql {
     /// Full-chunk `pages` / `slru_pages` INSERTs (see `build_insert_sql`).
     pages_full: Arc<str>,
@@ -637,22 +634,21 @@ impl PageStore {
         })
     }
 
-    /// Memoized per-`(tenant, timeline)` SQL with the ids baked in as
-    /// literals. Built once per `(tenant, timeline)` on first use; later
+    /// Memoized per-`branch_id` SQL with the id baked in as a
+    /// literal. Built once per `branch_id` on first use; later
     /// calls reuse the cached `Arc`. In production the map holds a single
     /// entry (#16).
-    fn baked_sql(&self, tenant: TenantId, timeline: TimelineId) -> Arc<BakedSql> {
+    fn baked_sql(&self, branch_id: BranchId) -> Arc<BakedSql> {
         Arc::clone(
             self.baked
-                .entry((tenant, timeline))
+                .entry(branch_id)
                 .or_insert_with(|| {
                     Arc::new(BakedSql {
                         pages_full: Arc::from(build_insert_sql(
                             &self.schema,
                             "pages",
                             PAGES_COLUMNS,
-                            tenant,
-                            timeline,
+                            branch_id,
                             PAGES_PER_ROW,
                             ROWS_PER_INSERT,
                         )),
@@ -660,8 +656,7 @@ impl PageStore {
                             &self.schema,
                             "slru_pages",
                             SLRU_COLUMNS,
-                            tenant,
-                            timeline,
+                            branch_id,
                             SLRU_PER_ROW,
                             ROWS_PER_INSERT,
                         )),
@@ -673,16 +668,11 @@ impl PageStore {
 
     // ------------------- pages ---------------------------------------------
 
-    pub async fn put_pages(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-        rows: &[Arc<PageRow>],
-    ) -> Result<()> {
+    pub async fn put_pages(&self, branch_id: BranchId, rows: &[Arc<PageRow>]) -> Result<()> {
         // Chunks dispatch in parallel — tokio-postgres pipelines them
         // on the shared connection so YB can absorb them concurrently.
         let parallelism = pageserver_api::config::scale_count(4, self.scale_factor);
-        let pages_full = Arc::clone(&self.baked_sql(tenant, timeline).pages_full);
+        let pages_full = Arc::clone(&self.baked_sql(branch_id).pages_full);
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for chunk in rows.chunks(ROWS_PER_INSERT) {
@@ -722,8 +712,7 @@ impl PageStore {
                     &self.schema,
                     "pages",
                     PAGES_COLUMNS,
-                    tenant,
-                    timeline,
+                    branch_id,
                     PAGES_PER_ROW,
                     n,
                 ))
@@ -761,12 +750,10 @@ impl PageStore {
                     .execute(&sql, &params)
                     .await
                     .with_context(|| {
-                        format!(
-                            "put_pages tenant={tenant} timeline={timeline} chunk_rows={chunk_rows}"
-                        )
+                        format!("put_pages branch={branch_id} chunk_rows={chunk_rows}")
                     })?;
                 // Hard invariant: every row in `chunk` is a distinct
-                // INSERT target — same (tenant, timeline, key, lsn,
+                // INSERT target — same (branch, key, lsn,
                 // is_image) PK can only appear once per chunk because
                 // walreceiver's LSNs are monotonic per key and
                 // materialiser writes don't share an LSN with another
@@ -779,8 +766,7 @@ impl PageStore {
                 if (affected as usize) < chunk_rows {
                     tracing::error!(
                         target: "yb_ps_trace",
-                        tenant = %tenant,
-                        timeline = %timeline,
+                        branch = %branch_id,
                         chunk_rows,
                         affected,
                         first = ?chunk_first,
@@ -819,19 +805,17 @@ impl PageStore {
     /// slower because the will_init scan isn't index-seek-friendly.
     pub async fn read_chain(
         &self,
-        tenant: TenantId,
-        timeline: TimelineId,
+        branch_id: BranchId,
         key: &[u8],
         target_lsn: Lsn,
     ) -> Result<Vec<Arc<PageRow>>> {
         let (sp, db, rel, fork, blk) = key_columns(&Key::from_slice(key))?;
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let branch_s = branch_id.to_string();
         let target = target_lsn.0 as i64;
 
-        // tenant/timeline stay bound ($1/$2), NOT baked: lineage reads call
-        // this with ANCESTOR timeline_ids (a branch reads its ancestors'
-        // pages), so the timeline is not fixed on the read path even though
+        // branch_id stays bound ($1), NOT baked: lineage reads call
+        // this with ANCESTOR branch_ids (a branch reads its ancestors'
+        // pages), so the branch is not fixed on the read path even though
         // it is on the write path. The scalar-subquery anchor +
         // COALESCE(..., 0) lower bound push both ends of the lsn range into
         // the DocDB scan; `lsn >= 0` covers the no-image case. The Rust-side
@@ -841,10 +825,7 @@ impl PageStore {
         let sql = build_read_chain_sql(&self.schema);
         let rows = self
             .ysql_client
-            .query(
-                &sql,
-                &[&tenant_s, &timeline_s, &sp, &db, &rel, &fork, &blk, &target],
-            )
+            .query(&sql, &[&branch_s, &sp, &db, &rel, &fork, &blk, &target])
             .await
             .context("read_chain")?;
         let mut chain = Vec::with_capacity(rows.len());
@@ -889,8 +870,7 @@ impl PageStore {
     /// `Key::is_rel_block_key` before calling this method.
     pub async fn scan_range(
         &self,
-        tenant: TenantId,
-        timeline: TimelineId,
+        branch_id: BranchId,
         range: Range<Key>,
         target_lsn: Lsn,
     ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
@@ -915,9 +895,7 @@ impl PageStore {
         if one_fork && range.end.field6 == range.start.field6.wrapping_add(1) {
             let mut key_bytes = vec![0u8; KEY_SIZE];
             range.start.write_to_byte_slice(&mut key_bytes);
-            let chain = self
-                .read_chain(tenant, timeline, &key_bytes, target_lsn)
-                .await?;
+            let chain = self.read_chain(branch_id, &key_bytes, target_lsn).await?;
             let mut out = HashMap::with_capacity(1);
             if !chain.is_empty() {
                 out.insert(range.start, chain);
@@ -925,10 +903,9 @@ impl PageStore {
             return Ok(out);
         }
 
-        // tenant/timeline stay bound ($1/$2), NOT baked — same lineage
+        // branch_id stays bound ($1), NOT baked — same lineage
         // reason as `read_chain` (ancestor timelines hit this path).
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let branch_s = branch_id.to_string();
         let target = target_lsn.0 as i64;
 
         // Per-block image anchor via CTE: for each block in the range,
@@ -955,9 +932,7 @@ impl PageStore {
             self.ysql_client
                 .query(
                     &sql,
-                    &[
-                        &tenant_s, &timeline_s, &sp, &db, &rel, &fork, &blk_lo, &blk_hi, &target,
-                    ],
+                    &[&branch_s, &sp, &db, &rel, &fork, &blk_lo, &blk_hi, &target],
                 )
                 .await
                 .context("scan_range one-fork")?
@@ -985,8 +960,8 @@ impl PageStore {
                 .query(
                     &sql,
                     &[
-                        &tenant_s, &timeline_s, &sp_lo, &db_lo, &rel_lo, &fork_lo, &blk_lo, &sp_hi,
-                        &db_hi, &rel_hi, &fork_hi, &blk_hi, &target,
+                        &branch_s, &sp_lo, &db_lo, &rel_lo, &fork_lo, &blk_lo, &sp_hi, &db_hi,
+                        &rel_hi, &fork_hi, &blk_hi, &target,
                     ],
                 )
                 .await
@@ -1019,13 +994,13 @@ impl PageStore {
         Ok(by_key)
     }
 
-    pub async fn delete_all_pages(&self, tenant: TenantId, timeline: TimelineId) -> Result<()> {
+    pub async fn delete_all_pages(&self, branch_id: BranchId) -> Result<()> {
         let sql = format!(
-            "DELETE FROM \"{}\".pages WHERE tenant_id = $1 AND timeline_id = $2",
+            "DELETE FROM \"{}\".pages WHERE branch_id = $1",
             self.schema
         );
         self.ysql_client
-            .execute(&sql, &[&tenant.to_string(), &timeline.to_string()])
+            .execute(&sql, &[&branch_id.to_string()])
             .await
             .context("delete_all_pages")?;
         Ok(())
@@ -1033,14 +1008,9 @@ impl PageStore {
 
     // ------------------- slru_pages ---------------------------------------
 
-    pub async fn put_slru_pages(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-        rows: &[SlruPageRow],
-    ) -> Result<()> {
+    pub async fn put_slru_pages(&self, branch_id: BranchId, rows: &[SlruPageRow]) -> Result<()> {
         let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
-        let slru_full = Arc::clone(&self.baked_sql(tenant, timeline).slru_full);
+        let slru_full = Arc::clone(&self.baked_sql(branch_id).slru_full);
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for chunk in rows.chunks(ROWS_PER_INSERT) {
@@ -1074,8 +1044,7 @@ impl PageStore {
                     &self.schema,
                     "slru_pages",
                     SLRU_COLUMNS,
-                    tenant,
-                    timeline,
+                    branch_id,
                     SLRU_PER_ROW,
                     n,
                 ))
@@ -1098,9 +1067,7 @@ impl PageStore {
                     .execute(&sql, &params)
                     .await
                     .with_context(|| {
-                        format!(
-                            "put_slru_pages tenant={tenant} timeline={timeline} chunk_rows={chunk_rows}"
-                        )
+                        format!("put_slru_pages branch={branch_id} chunk_rows={chunk_rows}")
                     })?;
                 Ok(())
             }));
@@ -1117,15 +1084,13 @@ impl PageStore {
     /// `read_chain`, just keyed by `(kind, segno, blknum)`.
     pub async fn read_slru_chain(
         &self,
-        tenant: TenantId,
-        timeline: TimelineId,
+        branch_id: BranchId,
         kind: SlruKind,
         segno: u32,
         blknum: u32,
         target_lsn: Lsn,
     ) -> Result<Vec<SlruPageRow>> {
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let branch_s = branch_id.to_string();
         let kind_i = slru_kind_to_i16(kind);
         let segno_i = segno as i64;
         let blk_i = blknum as i64;
@@ -1137,24 +1102,21 @@ impl PageStore {
         let sql = format!(
             "SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
              FROM \"{schema}\".slru_pages p \
-             WHERE p.tenant_id=$1 AND p.timeline_id=$2 AND p.kind=$3 \
-               AND p.segno=$4 AND p.blknum=$5 \
-               AND p.lsn <= $6 \
+             WHERE p.branch_id=$1 AND p.kind=$2 \
+               AND p.segno=$3 AND p.blknum=$4 \
+               AND p.lsn <= $5 \
                AND p.lsn >= COALESCE(( \
                      SELECT a.lsn FROM \"{schema}\".slru_pages a \
-                     WHERE a.tenant_id=$1 AND a.timeline_id=$2 AND a.kind=$3 \
-                       AND a.segno=$4 AND a.blknum=$5 \
-                       AND a.is_image=TRUE AND a.lsn <= $6 \
+                     WHERE a.branch_id=$1 AND a.kind=$2 \
+                       AND a.segno=$3 AND a.blknum=$4 \
+                       AND a.is_image=TRUE AND a.lsn <= $5 \
                      ORDER BY a.lsn DESC LIMIT 1), 0) \
              ORDER BY p.lsn DESC, p.is_image DESC",
             schema = self.schema
         );
         let rows = self
             .ysql_client
-            .query(
-                &sql,
-                &[&tenant_s, &timeline_s, &kind_i, &segno_i, &blk_i, &target],
-            )
+            .query(&sql, &[&branch_s, &kind_i, &segno_i, &blk_i, &target])
             .await
             .context("read_slru_chain")?;
         let mut chain = Vec::with_capacity(rows.len());
@@ -1178,8 +1140,7 @@ impl PageStore {
     /// LSN-descending and truncated at the latest will_init row.
     pub async fn scan_slru_range(
         &self,
-        tenant: TenantId,
-        timeline: TimelineId,
+        branch_id: BranchId,
         kind: SlruKind,
         segno: u32,
         blknum_range: Range<u32>,
@@ -1189,14 +1150,7 @@ impl PageStore {
         // the multi-block JOIN.
         if blknum_range.end == blknum_range.start.saturating_add(1) {
             let chain = self
-                .read_slru_chain(
-                    tenant,
-                    timeline,
-                    kind,
-                    segno,
-                    blknum_range.start,
-                    target_lsn,
-                )
+                .read_slru_chain(branch_id, kind, segno, blknum_range.start, target_lsn)
                 .await?;
             let mut out = HashMap::with_capacity(1);
             if !chain.is_empty() {
@@ -1205,8 +1159,7 @@ impl PageStore {
             return Ok(out);
         }
 
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let branch_s = branch_id.to_string();
         let kind_i = slru_kind_to_i16(kind);
         let segno_i = segno as i64;
         let blk_lo = blknum_range.start as i64;
@@ -1219,21 +1172,21 @@ impl PageStore {
         let sql = format!(
             "WITH blocks AS ( \
                  SELECT DISTINCT blknum FROM \"{schema}\".slru_pages \
-                 WHERE tenant_id=$1 AND timeline_id=$2 AND kind=$3 AND segno=$4 \
-                   AND blknum >= $5 AND blknum < $6 \
-                   AND lsn <= $7 \
+                 WHERE branch_id=$1 AND kind=$2 AND segno=$3 \
+                   AND blknum >= $4 AND blknum < $5 \
+                   AND lsn <= $6 \
              ) \
              SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
              FROM blocks b \
              CROSS JOIN LATERAL ( \
                  SELECT p.kind, p.segno, p.blknum, p.lsn, p.is_image, p.will_init, p.payload \
                  FROM \"{schema}\".slru_pages p \
-                 WHERE p.tenant_id=$1 AND p.timeline_id=$2 AND p.kind=$3 AND p.segno=$4 \
-                   AND p.blknum = b.blknum AND p.lsn <= $7 \
+                 WHERE p.branch_id=$1 AND p.kind=$2 AND p.segno=$3 \
+                   AND p.blknum = b.blknum AND p.lsn <= $6 \
                    AND p.lsn >= COALESCE(( \
                          SELECT a.lsn FROM \"{schema}\".slru_pages a \
-                         WHERE a.tenant_id=$1 AND a.timeline_id=$2 AND a.kind=$3 AND a.segno=$4 \
-                           AND a.blknum = b.blknum AND a.is_image=TRUE AND a.lsn <= $7 \
+                         WHERE a.branch_id=$1 AND a.kind=$2 AND a.segno=$3 \
+                           AND a.blknum = b.blknum AND a.is_image=TRUE AND a.lsn <= $6 \
                          ORDER BY a.lsn DESC LIMIT 1), 0) \
                  ORDER BY p.lsn DESC, p.is_image DESC \
              ) p \
@@ -1244,15 +1197,7 @@ impl PageStore {
             .ysql_client
             .query(
                 &sql,
-                &[
-                    &tenant_s,
-                    &timeline_s,
-                    &kind_i,
-                    &segno_i,
-                    &blk_lo,
-                    &blk_hi,
-                    &target,
-                ],
+                &[&branch_s, &kind_i, &segno_i, &blk_lo, &blk_hi, &target],
             )
             .await
             .context("scan_slru_range")?;
@@ -1277,17 +1222,11 @@ impl PageStore {
 
     // ------------------- meta ---------------------------------------------
 
-    pub async fn put_meta(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-        rows: &[MetaRow],
-    ) -> Result<()> {
-        const COLS: usize = 5;
+    pub async fn put_meta(&self, branch_id: BranchId, rows: &[MetaRow]) -> Result<()> {
+        const COLS: usize = 4;
         const ROWS_PER_INSERT: usize = 2000;
         let parallelism = pageserver_api::config::scale_count(3, self.scale_factor);
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let branch_s = branch_id.to_string();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for chunk in rows.chunks(ROWS_PER_INSERT) {
@@ -1295,7 +1234,7 @@ impl PageStore {
                 continue;
             }
             let mut sql = format!(
-                "INSERT INTO \"{}\".meta (tenant_id, timeline_id, key, lsn, payload) VALUES ",
+                "INSERT INTO \"{}\".meta (branch_id, key, lsn, payload) VALUES ",
                 self.schema
             );
             let mut params: Vec<Box<dyn ToSql + Sync + Send + 'static>> =
@@ -1306,12 +1245,11 @@ impl PageStore {
                 }
                 let base = i * COLS + 1;
                 sql.push_str(&format!(
-                    "(${}, ${}, ${}, ${}, ${})",
+                    "(${}, ${}, ${}, ${})",
                     base,
                     base + 1,
                     base + 2,
                     base + 3,
-                    base + 4,
                 ));
                 if row.key.len() != KEY_SIZE {
                     bail!(
@@ -1319,8 +1257,7 @@ impl PageStore {
                         row.key.len()
                     );
                 }
-                params.push(Box::new(tenant_s.clone()));
-                params.push(Box::new(timeline_s.clone()));
+                params.push(Box::new(branch_s.clone()));
                 params.push(Box::new(row.key.to_vec()));
                 params.push(Box::new(row.lsn.0 as i64));
                 params.push(Box::new(row.payload.to_vec()));
@@ -1336,9 +1273,7 @@ impl PageStore {
                     .execute(&sql, &params_ref)
                     .await
                     .with_context(|| {
-                        format!(
-                            "put_meta tenant={tenant} timeline={timeline} chunk_rows={chunk_rows}"
-                        )
+                        format!("put_meta branch={branch_id} chunk_rows={chunk_rows}")
                     })?;
                 Ok(())
             }));
@@ -1355,8 +1290,7 @@ impl PageStore {
     /// Returns `None` if no row exists at or below the target.
     pub async fn read_meta(
         &self,
-        tenant: TenantId,
-        timeline: TimelineId,
+        branch_id: BranchId,
         key: &[u8],
         target_lsn: Lsn,
     ) -> Result<Option<MetaRow>> {
@@ -1365,7 +1299,7 @@ impl PageStore {
         }
         let sql = format!(
             "SELECT key, lsn, payload FROM \"{}\".meta \
-             WHERE tenant_id=$1 AND timeline_id=$2 AND key=$3 AND lsn <= $4 \
+             WHERE branch_id=$1 AND key=$2 AND lsn <= $3 \
              ORDER BY lsn DESC LIMIT 1",
             self.schema
         );
@@ -1373,12 +1307,7 @@ impl PageStore {
             .ysql_client
             .query_opt(
                 &sql,
-                &[
-                    &tenant.to_string(),
-                    &timeline.to_string(),
-                    &key,
-                    &(target_lsn.0 as i64),
-                ],
+                &[&branch_id.to_string(), &key, &(target_lsn.0 as i64)],
             )
             .await
             .context("read_meta")?;
@@ -1390,13 +1319,11 @@ impl PageStore {
     /// LATERAL LIMIT 1 anchor seek per distinct key.
     pub async fn scan_meta_range(
         &self,
-        tenant: TenantId,
-        timeline: TimelineId,
+        branch_id: BranchId,
         range: Range<Key>,
         target_lsn: Lsn,
     ) -> Result<HashMap<Bytes, MetaRow>> {
-        let tenant_s = tenant.to_string();
-        let timeline_s = timeline.to_string();
+        let branch_s = branch_id.to_string();
         let target = target_lsn.0 as i64;
 
         let mut start_bytes = vec![0u8; KEY_SIZE];
@@ -1406,9 +1333,7 @@ impl PageStore {
 
         // Single-key fast path: no GROUP BY / LATERAL — just LIMIT 1.
         if range.end == range.start.next() {
-            let row = self
-                .read_meta(tenant, timeline, &start_bytes, target_lsn)
-                .await?;
+            let row = self.read_meta(branch_id, &start_bytes, target_lsn).await?;
             let mut out = HashMap::with_capacity(1);
             if let Some(r) = row {
                 out.insert(r.key.clone(), r);
@@ -1419,25 +1344,22 @@ impl PageStore {
         let sql = format!(
             "WITH keys AS ( \
                  SELECT DISTINCT key FROM \"{schema}\".meta \
-                 WHERE tenant_id=$1 AND timeline_id=$2 \
-                   AND key >= $3 AND key < $4 AND lsn <= $5 \
+                 WHERE branch_id=$1 \
+                   AND key >= $2 AND key < $3 AND lsn <= $4 \
              ) \
              SELECT k.key, latest.lsn, latest.payload \
              FROM keys k \
              CROSS JOIN LATERAL ( \
                  SELECT lsn, payload FROM \"{schema}\".meta \
-                 WHERE tenant_id=$1 AND timeline_id=$2 \
-                   AND key = k.key AND lsn <= $5 \
+                 WHERE branch_id=$1 \
+                   AND key = k.key AND lsn <= $4 \
                  ORDER BY lsn DESC LIMIT 1 \
              ) latest",
             schema = self.schema
         );
         let rows = self
             .ysql_client
-            .query(
-                &sql,
-                &[&tenant_s, &timeline_s, &start_bytes, &end_bytes, &target],
-            )
+            .query(&sql, &[&branch_s, &start_bytes, &end_bytes, &target])
             .await
             .context("scan_meta_range")?;
         let mut out = HashMap::with_capacity(rows.len());
@@ -1448,35 +1370,31 @@ impl PageStore {
         Ok(out)
     }
 
-    pub async fn delete_all_meta(&self, tenant: TenantId, timeline: TimelineId) -> Result<()> {
+    pub async fn delete_all_meta(&self, branch_id: BranchId) -> Result<()> {
         let sql = format!(
-            "DELETE FROM \"{}\".meta WHERE tenant_id = $1 AND timeline_id = $2",
+            "DELETE FROM \"{}\".meta WHERE branch_id = $1",
             self.schema
         );
         self.ysql_client
-            .execute(&sql, &[&tenant.to_string(), &timeline.to_string()])
+            .execute(&sql, &[&branch_id.to_string()])
             .await
             .context("delete_all_meta")?;
         Ok(())
     }
 
-    pub async fn delete_all_slru_pages(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-    ) -> Result<()> {
+    pub async fn delete_all_slru_pages(&self, branch_id: BranchId) -> Result<()> {
         let sql = format!(
-            "DELETE FROM \"{}\".slru_pages WHERE tenant_id = $1 AND timeline_id = $2",
+            "DELETE FROM \"{}\".slru_pages WHERE branch_id = $1",
             self.schema
         );
         self.ysql_client
-            .execute(&sql, &[&tenant.to_string(), &timeline.to_string()])
+            .execute(&sql, &[&branch_id.to_string()])
             .await
             .context("delete_all_slru_pages")?;
         Ok(())
     }
 
-    /// Drop every row for `(tenant, timeline)` across all four
+    /// Drop every row for `branch_id` across all four
     /// pageserver tables (`pages`, `slru_pages`, `meta`,
     /// `timeline_state`). Used by the timeline-delete flow to
     /// reclaim space and erase persisted state in one go.
@@ -1485,16 +1403,12 @@ impl PageStore {
     /// independently. If any DELETE fails the whole call returns
     /// `Err` and the caller may retry — partial deletion is
     /// idempotent so a re-run safely catches up.
-    pub async fn delete_all_for_timeline(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-    ) -> Result<()> {
+    pub async fn delete_all_for_timeline(&self, branch_id: BranchId) -> Result<()> {
         let (a, b, c, d) = tokio::join!(
-            self.delete_all_pages(tenant, timeline),
-            self.delete_all_slru_pages(tenant, timeline),
-            self.delete_all_meta(tenant, timeline),
-            self.delete_timeline(tenant, timeline),
+            self.delete_all_pages(branch_id),
+            self.delete_all_slru_pages(branch_id),
+            self.delete_all_meta(branch_id),
+            self.delete_timeline(branch_id),
         );
         a?;
         b?;
@@ -1506,17 +1420,17 @@ impl PageStore {
     // ------------------- lineage-aware reads -------------------------------
     //
     // A branch's pre-branch-point rows live under the ANCESTOR's
-    // timeline_id. Each method below walks the lineage segments
+    // branch_id. Each method below walks the lineage segments
     // nearest-first, capping the per-segment read LSN at
     // `min(target_lsn, seg.cap_lsn)`, and stops as soon as the chain
     // is anchored (page/SLRU) or the key is found (meta).
     //
     // Iterative per-segment queries (not one UNION ALL) on purpose:
-    // `timeline_id` is in the hash partition key, so segments live on
+    // `branch_id` is in the hash partition key, so segments live on
     // different tablets. The iterative walk touches ONE tablet in the
     // steady state — always for unbranched timelines, and for branch
     // keys once the image materialiser has copied an anchor up into
-    // the descendant's own timeline_id. Only cold branch keys pay the
+    // the descendant's own branch_id. Only cold branch keys pay the
     // extra round trip, and each such read self-heals via the
     // read-side materialise trigger.
 
@@ -1525,7 +1439,6 @@ impl PageStore {
     /// the reading timeline itself.
     pub async fn read_chain_lineage(
         &self,
-        tenant: TenantId,
         lineage: &[LineageSegment],
         key: &[u8],
         target_lsn: Lsn,
@@ -1547,7 +1460,7 @@ impl PageStore {
                 break;
             }
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
-            let rows = self.read_chain(tenant, seg.timeline_id, key, eff).await?;
+            let rows = self.read_chain(seg.branch_id, key, eff).await?;
             chain.extend(rows);
         }
         if lineage.len() > 1 {
@@ -1572,7 +1485,6 @@ impl PageStore {
     /// sorted/deduped/trimmed at the anchor.
     pub async fn scan_range_lineage(
         &self,
-        tenant: TenantId,
         lineage: &[LineageSegment],
         range: Range<Key>,
         target_lsn: Lsn,
@@ -1582,8 +1494,7 @@ impl PageStore {
         };
         let mut out = self
             .scan_range(
-                tenant,
-                first.timeline_id,
+                first.branch_id,
                 range.clone(),
                 std::cmp::min(target_lsn, first.cap_lsn),
             )
@@ -1593,9 +1504,7 @@ impl PageStore {
         }
         for seg in rest {
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
-            let anc = self
-                .scan_range(tenant, seg.timeline_id, range.clone(), eff)
-                .await?;
+            let anc = self.scan_range(seg.branch_id, range.clone(), eff).await?;
             for (key, rows) in anc {
                 out.entry(key).or_default().extend(rows);
             }
@@ -1612,10 +1521,9 @@ impl PageStore {
 
     /// Lineage-aware [`Self::read_slru_chain`]. Required for branches:
     /// branching copies nothing, so a fresh branch's pg_xact / SLRU
-    /// state lives entirely under the ancestor's timeline_id.
+    /// state lives entirely under the ancestor's branch_id.
     pub async fn read_slru_chain_lineage(
         &self,
-        tenant: TenantId,
         lineage: &[LineageSegment],
         kind: SlruKind,
         segno: u32,
@@ -1634,7 +1542,7 @@ impl PageStore {
             }
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
             let rows = self
-                .read_slru_chain(tenant, seg.timeline_id, kind, segno, blknum, eff)
+                .read_slru_chain(seg.branch_id, kind, segno, blknum, eff)
                 .await?;
             chain.extend(rows);
         }
@@ -1651,7 +1559,6 @@ impl PageStore {
     /// Lineage-aware [`Self::scan_slru_range`].
     pub async fn scan_slru_range_lineage(
         &self,
-        tenant: TenantId,
         lineage: &[LineageSegment],
         kind: SlruKind,
         segno: u32,
@@ -1663,8 +1570,7 @@ impl PageStore {
         };
         let mut out = self
             .scan_slru_range(
-                tenant,
-                first.timeline_id,
+                first.branch_id,
                 kind,
                 segno,
                 blknum_range.clone(),
@@ -1677,14 +1583,7 @@ impl PageStore {
         for seg in rest {
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
             let anc = self
-                .scan_slru_range(
-                    tenant,
-                    seg.timeline_id,
-                    kind,
-                    segno,
-                    blknum_range.clone(),
-                    eff,
-                )
+                .scan_slru_range(seg.branch_id, kind, segno, blknum_range.clone(), eff)
                 .await?;
             for (blk, rows) in anc {
                 out.entry(blk).or_default().extend(rows);
@@ -1705,7 +1604,6 @@ impl PageStore {
     /// relsize sentinel, …) shadows the ancestor's.
     pub async fn scan_meta_range_lineage(
         &self,
-        tenant: TenantId,
         lineage: &[LineageSegment],
         range: Range<Key>,
         target_lsn: Lsn,
@@ -1714,7 +1612,7 @@ impl PageStore {
         for seg in lineage {
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
             let rows = self
-                .scan_meta_range(tenant, seg.timeline_id, range.clone(), eff)
+                .scan_meta_range(seg.branch_id, range.clone(), eff)
                 .await?;
             for (k, v) in rows {
                 out.entry(k).or_insert(v);
@@ -1727,7 +1625,7 @@ impl PageStore {
 
     /// One-shot INSERT used at timeline creation by Phase 5b's
     /// `Timeline::write_timeline_row_to_yb`. Tries to create the row;
-    /// if a row at the same `(tenant, timeline)` already exists this
+    /// if a row at the same `branch_id` already exists this
     /// is a no-op (the existing state is the source of truth — a
     /// just-created timeline raced with an attach-time replay or
     /// similar; either way we shouldn't clobber the live row).
@@ -1742,13 +1640,13 @@ impl PageStore {
     pub async fn insert_timeline_at_creation(&self, row: &TimelineRow) -> Result<()> {
         let sql = format!(
             "INSERT INTO \"{}\".timeline_state \
-             (tenant_id, timeline_id, consistent_lsn, \
-              applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
+             (branch_id, consistent_lsn, \
+              applied_gc_cutoff_lsn, ancestor_branch_id, ancestor_lsn, \
               current_generation, pg_version, initdb_lsn, prev_record_lsn, \
               archived_at, deleted_at, rel_size_migration, \
               rel_size_migrated_at, lineage) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
-             ON CONFLICT (tenant_id, timeline_id) DO NOTHING",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
+             ON CONFLICT (branch_id) DO NOTHING",
             self.schema
         );
         let (rel_size_migration_text, lineage_json) = serialize_row_aux(row)?;
@@ -1756,11 +1654,10 @@ impl PageStore {
             .execute(
                 &sql,
                 &[
-                    &row.tenant_id.to_string(),
-                    &row.timeline_id.to_string(),
+                    &row.branch_id.to_string(),
                     &(row.consistent_lsn.0 as i64),
                     &(row.applied_gc_cutoff_lsn.0 as i64),
-                    &row.ancestor_timeline_id.map(|id| id.to_string()),
+                    &row.ancestor_branch_id.map(|id| id.to_string()),
                     &row.ancestor_lsn.map(|l| l.0 as i64),
                     &row.current_generation,
                     &(row.pg_version as i32),
@@ -1792,7 +1689,7 @@ impl PageStore {
     /// `task_mgr::shutdown_for_stale_generation` path on the next
     /// flush takes care of shutting the stale process down.
     ///
-    /// Does not touch `tenant_id`, `timeline_id`, `current_generation`
+    /// Does not touch `branch_id`, `current_generation`
     /// (owned by `cas_bump_generation_on_attach`), or `pg_version`
     /// (immutable per timeline). Other fields are full-overwrite from
     /// the caller's row.
@@ -1804,20 +1701,19 @@ impl PageStore {
         let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let sql = format!(
             "UPDATE \"{}\".timeline_state SET \
-                consistent_lsn   = $3, \
-                applied_gc_cutoff_lsn = $4, \
-                ancestor_timeline_id  = $5, \
-                ancestor_lsn          = $6, \
-                initdb_lsn            = $7, \
-                prev_record_lsn       = $8, \
-                archived_at           = $9, \
-                deleted_at            = $10, \
-                rel_size_migration    = $11, \
-                rel_size_migrated_at  = $12, \
-                lineage               = $13 \
-             WHERE tenant_id          = $1 \
-               AND timeline_id        = $2 \
-               AND current_generation = $14",
+                consistent_lsn   = $2, \
+                applied_gc_cutoff_lsn = $3, \
+                ancestor_branch_id    = $4, \
+                ancestor_lsn          = $5, \
+                initdb_lsn            = $6, \
+                prev_record_lsn       = $7, \
+                archived_at           = $8, \
+                deleted_at            = $9, \
+                rel_size_migration    = $10, \
+                rel_size_migrated_at  = $11, \
+                lineage               = $12 \
+             WHERE branch_id          = $1 \
+               AND current_generation = $13",
             self.schema
         );
         let (rel_size_migration_text, lineage_json) = serialize_row_aux(row)?;
@@ -1826,11 +1722,10 @@ impl PageStore {
             .execute(
                 &sql,
                 &[
-                    &row.tenant_id.to_string(),
-                    &row.timeline_id.to_string(),
+                    &row.branch_id.to_string(),
                     &(row.consistent_lsn.0 as i64),
                     &(row.applied_gc_cutoff_lsn.0 as i64),
-                    &row.ancestor_timeline_id.map(|id| id.to_string()),
+                    &row.ancestor_branch_id.map(|id| id.to_string()),
                     &row.ancestor_lsn.map(|l| l.0 as i64),
                     &row.initdb_lsn.map(|l| l.0 as i64),
                     &row.prev_record_lsn.map(|l| l.0 as i64),
@@ -1851,40 +1746,22 @@ impl PageStore {
         }
     }
 
-    pub async fn get_timeline(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-    ) -> Result<Option<TimelineRow>> {
+    pub async fn get_timeline(&self, branch_id: BranchId) -> Result<Option<TimelineRow>> {
         let sql = format!(
             "SELECT {} FROM \"{}\".timeline_state \
-             WHERE tenant_id = $1 AND timeline_id = $2",
+             WHERE branch_id = $1",
             TIMELINE_ROW_COLUMNS, self.schema
         );
         let row = self
             .ysql_client
-            .query_opt(&sql, &[&tenant.to_string(), &timeline.to_string()])
+            .query_opt(&sql, &[&branch_id.to_string()])
             .await
             .context("get_timeline")?;
         row.map(row_to_timeline).transpose()
     }
 
-    pub async fn list_timelines(&self, tenant: TenantId) -> Result<Vec<TimelineRow>> {
-        let sql = format!(
-            "SELECT {} FROM \"{}\".timeline_state \
-             WHERE tenant_id = $1",
-            TIMELINE_ROW_COLUMNS, self.schema
-        );
-        let rows = self
-            .ysql_client
-            .query(&sql, &[&tenant.to_string()])
-            .await
-            .context("list_timelines")?;
-        rows.into_iter().map(row_to_timeline).collect()
-    }
-
-    /// Build the ordered lineage for `timeline` by walking
-    /// `ancestor_timeline_id` / `ancestor_lsn` links in
+    /// Build the ordered lineage for `branch_id` by walking
+    /// `ancestor_branch_id` / `ancestor_lsn` links in
     /// `timeline_state`. Segment 0 is the timeline itself at
     /// `Lsn::MAX`; each ancestor's cap is the running `min` of the
     /// `ancestor_lsn`s on the path (non-increasing by the branch
@@ -1893,23 +1770,19 @@ impl PageStore {
     /// Called once at startup; ancestry never changes for a live
     /// process. The `lineage` JSONB column is NOT consulted — it
     /// carries upstream detach-ancestor state, not the ancestry chain.
-    pub async fn load_lineage(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-    ) -> Result<Vec<LineageSegment>> {
+    pub async fn load_lineage(&self, branch_id: BranchId) -> Result<Vec<LineageSegment>> {
         const MAX_DEPTH: usize = 64;
-        let mut segments = LineageSegment::single(timeline);
-        let mut seen: std::collections::HashSet<TimelineId> = std::iter::once(timeline).collect();
-        let mut row = self.get_timeline(tenant, timeline).await?.with_context(|| {
-            format!("load_lineage: timeline {timeline} has no timeline_state row")
+        let mut segments = LineageSegment::single(branch_id);
+        let mut seen: std::collections::HashSet<BranchId> = std::iter::once(branch_id).collect();
+        let mut row = self.get_timeline(branch_id).await?.with_context(|| {
+            format!("load_lineage: timeline {branch_id} has no timeline_state row")
         })?;
         let mut cap = Lsn::MAX;
-        while let Some(anc_id) = row.ancestor_timeline_id {
+        while let Some(anc_id) = row.ancestor_branch_id {
             let anc_lsn = row.ancestor_lsn.with_context(|| {
                 format!(
-                    "load_lineage: timeline {} has ancestor_timeline_id but no ancestor_lsn",
-                    row.timeline_id
+                    "load_lineage: timeline {} has ancestor_branch_id but no ancestor_lsn",
+                    row.branch_id
                 )
             })?;
             cap = std::cmp::min(cap, anc_lsn);
@@ -1920,11 +1793,11 @@ impl PageStore {
                 bail!("load_lineage: ancestry deeper than {MAX_DEPTH} segments");
             }
             segments.push(LineageSegment {
-                timeline_id: anc_id,
+                branch_id: anc_id,
                 cap_lsn: cap,
             });
             row = self
-                .get_timeline(tenant, anc_id)
+                .get_timeline(anc_id)
                 .await?
                 .with_context(|| format!("load_lineage: ancestor {anc_id} row missing"))?;
         }
@@ -1950,13 +1823,12 @@ impl PageStore {
     /// via the `ON CONFLICT DO NOTHING` insert.
     pub async fn create_branch_row(
         &self,
-        tenant: TenantId,
-        new_timeline: TimelineId,
-        ancestor: TimelineId,
+        new_branch: BranchId,
+        ancestor: BranchId,
         ancestor_lsn: Lsn,
         generation: i32,
     ) -> Result<TimelineRow> {
-        let anc = self.get_timeline(tenant, ancestor).await?.with_context(|| {
+        let anc = self.get_timeline(ancestor).await?.with_context(|| {
             format!("create_branch_row: ancestor {ancestor} has no timeline_state row")
         })?;
         if anc.deleted_at.is_some() {
@@ -1997,11 +1869,10 @@ impl PageStore {
             None
         };
         let row = TimelineRow {
-            tenant_id: tenant,
-            timeline_id: new_timeline,
+            branch_id: new_branch,
             consistent_lsn: ancestor_lsn,
             applied_gc_cutoff_lsn: anc.applied_gc_cutoff_lsn,
-            ancestor_timeline_id: Some(ancestor),
+            ancestor_branch_id: Some(ancestor),
             ancestor_lsn: Some(ancestor_lsn),
             current_generation: generation,
             pg_version: anc.pg_version,
@@ -2019,13 +1890,13 @@ impl PageStore {
         Ok(row)
     }
 
-    pub async fn delete_timeline(&self, tenant: TenantId, timeline: TimelineId) -> Result<()> {
+    pub async fn delete_timeline(&self, branch_id: BranchId) -> Result<()> {
         let sql = format!(
-            "DELETE FROM \"{}\".timeline_state WHERE tenant_id = $1 AND timeline_id = $2",
+            "DELETE FROM \"{}\".timeline_state WHERE branch_id = $1",
             self.schema
         );
         self.ysql_client
-            .execute(&sql, &[&tenant.to_string(), &timeline.to_string()])
+            .execute(&sql, &[&branch_id.to_string()])
             .await
             .context("delete_timeline")?;
         Ok(())
@@ -2056,7 +1927,7 @@ impl PageStore {
     /// briefly write redundant rows in the gap between attach and
     /// first flush).
     ///
-    /// `WHERE current_generation < $3` is the CAS predicate. If 0
+    /// `WHERE current_generation < $2` is the CAS predicate. If 0
     /// rows updated, probe the stored value to disambiguate:
     /// - stored `== ours` → idempotent re-attach, return
     ///   [`CasBumpOutcome::AlreadyAtOurGen`].
@@ -2066,24 +1937,20 @@ impl PageStore {
     ///   timeline creation; arriving here without it is a wiring bug).
     pub async fn cas_bump_generation_on_attach(
         &self,
-        tenant: TenantId,
-        timeline: TimelineId,
+        branch_id: BranchId,
         generation: utils::generation::Generation,
     ) -> Result<CasBumpOutcome> {
         let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let sql = format!(
             "UPDATE \"{}\".timeline_state \
-             SET current_generation = $3 \
-             WHERE tenant_id = $1 AND timeline_id = $2 \
-               AND current_generation < $3",
+             SET current_generation = $2 \
+             WHERE branch_id = $1 \
+               AND current_generation < $2",
             self.schema
         );
         let n = self
             .ysql_client
-            .execute(
-                &sql,
-                &[&tenant.to_string(), &timeline.to_string(), &gen_i32],
-            )
+            .execute(&sql, &[&branch_id.to_string(), &gen_i32])
             .await
             .context("cas_bump_generation_on_attach")?;
         if n == 1 {
@@ -2092,17 +1959,17 @@ impl PageStore {
         // n == 0 — probe.
         let probe_sql = format!(
             "SELECT current_generation FROM \"{}\".timeline_state \
-             WHERE tenant_id = $1 AND timeline_id = $2",
+             WHERE branch_id = $1",
             self.schema
         );
         let row = self
             .ysql_client
-            .query_opt(&probe_sql, &[&tenant.to_string(), &timeline.to_string()])
+            .query_opt(&probe_sql, &[&branch_id.to_string()])
             .await
             .context("cas_bump_generation_on_attach probe")?;
         match row {
             None => anyhow::bail!(
-                "no timeline row for {tenant}/{timeline} — \
+                "no timeline row for {branch_id} — \
                  cas_bump_generation_on_attach ran before timeline_create wrote the row"
             ),
             Some(r) => {
@@ -2140,15 +2007,14 @@ impl PageStore {
     /// write redundant rows).
     pub async fn advance_consistent_lsn(
         &self,
-        tenant: TenantId,
-        timeline: TimelineId,
+        branch_id: BranchId,
         generation: utils::generation::Generation,
         new_dc_lsn: Lsn,
         new_prev_record_lsn: Option<Lsn>,
     ) -> Result<AdvanceConsistentLsnOutcome> {
         // Persist `prev_record_lsn` alongside `consistent_lsn`
         // so a restart can hand the safekeeper the right `xl_prev`
-        // for the record at `consistent_lsn`. `COALESCE($5,
+        // for the record at `consistent_lsn`. `COALESCE($4,
         // prev_record_lsn)` keeps the existing column value when
         // the caller didn't resolve a fresh pairing (race —
         // pages flushed before their record's `finish_write` ran;
@@ -2157,10 +2023,10 @@ impl PageStore {
         // NULL on every throttled flush window.
         let sql = format!(
             "UPDATE \"{}\".timeline_state \
-             SET consistent_lsn = $3, \
-                 prev_record_lsn      = COALESCE($5, prev_record_lsn) \
-             WHERE tenant_id = $1 AND timeline_id = $2 \
-               AND current_generation = $4",
+             SET consistent_lsn = $2, \
+                 prev_record_lsn      = COALESCE($4, prev_record_lsn) \
+             WHERE branch_id = $1 \
+               AND current_generation = $3",
             self.schema
         );
         let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
@@ -2170,8 +2036,7 @@ impl PageStore {
             .execute(
                 &sql,
                 &[
-                    &tenant.to_string(),
-                    &timeline.to_string(),
+                    &branch_id.to_string(),
                     &(new_dc_lsn.0 as i64),
                     &gen_i32,
                     &prev_i64,
@@ -2185,17 +2050,17 @@ impl PageStore {
             // SELECT to disambiguate. Only runs on the unhappy path.
             let probe_sql = format!(
                 "SELECT current_generation FROM \"{}\".timeline_state \
-                 WHERE tenant_id = $1 AND timeline_id = $2",
+                 WHERE branch_id = $1",
                 self.schema
             );
             let row = self
                 .ysql_client
-                .query_opt(&probe_sql, &[&tenant.to_string(), &timeline.to_string()])
+                .query_opt(&probe_sql, &[&branch_id.to_string()])
                 .await
                 .context("advance_consistent_lsn probe")?;
             match row {
                 None => anyhow::bail!(
-                    "no timeline row for {tenant}/{timeline} — \
+                    "no timeline row for {branch_id} — \
                      advance_consistent_lsn called before timeline_create wrote the row"
                 ),
                 Some(r) => {
@@ -2210,36 +2075,32 @@ impl PageStore {
         }
     }
 
-    pub async fn bump_generation(&self, tenant: TenantId, timeline: TimelineId) -> Result<i32> {
+    pub async fn bump_generation(&self, branch_id: BranchId) -> Result<i32> {
         let sql = format!(
             "UPDATE \"{}\".timeline_state \
              SET current_generation = current_generation + 1 \
-             WHERE tenant_id = $1 AND timeline_id = $2 \
+             WHERE branch_id = $1 \
              RETURNING current_generation",
             self.schema
         );
         let row = self
             .ysql_client
-            .query_opt(&sql, &[&tenant.to_string(), &timeline.to_string()])
+            .query_opt(&sql, &[&branch_id.to_string()])
             .await
             .context("bump_generation")?
-            .with_context(|| format!("no timeline row for {tenant}/{timeline}"))?;
+            .with_context(|| format!("no timeline row for {branch_id}"))?;
         Ok(row.get::<_, i32>(0))
     }
 
-    pub async fn read_generation(
-        &self,
-        tenant: TenantId,
-        timeline: TimelineId,
-    ) -> Result<Option<i32>> {
+    pub async fn read_generation(&self, branch_id: BranchId) -> Result<Option<i32>> {
         let sql = format!(
             "SELECT current_generation FROM \"{}\".timeline_state \
-             WHERE tenant_id = $1 AND timeline_id = $2",
+             WHERE branch_id = $1",
             self.schema
         );
         let row = self
             .ysql_client
-            .query_opt(&sql, &[&tenant.to_string(), &timeline.to_string()])
+            .query_opt(&sql, &[&branch_id.to_string()])
             .await
             .context("read_generation")?;
         Ok(row.map(|r| r.get::<_, i32>(0)))
@@ -2479,8 +2340,8 @@ fn row_to_slru_page(r: tokio_postgres::Row) -> Result<SlruPageRow> {
 /// Column list shared by every `SELECT … FROM timeline_state` so the
 /// query layout stays in sync with `row_to_timeline`'s positional
 /// `try_get` indices.
-const TIMELINE_ROW_COLUMNS: &str = "tenant_id, timeline_id, consistent_lsn, \
-     applied_gc_cutoff_lsn, ancestor_timeline_id, ancestor_lsn, \
+const TIMELINE_ROW_COLUMNS: &str = "branch_id, consistent_lsn, \
+     applied_gc_cutoff_lsn, ancestor_branch_id, ancestor_lsn, \
      current_generation, pg_version, initdb_lsn, prev_record_lsn, \
      archived_at, deleted_at, rel_size_migration, \
      rel_size_migrated_at, lineage";
@@ -2504,21 +2365,20 @@ fn serialize_row_aux(row: &TimelineRow) -> Result<(Option<String>, serde_json::V
 }
 
 fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
-    let tenant_s: String = r.try_get(0)?;
-    let timeline_s: String = r.try_get(1)?;
-    let consistent_lsn: i64 = r.try_get(2)?;
-    let applied_gc_cutoff_lsn: i64 = r.try_get(3)?;
-    let ancestor_tl: Option<String> = r.try_get(4)?;
-    let ancestor_lsn: Option<i64> = r.try_get(5)?;
-    let current_generation: i32 = r.try_get(6)?;
-    let pg_version: i32 = r.try_get(7)?;
-    let initdb_lsn: Option<i64> = r.try_get(8)?;
-    let prev_record_lsn: Option<i64> = r.try_get(9)?;
-    let archived_at: Option<chrono::NaiveDateTime> = r.try_get(10)?;
-    let deleted_at: Option<chrono::NaiveDateTime> = r.try_get(11)?;
-    let rel_size_migration_text: Option<String> = r.try_get(12)?;
-    let rel_size_migrated_at: Option<i64> = r.try_get(13)?;
-    let lineage_json: Option<serde_json::Value> = r.try_get(14)?;
+    let branch_s: String = r.try_get(0)?;
+    let consistent_lsn: i64 = r.try_get(1)?;
+    let applied_gc_cutoff_lsn: i64 = r.try_get(2)?;
+    let ancestor_tl: Option<String> = r.try_get(3)?;
+    let ancestor_lsn: Option<i64> = r.try_get(4)?;
+    let current_generation: i32 = r.try_get(5)?;
+    let pg_version: i32 = r.try_get(6)?;
+    let initdb_lsn: Option<i64> = r.try_get(7)?;
+    let prev_record_lsn: Option<i64> = r.try_get(8)?;
+    let archived_at: Option<chrono::NaiveDateTime> = r.try_get(9)?;
+    let deleted_at: Option<chrono::NaiveDateTime> = r.try_get(10)?;
+    let rel_size_migration_text: Option<String> = r.try_get(11)?;
+    let rel_size_migrated_at: Option<i64> = r.try_get(12)?;
+    let lineage_json: Option<serde_json::Value> = r.try_get(13)?;
 
     let rel_size_migration = rel_size_migration_text
         .as_deref()
@@ -2532,14 +2392,13 @@ fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
         .unwrap_or_default();
 
     Ok(TimelineRow {
-        tenant_id: tenant_s.parse().context("parsing tenant_id")?,
-        timeline_id: timeline_s.parse().context("parsing timeline_id")?,
+        branch_id: branch_s.parse().context("parsing branch_id")?,
         consistent_lsn: Lsn(consistent_lsn as u64),
         applied_gc_cutoff_lsn: Lsn(applied_gc_cutoff_lsn as u64),
-        ancestor_timeline_id: ancestor_tl
-            .map(|s| s.parse::<TimelineId>())
+        ancestor_branch_id: ancestor_tl
+            .map(|s| s.parse::<BranchId>())
             .transpose()
-            .context("parsing ancestor_timeline_id")?,
+            .context("parsing ancestor_branch_id")?,
         ancestor_lsn: ancestor_lsn.map(|l| Lsn(l as u64)),
         current_generation,
         pg_version: pg_version as u32,
@@ -2574,8 +2433,8 @@ mod tests {
     /// All tests run against the production `pageserver.*` schema
     /// (created by storage_controller's diesel migration on a
     /// real `yb_light_local`-style cluster). Per-test isolation comes
-    /// from `rand_tenant()` / `rand_timeline()` — every test writes
-    /// to a distinct `(tenant_id, timeline_id)` namespace, so
+    /// from `rand_branch()` — every test writes
+    /// to a distinct `branch_id` namespace, so
     /// concurrent tests don't observe each other's data and rows
     /// from prior runs are harmless.
     ///
@@ -2606,57 +2465,37 @@ mod tests {
     async fn drop_schema(_store: &PageStore, _schema: &str) {
         // No-op: the schema is the production one, owned by the
         // diesel migration. Per-test isolation comes from random
-        // tenant/timeline IDs.
+        // branch IDs.
     }
 
-    fn rand_tenant() -> TenantId {
-        TenantId::generate()
+    fn rand_branch() -> BranchId {
+        BranchId::generate()
     }
 
-    fn rand_timeline() -> TimelineId {
-        TimelineId::generate()
-    }
-
-    /// `build_insert_sql` bakes the (tenant, timeline) literals into
+    /// `build_insert_sql` bakes the branch_id literal into
     /// every row tuple and numbers the per-row bind params `$1..` with
     /// no gaps — no live YB needed. Locks the placeholder math that the
     /// column order in `put_pages` / `put_slru_pages` depends on.
     #[test]
     fn build_insert_sql_bakes_ids_and_numbers_params() {
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
-        let ids = format!("'{tenant}','{timeline}'");
+        let branch = rand_branch();
+        let id = format!("'{branch}'");
 
-        // pages: 9 per-row params; 2 rows → $1..$18, ids baked per row.
-        let pages = build_insert_sql(
-            "pageserver",
-            "pages",
-            PAGES_COLUMNS,
-            tenant,
-            timeline,
-            PAGES_PER_ROW,
-            2,
-        );
+        // pages: 9 per-row params; 2 rows → $1..$18, id baked per row.
+        let pages = build_insert_sql("pageserver", "pages", PAGES_COLUMNS, branch, PAGES_PER_ROW, 2);
         let expected_pages = format!(
             "INSERT INTO \"pageserver\".pages ({PAGES_COLUMNS}) VALUES \
-             ({ids},$1,$2,$3,$4,$5,$6,$7,$8,$9),\
-             ({ids},$10,$11,$12,$13,$14,$15,$16,$17,$18)"
+             ({id},$1,$2,$3,$4,$5,$6,$7,$8,$9),\
+             ({id},$10,$11,$12,$13,$14,$15,$16,$17,$18)"
         );
         assert_eq!(pages, expected_pages);
 
         // slru: 7 per-row params; 1 row → $1..$7.
-        let slru = build_insert_sql(
-            "pageserver",
-            "slru_pages",
-            SLRU_COLUMNS,
-            tenant,
-            timeline,
-            SLRU_PER_ROW,
-            1,
-        );
+        let slru =
+            build_insert_sql("pageserver", "slru_pages", SLRU_COLUMNS, branch, SLRU_PER_ROW, 1);
         let expected_slru = format!(
             "INSERT INTO \"pageserver\".slru_pages ({SLRU_COLUMNS}) VALUES \
-             ({ids},$1,$2,$3,$4,$5,$6,$7)"
+             ({id},$1,$2,$3,$4,$5,$6,$7)"
         );
         assert_eq!(slru, expected_slru);
     }
@@ -2742,14 +2581,12 @@ mod tests {
     #[tokio::test]
     async fn put_and_read_chain_round_trip() {
         let (store, schema) = make_store("rt").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         let k = page_key(1663, 5, 16384, 0, 7);
 
         store
             .put_pages(
-                tenant,
-                timeline,
+                branch,
                 &[
                     page_row(k.clone(), 10, true, true, b"img"),
                     page_row(k.clone(), 20, false, false, b"delta-A"),
@@ -2760,7 +2597,7 @@ mod tests {
             .unwrap();
 
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(100))
+            .read_chain(branch, &k, Lsn(100))
             .await
             .unwrap();
         assert_eq!(got.len(), 3);
@@ -2774,8 +2611,7 @@ mod tests {
     #[tokio::test]
     async fn put_rejects_non_page_key() {
         let (store, schema) = make_store("reject_non_page").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
 
         // field1 = 0x65 (REL_DIR_KEY_PREFIX) - not a relation page
         let mut buf = [0u8; KEY_SIZE];
@@ -2783,7 +2619,7 @@ mod tests {
         let bad_key = Bytes::copy_from_slice(&buf);
 
         let err = store
-            .put_pages(tenant, timeline, &[page_row(bad_key, 10, true, true, b"x")])
+            .put_pages(branch, &[page_row(bad_key, 10, true, true, b"x")])
             .await
             .unwrap_err();
         let msg = format!("{err:#}");
@@ -2801,8 +2637,7 @@ mod tests {
         // read_chain at LSN 50 → image at 10 + 4 deltas (20, 30, 40, 50) = 5 rows.
         // read_chain at LSN 5 → empty (no anchor at or below 5).
         let (store, schema) = make_store("anchor").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         let k = page_key(1663, 5, 16384, 0, 1);
 
         let mut rows = vec![page_row(k.clone(), 10, true, true, b"img")];
@@ -2815,10 +2650,10 @@ mod tests {
                 &[b'd', i as u8],
             ));
         }
-        store.put_pages(tenant, timeline, &rows).await.unwrap();
+        store.put_pages(branch, &rows).await.unwrap();
 
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(10_000))
+            .read_chain(branch, &k, Lsn(10_000))
             .await
             .unwrap();
         assert_eq!(got.len(), 13);
@@ -2827,7 +2662,7 @@ mod tests {
         assert!(got.last().unwrap().is_image);
 
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(50))
+            .read_chain(branch, &k, Lsn(50))
             .await
             .unwrap();
         assert_eq!(got.len(), 5);
@@ -2835,7 +2670,7 @@ mod tests {
         assert_eq!(got.last().unwrap().lsn, Lsn(10));
 
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(5))
+            .read_chain(branch, &k, Lsn(5))
             .await
             .unwrap();
         assert!(got.is_empty());
@@ -2868,8 +2703,7 @@ mod tests {
     #[tokio::test]
     async fn read_chain_image_before_delta_at_tied_lsn() {
         let (store, schema) = make_store("tied_lsn_image_first").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         let k = page_key(1663, 5, 16384, 0, 99);
 
         // Same-LSN image+delta at 100, plus a later delta at 200.
@@ -2877,8 +2711,7 @@ mod tests {
         // bury it after the same-LSN delta.
         store
             .put_pages(
-                tenant,
-                timeline,
+                branch,
                 &[
                     page_row(k.clone(), 100, false, false, b"wal-rec-at-100"),
                     page_row(k.clone(), 200, false, false, b"wal-rec-at-200"),
@@ -2889,7 +2722,7 @@ mod tests {
             .unwrap();
 
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(300))
+            .read_chain(branch, &k, Lsn(300))
             .await
             .unwrap();
 
@@ -2923,8 +2756,7 @@ mod tests {
         // Read at LSN 100 should return rows 40, 30, 20, 10 (anchor)
         // — older rows are shadowed.
         let (store, schema) = make_store("slow_will_init").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         let k = page_key(1663, 5, 16384, 0, 2);
 
         let rows = vec![
@@ -2935,9 +2767,9 @@ mod tests {
             page_row(k.clone(), 30, false, false, b"d30"),
             page_row(k.clone(), 40, false, false, b"d40"),
         ];
-        store.put_pages(tenant, timeline, &rows).await.unwrap();
+        store.put_pages(branch, &rows).await.unwrap();
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(100))
+            .read_chain(branch, &k, Lsn(100))
             .await
             .unwrap();
         assert_eq!(got.len(), 4);
@@ -2963,14 +2795,12 @@ mod tests {
     #[tokio::test]
     async fn read_chain_trims_at_init_delta_above_image_anchor() {
         let (store, schema) = make_store("trim_init_above_image").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         let k = page_key(1663, 5, 16384, 0, 3);
 
         store
             .put_pages(
-                tenant,
-                timeline,
+                branch,
                 &[
                     page_row(k.clone(), 10, true, true, b"img"),
                     page_row(k.clone(), 15, false, false, b"d15"),
@@ -2984,7 +2814,7 @@ mod tests {
             .unwrap();
 
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(30))
+            .read_chain(branch, &k, Lsn(30))
             .await
             .unwrap();
         let lsns: Vec<u64> = got.iter().map(|r| r.lsn.0).collect();
@@ -3004,8 +2834,7 @@ mod tests {
     #[tokio::test]
     async fn scan_range_within_one_fork() {
         let (store, schema) = make_store("scan_fork").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         // 5 pages of one fork.
         let mut rows = Vec::new();
         for blk in 0u32..5 {
@@ -3022,13 +2851,13 @@ mod tests {
         // Plus pages on a different rel (should NOT be returned).
         let other = page_key(1663, 5, 99999, 0, 0);
         rows.push(page_row(other, 10, true, true, b"other-img"));
-        store.put_pages(tenant, timeline, &rows).await.unwrap();
+        store.put_pages(branch, &rows).await.unwrap();
 
         // Scan blocks 1..4 of (rel=16384, fork=0).
         let range = Key::from_slice(&page_key(1663, 5, 16384, 0, 1))
             ..Key::from_slice(&page_key(1663, 5, 16384, 0, 4));
         let got = store
-            .scan_range(tenant, timeline, range, Lsn(100))
+            .scan_range(branch, range, Lsn(100))
             .await
             .unwrap();
         // 3 keys (blknum 1, 2, 3); each with 2 rows.
@@ -3046,15 +2875,13 @@ mod tests {
         // Detects k..k.next() and uses the per-key fast path.
         // Verifies the result is the same as read_chain for that key.
         let (store, schema) = make_store("scan_single").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         let k_bytes = page_key(1663, 5, 16384, 0, 7);
         let k = Key::from_slice(&k_bytes);
 
         store
             .put_pages(
-                tenant,
-                timeline,
+                branch,
                 &[
                     page_row(k_bytes.clone(), 10, true, true, b"img"),
                     page_row(k_bytes.clone(), 20, false, false, b"d20"),
@@ -3066,7 +2893,7 @@ mod tests {
 
         let range = k..k.next();
         let got = store
-            .scan_range(tenant, timeline, range, Lsn(100))
+            .scan_range(branch, range, Lsn(100))
             .await
             .unwrap();
         assert_eq!(got.len(), 1);
@@ -3077,7 +2904,7 @@ mod tests {
 
         // Same target via read_chain — must match.
         let direct = store
-            .read_chain(tenant, timeline, &k_bytes, Lsn(100))
+            .read_chain(branch, &k_bytes, Lsn(100))
             .await
             .unwrap();
         assert_eq!(chain.as_slice(), direct.as_slice());
@@ -3088,13 +2915,12 @@ mod tests {
     async fn scan_range_single_key_empty_when_no_anchor() {
         // A key with no rows ≤ target returns an empty map.
         let (store, schema) = make_store("scan_single_empty").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         let k_bytes = page_key(1663, 5, 16384, 0, 99);
         let k = Key::from_slice(&k_bytes);
 
         let got = store
-            .scan_range(tenant, timeline, k..k.next(), Lsn(100))
+            .scan_range(branch, k..k.next(), Lsn(100))
             .await
             .unwrap();
         assert!(got.is_empty());
@@ -3114,8 +2940,7 @@ mod tests {
         //          will fail walredo if reads ever ask for this, but the
         //          scan itself returns what's there).
         let (store, schema) = make_store("anchor_range").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
 
         let k0 = page_key(1663, 5, 16384, 0, 0);
         let k1 = page_key(1663, 5, 16384, 0, 1);
@@ -3140,11 +2965,11 @@ mod tests {
             page_row(k3.clone(), 30, false, false, b"k3-30"),
             page_row(k3.clone(), 40, false, false, b"k3-40"),
         ];
-        store.put_pages(tenant, timeline, &rows).await.unwrap();
+        store.put_pages(branch, &rows).await.unwrap();
 
         let range = Key::from_slice(&k0)..Key::from_slice(&page_key(1663, 5, 16384, 0, 4));
         let got = store
-            .scan_range(tenant, timeline, range, Lsn(100))
+            .scan_range(branch, range, Lsn(100))
             .await
             .unwrap();
         assert_eq!(got.len(), 4);
@@ -3180,8 +3005,7 @@ mod tests {
     #[tokio::test]
     async fn scan_range_cross_fork() {
         let (store, schema) = make_store("scan_cross").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         // Pages in two different rels.
         let mut rows = Vec::new();
         for rel in [16384u32, 16385u32] {
@@ -3196,13 +3020,13 @@ mod tests {
                 ));
             }
         }
-        store.put_pages(tenant, timeline, &rows).await.unwrap();
+        store.put_pages(branch, &rows).await.unwrap();
 
         // Range spans both rels.
         let range = Key::from_slice(&page_key(1663, 5, 16384, 0, 0))
             ..Key::from_slice(&page_key(1663, 5, 16386, 0, 0));
         let got = store
-            .scan_range(tenant, timeline, range, Lsn(100))
+            .scan_range(branch, range, Lsn(100))
             .await
             .unwrap();
         // 6 distinct keys (3 blocks × 2 rels).
@@ -3213,8 +3037,7 @@ mod tests {
     #[tokio::test]
     async fn scan_range_rejects_non_page_namespace() {
         let (store, schema) = make_store("scan_reject").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         // field1 = 0x60 (RELATION_SIZE_PREFIX) - metadata namespace
         let mut s = [0u8; KEY_SIZE];
         s[0] = 0x60;
@@ -3222,7 +3045,7 @@ mod tests {
         e[0] = 0x61;
         let range = Key::from_slice(&s)..Key::from_slice(&e);
         let err = store
-            .scan_range(tenant, timeline, range, Lsn(100))
+            .scan_range(branch, range, Lsn(100))
             .await
             .unwrap_err();
         let msg = format!("{err:#}");
@@ -3234,42 +3057,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_chain_isolates_by_tenant_and_timeline() {
+    async fn read_chain_isolates_by_branch() {
         let (store, schema) = make_store("isolate").await;
         let k = page_key(1663, 5, 16384, 0, 2);
-        let t1 = rand_tenant();
-        let t2 = rand_tenant();
-        let tl1 = rand_timeline();
-        let tl2 = rand_timeline();
+        let b1 = rand_branch();
+        let b2 = rand_branch();
+        let b3 = rand_branch();
         store
-            .put_pages(t1, tl1, &[page_row(k.clone(), 10, true, true, b"t1tl1")])
+            .put_pages(b1, &[page_row(k.clone(), 10, true, true, b"b1")])
             .await
             .unwrap();
         store
-            .put_pages(t2, tl1, &[page_row(k.clone(), 10, true, true, b"t2tl1")])
+            .put_pages(b2, &[page_row(k.clone(), 10, true, true, b"b2")])
             .await
             .unwrap();
         store
-            .put_pages(t1, tl2, &[page_row(k.clone(), 10, true, true, b"t1tl2")])
+            .put_pages(b3, &[page_row(k.clone(), 10, true, true, b"b3")])
             .await
             .unwrap();
         assert_eq!(
-            store.read_chain(t1, tl1, &k, Lsn(100)).await.unwrap()[0]
+            store.read_chain(b1, &k, Lsn(100)).await.unwrap()[0]
                 .payload
                 .as_ref(),
-            b"t1tl1"
+            b"b1"
         );
         assert_eq!(
-            store.read_chain(t2, tl1, &k, Lsn(100)).await.unwrap()[0]
+            store.read_chain(b2, &k, Lsn(100)).await.unwrap()[0]
                 .payload
                 .as_ref(),
-            b"t2tl1"
+            b"b2"
         );
         assert_eq!(
-            store.read_chain(t1, tl2, &k, Lsn(100)).await.unwrap()[0]
+            store.read_chain(b3, &k, Lsn(100)).await.unwrap()[0]
                 .payload
                 .as_ref(),
-            b"t1tl2"
+            b"b3"
         );
         drop_schema(&store, &schema).await;
     }
@@ -3277,20 +3099,18 @@ mod tests {
     #[tokio::test]
     async fn high_lsn_round_trip() {
         let (store, schema) = make_store("high_lsn").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         let k = page_key(1663, 5, 16384, 0, 0xff);
         let high = 0x7fff_ffff_ffff_fff0u64;
         store
             .put_pages(
-                tenant,
-                timeline,
+                branch,
                 &[page_row(k.clone(), high, true, true, b"x")],
             )
             .await
             .unwrap();
         let got = store
-            .read_chain(tenant, timeline, &k, Lsn(u64::MAX >> 1))
+            .read_chain(branch, &k, Lsn(u64::MAX >> 1))
             .await
             .unwrap();
         assert_eq!(got.len(), 1);
@@ -3298,13 +3118,12 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    fn sample_timeline_row(t: TenantId, tl: TimelineId) -> TimelineRow {
+    fn sample_timeline_row(branch: BranchId) -> TimelineRow {
         TimelineRow {
-            tenant_id: t,
-            timeline_id: tl,
+            branch_id: branch,
             consistent_lsn: Lsn(90),
             applied_gc_cutoff_lsn: Lsn(50),
-            ancestor_timeline_id: None,
+            ancestor_branch_id: None,
             ancestor_lsn: None,
             current_generation: 1,
             pg_version: 17,
@@ -3321,11 +3140,10 @@ mod tests {
     #[tokio::test]
     async fn upsert_and_get_timeline_round_trip() {
         let (store, schema) = make_store("tl_rt").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
-        let row = sample_timeline_row(tenant, timeline);
+        let branch = rand_branch();
+        let row = sample_timeline_row(branch);
         store.insert_timeline_at_creation(&row).await.unwrap();
-        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        let got = store.get_timeline(branch).await.unwrap().unwrap();
         assert_eq!(got, row);
         drop_schema(&store, &schema).await;
     }
@@ -3343,29 +3161,28 @@ mod tests {
         use utils::lsn::Lsn;
 
         let (store, schema) = make_store("gen_cas").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
-        let mut row = sample_timeline_row(tenant, timeline);
+        let branch = rand_branch();
+        let mut row = sample_timeline_row(branch);
         row.current_generation = 1;
         row.consistent_lsn = Lsn(0x1000);
         store.insert_timeline_at_creation(&row).await.unwrap();
 
         // Bumped: stored gen=1, attach at gen=2 → succeeds, YB now 2.
         let res = store
-            .cas_bump_generation_on_attach(tenant, timeline, Generation::new(2))
+            .cas_bump_generation_on_attach(branch, Generation::new(2))
             .await
             .unwrap();
         assert_eq!(res, CasBumpOutcome::Bumped);
-        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        let got = store.get_timeline(branch).await.unwrap().unwrap();
         assert_eq!(got.current_generation, 2);
 
         // AlreadyAtOurGen: stored gen=2, attach at gen=2 → no-op.
         let res = store
-            .cas_bump_generation_on_attach(tenant, timeline, Generation::new(2))
+            .cas_bump_generation_on_attach(branch, Generation::new(2))
             .await
             .unwrap();
         assert_eq!(res, CasBumpOutcome::AlreadyAtOurGen);
-        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        let got = store.get_timeline(branch).await.unwrap().unwrap();
         assert_eq!(got.current_generation, 2);
 
         // Bumped again: stored gen=2, attach at gen=5 → succeeds, YB now 5.
@@ -3373,29 +3190,28 @@ mod tests {
         // moved 1→2→3 over restarts; this is the third restart
         // arriving at the PS, which must heal the lagging YB column.)
         let res = store
-            .cas_bump_generation_on_attach(tenant, timeline, Generation::new(5))
+            .cas_bump_generation_on_attach(branch, Generation::new(5))
             .await
             .unwrap();
         assert_eq!(res, CasBumpOutcome::Bumped);
-        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        let got = store.get_timeline(branch).await.unwrap().unwrap();
         assert_eq!(got.current_generation, 5);
 
         // StaleGeneration: stored gen=5, attach at gen=4 → another
         // PS bumped past us, return live=5 so caller can refuse.
         let res = store
-            .cas_bump_generation_on_attach(tenant, timeline, Generation::new(4))
+            .cas_bump_generation_on_attach(branch, Generation::new(4))
             .await
             .unwrap();
         assert_eq!(res, CasBumpOutcome::StaleGeneration { live_generation: 5 });
-        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        let got = store.get_timeline(branch).await.unwrap().unwrap();
         assert_eq!(got.current_generation, 5, "stale CAS must not regress");
 
-        // Row missing: attach against a tenant/timeline pair that
+        // Row missing: attach against a branch that
         // doesn't exist → error (wiring bug, not a stale-gen case).
-        let other_tenant = rand_tenant();
-        let other_timeline = rand_timeline();
+        let other_branch = rand_branch();
         let err = store
-            .cas_bump_generation_on_attach(other_tenant, other_timeline, Generation::new(1))
+            .cas_bump_generation_on_attach(other_branch, Generation::new(1))
             .await
             .unwrap_err();
         assert!(
@@ -3412,9 +3228,8 @@ mod tests {
         use utils::lsn::Lsn;
 
         let (store, schema) = make_store("dc_gate").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
-        let mut row = sample_timeline_row(tenant, timeline);
+        let branch = rand_branch();
+        let mut row = sample_timeline_row(branch);
         row.current_generation = 5;
         row.consistent_lsn = Lsn(0x1000);
         store.insert_timeline_at_creation(&row).await.unwrap();
@@ -3422,8 +3237,7 @@ mod tests {
         // Matching generation → Updated, persisted value advances.
         let res = store
             .advance_consistent_lsn(
-                tenant,
-                timeline,
+                branch,
                 Generation::new(5),
                 Lsn(0x2000),
                 Some(Lsn(0x1F00)),
@@ -3431,15 +3245,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res, AdvanceConsistentLsnOutcome::Updated);
-        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        let got = store.get_timeline(branch).await.unwrap().unwrap();
         assert_eq!(got.consistent_lsn, Lsn(0x2000));
         assert_eq!(got.prev_record_lsn, Some(Lsn(0x1F00)));
 
         // Stale generation → StaleGeneration { live = 5 }, value unchanged.
         let res = store
             .advance_consistent_lsn(
-                tenant,
-                timeline,
+                branch,
                 Generation::new(4),
                 Lsn(0x3000),
                 Some(Lsn(0x2F00)),
@@ -3450,7 +3263,7 @@ mod tests {
             res,
             AdvanceConsistentLsnOutcome::StaleGeneration { live_generation: 5 }
         );
-        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        let got = store.get_timeline(branch).await.unwrap().unwrap();
         assert_eq!(
             got.consistent_lsn,
             Lsn(0x2000),
@@ -3461,14 +3274,14 @@ mod tests {
         // row hasn't been UPSERT'd yet) → also stale: persisted row is
         // the source of truth.
         let res = store
-            .advance_consistent_lsn(tenant, timeline, Generation::new(6), Lsn(0x4000), None)
+            .advance_consistent_lsn(branch, Generation::new(6), Lsn(0x4000), None)
             .await
             .unwrap();
         assert_eq!(
             res,
             AdvanceConsistentLsnOutcome::StaleGeneration { live_generation: 5 }
         );
-        let got = store.get_timeline(tenant, timeline).await.unwrap().unwrap();
+        let got = store.get_timeline(branch).await.unwrap().unwrap();
         assert_eq!(got.consistent_lsn, Lsn(0x2000));
 
         drop_schema(&store, &schema).await;
@@ -3477,14 +3290,13 @@ mod tests {
     #[tokio::test]
     async fn bump_generation_is_monotonic() {
         let (store, schema) = make_store("gen").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         store
-            .insert_timeline_at_creation(&sample_timeline_row(tenant, timeline))
+            .insert_timeline_at_creation(&sample_timeline_row(branch))
             .await
             .unwrap();
         for expected in 2..=5 {
-            let g = store.bump_generation(tenant, timeline).await.unwrap();
+            let g = store.bump_generation(branch).await.unwrap();
             assert_eq!(g, expected);
         }
         drop_schema(&store, &schema).await;
@@ -3502,8 +3314,7 @@ mod tests {
     #[tokio::test]
     async fn put_pages_chunks_large_batches() {
         let (store, schema) = make_store("chunk_pages").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         let n: u32 = 1200;
         let payload = vec![0xABu8; 8192];
         let mut rows = Vec::with_capacity(n as usize);
@@ -3511,13 +3322,13 @@ mod tests {
             let k = page_key(1663, 5, 16384, 0, blk);
             rows.push(page_row(k, 10, true, true, &payload));
         }
-        store.put_pages(tenant, timeline, &rows).await.unwrap();
+        store.put_pages(branch, &rows).await.unwrap();
 
         // Spot-check: first, middle, last row each read back.
         for blk in [0u32, n / 2, n - 1] {
             let k = page_key(1663, 5, 16384, 0, blk);
             let chain = store
-                .read_chain(tenant, timeline, &k, Lsn(100))
+                .read_chain(branch, &k, Lsn(100))
                 .await
                 .unwrap();
             assert_eq!(chain.len(), 1, "blk {blk}");
@@ -3532,8 +3343,7 @@ mod tests {
     #[tokio::test]
     async fn put_meta_chunks_large_batches() {
         let (store, schema) = make_store("chunk_meta").await;
-        let tenant = rand_tenant();
-        let timeline = rand_timeline();
+        let branch = rand_branch();
         let n: u32 = 3500; // above the 2000-row chunk boundary
         let mut rows = Vec::with_capacity(n as usize);
         for i in 0..n {
@@ -3547,7 +3357,7 @@ mod tests {
                 payload: Bytes::from(format!("v{i}")),
             });
         }
-        store.put_meta(tenant, timeline, &rows).await.unwrap();
+        store.put_meta(branch, &rows).await.unwrap();
 
         // Spot-check first, middle, last.
         for i in [0u32, n / 2, n - 1] {
@@ -3555,7 +3365,7 @@ mod tests {
             buf[0] = 0x60;
             buf[14..18].copy_from_slice(&i.to_be_bytes());
             let got = store
-                .read_meta(tenant, timeline, &buf, Lsn(100))
+                .read_meta(branch, &buf, Lsn(100))
                 .await
                 .unwrap()
                 .expect("row");
@@ -3567,33 +3377,31 @@ mod tests {
     // ------------------- lineage tests -------------------------------------
 
     /// Two-segment lineage: `child` (at MAX) branched off `anc` at `cap`.
-    fn lineage2(child: TimelineId, anc: TimelineId, cap: u64) -> Vec<LineageSegment> {
+    fn lineage2(child: BranchId, anc: BranchId, cap: u64) -> Vec<LineageSegment> {
         vec![
             LineageSegment {
-                timeline_id: child,
+                branch_id: child,
                 cap_lsn: Lsn::MAX,
             },
             LineageSegment {
-                timeline_id: anc,
+                branch_id: anc,
                 cap_lsn: Lsn(cap),
             },
         ]
     }
 
     /// A branch chain anchors in the ancestor: pre-branch rows live
-    /// under the ancestor's timeline_id and the lineage walk stitches
+    /// under the ancestor's branch_id and the lineage walk stitches
     /// them below the descendant's deltas.
     #[tokio::test]
     async fn read_chain_lineage_anchors_in_ancestor() {
         let (store, schema) = make_store("lin_anchor").await;
-        let tenant = rand_tenant();
-        let anc = rand_timeline();
-        let child = rand_timeline();
+        let anc = rand_branch();
+        let child = rand_branch();
         let k = page_key(1663, 5, 16384, 0, 1);
 
         store
             .put_pages(
-                tenant,
                 anc,
                 &[
                     page_row(k.clone(), 10, true, true, b"img"),
@@ -3604,7 +3412,6 @@ mod tests {
             .unwrap();
         store
             .put_pages(
-                tenant,
                 child,
                 &[
                     page_row(k.clone(), 30, false, false, b"child-A"),
@@ -3616,7 +3423,7 @@ mod tests {
 
         let lineage = lineage2(child, anc, 25);
         let chain = store
-            .read_chain_lineage(tenant, &lineage, &k, Lsn(100))
+            .read_chain_lineage(&lineage, &k, Lsn(100))
             .await
             .unwrap();
         assert_eq!(
@@ -3632,14 +3439,12 @@ mod tests {
     #[tokio::test]
     async fn read_chain_lineage_caps_ancestor_at_branch_point() {
         let (store, schema) = make_store("lin_cap").await;
-        let tenant = rand_tenant();
-        let anc = rand_timeline();
-        let child = rand_timeline();
+        let anc = rand_branch();
+        let child = rand_branch();
         let k = page_key(1663, 5, 16384, 0, 2);
 
         store
             .put_pages(
-                tenant,
                 anc,
                 &[
                     page_row(k.clone(), 10, true, true, b"img"),
@@ -3651,7 +3456,6 @@ mod tests {
             .unwrap();
         store
             .put_pages(
-                tenant,
                 child,
                 &[page_row(k.clone(), 40, false, false, b"child")],
             )
@@ -3660,7 +3464,7 @@ mod tests {
 
         let lineage = lineage2(child, anc, 25);
         let chain = store
-            .read_chain_lineage(tenant, &lineage, &k, Lsn(100))
+            .read_chain_lineage(&lineage, &k, Lsn(100))
             .await
             .unwrap();
         assert_eq!(
@@ -3681,14 +3485,12 @@ mod tests {
     #[tokio::test]
     async fn read_chain_lineage_layers_ancestor_deltas_above_sub_cap_anchor() {
         let (store, schema) = make_store("lin_subcap").await;
-        let tenant = rand_tenant();
-        let anc = rand_timeline();
-        let child = rand_timeline();
+        let anc = rand_branch();
+        let child = rand_branch();
         let k = page_key(1663, 5, 16384, 0, 7);
 
         store
             .put_pages(
-                tenant,
                 anc,
                 &[
                     page_row(k.clone(), 10, true, true, b"anc-img"),
@@ -3705,7 +3507,6 @@ mod tests {
         // Copy-up image in the child at LSN 25 — below the cap.
         store
             .put_pages(
-                tenant,
                 child,
                 &[page_row(k.clone(), 25, true, true, b"copy-up-img")],
             )
@@ -3714,7 +3515,7 @@ mod tests {
 
         let lineage = lineage2(child, anc, 40);
         let chain = store
-            .read_chain_lineage(tenant, &lineage, &k, Lsn(100))
+            .read_chain_lineage(&lineage, &k, Lsn(100))
             .await
             .unwrap();
         assert_eq!(
@@ -3728,14 +3529,13 @@ mod tests {
         // walk must not descend (fast path preserved).
         store
             .put_pages(
-                tenant,
                 child,
                 &[page_row(k.clone(), 45, true, true, b"post-cap-img")],
             )
             .await
             .unwrap();
         let chain = store
-            .read_chain_lineage(tenant, &lineage, &k, Lsn(100))
+            .read_chain_lineage(&lineage, &k, Lsn(100))
             .await
             .unwrap();
         assert_eq!(
@@ -3751,14 +3551,12 @@ mod tests {
     #[tokio::test]
     async fn read_chain_lineage_stops_at_own_anchor() {
         let (store, schema) = make_store("lin_own").await;
-        let tenant = rand_tenant();
-        let anc = rand_timeline();
-        let child = rand_timeline();
+        let anc = rand_branch();
+        let child = rand_branch();
         let k = page_key(1663, 5, 16384, 0, 3);
 
         store
             .put_pages(
-                tenant,
                 anc,
                 &[
                     page_row(k.clone(), 10, true, true, b"anc-img"),
@@ -3769,7 +3567,6 @@ mod tests {
             .unwrap();
         store
             .put_pages(
-                tenant,
                 child,
                 &[page_row(k.clone(), 35, true, true, b"copy-up-img")],
             )
@@ -3778,7 +3575,7 @@ mod tests {
 
         let lineage = lineage2(child, anc, 25);
         let chain = store
-            .read_chain_lineage(tenant, &lineage, &k, Lsn(100))
+            .read_chain_lineage(&lineage, &k, Lsn(100))
             .await
             .unwrap();
         assert_eq!(chain.len(), 1, "own image shadows the whole ancestor chain");
@@ -3791,15 +3588,13 @@ mod tests {
     #[tokio::test]
     async fn scan_range_lineage_discovers_ancestor_only_keys() {
         let (store, schema) = make_store("lin_scan").await;
-        let tenant = rand_tenant();
-        let anc = rand_timeline();
-        let child = rand_timeline();
+        let anc = rand_branch();
+        let child = rand_branch();
         let k_anc_only = page_key(1663, 5, 16384, 0, 1);
         let k_shared = page_key(1663, 5, 16384, 0, 2);
 
         store
             .put_pages(
-                tenant,
                 anc,
                 &[
                     page_row(k_anc_only.clone(), 10, true, true, b"a-img"),
@@ -3810,7 +3605,6 @@ mod tests {
             .unwrap();
         store
             .put_pages(
-                tenant,
                 child,
                 &[page_row(k_shared.clone(), 30, false, false, b"s-child")],
             )
@@ -3821,7 +3615,7 @@ mod tests {
         let start = Key::from_slice(&page_key(1663, 5, 16384, 0, 0));
         let end = Key::from_slice(&page_key(1663, 5, 16384, 0, 10));
         let out = store
-            .scan_range_lineage(tenant, &lineage, start..end, Lsn(100))
+            .scan_range_lineage(&lineage, start..end, Lsn(100))
             .await
             .unwrap();
         assert_eq!(out.len(), 2);
@@ -3846,9 +3640,8 @@ mod tests {
     #[tokio::test]
     async fn read_slru_chain_lineage_blends() {
         let (store, schema) = make_store("lin_slru").await;
-        let tenant = rand_tenant();
-        let anc = rand_timeline();
-        let child = rand_timeline();
+        let anc = rand_branch();
+        let child = rand_branch();
         let slru_row = |lsn: u64, is_image: bool, will_init: bool, payload: &[u8]| SlruPageRow {
             kind: SlruKind::Clog,
             segno: 1,
@@ -3860,17 +3653,17 @@ mod tests {
         };
 
         store
-            .put_slru_pages(tenant, anc, &[slru_row(10, true, true, b"anc-img")])
+            .put_slru_pages(anc, &[slru_row(10, true, true, b"anc-img")])
             .await
             .unwrap();
         store
-            .put_slru_pages(tenant, child, &[slru_row(30, false, false, b"child-delta")])
+            .put_slru_pages(child, &[slru_row(30, false, false, b"child-delta")])
             .await
             .unwrap();
 
         let lineage = lineage2(child, anc, 25);
         let chain = store
-            .read_slru_chain_lineage(tenant, &lineage, SlruKind::Clog, 1, 0, Lsn(100))
+            .read_slru_chain_lineage(&lineage, SlruKind::Clog, 1, 0, Lsn(100))
             .await
             .unwrap();
         assert_eq!(
@@ -3880,7 +3673,7 @@ mod tests {
 
         // And the range-scan variant sees the ancestor-only block.
         let scanned = store
-            .scan_slru_range_lineage(tenant, &lineage, SlruKind::Clog, 1, 0..4, Lsn(100))
+            .scan_slru_range_lineage(&lineage, SlruKind::Clog, 1, 0..4, Lsn(100))
             .await
             .unwrap();
         assert_eq!(
@@ -3902,16 +3695,14 @@ mod tests {
     #[tokio::test]
     async fn meta_lineage_nearest_segment_wins() {
         let (store, schema) = make_store("lin_meta").await;
-        let tenant = rand_tenant();
-        let anc = rand_timeline();
-        let child = rand_timeline();
+        let anc = rand_branch();
+        let child = rand_branch();
         let shared = meta_key(1);
         let anc_late = meta_key(2); // only exists in anc, ABOVE the cap
         let anc_only = meta_key(3);
 
         store
             .put_meta(
-                tenant,
                 anc,
                 &[
                     MetaRow {
@@ -3935,7 +3726,6 @@ mod tests {
             .unwrap();
         store
             .put_meta(
-                tenant,
                 child,
                 &[MetaRow {
                     key: Bytes::from(shared.clone()),
@@ -3951,14 +3741,14 @@ mod tests {
         // Nearest segment wins for the shared key.
         let s = Key::from_slice(&shared);
         let out = store
-            .scan_meta_range_lineage(tenant, &lineage, s..s.next(), Lsn(100))
+            .scan_meta_range_lineage(&lineage, s..s.next(), Lsn(100))
             .await
             .unwrap();
         assert_eq!(out[shared.as_slice()].payload.as_ref(), b"child");
 
         // Below the child's version (lsn 30), the ancestor's value shows through.
         let out = store
-            .scan_meta_range_lineage(tenant, &lineage, s..s.next(), Lsn(15))
+            .scan_meta_range_lineage(&lineage, s..s.next(), Lsn(15))
             .await
             .unwrap();
         assert_eq!(out[shared.as_slice()].payload.as_ref(), b"anc");
@@ -3966,7 +3756,7 @@ mod tests {
         // Ancestor row above the branch point: invisible.
         let al = Key::from_slice(&anc_late);
         let out = store
-            .scan_meta_range_lineage(tenant, &lineage, al..al.next(), Lsn(100))
+            .scan_meta_range_lineage(&lineage, al..al.next(), Lsn(100))
             .await
             .unwrap();
         assert!(out.is_empty(), "lsn 28 > cap 25 must be invisible");
@@ -3976,7 +3766,7 @@ mod tests {
         let start = Key::from_slice(&meta_key(0));
         let end = Key::from_slice(&meta_key(10));
         let out = store
-            .scan_meta_range_lineage(tenant, &lineage, start..end, Lsn(100))
+            .scan_meta_range_lineage(&lineage, start..end, Lsn(100))
             .await
             .unwrap();
         assert_eq!(out.len(), 2);
@@ -3989,72 +3779,71 @@ mod tests {
     #[tokio::test]
     async fn create_branch_row_validations() {
         let (store, schema) = make_store("branch_row").await;
-        let tenant = rand_tenant();
-        let anc = rand_timeline();
+        let anc = rand_branch();
         // Ancestor: consistent 90, gc cutoff 50, prev_record 85.
-        let mut anc_row = sample_timeline_row(tenant, anc);
+        let mut anc_row = sample_timeline_row(anc);
         anc_row.prev_record_lsn = Some(Lsn(85));
         store.insert_timeline_at_creation(&anc_row).await.unwrap();
 
         // Branch point above the durable head → rejected.
         let err = store
-            .create_branch_row(tenant, rand_timeline(), anc, Lsn(95), 1)
+            .create_branch_row(rand_branch(), anc, Lsn(95), 1)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not yet durable"), "{err}");
 
         // Branch point below the gc cutoff → rejected.
         let err = store
-            .create_branch_row(tenant, rand_timeline(), anc, Lsn(40), 1)
+            .create_branch_row(rand_branch(), anc, Lsn(40), 1)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("gc cutoff"), "{err}");
 
         // Missing ancestor → rejected.
         let err = store
-            .create_branch_row(tenant, rand_timeline(), rand_timeline(), Lsn(70), 1)
+            .create_branch_row(rand_branch(), rand_branch(), Lsn(70), 1)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no timeline_state row"), "{err}");
 
         // Happy path mid-history: prev_record_lsn unknown → None.
-        let child = rand_timeline();
+        let child = rand_branch();
         let row = store
-            .create_branch_row(tenant, child, anc, Lsn(70), 3)
+            .create_branch_row(child, anc, Lsn(70), 3)
             .await
             .unwrap();
         assert_eq!(row.consistent_lsn, Lsn(70), "walreceiver resume point");
-        assert_eq!(row.ancestor_timeline_id, Some(anc));
+        assert_eq!(row.ancestor_branch_id, Some(anc));
         assert_eq!(row.ancestor_lsn, Some(Lsn(70)));
         assert_eq!(row.current_generation, 3);
         assert_eq!(row.pg_version, anc_row.pg_version);
         assert_eq!(row.prev_record_lsn, None);
-        let persisted = store.get_timeline(tenant, child).await.unwrap().unwrap();
+        let persisted = store.get_timeline(child).await.unwrap().unwrap();
         assert_eq!(persisted, row);
 
         // Happy path at the durable head: prev_record_lsn inherited.
-        let child2 = rand_timeline();
+        let child2 = rand_branch();
         let row = store
-            .create_branch_row(tenant, child2, anc, Lsn(90), 1)
+            .create_branch_row(child2, anc, Lsn(90), 1)
             .await
             .unwrap();
         assert_eq!(row.prev_record_lsn, Some(Lsn(85)));
 
         // Branching below the ancestor's own branch point → rejected.
-        let grandchild_bad = rand_timeline();
+        let grandchild_bad = rand_branch();
         let err = store
-            .create_branch_row(tenant, grandchild_bad, child, Lsn(60), 1)
+            .create_branch_row(grandchild_bad, child, Lsn(60), 1)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("own branch point"), "{err}");
 
         // Deleted ancestor → rejected.
-        let dead = rand_timeline();
-        let mut dead_row = sample_timeline_row(tenant, dead);
+        let dead = rand_branch();
+        let mut dead_row = sample_timeline_row(dead);
         dead_row.deleted_at = Some(chrono::Utc::now().naive_utc());
         store.insert_timeline_at_creation(&dead_row).await.unwrap();
         let err = store
-            .create_branch_row(tenant, rand_timeline(), dead, Lsn(70), 1)
+            .create_branch_row(rand_branch(), dead, Lsn(70), 1)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("deleted"), "{err}");
@@ -4066,50 +3855,49 @@ mod tests {
     #[tokio::test]
     async fn load_lineage_walks_ancestor_links() {
         let (store, schema) = make_store("lin_load").await;
-        let tenant = rand_tenant();
-        let grandparent = rand_timeline();
-        let parent = rand_timeline();
-        let child = rand_timeline();
+        let grandparent = rand_branch();
+        let parent = rand_branch();
+        let child = rand_branch();
 
         store
-            .insert_timeline_at_creation(&sample_timeline_row(tenant, grandparent))
+            .insert_timeline_at_creation(&sample_timeline_row(grandparent))
             .await
             .unwrap();
-        let mut parent_row = sample_timeline_row(tenant, parent);
-        parent_row.ancestor_timeline_id = Some(grandparent);
+        let mut parent_row = sample_timeline_row(parent);
+        parent_row.ancestor_branch_id = Some(grandparent);
         parent_row.ancestor_lsn = Some(Lsn(50));
         store.insert_timeline_at_creation(&parent_row).await.unwrap();
-        let mut child_row = sample_timeline_row(tenant, child);
-        child_row.ancestor_timeline_id = Some(parent);
+        let mut child_row = sample_timeline_row(child);
+        child_row.ancestor_branch_id = Some(parent);
         child_row.ancestor_lsn = Some(Lsn(70));
         store.insert_timeline_at_creation(&child_row).await.unwrap();
 
-        let lineage = store.load_lineage(tenant, child).await.unwrap();
+        let lineage = store.load_lineage(child).await.unwrap();
         assert_eq!(
             lineage,
             vec![
                 LineageSegment {
-                    timeline_id: child,
+                    branch_id: child,
                     cap_lsn: Lsn::MAX
                 },
                 LineageSegment {
-                    timeline_id: parent,
+                    branch_id: parent,
                     cap_lsn: Lsn(70)
                 },
                 LineageSegment {
-                    timeline_id: grandparent,
+                    branch_id: grandparent,
                     cap_lsn: Lsn(50)
                 },
             ]
         );
 
         // A root timeline gets the trivial single-segment lineage.
-        let root_lineage = store.load_lineage(tenant, grandparent).await.unwrap();
+        let root_lineage = store.load_lineage(grandparent).await.unwrap();
         assert_eq!(root_lineage, LineageSegment::single(grandparent));
 
         // Missing row → error, not an empty lineage.
         let err = store
-            .load_lineage(tenant, rand_timeline())
+            .load_lineage(rand_branch())
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no timeline_state row"), "{err}");

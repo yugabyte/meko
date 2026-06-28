@@ -1,7 +1,7 @@
-//! The single-tenant holder: this pageserver process serves exactly one
-//! (tenant, timeline) for its entire lifetime, identified by the
-//! `tenant_id` / `timeline_id` / `generation` baked into `pageserver.toml`
-//! by the launcher. The tenant is opened synchronously at startup, before
+//! The single-branch holder: this pageserver process serves exactly one
+//! branch for its entire lifetime, identified by the
+//! `branch_id` / `generation` baked into `pageserver.toml`
+//! by the launcher. The branch is opened synchronously at startup, before
 //! any listener accepts traffic.
 
 use std::collections::HashMap;
@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::crashsafe::path_with_suffix_extension;
 use utils::generation::Generation;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 
 use super::TenantSharedResources;
 use crate::config::PageServerConf;
@@ -139,21 +139,21 @@ pub struct TenantManager {
 /// and basebackup caches in yb-light, so removing them is always safe.
 async fn purge_stale_tenant_dirs(
     conf: &'static PageServerConf,
-    attached: &HashMap<TenantId, Generation>,
+    attached: &HashMap<BranchId, Generation>,
     background_purges: &BackgroundPurges,
 ) {
-    let tenants_dir = conf.tenants_path();
+    let branches_dir = conf.branches_path();
     let dentries = match tokio::task::spawn_blocking(move || {
-        tenants_dir
+        branches_dir
             .read_dir_utf8()
             .and_then(|it| it.collect::<Result<Vec<_>, _>>())
     })
     .await
-    .expect("read tenants dir task panicked")
+    .expect("read branches dir task panicked")
     {
         Ok(d) => d,
         Err(e) => {
-            warn!("Failed to read tenants dir while purging stale entries: {e}");
+            warn!("Failed to read branches dir while purging stale entries: {e}");
             return;
         }
     };
@@ -167,20 +167,20 @@ async fn purge_stale_tenant_dirs(
             }
             continue;
         }
-        let Ok(tenant_id) = dentry.file_name().parse::<TenantId>() else {
+        let Ok(branch_id) = dentry.file_name().parse::<BranchId>() else {
             warn!(
-                "Invalid tenant path (garbage in our repo directory?): '{}'",
+                "Invalid branch path (garbage in our repo directory?): '{}'",
                 dentry.file_name()
             );
             continue;
         };
-        if attached.contains_key(&tenant_id) {
+        if attached.contains_key(&branch_id) {
             continue;
         }
-        info!(%tenant_id, "Purging local tenant dir not owned by the configured tenant");
+        info!(%branch_id, "Purging local branch dir not owned by the configured branch");
         match safe_rename_tenant_dir(&path).await {
             Ok(tmp) => background_purges.spawn(tmp),
-            Err(e) => warn!(%tenant_id, "Failed to rename stale tenant dir {path}: {e}"),
+            Err(e) => warn!(%branch_id, "Failed to rename stale branch dir {path}: {e}"),
         }
     }
 }
@@ -196,36 +196,36 @@ pub async fn init_tenant_mgr(
 ) -> anyhow::Result<TenantManager> {
     let ctx = RequestContext::todo_child(TaskKind::Startup, DownloadBehavior::Warn);
 
-    // Single-timeline pageserver: the identity baked into
+    // Single-branch pageserver: the identity baked into
     // pageserver.toml by the launcher is the sole source of truth for
-    // which (tenant, timeline) this process serves and at what
-    // generation. The local tenants/ dir is just scratch (initdb
+    // which branch this process serves and at what
+    // generation. The local branches/ dir is just scratch (initdb
     // tarballs, basebackup cache), never authoritative.
     let Some(identity) = conf.timeline_identity else {
         anyhow::bail!(
-            "pageserver.toml must set tenant_id/timeline_id/generation: this pageserver \
-             serves exactly one timeline, assigned by the launcher before spawn"
+            "pageserver.toml must set branch_id/generation: this pageserver \
+             serves exactly one branch, assigned by the launcher before spawn"
         );
     };
-    let attached = HashMap::from([(identity.tenant_id, identity.generation)]);
+    let attached = HashMap::from([(identity.branch_id, identity.generation)]);
 
     purge_stale_tenant_dirs(conf, &attached, &background_purges).await;
 
     TENANT.startup_scheduled.inc();
 
-    let (tenant_id, generation) = (identity.tenant_id, identity.generation);
-    let timelines_path = conf.timelines_path(&tenant_id);
-    // tenant/timelines dir is just a cache (initdb.tar.zst, basebackup_cache).
+    let (branch_id, generation) = (identity.branch_id, identity.generation);
+    let branch_path = conf.branch_path(&branch_id);
+    // branch dir is just a cache (initdb.tar.zst, basebackup_cache).
     // Doesn't need crash-safe sync.
-    tokio::fs::create_dir_all(&timelines_path)
+    tokio::fs::create_dir_all(&branch_path)
         .await
-        .fatal_err("create timelines/ dir");
+        .fatal_err("create branch dir");
 
-    let tenant_conf = pageserver_api::models::TenantConfig::default();
+    let tenant_conf = pageserver_api::models::BranchConfig::default();
 
     let tenant = PageServer::open(
         conf,
-        tenant_id,
+        branch_id,
         resources,
         AttachedTenantConf::new(conf, tenant_conf, generation),
         &ctx,
@@ -233,7 +233,7 @@ pub async fn init_tenant_mgr(
     .await?;
     TENANT.startup_complete.inc();
 
-    info!(tenant_id = %tenant_id, "tenant opened at startup");
+    info!(branch_id = %branch_id, "tenant opened at startup");
 
     Ok(TenantManager {
         conf,
@@ -251,22 +251,22 @@ impl TenantManager {
             .expect("identity is required at startup")
     }
 
-    /// Gets the attached tenant, erroring if `tenant_id` doesn't match the
+    /// Gets the attached tenant, erroring if `branch_id` doesn't match the
     /// configured identity. The tenant is open and active for the whole process
     /// lifetime (it transitions its timeline to Stopping during shutdown).
     pub(crate) fn get_attached_tenant_shard(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
     ) -> Result<Arc<PageServer>, GetTenantError> {
-        if tenant_id != self.timeline_identity().tenant_id {
-            return Err(GetTenantError::NotFound(tenant_id));
+        if branch_id != self.timeline_identity().branch_id {
+            return Err(GetTenantError::NotFound(branch_id));
         }
         Ok(Arc::clone(&self.tenant))
     }
 
     /// The attached tenant.
-    pub(crate) fn list(&self) -> Vec<(TenantId, Arc<PageServer>)> {
-        vec![(self.tenant.tenant_id(), Arc::clone(&self.tenant))]
+    pub(crate) fn list(&self) -> Vec<(BranchId, Arc<PageServer>)> {
+        vec![(self.tenant.branch_id(), Arc::clone(&self.tenant))]
     }
 
     /// Shut down the tenant. This runs as part of pageserver shutdown.
@@ -280,7 +280,7 @@ impl TenantManager {
         let tenant = Arc::clone(&self.tenant);
         tenant
             .shutdown(ShutdownMode::Flush)
-            .instrument(info_span!("shutdown", tenant_id = %tenant.tenant_id()))
+            .instrument(info_span!("shutdown", branch_id = %tenant.branch_id()))
             .await;
         info!("tenant successfully stopped");
     }
@@ -291,17 +291,16 @@ impl TenantManager {
         (self.tenant.local_storage_wanted(), 1)
     }
 
-    #[instrument(skip_all, fields(tenant_id=%tenant_id, %timeline_id))]
+    #[instrument(skip_all, fields(branch_id=%branch_id))]
     pub(crate) async fn immediate_gc(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         gc_req: TimelineGcRequest,
         cancel: CancellationToken,
         ctx: &RequestContext,
     ) -> Result<GcResult, ApiError> {
         let tenant = self
-            .get_attached_tenant_shard(tenant_id)
+            .get_attached_tenant_shard(branch_id)
             .map_err(|e| ApiError::NotFound(anyhow::anyhow!(e).into()))?;
 
         let gc_horizon = gc_req.gc_horizon.unwrap_or_else(|| tenant.get_gc_horizon());
@@ -317,7 +316,7 @@ impl TenantManager {
 
         #[allow(unused_mut)]
         let mut result = tenant
-            .gc_iteration(Some(timeline_id), gc_horizon, pitr, &cancel, &ctx)
+            .gc_iteration(Some(branch_id), gc_horizon, pitr, &cancel, &ctx)
             .await;
         // FIXME: `gc_iteration` can return an error for multiple reasons; we should handle it
         // better once the types support it.
@@ -335,5 +334,5 @@ impl TenantManager {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum GetTenantError {
     #[error("Tenant {0} not found")]
-    NotFound(TenantId),
+    NotFound(BranchId),
 }

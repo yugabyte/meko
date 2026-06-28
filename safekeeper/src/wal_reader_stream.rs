@@ -11,7 +11,7 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use safekeeper_api::Term;
-use utils::id::TenantTimelineId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 #[derive(PartialEq, Eq, Debug)]
@@ -40,8 +40,8 @@ struct PositionedWalReader {
 pub(crate) struct StreamingWalReader {
     stream: BoxStream<'static, WalOrReset>,
     start_changed_tx: tokio::sync::watch::Sender<Lsn>,
-    // Added TenantTimelineId for instrumentation purposes.
-    pub(crate) ttid: TenantTimelineId,
+    // Added BranchId for instrumentation purposes.
+    pub(crate) branch_id: BranchId,
 }
 
 pub(crate) enum WalOrReset {
@@ -68,7 +68,7 @@ impl StreamingWalReader {
         buffer_size: usize,
     ) -> Self {
         let (start_changed_tx, start_changed_rx) = tokio::sync::watch::channel(start);
-        let ttid = tli.ttid;
+        let branch_id = tli.branch_id;
 
         let state = WalReaderStreamState {
             tli,
@@ -114,7 +114,7 @@ impl StreamingWalReader {
         Self {
             stream,
             start_changed_tx,
-            ttid,
+            branch_id,
         }
     }
 
@@ -172,8 +172,8 @@ impl WalReaderStreamState {
                 .map(Some)
                 .with_context(|| {
                     format!(
-                        "get_walreader failed at start={} (ttid={})",
-                        self.wal_reader.start, self.tli.ttid
+                        "get_walreader failed at start={} (branch_id={})",
+                        self.wal_reader.start, self.tli.branch_id
                     )
                 })?;
         }
@@ -271,7 +271,7 @@ mod tests {
 
     use futures::StreamExt;
     use postgres_ffi::MAX_SEND_SIZE;
-    use utils::id::{NodeId, TenantTimelineId};
+    use utils::id::{BranchId, NodeId};
     use utils::lsn::Lsn;
 
     use crate::test_utils::Env;
@@ -288,7 +288,7 @@ mod tests {
         let start_lsn = Lsn::from_str("0/149FD18").unwrap();
         let env = Env::new(true).unwrap();
         let tli = env
-            .make_timeline(NodeId(1), TenantTimelineId::generate(), start_lsn)
+            .make_timeline(NodeId(1), BranchId::generate(), start_lsn)
             .await
             .unwrap();
 

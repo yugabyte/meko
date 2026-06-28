@@ -14,7 +14,7 @@ use postgres_ffi::{MAX_SEND_SIZE, XLogSegNo};
 use safekeeper_api::models::WalSenderState;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
 use crate::safekeeper::TermHistory;
@@ -43,11 +43,8 @@ pub struct Args {
     /// Dump last modified time of WAL segments. Uses value of `dump_all` by default.
     pub dump_wal_last_modified: bool,
 
-    /// Filter timelines by tenant_id.
-    pub tenant_id: Option<TenantId>,
-
-    /// Filter timelines by timeline_id.
-    pub timeline_id: Option<TimelineId>,
+    /// Filter timelines by branch_id.
+    pub branch_id: Option<BranchId>,
 }
 
 /// Response for debug dump request.
@@ -70,7 +67,7 @@ pub struct TimelineDumpSer {
 impl std::fmt::Debug for TimelineDumpSer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TimelineDumpSer")
-            .field("tli", &self.tli.ttid)
+            .field("tli", &self.tli.branch_id)
             .field("args", &self.args)
             .finish()
     }
@@ -127,8 +124,7 @@ async fn build_from_tli_dump(
     };
 
     Timeline {
-        tenant_id: timeline.ttid.tenant_id,
-        timeline_id: timeline.ttid.timeline_id,
+        branch_id: timeline.branch_id,
         control_file,
         memory,
         disk_content,
@@ -147,8 +143,7 @@ pub struct Config {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Timeline {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub control_file: Option<TimelinePersistentState>,
     pub memory: Option<Memory>,
     pub disk_content: Option<DiskContent>,
@@ -196,11 +191,10 @@ pub async fn build(args: Args, global_timelines: Arc<GlobalTimelines>) -> Result
     let timelines_count = global_timelines.timelines_count();
     let config = global_timelines.get_global_config();
 
-    let ptrs_snapshot = if args.tenant_id.is_some() && args.timeline_id.is_some() {
-        // If both tenant_id and timeline_id are specified, we can just get the
-        // timeline directly, without taking a snapshot of the whole list.
-        let ttid = TenantTimelineId::new(args.tenant_id.unwrap(), args.timeline_id.unwrap());
-        if let Ok(tli) = global_timelines.get(ttid) {
+    let ptrs_snapshot = if let Some(branch_id) = args.branch_id {
+        // If branch_id is specified, we can just get the timeline directly,
+        // without taking a snapshot of the whole list.
+        if let Ok(tli) = global_timelines.get(branch_id) {
             vec![tli]
         } else {
             vec![]
@@ -217,14 +211,9 @@ pub async fn build(args: Args, global_timelines: Arc<GlobalTimelines>) -> Result
             .unwrap(),
     );
     for tli in ptrs_snapshot {
-        let ttid = tli.ttid;
-        if let Some(tenant_id) = args.tenant_id {
-            if tenant_id != ttid.tenant_id {
-                continue;
-            }
-        }
-        if let Some(timeline_id) = args.timeline_id {
-            if timeline_id != ttid.timeline_id {
+        let branch_id = tli.branch_id;
+        if let Some(filter_branch_id) = args.branch_id {
+            if filter_branch_id != branch_id {
                 continue;
             }
         }
@@ -232,7 +221,7 @@ pub async fn build(args: Args, global_timelines: Arc<GlobalTimelines>) -> Result
         timelines.push(TimelineDumpSer {
             tli,
             args: args.clone(),
-            timeline_dir: get_timeline_dir(&config, &ttid),
+            timeline_dir: get_timeline_dir(&config, &branch_id),
             runtime: runtime.clone(),
         });
     }

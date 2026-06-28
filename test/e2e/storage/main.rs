@@ -2,11 +2,11 @@
 //! an ephemeral YB database, then runs the requested tests in a fixed
 //! order, scanning the pageserver log for corruption markers after each.
 //!
-//! All tests share a single cluster + tenant + `main` endpoint to
+//! All tests share a single cluster + `main` branch + endpoint to
 //! minimize setup cost; between tests the cluster is recycled (any
 //! component the prior test left down is restarted, and the compute
-//! endpoint is recreated for a clean compute state). The tenant +
-//! timeline persist across tests, so tests use unique table names.
+//! endpoint is recreated for a clean compute state). The `main` branch
+//! persists across tests, so tests use unique table names.
 //!
 //! This is intentionally a binary, not a `cargo test` target: the
 //! shared-cluster, fixed-order, gate-after-each, fast-then-slow-on-one-

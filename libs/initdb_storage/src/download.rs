@@ -10,37 +10,36 @@ use tokio::io::AsyncSeekExt;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use utils::backoff;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 
 use crate::{
     BUFFER_SIZE, FAILED_DOWNLOAD_WARN_THRESHOLD, FAILED_REMOTE_OP_RETRIES, INITDB_PATH,
     TEMP_FILE_SUFFIX, remote_initdb_archive_path, remote_initdb_preserved_archive_path,
 };
 
-/// Download the timeline's initdb tarball into `timeline_path`. Returns the
+/// Download the branch's initdb tarball into `branch_path`. Returns the
 /// path of the on-disk tarball and an open `File` rewound to byte 0, ready
 /// for the caller to feed into `extract_zst_tarball`.
 ///
 /// Falls back to the `initdb-preserved.tar.zst` object if the primary one
 /// is gone (we keep a preserved copy alongside the writable one).
 pub async fn download_initdb_tar_zst(
-    timeline_path: &Utf8Path,
+    branch_path: &Utf8Path,
     storage: &GenericRemoteStorage,
-    tenant_id: &TenantId,
-    timeline_id: &TimelineId,
+    branch_id: &BranchId,
     cancel: &CancellationToken,
 ) -> Result<(Utf8PathBuf, File), DownloadError> {
-    let remote_path = remote_initdb_archive_path(tenant_id, timeline_id);
-    let remote_preserved_path = remote_initdb_preserved_archive_path(tenant_id, timeline_id);
+    let remote_path = remote_initdb_archive_path(branch_id);
+    let remote_preserved_path = remote_initdb_preserved_archive_path(branch_id);
 
-    if !timeline_path.exists() {
-        tokio::fs::create_dir_all(&timeline_path)
+    if !branch_path.exists() {
+        tokio::fs::create_dir_all(&branch_path)
             .await
-            .with_context(|| format!("timeline dir creation {timeline_path}"))
+            .with_context(|| format!("branch dir creation {branch_path}"))
             .map_err(DownloadError::Other)?;
     }
-    let temp_path = timeline_path.join(format!(
-        "{INITDB_PATH}.download-{timeline_id}.{TEMP_FILE_SUFFIX}"
+    let temp_path = branch_path.join(format!(
+        "{INITDB_PATH}.download-{branch_id}.{TEMP_FILE_SUFFIX}"
     ));
 
     let file = download_retry(

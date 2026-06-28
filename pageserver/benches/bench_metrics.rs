@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 
 //
 // Demonstrates that repeat label values lookup is a multicore scalability bottleneck
@@ -27,9 +27,9 @@ mod label_values {
                         let timelines = (0..*ntimelines)
                             .map(|_| {
                                 (
-                                    TenantId::generate().to_string(),
+                                    BranchId::generate().to_string(),
                                     "0000".to_string(),
-                                    TimelineId::generate().to_string(),
+                                    BranchId::generate().to_string(),
                                 )
                             })
                             .collect::<Vec<_>>();
@@ -78,9 +78,9 @@ mod label_values {
                         let timelines = (0..*ntimelines)
                             .map(|_| {
                                 (
-                                    TenantId::generate().to_string(),
+                                    BranchId::generate().to_string(),
                                     "0000".to_string(),
-                                    TimelineId::generate().to_string(),
+                                    BranchId::generate().to_string(),
                                 )
                             })
                             .collect::<Vec<_>>();

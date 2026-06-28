@@ -2,15 +2,15 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use pageserver_api::controller_api::{
-    NodeAvailability, NodeDescribeResponse, NodeLifecycle, NodeRegisterRequest,
-    NodeSchedulingPolicy, TenantLocateResponseShard,
+    BranchLocateResponseShard, NodeAvailability, NodeDescribeResponse, NodeLifecycle,
+    NodeRegisterRequest, NodeSchedulingPolicy,
 };
 use pageserver_client::mgmt_api;
 use reqwest::StatusCode;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 use utils::backoff;
-use utils::id::{NodeId, TenantId};
+use utils::id::{BranchId, NodeId};
 
 use crate::pageserver_client::PageserverClient;
 use crate::persistence::NodePersistence;
@@ -141,11 +141,11 @@ impl Node {
             || self.listen_grpc_port != register_req.listen_grpc_port
     }
 
-    /// For a shard located on this node, populate a response object
+    /// For a branch located on this node, populate a response object
     /// with this node's address information.
-    pub(crate) fn shard_location(&self, shard_id: TenantId) -> TenantLocateResponseShard {
-        TenantLocateResponseShard {
-            shard_id,
+    pub(crate) fn branch_location(&self, branch_id: BranchId) -> BranchLocateResponseShard {
+        BranchLocateResponseShard {
+            branch_id,
             node_id: self.id,
             listen_http_addr: self.listen_http_addr.clone(),
             listen_http_port: self.listen_http_port,

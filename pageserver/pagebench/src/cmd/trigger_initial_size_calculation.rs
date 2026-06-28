@@ -3,7 +3,7 @@ use std::sync::Arc;
 use humantime::Duration;
 use pageserver_client::mgmt_api::ForceAwaitLogicalSize;
 use tokio::task::JoinSet;
-use utils::id::TenantTimelineId;
+use utils::id::BranchId;
 
 #[derive(clap::Parser)]
 pub(crate) struct Args {
@@ -20,7 +20,7 @@ pub(crate) struct Args {
     poll_for_completion: Option<Duration>,
     #[clap(long)]
     limit_to_first_n_targets: Option<usize>,
-    targets: Option<Vec<TenantTimelineId>>,
+    targets: Option<Vec<BranchId>>,
 }
 
 pub(crate) fn main(args: Args) -> anyhow::Result<()> {
@@ -43,7 +43,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
     ));
 
     // discover targets
-    let timelines: Vec<TenantTimelineId> = crate::util::cli::targets::discover(
+    let branches: Vec<BranchId> = crate::util::cli::targets::discover(
         &mgmt_api_client,
         crate::util::cli::targets::Spec {
             limit_to_first_n_targets: args.limit_to_first_n_targets,
@@ -55,21 +55,17 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
     // kick it off
 
     let mut js = JoinSet::new();
-    for tl in timelines {
+    for branch_id in branches {
         let mgmt_api_client = Arc::clone(&mgmt_api_client);
         js.spawn(async move {
             let info = mgmt_api_client
-                .timeline_info(
-                    tl.tenant_id,
-                    tl.timeline_id,
-                    ForceAwaitLogicalSize::Yes,
-                )
+                .timeline_info(branch_id, ForceAwaitLogicalSize::Yes)
                 .await
                 .unwrap();
 
             // Polling should not be strictly required here since we await
             // for the initial logical size, however it's possible for the request
-            // to land before the timeline is initialised. This results in an approximate
+            // to land before the branch is initialised. This results in an approximate
             // logical size.
             if let Some(period) = args.poll_for_completion {
                 let mut ticker = tokio::time::interval(period.into());
@@ -78,11 +74,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
                 while !info.current_logical_size_is_accurate {
                     ticker.tick().await;
                     info = mgmt_api_client
-                        .timeline_info(
-                            tl.tenant_id,
-                            tl.timeline_id,
-                            ForceAwaitLogicalSize::Yes,
-                        )
+                        .timeline_info(branch_id, ForceAwaitLogicalSize::Yes)
                         .await
                         .unwrap();
                 }

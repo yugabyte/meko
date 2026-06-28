@@ -15,12 +15,12 @@ use crate::page_server::mgr::TenantManager;
 
 pub(crate) fn regenerate(
     conf: &PageServerConf,
-    tenants_path: &Path,
+    branches_path: &Path,
     tenant_manager: &TenantManager,
 ) -> anyhow::Result<PageserverUtilization> {
-    let statvfs = nix::sys::statvfs::statvfs(tenants_path)
+    let statvfs = nix::sys::statvfs::statvfs(branches_path)
         .map_err(std::io::Error::from)
-        .context("statvfs tenants directory")?;
+        .context("statvfs branches directory")?;
 
     // https://unix.stackexchange.com/a/703650
     let blocksz = if statvfs.fragment_size() > 0 {

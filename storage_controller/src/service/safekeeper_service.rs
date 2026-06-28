@@ -21,7 +21,7 @@ use safekeeper_api::models::TimelineLocateResponse;
 use safekeeper_client::mgmt_api;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::logging::SecretString;
 
 use super::Service;
@@ -58,11 +58,10 @@ impl Service {
     ///
     /// Returns `Ok(left)` if the timeline has been created on a quorum of safekeepers,
     /// where `left` contains the list of safekeepers that didn't have a successful response.
-    /// Assumes tenant lock is held while calling this function.
+    /// Assumes branch lock is held while calling this function.
     pub(super) async fn tenant_timeline_create_safekeepers_quorum(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         pg_version: PgVersionId,
         timeline_persistence: &TimelinePersistence,
     ) -> Result<Vec<NodeId>, ApiError> {
@@ -77,8 +76,7 @@ impl Service {
             pg_version,
             start_lsn: timeline_persistence.start_lsn.0,
             system_id: None,
-            tenant_id,
-            timeline_id,
+            branch_id,
             wal_seg_size: None,
         };
 
@@ -268,11 +266,10 @@ impl Service {
     /// timeline creation if one safekeeper is down.
     pub(super) async fn tenant_timeline_create_safekeepers(
         self: &Arc<Self>,
-        tenant_id: TenantId,
         timeline_info: &TimelineInfo,
         read_only: bool,
     ) -> Result<SafekeepersInfo, ApiError> {
-        let timeline_id = timeline_info.timeline_id;
+        let branch_id = timeline_info.branch_id;
         let pg_version = PgVersionId::from(timeline_info.pg_version);
         // Initially start_lsn is determined by last_record_lsn in pageserver
         // response as it does initdb. However, later we persist it and in sk
@@ -291,8 +288,7 @@ impl Service {
         let sks_persistence = sks.iter().map(|sk| sk.id.0 as i64).collect::<Vec<_>>();
         // Add timeline to db
         let mut timeline_persist = TimelinePersistence {
-            tenant_id: tenant_id.to_string(),
-            timeline_id: timeline_id.to_string(),
+            branch_id: branch_id.to_string(),
             start_lsn: start_lsn.into(),
             generation: 1,
             sk_set: sks_persistence.clone(),
@@ -304,11 +300,7 @@ impl Service {
             .insert_timeline(timeline_persist.clone())
             .await?;
         if !inserted {
-            if let Some(existent_persist) = self
-                .persistence
-                .get_timeline(tenant_id, timeline_id)
-                .await?
-            {
+            if let Some(existent_persist) = self.persistence.get_timeline(branch_id).await? {
                 // Replace with what we have in the db, to get stuff like the generation right.
                 // We do still repeat the http calls to the safekeepers. After all, we could have
                 // crashed right after the wrote to the DB.
@@ -322,8 +314,7 @@ impl Service {
         let ret = SafekeepersInfo {
             generation: timeline_persist.generation as u32,
             safekeepers: sks.clone(),
-            tenant_id,
-            timeline_id,
+            branch_id,
         };
         if read_only {
             return Ok(ret);
@@ -333,16 +324,11 @@ impl Service {
         // quorum == 1; a non-empty `remaining` means the SK did not respond and
         // there is nothing to fall back to.
         let remaining = self
-            .tenant_timeline_create_safekeepers_quorum(
-                tenant_id,
-                timeline_id,
-                pg_version,
-                &timeline_persist,
-            )
+            .tenant_timeline_create_safekeepers_quorum(branch_id, pg_version, &timeline_persist)
             .await?;
         if !remaining.is_empty() {
             return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                "safekeeper(s) {remaining:?} failed to create timeline {tenant_id}/{timeline_id}",
+                "safekeeper(s) {remaining:?} failed to create timeline {branch_id}",
             )));
         }
 
@@ -356,29 +342,18 @@ impl Service {
     /// an existing row is left untouched.
     pub(crate) async fn timeline_register(
         self: &Arc<Self>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         start_lsn: utils::lsn::Lsn,
         sk_set: Vec<utils::id::NodeId>,
         branch_name: Option<String>,
     ) -> Result<(), ApiError> {
-        // A branch alias maps to exactly one live timeline per tenant. Setting
-        // it here — in the same write as the registration — folds the
-        // launcher's old separate list+set round-trips; enforce the same
-        // uniqueness `register_branch_mapping` did, server-side.
-        if let Some(ref name) = branch_name {
-            let existing = self.persistence.list_timeline_branch_names().await?;
-            if existing.iter().any(|(t, tl, n)| {
-                n == name && *t == tenant_id.to_string() && *tl != timeline_id.to_string()
-            }) {
-                return Err(ApiError::Conflict(format!(
-                    "branch '{name}' already maps to another timeline in tenant {tenant_id}"
-                )));
-            }
-        }
+        // `branch_name` is a non-unique label here: in the flat model
+        // independent branches commonly share a name (e.g. every project's
+        // root branch is "main"), so the controller does NOT enforce global
+        // name uniqueness. Disambiguation by name is the launcher's local
+        // concern; callers that need an exact branch pass `branch_id`.
         let timeline_persist = TimelinePersistence {
-            tenant_id: tenant_id.to_string(),
-            timeline_id: timeline_id.to_string(),
+            branch_id: branch_id.to_string(),
             start_lsn: start_lsn.into(),
             generation: 1,
             sk_set: sk_set.iter().map(|id| id.0 as i64).collect(),
@@ -387,16 +362,13 @@ impl Service {
         };
         let inserted = self.persistence.insert_timeline(timeline_persist).await?;
         if !inserted {
-            tracing::info!(
-                "timeline {tenant_id}/{timeline_id} already registered, leaving row untouched"
-            );
+            tracing::info!("branch {branch_id} already registered, leaving row untouched");
         }
         Ok(())
     }
 
     pub(crate) async fn tenant_timeline_create_safekeepers_until_success(
         self: &Arc<Self>,
-        tenant_id: TenantId,
         timeline_info: TimelineInfo,
     ) -> Result<(), TimelineImportFinalizeError> {
         const BACKOFF: Duration = Duration::from_secs(5);
@@ -409,7 +381,7 @@ impl Service {
             // This function is only used in non-read-only scenarios
             let read_only = false;
             let res = self
-                .tenant_timeline_create_safekeepers(tenant_id, &timeline_info, read_only)
+                .tenant_timeline_create_safekeepers(&timeline_info, read_only)
                 .await;
 
             match res {
@@ -438,8 +410,7 @@ impl Service {
     /// but we want to make it storage controller managed.
     pub(crate) async fn timeline_import(&self, req: TimelineImportRequest) -> Result<(), ApiError> {
         let persistence = TimelinePersistence {
-            tenant_id: req.tenant_id.to_string(),
-            timeline_id: req.timeline_id.to_string(),
+            branch_id: req.branch_id.to_string(),
             start_lsn: req.start_lsn.into(),
             generation: 1,
             sk_set: req.sk_set.iter().map(|sk_id| sk_id.0 as i64).collect(),
@@ -457,8 +428,7 @@ impl Service {
         tracing::info!("timeline already present in db, updating");
 
         let update = TimelineUpdate {
-            tenant_id: persistence.tenant_id,
-            timeline_id: persistence.timeline_id,
+            branch_id: persistence.branch_id,
             start_lsn: persistence.start_lsn,
             sk_set: persistence.sk_set,
         };
@@ -473,17 +443,13 @@ impl Service {
     /// If the timeline is not storcon-managed, return NotFound.
     pub(crate) async fn tenant_timeline_locate(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<TimelineLocateResponse, ApiError> {
-        let timeline = self
-            .persistence
-            .get_timeline(tenant_id, timeline_id)
-            .await?;
+        let timeline = self.persistence.get_timeline(branch_id).await?;
 
         let Some(timeline) = timeline else {
             return Err(ApiError::NotFound(
-                anyhow::anyhow!("Timeline {}/{} not found", tenant_id, timeline_id).into(),
+                anyhow::anyhow!("Timeline {} not found", branch_id).into(),
             ));
         };
 
@@ -504,22 +470,16 @@ impl Service {
     /// deletion is done synchronously inline (with retries inside the op helper).
     pub(super) async fn tenant_timeline_delete_safekeepers(
         self: &Arc<Self>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<(), ApiError> {
-        let tl = self
-            .persistence
-            .get_timeline(tenant_id, timeline_id)
-            .await?;
+        let tl = self.persistence.get_timeline(branch_id).await?;
         let Some(tl) = tl else {
             tracing::info!(
-                "timeline {tenant_id}/{timeline_id} doesn't exist in timelines table, no deletions on safekeepers needed"
+                "timeline {branch_id} doesn't exist in timelines table, no deletions on safekeepers needed"
             );
             return Ok(());
         };
-        self.persistence
-            .timeline_set_deleted_at(tenant_id, timeline_id)
-            .await?;
+        self.persistence.timeline_set_deleted_at(branch_id).await?;
 
         let safekeepers = self.get_safekeepers(&tl.sk_set)?;
         if !safekeepers.is_empty() {
@@ -527,16 +487,14 @@ impl Service {
             let results = self
                 .tenant_timeline_safekeeper_op(
                     &safekeepers,
-                    move |client| async move {
-                        client.delete_timeline(tenant_id, timeline_id).await
-                    },
+                    move |client| async move { client.delete_timeline(branch_id).await },
                     SK_DELETE_TIMELINE_TIMEOUT,
                 )
                 .await?;
             for (sk, res) in safekeepers.iter().zip(results) {
                 if let Err(err) = res {
                     return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                        "failed to delete timeline {tenant_id}/{timeline_id} on safekeeper {}: {err}",
+                        "failed to delete timeline {branch_id} on safekeeper {}: {err}",
                         sk.get_id()
                     )));
                 }
@@ -544,86 +502,74 @@ impl Service {
             }
         }
 
-        if let Err(err) = self
-            .persistence
-            .delete_timeline(tenant_id, timeline_id)
-            .await
-        {
-            tracing::warn!(%tenant_id, %timeline_id, "couldn't delete timeline from db: {err}");
+        if let Err(err) = self.persistence.delete_timeline(branch_id).await {
+            tracing::warn!(%branch_id, "couldn't delete timeline from db: {err}");
         }
         Ok(())
     }
 
-    /// Perform tenant deletion on the safekeeper(s), then remove its timelines from the db.
+    /// Perform branch deletion on the safekeeper(s), then remove its timeline row from the db.
     ///
     /// yb-light is single-SK with no background safekeeper reconciler, so the
     /// deletion is done synchronously inline (with retries inside the op helper).
-    pub(super) async fn tenant_delete_safekeepers(
+    pub(super) async fn branch_delete_safekeepers(
         self: &Arc<Self>,
-        tenant_id: TenantId,
+        branch_id: BranchId,
     ) -> Result<(), ApiError> {
         let timeline_list = self
             .persistence
-            .list_timelines_for_tenant(tenant_id)
+            .list_timelines_for_branch(branch_id)
             .await?;
 
         if timeline_list.is_empty() {
-            // Early exit: the tenant is either empty or not migrated to the storcon yet
-            tracing::info!("Skipping tenant delete as the timeline doesn't exist in db");
+            // Early exit: the branch is either empty or not migrated to the storcon yet
+            tracing::info!("Skipping branch delete as the timeline doesn't exist in db");
             return Ok(());
         }
 
-        let timeline_list = timeline_list
-            .into_iter()
-            .map(|timeline| {
-                let timeline_id = TimelineId::from_str(&timeline.timeline_id)
-                    .context("timeline id loaded from db")
-                    .map_err(ApiError::InternalServerError)?;
-                Ok((timeline_id, timeline))
-            })
-            .collect::<Result<Vec<_>, ApiError>>()?;
-
-        for (timeline_id, _timeline) in timeline_list.iter() {
+        for timeline in timeline_list.iter() {
+            let row_branch_id = BranchId::from_str(&timeline.branch_id)
+                .context("branch id loaded from db")
+                .map_err(ApiError::InternalServerError)?;
             self.persistence
-                .timeline_set_deleted_at(tenant_id, *timeline_id)
+                .timeline_set_deleted_at(row_branch_id)
                 .await?;
         }
 
-        // The set of safekeepers that have any of the tenant's timelines.
+        // The set of safekeepers that have any of the branch's timelines.
         let mut sk_set = HashSet::new();
-        for (_timeline_id, timeline) in timeline_list.iter() {
+        for timeline in timeline_list.iter() {
             sk_set.extend(timeline.sk_set.iter().copied());
         }
         let sk_ids = sk_set.into_iter().collect::<Vec<_>>();
         let safekeepers = self.get_safekeepers(&sk_ids)?;
 
         if !safekeepers.is_empty() {
-            const SK_DELETE_TENANT_TIMEOUT: Duration = Duration::from_secs(30);
+            const SK_DELETE_BRANCH_TIMEOUT: Duration = Duration::from_secs(30);
             let results = self
                 .tenant_timeline_safekeeper_op(
                     &safekeepers,
-                    move |client| async move { client.delete_tenant(tenant_id).await },
-                    SK_DELETE_TENANT_TIMEOUT,
+                    move |client| async move { client.delete_timeline(branch_id).await },
+                    SK_DELETE_BRANCH_TIMEOUT,
                 )
                 .await?;
             for (sk, res) in safekeepers.iter().zip(results) {
                 if let Err(err) = res {
                     return Err(ApiError::InternalServerError(anyhow::anyhow!(
-                        "failed to delete tenant {tenant_id} on safekeeper {}: {err}",
+                        "failed to delete branch {branch_id} on safekeeper {}: {err}",
                         sk.get_id()
                     )));
                 }
-                tracing::info!(%tenant_id, "deleted tenant from safekeeper {}", sk.get_id());
+                tracing::info!(%branch_id, "deleted branch from safekeeper {}", sk.get_id());
             }
         }
 
-        for (timeline_id, _timeline) in timeline_list.iter() {
-            if let Err(err) = self
-                .persistence
-                .delete_timeline(tenant_id, *timeline_id)
-                .await
-            {
-                tracing::warn!(%tenant_id, %timeline_id, "couldn't delete timeline from db: {err}");
+        for timeline in timeline_list.iter() {
+            let row_branch_id = BranchId::from_str(&timeline.branch_id)
+                .context("branch id loaded from db")
+                .map_err(ApiError::InternalServerError)?;
+            if let Err(err) = self.persistence.delete_timeline(row_branch_id).await {
+                tracing::warn!(%row_branch_id, "couldn't delete timeline from db: {err}");
             }
         }
         Ok(())

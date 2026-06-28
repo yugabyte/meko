@@ -1,9 +1,9 @@
-//! Two independent timelines (each its own tenant + co-located PS+SK
-//! pair) coexisting in the same shared YB db: storage isolation (a
-//! same-named table on each holds only that timeline's rows) and
+//! Two independent branches (each its own co-located PS+SK pair)
+//! coexisting in the same shared YB db: storage isolation (a
+//! same-named table on each holds only that branch's rows) and
 //! independent lifecycle (dropping one leaves the other intact and
 //! serving). Doubles as coverage for concurrent pending Bootstrap inits
-//! across tenants (#23).
+//! across branches (#23).
 
 use anyhow::bail;
 
@@ -15,29 +15,29 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // Two endpoints in the compute lane, above `main`.
     let a_port = c.compute_port() + 138;
     let b_port = c.compute_port() + 148;
-    step("Create two independent timelines (tenant A, tenant B)");
-    let ta = c.tenant_create()?;
-    if ta.is_empty() {
-        bail!("tenant A create failed");
+    step("Create two independent branches (branch A, branch B)");
+    let ba = c.branch_create()?;
+    if ba.is_empty() {
+        bail!("branch A create failed");
     }
-    let tb = c.tenant_create()?;
-    if tb.is_empty() {
-        bail!("tenant B create failed");
+    let bb = c.branch_create()?;
+    if bb.is_empty() {
+        bail!("branch B create failed");
     }
-    tee_println!("tenant A: {ta}");
-    tee_println!("tenant B: {tb}");
-    if ta == tb {
-        bail!("two tenant creates returned the same id");
+    tee_println!("branch A: {ba}");
+    tee_println!("branch B: {bb}");
+    if ba == bb {
+        bail!("two branch creates returned the same id");
     }
 
-    step("Provision + start an endpoint on each (one co-located PS+SK pair per timeline)");
+    step("Provision + start an endpoint on each (one co-located PS+SK pair per branch)");
     c.yb(&[
-        "endpoint", "create", "ep_a", "--tenant-id", &ta, "--branch-name", "main",
+        "endpoint", "create", "ep_a", "--branch-id", &ba, "--branch-name", "main",
         "--pg-version", "17", "--pg-port", &a_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_a"])?;
     c.yb(&[
-        "endpoint", "create", "ep_b", "--tenant-id", &tb, "--branch-name", "main",
+        "endpoint", "create", "ep_b", "--branch-id", &bb, "--branch-name", "main",
         "--pg-version", "17", "--pg-port", &b_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_b"])?;

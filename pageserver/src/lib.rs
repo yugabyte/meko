@@ -235,7 +235,7 @@ pub async fn shutdown_pageserver(
 
     // There should be nothing left, but let's be sure
     timed(
-        task_mgr::shutdown_tasks(None, None, None),
+        task_mgr::shutdown_tasks(None, None),
         "shutdown leftovers",
         Duration::from_secs(1),
     )

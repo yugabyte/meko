@@ -11,7 +11,7 @@ use safekeeper_api::membership::Configuration;
 use safekeeper_api::{INITIAL_TERM, ServerInfo};
 use serde::{Deserialize, Serialize};
 use tracing::info;
-use utils::id::{TenantId, TenantTimelineId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::control_file;
@@ -24,9 +24,7 @@ use crate::timeline::TimelineError;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelinePersistentState {
     #[serde(with = "hex")]
-    pub tenant_id: TenantId,
-    #[serde(with = "hex")]
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     /// Membership configuration.
     pub mconf: Configuration,
     /// persistent acceptor state
@@ -55,17 +53,17 @@ impl TimelinePersistentState {
     /// yb-light: `commit_lsn` collapsed into `flush_lsn`, so creation only
     /// needs `start_lsn`. Term history is seeded when `start_lsn` is known.
     pub fn new(
-        ttid: &TenantTimelineId,
+        branch_id: &BranchId,
         mconf: Configuration,
         server_info: ServerInfo,
         start_lsn: Lsn,
     ) -> anyhow::Result<TimelinePersistentState> {
         if server_info.wal_seg_size == 0 {
-            bail!(TimelineError::UninitializedWalSegSize(*ttid));
+            bail!(TimelineError::UninitializedWalSegSize(*branch_id));
         }
 
         if server_info.pg_version == UNKNOWN_SERVER_VERSION {
-            bail!(TimelineError::UninitialinzedPgVersion(*ttid));
+            bail!(TimelineError::UninitialinzedPgVersion(*branch_id));
         }
 
         // If we are given with init LSN, initialize term history with it. It
@@ -83,8 +81,7 @@ impl TimelinePersistentState {
         };
 
         Ok(TimelinePersistentState {
-            tenant_id: ttid.tenant_id,
-            timeline_id: ttid.timeline_id,
+            branch_id: *branch_id,
             mconf,
             acceptor_state: AcceptorState {
                 term: INITIAL_TERM,
@@ -101,7 +98,7 @@ impl TimelinePersistentState {
 
     pub fn empty() -> Self {
         TimelinePersistentState::new(
-            &TenantTimelineId::empty(),
+            &BranchId::from_array([0u8; 16]),
             Configuration::empty(),
             ServerInfo {
                 pg_version: PgVersionId::from(PgMajorVersion::PG17),

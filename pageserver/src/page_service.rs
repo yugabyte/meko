@@ -52,7 +52,7 @@ use tonic::service::Interceptor as _;
 use tonic::transport::server::TcpConnectInfo;
 use tracing::*;
 use utils::auth::{Claims, Scope, SwappableJwtAuth};
-use utils::id::{TenantId, TenantTimelineId, TimelineId};
+use utils::id::BranchId;
 use utils::logging::log_slow;
 use utils::lsn::Lsn;
 use utils::simple_rcu::RcuReadGuard;
@@ -71,7 +71,7 @@ use crate::metrics::{
     MISROUTED_PAGESTREAM_REQUESTS, PAGESTREAM_HANDLER_RESULTS_TOTAL, SmgrOpTimer, TimelineMetrics,
 };
 use crate::pgdatadir_mapping::{LsnRange, Version};
-use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
+use crate::span::debug_assert_current_span_has_branch_id;
 use crate::task_mgr::{self, COMPUTE_REQUEST_RUNTIME, TaskKind};
 use crate::page_server::mgr::{GetTenantError, TenantManager};
 use crate::page_server::timeline::handle::{Handle, HandleUpgradeError, WeakHandle};
@@ -387,16 +387,16 @@ async fn page_service_conn_main(
                 info!("Postgres client disconnected ({io_error})");
                 Ok(())
             } else {
-                let tenant_id = conn_handler.timeline_handles.as_ref().unwrap().tenant_id();
+                let branch_id = conn_handler.timeline_handles.as_ref().unwrap().branch_id();
                 Err(io_error).context(format!(
-                    "Postgres connection error for tenant_id={tenant_id:?} client at peer_addr={peer_addr}"
+                    "Postgres connection error for branch_id={branch_id:?} client at peer_addr={peer_addr}"
                 ))
             }
         }
         other => {
-            let tenant_id = conn_handler.timeline_handles.as_ref().unwrap().tenant_id();
+            let branch_id = conn_handler.timeline_handles.as_ref().unwrap().branch_id();
             other.context(format!(
-                "Postgres query error for tenant_id={tenant_id:?} client peer_addr={peer_addr}"
+                "Postgres query error for branch_id={branch_id:?} client peer_addr={peer_addr}"
             ))
         }
     }
@@ -440,33 +440,32 @@ impl TimelineHandles {
         Self {
             wrapper: TenantManagerWrapper {
                 tenant_manager,
-                tenant_id: OnceCell::new(),
+                branch_id: OnceCell::new(),
             },
             handles: Default::default(),
         }
     }
     async fn get(
         &mut self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<Handle<TenantManagerTypes>, GetActiveTimelineError> {
-        if *self.wrapper.tenant_id.get_or_init(|| tenant_id) != tenant_id {
+        if *self.wrapper.branch_id.get_or_init(|| branch_id) != branch_id {
             return Err(GetActiveTimelineError::SwitchedTenant);
         }
-        self.handles.get(timeline_id, &self.wrapper).await
+        self.handles.get(branch_id, &self.wrapper).await
     }
 
-    fn tenant_id(&self) -> Option<TenantId> {
-        self.wrapper.tenant_id.get().copied()
+    fn branch_id(&self) -> Option<BranchId> {
+        self.wrapper.branch_id.get().copied()
     }
 }
 
 pub(crate) struct TenantManagerWrapper {
     tenant_manager: Arc<TenantManager>,
-    // We do not support switching tenant_id on a connection at this point.
+    // We do not support switching branch_id on a connection at this point.
     // We can can add support for this later if needed without changing
     // the protocol.
-    tenant_id: once_cell::sync::OnceCell<TenantId>,
+    branch_id: once_cell::sync::OnceCell<BranchId>,
 }
 
 pub(crate) struct TenantManagerTypes;
@@ -493,8 +492,8 @@ impl std::ops::Deref for TenantManagerCacheItem {
 }
 
 impl timeline::handle::Timeline<TenantManagerTypes> for TenantManagerCacheItem {
-    fn timeline_id(&self) -> TimelineId {
-        self.timeline.timeline_id
+    fn branch_id(&self) -> BranchId {
+        self.timeline.branch_id
     }
 
     fn per_timeline_state(&self) -> &timeline::handle::PerTimelineState<TenantManagerTypes> {
@@ -505,31 +504,30 @@ impl timeline::handle::Timeline<TenantManagerTypes> for TenantManagerCacheItem {
 impl timeline::handle::TenantManager<TenantManagerTypes> for TenantManagerWrapper {
     async fn resolve(
         &self,
-        timeline_id: TimelineId,
+        _branch_id: BranchId,
     ) -> Result<TenantManagerCacheItem, GetActiveTimelineError> {
-        let tenant_id = self.tenant_id.get().expect("we set this in get()");
+        let branch_id = *self.branch_id.get().expect("we set this in get()");
 
-        // Single-timeline pageserver: every request must target the
+        // Single-branch pageserver: every request must target the
         // configured identity; anything else is a misrouted compute.
         let identity = self.tenant_manager.timeline_identity();
-        if *tenant_id != identity.tenant_id || timeline_id != identity.timeline_id {
+        if branch_id != identity.branch_id {
             MISROUTED_PAGESTREAM_REQUESTS.inc();
             tracing::warn!(
-                "request for {tenant_id}/{timeline_id} but this pageserver serves {}/{}",
-                identity.tenant_id,
-                identity.timeline_id,
+                "request for {branch_id} but this pageserver serves {}",
+                identity.branch_id,
             );
             return Err(GetActiveTimelineError::Tenant(GetTenantError::NotFound(
-                *tenant_id,
+                branch_id,
             )));
         }
         let tenant_shard = self
             .tenant_manager
-            .get_attached_tenant_shard(*tenant_id)
+            .get_attached_tenant_shard(branch_id)
             .map_err(GetActiveTimelineError::Tenant)?;
 
         let timeline = tenant_shard
-            .get_timeline(timeline_id, true)
+            .get_timeline(branch_id, true)
             .map_err(GetActiveTimelineError::Timeline)?;
 
         let gate_guard = match timeline.gate.enter() {
@@ -947,8 +945,7 @@ impl PageServerHandler {
     #[allow(clippy::too_many_arguments)]
     async fn pagestream_read_message<IO>(
         pgb: &mut PostgresBackendReader<IO>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         timeline_handles: &mut TimelineHandles,
         conn_perf_span_fields: &ConnectionPerfSpanFields,
         cancel: &CancellationToken,
@@ -995,9 +992,9 @@ impl PageServerHandler {
         let batched_msg = match neon_fe_msg {
             PagestreamFeMessage::Exists(req) => {
                 let shard = timeline_handles
-                    .get(tenant_id, timeline_id)
+                    .get(branch_id)
                     .await?;
-                debug_assert_current_span_has_tenant_and_timeline_id();
+                debug_assert_current_span_has_branch_id();
                 let span = tracing::info_span!(parent: &parent_span, "handle_get_rel_exists_request", rel = %req.rel, req_lsn = %req.hdr.request_lsn);
                 let timer = Self::record_op_start_and_throttle(
                     &shard,
@@ -1014,7 +1011,7 @@ impl PageServerHandler {
             }
             PagestreamFeMessage::Nblocks(req) => {
                 let shard = timeline_handles
-                    .get(tenant_id, timeline_id)
+                    .get(branch_id)
                     .await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_get_nblocks_request", rel = %req.rel, req_lsn = %req.hdr.request_lsn);
                 let timer = Self::record_op_start_and_throttle(
@@ -1032,7 +1029,7 @@ impl PageServerHandler {
             }
             PagestreamFeMessage::DbSize(req) => {
                 let shard = timeline_handles
-                    .get(tenant_id, timeline_id)
+                    .get(branch_id)
                     .await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_db_size_request", dbnode = %req.dbnode, req_lsn = %req.hdr.request_lsn);
                 let timer = Self::record_op_start_and_throttle(
@@ -1050,7 +1047,7 @@ impl PageServerHandler {
             }
             PagestreamFeMessage::GetSlruSegment(req) => {
                 let shard = timeline_handles
-                    .get(tenant_id, timeline_id)
+                    .get(branch_id)
                     .await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_get_slru_segment_request", kind = %req.kind, segno = %req.segno, req_lsn = %req.hdr.request_lsn);
                 let timer = Self::record_op_start_and_throttle(
@@ -1097,7 +1094,7 @@ impl PageServerHandler {
 
                 let key = rel_block_to_key(req.rel, req.blkno);
 
-                let res = timeline_handles.get(tenant_id, timeline_id).await;
+                let res = timeline_handles.get(branch_id).await;
 
                 let shard = match res {
                     Ok(tl) => tl,
@@ -1137,8 +1134,7 @@ impl PageServerHandler {
                             peer_addr = conn_perf_span_fields.peer_addr,
                             application_name = conn_perf_span_fields.application_name,
                             compute_mode = conn_perf_span_fields.compute_mode,
-                            tenant_id = %tenant_id,
-                            timeline_id = %timeline_id,
+                            branch_id = %branch_id,
                             lsn = %req.hdr.request_lsn,
                             not_modified_since_lsn = %req.hdr.not_modified_since,
                             request_id = %req.hdr.reqid,
@@ -1234,7 +1230,7 @@ impl PageServerHandler {
             #[cfg(feature = "testing")]
             PagestreamFeMessage::Test(req) => {
                 let shard = timeline_handles
-                    .get(tenant_id, timeline_id)
+                    .get(branch_id)
                     .await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_test_request");
                 let timer = Self::record_op_start_and_throttle(
@@ -1282,7 +1278,7 @@ impl PageServerHandler {
         batch: &mut Result<BatchedFeMessage, QueryError>,
         this_msg: Result<BatchedFeMessage, QueryError>,
     ) -> Result<(), Result<BatchedFeMessage, QueryError>> {
-        debug_assert_current_span_has_tenant_and_timeline_id();
+        debug_assert_current_span_has_branch_id();
 
         let this_msg = match this_msg {
             Ok(this_msg) => this_msg,
@@ -1740,15 +1736,14 @@ impl PageServerHandler {
     async fn handle_pagerequests<IO>(
         &mut self,
         pgb: &mut PostgresBackend<IO>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         protocol_version: PagestreamProtocolVersion,
         ctx: RequestContext,
     ) -> Result<(), QueryError>
     where
         IO: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
     {
-        debug_assert_current_span_has_tenant_and_timeline_id();
+        debug_assert_current_span_has_branch_id();
 
         // switch client to COPYBOTH
         pgb.write_message_noflush(&BeMessage::CopyBothResponse)?;
@@ -1788,8 +1783,7 @@ impl PageServerHandler {
                 self.handle_pagerequests_pipelined(
                     pgb,
                     pgb_reader,
-                    tenant_id,
-                    timeline_id,
+                    branch_id,
                     timeline_handles,
                     request_span,
                     pipelining_config,
@@ -1803,8 +1797,7 @@ impl PageServerHandler {
                 self.handle_pagerequests_serial(
                     pgb,
                     pgb_reader,
-                    tenant_id,
-                    timeline_id,
+                    branch_id,
                     timeline_handles,
                     request_span,
                     protocol_version,
@@ -1831,8 +1824,7 @@ impl PageServerHandler {
         &mut self,
         pgb_writer: &mut PostgresBackend<IO>,
         mut pgb_reader: PostgresBackendReader<IO>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         mut timeline_handles: TimelineHandles,
         request_span: Span,
         protocol_version: PagestreamProtocolVersion,
@@ -1864,8 +1856,7 @@ impl PageServerHandler {
                 }
                 read = Self::pagestream_read_message(
                     &mut pgb_reader,
-                    tenant_id,
-                    timeline_id,
+                    branch_id,
                     &mut timeline_handles,
                     &self.perf_span_fields,
                     &cancel,
@@ -1906,8 +1897,7 @@ impl PageServerHandler {
         &mut self,
         pgb_writer: &mut PostgresBackend<IO>,
         pgb_reader: PostgresBackendReader<IO>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         mut timeline_handles: TimelineHandles,
         request_span: Span,
         pipelining_config: PageServicePipeliningConfigPipelined,
@@ -2020,8 +2010,7 @@ impl PageServerHandler {
                         }
                         r = Self::pagestream_read_message(
                             &mut pgb_reader,
-                            tenant_id,
-                            timeline_id,
+                            branch_id,
                             &mut timeline_handles,
                             &perf_span_fields,
                             &cancel_batcher,
@@ -2243,8 +2232,7 @@ impl PageServerHandler {
     async fn handle_make_lsn_lease<IO>(
         &mut self,
         pgb: &mut PostgresBackend<IO>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         lsn: Lsn,
         ctx: &RequestContext,
     ) -> Result<(), QueryError>
@@ -2255,7 +2243,7 @@ impl PageServerHandler {
             .timeline_handles
             .as_mut()
             .unwrap()
-            .get(tenant_id, timeline_id)
+            .get(branch_id)
             .await?;
 
         let lease = timeline
@@ -2400,7 +2388,7 @@ impl PageServerHandler {
         ctx: &RequestContext,
     ) -> Vec<Result<(PagestreamBeMessage, SmgrOpTimer, RequestContext), BatchedPageStreamError>>
     {
-        debug_assert_current_span_has_tenant_and_timeline_id();
+        debug_assert_current_span_has_branch_id();
 
         timeline
             .query_metrics
@@ -2440,8 +2428,7 @@ impl PageServerHandler {
                     info_span!(
                         target: PERF_TRACE_TARGET,
                         "GET_VECTORED",
-                        tenant_id = %timeline.tenant_id,
-                        timeline_id = %timeline.timeline_id,
+                        branch_id = %timeline.branch_id,
                         %max_effective_lsn
                     )
                 })
@@ -2604,8 +2591,7 @@ impl PageServerHandler {
     async fn handle_basebackup_request<IO>(
         &mut self,
         pgb: &mut PostgresBackend<IO>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         lsn: Option<Lsn>,
         prev_lsn: Option<Lsn>,
         full_backup: bool,
@@ -2622,13 +2608,13 @@ impl PageServerHandler {
             .timeline_handles
             .as_mut()
             .unwrap()
-            .get(tenant_id, timeline_id)
+            .get(branch_id)
             .await?;
         let ctx = ctx.with_scope_timeline(&timeline);
 
         if timeline.is_archived() == Some(true) {
             tracing::info!(
-                "timeline {tenant_id}/{timeline_id} is archived, but got basebackup request for it."
+                "branch {branch_id} is archived, but got basebackup request for it."
             );
             return Err(QueryError::NotFound("timeline is archived".into()));
         }
@@ -2743,7 +2729,7 @@ impl PageServerHandler {
 
     // when accessing management api supply None as an argument
     // when using to authorize tenant pass corresponding tenant id
-    fn check_permission(&self, tenant_id: Option<TenantId>) -> Result<(), QueryError> {
+    fn check_permission(&self, branch_id: Option<BranchId>) -> Result<(), QueryError> {
         if self.auth.is_none() {
             // auth is set to Trust, nothing to check so just return ok
             return Ok(());
@@ -2755,15 +2741,14 @@ impl PageServerHandler {
             .claims
             .as_ref()
             .expect("claims presence already checked");
-        check_permission(claims, tenant_id).map_err(|e| QueryError::Unauthorized(e.0))
+        check_permission(claims, branch_id).map_err(|e| QueryError::Unauthorized(e.0))
     }
 }
 
 /// `basebackup tenant timeline [lsn] [--gzip] [--replica]`
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct BaseBackupCmd {
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     lsn: Option<Lsn>,
     gzip: bool,
     replica: bool,
@@ -2772,8 +2757,7 @@ struct BaseBackupCmd {
 /// `fullbackup tenant timeline [lsn] [prev_lsn]`
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct FullBackupCmd {
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     lsn: Option<Lsn>,
     prev_lsn: Option<Lsn>,
 }
@@ -2781,16 +2765,14 @@ struct FullBackupCmd {
 /// `pagestream_v2 tenant timeline`
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct PageStreamCmd {
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     protocol_version: PagestreamProtocolVersion,
 }
 
 /// `lease lsn tenant timeline lsn`
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct LeaseLsnCmd {
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     lsn: Lsn,
 }
 
@@ -2806,19 +2788,16 @@ enum PageServiceCmd {
 impl PageStreamCmd {
     fn parse(query: &str, protocol_version: PagestreamProtocolVersion) -> anyhow::Result<Self> {
         let parameters = query.split_whitespace().collect_vec();
-        if parameters.len() != 2 {
+        if parameters.len() != 1 {
             bail!(
                 "invalid number of parameters for pagestream command: {}",
                 query
             );
         }
-        let tenant_id = TenantId::from_str(parameters[0])
-            .with_context(|| format!("Failed to parse tenant id from {}", parameters[0]))?;
-        let timeline_id = TimelineId::from_str(parameters[1])
-            .with_context(|| format!("Failed to parse timeline id from {}", parameters[1]))?;
+        let branch_id = BranchId::from_str(parameters[0])
+            .with_context(|| format!("Failed to parse branch id from {}", parameters[0]))?;
         Ok(Self {
-            tenant_id,
-            timeline_id,
+            branch_id,
             protocol_version,
         })
     }
@@ -2827,18 +2806,16 @@ impl PageStreamCmd {
 impl FullBackupCmd {
     fn parse(query: &str) -> anyhow::Result<Self> {
         let parameters = query.split_whitespace().collect_vec();
-        if parameters.len() < 2 || parameters.len() > 4 {
+        if parameters.is_empty() || parameters.len() > 3 {
             bail!(
                 "invalid number of parameters for basebackup command: {}",
                 query
             );
         }
-        let tenant_id = TenantId::from_str(parameters[0])
-            .with_context(|| format!("Failed to parse tenant id from {}", parameters[0]))?;
-        let timeline_id = TimelineId::from_str(parameters[1])
-            .with_context(|| format!("Failed to parse timeline id from {}", parameters[1]))?;
+        let branch_id = BranchId::from_str(parameters[0])
+            .with_context(|| format!("Failed to parse branch id from {}", parameters[0]))?;
         // The caller is responsible for providing correct lsn and prev_lsn.
-        let lsn = if let Some(lsn_str) = parameters.get(2) {
+        let lsn = if let Some(lsn_str) = parameters.get(1) {
             Some(
                 Lsn::from_str(lsn_str)
                     .with_context(|| format!("Failed to parse Lsn from {lsn_str}"))?,
@@ -2846,7 +2823,7 @@ impl FullBackupCmd {
         } else {
             None
         };
-        let prev_lsn = if let Some(prev_lsn_str) = parameters.get(3) {
+        let prev_lsn = if let Some(prev_lsn_str) = parameters.get(2) {
             Some(
                 Lsn::from_str(prev_lsn_str)
                     .with_context(|| format!("Failed to parse Lsn from {prev_lsn_str}"))?,
@@ -2855,8 +2832,7 @@ impl FullBackupCmd {
             None
         };
         Ok(Self {
-            tenant_id,
-            timeline_id,
+            branch_id,
             lsn,
             prev_lsn,
         })
@@ -2866,35 +2842,33 @@ impl FullBackupCmd {
 impl BaseBackupCmd {
     fn parse(query: &str) -> anyhow::Result<Self> {
         let parameters = query.split_whitespace().collect_vec();
-        if parameters.len() < 2 {
+        if parameters.is_empty() {
             bail!(
                 "invalid number of parameters for basebackup command: {}",
                 query
             );
         }
-        let tenant_id = TenantId::from_str(parameters[0])
-            .with_context(|| format!("Failed to parse tenant id from {}", parameters[0]))?;
-        let timeline_id = TimelineId::from_str(parameters[1])
-            .with_context(|| format!("Failed to parse timeline id from {}", parameters[1]))?;
+        let branch_id = BranchId::from_str(parameters[0])
+            .with_context(|| format!("Failed to parse branch id from {}", parameters[0]))?;
         let lsn;
         let flags_parse_from;
-        if let Some(maybe_lsn) = parameters.get(2) {
+        if let Some(maybe_lsn) = parameters.get(1) {
             if *maybe_lsn == "latest" {
                 lsn = None;
-                flags_parse_from = 3;
+                flags_parse_from = 2;
             } else if maybe_lsn.starts_with("--") {
                 lsn = None;
-                flags_parse_from = 2;
+                flags_parse_from = 1;
             } else {
                 lsn = Some(
                     Lsn::from_str(maybe_lsn)
                         .with_context(|| format!("Failed to parse lsn from {maybe_lsn}"))?,
                 );
-                flags_parse_from = 3;
+                flags_parse_from = 2;
             }
         } else {
             lsn = None;
-            flags_parse_from = 2;
+            flags_parse_from = 1;
         }
 
         let mut gzip = false;
@@ -2918,8 +2892,7 @@ impl BaseBackupCmd {
             }
         }
         Ok(Self {
-            tenant_id,
-            timeline_id,
+            branch_id,
             lsn,
             gzip,
             replica,
@@ -2930,21 +2903,18 @@ impl BaseBackupCmd {
 impl LeaseLsnCmd {
     fn parse(query: &str) -> anyhow::Result<Self> {
         let parameters = query.split_whitespace().collect_vec();
-        if parameters.len() != 3 {
+        if parameters.len() != 2 {
             bail!(
                 "invalid number of parameters for lease lsn command: {}",
                 query
             );
         }
-        let tenant_id = TenantId::from_str(parameters[0])
-            .with_context(|| format!("Failed to parse tenant id from {}", parameters[0]))?;
-        let timeline_id = TimelineId::from_str(parameters[1])
-            .with_context(|| format!("Failed to parse timeline id from {}", parameters[1]))?;
-        let lsn = Lsn::from_str(parameters[2])
-            .with_context(|| format!("Failed to parse lsn from {}", parameters[2]))?;
+        let branch_id = BranchId::from_str(parameters[0])
+            .with_context(|| format!("Failed to parse branch id from {}", parameters[0]))?;
+        let lsn = Lsn::from_str(parameters[1])
+            .with_context(|| format!("Failed to parse lsn from {}", parameters[1]))?;
         Ok(Self {
-            tenant_id,
-            timeline_id,
+            branch_id,
             lsn,
         })
     }
@@ -3054,7 +3024,7 @@ where
             .decode(str::from_utf8(jwt_response).context("jwt response is not UTF-8")?)
             .map_err(|e| QueryError::Unauthorized(e.0))?;
 
-        if matches!(data.claims.scope, Scope::Tenant) && data.claims.tenant_id.is_none() {
+        if matches!(data.claims.scope, Scope::Tenant) && data.claims.branch_id.is_none() {
             return Err(QueryError::Unauthorized(
                 "jwt token scope is Tenant, but tenant id is missing".into(),
             ));
@@ -3062,7 +3032,7 @@ where
 
         debug!(
             "jwt scope check succeeded for scope: {:#?} by tenant id: {:?}",
-            data.claims.scope, data.claims.tenant_id,
+            data.claims.scope, data.claims.branch_id,
         );
 
         self.claims = Some(data.claims);
@@ -3095,7 +3065,7 @@ where
         Ok(())
     }
 
-    #[instrument(skip_all, fields(tenant_id, timeline_id))]
+    #[instrument(skip_all, fields(branch_id))]
     async fn process_query(
         &mut self,
         pgb: &mut PostgresBackend<IO>,
@@ -3113,36 +3083,32 @@ where
         let query = PageServiceCmd::parse(query_string)?;
         match query {
             PageServiceCmd::PageStream(PageStreamCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 protocol_version,
             }) => {
                 tracing::Span::current()
-                    .record("tenant_id", field::display(tenant_id))
-                    .record("timeline_id", field::display(timeline_id));
+                    .record("branch_id", field::display(branch_id));
 
-                self.check_permission(Some(tenant_id))?;
+                self.check_permission(Some(branch_id))?;
                 let command_kind = match protocol_version {
                     PagestreamProtocolVersion::V2 => ComputeCommandKind::PageStreamV2,
                     PagestreamProtocolVersion::V3 => ComputeCommandKind::PageStreamV3,
                 };
                 COMPUTE_COMMANDS_COUNTERS.for_command(command_kind).inc();
 
-                self.handle_pagerequests(pgb, tenant_id, timeline_id, protocol_version, ctx)
+                self.handle_pagerequests(pgb, branch_id, protocol_version, ctx)
                     .await?;
             }
             PageServiceCmd::BaseBackup(BaseBackupCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn,
                 gzip,
                 replica,
             }) => {
                 tracing::Span::current()
-                    .record("tenant_id", field::display(tenant_id))
-                    .record("timeline_id", field::display(timeline_id));
+                    .record("branch_id", field::display(branch_id));
 
-                self.check_permission(Some(tenant_id))?;
+                self.check_permission(Some(branch_id))?;
 
                 COMPUTE_COMMANDS_COUNTERS
                     .for_command(ComputeCommandKind::Basebackup)
@@ -3151,8 +3117,7 @@ where
                 let res = async {
                     self.handle_basebackup_request(
                         pgb,
-                        tenant_id,
-                        timeline_id,
+                        branch_id,
                         lsn,
                         None,
                         false,
@@ -3170,16 +3135,14 @@ where
             }
             // same as basebackup, but result includes relational data as well
             PageServiceCmd::FullBackup(FullBackupCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn,
                 prev_lsn,
             }) => {
                 tracing::Span::current()
-                    .record("tenant_id", field::display(tenant_id))
-                    .record("timeline_id", field::display(timeline_id));
+                    .record("branch_id", field::display(branch_id));
 
-                self.check_permission(Some(tenant_id))?;
+                self.check_permission(Some(branch_id))?;
 
                 COMPUTE_COMMANDS_COUNTERS
                     .for_command(ComputeCommandKind::Fullbackup)
@@ -3188,8 +3151,7 @@ where
                 // Check that the timeline exists
                 self.handle_basebackup_request(
                     pgb,
-                    tenant_id,
-                    timeline_id,
+                    branch_id,
                     lsn,
                     prev_lsn,
                     true,
@@ -3207,22 +3169,20 @@ where
                 pgb.write_message_noflush(&BeMessage::CommandComplete(b"SELECT 1"))?;
             }
             PageServiceCmd::LeaseLsn(LeaseLsnCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn,
             }) => {
                 tracing::Span::current()
-                    .record("tenant_id", field::display(tenant_id))
-                    .record("timeline_id", field::display(timeline_id));
+                    .record("branch_id", field::display(branch_id));
 
-                self.check_permission(Some(tenant_id))?;
+                self.check_permission(Some(branch_id))?;
 
                 COMPUTE_COMMANDS_COUNTERS
                     .for_command(ComputeCommandKind::LeaseLsn)
                     .inc();
 
                 match self
-                    .handle_make_lsn_lease(pgb, tenant_id, timeline_id, lsn, &ctx)
+                    .handle_make_lsn_lease(pgb, branch_id, lsn, &ctx)
                     .await
                 {
                     Ok(()) => {
@@ -3317,7 +3277,7 @@ impl GrpcPageServiceHandler {
         };
 
         let observability_layer = ObservabilityLayer;
-        let mut tenant_interceptor = TenantMetadataInterceptor;
+        let mut branch_interceptor = BranchMetadataInterceptor;
         let mut auth_interceptor = TenantAuthInterceptor::new(auth);
 
         let page_service = tower::ServiceBuilder::new()
@@ -3326,7 +3286,7 @@ impl GrpcPageServiceHandler {
             // Intercept gRPC requests.
             .layer(tonic::service::InterceptorLayer::new(move |mut req| {
                 // Extract tenant metadata.
-                req = tenant_interceptor.call(req)?;
+                req = branch_interceptor.call(req)?;
                 // Authenticate tenant JWT token.
                 req = auth_interceptor.call(req)?;
                 Ok(req)
@@ -3392,15 +3352,12 @@ impl GrpcPageServiceHandler {
         &self,
         req: &tonic::Request<impl Any>,
     ) -> Result<Handle<TenantManagerTypes>, GetActiveTimelineError> {
-        let TenantTimelineId {
-            tenant_id,
-            timeline_id,
-        } = *extract::<TenantTimelineId>(req);
+        let branch_id = *extract::<BranchId>(req);
 
         // TODO: untangle acquisition from TenantManagerWrapper::resolve() and Cache::get(), to
         // avoid the unnecessary overhead.
         TimelineHandles::new(self.tenant_manager.clone())
-            .get(tenant_id, timeline_id)
+            .get(branch_id)
             .await
     }
 
@@ -3409,13 +3366,10 @@ impl GrpcPageServiceHandler {
         &self,
         req: &tonic::Request<impl Any>,
     ) -> Result<Handle<TenantManagerTypes>, tonic::Status> {
-        let TenantTimelineId {
-            tenant_id,
-            timeline_id,
-        } = *extract::<TenantTimelineId>(req);
+        let branch_id = *extract::<BranchId>(req);
 
         TimelineHandles::new(self.tenant_manager.clone())
-            .get(tenant_id, timeline_id)
+            .get(branch_id)
             .await
             .map_err(Into::into)
     }
@@ -3725,14 +3679,11 @@ impl proto::PageService for GrpcPageServiceHandler {
         req: tonic::Request<tonic::Streaming<proto::GetPageRequest>>,
     ) -> Result<tonic::Response<Self::GetPagesStream>, tonic::Status> {
         // Extract the timeline from the request and check that it exists.
-        let TenantTimelineId {
-            tenant_id,
-            timeline_id,
-        } = *extract::<TenantTimelineId>(&req);
+        let branch_id = *extract::<BranchId>(&req);
 
         let mut handles = TimelineHandles::new(self.tenant_manager.clone());
         let timeline = handles
-            .get(tenant_id, timeline_id)
+            .get(branch_id)
             .await
             .map_err(tonic::Status::from)?
             .downgrade();
@@ -3971,8 +3922,7 @@ where
         let span = info_span!(
             "grpc:pageservice",
             // These will be populated by TenantMetadataInterceptor.
-            tenant_id = field::Empty,
-            timeline_id = field::Empty,
+            branch_id = field::Empty,
             // NB: empty fields must be listed first above. Otherwise, the field names will be
             // clobbered when the empty fields are populated. They will be output last regardless.
             %peer,
@@ -4016,39 +3966,32 @@ where
     }
 }
 
-/// gRPC interceptor that decodes tenant metadata and stores it as a
-/// TenantTimelineId request extension.
+/// gRPC interceptor that decodes branch metadata and stores it as a
+/// BranchId request extension.
+///
+/// The branch id travels in the `yb-light-branch-id` gRPC metadata header
+/// (see `pageserver_page_api`'s client interceptor).
 #[derive(Clone)]
-struct TenantMetadataInterceptor;
+struct BranchMetadataInterceptor;
 
-impl tonic::service::Interceptor for TenantMetadataInterceptor {
+impl tonic::service::Interceptor for BranchMetadataInterceptor {
     fn call(&mut self, mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
-        // Decode the tenant ID.
-        let tenant_id = req
+        // Decode the branch ID from the metadata header.
+        let branch_id = req
             .metadata()
-            .get("neon-tenant-id")
-            .ok_or_else(|| tonic::Status::invalid_argument("missing neon-tenant-id"))?
+            .get("yb-light-branch-id")
+            .ok_or_else(|| tonic::Status::invalid_argument("missing yb-light-branch-id"))?
             .to_str()
-            .map_err(|_| tonic::Status::invalid_argument("invalid neon-tenant-id"))?;
-        let tenant_id = TenantId::from_str(tenant_id)
-            .map_err(|_| tonic::Status::invalid_argument("invalid neon-tenant-id"))?;
-
-        // Decode the timeline ID.
-        let timeline_id = req
-            .metadata()
-            .get("neon-timeline-id")
-            .ok_or_else(|| tonic::Status::invalid_argument("missing neon-timeline-id"))?
-            .to_str()
-            .map_err(|_| tonic::Status::invalid_argument("invalid neon-timeline-id"))?;
-        let timeline_id = TimelineId::from_str(timeline_id)
-            .map_err(|_| tonic::Status::invalid_argument("invalid neon-timeline-id"))?;
+            .map_err(|_| tonic::Status::invalid_argument("invalid yb-light-branch-id"))?;
+        let branch_id = BranchId::from_str(branch_id)
+            .map_err(|_| tonic::Status::invalid_argument("invalid yb-light-branch-id"))?;
 
         // Stash it in the request.
         let extensions = req.extensions_mut();
-        extensions.insert(TenantTimelineId::new(tenant_id, timeline_id));
+        extensions.insert(branch_id);
 
         // Decorate the tracing span.
-        span_record!(%tenant_id, %timeline_id);
+        span_record!(%branch_id);
 
         Ok(req)
     }
@@ -4073,8 +4016,8 @@ impl tonic::service::Interceptor for TenantAuthInterceptor {
             return Ok(req);
         };
 
-        // Fetch the tenant ID from the request extensions (set by TenantMetadataInterceptor).
-        let TenantTimelineId { tenant_id, .. } = *extract::<TenantTimelineId>(&req);
+        // Fetch the branch ID from the request extensions (set by TenantMetadataInterceptor).
+        let branch_id = *extract::<BranchId>(&req);
 
         // Fetch and decode the JWT token.
         let jwt = req
@@ -4092,7 +4035,7 @@ impl tonic::service::Interceptor for TenantAuthInterceptor {
         let claims = jwtdata.claims;
 
         // Check if the token is valid for this tenant.
-        check_permission(&claims, Some(tenant_id))
+        check_permission(&claims, Some(branch_id))
             .map_err(|err| tonic::Status::permission_denied(err.to_string()))?;
 
         // TODO: consider stashing the claims in the request extensions, if needed.
@@ -4195,129 +4138,118 @@ mod tests {
 
     #[test]
     fn pageservice_cmd_parse() {
-        let tenant_id = TenantId::generate();
-        let timeline_id = TimelineId::generate();
+        let branch_id = BranchId::generate();
         let cmd =
-            PageServiceCmd::parse(&format!("pagestream_v2 {tenant_id} {timeline_id}")).unwrap();
+            PageServiceCmd::parse(&format!("pagestream_v2 {branch_id}")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::PageStream(PageStreamCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 protocol_version: PagestreamProtocolVersion::V2,
             })
         );
-        let cmd = PageServiceCmd::parse(&format!("basebackup {tenant_id} {timeline_id}")).unwrap();
+        let cmd = PageServiceCmd::parse(&format!("basebackup {branch_id}")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::BaseBackup(BaseBackupCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn: None,
                 gzip: false,
                 replica: false
             })
         );
         let cmd =
-            PageServiceCmd::parse(&format!("basebackup {tenant_id} {timeline_id} --gzip")).unwrap();
+            PageServiceCmd::parse(&format!("basebackup {branch_id} --gzip")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::BaseBackup(BaseBackupCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn: None,
                 gzip: true,
                 replica: false
             })
         );
         let cmd =
-            PageServiceCmd::parse(&format!("basebackup {tenant_id} {timeline_id} latest")).unwrap();
+            PageServiceCmd::parse(&format!("basebackup {branch_id} latest")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::BaseBackup(BaseBackupCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn: None,
                 gzip: false,
                 replica: false
             })
         );
-        let cmd = PageServiceCmd::parse(&format!("basebackup {tenant_id} {timeline_id} 0/16ABCDE"))
+        let cmd = PageServiceCmd::parse(&format!("basebackup {branch_id} 0/16ABCDE"))
             .unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::BaseBackup(BaseBackupCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn: Some(Lsn::from_str("0/16ABCDE").unwrap()),
                 gzip: false,
                 replica: false
             })
         );
         let cmd = PageServiceCmd::parse(&format!(
-            "basebackup {tenant_id} {timeline_id} --replica --gzip"
+            "basebackup {branch_id} --replica --gzip"
         ))
         .unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::BaseBackup(BaseBackupCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn: None,
                 gzip: true,
                 replica: true
             })
         );
         let cmd = PageServiceCmd::parse(&format!(
-            "basebackup {tenant_id} {timeline_id} 0/16ABCDE --replica --gzip"
+            "basebackup {branch_id} 0/16ABCDE --replica --gzip"
         ))
         .unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::BaseBackup(BaseBackupCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn: Some(Lsn::from_str("0/16ABCDE").unwrap()),
                 gzip: true,
                 replica: true
             })
         );
-        let cmd = PageServiceCmd::parse(&format!("fullbackup {tenant_id} {timeline_id}")).unwrap();
+        let cmd = PageServiceCmd::parse(&format!("fullbackup {branch_id}")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::FullBackup(FullBackupCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn: None,
                 prev_lsn: None
             })
         );
         let cmd = PageServiceCmd::parse(&format!(
-            "fullbackup {tenant_id} {timeline_id} 0/16ABCDE 0/16ABCDF"
+            "fullbackup {branch_id} 0/16ABCDE 0/16ABCDF"
         ))
         .unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::FullBackup(FullBackupCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn: Some(Lsn::from_str("0/16ABCDE").unwrap()),
                 prev_lsn: Some(Lsn::from_str("0/16ABCDF").unwrap()),
             })
         );
         let cmd = PageServiceCmd::parse(&format!(
-            "lease lsn {tenant_id} {timeline_id} 0/16ABCDE"
+            "lease lsn {branch_id} 0/16ABCDE"
         ))
         .unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::LeaseLsn(LeaseLsnCmd {
-                tenant_id,
-                timeline_id,
+                branch_id,
                 lsn: Lsn::from_str("0/16ABCDE").unwrap(),
             })
         );
-        // yb-light: TenantId::split is gone.
+        // yb-light: BranchId::split is gone.
         let cmd = PageServiceCmd::parse("set a = b").unwrap();
         assert_eq!(cmd, PageServiceCmd::Set);
         let cmd = PageServiceCmd::parse("SET foo").unwrap();
@@ -4326,29 +4258,28 @@ mod tests {
 
     #[test]
     fn pageservice_cmd_err_handling() {
-        let tenant_id = TenantId::generate();
-        let timeline_id = TimelineId::generate();
+        let branch_id = BranchId::generate();
         let cmd = PageServiceCmd::parse("unknown_command");
         assert!(cmd.is_err());
         let cmd = PageServiceCmd::parse("pagestream_v2");
         assert!(cmd.is_err());
-        let cmd = PageServiceCmd::parse(&format!("pagestream_v2 {tenant_id}xxx"));
+        let cmd = PageServiceCmd::parse(&format!("pagestream_v2 {branch_id}xxx"));
         assert!(cmd.is_err());
-        let cmd = PageServiceCmd::parse(&format!("pagestream_v2 {tenant_id}xxx {timeline_id}xxx"));
+        let cmd = PageServiceCmd::parse(&format!("pagestream_v2 {branch_id}xxx"));
         assert!(cmd.is_err());
         let cmd = PageServiceCmd::parse(&format!(
-            "basebackup {tenant_id} {timeline_id} --gzip --gzip"
+            "basebackup {branch_id} --gzip --gzip"
         ));
         assert!(cmd.is_err());
         let cmd = PageServiceCmd::parse(&format!(
-            "basebackup {tenant_id} {timeline_id} --gzip --unknown"
+            "basebackup {branch_id} --gzip --unknown"
         ));
         assert!(cmd.is_err());
         let cmd = PageServiceCmd::parse(&format!(
-            "basebackup {tenant_id} {timeline_id} --gzip 0/16ABCDE"
+            "basebackup {branch_id} --gzip 0/16ABCDE"
         ));
         assert!(cmd.is_err());
-        let cmd = PageServiceCmd::parse(&format!("lease {tenant_id} {timeline_id} gzip 0/16ABCDE"));
+        let cmd = PageServiceCmd::parse(&format!("lease {branch_id} gzip 0/16ABCDE"));
         assert!(cmd.is_err());
     }
 

@@ -32,7 +32,7 @@ use parking_lot::Mutex as PlMutex;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use utils::bin_ser::BeSer;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use wal_decoder::models::record::NeonWalRecord;
 use wal_decoder::models::value::Value;
@@ -171,13 +171,12 @@ impl DeltaTally {
 /// or a materialiser walredo-and-INSERT can't queue behind a compute
 /// read and vice versa.
 pub struct PageWriter {
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     /// Ordered ancestry segments, nearest-first (`lineage[0]` is this
     /// timeline at `Lsn::MAX`). All PageStore reads go through the
     /// lineage-aware variants so a branch serves pre-branch-point
     /// data from the ancestor's rows. Writes always target
-    /// `timeline_id` — never an ancestor. Set once before the writer
+    /// `branch_id` — never an ancestor. Set once before the writer
     /// is shared (see [`Self::set_lineage`]); defaults to the trivial
     /// single-segment lineage.
     lineage: Vec<LineageSegment>,
@@ -385,8 +384,7 @@ impl PageWriter {
     // Wide signature: constructor wires up all collaborators in one place.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         generation: utils::generation::Generation,
         compute_page_store: Arc<PageStore>,
         fpu_page_store: Arc<PageStore>,
@@ -395,9 +393,8 @@ impl PageWriter {
         meta_cache_entries: usize,
     ) -> Self {
         Self {
-            tenant_id,
-            timeline_id,
-            lineage: LineageSegment::single(timeline_id),
+            branch_id,
+            lineage: LineageSegment::single(branch_id),
             generation,
             compute_page_store,
             fpu_page_store,
@@ -474,8 +471,7 @@ impl PageWriter {
         match self
             .fpu_page_store
             .advance_consistent_lsn(
-                self.tenant_id,
-                self.timeline_id,
+                self.branch_id,
                 self.generation,
                 lsn,
                 prev,
@@ -493,8 +489,7 @@ impl PageWriter {
                 // one), but surface the fact so the operator can see
                 // why the shutdown-time catch-up failed.
                 tracing::warn!(
-                    tenant_id = %self.tenant_id,
-                    timeline_id = %self.timeline_id,
+                    branch_id = %self.branch_id,
                     our_generation = ?self.generation,
                     live_generation,
                     "force_upsert_consistent_lsn_if_advanced fenced by newer generation — \
@@ -533,9 +528,9 @@ impl PageWriter {
     /// writer's own timeline.
     pub fn set_lineage(&mut self, lineage: Vec<LineageSegment>) {
         assert!(
-            lineage.first().map(|s| s.timeline_id) == Some(self.timeline_id),
+            lineage.first().map(|s| s.branch_id) == Some(self.branch_id),
             "lineage[0] must be the writer's own timeline ({}), got {:?}",
-            self.timeline_id,
+            self.branch_id,
             lineage.first(),
         );
         self.lineage = lineage;
@@ -545,12 +540,8 @@ impl PageWriter {
         self.materializer = Some(handle);
     }
 
-    pub fn tenant_id(&self) -> TenantId {
-        self.tenant_id
-    }
-
-    pub fn timeline_id(&self) -> TimelineId {
-        self.timeline_id
+    pub fn branch_id(&self) -> BranchId {
+        self.branch_id
     }
 
     /// Append a batch of entries to the in-RAM buffer. Does not flush.
@@ -935,7 +926,7 @@ impl PageWriter {
         }
         let persisted = self
             .compute_page_store
-            .scan_range_lineage(self.tenant_id, &self.lineage, range.clone(), target_lsn)
+            .scan_range_lineage(&self.lineage, range.clone(), target_lsn)
             .await?;
         let t_yb = t0.elapsed();
         let t_lock_start = Instant::now();
@@ -1103,7 +1094,7 @@ impl PageWriter {
         let cached: Vec<Arc<PageRow>> = self.pages.lookup_chain(&key, target_lsn);
         let persisted = self
             .compute_page_store
-            .read_chain_lineage(self.tenant_id, &self.lineage, &key_bytes, target_lsn)
+            .read_chain_lineage(&self.lineage, &key_bytes, target_lsn)
             .await?;
         let mut merged = cached;
         merged.extend(persisted);
@@ -1162,7 +1153,7 @@ impl PageWriter {
         // long materialiser walredo-and-INSERT can't stall compute.
         let persisted = self
             .fpu_page_store
-            .read_chain_lineage(self.tenant_id, &self.lineage, &key_bytes, target_lsn)
+            .read_chain_lineage(&self.lineage, &key_bytes, target_lsn)
             .await?;
         let mut merged = cached;
         merged.extend(persisted);
@@ -1531,8 +1522,7 @@ impl PageWriter {
                     match self
                         .fpu_page_store
                         .advance_consistent_lsn(
-                            self.tenant_id,
-                            self.timeline_id,
+                            self.branch_id,
                             self.generation,
                             lsn,
                             prev_record_lsn,
@@ -1566,8 +1556,7 @@ impl PageWriter {
                             // horizon). See architecture/
                             // yb-pageserver.md "Generation fencing".
                             crate::task_mgr::shutdown_for_stale_generation(
-                                self.tenant_id,
-                                self.timeline_id,
+                                self.branch_id,
                                 self.generation,
                                 live_generation,
                             );
@@ -1578,8 +1567,7 @@ impl PageWriter {
                             // lags. Next flush retries; SK keeps a
                             // little more WAL until we catch up.
                             tracing::warn!(
-                                tenant_id = %self.tenant_id,
-                                timeline_id = %self.timeline_id,
+                                branch_id = %self.branch_id,
                                 new_lsn = %lsn,
                                 "advance_consistent_lsn failed: {e:#}"
                             );
@@ -1604,17 +1592,17 @@ impl PageWriter {
         // never queues behind a 25 MiB INSERT.
         if !rel_rows.is_empty() {
             self.fpu_page_store
-                .put_pages(self.tenant_id, self.timeline_id, rel_rows)
+                .put_pages(self.branch_id, rel_rows)
                 .await?;
         }
         if !slru_rows.is_empty() {
             self.fpu_page_store
-                .put_slru_pages(self.tenant_id, self.timeline_id, slru_rows)
+                .put_slru_pages(self.branch_id, slru_rows)
                 .await?;
         }
         if !meta_rows.is_empty() {
             self.fpu_page_store
-                .put_meta(self.tenant_id, self.timeline_id, meta_rows)
+                .put_meta(self.branch_id, meta_rows)
                 .await?;
         }
         Ok(())
@@ -1795,7 +1783,7 @@ impl PageWriter {
         };
         let yb = self
             .compute_page_store
-            .scan_meta_range_lineage(self.tenant_id, &self.lineage, range.clone(), target_lsn)
+            .scan_meta_range_lineage(&self.lineage, range.clone(), target_lsn)
             .await?;
         for (k, v) in yb {
             match out.get(&k) {
@@ -1831,7 +1819,6 @@ impl PageWriter {
         let persisted = self
             .compute_page_store
             .read_slru_chain_lineage(
-                self.tenant_id,
                 &self.lineage,
                 kind,
                 segno,
@@ -1859,7 +1846,6 @@ impl PageWriter {
         let persisted = self
             .compute_page_store
             .scan_slru_range_lineage(
-                self.tenant_id,
                 &self.lineage,
                 kind,
                 segno,
@@ -2212,7 +2198,7 @@ mod tests {
 
     use bytes::Bytes;
     use remote_storage::YbConnConfig;
-    use utils::id::{TenantId, TimelineId};
+    use utils::id::BranchId;
     use wal_decoder::models::record::NeonWalRecord;
 
     use crate::page_store::{PageStore, PageStoreConfig};
@@ -2286,15 +2272,13 @@ mod tests {
         })
     }
 
-    fn writer(store: Arc<PageStore>, policy: FlushPolicy) -> (PageWriter, TenantId, TimelineId) {
-        let t = TenantId::generate();
-        let tl = TimelineId::generate();
+    fn writer(store: Arc<PageStore>, policy: FlushPolicy) -> (PageWriter, BranchId) {
+        let branch = BranchId::generate();
         (
             // Tests don't exercise the connection split — pass the
             // same PageStore arc as both compute + internal.
             PageWriter::new(
-                t,
-                tl,
+                branch,
                 utils::generation::Generation::new(1),
                 store.clone(),
                 store,
@@ -2302,8 +2286,7 @@ mod tests {
                 64 * 1024 * 1024,
                 0,
             ),
-            t,
-            tl,
+            branch,
         )
     }
 
@@ -2313,13 +2296,11 @@ mod tests {
         store: Arc<PageStore>,
         policy: FlushPolicy,
         entries: usize,
-    ) -> (PageWriter, TenantId, TimelineId) {
-        let t = TenantId::generate();
-        let tl = TimelineId::generate();
+    ) -> (PageWriter, BranchId) {
+        let t = BranchId::generate();
         (
             PageWriter::new(
                 t,
-                tl,
                 utils::generation::Generation::new(1),
                 store.clone(),
                 store,
@@ -2328,7 +2309,6 @@ mod tests {
                 entries,
             ),
             t,
-            tl,
         )
     }
 
@@ -2349,8 +2329,7 @@ mod tests {
     /// set.
     type MaterializerFixture = (
         PageWriter,
-        TenantId,
-        TimelineId,
+        BranchId,
         tokio::sync::mpsc::Receiver<MaterializeJob>,
         Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
     );
@@ -2383,11 +2362,9 @@ mod tests {
         payload_bytes_limit: u32,
         slru_count_limit: u32,
     ) -> MaterializerFixture {
-        let t = TenantId::generate();
-        let tl = TimelineId::generate();
+        let t = BranchId::generate();
         let mut w = PageWriter::new(
             t,
-            tl,
             utils::generation::Generation::new(1),
             store.clone(),
             store,
@@ -2404,7 +2381,7 @@ mod tests {
             tx,
             in_flight: in_flight.clone(),
         });
-        (w, t, tl, rx, in_flight)
+        (w, t, rx, in_flight)
     }
 
     /// A non-`will_init` delta (the normal "modify existing page"
@@ -2466,7 +2443,7 @@ mod tests {
     #[tokio::test]
     async fn empty_flush_is_noop() {
         let (store, schema) = make_store("empty_flush").await;
-        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, _t) = writer(store.clone(), FlushPolicy::default());
         w.flush().await.unwrap();
         let stats = w.stats().await;
         assert_eq!(stats.buffered_rows, 0);
@@ -2476,14 +2453,14 @@ mod tests {
     #[tokio::test]
     async fn image_passes_through_untouched() {
         let (store, schema) = make_store("image_pt").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
         let stats = w.stats().await;
         assert_eq!(stats.rows_written, 1);
         assert_eq!(stats.buffered_rows, 1);
         w.flush().await.unwrap();
         let chain = store
-            .read_chain(t, tl, &key_to_bytes(k(1)), Lsn(100))
+            .read_chain(t, &key_to_bytes(k(1)), Lsn(100))
             .await
             .unwrap();
         assert_eq!(chain.len(), 1);
@@ -2498,7 +2475,7 @@ mod tests {
         // No write-time materialisation: a plain delta arriving first
         // is stored as-is; reads find it via the slow path.
         let (store, schema) = make_store("delta_pt").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
         let init = Value::WalRecord(NeonWalRecord::Postgres {
             will_init: true,
             rec: Bytes::from_static(b"init"),
@@ -2514,7 +2491,7 @@ mod tests {
         assert_eq!(stats.rows_written, 3);
         w.flush().await.unwrap();
         let chain = store
-            .read_chain(t, tl, &key_to_bytes(k(1)), Lsn(100))
+            .read_chain(t, &key_to_bytes(k(1)), Lsn(100))
             .await
             .unwrap();
         assert_eq!(chain.len(), 3);
@@ -2539,7 +2516,7 @@ mod tests {
     #[tokio::test]
     async fn read_chain_durable_refuses_anchorless_chain() {
         let (store, schema) = make_store("anchorless").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
         // Deltas only, no will_init anchor anywhere ≤ target.
         w.put(&[(k(1), Lsn(20), delta()), (k(1), Lsn(30), delta())])
             .await
@@ -2549,7 +2526,7 @@ mod tests {
         // Sanity: the raw store chain is genuinely anchorless (no
         // will_init), which is the precondition the fix must catch.
         let raw = store
-            .read_chain(t, tl, &key_to_bytes(k(1)), Lsn(100))
+            .read_chain(t, &key_to_bytes(k(1)), Lsn(100))
             .await
             .unwrap();
         assert!(!raw.is_empty(), "deltas should be durable");
@@ -2574,7 +2551,7 @@ mod tests {
         // 100 deltas after a will_init delta — no image, no truncation.
         // read_chain returns the full chain up to the anchor.
         let (store, schema) = make_store("long_chain").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
         let init = Value::WalRecord(NeonWalRecord::Postgres {
             will_init: true,
             rec: Bytes::from_static(b"init"),
@@ -2586,7 +2563,7 @@ mod tests {
         w.put(&entries).await.unwrap();
         w.flush().await.unwrap();
         let chain = store
-            .read_chain(t, tl, &key_to_bytes(k(1)), Lsn(2000))
+            .read_chain(t, &key_to_bytes(k(1)), Lsn(2000))
             .await
             .unwrap();
         assert_eq!(chain.len(), 101);
@@ -2602,7 +2579,7 @@ mod tests {
         //   slru-block → slru buffer
         //   anything else → meta buffer
         let (store, schema) = make_store("route_three").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
 
         let meta_key = Key {
             field1: 0x60,
@@ -2632,7 +2609,7 @@ mod tests {
         let mut meta_key_bytes = vec![0u8; pageserver_api::key::KEY_SIZE];
         meta_key.write_to_byte_slice(&mut meta_key_bytes);
         let got = store
-            .read_meta(t, tl, &meta_key_bytes, Lsn(100))
+            .read_meta(t, &meta_key_bytes, Lsn(100))
             .await
             .unwrap()
             .expect("meta row");
@@ -2643,7 +2620,7 @@ mod tests {
     #[tokio::test]
     async fn flush_emits_a_single_insert_round_trip() {
         let (store, schema) = make_store("flush_one_rt").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
         let entries: Vec<(Key, Lsn, Value)> = (0..50).map(|i| (k(i), Lsn(10), image())).collect();
         w.put(&entries).await.unwrap();
         assert_eq!(w.stats().await.buffered_rows, 50);
@@ -2651,7 +2628,7 @@ mod tests {
         assert_eq!(w.stats().await.buffered_rows, 0);
         // Sample-read one of them.
         let chain = store
-            .read_chain(t, tl, &key_to_bytes(k(0)), Lsn(100))
+            .read_chain(t, &key_to_bytes(k(0)), Lsn(100))
             .await
             .unwrap();
         assert_eq!(chain.len(), 1);
@@ -2667,7 +2644,7 @@ mod tests {
             max_bytes: 200,
             backpressure_bytes: 0,
         };
-        let (w, _t, _tl) = writer(store.clone(), policy);
+        let (w, _t) = writer(store.clone(), policy);
         assert!(!w.should_flush().await);
         for i in 0..4 {
             w.put(&[(k(i), Lsn(10), image())]).await.unwrap();
@@ -2684,7 +2661,7 @@ mod tests {
             max_bytes: 1_000_000_000,
             backpressure_bytes: 0,
         };
-        let (w, _t, _tl) = writer(store.clone(), policy);
+        let (w, _t) = writer(store.clone(), policy);
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
         assert!(!w.should_flush().await);
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -2697,7 +2674,7 @@ mod tests {
     #[tokio::test]
     async fn read_chain_blends_buffered_and_persisted() {
         let (store, schema) = make_store("blend").await;
-        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, _t) = writer(store.clone(), FlushPolicy::default());
         let first_batch: Vec<(Key, Lsn, Value)> = (0..5)
             .map(|i| {
                 (
@@ -2729,7 +2706,7 @@ mod tests {
     #[tokio::test]
     async fn read_chain_truncates_at_will_init_anchor() {
         let (store, schema) = make_store("trunc_at_anchor").await;
-        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, _t) = writer(store.clone(), FlushPolicy::default());
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
         for i in 1..=3 {
             w.put(&[(k(1), Lsn(10 + 10 * i), delta())]).await.unwrap();
@@ -2755,8 +2732,7 @@ mod tests {
     #[tokio::test]
     async fn periodic_flusher_drains_on_age_trigger() {
         let (store, schema) = make_store("flusher_age").await;
-        let t = TenantId::generate();
-        let tl = TimelineId::generate();
+        let t = BranchId::generate();
         let policy = FlushPolicy {
             max_age: Duration::from_millis(40),
             max_bytes: 1 << 30,
@@ -2764,7 +2740,6 @@ mod tests {
         };
         let w = Arc::new(PageWriter::new(
             t,
-            tl,
             utils::generation::Generation::new(1),
             store.clone(),
             store.clone(),
@@ -2796,7 +2771,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let chain = store
-            .read_chain(t, tl, &key_to_bytes(k(1)), Lsn(100))
+            .read_chain(t, &key_to_bytes(k(1)), Lsn(100))
             .await
             .unwrap();
         assert_eq!(chain.len(), 1);
@@ -2807,8 +2782,7 @@ mod tests {
     #[tokio::test]
     async fn periodic_flusher_does_final_flush_on_shutdown() {
         let (store, schema) = make_store("flusher_final").await;
-        let t = TenantId::generate();
-        let tl = TimelineId::generate();
+        let t = BranchId::generate();
         let policy = FlushPolicy {
             max_age: Duration::from_secs(3600),
             max_bytes: 1 << 30,
@@ -2816,7 +2790,6 @@ mod tests {
         };
         let w = Arc::new(PageWriter::new(
             t,
-            tl,
             utils::generation::Generation::new(1),
             store.clone(),
             store.clone(),
@@ -2831,7 +2804,7 @@ mod tests {
         task.shutdown().await;
         assert_eq!(w.stats().await.buffered_rows, 0);
         let chain = store
-            .read_chain(t, tl, &key_to_bytes(k(1)), Lsn(100))
+            .read_chain(t, &key_to_bytes(k(1)), Lsn(100))
             .await
             .unwrap();
         assert_eq!(chain.len(), 1);
@@ -2862,7 +2835,7 @@ mod tests {
     #[tokio::test]
     async fn read_during_in_flight_flush_sees_buffered_rows() {
         let (store, schema) = make_store("flush_race").await;
-        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, _t) = writer(store.clone(), FlushPolicy::default());
         let w = Arc::new(w);
 
         // Seed enough rows that the flush has a non-trivial round-trip
@@ -2898,7 +2871,7 @@ mod tests {
     #[tokio::test]
     async fn passthrough_payload_is_serialised_wal_record() {
         let (store, schema) = make_store("ser_rt").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
         let rec = NeonWalRecord::ClearVisibilityMapFlags {
             new_heap_blkno: Some(42),
             old_heap_blkno: Some(43),
@@ -2910,7 +2883,7 @@ mod tests {
             .unwrap();
         w.flush().await.unwrap();
         let chain = store
-            .read_chain(t, tl, &key_to_bytes(k(1)), Lsn(100))
+            .read_chain(t, &key_to_bytes(k(1)), Lsn(100))
             .await
             .unwrap();
         assert_eq!(chain.len(), 2);
@@ -2929,7 +2902,7 @@ mod tests {
     async fn delta_threshold_dispatches_one_job() {
         let (store, schema) = make_store("mat_threshold").await;
         const LIMIT: u32 = 10;
-        let (w, _t, _tl, mut rx, in_flight) =
+        let (w, _t, mut rx, in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         // (LIMIT - 1) deltas + a flush — the counter sits below
@@ -2986,7 +2959,7 @@ mod tests {
         let (store, schema) = make_store("mat_slru_threshold").await;
         const SLRU_LIMIT: u32 = 8;
         // Rel limits 0 so *only* the SLRU trigger can fire.
-        let (w, _t, _tl, mut rx, in_flight) = writer_with_materializer_thresholds(
+        let (w, _t, mut rx, in_flight) = writer_with_materializer_thresholds(
             store.clone(),
             FlushPolicy::default(),
             0,
@@ -3049,7 +3022,7 @@ mod tests {
     async fn image_resets_chain_counter() {
         let (store, schema) = make_store("mat_image_reset").await;
         const LIMIT: u32 = 10;
-        let (w, _t, _tl, mut rx, _in_flight) =
+        let (w, _t, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         // 5 deltas, then an image, then 9 deltas + flush — must NOT
@@ -3090,7 +3063,7 @@ mod tests {
     async fn anchor_after_crossing_cancels_dispatch() {
         let (store, schema) = make_store("mat_cross_then_reset").await;
         const LIMIT: u32 = 3;
-        let (w, _t, _tl, mut rx, _in_flight) =
+        let (w, _t, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         // Cross the threshold — k(1) enters the ready set.
@@ -3136,7 +3109,7 @@ mod tests {
         };
         let limit = one_delta_bytes * 3; // exactly 3 deltas trigger.
 
-        let (w, _t, _tl, mut rx, in_flight) =
+        let (w, _t, mut rx, in_flight) =
             writer_with_materializer_thresholds(store.clone(), FlushPolicy::default(), 0, limit, 0);
 
         w.put(&[(k(1), Lsn(10), delta_non_init())]).await.unwrap();
@@ -3189,7 +3162,7 @@ mod tests {
             _ => panic!("delta_non_init must be a WalRecord"),
         };
         // count=3 hits before bytes=10*one_delta.
-        let (w, _t, _tl, mut rx, _in_flight) = writer_with_materializer_thresholds(
+        let (w, _t, mut rx, _in_flight) = writer_with_materializer_thresholds(
             store.clone(),
             FlushPolicy::default(),
             3,
@@ -3223,7 +3196,7 @@ mod tests {
     async fn write_side_dedup_blocks_redispatch_while_in_flight() {
         let (store, schema) = make_store("mat_write_dedup").await;
         const LIMIT: u32 = 5;
-        let (w, _t, _tl, mut rx, in_flight) =
+        let (w, _t, mut rx, in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         // First threshold + flush: dispatch.
@@ -3276,7 +3249,7 @@ mod tests {
     async fn will_init_delta_resets_chain_counter() {
         let (store, schema) = make_store("mat_winit_reset").await;
         const LIMIT: u32 = 5;
-        let (w, _t, _tl, mut rx, _in_flight) =
+        let (w, _t, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         for i in 0..3 {
@@ -3307,7 +3280,7 @@ mod tests {
     async fn per_key_counters_are_independent() {
         let (store, schema) = make_store("mat_per_key").await;
         const LIMIT: u32 = 4;
-        let (w, _t, _tl, mut rx, _in_flight) =
+        let (w, _t, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         // Alternate keys k(1) and k(2). After 4 deltas total each +
@@ -3341,7 +3314,7 @@ mod tests {
     async fn dispatch_does_not_fire_without_flush() {
         let (store, schema) = make_store("mat_no_dispatch_without_flush").await;
         const LIMIT: u32 = 10;
-        let (w, _t, _tl, mut rx, _in_flight) =
+        let (w, _t, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         // Push 10× the threshold without ever flushing. Pre-refactor
@@ -3380,7 +3353,7 @@ mod tests {
     async fn flush_horizon_advances_to_ingest_frontier() {
         let (store, schema) = make_store("mat_horizon").await;
         const LIMIT: u32 = 10;
-        let (w, _t, _tl, _rx, _in_flight) =
+        let (w, _t, _rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         assert_eq!(
@@ -3431,8 +3404,8 @@ mod tests {
     #[tokio::test]
     async fn watermarks_capped_at_ingest_frontier() {
         let (store, schema) = make_store("frontier_cap").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t, tl).await;
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t).await;
 
         let slot = Arc::new(utils::lsn::AtomicLsn::new(0));
         w.set_consistent_lsn_slot(slot.clone());
@@ -3481,7 +3454,7 @@ mod tests {
     async fn flush_trigger_target_lsn_is_per_key_max() {
         let (store, schema) = make_store("mat_target_lsn").await;
         const LIMIT: u32 = 3;
-        let (w, _t, _tl, mut rx, _in_flight) =
+        let (w, _t, mut rx, _in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         // 5 deltas for k(1), all in the same snapshot. LIMIT=3
@@ -3514,7 +3487,7 @@ mod tests {
     async fn cold_key_residue_dispatches_at_last_lsn() {
         let (store, schema) = make_store("mat_cold_residue").await;
         const LIMIT: u32 = 3;
-        let (w, _t, _tl, mut rx, in_flight) =
+        let (w, _t, mut rx, in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
 
         // Block dispatch by pre-loading in_flight with this key; the
@@ -3559,7 +3532,7 @@ mod tests {
     #[tokio::test]
     async fn limit_zero_disables_dispatch() {
         let (store, schema) = make_store("mat_disabled").await;
-        let (w, _t, _tl, mut rx, _) =
+        let (w, _t, mut rx, _) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), 0);
 
         for i in 0..50 {
@@ -3576,14 +3549,13 @@ mod tests {
     /// matching the generation used by the `writer` helper. Required
     /// for any test that wants `PageWriter::flush` to land its
     /// generation-gated `advance_consistent_lsn` UPDATE.
-    async fn seed_timeline_row(store: &PageStore, tenant: TenantId, timeline: TimelineId) {
+    async fn seed_timeline_row(store: &PageStore, branch: BranchId) {
         store
             .insert_timeline_at_creation(&crate::page_store::TimelineRow {
-                tenant_id: tenant,
-                timeline_id: timeline,
+                branch_id: branch,
                 consistent_lsn: Lsn(0),
                 applied_gc_cutoff_lsn: Lsn(0),
-                ancestor_timeline_id: None,
+                ancestor_branch_id: None,
                 ancestor_lsn: None,
                 current_generation: 1,
                 pg_version: 17,
@@ -3610,8 +3582,8 @@ mod tests {
     #[tokio::test]
     async fn put_alone_does_not_advance_consistent_lsn_slot() {
         let (store, schema) = make_store("clsn_slot_no_advance_on_put").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t, tl).await;
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t).await;
 
         let slot = Arc::new(utils::lsn::AtomicLsn::new(0));
         w.set_consistent_lsn_slot(slot.clone());
@@ -3654,8 +3626,8 @@ mod tests {
     #[tokio::test]
     async fn flush_publishes_remote_consistent_lsn() {
         let (store, schema) = make_store("rclsn_publish").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t, tl).await;
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t).await;
 
         let slot = Arc::new(utils::lsn::AtomicLsn::new(0));
         w.set_consistent_lsn_slot(slot.clone());
@@ -3707,7 +3679,7 @@ mod tests {
     #[tokio::test]
     async fn note_record_lsn_basic_lookup_and_prune() {
         let (store, schema) = make_store("rl_hist_basic").await;
-        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, _t) = writer(store.clone(), FlushPolicy::default());
 
         w.note_record_lsn(Lsn(0x100), Lsn(0x080));
         w.note_record_lsn(Lsn(0x200), Lsn(0x100));
@@ -3738,7 +3710,7 @@ mod tests {
     #[tokio::test]
     async fn note_record_lsn_picks_highest_at_or_below() {
         let (store, schema) = make_store("rl_hist_range").await;
-        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, _t) = writer(store.clone(), FlushPolicy::default());
 
         w.note_record_lsn(Lsn(0x100), Lsn(0x080));
         w.note_record_lsn(Lsn(0x300), Lsn(0x100));
@@ -3766,8 +3738,8 @@ mod tests {
     #[tokio::test]
     async fn flush_persists_prev_record_lsn_when_noted() {
         let (store, schema) = make_store("flush_persists_prev").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t, tl).await;
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t).await;
 
         // Simulate `Timeline::finish_write(Lsn(42))` for the record
         // whose pages we're about to flush.
@@ -3776,7 +3748,7 @@ mod tests {
         w.put(&[(k(1), Lsn(42), image())]).await.unwrap();
         w.flush().await.unwrap();
 
-        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        let row = store.get_timeline(t).await.unwrap().unwrap();
         assert_eq!(row.consistent_lsn, Lsn(42));
         assert_eq!(
             row.prev_record_lsn,
@@ -3796,15 +3768,15 @@ mod tests {
     #[tokio::test]
     async fn flush_without_noted_record_does_not_advance_consistent_lsn() {
         let (store, schema) = make_store("flush_null_prev").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t, tl).await;
-        let seeded = store.get_timeline(t, tl).await.unwrap().unwrap();
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t).await;
+        let seeded = store.get_timeline(t).await.unwrap().unwrap();
 
         // Deliberately skip note_record_lsn.
         w.put(&[(k(1), Lsn(42), image())]).await.unwrap();
         w.flush().await.unwrap();
 
-        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        let row = store.get_timeline(t).await.unwrap().unwrap();
         assert_eq!(
             row.consistent_lsn, seeded.consistent_lsn,
             "no noted record => no frontier => checkpoint must not move"
@@ -3823,24 +3795,24 @@ mod tests {
     async fn flush_with_no_pairing_preserves_persisted_prev() {
         use utils::generation::Generation;
         let (store, schema) = make_store("flush_preserve_prev").await;
-        let (_w, t, tl) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t, tl).await;
+        let (_w, t) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t).await;
 
         // First advance with a real prev.
         store
-            .advance_consistent_lsn(t, tl, Generation::new(1), Lsn(0x200), Some(Lsn(0x180)))
+            .advance_consistent_lsn(t, Generation::new(1), Lsn(0x200), Some(Lsn(0x180)))
             .await
             .unwrap();
-        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        let row = store.get_timeline(t).await.unwrap().unwrap();
         assert_eq!(row.prev_record_lsn, Some(Lsn(0x180)));
 
         // Second advance with no pairing (None). dc_lsn moves forward
         // but prev_record_lsn must retain its prior value.
         store
-            .advance_consistent_lsn(t, tl, Generation::new(1), Lsn(0x300), None)
+            .advance_consistent_lsn(t, Generation::new(1), Lsn(0x300), None)
             .await
             .unwrap();
-        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        let row = store.get_timeline(t).await.unwrap().unwrap();
         assert_eq!(row.consistent_lsn, Lsn(0x300));
         assert_eq!(
             row.prev_record_lsn,
@@ -3861,11 +3833,11 @@ mod tests {
         use tokio_util::sync::CancellationToken;
 
         let (store, schema) = make_store("stale_gen_shutdown").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t, tl).await;
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t).await;
         // Bump the persisted generation past the writer's gen=1.
-        store.bump_generation(t, tl).await.unwrap(); // now 2
-        store.bump_generation(t, tl).await.unwrap(); // now 3
+        store.bump_generation(t).await.unwrap(); // now 2
+        store.bump_generation(t).await.unwrap(); // now 3
 
         // Install a fresh global shutdown token so we can observe
         // cancellation. The OnceLock `init` no-ops on a re-set, so use
@@ -3922,14 +3894,14 @@ mod tests {
         use std::sync::atomic::Ordering::Relaxed;
 
         let (store, schema) = make_store("clsn_lag_expected").await;
-        let (w, t, tl) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t, tl).await;
+        let (w, t) = writer(store.clone(), FlushPolicy::default());
+        seed_timeline_row(&store, t).await;
 
         // First flush: the first upsert always goes through.
         w.put(&[(k(1), Lsn(0x100), image())]).await.unwrap();
         w.note_record_lsn(Lsn(0x100), Lsn(0x80));
         w.flush().await.unwrap();
-        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        let row = store.get_timeline(t).await.unwrap().unwrap();
         assert_eq!(row.consistent_lsn, Lsn(0x100));
 
         // Second flush within `policy.max_age`: pages durable, the
@@ -3940,7 +3912,7 @@ mod tests {
 
         // Page row IS durable in `pages`.
         let chain = store
-            .read_chain(t, tl, &key_to_bytes(k(2)), Lsn(0x300))
+            .read_chain(t, &key_to_bytes(k(2)), Lsn(0x300))
             .await
             .unwrap();
         let max_page_lsn = chain.iter().map(|r| r.lsn).max().unwrap_or(Lsn(0));
@@ -3958,7 +3930,7 @@ mod tests {
         // design. The replay window between this LSN and the actual
         // max durable LSN is what `put_rel_creation`'s idempotency
         // check protects against.
-        let row = store.get_timeline(t, tl).await.unwrap().unwrap();
+        let row = store.get_timeline(t).await.unwrap().unwrap();
         assert_eq!(
             row.consistent_lsn,
             Lsn(0x100),
@@ -4092,7 +4064,7 @@ mod tests {
     #[tokio::test]
     async fn meta_cache_populated_by_put_and_survives_flush() {
         let (store, schema) = make_store("mc_populated").await;
-        let (w, _t, _tl) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
+        let (w, _t) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
 
         assert_eq!(w.meta_cache_len(), Some(0));
         w.put(&[(mk(0), Lsn(10), image())]).await.unwrap();
@@ -4113,7 +4085,7 @@ mod tests {
     #[tokio::test]
     async fn meta_cache_serves_after_buffer_drain() {
         let (store, schema) = make_store("mc_after_drain").await;
-        let (w, _t, _tl) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
+        let (w, _t) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
         let payload = Bytes::from_static(b"cache-served-payload");
 
         w.put(&[(mk(1), Lsn(10), Value::Image(payload.clone()))])
@@ -4138,7 +4110,7 @@ mod tests {
     #[tokio::test]
     async fn meta_cache_newer_write_supersedes() {
         let (store, schema) = make_store("mc_newer_wins").await;
-        let (w, _t, _tl) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
+        let (w, _t) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
 
         w.put(&[(mk(2), Lsn(10), Value::Image(Bytes::from_static(b"old")))])
             .await
@@ -4164,7 +4136,7 @@ mod tests {
     #[tokio::test]
     async fn meta_cache_skips_for_older_target_lsn() {
         let (store, schema) = make_store("mc_old_lsn").await;
-        let (w, _t, _tl) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
+        let (w, _t) = writer_with_cache(store.clone(), FlushPolicy::default(), 16);
 
         w.put(&[(mk(3), Lsn(100), Value::Image(Bytes::from_static(b"v100")))])
             .await
@@ -4192,7 +4164,7 @@ mod tests {
     async fn meta_cache_eviction_falls_back_to_yb() {
         let (store, schema) = make_store("mc_evict").await;
         // Capacity 1 → writing a second key evicts the first.
-        let (w, _t, _tl) = writer_with_cache(store.clone(), FlushPolicy::default(), 1);
+        let (w, _t) = writer_with_cache(store.clone(), FlushPolicy::default(), 1);
 
         w.put(&[(mk(4), Lsn(10), Value::Image(Bytes::from_static(b"key4")))])
             .await
@@ -4240,7 +4212,7 @@ mod tests {
     async fn meta_cache_disabled_is_transparent() {
         let (store, schema) = make_store("mc_disabled").await;
         // `writer()` uses 0 entries — cache disabled.
-        let (w, _t, _tl) = writer(store.clone(), FlushPolicy::default());
+        let (w, _t) = writer(store.clone(), FlushPolicy::default());
 
         assert_eq!(w.meta_cache_len(), None, "cache must be None when disabled");
         w.put(&[(mk(6), Lsn(10), Value::Image(Bytes::from_static(b"no-cache")))])

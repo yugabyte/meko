@@ -117,14 +117,13 @@ pub(crate) async fn acquire_concurrency_permit(
 /// `pageserver.pages`. A background image materialiser (Phase 3e) will
 /// replace this loop once we need it.
 pub fn start_background_loops(tenant: &Arc<PageServer>) {
-    let tenant_id = tenant.id;
+    let branch_id = tenant.id;
 
     task_mgr::spawn(
         BACKGROUND_RUNTIME.handle(),
         TaskKind::GarbageCollector,
-        tenant_id,
-        None,
-        &format!("garbage collector for tenant {tenant_id}"),
+        Some(branch_id),
+        &format!("garbage collector for branch {branch_id}"),
         {
             let tenant = Arc::clone(tenant);
             async move {
@@ -132,7 +131,7 @@ pub fn start_background_loops(tenant: &Arc<PageServer>) {
                 TENANT_TASK_EVENTS.with_label_values(&["start"]).inc();
                 defer!(TENANT_TASK_EVENTS.with_label_values(&["stop"]).inc());
                 gc_loop(tenant, cancel)
-                    .instrument(info_span!("gc_loop", tenant_id = %tenant_id))
+                    .instrument(info_span!("gc_loop", branch_id = %branch_id))
                     .await;
                 Ok(())
             }
@@ -142,9 +141,8 @@ pub fn start_background_loops(tenant: &Arc<PageServer>) {
     task_mgr::spawn(
         BACKGROUND_RUNTIME.handle(),
         TaskKind::TenantHousekeeping,
-        tenant_id,
-        None,
-        &format!("housekeeping for tenant {tenant_id}"),
+        Some(branch_id),
+        &format!("housekeeping for branch {branch_id}"),
         {
             let tenant = Arc::clone(tenant);
             async move {
@@ -152,7 +150,7 @@ pub fn start_background_loops(tenant: &Arc<PageServer>) {
                 TENANT_TASK_EVENTS.with_label_values(&["start"]).inc();
                 defer!(TENANT_TASK_EVENTS.with_label_values(&["stop"]).inc());
                 tenant_housekeeping_loop(tenant, cancel)
-                    .instrument(info_span!("tenant_housekeeping_loop", tenant_id = %tenant_id))
+                    .instrument(info_span!("tenant_housekeeping_loop", branch_id = %branch_id))
                     .await;
                 Ok(())
             }
@@ -269,7 +267,7 @@ async fn tenant_housekeeping_loop(tenant: Arc<PageServer>, cancel: CancellationT
         iteration.run(tenant.housekeeping()).await;
 
         // Log any getpage throttling.
-        info_span!(parent: None, "pagestream_throttle", tenant_id=%tenant.id).in_scope(|| {
+        info_span!(parent: None, "pagestream_throttle", branch_id=%tenant.id).in_scope(|| {
             let now = Instant::now();
             let prev = std::mem::replace(&mut last_throttle_flag_reset_at, now);
             let Stats {

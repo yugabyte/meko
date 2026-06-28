@@ -15,7 +15,6 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let branch_pg_port = c.compute_port() + 100;
     let main = db::compute_conn(c.compute_port());
     let branch = db::compute_conn(branch_pg_port);
-    let tid = c.tid();
 
     step("Seed pre-branch data on main");
     // The branch compute reads these seed transactions' CLOG (SLRU)
@@ -35,7 +34,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 
     step("Create branch b1 (records the branch point; PS/SK come up at endpoint create)");
-    c.yb(&["timeline", "branch", "--tenant-id", tid, "--branch-name", "b1"])?;
+    c.yb(&["branch", "create", "--branch-name", "b1", "--ancestor-branch-name", "main"])?;
 
     step("Write post-branch data on main (must NOT be visible on b1)");
     db::batch(
@@ -46,7 +45,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Create + start endpoint on b1 (provisions pageserver 2 + safekeeper 2)");
     c.yb(&[
-        "endpoint", "create", "ep_b1", "--tenant-id", tid, "--branch-name", "b1",
+        "endpoint", "create", "ep_b1", "--branch-name", "b1",
         "--pg-version", "17", "--pg-port", &branch_pg_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_b1"])?;

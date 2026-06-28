@@ -46,7 +46,7 @@ use safekeeper_api::{
 };
 use tokio::task::JoinSet;
 use utils::auth::{Claims, Scope};
-use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 use utils::project_git_version;
 
@@ -109,6 +109,8 @@ enum YbLightLocalCmd {
     Tenant(TenantCmd),
     #[command(subcommand)]
     Timeline(TimelineCmd),
+    #[command(subcommand)]
+    Branch(BranchCmd),
     #[command(subcommand)]
     Pageserver(PageserverCmd),
     #[command(subcommand)]
@@ -214,27 +216,23 @@ enum TenantCmd {
 
 #[derive(clap::Args)]
 struct TenantCreateCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long = "tenant-id")]
-    tenant_id: Option<TenantId>,
-
-    /// Use a specific timeline id when creating a tenant and its initial timeline.
-    #[clap(long)]
-    timeline_id: Option<TimelineId>,
+    /// Branch ID, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: Option<BranchId>,
 
     #[clap(short = 'c')]
     config: Vec<String>,
 
-    /// Postgres version to use for the initial timeline.
+    /// Postgres version to use for the initial branch.
     #[arg(default_value = DEFAULT_PG_VERSION_NUM)]
     #[clap(long)]
     pg_version: PgMajorVersion,
 
-    /// Use this tenant in future CLI commands where tenant_id is needed, but not specified.
+    /// Use this branch in future CLI commands where branch_id is needed, but not specified.
     #[clap(long)]
     set_default: bool,
 
-    /// Placement policy shards in this tenant.
+    /// Placement policy for this branch.
     #[clap(long)]
     #[arg(value_parser = parse_placement_policy)]
     placement_policy: Option<PlacementPolicy>,
@@ -244,31 +242,31 @@ fn parse_placement_policy(s: &str) -> anyhow::Result<PlacementPolicy> {
     Ok(serde_json::from_str::<PlacementPolicy>(s)?)
 }
 
-/// Set a particular tenant as default in future CLI commands where tenant_id is needed, but not
+/// Set a particular branch as default in future CLI commands where branch_id is needed, but not
 /// specified.
 #[derive(clap::Args)]
 struct TenantSetDefaultCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long = "tenant-id")]
-    tenant_id: TenantId,
+    /// Branch ID, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: BranchId,
 }
 
 #[derive(clap::Args)]
 struct TenantConfigCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long = "tenant-id")]
-    tenant_id: Option<TenantId>,
+    /// Branch ID, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: Option<BranchId>,
 
     #[clap(short = 'c')]
     config: Vec<String>,
 }
 
-/// Import a tenant that is present in remote storage, and create branches for its timelines.
+/// Import a branch that is present in remote storage.
 #[derive(clap::Args)]
 struct TenantImportCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long = "tenant-id")]
-    tenant_id: TenantId,
+    /// Branch ID, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: BranchId,
 }
 
 /// Manage timelines.
@@ -281,59 +279,50 @@ enum TimelineCmd {
     Import(TimelineImportCmdArgs),
 }
 
-/// List all timelines available to this pageserver.
+/// List all branches available to this pageserver.
 #[derive(clap::Args)]
 struct TimelineListCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long = "tenant-id")]
-    tenant_id: Option<TenantId>,
+    /// Branch ID, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: Option<BranchId>,
 }
 
 /// Drop a branch and all of its endpoints: stop the endpoints' compute
-/// processes, delete their records, and mark the timeline dropped in the
+/// processes, delete their records, and mark the branch dropped in the
 /// storage controller. The underlying pageserver/safekeeper data is left for a
 /// later GC pass.
 #[derive(clap::Args)]
 struct TimelineDropCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long = "tenant-id")]
-    tenant_id: Option<TenantId>,
-    /// Timeline ID of the branch to drop, as a 32-byte hexadecimal string.
-    #[clap(long)]
-    timeline_id: TimelineId,
+    /// Branch ID of the branch to drop, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: BranchId,
 }
 
-/// Create a new timeline, branching off from another timeline.
+/// Create a new branch, branching off from another branch.
 #[derive(clap::Args)]
 struct TimelineBranchCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long = "tenant-id")]
-    tenant_id: Option<TenantId>,
-    /// New timeline's ID, as a 32-byte hexadecimal string.
-    #[clap(long)]
-    timeline_id: Option<TimelineId>,
-    /// Human-readable alias for the new timeline.
+    /// New branch's ID, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: Option<BranchId>,
+    /// Human-readable alias for the new branch.
     #[clap(long)]
     branch_name: String,
-    /// Use last Lsn of another timeline (and its data) as base when creating the new timeline. The
-    /// timeline gets resolved by its branch name.
+    /// Use last Lsn of another branch (and its data) as base when creating the new branch. The
+    /// branch gets resolved by its branch name.
     #[clap(long)]
     ancestor_branch_name: Option<String>,
-    /// When using another timeline as base, use a specific Lsn in it instead of the latest one.
+    /// When using another branch as base, use a specific Lsn in it instead of the latest one.
     #[clap(long)]
     ancestor_start_lsn: Option<Lsn>,
 }
 
-/// Create a new blank timeline.
+/// Create a new blank branch.
 #[derive(clap::Args)]
 struct TimelineCreateCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long = "tenant-id")]
-    tenant_id: Option<TenantId>,
-    /// New timeline's ID, as a 32-byte hexadecimal string.
-    #[clap(long)]
-    timeline_id: Option<TimelineId>,
-    /// Human-readable alias for the new timeline.
+    /// New branch's ID, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: Option<BranchId>,
+    /// Human-readable alias for the new branch.
     #[clap(long)]
     branch_name: String,
 
@@ -343,16 +332,13 @@ struct TimelineCreateCmdArgs {
     pg_version: PgMajorVersion,
 }
 
-/// Import a timeline from a basebackup directory.
+/// Import a branch from a basebackup directory.
 #[derive(clap::Args)]
 struct TimelineImportCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long = "tenant-id")]
-    tenant_id: Option<TenantId>,
-    /// New timeline's ID, as a 32-byte hexadecimal string.
-    #[clap(long)]
-    timeline_id: TimelineId,
-    /// Human-readable alias for the new timeline.
+    /// New branch's ID, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: BranchId,
+    /// Human-readable alias for the new branch.
     #[clap(long)]
     branch_name: String,
     /// Basebackup tarfile to import.
@@ -372,6 +358,62 @@ struct TimelineImportCmdArgs {
     #[arg(default_value = DEFAULT_PG_VERSION_NUM)]
     #[clap(long)]
     pg_version: PgMajorVersion,
+}
+
+/// Manage branches.
+#[derive(clap::Subcommand)]
+enum BranchCmd {
+    Create(BranchCreateCmdArgs),
+    Drop(BranchDropCmdArgs),
+}
+
+/// Create a branch.
+///
+/// With no `--ancestor-branch-name`, creates a ROOT branch (no ancestor) —
+/// equivalent to the old `tenant create`. With `--ancestor-branch-name`,
+/// creates a FORK off the named ancestor — equivalent to the old
+/// `timeline branch`.
+#[derive(clap::Args)]
+struct BranchCreateCmdArgs {
+    /// New branch's ID, as a 32-byte hexadecimal string. Generated if omitted.
+    #[clap(long = "branch-id")]
+    branch_id: Option<BranchId>,
+
+    /// Human-readable alias for the new branch. Defaults to `main` for a root
+    /// branch; required in practice for a fork.
+    #[clap(long)]
+    branch_name: Option<String>,
+
+    /// Name of the ancestor branch to fork from. When set, this creates a fork
+    /// branch off the named ancestor; when unset, a root branch is created.
+    #[clap(long)]
+    ancestor_branch_name: Option<String>,
+
+    /// When forking, use a specific Lsn in the ancestor instead of the latest one.
+    #[clap(long)]
+    ancestor_start_lsn: Option<Lsn>,
+
+    /// Postgres version to use for a root branch (a fork inherits its
+    /// ancestor's version).
+    #[arg(default_value = DEFAULT_PG_VERSION_NUM)]
+    #[clap(long)]
+    pg_version: PgMajorVersion,
+
+    /// Use this branch in future CLI commands where branch_id is needed, but
+    /// not specified (root branch only).
+    #[clap(long)]
+    set_default: bool,
+}
+
+/// Drop a branch and all of its endpoints: stop the endpoints' compute
+/// processes, delete their records, and mark the branch dropped in the
+/// storage controller. The underlying pageserver/safekeeper data is left for a
+/// later GC pass.
+#[derive(clap::Args)]
+struct BranchDropCmdArgs {
+    /// Branch ID of the branch to drop, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: BranchId,
 }
 
 /// Manage pageservers.
@@ -565,23 +607,23 @@ enum EndpointCmd {
 /// List endpoints.
 #[derive(clap::Args)]
 struct EndpointListCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long = "tenant-id")]
-    tenant_id: Option<TenantId>,
+    /// Branch ID, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: Option<BranchId>,
 }
 
 /// Create a compute endpoint.
 #[derive(clap::Args)]
 struct EndpointCreateCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long = "tenant-id")]
-    tenant_id: Option<TenantId>,
+    /// Branch ID, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: Option<BranchId>,
     /// Postgres endpoint ID.
     endpoint_id: Option<String>,
     /// Name of the branch the endpoint will run on.
     #[clap(long)]
     branch_name: Option<String>,
-    /// Specify LSN on the timeline to start from. By default, end of the timeline would be used.
+    /// Specify LSN on the branch to start from. By default, end of the branch would be used.
     #[clap(long)]
     lsn: Option<Lsn>,
     #[clap(long)]
@@ -706,9 +748,9 @@ struct EndpointStartCmdArgs {
 /// Reconfigure an endpoint.
 #[derive(clap::Args)]
 struct EndpointReconfigureCmdArgs {
-    /// Tenant id. Represented as a hexadecimal string 32 symbols length
-    #[clap(long = "tenant-id")]
-    tenant_id: Option<TenantId>,
+    /// Branch id. Represented as a hexadecimal string 32 symbols length
+    #[clap(long = "branch-id")]
+    branch_id: Option<BranchId>,
     /// Postgres endpoint ID.
     endpoint_id: String,
     /// Pageserver ID.
@@ -770,13 +812,10 @@ enum MappingsCmd {
 /// Create new mapping which cannot exist already.
 #[derive(clap::Args)]
 struct MappingsMapCmdArgs {
-    /// Tenant ID, as a 32-byte hexadecimal string.
-    #[clap(long)]
-    tenant_id: TenantId,
-    /// Timeline ID, as a 32-byte hexadecimal string.
-    #[clap(long)]
-    timeline_id: TimelineId,
-    /// Branch name to give to the timeline.
+    /// Branch ID, as a 32-byte hexadecimal string.
+    #[clap(long = "branch-id")]
+    branch_id: BranchId,
+    /// Branch name to give to the branch.
     #[clap(long)]
     branch_name: String,
 }
@@ -789,8 +828,8 @@ struct TimelineTreeEl {
     pub info: TimelineInfo,
     /// Name, recovered from ybLight config mappings
     pub name: Option<String>,
-    /// Holds all direct children of this timeline referenced using `timeline_id`.
-    pub children: BTreeSet<TimelineId>,
+    /// Holds all direct children of this branch referenced using `branch_id`.
+    pub children: BTreeSet<BranchId>,
 }
 
 /// A flock-based guard over the yb_light_local repository directory
@@ -848,6 +887,7 @@ fn main() -> Result<()> {
             YbLightLocalCmd::Stop(args) => rt.block_on(handle_stop_all(&args, env)),
             YbLightLocalCmd::Tenant(subcmd) => rt.block_on(handle_tenant(&subcmd, env)),
             YbLightLocalCmd::Timeline(subcmd) => rt.block_on(handle_timeline(&subcmd, env)),
+            YbLightLocalCmd::Branch(subcmd) => rt.block_on(handle_branch(&subcmd, env)),
             YbLightLocalCmd::Pageserver(subcmd) => rt.block_on(handle_pageserver(&subcmd, env)),
             YbLightLocalCmd::StorageController(subcmd) => {
                 rt.block_on(handle_storage_controller(&subcmd, env))
@@ -884,37 +924,36 @@ fn main() -> Result<()> {
 ///
 fn print_timelines_tree(
     timelines: Vec<TimelineInfo>,
-    mut timeline_name_mappings: HashMap<TenantTimelineId, String>,
+    mut timeline_name_mappings: HashMap<BranchId, String>,
 ) -> Result<()> {
     let mut timelines_hash = timelines
         .iter()
         .map(|t| {
             (
-                t.timeline_id,
+                t.branch_id,
                 TimelineTreeEl {
                     info: t.clone(),
                     children: BTreeSet::new(),
-                    name: timeline_name_mappings
-                        .remove(&TenantTimelineId::new(t.tenant_id, t.timeline_id)),
+                    name: timeline_name_mappings.remove(&t.branch_id),
                 },
             )
         })
         .collect::<HashMap<_, _>>();
 
-    // Memorize all direct children of each timeline.
+    // Memorize all direct children of each branch.
     for timeline in timelines.iter() {
-        if let Some(ancestor_timeline_id) = timeline.ancestor_timeline_id {
+        if let Some(ancestor_branch_id) = timeline.ancestor_branch_id {
             timelines_hash
-                .get_mut(&ancestor_timeline_id)
-                .context("missing timeline info in the HashMap")?
+                .get_mut(&ancestor_branch_id)
+                .context("missing branch info in the HashMap")?
                 .children
-                .insert(timeline.timeline_id);
+                .insert(timeline.branch_id);
         }
     }
 
     for timeline in timelines_hash.values() {
-        // Start with root local timelines (no ancestors) first.
-        if timeline.info.ancestor_timeline_id.is_none() {
+        // Start with root local branches (no ancestors) first.
+        if timeline.info.ancestor_branch_id.is_none() {
             print_timeline(0, &Vec::from([true]), timeline, &timelines_hash)?;
         }
     }
@@ -929,7 +968,7 @@ fn print_timeline(
     nesting_level: usize,
     is_last: &[bool],
     timeline: &TimelineTreeEl,
-    timelines: &HashMap<TimelineId, TimelineTreeEl>,
+    timelines: &HashMap<BranchId, TimelineTreeEl>,
 ) -> Result<()> {
     if nesting_level > 0 {
         let ancestor_lsn = match timeline.info.ancestor_lsn {
@@ -963,7 +1002,7 @@ fn print_timeline(
     println!(
         "{} [{}]",
         timeline.name.as_deref().unwrap_or("_no_name_"),
-        timeline.info.timeline_id
+        timeline.info.branch_id
     );
 
     let len = timeline.children.len();
@@ -994,17 +1033,17 @@ fn print_timeline(
     Ok(())
 }
 
-/// Helper function to get tenant id from an optional --tenant_id option or from the config file
+/// Helper function to get branch id from an optional --branch-id option or from the config file
 fn get_tenant_id(
-    tenant_id_arg: Option<TenantId>,
+    branch_id_arg: Option<BranchId>,
     env: &local_env::LocalEnv,
-) -> anyhow::Result<TenantId> {
-    if let Some(tenant_id_from_arguments) = tenant_id_arg {
-        Ok(tenant_id_from_arguments)
-    } else if let Some(default_id) = env.default_tenant_id {
+) -> anyhow::Result<BranchId> {
+    if let Some(branch_id_from_arguments) = branch_id_arg {
+        Ok(branch_id_from_arguments)
+    } else if let Some(default_id) = env.default_branch_id {
         Ok(default_id)
     } else {
-        anyhow::bail!("No tenant id. Use --tenant-id, or set a default tenant");
+        anyhow::bail!("No branch id. Use --branch-id, or set a default branch");
     }
 }
 
@@ -1098,7 +1137,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
             },
             pg_distrib_dir: None,
             yb_light_distrib_dir: None,
-            default_tenant_id: TenantId::from_array(std::array::from_fn(|_| 0)),
+            default_branch_id: BranchId::from_array(std::array::from_fn(|_| 0)),
             storage_controller: Some(YbLightStorageControllerConf {
                 // Provision the storage_controller + storage DBs in YB.
                 yb: Some(yb_conn.clone()),
@@ -1161,8 +1200,7 @@ fn allocate_pageserver_conf(env: &LocalEnv, endpoint_id: &str) -> anyhow::Result
         http_auth_type: template.http_auth_type,
         grpc_auth_type: template.grpc_auth_type,
         no_sync: template.no_sync,
-        tenant_id: None,
-        timeline_id: None,
+        branch_id: None,
         data_dir: env.pageserver_data_dir(endpoint_id),
     })
 }
@@ -1197,14 +1235,13 @@ fn pageserver_init_conf_for(
 }
 
 /// Allocate the conf for a safekeeper to be provisioned under `endpoint_id`,
-/// dedicated to `timeline_id`. Like [`allocate_pageserver_conf`], the first
+/// dedicated to `branch_id`. Like [`allocate_pageserver_conf`], the first
 /// safekeeper reuses the lowest-id template's id/ports; subsequent ones get
 /// the next free id and a per-id port offset.
 fn allocate_safekeeper_conf(
     env: &LocalEnv,
     endpoint_id: &str,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
 ) -> anyhow::Result<SafekeeperConf> {
     let template = env
         .safekeeper_templates
@@ -1227,8 +1264,7 @@ fn allocate_safekeeper_conf(
         listen_addr: template.listen_addr.clone(),
         yb_storage_conn: template.yb_storage_conn.clone(),
         wal_cache_size_mib: template.wal_cache_size_mib,
-        tenant_id: Some(tenant_id),
-        timeline_id: Some(timeline_id),
+        branch_id: Some(branch_id),
         endpoint_id: endpoint_id.to_string(),
     })
 }
@@ -1258,34 +1294,33 @@ fn allocate_endpoint_storage_conf(env: &LocalEnv, endpoint_id: &str) -> Endpoint
     }
 }
 
-/// The ancestor timeline's durable WAL end (`flush_lsn`), read from its
+/// The ancestor branch's durable WAL end (`flush_lsn`), read from its
 /// safekeeper. This is the authoritative "everything committed so far"
 /// position; the ancestor pageserver's `last_record_lsn` only reflects
 /// what its walreceiver has ingested and may lag this by seconds.
 async fn ancestor_durable_lsn(
     env: &LocalEnv,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
 ) -> anyhow::Result<Lsn> {
     let sk_conf = env
-        .safekeepers_for_timeline(timeline_id)
+        .safekeepers_for_timeline(branch_id)
         .into_iter()
         .next()
-        .with_context(|| format!("no safekeeper serves timeline {timeline_id}"))?
+        .with_context(|| format!("no safekeeper serves branch {branch_id}"))?
         .clone();
     let sk = SafekeeperNode::from_env(env, &sk_conf);
     let status: safekeeper_api::models::TimelineStatus = sk
         .http_client
-        .timeline_status(tenant_id, timeline_id)
+        .timeline_status(branch_id)
         .await?
         .json()
         .await
-        .context("decode safekeeper timeline status")?;
+        .context("decode safekeeper branch status")?;
     Ok(status.flush_lsn)
 }
 
-/// The pageserver CLI tenant operations target: the first-configured
-/// node, which serves the tenant's main timeline. Branch timelines get
+/// The pageserver CLI branch operations target: the first-configured
+/// node, which serves the main branch. Child branches get
 /// their own pageservers, resolved via `pageserver_conf_for_timeline`.
 fn get_default_pageserver(env: &local_env::LocalEnv) -> anyhow::Result<PageServerNode> {
     let ps_conf = env.pageservers.first().context(
@@ -1300,18 +1335,18 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
             for ps_conf in &env.pageservers {
                 let ps = PageServerNode::from_env(env, ps_conf);
                 match ps.read_timeline_identity()? {
-                    Some((tenant_id, timeline_id)) => {
-                        println!("{tenant_id} (timeline {timeline_id}, pageserver {})", ps_conf.id)
+                    Some(branch_id) => {
+                        println!("branch {branch_id} (pageserver {})", ps_conf.id)
                     }
-                    None => println!("(pageserver {}: no tenant assigned)", ps_conf.id),
+                    None => println!("(pageserver {}: no branch assigned)", ps_conf.id),
                 }
             }
         }
         TenantCmd::Import(args) => {
-            let tenant_id = args.tenant_id;
+            let branch_id = args.branch_id;
 
             let storage_controller = StorageController::from_env(env);
-            let create_response = storage_controller.tenant_import(tenant_id).await?;
+            let create_response = storage_controller.branch_import(branch_id).await?;
 
             let shard_zero = create_response
                 .shards
@@ -1319,42 +1354,11 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
                 .expect("Import response omitted shards");
 
             let attached_pageserver_id = shard_zero.node_id;
-            let pageserver =
-                PageServerNode::from_env(env, env.get_pageserver_conf(attached_pageserver_id)?);
 
-            println!(
-                "Imported tenant {tenant_id}, attached to pageserver {attached_pageserver_id}"
-            );
+            println!("Imported branch {branch_id}, attached to pageserver {attached_pageserver_id}");
 
-            let timelines = pageserver
-                .http_client
-                .list_timelines(shard_zero.shard_id)
+            env.register_branch_mapping("main".to_string(), branch_id)
                 .await?;
-
-            // Pick a 'main' timeline that has no ancestors, the rest will get arbitrary names
-            let main_timeline = timelines
-                .iter()
-                .find(|t| t.ancestor_timeline_id.is_none())
-                .expect("No timelines found")
-                .timeline_id;
-
-            let mut branch_i = 0;
-            for timeline in timelines.iter() {
-                let branch_name = if timeline.timeline_id == main_timeline {
-                    "main".to_string()
-                } else {
-                    branch_i += 1;
-                    format!("branch_{branch_i}")
-                };
-
-                println!(
-                    "Importing timeline {tenant_id}/{} as branch {branch_name}",
-                    timeline.timeline_id
-                );
-
-                env.register_branch_mapping(branch_name, tenant_id, timeline.timeline_id)
-                    .await?;
-            }
         }
         TenantCmd::Create(args) => {
             // Effective tenant config is the [tenant_config] section of
@@ -1365,46 +1369,45 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
                  pageserver.toml instead"
             );
 
-            // If tenant ID was not specified, generate one
-            let tenant_id = args.tenant_id.unwrap_or_else(TenantId::generate);
-            let new_timeline_id = args.timeline_id.unwrap_or(TimelineId::generate());
+            // If branch ID was not specified, generate one
+            let branch_id = args.branch_id.unwrap_or_else(BranchId::generate);
 
-            // Co-located topology: the tenant's PS+SK pair is provisioned
-            // under the first endpoint created for this timeline, not here.
-            // `tenant create` just allocates the ids and records the pending
+            // Co-located topology: the branch's PS+SK pair is provisioned
+            // under the first endpoint created for this branch, not here.
+            // `tenant create` just allocates the id and records the pending
             // Bootstrap recipe in the storage controller (durable cluster
             // state in YB) so `endpoint create` knows to run initdb + import.
             // The `main` branch mapping is registered with the controller
-            // only after the timeline exists (during provisioning) — the
-            // controller rejects a branch name for a timeline it doesn't
+            // only after the branch exists (during provisioning) — the
+            // controller rejects a branch name for a branch it doesn't
             // know yet, so until then the pending row carries the name.
             let sc = StorageController::from_env(env);
             sc.record_pending_timeline_init(
-                tenant_id,
-                new_timeline_id,
+                branch_id,
                 pageserver_api::controller_api::PendingTimelineInitRequest {
                     branch_name: DEFAULT_BRANCH_NAME.to_string(),
                     pg_version: args.pg_version,
-                    ancestor_timeline_id: None,
+                    ancestor_branch_id: None,
                     start_lsn: Lsn(0),
                 },
             )
             .await?;
 
-            // NB: test/e2e/storage/run.sh extracts the tenant id from this exact
-            // line (`awk '/successfully created/{print $2}'`). The
+            // NB: the e2e harness extracts the branch id from this exact line
+            // (it finds the line containing "successfully created" and takes
+            // the 2nd whitespace-separated token as the branch id). The
             // pageserver that serves it comes up at `endpoint create`.
-            println!("tenant {tenant_id} successfully created");
-            println!("Created an initial timeline '{new_timeline_id}' for tenant: {tenant_id}",);
+            println!("branch {branch_id} successfully created");
+            println!("Created an initial branch '{branch_id}'");
 
             if args.set_default {
-                println!("Setting tenant {tenant_id} as a default one");
-                env.default_tenant_id = Some(tenant_id);
+                println!("Setting branch {branch_id} as a default one");
+                env.default_branch_id = Some(branch_id);
             }
         }
         TenantCmd::SetDefault(args) => {
-            println!("Setting tenant {} as a default one", args.tenant_id);
-            env.default_tenant_id = Some(args.tenant_id);
+            println!("Setting branch {} as a default one", args.branch_id);
+            env.default_branch_id = Some(args.branch_id);
         }
         TenantCmd::Config(_) => {
             anyhow::bail!(
@@ -1422,8 +1425,8 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             // TODO(sharding): this command shouldn't have to specify a shard ID: we should ask the storage controller
             // where shard 0 is attached, and query there.
             let pageserver = get_default_pageserver(env)?;
-            let tenant_id = get_tenant_id(args.tenant_id, env)?;
-            let timelines = pageserver.timeline_list(&tenant_id).await?;
+            let _branch_id = get_tenant_id(args.branch_id, env)?;
+            let timelines = pageserver.timeline_list().await?;
             print_timelines_tree(timelines, env.timeline_name_mappings().await?)?;
         }
         TimelineCmd::Create(_) => {
@@ -1440,18 +1443,17 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             );
         }
         TimelineCmd::Branch(args) => {
-            let tenant_id = get_tenant_id(args.tenant_id, env)?;
-            let new_timeline_id = args.timeline_id.unwrap_or(TimelineId::generate());
+            let new_branch_id = args.branch_id.unwrap_or_else(BranchId::generate);
             let new_branch_name = &args.branch_name;
             let ancestor_branch_name = args
                 .ancestor_branch_name
                 .clone()
                 .unwrap_or(DEFAULT_BRANCH_NAME.to_owned());
-            let ancestor_timeline_id = env
-                .get_branch_timeline_id(&ancestor_branch_name, tenant_id)
+            let ancestor_branch_id = env
+                .get_branch_timeline_id(&ancestor_branch_name)
                 .await?
                 .ok_or_else(|| {
-                    anyhow!("Found no timeline id for branch name '{ancestor_branch_name}'")
+                    anyhow!("Found no branch id for branch name '{ancestor_branch_name}'")
                 })?;
 
             // Co-located topology: a branch is a NEW pageserver +
@@ -1460,23 +1462,22 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             // (`endpoint create`). Here we only capture the branch point
             // and pg_version from the ancestor (which is running now) and
             // record a pending Branch init. The branch's pre-branch data
-            // stays under the ancestor's timeline_id in YB and is served
+            // stays under the ancestor's branch_id in YB and is served
             // via lineage-aware reads — nothing is copied.
             let ancestor_ps_conf = env
-                .pageserver_conf_for_timeline(ancestor_timeline_id)
+                .pageserver_conf_for_timeline(ancestor_branch_id)
                 .with_context(|| {
-                    format!("no pageserver serves ancestor timeline {ancestor_timeline_id}")
+                    format!("no pageserver serves ancestor branch {ancestor_branch_id}")
                 })?
                 .clone();
             let ancestor_ps = PageServerNode::from_env(env, &ancestor_ps_conf);
             let ancestor_info = ancestor_ps
                 .timeline_info(
-                    tenant_id,
-                    ancestor_timeline_id,
+                    ancestor_branch_id,
                     pageserver_client::mgmt_api::ForceAwaitLogicalSize::No,
                 )
                 .await
-                .context("fetch ancestor timeline info")?;
+                .context("fetch ancestor branch info")?;
             let pg_version = ancestor_info.pg_version;
 
             // Default branch point: the ancestor's durable WAL end, from
@@ -1487,38 +1488,36 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             let start_lsn = match args.ancestor_start_lsn {
                 Some(lsn) => lsn,
                 None => {
-                    ancestor_durable_lsn(env, tenant_id, ancestor_timeline_id)
+                    ancestor_durable_lsn(env, ancestor_branch_id)
                         .await
                         .context("fetch ancestor durable WAL end from safekeeper")?
                 }
             };
 
             // The branch-name mapping is registered with the storage
-            // controller only after the timeline exists (during
+            // controller only after the branch exists (during
             // provisioning); until then the pending row carries the branch
             // name so `endpoint create` can resolve it.
             let sc = StorageController::from_env(env);
             sc.record_pending_timeline_init(
-                tenant_id,
-                new_timeline_id,
+                new_branch_id,
                 pageserver_api::controller_api::PendingTimelineInitRequest {
                     branch_name: new_branch_name.to_string(),
                     pg_version,
-                    ancestor_timeline_id: Some(ancestor_timeline_id),
+                    ancestor_branch_id: Some(ancestor_branch_id),
                     start_lsn,
                 },
             )
             .await?;
 
             println!(
-                "Created branch '{new_branch_name}' (timeline {new_timeline_id}) at {start_lsn} \
+                "Created branch '{new_branch_name}' (branch {new_branch_id}) at {start_lsn} \
                  from '{ancestor_branch_name}'; its pageserver + safekeeper come up at \
                  `endpoint create`",
             );
         }
         TimelineCmd::Drop(args) => {
-            let tenant_id = get_tenant_id(args.tenant_id, env)?;
-            let timeline_id = args.timeline_id;
+            let branch_id = args.branch_id;
 
             // Stop + tear down every endpoint sitting on this branch. With
             // `destroy`, `stop` halts the compute process, deprovisions the
@@ -1529,7 +1528,7 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             let to_drop: Vec<_> = cplane
                 .endpoints
                 .iter()
-                .filter(|(_, ep)| ep.tenant_id == tenant_id && ep.timeline_id == timeline_id)
+                .filter(|(_, ep)| ep.branch_id == branch_id)
                 .map(|(id, ep)| (id.clone(), ep.clone()))
                 .collect();
 
@@ -1542,14 +1541,14 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
 
             // Durable cleanup in the storage controller: delete any endpoint
             // records still present, discard an un-materialized init recipe,
-            // and mark the timeline dropped so it no longer surfaces as a live
+            // and mark the branch dropped so it no longer surfaces as a live
             // branch and isn't brought back on restart. Idempotent.
             StorageController::from_env(env)
-                .timeline_drop(tenant_id, timeline_id)
+                .timeline_drop(branch_id)
                 .await?;
 
             println!(
-                "Dropped branch (timeline {timeline_id}) and {} endpoint(s); the timeline is \
+                "Dropped branch (branch {branch_id}) and {} endpoint(s); the branch is \
                  marked dropped — its pageserver/safekeeper data is left for a later GC pass",
                 to_drop.len(),
             );
@@ -1559,18 +1558,80 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
     Ok(())
 }
 
-/// Provision the pageserver + safekeeper pair that serves `timeline_id`,
+/// Handle the `branch` subcommands, the branch_id-native command surface the
+/// e2e harness drives. These reshape onto the existing root-create / fork /
+/// drop logic:
+///
+/// * `branch create` with no `--ancestor-branch-name` creates a ROOT branch
+///   (no ancestor) — the same work as the old `tenant create`.
+/// * `branch create --ancestor-branch-name <ANC>` creates a FORK off the
+///   named ancestor — the same work as the old `timeline branch`.
+/// * `branch drop --branch-id <ID>` drops the branch — the same work as the
+///   old `timeline drop`.
+async fn handle_branch(subcmd: &BranchCmd, env: &mut local_env::LocalEnv) -> anyhow::Result<()> {
+    match subcmd {
+        BranchCmd::Create(args) => {
+            if args.ancestor_branch_name.is_some() {
+                // FORK: reuse the `timeline branch` logic. A fork needs a
+                // human-readable name to resolve it later at `endpoint create`.
+                let branch_name = args.branch_name.clone().ok_or_else(|| {
+                    anyhow!("`branch create` with --ancestor-branch-name requires --branch-name")
+                })?;
+                let new_branch_id = args.branch_id.unwrap_or_else(BranchId::generate);
+                handle_timeline(
+                    &TimelineCmd::Branch(TimelineBranchCmdArgs {
+                        branch_id: Some(new_branch_id),
+                        branch_name,
+                        ancestor_branch_name: args.ancestor_branch_name.clone(),
+                        ancestor_start_lsn: args.ancestor_start_lsn,
+                    }),
+                    env,
+                )
+                .await?;
+                // Keep the success-message invariant (2nd token is the branch
+                // id) consistent across root and fork creates.
+                println!("branch {new_branch_id} successfully created");
+            } else {
+                // ROOT: reuse the `tenant create` logic, which prints the
+                // `branch <id> successfully created` line the harness parses.
+                handle_tenant(
+                    &TenantCmd::Create(TenantCreateCmdArgs {
+                        branch_id: args.branch_id,
+                        config: Vec::new(),
+                        pg_version: args.pg_version,
+                        set_default: args.set_default,
+                        placement_policy: None,
+                    }),
+                    env,
+                )
+                .await?;
+            }
+        }
+        BranchCmd::Drop(args) => {
+            handle_timeline(
+                &TimelineCmd::Drop(TimelineDropCmdArgs {
+                    branch_id: args.branch_id,
+                }),
+                env,
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Provision the pageserver + safekeeper pair that serves `branch_id`,
 /// co-located under `endpoint_id`, consuming the pending init recorded at
 /// `tenant create` / `timeline branch`. No-op when a pageserver already
-/// serves the timeline (a second endpoint on an already-served branch —
+/// serves the branch (a second endpoint on an already-served branch —
 /// the pair stays under the first endpoint that created it).
 async fn provision_timeline_for_endpoint(
     env: &mut LocalEnv,
     endpoint_id: &str,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
 ) -> anyhow::Result<()> {
-    if env.pageserver_conf_for_timeline(timeline_id).is_some() {
+    if env.pageserver_conf_for_timeline(branch_id).is_some() {
         return Ok(());
     }
     // Read the recipe from the storage controller (durable cluster state in
@@ -1578,42 +1639,40 @@ async fn provision_timeline_for_endpoint(
     // provisioning calls below.
     let pending = {
         let sc = StorageController::from_env(env);
-        sc.list_pending_timeline_inits(tenant_id)
+        sc.list_pending_timeline_inits()
             .await?
             .into_iter()
-            .find(|p| p.timeline_id == timeline_id)
+            .find(|p| p.branch_id == branch_id)
             .with_context(|| {
                 format!(
-                    "timeline {timeline_id} has no provisioned pageserver and no pending init; \
+                    "branch {branch_id} has no provisioned pageserver and no pending init; \
                      run `tenant create` (for the main branch) or `timeline branch` first"
                 )
             })?
     };
 
-    // The branch alias is set on the timeline row in the same write as
+    // The branch alias is set on the branch row in the same write as
     // `timeline_register` (inside provision_*), folding the old separate
     // set-branch-name round-trip.
     let branch_name = Some(pending.branch_name);
-    match pending.ancestor_timeline_id {
-        // No ancestor => Bootstrap (the tenant's initial timeline).
+    match pending.ancestor_branch_id {
+        // No ancestor => Bootstrap (the initial branch).
         None => {
             provision_bootstrap(
                 env,
                 endpoint_id,
-                tenant_id,
-                timeline_id,
+                branch_id,
                 pending.pg_version,
                 branch_name,
             )
             .await?;
         }
-        Some(ancestor_timeline_id) => {
+        Some(ancestor_branch_id) => {
             provision_branch(
                 env,
                 endpoint_id,
-                tenant_id,
-                timeline_id,
-                ancestor_timeline_id,
+                branch_id,
+                ancestor_branch_id,
                 pending.start_lsn,
                 pending.pg_version,
                 branch_name,
@@ -1624,24 +1683,23 @@ async fn provision_timeline_for_endpoint(
 
     // The pair is materialized; drop the pending recipe from YB.
     StorageController::from_env(env)
-        .delete_pending_timeline_init(tenant_id, timeline_id)
+        .delete_pending_timeline_init(branch_id)
         .await?;
     Ok(())
 }
 
-/// Bring up the main timeline's pair: start the safekeeper, then start the
-/// pageserver (which runs initdb + import to bootstrap the timeline), then
+/// Bring up the main branch's pair: start the safekeeper, then start the
+/// pageserver (which runs initdb + import to bootstrap the branch), then
 /// have the storage controller create the timeline on the safekeeper.
 async fn provision_bootstrap(
     env: &mut LocalEnv,
     endpoint_id: &str,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     pg_version: PgMajorVersion,
     branch_name: Option<String>,
 ) -> anyhow::Result<()> {
     let ps_conf = allocate_pageserver_conf(env, endpoint_id)?;
-    let sk_conf = allocate_safekeeper_conf(env, endpoint_id, tenant_id, timeline_id)?;
+    let sk_conf = allocate_safekeeper_conf(env, endpoint_id, branch_id)?;
     // Record the safekeeper before building the pageserver toml: its
     // `safekeeper_pg_addr` is taken from `env.safekeepers.first()`.
     env.safekeepers.push(sk_conf.clone());
@@ -1678,15 +1736,14 @@ async fn provision_bootstrap(
         .initialize(init_conf, &format!("127.0.0.1:{}", sk_conf.pg_port))
         .context("initialize main pageserver")?;
     pageserver.set_timeline_identity(
-        tenant_id,
-        timeline_id,
+        branch_id,
         0, // placeholder; start() bumps via attach_hook
         Some(&pageserver_api::config::TimelineInitConfig::Bootstrap { pg_version }),
     )?;
     pageserver
         .register_and_attach()
         .await
-        .context("register tenant with storage controller")?;
+        .context("register branch with storage controller")?;
     pageserver
         .start(&std::time::Duration::from_secs(60))
         .await
@@ -1698,8 +1755,7 @@ async fn provision_bootstrap(
     let start_lsn = loop {
         match pageserver
             .timeline_info(
-                tenant_id,
-                timeline_id,
+                branch_id,
                 pageserver_client::mgmt_api::ForceAwaitLogicalSize::No,
             )
             .await
@@ -1712,12 +1768,12 @@ async fn provision_bootstrap(
             }
             Ok(info) => {
                 anyhow::bail!(
-                    "bootstrap timeline did not become Active in time (state: {:?})",
+                    "bootstrap branch did not become Active in time (state: {:?})",
                     info.state
                 );
             }
             Err(e) => {
-                return Err(e.context("bootstrap timeline did not become Active in time"));
+                return Err(e.context("bootstrap branch did not become Active in time"));
             }
         }
     };
@@ -1745,8 +1801,7 @@ async fn provision_bootstrap(
     };
     safekeeper
         .create_timeline(&safekeeper_api::models::TimelineCreateRequest {
-            tenant_id,
-            timeline_id,
+            branch_id,
             mconf,
             pg_version: PgVersionId::from(pg_version),
             system_id: None,
@@ -1757,13 +1812,12 @@ async fn provision_bootstrap(
         .await
         .context("create bootstrap timeline on safekeeper")?;
 
-    // Record the launcher-created timeline in the storage controller with
+    // Record the launcher-created branch in the storage controller with
     // an explicit sk_set pinning the co-located safekeeper (so the
     // pageserver streams from it too, and the row reflects real placement).
     storage_controller
         .timeline_register(
-            tenant_id,
-            timeline_id,
+            branch_id,
             pageserver_api::controller_api::TimelineRegisterRequest {
                 start_lsn,
                 sk_set: vec![sk_conf.id],
@@ -1771,7 +1825,7 @@ async fn provision_bootstrap(
             },
         )
         .await
-        .context("register bootstrap timeline with storage controller")?;
+        .context("register bootstrap branch with storage controller")?;
 
     env.pageservers.push(ps_conf);
     Ok(())
@@ -1784,24 +1838,23 @@ async fn provision_bootstrap(
 async fn provision_branch(
     env: &mut LocalEnv,
     endpoint_id: &str,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
-    ancestor_timeline_id: TimelineId,
+    branch_id: BranchId,
+    ancestor_branch_id: BranchId,
     start_lsn: Lsn,
     pg_version: PgMajorVersion,
     branch_name: Option<String>,
 ) -> anyhow::Result<()> {
     let timer = PhaseTimer::new("branch");
     let ancestor_ps_conf = env
-        .pageserver_conf_for_timeline(ancestor_timeline_id)
+        .pageserver_conf_for_timeline(ancestor_branch_id)
         .with_context(|| {
-            format!("no pageserver serves ancestor timeline {ancestor_timeline_id}")
+            format!("no pageserver serves ancestor branch {ancestor_branch_id}")
         })?
         .clone();
     let ancestor_ps = PageServerNode::from_env(env, &ancestor_ps_conf);
 
     let ps_conf = allocate_pageserver_conf(env, endpoint_id)?;
-    let sk_conf = allocate_safekeeper_conf(env, endpoint_id, tenant_id, timeline_id)?;
+    let sk_conf = allocate_safekeeper_conf(env, endpoint_id, branch_id)?;
     env.safekeepers.push(sk_conf.clone());
 
     // Safekeeper first: it must hold the timeline (starting at the branch
@@ -1836,8 +1889,7 @@ async fn provision_branch(
     };
     safekeeper
         .create_timeline(&safekeeper_api::models::TimelineCreateRequest {
-            tenant_id,
-            timeline_id,
+            branch_id,
             mconf,
             pg_version: PgVersionId::from(pg_version),
             system_id: None,
@@ -1861,11 +1913,10 @@ async fn provision_branch(
     let pageserver = PageServerNode::from_env(env, &ps_conf);
     pageserver.initialize_from_template(&ancestor_ps, &format!("127.0.0.1:{}", sk_conf.pg_port))?;
     pageserver.set_timeline_identity(
-        tenant_id,
-        timeline_id,
+        branch_id,
         0, // placeholder; start() bumps via attach_hook
         Some(&pageserver_api::config::TimelineInitConfig::Branch {
-            ancestor_timeline_id,
+            ancestor_branch_id,
             ancestor_lsn: start_lsn,
         }),
     )?;
@@ -1877,7 +1928,7 @@ async fn provision_branch(
     // branch-PS startup retry remains the correctness guarantee, so a
     // failed/partial flush only costs latency, never safety.
     if let Err(e) = ancestor_ps
-        .flush(tenant_id, ancestor_timeline_id, Some(start_lsn))
+        .flush(ancestor_branch_id, Some(start_lsn))
         .await
     {
         println!("branch: best-effort ancestor flush failed (relying on startup retry): {e:#}");
@@ -1890,13 +1941,12 @@ async fn provision_branch(
         .context("start branch pageserver")?;
     timer.tick("pageserver started");
 
-    // Wait for the branch timeline to come up Active.
+    // Wait for the branch to come up Active.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
         match pageserver
             .timeline_info(
-                tenant_id,
-                timeline_id,
+                branch_id,
                 pageserver_client::mgmt_api::ForceAwaitLogicalSize::No,
             )
             .await
@@ -1909,24 +1959,23 @@ async fn provision_branch(
             }
             Ok(info) => {
                 anyhow::bail!(
-                    "branch timeline did not become Active in time (state: {:?})",
+                    "branch did not become Active in time (state: {:?})",
                     info.state
                 );
             }
             Err(e) => {
-                return Err(e.context("branch timeline did not become Active in time"));
+                return Err(e.context("branch did not become Active in time"));
             }
         }
     }
 
-    timer.tick("timeline Active");
-    // Record the launcher-created timeline in the storage controller's
-    // bookkeeping (branch names + deletion flows hang off the timelines row).
+    timer.tick("branch Active");
+    // Record the launcher-created branch in the storage controller's
+    // bookkeeping (branch names + deletion flows hang off the branch row).
     let storage_controller = StorageController::from_env(env);
     storage_controller
         .timeline_register(
-            tenant_id,
-            timeline_id,
+            branch_id,
             pageserver_api::controller_api::TimelineRegisterRequest {
                 start_lsn,
                 sk_set: vec![sk_conf.id],
@@ -1934,7 +1983,7 @@ async fn provision_branch(
             },
         )
         .await
-        .context("register branch timeline with storage controller")?;
+        .context("register branch with storage controller")?;
 
     env.pageservers.push(ps_conf);
     Ok(())
@@ -1989,7 +2038,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
         EndpointCmd::List(args) => {
             // TODO(sharding): this command shouldn't have to specify a shard ID: we should ask the storage controller
             // where shard 0 is attached, and query there.
-            let tenant_id = get_tenant_id(args.tenant_id, env)?;
+            let branch_id = get_tenant_id(args.branch_id, env)?;
 
             let timeline_name_mappings = env.timeline_name_mappings().await?;
 
@@ -2000,7 +2049,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             table.set_header([
                 "ENDPOINT",
                 "ADDRESS",
-                "TIMELINE",
+                "BRANCH",
                 "BRANCH NAME",
                 "LSN",
                 "STATUS",
@@ -2009,7 +2058,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             for (endpoint_id, endpoint) in cplane
                 .endpoints
                 .iter()
-                .filter(|(_, endpoint)| endpoint.tenant_id == tenant_id)
+                .filter(|(_, endpoint)| endpoint.branch_id == branch_id)
             {
                 let lsn_str = match endpoint.mode {
                     ComputeMode::Static(lsn) => {
@@ -2025,17 +2074,14 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 };
 
                 let branch_name = timeline_name_mappings
-                    .get(&TenantTimelineId::new(
-                        tenant_id,
-                        endpoint.timeline_id,
-                    ))
+                    .get(&endpoint.branch_id)
                     .map(|name| name.as_str())
                     .unwrap_or("?");
 
                 table.add_row([
                     endpoint_id.as_str(),
                     &endpoint.pg_address.to_string(),
-                    &endpoint.timeline_id.to_string(),
+                    &endpoint.branch_id.to_string(),
                     branch_name,
                     lsn_str.as_str(),
                     &format!("{}", endpoint.status()),
@@ -2045,7 +2091,6 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             println!("{table}");
         }
         EndpointCmd::Create(args) => {
-            let tenant_id = get_tenant_id(args.tenant_id, env)?;
             let branch_name = args
                 .branch_name
                 .clone()
@@ -2055,22 +2100,25 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 .clone()
                 .unwrap_or_else(|| format!("ep-{branch_name}"));
 
-            // Resolve the branch to its timeline. A provisioned branch is
-            // known to the storage controller via its materialized branch
-            // name; an as-yet-unprovisioned one (recorded by `tenant create`
-            // / `timeline branch`, mapping not registered yet) is found in
-            // the controller's pending-init rows.
-            let timeline_id = match env.get_branch_timeline_id(&branch_name, tenant_id).await? {
-                Some(tid) => tid,
-                None => StorageController::from_env(env)
-                    .list_pending_timeline_inits(tenant_id)
-                    .await?
-                    .into_iter()
-                    .find(|p| p.branch_name == branch_name)
-                    .map(|p| p.timeline_id)
-                    .ok_or_else(|| {
-                        anyhow!("Found no timeline id for branch name '{branch_name}'")
-                    })?,
+            // Resolve the branch to its branch id. An explicit `--branch-id`
+            // wins. Otherwise resolve by name: a provisioned branch is known
+            // via its registered mapping; an as-yet-unprovisioned one
+            // (recorded by `branch create`, mapping not registered yet) is
+            // found in the controller's pending-init rows by name.
+            let branch_id = match args.branch_id {
+                Some(id) => id,
+                None => match env.get_branch_timeline_id(&branch_name).await? {
+                    Some(tid) => tid,
+                    None => StorageController::from_env(env)
+                        .list_pending_timeline_inits()
+                        .await?
+                        .into_iter()
+                        .find(|p| p.branch_name == branch_name)
+                        .map(|p| p.branch_id)
+                        .ok_or_else(|| {
+                            anyhow!("Found no branch id for branch name '{branch_name}'")
+                        })?,
+                },
             };
 
             timer.tick("branch resolved");
@@ -2097,11 +2145,11 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             }
 
             if !args.allow_multiple {
-                cplane.check_conflicting_endpoints(mode, tenant_id, timeline_id)?;
+                cplane.check_conflicting_endpoints(mode, branch_id)?;
             }
 
-            // Provision the timeline's pageserver + safekeeper pair (one per
-            // timeline, run the pending Bootstrap/Branch init from `tenant
+            // Provision the branch's pageserver + safekeeper pair (one per
+            // branch, run the pending Bootstrap/Branch init from `tenant
             // create` / `timeline branch`; a second endpoint on an
             // already-served branch makes this a no-op) CONCURRENTLY with this
             // endpoint's own endpoint_storage instance.
@@ -2138,7 +2186,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             timer.tick("pre-provision (endpoint_storage init done)");
 
             let (timeline_res, es_res) = tokio::join!(
-                provision_timeline_for_endpoint(env, &endpoint_id, tenant_id, timeline_id),
+                provision_timeline_for_endpoint(env, &endpoint_id, branch_id),
                 async {
                     if es_present {
                         es.start(&std::time::Duration::from_secs(30))
@@ -2170,8 +2218,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
 
             cplane.new_endpoint(
                 &endpoint_id,
-                tenant_id,
-                timeline_id,
+                branch_id,
                 args.pg_port,
                 args.external_http_port,
                 args.internal_http_port,
@@ -2208,12 +2255,12 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
 
             // If --safekeepers argument is given, use only the listed
             // safekeeper nodes; otherwise the safekeepers serving this
-            // endpoint's timeline (its dedicated one for branches, the
-            // legacy set for the main timeline).
+            // endpoint's branch (its dedicated one for branches, the
+            // legacy set for the main branch).
             let safekeepers = if let Some(safekeepers) = parse_safekeepers(&args.safekeepers)? {
                 safekeepers
             } else {
-                env.safekeepers_for_timeline(endpoint.timeline_id)
+                env.safekeepers_for_timeline(endpoint.branch_id)
                     .iter()
                     .map(|sk| sk.id)
                     .collect()
@@ -2222,8 +2269,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             if !args.allow_multiple {
                 cplane.check_conflicting_endpoints(
                     endpoint.mode,
-                    endpoint.tenant_id,
-                    endpoint.timeline_id,
+                    endpoint.branch_id,
                 )?;
             }
 
@@ -2238,12 +2284,12 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?
             } else {
                 // Per-endpoint pageserver topology: the pageserver
-                // serving this endpoint's timeline is identified by
+                // serving this endpoint's branch is identified by
                 // the identity in its pageserver.toml.
                 let conf = env
-                    .pageserver_conf_for_timeline(endpoint.timeline_id)
+                    .pageserver_conf_for_timeline(endpoint.branch_id)
                     .with_context(|| {
-                        format!("no pageserver serves timeline {}", endpoint.timeline_id)
+                        format!("no pageserver serves branch {}", endpoint.branch_id)
                     })?;
 
                 // Initialize an LSN lease for static computes.
@@ -2251,11 +2297,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                     let pageserver = PageServerNode::from_env(env, conf);
                     pageserver
                         .http_client
-                        .timeline_init_lsn_lease(
-                            endpoint.tenant_id,
-                            endpoint.timeline_id,
-                            lsn,
-                        )
+                        .branch_init_lsn_lease(endpoint.branch_id, lsn)
                         .await?;
                 }
 
@@ -2265,7 +2307,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
 
             let ps_conf = env.get_pageserver_conf(DEFAULT_PAGESERVER_ID)?;
             let auth_token = if matches!(ps_conf.pg_auth_type, AuthType::YbLightJWT) {
-                let claims = Claims::new(Some(endpoint.tenant_id), Scope::Tenant);
+                let claims = Claims::new(Some(endpoint.branch_id), Scope::Tenant);
 
                 Some(env.generate_auth_token(&claims)?)
             } else {
@@ -2276,8 +2318,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 + Duration::from_secs(86400))
             .as_secs();
             let claims = endpoint_storage::claims::EndpointStorageClaims {
-                tenant_id: endpoint.tenant_id,
-                timeline_id: endpoint.timeline_id,
+                branch_id: endpoint.branch_id,
                 endpoint_id: endpoint_id.to_string(),
                 exp,
             };
@@ -2330,9 +2371,9 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 }
                 None => {
                     let conf = env
-                        .pageserver_conf_for_timeline(endpoint.timeline_id)
+                        .pageserver_conf_for_timeline(endpoint.branch_id)
                         .with_context(|| {
-                            format!("no pageserver serves timeline {}", endpoint.timeline_id)
+                            format!("no pageserver serves branch {}", endpoint.branch_id)
                         })?;
                     local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?
                 }
@@ -2360,9 +2401,9 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?
             } else {
                 let conf = env
-                    .pageserver_conf_for_timeline(endpoint.timeline_id)
+                    .pageserver_conf_for_timeline(endpoint.branch_id)
                     .with_context(|| {
-                        format!("no pageserver serves timeline {}", endpoint.timeline_id)
+                        format!("no pageserver serves branch {}", endpoint.branch_id)
                     })?;
                 local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?
             };
@@ -2433,12 +2474,8 @@ fn parse_safekeepers(safekeepers_str: &Option<String>) -> Result<Option<Vec<Node
 async fn handle_mappings(subcmd: &MappingsCmd, env: &local_env::LocalEnv) -> Result<()> {
     match subcmd {
         MappingsCmd::Map(args) => {
-            env.register_branch_mapping(
-                args.branch_name.to_owned(),
-                args.tenant_id,
-                args.timeline_id,
-            )
-            .await?;
+            env.register_branch_mapping(args.branch_name.to_owned(), args.branch_id)
+                .await?;
 
             Ok(())
         }
@@ -2965,7 +3002,7 @@ mod tests {
             http_client: local_env::HttpClientCache::default(),
             pg_distrib_dir: PathBuf::from("/pg"),
             yb_light_distrib_dir: PathBuf::from("/yb_light"),
-            default_tenant_id: None,
+            default_branch_id: None,
             private_key_path: PathBuf::from("k"),
             public_key_path: PathBuf::from("k.pub"),
             storage_controller: YbLightStorageControllerConf::default(),
@@ -3013,14 +3050,12 @@ mod tests {
     #[test]
     fn first_safekeeper_reuses_template_id_and_ports() {
         let env = env_with_templates();
-        let tn = TenantId::generate();
-        let tl = TimelineId::generate();
-        let conf = allocate_safekeeper_conf(&env, "main", tn, tl).unwrap();
+        let branch = BranchId::generate();
+        let conf = allocate_safekeeper_conf(&env, "main", branch).unwrap();
         assert_eq!(conf.id, NodeId(1));
         assert_eq!(conf.pg_port, 5454);
         assert_eq!(conf.http_port, 7676);
-        assert_eq!(conf.tenant_id, Some(tn));
-        assert_eq!(conf.timeline_id, Some(tl));
+        assert_eq!(conf.branch_id, Some(branch));
         assert_eq!(conf.endpoint_id, "main");
         assert_eq!(conf.yb_storage_conn.as_deref(), Some("{ host = 'h' }"));
     }
@@ -3028,17 +3063,16 @@ mod tests {
     #[test]
     fn second_safekeeper_gets_next_id_and_port_delta() {
         let mut env = env_with_templates();
-        let tn = TenantId::generate();
-        let main_tl = TimelineId::generate();
+        let main_branch = BranchId::generate();
         env.safekeepers
-            .push(allocate_safekeeper_conf(&env.clone(), "main", tn, main_tl).unwrap());
-        let branch_tl = TimelineId::generate();
-        let conf = allocate_safekeeper_conf(&env, "ep_b1", tn, branch_tl).unwrap();
+            .push(allocate_safekeeper_conf(&env.clone(), "main", main_branch).unwrap());
+        let branch = BranchId::generate();
+        let conf = allocate_safekeeper_conf(&env, "ep_b1", branch).unwrap();
         // id 2, delta = 2
         assert_eq!(conf.id, NodeId(2));
         assert_eq!(conf.pg_port, 5456);
         assert_eq!(conf.http_port, 7678);
-        assert_eq!(conf.timeline_id, Some(branch_tl));
+        assert_eq!(conf.branch_id, Some(branch));
         assert_eq!(conf.endpoint_id, "ep_b1");
     }
 
@@ -3087,41 +3121,72 @@ mod tests {
     }
 
     #[test]
-    fn timeline_drop_parses_tenant_and_timeline_ids() {
+    fn branch_drop_parses_branch_id() {
         let cli = Cli::try_parse_from([
             "yb_light_local",
-            "timeline",
+            "branch",
             "drop",
-            "--tenant-id",
-            "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0",
-            "--timeline-id",
+            "--branch-id",
             "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
         ])
-        .expect("`timeline drop` with both ids should parse");
+        .expect("`branch drop` with a branch id should parse");
 
-        let YbLightLocalCmd::Timeline(TimelineCmd::Drop(args)) = cli.command else {
-            panic!("expected `timeline drop` to parse into Timeline(Drop)");
+        let YbLightLocalCmd::Branch(BranchCmd::Drop(args)) = cli.command else {
+            panic!("expected `branch drop` to parse into Branch(Drop)");
         };
-        let want_tenant: TenantId = "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0".parse().unwrap();
-        let want_timeline: TimelineId = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0".parse().unwrap();
-        assert_eq!(args.tenant_id, Some(want_tenant));
-        assert_eq!(args.timeline_id, want_timeline);
+        let want_branch: BranchId = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0".parse().unwrap();
+        assert_eq!(args.branch_id, want_branch);
     }
 
     #[test]
-    fn timeline_drop_requires_timeline_id() {
-        // `--timeline-id` is mandatory: dropping a branch must name the
-        // exact timeline, never fall back to a default.
-        let res = Cli::try_parse_from([
-            "yb_light_local",
-            "timeline",
-            "drop",
-            "--tenant-id",
-            "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0",
-        ]);
+    fn branch_drop_requires_branch_id() {
+        // `--branch-id` is mandatory: dropping a branch must name the
+        // exact branch, never fall back to a default.
+        let res = Cli::try_parse_from(["yb_light_local", "branch", "drop"]);
         assert!(
             res.is_err(),
-            "`timeline drop` without --timeline-id should fail to parse"
+            "`branch drop` without --branch-id should fail to parse"
         );
+    }
+
+    #[test]
+    fn branch_create_root_has_no_ancestor() {
+        // `branch create --pg-version 17` with no ancestor is a ROOT branch.
+        let cli = Cli::try_parse_from(["yb_light_local", "branch", "create", "--pg-version", "17"])
+            .expect("`branch create --pg-version 17` should parse");
+
+        let YbLightLocalCmd::Branch(BranchCmd::Create(args)) = cli.command else {
+            panic!("expected `branch create` to parse into Branch(Create)");
+        };
+        assert!(
+            args.ancestor_branch_name.is_none(),
+            "root `branch create` should have no ancestor"
+        );
+    }
+
+    #[test]
+    fn branch_create_fork_resolves_ancestor() {
+        // `branch create --branch-name <n> --ancestor-branch-name main
+        // --branch-id <id>` is a FORK off the named ancestor.
+        let cli = Cli::try_parse_from([
+            "yb_light_local",
+            "branch",
+            "create",
+            "--branch-name",
+            "child",
+            "--ancestor-branch-name",
+            "main",
+            "--branch-id",
+            "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+        ])
+        .expect("`branch create` fork form should parse");
+
+        let YbLightLocalCmd::Branch(BranchCmd::Create(args)) = cli.command else {
+            panic!("expected `branch create` to parse into Branch(Create)");
+        };
+        assert_eq!(args.ancestor_branch_name.as_deref(), Some("main"));
+        assert_eq!(args.branch_name.as_deref(), Some("child"));
+        let want_branch: BranchId = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0".parse().unwrap();
+        assert_eq!(args.branch_id, Some(want_branch));
     }
 }

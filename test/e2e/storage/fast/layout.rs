@@ -37,9 +37,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // Layout-test endpoint sits in the compute lane, above `main`.
     let layout_pg_port = c.compute_port() + 128;
     let r = c.repo_dir();
-    let tid = c.tid();
 
-    step("main timeline's pair is co-located under endpoints/main/");
+    step("main branch's pair is co-located under endpoints/main/");
     must_exist(
         &r.join("endpoints/main/pageserver/pageserver.toml"),
         "endpoints/main/pageserver/pageserver.toml",
@@ -77,7 +76,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 
     step(&format!("branch {LAYOUT_BRANCH} (no new on-disk dirs yet)"));
-    c.yb(&["timeline", "branch", "--tenant-id", tid, "--branch-name", LAYOUT_BRANCH])?;
+    c.yb(&["branch", "create", "--branch-name", LAYOUT_BRANCH, "--ancestor-branch-name", "main"])?;
     if r.join("endpoints").join(LAYOUT_EP).exists() {
         bail!("endpoints/{LAYOUT_EP} should not exist before endpoint create");
     }
@@ -86,7 +85,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         "endpoint create {LAYOUT_EP} provisions the branch's pair under its folder"
     ));
     c.yb(&[
-        "endpoint", "create", LAYOUT_EP, "--tenant-id", tid, "--branch-name", LAYOUT_BRANCH,
+        "endpoint", "create", LAYOUT_EP, "--branch-name", LAYOUT_BRANCH,
         "--pg-version", "17", "--pg-port", &layout_pg_port.to_string(),
     ])?;
     let ep_dir = r.join("endpoints").join(LAYOUT_EP);

@@ -62,7 +62,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::{Channel, Endpoint};
 
 use pageserver_page_api as page_api;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 
 /// Reap clients/streams that have been idle for this long. Channels are reaped immediately when
 /// empty, and indirectly rely on the client/stream idle timeouts.
@@ -216,16 +216,14 @@ impl Drop for ChannelGuard {
     }
 }
 
-/// A pool of gRPC clients for a single tenant timeline. Each client acquires a channel from the
+/// A pool of gRPC clients for a single branch. Each client acquires a channel from the
 /// inner `ChannelPool`. A client is only given out to single caller at a time. The pool limits the
 /// total number of concurrent clients to `max_clients` via semaphore.
 ///
 /// The pool is always wrapped in an outer `Arc`, to allow long-lived guards across tasks/threads.
 pub struct ClientPool {
-    /// Tenant ID.
-    tenant_id: TenantId,
-    /// Timeline ID.
-    timeline_id: TimelineId,
+    /// Branch ID.
+    branch_id: BranchId,
     /// Authentication token, if any.
     auth_token: Option<String>,
     /// Compression to use.
@@ -259,20 +257,18 @@ struct ClientEntry {
 }
 
 impl ClientPool {
-    /// Creates a new client pool for the given tenant timeline. Channels are acquired from the given
-    /// `ChannelPool`, which must point to the Pageserver that hosts the timeline. Allows up to
+    /// Creates a new client pool for the given branch. Channels are acquired from the given
+    /// `ChannelPool`, which must point to the Pageserver that hosts the branch. Allows up to
     /// `max_clients` concurrent clients, or unbounded if None.
     pub fn new(
         channel_pool: Arc<ChannelPool>,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         auth_token: Option<String>,
         compression: Option<CompressionEncoding>,
         max_clients: Option<NonZero<usize>>,
     ) -> Arc<Self> {
         let pool = Arc::new(Self {
-            tenant_id,
-            timeline_id,
+            branch_id,
             auth_token,
             compression,
             channel_pool,
@@ -314,8 +310,7 @@ impl ClientPool {
         let mut channel_guard = self.channel_pool.get();
         let client = page_api::Client::new(
             channel_guard.take(),
-            self.tenant_id,
-            self.timeline_id,
+            self.branch_id,
             self.auth_token.clone(),
             self.compression,
         )

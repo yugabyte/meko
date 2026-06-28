@@ -139,8 +139,7 @@ static int positive_mb_to_bytes(int mb)
 static void
 init_walprop_config(bool syncSafekeepers)
 {
-	walprop_config.yb_amp_tenant = yb_amp_tenant;
-	walprop_config.yb_amp_timeline = yb_amp_timeline;
+	walprop_config.branch_id = yb_amp_branch_id;
 	/* WalProposerCreate scribbles directly on it, so pstrdup */
 	walprop_config.safekeepers_list = pstrdup(wal_acceptors_list);
 	walprop_config.safekeeper_conninfo_options = pstrdup(safekeeper_conninfo_options);

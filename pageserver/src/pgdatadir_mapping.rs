@@ -48,7 +48,7 @@ use crate::metrics::{
     RELSIZE_LATEST_CACHE_MISSES, RELSIZE_SNAPSHOT_CACHE_ENTRIES, RELSIZE_SNAPSHOT_CACHE_HITS,
     RELSIZE_SNAPSHOT_CACHE_MISSES,
 };
-use crate::span::debug_assert_current_span_has_tenant_and_timeline_id;
+use crate::span::debug_assert_current_span_has_branch_id;
 use crate::page_server::timeline::{GetVectoredError, VersionedKeySpaceQuery};
 
 /// Max delta records appended to the AUX_FILES_KEY (for aux v1). The write path will write a full image once this threshold is reached.
@@ -291,7 +291,7 @@ impl Timeline {
         pages: impl ExactSizeIterator<Item = (&RelTag, &BlockNumber, LsnRange, RequestContext)>,
         ctx: &RequestContext,
     ) -> Vec<Result<Bytes, PageReconstructError>> {
-        debug_assert_current_span_has_tenant_and_timeline_id();
+        debug_assert_current_span_has_branch_id();
 
         let mut slots_filled = 0;
         let page_count = pages.len();
@@ -1327,7 +1327,7 @@ impl Timeline {
         lsn: Lsn,
         ctx: &RequestContext,
     ) -> Result<u64, CalculateLogicalSizeError> {
-        debug_assert_current_span_has_tenant_and_timeline_id();
+        debug_assert_current_span_has_branch_id();
 
         fail::fail_point!("skip-logical-size-calculation", |_| { Ok(0) });
 

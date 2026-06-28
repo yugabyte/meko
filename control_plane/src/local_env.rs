@@ -18,7 +18,7 @@ use reqwest::{Certificate, Url};
 use safekeeper_api::PgMajorVersion;
 use serde::{Deserialize, Serialize};
 use utils::auth::encode_from_key_file;
-use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
+use utils::id::{BranchId, NodeId};
 
 use crate::endpoint_storage::ENDPOINT_STORAGE_DEFAULT_ADDR;
 
@@ -65,9 +65,9 @@ pub struct LocalEnv {
     // Path to pageserver binary.
     pub yb_light_distrib_dir: PathBuf,
 
-    // Default tenant ID to use with the 'yb_light_local' command line utility, when
-    // --tenant_id is not explicitly specified.
-    pub default_tenant_id: Option<TenantId>,
+    // Default branch ID to use with the 'yb_light_local' command line utility, when
+    // --branch_id is not explicitly specified.
+    pub default_branch_id: Option<BranchId>,
 
     // used to issue tokens during e.g pg start
     pub private_key_path: PathBuf,
@@ -86,7 +86,7 @@ pub struct LocalEnv {
 
     /// The *provisioned* safekeepers, persisted in `.yb_light/config`.
     /// Empty on a fresh repo; a safekeeper is provisioned (datadir,
-    /// `endpoint_id`, `timeline_id`) at `endpoint create`, allocated from
+    /// `endpoint_id`, `branch_id`) at `endpoint create`, allocated from
     /// [`Self::safekeeper_templates`].
     pub safekeepers: Vec<SafekeeperConf>,
 
@@ -136,7 +136,7 @@ pub struct LocalEnv {
 pub struct OnDiskConfig {
     pub pg_distrib_dir: PathBuf,
     pub yb_light_distrib_dir: PathBuf,
-    pub default_tenant_id: Option<TenantId>,
+    pub default_branch_id: Option<BranchId>,
     pub private_key_path: PathBuf,
     pub public_key_path: PathBuf,
     pub storage_controller: YbLightStorageControllerConf,
@@ -178,7 +178,7 @@ pub struct YbLightLocalInitConf {
     pub pg_distrib_dir: Option<PathBuf>,
     // TODO: do we need this? Seems unused
     pub yb_light_distrib_dir: Option<PathBuf>,
-    pub default_tenant_id: TenantId,
+    pub default_branch_id: BranchId,
     pub storage_controller: Option<YbLightStorageControllerConf>,
     pub pageservers: Vec<YbLightLocalInitPageserverConf>,
     pub safekeepers: Vec<SafekeeperConf>,
@@ -302,12 +302,10 @@ pub struct PageServerConf {
     pub http_auth_type: AuthType,
     pub grpc_auth_type: AuthType,
     pub no_sync: bool,
-    /// The single (tenant, timeline) this pageserver serves, read from
-    /// the `tenant_id` / `timeline_id` keys of its `pageserver.toml`.
-    /// `None` until the launcher assigns one (`tenant create` /
-    /// `timeline branch`).
-    pub tenant_id: Option<TenantId>,
-    pub timeline_id: Option<TimelineId>,
+    /// The single branch this pageserver serves, read from the
+    /// `branch_id` key of its `pageserver.toml`.
+    /// `None` until the launcher assigns one (`branch create`).
+    pub branch_id: Option<BranchId>,
     /// The pageserver's data directory (`endpoints/<name>/pageserver`),
     /// captured at discovery / allocation time. Not part of the on-disk
     /// config — derived from where the `pageserver.toml` was found, or set
@@ -328,8 +326,7 @@ impl Default for PageServerConf {
             http_auth_type: AuthType::Trust,
             grpc_auth_type: AuthType::Trust,
             no_sync: false,
-            tenant_id: None,
-            timeline_id: None,
+            branch_id: None,
             data_dir: PathBuf::new(),
         }
     }
@@ -387,8 +384,7 @@ impl From<&YbLightLocalInitPageserverConf> for PageServerConf {
             grpc_auth_type: *grpc_auth_type,
             http_auth_type: *http_auth_type,
             no_sync: *no_sync,
-            tenant_id: None,
-            timeline_id: None,
+            branch_id: None,
             data_dir: PathBuf::new(),
         }
     }
@@ -416,13 +412,12 @@ pub struct SafekeeperConf {
     /// `yb_storage_conn`. `Some(0)` disables the cache; `None` lets the
     /// safekeeper apply its built-in default.
     pub wal_cache_size_mib: Option<u32>,
-    /// The (tenant, timeline) this safekeeper is dedicated to (per-endpoint
-    /// safekeeper topology). Passed to the process as
-    /// `--tenant-id`/`--timeline-id` so it scopes its startup load and gates
-    /// connections to a single timeline. `None` on the init-time template;
-    /// always set on a provisioned safekeeper (see `allocate_safekeeper_conf`).
-    pub tenant_id: Option<TenantId>,
-    pub timeline_id: Option<TimelineId>,
+    /// The branch this safekeeper is dedicated to (per-endpoint
+    /// safekeeper topology). Passed to the process via `branch_id` so it
+    /// scopes its startup load and gates connections to a single branch.
+    /// `None` on the init-time template; always set on a provisioned
+    /// safekeeper (see `allocate_safekeeper_conf`).
+    pub branch_id: Option<BranchId>,
     /// The endpoint whose folder holds this safekeeper's datadir
     /// (`endpoints/<endpoint_id>/safekeeper`). Empty for an init-time
     /// template; set at `endpoint create` when the safekeeper is
@@ -443,8 +438,7 @@ impl Default for SafekeeperConf {
             listen_addr: None,
             yb_storage_conn: None,
             wal_cache_size_mib: None,
-            tenant_id: None,
-            timeline_id: None,
+            branch_id: None,
             endpoint_id: String::new(),
         }
     }
@@ -484,30 +478,30 @@ impl SafekeeperConf {
 }
 
 impl LocalEnv {
-    /// The pageserver dedicated to `timeline_id` (per-endpoint pageserver
-    /// topology: one pageserver process per timeline, identity baked into
+    /// The pageserver dedicated to `branch_id` (per-endpoint pageserver
+    /// topology: one pageserver process per branch, identity baked into
     /// its `pageserver.toml`).
-    pub fn pageserver_conf_for_timeline(&self, timeline_id: TimelineId) -> Option<&PageServerConf> {
+    pub fn pageserver_conf_for_timeline(&self, branch_id: BranchId) -> Option<&PageServerConf> {
         self.pageservers
             .iter()
-            .find(|ps| ps.timeline_id == Some(timeline_id))
+            .find(|ps| ps.branch_id == Some(branch_id))
     }
 
-    /// The safekeepers serving `timeline_id`: the dedicated one if
+    /// The safekeepers serving `branch_id`: the dedicated one if
     /// provisioned, otherwise the legacy set (safekeepers with no
-    /// `timeline_id`, i.e. the main timeline's).
-    pub fn safekeepers_for_timeline(&self, timeline_id: TimelineId) -> Vec<&SafekeeperConf> {
+    /// `branch_id`, i.e. the main branch's).
+    pub fn safekeepers_for_timeline(&self, branch_id: BranchId) -> Vec<&SafekeeperConf> {
         let dedicated: Vec<&SafekeeperConf> = self
             .safekeepers
             .iter()
-            .filter(|sk| sk.timeline_id == Some(timeline_id))
+            .filter(|sk| sk.branch_id == Some(branch_id))
             .collect();
         if !dedicated.is_empty() {
             return dedicated;
         }
         self.safekeepers
             .iter()
-            .filter(|sk| sk.timeline_id.is_none())
+            .filter(|sk| sk.branch_id.is_none())
             .collect()
     }
 }
@@ -685,50 +679,46 @@ impl LocalEnv {
         Ok(instances)
     }
 
-    /// Persist a branch alias for the given timeline by calling into the storage controller.
-    /// Idempotent if the alias already points at the same timeline; rejects re-pointing.
+    /// Persist a branch alias for the given branch by calling into the storage controller.
+    /// Idempotent if the alias already points at the same branch; rejects re-pointing.
     pub async fn register_branch_mapping(
         &self,
         branch_name: String,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> anyhow::Result<()> {
         let sc = crate::storage_controller::StorageController::from_env(self);
         let existing = sc.list_timeline_branch_names().await?;
         if let Some(entry) = existing.iter().find(|e| e.branch_name == branch_name) {
-            if entry.tenant_id == tenant_id && entry.timeline_id == timeline_id {
+            if entry.branch_id == branch_id {
                 return Ok(());
             }
-            if entry.tenant_id == tenant_id {
-                bail!(
-                    "branch '{branch_name}' is already mapped to timeline {}, cannot map to another timeline {timeline_id}",
-                    entry.timeline_id
-                );
-            }
+            bail!(
+                "branch '{branch_name}' is already mapped to branch {}, cannot map to another branch {branch_id}",
+                entry.branch_id
+            );
         }
-        sc.set_timeline_branch_name(tenant_id, timeline_id, Some(branch_name))
+        sc.set_timeline_branch_name(branch_id, Some(branch_name))
             .await
     }
 
     pub async fn get_branch_timeline_id(
         &self,
         branch_name: &str,
-        tenant_id: TenantId,
-    ) -> anyhow::Result<Option<TimelineId>> {
+    ) -> anyhow::Result<Option<BranchId>> {
         let sc = crate::storage_controller::StorageController::from_env(self);
         let entries = sc.list_timeline_branch_names().await?;
         Ok(entries
             .into_iter()
-            .find(|e| e.branch_name == branch_name && e.tenant_id == tenant_id)
-            .map(|e| e.timeline_id))
+            .find(|e| e.branch_name == branch_name)
+            .map(|e| e.branch_id))
     }
 
-    pub async fn timeline_name_mappings(&self) -> anyhow::Result<HashMap<TenantTimelineId, String>> {
+    pub async fn timeline_name_mappings(&self) -> anyhow::Result<HashMap<BranchId, String>> {
         let sc = crate::storage_controller::StorageController::from_env(self);
         let entries = sc.list_timeline_branch_names().await?;
         Ok(entries
             .into_iter()
-            .map(|e| (TenantTimelineId::new(e.tenant_id, e.timeline_id), e.branch_name))
+            .map(|e| (e.branch_id, e.branch_name))
             .collect())
     }
 
@@ -736,12 +726,12 @@ impl LocalEnv {
     pub fn load_config(repopath: &Path) -> anyhow::Result<Self> {
         if !repopath.exists() {
             bail!(
-                "Neon config is not found in {}. You need to run 'yb_light_local init' first",
+                "yb-light config is not found in {}. You need to run 'yb_light_local init' first",
                 repopath.to_str().unwrap()
             );
         }
 
-        // TODO: check that it looks like a neon repository
+        // TODO: check that it looks like a yb-light repository
 
         // load and parse file
         let config_file_contents = fs::read_to_string(repopath.join("config"))?;
@@ -750,7 +740,7 @@ impl LocalEnv {
             let OnDiskConfig {
                 pg_distrib_dir,
                 yb_light_distrib_dir,
-                default_tenant_id,
+                default_branch_id,
                 private_key_path,
                 public_key_path,
                 storage_controller,
@@ -770,7 +760,7 @@ impl LocalEnv {
                 http_client: HttpClientCache::default(),
                 pg_distrib_dir,
                 yb_light_distrib_dir,
-                default_tenant_id,
+                default_branch_id,
                 private_key_path,
                 public_key_path,
                 storage_controller,
@@ -837,9 +827,7 @@ impl LocalEnv {
                 #[serde(default)]
                 no_sync: bool,
                 #[serde(default)]
-                tenant_id: Option<TenantId>,
-                #[serde(default)]
-                timeline_id: Option<TimelineId>,
+                branch_id: Option<BranchId>,
             }
             let config_toml: PageserverConfigTomlSubset = toml_edit::de::from_str(
                 &std::fs::read_to_string(&config_toml_path)
@@ -865,8 +853,7 @@ impl LocalEnv {
                 http_auth_type,
                 grpc_auth_type,
                 no_sync,
-                tenant_id,
-                timeline_id,
+                branch_id,
             } = config_toml;
             pageservers.push(PageServerConf {
                 id: identity_toml.id,
@@ -878,8 +865,7 @@ impl LocalEnv {
                 http_auth_type,
                 grpc_auth_type,
                 no_sync,
-                tenant_id,
-                timeline_id,
+                branch_id,
                 data_dir,
             });
         }
@@ -892,7 +878,7 @@ impl LocalEnv {
             &OnDiskConfig {
                 pg_distrib_dir: self.pg_distrib_dir.clone(),
                 yb_light_distrib_dir: self.yb_light_distrib_dir.clone(),
-                default_tenant_id: self.default_tenant_id,
+                default_branch_id: self.default_branch_id,
                 private_key_path: self.private_key_path.clone(),
                 public_key_path: self.public_key_path.clone(),
                 storage_controller: self.storage_controller.clone(),
@@ -1004,7 +990,7 @@ impl LocalEnv {
         let YbLightLocalInitConf {
             pg_distrib_dir,
             yb_light_distrib_dir,
-            default_tenant_id,
+            default_branch_id,
             storage_controller,
             pageservers,
             safekeepers,
@@ -1027,7 +1013,7 @@ impl LocalEnv {
             }
         });
 
-        // Find neon binaries.
+        // Find yb-light binaries.
         let yb_light_distrib_dir = yb_light_distrib_dir
             .unwrap_or_else(|| env::current_exe().unwrap().parent().unwrap().to_owned());
 
@@ -1057,7 +1043,7 @@ impl LocalEnv {
             http_client: HttpClientCache::default(),
             pg_distrib_dir,
             yb_light_distrib_dir,
-            default_tenant_id: Some(default_tenant_id),
+            default_branch_id: Some(default_branch_id),
             private_key_path,
             public_key_path,
             storage_controller: storage_controller.unwrap_or_default(),
@@ -1236,8 +1222,8 @@ mod tests {
             base_data_dir: base,
             http_client: HttpClientCache::default(),
             pg_distrib_dir: PathBuf::from("/pg"),
-            yb_light_distrib_dir: PathBuf::from("/neon"),
-            default_tenant_id: None,
+            yb_light_distrib_dir: PathBuf::from("/yb-light"),
+            default_branch_id: None,
             private_key_path: PathBuf::from("auth_private_key.pem"),
             public_key_path: PathBuf::from("auth_public_key.pem"),
             storage_controller: YbLightStorageControllerConf::default(),

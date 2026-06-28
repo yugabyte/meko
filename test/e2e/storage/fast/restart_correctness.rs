@@ -15,7 +15,7 @@ use crate::db;
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
-    let tid = c.tid();
+    let branch = c.branch();
 
     step("Write a small workload (table + inserts + updates)");
     db::batch(
@@ -37,7 +37,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let prev = db::query_text_opt(
         &yb,
         &format!(
-            "SELECT prev_record_lsn::text FROM pageserver.timeline_state WHERE tenant_id = '{tid}'"
+            "SELECT prev_record_lsn::text FROM pageserver.timeline_state WHERE branch_id = '{branch}'"
         ),
     )
     .await?;

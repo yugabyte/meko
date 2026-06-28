@@ -20,7 +20,7 @@ use tokio_util::io::StreamReader;
 use tonic::async_trait;
 use tracing::{info, instrument};
 use url::Url;
-use utils::id::TenantTimelineId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::util::tokio_thread_local_stats::AllThreadLocalStats;
@@ -44,7 +44,7 @@ pub(crate) struct Args {
     runtime: Option<humantime::Duration>,
     #[clap(long)]
     limit_to_first_n_targets: Option<usize>,
-    targets: Option<Vec<TenantTimelineId>>,
+    targets: Option<Vec<BranchId>>,
 }
 
 #[derive(Debug, Default)]
@@ -59,7 +59,7 @@ impl LiveStats {
 }
 
 struct Target {
-    timeline: TenantTimelineId,
+    branch_id: BranchId,
     lsn_range: Option<Range<Lsn>>,
 }
 
@@ -89,7 +89,7 @@ async fn main_impl(
     ));
 
     // discover targets
-    let timelines: Vec<TenantTimelineId> = crate::util::cli::targets::discover(
+    let branches: Vec<BranchId> = crate::util::cli::targets::discover(
         &mgmt_api_client,
         crate::util::cli::targets::Spec {
             limit_to_first_n_targets: args.limit_to_first_n_targets,
@@ -98,20 +98,16 @@ async fn main_impl(
     )
     .await?;
     let mut js = JoinSet::new();
-    for timeline in &timelines {
+    for branch_id in &branches {
         js.spawn({
-            let timeline = *timeline;
+            let branch_id = *branch_id;
             let info = mgmt_api_client
-                .timeline_info(
-                    timeline.tenant_id,
-                    timeline.timeline_id,
-                    ForceAwaitLogicalSize::No,
-                )
+                .timeline_info(branch_id, ForceAwaitLogicalSize::No)
                 .await
                 .unwrap();
             async move {
                 anyhow::Ok(Target {
-                    timeline,
+                    branch_id,
                     // TODO: support lsn_range != latest LSN
                     lsn_range: Some(info.last_record_lsn..(info.last_record_lsn + 1)),
                 })
@@ -125,7 +121,7 @@ async fn main_impl(
 
     let live_stats = Arc::new(LiveStats::default());
 
-    let num_client_tasks = timelines.len();
+    let num_client_tasks = branches.len();
     let num_live_stats_dump = 1;
     let num_work_sender_tasks = 1;
 
@@ -159,16 +155,18 @@ async fn main_impl(
         Err(url::ParseError::RelativeUrlWithoutBase) => "postgresql".to_string(),
         Err(err) => return Err(anyhow!("invalid connstring: {err}")),
     };
-    for &tl in &timelines {
+    for &branch_id in &branches {
         let (sender, receiver) = tokio::sync::mpsc::channel(1); // TODO: not sure what the implications of this are
-        work_senders.insert(tl, sender);
+        work_senders.insert(branch_id, sender);
 
         let client: Box<dyn Client> = match scheme.as_str() {
             "postgresql" | "postgres" => Box::new(
-                LibpqClient::new(&args.page_service_connstring, tl, !args.no_compression).await?,
+                LibpqClient::new(&args.page_service_connstring, branch_id, !args.no_compression)
+                    .await?,
             ),
             "grpc" => Box::new(
-                GrpcClient::new(&args.page_service_connstring, tl, !args.no_compression).await?,
+                GrpcClient::new(&args.page_service_connstring, branch_id, !args.no_compression)
+                    .await?,
             ),
             scheme => return Err(anyhow!("invalid scheme {scheme}")),
         };
@@ -185,13 +183,13 @@ async fn main_impl(
     let work_sender = async move {
         start_work_barrier.wait().await;
         loop {
-            let (timeline, work) = {
+            let (branch_id, work) = {
                 let mut rng = rand::rng();
                 let target = all_targets.choose(&mut rng).unwrap();
                 let lsn = target.lsn_range.clone().map(|r| rng.random_range(r));
-                (target.timeline, Work { lsn })
+                (target.branch_id, Work { lsn })
             };
-            let sender = work_senders.get(&timeline).unwrap();
+            let sender = work_senders.get(&branch_id).unwrap();
             // TODO: what if this blocks?
             sender.send(work).await.ok().unwrap();
         }
@@ -275,19 +273,19 @@ trait Client: Send {
 /// A libpq-based Pageserver client.
 struct LibpqClient {
     inner: pageserver_client::page_service::Client,
-    ttid: TenantTimelineId,
+    branch_id: BranchId,
     compression: bool,
 }
 
 impl LibpqClient {
     async fn new(
         connstring: &str,
-        ttid: TenantTimelineId,
+        branch_id: BranchId,
         compression: bool,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             inner: pageserver_client::page_service::Client::new(connstring.to_string()).await?,
-            ttid,
+            branch_id,
             compression,
         })
     }
@@ -300,8 +298,7 @@ impl Client for LibpqClient {
         lsn: Option<Lsn>,
     ) -> anyhow::Result<Pin<Box<dyn AsyncRead + Send + 'static>>> {
         let req = BasebackupRequest {
-            tenant_id: self.ttid.tenant_id,
-            timeline_id: self.ttid.timeline_id,
+            branch_id: self.branch_id,
             lsn,
             gzip: self.compression,
         };
@@ -321,13 +318,12 @@ struct GrpcClient {
 impl GrpcClient {
     async fn new(
         connstring: &str,
-        ttid: TenantTimelineId,
+        branch_id: BranchId,
         compression: bool,
     ) -> anyhow::Result<Self> {
         let inner = page_api::Client::connect(
             connstring.to_string(),
-            ttid.tenant_id,
-            ttid.timeline_id,
+            branch_id,
             None,
             None, // NB: uses payload compression
         )

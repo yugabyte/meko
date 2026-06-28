@@ -21,7 +21,7 @@ use tokio::task;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, MissedTickBehavior};
 use tracing::*;
-use utils::id::TenantTimelineId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
 
@@ -190,7 +190,7 @@ pub const REPLY_QUEUE_SIZE: usize = 16;
 
 impl SafekeeperPostgresHandler {
     /// Wrapper around handle_start_wal_push_guts handling result. Error is
-    /// handled here while we're still in walreceiver ttid span; with API
+    /// handled here while we're still in walreceiver branch_id span; with API
     /// extension, this can probably be moved into postgres_backend.
     pub async fn handle_start_wal_push<IO: AsyncRead + AsyncWrite + Unpin>(
         &mut self,
@@ -248,7 +248,7 @@ impl SafekeeperPostgresHandler {
         let peer_addr = *pgb.get_peer_addr();
 
         let mut network_reader = NetworkReader {
-            ttid: self.ttid,
+            branch_id: self.branch_id,
             conn_id: self.conn_id,
             pgb_reader: &mut pgb_reader,
             peer_addr,
@@ -316,7 +316,7 @@ impl SafekeeperPostgresHandler {
 }
 
 struct NetworkReader<'a, IO> {
-    ttid: TenantTimelineId,
+    branch_id: BranchId,
     conn_id: ConnectionId,
     pgb_reader: &'a mut PostgresBackendReader<IO>,
     peer_addr: SocketAddr,
@@ -347,11 +347,16 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> NetworkReader<'_, IO> {
                 };
                 let tli = if allow_timeline_creation {
                     self.global_timelines
-                        .create(self.ttid, Configuration::empty(), server_info, Lsn::INVALID)
+                        .create(
+                            self.branch_id,
+                            Configuration::empty(),
+                            server_info,
+                            Lsn::INVALID,
+                        )
                         .await
                         .context("create timeline")?
                 } else {
-                    let timeline_res = self.global_timelines.get(self.ttid);
+                    let timeline_res = self.global_timelines.get(self.branch_id);
                     match timeline_res {
                         Ok(tl) => tl,
                         Err(TimelineError::NotFound(_)) => {
@@ -550,11 +555,13 @@ impl WalAcceptor {
                 conn_id,
             };
 
-            let span_ttid = wa.tli.ttid; // satisfy borrow checker
+            let span_branch_id = wa.tli.branch_id; // satisfy borrow checker
             wa.run()
-                .instrument(
-                    info_span!("WAL acceptor", cid = %conn_id.unwrap_or(0), ttid = %span_ttid),
-                )
+                .instrument(info_span!(
+                    "WAL acceptor",
+                    cid = %conn_id.unwrap_or(0),
+                    branch_id = %span_branch_id
+                ))
                 .await
         })
     }

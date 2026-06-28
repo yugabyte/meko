@@ -14,21 +14,19 @@ use crate::{db, tee_println};
 const ENDPOINT_ID: &str = "ep_tools";
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
-    // Provision a dedicated tenant + timeline for this test rather than reusing
-    // the shared `main` timeline. The fast suite runs branch scenarios first,
-    // which leave several (and dropped) timelines under `main`'s tenant — so a
-    // tenant-scoped timeline lookup is ambiguous and can land on a branch whose
-    // pre-branch-point pages live under its ancestor's timeline_id (i.e. it has
-    // no page rows of its own). A fresh tenant has exactly one timeline, so the
-    // lookup below is unambiguous and the data we load here is the data we read.
+    // Provision a dedicated branch for this test rather than reusing the
+    // shared `main` branch. The fast suite runs branch scenarios first,
+    // which leave several (and dropped) branches behind — so addressing this
+    // test's data by a fresh, dedicated branch id keeps the lookups below
+    // unambiguous: the data we load here is the data we read.
     let tools_port = c.compute_port() + 120;
-    step("create a dedicated tenant + endpoint for this test");
-    let tenant = c.tenant_create()?;
-    if tenant.is_empty() {
-        bail!("tenant create failed");
+    step("create a dedicated branch + endpoint for this test");
+    let branch = c.branch_create()?;
+    if branch.is_empty() {
+        bail!("branch create failed");
     }
     c.yb(&[
-        "endpoint", "create", ENDPOINT_ID, "--tenant-id", &tenant, "--branch-name", "main",
+        "endpoint", "create", ENDPOINT_ID, "--branch-id", &branch, "--branch-name", "main",
         "--pg-version", "17", "--pg-port", &tools_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", ENDPOINT_ID])?;
@@ -46,21 +44,18 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
-    step("discover the timeline from pageserver.timeline_state");
-    let timeline = db::query_text(
+    step("confirm the branch's timeline_state row exists");
+    let row = db::query_text(
         &yb,
-        &format!("SELECT timeline_id FROM pageserver.timeline_state WHERE tenant_id='{tenant}' LIMIT 1"),
+        &format!("SELECT branch_id FROM pageserver.timeline_state WHERE branch_id='{branch}' LIMIT 1"),
     )
     .await?;
-    if timeline.is_empty() {
-        bail!("no timeline row for tenant {tenant}");
+    if row.is_empty() {
+        bail!("no timeline_state row for branch {branch}");
     }
 
     step("yb-dump-wals --summary");
-    let wals = c.run_tool(
-        "yb-dump-wals",
-        &["--tenant", &tenant, "--timeline", &timeline, "--summary"],
-    )?;
+    let wals = c.run_tool("yb-dump-wals", &["--branch", &branch, "--summary"])?;
     if !wals.contains("segno") {
         bail!("yb-dump-wals --summary missing 'segno' header:\n{wals}");
     }
@@ -71,7 +66,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // the instant we look. Poll until it lands rather than one-shot query.
     let key_sql = format!(
         "SELECT spcnode||' '||dbnode||' '||relnode||' '||forknum||' '||blknum \
-         FROM pageserver.pages WHERE tenant_id='{tenant}' AND timeline_id='{timeline}' LIMIT 1"
+         FROM pageserver.pages WHERE branch_id='{branch}' LIMIT 1"
     );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let key = loop {
@@ -80,7 +75,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         }
         if std::time::Instant::now() > deadline {
             bail!(
-                "no rows in pageserver.pages for tenant {tenant} timeline {timeline} \
+                "no rows in pageserver.pages for branch {branch} \
                  within 30s — the flush never landed"
             );
         }
@@ -96,7 +91,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let list = c.run_tool(
         "yb-dump-pages",
         &[
-            "--tenant", &tenant, "--timeline", &timeline, "--spc", spc, "--db", dbn, "--rel", rel,
+            "--branch", &branch, "--spc", spc, "--db", dbn, "--rel", rel,
             "--fork", fork, "--blknum", blk,
         ],
     )?;
@@ -108,7 +103,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let dec = c.run_tool(
         "yb-dump-pages",
         &[
-            "--decode", "--tenant", &tenant, "--timeline", &timeline, "--spc", spc, "--db", dbn,
+            "--decode", "--branch", &branch, "--spc", spc, "--db", dbn,
             "--rel", rel, "--fork", fork, "--blknum", blk,
         ],
     )?;
@@ -121,7 +116,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         &yb,
         &format!(
             "SELECT to_hex((consistent_lsn>>32)::int8)||'/'||to_hex((consistent_lsn & x'ffffffff'::bigint)::int8) \
-             FROM pageserver.timeline_state WHERE tenant_id='{tenant}' AND timeline_id='{timeline}'"
+             FROM pageserver.timeline_state WHERE branch_id='{branch}'"
         ),
     )
     .await?;
@@ -132,7 +127,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // failure would carry the `connecting to yb_storage` context instead.
     let (ok, out, err) = c.run_tool_capture(
         "yb-reset-consistent-lsn",
-        &["--tenant", &tenant, "--timeline", &timeline, "--target-lsn", &cur],
+        &["--branch", &branch, "--target-lsn", &cur],
     )?;
     if err.contains("connecting to yb_storage") {
         bail!("yb-reset-consistent-lsn failed to connect:\n{err}");

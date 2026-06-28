@@ -32,8 +32,8 @@ pub(crate) struct StorageControllerMetrics {
 #[derive(measured::MetricGroup)]
 #[metric(new())]
 pub(crate) struct StorageControllerMetricGroup {
-    /// Size of the in-memory map of tenants
-    pub(crate) storage_controller_tenants: measured::Gauge,
+    /// Size of the in-memory map of branches
+    pub(crate) storage_controller_branches: measured::Gauge,
 
     /// Size of the in-memory map of pageserver_nodes
     pub(crate) storage_controller_pageserver_nodes: measured::Gauge,
@@ -209,11 +209,9 @@ pub(crate) struct DatabaseQueryLatencyLabelGroup {
 #[label(set = StorageScrubberLabelGroupSet)]
 pub(crate) struct StorageScrubberLabelGroup<'a> {
     #[label(dynamic_with = lasso::ThreadedRodeo, default)]
-    pub(crate) tenant_id: &'a str,
+    pub(crate) branch_id: &'a str,
     #[label(dynamic_with = lasso::ThreadedRodeo, default)]
     pub(crate) shard_number: &'a str,
-    #[label(dynamic_with = lasso::ThreadedRodeo, default)]
-    pub(crate) timeline_id: &'a str,
     pub(crate) outcome: StorageScrubberOutcome,
 }
 

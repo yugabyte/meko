@@ -36,7 +36,7 @@ use tokio::{spawn, sync::watch, task::JoinHandle, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info, instrument, warn};
 use url::Url;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::measured_stream::MeasuredReader;
 use utils::pid_file;
@@ -249,8 +249,7 @@ impl Default for ComputeState {
 #[derive(Clone, Debug)]
 pub struct ParsedSpec {
     pub spec: ComputeSpec,
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub pageserver_conninfo: PageserverConnectionInfo,
     pub safekeeper_connstrings: Vec<String>,
     pub storage_auth_token: Option<String>,
@@ -342,25 +341,15 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
         };
 
         let storage_auth_token = spec.storage_auth_token.clone();
-        let tenant_id: TenantId = if let Some(tenant_id) = spec.tenant_id {
-            tenant_id
+        let branch_id: BranchId = if let Some(branch_id) = spec.storage_branch_id {
+            branch_id
         } else {
             let guc = spec
                 .cluster
                 .settings
-                .find("yb_amp.tenant_id")
-                .ok_or(anyhow::anyhow!("tenant id should be provided"))?;
-            TenantId::from_str(&guc).context("invalid tenant id")?
-        };
-        let timeline_id: TimelineId = if let Some(timeline_id) = spec.timeline_id {
-            timeline_id
-        } else {
-            let guc = spec
-                .cluster
-                .settings
-                .find("yb_amp.timeline_id")
-                .ok_or(anyhow::anyhow!("timeline id should be provided"))?;
-            TimelineId::from_str(&guc).context(anyhow::anyhow!("invalid timeline id"))?
+                .find("yb_amp.branch_id")
+                .ok_or(anyhow::anyhow!("branch id should be provided"))?;
+            BranchId::from_str(&guc).context(anyhow::anyhow!("invalid branch id"))?
         };
 
         let endpoint_storage_addr: Option<String> = spec
@@ -377,8 +366,7 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
             pageserver_conninfo,
             safekeeper_connstrings,
             storage_auth_token,
-            tenant_id,
-            timeline_id,
+            branch_id,
             endpoint_storage_addr,
             endpoint_storage_token,
         };
@@ -875,11 +863,10 @@ impl ComputeNode {
 
         let pspec = compute_state.pspec.as_ref().expect("spec must be set");
         info!(
-            "starting compute for project {}, operation {}, tenant {}, timeline {}, project {}, branch {}, endpoint {}, features {:?}, spec.remote_extensions {:?}",
+            "starting compute for project {}, operation {}, storage branch {}, project {}, branch {}, endpoint {}, features {:?}, spec.remote_extensions {:?}",
             pspec.spec.cluster.cluster_id.as_deref().unwrap_or("None"),
             pspec.spec.operation_uuid.as_deref().unwrap_or("None"),
-            pspec.tenant_id,
-            pspec.timeline_id,
+            pspec.branch_id,
             pspec.spec.project_id.as_deref().unwrap_or("None"),
             pspec.spec.branch_id.as_deref().unwrap_or("None"),
             pspec.spec.endpoint_id.as_deref().unwrap_or("None"),
@@ -1219,13 +1206,13 @@ impl ComputeNode {
         self.state.lock().unwrap().status
     }
 
-    pub fn get_timeline_id(&self) -> Option<TimelineId> {
+    pub fn get_branch_id(&self) -> Option<BranchId> {
         self.state
             .lock()
             .unwrap()
             .pspec
             .as_ref()
-            .map(|s| s.timeline_id)
+            .map(|s| s.branch_id)
     }
 
     // Remove `pgdata` directory and create it again with right permissions.
@@ -1301,8 +1288,7 @@ impl ComputeNode {
         let (reader, connected) = tokio::runtime::Handle::current().block_on(async move {
             let mut client = page_api::Client::connect(
                 ps_url,
-                spec.tenant_id,
-                spec.timeline_id,
+                spec.branch_id,
                 spec.storage_auth_token.clone(),
                 None, // NB: base backups use payload compression
             )
@@ -1361,25 +1347,16 @@ impl ComputeNode {
         let basebackup_cmd = match lsn {
             Lsn(0) => {
                 if spec.spec.mode != ComputeMode::Primary {
-                    format!(
-                        "basebackup {} {} --gzip --replica",
-                        spec.tenant_id, spec.timeline_id
-                    )
+                    format!("basebackup {} --gzip --replica", spec.branch_id)
                 } else {
-                    format!("basebackup {} {} --gzip", spec.tenant_id, spec.timeline_id)
+                    format!("basebackup {} --gzip", spec.branch_id)
                 }
             }
             _ => {
                 if spec.spec.mode != ComputeMode::Primary {
-                    format!(
-                        "basebackup {} {} {} --gzip --replica",
-                        spec.tenant_id, spec.timeline_id, lsn
-                    )
+                    format!("basebackup {} {} --gzip --replica", spec.branch_id, lsn)
                 } else {
-                    format!(
-                        "basebackup {} {} {} --gzip",
-                        spec.tenant_id, spec.timeline_id, lsn
-                    )
+                    format!("basebackup {} {} --gzip", spec.branch_id, lsn)
                 }
             }
         };
@@ -1450,10 +1427,7 @@ impl ComputeNode {
             // Format connstr
             let id = connstr.clone();
             let connstr = format!("postgresql://no_user@{connstr}");
-            let options = format!(
-                "-c timeline_id={} tenant_id={}",
-                pspec.timeline_id, pspec.tenant_id
-            );
+            let options = format!("-c branch_id={}", pspec.branch_id);
 
             // Construct client
             let mut config = tokio_postgres::Config::from_str(&connstr).unwrap();
@@ -2822,8 +2796,7 @@ LIMIT 100",
                     .with_label_values(&[
                         &params.compute_id,
                         instance_id,
-                        &pspec.tenant_id.to_string(),
-                        &pspec.timeline_id.to_string(),
+                        &pspec.branch_id.to_string(),
                     ])
                     .set(1);
             }

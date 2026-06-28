@@ -8,7 +8,7 @@ use compute_api::spec::{ComputeMode, PageserverConnectionInfo, PageserverProtoco
 use pageserver_page_api as page_api;
 use postgres::{NoTls, SimpleQueryMessage};
 use tracing::{info, warn};
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::compute::ComputeNode;
@@ -16,20 +16,20 @@ use crate::compute::ComputeNode;
 /// Spawns a background thread to periodically renew LSN leases for static compute.
 /// Do nothing if the compute is not in static mode.
 pub fn launch_lsn_lease_bg_task_for_static(compute: &Arc<ComputeNode>) {
-    let (tenant_id, timeline_id, lsn) = {
+    let (branch_id, lsn) = {
         let state = compute.state.lock().unwrap();
         let spec = state.pspec.as_ref().expect("Spec must be set");
         match spec.spec.mode {
-            ComputeMode::Static(lsn) => (spec.tenant_id, spec.timeline_id, lsn),
+            ComputeMode::Static(lsn) => (spec.branch_id, lsn),
             _ => return,
         }
     };
     let compute = compute.clone();
 
-    let span = tracing::info_span!("lsn_lease_bg_task", %tenant_id, %timeline_id, %lsn);
+    let span = tracing::info_span!("lsn_lease_bg_task", %branch_id, %lsn);
     thread::spawn(move || {
         let _entered = span.entered();
-        if let Err(e) = lsn_lease_bg_task(compute, tenant_id, timeline_id, lsn) {
+        if let Err(e) = lsn_lease_bg_task(compute, branch_id, lsn) {
             // TODO: might need stronger error feedback than logging an warning.
             warn!("Exited with error: {e}");
         }
@@ -37,14 +37,9 @@ pub fn launch_lsn_lease_bg_task_for_static(compute: &Arc<ComputeNode>) {
 }
 
 /// Renews lsn lease periodically so static compute are not affected by GC.
-fn lsn_lease_bg_task(
-    compute: Arc<ComputeNode>,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
-    lsn: Lsn,
-) -> Result<()> {
+fn lsn_lease_bg_task(compute: Arc<ComputeNode>, branch_id: BranchId, lsn: Lsn) -> Result<()> {
     loop {
-        let valid_until = acquire_lsn_lease_with_retry(&compute, tenant_id, timeline_id, lsn)?;
+        let valid_until = acquire_lsn_lease_with_retry(&compute, branch_id, lsn)?;
         let valid_duration = valid_until
             .duration_since(SystemTime::now())
             .unwrap_or(Duration::ZERO);
@@ -66,8 +61,7 @@ fn lsn_lease_bg_task(
 /// Returns an error if a lease is explicitly not granted. Otherwise, we keep sending requests.
 fn acquire_lsn_lease_with_retry(
     compute: &Arc<ComputeNode>,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     lsn: Lsn,
 ) -> Result<SystemTime> {
     let mut attempts = 0usize;
@@ -85,7 +79,7 @@ fn acquire_lsn_lease_with_retry(
             )
         };
 
-        let result = try_acquire_lsn_lease(conninfo, auth.as_deref(), tenant_id, timeline_id, lsn);
+        let result = try_acquire_lsn_lease(conninfo, auth.as_deref(), branch_id, lsn);
         match result {
             Ok(Some(res)) => {
                 return Ok(res);
@@ -111,8 +105,7 @@ fn acquire_lsn_lease_with_retry(
 fn try_acquire_lsn_lease(
     conninfo: PageserverConnectionInfo,
     auth: Option<&str>,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     lsn: Lsn,
 ) -> Result<Option<SystemTime>> {
     let mut leases = Vec::new();
@@ -121,20 +114,12 @@ fn try_acquire_lsn_lease(
     // lease on all of them.
     for pageserver in conninfo.pageservers {
         let lease = match conninfo.prefer_protocol {
-            PageserverProtocol::Grpc => acquire_lsn_lease_grpc(
-                &pageserver.grpc_url.unwrap(),
-                auth,
-                tenant_id,
-                timeline_id,
-                lsn,
-            )?,
-            PageserverProtocol::Libpq => acquire_lsn_lease_libpq(
-                &pageserver.libpq_url.unwrap(),
-                auth,
-                tenant_id,
-                timeline_id,
-                lsn,
-            )?,
+            PageserverProtocol::Grpc => {
+                acquire_lsn_lease_grpc(&pageserver.grpc_url.unwrap(), auth, branch_id, lsn)?
+            }
+            PageserverProtocol::Libpq => {
+                acquire_lsn_lease_libpq(&pageserver.libpq_url.unwrap(), auth, branch_id, lsn)?
+            }
         };
         leases.push(lease);
     }
@@ -147,8 +132,7 @@ fn try_acquire_lsn_lease(
 fn acquire_lsn_lease_libpq(
     connstring: &str,
     auth: Option<&str>,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     lsn: Lsn,
 ) -> Result<Option<SystemTime>> {
     let mut config = postgres::Config::from_str(connstring)?;
@@ -156,7 +140,7 @@ fn acquire_lsn_lease_libpq(
         config.password(auth);
     }
     let mut client = config.connect(NoTls)?;
-    let cmd = format!("lease lsn {tenant_id} {timeline_id} {lsn} ");
+    let cmd = format!("lease lsn {branch_id} {lsn} ");
     let res = client.simple_query(&cmd)?;
     let msg = match res.first() {
         Some(msg) => msg,
@@ -183,15 +167,13 @@ fn acquire_lsn_lease_libpq(
 fn acquire_lsn_lease_grpc(
     connstring: &str,
     auth: Option<&str>,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     lsn: Lsn,
 ) -> Result<Option<SystemTime>> {
     tokio::runtime::Handle::current().block_on(async move {
         let mut client = page_api::Client::connect(
             connstring.to_string(),
-            tenant_id,
-            timeline_id,
+            branch_id,
             auth.map(String::from),
             None,
         )

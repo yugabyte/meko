@@ -13,7 +13,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 
 pub mod defaults {
     pub use crate::{DEFAULT_HTTP_LISTEN_ADDR, DEFAULT_PG_LISTEN_ADDR};
@@ -52,12 +52,10 @@ pub mod defaults {
 pub struct SafekeeperConfigToml {
     /// Safekeeper node id. Must be stable across restarts of this instance.
     pub id: NodeId,
-    /// The single (tenant, timeline) this process serves for its lifetime
-    /// (single-timeline-per-process). Required in YB-WAL mode.
+    /// The single branch this process serves for its lifetime
+    /// (single-branch-per-process). Required in YB-WAL mode.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tenant_id: Option<TenantId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timeline_id: Option<TimelineId>,
+    pub branch_id: Option<BranchId>,
 
     pub listen_pg: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,8 +126,7 @@ impl Default for SafekeeperConfigToml {
         use defaults::*;
         Self {
             id: NodeId(0),
-            tenant_id: None,
-            timeline_id: None,
+            branch_id: None,
             listen_pg: DEFAULT_PG_LISTEN_ADDR.to_string(),
             listen_pg_tenant_only: None,
             listen_http: DEFAULT_HTTP_LISTEN_ADDR.to_string(),
@@ -178,7 +175,7 @@ impl SafekeeperConfigToml {
 
 #[cfg(test)]
 mod tests {
-    use utils::id::{TenantId, TimelineId};
+    use utils::id::BranchId;
 
     use super::*;
 
@@ -186,8 +183,7 @@ mod tests {
     fn round_trips() {
         let cfg = SafekeeperConfigToml {
             id: NodeId(7),
-            tenant_id: Some(TenantId::generate()),
-            timeline_id: Some(TimelineId::generate()),
+            branch_id: Some(BranchId::generate()),
             listen_pg: "127.0.0.1:5474".to_string(),
             listen_http: "127.0.0.1:7686".to_string(),
             yb_storage_conn: Some("{ host_ports = '127.0.0.1:5433', dbname = 'yb_storage' }".to_string()),

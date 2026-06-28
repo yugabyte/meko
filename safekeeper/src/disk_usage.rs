@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 
 use anyhow::{Result, anyhow};
 use once_cell::sync::Lazy;
-use utils::{critical_timeline, id::TenantTimelineId};
+use utils::{critical_timeline, id::BranchId};
 
 /// true if the last background scan found total usage > limit
 pub static GLOBAL_DISK_LIMIT_EXCEEDED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
@@ -36,12 +36,11 @@ pub fn get_filesystem_usage(path: &std::path::Path) -> u64 {
             used_blocks as u64 * blocksz as u64
         }
         Err(e) => {
-            // The global disk usage watcher aren't associated with a tenant or timeline, so we just
-            // pass placeholder (all-zero) tenant and timeline IDs to the critical!() macro.
-            let placeholder_ttid = TenantTimelineId::empty();
+            // The global disk usage watcher isn't associated with a branch, so we just
+            // pass a placeholder (all-zero) branch ID to the critical!() macro.
+            let placeholder_branch_id = BranchId::from_array([0u8; 16]);
             critical_timeline!(
-                placeholder_ttid.tenant_id,
-                placeholder_ttid.timeline_id,
+                placeholder_branch_id,
                 None::<&AtomicBool>,
                 "Global disk usage watcher failed to read filesystem usage: {:?}",
                 e

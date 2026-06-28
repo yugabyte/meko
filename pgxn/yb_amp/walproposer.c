@@ -161,9 +161,9 @@ WalProposerCreate(WalProposerConfig *config, walproposer_api api)
 			int			written = 0;
 
 			written = snprintf((char *) &sk->conninfo, MAXCONNINFO,
-							   "%s host=%s port=%s dbname=replication options='-c timeline_id=%s tenant_id=%s'",
+							   "%s host=%s port=%s dbname=replication options='-c branch_id=%s'",
 							   wp->config->safekeeper_conninfo_options, sk->host, sk->port,
-							   wp->config->yb_amp_timeline, wp->config->yb_amp_tenant);
+							   wp->config->branch_id);
 			if (written > MAXCONNINFO || written < 0)
 				wp_log(FATAL, "could not create connection string for safekeeper %s:%s", sk->host, sk->port);
 		}
@@ -190,12 +190,9 @@ WalProposerCreate(WalProposerConfig *config, walproposer_api api)
 
 	/* Fill the greeting package */
 	wp->greetRequest.pam.tag = 'g';
-	if (!wp->config->yb_amp_tenant)
-		wp_log(FATAL, "yb_amp.tenant_id is not provided");
-	wp->greetRequest.tenant_id = wp->config->yb_amp_tenant;
-	if (!wp->config->yb_amp_timeline)
-		wp_log(FATAL, "yb_amp.timeline_id is not provided");
-	wp->greetRequest.timeline_id = wp->config->yb_amp_timeline;
+	if (!wp->config->branch_id)
+		wp_log(FATAL, "yb_amp.branch_id is not provided");
+	wp->greetRequest.branch_id = wp->config->branch_id;
 	wp->greetRequest.pg_version = PG_VERSION_NUM;
 	wp->greetRequest.system_id = wp->config->systemId;
 	wp->greetRequest.wal_seg_size = wp->config->wal_segment_size;
@@ -2180,8 +2177,7 @@ PAMessageSerialize(WalProposer *wp, ProposerAcceptorMessage *msg, StringInfo buf
 			{
 				ProposerGreeting *m = (ProposerGreeting *) msg;
 
-				pq_send_ascii_string(buf, m->tenant_id);
-				pq_send_ascii_string(buf, m->timeline_id);
+				pq_send_ascii_string(buf, m->branch_id);
 				MembershipConfigurationSerialize(&m->mconf, buf);
 				pq_sendint32(buf, m->pg_version);
 				pq_sendint64(buf, m->system_id);

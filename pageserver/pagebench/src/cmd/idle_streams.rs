@@ -6,7 +6,7 @@ use tonic::transport::Endpoint;
 use tracing::info;
 
 use pageserver_page_api::{GetPageClass, GetPageRequest, GetPageStatusCode, ReadLsn, RelTag};
-use utils::id::TenantTimelineId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 /// Starts a large number of idle gRPC GetPage streams.
@@ -38,13 +38,13 @@ pub(crate) fn main(args: Args) -> anyhow::Result<()> {
 }
 
 async fn main_impl(args: Args) -> anyhow::Result<()> {
-    // Discover a tenant and timeline to use.
+    // Discover a branch to use.
     let mgmt_api_client = Arc::new(pageserver_client::mgmt_api::Client::new(
         reqwest::Client::new(),
         args.http_server.clone(),
         None,
     ));
-    let timelines: Vec<TenantTimelineId> = crate::util::cli::targets::discover(
+    let branches: Vec<BranchId> = crate::util::cli::targets::discover(
         &mgmt_api_client,
         crate::util::cli::targets::Spec {
             limit_to_first_n_targets: Some(1),
@@ -52,21 +52,15 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
         },
     )
     .await?;
-    let ttid = timelines
+    let branch_id = *branches
         .first()
-        .ok_or_else(|| anyhow!("no timelines found"))?;
+        .ok_or_else(|| anyhow!("no branches found"))?;
 
     // Set up the initial client.
     let endpoint = Endpoint::from_shared(args.server.clone())?;
 
     let connect = async || {
-        pageserver_page_api::Client::new(
-            endpoint.connect().await?,
-            ttid.tenant_id,
-            ttid.timeline_id,
-            None,
-            None,
-        )
+        pageserver_page_api::Client::new(endpoint.connect().await?, branch_id, None, None)
     };
 
     let mut client = connect().await?;

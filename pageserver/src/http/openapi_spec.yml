@@ -59,9 +59,9 @@ paths:
         "200":
           description: The reload completed successfully.
 
-  /v1/tenant/{tenant_id}:
+  /v1/branch/{branch_id}:
     parameters:
-      - name: tenant_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -87,9 +87,9 @@ paths:
           description: Service is unavailable, or tenant is already being modified (perhaps concurrently deleted)
 
 
-  /v1/tenant/{tenant_id}/time_travel_remote_storage:
+  /v1/branch/{branch_id}/time_travel_remote_storage:
     parameters:
-      - name: tenant_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -116,9 +116,9 @@ paths:
               schema:
                 type: string
 
-  /v1/tenant/{tenant_id}/timeline/{timeline_id}:
+  /v1/branch/{branch_id}:
     parameters:
-      - name: tenant_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -161,9 +161,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/PreconditionFailedError"
 
-  /v1/tenant/{tenant_id}/timeline/{timeline_id}/get_timestamp_of_lsn:
+  /v1/branch/{branch_id}/get_timestamp_of_lsn:
     parameters:
-      - name: tenant_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -199,9 +199,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/PreconditionFailedError"
 
-  /v1/tenant/{tenant_id}/timeline/{timeline_id}/get_lsn_by_timestamp:
+  /v1/branch/{branch_id}/get_lsn_by_timestamp:
     parameters:
-      - name: tenant_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -237,9 +237,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/LsnByTimestampResponse"
 
-  /v1/tenant/{tenant_shard_id}/timeline/{timeline_id}/lsn_lease:
+  /v1/branch/{branch_id}/lsn_lease:
     parameters:
-      - name: tenant_shard_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -272,9 +272,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/LsnLease"
 
-  /v1/tenant/{tenant_id}/timeline/{timeline_id}/do_gc:
+  /v1/branch/{branch_id}/do_gc:
     parameters:
-      - name: tenant_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -295,9 +295,9 @@ paths:
               schema:
                 type: string
 
-  /v1/tenant/{tenant_shard_id}/timeline/{timeline_id}/block_gc:
+  /v1/branch/{branch_id}/block_gc:
     parameters:
-      - name: tenant_shard_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -314,9 +314,9 @@ paths:
         "200":
           description: OK
 
-  /v1/tenant/{tenant_shard_id}/timeline/{timeline_id}/unblock_gc:
+  /v1/branch/{branch_id}/unblock_gc:
     parameters:
-      - name: tenant_shard_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -333,9 +333,9 @@ paths:
         "200":
           description: OK
 
-  /v1/tenant/{tenant_shard_id}/timeline/{timeline_id}/mark_invisible:
+  /v1/branch/{branch_id}/mark_invisible:
     parameters:
-      - name: tenant_shard_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -360,9 +360,9 @@ paths:
         "200":
           description: OK
 
-  /v1/tenant/{tenant_shard_id}/location_config:
+  /v1/branch/{branch_id}/location_config:
     parameters:
-      - name: tenant_shard_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -429,9 +429,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ConflictError"
 
-  /v1/tenant/{tenant_id}/timeline/{timeline_id}/preserve_initdb_archive:
+  /v1/branch/{branch_id}/preserve_initdb_archive:
     parameters:
-      - name: tenant_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -449,9 +449,9 @@ paths:
         "202":
           description: Tenant scheduled to load successfully
 
-  /v1/tenant/{tenant_shard_id}/timeline/{timeline_id}/archival_config:
+  /v1/branch/{branch_id}/archival_config:
     parameters:
-      - name: tenant_shard_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -494,9 +494,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ServiceUnavailableError"
 
-  /v1/tenant/{tenant_id}/synthetic_size:
+  /v1/branch/{branch_id}/synthetic_size:
     parameters:
-      - name: tenant_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -554,9 +554,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ServiceUnavailableError"
 
-  /v1/tenant/{tenant_shard_id}/heatmap_upload:
+  /v1/branch/{branch_id}/heatmap_upload:
     parameters:
-      - name: tenant_shard_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -568,9 +568,9 @@ paths:
         "200":
           description: Success
 
-  /v1/tenant/{tenant_shard_id}/secondary/download:
+  /v1/branch/{branch_id}/secondary/download:
     parameters:
-      - name: tenant_shard_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -598,9 +598,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/SecondaryProgress"
 
-  /v1/tenant/{tenant_id}/timeline:
+  /v1/branch/{branch_id}/timeline:
     parameters:
-      - name: tenant_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -620,12 +620,12 @@ paths:
             schema:
               type: object
               required:
-                - new_timeline_id
+                - new_branch_id
               properties:
-                new_timeline_id:
+                new_branch_id:
                   type: string
                   format: hex
-                ancestor_timeline_id:
+                ancestor_branch_id:
                   type: string
                   format: hex
                 ancestor_start_lsn:
@@ -677,9 +677,9 @@ paths:
                 items:
                   $ref: "#/components/schemas/TimelineInfo"
 
-  /v1/tenant/{tenant_shard_id}/timeline/{timeline_id}/detach_ancestor:
+  /v1/branch/{branch_id}/detach_ancestor:
     parameters:
-      - name: tenant_shard_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -758,7 +758,7 @@ paths:
                 $ref: "#/components/schemas/ServiceUnavailableError"
 
 
-  /v1/tenant:
+  /v1/branch:
     get:
       description: Get tenants list
       responses:
@@ -797,7 +797,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ConflictError"
 
-  /v1/tenant/config:
+  /v1/branch/config:
     put:
       description: |
         Update tenant's config by setting it to the provided value
@@ -838,9 +838,9 @@ paths:
                 items:
                   $ref: "#/components/schemas/TenantInfo"
 
-  /v1/tenant/{tenant_id}/config:
+  /v1/branch/{branch_id}/config:
     parameters:
-      - name: tenant_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -857,9 +857,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/TenantConfigResponse"
 
-  /v1/tenant/{tenant_shard_id}/timeline/{timeline_id}/download_heatmap_layers:
+  /v1/branch/{branch_id}/download_heatmap_layers:
     parameters:
-      - name: tenant_shard_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -1131,7 +1131,7 @@ components:
         remote_consistent_lsn_visible:
           type: string
           format: hex
-        ancestor_timeline_id:
+        ancestor_branch_id:
           type: string
           format: hex
         ancestor_lsn:
@@ -1368,7 +1368,7 @@ components:
           items:
             type: string
             format: hex
-            description: TimelineId
+            description: BranchId
 
 
     Error:

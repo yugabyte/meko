@@ -4,7 +4,7 @@ use std::sync::Arc;
 use camino_tempfile::Utf8TempDir;
 use postgres_ffi::v17::wal_generator::{LogicalMessageGenerator, WalGenerator};
 use safekeeper_api::membership::SafekeeperGeneration as Generation;
-use utils::id::{NodeId, TenantTimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
 use crate::receive_wal::WalAcceptor;
@@ -38,7 +38,7 @@ impl Env {
         conf
     }
 
-    /// Constructs a Safekeeper with the given node and tenant/timeline ID.
+    /// Constructs a Safekeeper with the given node and branch ID.
     ///
     /// The bench harness still builds a synthetic safekeeper backed by
     /// `YbWalStorage`, which in this environment is **not** wired to a
@@ -48,12 +48,12 @@ impl Env {
     pub async fn make_safekeeper(
         &self,
         node_id: NodeId,
-        ttid: TenantTimelineId,
+        branch_id: BranchId,
         _start_lsn: Lsn,
     ) -> anyhow::Result<SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore>>
     {
         let _ = node_id;
-        let _ = ttid;
+        let _ = branch_id;
         anyhow::bail!(
             "test_utils::Env::make_safekeeper is unsupported in YB-only mode — \
              the local-FS bench scaffolding has been removed"
@@ -65,19 +65,19 @@ impl Env {
     pub async fn make_timeline(
         &self,
         node_id: NodeId,
-        ttid: TenantTimelineId,
+        branch_id: BranchId,
         start_lsn: Lsn,
     ) -> anyhow::Result<Arc<Timeline>> {
         let conf = Arc::new(self.make_conf(node_id));
-        let timeline_dir = get_timeline_dir(&conf, &ttid);
+        let timeline_dir = get_timeline_dir(&conf, &branch_id);
 
-        let safekeeper = self.make_safekeeper(node_id, ttid, start_lsn).await?;
+        let safekeeper = self.make_safekeeper(node_id, branch_id, start_lsn).await?;
         let shared_state = SharedState::new(StateSK::Loaded(safekeeper));
 
         let yb_wal = YbWalConn::from_conf(&conf).await?;
 
         let timeline = Timeline::new(
-            ttid,
+            branch_id,
             &timeline_dir,
             shared_state,
             conf.clone(),

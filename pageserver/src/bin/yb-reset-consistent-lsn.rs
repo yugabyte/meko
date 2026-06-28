@@ -1,5 +1,5 @@
 //! Find — and optionally set — the maximum valid `consistent_lsn` at or
-//! below a target LSN, for a single (tenant, timeline) in `yb_storage`.
+//! below a target LSN, for a single branch in `yb_storage`.
 //!
 //! `pageserver.timeline_state.consistent_lsn` must point at a *real WAL
 //! record boundary*: the byte just after a complete record (= the start
@@ -28,7 +28,7 @@ use anyhow::{Context, bail};
 use clap::Parser;
 use postgres_ffi::wal_record_boundary::{WalSource, decode_forward, find_anchor};
 use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE};
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use ysql_client::tokio_postgres::types::ToSql;
 use ysql_client::YsqlClient;
@@ -38,12 +38,9 @@ use ysql_client::YsqlClient;
     about = "Find (and optionally set) the max valid pageserver consistent_lsn <= a target LSN"
 )]
 struct Args {
-    /// Tenant id (32 hex chars).
+    /// Branch id (32 hex chars).
     #[arg(long)]
-    tenant: TenantId,
-    /// Timeline id (32 hex chars).
-    #[arg(long)]
-    timeline: TimelineId,
+    branch: BranchId,
     /// Target max LSN in `X/Y` hex form. The result is the largest real
     /// WAL record boundary `<= target`.
     #[arg(long, value_name = "X/Y")]
@@ -86,17 +83,15 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connecting to yb_storage")?;
 
-    let tenant = args.tenant.to_string();
-    let timeline = args.timeline.to_string();
+    let branch = args.branch.to_string();
 
-    let state = read_timeline_state(&client, &tenant, &timeline).await?;
+    let state = read_timeline_state(&client, &branch).await?;
     let pg_version = match state.pg_version {
         17 => PgMajorVersion::PG17,
         v => bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
     };
 
-    println!("tenant   {tenant}");
-    println!("timeline {timeline}");
+    println!("branch   {branch}");
     println!("pg_version            {}", state.pg_version);
     println!("current_generation    {}", state.current_generation);
     println!("applied_gc_cutoff_lsn {}", state.applied_gc_cutoff_lsn);
@@ -120,8 +115,7 @@ async fn main() -> anyhow::Result<()> {
 
     let reader = WalReader {
         client: &client,
-        tenant: &tenant,
-        timeline: &timeline,
+        branch: &branch,
         seg,
     };
 
@@ -178,8 +172,7 @@ async fn main() -> anyhow::Result<()> {
 
     let affected = write_timeline_state(
         &client,
-        &tenant,
-        &timeline,
+        &branch,
         consistent,
         prev_to_write,
         args.expect_generation,
@@ -194,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
                      or with the right value",
                     state.current_generation
                 ),
-                None => " — row not found (tenant/timeline mismatch?)".into(),
+                None => " — row not found (branch mismatch?)".into(),
             }
         );
     }
@@ -205,18 +198,17 @@ async fn main() -> anyhow::Result<()> {
 
 async fn read_timeline_state(
     client: &YsqlClient,
-    tenant: &str,
-    timeline: &str,
+    branch: &str,
 ) -> anyhow::Result<TimelineState> {
     let sql = "SELECT consistent_lsn, prev_record_lsn, applied_gc_cutoff_lsn, pg_version, \
                current_generation \
-               FROM pageserver.timeline_state WHERE tenant_id = $1 AND timeline_id = $2";
-    let params: [&(dyn ToSql + Sync); 2] = [&tenant, &timeline];
+               FROM pageserver.timeline_state WHERE branch_id = $1";
+    let params: [&(dyn ToSql + Sync); 1] = [&branch];
     let row = client
         .query_opt(sql, &params)
         .await
         .context("reading pageserver.timeline_state")?
-        .with_context(|| format!("no timeline_state row for tenant={tenant} timeline={timeline}"))?;
+        .with_context(|| format!("no timeline_state row for branch={branch}"))?;
     let consistent_lsn = Lsn(row.get::<_, i64>(0) as u64);
     let prev_record_lsn = row.get::<_, Option<i64>>(1).map(|v| Lsn(v as u64));
     let applied_gc_cutoff_lsn = Lsn(row.get::<_, i64>(2) as u64);
@@ -233,8 +225,7 @@ async fn read_timeline_state(
 
 async fn write_timeline_state(
     client: &YsqlClient,
-    tenant: &str,
-    timeline: &str,
+    branch: &str,
     consistent: Lsn,
     prev: Option<Lsn>,
     expect_generation: Option<i32>,
@@ -242,15 +233,15 @@ async fn write_timeline_state(
     let consistent_i = consistent.0 as i64;
     let prev_i = prev.map(|l| l.0 as i64);
     if let Some(generation) = expect_generation {
-        let sql = "UPDATE pageserver.timeline_state SET consistent_lsn = $3, prev_record_lsn = $4 \
-                   WHERE tenant_id = $1 AND timeline_id = $2 AND current_generation = $5";
-        let params: [&(dyn ToSql + Sync); 5] =
-            [&tenant, &timeline, &consistent_i, &prev_i, &generation];
+        let sql = "UPDATE pageserver.timeline_state SET consistent_lsn = $2, prev_record_lsn = $3 \
+                   WHERE branch_id = $1 AND current_generation = $4";
+        let params: [&(dyn ToSql + Sync); 4] =
+            [&branch, &consistent_i, &prev_i, &generation];
         client.execute(sql, &params).await.context("UPDATE timeline_state")
     } else {
-        let sql = "UPDATE pageserver.timeline_state SET consistent_lsn = $3, prev_record_lsn = $4 \
-                   WHERE tenant_id = $1 AND timeline_id = $2";
-        let params: [&(dyn ToSql + Sync); 4] = [&tenant, &timeline, &consistent_i, &prev_i];
+        let sql = "UPDATE pageserver.timeline_state SET consistent_lsn = $2, prev_record_lsn = $3 \
+                   WHERE branch_id = $1";
+        let params: [&(dyn ToSql + Sync); 3] = [&branch, &consistent_i, &prev_i];
         client.execute(sql, &params).await.context("UPDATE timeline_state")
     }
 }
@@ -259,8 +250,7 @@ async fn write_timeline_state(
 /// `(segno, chunk_offset)` and resolving the chunk that covers it.
 struct WalReader<'a> {
     client: &'a YsqlClient,
-    tenant: &'a str,
-    timeline: &'a str,
+    branch: &'a str,
     seg: u64,
 }
 
@@ -273,9 +263,9 @@ impl WalSource for WalReader<'_> {
         let segno = (lsn.0 / self.seg) as i64;
         let off = (lsn.0 % self.seg) as i64;
         let sql = "SELECT chunk_offset, data FROM safekeeper.wals \
-                   WHERE tenant_id = $1 AND timeline_id = $2 AND segno = $3 AND chunk_offset <= $4 \
+                   WHERE branch_id = $1 AND segno = $2 AND chunk_offset <= $3 \
                    ORDER BY chunk_offset DESC LIMIT 1";
-        let params: [&(dyn ToSql + Sync); 4] = [&self.tenant, &self.timeline, &segno, &off];
+        let params: [&(dyn ToSql + Sync); 3] = [&self.branch, &segno, &off];
         let row = self
             .client
             .query_opt(sql, &params)

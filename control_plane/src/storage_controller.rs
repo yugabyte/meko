@@ -18,13 +18,13 @@ use crate::local_env::{LocalEnv, YbLightStorageControllerConf};
 use camino::{Utf8Path, Utf8PathBuf};
 use nix::unistd::Pid;
 use pageserver_api::controller_api::{
-    ComputeEndpoint, NodeConfigureRequest, NodeDescribeResponse, NodeRegisterRequest,
-    PendingTimelineInit, PendingTimelineInitRequest, SafekeeperSchedulingPolicyRequest,
-    SetTimelineBranchNameRequest, SkSchedulingPolicy, TenantCreateRequest, TenantCreateResponse,
+    BranchCreateRequest, BranchCreateResponse, ComputeEndpoint, NodeConfigureRequest,
+    NodeDescribeResponse, NodeRegisterRequest, PendingTimelineInit, PendingTimelineInitRequest,
+    SafekeeperSchedulingPolicyRequest, SetTimelineBranchNameRequest, SkSchedulingPolicy,
     TimelineBranchName,
 };
 use pageserver_api::models::{
-    TenantConfig, TimelineCreateRequest, TimelineInfo,
+    BranchConfig, TimelineCreateRequest, TimelineInfo,
 };
 use pageserver_client::mgmt_api::ResponseErrorMessageExt;
 use pem::Pem;
@@ -37,7 +37,7 @@ use tokio::process::Command;
 use tracing::instrument;
 use url::Url;
 use utils::auth::{Claims, Scope, encode_from_key_file};
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use whoami::username;
 use yb_tokio_postgres as tokio_postgres;
 
@@ -97,10 +97,10 @@ impl YbLightStorageControllerStopArgs {
 
 #[derive(Serialize, Deserialize)]
 pub struct AttachHookRequest {
-    pub tenant_id: TenantId,
+    pub branch_id: BranchId,
     pub node_id: Option<NodeId>,
-    pub generation_override: Option<i32>, // only new tenants
-    pub config: Option<TenantConfig>,     // only new tenants
+    pub generation_override: Option<i32>, // only new branches
+    pub config: Option<BranchConfig>,     // only new branches
 }
 
 #[derive(Serialize, Deserialize)]
@@ -111,7 +111,7 @@ pub struct AttachHookResponse {
 
 #[derive(Serialize, Deserialize)]
 pub struct InspectRequest {
-    pub tenant_id: TenantId,
+    pub branch_id: BranchId,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1018,11 +1018,11 @@ impl StorageController {
     #[instrument(skip(self))]
     pub async fn attach_hook(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         pageserver_id: NodeId,
     ) -> anyhow::Result<Option<u32>> {
         let request = AttachHookRequest {
-            tenant_id,
+            branch_id,
             node_id: Some(pageserver_id),
             generation_override: None,
             config: None,
@@ -1078,9 +1078,9 @@ impl StorageController {
     #[instrument(skip(self))]
     pub async fn inspect(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
     ) -> anyhow::Result<Option<(u32, NodeId)>> {
-        let request = InspectRequest { tenant_id };
+        let request = InspectRequest { branch_id };
 
         let response = self
             .dispatch::<_, InspectResponse>(
@@ -1094,19 +1094,19 @@ impl StorageController {
     }
 
     #[instrument(skip(self))]
-    pub async fn tenant_create(
+    pub async fn branch_create(
         &self,
-        req: TenantCreateRequest,
-    ) -> anyhow::Result<TenantCreateResponse> {
-        self.dispatch(Method::POST, "v1/tenant".to_string(), Some(req))
+        req: BranchCreateRequest,
+    ) -> anyhow::Result<BranchCreateResponse> {
+        self.dispatch(Method::POST, "v1/branch".to_string(), Some(req))
             .await
     }
 
     #[instrument(skip(self))]
-    pub async fn tenant_import(&self, tenant_id: TenantId) -> anyhow::Result<TenantCreateResponse> {
-        self.dispatch::<(), TenantCreateResponse>(
+    pub async fn branch_import(&self, branch_id: BranchId) -> anyhow::Result<BranchCreateResponse> {
+        self.dispatch::<(), BranchCreateResponse>(
             Method::POST,
-            format!("debug/v1/tenant/{tenant_id}/import"),
+            format!("debug/v1/branch/{branch_id}/import"),
             None,
         )
         .await
@@ -1143,32 +1143,31 @@ impl StorageController {
             .await
     }
 
-    #[instrument(skip_all, fields(%tenant_id, timeline_id=%req.new_timeline_id))]
+    #[instrument(skip_all, fields(branch_id=%req.new_branch_id))]
     pub async fn tenant_timeline_create(
         &self,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         req: TimelineCreateRequest,
     ) -> anyhow::Result<TimelineInfo> {
         self.dispatch(
             Method::POST,
-            format!("v1/tenant/{tenant_id}/timeline"),
+            format!("v1/branch/{branch_id}/timeline"),
             Some(req),
         )
         .await
     }
 
-    /// Register a launcher-created timeline (branch) in the storage
+    /// Register a launcher-created branch in the storage
     /// controller's `timelines` table.
     #[instrument(skip(self))]
     pub async fn timeline_register(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         req: pageserver_api::controller_api::TimelineRegisterRequest,
     ) -> anyhow::Result<()> {
         self.dispatch::<_, ()>(
             Method::POST,
-            format!("control/v1/tenant/{tenant_id}/timeline/{timeline_id}/register"),
+            format!("control/v1/branch/{branch_id}/register"),
             Some(req),
         )
         .await
@@ -1176,13 +1175,12 @@ impl StorageController {
 
     pub async fn set_timeline_branch_name(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         branch_name: Option<String>,
     ) -> anyhow::Result<()> {
         self.dispatch::<_, ()>(
             Method::PUT,
-            format!("control/v1/tenant/{tenant_id}/timeline/{timeline_id}/branch_name"),
+            format!("control/v1/branch/{branch_id}/branch_name"),
             Some(SetTimelineBranchNameRequest { branch_name }),
         )
         .await
@@ -1197,33 +1195,30 @@ impl StorageController {
         .await
     }
 
-    /// Record a pending timeline init recipe (`tenant create` / `timeline
-    /// branch` allocate the ids before the PS+SK exist). Idempotent on the
-    /// (tenant, timeline) key.
+    /// Record a pending timeline init recipe (`branch create` allocates the
+    /// id before the PS+SK exist). Idempotent on the branch_id key.
     pub async fn record_pending_timeline_init(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         req: PendingTimelineInitRequest,
     ) -> anyhow::Result<()> {
         self.dispatch::<_, ()>(
             Method::POST,
-            format!("control/v1/tenant/{tenant_id}/timeline/{timeline_id}/pending_init"),
+            format!("control/v1/branch/{branch_id}/pending_init"),
             Some(req),
         )
         .await
     }
 
-    /// List the pending timeline inits recorded for a tenant. Used by
+    /// List the pending timeline inits recorded for a branch. Used by
     /// `endpoint create` to resolve an unprovisioned branch and read its
     /// materialization recipe.
     pub async fn list_pending_timeline_inits(
         &self,
-        tenant_id: TenantId,
     ) -> anyhow::Result<Vec<PendingTimelineInit>> {
         self.dispatch::<(), _>(
             Method::GET,
-            format!("control/v1/tenant/{tenant_id}/pending_timeline_inits"),
+            "control/v1/pending_timeline_inits".to_string(),
             None,
         )
         .await
@@ -1232,29 +1227,27 @@ impl StorageController {
     /// Delete a pending timeline init after its PS+SK have been materialized.
     pub async fn delete_pending_timeline_init(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> anyhow::Result<()> {
         self.dispatch::<(), ()>(
             Method::DELETE,
-            format!("control/v1/tenant/{tenant_id}/timeline/{timeline_id}/pending_init"),
+            format!("control/v1/branch/{branch_id}/pending_init"),
             None,
         )
         .await
     }
 
-    /// Drop a branch: delete all of the timeline's endpoint records, discard
-    /// any un-materialized init recipe, and mark the timeline dropped. The
+    /// Drop a branch: delete all of the branch's endpoint records, discard
+    /// any un-materialized init recipe, and mark the branch dropped. The
     /// caller (`yb_light_local timeline drop`) stops the compute processes
     /// first. Idempotent.
     pub async fn timeline_drop(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> anyhow::Result<()> {
         self.dispatch::<(), ()>(
             Method::PUT,
-            format!("control/v1/tenant/{tenant_id}/timeline/{timeline_id}/drop"),
+            format!("control/v1/branch/{branch_id}/drop"),
             None,
         )
         .await

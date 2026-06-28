@@ -431,7 +431,7 @@ impl Drop for WalSenderGuard {
 
 impl SafekeeperPostgresHandler {
     /// Wrapper around handle_start_replication_guts handling result. Error is
-    /// handled here while we're still in walsender ttid span; with API
+    /// handled here while we're still in walsender branch_id span; with API
     /// extension, this can probably be moved into postgres_backend.
     pub async fn handle_start_replication<IO: AsyncRead + AsyncWrite + Unpin + Send>(
         &mut self,
@@ -439,7 +439,7 @@ impl SafekeeperPostgresHandler {
         start_pos: Lsn,
         term: Option<Term>,
     ) -> Result<(), QueryError> {
-        let tli = self.global_timelines.get(self.ttid)?;
+        let tli = self.global_timelines.get(self.branch_id)?;
         let residence_guard = tli.wal_residence_guard().await?;
 
         if let Err(end) = self
@@ -469,7 +469,7 @@ impl SafekeeperPostgresHandler {
             PostgresClientProtocol::Interpreted { .. } => Arc::new(tli.get_walsenders().register(
                 WalSenderState::Interpreted(InterpretedWalSenderInternalState {
                     public_state: safekeeper_api::models::InterpretedWalSenderState {
-                        ttid: self.ttid,
+                        branch_id: self.branch_id,
                         addr: *pgb.get_peer_addr(),
                         conn_id: self.conn_id,
                         appname: self.appname.clone(),
@@ -782,15 +782,12 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> ReplyReader<IO> {
 #[cfg(test)]
 mod tests {
     use safekeeper_api::models::FullTransactionId;
-    use utils::id::{TenantId, TenantTimelineId, TimelineId};
+    use utils::id::BranchId;
 
     use super::*;
 
-    fn mock_ttid() -> TenantTimelineId {
-        TenantTimelineId {
-            tenant_id: TenantId::from_slice(&[0x00; 16]).unwrap(),
-            timeline_id: TimelineId::from_slice(&[0x00; 16]).unwrap(),
-        }
+    fn mock_branch_id() -> BranchId {
+        BranchId::from_slice(&[0x00; 16]).unwrap()
     }
 
     fn mock_addr() -> SocketAddr {
@@ -801,7 +798,7 @@ mod tests {
     fn push_feedback(wss: &mut WalSendersShared, feedback: ReplicationFeedback) {
         let walsender_state = WalSenderState::Interpreted(InterpretedWalSenderInternalState {
             public_state: safekeeper_api::models::InterpretedWalSenderState {
-                ttid: mock_ttid(),
+                branch_id: mock_branch_id(),
                 addr: mock_addr(),
                 conn_id: 1,
                 appname: None,

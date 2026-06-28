@@ -5,6 +5,10 @@
 -- - `public`             — `blobs` / `wals` blob-and-WAL store,
 --   shared by pageserver and safekeeper.
 -- - `pageserver`         — yb-pageserver page-store tables.
+--
+-- Identity model: flat. A branch is identified end to end by a single
+-- `branch_id` (the former `(tenant_id, timeline_id)` pair collapsed —
+-- a branch maps 1:1 to a pageserver process). No enclosing tenant.
 
 CREATE SCHEMA IF NOT EXISTS storage_controller;
 CREATE SCHEMA IF NOT EXISTS pageserver;
@@ -14,19 +18,19 @@ CREATE SCHEMA IF NOT EXISTS safekeeper;
 -- storage_controller.* — controller's own tables.
 -- =====================================================================
 
--- Per-tenant placement record. yb-mode doesn't shard tenants
+-- Per-branch placement record. yb-mode doesn't shard branches
 -- across pageservers (YB tablet-shards the keyspace itself), so
--- this is keyed only by `tenant_id`.
-CREATE TABLE storage_controller.tenants (
-    tenant_id              VARCHAR NOT NULL,
-    -- NULL once the tenant has been detached / never attached.
+-- this is keyed only by `branch_id`.
+CREATE TABLE storage_controller.branches (
+    branch_id              VARCHAR NOT NULL,
+    -- NULL once the branch has been detached / never attached.
     generation             INTEGER,
     generation_pageserver  BIGINT,
     placement_policy       VARCHAR NOT NULL,
-    -- JSON-encoded TenantConfig, stored as JSONB.
+    -- JSON-encoded BranchConfig, stored as JSONB.
     config                 JSONB NOT NULL,
     scheduling_policy      VARCHAR NOT NULL DEFAULT '"Active"',
-    PRIMARY KEY (tenant_id)
+    PRIMARY KEY (branch_id)
 );
 
 -- Pageserver registry.
@@ -58,52 +62,49 @@ CREATE TABLE storage_controller.safekeepers (
     PRIMARY KEY (id)
 );
 
--- Per-tenant metadata-scrubber health summary; FK cascade so a
--- tenant removal cleans up its row.
+-- Per-branch metadata-scrubber health summary; FK cascade so a
+-- branch removal cleans up its row.
 CREATE TABLE storage_controller.metadata_health (
-    tenant_id        VARCHAR NOT NULL,
+    branch_id        VARCHAR NOT NULL,
     healthy          BOOLEAN NOT NULL DEFAULT TRUE,
     last_scrubbed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (tenant_id),
-    FOREIGN KEY (tenant_id)
-        REFERENCES storage_controller.tenants (tenant_id)
+    PRIMARY KEY (branch_id),
+    FOREIGN KEY (branch_id)
+        REFERENCES storage_controller.branches (branch_id)
         ON DELETE CASCADE
 );
 
--- Per-timeline safekeeper set + generation tracking.
+-- Per-branch safekeeper set + generation tracking.
 CREATE TABLE storage_controller.timelines (
-    tenant_id                   VARCHAR NOT NULL,
-    timeline_id                 VARCHAR NOT NULL,
+    branch_id                   VARCHAR NOT NULL,
     start_lsn                   pg_lsn NOT NULL,
     generation                  INTEGER NOT NULL,
     sk_set                      BIGINT[] NOT NULL,
     deleted_at                  TIMESTAMPTZ,
     branch_name                 VARCHAR,
-    PRIMARY KEY (tenant_id, timeline_id)
+    PRIMARY KEY (branch_id)
 );
 
--- Init recipe for a timeline whose ids + branch name are allocated (at
--- `tenant create` / `timeline branch`) but whose pageserver + safekeeper
--- aren't provisioned yet. `endpoint create` reads it back to materialize
--- the pair, then deletes the row. A NULL ancestor_timeline_id marks a
--- Bootstrap recipe (initdb + import on first start); a non-NULL one marks
--- a Branch off that ancestor at start_lsn.
+-- Init recipe for a branch whose id + branch name are allocated (at
+-- `branch create`) but whose pageserver + safekeeper aren't provisioned
+-- yet. `endpoint create` reads it back to materialize the branch, then
+-- deletes the row. A NULL ancestor_branch_id marks a Bootstrap recipe
+-- (initdb + import on first start); a non-NULL one marks a Branch off
+-- that ancestor at start_lsn.
 CREATE TABLE storage_controller.pending_timeline_inits (
-    tenant_id                   VARCHAR NOT NULL,
-    timeline_id                 VARCHAR NOT NULL,
+    branch_id                   VARCHAR NOT NULL,
     branch_name                 VARCHAR NOT NULL,
     pg_version                  INTEGER NOT NULL,
-    ancestor_timeline_id        VARCHAR,
+    ancestor_branch_id          VARCHAR,
     start_lsn                   pg_lsn NOT NULL,
-    PRIMARY KEY (tenant_id, timeline_id)
+    PRIMARY KEY (branch_id)
 );
 
--- Per-timeline import progress, shard-keyed JSON.
+-- Per-branch import progress, JSON.
 CREATE TABLE storage_controller.timeline_imports (
-    tenant_id      VARCHAR NOT NULL,
-    timeline_id    VARCHAR NOT NULL,
+    branch_id      VARCHAR NOT NULL,
     shard_statuses JSONB NOT NULL,
-    PRIMARY KEY (tenant_id, timeline_id)
+    PRIMARY KEY (branch_id)
 );
 
 -- Durable registry of compute endpoints managed by yb_light_local.
@@ -115,8 +116,7 @@ CREATE TABLE storage_controller.timeline_imports (
 -- interprets it (it round-trips through yb_light_local's serde model).
 CREATE TABLE storage_controller.endpoints (
     endpoint_id  VARCHAR NOT NULL,
-    tenant_id    VARCHAR NOT NULL,
-    timeline_id  VARCHAR NOT NULL,
+    branch_id    VARCHAR NOT NULL,
     spec         JSONB NOT NULL,
     PRIMARY KEY (endpoint_id)
 );
@@ -132,8 +132,7 @@ CREATE TABLE storage_controller.endpoints (
 CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper');
 
 CREATE TABLE public.blobs (
-    tenant_id        TEXT                  NOT NULL,
-    timeline_id      TEXT                  NOT NULL,
+    branch_id        TEXT                  NOT NULL,
     namespace        public.blob_namespace NOT NULL,
     key              TEXT                  NOT NULL,
     generation       INT,
@@ -143,7 +142,7 @@ CREATE TABLE public.blobs (
     etag             TEXT                  NOT NULL,
     last_modified_us BIGINT                NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, namespace, chunk_idx)
+    PRIMARY KEY ((branch_id, key) HASH, namespace, chunk_idx)
 );
 
 -- =====================================================================
@@ -152,14 +151,13 @@ CREATE TABLE public.blobs (
 
 -- Relation pages only: keys where `Key::is_rel_block_key()` holds
 -- (field1 == 0x00, field4 != 0, field6 != 0xffffffff). Hash partition
--- on (tenant, timeline, spcnode, dbnode, relnode, forknum) keeps a
+-- on (branch, spcnode, dbnode, relnode, forknum) keeps a
 -- relation's whole block-set on one tablet; range scans within a
 -- relfork are tablet-local. `is_image` sits between `blknum` and
 -- `lsn` so an anchor lookup
 -- (`AND is_image=TRUE ORDER BY lsn DESC LIMIT 1`) is a single seek.
 CREATE TABLE pageserver.pages (
-    tenant_id    TEXT     NOT NULL,
-    timeline_id  TEXT     NOT NULL,
+    branch_id    TEXT     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
     relnode      BIGINT   NOT NULL,
@@ -169,7 +167,7 @@ CREATE TABLE pageserver.pages (
     lsn          BIGINT   NOT NULL,
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
+    PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
                  blknum, lsn DESC, is_image)
 );
 
@@ -178,8 +176,7 @@ CREATE TABLE pageserver.pages (
 -- 1=MultiXactMembers, 2=MultiXactOffsets. Hash partition keeps a
 -- whole SLRU segment on one tablet.
 CREATE TABLE pageserver.slru_pages (
-    tenant_id    TEXT     NOT NULL,
-    timeline_id  TEXT     NOT NULL,
+    branch_id    TEXT     NOT NULL,
     kind         SMALLINT NOT NULL,
     segno        BIGINT   NOT NULL,
     blknum       BIGINT   NOT NULL,
@@ -187,7 +184,7 @@ CREATE TABLE pageserver.slru_pages (
     lsn          BIGINT   NOT NULL,
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id, kind, segno) HASH,
+    PRIMARY KEY ((branch_id, kind, segno) HASH,
                  blknum, lsn DESC, is_image)
 );
 
@@ -198,15 +195,14 @@ CREATE TABLE pageserver.slru_pages (
 -- origins, SLRU segment-size sentinels. Full-overwrite semantics:
 -- read = latest row ≤ target_lsn. No walredo, no chains.
 CREATE TABLE pageserver.meta (
-    tenant_id    TEXT     NOT NULL,
-    timeline_id  TEXT     NOT NULL,
+    branch_id    TEXT     NOT NULL,
     key          BYTEA    NOT NULL,
     lsn          BIGINT   NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, lsn DESC)
+    PRIMARY KEY ((branch_id, key) HASH, lsn DESC)
 );
 
--- Per-timeline state row — replaces upstream Neon's local
+-- Per-branch state row — replaces upstream Neon's local
 -- `metadata`, `index_part.json` layer list, and
 -- `tenant-manifest.json` files with one durable row in YB.
 -- Carries every load-bearing field from `index_part.json`: archive
@@ -214,11 +210,10 @@ CREATE TABLE pageserver.meta (
 -- `lineage` column for future ancestor-detach support (always
 -- `Default` in yb-mode today).
 CREATE TABLE pageserver.timeline_state (
-    tenant_id              TEXT      NOT NULL,
-    timeline_id            TEXT      NOT NULL,
+    branch_id              TEXT      NOT NULL,
     consistent_lsn         BIGINT    NOT NULL,
     applied_gc_cutoff_lsn  BIGINT    NOT NULL,
-    ancestor_timeline_id   TEXT,
+    ancestor_branch_id     TEXT,
     ancestor_lsn           BIGINT,
     current_generation     INT       NOT NULL,
     pg_version             INT       NOT NULL,
@@ -229,18 +224,18 @@ CREATE TABLE pageserver.timeline_state (
     rel_size_migration     TEXT,
     rel_size_migrated_at   BIGINT,
     lineage                JSONB,
-    PRIMARY KEY ((tenant_id) HASH, timeline_id)
+    PRIMARY KEY ((branch_id) HASH)
 );
 
 -- =====================================================================
 -- safekeeper.* — yb-safekeeper persistent state.
 -- =====================================================================
 
--- Per-timeline safekeeper control-file row — replaces upstream
+-- Per-branch safekeeper control-file row — replaces upstream
 -- Neon's `safekeeper.control` local-FS blob (and yb-light's previous
--- `safekeeper-control/<tenant>/<timeline>` blob in GenericRemote-
--- Storage). One row per timeline, hash-partitioned on
--- `(tenant_id, timeline_id)` so the row lives on a single tablet.
+-- `safekeeper-control/<branch>` blob in GenericRemote-
+-- Storage). One row per branch, hash-partitioned on
+-- `branch_id` so the row lives on a single tablet.
 --
 -- Column choice: hot-update LSN scalars get their own BIGINT
 -- columns so a control-file save is a column-scoped UPDATE rather
@@ -248,8 +243,7 @@ CREATE TABLE pageserver.timeline_state (
 -- `term_history`) go in JSONB so their internal Rust-side shape can
 -- evolve without an SQL migration.
 CREATE TABLE safekeeper.timeline_state (
-    tenant_id              TEXT        NOT NULL,
-    timeline_id            TEXT        NOT NULL,
+    branch_id              TEXT        NOT NULL,
     timeline_start_lsn     BIGINT      NOT NULL,
     local_start_lsn        BIGINT      NOT NULL,
     remote_consistent_lsn  BIGINT      NOT NULL,
@@ -261,16 +255,15 @@ CREATE TABLE safekeeper.timeline_state (
     proposer_uuid          BYTEA       NOT NULL,
     mconf                  JSONB       NOT NULL,
     creation_ts            TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH)
+    PRIMARY KEY ((branch_id) HASH)
 );
 
 -- Live WAL chunks the safekeeper mirrors into YB — the durable copy of
 -- the WAL stream (replaces upstream Neon's local-FS segment files).
--- Hash-partitioned on `(tenant_id, timeline_id)` so a timeline's WAL
+-- Hash-partitioned on `branch_id` so a branch's WAL
 -- lives on one tablet; `segno`/`chunk_offset` range within it.
 CREATE TABLE safekeeper.wals (
-    tenant_id        TEXT    NOT NULL,
-    timeline_id      TEXT    NOT NULL,
+    branch_id        TEXT    NOT NULL,
     segno            BIGINT  NOT NULL,
     chunk_offset     BIGINT  NOT NULL,
     chunk_size       INT     NOT NULL,
@@ -281,5 +274,5 @@ CREATE TABLE safekeeper.wals (
     -- the next write at exactly the truncation point), so the
     -- chunk_offset alone uniquely identifies a chunk and a same-PK
     -- INSERT is necessarily an idempotent retry of the same bytes.
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_offset)
+    PRIMARY KEY ((branch_id) HASH, segno, chunk_offset)
 );

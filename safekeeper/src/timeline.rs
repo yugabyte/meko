@@ -17,7 +17,7 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
-use utils::id::{NodeId, TenantId, TenantTimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 use utils::sync::gate::Gate;
 
@@ -240,16 +240,16 @@ impl SharedState {
     /// Restore SharedState from control file. If file doesn't exist, bails out.
     pub async fn restore(
         conf: &SafeKeeperConf,
-        ttid: &TenantTimelineId,
+        branch_id: &BranchId,
         yb_wal: Option<&Arc<YbWalConn>>,
     ) -> Result<Self> {
         let yb_wal = yb_wal
             .cloned()
             .context("control-file restore requires yb_storage_conn")?;
         let control_store =
-            control_file::ControlFileStorage::restore_new(yb_wal.system_client.clone(), ttid).await?;
+            control_file::ControlFileStorage::restore_new(yb_wal.system_client.clone(), branch_id).await?;
         if control_store.server.wal_seg_size == 0 {
-            bail!(TimelineError::UninitializedWalSegSize(*ttid));
+            bail!(TimelineError::UninitializedWalSegSize(*branch_id));
         }
 
         // YB WAL mode forbids multi-member safekeeper configurations (see
@@ -260,7 +260,7 @@ impl SharedState {
             crate::require_single_safekeeper(&control_store.mconf)?;
         }
 
-        let wal_store = YbWalStorage::new(ttid, &control_store, yb_wal.clone()).await?;
+        let wal_store = YbWalStorage::new(branch_id, &control_store, yb_wal.clone()).await?;
         let sk = StateSK::Loaded(SafeKeeper::new(
             TimelineState::new(control_store),
             wal_store,
@@ -277,7 +277,7 @@ impl SharedState {
 
     fn get_safekeeper_info(
         &self,
-        _ttid: &TenantTimelineId,
+        _branch_id: &BranchId,
         _conf: &SafeKeeperConf,
         _standby_apply_lsn: Lsn,
     ) -> LocalSkInfo {
@@ -308,32 +308,32 @@ impl SharedState {
 #[derive(Debug, thiserror::Error)]
 pub enum TimelineError {
     #[error("Timeline {0} was cancelled and cannot be used anymore")]
-    Cancelled(TenantTimelineId),
+    Cancelled(BranchId),
     #[error("Timeline {0} was not found in global map")]
-    NotFound(TenantTimelineId),
+    NotFound(BranchId),
     #[error("Timeline {0} has been deleted")]
-    Deleted(TenantTimelineId),
+    Deleted(BranchId),
     #[error("Timeline {0} creation is in progress")]
-    CreationInProgress(TenantTimelineId),
+    CreationInProgress(BranchId),
     #[error("Timeline {0} exists on disk, but wasn't loaded on startup")]
-    Invalid(TenantTimelineId),
+    Invalid(BranchId),
     #[error("Timeline {0} is already exists")]
-    AlreadyExists(TenantTimelineId),
+    AlreadyExists(BranchId),
     #[error("Timeline {0} is not initialized, wal_seg_size is zero")]
-    UninitializedWalSegSize(TenantTimelineId),
+    UninitializedWalSegSize(BranchId),
     #[error("Timeline {0} is not initialized, pg_version is unknown")]
-    UninitialinzedPgVersion(TenantTimelineId),
+    UninitialinzedPgVersion(BranchId),
 }
 
 // Convert to HTTP API error.
 impl From<TimelineError> for ApiError {
     fn from(te: TimelineError) -> ApiError {
         match te {
-            TimelineError::NotFound(ttid) => {
-                ApiError::NotFound(anyhow!("timeline {} not found", ttid).into())
+            TimelineError::NotFound(branch_id) => {
+                ApiError::NotFound(anyhow!("timeline {} not found", branch_id).into())
             }
-            TimelineError::Deleted(ttid) => {
-                ApiError::NotFound(anyhow!("timeline {} deleted", ttid).into())
+            TimelineError::Deleted(branch_id) => {
+                ApiError::NotFound(anyhow!("timeline {} deleted", branch_id).into())
             }
             _ => ApiError::InternalServerError(anyhow!("{}", te)),
         }
@@ -364,7 +364,7 @@ type RemoteDeletionReceiver = tokio::sync::watch::Receiver<Option<anyhow::Result
 /// Timeline struct manages lifecycle (creation, deletion, restore) of a safekeeper timeline.
 /// It also holds SharedState and provides mutually exclusive access to it.
 pub struct Timeline {
-    pub ttid: TenantTimelineId,
+    pub branch_id: BranchId,
 
     /// Used to broadcast commit_lsn updates to all background jobs.
     commit_lsn_watch_tx: watch::Sender<Lsn>,
@@ -418,7 +418,7 @@ pub struct Timeline {
 impl Timeline {
     /// Constructs a new timeline.
     pub fn new(
-        ttid: TenantTimelineId,
+        branch_id: BranchId,
         timeline_dir: &Utf8Path,
         shared_state: SharedState,
         conf: Arc<SafeKeeperConf>,
@@ -436,7 +436,7 @@ impl Timeline {
         let walreceivers = WalReceivers::new();
 
         Arc::new(Self {
-            ttid,
+            branch_id,
             timeline_dir: timeline_dir.to_owned(),
             commit_lsn_watch_tx,
             commit_lsn_watch_rx,
@@ -462,17 +462,18 @@ impl Timeline {
     /// Load existing timeline from disk.
     pub async fn load_timeline(
         conf: Arc<SafeKeeperConf>,
-        ttid: TenantTimelineId,
+        branch_id: BranchId,
         yb_wal: Option<Arc<YbWalConn>>,
     ) -> Result<Arc<Timeline>> {
         use tracing::Instrument;
-        let span = info_span!("load_timeline", timeline = %ttid.timeline_id);
+        let span = info_span!("load_timeline", branch_id = %branch_id);
         async move {
-            let shared_state = SharedState::restore(conf.as_ref(), &ttid, yb_wal.as_ref()).await?;
-            let timeline_dir = get_timeline_dir(conf.as_ref(), &ttid);
+            let shared_state =
+                SharedState::restore(conf.as_ref(), &branch_id, yb_wal.as_ref()).await?;
+            let timeline_dir = get_timeline_dir(conf.as_ref(), &branch_id);
 
             Ok(Timeline::new(
-                ttid,
+                branch_id,
                 &timeline_dir,
                 shared_state,
                 conf,
@@ -521,7 +522,7 @@ impl Timeline {
     /// Cancel the timeline, requesting background activity to stop. Closing
     /// the `self.gate` waits for that.
     pub fn cancel(&self) {
-        info!("timeline {} shutting down", self.ttid);
+        info!("timeline {} shutting down", self.branch_id);
         self.cancel.cancel();
     }
 
@@ -551,7 +552,7 @@ impl Timeline {
         assert!(self.cancel.is_cancelled());
         assert!(self.gate.close_complete());
 
-        info!("deleting timeline {} from disk", self.ttid);
+        info!("deleting timeline {} from disk", self.branch_id);
 
         // Close associated FDs. Nobody will be able to touch timeline data once
         // it is cancelled, so WAL storage won't be opened again.
@@ -629,11 +630,12 @@ impl Timeline {
         tracing::info!("starting remote deletion");
         let yb_wal = self.yb_wal.clone();
         let (result_tx, result_rx) = tokio::sync::watch::channel(None);
-        let ttid = self.ttid;
+        let branch_id = self.branch_id;
         tokio::task::spawn(
             async move {
                 let r = if let Some(yb_wal) = yb_wal {
-                    control_file::YbControlFileStorage::delete(&yb_wal.system_client, &ttid).await
+                    control_file::YbControlFileStorage::delete(&yb_wal.system_client, &branch_id)
+                        .await
                 } else {
                     tracing::info!(
                         "skipping remote deletion because yb_storage_conn is not set; this effectively leaks the control-file row"
@@ -649,7 +651,7 @@ impl Timeline {
                 // Ignore send results: it's legal for the Timeline to give up waiting for us.
                 let _ = result_tx.send(Some(r));
             }
-            .instrument(info_span!("remote_delete", timeline = %self.ttid)),
+            .instrument(info_span!("remote_delete", branch_id = %self.branch_id)),
         );
 
         **guard = Some(result_rx.clone());
@@ -716,7 +718,7 @@ impl Timeline {
     pub async fn get_safekeeper_info(&self, conf: &SafeKeeperConf) -> LocalSkInfo {
         let standby_apply_lsn = self.walsenders.get_hotstandby().reply.apply_lsn;
         let shared_state = self.read_shared_state().await;
-        shared_state.get_safekeeper_info(&self.ttid, conf, standby_apply_lsn)
+        shared_state.get_safekeeper_info(&self.branch_id, conf, standby_apply_lsn)
     }
 
     pub async fn get_peers(&self, conf: &SafeKeeperConf) -> Vec<PeerInfo> {
@@ -752,7 +754,7 @@ impl Timeline {
 
         let state = self.read_shared_state().await;
         Some(FullTimelineInfo {
-            ttid: self.ttid,
+            branch_id: self.branch_id,
             ps_feedback_count: ps_feedback_counter,
             ps_corruption_detected,
             last_ps_feedback,
@@ -822,7 +824,7 @@ impl Timeline {
         };
 
         if self.is_cancelled() {
-            bail!(TimelineError::Cancelled(self.ttid));
+            bail!(TimelineError::Cancelled(self.branch_id));
         }
 
         debug!("requesting WalResidentTimeline guard");
@@ -993,7 +995,7 @@ impl WalResidentTimeline {
         msg: &ProposerAcceptorMessage,
     ) -> Result<Option<AcceptorProposerMessage>> {
         if self.is_cancelled() {
-            bail!(TimelineError::Cancelled(self.ttid));
+            bail!(TimelineError::Cancelled(self.branch_id));
         }
 
         let mut rmsg: Option<AcceptorProposerMessage>;
@@ -1021,7 +1023,7 @@ impl WalResidentTimeline {
         let (_, persisted_state) = self.get_state().await;
 
         WalReader::new(
-            &self.ttid,
+            &self.branch_id,
             &persisted_state,
             start_lsn,
             self.yb_wal.clone(),
@@ -1077,15 +1079,12 @@ pub async fn delete_dir(path: &Utf8PathBuf) -> Result<bool> {
     }
 }
 
-/// Get a path to the tenant directory. If you just need to get a timeline directory,
-/// use WalResidentTimeline::get_timeline_dir instead.
-pub fn get_tenant_dir(conf: &SafeKeeperConf, tenant_id: &TenantId) -> Utf8PathBuf {
-    conf.workdir.join(tenant_id.to_string())
-}
-
 /// Get a path to the timeline directory. If you need to read WAL files from disk,
 /// use WalResidentTimeline::get_timeline_dir instead. This function does not check
 /// timeline eviction status and WAL files might not be present on disk.
-pub fn get_timeline_dir(conf: &SafeKeeperConf, ttid: &TenantTimelineId) -> Utf8PathBuf {
-    get_tenant_dir(conf, &ttid.tenant_id).join(ttid.timeline_id.to_string())
+///
+/// The path scheme is now flat: `<workdir>/<branch_id>` (the enclosing
+/// per-tenant directory was removed along with the tenant/timeline model).
+pub fn get_timeline_dir(conf: &SafeKeeperConf, branch_id: &BranchId) -> Utf8PathBuf {
+    conf.workdir.join(branch_id.to_string())
 }

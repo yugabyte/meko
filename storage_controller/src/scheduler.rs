@@ -7,7 +7,7 @@ use serde::Serialize;
 use utils::id::NodeId;
 
 use crate::node::Node;
-use crate::tenant::Tenant;
+use crate::branch::Branch;
 
 /// Scenarios in which we cannot find a suitable location for a tenant shard
 #[derive(thiserror::Error, Debug)]
@@ -32,10 +32,10 @@ pub enum MaySchedule {
 
 #[derive(Serialize)]
 pub(crate) struct SchedulerNode {
-    /// How many shards are currently scheduled on this node, via their [`crate::tenant::IntentState`].
-    tenant_count: usize,
-    /// How many shards are currently attached on this node, via their [`crate::tenant::IntentState`].
-    attached_tenant_count: usize,
+    /// How many shards are currently scheduled on this node, via their [`crate::branch::IntentState`].
+    branch_count: usize,
+    /// How many shards are currently attached on this node, via their [`crate::branch::IntentState`].
+    attached_branch_count: usize,
 
     /// Whether this node is currently elegible to have new shards scheduled (this is derived
     /// from a node's availability state and scheduling policy).
@@ -79,7 +79,7 @@ pub(crate) struct NodeAttachmentSchedulingScore {
     utilization_score: u64,
     /// Total number of shards attached to this node. When nodes have identical utilisation, this
     /// acts as an anti-affinity between attached shards.
-    total_attached_tenant_count: usize,
+    total_attached_branch_count: usize,
     /// Convenience to make selection deterministic in tests and empty systems
     node_id: NodeId,
 }
@@ -104,7 +104,7 @@ impl NodeSchedulingScore for NodeAttachmentSchedulingScore {
                 .copied()
                 .unwrap_or(AffinityScore::FREE),
             utilization_score: utilization.cached_score(),
-            total_attached_tenant_count: node.attached_tenant_count,
+            total_attached_branch_count: node.attached_branch_count,
             node_id: *node_id,
         })
     }
@@ -130,7 +130,7 @@ pub(crate) struct NodeSecondarySchedulingScore {
     utilization_score: u64,
     /// Anti-affinity with other locations: this gives the behavior that secondaries
     /// will spread out across the nodes.
-    total_tenant_count: usize,
+    total_branch_count: usize,
     /// Convenience to make selection deterministic in tests and empty systems
     node_id: NodeId,
 }
@@ -155,7 +155,7 @@ impl NodeSchedulingScore for NodeSecondarySchedulingScore {
                 .copied()
                 .unwrap_or(AffinityScore::FREE),
             utilization_score: utilization.cached_score(),
-            total_tenant_count: node.tenant_count,
+            total_branch_count: node.branch_count,
             node_id: *node_id,
         })
     }
@@ -177,8 +177,8 @@ impl PartialEq for SchedulerNode {
         );
 
         may_schedule_matches
-            && self.tenant_count == other.tenant_count
-            && self.attached_tenant_count == other.attached_tenant_count
+            && self.branch_count == other.branch_count
+            && self.attached_branch_count == other.attached_branch_count
     }
 }
 
@@ -220,7 +220,7 @@ impl std::ops::Add for AffinityScore {
     }
 }
 
-// For carrying state between multiple calls to [`Tenant::schedule`], e.g. when calling
+// For carrying state between multiple calls to [`Branch::schedule`], e.g. when calling
 // it for many shards in the same tenant.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ScheduleContext {
@@ -256,8 +256,8 @@ impl Scheduler {
             scheduler_nodes.insert(
                 node.get_id(),
                 SchedulerNode {
-                    tenant_count: 0,
-                    attached_tenant_count: 0,
+                    branch_count: 0,
+                    attached_branch_count: 0,
                     may_schedule: node.may_schedule(),
                 },
             );
@@ -275,15 +275,15 @@ impl Scheduler {
     pub(crate) fn consistency_check<'a>(
         &self,
         nodes: impl Iterator<Item = &'a Node>,
-        shards: impl Iterator<Item = &'a Tenant>,
+        shards: impl Iterator<Item = &'a Branch>,
     ) -> anyhow::Result<()> {
         let mut expect_nodes: HashMap<NodeId, SchedulerNode> = HashMap::new();
         for node in nodes {
             expect_nodes.insert(
                 node.get_id(),
                 SchedulerNode {
-                    tenant_count: 0,
-                    attached_tenant_count: 0,
+                    branch_count: 0,
+                    attached_branch_count: 0,
                     may_schedule: node.may_schedule(),
                 },
             );
@@ -293,12 +293,12 @@ impl Scheduler {
             if let Some(node_id) = shard.intent.get_attached() {
                 match expect_nodes.get_mut(node_id) {
                     Some(node) => {
-                        node.tenant_count += 1;
-                        node.attached_tenant_count += 1;
+                        node.branch_count += 1;
+                        node.attached_branch_count += 1;
                     }
                     None => anyhow::bail!(
-                        "Tenant {} references nonexistent node {}",
-                        shard.tenant_id,
+                        "Branch {} references nonexistent node {}",
+                        shard.branch_id,
                         node_id
                     ),
                 }
@@ -307,11 +307,11 @@ impl Scheduler {
             for node_id in shard.intent.get_secondary() {
                 match expect_nodes.get_mut(node_id) {
                     Some(node) => {
-                        node.tenant_count += 1;
+                        node.branch_count += 1;
                     }
                     None => anyhow::bail!(
-                        "Tenant {} references nonexistent node {}",
-                        shard.tenant_id,
+                        "Branch {} references nonexistent node {}",
+                        shard.branch_id,
                         node_id
                     ),
                 }
@@ -361,43 +361,43 @@ impl Scheduler {
 
         match update {
             RefCountUpdate::PromoteSecondary => {
-                node.attached_tenant_count += 1;
+                node.attached_branch_count += 1;
             }
             RefCountUpdate::Attach => {
-                node.tenant_count += 1;
-                node.attached_tenant_count += 1;
+                node.branch_count += 1;
+                node.attached_branch_count += 1;
             }
             RefCountUpdate::Detach => {
-                node.tenant_count -= 1;
-                node.attached_tenant_count -= 1;
+                node.branch_count -= 1;
+                node.attached_branch_count -= 1;
             }
             RefCountUpdate::DemoteAttached => {
-                node.attached_tenant_count -= 1;
+                node.attached_branch_count -= 1;
             }
             RefCountUpdate::AddSecondary => {
-                node.tenant_count += 1;
+                node.branch_count += 1;
             }
             RefCountUpdate::RemoveSecondary => {
-                node.tenant_count -= 1;
+                node.branch_count -= 1;
             }
         }
 
         // Maybe update PageserverUtilization
         match update {
             RefCountUpdate::AddSecondary | RefCountUpdate::Attach => {
-                // Referencing the node: if this takes our tenant_count above the utilzation structure's
+                // Referencing the node: if this takes our branch_count above the utilzation structure's
                 // shard count, then artifically bump it: this ensures that the scheduler immediately
                 // recognizes that this node has more work on it, without waiting for the next heartbeat
                 // to update the utilization.
                 if let MaySchedule::Yes(utilization) = &mut node.may_schedule {
-                    utilization.adjust_shard_count_max(node.tenant_count as u32);
+                    utilization.adjust_shard_count_max(node.branch_count as u32);
                 }
             }
             RefCountUpdate::PromoteSecondary
             | RefCountUpdate::Detach
             | RefCountUpdate::RemoveSecondary
             | RefCountUpdate::DemoteAttached => {
-                // De-referencing the node: leave the utilization's tenant_count at a stale higher
+                // De-referencing the node: leave the utilization's branch_count at a stale higher
                 // value until some future heartbeat after we have physically removed this shard
                 // from the node: this prevents the scheduler over-optimistically trying to schedule
                 // more work onto the node before earlier detaches are done.
@@ -414,7 +414,7 @@ impl Scheduler {
                 let mut may_schedule = node.may_schedule();
                 match &mut may_schedule {
                     MaySchedule::Yes(utilization) => {
-                        utilization.adjust_shard_count_max(entry.get().tenant_count as u32);
+                        utilization.adjust_shard_count_max(entry.get().branch_count as u32);
                     }
                     MaySchedule::No => { // Nothing to tweak
                     }
@@ -424,8 +424,8 @@ impl Scheduler {
             }
             Vacant(entry) => {
                 entry.insert(SchedulerNode {
-                    tenant_count: 0,
-                    attached_tenant_count: 0,
+                    branch_count: 0,
+                    attached_branch_count: 0,
                     may_schedule: node.may_schedule(),
                 });
             }
@@ -508,7 +508,7 @@ impl Scheduler {
                 tracing::info!(
                     "Node {node_id}: may_schedule={} shards={}",
                     !matches!(node.may_schedule, MaySchedule::No),
-                    node.tenant_count
+                    node.branch_count
                 );
             }
             return Err(ScheduleError::ImpossibleConstraint);
@@ -555,13 +555,13 @@ impl Scheduler {
 
     /// Unit test access to internal state
     #[cfg(test)]
-    pub(crate) fn get_node_tenant_count(&self, node_id: NodeId) -> usize {
-        self.nodes.get(&node_id).unwrap().tenant_count
+    pub(crate) fn get_node_branch_count(&self, node_id: NodeId) -> usize {
+        self.nodes.get(&node_id).unwrap().branch_count
     }
 
     #[cfg(test)]
-    pub(crate) fn get_node_attached_tenant_count(&self, node_id: NodeId) -> usize {
-        self.nodes.get(&node_id).unwrap().attached_tenant_count
+    pub(crate) fn get_node_attached_branch_count(&self, node_id: NodeId) -> usize {
+        self.nodes.get(&node_id).unwrap().attached_branch_count
     }
 
 }
@@ -611,7 +611,7 @@ mod tests {
     use pageserver_api::models::utilization::test_utilization;
 
     use super::*;
-    use crate::tenant::IntentState;
+    use crate::branch::IntentState;
     #[test]
     fn scheduler_basic() -> anyhow::Result<()> {
         let nodes = test_utils::make_test_nodes(2);
@@ -627,28 +627,28 @@ mod tests {
         let scheduled = scheduler.schedule_shard::<AttachedShardTag>(&[], &context)?;
         t2_intent.set_attached(&mut scheduler, Some(scheduled));
 
-        assert_eq!(scheduler.get_node_tenant_count(NodeId(1)), 1);
-        assert_eq!(scheduler.get_node_attached_tenant_count(NodeId(1)), 1);
+        assert_eq!(scheduler.get_node_branch_count(NodeId(1)), 1);
+        assert_eq!(scheduler.get_node_attached_branch_count(NodeId(1)), 1);
 
-        assert_eq!(scheduler.get_node_tenant_count(NodeId(2)), 1);
-        assert_eq!(scheduler.get_node_attached_tenant_count(NodeId(2)), 1);
+        assert_eq!(scheduler.get_node_branch_count(NodeId(2)), 1);
+        assert_eq!(scheduler.get_node_attached_branch_count(NodeId(2)), 1);
 
         let scheduled = scheduler
             .schedule_shard::<AttachedShardTag>(&t1_intent.all_pageservers(), &context)?;
         t1_intent.push_secondary(&mut scheduler, scheduled);
 
-        assert_eq!(scheduler.get_node_tenant_count(NodeId(1)), 1);
-        assert_eq!(scheduler.get_node_attached_tenant_count(NodeId(1)), 1);
+        assert_eq!(scheduler.get_node_branch_count(NodeId(1)), 1);
+        assert_eq!(scheduler.get_node_attached_branch_count(NodeId(1)), 1);
 
-        assert_eq!(scheduler.get_node_tenant_count(NodeId(2)), 2);
-        assert_eq!(scheduler.get_node_attached_tenant_count(NodeId(2)), 1);
+        assert_eq!(scheduler.get_node_branch_count(NodeId(2)), 2);
+        assert_eq!(scheduler.get_node_attached_branch_count(NodeId(2)), 1);
 
         t1_intent.clear(&mut scheduler);
-        assert_eq!(scheduler.get_node_tenant_count(NodeId(1)), 0);
-        assert_eq!(scheduler.get_node_tenant_count(NodeId(2)), 1);
+        assert_eq!(scheduler.get_node_branch_count(NodeId(1)), 0);
+        assert_eq!(scheduler.get_node_branch_count(NodeId(2)), 1);
 
-        let total_attached = scheduler.get_node_attached_tenant_count(NodeId(1))
-            + scheduler.get_node_attached_tenant_count(NodeId(2));
+        let total_attached = scheduler.get_node_attached_branch_count(NodeId(1))
+            + scheduler.get_node_attached_branch_count(NodeId(2));
         assert_eq!(total_attached, 1);
 
         if cfg!(debug_assertions) {
@@ -661,11 +661,11 @@ mod tests {
         } else {
             t2_intent.clear(&mut scheduler);
 
-            assert_eq!(scheduler.get_node_tenant_count(NodeId(1)), 0);
-            assert_eq!(scheduler.get_node_attached_tenant_count(NodeId(1)), 0);
+            assert_eq!(scheduler.get_node_branch_count(NodeId(1)), 0);
+            assert_eq!(scheduler.get_node_attached_branch_count(NodeId(1)), 0);
 
-            assert_eq!(scheduler.get_node_tenant_count(NodeId(2)), 0);
-            assert_eq!(scheduler.get_node_attached_tenant_count(NodeId(2)), 0);
+            assert_eq!(scheduler.get_node_branch_count(NodeId(2)), 0);
+            assert_eq!(scheduler.get_node_attached_branch_count(NodeId(2)), 0);
         }
 
         Ok(())

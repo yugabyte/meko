@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::*;
 #[cfg(test)]
 use utils::bin_ser::BeSer;
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
 
@@ -198,8 +198,7 @@ impl AcceptorState {
 /// Initial Proposer -> Acceptor message
 #[derive(Debug, Deserialize)]
 pub struct ProposerGreeting {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub mconf: membership::Configuration,
     /// Postgres server version
     pub pg_version: PgVersionId,
@@ -430,12 +429,9 @@ impl ProposerAcceptorMessage {
             })? as char;
             match tag {
                 'g' => {
-                    let tenant_id_str =
-                        Self::get_cstr(&mut msg_bytes).with_context(|| "reading tenant_id")?;
-                    let tenant_id = TenantId::from_str(&tenant_id_str)?;
-                    let timeline_id_str =
-                        Self::get_cstr(&mut msg_bytes).with_context(|| "reading timeline_id")?;
-                    let timeline_id = TimelineId::from_str(&timeline_id_str)?;
+                    let branch_id_str =
+                        Self::get_cstr(&mut msg_bytes).with_context(|| "reading branch_id")?;
+                    let branch_id = BranchId::from_str(&branch_id_str)?;
                     let mconf = Self::get_mconf(&mut msg_bytes)?;
                     let pg_version = msg_bytes
                         .get_u32_f()
@@ -445,8 +441,7 @@ impl ProposerAcceptorMessage {
                         .get_u32_f()
                         .with_context(|| "reading wal_seg_size")?;
                     let g = ProposerGreeting {
-                        tenant_id,
-                        timeline_id,
+                        branch_id,
                         mconf,
                         pg_version: PgVersionId::from_full_pg_version(pg_version),
                         system_id,
@@ -690,7 +685,7 @@ where
     WAL: wal_storage::Storage,
 {
     /// Accepts a control file storage containing the safekeeper state.
-    /// State must be initialized, i.e. contain filled `tenant_id`, `timeline_id`
+    /// State must be initialized, i.e. contain filled `branch_id`
     /// and `server` (`wal_seg_size` inside it) fields.
     pub fn new(
         state: TimelineState<CTRL>,
@@ -698,13 +693,10 @@ where
         node_id: NodeId,
         yb_wal_mode: bool,
     ) -> Result<SafeKeeper<CTRL, WAL>> {
-        if state.tenant_id == TenantId::from([0u8; 16])
-            || state.timeline_id == TimelineId::from([0u8; 16])
-        {
+        if state.branch_id == BranchId::from([0u8; 16]) {
             bail!(
-                "Calling SafeKeeper::new with empty tenant_id ({}) or timeline_id ({})",
-                state.tenant_id,
-                state.timeline_id
+                "Calling SafeKeeper::new with empty branch_id ({})",
+                state.branch_id
             );
         }
 
@@ -788,18 +780,11 @@ where
             );
         }
 
-        if msg.tenant_id != self.state.tenant_id {
+        if msg.branch_id != self.state.branch_id {
             bail!(
-                "invalid tenant ID, got {}, expected {}",
-                msg.tenant_id,
-                self.state.tenant_id
-            );
-        }
-        if msg.timeline_id != self.state.timeline_id {
-            bail!(
-                "invalid timeline ID, got {}, expected {}",
-                msg.timeline_id,
-                self.state.timeline_id
+                "invalid branch ID, got {}, expected {}",
+                msg.branch_id,
+                self.state.branch_id
             );
         }
         if self.state.server.wal_seg_size != msg.wal_seg_size {
@@ -1213,8 +1198,7 @@ mod tests {
     fn test_sk_state() -> TimelinePersistentState {
         let mut state = TimelinePersistentState::empty();
         state.server.wal_seg_size = WAL_SEGMENT_SIZE as u32;
-        state.tenant_id = TenantId::from([1u8; 16]);
-        state.timeline_id = TimelineId::from([1u8; 16]);
+        state.branch_id = BranchId::from([1u8; 16]);
         state
     }
 
@@ -1499,11 +1483,9 @@ mod tests {
 
     #[test]
     fn test_sk_state_bincode_serde_roundtrip() {
-        let tenant_id = TenantId::from_str("cf0480929707ee75372337efaa5ecf96").unwrap();
-        let timeline_id = TimelineId::from_str("112ded66422aa5e953e5440fa5427ac4").unwrap();
+        let branch_id = BranchId::from_str("112ded66422aa5e953e5440fa5427ac4").unwrap();
         let state = TimelinePersistentState {
-            tenant_id,
-            timeline_id,
+            branch_id,
             mconf: Configuration {
                 generation: SafekeeperGeneration::new(42),
                 members: MemberSet::new(vec![SafekeeperId {
@@ -1527,7 +1509,7 @@ mod tests {
                 wal_seg_size: 0x12345678,
             },
             proposer_uuid: {
-                let mut arr = timeline_id.as_arr();
+                let mut arr = branch_id.as_arr();
                 arr.reverse();
                 arr
             },

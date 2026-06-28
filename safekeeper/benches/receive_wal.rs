@@ -15,7 +15,7 @@ use safekeeper::safekeeper::{
 use safekeeper::test_utils::Env;
 use safekeeper_api::membership::SafekeeperGeneration as Generation;
 use tokio::io::AsyncWriteExt as _;
-use utils::id::{NodeId, TenantTimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
 const KB: usize = 1024;
@@ -79,7 +79,7 @@ fn bench_process_msg(c: &mut Criterion) {
         let env = Env::new(fsync)?;
         let mut safekeeper = runtime.block_on(env.make_safekeeper(
             NodeId(1),
-            TenantTimelineId::generate(),
+            BranchId::generate(),
             Lsn(0),
         ))?;
 
@@ -143,7 +143,7 @@ fn bench_wal_acceptor(c: &mut Criterion) {
             // TODO: WalAcceptor doesn't actually need a full timeline, only
             // Safekeeper::process_msg(). Consider decoupling them to simplify the setup.
             let tli = env
-                .make_timeline(NodeId(1), TenantTimelineId::generate(), Lsn(0))
+                .make_timeline(NodeId(1), BranchId::generate(), Lsn(0))
                 .await?
                 .wal_residence_guard()
                 .await?;
@@ -237,7 +237,7 @@ fn bench_wal_acceptor_throughput(c: &mut Criterion) {
 
         runtime.block_on(async {
             let tli = env
-                .make_timeline(NodeId(1), TenantTimelineId::generate(), Lsn(0))
+                .make_timeline(NodeId(1), BranchId::generate(), Lsn(0))
                 .await?
                 .wal_residence_guard()
                 .await?;

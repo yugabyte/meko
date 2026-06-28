@@ -3,14 +3,14 @@ use std::ops::{Deref, DerefMut};
 use std::process::{Child, Command};
 
 use tracing::{error, info, instrument};
-use utils::id::TenantId;
+use utils::id::BranchId;
 
 use crate::metrics::{WAL_REDO_PROCESS_COUNTERS, WalRedoKillCause};
 
 /// Wrapper type around `std::process::Child` which guarantees that the child
 /// will be killed and waited-for by this process before being dropped.
 pub(crate) struct NoLeakChild {
-    pub(crate) tenant_id: TenantId,
+    pub(crate) branch_id: BranchId,
     pub(crate) child: Option<Child>,
 }
 
@@ -29,10 +29,10 @@ impl DerefMut for NoLeakChild {
 }
 
 impl NoLeakChild {
-    pub(crate) fn spawn(tenant_id: TenantId, command: &mut Command) -> io::Result<Self> {
+    pub(crate) fn spawn(branch_id: BranchId, command: &mut Command) -> io::Result<Self> {
         let child = command.spawn()?;
         Ok(NoLeakChild {
-            tenant_id,
+            branch_id,
             child: Some(child),
         })
     }
@@ -84,7 +84,7 @@ impl Drop for NoLeakChild {
             Some(child) => child,
             None => return,
         };
-        let tenant_id = self.tenant_id;
+        let branch_id = self.branch_id;
         // Offload the kill+wait of the child process into the background.
         // If someone stops the runtime, we'll leak the child process.
         // We can ignore that case because we only stop the runtime on pageserver exit.
@@ -94,7 +94,7 @@ impl Drop for NoLeakChild {
                 // This thread here is going to outlive of our dropper.
                 let span = tracing::info_span!(
                     "walredo",
-                    tenant_id = %tenant_id
+                    branch_id = %branch_id
                 );
                 let _entered = span.enter();
                 Self::kill_and_wait_impl(child, WalRedoKillCause::NoLeakChildDrop);
@@ -105,11 +105,11 @@ impl Drop for NoLeakChild {
 }
 
 pub(crate) trait NoLeakChildCommandExt {
-    fn spawn_no_leak_child(&mut self, tenant_id: TenantId) -> io::Result<NoLeakChild>;
+    fn spawn_no_leak_child(&mut self, branch_id: BranchId) -> io::Result<NoLeakChild>;
 }
 
 impl NoLeakChildCommandExt for Command {
-    fn spawn_no_leak_child(&mut self, tenant_id: TenantId) -> io::Result<NoLeakChild> {
-        NoLeakChild::spawn(tenant_id, self)
+    fn spawn_no_leak_child(&mut self, branch_id: BranchId) -> io::Result<NoLeakChild> {
+        NoLeakChild::spawn(branch_id, self)
     }
 }

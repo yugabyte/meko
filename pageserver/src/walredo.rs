@@ -35,7 +35,7 @@ use pageserver_api::key::Key;
 use pageserver_api::models::{WalRedoManagerProcessStatus, WalRedoManagerStatus};
 use postgres_ffi::PgMajorVersion;
 use tracing::*;
-use utils::id::TenantId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::sync::gate::GateError;
 use utils::sync::heavier_once_cell;
@@ -56,7 +56,7 @@ use crate::metrics::{
 /// `walredo_pool_size` rather than 1. Slots are picked round-robin via
 /// [`Self::next_slot`].
 pub struct PostgresRedoManager {
-    tenant_id: TenantId,
+    branch_id: BranchId,
     conf: &'static PageServerConf,
     last_redo_at: std::sync::Mutex<Option<Instant>>,
     /// One [`heavier_once_cell`] per pool slot. Each cell:
@@ -268,14 +268,14 @@ impl PostgresRedoManager {
     ///
     /// Create a new PostgresRedoManager.
     ///
-    pub fn new(conf: &'static PageServerConf, tenant_id: TenantId) -> PostgresRedoManager {
+    pub fn new(conf: &'static PageServerConf, branch_id: BranchId) -> PostgresRedoManager {
         // The actual processes are launched lazily, on first request to each slot.
         let pool_size = conf.walredo_pool_size.get();
         let redo_pool = (0..pool_size)
             .map(|_| heavier_once_cell::OnceCell::default())
             .collect();
         PostgresRedoManager {
-            tenant_id,
+            branch_id,
             conf,
             last_redo_at: std::sync::Mutex::default(),
             redo_pool,
@@ -384,7 +384,7 @@ impl PostgresRedoManager {
                 let proc = Arc::new(Process {
                     process: process::WalRedoProcess::launch(
                         self.conf,
-                        self.tenant_id,
+                        self.branch_id,
                         pg_version,
                     )
                     .context("launch walredo process")?,

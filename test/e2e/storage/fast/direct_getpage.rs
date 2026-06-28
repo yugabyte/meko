@@ -29,7 +29,7 @@ use anyhow::{Context, ensure};
 use pageserver_api::reltag::RelTag;
 use pageserver_client_grpc::PageserverClient;
 use pageserver_page_api as page_api;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::cluster::{Cluster, step};
@@ -122,10 +122,9 @@ async fn run_inner(c: &Cluster) -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     step("GetPage@LSN directly from the PS for every historical LSN; validate");
-    let tenant_id = TenantId::from_str(c.tid()).context("parse tenant id")?;
-    let timeline_id = TimelineId::from_str(&c.timeline_id().await?).context("parse timeline id")?;
+    let branch_id = BranchId::from_str(&c.branch_id().await?).context("parse branch id")?;
     let url = format!("grpc://127.0.0.1:{}", c.ps_grpc_port());
-    let client = PageserverClient::new(tenant_id, timeline_id, url, None, None)
+    let client = PageserverClient::new(branch_id, url, None, None)
         .context("connect PS gRPC")?;
 
     let rel = RelTag {

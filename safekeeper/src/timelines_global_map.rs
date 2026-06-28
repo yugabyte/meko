@@ -1,8 +1,7 @@
-//! This module contains global `(tenant_id, timeline_id)` -> `Arc<Timeline>` mapping.
+//! This module contains global `branch_id` -> `Arc<Timeline>` mapping.
 //! All timelines should always be present in this map, this is done by loading them
 //! all from the disk on startup and keeping them in memory.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,11 +12,11 @@ use safekeeper_api::ServerInfo;
 use safekeeper_api::membership::{Configuration, SafekeeperGeneration};
 use safekeeper_api::models::{SafekeeperUtilization, TimelineDeleteResult};
 use tracing::*;
-use utils::id::{NodeId, TenantId, TenantTimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
 use crate::state::TimelinePersistentState;
-use crate::timeline::{Timeline, TimelineError, delete_dir, get_tenant_dir, get_timeline_dir};
+use crate::timeline::{Timeline, TimelineError, delete_dir, get_timeline_dir};
 use crate::timelines_set::TimelinesSet;
 use crate::yb_wal_storage::YbWalConn;
 use crate::{SafeKeeperConf, control_file};
@@ -31,9 +30,9 @@ enum GlobalMapTimeline {
 }
 
 struct GlobalTimelinesState {
-    /// This process serves a single (tenant, timeline) (see
-    /// [`SafeKeeperConf::yb_ttid`]), so the registry is one slot, not a map.
-    timeline: Option<(TenantTimelineId, GlobalMapTimeline)>,
+    /// This process serves a single branch (see
+    /// [`SafeKeeperConf::yb_branch_id`]), so the registry is one slot, not a map.
+    timeline: Option<(BranchId, GlobalMapTimeline)>,
 
     /// A tombstone indicates this timeline used to exist has been deleted. These are used to prevent
     /// on-demand timeline creation from recreating deleted timelines. This is only soft-enforced, as
@@ -41,12 +40,7 @@ struct GlobalTimelinesState {
     /// The timeline might also be locally deleted (excluded) via safekeeper migration algorithm. In that case,
     /// the tombsone contains the corresponding safekeeper generation. The pull_timeline requests with
     /// higher generation ignore such tombstones and can recreate the timeline.
-    timeline_tombstone: Option<(TenantTimelineId, TimelineTombstone)>,
-    /// A tombstone indicates that the tenant used to exist has been deleted.
-    /// These are created only by tenant_delete requests. They are always valid regardless of the
-    /// request generation.
-    /// This is only soft-enforced, as this slot is dropped on restart.
-    tenant_tombstone: Option<(TenantId, Instant)>,
+    timeline_tombstone: Option<(BranchId, TimelineTombstone)>,
 
     conf: Arc<SafeKeeperConf>,
     broker_active_set: Arc<TimelinesSet>,
@@ -69,27 +63,27 @@ impl GlobalTimelinesState {
         )
     }
 
-    /// Borrow the slot's entry if it is for `ttid`.
-    fn lookup(&self, ttid: &TenantTimelineId) -> Option<&GlobalMapTimeline> {
+    /// Borrow the slot's entry if it is for `branch_id`.
+    fn lookup(&self, branch_id: &BranchId) -> Option<&GlobalMapTimeline> {
         self.timeline
             .as_ref()
-            .filter(|(k, _)| k == ttid)
+            .filter(|(k, _)| k == branch_id)
             .map(|(_, v)| v)
     }
 
     /// Get timeline from the map. Returns error if timeline doesn't exist or
     /// creation is in progress.
-    fn get(&self, ttid: &TenantTimelineId) -> Result<Arc<Timeline>, TimelineError> {
-        match self.lookup(ttid).cloned() {
+    fn get(&self, branch_id: &BranchId) -> Result<Arc<Timeline>, TimelineError> {
+        match self.lookup(branch_id).cloned() {
             Some(GlobalMapTimeline::Timeline(tli)) => Ok(tli),
             Some(GlobalMapTimeline::CreationInProgress) => {
-                Err(TimelineError::CreationInProgress(*ttid))
+                Err(TimelineError::CreationInProgress(*branch_id))
             }
             None => {
-                if self.has_tombstone(ttid, None) {
-                    Err(TimelineError::Deleted(*ttid))
+                if self.has_tombstone(branch_id, None) {
+                    Err(TimelineError::Deleted(*branch_id))
                 } else {
-                    Err(TimelineError::NotFound(*ttid))
+                    Err(TimelineError::NotFound(*branch_id))
                 }
             }
         }
@@ -97,13 +91,13 @@ impl GlobalTimelinesState {
 
     fn has_timeline_tombstone(
         &self,
-        ttid: &TenantTimelineId,
+        branch_id: &BranchId,
         generation: Option<SafekeeperGeneration>,
     ) -> bool {
         let tombstone = self
             .timeline_tombstone
             .as_ref()
-            .filter(|(k, _)| k == ttid)
+            .filter(|(k, _)| k == branch_id)
             .map(|(_, t)| t);
         if let Some(generation) = generation {
             tombstone.is_some_and(|t| t.is_valid(generation))
@@ -112,31 +106,24 @@ impl GlobalTimelinesState {
         }
     }
 
-    fn has_tenant_tombstone(&self, tenant_id: &TenantId) -> bool {
-        self.tenant_tombstone
-            .as_ref()
-            .is_some_and(|(k, _)| k == tenant_id)
-    }
-
-    /// Check if the state has a tenant or a timeline tombstone.
+    /// Check if the state has a timeline tombstone.
     /// If `generation` is provided, check only for timeline tombsotnes with same or higher generation.
     /// If `generation` is `None`, check for any timeline tombstone.
-    /// Tenant tombstones are checked regardless of the generation.
     fn has_tombstone(
         &self,
-        ttid: &TenantTimelineId,
+        branch_id: &BranchId,
         generation: Option<SafekeeperGeneration>,
     ) -> bool {
-        self.has_timeline_tombstone(ttid, generation) || self.has_tenant_tombstone(&ttid.tenant_id)
+        self.has_timeline_tombstone(branch_id, generation)
     }
 
-    /// Removes timeline tombstone for the given timeline ID.
+    /// Removes timeline tombstone for the given branch ID.
     /// Returns `true` if there have been actual changes.
-    fn remove_timeline_tombstone(&mut self, ttid: &TenantTimelineId) -> bool {
+    fn remove_timeline_tombstone(&mut self, branch_id: &BranchId) -> bool {
         if self
             .timeline_tombstone
             .as_ref()
-            .is_some_and(|(k, _)| k == ttid)
+            .is_some_and(|(k, _)| k == branch_id)
         {
             self.timeline_tombstone = None;
             true
@@ -145,15 +132,11 @@ impl GlobalTimelinesState {
         }
     }
 
-    fn delete(&mut self, ttid: TenantTimelineId, generation: Option<SafekeeperGeneration>) {
-        if self.timeline.as_ref().is_some_and(|(k, _)| *k == ttid) {
+    fn delete(&mut self, branch_id: BranchId, generation: Option<SafekeeperGeneration>) {
+        if self.timeline.as_ref().is_some_and(|(k, _)| *k == branch_id) {
             self.timeline = None;
         }
-        self.timeline_tombstone = Some((ttid, TimelineTombstone::new(generation)));
-    }
-
-    fn add_tenant_tombstone(&mut self, tenant_id: TenantId) {
-        self.tenant_tombstone = Some((tenant_id, Instant::now()));
+        self.timeline_tombstone = Some((branch_id, TimelineTombstone::new(generation)));
     }
 }
 
@@ -169,7 +152,6 @@ impl GlobalTimelines {
             state: Mutex::new(GlobalTimelinesState {
                 timeline: None,
                 timeline_tombstone: None,
-                tenant_tombstone: None,
                 conf,
                 broker_active_set: Arc::new(TimelinesSet::default()),
                 yb_wal,
@@ -182,21 +164,22 @@ impl GlobalTimelines {
     /// not on the local filesystem, so the on-disk workdir is only used
     /// for logs and tmp dirs and has no tenant subdirs to scan.
     pub async fn init(&self) -> Result<()> {
-        let (yb_wal, ttid) = {
+        let (yb_wal, branch_id) = {
             let state = self.state.lock().unwrap();
-            (state.yb_wal.clone(), state.conf.yb_ttid()?)
+            (state.yb_wal.clone(), state.conf.yb_branch_id()?)
         };
         let yb_wal = yb_wal.context("safekeeper init requires yb_storage_conn")?;
 
         // `safekeeper.timeline_state` is shared across the whole cluster, so
-        // load ONLY our own timeline — never every row. Its row is absent on
-        // a fresh bootstrap (the timeline is created on demand by the first
+        // load ONLY our own branch — never every row. Its row is absent on
+        // a fresh bootstrap (the branch is created on demand by the first
         // walproposer handshake); load it here only if it already exists.
-        let ttids = control_file::YbControlFileStorage::list_all_ttids(&yb_wal.system_client)
-            .await
-            .context("enumerate safekeeper.timeline_state on init")?;
-        if ttids.contains(&ttid) {
-            self.load_one_timeline(ttid).await;
+        let branch_ids =
+            control_file::YbControlFileStorage::list_all_branch_ids(&yb_wal.system_client)
+                .await
+                .context("enumerate safekeeper.timeline_state on init")?;
+        if branch_ids.contains(&branch_id) {
+            self.load_one_timeline(branch_id).await;
         }
         info!(
             "loaded {} timelines from safekeeper.timeline_state",
@@ -205,22 +188,22 @@ impl GlobalTimelines {
         Ok(())
     }
 
-    /// Load a single timeline by ttid and register it in the global map.
+    /// Load a single timeline by branch_id and register it in the global map.
     /// Errors are logged but not propagated — a single corrupt timeline
     /// shouldn't take down the whole safekeeper at startup.
-    async fn load_one_timeline(&self, ttid: TenantTimelineId) {
+    async fn load_one_timeline(&self, branch_id: BranchId) {
         let (conf, broker_active_set, yb_wal) = {
             let state = self.state.lock().unwrap();
             state.get_dependencies()
         };
-        match Timeline::load_timeline(conf.clone(), ttid, yb_wal.clone()).await {
+        match Timeline::load_timeline(conf.clone(), branch_id, yb_wal.clone()).await {
             Ok(tli) => {
                 let mut shared_state = tli.write_shared_state().await;
                 self.state.lock().unwrap().timeline =
-                    Some((ttid, GlobalMapTimeline::Timeline(tli.clone())));
+                    Some((branch_id, GlobalMapTimeline::Timeline(tli.clone())));
                 tli.bootstrap(&mut shared_state, &conf, broker_active_set, yb_wal);
             }
-            Err(e) => error!("failed to load timeline {ttid}, reason: {e:?}"),
+            Err(e) => error!("failed to load timeline {branch_id}, reason: {e:?}"),
         }
     }
 
@@ -242,7 +225,7 @@ impl GlobalTimelines {
     /// an existing timeline.
     pub(crate) async fn create(
         &self,
-        ttid: TenantTimelineId,
+        branch_id: BranchId,
         mconf: Configuration,
         server_info: ServerInfo,
         start_lsn: Lsn,
@@ -251,33 +234,33 @@ impl GlobalTimelines {
 
         let (conf, _, yb_wal) = {
             let state = self.state.lock().unwrap();
-            if let Ok(timeline) = state.get(&ttid) {
+            if let Ok(timeline) = state.get(&branch_id) {
                 // Timeline already exists, return it.
                 return Ok(timeline);
             }
 
-            if state.has_tombstone(&ttid, generation) {
-                anyhow::bail!(TimelineError::Deleted(ttid));
+            if state.has_tombstone(&branch_id, generation) {
+                anyhow::bail!(TimelineError::Deleted(branch_id));
             }
 
             state.get_dependencies()
         };
 
-        info!("creating new timeline {}", ttid);
+        info!("creating new timeline {}", branch_id);
 
         // Do on disk initialization in tmp dir.
-        let (_tmp_dir, tmp_dir_path) = create_temp_timeline_dir(&conf, ttid).await?;
+        let (_tmp_dir, tmp_dir_path) = create_temp_timeline_dir(&conf, branch_id).await?;
 
         // TODO: currently we create only cfile. It would be reasonable to
         // immediately initialize first WAL segment as well.
-        let state = TimelinePersistentState::new(&ttid, mconf, server_info, start_lsn)?;
+        let state = TimelinePersistentState::new(&branch_id, mconf, server_info, start_lsn)?;
         let yb_wal = yb_wal
             .clone()
             .context("control-file create requires yb_storage_conn")?;
-        control_file::ControlFileStorage::create_new(yb_wal.fpu_client.clone(), &ttid, state)
+        control_file::ControlFileStorage::create_new(yb_wal.fpu_client.clone(), &branch_id, state)
             .await?;
         let timeline = self
-            .load_temp_timeline(ttid, &tmp_dir_path, generation)
+            .load_temp_timeline(branch_id, &tmp_dir_path, generation)
             .await?;
         Ok(timeline)
     }
@@ -295,51 +278,56 @@ impl GlobalTimelines {
     /// 3) take lock again and insert the timeline into the global map.
     pub async fn load_temp_timeline(
         &self,
-        ttid: TenantTimelineId,
+        branch_id: BranchId,
         tmp_path: &Utf8PathBuf,
         generation: Option<SafekeeperGeneration>,
     ) -> Result<Arc<Timeline>> {
         // Check for existence and mark that we're creating it.
         let (conf, broker_active_set, yb_wal) = {
             let mut state = self.state.lock().unwrap();
-            match state.lookup(&ttid) {
+            match state.lookup(&branch_id) {
                 Some(GlobalMapTimeline::CreationInProgress) => {
-                    bail!(TimelineError::CreationInProgress(ttid));
+                    bail!(TimelineError::CreationInProgress(branch_id));
                 }
                 Some(GlobalMapTimeline::Timeline(_)) => {
-                    bail!(TimelineError::AlreadyExists(ttid));
+                    bail!(TimelineError::AlreadyExists(branch_id));
                 }
                 _ => {}
             }
 
-            if state.has_tombstone(&ttid, generation) {
+            if state.has_tombstone(&branch_id, generation) {
                 // If the timeline is deleted, we refuse to recreate it.
                 // This is a safeguard against accidentally overwriting a timeline that was deleted
                 // by concurrent request.
-                anyhow::bail!(TimelineError::Deleted(ttid));
+                anyhow::bail!(TimelineError::Deleted(branch_id));
             }
 
             // We might have an outdated tombstone with the older generation.
             // Remove it unconditionally.
-            state.remove_timeline_tombstone(&ttid);
+            state.remove_timeline_tombstone(&branch_id);
 
-            state.timeline = Some((ttid, GlobalMapTimeline::CreationInProgress));
+            state.timeline = Some((branch_id, GlobalMapTimeline::CreationInProgress));
             state.get_dependencies()
         };
 
         // Do the actual move and reflect the result in the map.
-        match GlobalTimelines::install_temp_timeline(ttid, tmp_path, conf.clone(), yb_wal.clone())
-            .await
+        match GlobalTimelines::install_temp_timeline(
+            branch_id,
+            tmp_path,
+            conf.clone(),
+            yb_wal.clone(),
+        )
+        .await
         {
             Ok(timeline) => {
                 let mut timeline_shared_state = timeline.write_shared_state().await;
                 let mut state = self.state.lock().unwrap();
                 assert!(matches!(
-                    state.lookup(&ttid),
+                    state.lookup(&branch_id),
                     Some(GlobalMapTimeline::CreationInProgress)
                 ));
 
-                state.timeline = Some((ttid, GlobalMapTimeline::Timeline(timeline.clone())));
+                state.timeline = Some((branch_id, GlobalMapTimeline::Timeline(timeline.clone())));
                 drop(state);
                 timeline.bootstrap(&mut timeline_shared_state, &conf, broker_active_set, yb_wal);
                 drop(timeline_shared_state);
@@ -349,7 +337,7 @@ impl GlobalTimelines {
                 // Init failed, remove the marker from the map
                 let mut state = self.state.lock().unwrap();
                 assert!(matches!(
-                    state.lookup(&ttid),
+                    state.lookup(&branch_id),
                     Some(GlobalMapTimeline::CreationInProgress)
                 ));
                 state.timeline = None;
@@ -363,26 +351,26 @@ impl GlobalTimelines {
     /// control-file blob already lives in `GenericRemoteStorage`, so
     /// there's nothing to move locally.
     async fn install_temp_timeline(
-        ttid: TenantTimelineId,
+        branch_id: BranchId,
         _tmp_path: &Utf8PathBuf,
         conf: Arc<SafeKeeperConf>,
         yb_wal: Option<Arc<YbWalConn>>,
     ) -> Result<Arc<Timeline>> {
-        Timeline::load_timeline(conf, ttid, yb_wal).await
+        Timeline::load_timeline(conf, branch_id, yb_wal).await
     }
 
     /// Get a timeline from the global map. If it's not present, it doesn't exist on disk,
     /// or was corrupted and couldn't be loaded on startup. Returned timeline is always valid,
     /// i.e. loaded in memory and not cancelled.
-    pub(crate) fn get(&self, ttid: TenantTimelineId) -> Result<Arc<Timeline>, TimelineError> {
+    pub(crate) fn get(&self, branch_id: BranchId) -> Result<Arc<Timeline>, TimelineError> {
         let tli_res = {
             let state = self.state.lock().unwrap();
-            state.get(&ttid)
+            state.get(&branch_id)
         };
         match tli_res {
             Ok(tli) => {
                 if tli.is_cancelled() {
-                    return Err(TimelineError::Cancelled(ttid));
+                    return Err(TimelineError::Cancelled(branch_id));
                 }
                 Ok(tli)
             }
@@ -417,48 +405,33 @@ impl GlobalTimelines {
         SafekeeperUtilization { timeline_count }
     }
 
-    /// Returns all timelines belonging to a given tenant. Used for deleting all timelines of a tenant,
-    /// and that's why it can return cancelled timelines, to retry deleting them.
-    fn get_all_for_tenant(&self, tenant_id: TenantId) -> Vec<Arc<Timeline>> {
-        let global_lock = self.state.lock().unwrap();
-        global_lock
-            .timeline
-            .iter()
-            .filter_map(|(_, t)| match t {
-                GlobalMapTimeline::Timeline(t) => Some(t.clone()),
-                _ => None,
-            })
-            .filter(|t| t.ttid.tenant_id == tenant_id)
-            .collect()
-    }
-
     /// Delete timeline, only locally on this node or globally (also cleaning
     /// remote storage WAL), depending on `action` value.
     pub(crate) async fn delete_or_exclude(
         &self,
-        ttid: &TenantTimelineId,
+        branch_id: &BranchId,
         action: DeleteOrExclude,
     ) -> Result<TimelineDeleteResult> {
         let tli_res = {
             let state = self.state.lock().unwrap();
 
-            if state.has_timeline_tombstone(ttid, None) {
+            if state.has_timeline_tombstone(branch_id, None) {
                 // Presence of a tombstone guarantees that a previous deletion has completed and there is no work to do.
-                info!("Timeline {ttid} was already deleted");
+                info!("Timeline {branch_id} was already deleted");
                 return Ok(TimelineDeleteResult { dir_existed: false });
             }
 
-            state.get(ttid)
+            state.get(branch_id)
         };
 
         let result = match tli_res {
             Ok(timeline) => {
-                info!("deleting timeline {}, action={:?}", ttid, action);
+                info!("deleting timeline {}, action={:?}", branch_id, action);
 
                 timeline.cancel();
                 timeline.close().await;
 
-                info!("timeline {ttid} shut down for deletion");
+                info!("timeline {branch_id} shut down for deletion");
 
                 let mut shared_state = timeline.write_shared_state().await;
 
@@ -469,7 +442,7 @@ impl GlobalTimelines {
             }
             Err(_) => {
                 // Timeline not in memory, but it may still exist on disk in broken state.
-                let dir_path = get_timeline_dir(self.state.lock().unwrap().conf.as_ref(), ttid);
+                let dir_path = get_timeline_dir(self.state.lock().unwrap().conf.as_ref(), branch_id);
                 let dir_existed = delete_dir(&dir_path).await?;
 
                 Ok(TimelineDeleteResult { dir_existed })
@@ -477,58 +450,9 @@ impl GlobalTimelines {
         };
 
         // Finalize deletion, by dropping Timeline objects and storing smaller tombstones.
-        self.state.lock().unwrap().delete(*ttid, None);
+        self.state.lock().unwrap().delete(*branch_id, None);
 
         result
-    }
-
-    /// Deactivates and deletes all timelines for the tenant. Returns map of all timelines which
-    /// the tenant had, `true` if a timeline was active. There may be a race if new timelines are
-    /// created simultaneously. In that case the function will return error and the caller should
-    /// retry tenant deletion again later.
-    ///
-    /// If only_local, doesn't remove WAL segments in remote storage.
-    pub async fn delete_all_for_tenant(
-        &self,
-        tenant_id: &TenantId,
-        action: DeleteOrExclude,
-    ) -> Result<HashMap<TenantTimelineId, TimelineDeleteResult>> {
-        info!("deleting all timelines for tenant {}", tenant_id);
-
-        // Adding a tombstone before getting the timelines to prevent new timeline additions
-        self.state.lock().unwrap().add_tenant_tombstone(*tenant_id);
-
-        let to_delete = self.get_all_for_tenant(*tenant_id);
-
-        let mut err = None;
-
-        let mut deleted = HashMap::new();
-        for tli in &to_delete {
-            match self.delete_or_exclude(&tli.ttid, action.clone()).await {
-                Ok(result) => {
-                    deleted.insert(tli.ttid, result);
-                }
-                Err(e) => {
-                    error!("failed to delete timeline {}: {}", tli.ttid, e);
-                    // Save error to return later.
-                    err = Some(e);
-                }
-            }
-        }
-
-        // If there was an error, return it.
-        if let Some(e) = err {
-            return Err(e);
-        }
-
-        // There may be broken timelines on disk, so delete the whole tenant dir as well.
-        // Note that we could concurrently create new timelines while we were deleting them,
-        // so the directory may be not empty. In this case timelines will have bad state
-        // and timeline background jobs can panic.
-        let tenant_dir = get_tenant_dir(self.state.lock().unwrap().conf.as_ref(), tenant_id);
-        delete_dir(&tenant_dir).await?;
-
-        Ok(deleted)
     }
 
     pub fn housekeeping(&self, tombstone_ttl: &Duration) {
@@ -544,13 +468,6 @@ impl GlobalTimelines {
             .is_some_and(|(_, v)| now.duration_since(v.timestamp) >= *tombstone_ttl)
         {
             state.timeline_tombstone = None;
-        }
-        if state
-            .tenant_tombstone
-            .as_ref()
-            .is_some_and(|(_, v)| now.duration_since(*v) >= *tombstone_ttl)
-        {
-            state.tenant_tombstone = None;
         }
     }
 
@@ -573,7 +490,7 @@ pub enum DeleteOrExclude {
 /// Utf8TempDir goes out of scope.
 pub async fn create_temp_timeline_dir(
     conf: &SafeKeeperConf,
-    ttid: TenantTimelineId,
+    branch_id: BranchId,
 ) -> Result<(Utf8TempDir, Utf8PathBuf)> {
     let temp_base = conf.workdir.join("tmp");
 
@@ -581,7 +498,7 @@ pub async fn create_temp_timeline_dir(
 
     let tli_dir = camino_tempfile::Builder::new()
         .suffix("_temptli")
-        .prefix(&format!("{}_{}_", ttid.tenant_id, ttid.timeline_id))
+        .prefix(&format!("{branch_id}_"))
         .tempdir_in(temp_base)?;
 
     let tli_dir_path = tli_dir.path().to_path_buf();
@@ -596,7 +513,7 @@ pub async fn create_temp_timeline_dir(
 #[allow(dead_code)]
 pub async fn validate_temp_timeline(
     _conf: &SafeKeeperConf,
-    ttid: TenantTimelineId,
+    branch_id: BranchId,
     _path: &Utf8PathBuf,
     generation: Option<SafekeeperGeneration>,
     yb_wal: Option<&Arc<YbWalConn>>,
@@ -605,7 +522,8 @@ pub async fn validate_temp_timeline(
         .cloned()
         .context("control-file validate requires yb_storage_conn")?;
     let control_store =
-        control_file::ControlFileStorage::restore_new(yb_wal.system_client.clone(), &ttid).await?;
+        control_file::ControlFileStorage::restore_new(yb_wal.system_client.clone(), &branch_id)
+            .await?;
     if control_store.server.wal_seg_size == 0 {
         bail!("wal_seg_size is not set");
     }

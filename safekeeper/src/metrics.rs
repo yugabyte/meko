@@ -15,7 +15,7 @@ use metrics::{
 };
 use once_cell::sync::Lazy;
 use postgres_ffi::XLogSegNo;
-use utils::id::TenantTimelineId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
 
@@ -514,7 +514,7 @@ pub async fn time_io_closure<E: Into<anyhow::Error>>(
 /// Metrics for a single timeline.
 #[derive(Clone)]
 pub struct FullTimelineInfo {
-    pub ttid: TenantTimelineId,
+    pub branch_id: BranchId,
     pub ps_feedback_count: u64,
     pub ps_corruption_detected: bool,
     pub last_ps_feedback: PageserverFeedback,
@@ -566,7 +566,7 @@ impl TimelineCollector {
                 "safekeeper_commit_lsn",
                 "Current commit_lsn (not necessarily persisted to disk), grouped by timeline",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(commit_lsn.desc().into_iter().cloned());
@@ -576,7 +576,7 @@ impl TimelineCollector {
                 "safekeeper_flush_lsn",
                 "Current flush_lsn, grouped by timeline",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(flush_lsn.desc().into_iter().cloned());
@@ -586,7 +586,7 @@ impl TimelineCollector {
                 "safekeeper_epoch_start_lsn",
                 "Point since which compute generates new WAL in the current consensus term",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(epoch_start_lsn.desc().into_iter().cloned());
@@ -596,7 +596,7 @@ impl TimelineCollector {
                 "safekeeper_remote_consistent_lsn",
                 "LSN which is persisted to the remote storage in pageserver",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(remote_consistent_lsn.desc().into_iter().cloned());
@@ -606,7 +606,7 @@ impl TimelineCollector {
                 "safekeeper_ps_last_received_lsn",
                 "Last LSN received by the pageserver, acknowledged in the feedback",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(ps_last_received_lsn.desc().into_iter().cloned());
@@ -616,7 +616,7 @@ impl TimelineCollector {
                 "safekeeper_feedback_last_time_seconds",
                 "Timestamp of the last feedback from the pageserver",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(feedback_last_time_seconds.desc().into_iter().cloned());
@@ -626,7 +626,7 @@ impl TimelineCollector {
                 "safekeeper_ps_feedback_count_total",
                 "Number of feedbacks received from the pageserver",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
 
@@ -635,7 +635,7 @@ impl TimelineCollector {
                 "safekeeper_ps_corruption_detected",
                 "1 if corruption was detected in the timeline according to feedback from the pageserver, 0 otherwise",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
 
@@ -644,7 +644,7 @@ impl TimelineCollector {
                 "safekeeper_timeline_active",
                 "Reports 1 for active timelines, 0 for inactive",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(timeline_active.desc().into_iter().cloned());
@@ -654,7 +654,7 @@ impl TimelineCollector {
                 "safekeeper_connected_computes",
                 "Number of active compute connections",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(connected_computes.desc().into_iter().cloned());
@@ -664,14 +664,14 @@ impl TimelineCollector {
                 "safekeeper_disk_usage_bytes",
                 "Estimated disk space used to store WAL segments",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(disk_usage.desc().into_iter().cloned());
 
         let acceptor_term = GenericGaugeVec::new(
             Opts::new("safekeeper_acceptor_term", "Current consensus term"),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(acceptor_term.desc().into_iter().cloned());
@@ -681,7 +681,7 @@ impl TimelineCollector {
                 "safekeeper_written_wal_bytes_total",
                 "Number of WAL bytes written to disk, grouped by timeline",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(written_wal_bytes.desc().into_iter().cloned());
@@ -691,7 +691,7 @@ impl TimelineCollector {
                 "safekeeper_written_wal_seconds_total",
                 "Total time spent in write(2) writing WAL to disk, grouped by timeline",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(written_wal_seconds.desc().into_iter().cloned());
@@ -701,7 +701,7 @@ impl TimelineCollector {
                 "safekeeper_flushed_wal_seconds_total",
                 "Total time spent in fsync(2) flushing WAL to disk, grouped by timeline",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(flushed_wal_seconds.desc().into_iter().cloned());
@@ -732,7 +732,7 @@ impl TimelineCollector {
                 "safekeeper_interpreted_wal_reader_tasks",
                 "Number of active interpreted wal reader tasks, grouped by timeline",
             ),
-            &["tenant_id", "timeline_id"],
+            &["branch_id"],
         )
         .unwrap();
         descs.extend(interpreted_wal_reader_tasks.desc().into_iter().cloned());
@@ -805,9 +805,8 @@ impl Collector for TimelineCollector {
         .expect("collect_timeline_metrics thread panicked");
 
         for tli in &infos {
-            let tenant_id = tli.ttid.tenant_id.to_string();
-            let timeline_id = tli.ttid.timeline_id.to_string();
-            let labels = &[tenant_id.as_str(), timeline_id.as_str()];
+            let branch_id = tli.branch_id.to_string();
+            let labels = &[branch_id.as_str()];
 
             if tli.timeline_is_active {
                 active_timelines_count += 1;

@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::serde_as;
 pub use utilization::PageserverUtilization;
 
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 use utils::{completion, serde_system_time};
 
@@ -53,7 +53,7 @@ use crate::key::{CompactKey, Key};
     strum_macros::IntoStaticStr,
 )]
 #[serde(tag = "slug", content = "data")]
-pub enum TenantState {
+pub enum BranchState {
     /// This tenant is being attached to the pageserver.
     ///
     /// `set_stopping()` and `set_broken()` do not work in this state and wait for it to pass.
@@ -80,10 +80,10 @@ pub enum TenantState {
         /// None is set when an attach is cancelled, to signal to shutdown that the attach has in
         /// fact cancelled:
         ///
-        /// 1. `shutdown` sees `TenantState::Attaching`, and cancels the tenant.
-        /// 2. `attach` sets `TenantState::Stopping(None)` and exits.
-        /// 3. `set_stopping` waits for `TenantState::Stopping(None)` and sets
-        ///    `TenantState::Stopping(Some)` to claim the barrier as the shutdown owner.
+        /// 1. `shutdown` sees `BranchState::Attaching`, and cancels the tenant.
+        /// 2. `attach` sets `BranchState::Stopping(None)` and exits.
+        /// 3. `set_stopping` waits for `BranchState::Stopping(None)` and sets
+        ///    `BranchState::Stopping(Some)` to claim the barrier as the shutdown owner.
         //
         // Because of https://github.com/serde-rs/serde/issues/2105 this has to be a named field,
         // otherwise it will not be skipped during deserialization
@@ -102,11 +102,11 @@ pub enum TenantState {
     Broken { reason: String, backtrace: String },
 }
 
-impl TenantState {
-    pub fn attachment_status(&self) -> TenantAttachmentStatus {
-        use TenantAttachmentStatus::*;
+impl BranchState {
+    pub fn attachment_status(&self) -> BranchAttachmentStatus {
+        use BranchAttachmentStatus::*;
 
-        // Below TenantState::Activating is used as "transient" or "transparent" state for
+        // Below BranchState::Activating is used as "transient" or "transparent" state for
         // attachment_status determining.
         match self {
             // The attach procedure writes the marker file before adding the Attaching tenant to the tenants map.
@@ -141,7 +141,7 @@ impl TenantState {
     }
 }
 
-impl std::fmt::Debug for TenantState {
+impl std::fmt::Debug for BranchState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Broken { reason, backtrace } if !reason.is_empty() => {
@@ -215,13 +215,13 @@ impl std::fmt::Display for DetachBehavior {
     }
 }
 
-/// The only [`TenantState`] variants we could be `TenantState::Activating` from.
+/// The only [`BranchState`] variants we could be `BranchState::Activating` from.
 ///
 /// XXX: We used to have more variants here, but now it's just one, which makes this rather
 /// useless. Remove, once we've checked that there's no client code left that looks at this.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ActivatingFrom {
-    /// Arrived to [`TenantState::Activating`] from [`TenantState::Attaching`]
+    /// Arrived to [`BranchState::Activating`] from [`BranchState::Attaching`]
     Attaching,
 }
 
@@ -308,7 +308,7 @@ pub struct CompactInfoResponse {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TimelineCreateRequest {
-    pub new_timeline_id: TimelineId,
+    pub new_branch_id: BranchId,
     #[serde(flatten)]
     pub mode: TimelineCreateRequestMode,
 }
@@ -328,19 +328,19 @@ impl TimelineCreateRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub enum ShardImportStatus {
-    InProgress(Option<ShardImportProgress>),
+pub enum BranchImportStatus {
+    InProgress(Option<BranchImportProgress>),
     Done,
     Error(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub enum ShardImportProgress {
-    V1(ShardImportProgressV1),
+pub enum BranchImportProgress {
+    V1(BranchImportProgressV1),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ShardImportProgressV1 {
+pub struct BranchImportProgressV1 {
     /// Total number of jobs in the import plan
     pub jobs: usize,
     /// Number of jobs completed
@@ -352,11 +352,11 @@ pub struct ShardImportProgressV1 {
     pub job_soft_size_limit: usize,
 }
 
-impl ShardImportStatus {
+impl BranchImportStatus {
     pub fn is_terminal(&self) -> bool {
         match self {
-            ShardImportStatus::InProgress(_) => false,
-            ShardImportStatus::Done | ShardImportStatus::Error(_) => true,
+            BranchImportStatus::InProgress(_) => false,
+            BranchImportStatus::Done | BranchImportStatus::Error(_) => true,
         }
     }
 }
@@ -374,8 +374,7 @@ pub struct TimelineCreateResponseStorcon {
 /// cplane in the post migration hook.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SafekeepersInfo {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub generation: u32,
     pub safekeepers: Vec<SafekeeperInfo>,
 }
@@ -390,7 +389,7 @@ pub struct SafekeeperInfo {
 #[serde(untagged)]
 pub enum TimelineCreateRequestMode {
     Branch {
-        ancestor_timeline_id: TimelineId,
+        ancestor_branch_id: BranchId,
         #[serde(default)]
         ancestor_start_lsn: Option<Lsn>,
         // TODO: cplane sets this, but, the branching code always
@@ -408,7 +407,7 @@ pub enum TimelineCreateRequestMode {
     // (serde picks the first matching enum variant, in declaration order).
     Bootstrap {
         #[serde(default)]
-        existing_initdb_timeline_id: Option<TimelineId>,
+        existing_initdb_branch_id: Option<BranchId>,
         pg_version: Option<PgMajorVersion>,
     },
 }
@@ -510,7 +509,7 @@ impl<T: Serialize> Serialize for FieldPatch<T> {
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Eq, PartialEq)]
 #[serde(default)]
-pub struct TenantConfigPatch {
+pub struct BranchConfigPatch {
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub gc_horizon: FieldPatch<u64>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
@@ -541,13 +540,13 @@ pub struct TenantConfigPatch {
     pub basebackup_cache_enabled: FieldPatch<bool>,
 }
 
-/// Like [`crate::config::TenantConfigToml`], but preserves the information
+/// Like [`crate::config::BranchConfigToml`], but preserves the information
 /// about which parameters are set and which are not.
 ///
 /// Used in many places, including durably stored ones.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)] // this maps omitted fields in deserialization to None
-pub struct TenantConfig {
+pub struct BranchConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gc_horizon: Option<u64>,
 
@@ -597,11 +596,11 @@ pub struct TenantConfig {
     pub basebackup_cache_enabled: Option<bool>,
 }
 
-impl TenantConfig {
+impl BranchConfig {
     pub fn apply_patch(
         self,
-        patch: TenantConfigPatch,
-    ) -> Result<TenantConfig, humantime::DurationError> {
+        patch: BranchConfigPatch,
+    ) -> Result<BranchConfig, humantime::DurationError> {
         let Self {
             mut gc_horizon,
             mut gc_period,
@@ -678,9 +677,9 @@ impl TenantConfig {
 
     pub fn merge(
         &self,
-        global_conf: crate::config::TenantConfigToml,
-    ) -> crate::config::TenantConfigToml {
-        crate::config::TenantConfigToml {
+        global_conf: crate::config::BranchConfigToml,
+    ) -> crate::config::BranchConfigToml {
+        crate::config::BranchConfigToml {
             gc_horizon: self.gc_horizon.unwrap_or(global_conf.gc_horizon),
             gc_period: self.gc_period.unwrap_or(global_conf.gc_period),
             pitr_interval: self.pitr_interval.unwrap_or(global_conf.pitr_interval),
@@ -911,7 +910,7 @@ pub struct LocationConfig {
 
 #[derive(Serialize, Deserialize)]
 pub struct LocationConfigListResponse {
-    pub tenants: Vec<(TenantId, Option<LocationConfig>)>,
+    pub branches: Vec<(BranchId, Option<LocationConfig>)>,
 }
 
 #[derive(Serialize)]
@@ -921,88 +920,88 @@ pub struct StatusResponse {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct TenantLocationConfigRequest {
+pub struct BranchLocationConfigRequest {
     #[serde(flatten)]
     pub config: LocationConfig, // as we have a flattened field, we should reject all unknown fields in it
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct TenantTimeTravelRequest {
+pub struct BranchTimeTravelRequest {
     pub shard_counts: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct TenantShardLocation {
-    pub shard_id: TenantId,
+pub struct BranchLocation {
+    pub branch_id: BranchId,
     pub node_id: NodeId,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct TenantLocationConfigResponse {
-    pub shards: Vec<TenantShardLocation>,
+pub struct BranchLocationConfigResponse {
+    pub shards: Vec<BranchLocation>,
     // Vestigial: yb-light is single-shard, so this is always None.
     pub stripe_size: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct TenantConfigRequest {
-    pub tenant_id: TenantId,
+pub struct BranchConfigRequest {
+    pub branch_id: BranchId,
     #[serde(flatten)]
-    pub config: TenantConfig, // as we have a flattened field, we should reject all unknown fields in it
+    pub config: BranchConfig, // as we have a flattened field, we should reject all unknown fields in it
 }
 
-impl std::ops::Deref for TenantConfigRequest {
-    type Target = TenantConfig;
+impl std::ops::Deref for BranchConfigRequest {
+    type Target = BranchConfig;
 
     fn deref(&self) -> &Self::Target {
         &self.config
     }
 }
 
-impl TenantConfigRequest {
-    pub fn new(tenant_id: TenantId) -> TenantConfigRequest {
-        let config = TenantConfig::default();
-        TenantConfigRequest { tenant_id, config }
+impl BranchConfigRequest {
+    pub fn new(branch_id: BranchId) -> BranchConfigRequest {
+        let config = BranchConfig::default();
+        BranchConfigRequest { branch_id, config }
     }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct TenantConfigPatchRequest {
-    pub tenant_id: TenantId,
+pub struct BranchConfigPatchRequest {
+    pub branch_id: BranchId,
     #[serde(flatten)]
-    pub config: TenantConfigPatch, // as we have a flattened field, we should reject all unknown fields in it
+    pub config: BranchConfigPatch, // as we have a flattened field, we should reject all unknown fields in it
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct TenantWaitLsnRequest {
+pub struct BranchWaitLsnRequest {
     #[serde(flatten)]
-    pub timelines: HashMap<TimelineId, Lsn>,
+    pub branches: HashMap<BranchId, Lsn>,
     pub timeout: Duration,
 }
 
-/// See [`TenantState::attachment_status`] and the OpenAPI docs for context.
+/// See [`BranchState::attachment_status`] and the OpenAPI docs for context.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "slug", content = "data", rename_all = "snake_case")]
-pub enum TenantAttachmentStatus {
+pub enum BranchAttachmentStatus {
     Maybe,
     Attached,
     Failed { reason: String },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct TenantInfo {
-    pub id: TenantId,
-    // NB: intentionally not part of OpenAPI, we don't want to commit to a specific set of TenantState's
-    pub state: TenantState,
+pub struct BranchInfo {
+    pub id: BranchId,
+    // NB: intentionally not part of OpenAPI, we don't want to commit to a specific set of BranchState's
+    pub state: BranchState,
     /// Sum of the size of all layer files.
     /// If a layer is present in both local FS and S3, it counts only once.
     pub current_physical_size: Option<u64>, // physical size is only included in `tenant_status` endpoint
-    pub attachment_status: TenantAttachmentStatus,
+    pub attachment_status: BranchAttachmentStatus,
     pub generation: u32,
 
     /// Opaque explanation if gc is being blocked.
@@ -1013,13 +1012,13 @@ pub struct TenantInfo {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct TenantDetails {
+pub struct BranchDetails {
     #[serde(flatten)]
-    pub tenant_info: TenantInfo,
+    pub tenant_info: BranchInfo,
 
     pub walredo: Option<WalRedoManagerStatus>,
 
-    pub timelines: Vec<TimelineId>,
+    pub branches: Vec<BranchId>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Debug)]
@@ -1058,10 +1057,9 @@ pub struct TimelinesInfoAndOffloaded {
 /// Analog of [`TimelineInfo`] for offloaded timelines.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OffloadedTimelineInfo {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     /// Whether the timeline has a parent it has been branched off from or not
-    pub ancestor_timeline_id: Option<TimelineId>,
+    pub ancestor_branch_id: Option<BranchId>,
     /// Whether to retain the branch lsn at the ancestor or not
     pub ancestor_retain_lsn: Option<Lsn>,
     /// The time point when the timeline was archived
@@ -1086,10 +1084,9 @@ pub enum RelSizeMigration {
 /// This represents the output of the "timeline_detail" and "timeline_list" API calls.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TimelineInfo {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
 
-    pub ancestor_timeline_id: Option<TimelineId>,
+    pub ancestor_branch_id: Option<BranchId>,
     pub ancestor_lsn: Option<Lsn>,
     pub last_record_lsn: Lsn,
     pub prev_record_lsn: Option<Lsn>,
@@ -1316,20 +1313,20 @@ pub struct SecondaryProgress {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct TenantScanRemoteStorageShard {
-    pub tenant_id: TenantId,
+pub struct BranchScanRemoteStorage {
+    pub branch_id: BranchId,
     pub generation: Option<u32>,
     pub stripe_size: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
-pub struct TenantScanRemoteStorageResponse {
-    pub shards: Vec<TenantScanRemoteStorageShard>,
+pub struct BranchScanRemoteStorageResponse {
+    pub shards: Vec<BranchScanRemoteStorage>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
-pub enum TenantSorting {
+pub enum BranchSorting {
     /// Total size of layers on local disk for all timelines in a shard.
     ResidentSize,
     /// The logical size of the largest timeline within a _tenant_ (not shard). Only tracked on
@@ -1340,16 +1337,16 @@ pub enum TenantSorting {
     MaxLogicalSizePerShard,
 }
 
-impl Default for TenantSorting {
+impl Default for BranchSorting {
     fn default() -> Self {
         Self::ResidentSize
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TopTenantShardsRequest {
+pub struct TopBranchesRequest {
     // How would you like to sort the tenants?
-    pub order_by: TenantSorting,
+    pub order_by: BranchSorting,
 
     // How many results?
     pub limit: usize,
@@ -1364,8 +1361,8 @@ pub struct TopTenantShardsRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-pub struct TopTenantShardItem {
-    pub id: TenantId,
+pub struct TopBranchItem {
+    pub id: BranchId,
 
     /// Total size of layers on local disk for all timelines in this shard.
     pub resident_size: u64,
@@ -1384,8 +1381,8 @@ pub struct TopTenantShardItem {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
-pub struct TopTenantShardsResponse {
-    pub shards: Vec<TopTenantShardItem>,
+pub struct TopBranchesResponse {
+    pub shards: Vec<TopBranchItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1394,11 +1391,11 @@ pub struct ScanDisposableKeysResponse {
     pub not_disposable_count: usize,
 }
 
-// This is a cut-down version of TenantHistorySize from the pageserver crate, omitting fields
+// This is a cut-down version of BranchHistorySize from the pageserver crate, omitting fields
 // that require pageserver-internal types.  It is sufficient to get the total size.
 #[derive(Serialize, Deserialize, Debug)]
-pub struct TenantHistorySize {
-    pub id: TenantId,
+pub struct BranchHistorySize {
+    pub id: BranchId,
     /// Size is a mixture of WAL and logical size, so the unit is bytes.
     ///
     /// Will be none if `?inputs_only=true` was given.
@@ -1432,12 +1429,12 @@ mod tests {
 
     #[test]
     fn test_tenantinfo_serde() {
-        // Test serialization/deserialization of TenantInfo
-        let original_active = TenantInfo {
-            id: TenantId::generate(),
-            state: TenantState::Active,
+        // Test serialization/deserialization of BranchInfo
+        let original_active = BranchInfo {
+            id: BranchId::generate(),
+            state: BranchState::Active,
             current_physical_size: Some(42),
-            attachment_status: TenantAttachmentStatus::Attached,
+            attachment_status: BranchAttachmentStatus::Attached,
             generation: 1,
             gc_blocking: None,
         };
@@ -1453,14 +1450,14 @@ mod tests {
             "generation" : 1
         });
 
-        let original_broken = TenantInfo {
-            id: TenantId::generate(),
-            state: TenantState::Broken {
+        let original_broken = BranchInfo {
+            id: BranchId::generate(),
+            state: BranchState::Broken {
                 reason: "reason".into(),
                 backtrace: "backtrace info".into(),
             },
             current_physical_size: Some(42),
-            attachment_status: TenantAttachmentStatus::Attached,
+            attachment_status: BranchAttachmentStatus::Attached,
             generation: 1,
             gc_blocking: None,
         };
@@ -1495,12 +1492,12 @@ mod tests {
 
     #[test]
     fn test_reject_unknown_field() {
-        let id = TenantId::generate();
+        let id = BranchId::generate();
         let config_request = json!({
-            "tenant_id": id.to_string(),
+            "branch_id": id.to_string(),
             "unknown_field": "unknown_value".to_string(),
         });
-        let err = serde_json::from_value::<TenantConfigRequest>(config_request).unwrap_err();
+        let err = serde_json::from_value::<BranchConfigRequest>(config_request).unwrap_err();
         assert!(
             err.to_string().contains("unknown field `unknown_field`"),
             "expect unknown field `unknown_field` error, got: {err}"
@@ -1509,14 +1506,14 @@ mod tests {
 
     #[test]
     fn tenantstatus_activating_serde() {
-        let states = [TenantState::Activating(ActivatingFrom::Attaching)];
+        let states = [BranchState::Activating(ActivatingFrom::Attaching)];
         let expected = "[{\"slug\":\"Activating\",\"data\":\"Attaching\"}]";
 
         let actual = serde_json::to_string(&states).unwrap();
 
         assert_eq!(actual, expected);
 
-        let parsed = serde_json::from_str::<Vec<TenantState>>(&actual).unwrap();
+        let parsed = serde_json::from_str::<Vec<BranchState>>(&actual).unwrap();
 
         assert_eq!(states.as_slice(), &parsed);
     }
@@ -1525,28 +1522,28 @@ mod tests {
     fn tenantstatus_activating_strum() {
         // tests added, because we use these for metrics
         let examples = [
-            (line!(), TenantState::Attaching, "Attaching"),
+            (line!(), BranchState::Attaching, "Attaching"),
             (
                 line!(),
-                TenantState::Activating(ActivatingFrom::Attaching),
+                BranchState::Activating(ActivatingFrom::Attaching),
                 "Activating",
             ),
-            (line!(), TenantState::Active, "Active"),
+            (line!(), BranchState::Active, "Active"),
             (
                 line!(),
-                TenantState::Stopping { progress: None },
+                BranchState::Stopping { progress: None },
                 "Stopping",
             ),
             (
                 line!(),
-                TenantState::Stopping {
+                BranchState::Stopping {
                     progress: Some(completion::Barrier::default()),
                 },
                 "Stopping",
             ),
             (
                 line!(),
-                TenantState::Broken {
+                BranchState::Broken {
                     reason: "Example".into(),
                     backtrace: "Looooong backtrace".into(),
                 },
@@ -1595,34 +1592,34 @@ mod tests {
 
     #[test]
     fn test_tenant_config_patch_request_serde() {
-        let patch_request = TenantConfigPatchRequest {
-            tenant_id: TenantId::from_str("17c6d121946a61e5ab0fe5a2fd4d8215").unwrap(),
-            config: TenantConfigPatch {
+        let patch_request = BranchConfigPatchRequest {
+            branch_id: BranchId::from_str("17c6d121946a61e5ab0fe5a2fd4d8215").unwrap(),
+            config: BranchConfigPatch {
                 gc_horizon: FieldPatch::Remove,
                 pitr_interval: FieldPatch::Upsert("30 days".to_string()),
                 rel_size_v2_enabled: FieldPatch::Noop,
-                ..TenantConfigPatch::default()
+                ..BranchConfigPatch::default()
             },
         };
 
         let json = serde_json::to_string(&patch_request).unwrap();
 
-        let expected = r#"{"tenant_id":"17c6d121946a61e5ab0fe5a2fd4d8215","gc_horizon":null,"pitr_interval":"30 days"}"#;
+        let expected = r#"{"branch_id":"17c6d121946a61e5ab0fe5a2fd4d8215","gc_horizon":null,"pitr_interval":"30 days"}"#;
         assert_eq!(json, expected);
 
-        let decoded: TenantConfigPatchRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded.tenant_id, patch_request.tenant_id);
+        let decoded: BranchConfigPatchRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.branch_id, patch_request.branch_id);
         assert_eq!(decoded.config, patch_request.config);
 
         // Now apply the patch to a config to demonstrate semantics
-        let base = TenantConfig {
+        let base = BranchConfig {
             gc_horizon: Some(100),
             pitr_interval: Some(Duration::from_secs(7 * 24 * 3600)),
             rel_size_v2_enabled: Some(true),
             ..Default::default()
         };
 
-        let expected = TenantConfig {
+        let expected = BranchConfig {
             gc_horizon: None,
             pitr_interval: Some(Duration::from_secs(30 * 24 * 3600)),
             rel_size_v2_enabled: Some(true),

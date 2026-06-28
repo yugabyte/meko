@@ -1,5 +1,5 @@
 //! The shared-cluster fixture. Owns the suite lifecycle: ephemeral-db
-//! setup, `init`/`start`, one shared tenant + `main` endpoint, the
+//! setup, `init`/`start`, one shared `main` branch + endpoint, the
 //! per-scenario cluster recycle, the corruption-marker log gate, and a
 //! teardown that runs `clean.sh` but keeps the run's `*.log` files
 //! (`--no-fail-clean` instead leaves a failed cluster up for postmortem).
@@ -93,8 +93,8 @@ pub struct Cluster {
     port_base: u16,
     /// Compute port of the shared `main` endpoint.
     compute_port: u16,
-    /// The shared tenant id, set by [`Cluster::setup`].
-    tid: String,
+    /// The shared `main` branch id, set by [`Cluster::setup`].
+    branch: String,
     /// Regex form of [`MARKERS`].
     markers: Regex,
     /// Regex form of [`FATAL_MARKERS`] (polled across all cluster logs
@@ -111,8 +111,12 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    pub fn tid(&self) -> &str {
-        &self.tid
+    /// The shared `main` branch id (as a hex string). This is the single
+    /// flat-model identifier the former `(tenant_id, timeline_id)` pair
+    /// collapsed to: it keys the branch's rows in every YB table and
+    /// addresses it in CLI / HTTP / wire calls.
+    pub fn branch(&self) -> &str {
+        &self.branch
     }
     pub fn compute_port(&self) -> u16 {
         self.compute_port
@@ -135,11 +139,11 @@ impl Cluster {
     pub fn sk_pg_port(&self) -> u16 {
         self.port_base + 100
     }
-    /// The (single) timeline id under the shared tenant, as a hex string.
-    /// Public wrapper over the PS timeline listing for scenarios that need
-    /// to address the timeline directly (e.g. the gRPC page client).
-    pub async fn timeline_id(&self) -> anyhow::Result<String> {
-        self.main_timeline_id().await
+    /// The branch id of the shared `main` branch, as a hex string.
+    /// Public wrapper over the PS branch listing for scenarios that need
+    /// to address the branch directly (e.g. the gRPC page client).
+    pub async fn branch_id(&self) -> anyhow::Result<String> {
+        self.main_branch_id().await
     }
     pub fn repo_dir(&self) -> &Path {
         &self.repo_dir
@@ -232,7 +236,7 @@ impl Cluster {
             yb_port,
             port_base: 0,
             compute_port: 0,
-            tid: String::new(),
+            branch: String::new(),
             markers: Regex::new(MARKERS).expect("static marker regex"),
             fatal_markers: Regex::new(FATAL_MARKERS).expect("static fatal-marker regex"),
             success: false,
@@ -251,7 +255,7 @@ impl Cluster {
             tried.push(port_base);
             cluster.port_base = port_base;
             cluster.compute_port = port_base + COMPUTE_LANE;
-            cluster.tid = String::new();
+            cluster.branch = String::new();
             match cluster.bring_up() {
                 Ok(()) => return Ok(cluster),
                 Err(e) => {
@@ -294,20 +298,20 @@ impl Cluster {
         ])?;
         self.yb(&["start"])?;
 
-        step("tenant + endpoint");
-        let tid = self.tenant_create()?;
-        if tid.is_empty() {
-            bail!("tenant create failed");
+        step("branch + endpoint");
+        let branch = self.branch_create()?;
+        if branch.is_empty() {
+            bail!("branch create failed");
         }
-        tee_println!("tenant: {tid}");
-        self.tid = tid;
+        tee_println!("branch: {branch}");
+        self.branch = branch;
 
         // Pin `main` to `compute_port` (the compute lane, base +
         // COMPUTE_LANE) so the harness knows where to connect.
-        let tid = self.tid.clone();
+        let branch = self.branch.clone();
         let pg_port = self.compute_port.to_string();
         self.yb(&[
-            "endpoint", "create", "main", "--tenant-id", &tid, "--branch-name", "main",
+            "endpoint", "create", "main", "--branch-id", &branch, "--branch-name", "main",
             "--pg-version", "17", "--pg-port", &pg_port,
         ])?;
         self.yb(&["endpoint", "start", "main"])?;
@@ -384,26 +388,26 @@ impl Cluster {
         }
     }
 
-    /// `tenant create --pg-version 17`, parsing the tenant id out of the
-    /// "tenant <id> successfully created" stdout line.
-    pub fn tenant_create(&self) -> anyhow::Result<String> {
+    /// `branch create --pg-version 17`, parsing the branch id out of the
+    /// "branch <id> successfully created" stdout line.
+    pub fn branch_create(&self) -> anyhow::Result<String> {
         let out = self
             .yb_command()
-            .args(["tenant", "create", "--pg-version", "17"])
+            .args(["branch", "create", "--pg-version", "17"])
             .output()
-            .context("spawning yb_light_local tenant create")?;
+            .context("spawning yb_light_local branch create")?;
         let text = format!(
             "{}{}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
-        let tid = text
+        let branch = text
             .lines()
             .find(|l| l.contains("successfully created"))
             .and_then(|l| l.split_whitespace().nth(1))
             .unwrap_or("")
             .to_string();
-        Ok(tid)
+        Ok(branch)
     }
 
     /// Run a diagnostic tool binary (built next to `yb_light_local` in
@@ -608,21 +612,21 @@ impl Cluster {
             .status();
     }
 
-    /// Discover the (single) timeline id under the shared tenant from
-    /// the pageserver's timeline listing.
-    async fn main_timeline_id(&self) -> anyhow::Result<String> {
+    /// Discover the branch id of the shared `main` branch from the
+    /// pageserver's branch listing.
+    async fn main_branch_id(&self) -> anyhow::Result<String> {
         let url = format!(
-            "http://127.0.0.1:{}/v1/tenant/{}/timeline",
+            "http://127.0.0.1:{}/v1/branch/{}/timeline",
             self.ps_http_port(),
-            self.tid
+            self.branch
         );
         let body: serde_json::Value = reqwest::get(&url).await?.json().await?;
         body.as_array()
             .and_then(|a| a.first())
-            .and_then(|t| t.get("timeline_id"))
+            .and_then(|t| t.get("branch_id"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("no timeline in pageserver listing for tenant {}", self.tid))
+            .ok_or_else(|| anyhow::anyhow!("no branch in pageserver listing for branch {}", self.branch))
     }
 
     /// Before recycling, drive the pageserver to ingest + flush every WAL
@@ -660,13 +664,12 @@ impl Cluster {
             "select pg_current_wal_flush_lsn()::text",
         )
         .await?;
-        let timeline = self.main_timeline_id().await?;
+        let branch = self.main_branch_id().await?;
         // `flush?lsn=<tip>` waits for WAL ingest to reach `tip`, then
         // force_flushes — advancing `consistent_lsn` to the tip.
         let url = format!(
-            "http://127.0.0.1:{}/v1/tenant/{}/timeline/{timeline}/flush?lsn={tip}",
+            "http://127.0.0.1:{}/v1/branch/{branch}/flush?lsn={tip}",
             self.ps_http_port(),
-            self.tid
         );
         let t0 = Instant::now();
         let resp = reqwest::Client::new().put(&url).send().await?;

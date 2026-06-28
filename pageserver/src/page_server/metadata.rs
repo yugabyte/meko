@@ -21,7 +21,7 @@ use anyhow::ensure;
 use postgres_ffi::PgMajorVersion;
 use serde::{Deserialize, Serialize};
 use utils::bin_ser::{BeSer, SerializeError};
-use utils::id::TimelineId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 /// Use special format number to enable backward compatibility.
@@ -130,7 +130,7 @@ struct TimelineMetadataBodyV2 {
     // doing a clean shutdown, so that there is no more WAL beyond
     // 'disk_consistent_lsn'
     prev_record_lsn: Option<Lsn>,
-    ancestor_timeline: Option<TimelineId>,
+    ancestor_timeline: Option<BranchId>,
     ancestor_lsn: Lsn,
 
     // The LSN at which GC was last executed.  Synonym of [`Timeline::applied_gc_cutoff_lsn`].
@@ -154,7 +154,7 @@ struct TimelineMetadataBodyV1 {
     // doing a clean shutdown, so that there is no more WAL beyond
     // 'disk_consistent_lsn'
     prev_record_lsn: Option<Lsn>,
-    ancestor_timeline: Option<TimelineId>,
+    ancestor_timeline: Option<BranchId>,
     ancestor_lsn: Lsn,
     latest_gc_cutoff_lsn: Lsn,
     initdb_lsn: Lsn,
@@ -164,7 +164,7 @@ impl TimelineMetadata {
     pub fn new(
         disk_consistent_lsn: Lsn,
         prev_record_lsn: Option<Lsn>,
-        ancestor_timeline: Option<TimelineId>,
+        ancestor_timeline: Option<BranchId>,
         ancestor_lsn: Lsn,
         latest_gc_cutoff_lsn: Lsn,
         initdb_lsn: Lsn,
@@ -276,7 +276,7 @@ impl TimelineMetadata {
         self.body.prev_record_lsn
     }
 
-    pub fn ancestor_timeline(&self) -> Option<TimelineId> {
+    pub fn ancestor_timeline(&self) -> Option<BranchId> {
         self.body.ancestor_timeline
     }
 
@@ -287,14 +287,14 @@ impl TimelineMetadata {
     /// When reparenting, the `ancestor_lsn` does not change.
     ///
     /// Returns true if anything was changed.
-    pub fn reparent(&mut self, timeline: &TimelineId) {
+    pub fn reparent(&mut self, timeline: &BranchId) {
         assert!(self.body.ancestor_timeline.is_some());
         // no assertion for redoing this: it's fine, we may have to repeat this multiple times over
         self.body.ancestor_timeline = Some(*timeline);
     }
 
     /// Returns true if anything was changed
-    pub fn detach_from_ancestor(&mut self, branchpoint: &(TimelineId, Lsn)) {
+    pub fn detach_from_ancestor(&mut self, branchpoint: &(BranchId, Lsn)) {
         // Detaching from ancestor now doesn't always detach directly to the direct ancestor, but we
         // ensure the LSN is the same. So we don't check the timeline ID.
         if self.body.ancestor_lsn != Lsn(0) {
@@ -330,10 +330,10 @@ pub struct Lineage {
     #[serde(skip_serializing_if = "is_false", default)]
     reparenting_history_truncated: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    reparenting_history: Vec<utils::id::TimelineId>,
+    reparenting_history: Vec<utils::id::BranchId>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     original_ancestor: Option<(
-        utils::id::TimelineId,
+        utils::id::BranchId,
         utils::lsn::Lsn,
         chrono::NaiveDateTime,
     )>,

@@ -78,7 +78,7 @@ use sha2::{Digest, Sha256};
 use spki::der::Decode;
 use spki::{SubjectPublicKeyInfo, SubjectPublicKeyInfoRef};
 use tracing::debug;
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 
 use pageserver_api::config::DEFAULT_GRPC_LISTEN_PORT as DEFAULT_PAGESERVER_GRPC_PORT;
 use pageserver_api::controller_api::ComputeEndpoint;
@@ -95,8 +95,7 @@ use crate::storage_controller::StorageController;
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 pub struct EndpointConf {
     endpoint_id: String,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     mode: ComputeMode,
     pg_port: u16,
     external_http_port: u16,
@@ -216,8 +215,7 @@ impl ComputeControlPlane {
     pub async fn new_endpoint(
         &mut self,
         endpoint_id: &str,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         pg_port: Option<u16>,
         external_http_port: Option<u16>,
         internal_http_port: Option<u16>,
@@ -242,8 +240,7 @@ impl ComputeControlPlane {
         };
         let conf = EndpointConf {
             endpoint_id: endpoint_id.to_string(),
-            tenant_id,
-            timeline_id,
+            branch_id,
             mode,
             external_http_port,
             internal_http_port,
@@ -274,8 +271,7 @@ impl ComputeControlPlane {
         StorageController::from_env(&self.env)
             .endpoint_create(ComputeEndpoint {
                 endpoint_id: endpoint_id.to_string(),
-                tenant_id: tenant_id.to_string(),
-                timeline_id: timeline_id.to_string(),
+                branch_id: branch_id.to_string(),
                 spec,
             })
             .await
@@ -291,23 +287,21 @@ impl ComputeControlPlane {
     pub fn check_conflicting_endpoints(
         &self,
         mode: ComputeMode,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<()> {
         if matches!(mode, ComputeMode::Primary) {
             // this check is not complete, as you could have a concurrent attempt at
             // creating another primary, both reading the state before checking it here,
             // but it's better than nothing.
             let mut duplicates = self.endpoints.iter().filter(|(_k, v)| {
-                v.tenant_id == tenant_id
-                    && v.timeline_id == timeline_id
+                v.branch_id == branch_id
                     && v.mode == mode
                     && v.status() != EndpointStatus::Stopped
             });
 
             if let Some((key, _)) = duplicates.next() {
                 bail!(
-                    "attempting to create a duplicate primary endpoint on tenant {tenant_id}, timeline {timeline_id}: endpoint {key:?} exists already. please don't do this, it is not supported."
+                    "attempting to create a duplicate primary endpoint on branch {branch_id}: endpoint {key:?} exists already. please don't do this, it is not supported."
                 );
             }
         }
@@ -320,8 +314,7 @@ impl ComputeControlPlane {
 pub struct Endpoint {
     /// used as the directory name
     endpoint_id: String,
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub mode: ComputeMode,
     /// If true, the endpoint should use gRPC to communicate with Pageservers.
     pub grpc: bool,
@@ -446,9 +439,8 @@ impl Endpoint {
             ),
             endpoint_id: conf.endpoint_id,
             env: env.clone(),
-            timeline_id: conf.timeline_id,
+            branch_id: conf.branch_id,
             mode: conf.mode,
-            tenant_id: conf.tenant_id,
             pg_version: conf.pg_version,
             grpc: conf.grpc,
             skip_pg_catalog_updates: conf.skip_pg_catalog_updates,
@@ -601,14 +593,13 @@ impl Endpoint {
                 let sk_hosts = vec!["localhost"; self.env.safekeepers.len()].join(",");
 
                 let connstr = format!(
-                    "host={} port={} options='-c timeline_id={} tenant_id={}' application_name=replica replication=true",
+                    "host={} port={} options='-c branch_id={}' application_name=replica replication=true",
                     sk_hosts,
                     sk_ports,
-                    &self.timeline_id.to_string(),
-                    &self.tenant_id.to_string(),
+                    &self.branch_id.to_string(),
                 );
 
-                let slot_name = format!("repl_{}_", self.timeline_id);
+                let slot_name = format!("repl_{}_", self.branch_id);
                 conf.append("primary_conninfo", connstr.as_str());
                 conf.append("primary_slot_name", slot_name.as_str());
                 conf.append("hot_standby", "on");
@@ -832,9 +823,10 @@ impl Endpoint {
                     postgresql_conf: Some(postgresql_conf.clone()),
                 },
                 delta_operations: None,
-                tenant_id: Some(self.tenant_id),
-                timeline_id: Some(self.timeline_id),
+                storage_branch_id: Some(self.branch_id),
                 project_id: None,
+                // The product/control-plane branch UUID is wired up by a
+                // follow-up; the storage-layer id lives in `storage_branch_id`.
                 branch_id: None,
                 endpoint_id: Some(self.endpoint_id.clone()),
                 mode: self.mode,

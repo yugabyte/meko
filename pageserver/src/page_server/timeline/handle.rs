@@ -2,7 +2,7 @@
 //!
 //! # Motivation
 //!
-//! On a single page service connection, we're serving a single TenantTimelineId.
+//! On a single page service connection, we're serving a single BranchId.
 //!
 //! There is a single Timeline object to which we dispatch all requests. For
 //! example, a getpage request gets dispatched to the Timeline::get method of
@@ -29,7 +29,7 @@
 //! There are two concepts expressed as associated types in the `Types` trait:
 //! - `TenantManager`: the thing that performs the expensive work. It produces
 //!   a `Timeline` object, which is the other associated type.
-//! - `Timeline`: the item that we cache for fast TimelineId lookup.
+//! - `Timeline`: the item that we cache for fast BranchId lookup.
 //!
 //! There are three user-facing data structures exposed by this module:
 //! - `PerTimelineState`: a struct embedded into each Timeline struct. Lifetime == Timeline lifetime.
@@ -51,7 +51,7 @@
 //! - The `Handle` is a strong ref.
 //! - The `WeakHandle` is a weak ref.
 //! - The `PerTimelineState` contains a `HashMap<CacheId, strong ref>`.
-//! - The `Cache` is a `HashMap<TimelineId, weak ref>`.
+//! - The `Cache` is a `HashMap<BranchId, weak ref>`.
 //!
 //! Lifetimes:
 //! - `WeakHandle` and `Handle`: single pagestream request.
@@ -176,9 +176,9 @@
 //!
 //! # Cache lookup
 //!
-//! The `Cache` maintains a hash map of `TimelineId` to `WeakHandle`s, so a
+//! The `Cache` maintains a hash map of `BranchId` to `WeakHandle`s, so a
 //! repeat request for a timeline served on this connection avoids calling
-//! into the tenant manager. It looks up the requested `TimelineId`; if the
+//! into the tenant manager. It looks up the requested `BranchId`; if the
 //! `WeakHandle` is present and can be upgraded, it's a hit.
 //!
 //! ## Cache invalidation
@@ -197,7 +197,7 @@ use std::sync::Mutex;
 use std::sync::Weak;
 
 use tracing::{instrument, trace};
-use utils::id::TimelineId;
+use utils::id::BranchId;
 
 use crate::page_service::GetActiveTimelineError;
 use crate::page_server::GetTimelineError;
@@ -230,7 +230,7 @@ pub(crate) struct Cache<T: Types> {
     map: Map<T>,
 }
 
-type Map<T> = HashMap<TimelineId, WeakHandle<T>>;
+type Map<T> = HashMap<BranchId, WeakHandle<T>>;
 
 impl<T: Types> Default for Cache<T> {
     fn default() -> Self {
@@ -274,16 +274,16 @@ impl<T: Types> Default for PerTimelineState<T> {
 
 /// Abstract view of [`crate::page_server::mgr`], for testability.
 pub(crate) trait TenantManager<T: Types> {
-    /// Invoked by [`Cache::get`] to resolve a [`TimelineId`] to a [`Types::Timeline`].
+    /// Invoked by [`Cache::get`] to resolve a [`BranchId`] to a [`Types::Timeline`].
     async fn resolve(
         &self,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<T::Timeline, GetActiveTimelineError>;
 }
 
 /// Abstract view of an [`Arc<Timeline>`], for testability.
 pub(crate) trait Timeline<T: Types> {
-    fn timeline_id(&self) -> TimelineId;
+    fn branch_id(&self) -> BranchId;
     fn per_timeline_state(&self) -> &PerTimelineState<T>;
 }
 
@@ -294,10 +294,10 @@ impl<T: Types> Cache<T> {
     #[instrument(level = "trace", skip_all)]
     pub(crate) async fn get(
         &mut self,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         tenant_manager: &T::TenantManager,
     ) -> Result<Handle<T>, GetActiveTimelineError> {
-        self.do_get(timeline_id, tenant_manager).await
+        self.do_get(branch_id, tenant_manager).await
     }
 
     /// See module-level comment for details.
@@ -310,30 +310,30 @@ impl<T: Types> Cache<T> {
     #[instrument(level = "trace", skip_all)]
     async fn do_get(
         &mut self,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         tenant_manager: &T::TenantManager,
     ) -> Result<Handle<T>, GetActiveTimelineError> {
-        if let Some(cached) = self.map.get(&timeline_id) {
+        if let Some(cached) = self.map.get(&branch_id) {
             match cached.upgrade() {
                 Ok(upgraded) => return Ok(upgraded),
                 Err(HandleUpgradeError::ShutDown) => {
                     trace!("handle cache stale");
-                    self.map.remove(&timeline_id);
+                    self.map.remove(&branch_id);
                 }
             }
         }
-        self.get_miss(timeline_id, tenant_manager).await
+        self.get_miss(branch_id, tenant_manager).await
     }
 
     #[instrument(level = "trace", skip_all)]
     #[inline(always)]
     async fn get_miss(
         &mut self,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         tenant_manager: &T::TenantManager,
     ) -> Result<Handle<T>, GetActiveTimelineError> {
-        let timeline = tenant_manager.resolve(timeline_id).await?;
-        let key = timeline.timeline_id();
+        let timeline = tenant_manager.resolve(branch_id).await?;
+        let key = timeline.branch_id();
 
         trace!("creating new HandleInner");
         let timeline = Arc::new(timeline);

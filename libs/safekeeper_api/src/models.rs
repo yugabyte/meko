@@ -6,7 +6,7 @@ use postgres_ffi_types::TimestampTz;
 use postgres_versioninfo::PgVersionId;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
-use utils::id::{NodeId, TenantId, TenantTimelineId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
 
@@ -20,8 +20,7 @@ pub struct SafekeeperStatus {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TimelineCreateRequest {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub mconf: Configuration,
     pub pg_version: PgVersionId,
     pub system_id: Option<u64>,
@@ -158,7 +157,7 @@ pub enum WalSenderState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterpretedWalSenderState {
-    pub ttid: TenantTimelineId,
+    pub branch_id: BranchId,
     pub addr: SocketAddr,
     pub conn_id: ConnectionId,
     // postgres application_name
@@ -184,8 +183,7 @@ pub enum WalReceiverStatus {
 /// Info about timeline on safekeeper ready for reporting.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TimelineStatus {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub mconf: Configuration,
     pub acceptor_state: AcceptorStateStatus,
     pub pg_info: ServerInfo,

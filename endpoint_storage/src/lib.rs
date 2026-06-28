@@ -15,7 +15,7 @@ use std::result::Result as StdResult;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
-use utils::id::{EndpointId, TenantId, TimelineId};
+use utils::id::{BranchId, EndpointId};
 
 // simplified version of utils::auth::JwtAuth
 pub struct JwtAuth {
@@ -83,16 +83,14 @@ pub struct Storage {
 
 #[derive(Deserialize, Serialize)]
 struct KeyRequest {
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
     endpoint_id: EndpointId,
     path: String,
 }
 
 #[derive(Deserialize, Serialize, PartialEq)]
 struct PrefixKeyRequest {
-    tenant_id: TenantId,
-    timeline_id: Option<TimelineId>,
+    branch_id: BranchId,
     endpoint_id: Option<EndpointId>,
 }
 
@@ -105,12 +103,11 @@ impl TryFrom<&KeyRequest> for S3Path {
     type Error = String;
     fn try_from(req: &KeyRequest) -> StdResult<Self, Self::Error> {
         let KeyRequest {
-            tenant_id,
-            timeline_id,
+            branch_id,
             endpoint_id,
             path,
         } = &req;
-        let prefix = format!("{tenant_id}/{timeline_id}/{endpoint_id}",);
+        let prefix = format!("{branch_id}/{endpoint_id}",);
         let path = Utf8PathBuf::from(prefix).join(normalize_key(path)?);
         let path = RemotePath::new(&path).unwrap(); // unwrap() because the path is already relative
         Ok(S3Path { path })
@@ -168,8 +165,7 @@ impl FromRequestParts<Arc<Storage>> for S3Path {
         };
 
         let route = EndpointStorageClaims {
-            tenant_id: path.tenant_id,
-            timeline_id: path.timeline_id,
+            branch_id: path.branch_id,
             endpoint_id,
             exp: claims.exp,
         };
@@ -189,19 +185,12 @@ pub struct PrefixS3Path {
 
 impl From<&DeletePrefixClaims> for PrefixS3Path {
     fn from(path: &DeletePrefixClaims) -> Self {
-        let timeline_id = path
-            .timeline_id
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or("".to_string());
         let endpoint_id = path
             .endpoint_id
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or("".to_string());
-        let path = Utf8PathBuf::from(path.tenant_id.to_string())
-            .join(timeline_id)
-            .join(endpoint_id);
+        let path = Utf8PathBuf::from(path.branch_id.to_string()).join(endpoint_id);
         let path = RemotePath::new(&path).unwrap(); // unwrap() because the path is already relative
         PrefixS3Path { path }
     }
@@ -226,8 +215,7 @@ impl FromRequestParts<Arc<Storage>> for PrefixS3Path {
             .decode(bearer.token())
             .map_err(|e| bad_request(e, "invalid token"))?;
         let route = DeletePrefixClaims {
-            tenant_id: path.tenant_id,
-            timeline_id: path.timeline_id,
+            branch_id: path.branch_id,
             endpoint_id: path.endpoint_id,
             exp: claims.exp,
         };
@@ -259,22 +247,19 @@ mod tests {
         assert!(f("/1/2/3/../../../../").is_err());
     }
 
-    const TENANT_ID: TenantId =
-        TenantId::from_array([1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 6]);
-    const TIMELINE_ID: TimelineId =
-        TimelineId::from_array([1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 7]);
+    const BRANCH_ID: BranchId =
+        BranchId::from_array([1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 7]);
     const ENDPOINT_ID: &str = "ep-winter-frost-a662z3vg";
 
     #[test]
     fn s3_path() {
         let auth = EndpointStorageClaims {
-            tenant_id: TENANT_ID,
-            timeline_id: TIMELINE_ID,
+            branch_id: BRANCH_ID,
             endpoint_id: ENDPOINT_ID.into(),
             exp: u64::MAX,
         };
         let s3_path = |key| {
-            let path = &format!("{TENANT_ID}/{TIMELINE_ID}/{ENDPOINT_ID}/{key}");
+            let path = &format!("{BRANCH_ID}/{ENDPOINT_ID}/{key}");
             let path = RemotePath::from_string(path).unwrap();
             S3Path { path }
         };
@@ -282,8 +267,7 @@ mod tests {
         let path = "cache_key".to_string();
         let mut key_path = KeyRequest {
             path,
-            tenant_id: auth.tenant_id,
-            timeline_id: auth.timeline_id,
+            branch_id: auth.branch_id,
             endpoint_id: auth.endpoint_id,
         };
         assert_eq!(S3Path::try_from(&key_path).unwrap(), s3_path(key_path.path));
@@ -298,27 +282,20 @@ mod tests {
     #[test]
     fn prefix_s3_path() {
         let mut path = DeletePrefixClaims {
-            tenant_id: TENANT_ID,
-            timeline_id: None,
+            branch_id: BRANCH_ID,
             endpoint_id: None,
             exp: 0,
         };
         let prefix_path = |s: String| RemotePath::from_string(&s).unwrap();
         assert_eq!(
             PrefixS3Path::from(&path).path,
-            prefix_path(format!("{TENANT_ID}"))
-        );
-
-        path.timeline_id = Some(TIMELINE_ID);
-        assert_eq!(
-            PrefixS3Path::from(&path).path,
-            prefix_path(format!("{TENANT_ID}/{TIMELINE_ID}"))
+            prefix_path(format!("{BRANCH_ID}"))
         );
 
         path.endpoint_id = Some(ENDPOINT_ID.into());
         assert_eq!(
             PrefixS3Path::from(&path).path,
-            prefix_path(format!("{TENANT_ID}/{TIMELINE_ID}/{ENDPOINT_ID}"))
+            prefix_path(format!("{BRANCH_ID}/{ENDPOINT_ID}"))
         );
     }
 }

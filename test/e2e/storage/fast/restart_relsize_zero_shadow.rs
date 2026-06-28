@@ -23,7 +23,7 @@ use crate::db;
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
-    let tid = c.tid();
+    let branch = c.branch();
     // The PS log accumulates across iterations of this scenario (the
     // in-scenario restart does not truncate it); remember where it
     // starts so the marker scan below only judges this iteration.
@@ -94,7 +94,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     step("Assert: no all-zero image above a block's first row (yb_storage)");
-    // Tenant-wide, not just the test table: index/toast/catalog blocks
+    // Branch-wide, not just the test table: index/toast/catalog blocks
     // corrupt the same way (the first repro of bug B was on the pkey
     // index block while a table-scoped assertion passed).
     //
@@ -105,11 +105,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         &yb,
         &format!(
             "SELECT count(*) FROM pageserver.pages p
-             WHERE p.tenant_id = '{tid}' AND p.is_image
+             WHERE p.branch_id = '{branch}' AND p.is_image
                AND p.payload = decode(repeat('00', 8192), 'hex')
                AND p.lsn > (SELECT min(q.lsn) FROM pageserver.pages q
-                            WHERE q.tenant_id = p.tenant_id
-                              AND q.timeline_id = p.timeline_id
+                            WHERE q.branch_id = p.branch_id
                               AND q.spcnode = p.spcnode
                               AND q.dbnode = p.dbnode
                               AND q.relnode = p.relnode
@@ -124,7 +123,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
             "SELECT count(*) FROM (
                  SELECT spcnode, dbnode, relnode, forknum, blknum
                  FROM pageserver.pages
-                 WHERE tenant_id = '{tid}' AND is_image
+                 WHERE branch_id = '{branch}' AND is_image
                    AND payload = decode(repeat('00', 8192), 'hex')
                  GROUP BY 1, 2, 3, 4, 5 HAVING count(*) > 1
              ) d"

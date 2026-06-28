@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(addr) = args.dump_control_file {
         anyhow::bail!(
             "--dump-control-file is unsupported: local-FS control files were removed. \
-             Read the blob from remote storage at safekeeper-control/<tenant>/<timeline> \
+             Read the blob from remote storage at safekeeper-control/<branch_id> \
              (input was {addr})"
         );
     }
@@ -235,8 +235,7 @@ async fn main() -> anyhow::Result<()> {
         availability_zone: cfg.availability_zone,
         heartbeat_timeout: cfg.heartbeat_timeout,
         yb_storage_conn,
-        tenant_id: cfg.tenant_id,
-        timeline_id: cfg.timeline_id,
+        branch_id: cfg.branch_id,
         wal_cache_size_mib: cfg.wal_cache_size_mib.unwrap_or_else(|| {
             safekeeper::scale_count(
                 safekeeper::defaults::DEFAULT_WAL_CACHE_SIZE_MIB,

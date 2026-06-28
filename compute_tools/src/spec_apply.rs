@@ -77,12 +77,12 @@ impl ComputeNode {
             let mut drop_subscriptions_done = false;
 
             if spec.drop_subscriptions_before_start {
-                let timeline_id = self.get_timeline_id().context("timeline_id must be set")?;
+                let branch_id = self.get_branch_id().context("branch_id must be set")?;
 
-                info!("Checking if drop subscription operation was already performed for timeline_id: {}", timeline_id);
+                info!("Checking if drop subscription operation was already performed for branch_id: {}", branch_id);
 
                 drop_subscriptions_done = match
-                    client.query("select 1 from yb_amp.drop_subscriptions_done where timeline_id OPERATOR(pg_catalog.=) $1", &[&timeline_id.to_string()]).await {
+                    client.query("select 1 from yb_amp.drop_subscriptions_done where branch_id OPERATOR(pg_catalog.=) $1", &[&branch_id.to_string()]).await {
                     Ok(result) => !result.is_empty(),
                     Err(e) =>
                     {

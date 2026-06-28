@@ -1,6 +1,6 @@
 use safekeeper_api::models::{self, SafekeeperUtilization, TimelineCreateRequest};
 use safekeeper_client::mgmt_api::{Client, Result};
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::logging::SecretString;
 
 use crate::metrics::SafekeeperRequestLabelGroup;
@@ -68,26 +68,13 @@ impl SafekeeperClient {
 
     pub(crate) async fn delete_timeline(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     ) -> Result<models::TimelineDeleteResult> {
         measured_request!(
             "delete_timeline",
             crate::metrics::Method::Delete,
             &self.node_id_label,
-            self.inner.delete_timeline(tenant_id, timeline_id).await
-        )
-    }
-
-    pub(crate) async fn delete_tenant(
-        &self,
-        tenant_id: TenantId,
-    ) -> Result<models::TenantDeleteResult> {
-        measured_request!(
-            "delete_tenant",
-            crate::metrics::Method::Delete,
-            &self.node_id_label,
-            self.inner.delete_tenant(tenant_id).await
+            self.inner.delete_timeline(branch_id).await
         )
     }
 

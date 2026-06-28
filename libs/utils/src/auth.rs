@@ -15,7 +15,7 @@ use pem::Pem;
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
-use crate::id::TenantId;
+use crate::id::BranchId;
 
 /// Algorithm to use. We require EdDSA.
 const STORAGE_TOKEN_ALGORITHM: Algorithm = Algorithm::EdDSA;
@@ -74,8 +74,10 @@ where
 /// JWT payload. See docs/authentication.md for the format
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Claims {
-    #[serde(default)]
-    pub tenant_id: Option<TenantId>,
+    // Wire key stays `tenant_id` for JWT compatibility; the value is a
+    // branch id (the flat model dropped the enclosing tenant).
+    #[serde(default, rename = "tenant_id")]
+    pub branch_id: Option<BranchId>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -88,9 +90,9 @@ pub struct Claims {
 }
 
 impl Claims {
-    pub fn new(tenant_id: Option<TenantId>, scope: Scope) -> Self {
+    pub fn new(branch_id: Option<BranchId>, scope: Scope) -> Self {
         Self {
-            tenant_id,
+            branch_id,
             scope,
             endpoint_id: None,
         }
@@ -242,7 +244,7 @@ MC4CAQAwBQYDK2VwBCIEID/Drmc1AA6U/znNRWpF3zEGegOATQxfkdWxitcOMsIH
     #[test]
     fn test_decode() {
         let expected_claims = Claims {
-            tenant_id: Some(TenantId::from_str("3d1f7595b468230304e0b73cecbcb081").unwrap()),
+            branch_id: Some(BranchId::from_str("3d1f7595b468230304e0b73cecbcb081").unwrap()),
             scope: Scope::Tenant,
             endpoint_id: None,
         };
@@ -271,7 +273,7 @@ MC4CAQAwBQYDK2VwBCIEID/Drmc1AA6U/znNRWpF3zEGegOATQxfkdWxitcOMsIH
     #[test]
     fn test_encode() {
         let claims = Claims {
-            tenant_id: Some(TenantId::from_str("3d1f7595b468230304e0b73cecbcb081").unwrap()),
+            branch_id: Some(BranchId::from_str("3d1f7595b468230304e0b73cecbcb081").unwrap()),
             scope: Scope::Tenant,
             endpoint_id: None,
         };

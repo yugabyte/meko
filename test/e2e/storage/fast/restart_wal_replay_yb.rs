@@ -15,7 +15,7 @@ use crate::{db, psql};
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
-    let tid = c.tid();
+    let branch = c.branch();
     let soak: u64 = std::env::var("SOAK_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
     let http_timeout: u64 = std::env::var("PS_HTTP_TIMEOUT")
         .ok()
@@ -79,8 +79,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let mut last_record_lsn = String::new();
     let ps_http = c.ps_http_port();
     while Instant::now() < deadline {
-        if let Some(tl) = first_timeline_id(&http, ps_http, tid).await {
-            if let Some(lsn) = last_record_lsn_of(&http, ps_http, tid, &tl).await {
+        if let Some(br) = first_branch_id(&http, ps_http, branch).await {
+            if let Some(lsn) = last_record_lsn_of(&http, ps_http, &br).await {
                 if !lsn.is_empty() && lsn != "0/0" && lsn != ts_start_lsn {
                     last_record_lsn = lsn;
                     break;
@@ -130,21 +130,20 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// First timeline id from the PS `/v1/tenant/<id>/timeline` list.
-async fn first_timeline_id(http: &reqwest::Client, ps_http: u16, tid: &str) -> Option<String> {
-    let url = format!("http://127.0.0.1:{ps_http}/v1/tenant/{tid}/timeline");
+/// First branch id from the PS `/v1/branch/<id>/timeline` list.
+async fn first_branch_id(http: &reqwest::Client, ps_http: u16, branch: &str) -> Option<String> {
+    let url = format!("http://127.0.0.1:{ps_http}/v1/branch/{branch}/timeline");
     let v: serde_json::Value = http.get(&url).send().await.ok()?.json().await.ok()?;
-    v.get(0)?.get("timeline_id")?.as_str().map(str::to_string)
+    v.get(0)?.get("branch_id")?.as_str().map(str::to_string)
 }
 
-/// `last_record_lsn` from the PS timeline-detail endpoint.
+/// `last_record_lsn` from the PS branch-detail endpoint.
 async fn last_record_lsn_of(
     http: &reqwest::Client,
     ps_http: u16,
-    tid: &str,
-    tl: &str,
+    branch: &str,
 ) -> Option<String> {
-    let url = format!("http://127.0.0.1:{ps_http}/v1/tenant/{tid}/timeline/{tl}");
+    let url = format!("http://127.0.0.1:{ps_http}/v1/branch/{branch}");
     let v: serde_json::Value = http.get(&url).send().await.ok()?.json().await.ok()?;
     v.get("last_record_lsn")?.as_str().map(str::to_string)
 }

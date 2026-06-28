@@ -26,7 +26,7 @@ use pageserver_client::mgmt_api;
 use postgres_backend::AuthType;
 use postgres_connection::{PgConnectionConfig, parse_host_port};
 use utils::auth::{Claims, Scope};
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
 use crate::background_process;
@@ -218,10 +218,10 @@ impl PageServerNode {
         self.start_node(retry_timeout).await
     }
 
-    /// Read the single-timeline identity baked into this pageserver's
+    /// Read the single-branch identity baked into this pageserver's
     /// `pageserver.toml`, if any. `None` means the launcher hasn't
-    /// assigned a timeline yet (fresh repo, pre-`tenant create`).
-    pub fn read_timeline_identity(&self) -> anyhow::Result<Option<(TenantId, TimelineId)>> {
+    /// assigned a branch yet (fresh repo, pre-`branch create`).
+    pub fn read_timeline_identity(&self) -> anyhow::Result<Option<BranchId>> {
         let config_file_path = self.repo_path().join("pageserver.toml");
         let contents = std::fs::read_to_string(&config_file_path)
             .with_context(|| format!("read {config_file_path:?}"))?;
@@ -229,31 +229,26 @@ impl PageServerNode {
             .parse::<toml_edit::DocumentMut>()
             .with_context(|| format!("parse {config_file_path:?}"))?;
         let get_str = |key: &str| doc.get(key).and_then(|item| item.as_str());
-        match (get_str("tenant_id"), get_str("timeline_id")) {
-            (Some(tenant), Some(timeline)) => Ok(Some((
-                tenant.parse().context("parse tenant_id in pageserver.toml")?,
-                timeline
-                    .parse()
-                    .context("parse timeline_id in pageserver.toml")?,
-            ))),
-            _ => Ok(None),
+        match get_str("branch_id") {
+            Some(branch) => Ok(Some(
+                branch.parse().context("parse branch_id in pageserver.toml")?,
+            )),
+            None => Ok(None),
         }
     }
 
-    /// Bake the single-timeline identity into `pageserver.toml`
+    /// Bake the single-branch identity into `pageserver.toml`
     /// (read-modify-write; overwrites any previous identity).
     /// `generation` is just a placeholder here — [`Self::start`] bumps
     /// it via the storage controller on every spawn.
     pub fn set_timeline_identity(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         generation: u32,
         timeline_init: Option<&TimelineInitConfig>,
     ) -> anyhow::Result<()> {
         let mut fragment = toml_edit::DocumentMut::new();
-        fragment.insert("tenant_id", toml_edit::value(tenant_id.to_string()));
-        fragment.insert("timeline_id", toml_edit::value(timeline_id.to_string()));
+        fragment.insert("branch_id", toml_edit::value(branch_id.to_string()));
         fragment.insert("generation", toml_edit::value(generation as i64));
         if let Some(init) = timeline_init {
             let init_doc =
@@ -315,8 +310,8 @@ impl PageServerNode {
             toml_edit::value(safekeeper_pg_addr.to_string()),
         );
         // Strip any identity inherited from the template: this node
-        // serves its own timeline, assigned by the caller.
-        for key in ["tenant_id", "timeline_id", "generation", "timeline_init"] {
+        // serves its own branch, assigned by the caller.
+        for key in ["branch_id", "generation", "timeline_init"] {
             doc.remove(key);
         }
 
@@ -393,14 +388,14 @@ impl PageServerNode {
 
     /// If an identity is baked into `pageserver.toml`: register this
     /// node with the storage controller (idempotent), bump the
-    /// tenant's generation against this node via the attach-hook API,
+    /// branch's generation against this node via the attach-hook API,
     /// and persist the fresh generation back into the toml so the
     /// next process spawn picks it up. No-op without an identity.
     ///
     /// Returns the granted generation, or `None` if no identity is
     /// configured.
     pub async fn register_and_attach(&self) -> anyhow::Result<Option<u32>> {
-        let Some((tenant_id, timeline_id)) = self.read_timeline_identity()? else {
+        let Some(branch_id) = self.read_timeline_identity()? else {
             return Ok(None);
         };
         let storage_controller = crate::storage_controller::StorageController::from_env(&self.env);
@@ -409,14 +404,14 @@ impl PageServerNode {
             .await
             .context("register pageserver node with storage controller")?;
         let generation = storage_controller
-            .attach_hook(tenant_id, self.conf.id)
+            .attach_hook(branch_id, self.conf.id)
             .await?
             .context("attach_hook did not return a generation")?;
         let mut fragment = toml_edit::DocumentMut::new();
         fragment.insert("generation", toml_edit::value(generation as i64));
         self.merge_config_fragment(fragment)?;
         println!(
-            "pageserver {} serves {tenant_id}/{timeline_id} at generation {generation}",
+            "pageserver {} serves {branch_id} at generation {generation}",
             self.conf.id
         );
         Ok(Some(generation))
@@ -592,8 +587,8 @@ impl PageServerNode {
         self.http_client.status().await
     }
 
-    pub fn parse_config(mut settings: HashMap<&str, &str>) -> anyhow::Result<models::TenantConfig> {
-        let result = models::TenantConfig {
+    pub fn parse_config(mut settings: HashMap<&str, &str>) -> anyhow::Result<models::BranchConfig> {
+        let result = models::BranchConfig {
             gc_horizon: settings
                 .remove("gc_horizon")
                 .map(|x| x.parse::<u64>())
@@ -672,36 +667,41 @@ impl PageServerNode {
         }
     }
 
-    pub async fn timeline_list(
-        &self,
-        tenant_id: &TenantId,
-    ) -> anyhow::Result<Vec<TimelineInfo>> {
-        Ok(self.http_client.list_timelines(*tenant_id).await?)
+    /// List the branches this pageserver serves. In the per-endpoint
+    /// topology a pageserver serves exactly one branch (the identity baked
+    /// into its `pageserver.toml`), so this returns at most one
+    /// [`TimelineInfo`], fetched via [`Self::timeline_info`].
+    pub async fn timeline_list(&self) -> anyhow::Result<Vec<TimelineInfo>> {
+        let Some(branch_id) = self.read_timeline_identity()? else {
+            return Ok(Vec::new());
+        };
+        let info = self
+            .timeline_info(branch_id, mgmt_api::ForceAwaitLogicalSize::No)
+            .await?;
+        Ok(vec![info])
     }
 
     pub async fn timeline_info(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         force_await_logical_size: mgmt_api::ForceAwaitLogicalSize,
     ) -> anyhow::Result<TimelineInfo> {
         let timeline_info = self
             .http_client
-            .timeline_info(tenant_id, timeline_id, force_await_logical_size)
+            .timeline_info(branch_id, force_await_logical_size)
             .await?;
         Ok(timeline_info)
     }
 
-    /// Flush the timeline's pages to YB, advancing `consistent_lsn`. With
+    /// Flush the branch's pages to YB, advancing `consistent_lsn`. With
     /// `wait_lsn`, the pageserver waits for ingest to reach that LSN first.
     pub async fn flush(
         &self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         wait_lsn: Option<Lsn>,
     ) -> anyhow::Result<()> {
         self.http_client
-            .timeline_flush(tenant_id, timeline_id, wait_lsn)
+            .branch_flush(branch_id, wait_lsn)
             .await?;
         Ok(())
     }

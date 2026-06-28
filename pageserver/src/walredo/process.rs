@@ -14,7 +14,7 @@ use pageserver_api::reltag::RelTag;
 use postgres_ffi::{BLCKSZ, PgMajorVersion};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{Instrument, debug, error, instrument};
-use utils::id::TenantId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::poison::Poison;
 use wal_decoder::models::record::NeonWalRecord;
@@ -22,14 +22,14 @@ use wal_decoder::models::record::NeonWalRecord;
 use self::no_leak_child::NoLeakChild;
 use crate::config::PageServerConf;
 use crate::metrics::{WAL_REDO_PROCESS_COUNTERS, WAL_REDO_RECORD_COUNTER, WalRedoKillCause};
-use crate::span::debug_assert_current_span_has_tenant_id;
+use crate::span::debug_assert_current_span_has_branch_id;
 use crate::virtual_file::PAGE_SZ;
 
 pub struct WalRedoProcess {
     #[allow(dead_code)]
     conf: &'static PageServerConf,
     #[cfg(feature = "testing")]
-    tenant_id: TenantId,
+    branch_id: BranchId,
     // Some() on construction, only becomes None on Drop.
     child: Option<NoLeakChild>,
     stdout: tokio::sync::Mutex<Poison<ProcessOutput>>,
@@ -57,10 +57,10 @@ impl WalRedoProcess {
     #[instrument(skip_all,fields(pg_version=pg_version.major_version_num()))]
     pub(crate) fn launch(
         conf: &'static PageServerConf,
-        tenant_id: TenantId,
+        branch_id: BranchId,
         pg_version: PgMajorVersion,
     ) -> anyhow::Result<Self> {
-        crate::span::debug_assert_current_span_has_tenant_id();
+        crate::span::debug_assert_current_span_has_branch_id();
 
         let pg_bin_dir_path = conf.pg_bin_dir(pg_version).context("pg_bin_dir")?; // TODO these should be infallible.
         let pg_lib_dir_path = conf.pg_lib_dir(pg_version).context("pg_lib_dir")?;
@@ -72,7 +72,7 @@ impl WalRedoProcess {
             .arg("--wal-redo")
             // the child doesn't process this arg, but, having it in the argv helps indentify the
             // walredo process for a particular tenant when debugging a pagserver
-            .args(["--tenant-shard-id", &format!("{tenant_id}")])
+            .args(["--tenant-shard-id", &format!("{branch_id}")])
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
             .stdout(Stdio::piped())
@@ -95,7 +95,7 @@ impl WalRedoProcess {
             //    the files it opens, and
             // 2. to use seccomp to sandbox itself before processing the first
             //    walredo request.
-            .spawn_no_leak_child(tenant_id)
+            .spawn_no_leak_child(branch_id)
             .context("spawn process")?;
         WAL_REDO_PROCESS_COUNTERS.started.inc();
         let mut child = scopeguard::guard(child, |child| {
@@ -151,13 +151,13 @@ impl WalRedoProcess {
                         error!(error=?e, "failed to read from walredo stderr");
                     }
                 }
-            }.instrument(tracing::info_span!(parent: None, "wal-redo-postgres-stderr", pid = child.id(), tenant_id = %tenant_id, %pg_version))
+            }.instrument(tracing::info_span!(parent: None, "wal-redo-postgres-stderr", pid = child.id(), branch_id = %branch_id, %pg_version))
         );
 
         Ok(Self {
             conf,
             #[cfg(feature = "testing")]
-            tenant_id,
+            branch_id,
             child: Some(child),
             stdin: tokio::sync::Mutex::new(Poison::new(
                 "stdin",
@@ -201,7 +201,7 @@ impl WalRedoProcess {
         records: &[(Lsn, NeonWalRecord)],
         wal_redo_timeout: Duration,
     ) -> anyhow::Result<Bytes> {
-        debug_assert_current_span_has_tenant_id();
+        debug_assert_current_span_has_branch_id();
 
         let tag = protocol::BufferTag { rel, blknum };
 
@@ -380,7 +380,7 @@ impl WalRedoProcess {
         // these files will be collected to an allure report
         let filename = format!("walredo-{millis}-{}-{seq}.walredo", writebuf.len());
 
-        let path = self.conf.tenant_path(&self.tenant_id).join(&filename);
+        let path = self.conf.branch_path(&self.branch_id).join(&filename);
 
         use std::io::Write;
         let res = std::fs::OpenOptions::new()

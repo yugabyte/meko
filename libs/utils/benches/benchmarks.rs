@@ -16,15 +16,15 @@ criterion_main!(benches);
 
 pub fn bench_id_stringify(c: &mut Criterion) {
     // Can only use public methods.
-    let ttid = id::TenantTimelineId::generate();
+    let branch_id = id::BranchId::generate();
 
     c.bench_function("id.to_string", |b| {
         b.iter(|| {
             // FIXME measurement overhead?
             //for _ in 0..1000 {
-            //    ttid.tenant_id.to_string();
+            //    branch_id.to_string();
             //}
-            ttid.tenant_id.to_string();
+            branch_id.to_string();
         })
     });
 }

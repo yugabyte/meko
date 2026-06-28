@@ -33,10 +33,9 @@ impl EndpointStoragePair {
         let Some(ref base_uri) = pspec.endpoint_storage_addr else {
             bail!("pspec.endpoint_storage_addr missing")
         };
-        let tenant_id = pspec.tenant_id;
-        let timeline_id = pspec.timeline_id;
+        let branch_id = pspec.branch_id;
 
-        let url = format!("http://{base_uri}/{tenant_id}/{timeline_id}/{endpoint_id}/{KEY}");
+        let url = format!("http://{base_uri}/{branch_id}/{endpoint_id}/{KEY}");
         let Some(ref token) = pspec.endpoint_storage_token else {
             bail!("pspec.endpoint_storage_token missing")
         };

@@ -22,14 +22,14 @@ use utils::lsn::Lsn;
 use crate::cluster::Cluster;
 
 /// Connect to safekeeper node 1 in replication mode for the cluster's
-/// tenant/timeline, stream interpreted WAL from `start`, and read until the
+/// branch, stream interpreted WAL from `start`, and read until the
 /// stream's `streaming_lsn` reaches `target`. Returns the total interpreted
 /// payload bytes delivered (a liveness signal — content framing is not
 /// stable across reads, so callers compare *reaching the target*, not
 /// bytes). Errors if the stream ends or stalls before `target`.
 pub async fn read_committed_wal(
     c: &Cluster,
-    timeline_hex: &str,
+    branch_hex: &str,
     start: Lsn,
     target: Lsn,
 ) -> anyhow::Result<usize> {
@@ -38,9 +38,9 @@ pub async fn read_committed_wal(
         .port(c.sk_pg_port())
         .user("cloud_admin")
         .dbname("postgres")
-        // The SK reads tenant/timeline from the `options` startup param
-        // (space-separated `key=value`, parsed by its handler).
-        .options(&format!("timeline_id={timeline_hex} tenant_id={}", c.tid()))
+        // The SK reads the branch id from the `options` startup param
+        // (`key=value`, parsed by its handler as `branch_id=<id>`).
+        .options(&format!("branch_id={branch_hex}"))
         .replication_mode(tokio_postgres::config::ReplicationMode::Physical);
 
     let (client, connection) = cfg

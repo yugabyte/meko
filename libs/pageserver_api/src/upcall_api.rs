@@ -1,16 +1,14 @@
 //! Types in this file are for pageserver's upward-facing API calls to the storage controller,
-//! required for acquiring and validating tenant generation numbers.
+//! required for acquiring and validating branch generation numbers.
 //!
 //! See docs/rfcs/025-generation-numbers.md
 
 use serde::{Deserialize, Serialize};
 use utils::generation::Generation;
-use utils::id::{NodeId, TimelineId};
-
-use utils::id::TenantId;
+use utils::id::{BranchId, NodeId};
 
 use crate::controller_api::NodeRegisterRequest;
-use crate::models::ShardImportStatus;
+use crate::models::BranchImportStatus;
 
 /// Upcall message sent by the pageserver to the configured `control_plane_api` on
 /// startup.
@@ -25,49 +23,47 @@ pub struct ReAttachRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct ReAttachResponseTenant {
-    pub id: TenantId,
+pub struct ReAttachResponseBranch {
+    pub id: BranchId,
     /// `Some(g)` → re-attach in generation `g`; `None` → not attached.
     pub r#gen: Option<u32>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct ReAttachResponse {
-    pub tenants: Vec<ReAttachResponseTenant>,
+    pub branches: Vec<ReAttachResponseBranch>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct ValidateRequestTenant {
-    pub id: TenantId,
+pub struct ValidateRequestBranch {
+    pub id: BranchId,
     pub r#gen: u32,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct ValidateRequest {
-    pub tenants: Vec<ValidateRequestTenant>,
+    pub branches: Vec<ValidateRequestBranch>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct ValidateResponse {
-    pub tenants: Vec<ValidateResponseTenant>,
+    pub branches: Vec<ValidateResponseBranch>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct ValidateResponseTenant {
-    pub id: TenantId,
+pub struct ValidateResponseBranch {
+    pub id: BranchId,
     pub valid: bool,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct TimelineImportStatusRequest {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub generation: Generation,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct PutTimelineImportStatusRequest {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
-    pub status: ShardImportStatus,
+    pub branch_id: BranchId,
+    pub status: BranchImportStatus,
     pub generation: Generation,
 }

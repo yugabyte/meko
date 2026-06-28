@@ -9,7 +9,7 @@
 //! Prior history: upstream Neon used a local-FS blob, then yb-light's
 //! Phase 2 reduction stored the same bincode blob in
 //! `GenericRemoteStorage` (the `YbStore` backend) at the key
-//! `safekeeper-control/<tenant>/<timeline>`. Both representations are
+//! `safekeeper-control/<branch_id>`. Both representations are
 //! gone — see commit history and #10 for the migration.
 
 use std::future::Future;
@@ -23,7 +23,7 @@ use postgres_versioninfo::PgVersionId;
 use safekeeper_api::Term;
 use safekeeper_api::membership::Configuration;
 use serde::{Deserialize, Serialize};
-use utils::id::TenantTimelineId;
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use yb_tokio_postgres::types::ToSql;
 use ysql_client::YsqlClient;
@@ -49,7 +49,7 @@ pub trait Storage: Deref<Target = TimelinePersistentState> {
 /// it last wrote.
 pub struct YbControlFileStorage {
     client: Arc<YsqlClient>,
-    ttid: TenantTimelineId,
+    branch_id: BranchId,
     state: TimelinePersistentState,
     last_persist_at: Instant,
 }
@@ -57,7 +57,7 @@ pub struct YbControlFileStorage {
 impl std::fmt::Debug for YbControlFileStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("YbControlFileStorage")
-            .field("ttid", &self.ttid)
+            .field("branch_id", &self.branch_id)
             .finish()
     }
 }
@@ -100,25 +100,22 @@ const COLUMNS: &str = "timeline_start_lsn, local_start_lsn, remote_consistent_ls
                        mconf, creation_ts";
 
 impl YbControlFileStorage {
-    /// Load the row for `ttid`. Errors if no row exists — callers
+    /// Load the row for `branch_id`. Errors if no row exists — callers
     /// distinguish "create new" from "load existing" via the
     /// `create_new` constructor below.
     pub async fn restore_new(
         client: Arc<YsqlClient>,
-        ttid: &TenantTimelineId,
+        branch_id: &BranchId,
     ) -> Result<YbControlFileStorage> {
         let sql = format!(
             "SELECT {COLUMNS} FROM safekeeper.timeline_state \
-             WHERE tenant_id = $1 AND timeline_id = $2"
+             WHERE branch_id = $1"
         );
         let row = client
-            .query_opt(
-                &sql,
-                &[&ttid.tenant_id.to_string(), &ttid.timeline_id.to_string()],
-            )
+            .query_opt(&sql, &[&branch_id.to_string()])
             .await
             .context("SELECT safekeeper.timeline_state")?
-            .with_context(|| format!("control file not found in YB for {ttid}"))?;
+            .with_context(|| format!("control file not found in YB for {branch_id}"))?;
 
         let timeline_start_lsn = Lsn(row.try_get::<_, i64>(0)? as u64);
         let local_start_lsn = Lsn(row.try_get::<_, i64>(1)? as u64);
@@ -140,8 +137,7 @@ impl YbControlFileStorage {
         let creation_ts: std::time::SystemTime = creation_ts_dt.into();
 
         let state = TimelinePersistentState {
-            tenant_id: ttid.tenant_id,
-            timeline_id: ttid.timeline_id,
+            branch_id: *branch_id,
             mconf,
             acceptor_state: AcceptorState { term, term_history },
             server: safekeeper_api::ServerInfo {
@@ -158,7 +154,7 @@ impl YbControlFileStorage {
 
         Ok(YbControlFileStorage {
             client,
-            ttid: *ttid,
+            branch_id: *branch_id,
             state,
             last_persist_at: Instant::now(),
         })
@@ -167,12 +163,12 @@ impl YbControlFileStorage {
     /// Create + insert a fresh row.
     pub async fn create_new(
         client: Arc<YsqlClient>,
-        ttid: &TenantTimelineId,
+        branch_id: &BranchId,
         state: TimelinePersistentState,
     ) -> Result<YbControlFileStorage> {
         let store = YbControlFileStorage {
             client,
-            ttid: *ttid,
+            branch_id: *branch_id,
             state: state.clone(),
             last_persist_at: Instant::now(),
         };
@@ -180,43 +176,33 @@ impl YbControlFileStorage {
         Ok(store)
     }
 
-    /// Enumerate every `(tenant_id, timeline_id)` pair persisted in
+    /// Enumerate every `branch_id` persisted in
     /// `safekeeper.timeline_state`. Used by SK startup in YB-WAL mode
-    /// to re-discover timelines after a restart — there's no on-disk
+    /// to re-discover branches after a restart — there's no on-disk
     /// directory to scan and the storage_controller doesn't re-issue
-    /// `POST /v1/tenant/timeline` for existing timelines.
-    pub async fn list_all_ttids(client: &YsqlClient) -> Result<Vec<TenantTimelineId>> {
+    /// `POST /v1/branch` for existing branches.
+    pub async fn list_all_branch_ids(client: &YsqlClient) -> Result<Vec<BranchId>> {
         let rows = client
-            .query(
-                "SELECT tenant_id, timeline_id FROM safekeeper.timeline_state",
-                &[],
-            )
+            .query("SELECT branch_id FROM safekeeper.timeline_state", &[])
             .await
             .context("SELECT safekeeper.timeline_state list")?;
-        let mut ttids = Vec::with_capacity(rows.len());
+        let mut branch_ids = Vec::with_capacity(rows.len());
         for row in rows {
-            let tenant_id: String = row.try_get(0).context("read tenant_id")?;
-            let timeline_id: String = row.try_get(1).context("read timeline_id")?;
-            ttids.push(TenantTimelineId::new(
-                tenant_id
+            let branch_id: String = row.try_get(0).context("read branch_id")?;
+            branch_ids.push(
+                branch_id
                     .parse()
-                    .with_context(|| format!("parse tenant_id {tenant_id}"))?,
-                timeline_id
-                    .parse()
-                    .with_context(|| format!("parse timeline_id {timeline_id}"))?,
-            ));
+                    .with_context(|| format!("parse branch_id {branch_id}"))?,
+            );
         }
-        Ok(ttids)
+        Ok(branch_ids)
     }
 
-    /// Delete the row for `ttid`. Used by the timeline-delete flow.
-    pub async fn delete(client: &YsqlClient, ttid: &TenantTimelineId) -> Result<()> {
-        let sql = "DELETE FROM safekeeper.timeline_state WHERE tenant_id = $1 AND timeline_id = $2";
+    /// Delete the row for `branch_id`. Used by the timeline-delete flow.
+    pub async fn delete(client: &YsqlClient, branch_id: &BranchId) -> Result<()> {
+        let sql = "DELETE FROM safekeeper.timeline_state WHERE branch_id = $1";
         client
-            .execute(
-                sql,
-                &[&ttid.tenant_id.to_string(), &ttid.timeline_id.to_string()],
-            )
+            .execute(sql, &[&branch_id.to_string()])
             .await
             .context("DELETE safekeeper.timeline_state")?;
         Ok(())
@@ -229,11 +215,9 @@ impl YbControlFileStorage {
         let mconf_json = serde_json::to_value(&s.mconf).context("encode mconf JSONB")?;
         let term_history_json = term_history_to_json(&s.acceptor_state.term_history);
 
-        let tenant_id = self.ttid.tenant_id.to_string();
-        let timeline_id = self.ttid.timeline_id.to_string();
-        let params: [&(dyn ToSql + Sync); 13] = [
-            &tenant_id,
-            &timeline_id,
+        let branch_id = self.branch_id.to_string();
+        let params: [&(dyn ToSql + Sync); 12] = [
+            &branch_id,
             &(s.timeline_start_lsn.0 as i64),
             &(s.local_start_lsn.0 as i64),
             &(s.remote_consistent_lsn.0 as i64),
@@ -249,27 +233,26 @@ impl YbControlFileStorage {
 
         let sql = if insert {
             "INSERT INTO safekeeper.timeline_state (\
-                 tenant_id, timeline_id, timeline_start_lsn, local_start_lsn, \
+                 branch_id, timeline_start_lsn, local_start_lsn, \
                  remote_consistent_lsn, pg_version, system_id, \
                  wal_seg_size, term, term_history, proposer_uuid, mconf, \
                  creation_ts) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"
                 .to_string()
         } else {
             "UPDATE safekeeper.timeline_state SET \
-                 timeline_start_lsn    = $3, \
-                 local_start_lsn       = $4, \
-                 remote_consistent_lsn = $5, \
-                 pg_version            = $6, \
-                 system_id             = $7, \
-                 wal_seg_size          = $8, \
-                 term                  = $9, \
-                 term_history          = $10, \
-                 proposer_uuid         = $11, \
-                 mconf                 = $12, \
-                 creation_ts           = $13 \
-             WHERE tenant_id           = $1 \
-               AND timeline_id         = $2"
+                 timeline_start_lsn    = $2, \
+                 local_start_lsn       = $3, \
+                 remote_consistent_lsn = $4, \
+                 pg_version            = $5, \
+                 system_id             = $6, \
+                 wal_seg_size          = $7, \
+                 term                  = $8, \
+                 term_history          = $9, \
+                 proposer_uuid         = $10, \
+                 mconf                 = $11, \
+                 creation_ts           = $12 \
+             WHERE branch_id           = $1"
                 .to_string()
         };
 

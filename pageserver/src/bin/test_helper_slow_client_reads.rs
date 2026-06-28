@@ -5,25 +5,23 @@ use clap::Parser;
 use pageserver_api::pagestream_api::{
     PagestreamFeMessage, PagestreamRequest, PagestreamTestRequest,
 };
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 #[derive(clap::Parser)]
 struct Args {
     connstr: String,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let Args {
         connstr,
-        tenant_id,
-        timeline_id,
+        branch_id,
     } = Args::parse();
     let client = pageserver_client::page_service::Client::new(connstr).await?;
-    let client = client.pagestream(tenant_id, timeline_id).await?;
+    let client = client.pagestream(branch_id).await?;
     let (mut sender, _receiver) = client.split();
 
     eprintln!("filling the pipe");

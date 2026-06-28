@@ -9,7 +9,7 @@ use pageserver_api::reltag::RelTag;
 use tokio::task::JoinHandle;
 use tokio_postgres::CopyOutStream;
 use tokio_util::sync::CancellationToken;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 pub struct Client {
@@ -19,8 +19,7 @@ pub struct Client {
 }
 
 pub struct BasebackupRequest {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub lsn: Option<Lsn>,
     pub gzip: bool,
 }
@@ -49,14 +48,10 @@ impl Client {
         })
     }
 
-    pub async fn pagestream(
-        self,
-        tenant_id: TenantId,
-        timeline_id: TimelineId,
-    ) -> anyhow::Result<PagestreamClient> {
+    pub async fn pagestream(self, branch_id: BranchId) -> anyhow::Result<PagestreamClient> {
         let copy_both: tokio_postgres::CopyBothDuplex<bytes::Bytes> = self
             .client
-            .copy_both_simple(&format!("pagestream_v3 {tenant_id} {timeline_id}"))
+            .copy_both_simple(&format!("pagestream_v3 {branch_id}"))
             .await?;
         let (sink, stream) = copy_both.split(); // TODO: actually support splitting of the CopyBothDuplex so the lock inside this split adaptor goes away.
         let Client {
@@ -85,15 +80,13 @@ impl Client {
 
     pub async fn basebackup(&self, req: &BasebackupRequest) -> anyhow::Result<CopyOutStream> {
         let BasebackupRequest {
-            tenant_id,
-            timeline_id,
+            branch_id,
             lsn,
             gzip,
         } = req;
         let mut args = Vec::with_capacity(5);
         args.push("basebackup".to_string());
-        args.push(format!("{tenant_id}"));
-        args.push(format!("{timeline_id}"));
+        args.push(format!("{branch_id}"));
         if let Some(lsn) = lsn {
             args.push(format!("{lsn}"));
         }

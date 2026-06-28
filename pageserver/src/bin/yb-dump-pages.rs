@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use ysql_client::{YbConnArgs, YsqlClient};
 
@@ -23,9 +23,7 @@ use ysql_client::{YbConnArgs, YsqlClient};
 #[command(about = "Dump or decode pageserver.pages rows for one (rel, fork) tuple")]
 struct Args {
     #[arg(long)]
-    tenant: TenantId,
-    #[arg(long)]
-    timeline: TimelineId,
+    branch: BranchId,
     #[arg(long)]
     spc: i64,
     #[arg(long)]
@@ -61,9 +59,9 @@ struct Args {
 
 fn key_where(a: &Args) -> String {
     let mut w = format!(
-        "tenant_id='{}' AND timeline_id='{}' AND spcnode={} AND dbnode={} \
+        "branch_id='{}' AND spcnode={} AND dbnode={} \
          AND relnode={} AND forknum={}",
-        a.tenant, a.timeline, a.spc, a.db, a.rel, a.fork
+        a.branch, a.spc, a.db, a.rel, a.fork
     );
     if let Some(l) = a.lsn_from {
         w += &format!(" AND lsn >= {}", l.0 as i64);

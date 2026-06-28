@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt;
 use std::io::Write as _;
 use std::str::FromStr;
@@ -17,15 +16,15 @@ use hyper::{Body, Request, Response, StatusCode};
 use postgres_ffi::WAL_SEGMENT_SIZE;
 use safekeeper_api::ServerInfo;
 use safekeeper_api::models::{
-    AcceptorStateStatus, SafekeeperStatus, TenantDeleteResult, TermSwitchApiEntry,
-    TimelineCreateRequest, TimelineDeleteResult, TimelineStatus,
+    AcceptorStateStatus, SafekeeperStatus, TermSwitchApiEntry, TimelineCreateRequest,
+    TimelineStatus,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::info_span;
 use utils::auth::SwappableJwtAuth;
-use utils::id::{TenantId, TenantTimelineId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::debug_dump::TimelineDigestRequest;
@@ -57,44 +56,17 @@ fn get_global_timelines(request: &Request<Body>) -> Arc<GlobalTimelines> {
         .clone()
 }
 
-fn check_permission(request: &Request<Body>, tenant_id: Option<TenantId>) -> Result<(), ApiError> {
+fn check_permission(request: &Request<Body>, branch_id: Option<BranchId>) -> Result<(), ApiError> {
     check_permission_with(request, |claims| {
-        crate::auth::check_permission(claims, tenant_id)
+        crate::auth::check_permission(claims, branch_id)
     })
-}
-
-/// Deactivates all timelines for the tenant and removes its data directory.
-/// See `timeline_delete_handler`.
-async fn tenant_delete_handler(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let tenant_id = parse_request_param(&request, "tenant_id")?;
-    let only_local = parse_query_param(&request, "only_local")?.unwrap_or(false);
-    check_permission(&request, Some(tenant_id))?;
-    ensure_no_body(&mut request).await?;
-    let global_timelines = get_global_timelines(&request);
-    let action = if only_local {
-        DeleteOrExclude::DeleteLocal
-    } else {
-        DeleteOrExclude::Delete
-    };
-    let delete_info = global_timelines
-        .delete_all_for_tenant(&tenant_id, action)
-        .await
-        .map_err(ApiError::InternalServerError)?;
-    let response_body: TenantDeleteResult = delete_info
-        .iter()
-        .map(|(ttid, resp)| (format!("{}", ttid.timeline_id), *resp))
-        .collect::<HashMap<String, TimelineDeleteResult>>();
-    json_response(StatusCode::OK, response_body)
 }
 
 async fn timeline_create_handler(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
     let request_data: TimelineCreateRequest = json_request(&mut request).await?;
 
-    let ttid = TenantTimelineId {
-        tenant_id: request_data.tenant_id,
-        timeline_id: request_data.timeline_id,
-    };
-    check_permission(&request, Some(ttid.tenant_id))?;
+    let branch_id = request_data.branch_id;
+    check_permission(&request, Some(branch_id))?;
 
     let server_info = ServerInfo {
         pg_version: request_data.pg_version,
@@ -104,7 +76,7 @@ async fn timeline_create_handler(mut request: Request<Body>) -> Result<Response<
     let global_timelines = get_global_timelines(&request);
     global_timelines
         .create(
-            ttid,
+            branch_id,
             request_data.mconf,
             server_info,
             request_data.start_lsn,
@@ -142,10 +114,10 @@ async fn filesystem_usage_handler(request: Request<Body>) -> Result<Response<Bod
 async fn timeline_list_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
     check_permission(&request, None)?;
     let global_timelines = get_global_timelines(&request);
-    let res: Vec<TenantTimelineId> = global_timelines
+    let res: Vec<BranchId> = global_timelines
         .get_all()
         .iter()
-        .map(|tli| tli.ttid)
+        .map(|tli| tli.branch_id)
         .collect();
     json_response(StatusCode::OK, res)
 }
@@ -161,14 +133,11 @@ impl From<TermSwitchApiEntry> for TermLsn {
 
 /// Report info about timeline.
 async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "timeline_id")?,
-    );
-    check_permission(&request, Some(ttid.tenant_id))?;
+    let branch_id = parse_request_param(&request, "branch_id")?;
+    check_permission(&request, Some(branch_id))?;
 
     let global_timelines = get_global_timelines(&request);
-    let tli = global_timelines.get(ttid).map_err(ApiError::from)?;
+    let tli = global_timelines.get(branch_id).map_err(ApiError::from)?;
     let (inmem, state) = tli.get_state().await;
     let flush_lsn = tli.get_flush_lsn().await;
 
@@ -192,8 +161,7 @@ async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body
     let conf = get_conf(&request);
     // Note: we report in memory values which can be lost.
     let status = TimelineStatus {
-        tenant_id: ttid.tenant_id,
-        timeline_id: ttid.timeline_id,
+        branch_id,
         mconf: state.mconf,
         acceptor_state: acc_state,
         pg_info: state.server,
@@ -212,12 +180,9 @@ async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body
 
 /// Deactivates the timeline and removes its data directory.
 async fn timeline_delete_handler(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "timeline_id")?,
-    );
+    let branch_id = parse_request_param(&request, "branch_id")?;
     let only_local = parse_query_param(&request, "only_local")?.unwrap_or(false);
-    check_permission(&request, Some(ttid.tenant_id))?;
+    check_permission(&request, Some(branch_id))?;
     ensure_no_body(&mut request).await?;
     let global_timelines = get_global_timelines(&request);
     let action = if only_local {
@@ -226,7 +191,7 @@ async fn timeline_delete_handler(mut request: Request<Body>) -> Result<Response<
         DeleteOrExclude::Delete
     };
     let resp = global_timelines
-        .delete_or_exclude(&ttid, action)
+        .delete_or_exclude(&branch_id, action)
         .await
         .map_err(ApiError::InternalServerError)?;
     json_response(StatusCode::OK, resp)
@@ -237,13 +202,10 @@ async fn patch_control_file_handler(
 ) -> Result<Response<Body>, ApiError> {
     check_permission(&request, None)?;
 
-    let ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "timeline_id")?,
-    );
+    let branch_id = parse_request_param(&request, "branch_id")?;
 
     let global_timelines = get_global_timelines(&request);
-    let tli = global_timelines.get(ttid).map_err(ApiError::from)?;
+    let tli = global_timelines.get(branch_id).map_err(ApiError::from)?;
 
     let patch_request: patch_control_file::Request = json_request(&mut request).await?;
     let response = patch_control_file::handle_request(tli, patch_request)
@@ -257,13 +219,10 @@ async fn patch_control_file_handler(
 async fn timeline_checkpoint_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
     check_permission(&request, None)?;
 
-    let ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "timeline_id")?,
-    );
+    let branch_id = parse_request_param(&request, "branch_id")?;
 
     let global_timelines = get_global_timelines(&request);
-    let tli = global_timelines.get(ttid)?;
+    let tli = global_timelines.get(branch_id)?;
     tli.write_shared_state()
         .await
         .sk
@@ -275,11 +234,8 @@ async fn timeline_checkpoint_handler(request: Request<Body>) -> Result<Response<
 }
 
 async fn timeline_digest_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "timeline_id")?,
-    );
-    check_permission(&request, Some(ttid.tenant_id))?;
+    let branch_id = parse_request_param(&request, "branch_id")?;
+    check_permission(&request, Some(branch_id))?;
 
     let global_timelines = get_global_timelines(&request);
     let from_lsn: Option<Lsn> = parse_query_param(&request, "from_lsn")?;
@@ -294,7 +250,7 @@ async fn timeline_digest_handler(request: Request<Body>) -> Result<Response<Body
         )))?,
     };
 
-    let tli = global_timelines.get(ttid).map_err(ApiError::from)?;
+    let tli = global_timelines.get(branch_id).map_err(ApiError::from)?;
     let tli = tli
         .wal_residence_guard()
         .await
@@ -310,14 +266,11 @@ async fn timeline_digest_handler(request: Request<Body>) -> Result<Response<Body
 /// Successfull response returns list of segments existed before the deletion.
 /// Aimed for one-off usage not normally needed.
 async fn timeline_backup_partial_reset(request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let ttid = TenantTimelineId::new(
-        parse_request_param(&request, "tenant_id")?,
-        parse_request_param(&request, "timeline_id")?,
-    );
-    check_permission(&request, Some(ttid.tenant_id))?;
+    let branch_id = parse_request_param(&request, "branch_id")?;
+    check_permission(&request, Some(branch_id))?;
 
     let global_timelines = get_global_timelines(&request);
-    let tli = global_timelines.get(ttid).map_err(ApiError::from)?;
+    let tli = global_timelines.get(branch_id).map_err(ApiError::from)?;
 
     let response = tli
         .backup_partial_reset()
@@ -342,8 +295,7 @@ async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>
     let mut dump_disk_content: Option<bool> = None;
     let mut dump_term_history: Option<bool> = None;
     let mut dump_wal_last_modified: Option<bool> = None;
-    let mut tenant_id: Option<TenantId> = None;
-    let mut timeline_id: Option<TimelineId> = None;
+    let mut branch_id: Option<BranchId> = None;
 
     let query = request.uri().query().unwrap_or("");
     let mut values = url::form_urlencoded::parse(query.as_bytes());
@@ -356,8 +308,7 @@ async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>
             "dump_disk_content" => dump_disk_content = Some(parse_kv_str(&k, &v)?),
             "dump_term_history" => dump_term_history = Some(parse_kv_str(&k, &v)?),
             "dump_wal_last_modified" => dump_wal_last_modified = Some(parse_kv_str(&k, &v)?),
-            "tenant_id" => tenant_id = Some(parse_kv_str(&k, &v)?),
-            "timeline_id" => timeline_id = Some(parse_kv_str(&k, &v)?),
+            "branch_id" => branch_id = Some(parse_kv_str(&k, &v)?),
             _ => Err(ApiError::BadRequest(anyhow::anyhow!(
                 "Unknown query parameter: {}",
                 k
@@ -381,8 +332,7 @@ async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>
         dump_disk_content,
         dump_term_history,
         dump_wal_last_modified,
-        tenant_id,
-        timeline_id,
+        branch_id,
     };
 
     let resp = debug_dump::build(args, global_timelines)
@@ -488,37 +438,31 @@ pub fn make_router(
         .get("/v1/debug/filesystem_usage", |r| {
             request_span(r, filesystem_usage_handler)
         })
-        .delete("/v1/tenant/:tenant_id", |r| {
-            request_span(r, tenant_delete_handler)
-        })
         // Will be used in the future instead of implicit timeline creation
-        .post("/v1/tenant/timeline", |r| {
+        .post("/v1/branch", |r| {
             request_span(r, timeline_create_handler)
         })
-        .get("/v1/tenant/timeline", |r| {
+        .get("/v1/branch", |r| {
             request_span(r, timeline_list_handler)
         })
-        .get("/v1/tenant/:tenant_id/timeline/:timeline_id", |r| {
+        .get("/v1/branch/:branch_id", |r| {
             request_span(r, timeline_status_handler)
         })
-        .delete("/v1/tenant/:tenant_id/timeline/:timeline_id", |r| {
+        .delete("/v1/branch/:branch_id", |r| {
             request_span(r, timeline_delete_handler)
         })
-        .patch(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/control_file",
-            |r| request_span(r, patch_control_file_handler),
-        )
-        .post(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/checkpoint",
-            |r| request_span(r, timeline_checkpoint_handler),
-        )
-        .get("/v1/tenant/:tenant_id/timeline/:timeline_id/digest", |r| {
+        .patch("/v1/branch/:branch_id/control_file", |r| {
+            request_span(r, patch_control_file_handler)
+        })
+        .post("/v1/branch/:branch_id/checkpoint", |r| {
+            request_span(r, timeline_checkpoint_handler)
+        })
+        .get("/v1/branch/:branch_id/digest", |r| {
             request_span(r, timeline_digest_handler)
         })
-        .post(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/backup_partial_reset",
-            |r| request_span(r, timeline_backup_partial_reset),
-        )
+        .post("/v1/branch/:branch_id/backup_partial_reset", |r| {
+            request_span(r, timeline_backup_partial_reset)
+        })
         .get("/v1/debug_dump", |r| request_span(r, dump_debug_handler))
 }
 

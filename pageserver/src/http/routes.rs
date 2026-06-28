@@ -27,7 +27,7 @@ use remote_storage::GenericRemoteStorage;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::auth::SwappableJwtAuth;
-use utils::id::{TenantId, TimelineId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::config::PageServerConf;
@@ -89,9 +89,9 @@ fn get_config(request: &Request<Body>) -> &'static PageServerConf {
 }
 
 /// Check that the requester is authorized to operate on given tenant
-fn check_permission(request: &Request<Body>, tenant_id: Option<TenantId>) -> Result<(), ApiError> {
+fn check_permission(request: &Request<Body>, branch_id: Option<BranchId>) -> Result<(), ApiError> {
     check_permission_with(request, |claims| {
-        crate::auth::check_permission(claims, tenant_id)
+        crate::auth::check_permission(claims, branch_id)
     })
 }
 
@@ -130,7 +130,7 @@ async fn build_timeline_info(
     include_image_consistent_lsn: bool,
     ctx: &RequestContext,
 ) -> anyhow::Result<TimelineInfo> {
-    crate::page_server::debug_assert_current_span_has_tenant_and_timeline_id();
+    crate::page_server::debug_assert_current_span_has_branch_id();
 
     if force_await_initial_logical_size {
         timeline.clone().await_initial_logical_size().await
@@ -163,7 +163,7 @@ async fn build_timeline_info_common(
     ctx: &RequestContext,
     logical_size_task_priority: page_server::timeline::GetLogicalSizePriority,
 ) -> anyhow::Result<TimelineInfo> {
-    crate::page_server::debug_assert_current_span_has_tenant_and_timeline_id();
+    crate::page_server::debug_assert_current_span_has_branch_id();
     let initdb_lsn = timeline.initdb_lsn;
     let last_record_lsn = timeline.get_last_record_lsn();
     let (wal_source_connstr, last_received_msg_lsn, last_received_msg_ts) = {
@@ -179,7 +179,7 @@ async fn build_timeline_info_common(
         }
     };
 
-    let ancestor_timeline_id = timeline.get_ancestor_timeline_id();
+    let ancestor_branch_id = timeline.get_ancestor_branch_id();
     let ancestor_lsn = match timeline.get_ancestor_lsn() {
         Lsn(0) => None,
         lsn @ Lsn(_) => Some(lsn),
@@ -215,9 +215,8 @@ async fn build_timeline_info_common(
     let (rel_size_migration, rel_size_migrated_at) = timeline.get_rel_size_v2_status();
 
     let info = TimelineInfo {
-        tenant_id: timeline.tenant_id,
-        timeline_id: timeline.timeline_id,
-        ancestor_timeline_id,
+        branch_id: timeline.branch_id,
+        ancestor_branch_id,
         ancestor_lsn,
         // HTTP API field name kept as `disk_consistent_lsn` for back-compat
         // but populated with the durable `consistent_lsn` (gap-free, post-flush).
@@ -302,20 +301,20 @@ async fn timeline_list_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&request, "tenant_id")?;
+    let branch_id: BranchId = parse_request_param(&request, "branch_id")?;
     let include_non_incremental_logical_size: Option<bool> =
         parse_query_param(&request, "include-non-incremental-logical-size")?;
     let force_await_initial_logical_size: Option<bool> =
         parse_query_param(&request, "force-await-initial-logical-size")?;
     let include_image_consistent_lsn: Option<bool> =
         parse_query_param(&request, "include-image-consistent-lsn")?;
-    check_permission(&request, Some(tenant_id))?;
+    check_permission(&request, Some(branch_id))?;
 
     let state = get_state(&request);
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
 
     let response_data = async {
-        let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
+        let tenant = state.tenant_manager.get_attached_tenant_shard(branch_id)?;
 
         let timelines = tenant.list_timelines();
 
@@ -328,7 +327,7 @@ async fn timeline_list_handler(
                 include_image_consistent_lsn.unwrap_or(false),
                 &ctx,
             )
-            .instrument(info_span!("build_timeline_info", timeline_id = %timeline.timeline_id))
+            .instrument(info_span!("build_timeline_info", branch_id = %timeline.branch_id))
             .await
             .context("Failed to build timeline info")
             .map_err(ApiError::InternalServerError)?;
@@ -338,7 +337,7 @@ async fn timeline_list_handler(
         Ok::<Vec<TimelineInfo>, ApiError>(response_data)
     }
     .instrument(info_span!("timeline_list",
-                tenant_id = %tenant_id))
+                branch_id = %branch_id))
     .await?;
 
     json_response(StatusCode::OK, response_data)
@@ -348,24 +347,23 @@ async fn timeline_detail_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&request, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&request, "branch_id")?;
     let include_non_incremental_logical_size: Option<bool> =
         parse_query_param(&request, "include-non-incremental-logical-size")?;
     let force_await_initial_logical_size: Option<bool> =
         parse_query_param(&request, "force-await-initial-logical-size")?;
     let include_image_consistent_lsn: Option<bool> =
         parse_query_param(&request, "include-image-consistent-lsn")?;
-    check_permission(&request, Some(tenant_id))?;
+    check_permission(&request, Some(branch_id))?;
 
     // Logical size calculation needs downloading.
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
     let state = get_state(&request);
 
     let timeline_info = async {
-        let tenant = state.tenant_manager.get_attached_tenant_shard(tenant_id)?;
+        let tenant = state.tenant_manager.get_attached_tenant_shard(branch_id)?;
 
-        let timeline = tenant.get_timeline(timeline_id, false)?;
+        let timeline = tenant.get_timeline(branch_id, false)?;
         let ctx = &ctx.with_scope_timeline(&timeline);
 
         let timeline_info = build_timeline_info(
@@ -382,8 +380,8 @@ async fn timeline_detail_handler(
         Ok::<_, ApiError>(timeline_info)
     }
     .instrument(info_span!("timeline_detail",
-                tenant_id = %tenant_id,
-                %timeline_id))
+                branch_id = %branch_id,
+                %branch_id))
     .await?;
 
     json_response(StatusCode::OK, timeline_info)
@@ -393,11 +391,11 @@ async fn get_lsn_by_timestamp_handler(
     request: Request<Body>,
     cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&request, "tenant_id")?;
-    check_permission(&request, Some(tenant_id))?;
+    let branch_id: BranchId = parse_request_param(&request, "branch_id")?;
+    check_permission(&request, Some(branch_id))?;
     let state = get_state(&request);
 
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&request, "branch_id")?;
     let timestamp_raw = must_get_query_param(&request, "timestamp")?;
     let timestamp = humantime::parse_rfc3339(&timestamp_raw)
         .with_context(|| format!("Invalid time: {timestamp_raw:?}"))
@@ -407,7 +405,7 @@ async fn get_lsn_by_timestamp_handler(
     let with_lease = parse_query_param(&request, "with_lease")?.unwrap_or(false);
 
     let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
+        active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
         .with_scope_timeline(&timeline);
     let result = timeline
@@ -460,11 +458,11 @@ async fn get_timestamp_of_lsn_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&request, "tenant_id")?;
-    check_permission(&request, Some(tenant_id))?;
+    let branch_id: BranchId = parse_request_param(&request, "branch_id")?;
+    check_permission(&request, Some(branch_id))?;
     let state = get_state(&request);
 
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
+    let branch_id: BranchId = parse_request_param(&request, "branch_id")?;
 
     let lsn_str = must_get_query_param(&request, "lsn")?;
     let lsn = Lsn::from_str(&lsn_str)
@@ -472,7 +470,7 @@ async fn get_timestamp_of_lsn_handler(
         .map_err(ApiError::BadRequest)?;
 
     let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
+        active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
         .with_scope_timeline(&timeline);
     let result = timeline.get_timestamp_for_lsn(lsn, &ctx).await?;
@@ -505,9 +503,8 @@ async fn lsn_lease_handler(
     mut request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&request, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_id))?;
+    let branch_id: BranchId = parse_request_param(&request, "branch_id")?;
+    check_permission(&request, Some(branch_id))?;
     let lsn = json_request::<LsnLeaseRequest>(&mut request).await?.lsn;
 
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
@@ -515,7 +512,7 @@ async fn lsn_lease_handler(
     let state = get_state(&request);
 
     let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
+        active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
 
     let result = async {
         timeline
@@ -526,7 +523,7 @@ async fn lsn_lease_handler(
                 )
             })
     }
-    .instrument(info_span!("init_lsn_lease", tenant_id = %tenant_id, %timeline_id))
+    .instrument(info_span!("init_lsn_lease", branch_id = %branch_id))
     .await?;
 
     json_response(StatusCode::OK, result)
@@ -537,9 +534,8 @@ async fn timeline_gc_handler(
     mut request: Request<Body>,
     cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&request, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_id))?;
+    let branch_id: BranchId = parse_request_param(&request, "branch_id")?;
+    check_permission(&request, Some(branch_id))?;
 
     let gc_req: TimelineGcRequest = json_request(&mut request).await?;
 
@@ -548,7 +544,7 @@ async fn timeline_gc_handler(
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
     let gc_result = state
         .tenant_manager
-        .immediate_gc(tenant_id, timeline_id, gc_req, cancel, &ctx)
+        .immediate_gc(branch_id, gc_req, cancel, &ctx)
         .await?;
 
     json_response(StatusCode::OK, gc_result)
@@ -563,9 +559,8 @@ async fn timeline_flush_handler(
     request: Request<Body>,
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
-    let tenant_id: TenantId = parse_request_param(&request, "tenant_id")?;
-    let timeline_id: TimelineId = parse_request_param(&request, "timeline_id")?;
-    check_permission(&request, Some(tenant_id))?;
+    let branch_id: BranchId = parse_request_param(&request, "branch_id")?;
+    check_permission(&request, Some(branch_id))?;
 
     let wait_lsn: Option<Lsn> = parse_query_param(&request, "lsn")?;
 
@@ -573,7 +568,7 @@ async fn timeline_flush_handler(
 
     async {
         let timeline =
-            active_timeline_of_active_tenant(&state.tenant_manager, tenant_id, timeline_id).await?;
+            active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
         let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
             .with_scope_timeline(&timeline);
 
@@ -602,18 +597,17 @@ async fn timeline_flush_handler(
 
         json_response(StatusCode::OK, ())
     }
-    .instrument(info_span!("flush", tenant_id = %tenant_id, %timeline_id))
+    .instrument(info_span!("flush", branch_id = %branch_id))
     .await
 }
 
 async fn active_timeline_of_active_tenant(
     tenant_manager: &TenantManager,
-    tenant_id: TenantId,
-    timeline_id: TimelineId,
+    branch_id: BranchId,
 ) -> Result<Arc<Timeline>, ApiError> {
-    let tenant = tenant_manager.get_attached_tenant_shard(tenant_id)?;
+    let tenant = tenant_manager.get_attached_tenant_shard(branch_id)?;
 
-    Ok(tenant.get_timeline(timeline_id, true)?)
+    Ok(tenant.get_timeline(branch_id, true)?)
 }
 
 async fn always_panic_handler(
@@ -694,7 +688,7 @@ async fn get_utilization(
     // avoid needless statvfs calls even though those should be non-blocking fast.
     // regenerate at most 1Hz to allow polling at any rate.
     if !still_valid {
-        let path = state.conf.tenants_path();
+        let path = state.conf.branches_path();
         let doc =
             crate::utilization::regenerate(state.conf, path.as_std_path(), &state.tenant_manager)
                 .map_err(ApiError::InternalServerError)?;
@@ -884,29 +878,29 @@ pub fn make_router(
         .post("/v1/reload_auth_validation_keys", |r| {
             api_handler(r, reload_auth_validation_keys_handler)
         })
-        .get("/v1/tenant/:tenant_id/timeline", |r| {
+        .get("/v1/branch/:branch_id/timeline", |r| {
             api_handler(r, timeline_list_handler)
         })
-        .get("/v1/tenant/:tenant_id/timeline/:timeline_id", |r| {
+        .get("/v1/branch/:branch_id", |r| {
             api_handler(r, timeline_detail_handler)
         })
         .get(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/get_lsn_by_timestamp",
+            "/v1/branch/:branch_id/get_lsn_by_timestamp",
             |r| api_handler(r, get_lsn_by_timestamp_handler),
         )
         .get(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/get_timestamp_of_lsn",
+            "/v1/branch/:branch_id/get_timestamp_of_lsn",
             |r| api_handler(r, get_timestamp_of_lsn_handler),
         )
         .post(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/lsn_lease",
+            "/v1/branch/:branch_id/lsn_lease",
             |r| api_handler(r, lsn_lease_handler),
         )
-        .put("/v1/tenant/:tenant_id/timeline/:timeline_id/do_gc", |r| {
+        .put("/v1/branch/:branch_id/do_gc", |r| {
             api_handler(r, timeline_gc_handler)
         })
         .put(
-            "/v1/tenant/:tenant_id/timeline/:timeline_id/flush",
+            "/v1/branch/:branch_id/flush",
             // Not testing-gated: the launcher calls this on the ancestor at
             // branch time (with `?lsn=`) to flush its pages to YB so the
             // branch's `create_branch_row` durability barrier clears

@@ -8,15 +8,15 @@ use std::time::{Duration, Instant};
 /// in [`storage_controller::http`]
 use postgres_versioninfo::PgMajorVersion;
 use serde::{Deserialize, Serialize};
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
-use crate::models::{PageserverUtilization, TenantConfig, TimelineInfo};
+use crate::models::{PageserverUtilization, BranchConfig, TimelineInfo};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct TenantCreateRequest {
-    pub new_tenant_id: TenantId,
+pub struct BranchCreateRequest {
+    pub new_branch_id: BranchId,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<u32>,
@@ -26,19 +26,19 @@ pub struct TenantCreateRequest {
     pub placement_policy: Option<PlacementPolicy>,
 
     #[serde(flatten)]
-    pub config: TenantConfig, // as we have a flattened field, we should reject all unknown fields in it
+    pub config: BranchConfig, // as we have a flattened field, we should reject all unknown fields in it
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct TenantCreateResponseShard {
-    pub shard_id: TenantId,
+pub struct BranchCreateResponseShard {
+    pub branch_id: BranchId,
     pub node_id: NodeId,
     pub generation: u32,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct TenantCreateResponse {
-    pub shards: Vec<TenantCreateResponseShard>,
+pub struct BranchCreateResponse {
+    pub shards: Vec<BranchCreateResponseShard>,
 }
 
 /// A compute endpoint record persisted by the storage controller on behalf of
@@ -53,8 +53,7 @@ pub struct TenantCreateResponse {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ComputeEndpoint {
     pub endpoint_id: String,
-    pub tenant_id: String,
-    pub timeline_id: String,
+    pub branch_id: String,
     pub spec: serde_json::Value,
 }
 
@@ -84,14 +83,14 @@ pub struct NodeConfigureRequest {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct TenantPolicyRequest {
+pub struct BranchPolicyRequest {
     pub placement: Option<PlacementPolicy>,
     pub scheduling: Option<ShardSchedulingPolicy>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct TenantLocateResponseShard {
-    pub shard_id: TenantId,
+pub struct BranchLocateResponseShard {
+    pub branch_id: BranchId,
     pub node_id: NodeId,
 
     pub listen_pg_addr: String,
@@ -105,20 +104,20 @@ pub struct TenantLocateResponseShard {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct TenantLocateResponse {
-    pub shards: Vec<TenantLocateResponseShard>,
+pub struct BranchLocateResponse {
+    pub shards: Vec<BranchLocateResponseShard>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct TenantDescribeResponse {
-    pub tenant_id: TenantId,
-    pub shards: Vec<TenantDescribeResponseShard>,
+pub struct BranchDescribeResponse {
+    pub branch_id: BranchId,
+    pub shards: Vec<BranchDescribeResponseShard>,
     pub policy: PlacementPolicy,
-    pub config: TenantConfig,
+    pub config: BranchConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct TenantTimelineDescribeResponse {
+pub struct BranchTimelineDescribeResponse {
     pub shards: Vec<TimelineInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_consistent_lsn: Option<Lsn>,
@@ -132,7 +131,7 @@ pub struct NodeShardResponse {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NodeShard {
-    pub tenant_id: TenantId,
+    pub branch_id: BranchId,
     /// Whether the shard is observed secondary on a specific node. True = yes, False = no, None = not on this node.
     pub is_observed_secondary: Option<bool>,
     /// Whether the shard is intended to be a secondary on a specific node. True = yes, False = no, None = not on this node.
@@ -157,8 +156,8 @@ pub struct NodeDescribeResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct TenantDescribeResponseShard {
-    pub tenant_id: TenantId,
+pub struct BranchDescribeResponseShard {
+    pub branch_id: BranchId,
 
     pub node_attached: Option<NodeId>,
     pub node_secondary: Vec<NodeId>,
@@ -177,13 +176,13 @@ pub struct TenantDescribeResponseShard {
     pub scheduling_policy: ShardSchedulingPolicy,
 }
 
-/// Migration request for a given tenant shard to a given node.
+/// Migration request for a given branch to a given node.
 ///
-/// Explicitly migrating a particular shard is a low level operation
-/// TODO: higher level "Reschedule tenant" operation where the request
+/// Explicitly migrating a particular branch is a low level operation
+/// TODO: higher level "Reschedule branch" operation where the request
 /// specifies some constraints, e.g. asking it to get off particular node(s)
 #[derive(Serialize, Deserialize, Debug)]
-pub struct TenantShardMigrateRequest {
+pub struct BranchMigrateRequest {
     pub node_id: NodeId,
 
     /// Optionally, callers may specify the node they are migrating _from_, and the server will
@@ -255,7 +254,7 @@ pub enum NodeAvailability {
     // and the first successful heartbeat after the processing of the re-attach response
     // finishes on the pageserver.
     WarmingUp(Instant),
-    // Offline: Tenants shouldn't try to attach here, but they may assume that their
+    // Offline: Branches shouldn't try to attach here, but they may assume that their
     // secondary locations on this node still exist.  Newly added nodes are in this
     // state until we successfully contact them.
     Offline,
@@ -480,20 +479,20 @@ impl PlacementPolicy {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct TenantShardMigrateResponse {}
+pub struct BranchMigrateResponse {}
 
 /// Metadata health record posted from scrubber.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MetadataHealthRecord {
-    pub tenant_id: TenantId,
+    pub branch_id: BranchId,
     pub healthy: bool,
     pub last_scrubbed_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MetadataHealthUpdateRequest {
-    pub healthy_tenants: HashSet<TenantId>,
-    pub unhealthy_tenants: HashSet<TenantId>,
+    pub healthy_branches: HashSet<BranchId>,
+    pub unhealthy_branches: HashSet<BranchId>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -501,7 +500,7 @@ pub struct MetadataHealthUpdateResponse {}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MetadataHealthListUnhealthyResponse {
-    pub unhealthy_tenants: Vec<TenantId>,
+    pub unhealthy_branches: Vec<BranchId>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -541,8 +540,7 @@ pub struct TimelineSafekeeperPeer {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SCSafekeeperTimeline {
-    // SC does not know the tenant id.
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub peers: Vec<NodeId>,
 }
 
@@ -554,8 +552,7 @@ pub struct SCSafekeeperTimelinesResponse {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SafekeeperTimeline {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub peers: Vec<NodeId>,
 }
 
@@ -573,8 +570,7 @@ pub struct SafekeeperSchedulingPolicyRequest {
 /// Import request for safekeeper timelines.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TimelineImportRequest {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub start_lsn: Lsn,
     pub sk_set: Vec<NodeId>,
     pub force_upsert: bool,
@@ -603,20 +599,19 @@ pub struct TimelineRegisterRequest {
     /// Human-readable branch alias to set on the timeline row in the *same*
     /// write as the registration, folding the old separate set-branch-name
     /// round-trip. `None` leaves it unset. Rejected if the alias already maps
-    /// to a different live timeline in the same tenant.
+    /// to a different live branch.
     #[serde(default)]
     pub branch_name: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct TimelineBranchName {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub branch_name: String,
 }
 
-/// Recipe for a timeline whose ids + branch name are allocated (at
-/// `tenant create` / `timeline branch`) but whose pageserver + safekeeper
+/// Recipe for a branch whose id + branch name are allocated (at
+/// `branch create`) but whose pageserver + safekeeper
 /// aren't provisioned yet. Persisted in the storage controller's
 /// `pending_timeline_inits` table and read back by `endpoint create` to
 /// materialize the pair.
@@ -624,23 +619,22 @@ pub struct TimelineBranchName {
 pub struct PendingTimelineInitRequest {
     pub branch_name: String,
     pub pg_version: PgMajorVersion,
-    /// `None` => Bootstrap (the tenant's initial timeline, brought up via
+    /// `None` => Bootstrap (the initial branch, brought up via
     /// initdb + import). `Some` => Branch off this ancestor at `start_lsn`.
-    pub ancestor_timeline_id: Option<TimelineId>,
+    pub ancestor_branch_id: Option<BranchId>,
     /// Branch point. Ignored for Bootstrap — the pageserver picks the start
     /// LSN after initdb.
     pub start_lsn: Lsn,
 }
 
-/// A pending timeline init together with its ids, as returned by the list
+/// A pending timeline init together with its id, as returned by the list
 /// endpoint.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct PendingTimelineInit {
-    pub tenant_id: TenantId,
-    pub timeline_id: TimelineId,
+    pub branch_id: BranchId,
     pub branch_name: String,
     pub pg_version: PgMajorVersion,
-    pub ancestor_timeline_id: Option<TimelineId>,
+    pub ancestor_branch_id: Option<BranchId>,
     pub start_lsn: Lsn,
 }
 
@@ -667,12 +661,12 @@ mod test {
 
     #[test]
     fn test_reject_unknown_field() {
-        let id = TenantId::generate();
+        let id = BranchId::generate();
         let create_request = serde_json::json!({
-            "new_tenant_id": id.to_string(),
+            "new_branch_id": id.to_string(),
             "unknown_field": "unknown_value".to_string(),
         });
-        let err = serde_json::from_value::<TenantCreateRequest>(create_request).unwrap_err();
+        let err = serde_json::from_value::<BranchCreateRequest>(create_request).unwrap_err();
         assert!(
             err.to_string().contains("unknown field `unknown_field`"),
             "expect unknown field `unknown_field` error, got: {err}"
@@ -686,7 +680,7 @@ mod test {
             "node_id": 123
         }"#;
 
-        let request: TenantShardMigrateRequest = serde_json::from_str(json).unwrap();
+        let request: BranchMigrateRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.node_id, NodeId(123));
         assert_eq!(request.origin_node_id, None);
         assert!(!request.migration_config.override_scheduler);

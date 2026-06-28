@@ -6,19 +6,19 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use pageserver_api::controller_api::{
-    MigrationConfig, NodeAvailabilityWrapper, NodeConfigureRequest,
+    BranchCreateRequest, BranchDescribeResponse, BranchMigrateRequest, BranchMigrateResponse,
+    BranchPolicyRequest, MigrationConfig, NodeAvailabilityWrapper, NodeConfigureRequest,
     NodeDescribeResponse, NodeRegisterRequest, NodeSchedulingPolicy, NodeShardResponse,
     PlacementPolicy, SafekeeperDescribeResponse, SafekeeperSchedulingPolicyRequest,
     ShardSchedulingPolicy,
-    SkSchedulingPolicy, TenantCreateRequest, TenantDescribeResponse, TenantPolicyRequest,
-    TenantShardMigrateRequest, TenantShardMigrateResponse, TimelineSafekeeperMigrateRequest,
+    SkSchedulingPolicy, TimelineSafekeeperMigrateRequest,
 };
-use pageserver_api::models::{TenantConfig, TenantConfigPatchRequest, TenantConfigRequest};
+use pageserver_api::models::{BranchConfig, BranchConfigPatchRequest, BranchConfigRequest};
 use pageserver_client::mgmt_api::{self};
 use reqwest::{Certificate, Method, StatusCode, Url};
 use safekeeper_api::models::TimelineLocateResponse;
 use storage_controller_client::control_api::Client;
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{BranchId, NodeId};
 
 #[derive(Subcommand, Debug)]
 enum Command {
@@ -54,7 +54,7 @@ enum Command {
         /// manually mark a node offline
         #[arg(long)]
         availability: Option<NodeAvailabilityArg>,
-        /// Scheduling policy controls whether tenant shards may be scheduled onto this node.
+        /// Scheduling policy controls whether branches may be scheduled onto this node.
         #[arg(long)]
         scheduling: Option<NodeSchedulingPolicy>,
     },
@@ -68,10 +68,10 @@ enum Command {
     NodeStartDelete {
         #[arg(long)]
         node_id: NodeId,
-        /// When `force` is true, skip waiting for shards to prewarm during migration.
-        /// This can significantly speed up node deletion since prewarming all shards
+        /// When `force` is true, skip waiting for branches to prewarm during migration.
+        /// This can significantly speed up node deletion since prewarming all branches
         /// can take considerable time, but may result in slower initial access to
-        /// migrated shards until they warm up naturally.
+        /// migrated branches until they warm up naturally.
         #[arg(long)]
         force: bool,
     },
@@ -89,17 +89,17 @@ enum Command {
         #[arg(long)]
         node_id: NodeId,
     },
-    /// Modify a tenant's policies in the storage controller
-    TenantPolicy {
+    /// Modify a branch's policies in the storage controller
+    BranchPolicy {
         #[arg(long)]
-        tenant_id: TenantId,
-        /// Placement policy controls whether a tenant is `detached`, has only a secondary location (`secondary`),
+        branch_id: BranchId,
+        /// Placement policy controls whether a branch is `detached`, has only a secondary location (`secondary`),
         /// or is in the normal attached state with N secondary locations (`attached:N`)
         #[arg(long)]
         placement: Option<PlacementPolicyArg>,
-        /// Scheduling policy enables pausing the controller's scheduling activity involving this tenant.  `active` is normal,
+        /// Scheduling policy enables pausing the controller's scheduling activity involving this branch.  `active` is normal,
         /// `essential` disables optimization scheduling changes, `pause` disables all scheduling changes, and `stop` prevents
-        /// all reconciliation activity including for scheduling changes already made.  `pause` and `stop` can make a tenant
+        /// all reconciliation activity including for scheduling changes already made.  `pause` and `stop` can make a branch
         /// unavailable, and are only for use in emergencies.
         #[arg(long)]
         scheduling: Option<ShardSchedulingPolicyArg>,
@@ -108,25 +108,25 @@ enum Command {
     Nodes {},
     /// List soft deleted nodes known to the storage controller
     NodeTombstones {},
-    /// List tenants known to the storage controller
-    Tenants {
-        /// If this field is set, it will list the tenants on a specific node
+    /// List branches known to the storage controller
+    Branches {
+        /// If this field is set, it will list the branches on a specific node
         node_id: Option<NodeId>,
     },
-    /// Create a new tenant in the storage controller, and by extension on pageservers.
-    TenantCreate {
+    /// Create a new branch in the storage controller, and by extension on pageservers.
+    BranchCreate {
         #[arg(long)]
-        tenant_id: TenantId,
+        branch_id: BranchId,
     },
-    /// Delete a tenant in the storage controller, and by extension on pageservers.
-    TenantDelete {
+    /// Delete a branch in the storage controller, and by extension on pageservers.
+    BranchDelete {
         #[arg(long)]
-        tenant_id: TenantId,
+        branch_id: BranchId,
     },
-    /// Migrate the attached location for a tenant shard to a specific pageserver.
-    TenantShardMigrate {
+    /// Migrate the attached location for a branch to a specific pageserver.
+    BranchMigrate {
         #[arg(long)]
-        tenant_id: TenantId,
+        branch_id: BranchId,
         #[arg(long)]
         node: NodeId,
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
@@ -134,51 +134,51 @@ enum Command {
         #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
         override_scheduler: bool,
     },
-    /// Watch the location of a tenant shard evolve, e.g. while expecting it to migrate
-    TenantShardWatch {
+    /// Watch the location of a branch evolve, e.g. while expecting it to migrate
+    BranchWatch {
         #[arg(long)]
-        tenant_id: TenantId,
+        branch_id: BranchId,
     },
-    /// Migrate the secondary location for a tenant shard to a specific pageserver.
-    TenantShardMigrateSecondary {
+    /// Migrate the secondary location for a branch to a specific pageserver.
+    BranchMigrateSecondary {
         #[arg(long)]
-        tenant_id: TenantId,
+        branch_id: BranchId,
         #[arg(long)]
         node: NodeId,
     },
-    /// Cancel any ongoing reconciliation for this shard
-    TenantShardCancelReconcile {
+    /// Cancel any ongoing reconciliation for this branch
+    BranchCancelReconcile {
         #[arg(long)]
-        tenant_id: TenantId,
+        branch_id: BranchId,
     },
-    /// Set the pageserver tenant configuration of a tenant: this is the configuration structure
+    /// Set the pageserver branch configuration of a branch: this is the configuration structure
     /// that is passed through to pageservers, and does not affect storage controller behavior.
-    /// Any previous tenant configs are overwritten.
-    SetTenantConfig {
+    /// Any previous branch configs are overwritten.
+    SetBranchConfig {
         #[arg(long)]
-        tenant_id: TenantId,
+        branch_id: BranchId,
         #[arg(long)]
         config: String,
     },
-    /// Patch the pageserver tenant configuration of a tenant. Any fields with null values in the
-    /// provided JSON are unset from the tenant config and all fields with non-null values are set.
+    /// Patch the pageserver branch configuration of a branch. Any fields with null values in the
+    /// provided JSON are unset from the branch config and all fields with non-null values are set.
     /// Unspecified fields are not changed.
-    PatchTenantConfig {
+    PatchBranchConfig {
         #[arg(long)]
-        tenant_id: TenantId,
+        branch_id: BranchId,
         #[arg(long)]
         config: String,
     },
-    /// Print details about a particular tenant, including all its shards' states.
-    TenantDescribe {
+    /// Print details about a particular branch, including all its shards' states.
+    BranchDescribe {
         #[arg(long)]
-        tenant_id: TenantId,
+        branch_id: BranchId,
     },
-    /// Uncleanly drop a tenant from the storage controller: this doesn't delete anything from pageservers. Appropriate
-    /// if you e.g. used `tenant-warmup` by mistake on a tenant ID that doesn't really exist, or is in some other region.
-    TenantDrop {
+    /// Uncleanly drop a branch from the storage controller: this doesn't delete anything from pageservers. Appropriate
+    /// if you e.g. used `branch-warmup` by mistake on a branch ID that doesn't really exist, or is in some other region.
+    BranchDrop {
         #[arg(long)]
-        tenant_id: TenantId,
+        branch_id: BranchId,
         #[arg(long)]
         unclean: bool,
     },
@@ -197,7 +197,7 @@ enum Command {
         // Optional: migration concurrency (default is 8)
         #[arg(long)]
         concurrency: Option<usize>,
-        // Optional: maximum number of shards to migrate
+        // Optional: maximum number of branches to migrate
         #[arg(long)]
         max_shards: Option<usize>,
         // Optional: when set to true, nothing is migrated, but the plan is printed to stdout
@@ -241,42 +241,32 @@ enum Command {
         #[arg(long)]
         scheduling_policy: SkSchedulingPolicyArg,
     },
-    /// Downloads any missing heatmap layers for all shard for a given timeline
+    /// Downloads any missing heatmap layers for all shard for a given branch
     DownloadHeatmapLayers {
-        /// Tenant ID or tenant shard ID. When an unsharded tenant ID is specified,
-        /// the operation is performed on all shards. When a sharded tenant ID is
-        /// specified, the operation is only performed on the specified shard.
+        /// Branch ID. The operation is performed on all shards of the branch.
         #[arg(long)]
-        tenant_id: TenantId,
-        #[arg(long)]
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         /// Optional: Maximum download concurrency (default is 16)
         #[arg(long)]
         concurrency: Option<usize>,
     },
-    /// Locate safekeepers for a timeline from the storcon DB.
-    TimelineLocate {
+    /// Locate safekeepers for a branch from the storcon DB.
+    BranchLocate {
         #[arg(long)]
-        tenant_id: TenantId,
-        #[arg(long)]
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     },
-    /// Migrate a timeline to a new set of safekeepers
-    TimelineSafekeeperMigrate {
+    /// Migrate a branch to a new set of safekeepers
+    BranchSafekeeperMigrate {
         #[arg(long)]
-        tenant_id: TenantId,
-        #[arg(long)]
-        timeline_id: TimelineId,
+        branch_id: BranchId,
         /// Example: --new-sk-set 1,2,3
         #[arg(long, required = true, value_delimiter = ',')]
         new_sk_set: Vec<NodeId>,
     },
     /// Abort ongoing safekeeper migration.
-    TimelineSafekeeperMigrateAbort {
+    BranchSafekeeperMigrateAbort {
         #[arg(long)]
-        tenant_id: TenantId,
-        #[arg(long)]
-        timeline_id: TimelineId,
+        branch_id: BranchId,
     },
 }
 
@@ -460,23 +450,23 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
         }
-        Command::TenantCreate { tenant_id } => {
+        Command::BranchCreate { branch_id } => {
             storcon_client
                 .dispatch::<_, ()>(
                     Method::POST,
-                    "v1/tenant".to_string(),
-                    Some(TenantCreateRequest {
-                        new_tenant_id: tenant_id,
+                    "v1/branch".to_string(),
+                    Some(BranchCreateRequest {
+                        new_branch_id: branch_id,
                         generation: None,
                         placement_policy: Some(PlacementPolicy::Attached(1)),
-                        config: TenantConfig::default(),
+                        config: BranchConfig::default(),
                     }),
                 )
                 .await?;
         }
-        Command::TenantDelete { tenant_id } => {
+        Command::BranchDelete { branch_id } => {
             let status = vps_client
-                .tenant_delete(tenant_id)
+                .branch_delete(branch_id)
                 .await?;
             tracing::info!("Delete status: {}", status);
         }
@@ -521,7 +511,7 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
         }
-        Command::Tenants {
+        Command::Branches {
             node_id: Some(node_id),
         } => {
             let describe_response = storcon_client
@@ -534,13 +524,13 @@ async fn main() -> anyhow::Result<()> {
             let shards = describe_response.shards;
             let mut table = comfy_table::Table::new();
             table.set_header([
-                "Shard",
+                "Branch",
                 "Intended Primary/Secondary",
                 "Observed Primary/Secondary",
             ]);
             for shard in shards {
                 table.add_row([
-                    format!("{}", shard.tenant_id),
+                    format!("{}", shard.branch_id),
                     match shard.is_intended_secondary {
                         None => "".to_string(),
                         Some(true) => "Secondary".to_string(),
@@ -555,24 +545,24 @@ async fn main() -> anyhow::Result<()> {
             }
             println!("{table}");
         }
-        Command::Tenants { node_id: None } => {
+        Command::Branches { node_id: None } => {
             // Set up output formatting
             let mut table = comfy_table::Table::new();
-            table.set_header(["TenantId", "Placement", "Scheduling"]);
+            table.set_header(["BranchId", "Placement", "Scheduling"]);
 
             // Pagination loop over listing API
             let mut start_after = None;
             const LIMIT: usize = 1000;
             loop {
                 let path = match start_after {
-                    None => format!("control/v1/tenant?limit={LIMIT}"),
+                    None => format!("control/v1/branch?limit={LIMIT}"),
                     Some(start_after) => {
-                        format!("control/v1/tenant?limit={LIMIT}&start_after={start_after}")
+                        format!("control/v1/branch?limit={LIMIT}&start_after={start_after}")
                     }
                 };
 
                 let resp = storcon_client
-                    .dispatch::<(), Vec<TenantDescribeResponse>>(Method::GET, path, None)
+                    .dispatch::<(), Vec<BranchDescribeResponse>>(Method::GET, path, None)
                     .await?;
 
                 if resp.is_empty() {
@@ -586,13 +576,13 @@ async fn main() -> anyhow::Result<()> {
                     eprint!(".");
                 }
 
-                start_after = Some(resp.last().unwrap().tenant_id);
+                start_after = Some(resp.last().unwrap().branch_id);
 
-                for tenant in resp {
-                    let shard_zero = tenant.shards.into_iter().next().unwrap();
+                for branch in resp {
+                    let shard_zero = branch.shards.into_iter().next().unwrap();
                     table.add_row([
-                        format!("{}", tenant.tenant_id),
-                        format!("{:?}", tenant.policy),
+                        format!("{}", branch.branch_id),
+                        format!("{:?}", branch.policy),
                         format!("{:?}", shard_zero.scheduling_policy),
                     ]);
                 }
@@ -605,25 +595,25 @@ async fn main() -> anyhow::Result<()> {
 
             println!("{table}");
         }
-        Command::TenantPolicy {
-            tenant_id,
+        Command::BranchPolicy {
+            branch_id,
             placement,
             scheduling,
         } => {
-            let req = TenantPolicyRequest {
+            let req = BranchPolicyRequest {
                 scheduling: scheduling.map(|s| s.0),
                 placement: placement.map(|p| p.0),
             };
             storcon_client
                 .dispatch::<_, ()>(
                     Method::PUT,
-                    format!("control/v1/tenant/{tenant_id}/policy"),
+                    format!("control/v1/branch/{branch_id}/policy"),
                     Some(req),
                 )
                 .await?;
         }
-        Command::TenantShardMigrate {
-            tenant_id,
+        Command::BranchMigrate {
+            branch_id,
             node,
             prewarm,
             override_scheduler,
@@ -634,16 +624,16 @@ async fn main() -> anyhow::Result<()> {
                 ..Default::default()
             };
 
-            let req = TenantShardMigrateRequest {
+            let req = BranchMigrateRequest {
                 node_id: node,
                 origin_node_id: None,
                 migration_config,
             };
 
             match storcon_client
-                .dispatch::<TenantShardMigrateRequest, TenantShardMigrateResponse>(
+                .dispatch::<BranchMigrateRequest, BranchMigrateResponse>(
                     Method::PUT,
-                    format!("control/v1/tenant/{tenant_id}/migrate"),
+                    format!("control/v1/branch/{branch_id}/migrate"),
                     Some(req),
                 )
                 .await
@@ -658,68 +648,68 @@ async fn main() -> anyhow::Result<()> {
                 Ok(_) => {}
             }
 
-            watch_tenant_shard(storcon_client, tenant_id, Some(node)).await?;
+            watch_branch(storcon_client, branch_id, Some(node)).await?;
         }
-        Command::TenantShardWatch { tenant_id } => {
-            watch_tenant_shard(storcon_client, tenant_id, None).await?;
+        Command::BranchWatch { branch_id } => {
+            watch_branch(storcon_client, branch_id, None).await?;
         }
-        Command::TenantShardMigrateSecondary {
-            tenant_id,
+        Command::BranchMigrateSecondary {
+            branch_id,
             node,
         } => {
-            let req = TenantShardMigrateRequest {
+            let req = BranchMigrateRequest {
                 node_id: node,
                 origin_node_id: None,
                 migration_config: MigrationConfig::default(),
             };
 
             storcon_client
-                .dispatch::<TenantShardMigrateRequest, TenantShardMigrateResponse>(
+                .dispatch::<BranchMigrateRequest, BranchMigrateResponse>(
                     Method::PUT,
-                    format!("control/v1/tenant/{tenant_id}/migrate_secondary"),
+                    format!("control/v1/branch/{branch_id}/migrate_secondary"),
                     Some(req),
                 )
                 .await?;
         }
-        Command::TenantShardCancelReconcile { tenant_id } => {
+        Command::BranchCancelReconcile { branch_id } => {
             storcon_client
                 .dispatch::<(), ()>(
                     Method::PUT,
-                    format!("control/v1/tenant/{tenant_id}/cancel_reconcile"),
+                    format!("control/v1/branch/{branch_id}/cancel_reconcile"),
                     None,
                 )
                 .await?;
         }
-        Command::SetTenantConfig { tenant_id, config } => {
-            let tenant_conf = serde_json::from_str(&config)?;
+        Command::SetBranchConfig { branch_id, config } => {
+            let branch_conf = serde_json::from_str(&config)?;
 
             vps_client
-                .set_tenant_config(&TenantConfigRequest {
-                    tenant_id,
-                    config: tenant_conf,
+                .set_branch_config(&BranchConfigRequest {
+                    branch_id,
+                    config: branch_conf,
                 })
                 .await?;
         }
-        Command::PatchTenantConfig { tenant_id, config } => {
-            let tenant_conf = serde_json::from_str(&config)?;
+        Command::PatchBranchConfig { branch_id, config } => {
+            let branch_conf = serde_json::from_str(&config)?;
 
             vps_client
-                .patch_tenant_config(&TenantConfigPatchRequest {
-                    tenant_id,
-                    config: tenant_conf,
+                .patch_branch_config(&BranchConfigPatchRequest {
+                    branch_id,
+                    config: branch_conf,
                 })
                 .await?;
         }
-        Command::TenantDescribe { tenant_id } => {
-            let TenantDescribeResponse {
-                tenant_id,
+        Command::BranchDescribe { branch_id } => {
+            let BranchDescribeResponse {
+                branch_id,
                 shards,
                 policy,
                 config,
             } = storcon_client
-                .dispatch::<(), TenantDescribeResponse>(
+                .dispatch::<(), BranchDescribeResponse>(
                     Method::GET,
-                    format!("control/v1/tenant/{tenant_id}"),
+                    format!("control/v1/branch/{branch_id}"),
                     None,
                 )
                 .await?;
@@ -736,14 +726,14 @@ async fn main() -> anyhow::Result<()> {
                 .map(|n| (n.id, n))
                 .collect::<HashMap<_, _>>();
 
-            println!("Tenant {tenant_id}");
+            println!("Branch {branch_id}");
             let mut table = comfy_table::Table::new();
             table.add_row(["Policy", &format!("{policy:?}")]);
             table.add_row(["Config", &serde_json::to_string_pretty(&config).unwrap()]);
             println!("{table}");
             println!("Shards:");
             let mut table = comfy_table::Table::new();
-            table.set_header(["Shard", "Attached", "Secondary", "Last error", "status"]);
+            table.set_header(["Branch", "Attached", "Secondary", "Last error", "status"]);
             for shard in shards {
                 let secondary = shard
                     .node_secondary
@@ -772,7 +762,7 @@ async fn main() -> anyhow::Result<()> {
                     .map(|id| nodes.get(id).expect("Shard references nonexistent node"));
 
                 table.add_row([
-                    format!("{}", shard.tenant_id),
+                    format!("{}", shard.branch_id),
                     attached_node
                         .map(|n| format!("{} ({})", n.listen_http_addr, n.id))
                         .unwrap_or(String::new()),
@@ -783,16 +773,16 @@ async fn main() -> anyhow::Result<()> {
             }
             println!("{table}");
         }
-        Command::TenantDrop { tenant_id, unclean } => {
+        Command::BranchDrop { branch_id, unclean } => {
             if !unclean {
                 anyhow::bail!(
-                    "This command is not a tenant deletion, and uncleanly drops all controller state for the tenant.  If you know what you're doing, add `--unclean` to proceed."
+                    "This command is not a branch deletion, and uncleanly drops all controller state for the branch.  If you know what you're doing, add `--unclean` to proceed."
                 )
             }
             storcon_client
                 .dispatch::<(), ()>(
                     Method::POST,
-                    format!("debug/v1/tenant/{tenant_id}/drop"),
+                    format!("debug/v1/branch/{branch_id}/drop"),
                     None,
                 )
                 .await?;
@@ -800,7 +790,7 @@ async fn main() -> anyhow::Result<()> {
         Command::NodeDrop { node_id, unclean } => {
             if !unclean {
                 anyhow::bail!(
-                    "This command is not a clean node decommission, and uncleanly drops all controller state for the node, without checking if any tenants still refer to it.  If you know what you're doing, add `--unclean` to proceed."
+                    "This command is not a clean node decommission, and uncleanly drops all controller state for the node, without checking if any branches still refer to it.  If you know what you're doing, add `--unclean` to proceed."
                 )
             }
             storcon_client
@@ -940,13 +930,13 @@ async fn main() -> anyhow::Result<()> {
                     .await?;
             }
 
-            // Perform the migration: move each tenant shard scheduled on a node to
+            // Perform the migration: move each branch scheduled on a node to
             // be drained to a node which is being filled. A simple round robin
             // strategy is used to pick the new node.
-            let tenants = storcon_client
-                .dispatch::<(), Vec<TenantDescribeResponse>>(
+            let branches = storcon_client
+                .dispatch::<(), Vec<BranchDescribeResponse>>(
                     Method::GET,
-                    "control/v1/tenant".to_string(),
+                    "control/v1/branch".to_string(),
                     None,
                 )
                 .await?;
@@ -954,21 +944,21 @@ async fn main() -> anyhow::Result<()> {
             let mut selected_node_idx = 0;
 
             struct MigrationMove {
-                tenant_id: TenantId,
+                branch_id: BranchId,
                 from: NodeId,
                 to: NodeId,
             }
 
             let mut moves: Vec<MigrationMove> = Vec::new();
 
-            let shards = tenants
+            let shards = branches
                 .into_iter()
-                .flat_map(|tenant| tenant.shards.into_iter());
+                .flat_map(|branch| branch.shards.into_iter());
             for shard in shards {
                 if let Some(max_shards) = max_shards {
                     if moves.len() >= max_shards {
                         println!(
-                            "Stop planning shard moves since the requested maximum was reached"
+                            "Stop planning branch moves since the requested maximum was reached"
                         );
                         break;
                     }
@@ -990,10 +980,10 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 moves.push(MigrationMove {
-                    tenant_id: shard.tenant_id,
+                    branch_id: shard.branch_id,
                     from: shard
                         .node_attached
-                        .expect("We only migrate attached tenants"),
+                        .expect("We only migrate attached branches"),
                     to: node_to_fill_descs[selected_node_idx].id,
                 });
                 selected_node_idx = (selected_node_idx + 1) % node_to_fill_descs.len();
@@ -1004,7 +994,7 @@ async fn main() -> anyhow::Result<()> {
             if dry_run == Some(true) {
                 println!("Dryrun requested. Planned {total_moves} moves:");
                 for mv in &moves {
-                    println!("{}: {} -> {}", mv.tenant_id, mv.from, mv.to)
+                    println!("{}: {} -> {}", mv.branch_id, mv.from, mv.to)
                 }
 
                 return Ok(());
@@ -1016,17 +1006,17 @@ async fn main() -> anyhow::Result<()> {
                     let client = Client::new(http_client.clone(), cli.api.clone(), cli.jwt.clone());
                     async move {
                         client
-                            .dispatch::<TenantShardMigrateRequest, TenantShardMigrateResponse>(
+                            .dispatch::<BranchMigrateRequest, BranchMigrateResponse>(
                                 Method::PUT,
-                                format!("control/v1/tenant/{}/migrate", mv.tenant_id),
-                                Some(TenantShardMigrateRequest {
+                                format!("control/v1/branch/{}/migrate", mv.branch_id),
+                                Some(BranchMigrateRequest {
                                     node_id: mv.to,
                                     origin_node_id: Some(mv.from),
                                     migration_config: MigrationConfig::default(),
                                 }),
                             )
                             .await
-                            .map_err(|e| (mv.tenant_id, mv.from, mv.to, e))
+                            .map_err(|e| (mv.branch_id, mv.from, mv.to, e))
                     }
                 })
                 .buffered(concurrency.unwrap_or(DEFAULT_MIGRATE_CONCURRENCY));
@@ -1039,17 +1029,17 @@ async fn main() -> anyhow::Result<()> {
                     Ok(_) => {
                         success += 1;
                     }
-                    Err((tenant_id, from, to, error)) => {
+                    Err((branch_id, from, to, error)) => {
                         failure += 1;
                         println!(
-                            "Failed to migrate {tenant_id} from node {from} to node {to}: {error}"
+                            "Failed to migrate {branch_id} from node {from} to node {to}: {error}"
                         );
                     }
                 }
 
                 if (success + failure) % 20 == 0 {
                     println!(
-                        "Processed {}/{} shards: {} succeeded, {} failed",
+                        "Processed {}/{} branches: {} succeeded, {} failed",
                         success + failure,
                         total_moves,
                         success,
@@ -1059,7 +1049,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             println!(
-                "Processed {}/{} shards: {} succeeded, {} failed",
+                "Processed {}/{} branches: {} succeeded, {} failed",
                 success + failure,
                 total_moves,
                 success,
@@ -1179,12 +1169,11 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         Command::DownloadHeatmapLayers {
-            tenant_id,
-            timeline_id,
+            branch_id,
             concurrency,
         } => {
             let mut path = format!(
-                "v1/tenant/{tenant_id}/timeline/{timeline_id}/download_heatmap_layers",
+                "v1/branch/{branch_id}/download_heatmap_layers",
             );
 
             if let Some(c) = concurrency {
@@ -1195,11 +1184,10 @@ async fn main() -> anyhow::Result<()> {
                 .dispatch::<(), ()>(Method::POST, path, None)
                 .await?;
         }
-        Command::TimelineLocate {
-            tenant_id,
-            timeline_id,
+        Command::BranchLocate {
+            branch_id,
         } => {
-            let path = format!("debug/v1/tenant/{tenant_id}/timeline/{timeline_id}/locate");
+            let path = format!("debug/v1/branch/{branch_id}/locate");
 
             let resp = storcon_client
                 .dispatch::<(), TimelineLocateResponse>(Method::GET, path, None)
@@ -1215,12 +1203,11 @@ async fn main() -> anyhow::Result<()> {
             println!("sk_set = {sk_set:?}");
             println!("new_sk_set = {new_sk_set:?}");
         }
-        Command::TimelineSafekeeperMigrate {
-            tenant_id,
-            timeline_id,
+        Command::BranchSafekeeperMigrate {
+            branch_id,
             new_sk_set,
         } => {
-            let path = format!("v1/tenant/{tenant_id}/timeline/{timeline_id}/safekeeper_migrate");
+            let path = format!("v1/branch/{branch_id}/safekeeper_migrate");
 
             storcon_client
                 .dispatch::<_, ()>(
@@ -1230,12 +1217,11 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
         }
-        Command::TimelineSafekeeperMigrateAbort {
-            tenant_id,
-            timeline_id,
+        Command::BranchSafekeeperMigrateAbort {
+            branch_id,
         } => {
             let path =
-                format!("v1/tenant/{tenant_id}/timeline/{timeline_id}/safekeeper_migrate_abort");
+                format!("v1/branch/{branch_id}/safekeeper_migrate_abort");
 
             storcon_client
                 .dispatch::<(), ()>(Method::POST, path, None)
@@ -1248,32 +1234,32 @@ async fn main() -> anyhow::Result<()> {
 
 static WATCH_INTERVAL: Duration = Duration::from_secs(5);
 
-async fn watch_tenant_shard(
+async fn watch_branch(
     storcon_client: Client,
-    tenant_id: TenantId,
+    branch_id: BranchId,
     until_migrated_to: Option<NodeId>,
 ) -> anyhow::Result<()> {
     if let Some(until_migrated_to) = until_migrated_to {
         println!(
-            "Waiting for tenant {tenant_id} to be migrated to node {until_migrated_to}"
+            "Waiting for branch {branch_id} to be migrated to node {until_migrated_to}"
         );
     }
 
     loop {
         let desc = storcon_client
-            .dispatch::<(), TenantDescribeResponse>(
+            .dispatch::<(), BranchDescribeResponse>(
                 Method::GET,
-                format!("control/v1/tenant/{tenant_id}"),
+                format!("control/v1/branch/{branch_id}"),
                 None,
             )
             .await?;
 
-        // Output the current state of the tenant shard
+        // Output the current state of the branch
         let shard = desc
             .shards
             .iter()
-            .find(|s| s.tenant_id == tenant_id)
-            .ok_or(anyhow::anyhow!("Tenant not found"))?;
+            .find(|s| s.branch_id == branch_id)
+            .ok_or(anyhow::anyhow!("Branch not found"))?;
         let summary = format!(
             "attached: {} secondary: {} {}",
             shard
@@ -1297,7 +1283,7 @@ async fn watch_tenant_shard(
         // Maybe drop out if we finished migration
         if let Some(until_migrated_to) = until_migrated_to {
             if shard.node_attached == Some(until_migrated_to) && !shard.is_reconciling {
-                println!("Tenant {tenant_id} is now on node {until_migrated_to}");
+                println!("Branch {branch_id} is now on node {until_migrated_to}");
                 break;
             }
         }
