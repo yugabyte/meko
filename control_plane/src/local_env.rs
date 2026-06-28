@@ -707,10 +707,24 @@ impl LocalEnv {
     ) -> anyhow::Result<Option<BranchId>> {
         let sc = crate::storage_controller::StorageController::from_env(self);
         let entries = sc.list_timeline_branch_names().await?;
-        Ok(entries
+        let matches: Vec<BranchId> = entries
             .into_iter()
-            .find(|e| e.branch_name == branch_name)
-            .map(|e| e.branch_id))
+            .filter(|e| e.branch_name == branch_name)
+            .map(|e| e.branch_id)
+            .collect();
+        // Branch names are NOT globally unique in the flat model: independent
+        // branches commonly share a name (every project's root branch is
+        // "main"). When several match, prefer the branch this launcher actually
+        // serves, scanning `pageservers` in provisioning order so the primary
+        // (the first-provisioned "main") wins — ancestor-by-name resolution
+        // must land on a live, forkable branch, not a torn-down namesake. Fall
+        // back to the first controller match when none is locally served.
+        let served = self
+            .pageservers
+            .iter()
+            .filter_map(|ps| ps.branch_id)
+            .find(|b| matches.contains(b));
+        Ok(served.or_else(|| matches.first().copied()))
     }
 
     pub async fn timeline_name_mappings(&self) -> anyhow::Result<HashMap<BranchId, String>> {
