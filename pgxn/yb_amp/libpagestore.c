@@ -65,8 +65,6 @@ static const struct config_enum_entry yb_amp_compute_modes[] = {
 };
 
 /* GUCs */
-char	   *yb_amp_timeline;
-char	   *yb_amp_tenant;
 char	   *yb_amp_project_id;
 char	   *yb_amp_branch_id;
 char	   *yb_amp_endpoint_id;
@@ -1515,24 +1513,6 @@ pg_init_libpagestore(void)
 							   PGC_SIGHUP,
 							   0,	/* no flags required */
 							   CheckPageserverConnstring, AssignPageserverConnstring, NULL);
-
-	DefineCustomStringVariable("yb_amp.timeline_id",
-							   "YbAmp timeline_id the server is running on",
-							   NULL,
-							   &yb_amp_timeline,
-							   "",
-							   PGC_POSTMASTER,
-							   0,	/* no flags required */
-							   check_yb_amp_id, NULL, NULL);
-
-	DefineCustomStringVariable("yb_amp.tenant_id",
-							   "YbAmp tenant_id the server is running on",
-							   NULL,
-							   &yb_amp_tenant,
-							   "",
-							   PGC_POSTMASTER,
-							   0,	/* no flags required */
-							   check_yb_amp_id, NULL, NULL);
 
 	DefineCustomStringVariable("yb_amp.project_id",
 							   "YbAmp project_id the server is running on",

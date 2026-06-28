@@ -260,8 +260,6 @@ extern page_server_api *page_server;
 extern char *pageserver_connstring;
 extern int	flush_every_n_requests;
 extern int	readahead_buffer_size;
-extern char *yb_amp_timeline;
-extern char *yb_amp_tenant;
 extern char *yb_amp_branch_id;
 extern int32 max_cluster_size;
 extern int  yb_amp_protocol_version;

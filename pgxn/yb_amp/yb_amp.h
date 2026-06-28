@@ -14,8 +14,6 @@
 
 /* GUCs */
 extern char *yb_amp_auth_token;
-extern char *yb_amp_timeline;
-extern char *yb_amp_tenant;
 extern char *yb_amp_branch_id;
 extern char *wal_acceptors_list;
 extern int	wal_acceptor_reconnect_timeout;

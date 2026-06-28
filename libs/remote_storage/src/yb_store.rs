@@ -354,9 +354,9 @@ impl YbStore {
         if s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()) {
             return true;
         }
-        // sharded id: `<32hex>-<4hex>` = 37 chars, one dash. Emitted by
-        // `TenantId::Display` (libs/utils/src/shard.rs) for any id with
-        // `shard_count != 0`. Kept as an accepted shape so a sharded
+        // sharded id: `<32hex>-<4hex>` = 37 chars, one dash. The legacy
+        // sharded-id Display form (for any id with
+        // `shard_count != 0`). Kept as an accepted shape so a sharded
         // branch id is still recognised by `extract_neon_id` (otherwise
         // the parser would skip it and produce a branch-wide LIKE scan in
         // `YbStore::list`).
@@ -1145,7 +1145,7 @@ mod tests {
     const B_LEGACY: &str = "5b36a8400fc88e7eeec19878ef7fbe30";
 
     /// Real-shape sharded id: `<32hex>-<4hex>` (37 chars, one dash).
-    /// Format emitted by `TenantId::Display` whenever `shard_count != 0`.
+    /// The legacy sharded-id Display form (when `shard_count != 0`).
     /// `looks_like_neon_id` still accepts this shape (harmless).
     const B_SHARDED: &str = "5b36a8400fc88e7eeec19878ef7fbe30-0001";
 
