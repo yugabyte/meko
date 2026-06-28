@@ -319,17 +319,25 @@ func (h *AuthHandler) CompleteNewPassword(c echo.Context) error {
 //	@Router		/auth/logout [post]
 func (h *AuthHandler) Logout(c echo.Context) error {
 	accessToken, err := h.extractAccessToken(c)
-	if err != nil {
+	if err != nil || accessToken == "" {
+		// extractAccessToken already wrote a 401 when there's no usable token
+		// (it commits the response and returns a nil error). Nothing to revoke
+		// and no cookies exist to clear, so just return.
 		return err
-	}
-
-	if err := h.svc.Logout(c.Request().Context(), accessToken); err != nil {
-		return h.classifyAuthErr(c, err)
 	}
 
 	clearAuthCookie(c, "access_token")
 	clearAuthCookie(c, "id_token")
 	clearAuthCookie(c, "refresh_token")
+
+	if err := h.svc.Logout(c.Request().Context(), accessToken); err != nil {
+		// Best-effort token revocation. Never fail the logout on this — the
+		// session cookies are already cleared, so the user is logged out of the
+		// app either way. (Cognito's own hosted-session cookie is separate and
+		// not reachable from here.)
+		slog.Warn("cognito global sign-out failed; cleared session cookies anyway",
+			"error", err)
+	}
 
 	return ok(c, http.StatusOK, map[string]string{
 		"message": "logged out",
