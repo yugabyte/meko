@@ -1,7 +1,7 @@
 openapi: "3.0.2"
 info:
   title: Page Server API
-  description: Neon Pageserver API
+  description: yb-light Pageserver API
   version: "1.0"
   license:
     name: "Apache"
@@ -67,24 +67,24 @@ paths:
         schema:
           type: string
     get:
-      description: Get tenant status
+      description: Get info about the branch
       responses:
         "200":
-          description: Currently returns the flag whether the tenant has inprogress timeline downloads
+          description: TimelineInfo
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TenantInfo"
+                $ref: "#/components/schemas/TimelineInfo"
 
     delete:
       description: |
-        Attempts to delete specified tenant. 500, 503 and 409 errors should be retried.  Deleting
-        a non-existent tenant is considered successful (returns 200).
+        Attempts to delete specified branch. 500, 503 and 409 errors should be retried.  Deleting
+        a non-existent branch is considered successful (returns 200).
       responses:
         "200":
-          description: Tenant was successfully deleted, or was already not found.
+          description: Branch was successfully deleted, or was already not found.
         "503":
-          description: Service is unavailable, or tenant is already being modified (perhaps concurrently deleted)
+          description: Service is unavailable, or branch is already being modified (perhaps concurrently deleted)
 
 
   /v1/branch/{branch_id}/time_travel_remote_storage:
@@ -116,51 +116,6 @@ paths:
               schema:
                 type: string
 
-  /v1/branch/{branch_id}:
-    parameters:
-      - name: branch_id
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
-    get:
-      description: Get info about the timeline
-      responses:
-        "200":
-          description: TimelineInfo
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TimelineInfo"
-
-    delete:
-      description: "Attempts to delete specified timeline. 500 and 409 errors should be retried"
-      responses:
-        "404":
-          description: Timeline not found. This is the success path.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/NotFoundError"
-        "409":
-          description: Deletion is already in progress, continue polling
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ConflictError"
-        "412":
-          description: Tenant is missing, or timeline has children
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PreconditionFailedError"
-
   /v1/branch/{branch_id}/get_timestamp_of_lsn:
     parameters:
       - name: branch_id
@@ -168,12 +123,6 @@ paths:
         required: true
         schema:
           type: string
-      - name: timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
     get:
       description: Get timestamp for a given LSN
       parameters:
@@ -206,12 +155,6 @@ paths:
         required: true
         schema:
           type: string
-      - name: timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
     get:
       description: Get LSN by a timestamp
       parameters:
@@ -244,12 +187,6 @@ paths:
         required: true
         schema:
           type: string
-      - name: timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
     post:
       description: Obtains a lease for the given LSN.
       requestBody:
@@ -279,14 +216,8 @@ paths:
         required: true
         schema:
           type: string
-      - name: timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
     put:
-      description: Garbage collect given timeline
+      description: Garbage collect given branch
       responses:
         "200":
           description: OK
@@ -302,14 +233,8 @@ paths:
         required: true
         schema:
           type: string
-      - name: timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
     post:
-      description: Persistently add a gc blocking at the tenant level because of this timeline
+      description: Persistently add a gc blocking for this branch
       responses:
         "200":
           description: OK
@@ -321,14 +246,8 @@ paths:
         required: true
         schema:
           type: string
-      - name: timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
     post:
-      description: Persistently remove a tenant level gc blocking for this timeline
+      description: Persistently remove a gc blocking for this branch
       responses:
         "200":
           description: OK
@@ -340,12 +259,6 @@ paths:
         required: true
         schema:
           type: string
-      - name: timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: hex
     put:
       requestBody:
         content:
@@ -436,18 +349,13 @@ paths:
         required: true
         schema:
           type: string
-      - name: timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
     post:
       description: |
-        Marks the initdb archive for preservation upon deletion of the timeline or tenant.
+        Marks the initdb archive for preservation upon deletion of the branch.
         This is meant to be part of the disaster recovery process.
       responses:
         "202":
-          description: Tenant scheduled to load successfully
+          description: Branch scheduled to load successfully
 
   /v1/branch/{branch_id}/archival_config:
     parameters:
@@ -456,15 +364,10 @@ paths:
         required: true
         schema:
           type: string
-      - name: timeline_id
-        in: path
-        required: true
-        schema:
-          type: string
     put:
       description: |
-        Either archives or unarchives the given timeline.
-        An archived timeline may not have any non-archived children.
+        Either archives or unarchives the given branch.
+        An archived branch may not have any non-archived children.
       requestBody:
         required: true
         content:
@@ -517,7 +420,7 @@ paths:
           Override the default retention period (in bytes) used for size calculation.
     get:
       description: |
-        Calculate tenant's size, which is a mixture of WAL (bytes) and logical_size (bytes).
+        Calculate branch's size, which is a mixture of WAL (bytes) and logical_size (bytes).
       responses:
         "200":
           description: OK,
@@ -635,7 +538,7 @@ paths:
                   type: integer
                 read_only:
                   type: boolean
-                existing_initdb_timeline_id:
+                existing_initdb_branch_id:
                   type: string
                   format: hex
                 import_pgdata:
@@ -666,7 +569,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
     get:
-      description: Get timelines for tenant
+      description: Get branch info
       responses:
         "200":
           description: TimelineInfo
@@ -680,11 +583,6 @@ paths:
   /v1/branch/{branch_id}/detach_ancestor:
     parameters:
       - name: branch_id
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: timeline_id
         in: path
         required: true
         schema:
@@ -760,7 +658,7 @@ paths:
 
   /v1/branch:
     get:
-      description: Get tenants list
+      description: Get branches list
       responses:
         "200":
           description: TenantInfo
@@ -773,11 +671,11 @@ paths:
 
     post:
       description: |
-        Create a tenant. Returns new tenant id on success.
+        Create a branch. Returns new branch id on success.
 
-        If no new tenant id is specified in parameters, it would be generated. It's an error to recreate the same tenant.
+        If no new branch id is specified in parameters, it would be generated. It's an error to recreate the same branch.
 
-        Invalid fields in the tenant config will cause the request to be rejected with status 400.
+        Invalid fields in the branch config will cause the request to be rejected with status 400.
       requestBody:
         content:
           application/json:
@@ -785,13 +683,13 @@ paths:
               $ref: "#/components/schemas/TenantCreateRequest"
       responses:
         "201":
-          description: New tenant created successfully
+          description: New branch created successfully
           content:
             application/json:
               schema:
                 type: string
         "409":
-          description: Tenant already exists, creation skipped
+          description: Branch already exists, creation skipped
           content:
             application/json:
               schema:
@@ -800,9 +698,9 @@ paths:
   /v1/branch/config:
     put:
       description: |
-        Update tenant's config by setting it to the provided value
+        Update branch's config by setting it to the provided value
 
-        Invalid fields in the tenant config will cause the request to be rejected with status 400.
+        Invalid fields in the branch config will cause the request to be rejected with status 400.
       requestBody:
         content:
           application/json:
@@ -819,10 +717,10 @@ paths:
                   $ref: "#/components/schemas/TenantInfo"
     patch:
       description: |
-        Update tenant's config additively by patching the updated fields provided.
+        Update branch's config additively by patching the updated fields provided.
         Null values unset the field and non-null values upsert it.
 
-        Invalid fields in the tenant config will cause the request to be rejected with status 400.
+        Invalid fields in the branch config will cause the request to be rejected with status 400.
       requestBody:
         content:
           application/json:
@@ -847,11 +745,11 @@ paths:
           type: string
     get:
       description: |
-        Returns tenant's config description: specific config overrides a tenant has
+        Returns branch's config description: specific config overrides a branch has
         and the effective config.
       responses:
         "200":
-          description: Tenant config, specific and effective
+          description: Branch config, specific and effective
           content:
             application/json:
               schema:
@@ -860,11 +758,6 @@ paths:
   /v1/branch/{branch_id}/download_heatmap_layers:
     parameters:
       - name: branch_id
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: timeline_id
         in: path
         required: true
         schema:
@@ -898,7 +791,7 @@ paths:
   /v1/utilization:
     get:
       description: |
-        Returns the pageservers current utilization and fitness score for new tenants.
+        Returns the pageservers current utilization and fitness score for new branches.
 
       responses:
         "200":
@@ -927,12 +820,12 @@ components:
           type: integer
         attachment_status:
           description: |
-            Status of this tenant's attachment to this pageserver.
+            Status of this branch's attachment to this pageserver.
 
             - `maybe` means almost nothing, don't read anything into it
               except for the fact that the pageserver _might_ be already
-              writing to the tenant's S3 state, so, DO NOT ATTACH the
-              tenant to any other pageserver, or we risk split-brain.
+              writing to the branch's blob state, so, DO NOT ATTACH the
+              branch to any other pageserver, or we risk split-brain.
             - `attached` means that the attach operation has completed,
               successfully
             - `failed` means that attach has failed. For reason check corresponding `reason` failed.
@@ -962,9 +855,9 @@ components:
         - $ref: '#/components/schemas/TenantLoadRequest'
         - type: object
           required:
-            - new_tenant_id
+            - new_branch_id
           properties:
-            new_tenant_id:
+            new_branch_id:
               type: string
     TenantLoadRequest:
       type: object
@@ -977,9 +870,9 @@ components:
         - $ref: '#/components/schemas/TenantConfig'
         - type: object
           required:
-            - tenant_id
+            - branch_id
           properties:
-            tenant_id:
+            branch_id:
               type: string
     TenantLocationConfigRequest:
       type: object
@@ -1107,18 +1000,15 @@ components:
     TimelineInfo:
       type: object
       required:
-        - timeline_id
-        - tenant_id
+        - branch_id
         - last_record_lsn
         - disk_consistent_lsn
         - state
         - min_readable_lsn
       properties:
-        timeline_id:
+        branch_id:
           type: string
           format: hex
-        tenant_id:
-          type: string
         last_record_lsn:
           type: string
           format: hex
@@ -1165,15 +1055,11 @@ components:
     TimelineSafekeepersInfo:
       type: object
       required:
-        - tenant_id
-        - timeline_id
+        - branch_id
         - generation
         - safekeepers
       properties:
-        tenant_id:
-          type: string
-          format: hex
-        timeline_id:
+        branch_id:
           type: string
           format: hex
         generation:
@@ -1255,7 +1141,7 @@ components:
               type: integer
             needed:
               type: boolean
-        timeline_id:
+        branch_id:
           type: string
           format: hex
         kind:
@@ -1264,13 +1150,13 @@ components:
     TimelineInput:
       type: object
       required:
-        - timeline_id
+        - branch_id
       properties:
         ancestor_id:
           type: string
         ancestor_lsn:
           type: string
-        timeline_id:
+        branch_id:
           type: string
           format: hex
 

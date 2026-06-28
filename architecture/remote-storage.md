@@ -57,8 +57,7 @@ method against a YugabyteDB table reached via `tokio_postgres`.
 CREATE TYPE blob_namespace AS ENUM ('pageserver', 'safekeeper');
 
 CREATE TABLE public.blobs (
-    tenant_id        TEXT                  NOT NULL,    -- Neon tenant UUID, "" if not extractable
-    timeline_id      TEXT                  NOT NULL,    -- Neon timeline UUID, "" for tenant-scope-only blobs
+    branch_id        TEXT                  NOT NULL,    -- yb-light branch id (32-hex), "" if not extractable
     namespace        public.blob_namespace NOT NULL,    -- 'pageserver' or 'safekeeper'
     key              TEXT                  NOT NULL,    -- discriminating filename, generation suffix stripped
     generation       INT,                               -- pageserver attach gen; NULL for genless files
@@ -68,12 +67,12 @@ CREATE TABLE public.blobs (
     etag             TEXT                  NOT NULL,
     last_modified_us BIGINT                NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, namespace, chunk_idx)
+    PRIMARY KEY ((branch_id, key) HASH, namespace, chunk_idx)
 );
 ```
 
 Key in the HASH part distributes load across tablets at a per-key
-granularity (avoiding a single hot tablet on big tenants) and turns
+granularity (avoiding a single hot tablet on big branches) and turns
 `key = $x` lookups into one-tablet hash lookups. Generation lives in
 its own column rather than appended to `key` so that:
 
@@ -83,7 +82,7 @@ its own column rather than appended to `key` so that:
 - genless files (heatmap, initdb archives) sit naturally with
   `generation IS NULL`.
 
-`YbStore::parse_key` splits each incoming `RemotePath` into the four
+`YbStore::parse_key` splits each incoming `RemotePath` into the three
 storage columns + the chunk index:
 
 - **`namespace`**: derived from the blob's key/path (pageserver vs
@@ -93,18 +92,17 @@ storage columns + the chunk index:
   via a `text::blob_namespace` cast in SQL (tokio_postgres can't bind
   Rust `&str` directly to a custom ENUM type, so the cast happens
   server-side).
-- **`tenant_id`** / **`timeline_id`**: first two Neon-id-shaped tokens
+- **`branch_id`**: first branch-id-shaped token
   in the path *after* stripping the leading path prefix (e.g.
   `pageserver-yb/`; it is part of the `RemotePath`, not a config field).
-  A Neon id is
-  32 hex characters, optionally followed by `-<count>-<num>` for
-  sharded tenants. The extractor is heuristic but covers every key the
-  pageserver and safekeeper write. Empty strings when a level is absent
-  (tenant manifests have no `timeline_id`; future generic blobs may
-  have neither).
+  A branch id is
+  32 hex characters, optionally followed by `-<4hex>` for
+  sharded ids. The extractor is heuristic but covers every key the
+  pageserver and safekeeper write. Empty string when the branch is
+  absent (future generic blobs may have none).
 - **`key`**: the **discriminating filename only**. `parse_key` strips
-  the leading path prefix *plus* the literal segments `tenants` and
-  `timelines`, *plus* the tenant_id and timeline_id values themselves.
+  the leading path prefix *plus* the literal segment `branches`,
+  *plus* the branch_id value itself.
   Then `split_key_generation` strips the trailing or pre-extension
   `-<8hex>` generation marker into the separate `generation` column —
   so a key like `index_part.json-00000005` lands as
@@ -123,32 +121,32 @@ storage columns + the chunk index:
   on the same tablet (one row per key).
 - **`chunk_idx`** + **`data`**: object split into ≤ 100 MiB chunks.
 
-`reconstruct_key(namespace, tenant_id, timeline_id, key_body)` rebuilds
+`reconstruct_key(namespace, branch_id, key_body)` rebuilds
 the original `RemotePath` for `list` outputs by applying the layout:
 
-| namespace | timeline_id | layout |
+| namespace | branch_id | layout |
 |---|---|---|
-| `pageserver` | non-empty | `<prefix>tenants/<T>/timelines/<TL>/<body>` |
-| `pageserver` | empty | `<prefix>tenants/<T>/<body>` |
+| `pageserver` | non-empty | `<prefix>branches/<branch_id>/<body>` |
+| `pageserver` | empty | `<prefix><body>` (generic blob) |
 
-(`reconstruct_key` still has a dead `safekeeper` arm — `yb_store.rs:379-385`
+(`reconstruct_key` still has a dead `safekeeper` arm — `yb_store.rs:326-348`
 — but no writer emits safekeeper rows anymore. The safekeeper's control
 file now lives in typed columns in the `safekeeper.timeline_state` table,
 not in `blobs` — commit `840e56aae`.)
 
 Sample rows:
 
-| namespace | tenant_id | timeline_id | key |
-|---|---|---|---|
-| pageserver | c8178f5e…1f966a | 77ffde89…089eaa | `000000-FFF__layer-1` |
-| pageserver | c8178f5e…1f966a | 77ffde89…089eaa | `index_part.json-00000001` |
-| pageserver | c8178f5e…1f966a | *(empty)* | `tenant-manifest-00000001.json` |
+| namespace | branch_id | key |
+|---|---|---|
+| pageserver | 77ffde89…089eaa | `000000-FFF__layer-1` |
+| pageserver | 77ffde89…089eaa | `index_part.json-00000001` |
+| pageserver | 77ffde89…089eaa | `tenant-manifest-00000001.json` |
 
-The PK puts `(tenant_id, timeline_id)` in the hash partition so every
+The PK puts `branch_id` in the hash partition so every
 point-lookup (`head_object`, `download`'s metadata + streaming SELECT,
 `delete`, `upload`'s pre-DELETE, `copy`'s pre-DELETE and INSERT…SELECT)
 hits one tablet via hash routing. `list` constructs the LIKE pattern
-in placeholder form and filters by tenant_id / timeline_id when
+in placeholder form and filters by branch_id when
 extractable from the user-supplied prefix; `delete_objects` fans out
 one DELETE per object, each pinned to its own tablet.
 

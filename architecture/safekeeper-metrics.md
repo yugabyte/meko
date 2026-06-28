@@ -14,10 +14,10 @@ which is auth-exempt. Two registration paths feed it:
    series per **active** timeline.
 
 **Per-timeline label cardinality**: every metric in the *Per-timeline state*
-section carries `tenant_id` + `timeline_id` labels, so series count scales
-with the number of active timelines. The collector `reset()`s these each
-scrape, so inactive timelines drop out. In yb-light this is typically a single
-timeline (single-SK), keeping cardinality low.
+section carries a single `branch_id` label, so series count scales
+with the number of active branches. The collector `reset()`s these each
+scrape, so inactive branches drop out. In yb-light this is typically a single
+branch (single-SK), keeping cardinality low.
 
 ## WAL storage / write path (global)
 
@@ -84,7 +84,7 @@ yb-light-specific.
 
 ## Per-timeline state (`TimelineCollector`)
 
-All carry labels `tenant_id`, `timeline_id`; emitted once per active timeline
+All carry a single `branch_id` label; emitted once per active branch
 and reset each scrape.
 
 | Metric | Type | Meaning |

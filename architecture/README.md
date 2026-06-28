@@ -55,7 +55,7 @@ upstream Neon can skim) and **changes in yb-light**.
                   push  v               v
               +----------------+   +----------------+
               |   Safekeeper   |   |   Pageserver   |
-              |   (single)     |-->|  (per-tenant)  |
+              |   (single)     |-->|  (per-branch)  |
               +----------------+   +----------------+
                         \                 |
                          \                |  YsqlClient

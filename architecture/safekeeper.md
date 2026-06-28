@@ -21,7 +21,7 @@ The local filesystem holds only a log file and a pidfile.
   protocol (`send_interpreted_wal`); no same-host/same-build fast-path may be
   assumed on this link without a negotiated capability (see #69).
 
-### Per-timeline state
+### Per-branch state
 
 - **Control file**: 388 B binary blob holding the consensus state (`term`,
   `vote`, peer set, `commit_lsn`, `backup_lsn`, `peer_horizon_lsn`,
@@ -34,7 +34,7 @@ The local filesystem holds only a log file and a pidfile.
 In yb-light both are replaced — see "Changes in yb-light" §1
 (control file → typed columns in `safekeeper.timeline_state`) and §2
 (WAL chunks mirrored row-by-row into `safekeeper.wals`). The local FS holds
-nothing per-timeline.
+nothing per-branch.
 
 ### Background tasks
 
@@ -55,9 +55,9 @@ Surviving background work:
   producer/consumer writer, `load_write_lsn` restart rehydrate.
 - `safekeeper/src/timeline.rs` — `SharedState`, `Timeline::load_timeline`.
 - `safekeeper/src/timelines_global_map.rs` — `GlobalTimelines`. One process
-  serves one timeline (see §5), so the registry is a single `Option<(ttid,
-  slot)>` plus one timeline- and one tenant-tombstone slot, not `HashMap`s;
-  `init()` loads only the baked timeline, never the whole shared table. The
+  serves one branch (see §5), so the registry is a single `Option<(branch_id,
+  slot)>` plus one branch-tombstone slot, not `HashMap`s;
+  `init()` loads only the baked branch, never the whole shared table. The
   external API (`get`, `get_all` → `Vec`, `timelines_count`, …) is unchanged.
 - `safekeeper/src/safekeeper.rs` — the consensus state machine.
 - `safekeeper/src/bin/yb-safekeeper.rs` — entry point; reads
@@ -76,12 +76,11 @@ the bincode + crc32c blob framing, and `control_file_upgrade.rs` (V1..V9
 legacy upgrade paths, 778 LOC) were all deleted in `840e56aae` once the
 intermediate blob-in-`yb_storage.blobs` form was replaced with a typed row.
 
-Each timeline owns one row in `safekeeper.timeline_state`:
+Each branch owns one row in `safekeeper.timeline_state`:
 
 ```sql
 CREATE TABLE safekeeper.timeline_state (
-    tenant_id              TEXT     NOT NULL,
-    timeline_id            TEXT     NOT NULL,
+    branch_id              TEXT     NOT NULL,
     timeline_start_lsn     BIGINT   NOT NULL,
     local_start_lsn        BIGINT   NOT NULL,
     remote_consistent_lsn  BIGINT   NOT NULL,
@@ -93,7 +92,7 @@ CREATE TABLE safekeeper.timeline_state (
     proposer_uuid          BYTEA    NOT NULL,        -- 16 bytes
     mconf                  JSONB    NOT NULL,        -- membership Configuration
     creation_ts            TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH)
+    PRIMARY KEY ((branch_id) HASH)
 );
 ```
 
@@ -123,15 +122,13 @@ Schema (operator-provisioned in `yb_storage` DB):
 
 ```sql
 CREATE TABLE safekeeper.wals (
-    tenant_id        TEXT    NOT NULL,
-    timeline_id      TEXT    NOT NULL,
+    branch_id        TEXT    NOT NULL,
     segno            BIGINT  NOT NULL,
-    chunk_seq        INT     NOT NULL,   -- monotonic per (tenant, timeline, segno)
     chunk_offset     BIGINT  NOT NULL,   -- byte offset of `data` within the segment
     chunk_size       INT     NOT NULL,
     data             BYTEA   NOT NULL,
     last_modified_us BIGINT  NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_seq)
+    PRIMARY KEY ((branch_id) HASH, segno, chunk_offset)
 );
 ```
 
@@ -224,7 +221,7 @@ endpoint_storage use). When absent, the safekeeper uses
 
 `WalReader::open_segment` tries two sources, in order:
 
-1. Local FS (`<workdir>/<tenant>/<timeline>/<XLogFileName>`). With YB-WAL
+1. Local FS (`<workdir>/branches/<branch_id>/<XLogFileName>`). With YB-WAL
    mode + `no_local_writes` this always misses, so we fall through.
 2. **YB `wals` table** — via `YbSegmentReader`, a lazy chunk-streaming
    `AsyncRead` that consults the in-memory [`WalCache`](#wal-cache--lazy-yb-reader)
@@ -276,14 +273,12 @@ Replaced with two pieces, both in `safekeeper/src/yb_wal_storage.rs` +
    3. Otherwise spawn a YB fetch task and `tokio::sync::oneshot`-await
       it. The fetch issues:
       ```sql
-      SELECT chunk_offset, chunk_size, data FROM safekeeper.wals
-      WHERE tenant_id=$1 AND timeline_id=$2 AND segno=$3
-        AND chunk_offset <= $4 AND chunk_offset + chunk_size > $4
-      ORDER BY chunk_seq DESC LIMIT 1
+      SELECT chunk_offset, data FROM safekeeper.wals
+      WHERE branch_id=$1 AND segno=$2 AND chunk_offset <= $3
+      ORDER BY chunk_offset DESC LIMIT 1
       ```
-      `ORDER BY chunk_seq DESC LIMIT 1` gives last-write-wins overlay
-      semantics (segno-0 init blob vs. later `write_wal` chunks at the
-      same offset).
+      `ORDER BY chunk_offset DESC LIMIT 1` returns the chunk whose offset
+      most-closely precedes the requested byte — the one covering it.
    4. If neither cache nor YB has a covering chunk, return
       `io::ErrorKind::UnexpectedEof` — failing loudly is much better
       than serving zeros and letting the pageserver hit `xlp_magic=0`
@@ -318,7 +313,7 @@ A new constructor, `PhysicalStorage::new_no_local_writes`, skips
 
 ```sql
 SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM safekeeper.wals
-WHERE tenant_id = $1 AND timeline_id = $2
+WHERE branch_id = $1
 GROUP BY segno ORDER BY segno DESC LIMIT 1;
 ```
 
@@ -335,10 +330,10 @@ protocols racing on different LSN views, harder semantics, no extra
 safety.
 
 The yb-light build therefore **requires exactly one safekeeper per
-timeline** when `yb_storage_conn` is configured (the membership configuration
+branch** when `yb_storage_conn` is configured (the membership configuration
 must have a single member). Multiple safekeeper *processes* may run on
 a host — the per-endpoint topology gives each branch its own dedicated
-safekeeper — but each timeline's membership is always one safekeeper.
+safekeeper — but each branch's membership is always one safekeeper.
 The enforcement is in two places:
 
 - **Boot**: `SharedState::restore` loads the control file, and if YB WAL
@@ -359,23 +354,23 @@ issue.
 Unit tests in `yb_light_tests` cover: empty config accepted, single-member
 accepted, two-member rejected, joint config with two new members rejected.
 
-**Single-timeline identity (one timeline per process).** The
+**Single-branch identity (one branch per process).** The
 single-safekeeper constraint above is about *membership* (one acceptor per
-timeline); this is its dual on the *process* side: one safekeeper process
-serves exactly one `(tenant, timeline)` for its lifetime, baked into
-`safekeeper.toml`'s `tenant_id`/`timeline_id` (`SafeKeeperConf::yb_ttid`,
+branch); this is its dual on the *process* side: one safekeeper process
+serves exactly one `branch_id` for its lifetime, baked into
+`safekeeper.toml`'s `branch_id` (`SafeKeeperConf::yb_branch_id`,
 required in YB-WAL mode). It matters because `safekeeper.timeline_state` is shared across the
 whole cluster — without a baked identity a process can't tell its own
-timeline from everyone else's. Two consequences:
+branch from everyone else's. Two consequences:
 
-- **Scoped load.** `GlobalTimelines::init()` loads only the baked timeline's
+- **Scoped load.** `GlobalTimelines::init()` loads only the baked branch's
   row (if it exists yet — a fresh bootstrap creates it on demand via the
   walproposer handshake), never the whole table. The in-memory registry is
   therefore a single `Option`, not a `HashMap`.
 - **Connection gating.** `SafekeeperPostgresHandler::process_query` rejects
-  any connection whose `(tenant, timeline)` doesn't match the baked identity
+  any connection whose `branch_id` doesn't match the baked identity
   before it can touch the registry, so a misrouted walproposer can't create
-  or mutate a foreign timeline in this process.
+  or mutate a foreign branch in this process.
 
 ### 6. Node id from config, not from `safekeeper.id` (commit `8027e06c4`)
 
@@ -479,12 +474,12 @@ universes through a TLS-bridging proxy.
 <workdir>/endpoints/<endpoint_id>/safekeeper/
 ├── safekeeper-N.log          (rolling log — operational)
 ├── safekeeper.pid            (running-process lock)
-└── <tenant>/<timeline>/
+└── branches/<branch_id>/
     └── (empty — no control file, no segments, no .partial file)
 ```
 
 In the dev cluster the safekeeper is co-located under the endpoint that owns
-its timeline (provisioned at `endpoint create`) — a launcher convenience,
+its branch (provisioned at `endpoint create`) — a launcher convenience,
 not a design invariant; the consuming pageserver(s) may live elsewhere (see
 [`high-level.md`](high-level.md) "PS/SK co-location is NOT an invariant").
 Delete the entire
@@ -510,8 +505,7 @@ A representative `<datadir>/safekeeper.toml`:
 
 ```toml
 id = 1
-tenant_id   = "c8178f5e..."
-timeline_id = "77ffde89..."
+branch_id = "77ffde89..."
 listen_pg = "127.0.0.1:5474"
 listen_http = "127.0.0.1:7686"
 availability_zone = "sk-1"
@@ -527,11 +521,11 @@ stream — same DB, two tables. The WAL chunk table is hardcoded to
 `safekeeper.wals` (not configurable); `safekeeper.timeline_state` is reached
 via the same `YsqlClient`.
 
-`tenant_id`/`timeline_id` bake this process's single timeline identity
+`branch_id` bakes this process's single branch identity
 (required whenever `yb_storage_conn` is set) — the safekeeper's analogue of
-`pageserver.toml`'s identity keys. yb_light_local stamps them at provision time
-(`allocate_safekeeper_conf`). They scope the startup load to this one
-timeline and gate connections to it (see §5).
+`pageserver.toml`'s identity key. yb_light_local stamps it at provision time
+(`allocate_safekeeper_conf`). It scopes the startup load to this one
+branch and gates connections to it (see §5).
 
 `sslmode = "require"` is needed against YBA-managed universes (they
 default to TLS-mandatory `hostssl` rules). Add

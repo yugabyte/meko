@@ -18,14 +18,9 @@ paths:
         "200":
           description: OK
 
-  /{tenant_id}/{timeline_id}/{endpoint_id}/{key}:
+  /{branch_id}/{endpoint_id}/{key}:
     parameters:
-      - name: tenant_id
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: timeline_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -75,14 +70,9 @@ paths:
         "403":
           description: JWT does not authorize request to this route
 
-  /{tenant_id}/{timeline_id}/{endpoint_id}:
+  /{branch_id}/{endpoint_id}:
     parameters:
-      - name: tenant_id
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: timeline_id
+      - name: branch_id
         in: path
         required: true
         schema:
@@ -100,38 +90,18 @@ paths:
         "403":
           description: JWT does not authorize request to this route
 
-  /{tenant_id}/{timeline_id}:
+  /{branch_id}:
     parameters:
-      - name: tenant_id
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: timeline_id
+      - name: branch_id
         in: path
         required: true
         schema:
           type: string
     delete:
-      description: Delete timeline data from blob storage
+      description: Delete branch data from blob storage
       responses:
         "200":
-          description: Timeline data was deleted
-        "403":
-          description: JWT does not authorize request to this route
-
-  /{tenant_id}:
-    parameters:
-      - name: tenant_id
-        in: path
-        required: true
-        schema:
-          type: string
-    delete:
-      description: Delete tenant data from blob storage
-      responses:
-        "200":
-          description: Tenant data was deleted
+          description: Branch data was deleted
         "403":
           description: JWT does not authorize request to this route
 

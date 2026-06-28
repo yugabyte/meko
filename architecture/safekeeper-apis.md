@@ -22,7 +22,7 @@ below.
   when `conf.http_auth` is configured. When enabled, every route requires a
   valid token **except** the allowlist `/v1/status`, `/metrics`,
   `/profile/cpu`, `/profile/heap`. Per-route scope is enforced by
-  `check_permission()` (tenant-scoped where a `tenant_id` is in the path,
+  `check_permission()` (branch-scoped where a `branch_id` is in the path,
   otherwise global).
 
 ## Routes
@@ -42,27 +42,26 @@ below.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/v1/tenant/timeline` | Create a timeline. Body = `TimelineCreateRequest` (`tenant_id`, `timeline_id`, `pg_version`, optional `system_id`, `wal_seg_size`, `mconf`, `start_lsn`). Defaults: `system_id=0`, `wal_seg_size=WAL_SEGMENT_SIZE`. |
-| GET | `/v1/tenant/timeline` | List all non-deleted timelines as `[TenantTimelineId]`. Global scope. |
-| GET | `/v1/tenant/:tenant_id/timeline/:timeline_id` | Timeline status: `TimelineStatus` with `mconf`, `acceptor_state` (term/epoch/term_history), `pg_info`, `flush_lsn`, `commit_lsn`, `remote_consistent_lsn`, peers, walsenders, walreceivers. In-memory values (may be lost on crash). |
-| DELETE | `/v1/tenant/:tenant_id/timeline/:timeline_id` | Deactivate a timeline and remove its data dir. Query `only_local=<bool>` (default false): `DeleteLocal` vs full `Delete`. |
-| DELETE | `/v1/tenant/:tenant_id` | Deactivate all timelines for a tenant and remove its dir. Query `only_local=<bool>`. Returns `TenantDeleteResult` (map of timeline_id -> `TimelineDeleteResult`). |
+| POST | `/v1/branch` | Create a branch. Body = `TimelineCreateRequest` (`branch_id`, `pg_version`, optional `system_id`, `wal_seg_size`, `mconf`, `start_lsn`). Defaults: `system_id=0`, `wal_seg_size=WAL_SEGMENT_SIZE`. |
+| GET | `/v1/branch` | List all non-deleted branches as `[BranchId]`. Global scope. |
+| GET | `/v1/branch/:branch_id` | Branch status: `TimelineStatus` with `mconf`, `acceptor_state` (term/epoch/term_history), `pg_info`, `flush_lsn`, `commit_lsn`, `remote_consistent_lsn`, peers, walsenders, walreceivers. In-memory values (may be lost on crash). |
+| DELETE | `/v1/branch/:branch_id` | Deactivate a branch and remove its data dir. Query `only_local=<bool>` (default false): `DeleteLocal` vs full `Delete`. |
 
 ### Timeline maintenance / debug
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| PATCH | `/v1/tenant/:tenant_id/timeline/:timeline_id/control_file` | Patch control-file fields. Body = `patch_control_file::Request`. Global scope. |
-| POST | `/v1/tenant/:tenant_id/timeline/:timeline_id/checkpoint` | Force-persist (flush) the control file to durable state. Global scope. |
-| GET | `/v1/tenant/:tenant_id/timeline/:timeline_id/digest` | Compute a WAL digest over `[from_lsn, until_lsn]`. Both query params **required** (400 otherwise). |
-| POST | `/v1/tenant/:tenant_id/timeline/:timeline_id/backup_partial_reset` | Unevict timeline and remove uploaded partial segment(s) from remote storage; returns segments that existed before deletion. One-off repair tool. |
+| PATCH | `/v1/branch/:branch_id/control_file` | Patch control-file fields. Body = `patch_control_file::Request`. Global scope. |
+| POST | `/v1/branch/:branch_id/checkpoint` | Force-persist (flush) the control file to durable state. Global scope. |
+| GET | `/v1/branch/:branch_id/digest` | Compute a WAL digest over `[from_lsn, until_lsn]`. Both query params **required** (400 otherwise). |
+| POST | `/v1/branch/:branch_id/backup_partial_reset` | Unevict branch and remove uploaded partial segment(s) from remote storage; returns segments that existed before deletion. One-off repair tool. |
 
 ### Failpoints / global debug dump
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | PUT | `/v1/failpoints` | Configure failpoints (testing). Global scope. |
-| GET | `/v1/debug_dump` | Stream a full debug dump of SK state as `application/octet-stream`. Query toggles: `dump_all`, `dump_control_file`, `dump_memory`, `dump_disk_content`, `dump_term_history` (default true), `dump_wal_last_modified`, plus optional `tenant_id` / `timeline_id` filters. Most toggles default to the value of `dump_all` (default false). |
+| GET | `/v1/debug_dump` | Stream a full debug dump of SK state as `application/octet-stream`. Query toggles: `dump_all`, `dump_control_file`, `dump_memory`, `dump_disk_content`, `dump_term_history` (default true), `dump_wal_last_modified`, plus an optional `branch_id` filter. Most toggles default to the value of `dump_all` (default false). |
 
 ## yb-light specifics
 

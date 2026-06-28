@@ -37,7 +37,7 @@ is limited to the logging counters set up by `utils::logging::init(...)`
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `libmetrics_tracing_event_count` | counter (IntCounterVec) | `level` (`critical`, `error`, `warn`, `info`, `debug`, `trace`) | Count of emitted tracing/log events by level. Registered eagerly: `logging::init` references `TRACING_EVENT_COUNT_METRIC` to install the counting layer (`logging.rs:111-119,216-218`). |
-| `critical_storage_event_count` | counter (IntCounterVec) | `tenant_id`, `timeline_id` | Count of "critical storage events" (`logging.rs:88-108`). Registered lazily on first use of the `critical!` path; absent from the exposition until then. |
+| `critical_storage_event_count` | counter (IntCounterVec) | `branch_id` | Count of "critical storage events" (`logging.rs:88-108`). Registered lazily on first use of the `critical!` path; absent from the exposition until then. |
 
 There are **no** process/runtime collectors (no
 `process_cpu_seconds_total`, `process_resident_memory_bytes`, Go-style

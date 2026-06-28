@@ -60,21 +60,21 @@ the request is rejected.
 
 Two claim shapes (`claims.rs`):
 
-- `EndpointStorageClaims { tenant_id, timeline_id, endpoint_id, exp }` —
+- `EndpointStorageClaims { branch_id, endpoint_id, exp }` —
   used by `compute_ctl` for object GET/PUT/DELETE.
-- `DeletePrefixClaims { tenant_id, timeline_id: Option, endpoint_id: Option, exp }`
-  — used by the control plane for prefix deletes (tenant/timeline/endpoint
-  scope, with trailing levels `None`).
+- `DeletePrefixClaims { branch_id, endpoint_id: Option, exp }`
+  — used by the control plane for prefix deletes (branch / endpoint
+  scope, with the trailing endpoint level `None` for a whole-branch delete).
 
-Authorization checks (`lib.rs:143-239`):
+Authorization checks (`lib.rs:140-227`):
 
-- For object routes, the claim's `(tenant_id, timeline_id, endpoint_id, exp)`
+- For object routes, the claim's `(branch_id, endpoint_id, exp)`
   must equal the route's. **Exception**: for `GET`, the `endpoint_id` is
   taken from the *claim* rather than the path, so a read-only replica can
   read another endpoint's data during readonly→readwrite prewarming
-  (`lib.rs:162-168`).
-- For prefix deletes, the claim's `(tenant_id, timeline_id, endpoint_id, exp)`
-  must equal the route's, with `Option` levels matching exactly.
+  (`lib.rs:161-165`).
+- For prefix deletes, the claim's `(branch_id, endpoint_id, exp)`
+  must equal the route's, with the `Option` endpoint level matching exactly.
 
 A failed claim/route match returns `401 Unauthorized` (`lib.rs:120-123`); a
 malformed token or missing header returns `400 Bad Request`.
@@ -83,16 +83,15 @@ malformed token or missing header returns `400 Bad Request`.
 
 ## Routes
 
-Defined in `app()` (`app.rs:12-31`):
+Defined in `app()` (`app.rs:12-27`):
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| `GET` | `/{tenant_id}/{timeline_id}/{endpoint_id}/{*path}` | JWT | Download an object; streams `application/octet-stream` |
-| `PUT` | `/{tenant_id}/{timeline_id}/{endpoint_id}/{*path}` | JWT | Upload an object (overwrites if present) |
-| `DELETE` | `/{tenant_id}/{timeline_id}/{endpoint_id}/{*path}` | JWT | Delete one object |
-| `DELETE` | `/{tenant_id}/{timeline_id}/{endpoint_id}` | JWT | Delete all objects under an endpoint prefix |
-| `DELETE` | `/{tenant_id}/{timeline_id}` | JWT | Delete all objects under a timeline prefix |
-| `DELETE` | `/{tenant_id}` | JWT | Delete all objects under a tenant prefix |
+| `GET` | `/{branch_id}/{endpoint_id}/{*path}` | JWT | Download an object; streams `application/octet-stream` |
+| `PUT` | `/{branch_id}/{endpoint_id}/{*path}` | JWT | Upload an object (overwrites if present) |
+| `DELETE` | `/{branch_id}/{endpoint_id}/{*path}` | JWT | Delete one object |
+| `DELETE` | `/{branch_id}/{endpoint_id}` | JWT | Delete all objects under an endpoint prefix |
+| `DELETE` | `/{branch_id}` | JWT | Delete all objects under a branch prefix |
 | `GET` | `/metrics` | none | Prometheus text exposition (see [`endpoint-storage-metrics.md`](endpoint-storage-metrics.md)) |
 | `GET` | `/status` | none | Health check; always `200 OK` |
 
@@ -102,11 +101,11 @@ Notes:
   object key. It is sanitized by `normalize_key` (`lib.rs:40-49`): the key
   is path-cleaned, leading `/` stripped, and any key resolving to `..`,
   `.`, or `/` is rejected with `400` — preventing path traversal outside
-  the `{tenant}/{timeline}/{endpoint}` prefix.
+  the `{branch_id}/{endpoint_id}` prefix.
 - The object's storage path (the `RemotePath` handed to `YbStore`) is
-  `{tenant_id}/{timeline_id}/{endpoint_id}/{normalized-key}`
-  (`lib.rs:104-118`). Prefix-delete paths drop the absent trailing levels
-  (`lib.rs:190-208`).
+  `{branch_id}/{endpoint_id}/{normalized-key}`
+  (`lib.rs:102-115`). The prefix-delete path drops the absent trailing
+  endpoint level (`lib.rs:186-197`).
 - `/metrics` is implemented in code (`app.rs:28`, `:41-46`) but is **not**
   listed in `openapi_spec.yml`; the spec documents `/status` and the
   object/prefix routes only.

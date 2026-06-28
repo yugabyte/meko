@@ -1,6 +1,6 @@
-# Runbook: yb-neon performance investigation
+# Runbook: yb-light performance investigation
 
-Broader performance investigation for the yb-neon stack — memory growth, pageserver internals, WAL
+Broader performance investigation for the yb-light stack — memory growth, pageserver internals, WAL
 ingest, restart/replay, and CPU localization. Use this when something is "slow" or "using too much
 RAM" but you don't yet have a clean throughput symptom. For a *throughput* number that's too low,
 start with `throughput-troubleshooting.md`; for a component that won't start, see
@@ -11,7 +11,7 @@ Topology-agnostic: components may be co-located or split across boxes. Fill in t
 ## Conventions
 ```bash
 export PS_HOST=...   export PS_HTTP_PORT=...     # yb-pageserver metrics/HTTP
-export COMPUTE_HOST=... export COMPUTE_PORT=...   # neon compute
+export COMPUTE_HOST=... export COMPUTE_PORT=...   # yb-light compute
 export PSQL=<path-to>/psql
 export C="host=$COMPUTE_HOST port=$COMPUTE_PORT user=cloud_admin dbname=tpcc sslmode=disable"
 export M="curl -s http://$PS_HOST:$PS_HTTP_PORT/metrics"   # pageserver metrics shortcut
@@ -88,9 +88,9 @@ lever). Confirm the safekeeper is low-CPU before blaming it.
 
 ## 6. Restart / replay behavior
 After a PS restart, watch whether it replays a large WAL backlog before serving:
-- The 8k-direct PS historically **never flushed Neon layers**, so OLD builds re-replayed **all** WAL
+- The 8k-direct PS historically **never flushed yb-light layers**, so OLD builds re-replayed **all** WAL
   on restart (long unavailability). **Fixed in `93f755767`+**: resumes from the persisted
-  `timeline_state.disk_consistent_lsn`.
+  `pageserver.timeline_state.consistent_lsn`.
 - If a restarted PS is slow to become ready, check its log for full-history replay and confirm the
   build is `93f755767` or newer.
 

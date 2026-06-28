@@ -135,7 +135,7 @@ trust (a file read with no auth vs. an authenticated, retried HTTP fetch carryin
 plane picks among the three.
 
 At load, the raw spec is wrapped in a `ParsedSpec` (`compute.rs`) that extracts and
-validates the load-bearing bits: `tenant_id` / `timeline_id`, the
+validates the load-bearing bits: the `branch_id`, the
 `PageserverConnectionInfo`, the `safekeeper_connstrings` (required & non-empty for
 Primary), the `storage_auth_token` (bearer auth to PS/SK when enabled), and the
 `endpoint_storage` address + token (for LFC prewarm/offload).
@@ -221,7 +221,7 @@ internal `POST /refresh_configuration`, which the configurator turns into a re-f
 
 | Module | What it does |
 |---|---|
-| `compute_prewarm.rs` | LFC **prewarm** (load cache state before/at startup) and **offload** (periodically save it). State is read/written to **endpoint_storage** at `{addr}/{tenant}/{timeline}/{endpoint}/lfc_state` (zstd). Auto-prewarm if `spec.autoprewarm`; offload loop if `offload_lfc_interval_seconds` set. |
+| `compute_prewarm.rs` | LFC **prewarm** (load cache state before/at startup) and **offload** (periodically save it). State is read/written to **endpoint_storage** at `{addr}/{branch_id}/{endpoint}/lfc_state` (zstd). Auto-prewarm if `spec.autoprewarm`; offload loop if `offload_lfc_interval_seconds` set. |
 | `compute_promote.rs` | Replica→Primary: wait for the standby to catch up to the primary's flush LSN, set `yb_amp.safekeepers` + `synchronous_standby_names`, `pg_promote()`, then reconfigure as Primary. |
 | `sync_sk.rs` | Query each safekeeper's `TIMELINE_STATUS` for flush/commit LSN and confirm a quorum agrees, before basebackup and on shutdown. |
 | `lsn_lease.rs` | Static mode: renew the pageserver LSN lease (`GET /lsn_lease`) so the pinned LSN survives GC. |
@@ -236,7 +236,7 @@ internal `POST /refresh_configuration`, which the configurator turns into a re-f
 `compute_ctl` exposes Prometheus text at `GET /metrics` (`metrics.rs`,
 `compute_metrics.rs`): `compute_ctl_up`, Postgres up/down-time, control-plane request
 counters, DB-migration failures, remote-extension request counts, pagestream-error
-counters, `pg_cctl_attached{tenant_id,timeline_id,…}`, LFC prewarm counters, and the
+counters, `pg_cctl_attached{branch_id,…}`, LFC prewarm counters, and the
 installed-extensions gauge. Tracing is OpenTelemetry: `init_tracing_and_logging()`
 sets up an OTLP provider and propagates trace context across HTTP requests and via
 `OTEL_*` env vars (`logger.rs`, `compute.rs`).
@@ -249,8 +249,9 @@ touched the crate are fork-wide mechanical refactors, not behavior changes:
 - the `neon_local` → `yb_light_local` / `cargo neon` → `cargo yb_light` rename;
 - removal of the "Hadron" code;
 - the removal of sharding entirely (the `ShardIdentity` / `ShardIndex` /
-  `ShardCount` / … types and `TenantShardId` are gone; a `TenantId` identifies a
-  tenant directly — yb-light is single-shard);
+  `ShardCount` / … types and `TenantShardId` are gone — yb-light is single-shard);
+- the collapse of `(tenant_id, timeline_id)` into a single `branch_id` (the
+  `TenantId` / `TenantTimelineId` types are gone; `TimelineId` became `BranchId`);
 - the strip of S3/Azure/GCS backends from `libs/remote_storage`.
 
 `compute_ctl` does not know YugabyteDB exists, by design (mirroring
@@ -271,7 +272,7 @@ The [amp-controller design](../controller/architecture/amp-controller.md) leans 
   observe, `POST /terminate` to retire, `POST /promote` for write-endpoint cut-over.
 - **The spec is the durable artifact (§5.3).** Statelessness works because everything
   needed to recreate a compute lives in the spec (`config.json`): YB connection,
-  `(tenant_id, timeline_id)` binding, role, version, TLS/cert refs, otel config,
+  `branch_id` binding, role, version, TLS/cert refs, otel config,
   endpoint_storage address + token. `compute_ctl` holds none of this durably itself.
 - **endpoint_storage (§11.5).** The LFC prewarm/offload path is the live consumer of the
   endpoint_storage address + scoped token that `amp-controller` mints into every
@@ -280,7 +281,7 @@ The [amp-controller design](../controller/architecture/amp-controller.md) leans 
   against the JWKS embedded in its spec — the public half of the key `amp-controller`
   signs with.
 - **Single-writer invariant (§4.4 / §7).** At most one Primary `compute_ctl` per
-  timeline; upgrades and promotions are replace-and-cut-over via `/promote` +
+  branch; upgrades and promotions are replace-and-cut-over via `/promote` +
   `/terminate`, never two writers at once.
 
 ## Run / configure

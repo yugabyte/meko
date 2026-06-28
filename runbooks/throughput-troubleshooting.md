@@ -1,6 +1,6 @@
-# Runbook: Troubleshooting throughput issues (yb-neon)
+# Runbook: Troubleshooting throughput issues (yb-light)
 
-Diagnoses low throughput (TPC-C load or execute, or any OLTP workload) on the **yb-neon** stack:
+Diagnoses low throughput (TPC-C load or execute, or any OLTP workload) on the **yb-light** stack:
 a Postgres compute, a yb-pageserver, a safekeeper, a storage_controller, and a YugabyteDB backing
 store. The components may be co-located on one box or spread across boxes — this runbook does not
 assume a particular topology. Substitute the conventions below for your deployment.
@@ -8,12 +8,12 @@ assume a particular topology. Substitute the conventions below for your deployme
 ## Conventions (fill these in for your deployment)
 Set these once per shell; every command below uses them. Get the values from the deployment's
 service configs (`pageserver.toml`, the safekeeper/SC start scripts, the compute's
-`postgresql.conf` / `neon.pageserver_connstring`).
+`postgresql.conf` / `yb_amp.pageserver_connstring`).
 
 ```bash
 # --- Postgres compute (the benchmark connects here) ---
 export COMPUTE_HOST=...        # e.g. the compute box IP/host
-export COMPUTE_PORT=...        # neon compute port
+export COMPUTE_PORT=...        # yb-light compute port
 export COMPUTE_USER=cloud_admin
 export COMPUTE_DB=tpcc         # or whatever DB the workload uses
 export PGPASSWORD=...          # compute password
@@ -66,7 +66,7 @@ Read the dominant wait event and jump to the matching cause below:
 | Dominant wait | Likely cause | Go to |
 |---|---|---|
 | `IPC/SyncRep` | commit blocked on WAL durability to the safekeeper | **Step 2** |
-| `Extension/Neon/PS_ReadIO` | getpage round-trips to the pageserver | **Step 3** |
+| `Extension/YbAmp/PS_ReadIO` | getpage round-trips to the pageserver | **Step 3** |
 | `LWLock/BufferContent`, `LWLock/*` | buffer/lock contention on hot pages | **Step 4** |
 | `(running)` / `CPU` | CPU-bound — find which component | **Step 5** |
 | `Client/ClientRead` | client/driver side (connection pool, terminal pacing) | **Step 6** |
@@ -99,7 +99,7 @@ Cross-check the safekeeper is idle (low CPU) in Step 5. If SK CPU is low and WAL
 
 ---
 
-## Step 3 — getpage read latency (`Extension/Neon/PS_ReadIO`)
+## Step 3 — getpage read latency (`Extension/YbAmp/PS_ReadIO`)
 Each shared-buffers + LFC miss fetches the page from the pageserver. The 8k-direct PS does a
 **per-page YB fetch on miss** (~100–180 ms each when cold, more if the PS is off-box from YB). With
 few backends this serializes hard.
@@ -133,15 +133,15 @@ curl -s http://$PS_HOST:$PS_HTTP_PORT/metrics | awk '
 - If `yb_query / smgr` < 50% → time is in PS-internal work (chain walk, walredo dispatch).
   Check `crossbeam_skiplist` / `UnifiedPages` in a `perf record -g -p <PS pid> -- sleep 30`.
 
-**Levers:** bigger LFC (`neon.file_cache_size_limit`), bigger `page_cache_size` in `pageserver.toml`,
+**Levers:** bigger LFC (`yb_amp.file_cache_size_limit`), bigger `page_cache_size` in `pageserver.toml`,
 more concurrent terminals (amortize latency), keep working set warm.
 
 ---
 
-## Step 3a — PS → YB connection pool starvation (`Neon/PS_ReadIO` + high `yb_query` latency)
+## Step 3a — PS → YB connection pool starvation (`YbAmp/PS_ReadIO` + high `yb_query` latency)
 
 **Symptom:** PS has very few persistent TCP connections to the YB tserver (e.g. ~9) while many
-compute backends are blocked on `Extension/Neon/PS_ReadIO`. Hikari `ConnAcq` latency on the bench
+compute backends are blocked on `Extension/YbAmp/PS_ReadIO`. Hikari `ConnAcq` latency on the bench
 side blows up to seconds-to-tens-of-seconds even at "modest" connection counts (e.g. 100).
 
 **Diagnose** (run wherever the PS lives, replacing `$YB_HOST` with the YB tserver host):
@@ -269,5 +269,5 @@ not a stall. Confirm with the WAL-rate and wait-event checks above before declar
 | Run aborted early | Step 6 — connection-pool timeout in `execute.log` |
 | One PS core at 100%, rest idle | Step 7 — materializer lock starvation |
 | Compute pegged at full core count | CPU-bound — genuine, not tunable away |
-| All backends on `Neon/PS_ReadIO` + Hikari ConnAcq tens of seconds | **Step 3a** — PS → YB pool starvation, bump `scale_factor` |
+| All backends on `YbAmp/PS_ReadIO` + Hikari ConnAcq tens of seconds | **Step 3a** — PS → YB pool starvation, bump `scale_factor` |
 | `yb_client_query` ≫ YB tserver `SelectStmt` | **Step 3a** — PS-side queueing for too-few YB conns |

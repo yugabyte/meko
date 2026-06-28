@@ -7,7 +7,7 @@ Metrics are served as Prometheus text exposition on the HTTP management port
 (default `127.0.0.1:9898`). By default a background task collects them on an
 interval (`METRICS_COLLECTION_INTERVAL`); if `force_metric_collection_on_scrape`
 is set, collection happens on each scrape instead. `preinitialize_metrics`
-force-instantiates the instance-wide (non-per-timeline) metrics at startup so
+force-instantiates the instance-wide (non-per-branch) metrics at startup so
 they appear before any traffic.
 
 Process-level metrics (`libmetrics_process_*`, `libmetrics_build_info`,
@@ -18,37 +18,37 @@ Process-level metrics (`libmetrics_process_*`, `libmetrics_build_info`,
 
 ## Label cardinality
 
-Metrics labelled `tenant_id` + `timeline_id` are per-timeline. In yb-light a
-process serves exactly one `(tenant_id, timeline_id)`, so these are effectively
+Metrics labelled `branch_id` are per-branch. In yb-light a
+process serves exactly one `branch_id`, so these are effectively
 single-series per process (label values still present for cross-process
-aggregation). Per-timeline series are removed on timeline shutdown
-(`TimelineMetrics::shutdown`). `*_global` variants drop the tenant/timeline
-dimensions.
+aggregation). Per-branch series are removed on branch shutdown
+(`TimelineMetrics::shutdown`). `*_global` variants drop the `branch_id`
+dimension.
 
 ## getpage / page_service (compute read hot path)
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `pageserver_smgr_query_started_global_count` | IntCounter | `smgr_query_type` | smgr queries started, by query type. |
-| `pageserver_smgr_query_started_count` | IntCounter | `smgr_query_type`, `tenant_id`, `timeline_id` | smgr queries started, per timeline (getpage tracked per timeline). |
-| `pageserver_smgr_query_seconds` | Histogram | `smgr_query_type`, `tenant_id`, `timeline_id` | Execution time of smgr handling, excluding batch/throttle delays. |
+| `pageserver_smgr_query_started_count` | IntCounter | `smgr_query_type`, `branch_id` | smgr queries started, per branch (getpage tracked per branch). |
+| `pageserver_smgr_query_seconds` | Histogram | `smgr_query_type`, `branch_id` | Execution time of smgr handling, excluding batch/throttle delays. |
 | `pageserver_smgr_query_seconds_global` | Histogram | `smgr_query_type` | Instance-wide version of the above. |
 | `pageserver_page_service_batch_size_global` | Histogram | — | getpage batch sizes. |
-| `pageserver_page_service_batch_size` | Histogram | `tenant_id`, `timeline_id` | getpage batch sizes, per timeline. |
+| `pageserver_page_service_batch_size` | Histogram | `branch_id` | getpage batch sizes, per branch. |
 | `pageserver_page_service_batch_break_reason_global` | IntCounter | `reason` | Why a getpage batch was broken. |
-| `pageserver_page_service_batch_break_reason` | IntCounter | `tenant_id`, `timeline_id`, `reason` | Batch-break reason, per timeline. |
+| `pageserver_page_service_batch_break_reason` | IntCounter | `branch_id`, `reason` | Batch-break reason, per branch. |
 | `pageserver_page_service_config_max_batch_size` | IntGauge | `mode`, `execution`, `batching` | Configured max batch size + pipelining config. |
-| `pageserver_page_service_pagestream_batch_wait_time_seconds` | Histogram | `tenant_id`, `timeline_id` | Time a request waited in its batch before throttle+execution. |
+| `pageserver_page_service_pagestream_batch_wait_time_seconds` | Histogram | `branch_id` | Time a request waited in its batch before throttle+execution. |
 | `pageserver_page_service_pagestream_batch_wait_time_seconds_global` | Histogram | — | Instance-wide batch wait time. |
-| `pageserver_page_service_pagestream_flush_in_progress_micros` | IntCounter | `tenant_id`, `timeline_id` | Microseconds a pagestream response spent flushing to TCP (in-progress sum, not completion latency). |
+| `pageserver_page_service_pagestream_flush_in_progress_micros` | IntCounter | `branch_id` | Microseconds a pagestream response spent flushing to TCP (in-progress sum, not completion latency). |
 | `pageserver_page_service_pagestream_flush_in_progress_micros_global` | IntCounter | — | Instance-wide flush-in-progress micros. |
 | `pageserver_get_vectored_seconds` | Histogram | `task_kind` | Time in `get_vectored` (only `PageRequestHandler` tracked). |
 | `pageserver_scan_seconds` | Histogram | `task_kind` | Time in `scan` (only `PageRequestHandler` tracked). |
 | `pageserver_wait_lsn_seconds` | Histogram | — | Time waiting for WAL to arrive (on completion). |
-| `pageserver_wait_lsn_started_count` / `pageserver_wait_lsn_finished_count` | IntCounterPair | `tenant_id`, `timeline_id` | wait_lsn operations started/finished. |
-| `pageserver_wait_lsn_in_progress_micros` | IntCounter | `tenant_id`, `timeline_id` | wait_lsn in-progress micros, per timeline (periodic). |
+| `pageserver_wait_lsn_started_count` / `pageserver_wait_lsn_finished_count` | IntCounterPair | `branch_id` | wait_lsn operations started/finished. |
+| `pageserver_wait_lsn_in_progress_micros` | IntCounter | `branch_id` | wait_lsn in-progress micros, per branch (periodic). |
 | `pageserver_wait_lsn_in_progress_micros_global` | IntCounter | — | wait_lsn in-progress micros, global. |
-| `pageserver_layers_per_read` | Histogram | `tenant_id`, `timeline_id` | Layers visited per read (read amplification). |
+| `pageserver_layers_per_read` | Histogram | `branch_id` | Layers visited per read (read amplification). |
 | `pageserver_layers_per_read_global` | Histogram | — | Layers per read, global. |
 | `pageserver_layers_per_read_batch_global` | Histogram | — | Layers visited per read batch. |
 | `pageserver_layers_per_read_amortized_global` | Histogram | — | Layers per read amortized across batch. |
@@ -63,15 +63,15 @@ dimensions.
 
 ## Tenant throttling (pagestream)
 
-`kind` is always `pagestream`. Global variants have only `kind`; per-tenant
-variants add `tenant_id`.
+`kind` is always `pagestream`. Global variants have only `kind`; per-branch
+variants add `branch_id`.
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `pageserver_tenant_throttling_count_accounted_start_global` / `..._start` | IntCounter | `kind` (+`tenant_id`) | Throttle accounting starts. |
-| `pageserver_tenant_throttling_count_accounted_finish_global` / `..._finish` | IntCounter | `kind` (+`tenant_id`) | Throttle accounting finishes. |
-| `pageserver_tenant_throttling_wait_usecs_sum_global` / `..._sum` | IntCounter | `kind` (+`tenant_id`) | Microseconds spent waiting on throttle. |
-| `pageserver_tenant_throttling_count_global` / `pageserver_tenant_throttling_count` | IntCounter | `kind` (+`tenant_id`) | Number of throttlings. |
+| `pageserver_tenant_throttling_count_accounted_start_global` / `..._start` | IntCounter | `kind` (+`branch_id`) | Throttle accounting starts. |
+| `pageserver_tenant_throttling_count_accounted_finish_global` / `..._finish` | IntCounter | `kind` (+`branch_id`) | Throttle accounting finishes. |
+| `pageserver_tenant_throttling_wait_usecs_sum_global` / `..._sum` | IntCounter | `kind` (+`branch_id`) | Microseconds spent waiting on throttle. |
+| `pageserver_tenant_throttling_count_global` / `pageserver_tenant_throttling_count` | IntCounter | `kind` (+`branch_id`) | Number of throttlings. |
 
 ## WAL ingest / walreceiver
 
@@ -83,7 +83,7 @@ variants add `tenant_id`.
 | `pageserver_wal_ingest_records_committed` | IntCounter | — | WAL records that resulted in storage writes. |
 | `pageserver_wal_ingest_values_committed` | IntCounter | `class`, `kind` | Values committed (`class`=metadata/data, `kind`=image/delta). |
 | `pageserver_gap_blocks_zeroed_on_rel_extend` | IntCounter | — | Zero gap blocks written on relation extends. |
-| `pageserver_timeline_wal_records_received` | IntCounter | `tenant_id`, `timeline_id` | WAL records received, per timeline. |
+| `pageserver_timeline_wal_records_received` | IntCounter | `branch_id` | WAL records received, per branch. |
 | `pageserver_walreceiver_started_connections_total` | IntCounter | — | walreceiver connections started. |
 | `pageserver_walreceiver_active_managers` | IntGauge | — | Active walreceiver managers. |
 | `pageserver_walreceiver_switches_total` | IntCounter | `reason` | walreceiver `change_connection` calls. |
@@ -130,28 +130,28 @@ variants add `tenant_id`.
 | `pageserver_basebackup_cache_size_bytes` | UIntGauge | — | On-disk size of basebackup cache. |
 | `pageserver_basebackup_cache_prepare_queue_size` | UIntGauge | — | Pending requests in basebackup prepare channel. |
 
-## Per-timeline storage / size
+## Per-branch storage / size
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `pageserver_last_record_lsn` | IntGauge | `tenant_id`, `timeline_id` | Last record (applied) LSN. |
-| `pageserver_current_logical_size` | UIntGauge | `tenant_id`, `timeline_id` | Current logical size. |
-| `pageserver_resident_physical_size` | UIntGauge | `tenant_id`, `timeline_id` | Resident layer-file bytes (attached). yb-light: ~0. |
+| `pageserver_last_record_lsn` | IntGauge | `branch_id` | Last record (applied) LSN. |
+| `pageserver_current_logical_size` | UIntGauge | `branch_id` | Current logical size. |
+| `pageserver_resident_physical_size` | UIntGauge | `branch_id` | Resident layer-file bytes (attached). yb-light: ~0. |
 | `pageserver_resident_physical_size_global` | UIntGauge | — | Global resident physical size. |
-| `pageserver_visible_physical_size` | UIntGauge | `tenant_id`, `timeline_id` | Visible layer-file bytes. |
-| `pageserver_pitr_history_size` | UIntGauge | `tenant_id`, `timeline_id` | Data written since PITR cutoff. |
-| `pageserver_archive_size` | UIntGauge | `tenant_id`, `timeline_id` | Logical size if eligible for archival, else 0. |
-| `pageserver_standby_horizon` | IntGauge | `tenant_id`, `timeline_id` | Standby apply LSN holding off GC. |
-| `pageserver_aux_file_estimated_size` | IntGauge | `tenant_id`, `timeline_id` | Aux-file size (v2 store). |
-| `pageserver_directory_entries_count` | UIntGauge | `tenant_id`, `timeline_id` | Sum of entries in stored directory listings. |
-| `pageserver_valid_lsn_lease_count` | UIntGauge | `tenant_id`, `timeline_id` | Valid LSN leases after GC-info refresh. |
-| `pageserver_io_operations_bytes_total` | UIntGauge | `operation` (read/write), `tenant_id`, `timeline_id` | Bytes read/written in IO operations. |
-| `pageserver_storage_operations_seconds_sum` | Counter | `operation`, `tenant_id`, `timeline_id` | Time on storage operations (sum). `operation` ∈ logical-size, find-gc-cutoffs. |
-| `pageserver_storage_operations_seconds_count` | IntCounter | `operation`, `tenant_id`, `timeline_id` | Storage operation count. |
-| `pageserver_active_storage_operations_count` | IntGauge | `operation`, `tenant_id`, `timeline_id` | Active storage operations. |
+| `pageserver_visible_physical_size` | UIntGauge | `branch_id` | Visible layer-file bytes. |
+| `pageserver_pitr_history_size` | UIntGauge | `branch_id` | Data written since PITR cutoff. |
+| `pageserver_archive_size` | UIntGauge | `branch_id` | Logical size if eligible for archival, else 0. |
+| `pageserver_standby_horizon` | IntGauge | `branch_id` | Standby apply LSN holding off GC. |
+| `pageserver_aux_file_estimated_size` | IntGauge | `branch_id` | Aux-file size (v2 store). |
+| `pageserver_directory_entries_count` | UIntGauge | `branch_id` | Sum of entries in stored directory listings. |
+| `pageserver_valid_lsn_lease_count` | UIntGauge | `branch_id` | Valid LSN leases after GC-info refresh. |
+| `pageserver_io_operations_bytes_total` | UIntGauge | `operation` (read/write), `branch_id` | Bytes read/written in IO operations. |
+| `pageserver_storage_operations_seconds_sum` | Counter | `operation`, `branch_id` | Time on storage operations (sum). `operation` ∈ logical-size, find-gc-cutoffs. |
+| `pageserver_storage_operations_seconds_count` | IntCounter | `operation`, `branch_id` | Storage operation count. |
+| `pageserver_active_storage_operations_count` | IntGauge | `operation`, `branch_id` | Active storage operations. |
 | `pageserver_storage_operations_seconds_global` | Histogram | `operation` | Storage operation time, global. |
 | `pageserver_timeline_states_count` | UIntGauge | `state` | Count of timelines per state. |
-| `pageserver_evictions_with_low_residence_duration` | IntCounter | `tenant_id`, `timeline_id`, `residence_duration_data_source`, `low_threshold_secs` | Layers evicted below residence threshold. |
+| `pageserver_evictions_with_low_residence_duration` | IntCounter | `branch_id`, `residence_duration_data_source`, `low_threshold_secs` | Layers evicted below residence threshold. |
 
 ## Initial logical size calculation
 

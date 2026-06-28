@@ -258,7 +258,7 @@ Each WAL-derived write gets the **end-LSN of the record** that produced it.
 
 **Read path:** `PageWriter::scan_range` / `read_chain` blend `UnifiedPages`
 (buffer + LRU cache) with `PageStore` SQL. Queries are scoped to
-`(tenant_id, timeline_id)` — no ancestor timeline.
+`branch_id` — no ancestor branch.
 
 **Rel/SLRU:** image-anchored chain, truncated at `will_init=true`.
 **Meta:** latest row at `lsn ≤ target_lsn` (full overwrite).
@@ -279,7 +279,7 @@ Each WAL-derived write gets the **end-LSN of the record** that produced it.
 |-----|---------|---------------|
 | `GcCutoffs.space` | `GcInfo` RwLock | `last_record_lsn - gc_horizon` |
 | `GcCutoffs.time` | `GcInfo` | PITR time cutoff via `find_gc_cutoffs` |
-| `retain_lsns` | `GcInfo` | `(Lsn, TimelineId)` child branch points |
+| `retain_lsns` | `GcInfo` | `(Lsn, BranchId)` child branch points |
 | LSN leases | `GcInfo` BTreeMap | Per-LSN GC blockers |
 
 `gc_iteration_internal` refreshes `GcInfo` cutoffs and calls `timeline.gc()`,
@@ -386,7 +386,7 @@ persisted timeline_state.consistent_lsn  ≤  consistent_lsn_observed
 
 **Holds:**
 - Ingest ordering via `SeqWait`; getpage waits on `last_record_lsn`.
-- Read correctness on a single timeline: buffer + YB blend; chains truncated
+- Read correctness on a single branch: buffer + YB blend; chains truncated
   at `will_init`.
 - SK truncation safety: SK reads `remote_consistent_lsn` from feedback,
   which is now sourced from the durable `consistent_lsn` slot — only
@@ -422,7 +422,7 @@ persisted timeline_state.consistent_lsn  ≤  consistent_lsn_observed
 | `consistent_lsn` | `advance_consistent_lsn` | Yes |
 | `prev_record_lsn` | same UPDATE | Yes |
 | `applied_gc_cutoff_lsn` | `insert_timeline_at_creation` only | Yes |
-| `ancestor_lsn` / `ancestor_timeline_id` | creation INSERT | Yes |
+| `ancestor_lsn` / `ancestor_branch_id` | creation INSERT | Yes |
 | `initdb_lsn` | creation INSERT | Yes |
 | `applied_lsn` / `last_record_lsn` | never | seeded from `consistent_lsn` + persisted `prev` |
 | `remote_state.consistent_lsn` slot | never | seeded from `consistent_lsn` |

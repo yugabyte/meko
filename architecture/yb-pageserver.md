@@ -14,10 +14,10 @@ component is documented in [`pageserver.md`](pageserver.md); read that
 first for the parts that are inherited unchanged (Key encoding, walredo,
 WAL ingest, getpage RPC).
 
-## Single-timeline process model
+## Single-branch process model
 
-One yb-pageserver process serves exactly **one (tenant_id,
-timeline_id) for its entire lifetime** (the long-term topology gives
+One yb-pageserver process serves exactly **one `branch_id` for its
+entire lifetime** (the long-term topology gives
 each compute endpoint its own pageserver + safekeeper). That safekeeper
 is not necessarily on this node or at this build — the walreceiver streams
 the version-portable interpreted-WAL protocol and must tolerate a
@@ -26,19 +26,18 @@ remote/older/newer safekeeper (read endpoints especially; see
 The identity is baked into `pageserver.toml` by the launcher before spawn:
 
 ```toml
-tenant_id   = "c8178f5e..."   # required
-timeline_id = "77ffde89..."   # required
+branch_id   = "77ffde89..."   # required
 generation  = 7               # required; launcher bumps on EVERY spawn
 
 [timeline_init]               # consulted only when the timeline_state row is absent
-mode       = "bootstrap"      # or "branch" + ancestor_timeline_id + ancestor_lsn
+mode       = "bootstrap"      # or "branch" + ancestor_branch_id + ancestor_lsn
 pg_version = 17
 ```
 
 Startup is **open-or-create**, and runs SYNCHRONOUSLY in `main()`
 before the HTTP/libpq/gRPC listeners start: a connecting compute
 either gets ECONNREFUSED (process still opening; client retry covers
-it) or talks to a fully-active timeline. There is no tenant state
+it) or talks to a fully-active branch. There is no branch state
 machine and no in-protocol wait-for-active. Failure to open is fatal
 to the process.
 
@@ -47,7 +46,7 @@ to the process.
   `deleted_at` set refuses to open.
 - Row absent + `mode = "bootstrap"` → run initdb + import, then
   insert the row (`UninitializedTimeline::finish_creation`). If the
-  initdb tar for this timeline already exists in remote storage, it is
+  initdb tar for this branch already exists in remote storage, it is
   REUSED — initdb output is not bit-deterministic, and a crash-retry
   must overwrite any orphan page rows with identical payloads.
 - Row absent + `mode = "branch"` → validate against the ancestor's
@@ -61,18 +60,19 @@ to the process.
 **Generation handoff is launcher-owned.** The pageserver no longer
 calls the storage_ctl `/upcall/v1/re-attach` API (the
 `controller_upcall_client` module is deleted). Instead, every
-`PageServerNode::start` in neon_local: registers the node with
+`PageServerNode::start` in yb_light_local: registers the node with
 storage_ctl (idempotent), calls the attach-hook API (which increments
-`storage_controller.tenants.generation` against this node and returns
+`storage_controller.branches.generation` against this node and returns
 it), rewrites `generation` in `pageserver.toml`, and only then spawns
 the process. The YB-side CAS (`cas_bump_generation_on_attach`)
 enforces the fence at open regardless of how the number arrived.
 
 The management HTTP surface is correspondingly small: status /
-metrics / profile / utilization, the single timeline's list + detail
-(`GET /v1/tenant/:t/timeline[/:tl]`), `get_lsn_by_timestamp`,
+metrics / profile / utilization, the single branch's list + detail
+(`GET /v1/branch/:branch_id/timeline` + `GET /v1/branch/:branch_id`),
+`get_lsn_by_timestamp`,
 `get_timestamp_of_lsn`, `lsn_lease`, `do_gc`, `flush` (`PUT
-…/timeline/:tl/flush?lsn=` — flushes pages to YB, optionally waiting
+/v1/branch/:branch_id/flush?lsn=` — flushes pages to YB, optionally waiting
 for ingest to reach `lsn` first, then forces the durable `consistent_lsn`
 UPDATE through immediately (bypassing the per-`max_age` upsert throttle that
 the periodic/bootstrap flushes use); used to flush an ancestor at branch
@@ -86,17 +86,17 @@ Consequences elsewhere:
   wholesale (see [`storage-controller.md`](storage-controller.md)):
   there is no location_config to converge — attachment is decided at
   spawn time.
-- storage_ctl's timeline-create no longer POSTs to the pageserver; it
+- storage_ctl's branch-create no longer POSTs to the pageserver; it
   **observes** (polls `timeline_detail` until `Active`, generous
   timeout for debug-build initdb), then runs the safekeeper leg with
   `last_record_lsn` from the observed `TimelineInfo`.
 - `yb_light_local start` skips a pageserver whose toml has no
-  identity yet; `tenant create` bakes the identity in and starts it.
-- `timeline branch` provisions a NEW pageserver + safekeeper pair for
+  identity yet; `branch create` bakes the identity in and starts it.
+- `branch create` with an ancestor provisions a NEW pageserver + safekeeper pair for
   the branch: it allocates the next node ids/ports, clones the
   ancestor pageserver's toml (patching listen addresses and
   `safekeeper_pg_addr`), bakes the branch identity +
-  `[timeline_init] mode="branch"`, creates the timeline on the new
+  `[timeline_init] mode="branch"`, creates the branch on the new
   safekeeper at the branch LSN, and starts both. The default branch
   LSN is the ancestor **safekeeper's `flush_lsn`** (durable WAL end),
   not the ancestor pageserver's `last_record_lsn` — the latter is an
@@ -108,18 +108,17 @@ Consequences elsewhere:
   pageserver (wait-for-ingest then flush), so the durability
   barrier clears on the first try (~5 s → ~0.1 s); the retry stays as the
   correctness guarantee. Endpoints resolve
-  their pageserver and safekeeper from the timeline they sit on
+  their pageserver and safekeeper from the branch they sit on
   (`LocalEnv::pageserver_conf_for_timeline` /
-  `safekeepers_for_timeline`) — the storage_ctl `tenant_locate` path
-  is no longer used. `timeline create` (a second root timeline) still
-  errors; create a new tenant instead.
+  `safekeepers_for_timeline`, both now keyed by `branch_id`) — the
+  storage_ctl tenant-locate path is no longer used.
 
 ## Lineage-aware reads (branches)
 
 A branch's pre-branch-point rows live in YB under the **ancestor's**
-`timeline_id`; nothing is copied at branch time (pages, SLRU and meta
+`branch_id`; nothing is copied at branch time (pages, SLRU and meta
 alike). At startup the pageserver walks the
-`ancestor_timeline_id`/`ancestor_lsn` links in `timeline_state` once
+`ancestor_branch_id`/`ancestor_lsn` links in `timeline_state` once
 (`PageStore::load_lineage`) and builds an ordered segment list
 `[(self, MAX), (parent, cap), (grandparent, min(caps)), …]` — static
 for the process lifetime. Every PageStore read path (`read_chain`,
@@ -137,29 +136,30 @@ short-circuit when the cached anchor covers the lineage the same way
 (`cache_anchor_covers_lineage`).
 
 Iterative per-segment queries (not one UNION ALL) on purpose:
-`timeline_id` is in the hash partition key, so segments live on
+`branch_id` is in the hash partition key, so segments live on
 different tablets. The walk touches ONE tablet in the steady state —
-always for unbranched timelines, and per-key after the materialiser
-copies an anchor image up into the descendant's own timeline_id. A
+always for unbranched branches, and per-key after the materialiser
+copies an anchor image up into the descendant's own branch_id. A
 chain that crossed a segment boundary force-dispatches a read-side
 materialise job, so each cold branch key converges to local after one
 slow read. Writes (`put_*`, materialiser installs,
 `advance_consistent_lsn`, `delete_all_for_timeline`) always target the
-own timeline_id, never an ancestor.
+own branch_id, never an ancestor.
 
-**Boundary.** The per-segment `timeline_id` binding (the read SQL's
-`$2`, rebound for each ancestor — never baked as a literal, see the
+**Boundary.** The per-segment `branch_id` binding (the read SQL's
+`$1`, rebound for each ancestor — never baked as a literal, see the
 `read_chain`/`scan_range` comment in `page_store.rs`) plus the `lineage`
-vector are the one place reads are genuinely multi-timeline. Writes are
-single-timeline, so the rest of the pageserver state collapses to the
-process's single (tenant, timeline); the read path does **not**. A
-simplification that hard-codes the write timeline on the read path, or
+vector are the one place reads are genuinely multi-branch. Writes are
+single-branch, so the rest of the pageserver state collapses to the
+process's single `branch_id`; the read path does **not**. A
+simplification that hard-codes the write branch_id on the read path, or
 bakes it into the read SQL, would silently break branch reads — keep the
 lineage walk and its per-segment binding intact.
 
 Note the `lineage` JSONB column on `timeline_state` is unrelated: it
 carries upstream detach-ancestor state (always `Default` in yb-light);
-the ancestry chain is derived from the `ancestor_*` columns.
+the ancestry chain is derived from the `ancestor_branch_id` /
+`ancestor_lsn` columns.
 
 ## What was kept from upstream
 
@@ -186,9 +186,9 @@ The binary name is `yb-pageserver`. Builds with
 | `(Key, LSN) → Value` stored as B-tree leaves in delta/image layer files | One row per version in `pageserver.pages` (YB) |
 | Open in-memory layer + frozen layer + flush loop | In-RAM write buffer (5 s / 25 MiB defaults), flushed as `INSERT … VALUES (…),(…),…` into `pageserver.pages` |
 | L0 → L1 compaction, image-layer creation | **Image-anchored reads** + background image materialiser (this file) |
-| `index_part.json` (per-timeline layer list) | The `pageserver.timeline_state` state row |
+| `index_part.json` (per-branch layer list) | The `pageserver.timeline_state` state row |
 | `metadata` (local file with ancestor/LSN bookkeeping) | Columns on the `pageserver.timeline_state` row |
-| `tenant-manifest.json` (per-gen layer tracking) | `current_generation` column on the timeline row |
+| `tenant-manifest.json` (per-gen layer tracking) | `current_generation` column on the branch row |
 | Local layer cache + secondary cache + heatmap | None — every read hits YB |
 | Disk eviction + heatmap downloader | None |
 
@@ -200,8 +200,8 @@ storage-controller handshake are unchanged.
 Four tables live in the `pageserver` schema inside `yb_storage`:
 `pages` (relation pages), `slru_pages` (SLRU blocks), `meta`
 (everything else — relsize sentinels, dir listings, aux files,
-two-phase commit, repl origins), and `timeline_state` (per-timeline
-state row). Per-tenant config is NOT in YB: the effective config is
+two-phase commit, repl origins), and `timeline_state` (per-branch
+state row). Per-branch config is NOT in YB: the effective config is
 the `[tenant_config]` section of `pageserver.toml`.
 DDL is owned by the diesel migration at
 `storage_controller/migrations/00000000000001_initial_schema/up.sql`
@@ -217,8 +217,7 @@ anchor lookup at a given LSN is a single seek, not a scan.
 
 ```sql
 CREATE TABLE pageserver.pages (
-    tenant_id    TEXT     NOT NULL,
-    timeline_id  TEXT     NOT NULL,
+    branch_id    TEXT     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
     relnode      BIGINT   NOT NULL,
@@ -228,7 +227,7 @@ CREATE TABLE pageserver.pages (
     lsn          BIGINT   NOT NULL,    -- u64 stored as i64 (real LSNs are << 2^63)
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
+    PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
                  blknum, lsn DESC, is_image)
 );
 ```
@@ -252,16 +251,15 @@ the deltas above it.
 
 ### `pageserver.timeline_state`
 
-One row per timeline. Replaces the upstream split of `metadata` +
+One row per branch. Replaces the upstream split of `metadata` +
 `index_part.json` + `tenant-manifest.json`.
 
 ```sql
 CREATE TABLE pageserver.timeline_state (
-    tenant_id              TEXT      NOT NULL,
-    timeline_id            TEXT      NOT NULL,
+    branch_id              TEXT      NOT NULL,
     consistent_lsn         BIGINT    NOT NULL,
     applied_gc_cutoff_lsn  BIGINT    NOT NULL,
-    ancestor_timeline_id   TEXT,
+    ancestor_branch_id     TEXT,
     ancestor_lsn           BIGINT,
     current_generation     INT       NOT NULL,
     pg_version             INT       NOT NULL,
@@ -272,7 +270,7 @@ CREATE TABLE pageserver.timeline_state (
     rel_size_migration     TEXT,
     rel_size_migrated_at   BIGINT,
     lineage                JSONB,
-    PRIMARY KEY ((tenant_id) HASH, timeline_id)
+    PRIMARY KEY ((branch_id) HASH)
 );
 ```
 
@@ -470,7 +468,7 @@ the replay-start size, and the gap-fill zero-filled
 `[pinned_size, blkno)` on every record, stamping all-zero page images
 over live tail blocks. The regression test is
 `test/e2e/storage/fast/restart_relsize_zero_shadow.rs` (SIGKILL
-+ replay + tenant-wide zero-image shadowing assertions).
++ replay + branch-wide zero-image shadowing assertions).
 
 FSM and visibility-map forks are a tolerated exception to the implicit
 "relation exists ⇒ its size key is readable" coupling. The rel-directory
@@ -598,7 +596,7 @@ flushed-window's max LSN — durable in YB by construction
 `mpsc::send`, so the walreceiver backpressures when the materialiser
 falls behind.
 
-The worker task (`ImageMaterializer::spawn`, one per timeline) drains
+The worker task (`ImageMaterializer::spawn`, one per branch) drains
 the queue:
 
 1. `PageWriter::read_chain_durable(key, target_lsn)` — durable sources
@@ -633,28 +631,28 @@ on disk grows monotonically.
 
 ## Generation fencing
 
-`current_generation` on the `pageserver.timeline_state` row is the gate.
-Sequence:
+`current_generation` on the `pageserver.timeline_state` row (keyed by
+`branch_id`) is the gate. Sequence:
 
 1. Storage controller's attach decision bumps the generation. yb-pageserver
    learns the new gen from the attach payload.
-2. yb-pageserver opens the timeline: reads the current state row, asserts
+2. yb-pageserver opens the branch: reads the current state row, asserts
    `row.current_generation == attach_gen`.
 3. Row INSERTs run as independent chunks via
    `stream::iter(...).buffer_unordered(N)` against
    `pageserver.pages` / `slru_pages` / `meta` — there is no `BEGIN
    / COMMIT` wrapping the data INSERTs (`page_store.rs:351-457`). The
    generation fence is a **subsequent standalone UPDATE** in
-   `advance_consistent_lsn` (`page_store.rs:1589-1659`):
+   `advance_consistent_lsn`:
    `UPDATE pageserver.timeline_state
-    SET consistent_lsn=$3,
-        prev_record_lsn=COALESCE($5, prev_record_lsn)
-    WHERE tenant_id=$1 AND timeline_id=$2 AND current_generation=$4`.
+    SET consistent_lsn=$2,
+        prev_record_lsn=COALESCE($4, prev_record_lsn)
+    WHERE branch_id=$1 AND current_generation=$3`.
    If the `UPDATE`'s row count is 0, a one-shot probe SELECT
    disambiguates "row missing entirely" (init bug) from
    `StaleGeneration { live_generation }`; on the latter the flush
    reports `StaleGeneration` to its caller and the pageserver tears
-   down the timeline.
+   down the branch.
 
 This collapses the upstream "every layer file carries its gen in the
 name + every delete is gen-checked" machinery into one column.
@@ -671,26 +669,27 @@ name + every delete is gen-checked" machinery into one column.
 - **Disk eviction / heatmap / secondary cache** — none. No local files
   to evict.
 - **Layer-file generations** — gone. Only the `current_generation`
-  column on the timeline row matters.
+  column on the branch row matters.
 - **GC** — not implemented yet. The plan is a separate cron that
   prunes `pageserver.pages` rows older than `applied_gc_cutoff_lsn`
   per key, retaining at least one image per chain. Until that lands,
   rows accumulate indefinitely.
 - **S3 object-versioning time-travel recovery** — the upstream
   `time_travel_recover_tenant` path that walked an S3 bucket's
-  versioned objects to roll a tenant back to a wall-clock timestamp
+  versioned objects to roll a branch back to a wall-clock timestamp
   is gone (along with S3 itself in lane E, 2026-06-01). **Time
   travel and branching are still on the roadmap** — we want both —
   but they need a YB-native implementation built on the row-per-LSN
   layout of `pageserver.pages` + `pageserver.timeline_state`. The
-  shape: a tenant-level "recover to timestamp T" command resolves
+  shape: a "recover to timestamp T" command resolves
   T → LSN via the existing `find_lsn_for_timestamp` helper (still
-  intact), then creates a fresh timeline branched at that LSN. Branch
-  creation is already wired in yb-light (`timeline branch` provisions a
-  pageserver+safekeeper pair; see the `ancestor_timeline_id` /
+  intact), then creates a fresh branch branched at that LSN. Branch
+  creation is already wired in yb-light (`branch create` with an
+  ancestor provisions a
+  pageserver+safekeeper pair; see the `ancestor_branch_id` /
   `ancestor_lsn` columns on `pageserver.timeline_state`). What's missing is the operator-facing
-  command + the GC story for the source timeline's `pageserver.pages`
-  rows that the branch depends on. **Planned phase, not yet
+  command + the GC story for the source branch's `pageserver.pages`
+  rows that the new branch depends on. **Planned phase, not yet
   numbered.**
 
 ## Compute ↔ pageserver timeouts
@@ -705,7 +704,7 @@ where they differ from upstream:
 | First WARN log on stalled response | `yb_amp.pageserver_response_log_timeout` (`libpagestore.c:87`) | **10 s** | Cosmetic; request keeps waiting. |
 | Disconnect + reconnect on stalled response | `yb_amp.pageserver_response_disconnect_timeout` (`libpagestore.c:95`) | **30 s** *(was 150 s upstream)* | Lowered in yb-light: yb-pageserver is a same-DC, low-latency hop, so a stuck request is far more likely a pageserver-side stall than transient packet loss — drop and reopen the socket fast, don't wait for TCP retry backoff. |
 | Reconnect attempts before erroring back to compute | `max_reconnect_attempts` (`libpagestore.c:83`) | **60** (1 s backoff each) | Combined with the disconnect timeout, a hard-down pageserver surfaces to the compute query in ~30 s + 60 × 1 s ≈ ~90 s. |
-| Pageserver-side activation wait | none | — | The timeline is opened synchronously before listeners start; until then, computes get ECONNREFUSED and retry via the reconnect loop above. |
+| Pageserver-side activation wait | none | — | The branch is opened synchronously before listeners start; until then, computes get ECONNREFUSED and retry via the reconnect loop above. |
 
 Pageserver doesn't apply an idle/recv timeout to inbound compute
 libpq connections (the keepalive constants in `page_service.rs` are

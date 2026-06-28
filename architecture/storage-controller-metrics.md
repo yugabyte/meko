@@ -14,7 +14,7 @@ Histograms use exponential buckets (the `start`/`factor` noted per metric).
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `storage_controller_tenants` | Gauge | — | Size of the in-memory tenant map |
+| `storage_controller_branches` | Gauge | — | Size of the in-memory branch map |
 | `storage_controller_pageserver_nodes` | Gauge | — | Size of the in-memory pageserver-node map |
 | `storage_controller_https_pageserver_nodes` | Gauge | — | Count of pageserver nodes with HTTPS configured |
 | `storage_controller_safekeeper_nodes` | Gauge | — | Size of the in-memory safekeeper-node map |
@@ -31,10 +31,10 @@ Histograms use exponential buckets (the `start`/`factor` noted per metric).
 |---|---|---|---|
 | `storage_controller_http_request_status` | CounterVec | `path`, `method`, `status` | Count of handled requests by route name, method, and HTTP status code |
 | `storage_controller_http_request_latency` | HistogramVec (start 0.1, ×2.0) | `path`, `method` | Handler latency across all status codes |
-| `storage_controller_http_request_rate_limited` | Histogram (start 0.1, ×10.0) | — | Time spent waiting on the per-tenant rate limiter |
+| `storage_controller_http_request_rate_limited` | Histogram (start 0.1, ×10.0) | — | Time spent waiting on the per-branch rate limiter |
 
 `path` is the route's static `RequestName` (e.g. `control_v1_node`,
-`v1_tenant`), not the raw URL — tenant/timeline ids are never in labels.
+`v1_branch`), not the raw URL — branch ids are never in labels.
 `method` is the fixed-cardinality enum `{Get,Put,Post,Delete,Other}`; `status`
 is the numeric HTTP code.
 
@@ -64,21 +64,21 @@ safekeepers. `path` is the request path with ids stripped
 Migration}` (from `DatabaseError::error_label`). `operation` is the
 `DatabaseOperation` enum — one variant per persistence call, including:
 `InsertNode`, `UpdateNode`, `DeleteNode`, `ListNodes`, `ListTombstones`,
-`Detach`, `ReAttach`, `IncrementGeneration`, `TenantGenerations`,
-`ShardGenerations`, `ListTenantShards`, `LoadTenant`, `InsertTenantShards`,
-`UpdateTenant`, `DeleteTenant`, `UpdateTenantConfig`, `UpdateMetadataHealth`,
+`Detach`, `ReAttach`, `IncrementGeneration`, `BranchGenerations`,
+`ListBranches`, `LoadBranch`, `InsertBranches`,
+`UpdateBranch`, `DeleteBranch`, `UpdateBranchConfig`, `UpdateMetadataHealth`,
 `ListMetadataHealth`, `ListMetadataHealthUnhealthy`, `ListMetadataHealthOutdated`,
 `ListSafekeepers`, `InsertTimeline`, `UpdateTimeline`, `GetTimeline`,
 `InsertPendingTimelineInit`, `ListPendingTimelineInits`,
 `DeletePendingTimelineInit`, `InsertTimelineImport`, `UpdateTimelineImport`,
-`DeleteTimelineImport`, `ListTimelineImports`, `IsTenantImportingTimeline`,
+`DeleteTimelineImport`, `ListTimelineImports`, `IsBranchImporting`,
 `InsertEndpoint`, `ListEndpoints`, `DeleteEndpoint`.
 
 ## Storage-scrubber metrics
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `storage_controller_storage_scrub_status` | CounterVec | `tenant_id`, `shard_number`, `timeline_id`, `outcome` | Storage-scrubber results per timeline |
+| `storage_controller_storage_scrub_status` | CounterVec | `branch_id`, `shard_number`, `outcome` | Storage-scrubber results per branch |
 
 `outcome` is the fixed enum `{PSOk, PSWarning, PSError, PSOrphan, SKOk, SKError}`.
 
@@ -89,6 +89,6 @@ Migration}` (from `DatabaseError::error_label`). `operation` is the
   do not exist here — those subsystems were removed with the pageserver
   reconciler (see [`storage-controller.md`](storage-controller.md)). The
   `node_shards` / `*_desired` / `ps_node_pool_rotation_pending` gauges survive
-  but reflect the launcher-managed single-tenant model.
+  but reflect the launcher-managed single-branch model.
 - `NeonMetrics` (build_info + libmetrics process stats) is emitted alongside the
   group on every `/metrics` scrape.

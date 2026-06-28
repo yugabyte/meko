@@ -13,7 +13,7 @@ All three subsystems share **one** database, `yb_storage`. Within it:
 | `public` | `blobs`, `blob_namespace` ENUM | yugabyte | controller migrations |
 | `pageserver` | `pages`, `slru_pages`, `meta`, `timeline_state` | yugabyte | controller migrations |
 | `safekeeper` | `timeline_state`, `wals` | yugabyte | controller migrations |
-| `storage_controller` | 7 Diesel-managed tables (`tenants`, `nodes`, `safekeepers`, `metadata_health`, `controllers`, `timelines`, `timeline_imports`) | yugabyte | controller migrations |
+| `storage_controller` | 8 Diesel-managed tables (`branches`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `pending_timeline_inits`, `timeline_imports`, `endpoints`) | yugabyte | controller migrations |
 
 `yb_light_local` only `CREATE DATABASE`s `yb_storage`
 (`control_plane/src/storage_controller.rs::ensure_external_database`);
@@ -52,7 +52,7 @@ Generic chunked blob store used by:
   hardcoded / derived, not configured.
 
 The safekeeper has no consumer of `blobs` today — control-file state
-moved to `safekeeper.timeline_state` (one row per timeline) and live
+moved to `safekeeper.timeline_state` (one row per branch) and live
 WAL goes to `safekeeper.wals`. Subsystems are segregated by the **`namespace`
 column** (derived from the blob's key/path), not by separate tables.
 
@@ -60,8 +60,7 @@ column** (derived from the blob's key/path), not by separate tables.
 CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper');
 
 CREATE TABLE public.blobs (
-    tenant_id        TEXT                  NOT NULL,    -- Neon tenant UUID, or "" if not extractable
-    timeline_id      TEXT                  NOT NULL,    -- Neon timeline UUID, or "" for tenant-scoped blobs
+    branch_id        TEXT                  NOT NULL,    -- branch id, or "" if not extractable
     namespace        public.blob_namespace NOT NULL,    -- 'pageserver' or 'safekeeper'
     key              TEXT                  NOT NULL,    -- discriminating filename, generation suffix stripped
     generation       INT,                               -- pageserver attach gen; NULL for genless files
@@ -71,21 +70,21 @@ CREATE TABLE public.blobs (
     etag             TEXT                  NOT NULL,    -- total-object etag, denormalized
     last_modified_us BIGINT                NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((tenant_id, timeline_id, key) HASH, namespace, chunk_idx)
+    PRIMARY KEY ((branch_id, key) HASH, namespace, chunk_idx)
 );
 ```
 
-The four-way split (`namespace` + `tenant_id` + `timeline_id` + `key`) is
+The three-way split (`namespace` + `branch_id` + `key`) is
 populated at write time by `YbStore::parse_key`:
 
 - **`namespace`** is the typed `blob_namespace` ENUM. Today only
   `pageserver` and `safekeeper`. Derived from the blob's key/path:
   if it contains `safekeeper` → `safekeeper`; else → `pageserver`.
-- **`tenant_id`** and **`timeline_id`** are the first two Neon-id-shaped
-  tokens in the path (32 hex chars, optionally with a `-<count>-<num>`
-  shard suffix). Empty strings when absent.
+- **`branch_id`** is the branch-id-shaped token in the path (32 hex
+  chars, optionally with a `-<count>-<num>` shard suffix). Empty string
+  when absent.
 - **`key`** is the **discriminating filename only** — the path with
-  `tenants`, `timelines`, the tenant_id, and the timeline_id removed
+  `branches` and the branch_id removed
   (no configured prefix is involved). `split_key_generation`
   then peels the trailing or pre-extension `-<8hex>` generation marker
   into the separate `generation` column. `YbStore::reconstruct_key` +
@@ -98,19 +97,19 @@ populated at write time by `YbStore::parse_key`:
 
 A row in this schema looks like:
 
-| namespace | tenant_id | timeline_id | key | generation |
-|---|---|---|---|---|
-| `pageserver` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `000000-FFF__layer-1` | `1` |
-| `pageserver` | `c8178f5e…1f966a` | `77ffde89…089eaa` | `index_part.json` | `1` |
-| `pageserver` | `c8178f5e…1f966a` | *(empty)* | `tenant-manifest.json` | `1` |
-| `pageserver` | `c8178f5e…1f966a` | *(empty)* | `heatmap-v1.json` | *(NULL)* |
+| namespace | branch_id | key | generation |
+|---|---|---|---|
+| `pageserver` | `77ffde89…089eaa` | `000000-FFF__layer-1` | `1` |
+| `pageserver` | `77ffde89…089eaa` | `index_part.json` | `1` |
+| `pageserver` | `77ffde89…089eaa` | `tenant-manifest.json` | `1` |
+| `pageserver` | `77ffde89…089eaa` | `heatmap-v1.json` | *(NULL)* |
 
 The `safekeeper` ENUM variant is reserved but currently unused —
 safekeeper state lives in `safekeeper.timeline_state` and live WAL in
 `safekeeper.wals`.
 
-The PK puts `(tenant_id, timeline_id, key)` in the hash partition so
-every key has its own hash tablet (no hot tablet on big tenants).
+The PK puts `(branch_id, key)` in the hash partition so
+every key has its own hash tablet (no hot tablet on big branches).
 `key = $x` lookups resolve to one tablet via hash; within a bucket
 rows are sorted by `(namespace, chunk_idx)`. Generation lives in a
 plain column — multiple gens of the same logical file collapse into
@@ -132,29 +131,28 @@ pageserver-yb/      |              ~30 | 1-3 chunks each   |  ~600 MB
 ```sql
 -- Per-subsystem breakdown
 SELECT namespace,
-       count(DISTINCT (tenant_id, timeline_id, key)) AS objects,
-       count(*)                                       AS chunks,
-       pg_size_pretty(sum(length(data))::bigint)      AS stored
+       count(DISTINCT (branch_id, key))          AS objects,
+       count(*)                                  AS chunks,
+       pg_size_pretty(sum(length(data))::bigint) AS stored
 FROM blobs
 GROUP BY namespace
 ORDER BY namespace;
 
--- Per-tenant breakdown (fast — hits the (tenant_id, timeline_id) hash partition)
-SELECT tenant_id,
-       timeline_id,
+-- Per-branch breakdown (fast — hits the (branch_id, key) hash partition)
+SELECT branch_id,
        namespace,
        count(DISTINCT key) AS objects,
        count(*)            AS chunks,
        pg_size_pretty(sum(length(data))::bigint) AS stored
 FROM blobs
-GROUP BY tenant_id, timeline_id, namespace
+GROUP BY branch_id, namespace
 ORDER BY sum(length(data)) DESC;
 
 -- Largest objects
-SELECT tenant_id, timeline_id, namespace, key,
+SELECT branch_id, namespace, key,
        count(*) AS chunks, pg_size_pretty(max(size_bytes)) AS total
 FROM blobs
-GROUP BY tenant_id, timeline_id, namespace, key
+GROUP BY branch_id, namespace, key
 ORDER BY max(size_bytes) DESC
 LIMIT 10;
 ```
@@ -163,7 +161,7 @@ LIMIT 10;
 
 Per-write log used by the safekeeper's live-WAL mirror (when
 `yb_storage_conn` is configured). Schema is *different* from `blobs` — keyed by
-`(tenant, timeline, segno, chunk_offset)`. Each row is one chunk of
+`(branch_id, segno, chunk_offset)`. Each row is one chunk of
 one `write_wal()` call; the writer never produces overlapping chunks
 (`truncate_wal` aligns the next write at exactly the truncation
 point), so `chunk_offset` alone identifies a chunk within a segment
@@ -171,14 +169,13 @@ and a same-PK INSERT is an idempotent retry of the same bytes.
 
 ```sql
 CREATE TABLE safekeeper.wals (
-    tenant_id        TEXT    NOT NULL,
-    timeline_id      TEXT    NOT NULL,
+    branch_id        TEXT    NOT NULL,
     segno            BIGINT  NOT NULL,
     chunk_offset     BIGINT  NOT NULL,
     chunk_size       INT     NOT NULL,
     data             BYTEA   NOT NULL,
     last_modified_us BIGINT  NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id) HASH, segno, chunk_offset)
+    PRIMARY KEY ((branch_id) HASH, segno, chunk_offset)
 );
 ```
 
@@ -187,12 +184,12 @@ Schema documented in detail in [`safekeeper.md`](safekeeper.md).
 ### Useful diagnostic queries
 
 ```sql
--- Per-segment summary for one timeline
+-- Per-segment summary for one branch
 SELECT segno, count(*) AS chunks,
        max(chunk_offset + chunk_size) AS end_offset,
        pg_size_pretty(sum(chunk_size)::bigint) AS bytes
 FROM safekeeper.wals
-WHERE tenant_id = '...' AND timeline_id = '...'
+WHERE branch_id = '...'
 GROUP BY segno
 ORDER BY segno;
 ```
@@ -211,15 +208,14 @@ One row per `(block, LSN)`. Holds **relation pages only** —
 `Key::is_rel_block_key()` (`field1 == 0x00`, `field4 != 0`,
 `field6 != 0xffffffff`). Non-page keys (SLRUs, metadata, dir listings,
 aux files, repl origins, rel-size sentinels) continue through
-`public.blobs`. Hash partition by `(tenant, timeline, spcnode, dbnode,
+`public.blobs`. Hash partition by `(branch_id, spcnode, dbnode,
 relnode, forknum)` so each fork's whole block-set lives on one tablet.
 Clustering by `(blknum, lsn DESC, is_image)` means a per-block image
 lookup is a single seek, not a scan.
 
 ```sql
 CREATE TABLE pageserver.pages (
-    tenant_id    TEXT     NOT NULL,
-    timeline_id  TEXT     NOT NULL,
+    branch_id    TEXT     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
     relnode      BIGINT   NOT NULL,
@@ -229,7 +225,7 @@ CREATE TABLE pageserver.pages (
     lsn          BIGINT   NOT NULL,    -- u64 stored as i64 (real LSNs << 2^63)
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((tenant_id, timeline_id, spcnode, dbnode, relnode, forknum) HASH,
+    PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
                  blknum, lsn DESC, is_image)
 );
 ```
@@ -240,18 +236,18 @@ above the anchor):
 ```sql
 WITH anchor AS (
     SELECT lsn AS anchor_lsn FROM pageserver.pages
-    WHERE tenant_id=$1 AND timeline_id=$2
-      AND spcnode=$3 AND dbnode=$4 AND relnode=$5
-      AND forknum=$6 AND blknum=$7
-      AND is_image=TRUE AND lsn <= $8
+    WHERE branch_id=$1
+      AND spcnode=$2 AND dbnode=$3 AND relnode=$4
+      AND forknum=$5 AND blknum=$6
+      AND is_image=TRUE AND lsn <= $7
     ORDER BY lsn DESC LIMIT 1
 )
 SELECT lsn, is_image, will_init, payload
 FROM pageserver.pages p, anchor
-WHERE p.tenant_id=$1 AND p.timeline_id=$2
-  AND p.spcnode=$3 AND p.dbnode=$4 AND p.relnode=$5
-  AND p.forknum=$6 AND p.blknum=$7
-  AND p.lsn >= anchor.anchor_lsn AND p.lsn <= $8
+WHERE p.branch_id=$1
+  AND p.spcnode=$2 AND p.dbnode=$3 AND p.relnode=$4
+  AND p.forknum=$5 AND p.blknum=$6
+  AND p.lsn >= anchor.anchor_lsn AND p.lsn <= $7
 ORDER BY p.lsn DESC;
 ```
 
@@ -263,7 +259,7 @@ keeps it rare.
 
 ### `pageserver.timeline_state`
 
-One row per timeline. Replaces the upstream split of `metadata`,
+One row per branch. Replaces the upstream split of `metadata`,
 `index_part.json`, and `tenant-manifest.json` with a single
 transactionally-updatable record. `current_generation` is the gate
 that fences a stale pageserver — every flush is wrapped in a
@@ -273,11 +269,10 @@ in yb-light today).
 
 ```sql
 CREATE TABLE pageserver.timeline_state (
-    tenant_id              TEXT      NOT NULL,
-    timeline_id            TEXT      NOT NULL,
+    branch_id              TEXT      NOT NULL,
     consistent_lsn         BIGINT    NOT NULL,
     applied_gc_cutoff_lsn  BIGINT    NOT NULL,
-    ancestor_timeline_id   TEXT,
+    ancestor_branch_id     TEXT,
     ancestor_lsn           BIGINT,
     current_generation     INT       NOT NULL,
     pg_version             INT       NOT NULL,
@@ -288,7 +283,7 @@ CREATE TABLE pageserver.timeline_state (
     rel_size_migration     TEXT,
     rel_size_migrated_at   BIGINT,
     lineage                JSONB,
-    PRIMARY KEY ((tenant_id) HASH, timeline_id)
+    PRIMARY KEY ((branch_id) HASH)
 );
 ```
 
@@ -456,14 +451,14 @@ by hand.
 | Schema | Object | Purpose |
 |---|---|---|
 | `public` | `blob_namespace` ENUM | `pageserver` / `safekeeper` discriminator on `blobs`. |
-| `public` | `blobs` | Chunked blob store (pageserver yb_storage_conn). |
-| `pageserver` | `pages` | Relation pages, one row per (block, LSN); PK `((tenant, timeline, spc, db, rel, fork) HASH, blknum, lsn DESC, is_image)`. |
-| `pageserver` | `slru_pages` | SLRU blocks (pg_xact, pg_multixact_*); same shape as `pages`, keyed by `(kind, segno)`. |
-| `pageserver` | `meta` | Metadata blobs (relsize sentinels, dir listings, aux, two-phase, repl origins); full-overwrite semantics. |
-| `pageserver` | `timeline_state` | Per-timeline state (replaces `metadata` + `index_part.json` + `tenant-manifest.json`); generation-fenced via `current_generation`. |
-| `safekeeper` | `timeline_state` | Per-timeline safekeeper control file (replaces upstream's local-FS `safekeeper.control` blob). |
-| `safekeeper` | `wals` | Live-WAL chunks; PK `((tenant, timeline) HASH, segno, chunk_offset)`. |
-| `storage_controller` | 7 tables | `tenants`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `timeline_imports`, `endpoints`. |
+| `public` | `blobs` | Chunked blob store (pageserver yb_storage_conn); PK `((branch_id, key) HASH, namespace, chunk_idx)`. |
+| `pageserver` | `pages` | Relation pages, one row per (block, LSN); PK `((branch_id, spc, db, rel, fork) HASH, blknum, lsn DESC, is_image)`. |
+| `pageserver` | `slru_pages` | SLRU blocks (pg_xact, pg_multixact_*); same shape as `pages`, keyed by `(branch_id, kind, segno)`. |
+| `pageserver` | `meta` | Metadata blobs (relsize sentinels, dir listings, aux, two-phase, repl origins); full-overwrite semantics; PK `((branch_id, key) HASH, lsn DESC)`. |
+| `pageserver` | `timeline_state` | Per-branch state (replaces `metadata` + `index_part.json` + `tenant-manifest.json`); generation-fenced via `current_generation`; PK `((branch_id) HASH)`. |
+| `safekeeper` | `timeline_state` | Per-branch safekeeper control file (replaces upstream's local-FS `safekeeper.control` blob); PK `((branch_id) HASH)`. |
+| `safekeeper` | `wals` | Live-WAL chunks; PK `((branch_id) HASH, segno, chunk_offset)`. |
+| `storage_controller` | 8 tables | `branches`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `pending_timeline_inits`, `timeline_imports`, `endpoints`. |
 
 See `up.sql` for the exact column lists, PK ordering, and FK
 relationships.

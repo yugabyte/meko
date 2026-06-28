@@ -103,7 +103,7 @@ inherited as-is. yb-light's only relevant differences are operational: a single
 safekeeper means `/terminate` no longer runs a `sync-safekeepers` walproposer pass, and
 `/promote` / `/configure` / `/terminate` are the contact points the (future)
 `amp-controller` uses to drive endpoints. The spec body (`ConfigurationRequest`)
-carries the YB-backed pageserver/safekeeper connstrings, `(tenant_id, timeline_id)`, the
+carries the YB-backed pageserver/safekeeper connstrings, the `branch_id`, the
 endpoint_storage address+token for LFC, and the JWKS used by this very auth layer. The
-sharding types were stripped fork-wide, so a `TenantId` (not `TenantShardId`) identifies
-a tenant in these payloads.
+storage stack collapsed `(tenant_id, timeline_id)` into a single `branch_id`, so a
+`BranchId` (not a `TenantShardId` or id pair) identifies the branch in these payloads.

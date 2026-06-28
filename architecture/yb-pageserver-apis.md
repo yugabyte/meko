@@ -22,8 +22,8 @@ is required; with `AuthType::YbLightJWT` an EdDSA-signed JWT is required via the
 `auth_middleware`. The accepted scopes (`pageserver/src/auth.rs`
 `check_permission`) are:
 
-- `PageServerApi` — blanket access to all routes (tenant-scoped and instance-wide).
-- `Tenant` — access only to routes whose `:tenant_id` matches the token's tenant;
+- `PageServerApi` — blanket access to all routes (branch-scoped and instance-wide).
+- `Tenant` — access only to routes whose `:branch_id` matches the token's branch;
   rejected on instance-wide routes (those calling `check_permission(.., None)`).
 
 All other scopes (`Admin`, `SafekeeperData`, `GenerationsApi`, etc.) are rejected.
@@ -40,7 +40,7 @@ Every response carries a `PAGESERVER_LAUNCH_TIMESTAMP` header (set by middleware
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/v1/status` | Health check. Returns `{ "id": <node_id> }`. No tenant scope required. |
+| GET | `/v1/status` | Health check. Returns `{ "id": <node_id> }`. No branch scope required. |
 | GET | `/metrics` | Prometheus metrics (text exposition). See `yb-pageserver-metrics.md`. Honors `force_metric_collection_on_scrape`. |
 | GET | `/v1/doc` | Swagger UI HTML for the embedded OpenAPI spec. |
 | GET | `/swagger.yml` | Raw OpenAPI spec (`openapi_spec.yml`, embedded at compile time). |
@@ -65,23 +65,23 @@ These return `400 Bad Request` ("compiled without testing APIs") when the
 | PUT | `/v1/failpoints` | Configure failpoints (`failpoints_handler`). Bypasses the `api-503`/`api-500` failpoints. |
 | POST | `/v1/tracing/event` | Emit a tracing event at a chosen level. Body: `{ "level": "error\|warn\|info\|debug\|trace", "message": "..." }`. |
 
-### Timeline (tenant-scoped)
+### Branch (branch-scoped)
 
-All paths are under `/v1/tenant/:tenant_id/...`; `:tenant_id` and `:timeline_id`
-are parsed as IDs and authorized against the token's tenant scope. In yb-light
-the process serves exactly one `(tenant_id, timeline_id)` for its lifetime (see
-`architecture/yb-pageserver.md`), so in practice only that single pair resolves;
+All paths are under `/v1/branch/:branch_id/...`; `:branch_id`
+is parsed as an ID and authorized against the token's branch scope. In yb-light
+the process serves exactly one `branch_id` for its lifetime (see
+`architecture/yb-pageserver.md`), so in practice only that single id resolves;
 other IDs return `404`/`NotFound`.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/v1/tenant/:tenant_id/timeline` | List timelines for the tenant as `TimelineInfo[]`. |
-| GET | `/v1/tenant/:tenant_id/timeline/:timeline_id` | Detail for one timeline (`TimelineInfo`). |
-| GET | `/v1/tenant/:tenant_id/timeline/:timeline_id/get_lsn_by_timestamp` | Find the LSN for a timestamp. |
-| GET | `/v1/tenant/:tenant_id/timeline/:timeline_id/get_timestamp_of_lsn` | Find the timestamp for an LSN. |
-| POST | `/v1/tenant/:tenant_id/timeline/:timeline_id/lsn_lease` | Acquire an LSN lease (hold off GC at an LSN). |
-| PUT | `/v1/tenant/:tenant_id/timeline/:timeline_id/do_gc` | Run GC immediately on the timeline. |
-| PUT | `/v1/tenant/:tenant_id/timeline/:timeline_id/flush` | Flush pages to YB, advancing the durable `consistent_lsn`. |
+| GET | `/v1/branch/:branch_id/timeline` | List timelines for the branch as `TimelineInfo[]`. |
+| GET | `/v1/branch/:branch_id` | Detail for the branch (`TimelineInfo`). |
+| GET | `/v1/branch/:branch_id/get_lsn_by_timestamp` | Find the LSN for a timestamp. |
+| GET | `/v1/branch/:branch_id/get_timestamp_of_lsn` | Find the timestamp for an LSN. |
+| POST | `/v1/branch/:branch_id/lsn_lease` | Acquire an LSN lease (hold off GC at an LSN). |
+| PUT | `/v1/branch/:branch_id/do_gc` | Run GC immediately on the branch. |
+| PUT | `/v1/branch/:branch_id/flush` | Flush pages to YB, advancing the durable `consistent_lsn`. |
 
 #### Key params / bodies / responses
 
@@ -121,11 +121,11 @@ other IDs return `404`/`NotFound`.
 The router is heavily trimmed from upstream `pageserver`. Notable removals /
 differences:
 
-- **No tenant lifecycle / attach / location-config routes.** There is no
-  `POST /v1/tenant`, no `tenant/:id/location_config`, no attach/detach/ignore/load,
-  no tenant `do_gc`/`compact`/`checkpoint` at the tenant level. The
-  `(tenant, timeline)` identity is baked into `pageserver.toml` and opened
-  synchronously at startup (single-timeline process model).
+- **No branch lifecycle / attach / location-config routes.** There is no
+  `POST /v1/branch`, no `branch/:id/location_config`, no attach/detach/ignore/load,
+  no `do_gc`/`compact`/`checkpoint` at a branch-collection level. The
+  `branch_id` identity is baked into `pageserver.toml` and opened
+  synchronously at startup (single-branch process model).
 - **No timeline create / delete / branch / archival / detach-ancestor routes.**
   Branching is driven by the launcher + the `flush?lsn=` barrier, not an HTTP
   create-branch call.

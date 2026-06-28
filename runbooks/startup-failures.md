@@ -1,7 +1,7 @@
-# Runbook: yb-neon startup failures
+# Runbook: yb-light startup failures
 
 A component won't start, won't register, or the compute can't serve queries. This runbook covers the
-yb-neon bring-up failure modes by **symptom → cause → fix**. It is topology-agnostic: the compute,
+yb-light bring-up failure modes by **symptom → cause → fix**. It is topology-agnostic: the compute,
 pageserver, safekeeper, and storage_controller may be co-located or on separate boxes. Substitute
 the conventions below.
 
@@ -10,7 +10,7 @@ the conventions below.
 export PS_HOST=...        export PS_HTTP_PORT=...      # yb-pageserver
 export SC_BASE=http://<sc-host>:<sc-port>             # storage_controller
 export SK_HOST=...        export SK_PG_PORT=...        # safekeeper PG listen
-export COMPUTE_HOST=...   export COMPUTE_PORT=...      # neon compute
+export COMPUTE_HOST=...   export COMPUTE_PORT=...      # yb-light compute
 export YB_HOST=...  export YB_PORT=...  export YB_DB=...   # YugabyteDB backing store
 export YB_STORAGE_PASSWORD=...                            # YB password, used by PS/SK/endpoint-storage
 export PSQL=<path-to>/psql
@@ -29,18 +29,18 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 1. **storage_controller** → checkpoint: `curl $SC_BASE/control/v1/node` returns (even if `[]`).
 2. **safekeeper** → checkpoint: its HTTP `/v1/status` (or process up + port listening).
 3. **endpoint_storage** (if used) → checkpoint: process up, no TLS errors in its log.
-4. **pageserver** — *single-timeline model (#16)*: the process refuses to start unless
-   `pageserver.toml` carries `tenant_id`/`timeline_id`/`generation`. On a fresh repo this is
+4. **pageserver** — *single-branch model (#16)*: the process refuses to start unless
+   `pageserver.toml` carries `branch_id`/`generation`. On a fresh repo this is
    normal: `yb_light_local start` prints `Skipping pageserver …: no timeline identity yet` and
-   `tenant create` bakes the identity in, bumps the generation via the SC attach-hook, and starts
+   `branch create` bakes the identity in, bumps the generation via the SC attach-hook, and starts
    the pageserver itself. Manual deployments must write the identity (and `[timeline_init]` for a
    first boot) before spawning. Checkpoint once started:
    `curl http://$PS_HOST:$PS_HTTP_PORT/v1/status` returns OK.
 5. **Register SK with the SC** (see "Manual registration"). PS registration is launcher-driven
    (`node_register` + attach-hook happen inside every `yb_light_local pageserver start`).
-6. **Create tenant/timeline** (via yb_light_local; the pageserver bootstraps the timeline from its
+6. **Create the branch** (via `yb_light_local branch create`; the pageserver bootstraps the branch from its
    `[timeline_init]` config — the SC only observes via `timeline_detail` and then creates the
-   timeline on the safekeeper).
+   branch on the safekeeper).
 7. **Create + start the compute endpoint** → checkpoint: `psql … 'SELECT 1'`.
 
 ---
@@ -53,9 +53,9 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SK: `unexpected argument '--<flag>'` | flag removed/renamed in this build | **C** |
 | endpoint_storage / PS: `no pg_hba.conf entry … no encryption` | client connected to YB without TLS | **D** |
 | SC node list empty after PS starts; PS log `register: None` | PS didn't auto-register | **E** |
-| PS exits at startup: `pageserver.toml must set tenant_id/timeline_id/generation` | single-timeline identity missing — launcher hasn't assigned one (run `tenant create`, or write the identity + `[timeline_init]` into pageserver.toml) | — |
+| PS exits at startup: `pageserver.toml must set branch_id/generation` | single-branch identity missing — launcher hasn't assigned one (run `branch create`, or write the identity + `[timeline_init]` into pageserver.toml) | — |
 | PS exits at startup: `timeline … has no timeline_state row and no [timeline_init]` | row missing and no creation mode configured (wiped YB DB, or toml written without `[timeline_init]`) | — |
-| SK exits at startup: `YB-WAL mode requires --tenant-id and --timeline-id` | single-timeline identity missing from `safekeeper.toml` — the SK serves one timeline and scopes its load to it. Provisioned SKs get `tenant_id`/`timeline_id` written by `allocate_safekeeper_conf`; a hand-written `safekeeper.toml` must set both alongside `yb_storage_conn` | — |
+| SK exits at startup: `YB-WAL mode requires --branch-id (single-branch-per-process)` | single-branch identity missing from `safekeeper.toml` — the SK serves one branch and scopes its load to it. Provisioned SKs get `branch_id` written by `allocate_safekeeper_conf`; a hand-written `safekeeper.toml` must set it alongside `yb_storage_conn` | — |
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |
 | psql: `libreadline.so.7: cannot open shared object file` | bundle psql wants older readline | **G** |
 | Compute postmaster dies with `EADDRINUSE` on its own port | yb_light_local port collision | **H** |
@@ -74,7 +74,7 @@ by adding the missing/retyped key:
 - `yb_storage_conn` under `[[pageservers]]` must be a **string-encoded inline table**, not a native
   TOML map — i.e. `yb_storage_conn='{ host_ports="…:5433", user="…", dbname="…" }'` (quoted string),
   not `yb_storage_conn={…}`. It carries no `table_name` (each component hardcodes its tables).
-- Missing top-level keys it requires: `default_tenant_id`, `generate_local_ssl_certs`,
+- Missing top-level keys it requires: `default_branch_id`, `generate_local_ssl_certs`,
   `control_plane_api`. A panic at `local_env.rs:…` on init usually means `control_plane_api` is absent.
 - `[endpoint_storage]` stanza must be present.
 - endpoint_storage `YbStore` derivation needs the `[storage_controller.yb]` block (the shared
@@ -138,8 +138,8 @@ curl -s -X POST $SC_BASE/control/v1/safekeeper/1 -H 'Content-Type: application/j
   "http_port": <sk_http_port>, "availability_zone_id": "sk-1"
 }'
 ```
-If a tenant/timeline was created before the SK was registered, **delete and recreate** it so it
-lands on the now-known SK: `curl -X DELETE $SC_BASE/v1/tenant/<tenant_id>` then recreate.
+If a branch was created before the SK was registered, **delete and recreate** it so it
+lands on the now-known SK: `curl -X DELETE $SC_BASE/v1/branch/<branch_id>` then recreate.
 
 ## G. psql `libreadline.so.7` missing
 ```bash
@@ -254,7 +254,7 @@ curl -s $SC_BASE/control/v1/node; echo
 curl -s http://$PS_HOST:$PS_HTTP_PORT/v1/status; echo
 # 4. Compute serves queries + reads from the right PS?
 PGPASSWORD="$PGPASSWORD" $PSQL "host=$COMPUTE_HOST port=$COMPUTE_PORT user=cloud_admin dbname=postgres sslmode=disable" \
-  -tAc "select 1; show neon.pageserver_connstring;"
+  -tAc "select 1; show yb_amp.pageserver_connstring;"
 ```
-If `neon.pageserver_connstring` doesn't point at the PS you expect, the compute is talking to the
-wrong pageserver — re-check tenant placement (Step E/F) before anything else.
+If `yb_amp.pageserver_connstring` doesn't point at the PS you expect, the compute is talking to the
+wrong pageserver — re-check branch placement (Step E/F) before anything else.

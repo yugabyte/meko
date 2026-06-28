@@ -51,7 +51,7 @@ Native to `compute_ctl` but incremented/updated in response to Postgres signals.
 |---|---|---|---|
 | `pg_cctl_pagestream_request_errors_total` | IntCounter | — | PageStream request errors reported by Postgres. Incremented each time Postgres calls the internal `POST /refresh_configuration` (which it does when `get_page@lsn` / basebackup requests to a pageserver fail). A rising value typically signals Postgres downtime. |
 | `pg_cctl_configure_statement_timeout_errors_total` | IntCounter | — | Compute reconfiguration failures caused by a Postgres statement timeout (error code 57014) inside `ComputeNode::reconfigure()`. Usually indicates PG stuck retrying against a wrong/rejecting pageserver. |
-| `pg_cctl_attached` | IntGauge vec | `pg_compute_id`, `pg_instance_id`, `tenant_id`, `timeline_id` | Compute attached status (1 if attached). Reset + re-set around attach (`compute.rs`). yb-light is single-shard, so `tenant_id` identifies the tenant directly (no shard id). |
+| `pg_cctl_attached` | IntGauge vec | `pg_compute_id`, `pg_instance_id`, `branch_id` | Compute attached status (1 if attached). Reset + re-set around attach (`compute.rs`). The storage stack identifies a branch by a single `branch_id`, so the former `tenant_id` / `timeline_id` label pair collapsed to one. |
 
 The `pg_cctl_*` family is force-initialized at startup via
 `compute_metrics::initialize_metrics()` so the counters appear (at 0) before the first
@@ -60,6 +60,7 @@ event.
 ## yb-light specifics
 
 The metric set is upstream Neon's, inherited unchanged. The only fork-relevant note is in
-`pg_cctl_attached`'s labels: yb-light removed sharding, so the timeline is keyed by
-`tenant_id` / `timeline_id` rather than a `TenantShardId`. Otherwise these counters
-behave identically against the YB-backed pageserver/safekeeper tier.
+`pg_cctl_attached`'s labels: yb-light collapsed `(tenant_id, timeline_id)` into a single
+`branch_id` (and removed sharding), so the branch is keyed by `branch_id` rather than a
+`TenantShardId` or an id pair. Otherwise these counters behave identically against the
+YB-backed pageserver/safekeeper tier.
