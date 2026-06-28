@@ -1,0 +1,213 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  /* --- AMP brand + app-shell surfaces ---------------------------------
+   * `brand` is the fixed Yugabyte/AMP orange accent (logo mark, primary
+   * CTAs, active emphasis) — identical in both modes. `sidebar*` is the
+   * left-nav surface family: it reads a shade deeper than the page in
+   * dark mode and as a clean white panel in light mode. Consume these
+   * via Tailwind utilities (`bg-brand`, `bg-sidebar`, `border-sidebar-border`,
+   * `bg-sidebar-accent`) — never hard-code the hex. */
+  --color-brand: hsl(var(--brand));
+  --color-brand-foreground: hsl(var(--brand-foreground));
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+
+  /*
+   * Palette stops exposed as Tailwind utilities (`bg-meko-navy-700`,
+   * `to-meko-navy-950`, etc.). Use these SPARINGLY — they bypass the
+   * semantic layer, so they don't respond to a theme switch. Reserve
+   * for:
+   *   - scrollbar styling (`meko-navy-600/700` — no semantic equivalent)
+   *   - gradient endpoints where the semantic token is ambiguous
+   *   - brand-fixed visuals that must look the same in any mode
+   * For everything else, prefer the semantic tokens above.
+   */
+  --color-meko-navy-50:  hsl(var(--meko-navy-50));
+  --color-meko-navy-100: hsl(var(--meko-navy-100));
+  --color-meko-navy-200: hsl(var(--meko-navy-200));
+  --color-meko-navy-600: hsl(var(--meko-navy-600));
+  --color-meko-navy-700: hsl(var(--meko-navy-700));
+  --color-meko-navy-800: hsl(var(--meko-navy-800));
+  --color-meko-navy-900: hsl(var(--meko-navy-900));
+  --color-meko-navy-950: hsl(var(--meko-navy-950));
+}
+
+:root {
+  /* =====================================================================
+   * MEKO PALETTE — fixed brand colours, the single source of truth for
+   * every shade in the app. Components NEVER reference these directly;
+   * they consume the semantic tokens below, which in turn resolve to a
+   * palette stop. Light and dark mode share this palette — only the
+   * semantic mappings change between modes (see Phase 5).
+   *
+   * Family naming follows `<family>-<scale>` so the relationship between
+   * stops is obvious at a glance. The scale mirrors Tailwind's
+   * well-known 50–950 ramp: lower = lighter, higher = denser/darker.
+   * Numbering is identical across modes because the palette IS the
+   * constant.
+   *
+   * `meko-navy-*`: the blue-grey surface family used throughout the app
+   * (cards, panels, inputs, app shell). Brand accents (purple/emerald/
+   * blue for share/owner/info chips) stay on Tailwind's stock palette
+   * — no point reinventing those.
+   * ===================================================================== */
+
+  /* Light end — light-mode surfaces (consumed in Phase 5). */
+  --meko-navy-50:  222 32% 97%;   /* #F6F8FC */
+  --meko-navy-100: 220 19% 93%;   /* #E8ECF2 */
+  --meko-navy-200: 220 13% 81%;   /* #C5CCD8 */
+
+  /* Mid scrollbar tones (theme-independent today). */
+  --meko-navy-600: 224 31% 33%;   /* #3A4A70 — scrollbar thumb hover    */
+  --meko-navy-700: 224 30% 24%;   /* #2B3550 — scrollbar thumb          */
+
+  /* Dark end — drives the current dark theme. */
+  --meko-navy-800: 222 29% 15%;   /* #1C2333 — raised surfaces (cards, popovers) */
+  --meko-navy-900: 222 45% 10%;   /* #0E1525 — base surfaces (page bg, inputs)   */
+  --meko-navy-950: 223 47% 7%;    /* #0A0F1C — deepest, app shell                 */
+
+  /* =====================================================================
+   * SEMANTIC TOKENS — what components consume. `:root` carries the
+   * LIGHT theme; `.dark { … }` overrides everything for dark theme. The
+   * `useTheme` hook (`src/lib/theme.ts`) toggles the `.dark` class on
+   * `<html>` based on a localStorage preference, with `prefers-color-
+   * scheme` as the fallback on first visit.
+   *
+   * `--input` is deliberately pointed at the base (light: `navy-100`;
+   * dark: `navy-900`) and NOT the raised tone (`navy-200` / `navy-800`),
+   * so inputs read as inset against the cards they sit on. The previous
+   * setup conflated `--card` and `--input` at the same value, which is
+   * why so many components had to override with raw `bg-[#0E1525]` to
+   * get the inset look. After Phase 2's refactor those overrides are
+   * gone and inputs theme correctly.
+   * ===================================================================== */
+
+  /* --- LIGHT THEME (default) --- */
+  --background: var(--meko-navy-50);
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --primary: 222 47% 11%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: var(--meko-navy-100);
+  --secondary-foreground: 222 47% 11%;
+  --muted: var(--meko-navy-100);
+  /* Sat the lightness down a few stops vs. shadcn defaults (which sit
+   * at ~46%, Tailwind gray-500) — at 47% the muted text reads as
+   * "barely there" on the very-light app surfaces. 35% is roughly
+   * Tailwind gray-600/700, still distinguishably "muted" against
+   * `--foreground` (gray-900-ish) but legible at nav-text size. */
+  --muted-foreground: 215 16% 35%;
+  --accent: var(--meko-navy-100);
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: var(--meko-navy-200);
+  --input: var(--meko-navy-100);
+  --ring: 222 47% 11%;
+  --radius: 0.5rem;
+
+  /* AMP brand + sidebar — light mode */
+  --brand: 16 100% 62%;
+  --brand-foreground: 0 0% 100%;
+  --sidebar: 0 0% 100%;
+  --sidebar-foreground: 222 47% 11%;
+  --sidebar-border: var(--meko-navy-200);
+  --sidebar-accent: var(--meko-navy-100);
+  --sidebar-accent-foreground: 222 47% 11%;
+}
+
+/* --- DARK THEME --- */
+.dark {
+  --background: var(--meko-navy-900);
+  --foreground: 206 60% 97%;
+  --card: var(--meko-navy-800);
+  --card-foreground: 206 60% 97%;
+  --popover: var(--meko-navy-800);
+  --popover-foreground: 206 60% 97%;
+  --primary: 206 60% 97%;
+  --primary-foreground: var(--meko-navy-900);
+  --secondary: 224 23% 22%;
+  --secondary-foreground: 206 60% 97%;
+  --muted: var(--meko-navy-800);
+  --muted-foreground: 212 11% 58%;
+  --accent: 224 23% 22%;
+  --accent-foreground: 206 60% 97%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 206 60% 97%;
+  --border: 224 23% 22%;
+  --input: var(--meko-navy-900);
+  --ring: 206 60% 97%;
+
+  /* AMP brand + sidebar — dark mode. Sidebar reads a shade deeper than
+   * the page (navy-950) so the nav rail separates from the content. */
+  --brand: 16 100% 62%;
+  --brand-foreground: 0 0% 100%;
+  --sidebar: var(--meko-navy-950);
+  --sidebar-foreground: 206 60% 97%;
+  --sidebar-border: 224 23% 22%;
+  --sidebar-accent: 224 23% 22%;
+  --sidebar-accent-foreground: 206 60% 97%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  :where(
+      button,
+      a[href],
+      [role="button"],
+      [role="menuitem"],
+      [role="tab"],
+      [role="switch"],
+      [role="checkbox"],
+      [role="radio"],
+      [role="link"],
+      summary,
+      label[for]
+    ):not(:disabled) {
+    cursor: pointer;
+  }
+
+  :where(input, textarea, [contenteditable="true"], [role="textbox"]) {
+    cursor: text;
+  }
+
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+  }
+}
