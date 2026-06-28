@@ -82,7 +82,7 @@ branch → endpoint** (the user is not in the path). The error envelope is `{ "e
 | `POST /storage-pools` | createStoragePool | Top-level; the owner is named in the body (`owner_user_id`). |
 | `GET /storage-pools` | listStoragePools | Paginated; lists **every** pool (no owner filter yet). |
 | `GET /storage-pools/{poolId}` | getStoragePool | By id; not owner-scoped. |
-| `POST /storage-pools/{poolId}/projects` | createProject | Creates a project + its default branch and records the storage-controller pending-init recipe; returns a `Project` with its embedded `default_branch` (its `project_id`/`branch_id` are the storage-layer `tenant_id`/`timeline_id`). Does **not** deploy an endpoint. `201` / `404` / `409`. |
+| `POST /storage-pools/{poolId}/projects` | createProject | Creates a project + its default branch and records the storage-controller pending-init recipe (keyed by the flat `branch_id`); returns a `Project` with its embedded `default_branch` (its `branch_id` is the storage-layer flat `branch_id`; the `project_id` is control-plane-only). Does **not** deploy an endpoint. `201` / `404` / `409`. |
 | `GET /storage-pools/{poolId}/projects` | listProjects | Paginated; the pool's projects, each with its `default_branch`. `404` if the pool is unknown. |
 | `GET …/projects/{projectId}` | getProject | One project (with its `default_branch`). `404` if the pool/project is unknown. |
 | `DELETE …/projects/{projectId}` | deleteProject | **Logged only** → `202`. |
@@ -140,21 +140,21 @@ recipe.** It:
    `core.Backend.CreateProject`; the pool is top-level, so an unknown pool
    surfaces as `404` (the `project.storage_pool_id` foreign key); and
 2. records the storage controller's **pending-init recipe**
-   (`storagecontroller.Client.RecordPendingTimelineInit`, keyed by the
-   storage-layer `tenant_id`/`timeline_id`) when a controller is configured — the
+   (`storagecontroller.Client.RecordPendingTimelineInit`, keyed by the flat
+   storage-layer `branch_id`) when a controller is configured — the
    branch is declared, not yet materialized.
 
-It returns a `Project` with its embedded `default_branch`; the project id and
-branch id *are* the storage-layer `(tenant_id, timeline_id)`. It does **not**
-eagerly create the tenant on the storage controller or deploy an endpoint: compute
+It returns a `Project` with its embedded `default_branch`; the branch id *is* the
+storage-layer flat `branch_id` (the project id is control-plane-only). It does **not**
+eagerly materialize the branch on the storage controller or deploy an endpoint: compute
 is a separate resource (below), and the first endpoint deployed on the branch
 materializes it (the recipe is then dropped). See
 [`controller-project-create.md`](controller-project-create.md).
 
 Compute is a **separate resource**: a caller `POST`s an endpoint on the branch
 (below), which the controller deploys synchronously. Bootstrapping a fresh
-project's storage (initdb + the storage schema) is still out-of-band — the deploy
-path attaches an existing storage-layer tenant (Mode B), it does not create one.
+branch's storage (initdb + the storage schema) is still out-of-band — the deploy
+path attaches an existing storage-layer branch (Mode B), it does not create one.
 
 **`createBranch` forks an existing branch (#130).** The parent defaults to the
 project's default branch, or any branch named with `parent_branch_id`
@@ -170,9 +170,9 @@ branch is materialized lazily by the first endpoint deployed on it (the
 pageserver clones from the ancestor at `fork_lsn` instead of running `initdb`).
 It returns the branch (`201`); a missing pool/project/parent `404`s and a
 duplicate name within the project `409`s. *(Reading the ancestor's own node is
-routing-correct where the storage controller's per-tenant `describe` is not — it
-routes to whichever pageserver attached the tenant last and misses the parent
-timeline once the tenant has multiple endpoints, #133; `flush_lsn` also never lags
+routing-correct where the storage controller's per-branch `describe` is not — it
+routes to whichever pageserver attached the branch last and misses the parent
+branch once the branch has multiple endpoints, #133; `flush_lsn` also never lags
 durable WAL the way a pageserver's `last_record_lsn` can, #130. The parent must
 have a `read_write` endpoint to resolve a default — otherwise pass
 `fork_point_lsn`.)*

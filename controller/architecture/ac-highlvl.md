@@ -102,14 +102,16 @@ project. (Merging branches is future work.)
 
 Creating projects, branches, and endpoints can all be driven through the **MCP server**.
 
-Under the hood a project *is* the storage layer's **tenant** and a branch *is* its
-**timeline**: the Controller carries the storage-layer ids verbatim and maps
-project→tenant, branch→timeline only when talking to the storage controller.
+Under the hood a project is a purely control-plane grouping with **no** storage object;
+a branch's `branch_id` **is** the storage layer's flat `BranchId` verbatim. The
+Controller carries that storage-layer branch id verbatim when talking to the storage
+controller.
 
 Some notes on branches and endpoints:
 
-- **Branches are project-scoped.** A branch is identified by *(project, branch)* — the
-  storage layer's *(tenant, timeline)* pair.
+- **Branches are project-scoped.** A branch is identified within the Controller by
+  *(project, branch)*, the project being a control-plane scoping only; the `branch_id`
+  alone is the storage-layer identity.
 - **One writer per branch.** A second write endpoint cannot exist.
 
 ## 3. Main Workflows
@@ -122,25 +124,27 @@ steps, so a crash mid-operation resumes rather than leaving a mess.
    it maps roughly to a Meko datapack. A user who did not create a pool reaches it only if
    it is **shared** with them.
 2. **Create project.** The primary entry point. Under a storage pool the caller can
-   reach, the Controller — in one task — creates a **project** (assigning its **id**,
-   which *is* the storage layer's **`tenant_id`**, the identifier every resource below it
-   is scoped by), creates that project's one **default branch (PG cluster)** *scoped to
-   that project* (assigning its **branch id**, which *is* the storage layer's
-   **`timeline_id`**; a branch is identified by the pair **(project, branch)** =
-   **(tenant_id, timeline_id)**, never globally), registers the branch with the storage
+   reach, the Controller — in one task — creates a **project** (a purely control-plane
+   grouping, assigning its **id**, which maps to no storage object), creates that
+   project's one **default branch (PG cluster)** *scoped to
+   that project* (assigning its **branch id**, which *is* the storage layer's flat
+   **`branch_id`**; a branch is identified within the Controller by the pair
+   **(project, branch)**, never globally — the project being a control-plane scoping
+   only), registers the branch with the storage
    layer, creates the database record, and can stand up its first write endpoint. The
-   default branch is never created on its own — a project *is* a tenant plus its default
-   branch (its main timeline). Access to the new project is then granted per user.
-3. **Create endpoint.** On an existing branch — addressed by its **(project, branch)** =
-   storage-layer **(tenant_id, timeline_id)** — the Controller assembles the endpoint
-   *spec* (DB connection, branch/timeline binding, read/write role, version, TLS,
+   default branch is never created on its own — a project *is* a control-plane record
+   plus its default branch. Access to the new project is then granted per user.
+3. **Create endpoint.** On an existing branch — addressed by its **(project, branch)**,
+   the storage-layer identity being the flat **`branch_id`** — the Controller assembles
+   the endpoint
+   *spec* (DB connection, branch binding, read/write role, version, TLS,
    telemetry), assigns the endpoint its own unique **`endpoint_id`** (endpoints have no
    names; they are addressed by id), provisions the compute, and hands the spec to that
    endpoint's `compute_ctl`. A write endpoint is rejected if the branch already has one
    (single-writer rule). The id is durable: replacing a failed compute reuses the same
    `endpoint_id` (new instance, same record).
 4. **Branch.** Fork an existing branch at a chosen point — the default branch or another
-   branch — producing a *new* branch (with its own branch/`timeline_id` under the same
+   branch — producing a *new* branch (with its own `branch_id` under the same
    project) and database linked to their parent, and, optionally, a first endpoint on the
    branch. The pre-fork history is shared, not copied.
 5. **Pause / resume.** A Controller API call targeting an endpoint. Pause suspends the
@@ -166,7 +170,7 @@ one so the whole problem reduces to the Controller ordering its own actions.
 **Kill before create.** When the Controller replaces a write endpoint's compute, it fully
 retires the old **instance** — and *confirms* it is gone — before a new instance takes
 over the write role, so there is never a window in which two live computes write the same
-branch's timeline. (The endpoint *record* and its `endpoint_id` persist across the swap; it is the
+branch. (The endpoint *record* and its `endpoint_id` persist across the swap; it is the
 running instance that changes — see §3.) On Kubernetes "retire" means **removing the
 pod**, and for a bad-but-running endpoint this is a forceful termination — a bounded
 graceful window, then a hard kill. The Controller does not fire-and-forget: it waits for the kill to complete
@@ -222,9 +226,10 @@ hierarchy, the **physical** resources (branches and endpoints), and the **operat
 task log. A sketch in PostgreSQL DDL follows — a first cut to show the shape; authoritative
 DDL lives with the code and its migrations.
 
-A project's id *is* the storage layer's `tenant_id` and a branch's id *is* its
-`timeline_id` — the storage layer's 128-bit ids, carried here verbatim as `uuid`; the
-rename to project/branch stops at the controller boundary. All foreign keys are
+A project's id is a control-plane-only id (it maps to no storage object); a branch's
+`branch_id` *is* the storage layer's flat `BranchId` — a 128-bit id, carried here
+verbatim as `uuid`. The storage layer is flat: there is no enclosing tenant. All
+foreign keys are
 `RESTRICT` (the PG default) unless noted: teardown is top-down through tasks, never via
 `ON DELETE CASCADE` surprises.
 
@@ -245,7 +250,7 @@ CREATE TABLE storage_pool (
 );
 
 CREATE TABLE project (                         -- a "database": one project, one default branch
-    id               uuid PRIMARY KEY,   -- the storage-layer tenant_id
+    id               uuid PRIMARY KEY,   -- control-plane-only id; maps to no storage object
     storage_pool_id  uuid NOT NULL REFERENCES storage_pool(id),
     name             text NOT NULL,
     UNIQUE (storage_pool_id, name)             -- name unique within its pool
@@ -269,12 +274,12 @@ CREATE TABLE user_project_grant (              -- per-project access; revoke = d
 **Physical**
 
 ```sql
--- A branch *is* a timeline (the two are synonyms); there is no separate
--- timelines table. Identity is the (project_id, branch_id) pair — the storage
--- layer's (tenant_id, timeline_id).
+-- A branch's branch_id *is* the storage layer's flat BranchId; the storage layer
+-- is flat (no enclosing tenant). Controller identity is the (project_id, branch_id)
+-- pair, the project being a control-plane scoping only.
 CREATE TABLE branch (
-    project_id          uuid NOT NULL REFERENCES project(id),  -- = storage tenant_id
-    branch_id           uuid NOT NULL,                         -- = storage timeline_id
+    project_id          uuid NOT NULL REFERENCES project(id),  -- control-plane scoping only
+    branch_id           uuid NOT NULL,                         -- = storage-layer flat branch_id
     name                text NOT NULL,
     pg_version          int  NOT NULL, -- Is PG Version needed?
     is_default          boolean NOT NULL DEFAULT false,  -- the project's default (root) branch

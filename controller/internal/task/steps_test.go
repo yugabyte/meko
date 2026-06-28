@@ -130,8 +130,8 @@ func TestRecordBranchRecipeHandlerDefault(t *testing.T) {
 		t.Fatalf("recorded %d recipes, want 1", len(recipes.recorded))
 	}
 	got := recipes.recorded[0]
-	if got.projectID != hex32(projectID) || got.branchID != hex32(branchID) {
-		t.Errorf("recipe ids = (%s,%s), want hex32 (%s,%s)", got.projectID, got.branchID, hex32(projectID), hex32(branchID))
+	if got.branchID != hex32(branchID) {
+		t.Errorf("recipe branch id = %s, want hex32 %s", got.branchID, hex32(branchID))
 	}
 	if got.recipe.AncestorBranchID != "" {
 		t.Errorf("default-branch recipe ancestor = %q, want empty", got.recipe.AncestorBranchID)

@@ -130,14 +130,14 @@ func (e stringError) Error() string { return string(e) }
 // --- fakeRecipeStore: an in-memory task.RecipeStore -------------------------
 
 type recordedRecipe struct {
-	projectID, branchID string
-	recipe              BranchRecipe
+	branchID string
+	recipe   BranchRecipe
 }
 
 type fakeRecipeStore struct {
 	mu            sync.Mutex
 	recorded      []recordedRecipe
-	cleared       []string // "projectID/branchID" pairs cleared successfully
+	cleared       []string // branchIDs cleared successfully
 	clearAttempts int      // clears tried, incremented even when errClear is injected
 	errRecord     error
 	errClear      error
@@ -145,24 +145,24 @@ type fakeRecipeStore struct {
 
 func newFakeRecipeStore() *fakeRecipeStore { return &fakeRecipeStore{} }
 
-func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, projectID, branchID string, r BranchRecipe) error {
+func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, branchID string, r BranchRecipe) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.errRecord != nil {
 		return f.errRecord
 	}
-	f.recorded = append(f.recorded, recordedRecipe{projectID: projectID, branchID: branchID, recipe: r})
+	f.recorded = append(f.recorded, recordedRecipe{branchID: branchID, recipe: r})
 	return nil
 }
 
-func (f *fakeRecipeStore) ClearBranchRecipe(_ context.Context, projectID, branchID string) error {
+func (f *fakeRecipeStore) ClearBranchRecipe(_ context.Context, branchID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.clearAttempts++ // record the attempt before any injected failure
 	if f.errClear != nil {
 		return f.errClear
 	}
-	f.cleared = append(f.cleared, projectID+"/"+branchID)
+	f.cleared = append(f.cleared, branchID)
 	return nil
 }
 

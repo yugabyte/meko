@@ -97,43 +97,46 @@ func TestClientReadyError(t *testing.T) {
 	}
 }
 
-func TestClientCreateTimeline(t *testing.T) {
+func TestClientRecordPendingTimelineInit(t *testing.T) {
 	var gotMethod, gotPath string
-	var gotBody []byte
+	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod, gotPath = r.Method, r.URL.Path
-		gotBody, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"timeline_id":"tl-1"}`)
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	out, err := clientForServer(t, srv).CreateTimeline(
-		context.Background(), "tenant-1", json.RawMessage(`{"new_timeline_id":"tl-1"}`))
+	ancestor := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	err := clientForServer(t, srv).RecordPendingTimelineInit(context.Background(), "branch-1",
+		PendingTimelineInit{
+			BranchName:       "feature",
+			PgVersion:        17,
+			AncestorBranchID: &ancestor,
+			StartLSN:         "0/16ABCD0",
+		})
 	if err != nil {
-		t.Fatalf("CreateTimeline: %v", err)
+		t.Fatalf("RecordPendingTimelineInit: %v", err)
 	}
 	if gotMethod != http.MethodPost {
 		t.Errorf("method = %q, want POST", gotMethod)
 	}
-	if gotPath != "/v1/tenant/tenant-1/timeline" {
+	if gotPath != "/control/v1/branch/branch-1/pending_init" {
 		t.Errorf("path = %q", gotPath)
 	}
-	if string(gotBody) != `{"new_timeline_id":"tl-1"}` {
-		t.Errorf("body = %q", gotBody)
+	// The field names must match the Rust serde shape (PendingTimelineInitRequest).
+	if gotBody["branch_name"] != "feature" {
+		t.Errorf("branch_name = %v", gotBody["branch_name"])
 	}
-	var resp struct {
-		TimelineID string `json:"timeline_id"`
+	if gotBody["ancestor_branch_id"] != ancestor {
+		t.Errorf("ancestor_branch_id = %v, want %q", gotBody["ancestor_branch_id"], ancestor)
 	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.TimelineID != "tl-1" {
-		t.Errorf("timeline_id = %q, want tl-1", resp.TimelineID)
+	if gotBody["start_lsn"] != "0/16ABCD0" {
+		t.Errorf("start_lsn = %v", gotBody["start_lsn"])
 	}
 }
 
-func TestClientDeleteTimeline(t *testing.T) {
+func TestClientDeletePendingTimelineInit(t *testing.T) {
 	var gotMethod, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod, gotPath = r.Method, r.URL.Path
@@ -141,43 +144,72 @@ func TestClientDeleteTimeline(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := clientForServer(t, srv).DeleteTimeline(context.Background(), "tenant-1", "tl-1"); err != nil {
-		t.Fatalf("DeleteTimeline: %v", err)
+	if err := clientForServer(t, srv).DeletePendingTimelineInit(context.Background(), "branch-1"); err != nil {
+		t.Fatalf("DeletePendingTimelineInit: %v", err)
 	}
 	if gotMethod != http.MethodDelete {
 		t.Errorf("method = %q, want DELETE", gotMethod)
 	}
-	if gotPath != "/v1/tenant/tenant-1/timeline/tl-1" {
+	if gotPath != "/control/v1/branch/branch-1/pending_init" {
 		t.Errorf("path = %q", gotPath)
 	}
 }
 
-func TestClientErrorsOnEmptyBodyWhenResultExpected(t *testing.T) {
-	// 2xx with no body: a method that expects a JSON result must surface the
-	// empty response as an error, not return a silently-unpopulated value.
-	// CreateTenant decodes the controller's {"shards":[...]} reply, so an empty
-	// body is a decode error.
+func TestClientDeletePendingTimelineInitTolerates404(t *testing.T) {
+	// A missing recipe (already materialized) is treated as success.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
+		http.Error(w, "no such recipe", http.StatusNotFound)
 	}))
 	defer srv.Close()
 
-	if err := clientForServer(t, srv).CreateTenant(context.Background(), "tenant-1"); err == nil {
-		t.Fatal("expected an error decoding an empty body into a requested result")
+	if err := clientForServer(t, srv).DeletePendingTimelineInit(context.Background(), "branch-x"); err != nil {
+		t.Fatalf("DeletePendingTimelineInit should tolerate 404, got: %v", err)
+	}
+}
+
+func TestClientListPendingTimelineInits(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `[{"branch_id":"b1","branch_name":"main","pg_version":17,"ancestor_branch_id":null,"start_lsn":"0/0"},`+
+			`{"branch_id":"b2","branch_name":"feature","pg_version":17,"ancestor_branch_id":"b1","start_lsn":"0/16ABCD0"}]`)
+	}))
+	defer srv.Close()
+
+	inits, err := clientForServer(t, srv).ListPendingTimelineInits(context.Background())
+	if err != nil {
+		t.Fatalf("ListPendingTimelineInits: %v", err)
+	}
+	if gotMethod != http.MethodGet {
+		t.Errorf("method = %q, want GET", gotMethod)
+	}
+	if gotPath != "/control/v1/pending_timeline_inits" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if len(inits) != 2 {
+		t.Fatalf("got %d inits, want 2", len(inits))
+	}
+	if inits[0].BranchID != "b1" || inits[0].AncestorBranchID != nil {
+		t.Errorf("inits[0] = %+v", inits[0])
+	}
+	if inits[1].BranchID != "b2" || inits[1].AncestorBranchID == nil || *inits[1].AncestorBranchID != "b1" {
+		t.Errorf("inits[1] = %+v", inits[1])
 	}
 }
 
 func TestClientErrorIncludesStatusAndBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "no such tenant", http.StatusNotFound)
+		http.Error(w, "no such branch", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
-	err := clientForServer(t, srv).DeleteTimeline(context.Background(), "tenant-x", "tl-x")
+	err := clientForServer(t, srv).RecordPendingTimelineInit(context.Background(), "branch-x",
+		PendingTimelineInit{BranchName: "x", PgVersion: 17, StartLSN: "0/0"})
 	if err == nil {
-		t.Fatal("expected error on 404")
+		t.Fatal("expected error on 500")
 	}
-	if !strings.Contains(err.Error(), "404") || !strings.Contains(err.Error(), "no such tenant") {
+	if !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "no such branch") {
 		t.Errorf("error = %q, want it to carry status and body", err)
 	}
 }

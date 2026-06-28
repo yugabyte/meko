@@ -124,7 +124,7 @@ func (h RecordBranchRecipeHandler) Run(ctx context.Context, in StepInput) (json.
 	if args.AncestorBranchID != nil {
 		ancestor = hex32(*args.AncestorBranchID)
 	}
-	if err := h.Recipes.RecordBranchRecipe(ctx, hex32(args.ProjectID), hex32(args.BranchID), BranchRecipe{
+	if err := h.Recipes.RecordBranchRecipe(ctx, hex32(args.BranchID), BranchRecipe{
 		BranchName:       args.BranchName,
 		PgVersion:        args.PgVersion,
 		AncestorBranchID: ancestor,
@@ -221,7 +221,7 @@ func (h CreateEndpointHandler) Run(ctx context.Context, in StepInput) (json.RawM
 	// Best-effort and idempotent: a lingering recipe is harmless (nothing reads
 	// it), so a clear failure does not fail the task.
 	if h.Recipes != nil {
-		if err := h.Recipes.ClearBranchRecipe(ctx, hex32(args.ProjectID), hex32(args.BranchID)); err != nil {
+		if err := h.Recipes.ClearBranchRecipe(ctx, hex32(args.BranchID)); err != nil {
 			logger.Warn("failed to clear branch recipe (continuing)",
 				applog.KeyProjectID, args.ProjectID.String(), applog.KeyBranchID, args.BranchID.String(), "error", err.Error())
 		}

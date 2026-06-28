@@ -23,31 +23,30 @@ import (
 // fakeSCServer is an httptest stand-in for the managed storage controller's
 // pending-init endpoints. It records the calls the project/branch handlers make
 // through a real storagecontroller.Client, so the create-project recipe path is
-// exercised end-to-end without a real controller. The storage controller keeps
-// the tenant/timeline vocabulary (the controller maps project->tenant and
-// branch->timeline at this boundary). failRecord, when set, makes the record
+// exercised end-to-end without a real controller. The storage layer is flat: the
+// recipe is keyed by a single branch_id (the controller passes the branch's
+// branch_id verbatim at this boundary). failRecord, when set, makes the record
 // (POST) return 500 so the handler's error path can be tested.
 type fakeSCServer struct {
-	mu               sync.Mutex
-	recordHit        bool
-	recordedTenant   string
-	recordedTimeline string
-	recordedReq      storagecontroller.PendingTimelineInit
-	deleteHit        bool
-	failRecord       bool
+	mu             sync.Mutex
+	recordHit      bool
+	recordedBranch string
+	recordedReq    storagecontroller.PendingTimelineInit
+	deleteHit      bool
+	failRecord     bool
 }
 
 // start stands up the httptest server and returns a storagecontroller.Client
 // pointed at it. It serves the pending-init recipe endpoints
-// (POST/DELETE /control/v1/tenant/{tenant}/timeline/{timeline}/pending_init).
+// (POST/DELETE /control/v1/branch/{branch_id}/pending_init).
 // The default branch fork point is no longer read from the controller — it comes
 // from the parent's own safekeeper (see fakeSafekeeper, #133).
 func (f *fakeSCServer) start(t *testing.T) *storagecontroller.Client {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/control/v1/tenant/", func(w http.ResponseWriter, r *http.Request) {
-		// /control/v1/tenant/{tenant}/timeline/{timeline}/pending_init
-		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/control/v1/tenant/"), "/")
+	mux.HandleFunc("/control/v1/branch/", func(w http.ResponseWriter, r *http.Request) {
+		// /control/v1/branch/{branch_id}/pending_init
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/control/v1/branch/"), "/")
 		f.mu.Lock()
 		defer f.mu.Unlock()
 
@@ -56,7 +55,7 @@ func (f *fakeSCServer) start(t *testing.T) *storagecontroller.Client {
 			return
 		}
 
-		tenant, timeline := parts[0], parts[2]
+		branch := parts[0]
 		switch r.Method {
 		case http.MethodPost:
 			if f.failRecord {
@@ -64,8 +63,7 @@ func (f *fakeSCServer) start(t *testing.T) *storagecontroller.Client {
 				return
 			}
 			f.recordHit = true
-			f.recordedTenant = tenant
-			f.recordedTimeline = timeline
+			f.recordedBranch = branch
 			_ = json.NewDecoder(r.Body).Decode(&f.recordedReq)
 			w.WriteHeader(http.StatusOK)
 		case http.MethodDelete:
@@ -93,10 +91,10 @@ func newProjectControllersProv(t *testing.T, prov api.Provisioning) (*api.Contro
 }
 
 // fakeSafekeeper is an httptest stand-in for an endpoint's co-located safekeeper.
-// It serves GET /v1/tenant/{tenant}/timeline/{timeline} reporting flushLSN, which
+// It serves GET /v1/branch/{branch_id} reporting flushLSN, which
 // the branch handler reads from the parent's read_write endpoint to default the
 // fork point (#133). flushLSN empty => 404 (the safekeeper does not serve the
-// timeline), exercising the "no usable LSN" path.
+// branch), exercising the "no usable LSN" path.
 type fakeSafekeeper struct {
 	mu       sync.Mutex
 	flushLSN string
@@ -106,7 +104,7 @@ type fakeSafekeeper struct {
 func (f *fakeSafekeeper) start(t *testing.T) string {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/tenant/", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/v1/branch/", func(w http.ResponseWriter, _ *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.hit = true
@@ -177,11 +175,8 @@ func TestCreateProjectRecordsPendingInit(t *testing.T) {
 	if !sc.recordHit {
 		t.Fatal("RecordPendingTimelineInit was not called")
 	}
-	if want := hex.EncodeToString(project.Id[:]); sc.recordedTenant != want {
-		t.Errorf("recorded tenant = %q, want %q", sc.recordedTenant, want)
-	}
-	if want := hex.EncodeToString(def.BranchId[:]); sc.recordedTimeline != want {
-		t.Errorf("recorded timeline = %q, want %q", sc.recordedTimeline, want)
+	if want := hex.EncodeToString(def.BranchId[:]); sc.recordedBranch != want {
+		t.Errorf("recorded branch = %q, want %q", sc.recordedBranch, want)
 	}
 	if sc.recordedReq.BranchName != "main" {
 		t.Errorf("branch_name = %q, want main", sc.recordedReq.BranchName)
@@ -189,8 +184,8 @@ func TestCreateProjectRecordsPendingInit(t *testing.T) {
 	if sc.recordedReq.PgVersion != 17 {
 		t.Errorf("pg_version = %d, want 17", sc.recordedReq.PgVersion)
 	}
-	if sc.recordedReq.AncestorTimelineID != nil {
-		t.Errorf("ancestor_timeline_id = %v, want nil (default branch)", *sc.recordedReq.AncestorTimelineID)
+	if sc.recordedReq.AncestorBranchID != nil {
+		t.Errorf("ancestor_branch_id = %v, want nil (default branch)", *sc.recordedReq.AncestorBranchID)
 	}
 	if sc.recordedReq.StartLSN != "0/0" {
 		t.Errorf("start_lsn = %q, want 0/0", sc.recordedReq.StartLSN)
@@ -307,14 +302,14 @@ func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
 	if !sc.recordHit {
 		t.Fatal("RecordPendingTimelineInit was not called for the branch")
 	}
-	if want := hex.EncodeToString(br.BranchId[:]); sc.recordedTimeline != want {
-		t.Errorf("recorded timeline = %q, want the branch %q", sc.recordedTimeline, want)
+	if want := hex.EncodeToString(br.BranchId[:]); sc.recordedBranch != want {
+		t.Errorf("recorded branch = %q, want the branch %q", sc.recordedBranch, want)
 	}
-	if sc.recordedReq.AncestorTimelineID == nil {
-		t.Fatal("recipe ancestor_timeline_id = nil, want the parent")
+	if sc.recordedReq.AncestorBranchID == nil {
+		t.Fatal("recipe ancestor_branch_id = nil, want the parent")
 	}
-	if want := hex.EncodeToString(def.BranchId[:]); *sc.recordedReq.AncestorTimelineID != want {
-		t.Errorf("recipe ancestor = %q, want the default branch %q", *sc.recordedReq.AncestorTimelineID, want)
+	if want := hex.EncodeToString(def.BranchId[:]); *sc.recordedReq.AncestorBranchID != want {
+		t.Errorf("recipe ancestor = %q, want the default branch %q", *sc.recordedReq.AncestorBranchID, want)
 	}
 	if sc.recordedReq.StartLSN != "0/16ABCD0" {
 		t.Errorf("recipe start_lsn = %q, want 0/16ABCD0", sc.recordedReq.StartLSN)
@@ -356,8 +351,8 @@ func TestCreateBranchExplicitForkLSN(t *testing.T) {
 	if sc.recordedReq.StartLSN != lsn {
 		t.Errorf("recipe start_lsn = %q, want %q", sc.recordedReq.StartLSN, lsn)
 	}
-	if want := hex.EncodeToString(project.DefaultBranch.BranchId[:]); sc.recordedReq.AncestorTimelineID == nil || *sc.recordedReq.AncestorTimelineID != want {
-		t.Errorf("recipe ancestor = %v, want the default branch %q", sc.recordedReq.AncestorTimelineID, want)
+	if want := hex.EncodeToString(project.DefaultBranch.BranchId[:]); sc.recordedReq.AncestorBranchID == nil || *sc.recordedReq.AncestorBranchID != want {
+		t.Errorf("recipe ancestor = %v, want the default branch %q", sc.recordedReq.AncestorBranchID, want)
 	}
 }
 

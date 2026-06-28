@@ -201,20 +201,21 @@ func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRe
 	// storage controller. The branch is declared here, not yet materialized: the
 	// first endpoint deployed for it attaches a pageserver and bootstraps it
 	// (controller-project-create.md). The recipe lives in both the control DB (the
-	// branch row) and the storage controller. Storage-layer ids are 32-hex (no
-	// dashes); the control plane stores the same bytes as a SQL uuid. Synchronous
-	// for now — #113 moves this onto the write-ahead task framework. We do NOT
-	// eagerly create the tenant or deploy an endpoint here: compute is a separate
-	// resource (POST .../endpoints).
+	// branch row) and the storage controller, keyed by the single storage branch_id
+	// (the branch's branch_id verbatim — the storage layer is flat now, no enclosing
+	// tenant). The storage-layer branch_id is 32-hex (no dashes); the control plane
+	// stores the same bytes as a SQL uuid. Synchronous for now — #113 moves this onto
+	// the write-ahead task framework. We do NOT eagerly provision storage or deploy an
+	// endpoint here: compute is a separate resource (POST .../endpoints).
 	def := p.DefaultBranch
 	if c.prov.SC != nil {
 		if err := c.prov.SC.RecordPendingTimelineInit(ctx,
-			hex32(def.ProjectID), hex32(def.BranchID),
+			hex32(def.BranchID),
 			storagecontroller.PendingTimelineInit{
-				BranchName:         def.Name,
-				PgVersion:          pgVersion,
-				AncestorTimelineID: nil, // default (Bootstrap) branch
-				StartLSN:           "0/0",
+				BranchName:       def.Name,
+				PgVersion:        pgVersion,
+				AncestorBranchID: nil, // default (Bootstrap) branch
+				StartLSN:         "0/0",
 			}); err != nil {
 			return nil, fmt.Errorf("storage controller record pending timeline init: %w", err)
 		}
@@ -232,7 +233,8 @@ func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRe
 	return CreateProject201JSONResponse(projectToAPI(p)), nil
 }
 
-// hex32 renders a UUID as the storage layer's 32-lowercase-hex TenantId/TimelineId.
+// hex32 renders a UUID as the storage layer's 32-lowercase-hex BranchId (the
+// flat storage identity; the product branch_id is the storage branch_id verbatim).
 func hex32(id uuid.UUID) string {
 	return hex.EncodeToString(id[:])
 }
@@ -344,17 +346,18 @@ func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequ
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
 
-	// Record the branch recipe with the storage controller: same project, the
-	// ancestor (the parent) and the fork LSN set. Synchronous for now (#113).
+	// Record the branch recipe with the storage controller, keyed by the new
+	// branch's storage branch_id, with the ancestor (the parent's branch_id) and
+	// the fork LSN set. Synchronous for now (#113).
 	if c.prov.SC != nil {
 		ancestor := hex32(parent.BranchID)
 		if err := c.prov.SC.RecordPendingTimelineInit(ctx,
-			hex32(br.ProjectID), hex32(br.BranchID),
+			hex32(br.BranchID),
 			storagecontroller.PendingTimelineInit{
-				BranchName:         br.Name,
-				PgVersion:          parent.PgVersion, // a branch inherits the ancestor's version
-				AncestorTimelineID: &ancestor,
-				StartLSN:           forkLSN,
+				BranchName:       br.Name,
+				PgVersion:        parent.PgVersion, // a branch inherits the ancestor's version
+				AncestorBranchID: &ancestor,
+				StartLSN:         forkLSN,
 			}); err != nil {
 			return nil, fmt.Errorf("storage controller record pending timeline init: %w", err)
 		}
@@ -448,7 +451,7 @@ func (c *Controllers) resolveForkLSN(ctx context.Context, poolID uuid.UUID, pare
 		return "", errResp
 	}
 	skURL := c.prov.Deployer.EndpointSafekeeperURL(endpointDeployName(rw.ID))
-	lsn, err := c.prov.Node.TimelineFlushLSN(ctx, skURL, hex32(parent.ProjectID), hex32(parent.BranchID))
+	lsn, err := c.prov.Node.TimelineFlushLSN(ctx, skURL, hex32(parent.BranchID))
 	if err != nil {
 		// The parent's safekeeper is unreachable, does not serve the timeline, or
 		// reports no flush_lsn — there is nothing to branch from. Steer the caller
@@ -608,7 +611,7 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	// idempotent: a no-op for a branch an earlier endpoint already materialized,
 	// and a lingering recipe is harmless (nothing reads it).
 	if c.prov.SC != nil {
-		if err := c.prov.SC.DeletePendingTimelineInit(recCtx, hex32(br.ProjectID), hex32(br.BranchID)); err != nil {
+		if err := c.prov.SC.DeletePendingTimelineInit(recCtx, hex32(br.BranchID)); err != nil {
 			c.logger.LogAttrs(recCtx, slog.LevelWarn, "failed to delete pending timeline init (continuing)",
 				slog.String(applog.KeyEndpointID, ep.ID.String()), slog.String("error", err.Error()))
 		}

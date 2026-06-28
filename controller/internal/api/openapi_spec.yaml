@@ -21,8 +21,9 @@ info:
     - **Projects** — a project (a "database") in a pool. *Create* provisions the
       control-plane record: it creates the project **and its default branch**
       together and returns the project with its `default_branch`. A project has
-      exactly one default branch, created with it. The project id and branch ids
-      are the storage-layer ids (a project is a tenant, a branch is a timeline).
+      exactly one default branch, created with it. The branch id is the
+      storage-layer branch id verbatim (the storage layer is flat — a project maps
+      to no storage object).
       *Delete* is **logged only** (202): the write-ahead task framework that will
       execute it is not yet wired up.
     - **Branches** — create / list / get / delete a branch in a project. *Create*
@@ -207,9 +208,9 @@ paths:
       description: |
         Creates a project (a "database") in the pool together with its default
         branch (a PG cluster), and returns the project with its `default_branch`
-        populated. The project id is the storage-layer tenant id; the default
-        branch id is the storage-layer timeline id. The name is unique within the
-        pool. Returns 404 if the pool does not exist.
+        populated. The default branch id is the storage-layer branch id verbatim
+        (the storage layer is flat — a project maps to no storage object). The name
+        is unique within the pool. Returns 404 if the pool does not exist.
       requestBody:
         required: true
         content:
@@ -537,7 +538,7 @@ components:
       name: projectId
       in: path
       required: true
-      description: The project's id (the storage-layer tenant id).
+      description: The project's id (a control-plane id; maps to no storage object).
       schema:
         type: string
         format: uuid
@@ -545,7 +546,7 @@ components:
       name: branchId
       in: path
       required: true
-      description: The branch's id (the storage-layer timeline id).
+      description: The branch's id (the storage-layer branch id verbatim).
       schema:
         type: string
         format: uuid
@@ -709,7 +710,7 @@ components:
         id:
           type: string
           format: uuid
-          description: The project id (the storage-layer tenant id).
+          description: The project id (a control-plane id; maps to no storage object).
         storage_pool_id:
           type: string
           format: uuid
@@ -742,11 +743,11 @@ components:
         project_id:
           type: string
           format: uuid
-          description: The project (storage-layer tenant) this branch belongs to.
+          description: The project (control-plane grouping) this branch belongs to.
         branch_id:
           type: string
           format: uuid
-          description: The branch id (the storage-layer timeline id).
+          description: The branch id (the storage-layer branch id verbatim).
         name:
           type: string
         pg_version:
@@ -808,11 +809,11 @@ components:
         project_id:
           type: string
           format: uuid
-          description: The project (storage-layer tenant) this endpoint is bound to.
+          description: The project (control-plane grouping) this endpoint is bound to.
         branch_id:
           type: string
           format: uuid
-          description: The branch (storage-layer timeline) this endpoint is bound to.
+          description: The branch (storage-layer branch id) this endpoint is bound to.
         role:
           type: string
           enum: [read_write, read_only]

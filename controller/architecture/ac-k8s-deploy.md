@@ -71,28 +71,30 @@ Project/branch creation and endpoint creation are **separate** steps, joined by 
 
 - **create-project** (and **create-branch**) records the branch in the
   control-plane DB (`branch`) **and** a `pending_init` *recipe* in the storage
-  controller. It does **not** deploy anything or eagerly create the storage-layer
-  tenant.
+  controller, keyed by the flat `branch_id`. It does **not** deploy anything or
+  eagerly materialize the branch's storage.
 - **create-endpoint** deploys the endpoint with `BOOTSTRAP=true`. On first
   materialization the pod's supervisor runs `initdb` for the recipe's
-  tenant/timeline (the storage-layer ids of the project/branch), registers +
-  attaches to the storage controller (below), and registers the timeline; the
+  `branch_id`, registers +
+  attaches to the storage controller (below), and registers the branch; the
   controller then **consumes** the recipe (`DeletePendingTimelineInit`). There is
   no separate create-database call — the first endpoint is what turns the declared
   branch into real storage.
 
-The storage layer identifies a tenant/timeline by 32 lowercase hex chars; the
-control plane stores the same 16 bytes (the project/branch id) as a SQL `uuid` and
-converts with `hex.EncodeToString(id[:])` when rendering chart values.
+The storage layer identifies a branch by 32 lowercase hex chars; the
+control plane stores the same 16 bytes (the `branch_id`) as a SQL `uuid` and
+converts with `hex.EncodeToString(id[:])` when rendering chart values. (The endpoint
+image, not yet migrated to flat `branch_id`, still receives the project/branch ids as
+`TENANT_ID`/`TIMELINE_ID` env vars.)
 
 ## Storage-controller coordination + addressing
 
 With `storageController.url` set (the controller path), the endpoint pod registers its
 co-located pageserver + safekeeper with the controller, takes its pageserver
 **generation from the controller's attach-hook** (not a pinned constant), and
-registers the timeline. Two distinct network paths:
+registers the branch. Two distinct network paths:
 
-- **controller → endpoint** (heartbeats, tenant ops): the controller dials the
+- **controller → endpoint** (heartbeats, branch ops): the controller dials the
   endpoint's **own stable Service DNS** — `SC_REACHABLE_HOST =
   <release>.<ns>.svc.cluster.local` — and the SC-needed HTTP ports
   (pageserver/safekeeper) are published on that Service. Because the address is
@@ -119,8 +121,7 @@ registers the timeline. Two distinct network paths:
 
 The deployed endpoints reach their **backing YugabyteDB** by its in-cluster
 Service DNS (`--deploy-yb-host-ports`), which may differ from the controller's own
-`--database-url` path to its state. The `(tenant_id, timeline_id)` pair is the
-shared key.
+`--database-url` path to its state. The flat `branch_id` is the shared key.
 
 ## Endpoint data volume (`--deploy-storage-class`)
 
@@ -224,7 +225,7 @@ The deploy is **demo-grade**. What it currently takes for granted:
   layer.
 - **Postgres v17 only.** create-project rejects any other `pg_version`.
 - **One pageserver+safekeeper per endpoint pod**, registered with a **unique SC
-  node id derived from the timeline id** (a 31-bit hash). Collision-resistant, not
+  node id derived from the branch id** (a 31-bit hash). Collision-resistant, not
   collision-proof. One `read_write` endpoint per branch (single-writer).
 - **Bootstrap-on-first-endpoint.** Branches are materialized by the first
   endpoint's `initdb` (`BOOTSTRAP=true`), driven by the recipe — there is no
@@ -247,7 +248,7 @@ The deploy is **demo-grade**. What it currently takes for granted:
   amp-controller.md principle 6); deploy/retire are one-shot reconciles.
 - **No attach/detach handoff.** Retire is kill-before-create, correct absent a
   network partition (ac-highlvl.md §4 partition gap). Generation fencing is the
-  controller's (the attach-hook grants/bumps it), but live migration of a tenant
+  controller's (the attach-hook grants/bumps it), but live migration of a branch
   between endpoints is not built.
 - **Pre-fix endpoints don't self-heal.** An endpoint registered before the stable
   Service-DNS change (#121) has a stale node address in the SC and will still

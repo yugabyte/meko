@@ -17,14 +17,14 @@ func TestTimelineFlushLSN(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lsn, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "tenant-1", "tl-1")
+	lsn, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "br-1")
 	if err != nil {
 		t.Fatalf("TimelineFlushLSN: %v", err)
 	}
 	if lsn != "0/16ABCD0" {
 		t.Errorf("lsn = %q, want 0/16ABCD0", lsn)
 	}
-	if want := "/v1/tenant/tenant-1/timeline/tl-1"; gotPath != want {
+	if want := "/v1/branch/br-1"; gotPath != want {
 		t.Errorf("path = %q, want %q", gotPath, want)
 	}
 }
@@ -36,7 +36,7 @@ func TestTimelineFlushLSNTrailingSlashBaseURL(t *testing.T) {
 	defer srv.Close()
 
 	// A base URL with a trailing slash must not double the separator.
-	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL+"/", "t", "tl"); err != nil {
+	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL+"/", "br"); err != nil {
 		t.Fatalf("TimelineFlushLSN: %v", err)
 	}
 }
@@ -49,7 +49,7 @@ func TestTimelineFlushLSNMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "t", "tl"); err == nil {
+	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "br"); err == nil {
 		t.Fatal("expected an error when the status has no flush_lsn")
 	}
 }
@@ -62,7 +62,7 @@ func TestTimelineFlushLSNNotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "t", "tl"); err == nil {
+	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "br"); err == nil {
 		t.Fatal("expected an error on a 404 from the safekeeper")
 	}
 }

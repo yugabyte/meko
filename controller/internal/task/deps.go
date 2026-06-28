@@ -18,10 +18,10 @@ import (
 // recipe operations bridge to the storage-controller client.
 //
 // Naming: the controller's user-facing ladder is storage pool -> project ->
-// branch -> endpoint. A project is the storage layer's tenant and a branch its
-// timeline; the controller carries the storage ids verbatim, mapping
-// project_id -> tenant_id and branch_id -> timeline_id only at the storage seam
-// (the deploy spec and the storage-controller recipe), via hex32.
+// branch -> endpoint. The storage layer is flat: a branch's branch_id IS the
+// storage-layer BranchId (no enclosing tenant), so the controller carries it
+// verbatim, rendering it to 32-hex at the storage seam (the storage-controller
+// recipe) via hex32. A project no longer maps to a storage tenant.
 
 // StateStore is the set of *idempotent, id-keyed* project/branch operations the
 // step catalog drives. Unlike core.Backend's id-generating create methods (which
@@ -70,15 +70,16 @@ type BranchRecipe struct {
 }
 
 // RecipeStore records and clears the storage controller's pending-init recipes
-// (controller-timeline-create.md). The projectID/branchID are 32 lowercase hex
-// digits (the storage-layer TenantId/TimelineId the controller maps to). It may
-// be unavailable (no managed storage controller), in which case the handlers
-// no-op with a warning — mirroring the synchronous handler.
+// (controller-timeline-create.md). branchID is 32 lowercase hex digits (the
+// storage-layer BranchId the controller maps to — the storage layer is flat, so
+// the recipe is keyed by branch_id alone). It may be unavailable (no managed
+// storage controller), in which case the handlers no-op with a warning —
+// mirroring the synchronous handler.
 type RecipeStore interface {
-	RecordBranchRecipe(ctx context.Context, projectID, branchID string, r BranchRecipe) error
+	RecordBranchRecipe(ctx context.Context, branchID string, r BranchRecipe) error
 	// ClearBranchRecipe drops the recipe once the branch is materialized. It is
 	// idempotent: a missing recipe is treated as success.
-	ClearBranchRecipe(ctx context.Context, projectID, branchID string) error
+	ClearBranchRecipe(ctx context.Context, branchID string) error
 }
 
 // Deps bundles the collaborators the production step handlers need.
@@ -94,9 +95,10 @@ type Deps struct {
 	Bootstrap     bool   // initdb the recorded branch on a (non-fork) endpoint's first deploy
 }
 
-// hex32 renders a UUID as the storage layer's 32-lowercase-hex TenantId/TimelineId
-// (no dashes): a project id becomes the storage tenant id and a branch id the
-// storage timeline id. It matches the controller API layer's identical rendering.
+// hex32 renders a UUID as the storage layer's 32-lowercase-hex BranchId (no
+// dashes): a branch id becomes the storage branch id verbatim (the storage layer
+// is flat — no separate tenant). It matches the controller API layer's identical
+// rendering.
 func hex32(id uuid.UUID) string {
 	return hex.EncodeToString(id[:])
 }

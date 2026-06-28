@@ -44,72 +44,68 @@ func (c *Client) Ready(ctx context.Context) error {
 	return c.do(ctx, http.MethodGet, "/ready", nil, nil)
 }
 
-// CreateTenant registers a tenant with the storage controller (POST /v1/tenant).
-// Placement is "Detached" so it succeeds before any pageserver has registered —
-// the endpoint's attach-hook (at endpoint start) attaches the tenant to that
-// endpoint's pageserver and assigns the generation. tenantID is 32 lowercase hex
-// digits (no dashes), the storage-layer TenantId. Idempotent on the controller.
-func (c *Client) CreateTenant(ctx context.Context, tenantID string) error {
-	body := map[string]any{
-		"new_tenant_id":    tenantID,
-		"placement_policy": "Detached",
-	}
-	var out json.RawMessage // response is {"shards":[...]}; accept and discard.
-	return c.do(ctx, http.MethodPost, "/v1/tenant", body, &out)
-}
-
-// CreateTimeline registers a new timeline under tenant
-// (POST /v1/tenant/{tenant}/timeline). The request and response bodies are
-// passed through as raw JSON so this client stays decoupled from the upstream
-// pageserver timeline types; the task step catalog (§8) owns their shape.
-func (c *Client) CreateTimeline(ctx context.Context, tenantID string, req json.RawMessage) (json.RawMessage, error) {
-	var out json.RawMessage
-	err := c.do(ctx, http.MethodPost, "/v1/tenant/"+url.PathEscape(tenantID)+"/timeline", req, &out)
-	return out, err
-}
-
-// DeleteTimeline removes a timeline
-// (DELETE /v1/tenant/{tenant}/timeline/{timeline}).
-func (c *Client) DeleteTimeline(ctx context.Context, tenantID, timelineID string) error {
-	return c.do(ctx, http.MethodDelete,
-		"/v1/tenant/"+url.PathEscape(tenantID)+"/timeline/"+url.PathEscape(timelineID), nil, nil)
-}
-
-// PendingTimelineInit is the recipe for a timeline that has been declared but
+// PendingTimelineInit is the recipe for a branch that has been declared but
 // not yet materialized: the storage controller stores it until an endpoint's
-// pageserver attaches and bootstraps the timeline (controller/architecture/
-// controller-project-create.md). ancestor_timeline_id is null for a root (Bootstrap)
-// timeline; set, with start_lsn, for a branch. start_lsn is the controller's
-// Lsn string form ("hi/lo" uppercase hex, e.g. "0/0"); pg_version is the bare
-// major version (17).
+// pageserver attaches and bootstraps the branch (controller/architecture/
+// controller-project-create.md). It mirrors the storage controller's
+// PendingTimelineInitRequest serde shape (libs/pageserver_api controller_api).
+// AncestorBranchID is null for a root (Bootstrap) branch; set, with start_lsn,
+// for a branch off another. branch_name is a non-unique human-readable label.
+// start_lsn is the controller's Lsn string form ("hi/lo" uppercase hex, e.g.
+// "0/0"); pg_version is the bare major version (17).
 type PendingTimelineInit struct {
-	BranchName         string  `json:"branch_name"`
-	PgVersion          int     `json:"pg_version"`
-	AncestorTimelineID *string `json:"ancestor_timeline_id"`
-	StartLSN           string  `json:"start_lsn"`
+	BranchName       string  `json:"branch_name"`
+	PgVersion        int     `json:"pg_version"`
+	AncestorBranchID *string `json:"ancestor_branch_id"`
+	StartLSN         string  `json:"start_lsn"`
 }
 
-// RecordPendingTimelineInit records the recipe for a not-yet-materialized
-// timeline (POST /control/v1/tenant/{tenant}/timeline/{timeline}/pending_init).
-// ids are 32 lowercase hex digits (the storage-layer TenantId/TimelineId).
-func (c *Client) RecordPendingTimelineInit(ctx context.Context, tenantID, timelineID string, req PendingTimelineInit) error {
+// ListedPendingTimelineInit is one entry returned by the list-all endpoint: a
+// PendingTimelineInit together with its branch_id. It mirrors the storage
+// controller's PendingTimelineInit response struct (which carries the id, unlike
+// the request).
+type ListedPendingTimelineInit struct {
+	BranchID         string  `json:"branch_id"`
+	BranchName       string  `json:"branch_name"`
+	PgVersion        int     `json:"pg_version"`
+	AncestorBranchID *string `json:"ancestor_branch_id"`
+	StartLSN         string  `json:"start_lsn"`
+}
+
+// RecordPendingTimelineInit records the recipe for a not-yet-materialized branch
+// (POST /control/v1/branch/{branch_id}/pending_init). branchID is 32 lowercase
+// hex digits (the storage-layer BranchId). Idempotent on the branch_id key.
+func (c *Client) RecordPendingTimelineInit(ctx context.Context, branchID string, req PendingTimelineInit) error {
 	return c.do(ctx, http.MethodPost,
-		"/control/v1/tenant/"+url.PathEscape(tenantID)+"/timeline/"+url.PathEscape(timelineID)+"/pending_init",
+		"/control/v1/branch/"+url.PathEscape(branchID)+"/pending_init",
 		req, nil)
 }
 
-// DeletePendingTimelineInit drops the recipe once the timeline is materialized
-// (DELETE .../pending_init). It is idempotent: a missing recipe (404) — e.g. a
-// timeline an earlier endpoint already materialized — is treated as success.
-func (c *Client) DeletePendingTimelineInit(ctx context.Context, tenantID, timelineID string) error {
+// DeletePendingTimelineInit drops the recipe once the branch is materialized
+// (DELETE /control/v1/branch/{branch_id}/pending_init). It is idempotent: a
+// missing recipe (404) — e.g. a branch an earlier endpoint already materialized —
+// is treated as success.
+func (c *Client) DeletePendingTimelineInit(ctx context.Context, branchID string) error {
 	err := c.do(ctx, http.MethodDelete,
-		"/control/v1/tenant/"+url.PathEscape(tenantID)+"/timeline/"+url.PathEscape(timelineID)+"/pending_init",
+		"/control/v1/branch/"+url.PathEscape(branchID)+"/pending_init",
 		nil, nil)
 	var se *statusError
 	if errors.As(err, &se) && se.code == http.StatusNotFound {
 		return nil
 	}
 	return err
+}
+
+// ListPendingTimelineInits returns every pending-init recipe the storage
+// controller is holding (GET /control/v1/pending_timeline_inits). The endpoint
+// lists all branches (there is no per-id lookup in the flat model), so callers
+// filter the result by branch_name client-side.
+func (c *Client) ListPendingTimelineInits(ctx context.Context) ([]ListedPendingTimelineInit, error) {
+	var out []ListedPendingTimelineInit
+	if err := c.do(ctx, http.MethodGet, "/control/v1/pending_timeline_inits", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // statusError is returned by do for a non-2xx response, so callers can react to

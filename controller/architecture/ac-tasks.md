@@ -20,12 +20,13 @@ renewal during a long step, which is [#90](https://github.com/yugabyte/yb-light/
 
 **Terminology.** The controller's user-facing ladder is **storage pool → project
 → branch → endpoint** ([#147](https://github.com/yugabyte/yb-light/issues/147)).
-A project is the storage layer's *tenant* and a branch its *timeline*; the
-controller carries the storage ids verbatim and maps `project_id → tenant_id`,
-`branch_id → timeline_id` only at the storage seam — the deploy spec and the
-storage-controller recipe, via `hex32`. So the steps speak project/branch, and
-only the `deploy.EndpointSpec` and the storage-controller client keep
-tenant/timeline.
+A project is a purely control-plane grouping (it maps to no storage object); a
+branch's `branch_id` **is** the storage layer's flat `BranchId`. The controller
+carries that `branch_id` verbatim to the storage seam — the storage-controller
+recipe and client, via `hex32` — and the storage controller is keyed by the flat
+`branch_id`. The deploy spec is the one exception: the endpoint image is not yet
+migrated to flat `branch_id`, so `deploy.EndpointSpec` still renders the
+project/branch ids as the endpoint's `TENANT_ID`/`TIMELINE_ID` env vars.
 
 ## 1. Where it lives
 
@@ -118,8 +119,9 @@ A few invariants worth calling out:
   the endpoint clones from that ancestor at the fork LSN (`Bootstrap` forced off);
   otherwise a default branch runs `initdb` when the deployment's bootstrap flag is
   set. This mirrors the synchronous create-endpoint handler exactly. The deploy
-  spec carries the storage ids (`hex32(project_id)` as the tenant, `hex32(branch_id)`
-  as the timeline).
+  spec carries the storage ids as the endpoint image's (not-yet-migrated)
+  env-var contract: `hex32(project_id)` as `TENANT_ID`, `hex32(branch_id)` as
+  `TIMELINE_ID`.
 - **Clearing the recipe is best-effort.** A lingering recipe is harmless (nothing
   reads it once the branch is materialized), so a clear failure logs a warning and
   the step still succeeds.
@@ -152,13 +154,15 @@ unit-test against in-memory fakes and the framework stays decoupled:
   deliberately *not* on the `core.Backend` interface, so the synchronous API path
   keeps using the id-generating create methods.
 - **`RecipeStore`** — record/clear the storage controller's pending-init recipe,
-  keyed by the 32-hex storage ids the controller maps a project/branch to. A
+  keyed by the 32-hex flat `branch_id` the controller maps a branch to. A
   `BranchRecipe` decouples the task package from the storage-controller client
   type; `cmd/controller` bridges the two (`scRecipeStore`, mapping `BranchRecipe →
   PendingTimelineInit`). May be nil (no managed storage controller) — the handlers
   degrade with a warning.
 - **`deploy.Deployer`** — the existing runtime-agnostic endpoint deployer, reused
-  as-is (its `EndpointSpec` keeps the storage layer's tenant/timeline ids).
+  as-is (its `EndpointSpec` still renders the storage ids as the endpoint image's
+  `TENANT_ID`/`TIMELINE_ID` env vars, since that image is not yet migrated to flat
+  `branch_id`).
 
 `ProductionRegistry(Deps{…})` wires the catalog to the real collaborators;
 `cmd/controller` builds the `Deps` from the same `Provisioning` the synchronous

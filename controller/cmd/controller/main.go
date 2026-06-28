@@ -55,28 +55,28 @@ func main() {
 }
 
 // scRecipeStore adapts the storage-controller client to the task framework's
-// task.RecipeStore port, converting the framework's decoupled TimelineRecipe
+// task.RecipeStore port, converting the framework's decoupled BranchRecipe
 // into the client's PendingTimelineInit. It is the bridge that keeps the task
 // package independent of the storage-controller client type.
 type scRecipeStore struct{ sc *storagecontroller.Client }
 
-// projectID and branchID are the 32-hex storage ids (the storage layer's
-// tenant_id / timeline_id) the controller maps a project/branch to.
-func (a scRecipeStore) RecordBranchRecipe(ctx context.Context, projectID, branchID string, r task.BranchRecipe) error {
+// branchID is the 32-hex storage BranchId the controller maps a branch to (the
+// storage layer is flat — the branch_id is the whole storage identity).
+func (a scRecipeStore) RecordBranchRecipe(ctx context.Context, branchID string, r task.BranchRecipe) error {
 	var ancestor *string
 	if r.AncestorBranchID != "" {
 		ancestor = &r.AncestorBranchID
 	}
-	return a.sc.RecordPendingTimelineInit(ctx, projectID, branchID, storagecontroller.PendingTimelineInit{
-		BranchName:         r.BranchName,
-		PgVersion:          r.PgVersion,
-		AncestorTimelineID: ancestor,
-		StartLSN:           r.StartLSN,
+	return a.sc.RecordPendingTimelineInit(ctx, branchID, storagecontroller.PendingTimelineInit{
+		BranchName:       r.BranchName,
+		PgVersion:        r.PgVersion,
+		AncestorBranchID: ancestor,
+		StartLSN:         r.StartLSN,
 	})
 }
 
-func (a scRecipeStore) ClearBranchRecipe(ctx context.Context, projectID, branchID string) error {
-	return a.sc.DeletePendingTimelineInit(ctx, projectID, branchID)
+func (a scRecipeStore) ClearBranchRecipe(ctx context.Context, branchID string) error {
+	return a.sc.DeletePendingTimelineInit(ctx, branchID)
 }
 
 // buildProvisioning assembles the create-timeline / create-endpoint workflow's

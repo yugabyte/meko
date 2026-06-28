@@ -48,7 +48,7 @@ const (
 
 // Branch defines model for Branch.
 type Branch struct {
-	// BranchId The branch id (the storage-layer timeline id).
+	// BranchId The branch id (the storage-layer branch id verbatim).
 	BranchId  openapi_types.UUID `json:"branch_id"`
 	CreatedAt time.Time          `json:"created_at"`
 
@@ -63,7 +63,7 @@ type Branch struct {
 	ParentBranchId *openapi_types.UUID `json:"parent_branch_id"`
 	PgVersion      int                 `json:"pg_version"`
 
-	// ProjectId The project (storage-layer tenant) this branch belongs to.
+	// ProjectId The project (control-plane grouping) this branch belongs to.
 	ProjectId openapi_types.UUID `json:"project_id"`
 }
 
@@ -143,12 +143,12 @@ type Endpoint struct {
 	// Address Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed.
 	Address string `json:"address"`
 
-	// BranchId The branch (storage-layer timeline) this endpoint is bound to.
+	// BranchId The branch (storage-layer branch id) this endpoint is bound to.
 	BranchId  openapi_types.UUID `json:"branch_id"`
 	CreatedAt time.Time          `json:"created_at"`
 	Id        openapi_types.UUID `json:"id"`
 
-	// ProjectId The project (storage-layer tenant) this endpoint is bound to.
+	// ProjectId The project (control-plane grouping) this endpoint is bound to.
 	ProjectId openapi_types.UUID `json:"project_id"`
 	Role      EndpointRole       `json:"role"`
 }
@@ -197,7 +197,7 @@ type Project struct {
 	CreatedAt     time.Time `json:"created_at"`
 	DefaultBranch Branch    `json:"default_branch"`
 
-	// Id The project id (the storage-layer tenant id).
+	// Id The project id (a control-plane id; maps to no storage object).
 	Id   openapi_types.UUID `json:"id"`
 	Name string             `json:"name"`
 

@@ -120,9 +120,9 @@ These exist only in amp-controller's state store; they have no physical footprin
   and that default cluster together (§6) — and every branch of that cluster lives under the
   same project (§4.3). The project is the unit of branch ownership (§4.3) and the finest
   grain of user access (§10.1); that branch scoping is what isolates projects from each
-  other structurally, with access granted per project. A project *is* the storage layer's
-  **tenant** (§4.3): the controller carries the storage-layer id verbatim and maps
-  project→tenant only at the storage boundary.
+  other structurally, with access granted per project. A project is a purely
+  control-plane grouping — it maps to **no** storage object (§4.3); only its branches
+  carry a storage-layer identity.
 
 ### 4.2 Physical constructs
 
@@ -131,7 +131,8 @@ These correspond to real data or real running processes, and amp-controller trac
 - **YBDB universe** — the shared storage layer for a placement group; managed by YBA,
   driven by amp-controller through YBA's API.
 - **PG cluster** — a logical Postgres database backed by physical data in YBDB; that
-  data is the cluster's branch (the storage layer's timeline), exactly one per cluster
+  data is the cluster's branch (whose `branch_id` is the storage layer's flat branch id),
+  exactly one per cluster
   (§4.3). Each project has one **default** (root) cluster, created with the project; every
   other cluster under the project is a **branch**, produced by forking another cluster's
   branch (§4.3).
@@ -145,10 +146,10 @@ These correspond to real data or real running processes, and amp-controller trac
 
 A PG cluster's data is its **branch** — the two are synonyms for one entity,
 viewed from two angles: we say "branch" when talking about the data, and "PG
-cluster" when talking about the compute serving it. A branch *is* the storage layer's
-**timeline**: the controller maps branch→timeline only at the storage boundary, and
-carries the storage-layer id verbatim. Branches are uniquely identified by the pair
-**(project_id, branch_id)** — the storage layer's **(tenant_id, timeline_id)** — so a
+cluster" when talking about the compute serving it. A branch's `branch_id` **is**
+the storage layer's `BranchId` verbatim — the flat storage identity, with no
+enclosing tenant. Branches are uniquely identified within the controller by the pair
+**(project_id, branch_id)** — the project being a control-plane scoping only — so a
 branch cannot be named, resolved, or attached to outside its owning project. This scoping
 is structural: every API and internal interface that touches a branch takes the project as
 part of the key, so cross-project branch use is unrepresentable, not merely forbidden.
@@ -260,8 +261,10 @@ distributes — observability is provisioned with the endpoint, not bolted on af
 ### 5.3 Endpoints are stateless
 
 All durable data lives in YBDB. An endpoint's access to that data is purely
-**configuration** — the YBDB connection in its spec, plus its (tenant_id, timeline_id)
-binding (the storage-layer ids of the project/branch it serves). Nothing on the
+**configuration** — the YBDB connection in its spec, plus its branch binding (the
+storage-layer `branch_id` of the branch it serves; the endpoint image still receives
+this as `TENANT_ID`/`TIMELINE_ID` env vars, as it is not yet migrated to flat
+`branch_id` — see §5.6). Nothing on the
 endpoint's node or pod is precious: if an endpoint goes away, creating a new one with the
 same spec — on a completely different node, pod, or even runtime — serves exactly the
 same data.
@@ -311,7 +314,8 @@ The unit of deployment, scheduling, replacement, and upgrade is the whole endpoi
 ### 5.5 Delivering the endpoint spec to compute_ctl
 
 amp-controller is the source of every endpoint's spec. It assembles the spec from its
-state store (§5.3, §10) — YBDB connection, the `(tenant_id, timeline_id)` binding, role,
+state store (§5.3, §10) — YBDB connection, the branch binding (carried to the endpoint
+image as `TENANT_ID`/`TIMELINE_ID`, §5.6), role,
 version, TLS/cert references, otel config, the endpoint_storage address + scoped token
 (§11.5) — and hands it to that endpoint's compute_ctl, the single point of contact (§5.2).
 compute_ctl accepts a spec by three transports that all carry the **same payload** (one
@@ -373,8 +377,11 @@ this interface, not a change to the workflow.
   cluster API — a pod per endpoint, a Service for the address — reusing the
   `deploy/helm/yb-light-endpoint` chart. VMs (via ybops) follow the same shape.
 
-The endpoint spec carried in `EndpointSpec` (the project/branch ids rendered as the
-storage layer's tenant/timeline ids, PG version, the YBDB connection, the
+The endpoint spec carried in `EndpointSpec` (the branch binding rendered as the
+endpoint image's `TENANT_ID`/`TIMELINE_ID` env vars — the endpoint image is not yet
+migrated to flat `branch_id`, so the deploy contract still speaks tenant/timeline even
+though the controller↔storage_controller side is now flat `branch_id` — plus PG version,
+the YBDB connection, the
 storage-controller URL, bootstrap flag) is delivered to the endpoint as
 environment today; §5.5's `compute_ctl` transports are the longer-term refinement.
 
@@ -403,7 +410,7 @@ creation through YBA) follow the same pattern but are not user-facing.
 **Implemented today (create-project).** `POST .../projects` runs workflow 2 end to
 end inside the controller: it creates the project + default branch (state store),
 records the storage-controller pending-init recipe — keyed by the storage-layer
-tenant_id/timeline_id (§11.1) — and provisions the write endpoint through the deployer
+`branch_id` (§11.1) — and provisions the write endpoint through the deployer
 (§5.6), returning the endpoint's connection address. It currently runs **synchronously**
 (the call blocks while the endpoint comes up) rather than through the write-ahead task
 framework — moving it onto a task (principle 5, §8) so it is async, durable, and
@@ -649,7 +656,7 @@ reconciliation has something to reconcile against.
 ### 10.1 Entities
 
 ```
-user ──< user_pool_grant >── storage_pool ──< project ──< branch (= timeline) ──< endpoint
+user ──< user_pool_grant >── storage_pool ──< project ──< branch (= storage branch_id) ──< endpoint
  │           (a "share")          ▲             │       one default branch + its forks
  │       owner_user_id ───────────┘             │
  └──< user_project_grant >───────────────────────┘   (role: read_only | read_write)
@@ -662,12 +669,12 @@ admin users skip both grants; a pool's owner needs no share for that pool
   it is *not* an "org" (that level is undefined for now, §12). Names are unique within
   their parent scope (pool within placement group, project within pool), not globally, so
   projects can't collide with or probe each other's names.
-- **branch** — the PG cluster's data; a branch *is* the storage layer's timeline (the two
-  are synonyms, §4.3), keyed by the composite **(project_id, branch_id)** = storage-layer
-  **(tenant_id, timeline_id)**; plus name (unique within its project), an `is_default` flag
+- **branch** — the PG cluster's data; a branch's `branch_id` **is** the storage layer's
+  flat `BranchId` verbatim (§4.3), keyed in the controller by the composite
+  **(project_id, branch_id)** — the project being a control-plane scoping only;
+  plus name (unique within its project), an `is_default` flag
   (exactly one default branch per project, created with the project, §6; the rest are
-  forks), fork ancestry (parent branch + fork point), and lifecycle state. There is no
-  separate timelines table.
+  forks), fork ancestry (parent branch + fork point), and lifecycle state.
 - **endpoint** — durable **record**, ephemeral **instance**. The record is what users
   address through the API ("add/remove endpoint"), by id — endpoints have no names.
   The record carries the spec: branch
@@ -748,9 +755,9 @@ period. The supervisor's `Manager` runs any number of managed processes; the
 storage controller is the first. The storage-controller specifics — the binary
 path, the `--listen` / `--database-url` / `--dev` arguments, and the `/ready`
 readiness probe — live in `controller/internal/storagecontroller`, which also holds
-the thin internal HTTP client amp-controller uses to drive timeline
-management (create/delete/describe over the storage controller's
-`/v1/tenant/{tenant}/timeline` surface). The manager runs alongside the API
+the thin internal HTTP client amp-controller uses to drive branch
+management (create/delete/describe over the storage controller's flat
+`/v1/branch/{branch_id}` surface). The manager runs alongside the API
 server and the task worker in the `serve` loop, gated on `--storage-controller`;
 when disabled (the default for the base skeleton, so the controller still runs
 without the binary present) the controller serves without it. Driving the
@@ -775,10 +782,10 @@ inside the controller's own image.
 | Upcalls (`/upcall/v1/*`) | Generation fencing: `re-attach`/`validate` at pageserver boot | Yes — every pageserver start | **Reuse** — boot-critical (§11.4) |
 | Node registry (`/control/v1/node*`) | Register/describe/configure pageservers | Yes | **Reuse** |
 | Safekeeper registry (`/control/v1/safekeeper*`) | Upsert, list, scheduling policy | Yes | **Reuse** |
-| Timeline bookkeeping | Timeline create/register/delete, branch-name mappings | Yes | **Reuse** |
+| Branch bookkeeping | Branch create/register/delete, branch-name mappings | Yes | **Reuse** |
 | Generation debug ops (`attach-hook`, `inspect`) | Issue/inspect generations | Yes | **Reuse** (internal/ops only) |
 | Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows | Yes — built as a shim for `yb_light_local` | **Not reused** — superseded by amp-controller's endpoint records (§10.1); an opaque spec cannot carry the schema-enforced invariants of §10.2 |
-| Tenant placement/sharding, policies, time travel, pageserver passthrough | Upstream multi-tenant placement machinery | Dormant | **Not used** — dead weight in the per-timeline topology |
+| Tenant placement/sharding, policies, time travel, pageserver passthrough | Upstream multi-tenant placement machinery | Dormant | **Not used** — dead weight in the per-branch topology |
 
 ### 11.3 Constraints that make reuse safe
 
@@ -789,13 +796,13 @@ inside the controller's own image.
 - **amp-controller's records never live in it.** Tenancy, PG clusters, endpoints,
   and tasks live in amp-controller's own schema (§10). The storage controller keeps
   only storage-layer bookkeeping: generations, node and safekeeper rows,
-  timeline rows.
+  branch rows.
 - **Replaceable by construction.** Nothing in amp-controller may grow roots into it
   beyond the upcall/registry contract, so folding the live slice into
   amp-controller later stays a contained change.
 
 Generations remain load-bearing in our topology: replacement is the recovery
-primitive (§5.3), so an old and a new pageserver for the same timeline can
+primitive (§5.3), so an old and a new pageserver for the same branch can
 briefly coexist during a replace — generation fencing is what keeps the stale
 one from corrupting storage state.
 
@@ -808,7 +815,7 @@ one from corrupting storage state.
   the separate service is retired. The second option collapses back to a single
   service and a single source of truth; it must be costed before the first
   milestone hardens the dependency.
-- **Scale shape.** One pageserver per timeline means node count tracks endpoint
+- **Scale shape.** One pageserver per branch means node count tracks endpoint
   count, with register/deregister churn at create/destroy and scale-to-zero —
   inverted from upstream's assumption of a small fleet of long-lived
   pageservers. Heartbeating load and registry growth need validation.
@@ -823,7 +830,7 @@ the pageserver uses).
 
 It is not optional plumbing: every compute spec amp-controller builds carries the
 endpoint_storage address plus an access token scoped to that endpoint's
-(tenant, timeline, endpoint), so provisioning an endpoint implies a reachable
+(branch, endpoint), so provisioning an endpoint implies a reachable
 endpoint_storage. amp-controller owns both halves: it runs the service, and it
 mints the scoped tokens, signed with the control-plane key (§9.4); their
 rotation is a stated requirement (§7), not yet designed.
@@ -849,9 +856,9 @@ cache warmth, nothing else — so it inherits the replacement-is-recovery postur
 - **API authentication** — the user/grant model (§10.1) is designed; how callers
   authenticate as users is not.
 - **Branch data GC** — deleting a branch (PG cluster) removes control-plane records;
-  reclaiming the underlying timeline's physical data in YBDB is a future design.
+  reclaiming the underlying branch's physical data in YBDB is a future design.
 - **Data-plane credential isolation** — pageservers and safekeepers across all
-  storage-layer tenants currently share one set of universe credentials on the shared
-  storage tables; tenant-scoped data-plane credentials (or row-level security) are a
+  storage-layer branches currently share one set of universe credentials on the shared
+  storage tables; branch-scoped data-plane credentials (or row-level security) are a
   future design.
 

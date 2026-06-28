@@ -33,17 +33,17 @@ func NewClient() *Client {
 	return &Client{http: &http.Client{Timeout: 30 * time.Second}}
 }
 
-// TimelineFlushLSN reads a timeline's durable WAL end — the safekeeper's
+// TimelineFlushLSN reads a branch's durable WAL end — the safekeeper's
 // flush_lsn — from the safekeeper serving it
-// (GET {skBaseURL}/v1/tenant/{tenant}/timeline/{timeline}). This is the
+// (GET {skBaseURL}/v1/branch/{branch_id}). This is the
 // authoritative "everything committed so far" position, the default branch fork
 // point yb_light_local also branches at; unlike a pageserver's last_record_lsn
 // (an ingest position) it never lags durable WAL. skBaseURL is the safekeeper's
-// HTTP base URL; ids are 32 lowercase hex digits (the storage-layer
-// TenantId/TimelineId).
-func (c *Client) TimelineFlushLSN(ctx context.Context, skBaseURL, tenantID, timelineID string) (string, error) {
+// HTTP base URL; branchID is 32 lowercase hex digits (the storage-layer
+// BranchId).
+func (c *Client) TimelineFlushLSN(ctx context.Context, skBaseURL, branchID string) (string, error) {
 	u := strings.TrimRight(skBaseURL, "/") +
-		"/v1/tenant/" + url.PathEscape(tenantID) + "/timeline/" + url.PathEscape(timelineID)
+		"/v1/branch/" + url.PathEscape(branchID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", err
@@ -66,7 +66,7 @@ func (c *Client) TimelineFlushLSN(ctx context.Context, skBaseURL, tenantID, time
 		return "", fmt.Errorf("decode safekeeper timeline status: %w", err)
 	}
 	if status.FlushLSN == "" {
-		return "", fmt.Errorf("no flush_lsn for timeline %s", timelineID)
+		return "", fmt.Errorf("no flush_lsn for branch %s", branchID)
 	}
 	return status.FlushLSN, nil
 }

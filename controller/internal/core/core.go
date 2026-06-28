@@ -5,10 +5,10 @@
 // controller's only state store (amp-controller.md §10).
 //
 // The user-facing resource ladder is storage pool -> project -> branch ->
-// endpoint. A project is the storage layer's tenant and a branch is its
-// timeline: the controller keeps the storage ids verbatim (Project.ID is the
-// tenant_id, Branch.BranchID is the timeline_id) so the rename stops here and
-// the storage layer keeps tenant/timeline.
+// endpoint. The storage layer is flat: a branch's BranchID IS the storage-layer
+// BranchId (there is no enclosing tenant), kept verbatim. A project is a
+// control-plane grouping ("a database") that owns a set of branches and maps to
+// no storage object.
 //
 // Scope: users (no auth), storage pools, project create (which provisions the
 // project and its default branch, #92) and branch (which forks an existing
@@ -54,12 +54,13 @@ type StoragePool struct {
 	CreatedAt   time.Time
 }
 
-// Project is a "database" under a storage pool: ID is the storage-layer tenant
-// id (ac-highlvl.md §6). Creating a project creates its default branch at the
-// same time, returned in DefaultBranch (always populated on reads). A project
-// has exactly one default branch and zero or more branches off it.
+// Project is a "database" under a storage pool: a control-plane grouping that
+// owns a set of branches (ac-highlvl.md §6). ID is a control-plane id only — no
+// storage object maps to a project. Creating a project creates its default branch
+// at the same time, returned in DefaultBranch (always populated on reads). A
+// project has exactly one default branch and zero or more branches off it.
 type Project struct {
-	ID            uuid.UUID // the storage-layer tenant id
+	ID            uuid.UUID // control-plane id (maps to no storage object)
 	StoragePoolID uuid.UUID
 	Name          string
 	CreatedAt     time.Time
@@ -68,13 +69,14 @@ type Project struct {
 	DefaultBranch Branch
 }
 
-// Branch is a PG cluster (a timeline): identity is the (ProjectID, BranchID)
-// pair, which are the storage-layer (tenant_id, timeline_id). The project's
-// first branch is its default (IsDefault); CreateBranch forks an existing
-// branch into a non-default one.
+// Branch is a PG cluster. BranchID is the storage-layer BranchId verbatim (the
+// flat storage identity). The product identity is the (ProjectID, BranchID)
+// pair, which scopes lineage to a project; the storage layer keys on BranchID
+// alone. The project's first branch is its default (IsDefault); CreateBranch
+// forks an existing branch into a non-default one.
 type Branch struct {
-	ProjectID uuid.UUID // the storage-layer tenant id
-	BranchID  uuid.UUID // the storage-layer timeline id
+	ProjectID uuid.UUID // control-plane grouping (maps to no storage object)
+	BranchID  uuid.UUID // the storage-layer BranchId
 	Name      string
 	PgVersion int
 	IsDefault bool

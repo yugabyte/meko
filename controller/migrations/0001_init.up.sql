@@ -8,10 +8,13 @@
 -- index, one-default-per-project, and RESTRICT (never CASCADE) deletes.
 --
 -- The user-facing resource ladder is storage pool -> project -> branch ->
--- endpoint. A project is the storage layer's tenant and a branch is its
--- timeline: the controller keeps the storage ids verbatim (project.id is the
--- tenant_id, branch.branch_id is the timeline_id) so the rename stops at the
--- controller boundary and the storage layer keeps tenant/timeline.
+-- endpoint. The storage layer is flat: a branch's branch_id IS the storage-layer
+-- BranchId (there is no enclosing tenant), so the controller keeps it verbatim.
+-- A project is purely a control-plane grouping ("a database") that owns a set of
+-- branches; it does NOT map to any storage object. The (project_id, branch_id)
+-- composite keys below are the *product* data model — project-scoped lineage and
+-- the single-writer rule — not a storage identity: only branch_id reaches the
+-- storage layer.
 --
 -- Objects are unqualified and created in the search_path schema (controller).
 
@@ -32,8 +35,8 @@ CREATE TABLE storage_pool (
     created_at     timestamptz NOT NULL DEFAULT now()
 );
 
--- A project is a "database": one project, one default branch. id is the
--- storage-layer tenant_id.
+-- A project is a "database": one project, one default branch. id is a
+-- control-plane id only (no storage object maps to a project anymore).
 CREATE TABLE project (
     id               uuid PRIMARY KEY,
     storage_pool_id  uuid        NOT NULL REFERENCES storage_pool (id),
@@ -61,7 +64,10 @@ CREATE TABLE user_project_grant (
 
 -- Physical -------------------------------------------------------------------
 
--- A branch *is* a timeline; identity is the (project_id, branch_id) pair.
+-- A branch is a PG cluster. branch_id is the storage-layer BranchId verbatim
+-- (the flat storage identity). The product identity is the (project_id,
+-- branch_id) pair, which scopes lineage to a project; the storage layer keys on
+-- branch_id alone.
 CREATE TABLE branch (
     project_id          uuid        NOT NULL REFERENCES project (id),
     branch_id           uuid        NOT NULL,
