@@ -240,12 +240,18 @@ falls back to `disk_consistent_lsn` if NULL. Low impact in yb-light.
 - Parent `GcInfo.retain_lsns` — parent must retain history at child
   branch points.
 
-**Sharp edge:** `branch_timeline_impl` still comments that "read-calls
-know to look into the ancestor." That path is **gone**.
-`get_vectored_impl` goes straight to `get_vectored_via_page_writer`,
-which queries only this timeline's YB rows + buffer. `GetReadyAncestorError`
-exists but is **never constructed** (upstream remnant). Child reads for
-keys never written on the child return `MissingKey`, not parent data.
+**Ancestor reads:** upstream's *in-process* ancestor recursion — a parent
+`ancestor: Arc<Timeline>` walked by `get_vectored_impl`, raising
+`GetReadyAncestorError` — is **gone**: a yb-light pageserver hosts only its
+own branch and never holds the ancestor in memory (`GetReadyAncestorError`
+survives as a never-constructed upstream remnant). Inherited
+(pre-branch-point) reads happen in the page store instead: `PageWriter`'s
+read path calls the lineage-aware `PageStore` queries
+(`read_chain_lineage` / `scan_range_lineage` / …), which walk the branch's
+`LineageSegment` chain and read each ancestor's YB rows under the ancestor's
+`branch_id`, capped at that segment's `cap_lsn` (the `min` `ancestor_lsn`
+down the chain). So a child reading a key it never wrote returns the
+ancestor's pre-branch-point version, not `MissingKey`.
 
 ---
 
@@ -257,8 +263,9 @@ keys never written on the child return `MissingKey`, not parent data.
 Each WAL-derived write gets the **end-LSN of the record** that produced it.
 
 **Read path:** `PageWriter::scan_range` / `read_chain` blend `UnifiedPages`
-(buffer + LRU cache) with `PageStore` SQL. Queries are scoped to
-`branch_id` — no ancestor branch.
+(buffer + LRU cache) with `PageStore` SQL. The SQL is lineage-aware: it
+queries this `branch_id`'s rows plus each ancestor `branch_id`'s rows along
+the `LineageSegment` chain, each capped at the segment's branch-point LSN.
 
 **Rel/SLRU:** image-anchored chain, truncated at `will_init=true`.
 **Meta:** latest row at `lsn ≤ target_lsn` (full overwrite).
@@ -408,8 +415,9 @@ persisted timeline_state.consistent_lsn  ≤  consistent_lsn_observed
    the gap on clean exit.
 2. GC is cosmetic — `gc()` no-op; no row deletion; `applied_gc_cutoff_lsn`
    frozen after creation.
-3. Branches broken for inherited data — no ancestor read in
-   `get_vectored_via_page_writer`.
+3. Detach-ancestor unsupported — the `LineageSegment` chain is built once at
+   attach and is immutable for the process lifetime. Inherited reads work
+   (via the lineage walk), but a branch cannot be detached from its ancestor.
 4. `update_timeline_state` unused — full row upsert exists but nothing
    calls it; HTTP GC cutoff patches don't persist.
 

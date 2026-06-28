@@ -141,7 +141,7 @@ write_wal()                     consumer task                YB
 parse byte range into
 PendingChunks at segment
 boundaries; stamp each
-with monotonic chunk_seq
+with its chunk_offset
 and end_lsn
 
 push onto mpsc::Sender ─────►   rx.recv() (block)
@@ -182,9 +182,12 @@ return                              │
   boundary, so any crash between `write_wal` returning and the
   consumer's INSERT landing in YB is a no-op for the compute (no
   commit ack was sent).
-- **`chunk_seq`** is allocated by the producer at push time, so the
-  consumer's batch INSERTs preserve write order. On restart, rehydrated
-  via `SELECT max(chunk_seq) … GROUP BY segno`.
+- **`chunk_offset`** (the chunk's byte offset within its segment) is the
+  in-segment identity — the writer never produces overlapping chunks
+  (`truncate_wal` aligns the next write at the truncation point), so offset
+  order is write order and a same-offset re-INSERT is an idempotent replay.
+  On restart, the per-segment high-water position is rehydrated via
+  `SELECT segno, max(chunk_offset + chunk_size) … GROUP BY segno`.
 - **Force drain on flush.** Between the greedy `try_recv` drain and the
   INSERT, the consumer waits up to `ACCUMULATION_MAX` (2 ms) for more
   chunks via `tokio::select!`. The wait is short-circuited by
@@ -202,7 +205,8 @@ return                              │
   the DELETE; otherwise a buffered chunk past `end_pos` could land
   after the truncate. The DELETE itself drops rows whose
   `chunk_offset + chunk_size` lies past `end_pos`. After a
-  partial-segment truncate, `chunk_seq` state is reloaded from YB.
+  partial-segment truncate, the per-segment write position is reloaded
+  from YB.
 - **`remove_up_to(segno)`** deletes all rows with smaller `segno`. Does
   *not* wait on the watermark — by construction the producer's current
   segno is well above any segno targeted by `remove_up_to`.
