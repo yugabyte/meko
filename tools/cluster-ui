@@ -6,11 +6,16 @@
 #   - service health (storage controller, pageservers, safekeepers,
 #     endpoint storage)
 #   - pageserver nodes the storage controller knows about
-#   - tenants + their timelines (with the load-bearing LSNs:
+#   - branches + their lineage (with the load-bearing LSNs:
 #     last_record_lsn, disk_consistent_lsn, remote_consistent_lsn, ...)
-#   - safekeepers + their timelines (commit/flush LSNs)
+#   - safekeepers + their branches (commit/flush LSNs)
 #   - compute endpoints (from the storage_controller.endpoints table) and
 #     whether their compute_ctl is responding
+#
+# The storage model is branch-centric: the former `(tenant_id, timeline_id)`
+# pair has collapsed into a single `branch_id`, and branches form a lineage
+# tree via `ancestor_branch_id`. A root branch (no ancestor) is what a
+# "tenant" used to be; its descendants are the branches taken off it.
 #
 # Topology (pageservers, safekeepers, endpoints, branch names) is read
 # from the storage_controller schema in yb_storage via psql, not from the
@@ -22,7 +27,7 @@
 # and merges the results into /api/data (JSON), which the page polls.
 #
 # Usage:
-#   tools/cluster-ui                 # serve on 127.0.0.1:9000, repo .yb_light
+#   tools/cluster-ui                 # serve on 127.0.0.1:9099, repo .yb_light
 #   tools/cluster-ui --port 9001
 #   tools/cluster-ui --repo-dir /path/to/.yb_light
 #   tools/cluster-ui --once          # print the aggregated JSON and exit
@@ -118,7 +123,7 @@ def query_db(database_url, sql):
 # --------------------------------------------------------------------------
 
 def _norm_id(v):
-    """Strip hyphens so tenant/timeline ids match API + config formats."""
+    """Strip hyphens so branch ids match API + config formats."""
     return (v or "").replace("-", "").lower()
 
 
@@ -222,6 +227,8 @@ def discover(repo_dir, database_url=None):
             safekeepers.append({"id": int(r[0]), "http": f"http://{r[1]}:{r[2]}"})
 
     # Compute endpoints: the opaque EndpointConf rides along as the spec JSONB.
+    # Each spec carries its own `branch_id`, `endpoint_id`, `pg_port`, `mode`,
+    # and `external_http_port`.
     endpoints = []
     for r in _query(f"SELECT spec FROM {SC_SCHEMA}.endpoints"):
         try:
@@ -251,32 +258,31 @@ def discover(repo_dir, database_url=None):
             except (OSError, json.JSONDecodeError):
                 continue
 
-    # Branch names from materialized timelines.
+    # Branch names from materialized branches (storage_controller.timelines is
+    # keyed by branch_id now and carries the human alias in branch_name).
     branch_names = {}
-    for r in _query(f"SELECT tenant_id, timeline_id, branch_name "
+    for r in _query(f"SELECT branch_id, branch_name "
                     f"FROM {SC_SCHEMA}.timelines "
                     f"WHERE branch_name IS NOT NULL AND deleted_at IS NULL"):
-        if len(r) >= 3 and r[2]:
-            branch_names[f"{_norm_id(r[0])}/{_norm_id(r[1])}"] = r[2]
+        if len(r) >= 2 and r[1]:
+            branch_names[_norm_id(r[0])] = r[1]
 
-    # Pending timeline inits: branches created but not yet materialized
-    # (endpoint create hasn't run yet, so PS+SK aren't started). These carry
-    # ancestor_timeline_id and branch_name; we surface them as stub timeline
-    # entries so the UI shows them immediately after `timeline branch`.
-    db_timelines: dict = {}  # tenant_id_norm -> [{timeline_id, ancestor_timeline_id}]
-    for r in _query(f"SELECT tenant_id, timeline_id, branch_name, ancestor_timeline_id "
+    # Pending branch inits: branches created but not yet materialized (endpoint
+    # create hasn't run yet, so PS+SK aren't started). These carry
+    # ancestor_branch_id and branch_name; we surface them as stub branch
+    # entries so the UI shows them immediately after `branch create`.
+    db_branches: dict = {}  # branch_id_norm -> {branch_name, ancestor_branch_id}
+    for r in _query(f"SELECT branch_id, branch_name, ancestor_branch_id "
                     f"FROM {SC_SCHEMA}.pending_timeline_inits"):
-        if len(r) < 2:
+        if len(r) < 1 or not r[0]:
             continue
-        tnorm = _norm_id(r[0])
-        tlnorm = _norm_id(r[1])
-        key = f"{tnorm}/{tlnorm}"
-        if r[2]:
-            branch_names[key] = r[2]
-        db_timelines.setdefault(tnorm, []).append({
-            "timeline_id": tlnorm,
-            "ancestor_timeline_id": _norm_id(r[3]) if r[3] else None,
-        })
+        bnorm = _norm_id(r[0])
+        if len(r) >= 2 and r[1]:
+            branch_names[bnorm] = r[1]
+        db_branches[bnorm] = {
+            "branch_name": r[1] if len(r) >= 2 else None,
+            "ancestor_branch_id": _norm_id(r[2]) if len(r) >= 3 and r[2] else None,
+        }
 
     # Parse [[safekeepers]] http_port from the config file. The DB
     # safekeepers table loses branch SK entries when the cluster is reset,
@@ -288,20 +294,20 @@ def discover(repo_dir, database_url=None):
     ):
         sk_http_by_id[int(m.group(1))] = f"http://127.0.0.1:{m.group(2)}"
 
-    # SK assignment per timeline: sk_set column holds the safekeeper IDs,
+    # SK assignment per branch: sk_set column holds the safekeeper IDs,
     # resolved against the config-parsed port map above.
-    timeline_sk_urls = {}
+    branch_sk_urls = {}
     for r in _query(
-            f"SELECT tenant_id, timeline_id, unnest(sk_set) "
+            f"SELECT branch_id, unnest(sk_set) "
             f"FROM {SC_SCHEMA}.timelines "
             f"WHERE deleted_at IS NULL"):
-        if len(r) >= 3 and r[2]:
-            key = f"{_norm_id(r[0])}/{_norm_id(r[1])}"
-            if key not in timeline_sk_urls:
+        if len(r) >= 2 and r[1]:
+            key = _norm_id(r[0])
+            if key not in branch_sk_urls:
                 try:
-                    url = sk_http_by_id.get(int(r[2]))
+                    url = sk_http_by_id.get(int(r[1]))
                     if url:
-                        timeline_sk_urls[key] = url
+                        branch_sk_urls[key] = url
                 except (ValueError, TypeError):
                     pass
 
@@ -316,8 +322,8 @@ def discover(repo_dir, database_url=None):
         "endpoint_storage_by_id": endpoint_storage_by_id,
         "endpoints": endpoints,
         "branch_names": branch_names,
-        "db_timelines": db_timelines,
-        "timeline_sk_urls": timeline_sk_urls,
+        "db_branches": db_branches,
+        "branch_sk_urls": branch_sk_urls,
     }
 
 
@@ -337,10 +343,10 @@ def collect(repo_dir, database_url=None):
 
     nodes, nodes_err = http_get_json(f"{sc}/control/v1/node")
     sc_sks, _ = http_get_json(f"{sc}/control/v1/safekeeper")
-    sc_tenants, _ = http_get_json(f"{sc}/control/v1/tenant")
+    sc_branches, _ = http_get_json(f"{sc}/control/v1/branch")
 
-    # Pageservers: check status. The pageserver has no /v1/tenant listing
-    # endpoint; tenant discovery comes from the storage controller above.
+    # Pageservers: check status. The pageserver has no branch listing
+    # endpoint; branch discovery comes from the storage controller above.
     ps_alive = {}
     for ps in topo["pageservers"]:
         st, err = http_get_json(f"{ps['http']}/v1/status")
@@ -349,70 +355,87 @@ def collect(repo_dir, database_url=None):
                          "info": st})
         ps_alive[ps["id"]] = err is None
 
-    # Tenants + timelines: discover tenants from the storage controller, then
-    # query every live pageserver for the tenant's timelines and aggregate.
-    # Timelines for a given tenant may be spread across pageservers (a new
-    # branch may land on a different node than its parent), so a single
-    # node_attached lookup misses timelines on other nodes.
+    # Branches: discover them from the storage controller, then query every
+    # live pageserver for each branch's timeline detail (the LSNs and the
+    # ancestor_branch_id that wires up the lineage tree). A branch is attached
+    # to one node, but querying all live nodes keeps discovery robust if the
+    # attached node moves.
     ps_http = {ps["id"]: ps["http"] for ps in topo["pageservers"]}
-    tenants = []
-    for sc_tenant in (sc_tenants or []):
-        tid = sc_tenant.get("tenant_id")
-        # Collect timelines from every live pageserver, deduplicated.
-        seen_tl = {}
+    branches = []
+    seen_branches = set()
+    for sc_branch in (sc_branches or []):
+        bid = sc_branch.get("branch_id")
+        if not bid:
+            continue
+        bnorm = _norm_id(bid)
+        seen_branches.add(bnorm)
+        # First shard is the display anchor for attachment + scheduling state.
+        shards = sc_branch.get("shards", [])
+        node_id = shards[0].get("node_attached") if shards else None
+        state = shards[0].get("scheduling_policy", "?") if shards else "?"
+        # Pull the timeline detail (LSNs, ancestor) from a live pageserver.
+        detail = None
+        ps_url = None
         for ps_id, http in ps_http.items():
             if not ps_alive.get(ps_id):
                 continue
-            tl, _ = http_get_json(f"{http}/v1/tenant/{tid}/timeline")
+            tl, _ = http_get_json(f"{http}/v1/branch/{bid}/timeline")
             for t in (tl or []):
-                tlid = t.get("timeline_id")
-                if tlid and tlid not in seen_tl:
-                    seen_tl[tlid] = {**t, "_ps_http": http}
-        timelines = list(seen_tl.values())
-        # Supplement with DB-known timelines whose PS hasn't started yet
-        # (branch created but no endpoint yet → PS process not running).
-        tid_norm = _norm_id(tid)
-        for db_tl in topo.get("db_timelines", {}).get(tid_norm, []):
-            if db_tl["timeline_id"] not in seen_tl:
-                timelines.append({
-                    "timeline_id": db_tl["timeline_id"],
-                    "ancestor_timeline_id": db_tl["ancestor_timeline_id"],
-                    "_ps_http": None,
-                })
-        # Use the first shard's attached node and scheduling policy as the
-        # display anchor for this tenant.
-        shards = sc_tenant.get("shards", [])
-        node_id = shards[0].get("node_attached") if shards else None
-        state = shards[0].get("scheduling_policy", "?") if shards else "?"
-        tenants.append({
-            "pageserver": node_id,
-            "tenant": {"tenant_id": tid, "state": state},
-            "timelines": timelines,
+                if _norm_id(t.get("branch_id")) == bnorm:
+                    detail = t
+                    ps_url = http
+                    break
+            if detail:
+                break
+        entry = {
+            "branch_id": bid,
+            "ancestor_branch_id": (detail or {}).get("ancestor_branch_id"),
+            "branch_name": topo["branch_names"].get(bnorm),
+            "state": state,
+            "node_attached": node_id,
+            "_ps_http": ps_url,
+            "last_record_lsn": (detail or {}).get("last_record_lsn"),
+            "disk_consistent_lsn": (detail or {}).get("disk_consistent_lsn"),
+            "remote_consistent_lsn": (detail or {}).get("remote_consistent_lsn"),
+        }
+        branches.append(entry)
+
+    # Supplement with branches the controller knows about only as pending
+    # inits (created but not yet materialized → PS process not serving them).
+    for bnorm, info in topo.get("db_branches", {}).items():
+        if bnorm in seen_branches:
+            continue
+        branches.append({
+            "branch_id": bnorm,
+            "ancestor_branch_id": info.get("ancestor_branch_id"),
+            "branch_name": info.get("branch_name") or topo["branch_names"].get(bnorm),
+            "state": "pending",
+            "node_attached": None,
+            "_ps_http": None,
+            "pending": True,
         })
 
-    # Safekeepers + their timelines.
+    # Safekeepers + their branches.
     safekeepers = []
     for sk in topo["safekeepers"]:
         st, err = http_get_json(f"{sk['http']}/v1/status")
         services.append({"name": f"safekeeper-{sk['id']}", "kind": "safekeeper",
                          "url": sk["http"], "up": err is None, "detail": err,
                          "info": st})
-        # The list endpoint only returns {tenant_id, timeline_id}; the LSNs
-        # (flush_lsn, commit_lsn, remote_consistent_lsn, ...) live on the
-        # per-timeline detail endpoint, so fetch that for each entry.
+        # The list endpoint returns bare branch ids; the LSNs (flush_lsn,
+        # commit_lsn, remote_consistent_lsn, ...) live on the per-branch detail
+        # endpoint, so fetch that for each id.
         tl = []
         if err is None:
-            listing, _ = http_get_json(f"{sk['http']}/v1/tenant/timeline")
-            for entry in (listing or []):
-                tid = entry.get("tenant_id")
-                tlid = entry.get("timeline_id")
+            listing, _ = http_get_json(f"{sk['http']}/v1/branch")
+            for bid in (listing or []):
                 detail = None
-                if tid and tlid:
-                    detail, _ = http_get_json(
-                        f"{sk['http']}/v1/tenant/{tid}/timeline/{tlid}")
-                tl.append(detail if isinstance(detail, dict) else entry)
+                if bid:
+                    detail, _ = http_get_json(f"{sk['http']}/v1/branch/{bid}")
+                tl.append(detail if isinstance(detail, dict)
+                          else {"branch_id": bid})
         safekeepers.append({"id": sk["id"], "url": sk["http"], "up": err is None,
-                            "timelines": tl})
+                            "branches": tl})
 
     # Endpoint storage.
     es = topo["endpoint_storage"]
@@ -442,7 +465,7 @@ def collect(repo_dir, database_url=None):
         "nodes": nodes or [],
         "nodes_error": nodes_err,
         "sc_safekeepers": sc_sks or [],
-        "tenants": tenants,
+        "branches": branches,
         "safekeepers": safekeepers,
         "endpoints": endpoints,
     }
@@ -514,6 +537,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .tl-block { padding:8px 14px 10px; }
   .tl-head { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px; }
   .tl-label { color:var(--muted); font-size:12px; }
+  .tl-lsns { color:var(--muted); font:11px var(--mono); margin:0 0 6px 2px; }
   .tl-children {
     margin:2px 0 4px 18px;
     padding-left:16px;
@@ -554,10 +578,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
   <div class="banner" id="banner"></div>
   <section><h2>Services</h2><div class="cards" id="services"></div></section>
   <section>
-    <h2>Tenants, Timelines &amp; Endpoints
+    <h2>Branches &amp; Endpoints
       <button onclick="createTenant(this)"
         style="margin-left:10px;font-size:11px;padding:2px 8px;cursor:pointer;background:#1e222b;color:#9fb3d1;border:1px solid #2a2f3a;border-radius:4px;vertical-align:middle;"
-        title="Create a new tenant and start an endpoint on its main branch">+ tenant</button>
+        title="Create a new root branch and start an endpoint on it">+ root branch</button>
     </h2>
     <div id="unified"></div>
   </section>
@@ -567,19 +591,8 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const mono = (s) => `<span class="mono">${esc(s)}</span>`;
 
-function pick(o, keys) {
-  for (const k of keys) if (o && o[k] !== undefined && o[k] !== null) return o[k];
-  return undefined;
-}
-
 function normId(v) {
   return String(v == null ? "" : v).replace(/-/g, "").toLowerCase();
-}
-
-function branchCell(branchNames, tenantId, timelineId) {
-  const key = normId(tenantId) + "/" + normId(timelineId);
-  const name = branchNames[key] || null;
-  return name ? `<span class="pill ok">${esc(name)}</span>` : mono('-');
 }
 
 function table(headers, rows) {
@@ -598,35 +611,47 @@ function renderServices(svcs) {
     </div>`).join("");
 }
 
-function buildTlTree(timelines) {
+// Build the branch lineage forest from the flat branch list. Each branch
+// points at its ancestor via ancestor_branch_id; a branch whose ancestor is
+// absent (or null) is a root.
+function buildBranchForest(branches) {
   const byId = {};
-  for (const tl of timelines) byId[normId(tl.timeline_id)] = {tl, children: []};
+  for (const b of branches) byId[normId(b.branch_id)] = {b, children: []};
   const roots = [];
-  for (const tl of timelines) {
-    const anc = tl.ancestor_timeline_id;
+  for (const b of branches) {
+    const anc = b.ancestor_branch_id;
     const parent = anc ? byId[normId(anc)] : null;
-    if (parent) parent.children.push(byId[normId(tl.timeline_id)]);
-    else roots.push(byId[normId(tl.timeline_id)]);
+    if (parent) parent.children.push(byId[normId(b.branch_id)]);
+    else roots.push(byId[normId(b.branch_id)]);
   }
   return roots;
 }
 
-function renderTlNode(node, ctx) {
-  const {branchNames, tid, epByTl, skByTl, esUrl, esById} = ctx;
-  const tl = node.tl;
-  const tlid = tl.timeline_id;
-  const key = normId(tid) + '/' + normId(tlid);
-  const branch = branchNames[key];
-  const skHttp = skByTl[key] || null;
-  const eps = epByTl[key] || [];
+function renderBranchNode(node, ctx) {
+  const {branchNames, epByBranch, skByBranch, esUrl, esById} = ctx;
+  const b = node.b;
+  const bid = b.branch_id;
+  const key = normId(bid);
+  const branch = b.branch_name || branchNames[key];
+  const skHttp = skByBranch[key] || null;
+  const eps = epByBranch[key] || [];
 
   const branchPill = branch
     ? `<span class="pill branch">${esc(branch)}</span>`
-    : `<span class="pill">${mono(tlid.slice(0,8)+'…')}</span>`;
+    : `<span class="pill">${mono(String(bid).slice(0,8)+'…')}</span>`;
+  const statePill = b.pending
+    ? `<span class="pill warn">pending</span>`
+    : `<span class="pill ${/active/i.test(b.state||'')?'ok':'warn'}">${esc(b.state||'?')}</span>`;
 
   const portOf = url => url ? url.split(':').pop() : '-';
-  const psCell = mono(tl._ps_http ? portOf(tl._ps_http) : '-');
+  const psCell = mono(b._ps_http ? portOf(b._ps_http) : '-');
   const skCell = mono(skHttp ? portOf(skHttp) : '-');
+
+  const lsns = [];
+  if (b.last_record_lsn) lsns.push(`last_record=${b.last_record_lsn}`);
+  if (b.disk_consistent_lsn) lsns.push(`disk=${b.disk_consistent_lsn}`);
+  if (b.remote_consistent_lsn) lsns.push(`remote=${b.remote_consistent_lsn}`);
+  const lsnLine = lsns.length ? `<div class="tl-lsns">${esc(lsns.join('  •  '))}</div>` : '';
 
   let epSection = '';
   if (eps.length) {
@@ -660,22 +685,22 @@ function renderTlNode(node, ctx) {
   }
 
   const childrenHtml = node.children.length
-    ? `<div class="tl-children">${node.children.map(c => renderTlNode(c, ctx)).join('')}</div>`
+    ? `<div class="tl-children">${node.children.map(c => renderBranchNode(c, ctx)).join('')}</div>`
     : '';
 
   // Branching uses --ancestor-branch-name, so only offer the button on
-  // timelines that actually have a branch name.
+  // branches that actually have a name.
   const branchBtn = branch
-    ? `<button onclick='createBranch(${JSON.stringify(tid)},${JSON.stringify(branch)},${JSON.stringify(tlid)},this)'
+    ? `<button onclick='createBranch(${JSON.stringify(branch)},this)'
         style="margin-left:10px;font-size:11px;padding:2px 8px;cursor:pointer;background:#1e222b;color:#9fb3d1;border:1px solid #2a2f3a;border-radius:4px;"
         title="Branch off ${esc(branch)} and create + start a new endpoint">+ branch</button>`
     : '';
 
-  // Drop is offered on named branches except `main`: dropping a tenant's root
-  // timeline would orphan it. Reddish styling + a confirm() flag the
+  // Drop is offered on named branches except `main`: dropping a root branch
+  // would orphan its descendants. Reddish styling + a confirm() flag the
   // destructive, irreversible-ish action (vs the no-prompt branch create).
   const dropBtn = (branch && branch !== 'main')
-    ? `<button onclick='dropBranch(${JSON.stringify(tid)},${JSON.stringify(tlid)},${JSON.stringify(branch)},this)'
+    ? `<button onclick='dropBranch(${JSON.stringify(bid)},${JSON.stringify(branch)},this)'
         style="margin-left:6px;font-size:11px;padding:2px 8px;cursor:pointer;background:#2b1e22;color:#d99;border:1px solid #3a2a2f;border-radius:4px;"
         title="Drop ${esc(branch)} and all its endpoints">× Delete</button>`
     : '';
@@ -683,70 +708,80 @@ function renderTlNode(node, ctx) {
   return `<div class="tl-tree-node">
     <div class="tl-block">
       <div class="tl-head">
-        ${branchPill} <span class="tl-label">Timeline:</span> ${mono(tlid)}${branchBtn}${dropBtn}
+        ${branchPill} ${statePill} <span class="tl-label">Branch:</span> ${mono(bid)}${branchBtn}${dropBtn}
       </div>
+      ${lsnLine}
       ${epSection}
     </div>
     ${childrenHtml}
   </div>`;
 }
 
-// Tenant ids the user has collapsed. Kept across the periodic re-render so a
-// collapsed tenant stays collapsed when auto-refresh rebuilds the view.
-const collapsedTenants = new Set();
+// Root branch ids the user has collapsed. Kept across the periodic re-render
+// so a collapsed branch stays collapsed when auto-refresh rebuilds the view.
+const collapsedBranches = new Set();
 
-function toggleTenant(tid) {
-  const body = document.getElementById('tl-body-' + tid);
-  const btn = document.getElementById('tl-toggle-' + tid);
-  if (collapsedTenants.has(tid)) {
-    collapsedTenants.delete(tid);
+function toggleBranch(bid) {
+  const body = document.getElementById('tl-body-' + bid);
+  const btn = document.getElementById('tl-toggle-' + bid);
+  if (collapsedBranches.has(bid)) {
+    collapsedBranches.delete(bid);
     if (body) body.style.display = '';
     if (btn) btn.textContent = '▾';
   } else {
-    collapsedTenants.add(tid);
+    collapsedBranches.add(bid);
     if (body) body.style.display = 'none';
     if (btn) btn.textContent = '▸';
   }
 }
 
+// Count a node and all its descendants — the branch count shown on a root.
+function subtreeSize(node) {
+  return 1 + node.children.reduce((n, c) => n + subtreeSize(c), 0);
+}
+
 function renderUnified(d) {
   const branchNames = d.topology.branch_names || {};
 
-  // DB-derived mapping covers all timelines including branches; the SK
-  // runtime listing only returns timelines it has loaded in memory.
-  const skByTl = d.topology.timeline_sk_urls || {};
+  // DB-derived mapping covers all branches including children; the SK runtime
+  // listing only returns branches it has loaded in memory.
+  const skByBranch = d.topology.branch_sk_urls || {};
 
-  const epByTl = {};
+  const epByBranch = {};
   for (const ep of d.endpoints || []) {
-    const key = normId(ep.tenant_id) + '/' + normId(ep.timeline_id);
-    if (!epByTl[key]) epByTl[key] = [];
-    epByTl[key].push(ep);
+    const key = normId(ep.branch_id);
+    if (!epByBranch[key]) epByBranch[key] = [];
+    epByBranch[key].push(ep);
   }
 
-  if (!d.tenants || !d.tenants.length) {
-    $("unified").innerHTML = `<div class="empty">no tenants</div>`;
+  if (!d.branches || !d.branches.length) {
+    $("unified").innerHTML = `<div class="empty">no branches</div>`;
     return;
   }
 
-  $("unified").innerHTML = (d.tenants || []).map(entry => {
-    const tid = pick(entry.tenant, ['id','tenant_id']);
-    const state = entry.tenant.state || '?';
-    const ctx = {branchNames, tid, epByTl, skByTl, esUrl: d.topology.endpoint_storage,
-                 esById: d.topology.endpoint_storage_by_id || {}};
-    const roots = buildTlTree(entry.timelines || []);
-    const tlsHtml = roots.map(r => renderTlNode(r, ctx)).join('');
-    const collapsed = collapsedTenants.has(tid);
+  const ctx = {branchNames, epByBranch, skByBranch,
+               esUrl: d.topology.endpoint_storage,
+               esById: d.topology.endpoint_storage_by_id || {}};
+  const roots = buildBranchForest(d.branches);
+
+  $("unified").innerHTML = roots.map(root => {
+    const b = root.b;
+    const bid = b.branch_id;
+    const branch = b.branch_name || branchNames[normId(bid)];
+    const label = branch ? esc(branch) : mono(String(bid).slice(0,8)+'…');
+    const subtreeHtml = renderBranchNode(root, ctx);
+    const count = subtreeSize(root);
+    const collapsed = collapsedBranches.has(bid);
 
     return `<div class="tenant">
       <div class="head">
-        <button id="tl-toggle-${esc(tid)}" onclick='toggleTenant(${JSON.stringify(tid)})'
+        <button id="tl-toggle-${esc(bid)}" onclick='toggleBranch(${JSON.stringify(bid)})'
           style="font-size:11px;padding:0 6px;cursor:pointer;background:#1e222b;color:#9fb3d1;border:1px solid #2a2f3a;border-radius:4px;"
-          title="Collapse/expand this tenant">${collapsed ? '▸' : '▾'}</button>
-        <span class="tl-label">Tenant:</span> <span class="tid">${esc(tid)}</span>
-        <span class="pill ${/active/i.test(state)?'ok':'warn'}">${esc(state)}</span>
-        <span class="pill">${entry.timelines.length} branches(s)</span>
+          title="Collapse/expand this branch tree">${collapsed ? '▸' : '▾'}</button>
+        <span class="tl-label">Root:</span> <span class="tid">${label}</span>
+        <span class="pill">${count} branch(es)</span>
       </div>
-      <div id="tl-body-${esc(tid)}" ${collapsed ? 'style="display:none"' : ''}>${tlsHtml}</div>
+      <div id="tl-body-${esc(bid)}" ${collapsed ? 'style="display:none"' : ''}>${subtreeHtml}</div>
     </div>`;
   }).join('');
 }
@@ -762,7 +797,7 @@ function openSqlTool(pgPort, endpoint_id) {
   window.open('http://localhost:8081/open/' + conn);
 }
 
-async function createBranch(tid, ancestor, ancestorTlid, btn) {
+async function createBranch(ancestor, btn) {
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = "…creating";
@@ -770,8 +805,7 @@ async function createBranch(tid, ancestor, ancestorTlid, btn) {
     const r = await fetch("/api/branch", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({tenant_id: tid, ancestor_branch: ancestor,
-                            ancestor_timeline_id: ancestorTlid}),
+      body: JSON.stringify({ancestor_branch: ancestor}),
     });
     const d = await r.json();
     // No prompts on success — just refresh and the new branch appears.
@@ -790,10 +824,10 @@ async function createBranch(tid, ancestor, ancestorTlid, btn) {
   }
 }
 
-async function dropBranch(tid, tlid, branch, btn) {
+async function dropBranch(bid, branch, btn) {
   if (!confirm("Drop branch '" + branch + "' and all its endpoints?\n\n"
       + "This stops its compute(s), deletes their records, and marks the "
-      + "timeline dropped. The underlying data is left for a later GC pass.")) {
+      + "branch dropped. The underlying data is left for a later GC pass.")) {
     return;
   }
   const old = btn.textContent;
@@ -803,7 +837,7 @@ async function dropBranch(tid, tlid, branch, btn) {
     const r = await fetch("/api/drop", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({tenant_id: tid, timeline_id: tlid}),
+      body: JSON.stringify({branch_id: bid}),
     });
     const d = await r.json();
     // No prompt on success — refresh and the branch disappears. Surface
@@ -829,15 +863,15 @@ async function createTenant(btn) {
   try {
     const r = await fetch("/api/tenant", {method: "POST"});
     const d = await r.json();
-    // No prompts on success — just refresh and the new tenant appears.
+    // No prompts on success — just refresh and the new root branch appears.
     // Surface failures only, so a click that does nothing isn't a mystery.
     if (!(r.ok && d.ok)) {
       const detail = d.error
         || (d.steps || []).map(s => `${s.ok ? "✓" : "✗"} ${s.cmd}\n${s.output}`).join("\n\n");
-      alert("Tenant creation failed:\n\n" + detail);
+      alert("Root branch creation failed:\n\n" + detail);
     }
   } catch (e) {
-    alert("Tenant creation failed: " + e);
+    alert("Root branch creation failed: " + e);
   } finally {
     btn.disabled = false;
     btn.textContent = old;
@@ -921,31 +955,32 @@ def english_name():
     return f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}"
 
 
-def create_branch_with_endpoint(repo_dir, tenant_id, ancestor_branch, ancestor_timeline_id):
-    """Branch off `ancestor_branch`, then create and start an endpoint on the
-    new branch. The new branch and its endpoint share one friendly name.
-
-    yb_light_local resolves `--ancestor-branch-name` through its local branch
-    mappings, which can be missing or out of sync with the durable controller
-    state. Since the UI already knows the ancestor's timeline id (from the
-    controller), we first register that mapping (`mappings map`) so the branch
-    resolves regardless. Shells out to the repo's `target/debug/yb_light_local`
-    (args passed as a list, never via a shell). Returns
-    {ok, branch, endpoint, steps:[{cmd, ok, output}]} or {ok: False, error}.
-    """
-    if not tenant_id or not re.fullmatch(r"[0-9a-fA-F]{32}", str(tenant_id)):
-        return {"ok": False, "error": f"invalid tenant_id {tenant_id!r}"}
-    if not ancestor_branch or not re.fullmatch(r"[A-Za-z0-9_.\-]{1,64}", str(ancestor_branch)):
-        return {"ok": False, "error": f"invalid ancestor branch {ancestor_branch!r}"}
-    if not ancestor_timeline_id or not re.fullmatch(r"[0-9a-fA-F]{32}", str(ancestor_timeline_id)):
-        return {"ok": False, "error": f"invalid ancestor timeline id {ancestor_timeline_id!r}"}
-
-    # The CLI operates on the repo (parent of .yb_light) and finds .yb_light
-    # relative to its working directory.
+def _yb_light_binary(repo_dir):
+    """Resolve the repo's yb_light_local binary, or (None, error)."""
     repo_root = os.path.dirname(os.path.abspath(repo_dir)) if repo_dir else os.getcwd()
     binary = os.path.join(repo_root, "target", "debug", "yb_light_local")
     if not os.path.exists(binary):
-        return {"ok": False, "error": f"yb_light_local binary not found at {binary}"}
+        return None, repo_root, f"yb_light_local binary not found at {binary}"
+    return binary, repo_root, None
+
+
+def create_branch_with_endpoint(repo_dir, ancestor_branch):
+    """Branch off `ancestor_branch`, then create and start an endpoint on the
+    new branch. The new branch and its endpoint share one friendly name.
+
+    Branch names live in the storage controller now, so `--ancestor-branch-name`
+    resolves directly against durable state — no local mapping pre-step needed.
+    Shells out to the repo's `target/debug/yb_light_local` (args passed as a
+    list, never via a shell). Returns
+    {ok, branch, endpoint, branch_id, steps:[{cmd, ok, output}]} or
+    {ok: False, error}.
+    """
+    if not ancestor_branch or not re.fullmatch(r"[A-Za-z0-9_.\-]{1,64}", str(ancestor_branch)):
+        return {"ok": False, "error": f"invalid ancestor branch {ancestor_branch!r}"}
+
+    binary, repo_root, err = _yb_light_binary(repo_dir)
+    if err:
+        return {"ok": False, "error": err}
 
     # The new branch and its endpoint share one friendly name.
     name = english_name()
@@ -960,52 +995,54 @@ def create_branch_with_endpoint(repo_dir, tenant_id, ancestor_branch, ancestor_t
 
     steps = []
 
-    # Best-effort: make sure the ancestor branch name maps to its timeline id.
-    # `mappings map` errors if the mapping already exists — that's fine (the
-    # mapping is present), so this step is never fatal.
-    rc, out = run(["mappings", "map", "--tenant-id", tenant_id,
-                   "--timeline-id", ancestor_timeline_id, "--branch-name", ancestor_branch])
-    steps.append({"cmd": f"mappings map {ancestor_branch} -> {ancestor_timeline_id}",
-                  "ok": True,
-                  "output": ("already mapped" if rc != 0 else out) or "mapped"})
+    # Create the branch off the named ancestor. The CLI prints
+    # `branch <id> successfully created`; pull the new branch id out so the
+    # endpoint can attach by id (unambiguous).
+    rc, out = run(["branch", "create", "--branch-name", name,
+                   "--ancestor-branch-name", ancestor_branch])
+    steps.append({"cmd": f"branch create {name} off {ancestor_branch}",
+                  "ok": rc == 0, "output": out[-2000:]})
+    if rc != 0:
+        return {"ok": False, "branch": name, "endpoint": name, "steps": steps}
+    bm = re.search(r"branch ([0-9a-fA-F]{32}) successfully created", out)
+    branch_id = bm.group(1) if bm else None
 
-    for c in [
-        ["timeline", "branch", "--tenant-id", tenant_id,
-         "--branch-name", name, "--ancestor-branch-name", ancestor_branch],
-        ["endpoint", "create", name, "--tenant-id", tenant_id, "--branch-name", name],
-        ["endpoint", "start", name],
-    ]:
+    create_cmd = (["endpoint", "create", name, "--branch-id", branch_id]
+                  if branch_id else
+                  ["endpoint", "create", name, "--branch-name", name])
+    for c in [create_cmd, ["endpoint", "start", name]]:
         rc, out = run(c)
         steps.append({"cmd": " ".join(c), "ok": rc == 0, "output": out[-2000:]})
         if rc != 0:
-            return {"ok": False, "branch": name, "endpoint": name, "steps": steps}
+            return {"ok": False, "branch": name, "endpoint": name,
+                    "branch_id": branch_id, "steps": steps}
 
-    return {"ok": True, "branch": name, "endpoint": name, "steps": steps}
+    return {"ok": True, "branch": name, "endpoint": name,
+            "branch_id": branch_id, "steps": steps}
 
 
 def create_tenant_with_endpoint(repo_dir):
-    """Create a fresh tenant, then create and start an endpoint on its `main`
-    branch so it's immediately usable. The tenant id is generated by the CLI;
-    the endpoint gets a friendly name.
+    """Create a fresh root branch, then create and start an endpoint on it so
+    it's immediately usable. The branch id is generated by the CLI; the
+    endpoint gets a friendly name.
 
-    The main-branch endpoint can't simply be called "main": endpoint ids are
-    globally unique across the cluster, so every tenant's "main" would collide.
+    The endpoint can't simply be called "main": endpoint ids are globally
+    unique across the cluster, so every root's "main" endpoint would collide.
     It therefore gets its own friendly name (the "non-main endpoint == branch
-    name" convention only applies to branches, whose names we control).
+    name" convention only applies to named branches).
 
-    `tenant create` only allocates ids and records the pending bootstrap
-    recipe — the tenant's PS+SK pair isn't provisioned until the first endpoint
-    is created on the `main` branch (co-located topology), so we do that here to
-    mirror the branch flow's "leaves you with a running endpoint" behaviour.
-    Shells out to the repo's `target/debug/yb_light_local` (args passed as a
-    list, never via a shell). Returns
-    {ok, tenant_id, branch, endpoint, steps:[{cmd, ok, output}]} or
+    `branch create` (no ancestor) allocates a root branch and records the
+    pending bootstrap recipe — the branch's PS+SK pair isn't provisioned until
+    the first endpoint is created on it, so we do that here to mirror the
+    branch flow's "leaves you with a running endpoint" behaviour. Shells out to
+    the repo's `target/debug/yb_light_local` (args passed as a list, never via
+    a shell). Returns
+    {ok, branch_id, branch, endpoint, steps:[{cmd, ok, output}]} or
     {ok: False, error}.
     """
-    repo_root = os.path.dirname(os.path.abspath(repo_dir)) if repo_dir else os.getcwd()
-    binary = os.path.join(repo_root, "target", "debug", "yb_light_local")
-    if not os.path.exists(binary):
-        return {"ok": False, "error": f"yb_light_local binary not found at {binary}"}
+    binary, repo_root, err = _yb_light_binary(repo_dir)
+    if err:
+        return {"ok": False, "error": err}
 
     name = english_name()
 
@@ -1019,52 +1056,50 @@ def create_tenant_with_endpoint(repo_dir):
 
     steps = []
 
-    rc, out = run(["tenant", "create"])
-    steps.append({"cmd": "tenant create", "ok": rc == 0, "output": out[-2000:]})
+    # A root branch is a `branch create` with no ancestor; its default name is
+    # `main`. Multiple roots named `main` coexist (they have distinct ids), so
+    # we attach the endpoint by the printed branch id, not by name.
+    rc, out = run(["branch", "create"])
+    steps.append({"cmd": "branch create (root)", "ok": rc == 0, "output": out[-2000:]})
     if rc != 0:
         return {"ok": False, "steps": steps}
 
-    # `tenant create` prints "tenant <id> successfully created"; pull the id out
-    # so we can attach the endpoint to it.
-    m = re.search(r"tenant ([0-9a-fA-F]{32}) successfully created", out)
+    m = re.search(r"branch ([0-9a-fA-F]{32}) successfully created", out)
     if not m:
-        return {"ok": False, "error": "could not parse tenant id from output",
+        return {"ok": False, "error": "could not parse branch id from output",
                 "steps": steps}
-    tenant_id = m.group(1)
+    branch_id = m.group(1)
 
     for c in [
-        ["endpoint", "create", name, "--tenant-id", tenant_id, "--branch-name", "main"],
+        ["endpoint", "create", name, "--branch-id", branch_id],
         ["endpoint", "start", name],
     ]:
         rc, out = run(c)
         steps.append({"cmd": " ".join(c), "ok": rc == 0, "output": out[-2000:]})
         if rc != 0:
-            return {"ok": False, "tenant_id": tenant_id, "branch": "main",
+            return {"ok": False, "branch_id": branch_id, "branch": "main",
                     "endpoint": name, "steps": steps}
 
-    return {"ok": True, "tenant_id": tenant_id, "branch": "main",
+    return {"ok": True, "branch_id": branch_id, "branch": "main",
             "endpoint": name, "steps": steps}
 
 
-def drop_branch(repo_dir, tenant_id, timeline_id):
-    """Drop a branch and all its endpoints via `yb_light_local timeline drop`:
+def drop_branch(repo_dir, branch_id):
+    """Drop a branch and all its endpoints via `yb_light_local branch drop`:
     stops the branch's endpoint compute(s), deletes their records, and marks
-    the timeline dropped in the storage controller (the underlying PS/SK data
+    the branch dropped in the storage controller (the underlying PS/SK data
     is left for a later GC pass). Shells out to the repo's
     `target/debug/yb_light_local` (args passed as a list, never via a shell).
     Returns {ok, steps:[{cmd, ok, output}]} or {ok: False, error}.
     """
-    if not tenant_id or not re.fullmatch(r"[0-9a-fA-F]{32}", str(tenant_id)):
-        return {"ok": False, "error": f"invalid tenant_id {tenant_id!r}"}
-    if not timeline_id or not re.fullmatch(r"[0-9a-fA-F]{32}", str(timeline_id)):
-        return {"ok": False, "error": f"invalid timeline_id {timeline_id!r}"}
+    if not branch_id or not re.fullmatch(r"[0-9a-fA-F]{32}", str(branch_id)):
+        return {"ok": False, "error": f"invalid branch_id {branch_id!r}"}
 
-    repo_root = os.path.dirname(os.path.abspath(repo_dir)) if repo_dir else os.getcwd()
-    binary = os.path.join(repo_root, "target", "debug", "yb_light_local")
-    if not os.path.exists(binary):
-        return {"ok": False, "error": f"yb_light_local binary not found at {binary}"}
+    binary, repo_root, err = _yb_light_binary(repo_dir)
+    if err:
+        return {"ok": False, "error": err}
 
-    cmd = ["timeline", "drop", "--tenant-id", tenant_id, "--timeline-id", timeline_id]
+    cmd = ["branch", "drop", "--branch-id", branch_id]
     try:
         p = subprocess.run([binary, *cmd], cwd=repo_root,
                            capture_output=True, text=True, timeout=180)
@@ -1111,8 +1146,7 @@ class Handler(BaseHTTPRequestHandler):
                            "application/json")
                 return
             result = create_branch_with_endpoint(
-                self.repo_dir, payload.get("tenant_id"), payload.get("ancestor_branch"),
-                payload.get("ancestor_timeline_id"))
+                self.repo_dir, payload.get("ancestor_branch"))
             code = 200 if result.get("ok") else 500
             self._send(code, json.dumps(result).encode("utf-8"), "application/json")
         elif self.path.rstrip("/") == "/api/tenant":
@@ -1127,8 +1161,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"ok": False, "error": f"bad request: {e}"}).encode("utf-8"),
                            "application/json")
                 return
-            result = drop_branch(self.repo_dir, payload.get("tenant_id"),
-                                 payload.get("timeline_id"))
+            result = drop_branch(self.repo_dir, payload.get("branch_id"))
             code = 200 if result.get("ok") else 500
             self._send(code, json.dumps(result).encode("utf-8"), "application/json")
         else:
