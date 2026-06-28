@@ -363,26 +363,27 @@ BUILD_TYPE=release make -j`nproc` -s  # release
 The `make` target builds the Postgres headers, the walproposer static
 lib, and the yb_amp PG extensions before invoking `cargo build`, so it is
 the correct entry point for a clean first build. Build artefacts land in
-`target/{debug,release}/`. The release bundle
-deployed to a target host typically contains:
+`target/{debug,release}/`.
+
+`scripts/yb-light-ship.sh` packages a release deploy as a single
+versioned tarball (`/tmp/yb-light-bundle-<date>-<sha>.tar.gz`), which
+unpacks into a deploy dir laid out as:
 
 ```
-yb-light-bundle/
-  bin/
-    yb-pageserver
-    safekeeper
-    yb_light_local
-    compute_ctl
-    endpoint_storage
-    storage_broker
-    storage_controller
-  pg_install/v17/         # patched PG + libssl + libcrypto + libicu
-  config.toml             # per-deploy YB connection settings
-  start.sh / stop.sh
+yb-pageserver            # the binary yb_light_local launches
+yb_light_local
+yb-safekeeper
+storage_controller
+yb-compute-ctl
+yb-endpoint-storage
+tools/                   # yb-dump-pages, yb-dump-wals, yb-reset-consistent-lsn
+lib/                     # libssl/libcrypto 1.1 + libicu 60 (not on stock RHEL 9)
+pg_install/v17/          # patched PG + extensions + the same runtime libs
+REVISION.txt             # build host / date / commit
 ```
 
-`bin/yb-pageserver` is the binary name `yb_light_local` launches; it lives
-under `yb_light_distrib_dir` (set in `~/.yb_light/config`).
+`yb_light_local` launches `yb-pageserver` from `yb_light_distrib_dir`
+(set in `~/.yb_light/config`).
 
 ## Tests
 

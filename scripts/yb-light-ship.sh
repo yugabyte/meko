@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# yb-light release build + bundle staging.
+# yb-light release build + bundle packaging.
 #
 # Builds the release-mode binaries needed by the yb-pageserver deployment,
-# stages them into a versioned bundle directory under /tmp, and prints
-# the rsync command for shipping to the deployment host.
+# stages them into a bundle directory under /tmp, and packages that into a
+# versioned tarball (yb-light-bundle-<date>-<sha>.tar.gz) ready to ship.
 set -euo pipefail
 
 # protoc comes from `protoc-bin-vendored` via pageserver/page_api/build.rs;
@@ -11,12 +11,13 @@ set -euo pipefail
 
 SHA=$(git rev-parse --short HEAD)
 DATE=$(date -u +%Y-%m-%d)
-# Single bundle dir, reused across builds — `rm -rf` below wipes it
-# each run so the dev box doesn't accumulate 1.4 GB per build. The
-# remote ship still names the destination dir per commit so AWS
-# keeps the per-build history. Override via $BUNDLE_DIR if you need
-# multiple local bundles side-by-side.
+# Single staging dir, reused across builds — `rm -rf` below wipes it each
+# run so the dev box doesn't accumulate 1.4 GB per build. The output tarball
+# is named per commit (date + short SHA) so a build host keeps per-build
+# history. Override the staging dir via $BUNDLE_DIR, or the tarball path via
+# $TARBALL.
 BUNDLE=${BUNDLE_DIR:-/tmp/yb-light-bundle}
+TARBALL=${TARBALL:-/tmp/yb-light-bundle-${DATE}-${SHA}.tar.gz}
 
 echo ">>> Building release binaries (yb-pageserver + supporting bins)..."
 cargo build --release \
@@ -74,12 +75,12 @@ done
 # pg_install/v17/ — postgres binaries the compute spawns, plus the
 # neon extension .so files. Without this, the compute on the target
 # loads an older neon.so that's wire-incompatible with this bundle's
-# safekeeper. Use rsync inside the script so we get incremental
-# behavior locally (the tree is ~370 MB, mostly unchanging postgres).
+# safekeeper. `cp -a` preserves the tree's perms/symlinks (the tree is
+# ~370 MB, mostly unchanging postgres).
 echo
 echo ">>> Staging pg_install/v17/ ($(du -sh pg_install/v17 | awk '{print $1}'))..."
 mkdir -p "${BUNDLE}/pg_install"
-rsync -a pg_install/v17 "${BUNDLE}/pg_install/"
+cp -a pg_install/v17 "${BUNDLE}/pg_install/"
 
 # Same runtime libs into pg_install/v17/lib/ so the walredo postgres
 # child can load them; its LD_LIBRARY_PATH is only this dir (#33).
@@ -97,9 +98,22 @@ yb_light_local launches yb-pageserver (see local_env.rs::pageserver_bin).
 TXT
 
 echo
-echo ">>> Bundle ready:"
+echo ">>> Bundle staged:"
 ls -la "${BUNDLE}/"
+
+# Package the staged bundle into a single versioned tarball — the shippable
+# artifact. `-C "${BUNDLE}" .` so it unpacks into the destination dir without
+# a leading bundle/ path component.
 echo
-echo ">>> To ship to ec2-user@<host>:"
-echo "    rsync -avzh -e 'ssh -i ~/.yugabyte/yb-15-aws-portal-1-key.pem' \\"
-echo "        ${BUNDLE}/ ec2-user@<host>:~/yb-light/builds/${DATE}-${SHA}/"
+echo ">>> Packaging tarball ${TARBALL} ..."
+tar -czf "${TARBALL}" -C "${BUNDLE}" .
+
+echo
+echo ">>> Bundle tarball ready:"
+ls -lh "${TARBALL}"
+echo
+echo ">>> Ship it to the deployment host, e.g.:"
+echo "    scp ${TARBALL} <host>:~/yb-light/builds/"
+echo "    ssh <host> 'mkdir -p ~/yb-light/builds/${DATE}-${SHA} \\"
+echo "        && tar -xzf ~/yb-light/builds/$(basename "${TARBALL}") \\"
+echo "             -C ~/yb-light/builds/${DATE}-${SHA}'"
