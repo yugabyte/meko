@@ -56,15 +56,13 @@ params are `:branch_id`, `:node_id`, `:endpoint_id`, `:id`
 
 ### Upcall API (`/upcall/v1`) — control-plane upcalls
 
-Pageserver-facing upcalls. **yb-light note:** these handlers still exist
-server-side but the yb pageserver no longer calls re-attach / validate (its
-`controller_upcall_client` is deleted); generations arrive via the launcher's
-attach-hook instead. Scope: `GenerationsApi`.
+Pageserver-facing upcalls. **yb-light note:** the `re-attach` / `validate`
+generation-fencing upcalls were removed (#171 follow-up) — the yb pageserver
+never called them (generations arrive via the launcher's attach-hook); only the
+timeline-import-status upcalls remain. Scope: `GenerationsApi`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/upcall/v1/re-attach` | PS startup: learn which branches to attach (`ReAttachRequest`) |
-| POST | `/upcall/v1/validate` | PS pre-deletion: confirm it still holds the latest generation (`ValidateRequest`) |
 | GET | `/upcall/v1/timeline_import_status` | Read timeline-import progress (`TimelineImportStatusRequest`) |
 | POST | `/upcall/v1/timeline_import_status` | Report timeline-import progress (`PutTimelineImportStatusRequest`) |
 
@@ -98,7 +96,7 @@ Scope: `Infra` for register/list/status, `Admin` for config/shards.
 | POST | `/control/v1/node` | Register a pageserver node (`NodeRegisterRequest`) |
 | GET | `/control/v1/node` | List nodes (sorted by id) |
 | GET | `/control/v1/node/:node_id` | Describe one node |
-| PUT | `/control/v1/node/:node_id/config` | Set availability / scheduling policy (`NodeConfigureRequest`; body node_id must match URL) |
+| PUT | `/control/v1/node/:node_id/config` | Set availability (`NodeConfigureRequest`; body node_id must match URL) |
 | GET | `/control/v1/node/:node_id/shards` | List shard locations on a node |
 
 ### Compute-endpoint registry (`/control/v1/endpoint`)
@@ -196,10 +194,15 @@ startup reconcile and are rate-limited per branch; scope `PageServerApi` (or
   leadership/step-down/`/control/v1/step_down` route. These were removed with
   the pageserver reconciler (~8.4K lines, #16). Node lifecycle is limited to
   register / list / describe / config / drop / tombstone.
+- **No node scheduling policy.** With one pageserver per endpoint and no
+  reconciler, the node scheduling-policy machinery (drain / fill / pause and the
+  `nodes.scheduling_policy` column) was removed; `/node/:id/config` only sets
+  availability, and the scheduler simply picks the least-loaded eligible node.
 - **No safekeeper surface at all.** The global safekeeper registry + the
   multi-SK membership/quorum/`sk_set` machinery were removed (#171): each
   branch's endpoint owns its single co-located safekeeper and the launcher
   creates the timeline on it directly, so the controller never contacts a
   safekeeper.
-- **Upcall handlers are vestigial.** `/upcall/v1/re-attach` and
-  `/upcall/v1/validate` are still routed but unused by the yb pageserver.
+- **No generation-fencing upcalls.** `/upcall/v1/re-attach` and
+  `/upcall/v1/validate` were removed — the yb pageserver never called them
+  (generations arrive via the launcher's attach-hook).

@@ -27,9 +27,8 @@ in the same `yb_storage` DB.
 | Table | What it tracks |
 |---|---|
 | `branches` | Each branch → pageserver assignment (keyed by `branch_id`), generation, generation_pageserver, placement policy, scheduling policy, opaque config JSON |
-| `nodes` | Pageserver identities: node_id, listen addrs (PG/HTTP/HTTPS/gRPC), lifecycle, scheduling policy |
-| `safekeepers` | Safekeeper identities: id, region_id, version, host/port (PG + HTTP/HTTPS), AZ, scheduling policy |
-| `timelines` | Per-branch cluster-side bookkeeping (keyed by `branch_id`): start LSN, generation, safekeeper set, deleted_at, branch_name. A non-NULL `deleted_at` marks a branch as deleting/dropped — it's filtered out of the live branch listing (`/control/v1/timeline_branch_names`) and left for a later data GC (`branch drop`; see #38) |
+| `nodes` | Pageserver identities: node_id, listen addrs (PG/HTTP/HTTPS/gRPC), lifecycle |
+| `timelines` | Per-branch cluster-side bookkeeping (keyed by `branch_id`): start LSN, generation, deleted_at, branch_name. A non-NULL `deleted_at` marks a branch as deleting/dropped — it's filtered out of the live branch listing (`/control/v1/timeline_branch_names`) and left for a later data GC (`branch drop`; see #38) |
 | `pending_timeline_inits` | Init recipe for a branch whose `branch_id` + branch name are allocated (at `branch create`) but whose PS+SK aren't provisioned yet: branch_name, pg_version, ancestor_branch_id (NULL ⇒ Bootstrap, non-NULL ⇒ Branch off that ancestor), start_lsn. `endpoint create` reads it to materialize the branch, then deletes the row; driven by the `/control/v1/branch/{branch_id}/pending_init` + `/control/v1/pending_timeline_inits` APIs |
 | `metadata_health` | Per-branch health markers (keyed by `branch_id`, FK→`branches`): last successful scrub timestamps |
 | `timeline_imports` | In-progress imports (keyed by `branch_id`, e.g. from pg_dump) |
@@ -68,8 +67,8 @@ The pageserver-facing control path is launcher-managed (#16):
 - **No pageserver re-attach**: the pageserver no longer calls
   `/upcall/v1/re-attach` (its `controller_upcall_client` is deleted).
   Node registration + generation bumps arrive via the launcher
-  (`node_register` + attach-hook). The upcall handlers still exist
-  server-side but are unused by the yb pageserver.
+  (`node_register` + attach-hook). The `re-attach` / `validate` upcall
+  handlers were removed entirely.
 - **Branch creation observes, not commands**:
   `tenant_timeline_create_pageservers` polls `timeline_detail` instead
   of POSTing a create request.
@@ -108,8 +107,9 @@ The controller exposes an HTTP API on `--listen` for:
   discards any `pending_timeline_inits` recipe, and marks the branch
   `deleted_at` so it stops surfacing as a live branch and isn't restarted.
   Idempotent; the underlying PS/SK data is left for a later GC pass.
-- Legacy upcall handlers (re-attach / validate) remain but the yb
-  pageserver no longer calls them.
+- The `re-attach` / `validate` generation-fencing upcall handlers and the
+  node scheduling-policy machinery (drain/fill/pause) were removed — both
+  were unused in the co-located, one-pageserver-per-endpoint topology.
 
 ### Code layout
 

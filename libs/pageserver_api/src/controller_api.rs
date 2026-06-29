@@ -79,7 +79,6 @@ pub struct NodeConfigureRequest {
     pub node_id: NodeId,
 
     pub availability: Option<NodeAvailabilityWrapper>,
-    pub scheduling: Option<NodeSchedulingPolicy>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -143,7 +142,6 @@ pub struct NodeDescribeResponse {
     pub id: NodeId,
 
     pub availability: NodeAvailabilityWrapper,
-    pub scheduling: NodeSchedulingPolicy,
 
     pub listen_http_addr: String,
     pub listen_http_port: u16,
@@ -367,47 +365,6 @@ impl From<NodeLifecycle> for String {
         match value {
             Active => "active",
             Deleted => "deleted",
-        }
-        .to_string()
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Eq, PartialEq, Debug)]
-pub enum NodeSchedulingPolicy {
-    Active,
-    Filling,
-    Pause,
-    PauseForRestart,
-    Draining,
-    Deleting,
-}
-
-impl FromStr for NodeSchedulingPolicy {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "active" => Ok(Self::Active),
-            "filling" => Ok(Self::Filling),
-            "pause" => Ok(Self::Pause),
-            "pause_for_restart" => Ok(Self::PauseForRestart),
-            "draining" => Ok(Self::Draining),
-            "deleting" => Ok(Self::Deleting),
-            _ => Err(anyhow::anyhow!("Unknown scheduling state '{s}'")),
-        }
-    }
-}
-
-impl From<NodeSchedulingPolicy> for String {
-    fn from(value: NodeSchedulingPolicy) -> String {
-        use NodeSchedulingPolicy::*;
-        match value {
-            Active => "active",
-            Filling => "filling",
-            Pause => "pause",
-            PauseForRestart => "pause_for_restart",
-            Draining => "draining",
-            Deleting => "deleting",
         }
         .to_string()
     }

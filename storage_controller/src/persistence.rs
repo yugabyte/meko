@@ -19,8 +19,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use pageserver_api::controller_api::{
-    ComputeEndpoint, MetadataHealthRecord, NodeLifecycle, NodeSchedulingPolicy, PlacementPolicy,
-    ShardSchedulingPolicy,
+    ComputeEndpoint, MetadataHealthRecord, NodeLifecycle, PlacementPolicy, ShardSchedulingPolicy,
 };
 use pageserver_api::models::{BranchConfig, BranchImportStatus};
 use rustls::client::WebPkiServerVerifier;
@@ -107,7 +106,6 @@ pub(crate) enum DatabaseOperation {
     ListNodes,
     ListTombstones,
     Detach,
-    ReAttach,
     IncrementGeneration,
     BranchGenerations,
     ListBranches,
@@ -539,19 +537,6 @@ impl Persistence {
         }
     }
 
-    pub(crate) async fn update_node_scheduling_policy(
-        &self,
-        input_node_id: NodeId,
-        input_scheduling: NodeSchedulingPolicy,
-    ) -> DatabaseResult<()> {
-        use crate::schema::nodes::dsl::*;
-        self.update_node(
-            input_node_id,
-            scheduling_policy.eq(String::from(input_scheduling)),
-        )
-        .await
-    }
-
     pub(crate) async fn update_node_on_registration(
         &self,
         input_node_id: NodeId,
@@ -714,97 +699,8 @@ impl Persistence {
         .await
     }
 
-    /// When a tenant invokes the /re-attach API, this function is responsible for doing an efficient
-    /// batched increment of the generations of all tenants whose generation_pageserver is equal to
-    /// the node that called /re-attach.
-    #[tracing::instrument(skip_all, fields(node_id))]
-    pub(crate) async fn re_attach(
-        &self,
-        input_node_id: NodeId,
-    ) -> DatabaseResult<HashMap<BranchId, Generation>> {
-        use crate::schema::branches::dsl::*;
-        use crate::schema::nodes::dsl::{scheduling_policy, *};
-        let updated = self
-            .with_measured_conn(DatabaseOperation::ReAttach, move |conn| {
-                Box::pin(async move {
-                    let node: Option<NodePersistence> = nodes
-                        .filter(node_id.eq(input_node_id.0 as i64))
-                        .first::<NodePersistence>(conn)
-                        .await
-                        .optional()?;
-
-                    // Check if the node is not marked as deleted
-                    match node {
-                        Some(node) if matches!(NodeLifecycle::from_str(&node.lifecycle), Ok(NodeLifecycle::Deleted)) => {
-                            return Err(DatabaseError::Logical(format!(
-                                "Node {input_node_id} is marked as deleted, re-attach is not allowed"
-                            )));
-                        }
-                        _ => {
-                            // go through
-                        }
-                    };
-
-                    let rows_updated = diesel::update(branches)
-                        .filter(generation_pageserver.eq(input_node_id.0 as i64))
-                        .set(generation.eq(generation + 1))
-                        .execute(conn)
-                        .await?;
-
-                    tracing::info!("Incremented {} branches' generations", rows_updated);
-
-                    // TODO: UPDATE+SELECT in one query
-
-                    let updated = branches
-                        .filter(generation_pageserver.eq(input_node_id.0 as i64))
-                        .select(BranchPersistence::as_select())
-                        .load(conn)
-                        .await?;
-
-                    if let Some(node) = node {
-                        let old_scheduling_policy =
-                            NodeSchedulingPolicy::from_str(&node.scheduling_policy).unwrap();
-                        let new_scheduling_policy = match old_scheduling_policy {
-                            NodeSchedulingPolicy::Active => NodeSchedulingPolicy::Active,
-                            NodeSchedulingPolicy::PauseForRestart => NodeSchedulingPolicy::Active,
-                            NodeSchedulingPolicy::Draining => NodeSchedulingPolicy::Active,
-                            NodeSchedulingPolicy::Filling => NodeSchedulingPolicy::Active,
-                            NodeSchedulingPolicy::Pause => NodeSchedulingPolicy::Pause,
-                            NodeSchedulingPolicy::Deleting => NodeSchedulingPolicy::Pause,
-                        };
-                        diesel::update(nodes)
-                            .filter(node_id.eq(input_node_id.0 as i64))
-                            .set(scheduling_policy.eq(String::from(new_scheduling_policy)))
-                            .execute(conn)
-                            .await?;
-                    }
-
-                    Ok(updated)
-                })
-            })
-            .await?;
-
-        let mut result = HashMap::new();
-        for tsp in updated {
-            let parsed_branch_id = BranchId::from_str(tsp.branch_id.as_str())
-                .map_err(|e| DatabaseError::Logical(format!("Malformed branch id: {e}")))?;
-
-            let Some(g) = tsp.generation else {
-                // If the generation_pageserver column was non-NULL, then the generation column should also be non-NULL:
-                // we only set generation_pageserver when setting generation.
-                return Err(DatabaseError::Logical(
-                    "Generation should always be set after incrementing".to_string(),
-                ));
-            };
-            result.insert(parsed_branch_id, Generation::new(g as u32));
-        }
-
-        Ok(result)
-    }
-
     /// Called (via the attach_hook API) immediately before attaching to a new pageserver, to acquire a unique,
-    /// monotonically advancing generation number.  We also store the NodeId for which the generation was issued,
-    /// so that in [`Self::re_attach`] we can do a bulk UPDATE on the generations for that node.
+    /// monotonically advancing generation number.  We also store the NodeId for which the generation was issued.
     pub(crate) async fn increment_generation(
         &self,
         input_branch_id: BranchId,
@@ -1744,7 +1640,6 @@ impl BranchPersistence {
 #[diesel(table_name = crate::schema::nodes)]
 pub(crate) struct NodePersistence {
     pub(crate) node_id: i64,
-    pub(crate) scheduling_policy: String,
     pub(crate) listen_http_addr: String,
     pub(crate) listen_http_port: i32,
     pub(crate) listen_pg_addr: String,

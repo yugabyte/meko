@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use pageserver_api::controller_api::{
     BranchLocateResponseShard, NodeAvailability, NodeDescribeResponse, NodeLifecycle,
-    NodeRegisterRequest, NodeSchedulingPolicy,
+    NodeRegisterRequest,
 };
 use pageserver_client::mgmt_api;
 use reqwest::StatusCode;
@@ -27,7 +27,6 @@ pub(crate) struct Node {
     id: NodeId,
 
     availability: NodeAvailability,
-    scheduling: NodeSchedulingPolicy,
     lifecycle: NodeLifecycle,
 
     listen_http_addr: String,
@@ -107,14 +106,6 @@ impl Node {
 
     pub(crate) fn get_id(&self) -> NodeId {
         self.id
-    }
-
-    pub(crate) fn get_scheduling(&self) -> NodeSchedulingPolicy {
-        self.scheduling
-    }
-
-    pub(crate) fn set_scheduling(&mut self, scheduling: NodeSchedulingPolicy) {
-        self.scheduling = scheduling
     }
 
     pub(crate) fn has_https_port(&self) -> bool {
@@ -217,18 +208,9 @@ impl Node {
 
     /// Is this node elegible to have work scheduled onto it?
     pub(crate) fn may_schedule(&self) -> MaySchedule {
-        let utilization = match &self.availability {
-            NodeAvailability::Active(u) => u.clone(),
-            NodeAvailability::Offline | NodeAvailability::WarmingUp(_) => return MaySchedule::No,
-        };
-
-        match self.scheduling {
-            NodeSchedulingPolicy::Active => MaySchedule::Yes(utilization),
-            NodeSchedulingPolicy::Deleting => MaySchedule::No,
-            NodeSchedulingPolicy::Draining => MaySchedule::No,
-            NodeSchedulingPolicy::Filling => MaySchedule::Yes(utilization),
-            NodeSchedulingPolicy::Pause => MaySchedule::No,
-            NodeSchedulingPolicy::PauseForRestart => MaySchedule::No,
+        match &self.availability {
+            NodeAvailability::Active(_) => MaySchedule::Yes,
+            NodeAvailability::Offline | NodeAvailability::WarmingUp(_) => MaySchedule::No,
         }
     }
 
@@ -264,7 +246,6 @@ impl Node {
             listen_pg_port,
             listen_grpc_addr,
             listen_grpc_port,
-            scheduling: NodeSchedulingPolicy::Active,
             lifecycle: NodeLifecycle::Active,
             availability: NodeAvailability::Offline,
             use_https,
@@ -275,7 +256,6 @@ impl Node {
     pub(crate) fn to_persistent(&self) -> NodePersistence {
         NodePersistence {
             node_id: self.id.0 as i64,
-            scheduling_policy: self.scheduling.into(),
             lifecycle: self.lifecycle.into(),
             listen_http_addr: self.listen_http_addr.clone(),
             listen_http_port: self.listen_http_port as i32,
@@ -307,8 +287,6 @@ impl Node {
             id: NodeId(np.node_id as u64),
             // At startup we consider a node offline until proven otherwise.
             availability: NodeAvailability::Offline,
-            scheduling: NodeSchedulingPolicy::from_str(&np.scheduling_policy)
-                .expect("Bad scheduling policy in DB"),
             lifecycle: NodeLifecycle::from_str(&np.lifecycle).expect("Bad lifecycle in DB"),
             listen_http_addr: np.listen_http_addr,
             listen_http_port: np.listen_http_port as u16,
@@ -398,7 +376,6 @@ impl Node {
         NodeDescribeResponse {
             id: self.id,
             availability: self.availability.clone().into(),
-            scheduling: self.scheduling,
             listen_http_addr: self.listen_http_addr.clone(),
             listen_http_port: self.listen_http_port,
             listen_https_port: self.listen_https_port,

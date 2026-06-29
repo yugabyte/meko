@@ -18,7 +18,7 @@ use http_utils::error::ApiError;
 use itertools::Itertools;
 use pageserver_api::controller_api::{
     ComputeEndpoint, MetadataHealthRecord, MetadataHealthUpdateRequest, NodeAvailability,
-    NodeRegisterRequest, NodeSchedulingPolicy, NodeShard, NodeShardResponse, PlacementPolicy,
+    NodeRegisterRequest, NodeShard, NodeShardResponse, PlacementPolicy,
     PendingTimelineInit, PendingTimelineInitRequest,
     ShardSchedulingPolicy,
     BranchCreateRequest, BranchCreateResponse, BranchCreateResponseShard,
@@ -31,10 +31,7 @@ use pageserver_api::models::{
     TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateResponseStorcon,
     TimelineInfo,
 };
-use pageserver_api::upcall_api::{
-    PutTimelineImportStatusRequest, ReAttachRequest, ReAttachResponse, ReAttachResponseBranch,
-    TimelineImportStatusRequest, ValidateRequest, ValidateResponse, ValidateResponseBranch,
-};
+use pageserver_api::upcall_api::{PutTimelineImportStatusRequest, TimelineImportStatusRequest};
 use pageserver_client::{BlockUnblock, mgmt_api};
 use reqwest::{Certificate, StatusCode};
 use safekeeper_api::PgMajorVersion;
@@ -60,7 +57,7 @@ use crate::persistence::{
     BranchGenerationState, BranchFilter, BranchPersistence,
 };
 use crate::scheduler::{ScheduleContext, ScheduleError, Scheduler};
-use crate::branch::{Branch, IntentState, ObservedStateLocation};
+use crate::branch::{Branch, IntentState};
 use crate::timeline_import::{
     FinalizingImport, ImportResult, ShardImportStatuses, TimelineImport,
     TimelineImportFinalizeError, TimelineImportState, UpcallClient,
@@ -534,7 +531,7 @@ impl Service {
                     // This is the code path for geniune availability transitions (i.e node
                     // goes unavailable and/or comes back online).
                     let res = self
-                        .node_state_configure(node_id, Some(new_availability), None, &node_lock)
+                        .node_state_configure(node_id, Some(new_availability), &node_lock)
                         .await;
 
                     match res {
@@ -968,206 +965,6 @@ impl Service {
                     .map(|ps| (s.generation.expect("Test hook, not used on branches that are mid-onboarding with a NULL generation").into().unwrap(), ps))
             }),
         }
-    }
-
-    pub(crate) async fn re_attach(
-        &self,
-        reattach_req: ReAttachRequest,
-    ) -> Result<ReAttachResponse, ApiError> {
-        if let Some(register_req) = reattach_req.register {
-            self.node_register(register_req).await?;
-        }
-
-        // Ordering: we must persist generation number updates before making them visible in the in-memory state
-        let incremented_generations = self.persistence.re_attach(reattach_req.node_id).await?;
-
-        tracing::info!(
-            node_id=%reattach_req.node_id,
-            "Incremented {} branches' generations",
-            incremented_generations.len()
-        );
-
-        // Apply the updated generation to our in-memory state, and
-        // gather discover secondary locations.
-        let mut locked = self.inner.write().unwrap();
-        let (nodes, branches, scheduler) = locked.parts_mut();
-
-        let mut response = ReAttachResponse {
-            branches: Vec::new(),
-        };
-
-        // yb-light: pageservers carry no authoritative local branch state — the
-        // re-attach response is what they'll honor, and any prior observed
-        // location for this node is stale, so clear it.
-        tracing::info!(
-            "Pageserver {node_id} re-attached, clearing observed locations referencing the pageserver for all branches",
-            node_id = reattach_req.node_id
-        );
-        let mut num_branches_affected = 0;
-        for (branch_id, branch) in branches.iter_mut() {
-            if branch
-                .observed
-                .locations
-                .remove(&reattach_req.node_id)
-                .is_some()
-            {
-                tracing::info!("Cleared observed location for branch {branch_id}");
-                num_branches_affected += 1;
-            }
-        }
-        tracing::info!(
-            "Cleared observed locations for {num_branches_affected} branches"
-        );
-
-        // Scan through all branches, applying updates for ones where we updated generation
-        // and identifying branches that intend to have a secondary location on this node.
-        for (branch_id, branch) in branches {
-            if let Some(new_gen) = incremented_generations.get(branch_id) {
-                let new_gen = *new_gen;
-                response.branches.push(ReAttachResponseBranch {
-                    id: *branch_id,
-                    r#gen: Some(new_gen.into().unwrap()),
-                });
-
-                branch.generation = std::cmp::max(branch.generation, Some(new_gen));
-                if let Some(observed) = branch.observed.locations.get_mut(&reattach_req.node_id) {
-                    // Why can we update `observed` even though we're not sure our response will be received
-                    // by the pageserver?  Because the pageserver will not proceed with startup until
-                    // it has processed response: if it loses it, we'll see another request and increment
-                    // generation again, avoiding any uncertainty about dirtiness of branch's state.
-                    if let Some(conf) = observed.conf.as_mut() {
-                        conf.generation = new_gen.into();
-                    }
-                } else {
-                    // This node has no observed state for the branch: perhaps it was offline
-                    // when the pageserver restarted.  Insert a None to record that the
-                    // location's state is unknown.
-                    branch
-                        .observed
-                        .locations
-                        .insert(reattach_req.node_id, ObservedStateLocation { conf: None });
-                }
-            } else if branch.intent.get_secondary().contains(&reattach_req.node_id) {
-                // Ordering: pageserver will not accept /location_config requests until it has
-                // finished processing the response from re-attach.  So we can update our in-memory state
-                // now, and be confident that we are not stamping on the result of some later location config.
-                response.branches.push(ReAttachResponseBranch {
-                    id: *branch_id,
-                    r#gen: None,
-                });
-
-                // We must not update observed, because we have no guarantee that our
-                // response will be received by the pageserver.
-            }
-        }
-
-        // We consider a node Active once we have composed a re-attach response: the handling
-        // of the re-attach response implicitly synchronizes the LocationConfigs on the node.
-        //
-        // Additionally, reset the nodes scheduling policy to match the conditional update done
-        // in [`Persistence::re_attach`].
-        if let Some(node) = nodes.get(&reattach_req.node_id) {
-            let reset_scheduling = matches!(
-                node.get_scheduling(),
-                NodeSchedulingPolicy::PauseForRestart
-                    | NodeSchedulingPolicy::Draining
-                    | NodeSchedulingPolicy::Filling
-                    | NodeSchedulingPolicy::Deleting
-            );
-
-            let mut new_nodes = (**nodes).clone();
-            if let Some(node) = new_nodes.get_mut(&reattach_req.node_id) {
-                if reset_scheduling {
-                    node.set_scheduling(NodeSchedulingPolicy::Active);
-                }
-
-                tracing::info!("Marking {} warming-up on reattach", reattach_req.node_id);
-                node.set_availability(NodeAvailability::WarmingUp(std::time::Instant::now()));
-
-                scheduler.node_upsert(node);
-                let new_nodes = Arc::new(new_nodes);
-                *nodes = new_nodes;
-            } else {
-                tracing::error!(
-                    "Reattaching node {} was removed while processing the request",
-                    reattach_req.node_id
-                );
-            }
-        }
-
-        Ok(response)
-    }
-
-    pub(crate) async fn validate(
-        &self,
-        validate_req: ValidateRequest,
-    ) -> Result<ValidateResponse, DatabaseError> {
-        // Fast in-memory check: we may reject validation on anything that doesn't match our
-        // in-memory generation for a branch
-        let in_memory_result = {
-            let mut in_memory_result = Vec::new();
-            let locked = self.inner.read().unwrap();
-            for req_branch in validate_req.branches {
-                if let Some(branch) = locked.branches.get(&req_branch.id) {
-                    let valid = branch.generation == Some(Generation::new(req_branch.r#gen));
-                    tracing::info!(
-                        "handle_validate: {}(gen {}): valid={valid} (latest {:?})",
-                        req_branch.id,
-                        req_branch.r#gen,
-                        branch.generation
-                    );
-
-                    in_memory_result.push((
-                        req_branch.id,
-                        Generation::new(req_branch.r#gen),
-                        valid,
-                    ));
-                } else {
-                    // This is legal: for example after deletion of a branch that was busy with
-                    // compaction/gc while being deleted, the pageserver may still have deletions
-                    // in its queue.
-                    tracing::info!(
-                        "Refusing deletion validation for missing branch {}",
-                        req_branch.id
-                    );
-                }
-            }
-
-            in_memory_result
-        };
-
-        // Database calls to confirm validity for anything that passed the in-memory check.  We must do this
-        // in case of controller split-brain, where some other controller process might have incremented the generation.
-        let db_generations = self
-            .persistence
-            .branches_generations(
-                in_memory_result
-                    .iter()
-                    .filter_map(|i| if i.2 { Some(&i.0) } else { None }),
-            )
-            .await?;
-        let db_generations = db_generations.into_iter().collect::<HashMap<_, _>>();
-
-        let mut response = ValidateResponse {
-            branches: Vec::new(),
-        };
-        for (branch_id, validate_generation, valid) in in_memory_result.into_iter() {
-            let valid = if valid {
-                let db_generation = db_generations.get(&branch_id);
-                db_generation == Some(&Some(validate_generation))
-            } else {
-                // If in-memory state says it's invalid, trust that.  It's always safe to fail a validation, at worst
-                // this prevents a pageserver from cleaning up an object in S3.
-                false
-            };
-
-            response.branches.push(ValidateResponseBranch {
-                id: branch_id,
-                valid,
-            })
-        }
-
-        Ok(response)
     }
 
     pub(crate) async fn tenant_create(
@@ -3902,17 +3699,8 @@ impl Service {
         &self,
         node_id: NodeId,
         availability: Option<NodeAvailability>,
-        scheduling: Option<NodeSchedulingPolicy>,
         _node_lock: &TracingExclusiveGuard<NodeOperations>,
     ) -> Result<AvailabilityTransition, ApiError> {
-        if let Some(scheduling) = scheduling {
-            // Scheduling is a persistent part of Node: we must write updates to the database before
-            // applying them in memory
-            self.persistence
-                .update_node_scheduling_policy(node_id, scheduling)
-                .await?;
-        }
-
         // The transition we calculate here remains valid later in the function because we hold the op lock on the node:
         // nothing else can mutate its availability while we run.
         let availability_transition = if let Some(input_availability) = availability.as_ref() {
@@ -3942,10 +3730,6 @@ impl Service {
 
         if let Some(availability) = availability {
             node.set_availability(availability);
-        }
-
-        if let Some(scheduling) = scheduling {
-            node.set_scheduling(scheduling);
         }
 
         // Update the scheduler, in case the elegibility of the node for new shards has changed
@@ -4037,13 +3821,12 @@ impl Service {
         &self,
         node_id: NodeId,
         availability: Option<NodeAvailability>,
-        scheduling: Option<NodeSchedulingPolicy>,
     ) -> Result<(), ApiError> {
         let node_lock =
             trace_exclusive_lock(&self.node_op_locks, node_id, NodeOperations::Configure).await;
 
         let transition = self
-            .node_state_configure(node_id, availability, scheduling, &node_lock)
+            .node_state_configure(node_id, availability, &node_lock)
             .await?;
         self.handle_node_availability_transition(node_id, transition, &node_lock)
             .await
@@ -4054,9 +3837,8 @@ impl Service {
         &self,
         node_id: NodeId,
         availability: Option<NodeAvailability>,
-        scheduling: Option<NodeSchedulingPolicy>,
     ) -> Result<(), ApiError> {
-        self.node_configure(node_id, availability, scheduling).await
+        self.node_configure(node_id, availability).await
     }
 
     // yb-light: automatic shard-splitting is gone (branches are

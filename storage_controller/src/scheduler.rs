@@ -1,8 +1,6 @@
 use std::collections::HashMap;
-use std::fmt::Debug;
 
 use http_utils::error::ApiError;
-use pageserver_api::models::PageserverUtilization;
 use serde::Serialize;
 use utils::id::NodeId;
 
@@ -24,13 +22,13 @@ impl From<ScheduleError> for ApiError {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Copy, PartialEq, Eq)]
 pub enum MaySchedule {
-    Yes(PageserverUtilization),
+    Yes,
     No,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq, Eq)]
 pub(crate) struct SchedulerNode {
     /// How many shards are currently scheduled on this node, via their [`crate::branch::IntentState`].
     branch_count: usize,
@@ -42,147 +40,16 @@ pub(crate) struct SchedulerNode {
     may_schedule: MaySchedule,
 }
 
-pub(crate) trait NodeSchedulingScore: Debug + Ord + Copy + Sized {
-    fn generate(
-        node_id: &NodeId,
-        node: &mut SchedulerNode,
-        context: &ScheduleContext,
-    ) -> Option<Self>;
-
-    fn is_overloaded(&self) -> bool;
-    fn node_id(&self) -> NodeId;
-}
-
-pub(crate) trait ShardTag {
-    type Score: NodeSchedulingScore;
-}
+/// Marker for the kind of location being scheduled. yb-light no longer does
+/// utilization/affinity scoring (placement is launcher-pinned, one pageserver
+/// per endpoint), so the tag only documents intent at the call site.
+pub(crate) trait ShardTag {}
 
 pub(crate) struct AttachedShardTag {}
-impl ShardTag for AttachedShardTag {
-    type Score = NodeAttachmentSchedulingScore;
-}
+impl ShardTag for AttachedShardTag {}
 
 pub(crate) struct SecondaryShardTag {}
-impl ShardTag for SecondaryShardTag {
-    type Score = NodeSecondarySchedulingScore;
-}
-
-/// Scheduling score of a given node for shard attachments.
-/// Lower scores indicate more suitable nodes.
-/// Ordering is given by member declaration order (top to bottom).
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub(crate) struct NodeAttachmentSchedulingScore {
-    /// The number of shards belonging to the tenant currently being
-    /// scheduled that are attached to this node.
-    affinity_score: AffinityScore,
-    /// Utilisation score that combines shard count and disk utilisation
-    utilization_score: u64,
-    /// Total number of shards attached to this node. When nodes have identical utilisation, this
-    /// acts as an anti-affinity between attached shards.
-    total_attached_branch_count: usize,
-    /// Convenience to make selection deterministic in tests and empty systems
-    node_id: NodeId,
-}
-
-impl NodeSchedulingScore for NodeAttachmentSchedulingScore {
-    fn generate(
-        node_id: &NodeId,
-        node: &mut SchedulerNode,
-        context: &ScheduleContext,
-    ) -> Option<Self> {
-        let utilization = match &mut node.may_schedule {
-            MaySchedule::Yes(u) => u,
-            MaySchedule::No => {
-                return None;
-            }
-        };
-
-        Some(Self {
-            affinity_score: context
-                .nodes
-                .get(node_id)
-                .copied()
-                .unwrap_or(AffinityScore::FREE),
-            utilization_score: utilization.cached_score(),
-            total_attached_branch_count: node.attached_branch_count,
-            node_id: *node_id,
-        })
-    }
-
-    fn is_overloaded(&self) -> bool {
-        PageserverUtilization::is_overloaded(self.utilization_score)
-    }
-
-    fn node_id(&self) -> NodeId {
-        self.node_id
-    }
-}
-
-/// Scheduling score of a given node for shard secondaries.
-/// Lower scores indicate more suitable nodes.
-/// Ordering is given by member declaration order (top to bottom).
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub(crate) struct NodeSecondarySchedulingScore {
-    /// The number of shards belonging to the tenant currently being
-    /// scheduled that are attached to this node.
-    affinity_score: AffinityScore,
-    /// Utilisation score that combines shard count and disk utilisation
-    utilization_score: u64,
-    /// Anti-affinity with other locations: this gives the behavior that secondaries
-    /// will spread out across the nodes.
-    total_branch_count: usize,
-    /// Convenience to make selection deterministic in tests and empty systems
-    node_id: NodeId,
-}
-
-impl NodeSchedulingScore for NodeSecondarySchedulingScore {
-    fn generate(
-        node_id: &NodeId,
-        node: &mut SchedulerNode,
-        context: &ScheduleContext,
-    ) -> Option<Self> {
-        let utilization = match &mut node.may_schedule {
-            MaySchedule::Yes(u) => u,
-            MaySchedule::No => {
-                return None;
-            }
-        };
-
-        Some(Self {
-            affinity_score: context
-                .nodes
-                .get(node_id)
-                .copied()
-                .unwrap_or(AffinityScore::FREE),
-            utilization_score: utilization.cached_score(),
-            total_branch_count: node.branch_count,
-            node_id: *node_id,
-        })
-    }
-
-    fn is_overloaded(&self) -> bool {
-        PageserverUtilization::is_overloaded(self.utilization_score)
-    }
-
-    fn node_id(&self) -> NodeId {
-        self.node_id
-    }
-}
-
-impl PartialEq for SchedulerNode {
-    fn eq(&self, other: &Self) -> bool {
-        let may_schedule_matches = matches!(
-            (&self.may_schedule, &other.may_schedule),
-            (MaySchedule::Yes(_), MaySchedule::Yes(_)) | (MaySchedule::No, MaySchedule::No)
-        );
-
-        may_schedule_matches
-            && self.branch_count == other.branch_count
-            && self.attached_branch_count == other.attached_branch_count
-    }
-}
-
-impl Eq for SchedulerNode {}
+impl ShardTag for SecondaryShardTag {}
 
 /// This type is responsible for selecting which node is used when a tenant shard needs to choose a pageserver
 /// on which to run.
@@ -194,50 +61,15 @@ pub(crate) struct Scheduler {
     nodes: HashMap<NodeId, SchedulerNode>,
 }
 
-/// Score for soft constraint scheduling: lower scores are preferred to higher scores.
-///
-/// For example, we may set an affinity score based on the number of shards from the same
-/// tenant already on a node, to implicitly prefer to balance out shards.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub(crate) struct AffinityScore(pub(crate) usize);
-
-impl AffinityScore {
-    /// If we have no anti-affinity at all toward a node, this is its score.  It means
-    /// the scheduler has a free choice amongst nodes with this score, and may pick a node
-    /// based on other information such as total utilization.
-    pub(crate) const FREE: Self = Self(0);
-
-    pub(crate) fn inc(&mut self) {
-        self.0 += 1;
-    }
-}
-
-impl std::ops::Add for AffinityScore {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + rhs.0)
-    }
-}
-
-// For carrying state between multiple calls to [`Branch::schedule`], e.g. when calling
-// it for many shards in the same tenant.
+// Carried between multiple calls to [`Branch::schedule`]. yb-light no longer
+// does affinity scoring (placement is launcher-pinned, one pageserver per
+// endpoint), so this is now a no-op kept for call-site compatibility.
 #[derive(Debug, Default, Clone)]
-pub(crate) struct ScheduleContext {
-    /// Sparse map of nodes: omitting a node implicitly makes its affinity [`AffinityScore::FREE`]
-    pub(crate) nodes: HashMap<NodeId, AffinityScore>,
-}
+pub(crate) struct ScheduleContext {}
 
 impl ScheduleContext {
-    /// Input is a list of nodes we would like to avoid using again within this context.  The more
-    /// times a node is passed into this call, the less inclined we are to use it.
-    pub(crate) fn avoid(&mut self, nodes: &[NodeId]) {
-        for node_id in nodes {
-            let entry = self.nodes.entry(*node_id).or_insert(AffinityScore::FREE);
-            entry.inc()
-        }
-    }
-
+    /// No-op: affinity-based avoidance was removed along with scheduler scoring.
+    pub(crate) fn avoid(&mut self, _nodes: &[NodeId]) {}
 }
 
 pub(crate) enum RefCountUpdate {
@@ -405,71 +237,35 @@ impl Scheduler {
         }
     }
 
-    /// Compute a schedulling score for each node that the scheduler knows of
-    /// minus a set of hard excluded nodes.
-    fn compute_node_scores<Score>(
-        &mut self,
-        hard_exclude: &[NodeId],
-        context: &ScheduleContext,
-    ) -> Vec<Score>
-    where
-        Score: NodeSchedulingScore,
-    {
-        self.nodes
-            .iter_mut()
-            .filter_map(|(k, v)| {
-                if hard_exclude.contains(k) {
-                    None
-                } else {
-                    Score::generate(k, v, context)
-                }
-            })
-            .collect()
-    }
-
-    /// hard_exclude: it is forbidden to use nodes in this list, typically becacuse they
-    /// are already in use by this shard -- we use this to avoid picking the same node
-    /// as both attached and secondary location.  This is a hard constraint: if we cannot
-    /// find any nodes that aren't in this list, then we will return a [`ScheduleError::ImpossibleConstraint`].
+    /// Pick a node to place a location on.
     ///
-    /// context: we prefer to avoid using nodes identified in the context, according
-    /// to their anti-affinity score.  We use this to prefeer to avoid placing shards in
-    /// the same tenant on the same node.  This is a soft constraint: the context will never
-    /// cause us to fail to schedule a shard.
+    /// hard_exclude: it is forbidden to use nodes in this list (e.g. a shard's
+    /// existing locations, so we don't pick the same node twice). If no node
+    /// outside this list is eligible, returns [`ScheduleError::ImpossibleConstraint`].
+    ///
+    /// yb-light no longer does utilization/affinity scoring (placement is
+    /// launcher-pinned, one pageserver per endpoint). We simply pick the
+    /// least-loaded eligible node, breaking ties by node id for determinism.
+    /// `Tag`/`context` are kept for call-site compatibility but unused.
     pub(crate) fn schedule_shard<Tag: ShardTag>(
         &mut self,
         hard_exclude: &[NodeId],
-        context: &ScheduleContext,
+        _context: &ScheduleContext,
     ) -> Result<NodeId, ScheduleError> {
         if self.nodes.is_empty() {
             return Err(ScheduleError::NoPageservers);
         }
 
-        let mut scores = self.compute_node_scores::<Tag::Score>(hard_exclude, context);
-
-        // Exclude nodes whose utilization is critically high, if there are alternatives available.  This will
-        // cause us to violate affinity rules if it is necessary to avoid critically overloading nodes: for example
-        // we may place shards in the same tenant together on the same pageserver if all other pageservers are
-        // overloaded.
-        let non_overloaded_scores = scores
+        let node_id = self
+            .nodes
             .iter()
-            .filter(|i| !i.is_overloaded())
-            .copied()
-            .collect::<Vec<_>>();
-        if !non_overloaded_scores.is_empty() {
-            scores = non_overloaded_scores;
-        }
+            .filter(|(node_id, node)| {
+                !hard_exclude.contains(node_id) && matches!(node.may_schedule, MaySchedule::Yes)
+            })
+            .min_by_key(|(node_id, node)| (node.branch_count, **node_id))
+            .map(|(node_id, _)| *node_id);
 
-        // Sort the nodes by score. The one with the lowest scores will be the preferred node.
-        // Refer to [`NodeAttachmentSchedulingScore`] for attached locations and
-        // [`NodeSecondarySchedulingScore`] for secondary locations to understand how the nodes
-        // are ranked.
-        scores.sort();
-
-        if scores.is_empty() {
-            // After applying constraints, no pageservers were left.
-            // Log details to understand why we couldn't schedule: this may help an engineer
-            // understand if some nodes are marked offline in a way that's preventing progress.
+        let Some(node_id) = node_id else {
             tracing::info!("Scheduling failure, while excluding {hard_exclude:?}, node states:");
             for (node_id, node) in &self.nodes {
                 tracing::info!(
@@ -479,15 +275,9 @@ impl Scheduler {
                 );
             }
             return Err(ScheduleError::ImpossibleConstraint);
-        }
+        };
 
-        // Lowest score wins
-        let node_id = scores.first().unwrap().node_id();
-
-        tracing::info!(
-            "scheduler selected node {node_id} (elegible nodes {:?}, hard exclude: {hard_exclude:?}, soft exclude: {context:?})",
-            scores.iter().map(|i| i.node_id().0).collect::<Vec<_>>(),
-        );
+        tracing::info!("scheduler selected node {node_id} (hard exclude: {hard_exclude:?})");
 
         // Note that we do not update shard count here to reflect the scheduling: that
         // is IntentState's job when the scheduled location is used.
@@ -511,7 +301,7 @@ impl Scheduler {
                     .nodes
                     .get(node_id)
                     .expect("Referenced nodes always exist");
-                if matches!(node.may_schedule, MaySchedule::Yes(_)) {
+                if matches!(node.may_schedule, MaySchedule::Yes) {
                     Some(*node_id)
                 } else {
                     None
@@ -574,9 +364,6 @@ pub(crate) mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use pageserver_api::controller_api::NodeAvailability;
-    use pageserver_api::models::utilization::test_utilization;
-
     use super::*;
     use crate::branch::IntentState;
     #[test]
@@ -636,129 +423,5 @@ mod tests {
         }
 
         Ok(())
-    }
-
-    #[test]
-    /// Test the PageserverUtilization's contribution to scheduling algorithm
-    fn scheduler_utilization() {
-        let mut nodes = test_utils::make_test_nodes(3);
-        let mut scheduler = Scheduler::new(nodes.values());
-
-        // Need to keep these alive because they contribute to shard counts via RAII
-        let mut scheduled_intents = Vec::new();
-
-        let empty_context = ScheduleContext::default();
-
-        fn assert_scheduler_chooses(
-            expect_node: NodeId,
-            scheduled_intents: &mut Vec<IntentState>,
-            scheduler: &mut Scheduler,
-            context: &ScheduleContext,
-        ) {
-            let scheduled = scheduler
-                .schedule_shard::<AttachedShardTag>(&[], context)
-                .unwrap();
-            let mut intent = IntentState::new();
-            intent.set_attached(scheduler, Some(scheduled));
-            scheduled_intents.push(intent);
-            assert_eq!(scheduled, expect_node);
-        }
-
-        // Independent schedule calls onto empty nodes should round-robin, because each node's
-        // attached branch count is updated inline.  The order is determinsitic because when all other factors are
-        // equal, we order by node ID.
-        assert_scheduler_chooses(
-            NodeId(1),
-            &mut scheduled_intents,
-            &mut scheduler,
-            &empty_context,
-        );
-        assert_scheduler_chooses(
-            NodeId(2),
-            &mut scheduled_intents,
-            &mut scheduler,
-            &empty_context,
-        );
-        assert_scheduler_chooses(
-            NodeId(3),
-            &mut scheduled_intents,
-            &mut scheduler,
-            &empty_context,
-        );
-
-        // Manually setting utilization higher should cause schedule calls to round-robin the other nodes
-        // which have equal utilization.
-        nodes
-            .get_mut(&NodeId(1))
-            .unwrap()
-            .set_availability(NodeAvailability::Active(test_utilization::simple(
-                1024 * 1024 * 1024,
-            )));
-        scheduler.node_upsert(nodes.get(&NodeId(1)).unwrap());
-
-        assert_scheduler_chooses(
-            NodeId(2),
-            &mut scheduled_intents,
-            &mut scheduler,
-            &empty_context,
-        );
-        assert_scheduler_chooses(
-            NodeId(3),
-            &mut scheduled_intents,
-            &mut scheduler,
-            &empty_context,
-        );
-        assert_scheduler_chooses(
-            NodeId(2),
-            &mut scheduled_intents,
-            &mut scheduler,
-            &empty_context,
-        );
-        assert_scheduler_chooses(
-            NodeId(3),
-            &mut scheduled_intents,
-            &mut scheduler,
-            &empty_context,
-        );
-
-        // The scheduler should prefer nodes with lower affinity score,
-        // even if they have higher utilization (as long as they aren't utilized at >100%)
-        let mut context_prefer_node1 = ScheduleContext::default();
-        context_prefer_node1.avoid(&[NodeId(2), NodeId(3)]);
-        assert_scheduler_chooses(
-            NodeId(1),
-            &mut scheduled_intents,
-            &mut scheduler,
-            &context_prefer_node1,
-        );
-        assert_scheduler_chooses(
-            NodeId(1),
-            &mut scheduled_intents,
-            &mut scheduler,
-            &context_prefer_node1,
-        );
-
-        // If a node is over-utilized, it will not be used even if affinity scores prefer it
-        nodes
-            .get_mut(&NodeId(1))
-            .unwrap()
-            .set_availability(NodeAvailability::Active(test_utilization::overloaded()));
-        scheduler.node_upsert(nodes.get(&NodeId(1)).unwrap());
-        assert_scheduler_chooses(
-            NodeId(2),
-            &mut scheduled_intents,
-            &mut scheduler,
-            &context_prefer_node1,
-        );
-        assert_scheduler_chooses(
-            NodeId(3),
-            &mut scheduled_intents,
-            &mut scheduler,
-            &context_prefer_node1,
-        );
-
-        for mut intent in scheduled_intents {
-            intent.clear(&mut scheduler);
-        }
     }
 }

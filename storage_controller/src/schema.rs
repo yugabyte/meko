@@ -36,7 +36,6 @@ diesel::table! {
 diesel::table! {
     nodes (node_id) {
         node_id -> Int8,
-        scheduling_policy -> Varchar,
         listen_http_addr -> Varchar,
         listen_http_port -> Int4,
         listen_pg_addr -> Varchar,

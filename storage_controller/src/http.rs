@@ -28,9 +28,7 @@ use pageserver_api::models::{
     DetachBehavior, LsnLeaseRequest, TimelineArchivalConfigRequest,
     TimelineCreateRequest,
 };
-use pageserver_api::upcall_api::{
-    PutTimelineImportStatusRequest, ReAttachRequest, TimelineImportStatusRequest, ValidateRequest,
-};
+use pageserver_api::upcall_api::{PutTimelineImportStatusRequest, TimelineImportStatusRequest};
 use pageserver_client::{BlockUnblock, mgmt_api};
 
 use routerify::Middleware;
@@ -120,27 +118,6 @@ async fn maybe_rate_limit(request: &Request<Body>, branch_id: BranchId) {
 
     // Wait for quota.
     rate_limiter.until_key_ready(&branch_id).await;
-}
-
-/// Pageserver calls into this on startup, to learn which branches it should attach
-async fn handle_re_attach(req: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permissions(&req, Scope::GenerationsApi)?;
-
-    let mut req = req;
-    let reattach_req = json_request::<ReAttachRequest>(&mut req).await?;
-    let state = get_state(&req);
-    json_response(StatusCode::OK, state.service.re_attach(reattach_req).await?)
-}
-
-/// Pageserver calls into this before doing deletions, to confirm that it still
-/// holds the latest generation for the branches with deletions enqueued
-async fn handle_validate(req: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permissions(&req, Scope::GenerationsApi)?;
-
-    let mut req = req;
-    let validate_req = json_request::<ValidateRequest>(&mut req).await?;
-    let state = get_state(&req);
-    json_response(StatusCode::OK, state.service.validate(validate_req).await?)
 }
 
 async fn handle_get_timeline_import_status(req: Request<Body>) -> Result<Response<Body>, ApiError> {
@@ -802,7 +779,6 @@ async fn handle_node_configure(req: Request<Body>) -> Result<Response<Body>, Api
             .external_node_configure(
                 config_req.node_id,
                 config_req.availability.map(NodeAvailability::from),
-                config_req.scheduling,
             )
             .await?,
     )
@@ -1166,12 +1142,6 @@ pub fn make_router(
             named_request_span(r, profile_heap_handler, RequestName("profile_heap"))
         })
         // Upcalls for the pageserver: point the pageserver's `control_plane_api` config to this prefix
-        .post("/upcall/v1/re-attach", |r| {
-            named_request_span(r, handle_re_attach, RequestName("upcall_v1_reattach"))
-        })
-        .post("/upcall/v1/validate", |r| {
-            named_request_span(r, handle_validate, RequestName("upcall_v1_validate"))
-        })
         .get("/upcall/v1/timeline_import_status", |r| {
             named_request_span(
                 r,

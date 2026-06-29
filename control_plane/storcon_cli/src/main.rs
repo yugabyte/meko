@@ -4,11 +4,10 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use futures::StreamExt;
 use pageserver_api::controller_api::{
     BranchCreateRequest, BranchDescribeResponse, BranchMigrateRequest, BranchMigrateResponse,
     BranchPolicyRequest, MigrationConfig, NodeAvailabilityWrapper, NodeConfigureRequest,
-    NodeDescribeResponse, NodeRegisterRequest, NodeSchedulingPolicy, NodeShardResponse,
+    NodeDescribeResponse, NodeRegisterRequest, NodeShardResponse,
     PlacementPolicy, ShardSchedulingPolicy,
 };
 use pageserver_api::models::{BranchConfig, BranchConfigPatchRequest, BranchConfigRequest};
@@ -51,9 +50,6 @@ enum Command {
         /// manually mark a node offline
         #[arg(long)]
         availability: Option<NodeAvailabilityArg>,
-        /// Scheduling policy controls whether branches may be scheduled onto this node.
-        #[arg(long)]
-        scheduling: Option<NodeSchedulingPolicy>,
     },
     /// Exists for backup usage and will be removed in future.
     /// Use [`Command::NodeStartDelete`] instead, if possible.
@@ -185,50 +181,6 @@ enum Command {
         #[arg(long)]
         unclean: bool,
     },
-    // Migrate away from a set of specified pageservers by moving the primary attachments to pageservers
-    // outside of the specified set.
-    BulkMigrate {
-        // Set of pageserver node ids to drain.
-        #[arg(long)]
-        nodes: Vec<NodeId>,
-        // Optional: migration concurrency (default is 8)
-        #[arg(long)]
-        concurrency: Option<usize>,
-        // Optional: maximum number of branches to migrate
-        #[arg(long)]
-        max_shards: Option<usize>,
-        // Optional: when set to true, nothing is migrated, but the plan is printed to stdout
-        #[arg(long)]
-        dry_run: Option<bool>,
-    },
-    /// Start draining the specified pageserver.
-    /// The drain is complete when the schedulling policy returns to active.
-    StartDrain {
-        #[arg(long)]
-        node_id: NodeId,
-    },
-    /// Cancel draining the specified pageserver and wait for `timeout`
-    /// for the operation to be canceled. May be retried.
-    CancelDrain {
-        #[arg(long)]
-        node_id: NodeId,
-        #[arg(long)]
-        timeout: humantime::Duration,
-    },
-    /// Start filling the specified pageserver.
-    /// The drain is complete when the schedulling policy returns to active.
-    StartFill {
-        #[arg(long)]
-        node_id: NodeId,
-    },
-    /// Cancel filling the specified pageserver and wait for `timeout`
-    /// for the operation to be canceled. May be retried.
-    CancelFill {
-        #[arg(long)]
-        node_id: NodeId,
-        #[arg(long)]
-        timeout: humantime::Duration,
-    },
     /// Downloads any missing heatmap layers for all shard for a given branch
     DownloadHeatmapLayers {
         /// Branch ID. The operation is performed on all shards of the branch.
@@ -328,34 +280,6 @@ impl FromStr for NodeAvailabilityArg {
     }
 }
 
-async fn wait_for_scheduling_policy<F>(
-    client: Client,
-    node_id: NodeId,
-    timeout: Duration,
-    f: F,
-) -> anyhow::Result<NodeSchedulingPolicy>
-where
-    F: Fn(NodeSchedulingPolicy) -> bool,
-{
-    let waiter = tokio::time::timeout(timeout, async move {
-        loop {
-            let node = client
-                .dispatch::<(), NodeDescribeResponse>(
-                    Method::GET,
-                    format!("control/v1/node/{node_id}"),
-                    None,
-                )
-                .await?;
-
-            if f(node.scheduling) {
-                return Ok::<NodeSchedulingPolicy, mgmt_api::Error>(node.scheduling);
-            }
-        }
-    });
-
-    Ok(waiter.await??)
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -441,12 +365,11 @@ async fn main() -> anyhow::Result<()> {
             resp.sort_by(|a, b| a.listen_http_addr.cmp(&b.listen_http_addr));
 
             let mut table = comfy_table::Table::new();
-            table.set_header(["Id", "Hostname", "Scheduling", "Availability"]);
+            table.set_header(["Id", "Hostname", "Availability"]);
             for node in resp {
                 table.add_row([
                     format!("{}", node.id),
                     node.listen_http_addr,
-                    format!("{:?}", node.scheduling),
                     format!("{:?}", node.availability),
                 ]);
             }
@@ -455,12 +378,10 @@ async fn main() -> anyhow::Result<()> {
         Command::NodeConfigure {
             node_id,
             availability,
-            scheduling,
         } => {
             let req = NodeConfigureRequest {
                 node_id,
                 availability: availability.map(|a| a.0),
-                scheduling,
             };
             storcon_client
                 .dispatch::<_, ()>(
@@ -774,7 +695,7 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
             println!("Delete started for {node_id}");
         }
-        Command::NodeCancelDelete { node_id, timeout } => {
+        Command::NodeCancelDelete { node_id, timeout: _ } => {
             storcon_client
                 .dispatch::<(), ()>(
                     Method::DELETE,
@@ -783,17 +704,7 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
 
-            println!("Waiting for node {node_id} to quiesce on scheduling policy ...");
-
-            let final_policy =
-                wait_for_scheduling_policy(storcon_client, node_id, *timeout, |sched| {
-                    !matches!(sched, NodeSchedulingPolicy::Deleting)
-                })
-                .await?;
-
-            println!(
-                "Delete was cancelled for node {node_id}. Schedulling policy is now {final_policy:?}"
-            );
+            println!("Delete was cancelled for node {node_id}.");
         }
         Command::NodeDeleteTombstone { node_id } => {
             storcon_client
@@ -816,265 +727,15 @@ async fn main() -> anyhow::Result<()> {
             resp.sort_by(|a, b| a.listen_http_addr.cmp(&b.listen_http_addr));
 
             let mut table = comfy_table::Table::new();
-            table.set_header(["Id", "Hostname", "Scheduling", "Availability"]);
+            table.set_header(["Id", "Hostname", "Availability"]);
             for node in resp {
                 table.add_row([
                     format!("{}", node.id),
                     node.listen_http_addr,
-                    format!("{:?}", node.scheduling),
                     format!("{:?}", node.availability),
                 ]);
             }
             println!("{table}");
-        }
-        Command::BulkMigrate {
-            nodes,
-            concurrency,
-            max_shards,
-            dry_run,
-        } => {
-            // Load the list of nodes, split them up into the drained and filled sets,
-            // and validate that draining is possible.
-            let node_descs = storcon_client
-                .dispatch::<(), Vec<NodeDescribeResponse>>(
-                    Method::GET,
-                    "control/v1/node".to_string(),
-                    None,
-                )
-                .await?;
-
-            let mut node_to_drain_descs = Vec::new();
-            let mut node_to_fill_descs = Vec::new();
-
-            for desc in node_descs {
-                let to_drain = nodes.contains(&desc.id);
-                if to_drain {
-                    node_to_drain_descs.push(desc);
-                } else {
-                    node_to_fill_descs.push(desc);
-                }
-            }
-
-            if nodes.len() != node_to_drain_descs.len() {
-                anyhow::bail!("Bulk migration requested away from node which doesn't exist.")
-            }
-
-            node_to_fill_descs.retain(|desc| {
-                matches!(desc.availability, NodeAvailabilityWrapper::Active)
-                    && matches!(
-                        desc.scheduling,
-                        NodeSchedulingPolicy::Active | NodeSchedulingPolicy::Filling
-                    )
-            });
-
-            if node_to_fill_descs.is_empty() {
-                anyhow::bail!("There are no nodes to migrate to")
-            }
-
-            // Set the node scheduling policy to draining for the nodes which
-            // we plan to drain.
-            for node_desc in node_to_drain_descs.iter() {
-                let req = NodeConfigureRequest {
-                    node_id: node_desc.id,
-                    availability: None,
-                    scheduling: Some(NodeSchedulingPolicy::Draining),
-                };
-
-                storcon_client
-                    .dispatch::<_, ()>(
-                        Method::PUT,
-                        format!("control/v1/node/{}/config", node_desc.id),
-                        Some(req),
-                    )
-                    .await?;
-            }
-
-            // Perform the migration: move each branch scheduled on a node to
-            // be drained to a node which is being filled. A simple round robin
-            // strategy is used to pick the new node.
-            let branches = storcon_client
-                .dispatch::<(), Vec<BranchDescribeResponse>>(
-                    Method::GET,
-                    "control/v1/branch".to_string(),
-                    None,
-                )
-                .await?;
-
-            let mut selected_node_idx = 0;
-
-            struct MigrationMove {
-                branch_id: BranchId,
-                from: NodeId,
-                to: NodeId,
-            }
-
-            let mut moves: Vec<MigrationMove> = Vec::new();
-
-            let shards = branches
-                .into_iter()
-                .flat_map(|branch| branch.shards.into_iter());
-            for shard in shards {
-                if let Some(max_shards) = max_shards {
-                    if moves.len() >= max_shards {
-                        println!(
-                            "Stop planning branch moves since the requested maximum was reached"
-                        );
-                        break;
-                    }
-                }
-
-                let should_migrate = {
-                    if let Some(attached_to) = shard.node_attached {
-                        node_to_drain_descs
-                            .iter()
-                            .map(|desc| desc.id)
-                            .any(|id| id == attached_to)
-                    } else {
-                        false
-                    }
-                };
-
-                if !should_migrate {
-                    continue;
-                }
-
-                moves.push(MigrationMove {
-                    branch_id: shard.branch_id,
-                    from: shard
-                        .node_attached
-                        .expect("We only migrate attached branches"),
-                    to: node_to_fill_descs[selected_node_idx].id,
-                });
-                selected_node_idx = (selected_node_idx + 1) % node_to_fill_descs.len();
-            }
-
-            let total_moves = moves.len();
-
-            if dry_run == Some(true) {
-                println!("Dryrun requested. Planned {total_moves} moves:");
-                for mv in &moves {
-                    println!("{}: {} -> {}", mv.branch_id, mv.from, mv.to)
-                }
-
-                return Ok(());
-            }
-
-            const DEFAULT_MIGRATE_CONCURRENCY: usize = 8;
-            let mut stream = futures::stream::iter(moves)
-                .map(|mv| {
-                    let client = Client::new(http_client.clone(), cli.api.clone(), cli.jwt.clone());
-                    async move {
-                        client
-                            .dispatch::<BranchMigrateRequest, BranchMigrateResponse>(
-                                Method::PUT,
-                                format!("control/v1/branch/{}/migrate", mv.branch_id),
-                                Some(BranchMigrateRequest {
-                                    node_id: mv.to,
-                                    origin_node_id: Some(mv.from),
-                                    migration_config: MigrationConfig::default(),
-                                }),
-                            )
-                            .await
-                            .map_err(|e| (mv.branch_id, mv.from, mv.to, e))
-                    }
-                })
-                .buffered(concurrency.unwrap_or(DEFAULT_MIGRATE_CONCURRENCY));
-
-            let mut success = 0;
-            let mut failure = 0;
-
-            while let Some(res) = stream.next().await {
-                match res {
-                    Ok(_) => {
-                        success += 1;
-                    }
-                    Err((branch_id, from, to, error)) => {
-                        failure += 1;
-                        println!(
-                            "Failed to migrate {branch_id} from node {from} to node {to}: {error}"
-                        );
-                    }
-                }
-
-                if (success + failure) % 20 == 0 {
-                    println!(
-                        "Processed {}/{} branches: {} succeeded, {} failed",
-                        success + failure,
-                        total_moves,
-                        success,
-                        failure
-                    );
-                }
-            }
-
-            println!(
-                "Processed {}/{} branches: {} succeeded, {} failed",
-                success + failure,
-                total_moves,
-                success,
-                failure
-            );
-        }
-        Command::StartDrain { node_id } => {
-            storcon_client
-                .dispatch::<(), ()>(
-                    Method::PUT,
-                    format!("control/v1/node/{node_id}/drain"),
-                    None,
-                )
-                .await?;
-            println!("Drain started for {node_id}");
-        }
-        Command::CancelDrain { node_id, timeout } => {
-            storcon_client
-                .dispatch::<(), ()>(
-                    Method::DELETE,
-                    format!("control/v1/node/{node_id}/drain"),
-                    None,
-                )
-                .await?;
-
-            println!("Waiting for node {node_id} to quiesce on scheduling policy ...");
-
-            let final_policy =
-                wait_for_scheduling_policy(storcon_client, node_id, *timeout, |sched| {
-                    use NodeSchedulingPolicy::*;
-                    matches!(sched, Active | PauseForRestart)
-                })
-                .await?;
-
-            println!(
-                "Drain was cancelled for node {node_id}. Schedulling policy is now {final_policy:?}"
-            );
-        }
-        Command::StartFill { node_id } => {
-            storcon_client
-                .dispatch::<(), ()>(Method::PUT, format!("control/v1/node/{node_id}/fill"), None)
-                .await?;
-
-            println!("Fill started for {node_id}");
-        }
-        Command::CancelFill { node_id, timeout } => {
-            storcon_client
-                .dispatch::<(), ()>(
-                    Method::DELETE,
-                    format!("control/v1/node/{node_id}/fill"),
-                    None,
-                )
-                .await?;
-
-            println!("Waiting for node {node_id} to quiesce on scheduling policy ...");
-
-            let final_policy =
-                wait_for_scheduling_policy(storcon_client, node_id, *timeout, |sched| {
-                    use NodeSchedulingPolicy::*;
-                    matches!(sched, Active)
-                })
-                .await?;
-
-            println!(
-                "Fill was cancelled for node {node_id}. Schedulling policy is now {final_policy:?}"
-            );
         }
         Command::DownloadHeatmapLayers {
             branch_id,
