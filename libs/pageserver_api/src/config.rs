@@ -465,7 +465,7 @@ pub struct YbPageWriterConfig {
     /// deserialize + re-serialize CPU across blocking threads; the per-key
     /// buffer pushes and the materialiser bookkeeping stay serial, so
     /// ordering and atomicity are unchanged. Not scaled by `scale_factor`.
-    /// Default 1.
+    /// Default 4 (set to 1 for the historical serial behavior).
     pub ingest_parallelism: usize,
 }
 
@@ -484,7 +484,7 @@ impl YbPageWriterConfig {
             read_cache_bytes: 1024 * 1024 * 1024,
             backpressure_bytes: 50 * 1024 * 1024,
             meta_cache_entries: 8192,
-            ingest_parallelism: 1,
+            ingest_parallelism: 4,
         }
     }
 }
