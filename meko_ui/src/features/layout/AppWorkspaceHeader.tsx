@@ -91,21 +91,25 @@ export function AppWorkspaceHeader({
 }
 
 /**
- * Tier chip shown next to the signed-in email. Renders only for paid
- * tiers (`pro` / `enterprise`) — free users see nothing so the chip
- * doesn't become noise. Source of truth: `currentUser.user_type` from
- * `/auth/me`.
+ * Tier chip shown next to the signed-in email. Renders for free / pro /
+ * enterprise — anything unknown / empty stays hidden so unauthenticated
+ * or pre-/auth/me states don't flash a wrong tag. Source of truth:
+ * `currentUser.user_type` from `/auth/me`.
  */
 function TierBadge({ userType }: { userType?: string | null }) {
-  const t = (userType ?? "").trim().toLowerCase();
-  if (t !== "pro" && t !== "enterprise") return null;
-  const label = t === "enterprise" ? "ENTERPRISE" : "PRO";
-  // Pro = blue (matches the existing CTA / Pricing accents).
-  // Enterprise = purple so it reads as one tier above Pro.
+  const userTier = (userType ?? "").trim().toLowerCase();
+  if (userTier !== "free" && userTier !== "pro" && userTier !== "enterprise") return null;
+  // Each tier gets a distinct hue so the eye separates them at a glance.
+  //   free       — muted/neutral; "you can upgrade" without nagging.
+  //   pro        — blue (matches the existing CTA / Pricing accents).
+  //   enterprise — purple so it reads as one tier above Pro.
   const tone =
-    t === "enterprise"
+    userTier === "enterprise"
       ? "border-purple-500/40 bg-purple-500/10 text-purple-700 dark:text-purple-300"
-      : "border-blue-500/40 bg-blue-500/10 text-blue-700 dark:text-blue-300";
+      : userTier === "pro"
+        ? "border-blue-500/40 bg-blue-500/10 text-blue-700 dark:text-blue-300"
+        : "border-border bg-muted text-muted-foreground";
+  const label = userTier.toUpperCase();
   return (
     <span
       className={cn(

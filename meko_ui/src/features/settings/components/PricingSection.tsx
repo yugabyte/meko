@@ -49,7 +49,7 @@ const TIER_ROWS: ReadonlyArray<Row> = [
   { label: "Max KB file size", freeValue: "5 MB", proValue: "Custom" },
   { label: "Support", freeValue: "COMMUNITY", proValue: "PRIORITY" },
   { label: "Decision Trace", freeValue: "Supported", proValue: "Supported" },
-  { label: "On-Prem Deployment", freeValue: null, proValue: "Included" },
+  { label: "On-Prem Deployment", freeValue: null, proValue: null },
   { label: "Audit Logs", freeValue: null, proValue: "Included" },
   { label: "Custom Integrations", freeValue: null, proValue: "Included" },
   { label: "SSO", freeValue: null, proValue: "Included" },
