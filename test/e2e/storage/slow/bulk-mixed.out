@@ -1,4 +1,5 @@
 Timing is on.
+psql:bulk-mixed.sql:20: NOTICE:  table "big_table" does not exist, skipping
 DROP TABLE
 CREATE TABLE
 INSERT 0 2000000
