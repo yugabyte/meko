@@ -90,14 +90,15 @@ image, not yet migrated to flat `branch_id`, still receives the project/branch i
 ## Storage-controller coordination + addressing
 
 With `storageController.url` set (the controller path), the endpoint pod registers its
-co-located pageserver + safekeeper with the controller, takes its pageserver
+co-located pageserver with the controller, takes its pageserver
 **generation from the controller's attach-hook** (not a pinned constant), and
-registers the branch. Two distinct network paths:
+registers the branch. (The safekeeper is endpoint-owned and not registered with
+the controller.) Two distinct network paths:
 
 - **controller → endpoint** (heartbeats, branch ops): the controller dials the
   endpoint's **own stable Service DNS** — `SC_REACHABLE_HOST =
-  <release>.<ns>.svc.cluster.local` — and the SC-needed HTTP ports
-  (pageserver/safekeeper) are published on that Service. Because the address is
+  <release>.<ns>.svc.cluster.local` — and the SC-needed HTTP port
+  (pageserver) is published on that Service. Because the address is
   the Service, not the pod IP, a **rescheduled pod (new IP) re-registers the same
   address** and the controller's node-register stays `UpToDate` instead of
   returning `409` — the fix for the reschedule crash-loop

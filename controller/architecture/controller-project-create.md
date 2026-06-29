@@ -153,8 +153,8 @@ writes are synchronous today and move onto the task framework under #113.
   endpoint attaches; it is never pinned.
 - **Storage-controller calls used:** record / delete pending init, keyed by
   `branch_id` (`POST`/`DELETE /control/v1/branch/{branch_id}/pending_init`, by
-  cAmp); pageserver-node register, safekeeper register, attach-hook, and the
+  cAmp); pageserver-node register, attach-hook, and the
   branch `register` route (`POST /control/v1/branch/{branch_id}/register`, by the
-  endpoint).
+  endpoint). (No safekeeper register — the safekeeper is endpoint-owned; see #171.)
 - **Durability.** These steps run synchronously today; #113 tracks moving them
   onto cAmp's write-ahead task framework as durable, resumable steps.

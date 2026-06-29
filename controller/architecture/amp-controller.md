@@ -228,8 +228,9 @@ Exactly one of each runs per placement group (§1):
   boundary is one placement group, one controller (§1); it owns the lifecycle of
   everything below it and exposes the API (§3) that an agent layer (§12) will consume.
 - **storage controller** — the existing `storage_controller/` crate, reused as an
-  internal storage-layer registry and the generation-fencing authority the pageserver
-  and safekeeper binaries already speak to. It runs *under* amp-controller as a
+  internal storage-layer registry and the generation-fencing authority for the
+  pageserver (it issues generations via the attach-hook the launcher calls; the
+  safekeeper is endpoint-owned and not registered with it). It runs *under* amp-controller as a
   managed service (§11.1): never amp-controller's state store, never exposed to
   users.
 - **endpoint_storage** — YB Light's small standalone store for endpoint-scoped scratch
@@ -742,8 +743,8 @@ pageserver and safekeeper binaries already implement. Today it is driven by
 
 **Decision: reuse it as an internal storage-layer registry — never as
 amp-controller's state store, and never exposed to users.** This is principle 7
-applied: the hard, proven part is the fencing/registry protocol the data-plane
-binaries already speak, and we do not rewrite it.
+applied: the hard, proven part is the pageserver's fencing/registry protocol,
+and we do not rewrite it.
 
 **How the controller runs it ([#94](https://github.com/yugabyte/yb-light/issues/94)).**
 amp-controller owns the storage controller as a child process it fully
