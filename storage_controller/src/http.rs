@@ -20,7 +20,6 @@ use pageserver_api::controller_api::{
     ComputeEndpoint, MetadataHealthListOutdatedRequest, MetadataHealthListOutdatedResponse,
     MetadataHealthListUnhealthyResponse, MetadataHealthUpdateRequest, MetadataHealthUpdateResponse,
     NodeAvailability, NodeConfigureRequest, NodeRegisterRequest, PendingTimelineInitRequest,
-    SafekeeperSchedulingPolicyRequest,
     SetTimelineBranchNameRequest, BranchCreateRequest,
     BranchPolicyRequest, TimelineBranchName, TimelineImportRequest,
  TimelineRegisterRequest,
@@ -44,7 +43,6 @@ use crate::metrics::{
     HttpRequestLatencyLabelGroup, HttpRequestStatusLabelGroup, METRICS_REGISTRY,
     PageserverRequestLabelGroup,
 };
-use crate::persistence::SafekeeperUpsert;
 use crate::service::{
     BranchMutationLocations, STARTUP_RECONCILE_TIMEOUT, Service,
 };
@@ -641,7 +639,7 @@ async fn handle_timeline_register(
     let body = json_request::<TimelineRegisterRequest>(&mut req).await?;
 
     service
-        .timeline_register(branch_id, body.start_lsn, body.sk_set, body.branch_name)
+        .timeline_register(branch_id, body.start_lsn, body.branch_name)
         .await?;
     json_response(StatusCode::OK, ())
 }
@@ -832,14 +830,6 @@ async fn handle_node_shards(req: Request<Body>) -> Result<Response<Body>, ApiErr
     json_response(StatusCode::OK, node_status)
 }
 
-async fn handle_safekeeper_list(req: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permissions(&req, Scope::Infra)?;
-
-    let state = get_state(&req);
-    let safekeepers = state.service.safekeepers_list().await?;
-    json_response(StatusCode::OK, safekeepers)
-}
-
 async fn handle_metadata_health_update(req: Request<Body>) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::Scrubber)?;
 
@@ -945,21 +935,6 @@ async fn handle_timeline_import(req: Request<Body>) -> Result<Response<Body>, Ap
     json_response(StatusCode::OK, state.service.timeline_import(import_req).await?)
 }
 
-async fn handle_tenant_timeline_locate(
-    service: Arc<Service>,
-    req: Request<Body>,
-) -> Result<Response<Body>, ApiError> {
-    let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
-
-    check_permissions(&req, Scope::Admin)?;
-    maybe_rate_limit(&req, branch_id).await;
-
-    json_response(
-        StatusCode::OK,
-        service.tenant_timeline_locate(branch_id).await?,
-    )
-}
-
 async fn handle_tenants_dump(req: Request<Body>) -> Result<Response<Body>, ApiError> {
     check_permissions(&req, Scope::Admin)?;
 
@@ -1014,80 +989,6 @@ async fn handle_ready(req: Request<Body>) -> Result<Response<Body>, ApiError> {
     } else {
         json_response(StatusCode::SERVICE_UNAVAILABLE, ())
     }
-}
-
-/// Return the safekeeper record by instance id, or 404.
-///
-/// Not used by anything except manual testing.
-async fn handle_get_safekeeper(req: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permissions(&req, Scope::Infra)?;
-
-    let id = parse_request_param::<i64>(&req, "id")?;
-
-    let state = get_state(&req);
-
-    let res = state.service.get_safekeeper(id).await;
-
-    match res {
-        Ok(b) => json_response(StatusCode::OK, b),
-        Err(crate::persistence::DatabaseError::Query(diesel::result::Error::NotFound)) => {
-            Err(ApiError::NotFound("unknown instance id".into()))
-        }
-        Err(other) => Err(other.into()),
-    }
-}
-
-/// Used as part of deployment scripts.
-///
-/// Assumes information is only relayed to storage controller after first selecting an unique id on
-/// control plane database, which means we have an id field in the request and payload.
-async fn handle_upsert_safekeeper(mut req: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permissions(&req, Scope::Infra)?;
-
-    let body = json_request::<SafekeeperUpsert>(&mut req).await?;
-    let id = parse_request_param::<i64>(&req, "id")?;
-
-    if id != body.id {
-        // it should be repeated
-        return Err(ApiError::BadRequest(anyhow::anyhow!(
-            "id mismatch: url={id:?}, body={:?}",
-            body.id
-        )));
-    }
-
-    if id <= 0 {
-        return Err(ApiError::BadRequest(anyhow::anyhow!(
-            "id not allowed to be zero or negative: {id}"
-        )));
-    }
-
-    let state = get_state(&req);
-
-    state.service.upsert_safekeeper(body).await?;
-
-    Ok(Response::builder()
-        .status(StatusCode::NO_CONTENT)
-        .body(Body::empty())
-        .unwrap())
-}
-
-/// Sets the scheduling policy of the specified safekeeper
-async fn handle_safekeeper_scheduling_policy(
-    mut req: Request<Body>,
-) -> Result<Response<Body>, ApiError> {
-    check_permissions(&req, Scope::Admin)?;
-
-    let body = json_request::<SafekeeperSchedulingPolicyRequest>(&mut req).await?;
-    let id = parse_request_param::<i64>(&req, "id")?;
-
-    let state = get_state(&req);
-
-    state
-        .service
-        .set_safekeeper_scheduling_policy(id, body.scheduling_policy)
-        .await?;
-
-    json_response(StatusCode::OK, ())
 }
 
 /// Common wrapper for request handlers that call into Service and will operate on branches: they must only
@@ -1336,13 +1237,6 @@ pub fn make_router(
                 RequestName("debug_v1_timeline_import"),
             )
         })
-        .get("/debug/v1/branch/:branch_id/locate_timeline", |r| {
-            tenant_service_handler(
-                r,
-                handle_tenant_timeline_locate,
-                RequestName("v1_branch_timeline_locate"),
-            )
-        })
         .get("/debug/v1/scheduler", |r| {
             named_request_span(r, handle_scheduler_dump, RequestName("debug_v1_scheduler"))
         })
@@ -1418,32 +1312,6 @@ pub fn make_router(
                 r,
                 handle_metadata_health_list_outdated,
                 RequestName("control_v1_metadata_health_list_outdated"),
-            )
-        })
-        // Safekeepers
-        .get("/control/v1/safekeeper", |r| {
-            named_request_span(
-                r,
-                handle_safekeeper_list,
-                RequestName("control_v1_safekeeper_list"),
-            )
-        })
-        .get("/control/v1/safekeeper/:id", |r| {
-            named_request_span(r, handle_get_safekeeper, RequestName("v1_safekeeper"))
-        })
-        .post("/control/v1/safekeeper/:id", |r| {
-            // id is in the body
-            named_request_span(
-                r,
-                handle_upsert_safekeeper,
-                RequestName("v1_safekeeper_post"),
-            )
-        })
-        .post("/control/v1/safekeeper/:id/scheduling_policy", |r| {
-            named_request_span(
-                r,
-                handle_safekeeper_scheduling_policy,
-                RequestName("v1_safekeeper_scheduling_policy"),
             )
         })
         // Branch operations

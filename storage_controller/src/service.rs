@@ -21,7 +21,7 @@ use pageserver_api::controller_api::{
     NodeRegisterRequest, NodeSchedulingPolicy, NodeShard, NodeShardResponse, PlacementPolicy,
     PendingTimelineInit, PendingTimelineInitRequest,
     ShardSchedulingPolicy,
-    SkSchedulingPolicy, BranchCreateRequest, BranchCreateResponse, BranchCreateResponseShard,
+    BranchCreateRequest, BranchCreateResponse, BranchCreateResponseShard,
     BranchDescribeResponse, BranchDescribeResponseShard, BranchLocateResponse, BranchPolicyRequest, BranchTimelineDescribeResponse,
     TimelineBranchName,
 };
@@ -38,9 +38,8 @@ use pageserver_api::upcall_api::{
 use pageserver_client::{BlockUnblock, mgmt_api};
 use reqwest::{Certificate, StatusCode};
 use safekeeper_api::PgMajorVersion;
-use safekeeper_api::models::SafekeeperUtilization;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, instrument};
+use tracing::instrument;
 use utils::completion::Barrier;
 use utils::generation::Generation;
 use utils::id::{BranchId, NodeId};
@@ -48,7 +47,7 @@ use utils::lsn::Lsn;
 use utils::sync::gate::Gate;
 use utils::{failpoint_support, pausable_failpoint};
 
-use crate::heartbeater::{Heartbeater, PageserverState, SafekeeperState};
+use crate::heartbeater::{Heartbeater, PageserverState};
 use crate::id_lock_map::{
     IdLockMap, TracingExclusiveGuard, trace_exclusive_lock, trace_shared_lock,
 };
@@ -60,7 +59,6 @@ use crate::persistence::{
     DatabaseError, MetadataHealthPersistence, PendingTimelineInitPersistence, Persistence,
     BranchGenerationState, BranchFilter, BranchPersistence,
 };
-use crate::safekeeper::Safekeeper;
 use crate::scheduler::{ScheduleContext, ScheduleError, Scheduler};
 use crate::branch::{Branch, IntentState, ObservedStateLocation};
 use crate::timeline_import::{
@@ -135,8 +133,6 @@ struct ServiceState {
 
     nodes: Arc<HashMap<NodeId, Node>>,
 
-    safekeepers: Arc<HashMap<NodeId, Safekeeper>>,
-
     scheduler: Scheduler,
 
     /// Tracks ongoing timeline import finalization tasks
@@ -199,14 +195,12 @@ fn passthrough_api_error(node: &Node, e: mgmt_api::Error) -> ApiError {
 impl ServiceState {
     fn new(
         nodes: HashMap<NodeId, Node>,
-        safekeepers: HashMap<NodeId, Safekeeper>,
         branches: BTreeMap<BranchId, Branch>,
         scheduler: Scheduler,
     ) -> Self {
         Self {
             branches,
             nodes: Arc::new(nodes),
-            safekeepers: Arc::new(safekeepers),
             scheduler,
             imports_finalizing: Default::default(),
         }
@@ -221,24 +215,6 @@ impl ServiceState {
     ) {
         (&mut self.nodes, &mut self.branches, &mut self.scheduler)
     }
-
-    #[allow(clippy::type_complexity)]
-    fn parts_mut_sk(
-        &mut self,
-    ) -> (
-        &mut Arc<HashMap<NodeId, Node>>,
-        &mut Arc<HashMap<NodeId, Safekeeper>>,
-        &mut BTreeMap<BranchId, Branch>,
-        &mut Scheduler,
-    ) {
-        (
-            &mut self.nodes,
-            &mut self.safekeepers,
-            &mut self.branches,
-            &mut self.scheduler,
-        )
-    }
-
 }
 
 #[derive(Clone)]
@@ -316,7 +292,6 @@ pub struct Service {
     persistence: Arc<Persistence>,
 
     heartbeater_ps: Heartbeater<Node, PageserverState>,
-    heartbeater_sk: Heartbeater<Safekeeper, SafekeeperState>,
 
     // Locking on a branch granularity:
     // - Take exclusively for rare operations that mutate the branch's persistent state (e.g. create/delete)
@@ -379,12 +354,11 @@ impl Service {
             let locked = self.inner.read().unwrap();
             locked.nodes.clone()
         };
-        let (mut nodes_online, mut sks_online) =
-            self.initial_heartbeat_round(all_nodes.keys()).await;
+        let mut nodes_online = self.initial_heartbeat_round(all_nodes.keys()).await;
 
         let branch_count = {
             let mut locked = self.inner.write().unwrap();
-            let (nodes, safekeepers, branches, scheduler) = locked.parts_mut_sk();
+            let (nodes, branches, scheduler) = locked.parts_mut();
 
             // Mark nodes online if they responded to us: nodes are offline by default after a restart.
             let mut new_nodes = (**nodes).clone();
@@ -395,17 +369,6 @@ impl Service {
                 }
             }
             *nodes = Arc::new(new_nodes);
-
-            let mut new_sks = (**safekeepers).clone();
-            for (node_id, node) in new_sks.iter_mut() {
-                if let Some((utilization, last_seen_at)) = sks_online.remove(node_id) {
-                    node.set_availability(SafekeeperState::Available {
-                        utilization,
-                        last_seen_at,
-                    });
-                }
-            }
-            *safekeepers = Arc::new(new_sks);
 
             // Populate each branch's intent state: intent was pre-seeded from
             // generation_pageserver in [`Self::spawn`]; scheduling fills in the rest.
@@ -462,10 +425,7 @@ impl Service {
     async fn initial_heartbeat_round<'a>(
         &self,
         node_ids: impl Iterator<Item = &'a NodeId>,
-    ) -> (
-        HashMap<NodeId, PageserverUtilization>,
-        HashMap<NodeId, (SafekeeperUtilization, Instant)>,
-    ) {
+    ) -> HashMap<NodeId, PageserverUtilization> {
         assert!(!self.startup_complete.is_ready());
 
         let all_nodes = {
@@ -485,16 +445,11 @@ impl Service {
             }
         }
 
-        let all_sks = {
-            let locked = self.inner.read().unwrap();
-            locked.safekeepers.clone()
-        };
-
         tracing::info!("Sending initial heartbeats...");
-        let (res_ps, res_sk) = tokio::join!(
-            self.heartbeater_ps.heartbeat(Arc::new(nodes_to_heartbeat)),
-            self.heartbeater_sk.heartbeat(all_sks)
-        );
+        let res_ps = self
+            .heartbeater_ps
+            .heartbeat(Arc::new(nodes_to_heartbeat))
+            .await;
 
         let mut online_nodes = HashMap::new();
         if let Ok(deltas) = res_ps {
@@ -511,22 +466,7 @@ impl Service {
             }
         }
 
-        let mut online_sks = HashMap::new();
-        if let Ok(deltas) = res_sk {
-            for (node_id, status) in deltas.0 {
-                match status {
-                    SafekeeperState::Available {
-                        utilization,
-                        last_seen_at,
-                    } => {
-                        online_sks.insert(node_id, (utilization, last_seen_at));
-                    }
-                    SafekeeperState::Offline => {}
-                }
-            }
-        }
-
-        (online_nodes, online_sks)
+        online_nodes
     }
 
     /// Heartbeat all storage nodes once in a while.
@@ -546,15 +486,7 @@ impl Service {
                 locked.nodes.clone()
             };
 
-            let safekeepers = {
-                let locked = self.inner.read().unwrap();
-                locked.safekeepers.clone()
-            };
-
-            let (res_ps, res_sk) = tokio::join!(
-                self.heartbeater_ps.heartbeat(nodes),
-                self.heartbeater_sk.heartbeat(safekeepers)
-            );
+            let res_ps = self.heartbeater_ps.heartbeat(nodes).await;
 
             if let Ok(deltas) = res_ps {
                 let mut to_handle = Vec::default();
@@ -657,53 +589,6 @@ impl Service {
                     }
                 }
             }
-            if let Ok(deltas) = res_sk {
-                let mut to_activate = Vec::new();
-                {
-                    let mut locked = self.inner.write().unwrap();
-                    let mut safekeepers = (*locked.safekeepers).clone();
-
-                    for (id, state) in deltas.0 {
-                        let Some(sk) = safekeepers.get_mut(&id) else {
-                            tracing::info!(
-                                "Couldn't update safekeeper safekeeper state for id {id} from heartbeat={state:?}"
-                            );
-                            continue;
-                        };
-                        if sk.scheduling_policy() == SkSchedulingPolicy::Activating
-                            && let SafekeeperState::Available { .. } = state
-                        {
-                            to_activate.push(id);
-                        }
-                        sk.set_availability(state);
-                    }
-                    locked.safekeepers = Arc::new(safekeepers);
-                }
-                for sk_id in to_activate {
-                    // TODO this can race with set_scheduling_policy (can create disjoint DB <-> in-memory state)
-                    tracing::info!("Activating safekeeper {sk_id}");
-                    match self.persistence.activate_safekeeper(sk_id.0 as i64).await {
-                        Ok(Some(())) => {}
-                        Ok(None) => {
-                            tracing::info!(
-                                "safekeeper {sk_id} has been removed from db or has different scheduling policy than active or activating"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!("couldn't apply activation of {sk_id} to db: {e}");
-                            continue;
-                        }
-                    }
-                    if let Err(e) = self
-                        .set_safekeeper_scheduling_policy_in_mem(sk_id, SkSchedulingPolicy::Active)
-                        .await
-                    {
-                        tracing::info!("couldn't activate safekeeper {sk_id} in memory: {e}");
-                        continue;
-                    }
-                    tracing::info!("Activation of safekeeper {sk_id} done");
-                }
-            }
         }
     }
 
@@ -728,45 +613,6 @@ impl Service {
             .metrics_group
             .storage_controller_https_pageserver_nodes
             .set(nodes.values().filter(|n| n.has_https_port()).count() as i64);
-
-        tracing::info!("Loading safekeepers from database...");
-        let safekeepers = persistence
-            .list_safekeepers()
-            .await?
-            .into_iter()
-            .map(|skp| {
-                Safekeeper::from_persistence(
-                    skp,
-                    CancellationToken::new(),
-                    config.use_https_safekeeper_api,
-                )
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let safekeepers: HashMap<NodeId, Safekeeper> =
-            safekeepers.into_iter().map(|n| (n.get_id(), n)).collect();
-        let count_policy = |policy| {
-            safekeepers
-                .iter()
-                .filter(|sk| sk.1.scheduling_policy() == policy)
-                .count()
-        };
-        let active_sk_count = count_policy(SkSchedulingPolicy::Active);
-        let activating_sk_count = count_policy(SkSchedulingPolicy::Activating);
-        let pause_sk_count = count_policy(SkSchedulingPolicy::Pause);
-        let decom_sk_count = count_policy(SkSchedulingPolicy::Decomissioned);
-        tracing::info!(
-            "Loaded {} safekeepers from database. Active {active_sk_count}, activating {activating_sk_count}, \
-            paused {pause_sk_count}, decomissioned {decom_sk_count}.",
-            safekeepers.len()
-        );
-        metrics::METRICS_REGISTRY
-            .metrics_group
-            .storage_controller_safekeeper_nodes
-            .set(safekeepers.len() as i64);
-        metrics::METRICS_REGISTRY
-            .metrics_group
-            .storage_controller_https_safekeeper_nodes
-            .set(safekeepers.values().filter(|s| s.has_https_port()).count() as i64);
 
         tracing::info!("Loading branches from database...");
         let branch_persistence = persistence.load_active_branches().await?;
@@ -868,25 +714,15 @@ impl Service {
             cancel.clone(),
         );
 
-        let heartbeater_sk = Heartbeater::new(
-            http_client.clone(),
-            config.safekeeper_jwt_token.clone(),
-            config.max_offline_interval,
-            config.max_warming_up_interval,
-            cancel.clone(),
-        );
-
         let this = Arc::new(Self {
             inner: Arc::new(std::sync::RwLock::new(ServiceState::new(
                 nodes,
-                safekeepers,
                 branches,
                 scheduler,
             ))),
             config: config.clone(),
             persistence,
             heartbeater_ps,
-            heartbeater_sk,
             startup_complete: startup_complete.clone(),
             cancel,
             gate: Gate::default(),
@@ -937,17 +773,6 @@ impl Service {
                 this.spawn_heartbeat_driver().await;
             }
         });
-
-        // Check that there is enough safekeepers configured that we can create new timelines
-        let test_sk_res_str = match this.safekeepers_for_new_timeline().await {
-            Ok(v) => format!("Ok({v:?})"),
-            Err(v) => format!("Err({v:})"),
-        };
-        tracing::info!(
-            timeline_safekeeper_count = config.timeline_safekeeper_count,
-            timelines_onto_safekeepers = config.timelines_onto_safekeepers,
-            "viability test result (test timeline creation on safekeepers): {test_sk_res_str}",
-        );
 
         Ok(this)
     }
@@ -1768,10 +1593,8 @@ impl Service {
             );
         };
 
-        // Delete the branch from safekeepers (if needed)
-        self.branch_delete_safekeepers(branch_id)
-            .instrument(tracing::info_span!("branch_delete_safekeepers", %branch_id))
-            .await?;
+        // The branch's safekeeper data is owned by the launcher and reaped
+        // separately (see #171); the controller only drops its own records.
 
         // Success is represented as 404, to imitate the existing pageserver deletion API
         Ok(StatusCode::NOT_FOUND)
@@ -1935,11 +1758,8 @@ impl Service {
         branch_id: BranchId,
         create_req: TimelineCreateRequest,
     ) -> Result<TimelineCreateResponseStorcon, ApiError> {
-        let safekeepers = self.config.timelines_onto_safekeepers;
-
         tracing::info!(
             mode=%create_req.mode_tag(),
-            %safekeepers,
             "Creating branch {}",
             branch_id,
         );
@@ -1952,13 +1772,6 @@ impl Service {
         .await;
         failpoint_support::sleep_millis_async!("tenant-create-timeline-shared-lock");
         let is_import = create_req.is_import();
-        let read_only = matches!(
-            create_req.mode,
-            models::TimelineCreateRequestMode::Branch {
-                read_only: true,
-                ..
-            }
-        );
 
         if is_import {
             // Ensure that there is no split on-going.
@@ -1977,7 +1790,10 @@ impl Service {
             .tenant_timeline_create_pageservers(branch_id, create_req)
             .await?;
 
-        let selected_safekeepers = if is_import {
+        // The controller never creates a timeline on the safekeeper (the
+        // launcher owns the branch's single co-located safekeeper, see #171).
+        // It only tracks the in-progress import here so finalization can run.
+        if is_import {
             let import = TimelineImport {
                 branch_id,
                 shard_statuses: ShardImportStatuses::new(),
@@ -2006,26 +1822,9 @@ impl Service {
                     tracing::info!(%branch_id, "Timeline import entry already present");
                 }
             }
+        }
 
-            None
-        } else if safekeepers || read_only {
-            // Note that for imported branches, we do not create the timeline on the safekeepers
-            // straight away. Instead, we do it once the import finalized such that we know what
-            // start LSN to provide for the safekeepers. This is done in
-            // [`Self::finalize_timeline_import`].
-            let res = self
-                .tenant_timeline_create_safekeepers(&timeline_info, read_only)
-                .instrument(tracing::info_span!("timeline_create_safekeepers", %branch_id))
-                .await?;
-            Some(res)
-        } else {
-            None
-        };
-
-        Ok(TimelineCreateResponseStorcon {
-            timeline_info,
-            safekeepers: selected_safekeepers,
-        })
+        Ok(TimelineCreateResponseStorcon { timeline_info })
     }
 
     #[instrument(skip_all, fields(
@@ -2255,15 +2054,12 @@ impl Service {
                 Ok(())
             }
             None => match self.activate_timeline_post_import(&import).await {
-                Ok(timeline_info) => {
+                Ok(_timeline_info) => {
                     tracing::info!("Post import timeline activation complete");
 
-                    if self.config.timelines_onto_safekeepers {
-                        // Now that we know the start LSN of this timeline, create it on the
-                        // safekeepers.
-                        self.tenant_timeline_create_safekeepers_until_success(timeline_info)
-                            .await?;
-                    }
+                    // The branch's single safekeeper is owned by the launcher,
+                    // which already created the timeline on it; the controller
+                    // does not create it on safekeepers (see #171).
 
                     self.notify_cplane_and_delete_import(branch_id, Ok(()))
                         .await?;
@@ -3018,7 +2814,10 @@ impl Service {
         )
         .await;
 
-        let status_code = self.tenant_remote_mutation(branch_id, move |mut targets| async move {
+        // The branch's safekeeper data is owned by the launcher and reaped
+        // separately (see #171); the controller deletes only its own records
+        // here (via the pageserver mutation below).
+        self.tenant_remote_mutation(branch_id, move |mut targets| async move {
             if targets.0.is_empty() {
                 return Err(ApiError::NotFound(
                     anyhow::anyhow!("Branch not found").into(),
@@ -3092,12 +2891,8 @@ impl Service {
             )
             .await?;
             Ok(shard_zero_status)
-        }).await?;
-
-        self.tenant_timeline_delete_safekeepers(branch_id)
-            .await?;
-
-        status_code
+        })
+        .await?
     }
     /// When you know the BranchId, get the node holding the branch.
     ///

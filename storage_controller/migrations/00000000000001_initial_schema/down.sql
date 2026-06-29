@@ -25,6 +25,5 @@ DROP TABLE IF EXISTS storage_controller.pending_timeline_inits;
 DROP TABLE IF EXISTS storage_controller.timelines;
 DROP TABLE IF EXISTS storage_controller.controllers;
 DROP TABLE IF EXISTS storage_controller.metadata_health;
-DROP TABLE IF EXISTS storage_controller.safekeepers;
 DROP TABLE IF EXISTS storage_controller.nodes;
 DROP TABLE IF EXISTS storage_controller.branches;

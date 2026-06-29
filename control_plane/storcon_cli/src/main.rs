@@ -9,14 +9,11 @@ use pageserver_api::controller_api::{
     BranchCreateRequest, BranchDescribeResponse, BranchMigrateRequest, BranchMigrateResponse,
     BranchPolicyRequest, MigrationConfig, NodeAvailabilityWrapper, NodeConfigureRequest,
     NodeDescribeResponse, NodeRegisterRequest, NodeSchedulingPolicy, NodeShardResponse,
-    PlacementPolicy, SafekeeperDescribeResponse, SafekeeperSchedulingPolicyRequest,
-    ShardSchedulingPolicy,
-    SkSchedulingPolicy, TimelineSafekeeperMigrateRequest,
+    PlacementPolicy, ShardSchedulingPolicy,
 };
 use pageserver_api::models::{BranchConfig, BranchConfigPatchRequest, BranchConfigRequest};
 use pageserver_client::mgmt_api::{self};
 use reqwest::{Certificate, Method, StatusCode, Url};
-use safekeeper_api::models::TimelineLocateResponse;
 use storage_controller_client::control_api::Client;
 use utils::id::{BranchId, NodeId};
 
@@ -232,15 +229,6 @@ enum Command {
         #[arg(long)]
         timeout: humantime::Duration,
     },
-    /// List safekeepers known to the storage controller
-    Safekeepers {},
-    /// Set the scheduling policy of the specified safekeeper
-    SafekeeperScheduling {
-        #[arg(long)]
-        node_id: NodeId,
-        #[arg(long)]
-        scheduling_policy: SkSchedulingPolicyArg,
-    },
     /// Downloads any missing heatmap layers for all shard for a given branch
     DownloadHeatmapLayers {
         /// Branch ID. The operation is performed on all shards of the branch.
@@ -249,24 +237,6 @@ enum Command {
         /// Optional: Maximum download concurrency (default is 16)
         #[arg(long)]
         concurrency: Option<usize>,
-    },
-    /// Locate safekeepers for a branch from the storcon DB.
-    BranchLocate {
-        #[arg(long)]
-        branch_id: BranchId,
-    },
-    /// Migrate a branch to a new set of safekeepers
-    BranchSafekeeperMigrate {
-        #[arg(long)]
-        branch_id: BranchId,
-        /// Example: --new-sk-set 1,2,3
-        #[arg(long, required = true, value_delimiter = ',')]
-        new_sk_set: Vec<NodeId>,
-    },
-    /// Abort ongoing safekeeper migration.
-    BranchSafekeeperMigrateAbort {
-        #[arg(long)]
-        branch_id: BranchId,
     },
 }
 
@@ -321,17 +291,6 @@ impl FromStr for PlacementPolicyArg {
                 "Unknown placement policy '{s}', try detached,secondary,attached:<n>"
             )),
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct SkSchedulingPolicyArg(SkSchedulingPolicy);
-
-impl FromStr for SkSchedulingPolicyArg {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        SkSchedulingPolicy::from_str(s).map(Self)
     }
 }
 
@@ -1117,57 +1076,6 @@ async fn main() -> anyhow::Result<()> {
                 "Fill was cancelled for node {node_id}. Schedulling policy is now {final_policy:?}"
             );
         }
-        Command::Safekeepers {} => {
-            let mut resp = storcon_client
-                .dispatch::<(), Vec<SafekeeperDescribeResponse>>(
-                    Method::GET,
-                    "control/v1/safekeeper".to_string(),
-                    None,
-                )
-                .await?;
-
-            resp.sort_by(|a, b| a.id.cmp(&b.id));
-
-            let mut table = comfy_table::Table::new();
-            table.set_header([
-                "Id",
-                "Version",
-                "Host",
-                "Port",
-                "Http Port",
-                "AZ Id",
-                "Scheduling",
-            ]);
-            for sk in resp {
-                table.add_row([
-                    format!("{}", sk.id),
-                    format!("{}", sk.version),
-                    sk.host,
-                    format!("{}", sk.port),
-                    format!("{}", sk.http_port),
-                    sk.availability_zone_id.clone(),
-                    String::from(sk.scheduling_policy),
-                ]);
-            }
-            println!("{table}");
-        }
-        Command::SafekeeperScheduling {
-            node_id,
-            scheduling_policy,
-        } => {
-            let scheduling_policy = scheduling_policy.0;
-            storcon_client
-                .dispatch::<SafekeeperSchedulingPolicyRequest, ()>(
-                    Method::POST,
-                    format!("control/v1/safekeeper/{node_id}/scheduling_policy"),
-                    Some(SafekeeperSchedulingPolicyRequest { scheduling_policy }),
-                )
-                .await?;
-            println!(
-                "Scheduling policy of {node_id} set to {}",
-                String::from(scheduling_policy)
-            );
-        }
         Command::DownloadHeatmapLayers {
             branch_id,
             concurrency,
@@ -1179,49 +1087,6 @@ async fn main() -> anyhow::Result<()> {
             if let Some(c) = concurrency {
                 path = format!("{path}?concurrency={c}");
             }
-
-            storcon_client
-                .dispatch::<(), ()>(Method::POST, path, None)
-                .await?;
-        }
-        Command::BranchLocate {
-            branch_id,
-        } => {
-            let path = format!("debug/v1/branch/{branch_id}/locate");
-
-            let resp = storcon_client
-                .dispatch::<(), TimelineLocateResponse>(Method::GET, path, None)
-                .await?;
-
-            let sk_set = resp.sk_set.iter().map(|id| id.0 as i64).collect::<Vec<_>>();
-            let new_sk_set = resp
-                .new_sk_set
-                .as_ref()
-                .map(|ids| ids.iter().map(|id| id.0 as i64).collect::<Vec<_>>());
-
-            println!("generation = {}", resp.generation);
-            println!("sk_set = {sk_set:?}");
-            println!("new_sk_set = {new_sk_set:?}");
-        }
-        Command::BranchSafekeeperMigrate {
-            branch_id,
-            new_sk_set,
-        } => {
-            let path = format!("v1/branch/{branch_id}/safekeeper_migrate");
-
-            storcon_client
-                .dispatch::<_, ()>(
-                    Method::POST,
-                    path,
-                    Some(TimelineSafekeeperMigrateRequest { new_sk_set }),
-                )
-                .await?;
-        }
-        Command::BranchSafekeeperMigrateAbort {
-            branch_id,
-        } => {
-            let path =
-                format!("v1/branch/{branch_id}/safekeeper_migrate_abort");
 
             storcon_client
                 .dispatch::<(), ()>(Method::POST, path, None)

@@ -49,20 +49,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    safekeepers (id) {
-        id -> Int8,
-        region_id -> Text,
-        version -> Int8,
-        host -> Text,
-        port -> Int4,
-        http_port -> Int4,
-        availability_zone_id -> Text,
-        scheduling_policy -> Varchar,
-        https_port -> Nullable<Int4>,
-    }
-}
-
-diesel::table! {
     timeline_imports (branch_id) {
         branch_id -> Varchar,
         shard_statuses -> Jsonb,
@@ -77,7 +63,6 @@ diesel::table! {
         branch_id -> Varchar,
         start_lsn -> PgLsn,
         generation -> Int4,
-        sk_set -> Array<Nullable<Int8>>,
         deleted_at -> Nullable<Timestamptz>,
         branch_name -> Nullable<Varchar>,
     }
@@ -102,7 +87,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     metadata_health,
     nodes,
     pending_timeline_inits,
-    safekeepers,
     timeline_imports,
     timelines,
 );

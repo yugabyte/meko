@@ -20,7 +20,7 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 use pageserver_api::controller_api::{
     ComputeEndpoint, MetadataHealthRecord, NodeLifecycle, NodeSchedulingPolicy, PlacementPolicy,
-    SafekeeperDescribeResponse, ShardSchedulingPolicy, SkSchedulingPolicy,
+    ShardSchedulingPolicy,
 };
 use pageserver_api::models::{BranchConfig, BranchImportStatus};
 use rustls::client::WebPkiServerVerifier;
@@ -120,7 +120,6 @@ pub(crate) enum DatabaseOperation {
     ListMetadataHealth,
     ListMetadataHealthUnhealthy,
     ListMetadataHealthOutdated,
-    ListSafekeepers,
     InsertTimeline,
     UpdateTimeline,
     GetTimeline,
@@ -1124,132 +1123,6 @@ impl Persistence {
         .await
     }
 
-    /// At startup, populate the list of nodes which our shards may be placed on
-    pub(crate) async fn list_safekeepers(&self) -> DatabaseResult<Vec<SafekeeperPersistence>> {
-        let safekeepers: Vec<SafekeeperPersistence> = self
-            .with_measured_conn(DatabaseOperation::ListNodes, move |conn| {
-                Box::pin(async move {
-                    Ok(crate::schema::safekeepers::table
-                        .load::<SafekeeperPersistence>(conn)
-                        .await?)
-                })
-            })
-            .await?;
-
-        tracing::info!("list_safekeepers: loaded {} nodes", safekeepers.len());
-
-        Ok(safekeepers)
-    }
-
-    pub(crate) async fn safekeeper_upsert(
-        &self,
-        record: SafekeeperUpsert,
-    ) -> Result<(), DatabaseError> {
-        use crate::schema::safekeepers::dsl::*;
-
-        self.with_conn(move |conn| {
-            let record = record.clone();
-            Box::pin(async move {
-                let bind = record
-                    .as_insert_or_update()
-                    .map_err(|e| DatabaseError::Logical(format!("{e}")))?;
-
-                let inserted_updated = diesel::insert_into(safekeepers)
-                    .values(&bind)
-                    .on_conflict(id)
-                    .do_update()
-                    .set(&bind)
-                    .execute(conn)
-                    .await?;
-
-                if inserted_updated != 1 {
-                    return Err(DatabaseError::Logical(format!(
-                        "unexpected number of rows ({inserted_updated})"
-                    )));
-                }
-
-                Ok(())
-            })
-        })
-        .await
-    }
-
-    pub(crate) async fn set_safekeeper_scheduling_policy(
-        &self,
-        id_: i64,
-        scheduling_policy_: SkSchedulingPolicy,
-    ) -> Result<(), DatabaseError> {
-        use crate::schema::safekeepers::dsl::*;
-
-        self.with_conn(move |conn| {
-            Box::pin(async move {
-                #[derive(Insertable, AsChangeset)]
-                #[diesel(table_name = crate::schema::safekeepers)]
-                struct UpdateSkSchedulingPolicy<'a> {
-                    id: i64,
-                    scheduling_policy: &'a str,
-                }
-                let scheduling_policy_ = String::from(scheduling_policy_);
-
-                let rows_affected = diesel::update(safekeepers.filter(id.eq(id_)))
-                    .set(scheduling_policy.eq(scheduling_policy_))
-                    .execute(conn)
-                    .await?;
-
-                if rows_affected != 1 {
-                    return Err(DatabaseError::Logical(format!(
-                        "unexpected number of rows ({rows_affected})",
-                    )));
-                }
-
-                Ok(())
-            })
-        })
-        .await
-    }
-
-    /// Activate the given safekeeper, ensuring that there is no TOCTOU.
-    /// Returns `Some` if the safekeeper has indeed been activating (or already active). Other states return `None`.
-    pub(crate) async fn activate_safekeeper(&self, id_: i64) -> Result<Option<()>, DatabaseError> {
-        use crate::schema::safekeepers::dsl::*;
-
-        self.with_conn(move |conn| {
-            Box::pin(async move {
-                #[derive(Insertable, AsChangeset)]
-                #[diesel(table_name = crate::schema::safekeepers)]
-                struct UpdateSkSchedulingPolicy<'a> {
-                    id: i64,
-                    scheduling_policy: &'a str,
-                }
-                let scheduling_policy_active = String::from(SkSchedulingPolicy::Active);
-                let scheduling_policy_activating = String::from(SkSchedulingPolicy::Activating);
-
-                let rows_affected = diesel::update(
-                    safekeepers.filter(id.eq(id_)).filter(
-                        scheduling_policy
-                            .eq(scheduling_policy_activating)
-                            .or(scheduling_policy.eq(&scheduling_policy_active)),
-                    ),
-                )
-                .set(scheduling_policy.eq(&scheduling_policy_active))
-                .execute(conn)
-                .await?;
-
-                if rows_affected == 0 {
-                    return Ok(Some(()));
-                }
-                if rows_affected != 1 {
-                    return Err(DatabaseError::Logical(format!(
-                        "unexpected number of rows ({rows_affected})",
-                    )));
-                }
-
-                Ok(Some(()))
-            })
-        })
-        .await
-    }
-
     /// Persist timeline. Returns if the timeline was newly inserted. If it wasn't, we haven't done any writes.
     pub(crate) async fn insert_timeline(&self, entry: TimelinePersistence) -> DatabaseResult<bool> {
         use crate::schema::timelines;
@@ -1305,40 +1178,6 @@ impl Persistence {
         .await
     }
 
-    /// Update timeline membership configuration in the database.
-    /// Load timeline from db. Returns `None` if not present.
-    pub(crate) async fn get_timeline(
-        &self,
-        branch_id: BranchId,
-    ) -> DatabaseResult<Option<TimelinePersistence>> {
-        use crate::schema::timelines::dsl;
-
-        let branch_id = &branch_id;
-        let timeline_from_db = self
-            .with_measured_conn(DatabaseOperation::GetTimeline, move |conn| {
-                Box::pin(async move {
-                    let mut from_db: Vec<TimelineFromDb> = dsl::timelines
-                        .filter(dsl::branch_id.eq(&branch_id.to_string()))
-                        .load(conn)
-                        .await?;
-                    if from_db.is_empty() {
-                        return Ok(None);
-                    }
-                    if from_db.len() != 1 {
-                        return Err(DatabaseError::Logical(format!(
-                            "unexpected number of rows ({})",
-                            from_db.len()
-                        )));
-                    }
-
-                    Ok(Some(from_db.pop().unwrap().into_persistence()))
-                })
-            })
-            .await?;
-
-        Ok(timeline_from_db)
-    }
-
     /// Set `delete_at` for the given timeline
     pub(crate) async fn timeline_set_deleted_at(
         &self,
@@ -1365,58 +1204,6 @@ impl Persistence {
             })
         })
         .await
-    }
-
-    /// Load timeline from db. Returns `None` if not present.
-    ///
-    /// Only works if `deleted_at` is set, so you should call [`Self::timeline_set_deleted_at`] before.
-    pub(crate) async fn delete_timeline(
-        &self,
-        branch_id: BranchId,
-    ) -> DatabaseResult<()> {
-        use crate::schema::timelines::dsl;
-
-        let branch_id = &branch_id;
-        self.with_measured_conn(DatabaseOperation::GetTimeline, move |conn| {
-            Box::pin(async move {
-                diesel::delete(dsl::timelines)
-                    .filter(dsl::branch_id.eq(&branch_id.to_string()))
-                    .filter(dsl::deleted_at.is_not_null())
-                    .execute(conn)
-                    .await?;
-                Ok(())
-            })
-        })
-        .await?;
-
-        Ok(())
-    }
-
-    /// Loads the timeline row for a branch (at most one, since `branch_id` is the PK).
-    pub(crate) async fn list_timelines_for_branch(
-        &self,
-        branch_id: BranchId,
-    ) -> DatabaseResult<Vec<TimelinePersistence>> {
-        use crate::schema::timelines::dsl;
-
-        let branch_id = &branch_id;
-        let timelines = self
-            .with_measured_conn(DatabaseOperation::GetTimeline, move |conn| {
-                Box::pin(async move {
-                    let timelines: Vec<TimelineFromDb> = dsl::timelines
-                        .filter(dsl::branch_id.eq(&branch_id.to_string()))
-                        .load(conn)
-                        .await?;
-                    Ok(timelines)
-                })
-            })
-            .await?;
-
-        let timelines = timelines
-            .into_iter()
-            .map(TimelineFromDb::into_persistence)
-            .collect();
-        Ok(timelines)
     }
 
     /// Set or clear the `branch_name` column on a timeline row. Returns whether the row existed.
@@ -2043,134 +1830,6 @@ impl From<EndpointPersistence> for ComputeEndpoint {
     }
 }
 
-// What we store in the database
-#[derive(Serialize, Deserialize, Queryable, Selectable, Eq, PartialEq, Debug, Clone)]
-#[diesel(table_name = crate::schema::safekeepers)]
-pub(crate) struct SafekeeperPersistence {
-    pub(crate) id: i64,
-    pub(crate) region_id: String,
-    /// 1 is special, it means just created (not currently posted to storcon).
-    /// Zero or negative is not really expected.
-    /// Otherwise the number from `release-$(number_of_commits_on_branch)` tag.
-    pub(crate) version: i64,
-    pub(crate) host: String,
-    pub(crate) port: i32,
-    pub(crate) http_port: i32,
-    pub(crate) availability_zone_id: String,
-    pub(crate) scheduling_policy: SkSchedulingPolicyFromSql,
-    pub(crate) https_port: Option<i32>,
-}
-
-/// Wrapper struct around [`SkSchedulingPolicy`] because both it and [`FromSql`] are from foreign crates,
-/// and we don't want to make [`safekeeper_api`] depend on [`diesel`].
-#[derive(Serialize, Deserialize, FromSqlRow, Eq, PartialEq, Debug, Copy, Clone)]
-pub(crate) struct SkSchedulingPolicyFromSql(pub(crate) SkSchedulingPolicy);
-
-impl From<SkSchedulingPolicy> for SkSchedulingPolicyFromSql {
-    fn from(value: SkSchedulingPolicy) -> Self {
-        SkSchedulingPolicyFromSql(value)
-    }
-}
-
-impl FromSql<diesel::sql_types::VarChar, Pg> for SkSchedulingPolicyFromSql {
-    fn from_sql(
-        bytes: <Pg as diesel::backend::Backend>::RawValue<'_>,
-    ) -> diesel::deserialize::Result<Self> {
-        let bytes = bytes.as_bytes();
-        match core::str::from_utf8(bytes) {
-            Ok(s) => match SkSchedulingPolicy::from_str(s) {
-                Ok(policy) => Ok(SkSchedulingPolicyFromSql(policy)),
-                Err(e) => Err(format!("can't parse: {e}").into()),
-            },
-            Err(e) => Err(format!("invalid UTF-8 for scheduling policy: {e}").into()),
-        }
-    }
-}
-
-impl SafekeeperPersistence {
-    pub(crate) fn from_upsert(
-        upsert: SafekeeperUpsert,
-        scheduling_policy: SkSchedulingPolicy,
-    ) -> Self {
-        crate::persistence::SafekeeperPersistence {
-            id: upsert.id,
-            region_id: upsert.region_id,
-            version: upsert.version,
-            host: upsert.host,
-            port: upsert.port,
-            http_port: upsert.http_port,
-            https_port: upsert.https_port,
-            availability_zone_id: upsert.availability_zone_id,
-            scheduling_policy: SkSchedulingPolicyFromSql(scheduling_policy),
-        }
-    }
-    pub(crate) fn as_describe_response(&self) -> Result<SafekeeperDescribeResponse, DatabaseError> {
-        Ok(SafekeeperDescribeResponse {
-            id: NodeId(self.id as u64),
-            region_id: self.region_id.clone(),
-            version: self.version,
-            host: self.host.clone(),
-            port: self.port,
-            http_port: self.http_port,
-            https_port: self.https_port,
-            availability_zone_id: self.availability_zone_id.clone(),
-            scheduling_policy: self.scheduling_policy.0,
-        })
-    }
-}
-
-/// What we expect from the upsert http api
-#[derive(Serialize, Deserialize, Eq, PartialEq, Debug, Clone)]
-pub(crate) struct SafekeeperUpsert {
-    pub(crate) id: i64,
-    pub(crate) region_id: String,
-    /// 1 is special, it means just created (not currently posted to storcon).
-    /// Zero or negative is not really expected.
-    /// Otherwise the number from `release-$(number_of_commits_on_branch)` tag.
-    pub(crate) version: i64,
-    pub(crate) host: String,
-    pub(crate) port: i32,
-    /// The active flag will not be stored in the database and will be ignored.
-    pub(crate) active: Option<bool>,
-    pub(crate) http_port: i32,
-    pub(crate) https_port: Option<i32>,
-    pub(crate) availability_zone_id: String,
-}
-
-impl SafekeeperUpsert {
-    fn as_insert_or_update(&self) -> anyhow::Result<InsertUpdateSafekeeper<'_>> {
-        if self.version < 0 {
-            anyhow::bail!("negative version: {}", self.version);
-        }
-        Ok(InsertUpdateSafekeeper {
-            id: self.id,
-            region_id: &self.region_id,
-            version: self.version,
-            host: &self.host,
-            port: self.port,
-            http_port: self.http_port,
-            https_port: self.https_port,
-            availability_zone_id: &self.availability_zone_id,
-            // None means a wish to not update this column. We expose abilities to update it via other means.
-            scheduling_policy: None,
-        })
-    }
-}
-
-#[derive(Insertable, AsChangeset)]
-#[diesel(table_name = crate::schema::safekeepers)]
-struct InsertUpdateSafekeeper<'a> {
-    id: i64,
-    region_id: &'a str,
-    version: i64,
-    host: &'a str,
-    port: i32,
-    http_port: i32,
-    https_port: Option<i32>,
-    availability_zone_id: &'a str,
-    scheduling_policy: Option<&'a str>,
-}
-
 #[derive(Serialize, Deserialize, FromSqlRow, AsExpression, Eq, PartialEq, Debug, Copy, Clone)]
 #[diesel(sql_type = crate::schema::sql_types::PgLsn)]
 pub(crate) struct LsnWrapper(pub(crate) Lsn);
@@ -2204,13 +1863,12 @@ impl ToSql<crate::schema::sql_types::PgLsn, Pg> for LsnWrapper {
     }
 }
 
-#[derive(Insertable, AsChangeset, Clone)]
+#[derive(Insertable, AsChangeset, Queryable, Selectable, Clone)]
 #[diesel(table_name = crate::schema::timelines)]
 pub(crate) struct TimelinePersistence {
     pub(crate) branch_id: String,
     pub(crate) start_lsn: LsnWrapper,
     pub(crate) generation: i32,
-    pub(crate) sk_set: Vec<i64>,
     pub(crate) deleted_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) branch_name: Option<String>,
 }
@@ -2233,38 +1891,6 @@ pub(crate) struct PendingTimelineInitPersistence {
     pub(crate) start_lsn: LsnWrapper,
 }
 
-/// This is separate from [TimelinePersistence] only because postgres allows NULLs
-/// in arrays and there is no way to forbid that at schema level. Hence diesel
-/// wants `sk_set` to be `Vec<Option<i64>>` instead of `Vec<i64>` for
-/// Queryable/Selectable. It does however allow insertions without redundant
-/// Option(s), so [TimelinePersistence] doesn't have them.
-#[derive(Queryable, Selectable)]
-#[diesel(table_name = crate::schema::timelines)]
-pub(crate) struct TimelineFromDb {
-    pub(crate) branch_id: String,
-    pub(crate) start_lsn: LsnWrapper,
-    pub(crate) generation: i32,
-    pub(crate) sk_set: Vec<Option<i64>>,
-    pub(crate) deleted_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub(crate) branch_name: Option<String>,
-}
-
-impl TimelineFromDb {
-    fn into_persistence(self) -> TimelinePersistence {
-        // We should never encounter null entries in the sets, but we need to filter them out.
-        // There is no way to forbid this in the schema that diesel recognizes (to our knowledge).
-        let sk_set = self.sk_set.into_iter().flatten().collect::<Vec<_>>();
-        TimelinePersistence {
-            branch_id: self.branch_id,
-            start_lsn: self.start_lsn,
-            generation: self.generation,
-            sk_set,
-            deleted_at: self.deleted_at,
-            branch_name: self.branch_name,
-        }
-    }
-}
-
 // This is separate from TimelinePersistence because we don't want to touch generation and deleted_at values for the update.
 #[derive(AsChangeset)]
 #[diesel(table_name = crate::schema::timelines)]
@@ -2272,7 +1898,6 @@ impl TimelineFromDb {
 pub(crate) struct TimelineUpdate {
     pub(crate) branch_id: String,
     pub(crate) start_lsn: LsnWrapper,
-    pub(crate) sk_set: Vec<i64>,
 }
 
 #[derive(Serialize, Deserialize, Queryable, Selectable, Insertable, Eq, PartialEq, Clone)]

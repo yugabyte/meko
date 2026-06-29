@@ -48,20 +48,6 @@ CREATE TABLE storage_controller.nodes (
     PRIMARY KEY (node_id)
 );
 
--- Safekeeper registry.
-CREATE TABLE storage_controller.safekeepers (
-    id                   BIGINT NOT NULL,
-    region_id            TEXT NOT NULL,
-    version              BIGINT NOT NULL,
-    host                 TEXT NOT NULL,
-    port                 INTEGER NOT NULL,
-    http_port            INTEGER NOT NULL,
-    availability_zone_id TEXT NOT NULL,
-    scheduling_policy    VARCHAR NOT NULL DEFAULT 'activating',
-    https_port           INTEGER,
-    PRIMARY KEY (id)
-);
-
 -- Per-branch metadata-scrubber health summary; FK cascade so a
 -- branch removal cleans up its row.
 CREATE TABLE storage_controller.metadata_health (
@@ -74,12 +60,12 @@ CREATE TABLE storage_controller.metadata_health (
         ON DELETE CASCADE
 );
 
--- Per-branch safekeeper set + generation tracking.
+-- Per-branch WAL start LSN + generation tracking. (The branch's single
+-- co-located safekeeper is owned by the launcher, not tracked here.)
 CREATE TABLE storage_controller.timelines (
     branch_id                   VARCHAR NOT NULL,
     start_lsn                   pg_lsn NOT NULL,
     generation                  INTEGER NOT NULL,
-    sk_set                      BIGINT[] NOT NULL,
     deleted_at                  TIMESTAMPTZ,
     branch_name                 VARCHAR,
     PRIMARY KEY (branch_id)

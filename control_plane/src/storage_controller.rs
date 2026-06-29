@@ -20,12 +20,9 @@ use nix::unistd::Pid;
 use pageserver_api::controller_api::{
     BranchCreateRequest, BranchCreateResponse, ComputeEndpoint, NodeConfigureRequest,
     NodeDescribeResponse, NodeRegisterRequest, PendingTimelineInit, PendingTimelineInitRequest,
-    SafekeeperSchedulingPolicyRequest, SetTimelineBranchNameRequest, SkSchedulingPolicy,
-    TimelineBranchName,
+    SetTimelineBranchNameRequest, TimelineBranchName,
 };
-use pageserver_api::models::{
-    BranchConfig, TimelineCreateRequest, TimelineInfo,
-};
+use pageserver_api::models::BranchConfig;
 use pageserver_client::mgmt_api::ResponseErrorMessageExt;
 use pem::Pem;
 use postgres_backend::AuthType;
@@ -803,10 +800,6 @@ impl StorageController {
         )
         .await?;
 
-        if self.config.timelines_onto_safekeepers {
-            self.register_safekeepers().await?;
-        }
-
         Ok(())
     }
 
@@ -978,42 +971,6 @@ impl StorageController {
         Ok(response)
     }
 
-    /// Register the already-provisioned safekeepers in the storage
-    /// controller. On a fresh repo this is empty — safekeepers are
-    /// provisioned at `endpoint create`, which registers each one via
-    /// [`Self::register_safekeeper`].
-    #[instrument(skip(self))]
-    async fn register_safekeepers(&self) -> anyhow::Result<()> {
-        for sk in self.env.safekeepers.iter() {
-            self.register_safekeeper(sk).await?;
-        }
-        Ok(())
-    }
-
-    /// Register a single safekeeper and mark it Active. Idempotent.
-    #[instrument(skip(self, sk))]
-    pub async fn register_safekeeper(
-        &self,
-        sk: &crate::local_env::SafekeeperConf,
-    ) -> anyhow::Result<()> {
-        let sk_id = sk.id;
-        let body = serde_json::json!({
-            "id": sk_id,
-            "created_at": "2023-10-25T09:11:25Z",
-            "updated_at": "2024-08-28T11:32:43Z",
-            "region_id": "aws-us-east-2",
-            "host": "127.0.0.1",
-            "port": sk.pg_port,
-            "http_port": sk.http_port,
-            "https_port": sk.https_port,
-            "version": 5957,
-            "availability_zone_id": format!("us-east-2b-{sk_id}"),
-        });
-        self.upsert_safekeeper(sk_id, body).await?;
-        self.safekeeper_scheduling_policy(sk_id, SkSchedulingPolicy::Active)
-            .await
-    }
-
     /// Call into the attach_hook API, for use before handing out attachments to pageservers
     #[instrument(skip(self))]
     pub async fn attach_hook(
@@ -1037,42 +994,6 @@ impl StorageController {
             .await?;
 
         Ok(response.generation)
-    }
-
-    #[instrument(skip(self))]
-    pub async fn upsert_safekeeper(
-        &self,
-        node_id: NodeId,
-        request: serde_json::Value,
-    ) -> anyhow::Result<()> {
-        let resp = self
-            .dispatch_inner::<serde_json::Value>(
-                Method::POST,
-                format!("control/v1/safekeeper/{node_id}"),
-                Some(request),
-            )
-            .await?;
-        if !resp.status().is_success() {
-            anyhow::bail!(
-                "setting scheduling policy unsuccessful for safekeeper {node_id}: {}",
-                resp.status()
-            );
-        }
-        Ok(())
-    }
-
-    #[instrument(skip(self))]
-    pub async fn safekeeper_scheduling_policy(
-        &self,
-        node_id: NodeId,
-        scheduling_policy: SkSchedulingPolicy,
-    ) -> anyhow::Result<()> {
-        self.dispatch::<SafekeeperSchedulingPolicyRequest, ()>(
-            Method::POST,
-            format!("control/v1/safekeeper/{node_id}/scheduling_policy"),
-            Some(SafekeeperSchedulingPolicyRequest { scheduling_policy }),
-        )
-        .await
     }
 
     #[instrument(skip(self))]
@@ -1141,20 +1062,6 @@ impl StorageController {
     pub async fn ready(&self) -> anyhow::Result<()> {
         self.dispatch::<(), ()>(Method::GET, "ready".to_string(), None)
             .await
-    }
-
-    #[instrument(skip_all, fields(branch_id=%req.new_branch_id))]
-    pub async fn tenant_timeline_create(
-        &self,
-        branch_id: BranchId,
-        req: TimelineCreateRequest,
-    ) -> anyhow::Result<TimelineInfo> {
-        self.dispatch(
-            Method::POST,
-            format!("v1/branch/{branch_id}/timeline"),
-            Some(req),
-        )
-        .await
     }
 
     /// Register a launcher-created branch in the storage

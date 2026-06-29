@@ -41,12 +41,6 @@ pub(crate) struct StorageControllerMetricGroup {
     /// Count of how many pageserver nodes from in-memory map have https configured
     pub(crate) storage_controller_https_pageserver_nodes: measured::Gauge,
 
-    /// Size of the in-memory map of safekeeper_nodes
-    pub(crate) storage_controller_safekeeper_nodes: measured::Gauge,
-
-    /// Count of how many safekeeper nodes from in-memory map have https configured
-    pub(crate) storage_controller_https_safekeeper_nodes: measured::Gauge,
-
     /// How many shard locations (secondary or attached) on each node
     pub(crate) storage_controller_node_shards: measured::GaugeVec<NodeLabelGroupSet>,
 
@@ -71,24 +65,12 @@ pub(crate) struct StorageControllerMetricGroup {
     pub(crate) storage_controller_pageserver_request_error:
         measured::CounterVec<PageserverRequestLabelGroupSet>,
 
-    /// Count of HTTP requests to the safekeeper that resulted in an error,
-    /// broken down by the safekeeper node id, request name and method
-    pub(crate) storage_controller_safekeeper_request_error:
-        measured::CounterVec<SafekeeperRequestLabelGroupSet>,
-
     /// Latency of HTTP requests to the pageserver, broken down by pageserver
     /// node id, request name and method. This include both successful and unsuccessful
     /// requests.
     #[metric(metadata = histogram::Thresholds::exponential_buckets(0.1, 2.0))]
     pub(crate) storage_controller_pageserver_request_latency:
         measured::HistogramVec<PageserverRequestLabelGroupSet, 5>,
-
-    /// Latency of HTTP requests to the safekeeper, broken down by safekeeper
-    /// node id, request name and method. This include both successful and unsuccessful
-    /// requests.
-    #[metric(metadata = histogram::Thresholds::exponential_buckets(0.1, 2.0))]
-    pub(crate) storage_controller_safekeeper_request_latency:
-        measured::HistogramVec<SafekeeperRequestLabelGroupSet, 5>,
 
     /// Count of pass-through HTTP requests to the pageserver that resulted in an error,
     /// broken down by the pageserver node id, request name and method
@@ -121,9 +103,6 @@ pub(crate) struct StorageControllerMetricGroup {
 
     /// Desired number of pageservers managed by the storage controller
     pub(crate) storage_controller_num_pageservers_desired: measured::Gauge,
-
-    /// Desired number of safekeepers managed by the storage controller
-    pub(crate) storage_controller_num_safekeeper_desired: measured::Gauge,
 }
 
 impl StorageControllerMetrics {
@@ -177,16 +156,6 @@ pub(crate) struct HttpRequestLatencyLabelGroup<'a> {
 pub(crate) struct PageserverRequestLabelGroup<'a> {
     #[label(dynamic_with = lasso::ThreadedRodeo, default)]
     pub(crate) pageserver_id: &'a str,
-    #[label(dynamic_with = lasso::ThreadedRodeo, default)]
-    pub(crate) path: &'a str,
-    pub(crate) method: Method,
-}
-
-#[derive(measured::LabelGroup, Clone)]
-#[label(set = SafekeeperRequestLabelGroupSet)]
-pub(crate) struct SafekeeperRequestLabelGroup<'a> {
-    #[label(dynamic_with = lasso::ThreadedRodeo, default)]
-    pub(crate) safekeeper_id: &'a str,
     #[label(dynamic_with = lasso::ThreadedRodeo, default)]
     pub(crate) path: &'a str,
     pub(crate) method: Method,

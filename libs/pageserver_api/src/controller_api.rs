@@ -413,45 +413,6 @@ impl From<NodeSchedulingPolicy> for String {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Eq, PartialEq, Debug)]
-pub enum SkSchedulingPolicy {
-    Active,
-    Activating,
-    Pause,
-    Decomissioned,
-}
-
-impl FromStr for SkSchedulingPolicy {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "active" => Self::Active,
-            "activating" => Self::Activating,
-            "pause" => Self::Pause,
-            "decomissioned" => Self::Decomissioned,
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "Unknown scheduling policy '{s}', try active,pause,decomissioned"
-                ));
-            }
-        })
-    }
-}
-
-impl From<SkSchedulingPolicy> for String {
-    fn from(value: SkSchedulingPolicy) -> String {
-        use SkSchedulingPolicy::*;
-        match value {
-            Active => "active",
-            Activating => "activating",
-            Pause => "pause",
-            Decomissioned => "decomissioned",
-        }
-        .to_string()
-    }
-}
-
 /// Controls how tenant shards are mapped to locations on pageservers, e.g. whether
 /// to create secondary locations.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -514,23 +475,6 @@ pub struct MetadataHealthListOutdatedResponse {
     pub health_records: Vec<MetadataHealthRecord>,
 }
 
-/// Publicly exposed safekeeper description
-#[derive(Serialize, Deserialize, Clone)]
-pub struct SafekeeperDescribeResponse {
-    pub id: NodeId,
-    pub region_id: String,
-    /// 1 is special, it means just created (not currently posted to storcon).
-    /// Zero or negative is not really expected.
-    /// Otherwise the number from `release-$(number_of_commits_on_branch)` tag.
-    pub version: i64,
-    pub host: String,
-    pub port: i32,
-    pub http_port: i32,
-    pub https_port: Option<i32>,
-    pub availability_zone_id: String,
-    pub scheduling_policy: SkSchedulingPolicy,
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TimelineSafekeeperPeer {
     pub node_id: NodeId,
@@ -562,17 +506,11 @@ pub struct SafekeeperTimelinesResponse {
     pub safekeeper_peers: Vec<TimelineSafekeeperPeer>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct SafekeeperSchedulingPolicyRequest {
-    pub scheduling_policy: SkSchedulingPolicy,
-}
-
 /// Import request for safekeeper timelines.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TimelineImportRequest {
     pub branch_id: BranchId,
     pub start_lsn: Lsn,
-    pub sk_set: Vec<NodeId>,
     pub force_upsert: bool,
 }
 
@@ -594,8 +532,6 @@ pub struct SetTimelineBranchNameRequest {
 pub struct TimelineRegisterRequest {
     /// The timeline's start LSN (branch point for branches).
     pub start_lsn: Lsn,
-    /// Safekeeper node ids serving this timeline.
-    pub sk_set: Vec<NodeId>,
     /// Human-readable branch alias to set on the timeline row in the *same*
     /// write as the registration, folding the old separate set-branch-name
     /// round-trip. `None` leaves it unset. Rejected if the alias already maps

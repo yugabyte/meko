@@ -68,14 +68,16 @@ endpoint materializes the branch, and cAmp finalizes.
   controller), and `BOOTSTRAP=true`.
 
 **The endpoint materializes** (its supervisor, during bring-up):
-1. Registers its safekeeper and its pageserver node with the storage controller
-   and runs the attach-hook; the storage controller attaches the branch to this
-   pageserver and grants its **generation**.
+1. Registers its pageserver node with the storage controller and runs the
+   attach-hook; the storage controller attaches the branch to this pageserver
+   and grants its **generation**. (The safekeeper is not registered with the
+   controller — the endpoint owns it; see #171.)
 2. Runs **`initdb`** (`BOOTSTRAP=true`) — the pageserver bootstraps the branch.
 3. Once the branch is `Active`, reads its `start_lsn`, creates the branch on
    its safekeeper (single-member membership, generation 1), and **registers it
    with the storage controller** (`POST /control/v1/branch/{branch_id}/register`:
-   `start_lsn` plus this endpoint's safekeeper as the `sk_set`).
+   `start_lsn`, optional `branch_name` — the controller just records the branch
+   row).
 4. Starts compute (Postgres).
 
 **cAmp finalizes**, once the endpoint is ready:
@@ -133,7 +135,7 @@ writes are synchronous today and move onto the task framework under #113.
 | `yb_light_local` | Amp Controller (cAmp) |
 |---|---|
 | `record_pending_timeline_init` (per branch) | `create-project` → `project` + default `branch` (cAmp DB) **and** the storage controller's pending init, keyed by `branch_id` (`POST /control/v1/branch/{branch_id}/pending_init`). There is no separate tenant-create step anymore — a root branch is just a pending `Bootstrap` init. |
-| control plane starts SK + `register_safekeeper` | the **endpoint** registers its safekeeper |
+| control plane starts SK | the **endpoint** starts its safekeeper (not registered with the controller — see #171) |
 | control plane inits PS + `register_and_attach` | the **endpoint** registers its pageserver + runs the attach-hook (generation) |
 | PS `Bootstrap` runs `initdb` | the **endpoint** runs `initdb` (`BOOTSTRAP=true`) |
 | SK branch create + SC `timeline_register` | the **endpoint** creates the branch on its safekeeper, then calls the branch `register` route (`POST /control/v1/branch/{branch_id}/register`) |

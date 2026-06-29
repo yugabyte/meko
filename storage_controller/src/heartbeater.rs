@@ -6,18 +6,14 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use pageserver_api::controller_api::{NodeAvailability, SkSchedulingPolicy};
+use pageserver_api::controller_api::NodeAvailability;
 use pageserver_api::models::PageserverUtilization;
-use safekeeper_api::models::SafekeeperUtilization;
-use safekeeper_client::mgmt_api;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use utils::id::NodeId;
-use utils::logging::SecretString;
 
 use crate::node::Node;
-use crate::safekeeper::Safekeeper;
 
 struct HeartbeaterTask<Server, State> {
     receiver: tokio::sync::mpsc::UnboundedReceiver<HeartbeatRequest<Server, State>>,
@@ -39,15 +35,6 @@ pub(crate) enum PageserverState {
     },
     WarmingUp {
         started_at: Instant,
-    },
-    Offline,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum SafekeeperState {
-    Available {
-        last_seen_at: Instant,
-        utilization: SafekeeperUtilization,
     },
     Offline,
 }
@@ -308,136 +295,6 @@ impl HeartBeat<Node, PageserverState> for HeartbeaterTask<Node, PageserverState>
                 }
                 Vacant(vac) => {
                     vac.insert(ps_state.clone());
-                }
-                _ => {}
-            }
-        }
-
-        Ok(AvailablityDeltas(deltas))
-    }
-}
-
-impl HeartBeat<Safekeeper, SafekeeperState> for HeartbeaterTask<Safekeeper, SafekeeperState> {
-    async fn heartbeat(
-        &mut self,
-        safekeepers: Arc<HashMap<NodeId, Safekeeper>>,
-    ) -> Result<AvailablityDeltas<SafekeeperState>, HeartbeaterError> {
-        let mut new_state = HashMap::new();
-
-        let mut heartbeat_futs = FuturesUnordered::new();
-        for (node_id, sk) in &*safekeepers {
-            if sk.scheduling_policy() == SkSchedulingPolicy::Decomissioned {
-                continue;
-            }
-            heartbeat_futs.push({
-                let http_client = self.http_client.clone();
-                let jwt_token = self
-                    .jwt_token
-                    .as_ref()
-                    .map(|t| SecretString::from(t.to_owned()));
-                let cancel = self.cancel.clone();
-
-                async move {
-                    let response = sk
-                        .with_client_retries(
-                            |client| async move { client.get_utilization().await },
-                            &http_client,
-                            &jwt_token,
-                            3,
-                            3,
-                            Duration::from_secs(1),
-                            &cancel,
-                        )
-                        .await;
-
-                    let status = match response {
-                        Ok(utilization) => SafekeeperState::Available {
-                            last_seen_at: Instant::now(),
-                            utilization,
-                        },
-                        Err(mgmt_api::Error::Cancelled) => {
-                            // This indicates cancellation of the request.
-                            // We ignore the node in this case.
-                            return None;
-                        }
-                        Err(e) => {
-                            tracing::info!(
-                                "Marking safekeeper {} at as offline: {e}",
-                                sk.base_url()
-                            );
-                            SafekeeperState::Offline
-                        }
-                    };
-
-                    Some((*node_id, status))
-                }
-                .instrument(tracing::info_span!("heartbeat_sk", %node_id))
-            });
-        }
-
-        loop {
-            let maybe_status = tokio::select! {
-                next = heartbeat_futs.next() => {
-                    match next {
-                        Some(result) => result,
-                        None => { break; }
-                    }
-                },
-                _ = self.cancel.cancelled() => { return Err(HeartbeaterError::Cancel); }
-            };
-
-            if let Some((node_id, status)) = maybe_status {
-                new_state.insert(node_id, status);
-            }
-        }
-
-        let mut offline = 0;
-        for state in new_state.values() {
-            match state {
-                SafekeeperState::Offline => offline += 1,
-                SafekeeperState::Available { .. } => {}
-            }
-        }
-
-        tracing::info!(
-            "Heartbeat round complete for {} safekeepers, {} offline",
-            new_state.len(),
-            offline
-        );
-
-        let mut deltas = Vec::new();
-        let now = Instant::now();
-        for (node_id, sk_state) in new_state.iter_mut() {
-            use std::collections::hash_map::Entry::*;
-            let entry = self.state.entry(*node_id);
-
-            let mut needs_update = false;
-            match entry {
-                Occupied(ref occ) => match (occ.get(), &sk_state) {
-                    (SafekeeperState::Offline, SafekeeperState::Offline) => {}
-                    (SafekeeperState::Available { last_seen_at, .. }, SafekeeperState::Offline) => {
-                        if now - *last_seen_at >= self.max_offline_interval {
-                            deltas.push((*node_id, sk_state.clone()));
-                            needs_update = true;
-                        }
-                    }
-                    _ => {
-                        deltas.push((*node_id, sk_state.clone()));
-                        needs_update = true;
-                    }
-                },
-                Vacant(_) => {
-                    // This is a new node. Don't generate a delta for it.
-                    deltas.push((*node_id, sk_state.clone()));
-                }
-            }
-
-            match entry {
-                Occupied(mut occ) if needs_update => {
-                    (*occ.get_mut()) = sk_state.clone();
-                }
-                Vacant(vac) => {
-                    vac.insert(sk_state.clone());
                 }
                 _ => {}
             }

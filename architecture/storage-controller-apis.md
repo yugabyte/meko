@@ -85,7 +85,6 @@ generations.
 | POST | `/debug/v1/branch/:branch_id/import_timeline` | Import a branch (`TimelineImportRequest`; branch_id must match URL) (scope `PageServerApi`) |
 | GET | `/debug/v1/branch` | Dump full in-memory branch state |
 | GET | `/debug/v1/branch/:branch_id/locate` | Resolve a branch to its node(s) (debug-only `tenant_locate`) |
-| GET | `/debug/v1/branch/:branch_id/locate_timeline` | Resolve a branch to node(s) |
 | GET | `/debug/v1/scheduler` | Dump scheduler state |
 | POST | `/debug/v1/consistency_check` | Cross-check in-memory vs DB state |
 | PUT | `/debug/v1/failpoints` | Configure failpoints (request-span only; no scope check) |
@@ -114,16 +113,14 @@ endpoint `spec`.
 | GET | `/control/v1/endpoint` | List endpoint records |
 | DELETE | `/control/v1/endpoint/:endpoint_id` | Delete an endpoint record |
 
-### Safekeeper operations (`/control/v1/safekeeper`)
+### Safekeeper operations
 
-Scope: `Infra` for list/get, `Admin` for upsert/scheduling.
-
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/control/v1/safekeeper` | List safekeepers |
-| GET | `/control/v1/safekeeper/:id` | Get one safekeeper by instance id (404 if unknown; manual-testing only) |
-| POST | `/control/v1/safekeeper/:id` | Upsert a safekeeper (`SafekeeperUpsert`; id in URL must equal body, >0); 204 on success. Used by deploy scripts |
-| POST | `/control/v1/safekeeper/:id/scheduling_policy` | Set a safekeeper's scheduling policy (`SafekeeperSchedulingPolicyRequest`) |
+None. In yb-light's co-located topology each branch's endpoint provisions and
+owns its own single safekeeper, and the launcher creates the timeline on it
+directly — the controller never contacts a safekeeper. The global safekeeper
+registry (the `storage_controller.safekeepers` table, its register/list/
+scheduling/heartbeat machinery, and the multi-SK `sk_set`/quorum code) was
+removed in #171; the controller only records branch rows.
 
 ### Metadata health (`/control/v1/metadata_health`)
 
@@ -156,7 +153,7 @@ Branch-name mapping and the pending-timeline-init recipe registry. Scope:
 |---|---|---|
 | GET | `/control/v1/branch/:branch_id/timeline` | Describe a branch (scope `Scrubber`) |
 | PUT | `/control/v1/branch/:branch_id/branch_name` | Set a branch's branch name (`SetTimelineBranchNameRequest`) |
-| POST | `/control/v1/branch/:branch_id/register` | Register a branch (start_lsn + sk_set, optional `branch_name` set in the same write — folds the separate branch_name call) (`TimelineRegisterRequest`) |
+| POST | `/control/v1/branch/:branch_id/register` | Register a branch (start_lsn, optional `branch_name` set in the same write — folds the separate branch_name call) (`TimelineRegisterRequest`) |
 | PUT | `/control/v1/branch/:branch_id/drop` | Drop a branch + all its endpoints; mark branch deleted; idempotent |
 | GET | `/control/v1/timeline_branch_names` | List live (non-deleted) branch-name mappings |
 | POST | `/control/v1/branch/:branch_id/pending_init` | Record a pending branch-init recipe (`PendingTimelineInitRequest`) |
@@ -199,8 +196,10 @@ startup reconcile and are rate-limited per branch; scope `PageServerApi` (or
   leadership/step-down/`/control/v1/step_down` route. These were removed with
   the pageserver reconciler (~8.4K lines, #16). Node lifecycle is limited to
   register / list / describe / config / drop / tombstone.
-- **No safekeeper membership-switch surface.** The multi-SK membership-change
-  endpoints were stripped (commit `1a9ca7ec1`); only list/get/upsert/
-  scheduling-policy remain.
+- **No safekeeper surface at all.** The global safekeeper registry + the
+  multi-SK membership/quorum/`sk_set` machinery were removed (#171): each
+  branch's endpoint owns its single co-located safekeeper and the launcher
+  creates the timeline on it directly, so the controller never contacts a
+  safekeeper.
 - **Upcall handlers are vestigial.** `/upcall/v1/re-attach` and
   `/upcall/v1/validate` are still routed but unused by the yb pageserver.

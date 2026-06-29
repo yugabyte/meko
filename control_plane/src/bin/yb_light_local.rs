@@ -1696,8 +1696,7 @@ async fn provision_bootstrap(
     // `safekeeper_pg_addr` is taken from `env.safekeepers.first()`.
     env.safekeepers.push(sk_conf.clone());
 
-    // Safekeeper first: it must be up (and registered with the storage
-    // controller) before the controller creates the timeline on it.
+    // Safekeeper first: it must be up before we create the timeline on it.
     println!(
         "Provisioning safekeeper {} (pg port {}) for endpoint '{endpoint_id}'",
         sk_conf.id, sk_conf.pg_port
@@ -1710,10 +1709,6 @@ async fn provision_bootstrap(
         .await
         .context("start main safekeeper")?;
     let storage_controller = StorageController::from_env(env);
-    storage_controller
-        .register_safekeeper(&sk_conf)
-        .await
-        .context("register main safekeeper with storage controller")?;
 
     // Pageserver: bake the Bootstrap identity, start it (runs initdb +
     // import). Mirrors the body of the old `tenant create`.
@@ -1804,15 +1799,14 @@ async fn provision_bootstrap(
         .await
         .context("create bootstrap timeline on safekeeper")?;
 
-    // Record the launcher-created branch in the storage controller with
-    // an explicit sk_set pinning the co-located safekeeper (so the
-    // pageserver streams from it too, and the row reflects real placement).
+    // Record the launcher-created branch in the storage controller (the
+    // branch's single co-located safekeeper is owned by the launcher; the
+    // controller just tracks the branch row).
     storage_controller
         .timeline_register(
             branch_id,
             pageserver_api::controller_api::TimelineRegisterRequest {
                 start_lsn,
-                sk_set: vec![sk_conf.id],
                 branch_name,
             },
         )
@@ -1970,7 +1964,6 @@ async fn provision_branch(
             branch_id,
             pageserver_api::controller_api::TimelineRegisterRequest {
                 start_lsn,
-                sk_set: vec![sk_conf.id],
                 branch_name,
             },
         )

@@ -366,23 +366,6 @@ impl BranchImportStatus {
 pub struct TimelineCreateResponseStorcon {
     #[serde(flatten)]
     pub timeline_info: TimelineInfo,
-
-    pub safekeepers: Option<SafekeepersInfo>,
-}
-
-/// Safekeepers as returned in timeline creation request to storcon or pushed to
-/// cplane in the post migration hook.
-#[derive(Serialize, Deserialize, Clone)]
-pub struct SafekeepersInfo {
-    pub branch_id: BranchId,
-    pub generation: u32,
-    pub safekeepers: Vec<SafekeeperInfo>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct SafekeeperInfo {
-    pub id: NodeId,
-    pub hostname: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
