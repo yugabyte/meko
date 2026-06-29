@@ -992,9 +992,7 @@ impl Endpoint {
                         | ComputeStatus::Configuration
                         | ComputeStatus::TerminationPendingFast
                         | ComputeStatus::TerminationPendingImmediate
-                        | ComputeStatus::Terminated
-                        | ComputeStatus::RefreshConfigurationPending
-                        | ComputeStatus::RefreshConfiguration => {
+                        | ComputeStatus::Terminated => {
                             bail!("unexpected compute status: {:?}", state.status)
                         }
                     }
@@ -1291,33 +1289,6 @@ impl Endpoint {
         }
 
         Ok(())
-    }
-
-    pub async fn refresh_configuration(&self) -> Result<()> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .unwrap();
-        let response = client
-            .post(format!(
-                "http://{}:{}/refresh_configuration",
-                self.internal_http_address.ip(),
-                self.internal_http_address.port()
-            ))
-            .send()
-            .await?;
-
-        let status = response.status();
-        if !(status.is_client_error() || status.is_server_error()) {
-            Ok(())
-        } else {
-            let url = response.url().to_owned();
-            let msg = match response.text().await {
-                Ok(err_body) => format!("Error: {err_body}"),
-                Err(_) => format!("Http error ({}) at {}.", status.as_u16(), url),
-            };
-            Err(anyhow::anyhow!(msg))
-        }
     }
 
     pub fn connstr(&self, user: &str, db_name: &str) -> String {

@@ -23,8 +23,7 @@ use super::{
     middleware::authorize::Authorize,
     routes::{
         check_writability, configure, database_schema, dbs_and_roles, extension_server, extensions,
-        grants, insights, lfc, liveness_probe, metrics, metrics_json, promote,
-        refresh_configuration, status, terminate,
+        grants, insights, lfc, liveness_probe, metrics, metrics_json, promote, status, terminate,
     },
 };
 use crate::compute::ComputeNode;
@@ -69,12 +68,7 @@ impl From<&Server> for Router<Arc<ComputeNode>> {
                         post(extension_server::download_extension),
                     )
                     .route("/extensions", post(extensions::install_extension))
-                    .route("/grants", post(grants::add_grant))
-                    // Compute-initiated configuration refresh
-                    .route(
-                        "/refresh_configuration",
-                        post(refresh_configuration::refresh_configuration),
-                    );
+                    .route("/grants", post(grants::add_grant));
 
                 // Add in any testing support
                 if cfg!(feature = "testing") {

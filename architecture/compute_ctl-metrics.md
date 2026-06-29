@@ -49,7 +49,6 @@ Native to `compute_ctl` but incremented/updated in response to Postgres signals.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `pg_cctl_pagestream_request_errors_total` | IntCounter | — | PageStream request errors reported by Postgres. Incremented each time Postgres calls the internal `POST /refresh_configuration` (which it does when `get_page@lsn` / basebackup requests to a pageserver fail). A rising value typically signals Postgres downtime. |
 | `pg_cctl_configure_statement_timeout_errors_total` | IntCounter | — | Compute reconfiguration failures caused by a Postgres statement timeout (error code 57014) inside `ComputeNode::reconfigure()`. Usually indicates PG stuck retrying against a wrong/rejecting pageserver. |
 | `pg_cctl_attached` | IntGauge vec | `pg_compute_id`, `pg_instance_id`, `branch_id` | Compute attached status (1 if attached). Reset + re-set around attach (`compute.rs`). The storage stack identifies a branch by a single `branch_id`, so the former `tenant_id` / `timeline_id` label pair collapsed to one. |
 

@@ -2003,34 +2003,6 @@ impl ComputeNode {
         Ok::<(), anyhow::Error>(())
     }
 
-    // Signal to the configurator to refresh the configuration by pulling a new spec from the HCC.
-    // Note that this merely triggers a notification on a condition variable the configurator thread
-    // waits on. The configurator thread (in configurator.rs) pulls the new spec from the HCC and
-    // applies it.
-    pub async fn signal_refresh_configuration(&self) -> Result<()> {
-        let states_allowing_configuration_refresh = [
-            ComputeStatus::Running,
-            ComputeStatus::Failed,
-            ComputeStatus::RefreshConfigurationPending,
-        ];
-
-        let mut state = self.state.lock().expect("state lock poisoned");
-        if states_allowing_configuration_refresh.contains(&state.status) {
-            state.status = ComputeStatus::RefreshConfigurationPending;
-            self.state_changed.notify_all();
-            Ok(())
-        } else if state.status == ComputeStatus::Init {
-            // If the compute is in Init state, we can't refresh the configuration immediately,
-            // but we should be able to do that soon.
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!(
-                "Cannot refresh compute configuration in state {:?}",
-                state.status
-            ))
-        }
-    }
-
     // Wrapped this around `pg_ctl reload`, but right now we don't use
     // `pg_ctl` for start / stop.
     #[instrument(skip_all)]
@@ -2207,8 +2179,6 @@ impl ComputeNode {
                             // wait
                             ComputeStatus::Init
                             | ComputeStatus::Configuration
-                            | ComputeStatus::RefreshConfiguration
-                            | ComputeStatus::RefreshConfigurationPending
                             | ComputeStatus::Empty => {
                                 state = self.state_changed.wait(state).unwrap();
                             }

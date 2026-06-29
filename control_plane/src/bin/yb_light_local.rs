@@ -598,7 +598,6 @@ enum EndpointCmd {
     Create(EndpointCreateCmdArgs),
     Start(EndpointStartCmdArgs),
     Reconfigure(EndpointReconfigureCmdArgs),
-    RefreshConfiguration(EndpointRefreshConfigurationArgs),
     Stop(EndpointStopCmdArgs),
     UpdatePageservers(EndpointUpdatePageserversCmdArgs),
     GenerateJwt(EndpointGenerateJwtCmdArgs),
@@ -758,13 +757,6 @@ struct EndpointReconfigureCmdArgs {
     endpoint_pageserver_id: Option<NodeId>,
     #[clap(long)]
     safekeepers: Option<String>,
-}
-
-/// Refresh the endpoint's configuration by forcing it reload it's spec
-#[derive(clap::Args)]
-struct EndpointRefreshConfigurationArgs {
-    /// Postgres endpoint id
-    endpoint_id: String,
 }
 
 /// Stop an endpoint.
@@ -2415,14 +2407,6 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             endpoint
                 .reconfigure(Some(&pageserver_conninfo), safekeepers, None)
                 .await?;
-        }
-        EndpointCmd::RefreshConfiguration(args) => {
-            let endpoint_id = &args.endpoint_id;
-            let endpoint = cplane
-                .endpoints
-                .get(endpoint_id.as_str())
-                .with_context(|| format!("postgres endpoint {endpoint_id} is not found"))?;
-            endpoint.refresh_configuration().await?;
         }
         EndpointCmd::Stop(args) => {
             let endpoint_id = &args.endpoint_id;

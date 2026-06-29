@@ -54,7 +54,6 @@ control plane to drive an endpoint:
 | `failed` | Startup or reconfiguration failed; `error` is populated |
 | `termination_pending_fast` / `termination_pending_immediate` | `/terminate` requested; the two variants differ only in how long `/terminate` blocks before returning |
 | `terminated` | Postgres has shut down |
-| `refresh_configuration_pending` / `refresh_configuration` | A compute-initiated config refresh is queued / running (see Reconfiguration) |
 
 `ComputeNode` (the long-lived handle) holds this behind a `Mutex<ComputeState>` plus a
 `Condvar`; threads (the configurator, the monitor, HTTP handlers) wait on status
@@ -190,7 +189,6 @@ behind JWT auth except for metrics:
 | `POST /extension_server/{*filename}` | download a remote extension file |
 | `POST /extensions` | install an extension (called by the `neon` ext) |
 | `POST /grants` | add a grant |
-| `POST /refresh_configuration` | Postgres-initiated config refresh (it suspects a stale pageserver) |
 | `POST /failpoints` | chaos hooks (`testing` builds only) |
 
 Auth (`http/middleware/authorize.rs`): the external router validates a `Bearer` JWT
@@ -204,18 +202,14 @@ Auth (`http/middleware/authorize.rs`): the external router validates a `Bearer` 
   maintains `last_active` and the current/total downtime metrics, and exits once the
   compute reaches a terminal/terminating status.
 - **configurator** (`configurator.rs`) — waits on the `Condvar` for
-  `configuration_pending` (from `POST /configure`) or `refresh_configuration_pending`
-  (compute-initiated), flips status to `configuration`, calls `reconfigure()`, then
-  back to `running` or `failed`.
+  `configuration_pending` (from `POST /configure`), flips status to `configuration`,
+  calls `reconfigure()`, then back to `running` or `failed`.
 
-### Reconfiguration & refresh
+### Reconfiguration
 
 `reconfigure()` (`compute.rs`) rewrites `postgresql.conf` and reloads it, re-applies the
 spec SQL (unless `skip_pg_catalog_updates`), and refreshes pgbouncer / local_proxy /
-rsyslog config. The **refresh** path exists so Postgres can ask `compute_ctl` to pull a
-fresh spec when it suspects it is talking to the wrong pageserver — Postgres hits the
-internal `POST /refresh_configuration`, which the configurator turns into a re-fetch +
-`reconfigure()`.
+rsyslog config.
 
 ### Feature subsystems
 

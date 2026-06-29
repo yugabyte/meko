@@ -93,7 +93,6 @@ Called by local processes (the `yb_amp` extension, `local_proxy`); no auth layer
 | POST | `/extension_server/{*filename}` | Download a remote extension file. Optional query `?is_library=`. 412 if `--remote-ext-base-url` unset; 409 if spec has no remote-extension info; 404 if the file is unknown. |
 | POST | `/extensions` | Install an extension. Body `ExtensionInstallRequest` (`{ extension, database, version }`). Requires `Running`. Returns `ExtensionInstallResponse { extension, version }` (201). Called by the `yb_amp` extension. |
 | POST | `/grants` | Add role grants. Body `SetRoleGrantsRequest` (`{ database, schema, privileges, role }`). Requires `Running`. Returns `SetRoleGrantsResponse` (201). |
-| POST | `/refresh_configuration` | Postgres-initiated config refresh — nudges `compute_ctl` to re-pull its spec and reconfigure (best-effort, non-blocking). Increments `pg_cctl_pagestream_request_errors_total`. Postgres calls this when it suspects a stale/wrong pageserver. |
 | POST | `/failpoints` | **`testing` feature builds only.** Body is a list of `FailpointConfig { name, actions }`. 412 if not compiled with failpoint support. |
 
 ## yb-light specifics

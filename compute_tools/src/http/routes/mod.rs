@@ -16,7 +16,6 @@ pub(in crate::http) mod lfc;
 pub(in crate::http) mod metrics;
 pub(in crate::http) mod metrics_json;
 pub(in crate::http) mod promote;
-pub(in crate::http) mod refresh_configuration;
 pub(in crate::http) mod status;
 pub(in crate::http) mod terminate;
 
