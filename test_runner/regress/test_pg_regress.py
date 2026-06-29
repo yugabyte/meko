@@ -290,71 +290,9 @@ def test_isolation(
     post_checks(env, test_output_dir, DBNAME, endpoint)
 
 
-# Run extra Neon-specific pg_regress-based tests. The tests and their
-# schedule file are in the sql_regress/ directory.
-@pytest.mark.parametrize("shard_count", [None, 4])
-@pytest.mark.parametrize("reldir_type", ["v1", "v2"])
-def test_sql_regress(
-    neon_env_builder: NeonEnvBuilder,
-    test_output_dir: Path,
-    pg_bin: PgBin,
-    capsys: CaptureFixture[str],
-    base_dir: Path,
-    pg_distrib_dir: Path,
-    shard_count: int | None,
-    reldir_type: str,
-):
-    DBNAME = "regression"
-
-    if shard_count is not None:
-        neon_env_builder.num_pageservers = shard_count
-    neon_env_builder.enable_pageserver_remote_storage(s3_storage())
-    env = neon_env_builder.init_start(
-        initial_tenant_conf=patch_tenant_conf(TENANT_CONF, reldir_type),
-        initial_tenant_shard_count=shard_count,
-    )
-
-    # Connect to postgres and create a database called "regression".
-    endpoint = env.endpoints.create_start("main")
-    endpoint.safe_psql(f"CREATE DATABASE {DBNAME}")
-
-    # Create some local directories for pg_regress to run in.
-    runpath = test_output_dir / "regress"
-    (runpath / "testtablespace").mkdir(parents=True)
-
-    # Compute all the file locations that pg_regress will need.
-    #
-    # XXX: We assume that the `build` directory is a sibling of the
-    # pg_distrib_dir.  That is the default when you check out the
-    # repository; `build` and `pg_install` are created side by side.
-    build_path = pg_distrib_dir / f"../build/{env.pg_version.v_prefixed}/src/test/regress"
-    src_path = base_dir / "test_runner/sql_regress"
-    bindir = pg_distrib_dir / f"v{env.pg_version}/bin"
-    schedule = src_path / "parallel_schedule"
-    pg_regress = build_path / "pg_regress"
-
-    pg_regress_command = [
-        str(pg_regress),
-        "--use-existing",
-        f"--bindir={bindir}",
-        f"--dlpath={build_path}",
-        f"--schedule={schedule}",
-        f"--inputdir={src_path}",
-    ]
-
-    env_vars = {
-        "PGPORT": str(endpoint.default_options["port"]),
-        "PGUSER": endpoint.default_options["user"],
-        "PGHOST": endpoint.default_options["host"],
-    }
-
-    # Run the command.
-    # We don't capture the output. It's not too chatty, and it always
-    # logs the exact same data to `regression.out` anyway.
-    with capsys.disabled():
-        pg_bin.run(pg_regress_command, env=env_vars, cwd=runpath)
-
-    post_checks(env, test_output_dir, DBNAME, endpoint)
+# The Neon-specific sql_regress tests (test_runner/sql_regress) were migrated
+# into the yb-light e2e golden suite (test/e2e/storage/fast); the old
+# pg_regress-driven `test_sql_regress` and its directory were removed.
 
 
 def test_max_wal_rate(neon_simple_env: NeonEnv):

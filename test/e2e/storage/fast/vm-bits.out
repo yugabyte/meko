@@ -1,3 +1,4 @@
+psql:vm-bits.sql:7: NOTICE:  extension "yb_amp_test_utils" already exists, skipping
 CREATE EXTENSION
 CREATE TABLE
 INSERT 0 1

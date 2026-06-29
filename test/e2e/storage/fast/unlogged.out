@@ -1,3 +1,4 @@
+psql:unlogged.sql:5: NOTICE:  extension "yb_amp_test_utils" already exists, skipping
 CREATE EXTENSION
 CREATE TABLE
 CREATE INDEX

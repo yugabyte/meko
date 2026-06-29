@@ -1,3 +1,4 @@
+psql:multixact.sql:10: NOTICE:  extension "yb_amp_test_utils" already exists, skipping
 CREATE EXTENSION
 CREATE TABLE
 INSERT 0 10000

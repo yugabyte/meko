@@ -1,4 +1,5 @@
 Timing is on.
+psql:update-churn.sql:13: NOTICE:  table "churn" does not exist, skipping
 DROP TABLE
 CREATE TABLE
 INSERT 0 500

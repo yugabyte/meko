@@ -97,8 +97,12 @@ Nothing central to edit — tests are auto-discovered.
   loops). Don't print a `PASS` line — the runner does that.
 
 - **A golden `.sql` workload**: drop `<name>.sql` + `<name>.out` into
-  `fast/` or `slow/`. The runner execs `psql -f`, normalizes stdout, and
-  diffs against the `.out` golden. The `psql` used is the one built from
+  `fast/` or `slow/`. The runner execs `psql -f`, captures stdout and
+  stderr **interleaved** (like pg_regress's `2>&1`, so `NOTICE`/`WARNING`/
+  `ERROR` text is part of the golden), normalizes it, and diffs against the
+  `.out` golden. A workload with *intentional* errors should `\set
+  ON_ERROR_STOP 0` in its `.sql` (the runner otherwise aborts on the first
+  error); see `fast/event-triggers.sql`. The `psql` used is the one built from
   yb-light's own Postgres (`pg_install/v17/bin/psql`), not whatever is on
   `PATH` — its meta-commands (e.g. `\d`) must match the compute's major
   version. Generate/refresh the golden with
@@ -112,12 +116,45 @@ Nothing central to edit — tests are auto-discovered.
   e.g. `clog`/`subxacts`, whose heavy commit bursts make the next endpoint
   recycle time out (see issue #115).
 
+## Full upstream pg_regress suite (`pg_regress.sh`)
+
+`run.sh` runs this crate's own checked-in golden workloads. To instead run
+the **full upstream PostgreSQL regression suite** against a yb-light
+compute, use `pg_regress.sh` — a separate driver that bypasses the Rust
+harness entirely:
+
+```sh
+test/e2e/storage/pg_regress.sh            # full suite, release build (default)
+test/e2e/storage/pg_regress.sh --debug    # debug build (slower)
+test/e2e/storage/pg_regress.sh -j 16      # more pg_regress connections
+test/e2e/storage/pg_regress.sh --keep     # leave the cluster up for postmortem
+test/e2e/storage/pg_regress.sh -h         # full help
+```
+
+It drives the ~200-test suite straight from the vendored Postgres source
+(`vendor/postgres-v17/src/test/regress`) via the stock `pg_regress`
+binary: it builds + installs the suite's C support modules (regress,
+refint, autoinc), brings up a throwaway `yb_light_local` cluster, creates
+the `regression` database, runs the parallel schedule, and tears down on
+exit (unless `--keep`). The by-design `CREATE TABLESPACE`-unsupported
+diffs are blessed via the expected-output variants in
+[`regress_yb_expected/`](regress_yb_expected) (overlaid onto pg_regress's
+`expected/<test>_N.out` alternative-file mechanism, not by editing the
+upstream goldens), so a clean tree is a genuine green (0 failures on PG17).
+See the header of `pg_regress.sh` and issue #119 for details.
+
+> Defaults to a **release** build — a debug build of the full suite is
+> painfully slow. Honours `YB_HOST`/`YB_PORT`, `E2E_PORT_BASE`,
+> `YB_LIGHT_REPO_DIR`, `YB_DBNAME`.
+
 ## Layout
 
 ```
 test/e2e/
   storage/                 this suite (the `e2e_tests` crate)
     run.sh                 wrapper: build + run the harness (signal-trap cleanup)
+    pg_regress.sh          driver for the FULL upstream pg_regress suite (see above)
+    regress_yb_expected/   yb-light expected-output variants for pg_regress.sh
     clean.sh               teardown (kill procs, drop DB, wipe run dir)
     build.rs               auto-registers scenarios from fast/ and slow/
     Cargo.toml             the `e2e_tests` crate

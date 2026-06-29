@@ -1,4 +1,6 @@
+psql:read-validation.sql:7: NOTICE:  extension "yb_amp_test_utils" already exists, skipping
 CREATE EXTENSION
+psql:read-validation.sql:8: NOTICE:  extension "pageinspect" already exists, skipping
 CREATE EXTENSION
 CREATE TABLE
 INSERT 0 1

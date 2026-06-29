@@ -1,4 +1,6 @@
+psql:vm-truncate.sql:6: NOTICE:  extension "yb_amp_test_utils" already exists, skipping
 CREATE EXTENSION
+psql:vm-truncate.sql:7: NOTICE:  extension "pageinspect" already exists, skipping
 CREATE EXTENSION
 CREATE TABLE
 INSERT 0 1000

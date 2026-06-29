@@ -50,17 +50,38 @@ pub fn spawn_bg(port: u16, sql: &str) -> std::io::Result<Child> {
         .spawn()
 }
 
-/// Run a `.sql` file with `ON_ERROR_STOP=1`, capturing stdout (for the
-/// golden diff) while stderr flows to our log. Returns the captured
-/// stdout; errors if `psql` exits non-zero.
+/// Run a `.sql` file with `ON_ERROR_STOP=1`, capturing stdout AND stderr
+/// **interleaved** (for the golden diff). Returns the captured output;
+/// errors if `psql` exits non-zero.
+///
+/// psql writes `NOTICE`/`WARNING`/`ERROR` to stderr, so goldens that
+/// exercise them (e.g. `event-triggers`) need those lines to land in
+/// order with the command tags on stdout — exactly what pg_regress gets
+/// from `2>&1`. We reproduce that by pointing both child streams at one
+/// file handle (cloned, so they share a single OS offset): the kernel
+/// interleaves the writes in emission order. A test that wants its
+/// intentional errors captured rather than aborting the run overrides the
+/// runner's `ON_ERROR_STOP=1` with `\set ON_ERROR_STOP 0` in its `.sql`.
 pub fn run_file(port: u16, sql: &Path) -> anyhow::Result<String> {
-    let out = base(port)
+    let stem = sql
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "workload".to_string());
+    let sink_path =
+        std::env::temp_dir().join(format!("e2e-psql-{}-{}.out", std::process::id(), stem));
+    let sink = std::fs::File::create(&sink_path)?;
+
+    let status = base(port)
         .args(["-v", "ON_ERROR_STOP=1", "-f"])
         .arg(sql)
-        .stderr(Stdio::inherit())
-        .output()?;
-    if !out.status.success() {
-        anyhow::bail!("psql -f {} exited with {}", sql.display(), out.status);
+        .stdout(sink.try_clone()?)
+        .stderr(sink.try_clone()?)
+        .status()?;
+
+    let captured = std::fs::read(&sink_path)?;
+    let _ = std::fs::remove_file(&sink_path);
+    if !status.success() {
+        anyhow::bail!("psql -f {} exited with {}", sql.display(), status);
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&captured).into_owned())
 }

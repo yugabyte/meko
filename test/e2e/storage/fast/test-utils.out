@@ -1,0 +1,22 @@
+psql:test-utils.sql:7: NOTICE:  extension "yb_amp_test_utils" already exists, skipping
+CREATE EXTENSION
+ test_consume_cpu
+------------------
+
+(1 row)
+
+ test_consume_memory
+---------------------
+
+(1 row)
+
+ test_release_memory
+---------------------
+
+(1 row)
+
+ test_release_memory
+---------------------
+
+(1 row)
+

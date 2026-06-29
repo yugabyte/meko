@@ -11,17 +11,23 @@ use regex::Regex;
 use crate::cluster::Cluster;
 use crate::tee_println;
 
-/// Normalize psql stdout for golden diffing: drop `\timing`'s `Time:`
-/// lines and libpq/server version-mismatch warnings, strip trailing
-/// whitespace. Result sets and command tags are kept — they carry
-/// signal.
+/// Normalize psql output (stdout + interleaved stderr) for golden
+/// diffing: canonicalize psql's message location prefix to a basename,
+/// drop `\timing`'s `Time:` lines and libpq/server version-mismatch
+/// warnings, strip trailing whitespace. Result sets, command tags, and
+/// `NOTICE`/`WARNING`/`ERROR` text are kept — they carry signal.
 fn normalize(input: &str) -> String {
     let time = Regex::new(r"^Time: [0-9.]+ ms").expect("static regex");
-    let version =
-        Regex::new(r"^(WARNING|NOTICE): .*(server|libpq|protocol) version").expect("static regex");
+    // psql prefixes client messages with the path we pass to `-f`
+    // (`psql:/abs/checkout/foo.sql:NN: NOTICE: ...`). Reduce it to the
+    // basename so goldens don't bake in a machine-specific checkout path.
+    let psql_loc = Regex::new(r"^psql:.*/([^/]+:\d+:)").expect("static regex");
+    let version = Regex::new(r"^(psql:\S+ )?(WARNING|NOTICE): .*(server|libpq|protocol) version")
+        .expect("static regex");
     let mut out = String::new();
     for line in input.lines() {
-        if time.is_match(line) || version.is_match(line) {
+        let line = psql_loc.replace(line, "psql:$1");
+        if time.is_match(&line) || version.is_match(&line) {
             continue;
         }
         out.push_str(line.trim_end());
