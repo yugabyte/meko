@@ -582,7 +582,18 @@ _PG_init(void)
 							"Maximal size of pgstat.stat file saved in YbAmp storage",
 							"Zero value disables persisting pgstat.stat file",
 							&neon_pgstat_file_size_limit,
-							0, 0, 1000000, /* disabled by default */
+							/*
+							 * Enabled by default at 1 MB. The stat file is
+							 * WAL-logged on clean shutdown (bounded by this
+							 * limit), so the cost is <= 1 MB of WAL per clean
+							 * shutdown, while persisting cumulative stats across
+							 * the frequent restarts of a serverless compute
+							 * avoids post-restart bad plans + re-ANALYZE churn.
+							 * 1 MB covers ~10k relations with stats; larger
+							 * schemas hit the cap and fall back to dropping
+							 * stats, which bounds the WAL cost.
+							 */
+							1024, 0, 1000000,
 							PGC_SIGHUP,
 							GUC_UNIT_KB,
 							NULL, NULL, NULL);
