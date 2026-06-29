@@ -498,6 +498,7 @@ Default knobs (configurable via `pageserver.toml` under the
 | `image_chain_payload_bytes_limit` | 4 KiB | Combined-delta-payload trigger for relation-page materialisation (`0` disables size trigger; does not apply to SLRU) |
 | `materialize_queue_capacity` | 2000 | Bounded mpsc depth; the write-side dispatch uses **blocking** send (backpressures walreceiver); the read-side dispatch uses `try_send` (drops on overflow — the next read of the same key re-evaluates) |
 | `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes`. Whole cold keys are evicted in LRU order when crossed; keys with unflushed (pre-flush) rows are pinned regardless |
+| `ingest_parallelism` | 1 | Workers used to deserialize WAL values + build page rows when applying a batch (`PageWriter::put_serialized`). `1` = serial (default). `>1` fans the per-key deserialize/re-serialize CPU across blocking threads on batches ≥256 entries; the buffer pushes and materialiser bookkeeping stay serial and ordered, so LSN ordering and atomic commit are unchanged |
 
 ## Backpressure
 

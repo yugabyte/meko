@@ -57,6 +57,9 @@ pub struct FlushPolicy {
     /// the size-based flush trigger fires first; recommended ≥ 2×
     /// `max_bytes`.
     pub backpressure_bytes: usize,
+    /// Number of parallel workers used to deserialize + build page rows in
+    /// `put_serialized`. 1 = serial. See `YbPageWriterConfig::ingest_parallelism`.
+    pub ingest_parallelism: usize,
 }
 
 impl Default for FlushPolicy {
@@ -65,6 +68,7 @@ impl Default for FlushPolicy {
             max_age: Duration::from_secs(5),
             max_bytes: 25 * 1024 * 1024,
             backpressure_bytes: 50 * 1024 * 1024,
+            ingest_parallelism: 1,
         }
     }
 }
@@ -559,19 +563,88 @@ impl PageWriter {
             return Ok(());
         }
 
-        // Backpressure: if the buffer is already at or above the
-        // configured hard cap, block until a flush drains it below
-        // the cap. The walreceiver is the only producer that hits
-        // this path, so stalling it here pushes the slowdown all the
-        // way up to safekeeper ack — which is exactly what we want
-        // when YB INSERTs can't keep up. Without this, the buffer
-        // grows unboundedly under CPU pressure (pre-flush rows are
-        // pinned in `UnifiedPages` and `evict_to_capacity` can't
-        // touch them).
-        //
-        // `notified()` is registered before the size check (via
-        // `enable()`) to close the race where a flush completes
-        // between our check and our wait.
+        self.await_backpressure().await;
+
+        let mut rel_rows = Vec::with_capacity(entries.len());
+        let mut slru_rows = Vec::new();
+        let mut meta_rows = Vec::new();
+        let mut slru_mat = Vec::new();
+        for (key, lsn, value) in entries {
+            if key.is_rel_block_key() {
+                rel_rows.push(build_page_row(*key, *lsn, value)?);
+            } else if key.is_slru_block_key() {
+                slru_rows.push(build_slru_page_row(*key, *lsn, value)?);
+                slru_mat.push((*key, *lsn, slru_resets_chain(value)));
+            } else {
+                meta_rows.push(build_meta_row(*key, *lsn, value)?);
+            }
+        }
+        self.push_rows(rel_rows, slru_rows, meta_rows, slru_mat)
+    }
+
+    /// Apply a serialized WAL value batch. With `ingest_parallelism > 1`
+    /// (and a large enough batch) the per-key deserialize + row build is
+    /// fanned across blocking workers; the buffer pushes and materialiser
+    /// bookkeeping (`push_rows`) stay serial and in batch order, so
+    /// ordering and atomicity are identical to the serial path.
+    pub async fn put_serialized(&self, batch: SerializedValueBatch) -> Result<()> {
+        let len = batch.metadata.len();
+        if len == 0 {
+            return Ok(());
+        }
+
+        self.await_backpressure().await;
+
+        // Below this size the spawn_blocking hand-off costs more than the
+        // serial build saves.
+        const MIN_PARALLEL_ENTRIES: usize = 256;
+        let parallelism = self.policy.ingest_parallelism;
+        let (rel_rows, slru_rows, meta_rows, slru_mat) =
+            if parallelism > 1 && len >= MIN_PARALLEL_ENTRIES {
+                let batch = std::sync::Arc::new(batch);
+                let mut handles = Vec::new();
+                for range in partition_ranges(len, parallelism) {
+                    let batch = std::sync::Arc::clone(&batch);
+                    handles.push(tokio::task::spawn_blocking(move || {
+                        build_rows_from_batch(&batch, range)
+                    }));
+                }
+                let mut rel_rows = Vec::new();
+                let mut slru_rows = Vec::new();
+                let mut meta_rows = Vec::new();
+                let mut slru_mat = Vec::new();
+                // Joined in range order, so the concatenation reproduces the
+                // batch's key/LSN order exactly as the serial path would.
+                for handle in handles {
+                    let (rel, slru, meta, mat) = handle
+                        .await
+                        .map_err(|e| anyhow::anyhow!("ingest build task failed: {e}"))??;
+                    rel_rows.extend(rel);
+                    slru_rows.extend(slru);
+                    meta_rows.extend(meta);
+                    slru_mat.extend(mat);
+                }
+                (rel_rows, slru_rows, meta_rows, slru_mat)
+            } else {
+                build_rows_from_batch(&batch, 0..len)?
+            };
+
+        self.push_rows(rel_rows, slru_rows, meta_rows, slru_mat)
+    }
+
+    /// Backpressure: if the buffer is already at or above the configured
+    /// hard cap, block until a flush drains it below the cap. The
+    /// walreceiver is the only producer that hits this path, so stalling
+    /// here pushes the slowdown all the way up to safekeeper ack — which
+    /// is exactly what we want when YB INSERTs can't keep up. Without
+    /// this, the buffer grows unboundedly under CPU pressure (pre-flush
+    /// rows are pinned in `UnifiedPages` and `evict_to_capacity` can't
+    /// touch them).
+    ///
+    /// `notified()` is registered before the size check (via `enable()`)
+    /// to close the race where a flush completes between our check and
+    /// our wait.
+    async fn await_backpressure(&self) {
         if self.policy.backpressure_bytes > 0 {
             let mut waited = false;
             loop {
@@ -598,19 +671,20 @@ impl PageWriter {
                 notified.await;
             }
         }
+    }
 
-        let mut rel_rows = Vec::with_capacity(entries.len());
-        let mut slru_rows = Vec::new();
-        let mut meta_rows = Vec::new();
-        for (key, lsn, value) in entries {
-            if key.is_rel_block_key() {
-                rel_rows.push(build_page_row(*key, *lsn, value)?);
-            } else if key.is_slru_block_key() {
-                slru_rows.push(build_slru_page_row(*key, *lsn, value)?);
-            } else {
-                meta_rows.push(build_meta_row(*key, *lsn, value)?);
-            }
-        }
+    /// Push pre-built rows into the in-RAM buffers and update the
+    /// materialiser counters. Always serial and in caller order — this is
+    /// the stage that must NOT be parallelized (per-key DashMap pushes are
+    /// lock-free, but the materialiser bookkeeping and aux buffers assume
+    /// ordered, single-threaded application).
+    fn push_rows(
+        &self,
+        rel_rows: Vec<PageRow>,
+        slru_rows: Vec<SlruPageRow>,
+        meta_rows: Vec<MetaRow>,
+        slru_mat: Vec<(Key, Lsn, bool)>,
+    ) -> Result<()> {
         if rel_rows.is_empty() && slru_rows.is_empty() && meta_rows.is_empty() {
             return Ok(());
         }
@@ -653,24 +727,16 @@ impl PageWriter {
         // grows to a full page (~32 K deltas) and every basebackup
         // re-walks it to rebuild the page (the slow phase we observed).
         // The payload trigger is disabled — clog deltas are a couple of
-        // bytes. Tallied straight off `entries` because the built
-        // `slru_rows` drop the `Key`; `will_init` mirrors
-        // `build_slru_page_row` (image / ZEROPAGE anchors the chain).
+        // bytes. Tallied from `slru_mat` (key, lsn, resets_chain) built
+        // alongside the rows, because the built `slru_rows` drop the `Key`.
         if let Some(slru_count_limit) = self
             .materializer
             .as_ref()
             .map(|m| m.slru_count_limit)
             .filter(|&c| c > 0)
         {
-            for (key, lsn, value) in entries {
-                if !key.is_slru_block_key() {
-                    continue;
-                }
-                let resets_chain = match value {
-                    Value::Image(_) => true,
-                    Value::WalRecord(rec) => rec.will_init(),
-                };
-                self.record_delta_for_materialize(key, *lsn, resets_chain, 0, slru_count_limit, 0);
+            for (key, lsn, resets_chain) in &slru_mat {
+                self.record_delta_for_materialize(key, *lsn, *resets_chain, 0, slru_count_limit, 0);
             }
         }
         // Aux (slru + meta) buffers under one small mutex. Holds
@@ -1970,6 +2036,79 @@ impl PageWriter {
 /// Convert the upstream-shaped `SerializedValueBatch` (one batch per
 /// digested WAL record) into the `(Key, LSN, Value)` triples
 /// [`PageWriter::put`] consumes. Skips `ValueMeta::Observed` entries.
+/// Whether a SLRU value resets the delta chain (image / will-init anchor).
+fn slru_resets_chain(value: &Value) -> bool {
+    match value {
+        Value::Image(_) => true,
+        Value::WalRecord(rec) => rec.will_init(),
+    }
+}
+
+/// Split `len` items into up to `parts` contiguous, near-equal ranges
+/// (empty ranges omitted). Contiguous and in order, so callers can join
+/// the per-range results back in the original batch order.
+fn partition_ranges(len: usize, parts: usize) -> Vec<std::ops::Range<usize>> {
+    let parts = parts.clamp(1, len.max(1));
+    let base = len / parts;
+    let rem = len % parts;
+    let mut out = Vec::with_capacity(parts);
+    let mut start = 0;
+    for i in 0..parts {
+        let extra = if i < rem { 1 } else { 0 };
+        let end = start + base + extra;
+        if start < end {
+            out.push(start..end);
+        }
+        start = end;
+    }
+    out
+}
+
+/// (rel rows, slru rows, meta rows, slru materialiser tuples).
+type BuiltRows = (Vec<PageRow>, Vec<SlruPageRow>, Vec<MetaRow>, Vec<(Key, Lsn, bool)>);
+
+/// Deserialize values and build page rows for `batch.metadata[range]`.
+/// Pure CPU and self-contained, so it is safe to run on a blocking worker
+/// over an `Arc<SerializedValueBatch>`. The `slru_mat` tuples carry the
+/// `(key, lsn, resets_chain)` the materialiser needs, since the built
+/// `SlruPageRow`s drop the key.
+fn build_rows_from_batch(
+    batch: &SerializedValueBatch,
+    range: std::ops::Range<usize>,
+) -> Result<BuiltRows> {
+    let mut rel_rows = Vec::new();
+    let mut slru_rows = Vec::new();
+    let mut meta_rows = Vec::new();
+    let mut slru_mat = Vec::new();
+    for meta in &batch.metadata[range] {
+        let ValueMeta::Serialized(ser) = meta else {
+            continue;
+        };
+        let start = ser.batch_offset as usize;
+        let end = start
+            .checked_add(ser.len)
+            .ok_or_else(|| anyhow::anyhow!("ValueMeta offset overflow"))?;
+        if end > batch.raw.len() {
+            anyhow::bail!(
+                "ValueMeta range {start}..{end} exceeds raw buffer length {}",
+                batch.raw.len()
+            );
+        }
+        let value = Value::des(&batch.raw[start..end])?;
+        let key = Key::from_compact(ser.key);
+        let lsn = ser.lsn;
+        if key.is_rel_block_key() {
+            rel_rows.push(build_page_row(key, lsn, &value)?);
+        } else if key.is_slru_block_key() {
+            slru_rows.push(build_slru_page_row(key, lsn, &value)?);
+            slru_mat.push((key, lsn, slru_resets_chain(&value)));
+        } else {
+            meta_rows.push(build_meta_row(key, lsn, &value)?);
+        }
+    }
+    Ok((rel_rows, slru_rows, meta_rows, slru_mat))
+}
+
 pub fn extract_triples(batch: &SerializedValueBatch) -> Result<Vec<(Key, Lsn, Value)>> {
     let mut out = Vec::with_capacity(batch.len);
     for meta in &batch.metadata {
@@ -2643,6 +2782,7 @@ mod tests {
             max_age: Duration::from_secs(3600),
             max_bytes: 200,
             backpressure_bytes: 0,
+            ingest_parallelism: 1,
         };
         let (w, _t) = writer(store.clone(), policy);
         assert!(!w.should_flush().await);
@@ -2660,6 +2800,7 @@ mod tests {
             max_age: Duration::from_millis(100),
             max_bytes: 1_000_000_000,
             backpressure_bytes: 0,
+            ingest_parallelism: 1,
         };
         let (w, _t) = writer(store.clone(), policy);
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
@@ -2737,6 +2878,7 @@ mod tests {
             max_age: Duration::from_millis(40),
             max_bytes: 1 << 30,
             backpressure_bytes: 0,
+            ingest_parallelism: 1,
         };
         let w = Arc::new(PageWriter::new(
             t,
@@ -2787,6 +2929,7 @@ mod tests {
             max_age: Duration::from_secs(3600),
             max_bytes: 1 << 30,
             backpressure_bytes: 0,
+            ingest_parallelism: 1,
         };
         let w = Arc::new(PageWriter::new(
             t,

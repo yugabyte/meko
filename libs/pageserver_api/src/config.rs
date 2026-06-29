@@ -361,6 +361,8 @@ pub struct YbPageWriterConfigToml {
     /// point reads. 0 disables the cache. Default 8192.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta_cache_entries: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingest_parallelism: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -456,6 +458,15 @@ pub struct YbPageWriterConfig {
     /// at any LSN ≥ the write LSN hits the cache without a YB round-trip.
     /// 0 disables the cache. Default 8192.
     pub meta_cache_entries: usize,
+
+    /// Number of parallel workers used to deserialize WAL values and build
+    /// page rows when applying a batch to the page writer. 1 = serial
+    /// (the default and historical behavior). Values >1 fan the per-key
+    /// deserialize + re-serialize CPU across blocking threads; the per-key
+    /// buffer pushes and the materialiser bookkeeping stay serial, so
+    /// ordering and atomicity are unchanged. Not scaled by `scale_factor`.
+    /// Default 1.
+    pub ingest_parallelism: usize,
 }
 
 impl YbPageWriterConfig {
@@ -473,6 +484,7 @@ impl YbPageWriterConfig {
             read_cache_bytes: 1024 * 1024 * 1024,
             backpressure_bytes: 50 * 1024 * 1024,
             meta_cache_entries: 8192,
+            ingest_parallelism: 1,
         }
     }
 }
@@ -512,6 +524,7 @@ impl YbPageWriterConfigToml {
                 .backpressure_bytes
                 .unwrap_or_else(|| scale_count(base.backpressure_bytes, scale_factor)),
             meta_cache_entries: self.meta_cache_entries.unwrap_or(base.meta_cache_entries),
+            ingest_parallelism: self.ingest_parallelism.unwrap_or(base.ingest_parallelism),
         }
     }
 }

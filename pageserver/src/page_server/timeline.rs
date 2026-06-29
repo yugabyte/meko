@@ -1909,6 +1909,7 @@ impl Timeline {
                     max_age: pw_cfg.flush_interval,
                     max_bytes: pw_cfg.flush_size_bytes,
                     backpressure_bytes: pw_cfg.backpressure_bytes,
+                    ingest_parallelism: pw_cfg.ingest_parallelism,
                 },
                 pw_cfg.read_cache_bytes,
                 pw_cfg.meta_cache_entries,
@@ -3044,10 +3045,7 @@ impl TimelineWriter<'_> {
                  compute_page_store and fpu_page_store to be configured"
             )
         })?;
-        let triples = crate::page_writer::extract_triples(&batch)?;
-        if !triples.is_empty() {
-            page_writer.put(&triples).await?;
-        }
+        page_writer.put_serialized(batch).await?;
         // Advance applied_lsn — the in-memory ingest watermark
         // GetPage@LSN waits on. This advances per put_batch so reads
         // don't stall behind YB INSERT latency. NOT a durability
