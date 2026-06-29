@@ -1,18 +1,24 @@
 package task
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
 )
 
-// This file defines the task kinds and their write-ahead *plans* (amp-controller.md
-// §8.1): the ordered list of steps a task will run, with all ids assigned and
-// baked into the step args up front, before any step executes. A plan is pure
-// data — building one mutates nothing — so the same builders are used by tests
-// today and by the API mutation handlers once those are moved onto the framework
-// (#113). The default Postgres major version yb-light targets is v17.
+// This file is the caller-facing surface of the task framework: a Service that
+// records tasks (amp-controller.md §8.1). It holds the Store, so a caller depends
+// on one Service rather than threading the Store through every call — the Service
+// is what anything that initiates a task takes as a dependency. Each CreateX
+// method generates all the ids the operation needs up front, describes the
+// ordered steps as StepSpecs (kind + marshaled args — pure data, no deps, no
+// executable Step), and hands them to Store.Create, which write-ahead-records the
+// task and its steps and returns the Task to surface to the user. Building the
+// specs performs no effects; the steps only become executable later, when the
+// worker rebuilds them via the Registry. The default Postgres major version
+// yb-light targets is v17.
 
 // Task kinds — the task.kind values. Each corresponds to a user-visible
 // operation whose status the API exposes (GET /tasks/{id}).
@@ -23,17 +29,21 @@ const (
 	KindDeleteEndpoint = "delete_endpoint"
 )
 
-// Plan is a built, ready-to-persist task: its kind, the resource it targets (for
-// the task API's status monitoring), the originating request (params, echoed
-// back via the task API), and its ordered steps. Hand it to Store.PlanFrom to
-// write-ahead-record it. ProjectID/TargetRef are nullable: a task that creates
-// its own target may not have one when planned.
-type Plan struct {
-	Kind      string
-	ProjectID *uuid.UUID
-	TargetRef *string
-	Params    json.RawMessage
-	Steps     []StepPlan
+// Service records tasks against a Store and reads them back. It is the dependency
+// API mutation handlers (and anything else that initiates a task) take instead of
+// the raw Store; the worker, which claims and runs tasks, uses the Store directly.
+type Service struct {
+	store Store
+}
+
+// NewService returns a task Service backed by store.
+func NewService(store Store) *Service {
+	return &Service{store: store}
+}
+
+// Get returns a task by id (its status, for GET /tasks/{id}), or nil if absent.
+func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Task, error) {
+	return s.store.Get(ctx, id)
 }
 
 // CreateProjectInput is the request for a create_project task: a new project (a
@@ -48,23 +58,23 @@ type CreateProjectInput struct {
 	WithWriter bool `json:"with_writer"`
 }
 
-// BuildCreateProject plans a create_project task: create the project + its
-// default branch, record the branch's pending-init recipe, then (when WithWriter)
-// create and deploy the first write endpoint. The project/branch (and endpoint)
-// ids are generated here so the whole plan is fixed before execution.
-func BuildCreateProject(in CreateProjectInput) (Plan, error) {
+// CreateProject records a create_project task: create the project + its default
+// branch, record the branch's pending-init recipe, then (when WithWriter) create
+// and deploy the first write endpoint. The project/branch (and endpoint) ids are
+// generated here so the whole plan is fixed before execution.
+func (s *Service) CreateProject(ctx context.Context, in CreateProjectInput) (*Task, error) {
 	projectID := uuid.New()
 	branchID := uuid.New()
 
-	steps := []StepPlan{
-		mustStep(StepCreateProject, CreateProjectArgs{
+	steps := []StepSpec{
+		stepSpec(StepCreateProject, CreateProjectArgs{
 			PoolID:    in.PoolID,
 			ProjectID: projectID,
 			BranchID:  branchID,
 			Name:      in.Name,
 			PgVersion: in.PgVersion,
 		}),
-		mustStep(StepRecordBranchRecipe, RecordBranchRecipeArgs{
+		stepSpec(StepRecordBranchRecipe, RecordBranchRecipeArgs{
 			ProjectID:  projectID,
 			BranchID:   branchID,
 			BranchName: defaultBranchName, // the default branch is always "main", not the project name
@@ -73,7 +83,7 @@ func BuildCreateProject(in CreateProjectInput) (Plan, error) {
 		}),
 	}
 	if in.WithWriter {
-		steps = append(steps, mustStep(StepCreateEndpoint, CreateEndpointArgs{
+		steps = append(steps, stepSpec(StepCreateEndpoint, CreateEndpointArgs{
 			EndpointID: uuid.New(),
 			ProjectID:  projectID,
 			BranchID:   branchID,
@@ -81,7 +91,7 @@ func BuildCreateProject(in CreateProjectInput) (Plan, error) {
 			PgVersion:  in.PgVersion,
 		}))
 	}
-	return plan(KindCreateProject, in, projectID, steps)
+	return s.create(ctx, KindCreateProject, in, projectID, steps)
 }
 
 // BranchInput is the request for a branch task. The new branch stays in its
@@ -99,16 +109,16 @@ type BranchInput struct {
 	WithWriter bool `json:"with_writer"`
 }
 
-// BuildBranch plans a branch task: fork the parent into a new branch, record its
+// Branch records a branch task: fork the parent into a new branch, record its
 // (ancestor-bearing) pending-init recipe, then (when WithWriter) create and
 // deploy a write endpoint on the branch — which clones from the ancestor at
 // ForkLSN rather than initdb'ing.
-func BuildBranch(in BranchInput) (Plan, error) {
+func (s *Service) Branch(ctx context.Context, in BranchInput) (*Task, error) {
 	branchID := uuid.New()
 	parent := in.ParentBranchID
 
-	steps := []StepPlan{
-		mustStep(StepCreateBranch, CreateBranchArgs{
+	steps := []StepSpec{
+		stepSpec(StepCreateBranch, CreateBranchArgs{
 			ParentBranchID: parent,
 			ProjectID:      in.ProjectID,
 			BranchID:       branchID,
@@ -116,7 +126,7 @@ func BuildBranch(in BranchInput) (Plan, error) {
 			ForkLSN:        in.ForkLSN,
 			PgVersion:      in.PgVersion,
 		}),
-		mustStep(StepRecordBranchRecipe, RecordBranchRecipeArgs{
+		stepSpec(StepRecordBranchRecipe, RecordBranchRecipeArgs{
 			ProjectID:        in.ProjectID,
 			BranchID:         branchID,
 			BranchName:       in.Name,
@@ -126,7 +136,7 @@ func BuildBranch(in BranchInput) (Plan, error) {
 		}),
 	}
 	if in.WithWriter {
-		steps = append(steps, mustStep(StepCreateEndpoint, CreateEndpointArgs{
+		steps = append(steps, stepSpec(StepCreateEndpoint, CreateEndpointArgs{
 			EndpointID:       uuid.New(),
 			ProjectID:        in.ProjectID,
 			BranchID:         branchID,
@@ -136,7 +146,7 @@ func BuildBranch(in BranchInput) (Plan, error) {
 			AncestorLSN:      in.ForkLSN,
 		}))
 	}
-	return plan(KindBranch, in, in.ProjectID, steps)
+	return s.create(ctx, KindBranch, in, in.ProjectID, steps)
 }
 
 // CreateEndpointInput is the request for a create_endpoint (scale-up) task on an
@@ -151,15 +161,15 @@ type CreateEndpointInput struct {
 	AncestorLSN      string     `json:"ancestor_lsn,omitempty"`
 }
 
-// BuildCreateEndpoint plans a create_endpoint task: a single create_endpoint step
-// on an existing branch. Role defaults to read_write when unset.
-func BuildCreateEndpoint(in CreateEndpointInput) (Plan, error) {
+// CreateEndpoint records a create_endpoint task: a single create_endpoint step on
+// an existing branch. Role defaults to read_write when unset.
+func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*Task, error) {
 	role := in.Role
 	if role == "" {
 		role = roleReadWrite
 	}
-	steps := []StepPlan{
-		mustStep(StepCreateEndpoint, CreateEndpointArgs{
+	steps := []StepSpec{
+		stepSpec(StepCreateEndpoint, CreateEndpointArgs{
 			EndpointID:       uuid.New(),
 			ProjectID:        in.ProjectID,
 			BranchID:         in.BranchID,
@@ -169,7 +179,7 @@ func BuildCreateEndpoint(in CreateEndpointInput) (Plan, error) {
 			AncestorLSN:      in.AncestorLSN,
 		}),
 	}
-	return plan(KindCreateEndpoint, in, in.ProjectID, steps)
+	return s.create(ctx, KindCreateEndpoint, in, in.ProjectID, steps)
 }
 
 // DeleteEndpointInput is the request for a delete_endpoint (scale-down) task.
@@ -178,12 +188,12 @@ type DeleteEndpointInput struct {
 	EndpointID uuid.UUID `json:"endpoint_id"`
 }
 
-// BuildDeleteEndpoint plans a delete_endpoint task: a single delete_endpoint step.
-func BuildDeleteEndpoint(in DeleteEndpointInput) (Plan, error) {
-	steps := []StepPlan{
-		mustStep(StepDeleteEndpoint, DeleteEndpointArgs{EndpointID: in.EndpointID}),
+// DeleteEndpoint records a delete_endpoint task: a single delete_endpoint step.
+func (s *Service) DeleteEndpoint(ctx context.Context, in DeleteEndpointInput) (*Task, error) {
+	steps := []StepSpec{
+		stepSpec(StepDeleteEndpoint, DeleteEndpointArgs{EndpointID: in.EndpointID}),
 	}
-	return plan(KindDeleteEndpoint, in, in.ProjectID, steps)
+	return s.create(ctx, KindDeleteEndpoint, in, in.ProjectID, steps)
 }
 
 // EndpointDeployName is the deployer's stable instance handle for an endpoint
@@ -205,30 +215,31 @@ const roleReadWrite = "read_write"
 // name. The create_project step (EnsureProject) names the branch the same way.
 const defaultBranchName = "main"
 
-// plan finishes a Plan: it marshals the originating request as params and stamps
-// the task's target project (project_id, exposed by the task API for monitoring).
-// A nil project is left unstamped. projectID is taken by value and the address of
-// a copy is stored, so callers can pass a field directly.
-func plan(kind string, params any, projectID uuid.UUID, steps []StepPlan) (Plan, error) {
+// create marshals the originating request as params, stamps the task's target
+// project (project_id, exposed by the task API for monitoring; a nil project is
+// left unstamped), and persists the task + its steps via the Store. projectID is
+// taken by value and the address of a copy is stored, so callers can pass a field
+// directly.
+func (s *Service) create(ctx context.Context, kind string, params any, projectID uuid.UUID, steps []StepSpec) (*Task, error) {
 	raw, err := json.Marshal(params)
 	if err != nil {
-		return Plan{}, fmt.Errorf("marshal %s params: %w", kind, err)
+		return nil, fmt.Errorf("marshal %s params: %w", kind, err)
 	}
-	p := Plan{Kind: kind, Params: raw, Steps: steps}
+	spec := TaskSpec{Kind: kind, Params: raw, Steps: steps}
 	if projectID != uuid.Nil {
 		pid := projectID
-		p.ProjectID = &pid
+		spec.ProjectID = &pid
 	}
-	return p, nil
+	return s.store.Create(ctx, spec)
 }
 
-// mustStep builds a StepPlan, marshaling typed args to JSON. The args are
+// stepSpec builds a StepSpec, marshaling typed args to JSON. The args are
 // fixed-shape structs of ids and scalars, so marshaling cannot fail; an empty
-// args object is a safe degradation a step handler will reject on decode.
-func mustStep(kind string, args any) StepPlan {
+// args object is a safe degradation the step's Builder will reject on decode.
+func stepSpec(kind string, args any) StepSpec {
 	raw, err := json.Marshal(args)
 	if err != nil {
 		raw = json.RawMessage(`{}`)
 	}
-	return StepPlan{Kind: kind, Args: raw}
+	return StepSpec{Kind: kind, Args: raw}
 }

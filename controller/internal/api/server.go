@@ -32,7 +32,7 @@ type Server struct {
 
 // NewServer wires middleware, the spec/explorer routes, and the generated,
 // spec-driven API onto an echo server.
-func NewServer(cfg *config.Config, backend core.Backend, store task.Store, prov Provisioning, logger *slog.Logger) *Server {
+func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, prov Provisioning, logger *slog.Logger) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -70,7 +70,7 @@ func NewServer(cfg *config.Config, backend core.Backend, store task.Store, prov 
 
 	// The generated, spec-driven API. The controllers implement the strict
 	// interface; the generated router binds and validates against the spec.
-	impl := NewControllers(backend, store, prov, logger)
+	impl := NewControllers(backend, tasks, prov, logger)
 	RegisterHandlersWithBaseURL(e, NewStrictHandler(impl, nil), apiBaseURL)
 
 	if cfg.Deploy.Enabled {

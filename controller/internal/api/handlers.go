@@ -54,14 +54,15 @@ type Provisioning struct {
 // (§6) and are logged-only for now (#92).
 type Controllers struct {
 	backend core.Backend
-	tasks   task.Store
+	tasks   *task.Service
 	prov    Provisioning
 	logger  *slog.Logger
 }
 
-// NewControllers wires the controllers to a backend, the task store (for task
-// status reads), the provisioning collaborators, and the root logger.
-func NewControllers(backend core.Backend, tasks task.Store, prov Provisioning, logger *slog.Logger) *Controllers {
+// NewControllers wires the controllers to a backend, the task service (to create
+// tasks and read their status), the provisioning collaborators, and the root
+// logger.
+func NewControllers(backend core.Backend, tasks *task.Service, prov Provisioning, logger *slog.Logger) *Controllers {
 	return &Controllers{backend: backend, tasks: tasks, prov: prov, logger: logger}
 }
 

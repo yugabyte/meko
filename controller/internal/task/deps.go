@@ -9,13 +9,15 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/deploy"
 )
 
-// This file defines the *ports* the step catalog (steps.go) depends on: narrow
-// interfaces over the controller's collaborators, so step handlers are unit
+// This file defines the *ports* the step catalog (the step_*.go files) depends
+// on: narrow interfaces over the controller's collaborators, so steps are unit
 // testable against in-memory fakes and the framework stays decoupled from the
 // concrete state store, storage controller, and deployer. The real adapters that
-// satisfy these ports are assembled by ProductionRegistry (registry.go); the
-// id-keyed state operations live on *core.PgBackend (core/provision.go) and the
-// recipe operations bridge to the storage-controller client.
+// satisfy these ports are bundled into Deps and carried by the Registry, which
+// binds them into each step at construction (registry.go) — so a built step keeps
+// only the specific ports it uses and Execute needs only a context. The id-keyed
+// state operations live on *core.PgBackend (core/provision.go) and the recipe
+// operations bridge to the storage-controller client.
 //
 // Naming: the controller's user-facing ladder is storage pool -> project ->
 // branch -> endpoint. The storage layer is flat: a branch's branch_id IS the
@@ -82,10 +84,12 @@ type RecipeStore interface {
 	ClearBranchRecipe(ctx context.Context, branchID string) error
 }
 
-// Deps bundles the collaborators the production step handlers need.
-// Recipes and Deployer may be nil when the corresponding service is disabled;
-// the handlers that need them degrade or fail accordingly (a create_endpoint
-// task is only planned when a deployer is configured — see ProductionRegistry).
+// Deps bundles the collaborators the production steps need. The Registry holds
+// one Deps and binds it into each step it builds (registry.go); a step then keeps
+// only the specific ports it uses. Recipes and Deployer may be nil when the
+// corresponding service is disabled; the steps that need them degrade or fail
+// accordingly (a create_endpoint task is only planned when a deployer is
+// configured — see plan.go / the API wiring, #113).
 type Deps struct {
 	State         StateStore
 	Recipes       RecipeStore

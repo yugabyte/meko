@@ -1,50 +1,50 @@
 package task
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/yugabyte/yb-amp/controller/internal/deploy"
 )
 
-// These tests cover the Registry (registry.go): the kind->handler lookup the
-// worker depends on, and that DefaultRegistry / ProductionRegistry register the
-// expected step catalog.
+// These tests cover the Registry (registry.go): the kind->builder reconstruction
+// the worker depends on (decode persisted args + bind deps -> typed step), and
+// that DefaultRegistry / ProductionRegistry register the expected step catalog
+// wired with their deps.
 
-func TestRegistryRegisterAndLookup(t *testing.T) {
+func TestRegistryBuildAndMissing(t *testing.T) {
 	r := NewRegistry()
-	if _, ok := r.Lookup("absent"); ok {
-		t.Error("Lookup of an unregistered kind returned ok, want not-found")
+	if _, err := r.Build("absent", nil); err == nil {
+		t.Error("Build of an unregistered kind returned nil error, want not-found")
 	}
-	r.Register(&fakeHandler{kind: "k"})
-	h, ok := r.Lookup("k")
-	if !ok {
-		t.Fatal("Lookup of a registered kind returned not-found")
+	r.Register("k", func(json.RawMessage, Deps) (Step, error) { return &fakeStep{kind: "k"}, nil })
+	step, err := r.Build("k", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Build of a registered kind: %v", err)
 	}
-	if h.Kind() != "k" {
-		t.Errorf("looked-up handler Kind() = %q, want k", h.Kind())
+	if step.Kind() != "k" {
+		t.Errorf("built step Kind() = %q, want k", step.Kind())
 	}
 }
 
 func TestRegistryRegisterReplaces(t *testing.T) {
 	r := NewRegistry()
-	first := &fakeHandler{kind: "dup"}
-	second := &fakeHandler{kind: "dup"}
-	r.Register(first)
-	r.Register(second)
-	h, _ := r.Lookup("dup")
-	if h != second {
-		t.Error("a later Register of the same kind did not replace the earlier handler")
+	r.Register("dup", func(json.RawMessage, Deps) (Step, error) { return &fakeStep{kind: "first"}, nil })
+	r.Register("dup", func(json.RawMessage, Deps) (Step, error) { return &fakeStep{kind: "second"}, nil })
+	step, _ := r.Build("dup", nil)
+	if step.Kind() != "second" {
+		t.Errorf("a later Register of the same kind did not replace the earlier builder: got %q", step.Kind())
 	}
 }
 
 func TestDefaultRegistryHasNoop(t *testing.T) {
-	r := DefaultRegistry()
-	h, ok := r.Lookup(KindNoop)
-	if !ok {
-		t.Fatal("DefaultRegistry is missing the noop step")
+	r := DefaultRegistry(Deps{})
+	step, err := r.Build(KindNoop, nil)
+	if err != nil {
+		t.Fatalf("DefaultRegistry is missing the noop step: %v", err)
 	}
-	if _, isNoop := h.(NoopHandler); !isNoop {
-		t.Errorf("noop kind maps to %T, want NoopHandler", h)
+	if _, isNoop := step.(noopStep); !isNoop {
+		t.Errorf("noop kind builds %T, want noopStep", step)
 	}
 }
 
@@ -69,26 +69,46 @@ func TestProductionRegistryHasFullCatalog(t *testing.T) {
 		StepCreateEndpoint,
 		StepDeleteEndpoint,
 	} {
-		h, ok := r.Lookup(kind)
-		if !ok {
-			t.Errorf("ProductionRegistry is missing step kind %q", kind)
+		// Empty args decode into a zero-valued step, so every kind builds.
+		step, err := r.Build(kind, json.RawMessage(`{}`))
+		if err != nil {
+			t.Errorf("ProductionRegistry cannot build step kind %q: %v", kind, err)
 			continue
 		}
-		if h.Kind() != kind {
-			t.Errorf("kind %q maps to a handler whose Kind() = %q", kind, h.Kind())
+		if step.Kind() != kind {
+			t.Errorf("kind %q builds a step whose Kind() = %q", kind, step.Kind())
 		}
 	}
 
-	// The create_endpoint handler must carry the deploy collaborators it needs.
-	h, _ := r.Lookup(StepCreateEndpoint)
-	ce, ok := h.(CreateEndpointHandler)
+	// The create_endpoint step is built wired with the deploy collaborators from
+	// deps (bound at construction, not at Execute time).
+	step, _ := r.Build(StepCreateEndpoint, json.RawMessage(`{}`))
+	ce, ok := step.(*createEndpointStep)
 	if !ok {
-		t.Fatalf("create_endpoint handler is %T, want CreateEndpointHandler", h)
+		t.Fatalf("create_endpoint builds %T, want *createEndpointStep", step)
 	}
-	if ce.Deployer == nil || ce.Recipes == nil || ce.State == nil {
-		t.Error("create_endpoint handler is missing wired dependencies")
+	if ce.deployer == nil || ce.recipes == nil || ce.state == nil {
+		t.Error("create_endpoint step is missing wired dependencies")
 	}
-	if !ce.Bootstrap || ce.SCURL != "http://sc:50051" {
-		t.Errorf("create_endpoint handler config = {bootstrap:%v scurl:%q}, want {true http://sc:50051}", ce.Bootstrap, ce.SCURL)
+	if !ce.bootstrap || ce.scURL != "http://sc:50051" {
+		t.Errorf("create_endpoint config = {bootstrap:%v scurl:%q}, want {true http://sc:50051}", ce.bootstrap, ce.scURL)
+	}
+}
+
+func TestRegistryBuildRejectsBadArgs(t *testing.T) {
+	// Undecodable args are a build error for every real step kind — the worker
+	// fails the step rather than run it half-formed. (The noop step ignores args.)
+	r := ProductionRegistry(Deps{})
+	bad := json.RawMessage(`not json`)
+	for _, kind := range []string{
+		StepCreateProject,
+		StepCreateBranch,
+		StepRecordBranchRecipe,
+		StepCreateEndpoint,
+		StepDeleteEndpoint,
+	} {
+		if _, err := r.Build(kind, bad); err == nil {
+			t.Errorf("%s: Build on bad args returned nil error, want a decode error", kind)
+		}
 	}
 }

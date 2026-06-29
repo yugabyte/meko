@@ -23,7 +23,9 @@ const (
 	StatusFailed    Status = "failed"
 )
 
-// Task is one row of the `task` table: a single initiated operation.
+// Task is one row of the `task` table: a single initiated operation. StepIDs is
+// its steps in execution order; the steps themselves are StepRecord rows keyed by
+// those ids.
 type Task struct {
 	ID          uuid.UUID
 	Kind        string
@@ -31,6 +33,7 @@ type Task struct {
 	ProjectID   *uuid.UUID
 	TargetRef   *string
 	Params      json.RawMessage
+	StepIDs     []uuid.UUID
 	Error       *string
 	Owner       *string
 	LeaseExpiry *time.Time
@@ -38,10 +41,14 @@ type Task struct {
 	UpdatedAt   time.Time
 }
 
-// Step is one row of the `task_step` table: one ordered, idempotent step.
-type Step struct {
+// StepRecord is one row of the `task_step` table: the persisted state of one
+// idempotent step, keyed by its own id (referenced from Task.StepIDs, which fixes
+// execution order). It is pure data — the executable Step (the interface below) is
+// reconstructed from a record's Kind and Args by the Registry on claim and replay
+// (§8.2).
+type StepRecord struct {
+	ID        uuid.UUID
 	TaskID    uuid.UUID
-	Ordinal   int
 	Kind      string
 	Status    Status
 	Args      json.RawMessage
@@ -50,22 +57,57 @@ type Step struct {
 	UpdatedAt time.Time
 }
 
-// StepPlan describes a step to be written write-ahead when a task is planned.
-type StepPlan struct {
+// StepSpec is a step as planned: its kind and marshaled args, with no behavior and
+// no deps. A CreateXTask builder produces a list of these; Store.Create persists
+// them as task_step rows, and the worker later rebuilds the executable Step from
+// the persisted kind+args via the Registry. It is deliberately *not* a Step — a
+// planned step is never executed in place, so it needs neither deps nor logic.
+type StepSpec struct {
 	Kind string
 	Args json.RawMessage
 }
 
-// StepInput is handed to a Handler when its step runs.
-type StepInput struct {
-	Task Task
-	Step Step
+// TaskSpec is a task as planned: the task-level metadata plus its ordered steps.
+// Store.Create persists it — assigning the task id and a step id per step — and
+// returns the resulting Task.
+type TaskSpec struct {
+	Kind      string
+	ProjectID *uuid.UUID
+	TargetRef *string
+	Params    json.RawMessage
+	Steps     []StepSpec
 }
 
-// Handler executes one kind of step. Implementations must be idempotent: a
-// handler can be re-run after a crash or partial execution and must converge to
-// the same result (§8).
-type Handler interface {
+// Step is one executable step in a task: a unit of work that carries its own
+// typed args and its collaborators (both bound at construction — see the
+// New…Step constructors). A plan is an ordered []Step (plan.go); the worker
+// persists each as a StepRecord, then rebuilds and runs it via the Registry.
+// Implementations must be idempotent: a step can be re-run after a crash or
+// partial execution and must converge to the same result (§8). A step's deps are
+// unexported fields, so json.Marshal(step) is exactly the args persisted to
+// task_step.args, and the Registry decodes them back (re-binding deps).
+type Step interface {
+	// Kind is the step's task_step.kind, the key the Registry builds it under.
 	Kind() string
-	Run(ctx context.Context, in StepInput) (json.RawMessage, error)
+	// Execute performs the step's effect (through the deps bound at construction)
+	// and reports the outcome. It must not return a Go error: success and failure
+	// are both StepResult (use Ok / Fail), so the executor has one path to record.
+	Execute(ctx context.Context) StepResult
 }
+
+// StepResult is the outcome of executing a Step. Exactly one of Output (an
+// informational, fixed-shape result persisted to task_step.result and read back
+// via the task API) or Err (the cause of a failure) is meaningful, per Failed.
+type StepResult struct {
+	Output json.RawMessage
+	Err    error
+}
+
+// Failed reports whether the step failed.
+func (r StepResult) Failed() bool { return r.Err != nil }
+
+// Ok is the success result carrying an informational output.
+func Ok(output json.RawMessage) StepResult { return StepResult{Output: output} }
+
+// Fail is the failure result carrying the cause.
+func Fail(err error) StepResult { return StepResult{Err: err} }

@@ -1,6 +1,6 @@
 // These tests drive the controllers through the *generated* Go client
 // (api.ClientWithResponses) over a real httptest server, with the backend
-// stubbed by core.MemBackend and a fake task store. They validate that the
+// stubbed by core.MemBackend and the in-memory task.MemStore. They validate that the
 // controllers are wired to the spec correctly — routing, path/body binding,
 // status codes, and response shapes — without a database.
 package api_test
@@ -26,15 +26,15 @@ import (
 )
 
 // newTestServer stands up the real server (NewServer) over httptest, backed by
-// an in-memory backend and a fake task store, and returns the generated client
-// pointed at it.
-func newTestServer(t *testing.T) (*api.ClientWithResponses, *core.MemBackend, *fakeTaskStore) {
+// an in-memory backend and an in-memory task store, and returns the generated
+// client pointed at it.
+func newTestServer(t *testing.T) (*api.ClientWithResponses, *core.MemBackend, *task.MemStore) {
 	// Deploy enabled by default so the endpoint routes are live (a fake deployer
 	// returns a derived address without touching a real runtime).
 	return newTestServerDeploy(t, true)
 }
 
-func newTestServerDeploy(t *testing.T, deployEnabled bool) (*api.ClientWithResponses, *core.MemBackend, *fakeTaskStore) {
+func newTestServerDeploy(t *testing.T, deployEnabled bool) (*api.ClientWithResponses, *core.MemBackend, *task.MemStore) {
 	t.Helper()
 	var prov api.Provisioning
 	if deployEnabled {
@@ -54,7 +54,7 @@ func newTestServerWithProv(t *testing.T, prov api.Provisioning) (*api.ClientWith
 // newTestServerWith builds the server over an explicit backend + provisioning
 // (used to inject a failing backend / deployer), returning the client, the
 // backend, and the task store wired into the server.
-func newTestServerWith(t *testing.T, backend *core.MemBackend, prov api.Provisioning) (*api.ClientWithResponses, *core.MemBackend, *fakeTaskStore) {
+func newTestServerWith(t *testing.T, backend *core.MemBackend, prov api.Provisioning) (*api.ClientWithResponses, *core.MemBackend, *task.MemStore) {
 	t.Helper()
 	client, tasks := newTestServerBackend(t, backend, prov)
 	return client, backend, tasks
@@ -62,13 +62,13 @@ func newTestServerWith(t *testing.T, backend *core.MemBackend, prov api.Provisio
 
 // newTestServerBackend builds the server over any core.Backend (so a failing
 // backend can be injected), returning the client and the wired task store.
-func newTestServerBackend(t *testing.T, backend core.Backend, prov api.Provisioning) (*api.ClientWithResponses, *fakeTaskStore) {
+func newTestServerBackend(t *testing.T, backend core.Backend, prov api.Provisioning) (*api.ClientWithResponses, *task.MemStore) {
 	t.Helper()
-	tasks := newFakeTaskStore()
+	tasks := task.NewMemStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.Config{ListenAddr: ":0"}
 	cfg.Deploy.Enabled = prov.Deployer != nil
-	srv := api.NewServer(cfg, backend, tasks, prov, logger)
+	srv := api.NewServer(cfg, backend, task.NewService(tasks), prov, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	client, err := api.NewClientWithResponses(ts.URL + "/api/v1")
@@ -437,14 +437,14 @@ func TestGetTask(t *testing.T) {
 
 	// Seeded task -> 200 with the right kind/status.
 	id := uuid.New()
-	tasks.put(&task.Task{
+	tasks.Seed(&task.Task{
 		ID:        id,
 		Kind:      "create_project",
 		Status:    task.StatusRunning,
 		Params:    json.RawMessage(`{"name":"db1"}`),
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-	})
+	}, nil)
 	got, err := client.GetTaskWithResponse(ctx, id)
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
@@ -457,56 +457,8 @@ func TestGetTask(t *testing.T) {
 	}
 }
 
-// fakeTaskStore is a task.Store whose only meaningful method is Get; the
-// controllers only read task status. The mutation methods satisfy the
-// interface and are unused by the API.
-type fakeTaskStore struct {
-	tasks map[uuid.UUID]*task.Task
+// newFakeTaskService wraps a fresh in-memory task store in a task.Service, for
+// tests that build a server but don't need a handle on the underlying store.
+func newFakeTaskService() *task.Service {
+	return task.NewService(task.NewMemStore())
 }
-
-func newFakeTaskStore() *fakeTaskStore {
-	return &fakeTaskStore{tasks: make(map[uuid.UUID]*task.Task)}
-}
-
-func (f *fakeTaskStore) put(t *task.Task) { f.tasks[t.ID] = t }
-
-func (f *fakeTaskStore) Get(_ context.Context, id uuid.UUID) (*task.Task, error) {
-	return f.tasks[id], nil
-}
-
-func (f *fakeTaskStore) Plan(_ context.Context, kind string, params json.RawMessage, _ []task.StepPlan) (*task.Task, error) {
-	tk := &task.Task{
-		ID:        uuid.New(),
-		Kind:      kind,
-		Status:    task.StatusPending,
-		Params:    params,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	f.tasks[tk.ID] = tk
-	return tk, nil
-}
-func (f *fakeTaskStore) PlanFrom(_ context.Context, p task.Plan) (*task.Task, error) {
-	tk := &task.Task{
-		ID:        uuid.New(),
-		Kind:      p.Kind,
-		Status:    task.StatusPending,
-		ProjectID: p.ProjectID,
-		TargetRef: p.TargetRef,
-		Params:    p.Params,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	f.tasks[tk.ID] = tk
-	return tk, nil
-}
-func (f *fakeTaskStore) ClaimNext(context.Context, string, time.Duration) (*task.Task, error) {
-	return nil, nil
-}
-func (f *fakeTaskStore) Steps(context.Context, uuid.UUID) ([]task.Step, error) { return nil, nil }
-func (f *fakeTaskStore) StartStep(context.Context, uuid.UUID, int) error       { return nil }
-func (f *fakeTaskStore) CompleteStep(context.Context, uuid.UUID, int, json.RawMessage) error {
-	return nil
-}
-func (f *fakeTaskStore) FailStep(context.Context, uuid.UUID, int, error) error { return nil }
-func (f *fakeTaskStore) CompleteTask(context.Context, uuid.UUID) error         { return nil }

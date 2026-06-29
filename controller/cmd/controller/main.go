@@ -252,7 +252,9 @@ func runServe(args []string) error {
 	}
 	worker := task.NewWorker(store, task.ProductionRegistry(deps), cfg.Task, logger)
 
-	srv := api.NewServer(cfg, backend, store, prov, logger)
+	// The API creates tasks and reads their status through the task service (which
+	// wraps the same store the worker drains).
+	srv := api.NewServer(cfg, backend, task.NewService(store), prov, logger)
 
 	// Managed services the controller owns as subprocesses (§11). The storage
 	// controller is the first; the manager is a no-op until one is enabled.

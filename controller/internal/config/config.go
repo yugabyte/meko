@@ -30,6 +30,15 @@ type DBConfig struct {
 type TaskConfig struct {
 	PollInterval time.Duration
 	LeaseTTL     time.Duration
+	// MaxConcurrent caps how many tasks the worker executes at once; it only
+	// claims a task when a slot is free, so it never holds a lease on a task it
+	// can't run.
+	MaxConcurrent int
+	// ShutdownGrace bounds how long Run waits for in-flight tasks to finish after
+	// its context is cancelled; past it, Run returns and the still-running tasks
+	// are left to be reclaimed (their leases expire), so a misbehaving step can't
+	// wedge process exit.
+	ShutdownGrace time.Duration
 }
 
 // StorageControllerConfig configures the storage controller that the controller
@@ -148,6 +157,8 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&c.SigningKeyPath, "signing-key", env("AMP_SIGNING_KEY_PATH", ""), "path to the control-plane signing key (optional)")
 	fs.DurationVar(&c.Task.PollInterval, "task-poll-interval", envDuration("AMP_TASK_POLL_INTERVAL", 2*time.Second), "task worker poll interval")
 	fs.DurationVar(&c.Task.LeaseTTL, "task-lease-ttl", envDuration("AMP_TASK_LEASE_TTL", 30*time.Second), "task ownership lease TTL")
+	fs.IntVar(&c.Task.MaxConcurrent, "task-max-concurrent", envInt("AMP_TASK_MAX_CONCURRENT", 50), "max tasks the worker executes concurrently")
+	fs.DurationVar(&c.Task.ShutdownGrace, "task-shutdown-grace", envDuration("AMP_TASK_SHUTDOWN_GRACE", 10*time.Second), "max time to wait for in-flight tasks to finish on shutdown")
 
 	sc := &c.StorageController
 	fs.BoolVar(&sc.Enabled, "storage-controller", envBool("AMP_STORAGE_CONTROLLER", false), "run the storage controller as a managed subprocess (§11.1)")
@@ -207,6 +218,12 @@ func Load(args []string) (*Config, error) {
 	}
 	if c.Task.LeaseTTL <= 0 {
 		return nil, fmt.Errorf("task lease TTL must be positive")
+	}
+	if c.Task.MaxConcurrent < 1 {
+		return nil, fmt.Errorf("task max concurrent must be at least 1")
+	}
+	if c.Task.ShutdownGrace <= 0 {
+		return nil, fmt.Errorf("task shutdown grace must be positive")
 	}
 	if err := validateStorageController(sc, c.DB.URL); err != nil {
 		return nil, err

@@ -30,6 +30,12 @@ func TestLoadDefaults(t *testing.T) {
 	if c.Task.PollInterval != 2*time.Second {
 		t.Errorf("Task.PollInterval = %v, want 2s", c.Task.PollInterval)
 	}
+	if c.Task.MaxConcurrent != 50 {
+		t.Errorf("Task.MaxConcurrent = %d, want 50", c.Task.MaxConcurrent)
+	}
+	if c.Task.ShutdownGrace != 10*time.Second {
+		t.Errorf("Task.ShutdownGrace = %v, want 10s", c.Task.ShutdownGrace)
+	}
 }
 
 func TestLoadFlagOverridesEnv(t *testing.T) {

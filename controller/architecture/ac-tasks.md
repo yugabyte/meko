@@ -1,7 +1,7 @@
 # amp-controller — Task Framework & Step Catalog
 
 **Status:** Draft
-**Last updated:** 2026-06-23
+**Last updated:** 2026-06-26
 
 This is the design doc the high-level design defers to for the **step catalog**:
 [`amp-controller.md`](amp-controller.md) §8 fixes the *shape* of the task
@@ -12,7 +12,7 @@ own design doc" — this one. Read §8 first; this doc assumes it.
 
 It covers the package layout, the execution model as implemented, the step
 catalog (kinds, arguments, results, and each step's idempotency contract), the
-task plans that compose those steps, and the dependency ports that keep it
+task builders that compose those steps, and the dependency ports that keep it
 testable. It does **not** cover wiring the API mutation handlers onto tasks —
 the handlers still run synchronously and moving them is
 [#113](https://github.com/yugabyte/yb-light/issues/113); nor HA-safe lease
@@ -35,45 +35,71 @@ operations on `core.PgBackend`:
 
 | File | What |
 |---|---|
-| `task.go` | The `Task` / `Step` / `StepPlan` / `StepInput` types and the `Handler` interface. |
-| `store.go` | The `Store` interface and `PgStore` — persistence of tasks and steps (the write-ahead log). |
-| `worker.go` | The `Worker`: claim a task under a lease, drive its steps with the resume-safe loop. |
-| `registry.go` | The `Registry` (kind → `Handler`), `DefaultRegistry` (noop only), and `ProductionRegistry` (the full catalog). |
-| `deps.go` | The dependency *ports* the step handlers use: `StateStore`, `RecipeStore`, and the `Deps` bundle. |
-| `steps.go` | The **step catalog** — one `Handler` per re-usable step. |
-| `plan.go` | The **task plans** — builders that assign ids write-ahead and produce a `Plan` of ordered steps. |
+| `task.go` | The `Task` (carries `StepIDs`, its steps in order) / `StepRecord` (a step row, keyed by its own id) types; the `StepSpec` / `TaskSpec` plan-time descriptions; the `Step` interface (`Kind()` + `Execute(ctx) StepResult`); and `StepResult` (`Ok` / `Fail`). |
+| `tasks.go` | The `Service` — the dependency anything that initiates a task takes (it holds the `Store`, so callers don't thread it through). One `CreateX(ctx, in)` method per kind builds the step `StepSpec`s and hands them to `Store.Create`; `Get` reads a task's status back. |
+| `store.go` | The `Store` interface and `PgStore` — `Create` write-ahead-records the task + its steps; the claim/step-transition methods drive the write-ahead log. The `Service` wraps it for callers; the worker uses it directly. |
+| `mem.go` | `MemStore` — an in-memory `Store` (real type, not a test fake) mirroring `core.MemBackend`, with a `Seed` helper for preloading states `Create` can't produce. The task and API unit tests run against it; the real SQL is the e2e suite's job. |
+| `worker.go` | The `Worker`: a claim loop that runs up to `MaxConcurrent` tasks at once, each in its own goroutine, driving it through the resume-safe step loop (the registry hands it steps already wired with their deps). |
+| `registry.go` | The `Registry` (kind → `Builder`, which decodes a persisted step's args and binds the registry's `Deps` into a typed `Step`), `DefaultRegistry` (noop only), and `ProductionRegistry(deps)` (the full catalog, deps-wired). |
+| `deps.go` | The dependency *ports* the steps use: `StateStore`, `RecipeStore`, and the `Deps` bundle the registry binds into each step. |
+| `steps.go` | The step-catalog anchor: the shared `mustResult` helper and the catalog overview. |
+| `step_<kind>.go` | One file per step — its kind constant, typed args struct, the `Step` implementation (args + deps as fields), and the `Builder` that rebuilds it from persisted args + deps. |
 | `core/provision.go` | The idempotent, id-keyed `Ensure*` state operations the steps drive (`*PgBackend` satisfies `task.StateStore`). |
 
 ## 2. Execution model (as built)
 
-A task is two kinds of row (schema in migration `0001_init.up.sql`; DDL sketch in
-§8.1 of the high-level doc):
+A task is two kinds of row (schema in migrations `0001_init.up.sql` +
+`0002_task_step_ids.up.sql`; DDL sketch in §8.1 of the high-level doc):
 
 - **`task`** — one per operation, the user-visible unit (`GET /tasks/{id}`). Holds
   the kind, a coarse status, the target project/ref (for monitoring), the
-  originating request (`params`), the owner + lease, and (on failure) the error.
-- **`task_step`** — the ordered, idempotent steps, one row each. The `args` are
-  written when the task is planned; `result` and `status` are updated as it runs.
-  These rows **are** the write-ahead log.
+  originating request (`params`), `step_ids` (its steps in execution order), the
+  owner + lease, and (on failure) the error.
+- **`task_step`** — the idempotent steps, one row each, keyed by its own `id`
+  (referenced from `task.step_ids`, which fixes their order); a `task_id` backref
+  keeps "the steps of this task" a cheap lookup. The `args` are written when the
+  task is created; `result` and `status` are updated as it runs. These rows **are**
+  the write-ahead log.
 
-**Planning is write-ahead.** A plan builder (`plan.go`) generates *all* the ids
-the operation will need — project, branch, endpoint — up front and bakes them
-into the step `args`, then `Store.PlanFrom` writes the `task` and all its `pending`
-steps in one transaction *before* any step runs. The plan is durable intent;
-execution catches up to it. Because every id is fixed at plan time, a step is a
-pure function of its `args` — which is what makes replay converge.
+**Creation is write-ahead.** A `Service.CreateX` method (`tasks.go`) generates
+*all* the ids the operation will need — project, branch, endpoint — up front and
+bakes them into the step args (described as `StepSpec`s — pure data, never an
+executable `Step`), then `Store.Create` assigns the task id + a step id per step and writes
+the `task` (with its ordered `step_ids`) and all its `pending` steps in one
+transaction *before* any step runs, returning the `Task`. The record is durable
+intent; execution catches up to it. Because every id is fixed up front, a step is
+a pure function of its `args` — which is what makes replay converge.
 
-**Execution is a resume-safe loop** (`Worker.execute`): load the task's steps in
-order, skip any already `succeeded`, and for each remaining step mark it
-`running`, look its `kind` up in the registry, run the handler, then record the
-result and mark it `succeeded` — or, on error, mark the step and the task
-`failed` and stop. A step left `running` (started, never completed — the owner
-died mid-step) is *not* skipped: it is re-run, which is safe precisely because
-every step is idempotent. A missing handler fails the task rather than silently
-skipping work.
+**Claiming and execution are decoupled, and concurrent** (`Worker.Run`). One
+claim loop drives the worker: it acquires one of `cfg.MaxConcurrent` execution
+slots (default 50), claims the next runnable task, and hands it to its own
+goroutine that runs the step loop below and frees the slot when it finishes — so
+up to `MaxConcurrent` tasks run at once. Acquiring the slot *before* claiming is
+deliberate: the worker never takes a lease on a task it can't immediately start
+(no claimed-but-idle task whose lease could expire while it waits). When nothing
+is claimable it idles one poll interval; a persistent claim error (e.g. the DB is
+down) backs off exponentially instead. A panic in a step is recovered and fails
+that step's task, rather than taking the worker (and its other in-flight tasks)
+down. On shutdown it stops claiming and waits up to `ShutdownGrace` for in-flight
+tasks to unwind, then returns regardless — a step that ignores cancellation can't
+wedge process exit (the unfinished tasks are simply reclaimed, §8.2). Tasks run
+independently with no ordering between them, so two tasks touching the same
+resource can interleave — the DB constraints and step idempotency keep that
+correct, but per-resource serialization is future work
+([#176](https://github.com/yugabyte/yb-light/issues/176)).
 
-One distinction the loop draws: a step error returned because the **worker's
-context is cancelled** (shutdown) is *not* treated as a terminal failure. The
+**Execution is a resume-safe loop** (`Worker.execute`, one per task goroutine):
+load the task's step records in execution order (`task.step_ids`), skip any already `succeeded`, and for each remaining step
+*rebuild* it from its `kind`+`args` via the registry (which binds in its `Deps`),
+mark it `running`, run it (`Execute`), then record the result and mark it
+`succeeded` — or, on failure, mark the step and the task `failed` and stop. A step
+left `running` (started, never completed — the owner died mid-step) is *not*
+skipped: it is rebuilt and re-run, which is safe precisely because every step is
+idempotent. A step whose `kind` is unregistered, or whose persisted `args` no
+longer decode, fails the task rather than silently skipping work.
+
+One distinction the loop draws: a step failure whose cause is the **worker's
+context being cancelled** (shutdown) is *not* treated as a terminal failure. The
 loop returns without marking the task `failed`, leaving it `running` so the lease
 expires and it is reclaimed and replayed (§8.2) — durably failing a task over a
 graceful shutdown would strand it. Only a genuine step error on a live context
@@ -95,12 +121,18 @@ step. Replaying the step that was in flight when the owner died is safe because
 
 ## 3. The step catalog
 
-Steps are the re-usable, idempotent units tasks are built from. Each is a
-`Handler` (a `Kind()` and a `Run(ctx, StepInput) (result, error)`); the handler
-reads its typed args from `Step.Args`, performs its effect through a narrow port
-(§5), and returns a small JSON result (informational — read back via the task
-API, never load-bearing). **Idempotency is the contract**: re-running a step
-after a crash or partial execution must converge, not double-apply or error.
+Steps are the re-usable, idempotent units tasks are built from. Each implements
+the `Step` interface (a `Kind()` and an `Execute(ctx) StepResult`) in its own
+`step_<kind>.go` file. A step carries both its typed args *and* the narrow
+port(s) it needs as fields, both bound by its `New…Step(args, deps)` constructor —
+at plan time, or rebuilt from the persisted `args` + the registry's deps on
+replay. The deps fields are unexported, so `json.Marshal(step)` is *only* the
+args — exactly the persisted `task_step.args`. `Execute` performs the step's
+effect through those ports (§5) and returns a `StepResult`: either an `Ok`
+carrying a small JSON output (informational — read back via the task API, never
+load-bearing) or a `Fail` carrying the cause. **Idempotency is the contract**:
+re-running a step after a crash or partial execution must converge, not
+double-apply or error.
 
 | Step kind | Args | Effect | How it stays idempotent |
 |---|---|---|---|
@@ -119,34 +151,42 @@ A few invariants worth calling out:
   the endpoint clones from that ancestor at the fork LSN (`Bootstrap` forced off);
   otherwise a default branch runs `initdb` when the deployment's bootstrap flag is
   set. This mirrors the synchronous create-endpoint handler exactly. The deploy
-  spec carries the storage ids as the endpoint image's (not-yet-migrated)
-  env-var contract: `hex32(project_id)` as `TENANT_ID`, `hex32(branch_id)` as
-  `TIMELINE_ID`.
+  spec carries the storage layer's flat branch id — `hex32(branch_id)` as the
+  spec's `BranchID` (and `hex32(ancestor_branch_id)` for a fork); a project no
+  longer maps to a storage tenant (#168).
 - **Clearing the recipe is best-effort.** A lingering recipe is harmless (nothing
   reads it once the branch is materialized), so a clear failure logs a warning and
   the step still succeeds.
 
-## 4. Task plans
+## 4. The task service
 
-Plans compose the catalog. Each builder takes a typed input, generates the ids,
-and returns a `Plan { Kind, ProjectID, TargetRef, Params, Steps }`.
+The `Service` (holding a `Store`) is the dependency callers take to initiate
+tasks; its `CreateX` methods compose the catalog. Each takes a typed input,
+generates the ids, describes the ordered steps as `StepSpec`s (kind + marshaled
+args — no deps, no executable `Step`), and hands a `TaskSpec` to `Store.Create`,
+which persists the task + steps and returns the `Task` to surface to the user.
+`Service.Get` reads a task's status back. The worker rebuilds the executable steps
+(with its deps) later.
 
-| Task kind | Builder | Steps |
+| Task kind | Service method | Steps |
 |---|---|---|
-| `create_project` | `BuildCreateProject` | `create_project` → `record_branch_recipe` → (`create_endpoint`, when a first writer is requested). |
-| `branch` | `BuildBranch` | `create_branch` → `record_branch_recipe` (ancestor set) → (`create_endpoint` cloning from the ancestor, when requested). |
-| `create_endpoint` (scale-up) | `BuildCreateEndpoint` | `create_endpoint`. |
-| `delete_endpoint` (scale-down) | `BuildDeleteEndpoint` | `delete_endpoint`. |
+| `create_project` | `Service.CreateProject` | `create_project` → `record_branch_recipe` → (`create_endpoint`, when a first writer is requested). |
+| `branch` | `Service.Branch` | `create_branch` → `record_branch_recipe` (ancestor set) → (`create_endpoint` cloning from the ancestor, when requested). |
+| `create_endpoint` (scale-up) | `Service.CreateEndpoint` | `create_endpoint`. |
+| `delete_endpoint` (scale-down) | `Service.DeleteEndpoint` | `delete_endpoint`. |
 
-`create_endpoint` appearing in three of the four plans is the point: it is one
+`create_endpoint` appearing in three of the four tasks is the point: it is one
 step, reused, not three copies (§8). Branch fork-point resolution (the default
-"latest LSN") is a *read* done before planning, so the fork LSN reaches the plan
-already resolved — the plan stays pure.
+"latest LSN") is a *read* done before the builder runs, so the fork LSN reaches it
+already resolved — building a task performs no I/O of its own.
 
 ## 5. Dependency ports
 
-Step handlers depend on narrow interfaces, not concrete collaborators, so they
-unit-test against in-memory fakes and the framework stays decoupled:
+Steps depend on narrow interfaces, not concrete collaborators, so they
+unit-test against in-memory fakes and the framework stays decoupled. The ports
+are bundled into `Deps`, which the registry binds into each step at construction
+(so a built step keeps only the ports it uses, and `Execute` needs only a
+context):
 
 - **`StateStore`** — the idempotent, id-keyed project/branch operations
   (`EnsureProject`, `EnsureBranch`, `EnsureEndpointRecord`, `SetEndpointAddress`,
@@ -157,37 +197,51 @@ unit-test against in-memory fakes and the framework stays decoupled:
   keyed by the 32-hex flat `branch_id` the controller maps a branch to. A
   `BranchRecipe` decouples the task package from the storage-controller client
   type; `cmd/controller` bridges the two (`scRecipeStore`, mapping `BranchRecipe →
-  PendingTimelineInit`). May be nil (no managed storage controller) — the handlers
+  PendingTimelineInit`). May be nil (no managed storage controller) — the steps
   degrade with a warning.
 - **`deploy.Deployer`** — the existing runtime-agnostic endpoint deployer, reused
   as-is (its `EndpointSpec` still renders the storage ids as the endpoint image's
   `TENANT_ID`/`TIMELINE_ID` env vars, since that image is not yet migrated to flat
   `branch_id`).
 
-`ProductionRegistry(Deps{…})` wires the catalog to the real collaborators;
-`cmd/controller` builds the `Deps` from the same `Provisioning` the synchronous
-handlers use. The registry is live in `serve`, but **no API path plans these task
-kinds yet** (mutations still run synchronously), so the worker simply has nothing
-of these kinds to claim until #113.
+`ProductionRegistry(deps)` registers the catalog's builders and holds the deps,
+so each step it builds comes out fully wired; `cmd/controller` builds the `Deps`
+from the same `Provisioning` the synchronous handlers use and passes them to
+`ProductionRegistry`, then hands the registry to `NewWorker`. It also wraps the
+store in a `Service` and hands that to the API (so the controllers can create
+tasks and read their status). The worker is live in `serve`, but **no API path
+plans these task kinds yet** (mutations still run synchronously), so it simply has
+nothing of these kinds to claim until #113.
 
 ## 6. Testing
 
-The package is tested without a database (matching `core.MemBackend` and the API
-tests' `fakeTaskStore`): in-memory fakes for every port and an in-memory
-`Store`. The tests cover
+The package is tested without a database (matching `core.MemBackend`): in-memory
+fakes for every port and the in-memory `MemStore` for the `Store` itself —
+`MemStore` is a real, exported type (`mem.go`), so the API package's tests run
+against it too rather than carrying their own task-store fake. The tests cover
 
-- the **worker** loop against a faithful in-memory store — runs all steps to
-  completion, **resumes** a reclaimed task skipping already-succeeded steps,
-  **replays an in-flight `running` step**, **fails** the task and halts later
-  steps on a step error, fails on an unknown step kind, ignores a live-owned
-  (unexpired-lease) task, and leaves a cancelled task reclaimable;
-- **every step handler** — its happy path, **idempotent replay** (run twice,
-  converge), error propagation, the fork-vs-default-branch deploy spec, and the
-  best-effort recipe clear;
-- the **plan builders** — correct ordered step kinds, ids generated and threaded
-  consistently across steps, and branch ancestor wiring.
+- the **worker**, two ways: the per-task `execute` path against a faithful
+  in-memory store — runs all steps to completion, **resumes** a reclaimed task
+  skipping already-succeeded steps, **replays an in-flight `running` step**,
+  **fails** the task and halts later steps on a step error, fails on an unknown
+  step kind, and leaves a cancelled task reclaimable; and the `Run` **claim loop**
+  — it drains a backlog concurrently and never exceeds `MaxConcurrent` tasks in
+  flight (a gated step asserts the cap), stops cleanly on cancel, recovers a
+  panicking step into a task failure, logs a shutdown interruption as such (not as
+  an error), and returns within `ShutdownGrace` even if a step ignores cancel;
+- **every step** — its happy path, **idempotent replay** (run twice, converge),
+  error propagation, the fork-vs-default-branch deploy spec, and the best-effort
+  recipe clear;
+- the **registry** — building a step for a registered kind, the not-found error
+  for an unregistered one, and rejecting undecodable persisted args (the
+  reconstruction seam where bad input is now caught);
+- the **task service** — its `CreateX` methods against the in-memory store:
+  correct ordered step kinds, ids generated and threaded consistently across
+  steps, and branch ancestor wiring.
 
 What is **not** unit-tested here is `PgStore`'s SQL (the claim/lease query, the
-transactional plan writes) and `PgBackend`'s `Ensure*` SQL — there is no
-DB-backed harness in the repo today (the same gap as the rest of `PgBackend`).
-That SQL is exercised by the e2e suite.
+transactional `Create` writes, the `step_ids`-ordered `Steps` query) and
+`PgBackend`'s `Ensure*` SQL — there is no DB-backed Go harness in the repo today
+(the same gap as the rest of `PgBackend`). That SQL is exercised by the e2e suite;
+the `0002` schema + the new `uuid[]` / `array_position` queries were validated by
+applying the migrations against YugabyteDB directly.

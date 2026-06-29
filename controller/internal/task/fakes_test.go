@@ -3,19 +3,18 @@ package task
 import (
 	"context"
 	"encoding/json"
-	"sort"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/yugabyte/yb-amp/controller/internal/deploy"
 )
 
-// Shared in-memory fakes for the task-package tests. They live in one file so
-// the per-unit test files (steps_test.go, plan_test.go, worker_test.go,
-// registry_test.go) share one definition each — matching the no-database test
-// convention used across the controller (core.MemBackend, api's fakeTaskStore).
+// Shared fakes for the task-package tests: the dependency *ports* (StateStore,
+// RecipeStore, deploy.Deployer) and a configurable Step. They live in one file so
+// the per-unit test files (steps_test.go, tasks_test.go, worker_test.go,
+// registry_test.go) share one definition each. The in-memory Store itself is the
+// real MemStore (mem.go) — usable by any package's tests — not a fake here.
 
 // --- fakeStateStore: an in-memory task.StateStore ---------------------------
 
@@ -201,206 +200,38 @@ func (f *fakeDeployer) EndpointSafekeeperURL(id string) string {
 	return "http://" + id + ":7676"
 }
 
-// --- fakeHandler: a configurable task.Handler for worker tests --------------
+// --- fakeStep: a configurable task.Step for worker tests --------------------
 
-// fakeHandler records each invocation (and the step ordinal it saw) and can be
-// told to fail. It lets the worker tests assert which steps ran, in what order,
-// and that already-succeeded steps are skipped on resume.
-type fakeHandler struct {
+// fakeStep records how many times it ran and can be told to fail. It surfaces a
+// cancelled context as a failure — modeling a step whose DB/HTTP call returns a
+// cancellation error when the worker is torn down mid-step — which lets the
+// worker's cancellation-vs-failure distinction be tested. The worker rebuilds a
+// step on each execution; regWith hands back this same instance from its builder,
+// so call counts accumulate across rebuilds.
+type fakeStep struct {
 	kind     string
 	mu       sync.Mutex
 	calls    int
-	ordinals []int
 	failWith error
 }
 
-func (h *fakeHandler) Kind() string { return h.kind }
+func (s *fakeStep) Kind() string { return s.kind }
 
-func (h *fakeHandler) Run(_ context.Context, in StepInput) (json.RawMessage, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.calls++
-	h.ordinals = append(h.ordinals, in.Step.Ordinal)
-	if h.failWith != nil {
-		return nil, h.failWith
+func (s *fakeStep) Execute(ctx context.Context) StepResult {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return Fail(err)
 	}
-	return json.RawMessage(`{"ok":true}`), nil
-}
-
-func (h *fakeHandler) callCount() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.calls
-}
-
-// --- fakeStore: an in-memory task.Store for worker tests --------------------
-
-// fakeStore is a faithful in-memory model of the write-ahead task store: tasks
-// and their ordered steps, an atomic claim under a lease (pending, or running
-// with an expired lease, becomes claimable), and the step/task status
-// transitions the worker drives. It lets the worker's resume-safe execution
-// loop (§8.1) be tested without a database; the real PgStore SQL is exercised
-// by the e2e suite. The clock is injectable so lease expiry is deterministic.
-type fakeStore struct {
-	mu    sync.Mutex
-	order []uuid.UUID
-	tasks map[uuid.UUID]*Task
-	steps map[uuid.UUID][]*Step
-	now   func() time.Time
-}
-
-func newFakeStore() *fakeStore {
-	return &fakeStore{
-		tasks: map[uuid.UUID]*Task{},
-		steps: map[uuid.UUID][]*Step{},
-		now:   time.Now,
+	if s.failWith != nil {
+		return Fail(s.failWith)
 	}
+	return Ok(json.RawMessage(`{"ok":true}`))
 }
 
-// seed inserts a task and its steps directly, for preloading resume/failure
-// scenarios (e.g. a running task with an expired lease and some steps already
-// succeeded).
-func (s *fakeStore) seed(t *Task, steps []*Step) {
+func (s *fakeStep) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.order = append(s.order, t.ID)
-	s.tasks[t.ID] = t
-	s.steps[t.ID] = steps
-}
-
-func (s *fakeStore) Plan(ctx context.Context, kind string, params json.RawMessage, steps []StepPlan) (*Task, error) {
-	return s.PlanFrom(ctx, Plan{Kind: kind, Params: params, Steps: steps})
-}
-
-func (s *fakeStore) PlanFrom(_ context.Context, p Plan) (*Task, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	id := uuid.New()
-	now := s.now()
-	t := &Task{
-		ID:        id,
-		Kind:      p.Kind,
-		Status:    StatusPending,
-		ProjectID: p.ProjectID,
-		TargetRef: p.TargetRef,
-		Params:    p.Params,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	var steps []*Step
-	for i, sp := range p.Steps {
-		steps = append(steps, &Step{TaskID: id, Ordinal: i, Kind: sp.Kind, Status: StatusPending, Args: sp.Args, UpdatedAt: now})
-	}
-	s.order = append(s.order, id)
-	s.tasks[id] = t
-	s.steps[id] = steps
-	return cloneTask(t), nil
-}
-
-func (s *fakeStore) ClaimNext(_ context.Context, owner string, lease time.Duration) (*Task, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := s.now()
-	for _, id := range s.order {
-		t := s.tasks[id]
-		claimable := t.Status == StatusPending ||
-			(t.Status == StatusRunning && t.LeaseExpiry != nil && t.LeaseExpiry.Before(now))
-		if !claimable {
-			continue
-		}
-		t.Status = StatusRunning
-		t.Owner = &owner
-		exp := now.Add(lease)
-		t.LeaseExpiry = &exp
-		t.UpdatedAt = now
-		return cloneTask(t), nil
-	}
-	return nil, nil
-}
-
-func (s *fakeStore) Steps(_ context.Context, taskID uuid.UUID) ([]Step, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	src := s.steps[taskID]
-	out := make([]Step, 0, len(src))
-	for _, st := range src {
-		out = append(out, *st)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Ordinal < out[j].Ordinal })
-	return out, nil
-}
-
-func (s *fakeStore) StartStep(_ context.Context, taskID uuid.UUID, ordinal int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if st := s.step(taskID, ordinal); st != nil {
-		st.Status = StatusRunning
-		st.UpdatedAt = s.now()
-	}
-	return nil
-}
-
-func (s *fakeStore) CompleteStep(_ context.Context, taskID uuid.UUID, ordinal int, result json.RawMessage) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if st := s.step(taskID, ordinal); st != nil {
-		st.Status = StatusSucceeded
-		st.Result = result
-		st.Error = nil
-		st.UpdatedAt = s.now()
-	}
-	return nil
-}
-
-func (s *fakeStore) FailStep(_ context.Context, taskID uuid.UUID, ordinal int, cause error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	msg := cause.Error()
-	if st := s.step(taskID, ordinal); st != nil {
-		st.Status = StatusFailed
-		st.Error = &msg
-		st.UpdatedAt = s.now()
-	}
-	if t := s.tasks[taskID]; t != nil {
-		t.Status = StatusFailed
-		t.Error = &msg
-		t.UpdatedAt = s.now()
-	}
-	return nil
-}
-
-func (s *fakeStore) CompleteTask(_ context.Context, taskID uuid.UUID) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if t := s.tasks[taskID]; t != nil {
-		t.Status = StatusSucceeded
-		t.Error = nil
-		t.UpdatedAt = s.now()
-	}
-	return nil
-}
-
-func (s *fakeStore) Get(_ context.Context, id uuid.UUID) (*Task, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	t := s.tasks[id]
-	if t == nil {
-		return nil, nil
-	}
-	return cloneTask(t), nil
-}
-
-// step returns the step pointer for (taskID, ordinal). Caller holds s.mu.
-func (s *fakeStore) step(taskID uuid.UUID, ordinal int) *Step {
-	for _, st := range s.steps[taskID] {
-		if st.Ordinal == ordinal {
-			return st
-		}
-	}
-	return nil
-}
-
-func cloneTask(t *Task) *Task {
-	c := *t
-	return &c
+	return s.calls
 }

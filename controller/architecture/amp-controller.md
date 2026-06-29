@@ -482,16 +482,17 @@ Two record types, both rows in amp-controller's schema (§10):
   so a caller can monitor or poll a long-running operation. It carries the task kind, a
   coarse status, the resource it targets, the originating request, and (on failure) the
   error.
-- **`task_step`** — the ordered steps of one task, one row each. A step records its
-  position in the sequence (`ordinal`), which re-usable step it is (`kind`), its own
-  status, its input arguments, and its result. These rows **are** the write-ahead log:
-  written when the task is planned, updated as execution progresses.
+- **`task_step`** — the steps of one task, one row each, keyed by its own `id`. The task
+  carries the ordered list of those ids (`task.step_ids`), which fixes execution order;
+  each step row records which re-usable step it is (`kind`), its own status, its input
+  arguments, and its result. These rows **are** the write-ahead log: written when the task
+  is created, updated as execution progresses.
 
-Execution is then a simple loop: take the lowest-`ordinal` step that is not yet
-`succeeded`, run it, record its result and status, repeat until the list is exhausted or a
-step fails. On crash and reclaim (§8.2), the new owner runs the *same* loop — completed
-steps are skipped because their status already says `succeeded`, so work resumes at the
-first unfinished step instead of from the top.
+Execution is then a simple loop: walk the task's steps in `step_ids` order, take the first
+that is not yet `succeeded`, run it, record its result and status, repeat until the list is
+exhausted or a step fails. On crash and reclaim (§8.2), the new owner runs the *same* loop —
+completed steps are skipped because their status already says `succeeded`, so work resumes
+at the first unfinished step instead of from the top.
 
 A sketch of the DDL (authoritative DDL lives with the code and its migrations):
 
@@ -507,6 +508,7 @@ CREATE TABLE task (
     target_ref   text,                         --   monitoring; nullable (a task may create
                                                --   its own target, absent when planned)
     params       jsonb       NOT NULL,        -- the request that created the task
+    step_ids     uuid[]      NOT NULL DEFAULT '{}',  -- this task's steps, in execution order
     error        text,                         -- set when status = 'failed'
     owner        text,                         -- which instance holds the task (§8.2)
     lease_expiry timestamptz,                  -- ownership lease; expiry => reclaimable
@@ -515,17 +517,17 @@ CREATE TABLE task (
 );
 
 CREATE TABLE task_step (
+    id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),  -- referenced by task.step_ids
     task_id    uuid        NOT NULL REFERENCES task(id),
-    ordinal    int         NOT NULL,          -- execution order within the task
     kind       text        NOT NULL,          -- which re-usable step (e.g. 'create_endpoint')
     status     step_status NOT NULL DEFAULT 'pending',
-    args       jsonb       NOT NULL,          -- inputs, written when the task is planned
+    args       jsonb       NOT NULL,          -- inputs, written when the task is created
     result     jsonb,                          -- outputs, written when the step succeeds
     error      text,
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (task_id, ordinal)            -- steps are ordered, unique within a task
+    updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE INDEX task_step_by_task ON task_step (task_id);  -- "the steps of this task"
 -- the claim/resume query only ever scans unfinished tasks
 CREATE INDEX task_runnable ON task (status) WHERE status IN ('pending', 'running');
 ```

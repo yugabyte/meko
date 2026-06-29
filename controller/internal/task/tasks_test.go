@@ -7,14 +7,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// These tests validate the write-ahead plan builders (plan.go): each task kind
-// produces the right ordered step kinds, all ids are generated and threaded
-// consistently across the steps (so a step downstream operates on the same
-// project/branch/endpoint the upstream step created), and the fork vs.
-// default-branch distinction (ancestor wiring) is correct. A plan is pure data,
-// so these run without any collaborators.
+// These tests validate the task Service (tasks.go): each CreateX method records
+// the right ordered step kinds, generates and threads ids consistently across the
+// steps (so a downstream step operates on the same project/branch/endpoint an
+// upstream step created), and gets the fork vs. default-branch (ancestor) wiring
+// right. They run the Service against an in-memory MemStore and read the
+// persisted steps back to assert on them.
 
-func stepKinds(steps []StepPlan) []string {
+func stepKinds(steps []StepRecord) []string {
 	out := make([]string, len(steps))
 	for i, s := range steps {
 		out[i] = s.Kind
@@ -22,21 +22,21 @@ func stepKinds(steps []StepPlan) []string {
 	return out
 }
 
-func stepByKind(t *testing.T, steps []StepPlan, kind string) StepPlan {
+func stepByKind(t *testing.T, steps []StepRecord, kind string) StepRecord {
 	t.Helper()
 	for _, s := range steps {
 		if s.Kind == kind {
 			return s
 		}
 	}
-	t.Fatalf("no %q step in plan (got %v)", kind, stepKinds(steps))
-	return StepPlan{}
+	t.Fatalf("no %q step in task (got %v)", kind, stepKinds(steps))
+	return StepRecord{}
 }
 
-func decodeArgs(t *testing.T, sp StepPlan, dst any) {
+func decodeArgs(t *testing.T, st StepRecord, dst any) {
 	t.Helper()
-	if err := json.Unmarshal(sp.Args, dst); err != nil {
-		t.Fatalf("decode %q args: %v", sp.Kind, err)
+	if err := json.Unmarshal(st.Args, dst); err != nil {
+		t.Fatalf("decode %q args: %v", st.Kind, err)
 	}
 }
 
@@ -52,22 +52,25 @@ func equalKinds(a, b []string) bool {
 	return true
 }
 
-func TestBuildCreateProjectNoWriter(t *testing.T) {
+func TestServiceCreateProjectNoWriter(t *testing.T) {
+	store := NewMemStore()
+	svc := NewService(store)
 	poolID := uuid.New()
-	p, err := BuildCreateProject(CreateProjectInput{PoolID: poolID, Name: "shop", PgVersion: 17})
+	tk, err := svc.CreateProject(t.Context(), CreateProjectInput{PoolID: poolID, Name: "shop", PgVersion: 17})
 	if err != nil {
-		t.Fatalf("BuildCreateProject: %v", err)
+		t.Fatalf("CreateProject: %v", err)
 	}
-	if p.Kind != KindCreateProject {
-		t.Errorf("kind = %q, want %q", p.Kind, KindCreateProject)
+	if tk.Kind != KindCreateProject {
+		t.Errorf("kind = %q, want %q", tk.Kind, KindCreateProject)
 	}
+	steps, _ := store.Steps(t.Context(), tk.ID)
 	want := []string{StepCreateProject, StepRecordBranchRecipe}
-	if !equalKinds(stepKinds(p.Steps), want) {
-		t.Fatalf("steps = %v, want %v", stepKinds(p.Steps), want)
+	if !equalKinds(stepKinds(steps), want) {
+		t.Fatalf("steps = %v, want %v", stepKinds(steps), want)
 	}
 
 	var cp CreateProjectArgs
-	decodeArgs(t, stepByKind(t, p.Steps, StepCreateProject), &cp)
+	decodeArgs(t, stepByKind(t, steps, StepCreateProject), &cp)
 	if cp.PoolID != poolID || cp.Name != "shop" || cp.PgVersion != 17 {
 		t.Errorf("create-project args = %+v, want pool=%s name=shop pgv=17", cp, poolID)
 	}
@@ -76,7 +79,7 @@ func TestBuildCreateProjectNoWriter(t *testing.T) {
 	}
 
 	var rec RecordBranchRecipeArgs
-	decodeArgs(t, stepByKind(t, p.Steps, StepRecordBranchRecipe), &rec)
+	decodeArgs(t, stepByKind(t, steps, StepRecordBranchRecipe), &rec)
 	// The recipe step must target the same project+branch the create step makes.
 	if rec.ProjectID != cp.ProjectID || rec.BranchID != cp.BranchID {
 		t.Errorf("recipe ids (%s,%s) != create-project ids (%s,%s)", rec.ProjectID, rec.BranchID, cp.ProjectID, cp.BranchID)
@@ -89,30 +92,33 @@ func TestBuildCreateProjectNoWriter(t *testing.T) {
 	}
 
 	// The task targets the project it creates (stamped for the task API).
-	if p.ProjectID == nil || *p.ProjectID != cp.ProjectID {
-		t.Errorf("plan ProjectID = %v, want %s", p.ProjectID, cp.ProjectID)
+	if tk.ProjectID == nil || *tk.ProjectID != cp.ProjectID {
+		t.Errorf("task ProjectID = %v, want %s", tk.ProjectID, cp.ProjectID)
 	}
 	// Params round-trip to the originating request.
 	var got CreateProjectInput
-	if err := json.Unmarshal(p.Params, &got); err != nil || got.Name != "shop" || got.PoolID != poolID {
+	if err := json.Unmarshal(tk.Params, &got); err != nil || got.Name != "shop" || got.PoolID != poolID {
 		t.Errorf("params round-trip = %+v (err %v), want name=shop pool=%s", got, err, poolID)
 	}
 }
 
-func TestBuildCreateProjectWithWriter(t *testing.T) {
-	p, err := BuildCreateProject(CreateProjectInput{PoolID: uuid.New(), Name: "shop", PgVersion: 17, WithWriter: true})
+func TestServiceCreateProjectWithWriter(t *testing.T) {
+	store := NewMemStore()
+	svc := NewService(store)
+	tk, err := svc.CreateProject(t.Context(), CreateProjectInput{PoolID: uuid.New(), Name: "shop", PgVersion: 17, WithWriter: true})
 	if err != nil {
-		t.Fatalf("BuildCreateProject: %v", err)
+		t.Fatalf("CreateProject: %v", err)
 	}
+	steps, _ := store.Steps(t.Context(), tk.ID)
 	want := []string{StepCreateProject, StepRecordBranchRecipe, StepCreateEndpoint}
-	if !equalKinds(stepKinds(p.Steps), want) {
-		t.Fatalf("steps = %v, want %v", stepKinds(p.Steps), want)
+	if !equalKinds(stepKinds(steps), want) {
+		t.Fatalf("steps = %v, want %v", stepKinds(steps), want)
 	}
 
 	var cp CreateProjectArgs
-	decodeArgs(t, stepByKind(t, p.Steps, StepCreateProject), &cp)
+	decodeArgs(t, stepByKind(t, steps, StepCreateProject), &cp)
 	var ep CreateEndpointArgs
-	decodeArgs(t, stepByKind(t, p.Steps, StepCreateEndpoint), &ep)
+	decodeArgs(t, stepByKind(t, steps, StepCreateEndpoint), &ep)
 	if ep.ProjectID != cp.ProjectID || ep.BranchID != cp.BranchID {
 		t.Errorf("endpoint targets (%s,%s), want the created branch (%s,%s)", ep.ProjectID, ep.BranchID, cp.ProjectID, cp.BranchID)
 	}
@@ -127,25 +133,28 @@ func TestBuildCreateProjectWithWriter(t *testing.T) {
 	}
 }
 
-func TestBuildBranch(t *testing.T) {
+func TestServiceBranch(t *testing.T) {
+	store := NewMemStore()
+	svc := NewService(store)
 	poolID, projectID, parentID := uuid.New(), uuid.New(), uuid.New()
-	p, err := BuildBranch(BranchInput{
+	tk, err := svc.Branch(t.Context(), BranchInput{
 		PoolID: poolID, ProjectID: projectID, ParentBranchID: parentID,
 		Name: "feature", ForkLSN: "0/16ABCD0", PgVersion: 17, WithWriter: true,
 	})
 	if err != nil {
-		t.Fatalf("BuildBranch: %v", err)
+		t.Fatalf("Branch: %v", err)
 	}
-	if p.Kind != KindBranch {
-		t.Errorf("kind = %q, want %q", p.Kind, KindBranch)
+	if tk.Kind != KindBranch {
+		t.Errorf("kind = %q, want %q", tk.Kind, KindBranch)
 	}
+	steps, _ := store.Steps(t.Context(), tk.ID)
 	want := []string{StepCreateBranch, StepRecordBranchRecipe, StepCreateEndpoint}
-	if !equalKinds(stepKinds(p.Steps), want) {
-		t.Fatalf("steps = %v, want %v", stepKinds(p.Steps), want)
+	if !equalKinds(stepKinds(steps), want) {
+		t.Fatalf("steps = %v, want %v", stepKinds(steps), want)
 	}
 
 	var br CreateBranchArgs
-	decodeArgs(t, stepByKind(t, p.Steps, StepCreateBranch), &br)
+	decodeArgs(t, stepByKind(t, steps, StepCreateBranch), &br)
 	if br.ParentBranchID != parentID || br.ProjectID != projectID || br.ForkLSN != "0/16ABCD0" {
 		t.Errorf("branch args = %+v, want parent=%s project=%s fork=0/16ABCD0", br, parentID, projectID)
 	}
@@ -154,7 +163,7 @@ func TestBuildBranch(t *testing.T) {
 	}
 
 	var rec RecordBranchRecipeArgs
-	decodeArgs(t, stepByKind(t, p.Steps, StepRecordBranchRecipe), &rec)
+	decodeArgs(t, stepByKind(t, steps, StepRecordBranchRecipe), &rec)
 	if rec.BranchID != br.BranchID {
 		t.Errorf("recipe branch %s != created branch %s", rec.BranchID, br.BranchID)
 	}
@@ -166,7 +175,7 @@ func TestBuildBranch(t *testing.T) {
 	}
 
 	var ep CreateEndpointArgs
-	decodeArgs(t, stepByKind(t, p.Steps, StepCreateEndpoint), &ep)
+	decodeArgs(t, stepByKind(t, steps, StepCreateEndpoint), &ep)
 	if ep.BranchID != br.BranchID {
 		t.Errorf("endpoint targets %s, want the branch %s", ep.BranchID, br.BranchID)
 	}
@@ -175,27 +184,31 @@ func TestBuildBranch(t *testing.T) {
 	}
 }
 
-func TestBuildCreateEndpointDefaultsRoleAndPassesAncestor(t *testing.T) {
+func TestServiceCreateEndpointDefaultsRoleAndPassesAncestor(t *testing.T) {
+	store := NewMemStore()
+	svc := NewService(store)
 	projectID, branchID, ancestor := uuid.New(), uuid.New(), uuid.New()
 
 	// Role unset defaults to read_write.
-	p, err := BuildCreateEndpoint(CreateEndpointInput{ProjectID: projectID, BranchID: branchID, PgVersion: 17})
+	tk, err := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ProjectID: projectID, BranchID: branchID, PgVersion: 17})
 	if err != nil {
-		t.Fatalf("BuildCreateEndpoint: %v", err)
+		t.Fatalf("CreateEndpoint: %v", err)
 	}
-	if p.Kind != KindCreateEndpoint || len(p.Steps) != 1 || p.Steps[0].Kind != StepCreateEndpoint {
-		t.Fatalf("plan = kind %q with steps %v, want one create_endpoint step", p.Kind, stepKinds(p.Steps))
+	steps, _ := store.Steps(t.Context(), tk.ID)
+	if tk.Kind != KindCreateEndpoint || len(steps) != 1 || steps[0].Kind != StepCreateEndpoint {
+		t.Fatalf("task = kind %q with steps %v, want one create_endpoint step", tk.Kind, stepKinds(steps))
 	}
 	var ep CreateEndpointArgs
-	decodeArgs(t, p.Steps[0], &ep)
+	decodeArgs(t, steps[0], &ep)
 	if ep.Role != "read_write" {
 		t.Errorf("default role = %q, want read_write", ep.Role)
 	}
 
 	// A fork target passes the ancestor through.
-	p2, _ := BuildCreateEndpoint(CreateEndpointInput{ProjectID: projectID, BranchID: branchID, Role: "read_only", PgVersion: 17, AncestorBranchID: &ancestor, AncestorLSN: "0/9"})
+	tk2, _ := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ProjectID: projectID, BranchID: branchID, Role: "read_only", PgVersion: 17, AncestorBranchID: &ancestor, AncestorLSN: "0/9"})
+	steps2, _ := store.Steps(t.Context(), tk2.ID)
 	var ep2 CreateEndpointArgs
-	decodeArgs(t, p2.Steps[0], &ep2)
+	decodeArgs(t, steps2[0], &ep2)
 	if ep2.Role != "read_only" {
 		t.Errorf("role = %q, want read_only", ep2.Role)
 	}
@@ -204,17 +217,20 @@ func TestBuildCreateEndpointDefaultsRoleAndPassesAncestor(t *testing.T) {
 	}
 }
 
-func TestBuildDeleteEndpoint(t *testing.T) {
+func TestServiceDeleteEndpoint(t *testing.T) {
+	store := NewMemStore()
+	svc := NewService(store)
 	epID := uuid.New()
-	p, err := BuildDeleteEndpoint(DeleteEndpointInput{ProjectID: uuid.New(), EndpointID: epID})
+	tk, err := svc.DeleteEndpoint(t.Context(), DeleteEndpointInput{ProjectID: uuid.New(), EndpointID: epID})
 	if err != nil {
-		t.Fatalf("BuildDeleteEndpoint: %v", err)
+		t.Fatalf("DeleteEndpoint: %v", err)
 	}
-	if p.Kind != KindDeleteEndpoint || len(p.Steps) != 1 || p.Steps[0].Kind != StepDeleteEndpoint {
-		t.Fatalf("plan = kind %q with steps %v, want one delete_endpoint step", p.Kind, stepKinds(p.Steps))
+	steps, _ := store.Steps(t.Context(), tk.ID)
+	if tk.Kind != KindDeleteEndpoint || len(steps) != 1 || steps[0].Kind != StepDeleteEndpoint {
+		t.Fatalf("task = kind %q with steps %v, want one delete_endpoint step", tk.Kind, stepKinds(steps))
 	}
 	var del DeleteEndpointArgs
-	decodeArgs(t, p.Steps[0], &del)
+	decodeArgs(t, steps[0], &del)
 	if del.EndpointID != epID {
 		t.Errorf("delete args endpoint = %s, want %s", del.EndpointID, epID)
 	}

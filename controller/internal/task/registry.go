@@ -3,74 +3,85 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 )
 
-// Registry maps a step kind to the Handler that runs it. The executor looks a
-// step's kind up here; a missing kind fails the task rather than silently
-// skipping work.
+// Builder reconstructs an executable Step from a persisted step's args (the
+// task_step.args JSON) and the registry's deps. It decodes the args into the
+// step's typed argument struct and binds them — together with the deps — via the
+// step's constructor. One Builder per kind; bad args are a real error (the worker
+// fails the step rather than run it half-formed).
+type Builder func(args json.RawMessage, deps Deps) (Step, error)
+
+// Registry maps a step kind to the Builder that reconstructs it, and holds the
+// deps every step is wired with. The worker rebuilds every persisted step
+// through here on claim/replay (§8.2) — fully wired and ready to Execute; a
+// missing kind fails the task rather than silently skipping work.
 type Registry struct {
-	handlers map[string]Handler
+	deps     Deps
+	builders map[string]Builder
 }
 
-// NewRegistry returns an empty registry.
+// NewRegistry returns an empty registry with no deps. Used by tests that
+// register their own (deps-ignoring) builders; the real catalogs are built by
+// DefaultRegistry / ProductionRegistry, which carry deps.
 func NewRegistry() *Registry {
-	return &Registry{handlers: make(map[string]Handler)}
+	return &Registry{builders: make(map[string]Builder)}
 }
 
-// Register adds a handler, keyed by its Kind. A later registration of the same
-// kind replaces the earlier one.
-func (r *Registry) Register(h Handler) {
-	r.handlers[h.Kind()] = h
+// Register adds a builder for kind. A later registration of the same kind
+// replaces the earlier one.
+func (r *Registry) Register(kind string, b Builder) {
+	r.builders[kind] = b
 }
 
-// Lookup returns the handler for kind, if registered.
-func (r *Registry) Lookup(kind string) (Handler, bool) {
-	h, ok := r.handlers[kind]
-	return h, ok
+// Build reconstructs the Step for kind from its persisted args, wired with the
+// registry's deps. It errors if the kind is unregistered or the args fail to
+// decode.
+func (r *Registry) Build(kind string, args json.RawMessage) (Step, error) {
+	b, ok := r.builders[kind]
+	if !ok {
+		return nil, fmt.Errorf("no step registered for kind %q", kind)
+	}
+	return b(args, r.deps)
 }
 
 // DefaultRegistry returns a registry holding only the no-op step — enough to
-// exercise the executor end-to-end without any collaborators. Used when no
-// real provisioning dependencies are wired (e.g. the base skeleton).
-func DefaultRegistry() *Registry {
+// exercise the executor end-to-end without any collaborators. Used when no real
+// provisioning dependencies are wired (e.g. the base skeleton).
+func DefaultRegistry(deps Deps) *Registry {
 	r := NewRegistry()
-	r.Register(NoopHandler{})
+	r.deps = deps
+	r.Register(KindNoop, buildNoopStep)
 	return r
 }
 
-// ProductionRegistry returns the registry wired with the real step catalog
-// (steps.go), backed by deps. It is the registry the worker uses once the
-// controller has its provisioning collaborators. The endpoint steps require a
-// deployer; if deps.Deployer is nil they are still registered but will fail if
-// ever run — no endpoint task is planned without a deployer (see plan.go / the
-// API wiring, #113). The no-op step stays registered for diagnostics/tests.
+// ProductionRegistry returns the registry wired with the real step catalog (the
+// step_*.go files) plus the no-op step, all bound to deps. It is the registry the
+// worker uses. A step whose deps are absent (e.g. an endpoint step built with no
+// deployer) fails when executed; no such task is planned without those deps (see
+// plan.go / the API wiring, #113).
 func ProductionRegistry(deps Deps) *Registry {
-	r := NewRegistry()
-	r.Register(NoopHandler{})
-	r.Register(CreateProjectHandler{State: deps.State})
-	r.Register(CreateBranchHandler{State: deps.State})
-	r.Register(RecordBranchRecipeHandler{Recipes: deps.Recipes})
-	r.Register(CreateEndpointHandler{
-		State:     deps.State,
-		Recipes:   deps.Recipes,
-		Deployer:  deps.Deployer,
-		YB:        deps.EndpointYB,
-		SCURL:     deps.SCEndpointURL,
-		Bootstrap: deps.Bootstrap,
-	})
-	r.Register(DeleteEndpointHandler{State: deps.State, Deployer: deps.Deployer})
+	r := DefaultRegistry(deps)
+	r.Register(StepCreateProject, buildCreateProjectStep)
+	r.Register(StepCreateBranch, buildCreateBranchStep)
+	r.Register(StepRecordBranchRecipe, buildRecordBranchRecipeStep)
+	r.Register(StepCreateEndpoint, buildCreateEndpointStep)
+	r.Register(StepDeleteEndpoint, buildDeleteEndpointStep)
 	return r
 }
 
-// KindNoop is a step that does nothing; a placeholder until the real step
-// catalog exists.
+// KindNoop is a step that does nothing; a placeholder used by DefaultRegistry
+// and for diagnostics.
 const KindNoop = "noop"
 
-// NoopHandler succeeds immediately. It is trivially idempotent.
-type NoopHandler struct{}
+// noopStep succeeds immediately. It is trivially idempotent.
+type noopStep struct{}
 
-func (NoopHandler) Kind() string { return KindNoop }
+func (noopStep) Kind() string { return KindNoop }
 
-func (NoopHandler) Run(_ context.Context, _ StepInput) (json.RawMessage, error) {
-	return json.RawMessage(`{"noop":true}`), nil
+func (noopStep) Execute(context.Context) StepResult {
+	return Ok(json.RawMessage(`{"noop":true}`))
 }
+
+func buildNoopStep(json.RawMessage, Deps) (Step, error) { return noopStep{}, nil }
