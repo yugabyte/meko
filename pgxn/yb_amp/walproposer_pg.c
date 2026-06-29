@@ -120,9 +120,6 @@ static void rm_safekeeper_event_set(Safekeeper *to_remove, bool is_sk);
 
 static void CheckGracefulShutdown(WalProposer *wp);
 
-/* BEGIN_HADRON */
-shardno_t get_num_shards(void);
-
 static int positive_mb_to_bytes(int mb)
 {
 	if (mb <= 0)
@@ -507,45 +504,19 @@ backpressure_lag_impl(void)
 			 LSN_FORMAT_ARGS(flushPtr),
 			 LSN_FORMAT_ARGS(applyPtr));
 
-		if (lakebase_mode)
+		if ((writePtr != InvalidXLogRecPtr && max_replication_write_lag > 0 && myFlushLsn > writePtr + max_replication_write_lag * MB))
 		{
-			// in case PG does not have shard map initialized, we assume PG always has 1 shard at minimum.
-			shardno_t num_shards = Max(1, get_num_shards());
-			int tenant_max_replication_apply_lag = num_shards * max_replication_apply_lag;
-			int tenant_max_replication_flush_lag = num_shards * max_replication_flush_lag;
-			int tenant_max_replication_write_lag = num_shards * max_replication_write_lag;
-
-			if ((writePtr != InvalidXLogRecPtr && tenant_max_replication_write_lag > 0 && myFlushLsn > writePtr + tenant_max_replication_write_lag * MB))
-			{
-				return (myFlushLsn - writePtr - tenant_max_replication_write_lag * MB);
-			}
-
-			if ((flushPtr != InvalidXLogRecPtr && tenant_max_replication_flush_lag > 0 && myFlushLsn > flushPtr + tenant_max_replication_flush_lag * MB))
-			{
-				return (myFlushLsn - flushPtr - tenant_max_replication_flush_lag * MB);
-			}
-
-			if ((applyPtr != InvalidXLogRecPtr && tenant_max_replication_apply_lag > 0 && myFlushLsn > applyPtr + tenant_max_replication_apply_lag * MB))
-			{
-				return (myFlushLsn - applyPtr - tenant_max_replication_apply_lag * MB);
-			}
+			return (myFlushLsn - writePtr - max_replication_write_lag * MB);
 		}
-		else
+
+		if ((flushPtr != InvalidXLogRecPtr && max_replication_flush_lag > 0 && myFlushLsn > flushPtr + max_replication_flush_lag * MB))
 		{
-			if ((writePtr != InvalidXLogRecPtr && max_replication_write_lag > 0 && myFlushLsn > writePtr + max_replication_write_lag * MB))
-			{
-				return (myFlushLsn - writePtr - max_replication_write_lag * MB);
-			}
+			return (myFlushLsn - flushPtr - max_replication_flush_lag * MB);
+		}
 
-			if ((flushPtr != InvalidXLogRecPtr && max_replication_flush_lag > 0 && myFlushLsn > flushPtr + max_replication_flush_lag * MB))
-			{
-				return (myFlushLsn - flushPtr - max_replication_flush_lag * MB);
-			}
-
-			if ((applyPtr != InvalidXLogRecPtr && max_replication_apply_lag > 0 && myFlushLsn > applyPtr + max_replication_apply_lag * MB))
-			{
-				return (myFlushLsn - applyPtr - max_replication_apply_lag * MB);
-			}
+		if ((applyPtr != InvalidXLogRecPtr && max_replication_apply_lag > 0 && myFlushLsn > applyPtr + max_replication_apply_lag * MB))
+		{
+			return (myFlushLsn - applyPtr - max_replication_apply_lag * MB);
 		}
 	}
 	return 0;
@@ -730,16 +701,14 @@ walprop_pg_get_shmem_state(WalProposer *wp)
 }
 
 /*
- * Record new ps_feedback in the array with shards and update min_feedback.
+ * Record new ps_feedback from the (single) pageserver.
  */
 static PageserverFeedback
-record_pageserver_feedback(PageserverFeedback *ps_feedback, shardno_t num_shards)
+record_pageserver_feedback(PageserverFeedback *ps_feedback)
 {
-	PageserverFeedback min_feedback;
+	PageserverFeedback feedback;
 
 	Assert(ps_feedback->present);
-	Assert(ps_feedback->shard_number < MAX_SHARDS);
-	Assert(ps_feedback->shard_number < num_shards);
 
 	// Begin Hadron: Record any corruption signal from the pageserver first.
 	// databricks_metrics_shared is only allocated when lakebase_mode=true;
@@ -751,38 +720,11 @@ record_pageserver_feedback(PageserverFeedback *ps_feedback, shardno_t num_shards
 	}
 
 	SpinLockAcquire(&walprop_shared->mutex);
-
-	// Hadron: Update the num_shards from the source-of-truth (shard map) lazily when we receive
-	// a new pageserver feedback.
-	walprop_shared->num_shards = Max(walprop_shared->num_shards, num_shards);
-
-	/* Update the feedback */
-	memcpy(&walprop_shared->shard_ps_feedback[ps_feedback->shard_number], ps_feedback, sizeof(PageserverFeedback));
-
-	/* Calculate min LSNs */
-	memcpy(&min_feedback, ps_feedback, sizeof(PageserverFeedback));
-	for (int i = 0; i < walprop_shared->num_shards; i++)
-	{
-		PageserverFeedback *feedback = &walprop_shared->shard_ps_feedback[i];
-
-		if (feedback->present)
-		{
-			if (min_feedback.last_received_lsn == InvalidXLogRecPtr || feedback->last_received_lsn < min_feedback.last_received_lsn)
-				min_feedback.last_received_lsn = feedback->last_received_lsn;
-
-			if (min_feedback.disk_consistent_lsn == InvalidXLogRecPtr || feedback->disk_consistent_lsn < min_feedback.disk_consistent_lsn)
-				min_feedback.disk_consistent_lsn = feedback->disk_consistent_lsn;
-
-			if (min_feedback.remote_consistent_lsn == InvalidXLogRecPtr || feedback->remote_consistent_lsn < min_feedback.remote_consistent_lsn)
-				min_feedback.remote_consistent_lsn = feedback->remote_consistent_lsn;
-		}
-	}
-	/* Copy min_feedback back to shmem */
-	memcpy(&walprop_shared->min_ps_feedback, &min_feedback, sizeof(PageserverFeedback));
-
+	memcpy(&walprop_shared->min_ps_feedback, ps_feedback, sizeof(PageserverFeedback));
+	feedback = walprop_shared->min_ps_feedback;
 	SpinLockRelease(&walprop_shared->mutex);
 
-	return min_feedback;
+	return feedback;
 }
 
 void
@@ -2139,39 +2081,15 @@ walprop_pg_process_safekeeper_feedback(WalProposer *wp, Safekeeper *sk)
 	/* handle fresh ps_feedback */
 	if (sk->appendResponse.ps_feedback.present)
 	{
-		shardno_t num_shards = get_num_shards();
+		PageserverFeedback feedback = record_pageserver_feedback(&sk->appendResponse.ps_feedback);
 
-		// During shard split, we receive ps_feedback from child shards before
-		// the split commits and our shard map GUC has been updated. We must
-		// filter out such feedback here because record_pageserver_feedback()
-		// doesn't do it.
-		//
-		// NB: what we would actually want to happen is that we only receive
-		// ps_feedback from the parent shards when the split is committed, then
-		// apply the split to our set of tracked feedback and from here on only
-		// receive ps_feedback from child shards. This filter condition doesn't
-		// do that: if we split from N parent to 2N child shards, the first N
-		// child shards' feedback messages will pass this condition, even before
-		// the split is committed. That's a bit sloppy, but OK for now.
-		if (sk->appendResponse.ps_feedback.shard_number < num_shards)
+		if (sk->appendResponse.ps_feedback.currentClusterSize > 0)
+			SetYbAmpCurrentClusterSize(sk->appendResponse.ps_feedback.currentClusterSize);
+
+		if (feedback.disk_consistent_lsn != standby_apply_lsn)
 		{
-			PageserverFeedback min_feedback = record_pageserver_feedback(&sk->appendResponse.ps_feedback, num_shards);
-
-			/* Only one main shard sends non-zero currentClusterSize */
-			if (sk->appendResponse.ps_feedback.currentClusterSize > 0)
-				SetYbAmpCurrentClusterSize(sk->appendResponse.ps_feedback.currentClusterSize);
-
-			if (min_feedback.disk_consistent_lsn != standby_apply_lsn)
-			{
-				standby_apply_lsn = min_feedback.disk_consistent_lsn;
-				needToAdvanceSlot = true;
-			}
-		}
-		else
-		{
-			// HADRON
-			elog(DEBUG2, "Ignoring pageserver feedback for unknown shard %d (current shard number %d)",
-				sk->appendResponse.ps_feedback.shard_number, num_shards);
+			standby_apply_lsn = feedback.disk_consistent_lsn;
+			needToAdvanceSlot = true;
 		}
 	}
 

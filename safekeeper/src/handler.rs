@@ -170,9 +170,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
                                 metrics.set_client_az(client_az)
                             }
                         }
-                        // Shard params (`shard_count` / `shard_number` /
-                        // `shard_stripe_size`) are accepted but ignored:
-                        // yb-light is single-shard.
+                        // Unknown startup options are ignored.
                         _ => continue,
                     }
                 }

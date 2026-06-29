@@ -297,10 +297,6 @@ impl ConnectionManagerState {
         let connection_conf_args = ConnectionConfigArgs {
             protocol: conf.protocol,
             branch_id,
-            // Single-shard yb-light: carry the unsharded constants.
-            shard_number: Some(0),
-            shard_count: Some(0),
-            shard_stripe_size: Some(0),
             listen_pg_addr_str: safekeeper_pg_addr,
             auth_token: conf.auth_token.as_ref().map(|t| t.as_str()),
         };

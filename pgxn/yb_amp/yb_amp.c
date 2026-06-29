@@ -829,7 +829,6 @@ yb_amp_shmem_request_hook(void)
 
 	LfcShmemRequest();
 	YbAmpPerfCountersShmemRequest();
-	PagestoreShmemRequest();
 	RelsizeCacheShmemRequest();
 	WalproposerShmemRequest();
 	LwLsnCacheShmemRequest();
@@ -854,7 +853,6 @@ yb_amp_shmem_startup_hook(void)
 	if (lakebase_mode) {
 		DatabricksMetricsShmemInit();
 	}
-	PagestoreShmemInit();
 	RelsizeCacheShmemInit();
 	WalproposerShmemInit();
 	LwLsnCacheShmemInit();

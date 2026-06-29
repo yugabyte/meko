@@ -79,11 +79,9 @@
 #include "access/xlogrecovery.h"
 #endif
 
-#define YBAMP_PANIC_CONNECTION_STATE(shard_no, elvl, message, ...) \
-	yb_amp_shard_log(shard_no, elvl, "Broken connection state: " message, \
+#define YBAMP_PANIC_CONNECTION_STATE(elvl, message, ...) \
+	yb_amp_log(elvl, "Broken connection state: " message, \
 				   ##__VA_ARGS__)
-
-page_server_api *page_server;
 
 /*
  * Various settings related to prompt (fast) handling of PageStream responses
@@ -95,7 +93,7 @@ static bool		timeout_set = false;
 static bool		timeout_signaled = false;
 
 /*
- * We have a CHECK_FOR_INTERRUPTS in page_server->receive(), and we don't want
+ * We have a CHECK_FOR_INTERRUPTS in pageserver_receive(), and we don't want
  * that to handle any getpage responses if we're already working on the
  * backlog of those, as we'd hit issues with determining which prefetch slot
  * we just got a response for.
@@ -187,7 +185,6 @@ typedef enum {
 typedef struct PrefetchRequest
 {
 	BufferTag	buftag;			/* must be first entry in the struct */
-	shardno_t	shard_no;
 	uint8		status;		/* see PrefetchStatus for valid values */
 	uint8		flags;		/* see PrefetchRequestFlags */
 	yb_amp_request_lsns request_lsns;
@@ -260,9 +257,8 @@ typedef struct PrefetchState
 
 	/* the buffers */
 	prfh_hash	*prf_hash;
-	int			max_shard_no;
-	/* Mark shards involved in prefetch */
-	uint8		shard_bitmap[(MAX_SHARDS + 7)/8];
+	/* true if there are sent-but-not-yet-flushed requests to the page server */
+	bool		has_unflushed_requests;
 	PrefetchRequest prf_buffer[];	/* prefetch buffers */
 } PrefetchState;
 
@@ -364,7 +360,6 @@ compact_prefetch_buffers(void)
 		Assert(target_slot->status == PRFS_UNUSED);
 
 		target_slot->buftag = source_slot->buftag;
-		target_slot->shard_no = source_slot->shard_no;
 		target_slot->status = source_slot->status;
 		target_slot->flags = source_slot->flags;
 		target_slot->response = source_slot->response;
@@ -417,7 +412,7 @@ check_getpage_response(PrefetchRequest* slot, YbAmpResponse* resp)
 {
 	if (resp->tag != T_YbAmpGetPageResponse && resp->tag != T_YbAmpErrorResponse)
 	{
-		yb_amp_shard_log(slot->shard_no, PANIC, "Unexpected prefetch response %d, ring_receive=" UINT64_FORMAT ", ring_flush=" UINT64_FORMAT ", ring_unused=" UINT64_FORMAT "",
+		yb_amp_log(PANIC, "Unexpected prefetch response %d, ring_receive=" UINT64_FORMAT ", ring_flush=" UINT64_FORMAT ", ring_unused=" UINT64_FORMAT "",
 					   resp->tag, MyPState->ring_receive, MyPState->ring_flush, MyPState->ring_unused);
 	}
 	if (yb_amp_protocol_version >= 3)
@@ -433,7 +428,7 @@ check_getpage_response(PrefetchRequest* slot, YbAmpResponse* resp)
 				getpage_resp->req.forknum != slot->buftag.forkNum ||
 				getpage_resp->req.blkno != slot->buftag.blockNum)
 			{
-				YBAMP_PANIC_CONNECTION_STATE(slot->shard_no, PANIC,
+				YBAMP_PANIC_CONNECTION_STATE(PANIC,
 											"Receive unexpected getpage response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u, block=%u} to get page request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u, block=%u}",
 											resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), RelFileInfoFmt(getpage_resp->req.rinfo), getpage_resp->req.forknum, getpage_resp->req.blkno,
 											slot->reqid, LSN_FORMAT_ARGS(slot->request_lsns.request_lsn), LSN_FORMAT_ARGS(slot->request_lsns.not_modified_since), RelFileInfoFmt(rinfo), slot->buftag.forkNum, slot->buftag.blockNum);
@@ -478,7 +473,7 @@ communicator_prefetch_pump_state(void)
 		slot = GetPrfSlot(MyPState->ring_receive);
 
 		old = MemoryContextSwitchTo(MyPState->errctx);
-		response = page_server->try_receive(slot->shard_no);
+		response = pageserver_try_receive();
 		MemoryContextSwitchTo(old);
 
 		if (response == NULL)
@@ -491,7 +486,7 @@ communicator_prefetch_pump_state(void)
 			slot->response != NULL ||
 			slot->my_ring_index != MyPState->ring_receive)
 		{
-			yb_amp_shard_log(slot->shard_no, PANIC,
+			yb_amp_log(PANIC,
 						   "Incorrect prefetch slot state after receive: status=%d response=%p my=" UINT64_FORMAT " receive=" UINT64_FORMAT "",
 						   slot->status, slot->response,
 						   slot->my_ring_index, MyPState->ring_receive);
@@ -561,8 +556,7 @@ readahead_buffer_resize(int newsize, void *extra)
 	newPState->ring_last = newsize;
 	newPState->ring_unused = newsize;
 	newPState->ring_receive = newsize;
-	newPState->max_shard_no = MyPState->max_shard_no;
-	memcpy(newPState->shard_bitmap, MyPState->shard_bitmap, sizeof(MyPState->shard_bitmap));
+	newPState->has_unflushed_requests = MyPState->has_unflushed_requests;
 
 	/*
 	 * Copy over the prefetches.
@@ -643,9 +637,8 @@ prefetch_on_exit(int code, Datum arg)
 {
 	if (code != 0) /* do disconnect only on abnormal backend termination */
 	{
-		shardno_t shard_no = DatumGetInt32(arg);
 		prefetch_on_ps_disconnect();
-		page_server->disconnect(shard_no);
+		pageserver_disconnect_conn();
 	}
 }
 
@@ -690,16 +683,12 @@ prefetch_cleanup_trailing_unused(void)
 static bool
 prefetch_flush_requests(void)
 {
-	for (shardno_t shard_no = 0; shard_no < MyPState->max_shard_no; shard_no++)
+	if (MyPState->has_unflushed_requests)
 	{
-		if (BITMAP_ISSET(MyPState->shard_bitmap, shard_no))
-		{
-			if (!page_server->flush(shard_no))
-				return false;
-			BITMAP_CLR(MyPState->shard_bitmap, shard_no);
-		}
+		if (!pageserver_flush())
+			return false;
+		MyPState->has_unflushed_requests = false;
 	}
-	MyPState->max_shard_no = 0;
 	return true;
 }
 
@@ -772,7 +761,6 @@ prefetch_read(PrefetchRequest *slot)
 	YbAmpResponse *response;
 	MemoryContext old;
 	BufferTag	buftag;
-	shardno_t	shard_no;
 	uint64		my_ring_index;
 
 	Assert(slot->status == PRFS_REQUESTED);
@@ -784,7 +772,7 @@ prefetch_read(PrefetchRequest *slot)
 		slot->response != NULL ||
 		slot->my_ring_index != MyPState->ring_receive)
 	{
-		yb_amp_shard_log(slot->shard_no, PANIC,
+		yb_amp_log(PANIC,
 					   "Incorrect prefetch read: status=%d response=%p my=" UINT64_FORMAT " receive=" UINT64_FORMAT "",
 					   slot->status, slot->response,
 					   slot->my_ring_index, MyPState->ring_receive);
@@ -796,11 +784,10 @@ prefetch_read(PrefetchRequest *slot)
 	 * values in the error message
 	 */
 	buftag = slot->buftag;
-	shard_no = slot->shard_no;
 	my_ring_index = slot->my_ring_index;
 
 	old = MemoryContextSwitchTo(MyPState->errctx);
-	response = (YbAmpResponse *) page_server->receive(shard_no);
+	response = (YbAmpResponse *) pageserver_receive();
 	MemoryContextSwitchTo(old);
 	if (response)
 	{
@@ -811,7 +798,7 @@ prefetch_read(PrefetchRequest *slot)
 			slot->response != NULL ||
 			slot->my_ring_index != MyPState->ring_receive)
 		{
-			yb_amp_shard_log(shard_no, PANIC,
+			yb_amp_log(PANIC,
 						   "Incorrect prefetch slot state after receive: status=%d response=%p my=" UINT64_FORMAT " receive=" UINT64_FORMAT "",
 						   slot->status, slot->response,
 						   slot->my_ring_index, MyPState->ring_receive);
@@ -847,7 +834,7 @@ prefetch_read(PrefetchRequest *slot)
 		 * Note: The slot might no longer be valid, if the connection was lost
 		 * and the prefetch queue was flushed during the receive call
 		 */
-		yb_amp_shard_log(shard_no, LOG,
+		yb_amp_log(LOG,
 					   "No response from reading prefetch entry " UINT64_FORMAT ": %u/%u/%u.%u block %u. This can be caused by a concurrent disconnect",
 					   my_ring_index,
 					   RelFileInfoFmt(BufTagGetNRelFileInfo(buftag)),
@@ -903,12 +890,12 @@ prefetch_on_ps_disconnect(void)
 		Assert(slot->my_ring_index == ring_index);
 
 		/*
-		 * Drop connection to all shards which have prefetch requests.
+		 * Drop the connection to the page server.
 		 * It is not a problem to call disconnect multiple times on the same connection
 		 * because disconnect implementation in libpagestore.c will check if connection
 		 * is alive and do nothing of connection was already dropped.
 		 */
-		page_server->disconnect(slot->shard_no);
+		pageserver_disconnect_conn();
 
 		/* clean up the request */
 		slot->status = PRFS_TAG_REMAINS;
@@ -1021,7 +1008,7 @@ prefetch_do_request(PrefetchRequest *slot, yb_amp_request_lsns *force_request_ls
 	Assert(slot->response == NULL);
 	Assert(slot->my_ring_index == MyPState->ring_unused);
 
-	while (!page_server->send(slot->shard_no, (YbAmpRequest *) &request))
+	while (!pageserver_send((YbAmpRequest *) &request))
 	{
 		Assert(mySlotNo == MyPState->ring_unused);
 		/* loop */
@@ -1032,8 +1019,7 @@ prefetch_do_request(PrefetchRequest *slot, yb_amp_request_lsns *force_request_ls
 	MyPState->n_requests_inflight += 1;
 	MyPState->n_unused -= 1;
 	MyPState->ring_unused += 1;
-	BITMAP_SET(MyPState->shard_bitmap, slot->shard_no);
-	MyPState->max_shard_no = Max(slot->shard_no+1, MyPState->max_shard_no);
+	MyPState->has_unflushed_requests = true;
 
 	/* update slot state */
 	slot->status = PRFS_REQUESTED;
@@ -1357,7 +1343,6 @@ Retry:
 		 * function reads the buffer tag from the slot.
 		 */
 		slot->buftag = hashkey.buftag;
-		slot->shard_no = get_shard_number(&tag);
 		slot->my_ring_index = last_ring_index;
 		slot->flags = 0;
 
@@ -1412,62 +1397,43 @@ static YbAmpResponse *
 page_server_request(void const *req)
 {
 	YbAmpResponse *resp = NULL;
-	BufferTag tag = {0};
-	shardno_t shard_no;
 
+	/* Validate the request tag (all requests go to the single page server). */
 	switch (messageTag(req))
 	{
 		case T_YbAmpExistsRequest:
-			CopyNRelFileInfoToBufTag(tag, ((YbAmpExistsRequest *) req)->rinfo);
-			break;
 		case T_YbAmpNblocksRequest:
-			CopyNRelFileInfoToBufTag(tag, ((YbAmpNblocksRequest *) req)->rinfo);
-			break;
 		case T_YbAmpDbSizeRequest:
-			NInfoGetDbOid(BufTagGetNRelFileInfo(tag)) = ((YbAmpDbSizeRequest *) req)->dbNode;
-			break;
 		case T_YbAmpGetPageRequest:
-			CopyNRelFileInfoToBufTag(tag, ((YbAmpGetPageRequest *) req)->rinfo);
-			tag.blockNum = ((YbAmpGetPageRequest *) req)->blkno;
 			break;
 		default:
 			yb_amp_log(PANIC, "Unexpected request tag: %d", messageTag(req));
-	}
-	shard_no = get_shard_number(&tag);
-
-	/*
-	 * Current sharding model assumes that all metadata is present only at shard 0.
-	 * We still need to call get_shard_no() to check if shard map is up-to-date.
-	 */
-	if (((YbAmpRequest *) req)->tag != T_YbAmpGetPageRequest)
-	{
-		shard_no = 0;
 	}
 
 	consume_prefetch_responses();
 
 	PG_TRY();
 	{
-		before_shmem_exit(prefetch_on_exit, Int32GetDatum(shard_no));
+		before_shmem_exit(prefetch_on_exit, (Datum) 0);
 		do
 		{
-			while (!page_server->send(shard_no, (YbAmpRequest *) req)
-				   || !page_server->flush(shard_no))
+			while (!pageserver_send((YbAmpRequest *) req)
+				   || !pageserver_flush())
 			{
 				/* do nothing */
 			}
 			MyYbAmpCounters->pageserver_open_requests++;
-			resp = page_server->receive(shard_no);
+			resp = pageserver_receive();
 			MyYbAmpCounters->pageserver_open_requests--;
 		} while (resp == NULL);
-		cancel_before_shmem_exit(prefetch_on_exit, Int32GetDatum(shard_no));
+		cancel_before_shmem_exit(prefetch_on_exit, (Datum) 0);
 	}
 	PG_CATCH();
 	{
-		cancel_before_shmem_exit(prefetch_on_exit, Int32GetDatum(shard_no));
+		cancel_before_shmem_exit(prefetch_on_exit, (Datum) 0);
 		/* Nothing should cancel disconnect: we should not leave connection in opaque state */
 		HOLD_INTERRUPTS();
-		page_server->disconnect(shard_no);
+		pageserver_disconnect_conn();
 		MyYbAmpCounters->pageserver_open_requests = 0;
 		RESUME_INTERRUPTS();
 
@@ -2062,7 +2028,7 @@ communicator_exists(NRelFileInfo rinfo, ForkNumber forkNum, yb_amp_request_lsns 
 						!RelFileInfoEquals(exists_resp->req.rinfo, request.rinfo) ||
 						exists_resp->req.forknum != request.forknum)
 					{
-						YBAMP_PANIC_CONNECTION_STATE(0, PANIC,
+						YBAMP_PANIC_CONNECTION_STATE(PANIC,
 													"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u} to exits request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u}",
 													resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), RelFileInfoFmt(exists_resp->req.rinfo), exists_resp->req.forknum,
 													request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), RelFileInfoFmt(request.rinfo), request.forknum);
@@ -2093,7 +2059,7 @@ communicator_exists(NRelFileInfo rinfo, ForkNumber forkNum, yb_amp_request_lsns 
 				break;
 
 			default:
-				YBAMP_PANIC_CONNECTION_STATE(0, PANIC,
+				YBAMP_PANIC_CONNECTION_STATE(PANIC,
 											"Expected Exists (0x%02x) or Error (0x%02x) response to ExistsRequest, but got 0x%02x",
 											T_YbAmpExistsResponse, T_YbAmpErrorResponse, resp->tag);
 		}
@@ -2259,14 +2225,14 @@ Retry:
 			case T_YbAmpErrorResponse:
 				ereport(ERROR,
 						(errcode(ERRCODE_IO_ERROR),
-						 errmsg(YBAMP_TAG "[shard %d, reqid " UINT64_HEX_FORMAT "] could not read block %u in rel %u/%u/%u.%u from page server at lsn %X/%08X",
-								slot->shard_no, resp->reqid, blockno, RelFileInfoFmt(rinfo),
+						 errmsg(YBAMP_TAG "[reqid " UINT64_HEX_FORMAT "] could not read block %u in rel %u/%u/%u.%u from page server at lsn %X/%08X",
+								resp->reqid, blockno, RelFileInfoFmt(rinfo),
 								forkNum, LSN_FORMAT_ARGS(reqlsns->effective_request_lsn)),
 						 errdetail("page server returned error: %s",
 								   ((YbAmpErrorResponse *) resp)->message)));
 				break;
 			default:
-				YBAMP_PANIC_CONNECTION_STATE(slot->shard_no, PANIC,
+				YBAMP_PANIC_CONNECTION_STATE(PANIC,
 											"Expected GetPage (0x%02x) or Error (0x%02x) response to GetPageRequest, but got 0x%02x",
 											T_YbAmpGetPageResponse, T_YbAmpErrorResponse, resp->tag);
 		}
@@ -2311,7 +2277,7 @@ communicator_nblocks(NRelFileInfo rinfo, ForkNumber forknum, yb_amp_request_lsns
 						!RelFileInfoEquals(relsize_resp->req.rinfo, request.rinfo) ||
 						relsize_resp->req.forknum != forknum)
 					{
-						YBAMP_PANIC_CONNECTION_STATE(0, PANIC,
+						YBAMP_PANIC_CONNECTION_STATE(PANIC,
 													"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u} to get relsize request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u}",
 													resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), RelFileInfoFmt(relsize_resp->req.rinfo), relsize_resp->req.forknum,
 													request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), RelFileInfoFmt(request.rinfo), forknum);
@@ -2342,7 +2308,7 @@ communicator_nblocks(NRelFileInfo rinfo, ForkNumber forknum, yb_amp_request_lsns
 				break;
 
 			default:
-				YBAMP_PANIC_CONNECTION_STATE(0, PANIC,
+				YBAMP_PANIC_CONNECTION_STATE(PANIC,
 											"Expected Nblocks (0x%02x) or Error (0x%02x) response to NblocksRequest, but got 0x%02x",
 											T_YbAmpNblocksResponse, T_YbAmpErrorResponse, resp->tag);
 		}
@@ -2381,7 +2347,7 @@ communicator_dbsize(Oid dbNode, yb_amp_request_lsns *request_lsns)
 					if (!equal_requests(resp, &request.hdr) ||
 						dbsize_resp->req.dbNode != dbNode)
 					{
-						YBAMP_PANIC_CONNECTION_STATE(0, PANIC,
+						YBAMP_PANIC_CONNECTION_STATE(PANIC,
 													"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, dbNode=%u} to get DB size request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, dbNode=%u}",
 													resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), dbsize_resp->req.dbNode,
 													request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), dbNode);
@@ -2410,7 +2376,7 @@ communicator_dbsize(Oid dbNode, yb_amp_request_lsns *request_lsns)
 				break;
 
 			default:
-				YBAMP_PANIC_CONNECTION_STATE(0, PANIC,
+				YBAMP_PANIC_CONNECTION_STATE(PANIC,
 											"Expected DbSize (0x%02x) or Error (0x%02x) response to DbSizeRequest, but got 0x%02x",
 											T_YbAmpDbSizeResponse, T_YbAmpErrorResponse, resp->tag);
 		}
@@ -2425,7 +2391,6 @@ communicator_read_slru_segment(SlruKind kind, int64 segno, yb_amp_request_lsns *
 							   void *buffer)
 {
 	int			n_blocks;
-	shardno_t	shard_no = 0; /* All SLRUs are at shard 0 */
 	YbAmpResponse *resp = NULL;
 	YbAmpGetSlruSegmentRequest request;
 
@@ -2441,20 +2406,20 @@ communicator_read_slru_segment(SlruKind kind, int64 segno, yb_amp_request_lsns *
 
 	PG_TRY();
 	{
-		before_shmem_exit(prefetch_on_exit, Int32GetDatum(shard_no));
+		before_shmem_exit(prefetch_on_exit, (Datum) 0);
 		do
 		{
-			while (!page_server->send(shard_no, &request.hdr) || !page_server->flush(shard_no));
-			resp = page_server->receive(shard_no);
+			while (!pageserver_send(&request.hdr) || !pageserver_flush());
+			resp = pageserver_receive();
 		} while (resp == NULL);
-		cancel_before_shmem_exit(prefetch_on_exit, Int32GetDatum(shard_no));
+		cancel_before_shmem_exit(prefetch_on_exit, (Datum) 0);
 	}
 	PG_CATCH();
 	{
-		cancel_before_shmem_exit(prefetch_on_exit, Int32GetDatum(shard_no));
+		cancel_before_shmem_exit(prefetch_on_exit, (Datum) 0);
 		/* Nothing should cancel disconnect: we should not leave connection in opaque state */
 		HOLD_INTERRUPTS();
-		page_server->disconnect(shard_no);
+		pageserver_disconnect_conn();
 		RESUME_INTERRUPTS();
 
 		PG_RE_THROW();
@@ -2472,7 +2437,7 @@ communicator_read_slru_segment(SlruKind kind, int64 segno, yb_amp_request_lsns *
 					slru_resp->req.kind != kind ||
 					slru_resp->req.segno != segno)
 				{
-					YBAMP_PANIC_CONNECTION_STATE(0, PANIC,
+					YBAMP_PANIC_CONNECTION_STATE(PANIC,
 												"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, kind=%u, segno=%u} to get SLRU segment request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, kind=%u, segno=%lluu}",
 												resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), slru_resp->req.kind, slru_resp->req.segno,
 												request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), kind, (unsigned long long) segno);
@@ -2504,7 +2469,7 @@ communicator_read_slru_segment(SlruKind kind, int64 segno, yb_amp_request_lsns *
 			break;
 
 		default:
-			YBAMP_PANIC_CONNECTION_STATE(0, PANIC,
+			YBAMP_PANIC_CONNECTION_STATE(PANIC,
 										"Expected GetSlruSegment (0x%02x) or Error (0x%02x) response to GetSlruSegmentRequest, but got 0x%02x",
 										T_YbAmpGetSlruSegmentResponse, T_YbAmpErrorResponse, resp->tag);
 	}

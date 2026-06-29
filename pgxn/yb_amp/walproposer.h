@@ -319,7 +319,6 @@ typedef struct PageserverFeedback
 	XLogRecPtr	disk_consistent_lsn;
 	XLogRecPtr	remote_consistent_lsn;
 	TimestampTz replytime;
-	uint32		shard_number;
 	/* true if the pageserver has detected data corruption in the timeline */
 	bool		corruption_detected;
 } PageserverFeedback;
@@ -367,12 +366,9 @@ typedef struct WalproposerShmemState
 	pg_atomic_uint64 backpressureThrottlingTime;
 	pg_atomic_uint64 currentClusterSize;
 
-	/* last feedback from each shard */
-	PageserverFeedback shard_ps_feedback[MAX_SHARDS];
-	int			num_shards;
 	bool		replica_promote;
 
-	/* aggregated feedback with min LSNs across shards */
+	/* latest feedback from the (single) pageserver */
 	PageserverFeedback min_ps_feedback;
 
 	/* BEGIN_HADRON */

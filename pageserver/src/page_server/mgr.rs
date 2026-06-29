@@ -286,9 +286,9 @@ impl TenantManager {
     }
 
     /// This pageserver's contribution to utilization metrics: the number of bytes
-    /// of local disk space the tenant wants, and the shard count (always 1).
-    pub(crate) fn calculate_utilization(&self) -> (u64, u32) {
-        (self.tenant.local_storage_wanted(), 1)
+    /// of local disk space the tenant wants.
+    pub(crate) fn calculate_utilization(&self) -> u64 {
+        self.tenant.local_storage_wanted()
     }
 
     #[instrument(skip_all, fields(branch_id=%branch_id))]

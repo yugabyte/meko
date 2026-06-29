@@ -53,9 +53,6 @@ extern uint32		WAIT_EVENT_YBAMP_WAL_DL;
 #define yb_amp_log(tag, fmt, ...) ereport(tag,                                  \
 										(errmsg(YBAMP_TAG fmt, ##__VA_ARGS__), \
 										 errhidestmt(true), errhidecontext(true), errposition(0), internalerrposition(0)))
-#define yb_amp_shard_log(shard_no, tag, fmt, ...) ereport(tag,	\
-														(errmsg(YBAMP_TAG "[shard %d] " fmt, shard_no, ##__VA_ARGS__), \
-														 errhidestmt(true), errhidecontext(true), errposition(0), internalerrposition(0)))
 
 
 extern void pg_init_libpagestore(void);
@@ -71,14 +68,12 @@ extern PGDLLEXPORT void WalProposerMain(Datum main_arg);
 extern PGDLLEXPORT void LogicalSlotsMonitorMain(Datum main_arg);
 
 extern void LfcShmemRequest(void);
-extern void PagestoreShmemRequest(void);
 extern void RelsizeCacheShmemRequest(void);
 extern void WalproposerShmemRequest(void);
 extern void LwLsnCacheShmemRequest(void);
 extern void YbAmpPerfCountersShmemRequest(void);
 
 extern void LfcShmemInit(void);
-extern void PagestoreShmemInit(void);
 extern void RelsizeCacheShmemInit(void);
 extern void WalproposerShmemInit(void);
 extern void LwLsnCacheShmemInit(void);

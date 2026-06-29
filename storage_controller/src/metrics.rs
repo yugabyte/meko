@@ -210,8 +210,6 @@ pub(crate) struct DatabaseQueryLatencyLabelGroup {
 pub(crate) struct StorageScrubberLabelGroup<'a> {
     #[label(dynamic_with = lasso::ThreadedRodeo, default)]
     pub(crate) branch_id: &'a str,
-    #[label(dynamic_with = lasso::ThreadedRodeo, default)]
-    pub(crate) shard_number: &'a str,
     pub(crate) outcome: StorageScrubberOutcome,
 }
 

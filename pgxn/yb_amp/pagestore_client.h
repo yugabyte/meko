@@ -20,7 +20,6 @@
 #include "storage/block.h"
 #include "storage/buf_internals.h"
 
-#define MAX_SHARDS 128
 #define MAX_PAGESERVER_CONNSTRING_SIZE 256
 
 typedef enum
@@ -215,47 +214,39 @@ typedef enum
 extern int debug_compare_local;
 
 /*
- * API
+ * Page server client API. There is exactly one page server per endpoint.
  */
 
-typedef uint16 shardno_t;
-
-typedef struct
-{
-	/*
-	 * Send this request to the PageServer associated with this shard.
-	 * This function assigns request_id to the request which can be extracted by caller from request struct.
-	 */
-	bool		(*send) (shardno_t  shard_no, YbAmpRequest * request);
-	/*
-	 * Blocking read for the next response of this shard.
-	 *
-	 * When a CANCEL signal is handled, the connection state will be
-	 * unmodified.
-	 */
-	YbAmpResponse *(*receive) (shardno_t shard_no);
-	/*
-	 * Try get the next response from the TCP buffers, if any.
-	 * Returns NULL when the data is not yet available.
-	 *
-	 * This will raise errors only for malformed responses (we can't put them
-	 * back into connection). All other error conditions are soft errors and
-	 * return NULL as "no response available".
-	 */
-	YbAmpResponse *(*try_receive) (shardno_t shard_no);
-	/*
-	 * Make sure all requests are sent to PageServer.
-	 */
-	bool		(*flush) (shardno_t shard_no);
-	/*
-	 * Disconnect from this pageserver shard.
-	 */
-	void        (*disconnect) (shardno_t shard_no);
-} page_server_api;
+/*
+ * Send a request to the page server. This assigns a request_id to the request,
+ * which the caller can extract from the request struct.
+ */
+extern bool pageserver_send(YbAmpRequest *request);
+/*
+ * Blocking read for the next response.
+ *
+ * When a CANCEL signal is handled, the connection state will be unmodified.
+ */
+extern YbAmpResponse *pageserver_receive(void);
+/*
+ * Try to get the next response from the TCP buffers, if any. Returns NULL when
+ * the data is not yet available.
+ *
+ * This will raise errors only for malformed responses (we can't put them back
+ * into the connection). All other error conditions are soft errors and return
+ * NULL as "no response available".
+ */
+extern YbAmpResponse *pageserver_try_receive(void);
+/*
+ * Make sure all requests are sent to the page server.
+ */
+extern bool pageserver_flush(void);
+/*
+ * Disconnect from the page server.
+ */
+extern void pageserver_disconnect_conn(void);
 
 extern void prefetch_on_ps_disconnect(void);
-
-extern page_server_api *page_server;
 
 extern char *pageserver_connstring;
 extern int	flush_every_n_requests;
@@ -263,8 +254,6 @@ extern int	readahead_buffer_size;
 extern char *yb_amp_branch_id;
 extern int32 max_cluster_size;
 extern int  yb_amp_protocol_version;
-
-extern shardno_t get_shard_number(BufferTag* tag);
 
 extern const f_smgr *smgr_yb_amp(ProcNumber backend, NRelFileInfo rinfo);
 extern void smgr_init_yb_amp(void);

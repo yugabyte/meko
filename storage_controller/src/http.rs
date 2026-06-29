@@ -26,7 +26,7 @@ use pageserver_api::controller_api::{
  TimelineRegisterRequest,
 };
 use pageserver_api::models::{
-    DetachBehavior, LsnLeaseRequest, BranchTimeTravelRequest, TimelineArchivalConfigRequest,
+    DetachBehavior, LsnLeaseRequest, TimelineArchivalConfigRequest,
     TimelineCreateRequest,
 };
 use pageserver_api::upcall_api::{
@@ -232,9 +232,6 @@ async fn handle_tenant_time_travel_remote_storage(
     check_permissions(&req, Scope::PageServerApi)?;
     maybe_rate_limit(&req, branch_id).await;
 
-    let mut req = req;
-    let time_travel_req = json_request::<BranchTimeTravelRequest>(&mut req).await?;
-
     let timestamp_raw = must_get_query_param(&req, "travel_to")?;
     let _timestamp = humantime::parse_rfc3339(&timestamp_raw).map_err(|_e| {
         ApiError::BadRequest(anyhow::anyhow!(
@@ -250,12 +247,7 @@ async fn handle_tenant_time_travel_remote_storage(
     })?;
 
     service
-        .tenant_time_travel_remote_storage(
-            &time_travel_req,
-            branch_id,
-            timestamp_raw,
-            done_if_after_raw,
-        )
+        .tenant_time_travel_remote_storage(branch_id, timestamp_raw, done_if_after_raw)
         .await?;
     json_response(StatusCode::OK, ())
 }

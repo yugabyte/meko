@@ -927,12 +927,6 @@ pub struct BranchLocationConfigRequest {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct BranchTimeTravelRequest {
-    pub shard_counts: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
 pub struct BranchLocation {
     pub branch_id: BranchId,
     pub node_id: NodeId,

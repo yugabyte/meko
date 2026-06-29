@@ -13,8 +13,6 @@
 #include <math.h>
 #include <sys/socket.h>
 
-#include <curl/curl.h>
-
 #include "libpq-int.h"
 
 #include "access/xlog.h"
@@ -79,7 +77,6 @@ int         yb_amp_protocol_version = 3;
 
 static int	yb_amp_compute_mode = 0;
 static int	max_reconnect_attempts = 60;
-static int	stripe_size;
 static int	max_sockets;
 
 static int pageserver_response_log_timeout = 10000;
@@ -92,51 +89,6 @@ static int pageserver_response_log_timeout = 10000;
  */
 static int pageserver_response_disconnect_timeout = 30000;
 
-static int	conf_refresh_reconnect_attempt_threshold = 16;
-// Hadron: timeout for refresh errors (1 minute)
-static uint64 	kRefreshErrorTimeoutUSec = 1 * USECS_PER_MINUTE;
-
-typedef struct
-{
-	char		connstring[MAX_SHARDS][MAX_PAGESERVER_CONNSTRING_SIZE];
-	size_t		num_shards;
-	size_t		stripe_size;
-} ShardMap;
-
-/*
- * PagestoreShmemState is kept in shared memory. It contains the connection
- * strings for each shard.
- *
- * The "yb_amp.pageserver_connstring" GUC is marked with the PGC_SIGHUP option,
- * allowing it to be changed using pg_reload_conf(). The control plane can
- * update the connection string if the pageserver crashes, is relocated, or
- * new shards are added. A parsed copy of the current value of the GUC is kept
- * in shared memory, updated by the postmaster, because regular backends don't
- * reload the config during query execution, but we might need to re-establish
- * the pageserver connection with the new connection string even in the middle
- * of a query.
- *
- * The shared memory copy is protected by a lockless algorithm using two
- * atomic counters. The counters allow a backend to quickly check if the value
- * has changed since last access, and to detect and retry copying the value if
- * the postmaster changes the value concurrently. (Postmaster doesn't have a
- * PGPROC entry and therefore cannot use LWLocks.)
- *
- * stripe_size is now also part of ShardMap, although it is defined by separate GUC.
- * Postgres doesn't provide any mechanism to enforce dependencies between GUCs,
- * that it we we have to rely on order of GUC definition in config file.
- * "yb_amp.stripe_size" should be defined prior to "yb_amp.pageserver_connstring"
- */
-typedef struct
-{
-	pg_atomic_uint64 begin_update_counter;
-	pg_atomic_uint64 end_update_counter;
-	ShardMap	shard_map;
-} PagestoreShmemState;
-
-static PagestoreShmemState *pagestore_shared;
-static uint64 pagestore_local_counter = 0;
-
 typedef enum PSConnectionState {
 	PS_Disconnected,			/* no connection yet */
 	PS_Connecting_Startup,		/* connection starting up */
@@ -144,7 +96,7 @@ typedef enum PSConnectionState {
 	PS_Connected,				/* connected, pagestream established */
 } PSConnectionState;
 
-/* This backend's per-shard connections */
+/* This backend's connection to the page server */
 typedef struct
 {
 	TimestampTz		last_connect_time; /* read-only debug value */
@@ -183,249 +135,45 @@ typedef struct
 static uint32 local_request_counter;
 #define GENERATE_REQUEST_ID() (((YbAmpRequestId)MyProcPid << 32) | ++local_request_counter)
 
-static PageServer page_servers[MAX_SHARDS];
+/* There is exactly one page server per endpoint in AMP / yb-light. */
+static PageServer page_server;
 
-static bool pageserver_flush(shardno_t shard_no);
-static void pageserver_disconnect(shardno_t shard_no);
-static void pageserver_disconnect_shard(shardno_t shard_no);
-// HADRON
-shardno_t get_num_shards(void);
-
-static bool
-PagestoreShmemIsValid(void)
-{
-	return pagestore_shared && UsedShmemSegAddr;
-}
+static void pageserver_disconnect(void);
 
 /*
- * Parse a comma-separated list of connection strings into a ShardMap.
+ * Validate a pageserver connection string. There is exactly one page server
+ * per endpoint, so the GUC holds a single connection string.
  *
- * If 'result' is NULL, just checks that the input is valid. If the input is
- * not valid, returns false. The contents of *result are undefined in
- * that case, and must not be relied on.
+ * If the input is not valid, returns false.
  */
 static bool
-ParseShardMap(const char *connstr, ShardMap *result)
+CheckPageserverConnstring(char **newval, void **extra, GucSource source)
 {
-	const char *p;
-	int			nshards = 0;
-
-	if (result)
-		memset(result, 0, sizeof(ShardMap));
-
-	p = connstr;
-	nshards = 0;
-	for (;;)
+	if (strlen(*newval) >= MAX_PAGESERVER_CONNSTRING_SIZE)
 	{
-		const char *sep;
-		size_t		connstr_len;
-
-		sep = strchr(p, ',');
-		connstr_len = sep != NULL ? sep - p : strlen(p);
-
-		if (connstr_len == 0 && sep == NULL)
-			break;				/* ignore trailing comma */
-
-		if (nshards >= MAX_SHARDS)
-		{
-			yb_amp_log(LOG, "Too many shards");
-			return false;
-		}
-		if (connstr_len >= MAX_PAGESERVER_CONNSTRING_SIZE)
-		{
-			yb_amp_log(LOG, "Connection string too long");
-			return false;
-		}
-		if (result)
-		{
-			memcpy(result->connstring[nshards], p, connstr_len);
-			result->connstring[nshards][connstr_len] = '\0';
-		}
-		nshards++;
-
-		if (sep == NULL)
-			break;
-		p = sep + 1;
-	}
-	if (result)
-	{
-		result->num_shards = nshards;
-		result->stripe_size = stripe_size;
+		yb_amp_log(LOG, "Connection string too long");
+		return false;
 	}
 
 	return true;
 }
 
-static bool
-CheckPageserverConnstring(char **newval, void **extra, GucSource source)
-{
-	char	   *p = *newval;
-
-	return ParseShardMap(p, NULL);
-}
-
-static void
-AssignPageserverConnstring(const char *newval, void *extra)
-{
-	ShardMap	shard_map;
-
-	/*
-	 * Only postmaster updates the copy in shared memory.
-	 */
-	if (!PagestoreShmemIsValid() || IsUnderPostmaster)
-		return;
-
-	if (!ParseShardMap(newval, &shard_map))
-	{
-		/*
-		 * shouldn't happen, because we already checked the value in
-		 * CheckPageserverConnstring
-		 */
-		elog(ERROR, "could not parse shard map");
-	}
-
-	if (memcmp(&pagestore_shared->shard_map, &shard_map, sizeof(ShardMap)) != 0)
-	{
-		pg_atomic_add_fetch_u64(&pagestore_shared->begin_update_counter, 1);
-		pg_write_barrier();
-		memcpy(&pagestore_shared->shard_map, &shard_map, sizeof(ShardMap));
-		pg_write_barrier();
-		pg_atomic_add_fetch_u64(&pagestore_shared->end_update_counter, 1);
-	}
-	else
-	{
-		/* no change */
-	}
-}
-
-/* BEGIN_HADRON */
-/**
- * Return the total number of shards seen in the shard map.
- */
-shardno_t get_num_shards(void)
-{
-	const ShardMap *shard_map;
-
-	Assert(pagestore_shared);
-	shard_map = &pagestore_shared->shard_map;
-
-	Assert(shard_map != NULL);
-	return shard_map->num_shards;
-}
-/* END_HADRON */
-
-/*
- * Get the current number of shards, and/or the connection string for a
- * particular shard from the shard map in shared memory.
- *
- * If num_shards_p is not NULL, it is set to the current number of shards.
- *
- * If connstr_p is not NULL, the connection string for 'shard_no' is copied to
- * it. It must point to a buffer at least MAX_PAGESERVER_CONNSTRING_SIZE bytes
- * long.
- *
- * As a side-effect, if the shard map in shared memory had changed since the
- * last call, terminates all existing connections to all pageservers.
- */
-static void
-load_shard_map(shardno_t shard_no, char *connstr_p, shardno_t *num_shards_p, size_t* stripe_size_p)
-{
-	uint64		begin_update_counter;
-	uint64		end_update_counter;
-	ShardMap   *shard_map = &pagestore_shared->shard_map;
-	shardno_t	num_shards;
-	size_t		stripe_size;
-
-	/*
-	 * Postmaster can update the shared memory values concurrently, in which
-	 * case we would copy a garbled mix of the old and new values. We will
-	 * detect it because the counter's won't match, and retry. But it's
-	 * important that we don't do anything within the retry-loop that would
-	 * depend on the string having valid contents.
-	 */
-	do
-	{
-		begin_update_counter = pg_atomic_read_u64(&pagestore_shared->begin_update_counter);
-		end_update_counter = pg_atomic_read_u64(&pagestore_shared->end_update_counter);
-
-		num_shards = shard_map->num_shards;
-		stripe_size = shard_map->stripe_size;
-		if (connstr_p && shard_no < MAX_SHARDS)
-			strlcpy(connstr_p, shard_map->connstring[shard_no], MAX_PAGESERVER_CONNSTRING_SIZE);
-		pg_memory_barrier();
-	}
-	while (begin_update_counter != end_update_counter
-		   || begin_update_counter != pg_atomic_read_u64(&pagestore_shared->begin_update_counter)
-		   || end_update_counter != pg_atomic_read_u64(&pagestore_shared->end_update_counter));
-
-	if (connstr_p && shard_no >= num_shards)
-		yb_amp_log(ERROR, "Shard %d is greater or equal than number of shards %d",
-				 shard_no, num_shards);
-
-	/*
-	 * If any of the connection strings changed, reset all connections.
-	 */
-	if (pagestore_local_counter != end_update_counter)
-	{
-		for (shardno_t i = 0; i < MAX_SHARDS; i++)
-		{
-			if (page_servers[i].conn)
-				pageserver_disconnect(i);
-		}
-		pagestore_local_counter = end_update_counter;
-
-        /* Reserve file descriptors for sockets */
-		while (max_sockets < num_shards)
-		{
-			max_sockets += 1;
-			ReserveExternalFD();
-		}
-	}
-
-	if (num_shards_p)
-		*num_shards_p = num_shards;
-	if (stripe_size_p)
-		*stripe_size_p = stripe_size;
-}
-
-#define MB (1024*1024)
-
-shardno_t
-get_shard_number(BufferTag *tag)
-{
-	shardno_t	n_shards;
-	size_t		stripe_size;
-	uint32		hash;
-
-	load_shard_map(0, NULL, &n_shards, &stripe_size);
-
-#if PG_MAJORVERSION_NUM < 16
-	hash = murmurhash32(tag->rnode.relNode);
-	hash = hash_combine(hash, murmurhash32(tag->blockNum / stripe_size));
-#else
-	hash = murmurhash32(tag->relNumber);
-	hash = hash_combine(hash, murmurhash32(tag->blockNum / stripe_size));
-#endif
-
-	return hash % n_shards;
-}
-
 static inline void
-CLEANUP_AND_DISCONNECT(PageServer *shard)
+CLEANUP_AND_DISCONNECT(PageServer *ps)
 {
-	if (shard->wes_read)
+	if (ps->wes_read)
 	{
-		FreeWaitEventSet(shard->wes_read);
-		shard->wes_read = NULL;
+		FreeWaitEventSet(ps->wes_read);
+		ps->wes_read = NULL;
 	}
-	if (shard->conn)
+	if (ps->conn)
 	{
 		MyYbAmpCounters->pageserver_disconnects_total++;
-		PQfinish(shard->conn);
-		shard->conn = NULL;
+		PQfinish(ps->conn);
+		ps->conn = NULL;
 	}
 
-	shard->state = PS_Disconnected;
+	ps->state = PS_Disconnected;
 }
 
 /*
@@ -438,21 +186,26 @@ CLEANUP_AND_DISCONNECT(PageServer *shard)
  * is canceled.
  */
 static bool
-pageserver_connect(shardno_t shard_no, int elevel)
+pageserver_connect(int elevel)
 {
-	PageServer *shard = &page_servers[shard_no];
+	PageServer *ps = &page_server;
 	char		connstr[MAX_PAGESERVER_CONNSTRING_SIZE];
 
 	/*
-	 * Get the connection string for this shard. If the shard map has been
-	 * updated since we last looked, this will also disconnect any existing
-	 * pageserver connections as a side effect.
-	 * Note that connstr is used both during connection start, and when we
-	 * log the successful connection.
+	 * The pageserver connection string is fixed for the lifetime of the
+	 * endpoint, so we just read it from the GUC. It is used both during
+	 * connection start, and when we log the successful connection.
 	 */
-	load_shard_map(shard_no, connstr, NULL, NULL);
+	strlcpy(connstr, pageserver_connstring, sizeof(connstr));
 
-	switch (shard->state)
+	/* Reserve a file descriptor for the socket on first use. */
+	if (max_sockets < 1)
+	{
+		max_sockets += 1;
+		ReserveExternalFD();
+	}
+
+	switch (ps->state)
 	{
 	case PS_Disconnected:
 	{
@@ -465,12 +218,12 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		int64		us_since_last_attempt;
 
 		/* Make sure we start with a clean slate */
-		CLEANUP_AND_DISCONNECT(shard);
+		CLEANUP_AND_DISCONNECT(ps);
 
-		yb_amp_shard_log(shard_no, DEBUG5, "Connection state: Disconnected");
+		yb_amp_log(DEBUG5, "Connection state: Disconnected");
 
 		now = GetCurrentTimestamp();
-		us_since_last_attempt = (int64) (now - shard->last_reconnect_time);
+		us_since_last_attempt = (int64) (now - ps->last_reconnect_time);
 
 		/*
 		 * Make sure we don't do exponential backoff with a constant multiplier
@@ -478,8 +231,8 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		 *
 		 * cf. https://github.com/neondatabase/neon/issues/7897
 		 */
-		if (shard->delay_us == 0)
-			shard->delay_us = MIN_RECONNECT_INTERVAL_USEC;
+		if (ps->delay_us == 0)
+			ps->delay_us = MIN_RECONNECT_INTERVAL_USEC;
 
 		/*
 		 * If we did other tasks between reconnect attempts, then we won't
@@ -487,20 +240,20 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		 *
 		 * This is a loop to protect against interrupted sleeps.
 		 */
-		while (us_since_last_attempt < shard->delay_us)
+		while (us_since_last_attempt < ps->delay_us)
 		{
-			pg_usleep(shard->delay_us - us_since_last_attempt);
+			pg_usleep(ps->delay_us - us_since_last_attempt);
 
 			/* At least we should handle cancellations here */
 			CHECK_FOR_INTERRUPTS();
 
 			now = GetCurrentTimestamp();
-			us_since_last_attempt = (int64) (now - shard->last_reconnect_time);
+			us_since_last_attempt = (int64) (now - ps->last_reconnect_time);
 		}
 
 		/* update the delay metric */
-		shard->delay_us = Min(shard->delay_us * 2, MAX_RECONNECT_INTERVAL_USEC);
-		shard->last_reconnect_time = now;
+		ps->delay_us = Min(ps->delay_us * 2, MAX_RECONNECT_INTERVAL_USEC);
+		ps->last_reconnect_time = now;
 
 		/*
 		 * Connect using the connection string we got from the
@@ -567,19 +320,19 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		keywords[n_pgsql_params] = NULL;
 		values[n_pgsql_params] = NULL;
 
-		shard->conn = PQconnectStartParams(keywords, values, 1);
-		if (PQstatus(shard->conn) == CONNECTION_BAD)
+		ps->conn = PQconnectStartParams(keywords, values, 1);
+		if (PQstatus(ps->conn) == CONNECTION_BAD)
 		{
-			char	   *msg = pchomp(PQerrorMessage(shard->conn));
-			CLEANUP_AND_DISCONNECT(shard);
+			char	   *msg = pchomp(PQerrorMessage(ps->conn));
+			CLEANUP_AND_DISCONNECT(ps);
 			ereport(elevel,
 					(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
-						errmsg(YBAMP_TAG "[shard %d] could not establish connection to pageserver", shard_no),
+						errmsg(YBAMP_TAG "could not establish connection to pageserver"),
 						errdetail_internal("%s", msg)));
 			pfree(msg);
 			return false;
 		}
-		shard->state = PS_Connecting_Startup;
+		ps->state = PS_Connecting_Startup;
 	}
 	/* FALLTHROUGH */
 	case PS_Connecting_Startup:
@@ -588,7 +341,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		int			ps_send_query_ret;
 		bool		connected = false;
 		int poll_result = PGRES_POLLING_WRITING;
-		yb_amp_shard_log(shard_no, DEBUG5, "Connection state: Connecting_Startup");
+		yb_amp_log(DEBUG5, "Connection state: Connecting_Startup");
 
 		do
 		{
@@ -597,24 +350,24 @@ pageserver_connect(shardno_t shard_no, int elevel)
 			default: /* unknown/unused states are handled as a failed connection */
 			case PGRES_POLLING_FAILED:
 				{
-					char	   *pqerr = PQerrorMessage(shard->conn);
+					char	   *pqerr = PQerrorMessage(ps->conn);
 					char	   *msg = NULL;
-					yb_amp_shard_log(shard_no, DEBUG5, "POLLING_FAILED");
+					yb_amp_log(DEBUG5, "POLLING_FAILED");
 
 					if (pqerr)
 						msg = pchomp(pqerr);
 
-					CLEANUP_AND_DISCONNECT(shard);
+					CLEANUP_AND_DISCONNECT(ps);
 
 					if (msg)
 					{
-						yb_amp_shard_log(shard_no, elevel,
+						yb_amp_log(elevel,
 									   "could not connect to pageserver: %s",
 									   msg);
 						pfree(msg);
 					}
 					else
-						yb_amp_shard_log(shard_no, elevel,
+						yb_amp_log(elevel,
 									   "could not connect to pageserver");
 
 					return false;
@@ -625,7 +378,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 				{
 					int rc = WaitLatchOrSocket(MyLatch,
 											   WL_EXIT_ON_PM_DEATH | WL_LATCH_SET | WL_SOCKET_READABLE,
-											   PQsocket(shard->conn),
+											   PQsocket(ps->conn),
 											   0,
 											   WAIT_EVENT_YBAMP_PS_STARTING);
 					elog(DEBUG5, "PGRES_POLLING_READING=>%d", rc);
@@ -647,7 +400,7 @@ pageserver_connect(shardno_t shard_no, int elevel)
 				{
 					int rc = WaitLatchOrSocket(MyLatch,
 											   WL_EXIT_ON_PM_DEATH | WL_LATCH_SET | WL_SOCKET_WRITEABLE,
-											   PQsocket(shard->conn),
+											   PQsocket(ps->conn),
 											   0,
 											   WAIT_EVENT_YBAMP_PS_STARTING);
 					elog(DEBUG5, "PGRES_POLLING_WRITING=>%d", rc);
@@ -664,28 +417,28 @@ pageserver_connect(shardno_t shard_no, int elevel)
 
 				break;
 			case PGRES_POLLING_OK:
-				yb_amp_shard_log(shard_no, DEBUG5, "POLLING_OK");
+				yb_amp_log(DEBUG5, "POLLING_OK");
 				connected = true;
 				break;
 			}
-			poll_result = PQconnectPoll(shard->conn);
+			poll_result = PQconnectPoll(ps->conn);
 			elog(DEBUG5, "PQconnectPoll=>%d", poll_result);
 		}
 		while (!connected);
 
 		/* No more polling needed; connection succeeded */
-		shard->last_connect_time = GetCurrentTimestamp();
+		ps->last_connect_time = GetCurrentTimestamp();
 
 #if PG_MAJORVERSION_NUM >= 17
-		shard->wes_read = CreateWaitEventSet(NULL, 3);
+		ps->wes_read = CreateWaitEventSet(NULL, 3);
 #else
-		shard->wes_read = CreateWaitEventSet(TopMemoryContext, 3);
+		ps->wes_read = CreateWaitEventSet(TopMemoryContext, 3);
 #endif
-		AddWaitEventToSet(shard->wes_read, WL_LATCH_SET, PGINVALID_SOCKET,
+		AddWaitEventToSet(ps->wes_read, WL_LATCH_SET, PGINVALID_SOCKET,
 						  MyLatch, NULL);
-		AddWaitEventToSet(shard->wes_read, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
+		AddWaitEventToSet(ps->wes_read, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
 						  NULL, NULL);
-		AddWaitEventToSet(shard->wes_read, WL_SOCKET_READABLE, PQsocket(shard->conn), NULL, NULL);
+		AddWaitEventToSet(ps->wes_read, WL_SOCKET_READABLE, PQsocket(ps->conn), NULL, NULL);
 
 
 		switch (yb_amp_protocol_version)
@@ -700,55 +453,55 @@ pageserver_connect(shardno_t shard_no, int elevel)
 			elog(ERROR, "unexpected yb_amp_protocol_version %d", yb_amp_protocol_version);
 		}
 
-		if (PQstatus(shard->conn) == CONNECTION_BAD)
+		if (PQstatus(ps->conn) == CONNECTION_BAD)
 		{
-			char	   *msg = pchomp(PQerrorMessage(shard->conn));
+			char	   *msg = pchomp(PQerrorMessage(ps->conn));
 
-			CLEANUP_AND_DISCONNECT(shard);
+			CLEANUP_AND_DISCONNECT(ps);
 
 			ereport(elevel,
 					(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
-						errmsg(YBAMP_TAG "[shard %d] could not establish connection to pageserver", shard_no),
+						errmsg(YBAMP_TAG "could not establish connection to pageserver"),
 						errdetail_internal("%s", msg)));
 			pfree(msg);
 			return false;
 		}
 
-		ps_send_query_ret = PQsendQuery(shard->conn, pagestream_query);
+		ps_send_query_ret = PQsendQuery(ps->conn, pagestream_query);
 		pfree(pagestream_query);
 		if (ps_send_query_ret != 1)
 		{
-			CLEANUP_AND_DISCONNECT(shard);
+			CLEANUP_AND_DISCONNECT(ps);
 
-			yb_amp_shard_log(shard_no, elevel, "could not send pagestream command to pageserver");
+			yb_amp_log(elevel, "could not send pagestream command to pageserver");
 			return false;
 		}
 
-		shard->state = PS_Connecting_PageStream;
+		ps->state = PS_Connecting_PageStream;
 	}
 	/* FALLTHROUGH */
 	case PS_Connecting_PageStream:
 	{
-		yb_amp_shard_log(shard_no, DEBUG5, "Connection state: Connecting_PageStream");
+		yb_amp_log(DEBUG5, "Connection state: Connecting_PageStream");
 
-		if (PQstatus(shard->conn) == CONNECTION_BAD)
+		if (PQstatus(ps->conn) == CONNECTION_BAD)
 		{
-			char	   *msg = pchomp(PQerrorMessage(shard->conn));
-			CLEANUP_AND_DISCONNECT(shard);
+			char	   *msg = pchomp(PQerrorMessage(ps->conn));
+			CLEANUP_AND_DISCONNECT(ps);
 			ereport(elevel,
 					(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
-						errmsg(YBAMP_TAG "[shard %d] could not establish connection to pageserver", shard_no),
+						errmsg(YBAMP_TAG "could not establish connection to pageserver"),
 						errdetail_internal("%s", msg)));
 			pfree(msg);
 			return false;
 		}
 
-		while (PQisBusy(shard->conn))
+		while (PQisBusy(ps->conn))
 		{
 			WaitEvent	event;
 
 			/* Sleep until there's something to do */
-			(void) WaitEventSetWait(shard->wes_read, -1L, &event, 1,
+			(void) WaitEventSetWait(ps->wes_read, -1L, &event, 1,
 									WAIT_EVENT_YBAMP_PS_CONFIGURING);
 			ResetLatch(MyLatch);
 
@@ -757,12 +510,12 @@ pageserver_connect(shardno_t shard_no, int elevel)
 			/* Data available in socket? */
 			if (event.events & WL_SOCKET_READABLE)
 			{
-				if (!PQconsumeInput(shard->conn))
+				if (!PQconsumeInput(ps->conn))
 				{
-					char	   *msg = pchomp(PQerrorMessage(shard->conn));
+					char	   *msg = pchomp(PQerrorMessage(ps->conn));
 
-					CLEANUP_AND_DISCONNECT(shard);
-					yb_amp_shard_log(shard_no, elevel, "could not complete handshake with pageserver: %s",
+					CLEANUP_AND_DISCONNECT(ps);
+					yb_amp_log(elevel, "could not complete handshake with pageserver: %s",
 								   msg);
 					pfree(msg);
 					return false;
@@ -770,12 +523,12 @@ pageserver_connect(shardno_t shard_no, int elevel)
 			}
 		}
 
-		shard->state = PS_Connected;
-		shard->nrequests_sent = 0;
-		shard->nresponses_received = 0;
-		INSTR_TIME_SET_ZERO(shard->receive_start_time);
-		INSTR_TIME_SET_ZERO(shard->receive_last_log_time);
-		shard->receive_logged = false;
+		ps->state = PS_Connected;
+		ps->nrequests_sent = 0;
+		ps->nresponses_received = 0;
+		INSTR_TIME_SET_ZERO(ps->receive_start_time);
+		INSTR_TIME_SET_ZERO(ps->receive_last_log_time);
+		ps->receive_logged = false;
 	}
 	/* FALLTHROUGH */
 	case PS_Connected:
@@ -783,13 +536,13 @@ pageserver_connect(shardno_t shard_no, int elevel)
 		 * We successfully connected. Future connections to this PageServer
 		 * will do fast retries again, with exponential backoff.
 		 */
-		shard->delay_us = MIN_RECONNECT_INTERVAL_USEC;
+		ps->delay_us = MIN_RECONNECT_INTERVAL_USEC;
 
-		yb_amp_shard_log(shard_no, DEBUG5, "Connection state: Connected");
-		yb_amp_shard_log(shard_no, LOG, "libpagestore: connected to '%s' with protocol version %d", connstr, yb_amp_protocol_version);
+		yb_amp_log(DEBUG5, "Connection state: Connected");
+		yb_amp_log(LOG, "libpagestore: connected to '%s' with protocol version %d", connstr, yb_amp_protocol_version);
 		return true;
 	default:
-		yb_amp_shard_log(shard_no, ERROR, "libpagestore: invalid connection state %d", shard->state);
+		yb_amp_log(ERROR, "libpagestore: invalid connection state %d", ps->state);
 	}
 
 	pg_unreachable();
@@ -844,11 +597,11 @@ get_local_port(int socketfd, int *port)
  * A wrapper around PQgetCopyData that checks for interrupts while sleeping.
  */
 static int
-call_PQgetCopyData(shardno_t shard_no, char **buffer)
+call_PQgetCopyData(char **buffer)
 {
 	int			ret;
-	PageServer *shard = &page_servers[shard_no];
-	PGconn	   *pageserver_conn = shard->conn;
+	PageServer *ps = &page_server;
+	PGconn	   *pageserver_conn = ps->conn;
 	instr_time	now,
 				since_start,
 				since_last_log;
@@ -869,20 +622,20 @@ retry:
 		 * log message. On first call, remember the start time.
 		 */
 		INSTR_TIME_SET_CURRENT(now);
-		if (INSTR_TIME_IS_ZERO(shard->receive_start_time))
+		if (INSTR_TIME_IS_ZERO(ps->receive_start_time))
 		{
-			shard->receive_start_time = now;
+			ps->receive_start_time = now;
 			INSTR_TIME_SET_ZERO(since_start);
-			shard->receive_last_log_time = now;
+			ps->receive_last_log_time = now;
 			INSTR_TIME_SET_ZERO(since_last_log);
-			shard->receive_logged = false;
+			ps->receive_logged = false;
 		}
 		else
 		{
 			since_start = now;
-			INSTR_TIME_SUBTRACT(since_start, shard->receive_start_time);
+			INSTR_TIME_SUBTRACT(since_start, ps->receive_start_time);
 			since_last_log = now;
-			INSTR_TIME_SUBTRACT(since_last_log, shard->receive_last_log_time);
+			INSTR_TIME_SUBTRACT(since_last_log, ps->receive_last_log_time);
 		}
 
 		/* Sleep until the log or disconnect timeout is reached. */
@@ -890,7 +643,7 @@ retry:
 		disconnect_timeout = Max(0, (double) pageserver_response_disconnect_timeout - INSTR_TIME_GET_MILLISEC(since_start));
 		timeout = (long) ceil(Min(log_timeout, disconnect_timeout));
 
-		noccurred = WaitEventSetWait(shard->wes_read, timeout, &occurred_event, 1,
+		noccurred = WaitEventSetWait(ps->wes_read, timeout, &occurred_event, 1,
 									 WAIT_EVENT_YBAMP_PS_READ);
 		ResetLatch(MyLatch);
 
@@ -903,7 +656,7 @@ retry:
 			{
 				char	   *msg = pchomp(PQerrorMessage(pageserver_conn));
 
-				yb_amp_shard_log(shard_no, LOG, "could not get response from pageserver: %s", msg);
+				yb_amp_log(LOG, "could not get response from pageserver: %s", msg);
 				pfree(msg);
 				return -1;
 			}
@@ -913,9 +666,9 @@ retry:
 		/* Timeout was reached, or we were interrupted for some other reason */
 		INSTR_TIME_SET_CURRENT(now);
 		since_last_log = now;
-		INSTR_TIME_SUBTRACT(since_last_log, shard->receive_last_log_time);
+		INSTR_TIME_SUBTRACT(since_last_log, ps->receive_last_log_time);
 		since_start = now;
-		INSTR_TIME_SUBTRACT(since_start, shard->receive_start_time);
+		INSTR_TIME_SUBTRACT(since_start, ps->receive_start_time);
 
 		/*
 		 * As a debugging aid, if we don't get a response to a pageserver request
@@ -937,14 +690,14 @@ retry:
 			get_local_port(PQsocket(pageserver_conn), &port);
 			get_socket_stats(PQsocket(pageserver_conn), &sndbuf, &recvbuf);
 
-			yb_amp_shard_log(shard_no, LOG,
+			yb_amp_log(LOG,
 						   "no response received from pageserver for %0.3f s, still waiting (sent " UINT64_FORMAT " requests, received " UINT64_FORMAT " responses) (socket port=%d sndbuf=%d recvbuf=%d) (conn start=%d end=%d)",
 						   INSTR_TIME_GET_DOUBLE(since_start),
-						   shard->nrequests_sent, shard->nresponses_received, port, sndbuf, recvbuf,
+						   ps->nrequests_sent, ps->nresponses_received, port, sndbuf, recvbuf,
 				           pageserver_conn->inStart, pageserver_conn->inEnd);
-			shard->receive_last_log_time = now;
-			MyYbAmpCounters->compute_getpage_stuck_requests_total += !shard->receive_logged;
-			shard->receive_logged = true;
+			ps->receive_last_log_time = now;
+			MyYbAmpCounters->compute_getpage_stuck_requests_total += !ps->receive_logged;
+			ps->receive_logged = true;
 			max_wait = &MyYbAmpCounters->compute_getpage_max_inflight_stuck_time_ms;
 			*max_wait = Max(*max_wait, INSTR_TIME_GET_MILLISEC(since_start));
 		}
@@ -967,10 +720,10 @@ retry:
 		{
 			int 		port;
 			get_local_port(PQsocket(pageserver_conn), &port);
-			yb_amp_shard_log(shard_no, LOG, "no response from pageserver for %0.3f s, disconnecting (socket port=%d)",
+			yb_amp_log(LOG, "no response from pageserver for %0.3f s, disconnecting (socket port=%d)",
 					   INSTR_TIME_GET_DOUBLE(since_start), port);
 			MyYbAmpCounters->compute_getpage_max_inflight_stuck_time_ms = 0;
-			pageserver_disconnect(shard_no);
+			pageserver_disconnect();
 			return -1;
 		}
 
@@ -981,49 +734,46 @@ retry:
 	 * If we logged earlier that the response is taking a long time, log
 	 * another message when the response is finally received.
 	 */
-	if (shard->receive_logged)
+	if (ps->receive_logged)
 	{
 		INSTR_TIME_SET_CURRENT(now);
 		since_start = now;
-		INSTR_TIME_SUBTRACT(since_start, shard->receive_start_time);
-		yb_amp_shard_log(shard_no, LOG,
+		INSTR_TIME_SUBTRACT(since_start, ps->receive_start_time);
+		yb_amp_log(LOG,
 					   "received response from pageserver after %0.3f s",
 					   INSTR_TIME_GET_DOUBLE(since_start));
 	}
-	INSTR_TIME_SET_ZERO(shard->receive_start_time);
-	INSTR_TIME_SET_ZERO(shard->receive_last_log_time);
-	shard->receive_logged = false;
+	INSTR_TIME_SET_ZERO(ps->receive_start_time);
+	INSTR_TIME_SET_ZERO(ps->receive_last_log_time);
+	ps->receive_logged = false;
 	MyYbAmpCounters->compute_getpage_max_inflight_stuck_time_ms = 0;
 
 	return ret;
 }
 
 /*
- * Reset prefetch and drop connection to the shard.
- * It also drops connection to all other shards involved in prefetch, through
- * prefetch_on_ps_disconnect().
+ * Reset prefetch and drop the connection to the page server.
  */
 static void
-pageserver_disconnect(shardno_t shard_no)
+pageserver_disconnect(void)
 {
 	/*
-	 * If the connection to any pageserver is lost, we throw away the
-	 * whole prefetch queue, even for other pageservers. It should not
-	 * cause big problems, because connection loss is supposed to be a
-	 * rare event.
+	 * If the connection to the pageserver is lost, we throw away the whole
+	 * prefetch queue. It should not cause big problems, because connection
+	 * loss is supposed to be a rare event.
 	 */
 	prefetch_on_ps_disconnect();
 
-	pageserver_disconnect_shard(shard_no);
+	pageserver_disconnect_conn();
 }
 
 /*
- * Disconnect from specified shard
+ * Drop the connection to the page server.
  */
-static void
-pageserver_disconnect_shard(shardno_t shard_no)
+void
+pageserver_disconnect_conn(void)
 {
-	PageServer *shard = &page_servers[shard_no];
+	PageServer *ps = &page_server;
 	/*
 	 * If anything goes wrong while we were sending a request, it's not clear
 	 * what state the connection is in. For example, if we sent the request
@@ -1035,120 +785,25 @@ pageserver_disconnect_shard(shardno_t shard_no)
 	 * of the wait event sets or the psql connection, or failed when we tried
 	 * to attach wait events to the WaitEventSets.
 	 */
-	CLEANUP_AND_DISCONNECT(shard);
+	CLEANUP_AND_DISCONNECT(ps);
 
-	shard->state = PS_Disconnected;
+	ps->state = PS_Disconnected;
 }
 
-// BEGIN HADRON
-/*
- * Nudge compute_ctl to refresh our configuration. Called when we suspect we may be
- * connecting to the wrong pageservers due to a stale configuration.
- *
- * This is a best-effort operation. If we couldn't send the local loopback HTTP request
- * to compute_ctl or if the request fails for any reason, we just log the error and move
- * on.
- */
-
-extern int hadron_extension_server_port;
-
-// The timestamp (usec) of the first error that occurred while trying to refresh the configuration.
-// Will be reset to 0 after a successful refresh.
-static uint64 first_recorded_refresh_error_usec = 0;
-
-// Request compute_ctl to refresh the configuration. This operation may fail, e.g., if the compute_ctl
-// is already in the configuration state. The function returns true if the caller needs to cancel the
-// current query to avoid dead/live lock.
-static bool
-hadron_request_configuration_refresh() {
-	static CURL	   *handle = NULL;
-	CURLcode	res;
-	char	   *compute_ctl_url;
-	bool cancel_query = false;
-
-	if (!lakebase_mode)
-		return false;
-
-	if (handle == NULL)
-	{
-		handle = alloc_curl_handle();
-
-		curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, "POST");
-		curl_easy_setopt(handle, CURLOPT_TIMEOUT, 3L /* seconds */ );
-		curl_easy_setopt(handle, CURLOPT_POSTFIELDS, "");
-	}
-
-	// Set the URL
-	compute_ctl_url = psprintf("http://localhost:%d/refresh_configuration", hadron_extension_server_port);
-
-
-	elog(LOG, "Sending refresh configuration request to compute_ctl: %s", compute_ctl_url);
-
-	curl_easy_setopt(handle, CURLOPT_URL, compute_ctl_url);
-
-	res = curl_easy_perform(handle);
-	if (res != CURLE_OK )
-	{
-		elog(WARNING, "refresh_configuration request failed: %s\n", curl_easy_strerror(res));
-	}
-	else
-	{
-		long http_code = 0;
-		curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &http_code);
-		if ( res != CURLE_OK )
-		{
-			elog(WARNING, "compute_ctl refresh_configuration request getinfo failed: %s\n", curl_easy_strerror(res));
-		}
-		else
-		{
-			elog(LOG, "compute_ctl refresh_configuration got HTTP response: %ld\n", http_code);
-			if( http_code == 200 )
-			{
-				first_recorded_refresh_error_usec = 0;
-			}
-			else
-			{
-				if (first_recorded_refresh_error_usec == 0)
-				{
-					first_recorded_refresh_error_usec = GetCurrentTimestamp();
-				}
-				else if(GetCurrentTimestamp() - first_recorded_refresh_error_usec > kRefreshErrorTimeoutUSec)
-				{
-					{
-						first_recorded_refresh_error_usec = 0;
-						cancel_query = true;
-					}
-				}
-			}
-		}
-	}
-
-	// In regular Postgres usage, it is not necessary to manually free memory allocated by palloc (psprintf) because
-	// it will be cleaned up after the "memory context" is reset (e.g. after the query or the transaction is finished).
-	// However, the number of times this function gets called during a single query/transaction can be unbounded due to
-	// the various retry loops around calls to pageservers. Therefore, we need to manually free this memory here.
-	if (compute_ctl_url != NULL)
-	{
-		pfree(compute_ctl_url);
-	}
-	return cancel_query;
-}
-// END HADRON
-
-static bool
-pageserver_send(shardno_t shard_no, YbAmpRequest *request)
+bool
+pageserver_send(YbAmpRequest *request)
 {
 	StringInfoData req_buff;
-	PageServer *shard = &page_servers[shard_no];
+	PageServer *ps = &page_server;
 	PGconn	   *pageserver_conn;
 
 	MyYbAmpCounters->pageserver_requests_sent_total++;
 
 	/* If the connection was lost for some reason, reconnect */
-	if (shard->state == PS_Connected && PQstatus(shard->conn) == CONNECTION_BAD)
+	if (ps->state == PS_Connected && PQstatus(ps->conn) == CONNECTION_BAD)
 	{
-		yb_amp_shard_log(shard_no, LOG, "pageserver_send disconnect bad connection");
-		pageserver_disconnect(shard_no);
+		yb_amp_log(LOG, "pageserver_send disconnect bad connection");
+		pageserver_disconnect();
 		pageserver_conn = NULL;
 	}
 
@@ -1164,23 +819,18 @@ pageserver_send(shardno_t shard_no, YbAmpRequest *request)
 	 * https://github.com/neondatabase/neon/issues/1138 So try to reestablish
 	 * connection in case of failure.
 	 */
-	if (shard->state != PS_Connected)
+	if (ps->state != PS_Connected)
 	{
-		while (!pageserver_connect(shard_no, shard->n_reconnect_attempts < max_reconnect_attempts ? LOG : ERROR))
+		while (!pageserver_connect(ps->n_reconnect_attempts < max_reconnect_attempts ? LOG : ERROR))
 		{
-			shard->n_reconnect_attempts += 1;
-			if (shard->n_reconnect_attempts > conf_refresh_reconnect_attempt_threshold
-				&& hadron_request_configuration_refresh() )
-			{
-				yb_amp_shard_log(shard_no, ERROR, "request failed too many times, cancelling query");
-			}
+			ps->n_reconnect_attempts += 1;
 		}
-		shard->n_reconnect_attempts = 0;
+		ps->n_reconnect_attempts = 0;
 	} else {
-		Assert(shard->conn != NULL);
+		Assert(ps->conn != NULL);
 	}
 
-	pageserver_conn = shard->conn;
+	pageserver_conn = ps->conn;
 
 	/*
 	 * Send request.
@@ -1194,13 +844,13 @@ pageserver_send(shardno_t shard_no, YbAmpRequest *request)
 	 * PGRES_POLLING_WRITING state. It's kinda dirty to disconnect at this
 	 * point, but on the grand scheme of things it's only a small issue.
 	 */
-	shard->nrequests_sent++;
+	ps->nrequests_sent++;
 	if (PQputCopyData(pageserver_conn, req_buff.data, req_buff.len) <= 0)
 	{
 		char	   *msg = pchomp(PQerrorMessage(pageserver_conn));
 
-		pageserver_disconnect(shard_no);
-		yb_amp_shard_log(shard_no, LOG, "pageserver_send disconnected: failed to send page request (try to reconnect): %s", msg);
+		pageserver_disconnect();
+		yb_amp_log(LOG, "pageserver_send disconnected: failed to send page request (try to reconnect): %s", msg);
 		pfree(msg);
 		pfree(req_buff.data);
 		return false;
@@ -1212,34 +862,34 @@ pageserver_send(shardno_t shard_no, YbAmpRequest *request)
 	{
 		char	   *msg = nm_to_string((YbAmpMessage *) request);
 
-		yb_amp_shard_log(shard_no, PageStoreTrace, "sent request: %s", msg);
+		yb_amp_log(PageStoreTrace, "sent request: %s", msg);
 		pfree(msg);
 	}
 
 	return true;
 }
 
-static YbAmpResponse *
-pageserver_receive(shardno_t shard_no)
+YbAmpResponse *
+pageserver_receive(void)
 {
 	StringInfoData resp_buff;
 	YbAmpResponse *resp;
-	PageServer *shard = &page_servers[shard_no];
-	PGconn	   *pageserver_conn = shard->conn;
+	PageServer *ps = &page_server;
+	PGconn	   *pageserver_conn = ps->conn;
 	/* read response */
 	int			rc;
 
-	if (shard->state != PS_Connected)
+	if (ps->state != PS_Connected)
 	{
-		yb_amp_shard_log(shard_no, LOG,
+		yb_amp_log(LOG,
 					   "pageserver_receive: returning NULL for non-connected pageserver connection: 0x%02x",
-					   shard->state);
+					   ps->state);
 		return NULL;
 	}
 
 	Assert(pageserver_conn);
 
-	rc = call_PQgetCopyData(shard_no, &resp_buff.data);
+	rc = call_PQgetCopyData(&resp_buff.data);
 	if (rc >= 0)
 	{
 		/* call_PQgetCopyData handles rc == 0 */
@@ -1254,8 +904,8 @@ pageserver_receive(shardno_t shard_no)
 		}
 		PG_CATCH();
 		{
-			yb_amp_shard_log(shard_no, LOG, "pageserver_receive: disconnect due to failure while parsing response");
-			pageserver_disconnect(shard_no);
+			yb_amp_log(LOG, "pageserver_receive: disconnect due to failure while parsing response");
+			pageserver_disconnect();
 			PG_RE_THROW();
 		}
 		PG_END_TRY();
@@ -1264,7 +914,7 @@ pageserver_receive(shardno_t shard_no)
 		{
 			char	   *msg = nm_to_string((YbAmpMessage *) resp);
 
-			yb_amp_shard_log(shard_no, PageStoreTrace, "got response: %s", msg);
+			yb_amp_log(PageStoreTrace, "got response: %s", msg);
 			pfree(msg);
 		}
 
@@ -1279,16 +929,16 @@ pageserver_receive(shardno_t shard_no)
 		{
 			YbAmpGoingAwayResponse *ga = (YbAmpGoingAwayResponse *) resp;
 
-			yb_amp_shard_log(shard_no, LOG,
+			yb_amp_log(LOG,
 						   "received GoingAway from pageserver (reason=%u); disconnecting",
 						   ga->reason);
 			pfree(resp);
-			pageserver_disconnect(shard_no);
-			shard->nresponses_received++;
+			pageserver_disconnect();
+			ps->nresponses_received++;
 			return NULL;
 		}
 	}
-	else if (rc == -1 && shard->state == PS_Disconnected)
+	else if (rc == -1 && ps->state == PS_Disconnected)
 	{
 		/* If the state is 'Disconnected', the disconnection message was already logged */
 		resp = NULL;
@@ -1297,59 +947,50 @@ pageserver_receive(shardno_t shard_no)
 	{
 		char	   *msg = pchomp(PQerrorMessage(pageserver_conn));
 
-		yb_amp_shard_log(shard_no, LOG, "pageserver_receive disconnect: psql end of copy data: %s", msg);
+		yb_amp_log(LOG, "pageserver_receive disconnect: psql end of copy data: %s", msg);
 		pfree(msg);
-		pageserver_disconnect(shard_no);
+		pageserver_disconnect();
 		resp = NULL;
-
-		/*
-		 * Always poke compute_ctl to request a configuration refresh if we have issues receiving data from pageservers after
-		 * successfully connecting to it. It could be an indication that we are connecting to the wrong pageservers (e.g. PS
-		 * is in secondary mode or otherwise refuses to respond our request).
-		 */
-		hadron_request_configuration_refresh();
 	}
 	else if (rc == -2)
 	{
 		char	   *msg = pchomp(PQerrorMessage(pageserver_conn));
 
-		pageserver_disconnect(shard_no);
-		hadron_request_configuration_refresh();
-		yb_amp_shard_log(shard_no, ERROR, "pageserver_receive disconnect: could not read COPY data: %s", msg);
+		pageserver_disconnect();
+		yb_amp_log(ERROR, "pageserver_receive disconnect: could not read COPY data: %s", msg);
 	}
 	else
 	{
-		pageserver_disconnect(shard_no);
-		hadron_request_configuration_refresh();
-		yb_amp_shard_log(shard_no, ERROR, "pageserver_receive disconnect: unexpected PQgetCopyData return value: %d", rc);
+		pageserver_disconnect();
+		yb_amp_log(ERROR, "pageserver_receive disconnect: unexpected PQgetCopyData return value: %d", rc);
 	}
 
-	shard->nresponses_received++;
+	ps->nresponses_received++;
 	return (YbAmpResponse *) resp;
 }
 
-static YbAmpResponse *
-pageserver_try_receive(shardno_t shard_no)
+YbAmpResponse *
+pageserver_try_receive(void)
 {
 	StringInfoData resp_buff;
 	YbAmpResponse *resp;
-	PageServer *shard = &page_servers[shard_no];
-	PGconn	   *pageserver_conn = shard->conn;
+	PageServer *ps = &page_server;
+	PGconn	   *pageserver_conn = ps->conn;
 	int	rc;
 
-	if (shard->state != PS_Connected)
+	if (ps->state != PS_Connected)
 		return NULL;
 
 	Assert(pageserver_conn);
 
-	rc = PQgetCopyData(shard->conn, &resp_buff.data, 1 /* async */);
+	rc = PQgetCopyData(ps->conn, &resp_buff.data, 1 /* async */);
 	if (rc == 0)
 	{
-		if (!PQconsumeInput(shard->conn))
+		if (!PQconsumeInput(ps->conn))
 		{
 			return NULL;
 		}
-		rc = PQgetCopyData(shard->conn, &resp_buff.data, 1 /* async */);
+		rc = PQgetCopyData(ps->conn, &resp_buff.data, 1 /* async */);
 	}
 
 	if (rc == 0)
@@ -1365,8 +1006,8 @@ pageserver_try_receive(shardno_t shard_no)
 		}
 		PG_CATCH();
 		{
-			yb_amp_shard_log(shard_no, LOG, "pageserver_receive: disconnect due to failure while parsing response");
-			pageserver_disconnect(shard_no);
+			yb_amp_log(LOG, "pageserver_receive: disconnect due to failure while parsing response");
+			pageserver_disconnect();
 			/*
 			 * Malformed responses from PageServer are a reason to raise
 			 * errors and cancel transactions.
@@ -1379,7 +1020,7 @@ pageserver_try_receive(shardno_t shard_no)
 		{
 			char	   *msg = nm_to_string((YbAmpMessage *) resp);
 
-			yb_amp_shard_log(shard_no, PageStoreTrace, "got response: %s", msg);
+			yb_amp_log(PageStoreTrace, "got response: %s", msg);
 			pfree(msg);
 		}
 
@@ -1387,60 +1028,47 @@ pageserver_try_receive(shardno_t shard_no)
 		{
 			YbAmpGoingAwayResponse *ga = (YbAmpGoingAwayResponse *) resp;
 
-			yb_amp_shard_log(shard_no, LOG,
+			yb_amp_log(LOG,
 						   "received GoingAway from pageserver (reason=%u); disconnecting",
 						   ga->reason);
 			pfree(resp);
-			pageserver_disconnect(shard_no);
+			pageserver_disconnect();
 			return NULL;
 		}
 	}
 	else if (rc == -1)
 	{
-		yb_amp_shard_log(shard_no, LOG, "pageserver_receive disconnect: psql end of copy data: %s", pchomp(PQerrorMessage(pageserver_conn)));
-		pageserver_disconnect(shard_no);
+		yb_amp_log(LOG, "pageserver_receive disconnect: psql end of copy data: %s", pchomp(PQerrorMessage(pageserver_conn)));
+		pageserver_disconnect();
 		resp = NULL;
-		hadron_request_configuration_refresh();
 	}
 	else if (rc == -2)
 	{
 		char	   *msg = pchomp(PQerrorMessage(pageserver_conn));
 
-		pageserver_disconnect(shard_no);
-		hadron_request_configuration_refresh();
-		yb_amp_shard_log(shard_no, LOG, "pageserver_receive disconnect: could not read COPY data: %s", msg);
+		pageserver_disconnect();
+		yb_amp_log(LOG, "pageserver_receive disconnect: could not read COPY data: %s", msg);
 		resp = NULL;
 	}
 	else
 	{
-		pageserver_disconnect(shard_no);
-		hadron_request_configuration_refresh();
-		yb_amp_shard_log(shard_no, ERROR, "pageserver_receive disconnect: unexpected PQgetCopyData return value: %d", rc);
+		pageserver_disconnect();
+		yb_amp_log(ERROR, "pageserver_receive disconnect: unexpected PQgetCopyData return value: %d", rc);
 	}
 
-	/*
-	 * Always poke compute_ctl to request a configuration refresh if we have issues receiving data from pageservers after
-	 * successfully connecting to it. It could be an indication that we are connecting to the wrong pageservers (e.g. PS
-	 * is in secondary mode or otherwise refuses to respond our request).
-	 */
-	if ( rc < 0 && hadron_request_configuration_refresh() )
-	{
-		yb_amp_shard_log(shard_no, ERROR, "refresh_configuration request failed, cancelling query");
-	}
-
-	shard->nresponses_received++;
+	ps->nresponses_received++;
 	return (YbAmpResponse *) resp;
 }
 
 
-static bool
-pageserver_flush(shardno_t shard_no)
+bool
+pageserver_flush(void)
 {
-	PGconn	   *pageserver_conn = page_servers[shard_no].conn;
+	PGconn	   *pageserver_conn = page_server.conn;
 
-	if (page_servers[shard_no].state != PS_Connected)
+	if (page_server.state != PS_Connected)
 	{
-		yb_amp_shard_log(shard_no, WARNING, "Tried to flush while disconnected");
+		yb_amp_log(WARNING, "Tried to flush while disconnected");
 	}
 	else
 	{
@@ -1449,8 +1077,8 @@ pageserver_flush(shardno_t shard_no)
 		{
 			char	   *msg = pchomp(PQerrorMessage(pageserver_conn));
 
-			pageserver_disconnect(shard_no);
-			yb_amp_shard_log(shard_no, LOG, "pageserver_flush disconnect because failed to flush page requests: %s", msg);
+			pageserver_disconnect();
+			yb_amp_log(LOG, "pageserver_flush disconnect because failed to flush page requests: %s", msg);
 			pfree(msg);
 			return false;
 		}
@@ -1459,44 +1087,12 @@ pageserver_flush(shardno_t shard_no)
 	return true;
 }
 
-page_server_api api =
-{
-	.send = pageserver_send,
-	.flush = pageserver_flush,
-	.receive = pageserver_receive,
-	.try_receive = pageserver_try_receive,
-	.disconnect = pageserver_disconnect_shard
-};
-
 static bool
 check_yb_amp_id(char **newval, void **extra, GucSource source)
 {
 	uint8		id[16];
 
 	return **newval == '\0' || HexDecodeString(id, *newval, 16);
-}
-
-void
-PagestoreShmemInit(void)
-{
-	bool		found;
-
-	pagestore_shared = ShmemInitStruct("libpagestore shared state",
-									   sizeof(PagestoreShmemState),
-									   &found);
-	if (!found)
-	{
-		pg_atomic_init_u64(&pagestore_shared->begin_update_counter, 0);
-		pg_atomic_init_u64(&pagestore_shared->end_update_counter, 0);
-		memset(&pagestore_shared->shard_map, 0, sizeof(ShardMap));
-		AssignPageserverConnstring(pageserver_connstring, NULL);
-	}
-}
-
-void
-PagestoreShmemRequest(void)
-{
-	RequestAddinShmemSpace(sizeof(PagestoreShmemState));
 }
 
 /*
@@ -1512,7 +1108,7 @@ pg_init_libpagestore(void)
 							   "",
 							   PGC_SIGHUP,
 							   0,	/* no flags required */
-							   CheckPageserverConnstring, AssignPageserverConnstring, NULL);
+							   CheckPageserverConnstring, NULL, NULL);
 
 	DefineCustomStringVariable("yb_amp.project_id",
 							   "YbAmp project_id the server is running on",
@@ -1538,15 +1134,6 @@ pg_init_libpagestore(void)
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */
 							   NULL, NULL, NULL);
-
-	DefineCustomIntVariable("yb_amp.stripe_size",
-							"sharding stripe size",
-							NULL,
-							&stripe_size,
-							2048, 1, INT_MAX,
-							PGC_SIGHUP,
-							GUC_UNIT_BLOCKS,
-							NULL, NULL, NULL);
 
 	DefineCustomIntVariable("yb_amp.max_cluster_size",
 							"cluster size limit",
@@ -1605,16 +1192,6 @@ pg_init_libpagestore(void)
 							PGC_SU_BACKEND,
 							0,	/* no flags required */
 							NULL, NULL, NULL);
-	DefineCustomIntVariable("hadron.conf_refresh_reconnect_attempt_threshold",
-							"Threshold of the number of consecutive failed pageserver "
-							"connection attempts (per shard) before signaling "
-							"compute_ctl for a configuration refresh.",
-							NULL,
-							&conf_refresh_reconnect_attempt_threshold,
-							16, 0, INT_MAX,
-							PGC_USERSET,
-							0,
-							NULL, NULL, NULL);
 
 	DefineCustomIntVariable("yb_amp.pageserver_response_log_timeout",
 							"pageserver response log timeout",
@@ -1647,11 +1224,7 @@ pg_init_libpagestore(void)
 							0,
 							NULL, NULL, NULL);
 
-	if (page_server != NULL)
-		yb_amp_log(ERROR, "libpagestore already loaded");
-
-	yb_amp_log(PageStoreTrace, "libpagestore already loaded");
-	page_server = &api;
+	yb_amp_log(PageStoreTrace, "libpagestore loaded");
 
 	/*
 	 * Retrieve the auth token to use when connecting to pageserver and
@@ -1669,5 +1242,5 @@ pg_init_libpagestore(void)
 		dbsize_hook = yb_amp_dbsize;
 	}
 
-	memset(page_servers, 0, sizeof(page_servers));
+	memset(&page_server, 0, sizeof(page_server));
 }

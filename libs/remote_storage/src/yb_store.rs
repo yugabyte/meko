@@ -260,11 +260,10 @@ impl YbStore {
     /// doesn't carry one (e.g. future generic blobs that follow no branch
     /// convention).
     ///
-    /// A Neon id is 32 hex characters, optionally followed by `-<4hex>` for
-    /// sharded ids (e.g. `c8178f5e…1f966a-0001`). The function is heuristic —
-    /// it returns the first such token it finds, in path order — which is
-    /// sufficient for every key the pageserver and safekeeper write today and
-    /// benign (empty) for any future key that doesn't follow the convention.
+    /// A Neon id is 32 hex characters. The function is heuristic — it returns
+    /// the first such token it finds, in path order — which is sufficient for
+    /// every key the pageserver and safekeeper write today and benign (empty)
+    /// for any future key that doesn't follow the convention.
     fn extract_neon_id(key: &str) -> String {
         for part in key.split('/') {
             if Self::looks_like_neon_id(part) {
@@ -351,22 +350,7 @@ impl YbStore {
 
     fn looks_like_neon_id(s: &str) -> bool {
         // bare 32-hex-char branch id
-        if s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit()) {
-            return true;
-        }
-        // sharded id: `<32hex>-<4hex>` = 37 chars, one dash. The legacy
-        // sharded-id Display form (for any id with
-        // `shard_count != 0`). Kept as an accepted shape so a sharded
-        // branch id is still recognised by `extract_neon_id` (otherwise
-        // the parser would skip it and produce a branch-wide LIKE scan in
-        // `YbStore::list`).
-        if s.len() == 32 + 1 + 4 && s.as_bytes()[32] == b'-' {
-            let core = &s[..32];
-            let slug = &s[33..];
-            return core.chars().all(|c| c.is_ascii_hexdigit())
-                && slug.chars().all(|c| c.is_ascii_hexdigit());
-        }
-        false
+        s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit())
     }
 
     async fn with_timeout<F, T, E>(&self, fut: F, cancel: &CancellationToken) -> anyhow::Result<T>
@@ -1141,13 +1125,8 @@ fn escape_like(s: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Real-shape unsharded branch id: bare 32-hex.
+    /// Real-shape branch id: bare 32-hex.
     const B_LEGACY: &str = "5b36a8400fc88e7eeec19878ef7fbe30";
-
-    /// Real-shape sharded id: `<32hex>-<4hex>` (37 chars, one dash).
-    /// The legacy sharded-id Display form (when `shard_count != 0`).
-    /// `looks_like_neon_id` still accepts this shape (harmless).
-    const B_SHARDED: &str = "5b36a8400fc88e7eeec19878ef7fbe30-0001";
 
     #[test]
     fn extract_neon_id_pageserver_branch_path() {
@@ -1155,14 +1134,6 @@ mod tests {
             "branches/{B_LEGACY}/index_part.json-00000005"
         ));
         assert_eq!(b, B_LEGACY, "branch_id from a pageserver branch path");
-    }
-
-    #[test]
-    fn extract_neon_id_sharded_branch_path() {
-        let b = YbStore::extract_neon_id(&format!(
-            "branches/{B_SHARDED}/index_part.json-00000005"
-        ));
-        assert_eq!(b, B_SHARDED, "branch_id for the sharded (37-char) form");
     }
 
     #[test]

@@ -42,7 +42,7 @@ pub(crate) fn regenerate(
     let captured_at = std::time::SystemTime::now();
 
     // Calculate aggregate utilization from tenants on this pageserver
-    let (disk_wanted_bytes, shard_count) = tenant_manager.calculate_utilization();
+    let disk_wanted_bytes = tenant_manager.calculate_utilization();
 
     // Fetch the fraction of disk space which may be used
     let disk_usable_pct = if conf.disk_usage_based_eviction.enabled {
@@ -51,16 +51,11 @@ pub(crate) fn regenerate(
         Percent::new(100).unwrap()
     };
 
-    // Express a static value for how many shards we may schedule on one node
-    const MAX_SHARDS: u32 = 2500;
-
     let mut doc = PageserverUtilization {
         disk_usage_bytes: used,
         free_space_bytes: free,
         disk_wanted_bytes,
         disk_usable_pct,
-        shard_count,
-        max_shard_count: MAX_SHARDS,
         utilization_score: None,
         captured_at: utils::serde_system_time::SystemTime(captured_at),
     };

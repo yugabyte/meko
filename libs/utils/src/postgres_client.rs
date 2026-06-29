@@ -48,9 +48,6 @@ pub struct ConnectionConfigArgs<'a> {
     pub protocol: PostgresClientProtocol,
 
     pub branch_id: BranchId,
-    pub shard_number: Option<u8>,
-    pub shard_count: Option<u8>,
-    pub shard_stripe_size: Option<u32>,
 
     pub listen_pg_addr_str: &'a str,
 
@@ -59,7 +56,7 @@ pub struct ConnectionConfigArgs<'a> {
 
 impl<'a> ConnectionConfigArgs<'a> {
     fn options(&'a self) -> Vec<String> {
-        let mut options = vec![
+        let options = vec![
             "-c".to_owned(),
             format!("branch_id={}", self.branch_id),
             format!(
@@ -67,18 +64,6 @@ impl<'a> ConnectionConfigArgs<'a> {
                 serde_json::to_string(&self.protocol).unwrap()
             ),
         ];
-
-        if self.shard_number.is_some() {
-            assert!(self.shard_count.is_some());
-            assert!(self.shard_stripe_size.is_some());
-
-            options.push(format!("shard_count={}", self.shard_count.unwrap()));
-            options.push(format!("shard_number={}", self.shard_number.unwrap()));
-            options.push(format!(
-                "shard_stripe_size={}",
-                self.shard_stripe_size.unwrap()
-            ));
-        }
 
         options
     }

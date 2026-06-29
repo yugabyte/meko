@@ -1881,12 +1881,6 @@ ParsePageserverFeedbackMessage(WalProposer *wp, StringInfo reply_message, Pagese
 			ps_feedback->replytime = pq_getmsgint64(reply_message);
 			psfeedback_log("%s", key, timestamptz_to_str(ps_feedback->replytime));
 		}
-		else if (strcmp(key, "shard_number") == 0)
-		{
-			Assert(value_len == sizeof(uint32));
-			ps_feedback->shard_number = pq_getmsgint(reply_message, sizeof(uint32));
-			psfeedback_log("%u", key, ps_feedback->shard_number);
-		}
 		else if (strcmp(key, "corruption_detected") == 0)
 		{
 			Assert(value_len == 1);

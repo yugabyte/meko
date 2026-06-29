@@ -1,7 +1,7 @@
 mod safekeeper_service;
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -27,7 +27,7 @@ use pageserver_api::controller_api::{
 };
 use pageserver_api::models::{
     self, DetachBehavior, LsnLease,
-    PageserverUtilization, BranchImportStatus, BranchConfig, BranchTimeTravelRequest,
+    PageserverUtilization, BranchImportStatus, BranchConfig,
     TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateResponseStorcon,
     TimelineInfo,
 };
@@ -784,6 +784,8 @@ impl Service {
 
         #[cfg(feature = "testing")]
         {
+            use std::collections::HashSet;
+
             // Hack: insert scheduler state for all nodes referenced by branches, as compatibility
             // tests only store the branches, not the nodes.  The nodes will be loaded shortly
             // after when pageservers start up and register.
@@ -1606,7 +1608,6 @@ impl Service {
 
     pub(crate) async fn tenant_time_travel_remote_storage(
         &self,
-        time_travel_req: &BranchTimeTravelRequest,
         branch_id: BranchId,
         timestamp: Cow<'_, str>,
         done_if_after: Cow<'_, str>,
@@ -1660,42 +1661,25 @@ impl Service {
             node.clone()
         };
 
-        // The shard count is encoded in the remote storage's URL, so we need to handle all historically used shard counts
-        let mut counts = time_travel_req
-            .shard_counts
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        counts.sort_unstable();
+        // yb-light is always single-shard, so the recovery runs once against the chosen node.
+        let client = PageserverClient::new(
+            node.get_id(),
+            self.http_client.clone(),
+            node.base_url(),
+            self.config.pageserver_jwt_token.as_deref(),
+        );
 
-        for count in counts {
-            // yb-light: always single shard regardless of the historical shard counts.
-            let _ = count;
-            let client = PageserverClient::new(
-                node.get_id(),
-                self.http_client.clone(),
-                node.base_url(),
-                self.config.pageserver_jwt_token.as_deref(),
-            );
+        tracing::info!("Doing time travel recovery for branch {branch_id}",);
 
-            tracing::info!("Doing time travel recovery for branch {branch_id}",);
-
-            client
-                .branch_time_travel_remote_storage(
-                    branch_id,
-                    &timestamp,
-                    &done_if_after,
-                )
-                .await
-                .map_err(|e| {
-                    ApiError::InternalServerError(anyhow::anyhow!(
-                        "Error doing time travel recovery for branch {branch_id} on node {}: {e}",
-                        node
-                    ))
-                })?;
-        }
+        client
+            .branch_time_travel_remote_storage(branch_id, &timestamp, &done_if_after)
+            .await
+            .map_err(|e| {
+                ApiError::InternalServerError(anyhow::anyhow!(
+                    "Error doing time travel recovery for branch {branch_id} on node {}: {e}",
+                    node
+                ))
+            })?;
         Ok(())
     }
 

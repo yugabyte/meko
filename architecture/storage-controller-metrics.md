@@ -78,7 +78,7 @@ Migration}` (from `DatabaseError::error_label`). `operation` is the
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `storage_controller_storage_scrub_status` | CounterVec | `branch_id`, `shard_number`, `outcome` | Storage-scrubber results per branch |
+| `storage_controller_storage_scrub_status` | CounterVec | `branch_id`, `outcome` | Storage-scrubber results per branch |
 
 `outcome` is the fixed enum `{PSOk, PSWarning, PSError, PSOrphan, SKOk, SKError}`.
 

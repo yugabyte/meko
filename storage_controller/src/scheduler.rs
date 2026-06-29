@@ -381,46 +381,13 @@ impl Scheduler {
                 node.branch_count -= 1;
             }
         }
-
-        // Maybe update PageserverUtilization
-        match update {
-            RefCountUpdate::AddSecondary | RefCountUpdate::Attach => {
-                // Referencing the node: if this takes our branch_count above the utilzation structure's
-                // shard count, then artifically bump it: this ensures that the scheduler immediately
-                // recognizes that this node has more work on it, without waiting for the next heartbeat
-                // to update the utilization.
-                if let MaySchedule::Yes(utilization) = &mut node.may_schedule {
-                    utilization.adjust_shard_count_max(node.branch_count as u32);
-                }
-            }
-            RefCountUpdate::PromoteSecondary
-            | RefCountUpdate::Detach
-            | RefCountUpdate::RemoveSecondary
-            | RefCountUpdate::DemoteAttached => {
-                // De-referencing the node: leave the utilization's branch_count at a stale higher
-                // value until some future heartbeat after we have physically removed this shard
-                // from the node: this prevents the scheduler over-optimistically trying to schedule
-                // more work onto the node before earlier detaches are done.
-            }
-        }
     }
 
     pub(crate) fn node_upsert(&mut self, node: &Node) {
         use std::collections::hash_map::Entry::*;
         match self.nodes.entry(node.get_id()) {
             Occupied(mut entry) => {
-                // Updates to MaySchedule are how we receive updated PageserverUtilization: adjust these values
-                // to account for any shards scheduled on the controller but not yet visible to the pageserver.
-                let mut may_schedule = node.may_schedule();
-                match &mut may_schedule {
-                    MaySchedule::Yes(utilization) => {
-                        utilization.adjust_shard_count_max(entry.get().branch_count as u32);
-                    }
-                    MaySchedule::No => { // Nothing to tweak
-                    }
-                }
-
-                entry.get_mut().may_schedule = may_schedule;
+                entry.get_mut().may_schedule = node.may_schedule();
             }
             Vacant(entry) => {
                 entry.insert(SchedulerNode {
@@ -596,7 +563,7 @@ pub(crate) mod test_utils {
                         false,
                     )
                     .unwrap();
-                    node.set_availability(NodeAvailability::Active(test_utilization::simple(0, 0)));
+                    node.set_availability(NodeAvailability::Active(test_utilization::simple(0)));
                     assert!(node.is_available());
                     node
                 })
@@ -698,7 +665,7 @@ mod tests {
         }
 
         // Independent schedule calls onto empty nodes should round-robin, because each node's
-        // utilization's shard count is updated inline.  The order is determinsitic because when all other factors are
+        // attached branch count is updated inline.  The order is determinsitic because when all other factors are
         // equal, we order by node ID.
         assert_scheduler_chooses(
             NodeId(1),
@@ -725,7 +692,6 @@ mod tests {
             .get_mut(&NodeId(1))
             .unwrap()
             .set_availability(NodeAvailability::Active(test_utilization::simple(
-                10,
                 1024 * 1024 * 1024,
             )));
         scheduler.node_upsert(nodes.get(&NodeId(1)).unwrap());
@@ -776,10 +742,7 @@ mod tests {
         nodes
             .get_mut(&NodeId(1))
             .unwrap()
-            .set_availability(NodeAvailability::Active(test_utilization::simple(
-                20000,
-                1024 * 1024 * 1024,
-            )));
+            .set_availability(NodeAvailability::Active(test_utilization::overloaded()));
         scheduler.node_upsert(nodes.get(&NodeId(1)).unwrap());
         assert_scheduler_chooses(
             NodeId(2),
