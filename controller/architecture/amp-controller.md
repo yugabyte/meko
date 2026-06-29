@@ -779,9 +779,9 @@ inside the controller's own image.
 
 | API surface | What it does | Used by yb-light today | amp-controller posture |
 |---|---|---|---|
-| Upcalls (`/upcall/v1/*`) | Generation fencing: `re-attach`/`validate` at pageserver boot | Yes — every pageserver start | **Reuse** — boot-critical (§11.4) |
-| Node registry (`/control/v1/node*`) | Register/describe/configure pageservers | Yes | **Reuse** |
-| Safekeeper registry (`/control/v1/safekeeper*`) | Upsert, list, scheduling policy | Yes | **Reuse** |
+| Upcalls (`/upcall/v1/*`) | Timeline-import status reporting only — the `re-attach`/`validate` generation-fencing upcalls were removed (the yb pageserver never called them; fencing is via the launcher's attach-hook) | Import flows only | **Reuse** (import only) |
+| Node registry (`/control/v1/node*`) | Register/describe/configure pageservers (config sets availability only; the node scheduling-policy machinery was removed) | Yes | **Reuse** |
+| ~~Safekeeper registry (`/control/v1/safekeeper*`)~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly, so the controller never contacts a safekeeper | No longer exists | **Removed** |
 | Branch bookkeeping | Branch create/register/delete, branch-name mappings | Yes | **Reuse** |
 | Generation debug ops (`attach-hook`, `inspect`) | Issue/inspect generations | Yes | **Reuse** (internal/ops only) |
 | Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows | Yes — built as a shim for `yb_light_local` | **Not reused** — superseded by amp-controller's endpoint records (§10.1); an opaque spec cannot carry the schema-enforced invariants of §10.2 |
@@ -795,8 +795,7 @@ inside the controller's own image.
   scheduling/placement) must be audited and disabled or rendered inert.
 - **amp-controller's records never live in it.** Tenancy, PG clusters, endpoints,
   and tasks live in amp-controller's own schema (§10). The storage controller keeps
-  only storage-layer bookkeeping: generations, node and safekeeper rows,
-  branch rows.
+  only storage-layer bookkeeping: generations, node rows, branch rows.
 - **Replaceable by construction.** Nothing in amp-controller may grow roots into it
   beyond the upcall/registry contract, so folding the live slice into
   amp-controller later stays a contained change.
@@ -808,13 +807,13 @@ one from corrupting storage state.
 
 ### 11.4 Open questions (for the storage-controller design doc in `designs/`)
 
-- **Who serves the upcall API.** The pageserver inside an endpoint must reach
-  `/upcall/v1/*` at boot to get fenced. Either the shared storage controller
-  serves it — and endpoint blobs gain a second boot-critical dependency beyond
-  compute_ctl (§5.2) — or amp-controller absorbs the small upcall surface itself and
-  the separate service is retired. The second option collapses back to a single
-  service and a single source of truth; it must be costed before the first
-  milestone hardens the dependency.
+- **Who serves the upcall API.** Generation fencing no longer rides the upcall
+  API — the launcher fences via the attach-hook, and the `re-attach`/`validate`
+  upcalls were removed. The only remaining `/upcall/v1/*` surface is
+  timeline-import status reporting, used by import flows rather than every
+  pageserver boot. If amp-controller absorbs that small surface, the separate
+  storage-controller service can be retired; this is no longer boot-critical, so
+  it is a simplification rather than a hard dependency to cost.
 - **Scale shape.** One pageserver per branch means node count tracks endpoint
   count, with register/deregister churn at create/destroy and scale-to-zero —
   inverted from upstream's assumption of a small fleet of long-lived
