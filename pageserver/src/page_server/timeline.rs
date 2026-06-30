@@ -1910,6 +1910,7 @@ impl Timeline {
                     max_bytes: pw_cfg.flush_size_bytes,
                     backpressure_bytes: pw_cfg.backpressure_bytes,
                     ingest_parallelism: pw_cfg.ingest_parallelism,
+                    ingest_parallelism_min_batch: pw_cfg.ingest_parallelism_min_batch,
                 },
                 pw_cfg.read_cache_bytes,
                 pw_cfg.meta_cache_entries,

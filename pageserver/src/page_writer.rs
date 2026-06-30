@@ -61,6 +61,9 @@ pub struct FlushPolicy {
     /// Number of parallel workers used to deserialize + build page rows in
     /// `put_serialized`. 1 = serial. See `YbPageWriterConfig::ingest_parallelism`.
     pub ingest_parallelism: usize,
+    /// Minimum batch size (entries) before parallel apply kicks in. See
+    /// `YbPageWriterConfig::ingest_parallelism_min_batch`.
+    pub ingest_parallelism_min_batch: usize,
 }
 
 impl Default for FlushPolicy {
@@ -70,6 +73,7 @@ impl Default for FlushPolicy {
             max_bytes: 25 * 1024 * 1024,
             backpressure_bytes: 50 * 1024 * 1024,
             ingest_parallelism: 1,
+            ingest_parallelism_min_batch: 256,
         }
     }
 }
@@ -605,9 +609,8 @@ impl PageWriter {
 
         // Below this size the spawn_blocking hand-off costs more than the
         // serial apply saves.
-        const MIN_PARALLEL_ENTRIES: usize = 256;
         let parallelism = self.policy.ingest_parallelism;
-        if parallelism > 1 && len >= MIN_PARALLEL_ENTRIES {
+        if parallelism > 1 && len >= self.policy.ingest_parallelism_min_batch {
             // Partition entry indices by page key so the same key is always
             // applied by one worker (its chain order + materialiser tally
             // stay race-free); distinct keys hit distinct shards and apply
@@ -2787,6 +2790,7 @@ mod tests {
             max_bytes: 200,
             backpressure_bytes: 0,
             ingest_parallelism: 1,
+            ingest_parallelism_min_batch: 256,
         };
         let (w, _t) = writer(store.clone(), policy);
         assert!(!w.should_flush().await);
@@ -2805,6 +2809,7 @@ mod tests {
             max_bytes: 1_000_000_000,
             backpressure_bytes: 0,
             ingest_parallelism: 1,
+            ingest_parallelism_min_batch: 256,
         };
         let (w, _t) = writer(store.clone(), policy);
         w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
@@ -2883,6 +2888,7 @@ mod tests {
             max_bytes: 1 << 30,
             backpressure_bytes: 0,
             ingest_parallelism: 1,
+            ingest_parallelism_min_batch: 256,
         };
         let w = Arc::new(PageWriter::new(
             t,
@@ -2934,6 +2940,7 @@ mod tests {
             max_bytes: 1 << 30,
             backpressure_bytes: 0,
             ingest_parallelism: 1,
+            ingest_parallelism_min_batch: 256,
         };
         let w = Arc::new(PageWriter::new(
             t,
@@ -4374,6 +4381,127 @@ mod tests {
         assert_eq!(w.stats().await.meta_cache_hits, 0, "no hits when disabled");
         let row = result.into_values().next().expect("row from YB");
         assert_eq!(row.payload, Bytes::from_static(b"no-cache"));
+        drop_schema(&store, &schema).await;
+    }
+
+    // ---- parallel apply (ingest_parallelism) ----------------------
+
+    /// Build a `(CompactKey, Lsn, serialized_size, Value)` entry with the
+    /// correct serialized size for `SerializedValueBatch::from_values`.
+    fn ser_entry(
+        key: Key,
+        lsn: Lsn,
+        val: Value,
+    ) -> (pageserver_api::key::CompactKey, Lsn, usize, Value) {
+        let size = val.serialized_size().expect("serialized_size") as usize;
+        (key.to_compact(), lsn, size, val)
+    }
+
+    /// A distinct image payload per tag, so per-key comparisons are meaningful.
+    fn img(tag: &str) -> Value {
+        Value::Image(Bytes::from(tag.as_bytes().to_vec()))
+    }
+
+    /// Read a key's chain (newest-first) from the in-RAM buffer, reduced to
+    /// its comparable fields. The batches below give every key an image
+    /// anchor, so the chain is complete in the buffer (no YB read needed).
+    async fn chain_fields(w: &PageWriter, key: Key) -> Vec<(Lsn, bool, bool, Bytes)> {
+        w.read_chain(key, Lsn(u64::MAX))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.lsn, r.is_image, r.will_init, r.payload.clone()))
+            .collect()
+    }
+
+    /// Parallel apply (`ingest_parallelism > 1`) must produce byte-identical
+    /// per-key chains to the serial path: partition-by-key + concurrent push
+    /// must not drop, duplicate, reorder, or cross-contaminate any version.
+    #[tokio::test]
+    async fn put_serialized_parallel_matches_serial() {
+        let (store, schema) = make_store("ppush_parity").await;
+
+        // Enough keys that the parallel path actually fans across workers.
+        // Each key: an image anchor + two deltas (in ascending LSN, as the
+        // batch validator requires per key).
+        let n_keys = 400u32;
+        let build = || {
+            let mut entries = Vec::new();
+            for kk in 0..n_keys {
+                entries.push(ser_entry(k(kk), Lsn(10), img(&format!("img-{kk}"))));
+                entries.push(ser_entry(k(kk), Lsn(20), delta()));
+                entries.push(ser_entry(k(kk), Lsn(30), delta()));
+            }
+            SerializedValueBatch::from_values(entries)
+        };
+
+        let serial_policy = FlushPolicy {
+            ingest_parallelism: 1,
+            ..FlushPolicy::default()
+        };
+        let (ws, _ts) = writer(store.clone(), serial_policy);
+        let ws = Arc::new(ws);
+        ws.put_serialized(build()).await.unwrap();
+
+        let parallel_policy = FlushPolicy {
+            ingest_parallelism: 4,
+            ingest_parallelism_min_batch: 1, // force the parallel path
+            ..FlushPolicy::default()
+        };
+        let (wp, _tp) = writer(store.clone(), parallel_policy);
+        let wp = Arc::new(wp);
+        wp.put_serialized(build()).await.unwrap();
+
+        for kk in 0..n_keys {
+            let s = chain_fields(&ws, k(kk)).await;
+            let p = chain_fields(&wp, k(kk)).await;
+            assert_eq!(s.len(), 3, "key {kk}: expected image + 2 deltas serially");
+            assert_eq!(p, s, "key {kk}: parallel chain differs from serial");
+        }
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Many versions of ONE key in a parallel batch must stay in correct LSN
+    /// order — the by-key partition guarantees a key is owned by a single
+    /// worker, so its chain is never interleaved/reordered.
+    #[tokio::test]
+    async fn put_serialized_parallel_preserves_per_key_lsn_order() {
+        let (store, schema) = make_store("ppush_order").await;
+
+        let hot = k(999_999);
+        let build = || {
+            let mut entries = Vec::new();
+            // Padding keys so the batch crosses into the parallel path.
+            for kk in 0..400u32 {
+                entries.push(ser_entry(k(kk), Lsn(10), img(&format!("o-{kk}"))));
+            }
+            // The hot key: image anchor + 20 deltas at increasing LSNs.
+            entries.push(ser_entry(hot, Lsn(100), img("hot-base")));
+            for i in 1..=20u64 {
+                entries.push(ser_entry(hot, Lsn(100 + i * 10), delta()));
+            }
+            SerializedValueBatch::from_values(entries)
+        };
+
+        let parallel_policy = FlushPolicy {
+            ingest_parallelism: 4,
+            ingest_parallelism_min_batch: 1,
+            ..FlushPolicy::default()
+        };
+        let (wp, _tp) = writer(store.clone(), parallel_policy);
+        let wp = Arc::new(wp);
+        wp.put_serialized(build()).await.unwrap();
+
+        let chain = chain_fields(&wp, hot).await;
+        assert_eq!(chain.len(), 21, "expected image + 20 deltas");
+        let lsns: Vec<u64> = chain.iter().map(|(l, _, _, _)| l.0).collect();
+        let mut descending = lsns.clone();
+        descending.sort_unstable_by(|a, b| b.cmp(a));
+        assert_eq!(lsns, descending, "chain not in descending LSN order");
+        assert_eq!(*lsns.last().unwrap(), 100, "oldest entry must be the anchor LSN");
+        assert!(chain.last().unwrap().1, "oldest entry must be the image anchor");
+
         drop_schema(&store, &schema).await;
     }
 }

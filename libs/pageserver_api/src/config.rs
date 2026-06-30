@@ -363,6 +363,8 @@ pub struct YbPageWriterConfigToml {
     pub meta_cache_entries: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingest_parallelism: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingest_parallelism_min_batch: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -467,6 +469,13 @@ pub struct YbPageWriterConfig {
     /// ordering and atomicity are unchanged. Not scaled by `scale_factor`.
     /// Default 4 (set to 1 for the historical serial behavior).
     pub ingest_parallelism: usize,
+
+    /// Minimum number of entries in a batch before `ingest_parallelism > 1`
+    /// fans the apply across workers. Below this the spawn_blocking hand-off
+    /// costs more than the parallel apply saves, so the batch is applied
+    /// serially. Not scaled by `scale_factor`. Default 256. (Set to 1 to
+    /// force the parallel path on every batch — used by tests / e2e.)
+    pub ingest_parallelism_min_batch: usize,
 }
 
 impl YbPageWriterConfig {
@@ -485,6 +494,7 @@ impl YbPageWriterConfig {
             backpressure_bytes: 50 * 1024 * 1024,
             meta_cache_entries: 8192,
             ingest_parallelism: 4,
+            ingest_parallelism_min_batch: 256,
         }
     }
 }
@@ -525,6 +535,9 @@ impl YbPageWriterConfigToml {
                 .unwrap_or_else(|| scale_count(base.backpressure_bytes, scale_factor)),
             meta_cache_entries: self.meta_cache_entries.unwrap_or(base.meta_cache_entries),
             ingest_parallelism: self.ingest_parallelism.unwrap_or(base.ingest_parallelism),
+            ingest_parallelism_min_batch: self
+                .ingest_parallelism_min_batch
+                .unwrap_or(base.ingest_parallelism_min_batch),
         }
     }
 }
