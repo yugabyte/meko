@@ -2,7 +2,7 @@
 //! `yb_light_local` is an executable that can be used to create a local
 //! ybLight environment, for testing purposes. The local environment is
 //! quite different from the cloud environment with Kubernetes, but it
-//! easier to work with locally. The python tests in `test_runner`
+//! easier to work with locally. The python tests in `old_neon_test_runner`
 //! rely on `yb_light_local` to set up the environment for each test.
 //!
 use std::borrow::Cow;

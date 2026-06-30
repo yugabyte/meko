@@ -133,7 +133,7 @@ jobs:
         cd "${RUNNER_TEMP}"
         
         # Copy the generator script
-        cp "${GITHUB_WORKSPACE}/test_runner/performance/benchbase_tpc_c_helpers/generate_workload_size.py" .
+        cp "${GITHUB_WORKSPACE}/old_neon_test_runner/performance/benchbase_tpc_c_helpers/generate_workload_size.py" .
         
         # Generate configs and scripts
         python3 generate_workload_size.py \
@@ -210,8 +210,8 @@ jobs:
         echo "Copying results processing scripts..."
         
         # Copy both processing scripts
-        cp "${GITHUB_WORKSPACE}/test_runner/performance/benchbase_tpc_c_helpers/generate_diagrams.py" .
-        cp "${GITHUB_WORKSPACE}/test_runner/performance/benchbase_tpc_c_helpers/upload_results_to_perf_test_results.py" .
+        cp "${GITHUB_WORKSPACE}/old_neon_test_runner/performance/benchbase_tpc_c_helpers/generate_diagrams.py" .
+        cp "${GITHUB_WORKSPACE}/old_neon_test_runner/performance/benchbase_tpc_c_helpers/upload_results_to_perf_test_results.py" .
         
         echo "Processing load phase metrics..."
         

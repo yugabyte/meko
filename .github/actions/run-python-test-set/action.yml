@@ -132,11 +132,11 @@ runs:
           export REMOTE_ENV=1
         fi
 
-        PERF_REPORT_DIR="$(realpath test_runner/perf-report-local)"
+        PERF_REPORT_DIR="$(realpath old_neon_test_runner/perf-report-local)"
         echo "PERF_REPORT_DIR=${PERF_REPORT_DIR}" >> ${GITHUB_ENV}
         rm -rf $PERF_REPORT_DIR
 
-        TEST_SELECTION="test_runner/${{ inputs.test_selection }}"
+        TEST_SELECTION="old_neon_test_runner/${{ inputs.test_selection }}"
         EXTRA_PARAMS="${{ inputs.extra_params }}"
         if [ -z "$TEST_SELECTION" ]; then
           echo "test_selection must be set"
@@ -168,7 +168,7 @@ runs:
         fi
 
         # We use pytest-split plugin to run benchmarks in parallel on different CI runners
-        if [ "${TEST_SELECTION}" = "test_runner/performance" ] && [ "${{ inputs.build_type }}" != "remote" ]; then
+        if [ "${TEST_SELECTION}" = "old_neon_test_runner/performance" ] && [ "${{ inputs.build_type }}" != "remote" ]; then
           mkdir -p $TEST_OUTPUT
           echo '${{ inputs.benchmark_durations || '{}' }}' > $TEST_OUTPUT/benchmark_durations.json
 

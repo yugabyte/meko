@@ -129,7 +129,7 @@ def ingest_test_result(
         raw.pop("labels")
         raw.pop("extra")
 
-        # All allure parameters are prefixed with "__", see test_runner/fixtures/parametrize.py
+        # All allure parameters are prefixed with "__", see old_neon_test_runner/fixtures/parametrize.py
         parameters = {
             p["name"].removeprefix("__"): p["value"]
             for p in test["parameters"]

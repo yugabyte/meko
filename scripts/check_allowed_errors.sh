@@ -3,7 +3,7 @@
 set -eu
 
 HELPER_DIR="$(dirname "${BASH_SOURCE[0]}")"
-SCRIPT="test_runner/fixtures/pageserver/allowed_errors.py"
+SCRIPT="old_neon_test_runner/fixtures/pageserver/allowed_errors.py"
 
 # first run to understand all of the errors:
 #
@@ -11,7 +11,7 @@ SCRIPT="test_runner/fixtures/pageserver/allowed_errors.py"
 # example: ./scripts/check_allowed_errors.sh -i pageserver.log
 #
 # then edit the test local allowed_errors to the
-# test_runner/fixtures/pageserver/allowed_errors.py, then re-run to make sure
+# old_neon_test_runner/fixtures/pageserver/allowed_errors.py, then re-run to make sure
 # they are handled.
 #
 # finally revert any local changes to allowed_errors.py.

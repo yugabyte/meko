@@ -1,4 +1,4 @@
-//! Ported from Neon's test_createuser (test_runner/regress/test_createuser.py).
+//! Ported from Neon's test_createuser (old_neon_test_runner/regress/test_createuser.py).
 //! A role created on `main` must be visible on a branch taken from it — i.e. the
 //! shared catalog (`pg_authid`) and its relmapper change propagate across the
 //! branch point. Create the role on `main`, checkpoint, branch off `main`, then

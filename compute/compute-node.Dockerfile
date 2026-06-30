@@ -1784,7 +1784,7 @@ RUN set -e \
 FROM build-deps AS exporters
 ARG TARGETARCH
 # Keep sql_exporter version same as in build-tools/Dockerfile and
-# test_runner/regress/test_compute_metrics.py
+# old_neon_test_runner/regress/test_compute_metrics.py
 # See comment on the top of the file regading `echo`, `-e` and `\n`
 RUN if [ "$TARGETARCH" = "amd64" ]; then\
         postgres_exporter_sha256='59aa4a7bb0f7d361f5e05732f5ed8c03cc08f78449cef5856eadec33a627694b';\

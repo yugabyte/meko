@@ -1,4 +1,4 @@
--- Ported from test_runner/sql_regress/sql/neon-event-triggers.sql. Three
+-- Ported from old_neon_test_runner/sql_regress/sql/neon-event-triggers.sql. Three
 -- adaptations for the e2e golden runner (vs the old pg_regress location):
 --   * `\set ON_ERROR_STOP 0` — this test has *intentional* errors (the
 --     permission-denied checks); the runner otherwise runs with

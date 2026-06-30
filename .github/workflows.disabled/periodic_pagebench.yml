@@ -212,8 +212,8 @@ jobs:
         # run only two selected tests
         # environment set by parent:
         # RUST_BACKTRACE=1 DEFAULT_PG_VERSION=16 BUILD_TYPE=release
-        ./scripts/pytest ${PARAMS} test_runner/performance/pageserver/pagebench/test_pageserver_max_throughput_getpage_at_latest_lsn.py::test_pageserver_characterize_throughput_with_n_tenants ${EXTRA_PARAMS}
-        ./scripts/pytest ${PARAMS} test_runner/performance/pageserver/pagebench/test_pageserver_max_throughput_getpage_at_latest_lsn.py::test_pageserver_characterize_latencies_with_1_client_and_throughput_with_many_clients_one_tenant ${EXTRA_PARAMS}
+        ./scripts/pytest ${PARAMS} old_neon_test_runner/performance/pageserver/pagebench/test_pageserver_max_throughput_getpage_at_latest_lsn.py::test_pageserver_characterize_throughput_with_n_tenants ${EXTRA_PARAMS}
+        ./scripts/pytest ${PARAMS} old_neon_test_runner/performance/pageserver/pagebench/test_pageserver_max_throughput_getpage_at_latest_lsn.py::test_pageserver_characterize_latencies_with_1_client_and_throughput_with_many_clients_one_tenant ${EXTRA_PARAMS}
 
     - name: upload the performance metrics to the Neon performance database which is used by grafana dashboards to display the results
       shell: bash -euxo pipefail {0}

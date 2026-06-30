@@ -12,8 +12,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/pg-clients.yml'
-      - 'test_runner/pg_clients/**/*.py'
-      - 'test_runner/logical_repl/**/*.py'
+      - 'old_neon_test_runner/pg_clients/**/*.py'
+      - 'old_neon_test_runner/logical_repl/**/*.py'
       - 'poetry.lock'
   workflow_dispatch:
 

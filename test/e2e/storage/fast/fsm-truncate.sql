@@ -1,4 +1,4 @@
--- Ported from Neon's test_fsm_truncate (test_runner/regress/test_fsm_truncate.py).
+-- Ported from Neon's test_fsm_truncate (old_neon_test_runner/regress/test_fsm_truncate.py).
 -- Regression guard: truncating a relation must also truncate its FSM and VM
 -- forks, with no page-reconstruction error on the yb-light storage path. The
 -- e2e corruption-marker + correctness-counter gates are the real assertion; the

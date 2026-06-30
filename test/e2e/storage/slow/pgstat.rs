@@ -1,4 +1,4 @@
-//! (slow) Ported from Neon's test_pgstat (test_runner/regress/test_pgstat.py).
+//! (slow) Ported from Neon's test_pgstat (old_neon_test_runner/regress/test_pgstat.py).
 //! Postgres cumulative statistics (`pg_stat_user_tables`) are persisted across a
 //! *clean* compute restart but discarded on a *crash* restart, and are not
 //! restored when the stat file exceeds `yb_amp.pgstat_file_size_limit`. yb-amp

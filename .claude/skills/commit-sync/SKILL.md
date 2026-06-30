@@ -121,7 +121,7 @@ Where tests live in this repo:
 | Unit | `#[cfg(test)]` modules inside the crate (e.g. `libs/ysql_client/src/lib.rs`) |
 | Integration (Rust) | `<crate>/tests/` (e.g. `compute_tools/tests/`, `safekeeper/tests/`) |
 | End-to-end (cluster) | `test/e2e/storage/fast/` and `test/e2e/storage/slow/` (`*.sh` / `*.sql`, driven by `test/e2e/storage/run.sh`) |
-| Python harness | `test_runner/` |
+| Python harness | `old_neon_test_runner/` |
 
 Triggers that usually mean "add/extend a test":
 - A new public function, API route, or CLI subcommand.

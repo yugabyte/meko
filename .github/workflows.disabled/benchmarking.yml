@@ -211,15 +211,15 @@ jobs:
           -m remote_cluster
           --sparse-ordering
           --timeout 14400
-          --ignore test_runner/performance/test_perf_olap.py
-          --ignore test_runner/performance/test_perf_pgvector_queries.py
-          --ignore test_runner/performance/test_logical_replication.py
-          --ignore test_runner/performance/test_physical_replication.py
-          --ignore test_runner/performance/test_perf_ingest_using_pgcopydb.py
-          --ignore test_runner/performance/test_cumulative_statistics_persistence.py
-          --ignore test_runner/performance/test_perf_many_relations.py
-          --ignore test_runner/performance/test_perf_oltp_large_tenant.py
-          --ignore test_runner/performance/test_lfc_prewarm.py
+          --ignore old_neon_test_runner/performance/test_perf_olap.py
+          --ignore old_neon_test_runner/performance/test_perf_pgvector_queries.py
+          --ignore old_neon_test_runner/performance/test_logical_replication.py
+          --ignore old_neon_test_runner/performance/test_physical_replication.py
+          --ignore old_neon_test_runner/performance/test_perf_ingest_using_pgcopydb.py
+          --ignore old_neon_test_runner/performance/test_cumulative_statistics_persistence.py
+          --ignore old_neon_test_runner/performance/test_perf_many_relations.py
+          --ignore old_neon_test_runner/performance/test_perf_oltp_large_tenant.py
+          --ignore old_neon_test_runner/performance/test_lfc_prewarm.py
       env:
         BENCHMARK_CONNSTR: ${{ steps.create-neon-project.outputs.dsn }}
         VIP_VAP_ACCESS_TOKEN: "${{ secrets.VIP_VAP_ACCESS_TOKEN }}"
