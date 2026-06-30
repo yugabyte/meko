@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# yb-light release build + bundle packaging.
+# Generate a yb-light release build + bundle package.
 #
 # Builds the release-mode binaries needed by the yb-pageserver deployment,
 # stages them into a bundle directory under /tmp, and packages that into a
