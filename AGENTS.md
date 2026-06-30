@@ -103,6 +103,13 @@ Code anchors:
 
 ## Build notes
 
+- `./build.sh` is the single build entry point: no flag = debug, `--release`
+  = release, `--release-tar` = release + shippable tarball, `--headers` =
+  install just the PG headers (for `cargo check` / IDE). It checks out the
+  `vendor/postgres-v17` submodule on a fresh clone and rebuilds PostgreSQL
+  when the gitlink moves, so prefer it over a bare `make`/`cargo build`. The
+  logic lives in [`scripts/build.py`](scripts/build.py); `build.sh` is a thin
+  shim.
 - Workspace builds with stable Rust. Some files use the `2024` edition.
 - Protobuf-codegen needs **protoc ≥ 3.15** (proto3 `optional` keyword).
   On `dev-server-hsunder` the system `protoc` is 3.5.0; release builds
@@ -146,10 +153,6 @@ handoff doc.)
   creates it. Workaround: pre-provision YB once by hand; structural fix
   is to make `StorageController::provision_external_database()` a
   synchronous pre-step before the `JoinSet` block.
-- The bundle build doesn't yet ship `libssl.so.1.1` / `libcrypto.so.1.1`
-  / `libicu*.so.60` alongside `pg_install/v17/lib/`, and `yb_light_local`
-  strips `LD_LIBRARY_PATH` from child processes. Both are fixable; see
-  the bundle handoff doc.
 - `endpoint create --pg-setting NAME=VALUE` is the escape hatch for
   arbitrary GUCs. Dedicated `--shared-buffers` and `--lfc-size` flags
   exist for the common cases.
