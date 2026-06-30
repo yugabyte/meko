@@ -329,49 +329,40 @@ brew install protobuf openssl flex bison icu4c pkg-config m4
 brew install libpq && brew link --force libpq
 ```
 
-### First build: check out the Postgres submodule
-
-ybAmp builds against a patched PostgreSQL tree vendored as a git
-submodule. It currently targets **PostgreSQL v17** — only
-`vendor/postgres-v17` is vendored. After cloning, check it out before building:
-
-```sh
-git submodule update --init --recursive --depth 2 --progress .
-```
-
-If you skip this, `configure` aborts with *"Postgres submodule not found
-in vendor/postgres-v17/"*.
-
-The `postgres_ffi` crate generates Rust bindings from the **PostgreSQL
-server headers**, which are produced by building Postgres — so a bare
-`cargo build` fails early with `bindgen_deps.h: 'c.h' file not found`.
-Always build through `make` (below), which installs the headers into
-`pg_install/v17/include/...` first. To generate just the headers without
-a full build (e.g. for `cargo check`/IDE), run once:
-
-```sh
-make postgres-headers-install-v17
-```
-
 ### Build
 
+`./build.sh` (repo root) is the single build entry point — use it for a
+fresh clone and for every build after:
+
 ```sh
-make -j`nproc` -s                     # debug
-BUILD_TYPE=release make -j`nproc` -s  # release
+./build.sh                # debug   -> target/debug
+./build.sh --release      # release -> target/release
+./build.sh --release-tar  # release + shippable tarball (see below)
+./build.sh --headers      # just install PG headers (for cargo check / IDE)
 ```
 
-The `make` target builds the Postgres headers, the walproposer static
-lib, and the yb_amp PG extensions before invoking `cargo build`, so it is
-the correct entry point for a clean first build. Build artefacts land in
-`target/{debug,release}/`.
+It does everything the build needs, so there's no manual `git submodule
+update` or `make` to remember. Specifically it:
 
-`build.sh` (repo root) is the one-shot build wrapper: with no
-flag it builds debug, `--release` builds release, and `--release-tar` builds
-release and packages a deploy as a single versioned tarball
-(`/tmp/yb-light-bundle-<date>-<sha>.tar.gz`). In every mode it first syncs
-the `vendor/postgres-v17` submodule and rebuilds PostgreSQL when the gitlink
-has moved (otherwise it reuses the cached `pg_install/v17`). The tarball
-unpacks into a deploy dir laid out as:
+- Checks out the vendored **PostgreSQL v17** tree (`vendor/postgres-v17`)
+  on a fresh clone, and re-syncs + rebuilds PostgreSQL whenever the
+  submodule gitlink has moved; otherwise it reuses the cached
+  `pg_install/v17`.
+- Installs the **PostgreSQL server headers** before `cargo build` (the
+  `postgres_ffi` crate generates Rust bindings from them, so a bare
+  `cargo build` would otherwise fail with `bindgen_deps.h: 'c.h' file not
+  found`). `--headers` runs just this step for `cargo check` / IDE use.
+- Builds the walproposer static lib, the `yb_amp` PG extensions, and the
+  workspace binaries into `target/{debug,release}/`.
+
+(The script is a thin `build.sh` shim over [`scripts/build.py`](scripts/build.py),
+which holds the logic — run `./build.sh --help` for details. It drives the
+same `make` targets directly if you prefer: `make -j$(nproc) -s` for debug,
+`BUILD_TYPE=release make -j$(nproc) -s` for release.)
+
+`--release-tar` packages a deploy as a single versioned tarball
+(`/tmp/yb-light-bundle-<date>-<sha>.tar.gz`) that unpacks into a deploy dir
+laid out as:
 
 ```
 yb-pageserver            # the binary yb_light_local launches
