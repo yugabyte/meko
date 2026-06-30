@@ -22,6 +22,12 @@
 #   - Processes are killed only by matching the dead run's dir in their
 #     argv (`pkill -f <dir>`), so the YugabyteDB cluster and a developer's
 #     `.yb_light` cluster — which carry no run dir in argv — are never hit.
+#   - The one exception is the `storage_controller`: it keeps no local data
+#     dir (all state is in YB), so its argv carries the run's ephemeral DB
+#     name but NO run-dir path, and the dir match above misses it. It (and
+#     any process from a dir-GC'd run) is reaped in the DB loop below by
+#     matching the run-unique `yb_storage_e2e_<id>` name — under the exact
+#     same dead-run gate as the DROP, so a live run is still never touched.
 #   - run.sh takes the lock BEFORE it starts the harness, so a run only ever
 #     has processes once it holds the lock. "Unlocked dir WITH live
 #     processes" is therefore always a dead run, never one still starting —
@@ -110,6 +116,16 @@ if command -v psql >/dev/null 2>&1; then
                 ''|*[!0-9]*) continue ;;    # unparseable epoch -> leave it
             esac
             [ $(( now - created )) -ge "$CROSS_REAP_GRACE_SECS" ] || continue
+        fi
+        # Kill any orphan process still bound to this dead run's DB before we
+        # drop it. The dir-based pass above misses the storage_controller
+        # (no run-dir in its argv) and every process of a dir-GC'd run; the
+        # run-unique DB name catches them. Gated by the same dead-run rules as
+        # the DROP, and the DB name embeds <epoch>_<pid>, so it can't
+        # false-match an unrelated process or a live run's controller.
+        if pgrep -f -- "$db" >/dev/null 2>&1; then
+            echo "reap.sh: killing orphan process(es) bound to dead-run DB $db" >&2
+            pkill -9 -f -- "$db" 2>/dev/null || true
         fi
         echo "reap.sh: dropping ephemeral DB of dead run: $db" >&2
         yb "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" >/dev/null
