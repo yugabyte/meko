@@ -37,11 +37,28 @@ type fakeStateStore struct {
 	deletedEndpoints     map[uuid.UUID]struct{}
 	existingWriterBranch map[uuid.UUID]uuid.UUID // branch id -> the writer endpoint id already present
 
+	// Cascade-delete bookkeeping: where each (live) endpoint and branch sits, so
+	// EndpointIDsForBranch / EndpointIDsForProject can enumerate children and the
+	// delete-by-id methods can prune them. Populated by seedEndpoint / seedBranch.
+	endpointBranch  map[uuid.UUID]branchRef // endpoint id -> its (project, branch)
+	branchProject   map[uuid.UUID]uuid.UUID // branch id -> its project
+	branchParent    map[uuid.UUID]uuid.UUID // branch id -> its parent branch id (forks only)
+	deletedBranches map[uuid.UUID]struct{}
+	deletedProjects map[uuid.UUID]struct{}
+
 	errEnsureProject  error
 	errEnsureBranch   error
 	errEnsureEndpoint error
 	errSetAddress     error
 	errDeleteEndpoint error
+	errDeleteBranch   error
+	errDeleteProject  error
+}
+
+// branchRef is an endpoint's (project, branch) placement in the fake.
+type branchRef struct {
+	projectID uuid.UUID
+	branchID  uuid.UUID
 }
 
 func newFakeStateStore() *fakeStateStore {
@@ -51,7 +68,51 @@ func newFakeStateStore() *fakeStateStore {
 		endpointAddresses:    map[uuid.UUID]string{},
 		deletedEndpoints:     map[uuid.UUID]struct{}{},
 		existingWriterBranch: map[uuid.UUID]uuid.UUID{},
+		endpointBranch:       map[uuid.UUID]branchRef{},
+		branchProject:        map[uuid.UUID]uuid.UUID{},
+		branchParent:         map[uuid.UUID]uuid.UUID{},
+		deletedBranches:      map[uuid.UUID]struct{}{},
+		deletedProjects:      map[uuid.UUID]struct{}{},
 	}
+}
+
+// seedEndpoint registers a live endpoint on (projectID, branchID) so the cascade
+// enumeration methods can find it. Test helper.
+func (f *fakeStateStore) seedEndpoint(endpointID, projectID, branchID uuid.UUID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.endpointBranch[endpointID] = branchRef{projectID: projectID, branchID: branchID}
+	f.createdEndpoints[endpointID] = "read_only"
+}
+
+// seedBranch registers a live branch under projectID. Test helper.
+func (f *fakeStateStore) seedBranch(projectID, branchID uuid.UUID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.branchProject[branchID] = projectID
+	f.createdBranches[branchID] = struct{}{}
+}
+
+// seedBranchFork registers a live branch under projectID forked from parentID,
+// so ChildBranchIDs reports parentID as having a child. Test helper.
+func (f *fakeStateStore) seedBranchFork(projectID, branchID, parentID uuid.UUID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.branchProject[branchID] = projectID
+	f.branchParent[branchID] = parentID
+	f.createdBranches[branchID] = struct{}{}
+}
+
+func (f *fakeStateStore) ChildBranchIDs(_ context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ids []uuid.UUID
+	for id, parent := range f.branchParent {
+		if parent == branchID && f.branchProject[id] == projectID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 func (f *fakeStateStore) EnsureProject(_ context.Context, _, _, branchID uuid.UUID, _ string, _ int) error {
@@ -116,6 +177,74 @@ func (f *fakeStateStore) DeleteEndpoint(_ context.Context, endpointID uuid.UUID)
 	}
 	f.deletedEndpoints[endpointID] = struct{}{}
 	delete(f.createdEndpoints, endpointID)
+	delete(f.endpointBranch, endpointID)
+	return nil
+}
+
+func (f *fakeStateStore) EndpointIDsForBranch(_ context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ids []uuid.UUID
+	for id, ref := range f.endpointBranch {
+		if ref.projectID == projectID && ref.branchID == branchID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+func (f *fakeStateStore) EndpointIDsForProject(_ context.Context, projectID uuid.UUID) ([]uuid.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ids []uuid.UUID
+	for id, ref := range f.endpointBranch {
+		if ref.projectID == projectID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+func (f *fakeStateStore) DeleteBranch(_ context.Context, projectID, branchID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.errDeleteBranch != nil {
+		return f.errDeleteBranch
+	}
+	// Mirror PgBackend's self-FK RESTRICT: a still-referencing child fork makes
+	// the delete a conflict rather than a silent drop.
+	for id, parent := range f.branchParent {
+		if parent == branchID && f.branchProject[id] == projectID {
+			return errConflict
+		}
+	}
+	if p, ok := f.branchProject[branchID]; ok && p == projectID {
+		delete(f.branchProject, branchID)
+		delete(f.createdBranches, branchID)
+	}
+	f.deletedBranches[branchID] = struct{}{} // idempotent: tolerate-absent
+	return nil
+}
+
+func (f *fakeStateStore) DeleteProject(_ context.Context, projectID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.errDeleteProject != nil {
+		return f.errDeleteProject
+	}
+	for id, ref := range f.endpointBranch {
+		if ref.projectID == projectID {
+			delete(f.endpointBranch, id)
+			delete(f.createdEndpoints, id)
+		}
+	}
+	for id, p := range f.branchProject {
+		if p == projectID {
+			delete(f.branchProject, id)
+			delete(f.createdBranches, id)
+		}
+	}
+	f.deletedProjects[projectID] = struct{}{} // idempotent: tolerate-absent
 	return nil
 }
 

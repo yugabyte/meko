@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yugabyte/yb-amp/controller/internal/api"
+	"github.com/yugabyte/yb-amp/controller/internal/core"
+	"github.com/yugabyte/yb-amp/controller/internal/task"
 )
 
 func TestListUsersPagination(t *testing.T) {
@@ -119,7 +121,7 @@ func TestListStoragePoolsPaginationClamps(t *testing.T) {
 }
 
 func TestListProjects(t *testing.T) {
-	client, _, _ := newTestServer(t)
+	client, backend, store := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
@@ -149,9 +151,9 @@ func TestListProjects(t *testing.T) {
 	// Create three projects in pool, one in the other pool.
 	want := []string{"a", "b", "c"}
 	for _, name := range want {
-		mustCreateProject(t, client, pool.Id, name)
+		mustCreateProject(t, client, store, backend, pool.Id, name)
 	}
-	mustCreateProject(t, client, other.Id, "z")
+	mustCreateProject(t, client, store, backend, other.Id, "z")
 
 	// The pool lists exactly its own three, scoped away from the other pool.
 	got, err := client.ListProjectsWithResponse(ctx, pool.Id, nil)
@@ -179,11 +181,11 @@ func TestListProjects(t *testing.T) {
 }
 
 func TestListBranches(t *testing.T) {
-	client, _, _ := newTestServer(t)
+	client, backend, store := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	project := mustCreateProject(t, client, pool.Id, "main")
+	project := mustCreateProject(t, client, store, backend, pool.Id, "main")
 
 	// A fresh project lists exactly its default branch.
 	only, err := client.ListBranchesWithResponse(ctx, pool.Id, project.Id, nil)
@@ -195,29 +197,43 @@ func TestListBranches(t *testing.T) {
 	}
 
 	// Fork a branch off the default with an explicit fork point (no storage
-	// controller is wired here, so the LSN must be explicit).
+	// controller is wired here, so the LSN must be explicit) -> 202 + a branch
+	// task; drive it, then the branch row is materialized.
 	lsn := "0/16ABCD0"
 	br, err := client.CreateBranchWithResponse(ctx, pool.Id, project.Id, api.CreateBranchRequest{Name: "feature", ForkPointLsn: &lsn})
 	if err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
-	if br.StatusCode() != http.StatusCreated || br.JSON201 == nil {
+	if br.StatusCode() != http.StatusAccepted || br.JSON202 == nil {
 		t.Fatalf("CreateBranch status = %d, body = %s", br.StatusCode(), br.Body)
 	}
-	if br.JSON201.IsDefault {
-		t.Error("forked branch is_default = true, want false")
+	if br.JSON202.Kind != "branch" {
+		t.Errorf("task kind = %q, want branch", br.JSON202.Kind)
 	}
-	if br.JSON201.ParentBranchId == nil || *br.JSON201.ParentBranchId != project.DefaultBranch.BranchId {
-		t.Errorf("parent_branch_id = %v, want the default branch %v", br.JSON201.ParentBranchId, project.DefaultBranch.BranchId)
-	}
+	drainTasks(t, store, backend, api.Provisioning{Deployer: &fakeDeployer{}})
 
-	// Now the project lists both branches.
+	// Now the project lists both branches; the fork carries parent + is_default=false.
 	both, err := client.ListBranchesWithResponse(ctx, pool.Id, project.Id, nil)
 	if err != nil {
 		t.Fatalf("ListBranches(after fork): %v", err)
 	}
 	if both.JSON200 == nil || both.JSON200.Total != 2 {
 		t.Errorf("branches after fork = %d, want 2", both.JSON200.Total)
+	}
+	var feature *api.Branch
+	for i := range both.JSON200.Branches {
+		if both.JSON200.Branches[i].Name == "feature" {
+			feature = &both.JSON200.Branches[i]
+		}
+	}
+	if feature == nil {
+		t.Fatal("forked branch 'feature' not listed after drive")
+	}
+	if feature.IsDefault {
+		t.Error("forked branch is_default = true, want false")
+	}
+	if feature.ParentBranchId == nil || *feature.ParentBranchId != project.DefaultBranch.BranchId {
+		t.Errorf("parent_branch_id = %v, want the default branch %v", feature.ParentBranchId, project.DefaultBranch.BranchId)
 	}
 
 	// Unknown project under a real pool -> 404.
@@ -232,25 +248,29 @@ func TestListBranches(t *testing.T) {
 
 func TestListEndpoints(t *testing.T) {
 	dep := &fakeDeployer{addr: "127.0.0.1:5555"}
-	client, _ := newTestServerWithProv(t, api.Provisioning{Deployer: dep})
+	prov := api.Provisioning{Deployer: dep}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
 	// Create-project records the project + default branch only; compute is a
 	// separate resource. The first endpoint is deployed by POSTing it.
-	project := mustCreateProject(t, client, pool.Id, "main")
+	project := mustCreateProject(t, client, store, backend, pool.Id, "main")
 	branchID := project.DefaultBranch.BranchId
 
-	// Deploy a read_write endpoint on the default branch (the deployer is set).
+	// Deploy a read_write endpoint on the default branch (the deployer is set) ->
+	// 202; drive the create_endpoint task, then it shows up in the list with its
+	// deployed address.
 	rw := api.CreateEndpointRequestRoleReadWrite
 	cep, err := client.CreateEndpointWithResponse(ctx, pool.Id, project.Id, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
-	if cep.StatusCode() != http.StatusCreated || cep.JSON201 == nil {
+	if cep.StatusCode() != http.StatusAccepted || cep.JSON202 == nil {
 		t.Fatalf("CreateEndpoint status = %d, body = %s", cep.StatusCode(), cep.Body)
 	}
+	drainTasks(t, store, backend, prov)
 
 	eps, err := client.ListEndpointsWithResponse(ctx, pool.Id, project.Id, branchID, nil)
 	if err != nil {
@@ -297,11 +317,11 @@ func TestListEndpoints(t *testing.T) {
 }
 
 func TestListEndpointsEmpty(t *testing.T) {
-	client, _, _ := newTestServer(t) // no deployer -> no endpoint provisioned
+	client, backend, store := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	project := mustCreateProject(t, client, pool.Id, "main")
+	project := mustCreateProject(t, client, store, backend, pool.Id, "main")
 	branchID := project.DefaultBranch.BranchId
 
 	eps, err := client.ListEndpointsWithResponse(ctx, pool.Id, project.Id, branchID, nil)
@@ -317,14 +337,29 @@ func TestListEndpointsEmpty(t *testing.T) {
 	}
 }
 
-func mustCreateProject(t *testing.T, client *api.ClientWithResponses, poolID uuid.UUID, name string) api.Project {
+// mustCreateProject creates a project through the client, drives the resulting
+// create_project task to completion against the shared store/backend (so the
+// project + its default branch are materialized), and returns the project read
+// back via GET. The drive uses a deployer-enabled provisioning, which is
+// sufficient for create_project (it plans no endpoint step). Tests whose endpoint
+// creates need a specific deployer drive those separately.
+func mustCreateProject(t *testing.T, client *api.ClientWithResponses, store *task.MemStore, backend core.Backend, poolID uuid.UUID, name string) api.Project {
 	t.Helper()
 	resp, err := client.CreateProjectWithResponse(context.Background(), poolID, api.CreateProjectRequest{Name: name})
 	if err != nil {
 		t.Fatalf("CreateProject(%q): %v", name, err)
 	}
-	if resp.StatusCode() != http.StatusCreated || resp.JSON201 == nil {
+	if resp.StatusCode() != http.StatusAccepted || resp.JSON202 == nil {
 		t.Fatalf("CreateProject(%q) status = %d, body = %s", name, resp.StatusCode(), resp.Body)
 	}
-	return *resp.JSON201
+	projectID := *resp.JSON202.ProjectId
+	drainTasks(t, store, backend, api.Provisioning{Deployer: &fakeDeployer{}})
+	gp, err := client.GetProjectWithResponse(context.Background(), poolID, projectID)
+	if err != nil {
+		t.Fatalf("GetProject(%q): %v", name, err)
+	}
+	if gp.StatusCode() != http.StatusOK || gp.JSON200 == nil {
+		t.Fatalf("GetProject(%q) status = %d, body = %s", name, gp.StatusCode(), gp.Body)
+	}
+	return *gp.JSON200
 }

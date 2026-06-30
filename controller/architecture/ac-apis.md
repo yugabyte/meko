@@ -1,7 +1,7 @@
 # ac — REST API
 
 **Status:** Draft
-**Last updated:** 2026-06-17
+**Last updated:** 2026-06-29
 
 How the amp controller's REST API is defined, generated, served, and tested.
 The guiding principle is amp-controller.md §3 (**API-first**, versioned in
@@ -74,6 +74,22 @@ Everything is under `/api/v1`. The resource ladder is **storage pool → project
 branch → endpoint** (the user is not in the path). The error envelope is `{ "error": {
 "code", "message" } }` for every non-2xx response.
 
+**Mutations are asynchronous tasks.** The six world-changing operations —
+`createProject`, `createBranch`, `createEndpoint`, `deleteProject`,
+`deleteBranch`, `deleteEndpoint` — no longer do the work inline. Each runs cheap
+synchronous validation, then plans a write-ahead **task** (amp-controller.md §5,
+§8; [`ac-tasks.md`](ac-tasks.md)) and returns `202 Accepted` with the `Task`
+JSON in the body and a `Location: /api/v1/tasks/{id}` header. The client then
+**polls `getTask`** until `status` is `succeeded` (done) or `failed` (read the
+`error` field), and reads the resulting ids/`address` back with the relevant
+`GET`/list. Because the worker does the work, a name or single-writer conflict
+that used to be a synchronous `409` on create is now a task that ends
+`status == "failed"` — `409` no longer occurs on these creates. Only cheap,
+local checks stay synchronous: `400` (malformed body / bad parameter), `404`
+(unknown pool/project/branch/endpoint), and `501` (endpoint deploy disabled).
+`createUser` and `createStoragePool` are **not** tasks — they remain synchronous
+`201` returning the resource.
+
 | Method & path | Operation | Notes |
 |---|---|---|
 | `POST /users` | createUser | Create a user. No auth. |
@@ -82,19 +98,20 @@ branch → endpoint** (the user is not in the path). The error envelope is `{ "e
 | `POST /storage-pools` | createStoragePool | Top-level; the owner is named in the body (`owner_user_id`). |
 | `GET /storage-pools` | listStoragePools | Paginated; lists **every** pool (no owner filter yet). |
 | `GET /storage-pools/{poolId}` | getStoragePool | By id; not owner-scoped. |
-| `POST /storage-pools/{poolId}/projects` | createProject | Creates a project + its default branch and records the storage-controller pending-init recipe (keyed by the flat `branch_id`); returns a `Project` with its embedded `default_branch` (its `branch_id` is the storage-layer flat `branch_id`; the `project_id` is control-plane-only). Does **not** deploy an endpoint. `201` / `404` / `409`. |
+| `POST /storage-pools/{poolId}/projects` | createProject | **Async** → `202` + `Task` + `Location: /api/v1/tasks/{id}`. Plans a task that creates a project + its default branch and records the storage-controller pending-init recipe (keyed by the flat `branch_id`). Does **not** deploy an endpoint. Poll `getTask`, then `getProject`/`listProjects` to read the ids/`default_branch`. Cheap validation is still synchronous: `400` (bad body / unsupported `pg_version`) / `404` (unknown pool). A duplicate project name no longer `409`s — it surfaces as a `failed` task. |
 | `GET /storage-pools/{poolId}/projects` | listProjects | Paginated; the pool's projects, each with its `default_branch`. `404` if the pool is unknown. |
 | `GET …/projects/{projectId}` | getProject | One project (with its `default_branch`). `404` if the pool/project is unknown. |
-| `DELETE …/projects/{projectId}` | deleteProject | **Logged only** → `202`. |
-| `POST …/projects/{projectId}/branches` | createBranch | Forks a parent branch (default: the project's default branch; override with `parent_branch_id` to branch off another branch) into a new branch under the same project, recording the storage-controller recipe with the ancestor + fork LSN set (default: the parent's latest LSN; override with `fork_point_lsn`). Returns the branch `{project_id, branch_id, parent_branch_id, fork_lsn, is_default}`. Does **not** deploy an endpoint. `201` / `404` / `409`. |
+| `DELETE …/projects/{projectId}` | deleteProject | **Async cascade** → `202` + `Task` + `Location`. Plans a `delete_project` task that retires every endpoint in the project, then drops its branches and the project row. Cheap pre-check: `404` if the pool/project is unknown. |
+| `POST …/projects/{projectId}/branches` | createBranch | **Async** → `202` + `Task` + `Location`. Plans a task that forks a parent branch (default: the project's default branch; override with `parent_branch_id` to branch off another branch) into a new branch under the same project, recording the storage-controller recipe with the ancestor + fork LSN set (default: the parent's latest LSN; override with `fork_point_lsn`). Does **not** deploy an endpoint. Poll `getTask`, then `listBranches`/`getBranch` to read the branch. Cheap validation is synchronous: `400` (bad body / bad or unresolvable `fork_point_lsn`) / `404` (unknown pool/project/parent). A duplicate branch name surfaces as a `failed` task, not a `409`. |
 | `GET …/projects/{projectId}/branches` | listBranches | Paginated; the project's branches (default branch + forks). `404` if the pool/project is unknown. |
 | `GET …/branches/{branchId}` | getBranch | One branch. `404` if the pool/project/branch is unknown. |
-| `DELETE …/branches/{branchId}` | deleteBranch | **Logged only** → `202`. |
-| `POST …/branches/{branchId}/endpoints` | createEndpoint | Creates the endpoint and **synchronously deploys** it → `201 {endpoint}` (its `address` set). Optional `disk_type` (`network` default = the configured storage class; `local` not yet supported → `400`). `501` if `--deploy` is off. |
+| `DELETE …/branches/{branchId}` | deleteBranch | **Async cascade** → `202` + `Task` + `Location`. Plans a `delete_branch` task that retires the branch's endpoints, then drops the branch row. Cheap pre-checks: `404` if the pool/project/branch is unknown; `409` if the branch has child branches (the parent FK is `RESTRICT`, so the delete would be doomed). |
+| `POST …/branches/{branchId}/endpoints` | createEndpoint | **Async** → `202` + `Task` + `Location`. Plans a task that records the endpoint, deploys it, and records its `address`. Poll `getTask`, then `listEndpoints`/`getEndpoint` to read the id + `address`. Optional `disk_type` (`network` default = the configured storage class; `local` not yet supported → `400`). `501` if `--deploy` is off; `404` if the pool/project/branch is unknown. A second `read_write` endpoint (single-writer) surfaces as a `failed` task, not a `409`. |
 | `GET …/branches/{branchId}/endpoints` | listEndpoints | Paginated; the branch's endpoints. `404` if the pool/project/branch is unknown. |
 | `GET …/endpoints/{endpointId}` | getEndpoint | One endpoint (its `address` is set once deployed). |
-| `DELETE …/endpoints/{endpointId}` | deleteEndpoint | **Synchronously retires** the endpoint → `204`. `501` if `--deploy` is off. |
-| `GET /tasks/{taskId}` | getTask | Status of a write-ahead task. |
+| `DELETE …/endpoints/{endpointId}` | deleteEndpoint | **Async** → `202` + `Task` + `Location`. Plans a `delete_endpoint` task that retires the running instance and drops the row. `501` if `--deploy` is off; `404` if the endpoint is unknown. |
+| `GET /tasks` | listTasks | Paginated; write-ahead tasks newest-first (`created_at` DESC), with optional `status`, `kind`, and `project_id` filters. |
+| `GET /tasks/{taskId}` | getTask | Status of a write-ahead task (`pending`/`running`/`succeeded`/`failed`; `error` set on failure). |
 
 ### Pagination
 
@@ -131,59 +148,74 @@ longer owner-scoped: `listStoragePools` returns **every** pool (an owner filter
 can come with grants), and `getStoragePool` resolves a pool by id regardless of
 who created it.
 
-### Projects & branches: create + branch persist the resource and its recipe; delete is logged-only
+### Projects & branches: create, branch, and delete are all tasks
 
-**`createProject` records the control-plane resource and the pending-init
-recipe.** It:
-1. creates a project (a "database", unique name within the pool, else `409`)
-   together with its **default branch** (`branch`, `is_default`) — one transaction,
-   `core.Backend.CreateProject`; the pool is top-level, so an unknown pool
-   surfaces as `404` (the `project.storage_pool_id` foreign key); and
-2. records the storage controller's **pending-init recipe**
-   (`storagecontroller.Client.RecordPendingTimelineInit`, keyed by the flat
-   storage-layer `branch_id`) when a controller is configured — the
-   branch is declared, not yet materialized.
+**`createProject` plans a task and returns `202`.** After validating the body
+(`400` on a missing name or an unsupported `pg_version`) and confirming the pool
+exists (a synchronous `404`, preserving the pool-not-found contract), the handler
+plans a `create_project` task (`task.Service.CreateProject`) and returns `202`
+with the `Task` and the `Location` header. The worker then, in idempotent steps:
+1. creates the project (a "database", unique name within the pool) together with
+   its **default branch** (`branch`, `is_default`); and
+2. records the storage controller's **pending-init recipe** (keyed by the flat
+   storage-layer `branch_id`) when a controller is configured — the branch is
+   declared, not yet materialized.
 
-It returns a `Project` with its embedded `default_branch`; the branch id *is* the
-storage-layer flat `branch_id` (the project id is control-plane-only). It does **not**
-eagerly materialize the branch on the storage controller or deploy an endpoint: compute
-is a separate resource (below), and the first endpoint deployed on the branch
-materializes it (the recipe is then dropped). See
-[`controller-project-create.md`](controller-project-create.md).
+Because that work is now on the task, a **duplicate project name** is no longer a
+synchronous `409`: it surfaces when the `create_project` step's name insert
+fails, ending the task `status == "failed"`. The client polls `getTask`, then
+reads the project (and its embedded `default_branch`, whose `branch_id` *is* the
+storage-layer flat `branch_id`) back with `getProject`/`listProjects`. The task
+does **not** eagerly materialize the branch on the storage controller or deploy
+an endpoint: compute is a separate resource (below), and the first endpoint
+deployed on the branch materializes it (the recipe is then dropped). See
+[`controller-project-create.md`](controller-project-create.md) and
+[`ac-tasks.md`](ac-tasks.md).
 
 Compute is a **separate resource**: a caller `POST`s an endpoint on the branch
-(below), which the controller deploys synchronously. Bootstrapping a fresh
+(below), which the controller deploys via a task. Bootstrapping a fresh
 branch's storage (initdb + the storage schema) is still out-of-band — the deploy
 path attaches an existing storage-layer branch (Mode B), it does not create one.
 
-**`createBranch` forks an existing branch (#130).** The parent defaults to the
-project's default branch, or any branch named with `parent_branch_id`
-(branch-of-branch); the new branch is a non-default `branch` under the **same
-project**, inheriting the parent's `pg_version` and recording its fork ancestry
-(`parent_branch_id`, `fork_lsn`) — `core.Backend.CreateBranch`. The fork point
-defaults to the parent's durable WAL end — the `flush_lsn` of the safekeeper
-co-located with the parent's `read_write` endpoint, read directly from that node
-(`node.Client.TimelineFlushLSN`); a caller can pin an earlier point with
-`fork_point_lsn`. Like create-project, it then records the storage controller's
-**pending-init recipe**, this time with the ancestor and `start_lsn` set, and the
-branch is materialized lazily by the first endpoint deployed on it (the
-pageserver clones from the ancestor at `fork_lsn` instead of running `initdb`).
-It returns the branch (`201`); a missing pool/project/parent `404`s and a
-duplicate name within the project `409`s. *(Reading the ancestor's own node is
-routing-correct where the storage controller's per-branch `describe` is not — it
-routes to whichever pageserver attached the branch last and misses the parent
-branch once the branch has multiple endpoints, #133; `flush_lsn` also never lags
-durable WAL the way a pageserver's `last_record_lsn` can, #130. The parent must
-have a `read_write` endpoint to resolve a default — otherwise pass
+**`createBranch` forks an existing branch (#130), as a task.** After validating
+the body and resolving the project, the parent branch, and the fork point
+synchronously — a missing pool/project/parent is `404`, and a malformed or
+unresolvable `fork_point_lsn` is `400` — the handler plans a `branch` task
+(`task.Service.Branch`) and returns `202` + `Task` + `Location`. The new branch
+is a non-default `branch` under the **same project**, inheriting the parent's
+`pg_version` and recording its fork ancestry (`parent_branch_id`, `fork_lsn`).
+The fork point defaults to the parent's durable WAL end — the `flush_lsn` of the
+safekeeper co-located with the parent's `read_write` endpoint, read directly from
+that node (`node.Client.TimelineFlushLSN`) **before** the task is planned; a
+caller can pin an earlier point with `fork_point_lsn`. The worker then forks the
+branch and records the storage controller's **pending-init recipe**, this time
+with the ancestor and `start_lsn` set, and the branch is materialized lazily by
+the first endpoint deployed on it (the pageserver clones from the ancestor at
+`fork_lsn` instead of running `initdb`). A **duplicate branch name** within the
+project surfaces as a `failed` task, not a `409`; the client polls `getTask`,
+then reads the branch with `listBranches`/`getBranch`. *(Reading the ancestor's
+own node is routing-correct where the storage controller's per-branch `describe`
+is not — it routes to whichever pageserver attached the branch last and misses
+the parent branch once the branch has multiple endpoints, #133; `flush_lsn` also
+never lags durable WAL the way a pageserver's `last_record_lsn` can, #130. The
+parent must have a `read_write` endpoint to resolve a default — otherwise pass
 `fork_point_lsn`.)*
 
-**`deleteProject` and `deleteBranch` are still logged-only.** They are meant to run
-through the write-ahead task framework (amp-controller.md §5, §8), whose step
-catalog does not exist yet, so per #92 they **only log** the request and return
-`202 Accepted`. They bypass `core.Backend` and don't validate the target
-(that validation belongs to the task steps that will replace the logging); no
-`task` row is written, and `getTask` is wired to the store for when it is. Their
-only outcomes are `202`, `400`, and `500`.
+**`deleteProject` and `deleteBranch` are real cascade-delete tasks.** Each runs a
+cheap pre-check that the target exists (`404` via `core.Backend` if not);
+`deleteBranch` additionally rejects a branch with child branches up front (`409`,
+since the parent FK is `RESTRICT` and the task would be doomed). Each then
+plans a task — `task.Service.DeleteProject` / `DeleteBranch` — and returns `202`
++ `Task` + `Location`. The worker's single, self-contained idempotent step
+(`delete_project` / `delete_branch`) enumerates the project's (resp. branch's)
+endpoints at execution time, retires each running instance and drops its record,
+then drops the branch(es) and the project row. The cascade order is
+**endpoints → branch(es) → project**: the FKs are `RESTRICT` (amp-controller.md
+§10.2), so children are removed before their parents — and `delete_project`
+nulls the branches' in-project parent pointers before dropping them to sidestep
+the self-FK ordering. The client polls `getTask` for the terminal status; the
+outcomes are `202` (accepted), `400`/`404`/`409` (synchronous validation; `409`
+only on `deleteBranch` with child forks), or a `failed` task. See [`ac-tasks.md`](ac-tasks.md) §3.
 
 **`listProjects`, `listBranches`, and `listEndpoints` are read-only and
 paginated.** `listProjects` returns the pool's projects (each with its
@@ -193,25 +225,28 @@ forks); `listEndpoints` returns a branch's endpoints. The branch is addressed by
 the project — `branch_id` is a generated UUID, unique within a project — and a
 pool, project, or branch that doesn't exist is a `404`.
 
-### Endpoints are deployed synchronously (#108)
+### Endpoints are deployed by a task (#108)
 
 `createEndpoint` resolves the branch within the project via
 `core.Backend.GetBranch` (`(poolId, projectId, branchId)`: a missing link is
-`404`), inserts the `endpoint` row (recorded first, so the single-writer rule is
-enforced before a deploy is spent), then **synchronously deploys** it via the
+`404`), validates the role and `disk_type`, then plans a `create_endpoint` task
+(`task.Service.CreateEndpoint`) and returns `202` + `Task` + `Location`. The
+worker's `create_endpoint` step records the `endpoint` row first (so the
+single-writer rule is enforced before a deploy is spent), deploys it via the
 runtime-agnostic [`deploy.Deployer`](../internal/deploy/) (Docker today,
-Kubernetes via Helm), records the resolved `address`
-(`core.Backend.SetEndpointAddress`), and best-effort drops the storage
-controller's pending-init recipe (the endpoint has now materialized the
-branch). It returns `201` with the deployed endpoint. If the deploy fails the
-row is removed (compensation). A branch admits at most one `read_write`
-endpoint — the schema's `one_writer_per_branch` partial unique index — which
-surfaces as `409`. `deleteEndpoint` synchronously retires the endpoint (remove
-the running instance + drop the row) and returns `204`. Both refuse with `501`
-when the deployer is disabled (`--deploy` off). The Kubernetes deploy mechanism
-(the Helm release per endpoint, Mode-B attach) is described in
-[`ac-k8s-deploy.md`](ac-k8s-deploy.md); moving the deploy onto the
-write-ahead task framework (async + `getTask` polling) is a follow-up.
+Kubernetes via Helm), records the resolved `address`, and best-effort drops the
+storage controller's pending-init recipe (the endpoint has now materialized the
+branch). A branch admits at most one `read_write` endpoint — the schema's
+`one_writer_per_branch` partial unique index — so a second writer now surfaces as
+a **`failed` task** rather than a synchronous `409`. `deleteEndpoint` runs the
+same cheap `404` pre-check, then plans a `delete_endpoint` task that retires the
+running instance and drops the row; it returns `202` (not the old `204`). Both
+refuse with `501` when the deployer is disabled (`--deploy` off). The client
+polls `getTask`, then reads the deployed endpoint's `address` with
+`getEndpoint`/`listEndpoints`. The Kubernetes deploy mechanism (the Helm release
+per endpoint, Mode-B attach) is described in
+[`ac-k8s-deploy.md`](ac-k8s-deploy.md); the step catalog and the worker are in
+[`ac-tasks.md`](ac-tasks.md).
 
 ## Layering
 
@@ -221,31 +256,47 @@ internal/api/    HTTP: generated contract (api.gen.go) + controllers (handlers.g
         │  implements StrictServerInterface, calls ↓
 internal/core/   Domain: Backend interface + PgBackend (YBDB) + MemBackend (tests).
                  ErrNotFound → 404, ErrConflict → 409.
-internal/task/   Task store, read by getTask.
-internal/deploy/ Kubernetes endpoint provisioner; synchronous deploy/retire (ac-k8s-deploy.md).
+internal/task/   Task framework: Service (plan tasks), Store, and the worker that
+                 runs the idempotent steps. Mutation handlers plan tasks here;
+                 getTask/listTasks read status back (ac-tasks.md).
+internal/deploy/ Kubernetes endpoint provisioner; deploy/retire driven by the
+                 task steps (ac-k8s-deploy.md).
 ```
 
 The `core.Backend` seam is what lets the whole HTTP layer be tested without a
 database: `MemBackend` mirrors `PgBackend`'s semantics (owner-existence checks,
 globally-unique pool names, top-level + paginated listing, project create, and
-in-project-unique branch names). The user, storage-pool, project (create), branch
-(create + fork), and endpoint controllers go through it; the logged-only
-delete-project / delete-branch controllers do not (above). A controller
-that returns an unexpected (non-`echo.HTTPError`) error yields a `500` rendered
-in the same `Error` envelope — documented per operation in the spec so the
-generated client gets a typed handle for it.
+in-project-unique branch names). The synchronous read paths and the cheap
+pre-checks on the mutation handlers go through it directly; the mutations
+themselves go through `task.Service`, and the world-changing work runs in the
+worker's steps (against the task framework's `StateStore` port, `ac-tasks.md`
+§5). A controller that returns an unexpected (non-`echo.HTTPError`) error yields
+a `500` rendered in the same `Error` envelope — documented per operation in the
+spec so the generated client gets a typed handle for it.
 
 ## Testing
 
-Two layers, both in `internal/api/*_test.go`:
+Both in `internal/api/*_test.go`, driving the **generated client** against a real
+`httptest` server with the backend stubbed by `MemBackend` and the in-memory
+`task.MemStore`:
 
-- **Controller tests** drive the **generated client** against a real `httptest`
-  server with the backend stubbed by `MemBackend` and a fake task store. They
-  assert routing, path/body binding, status codes, and response shapes for every
-  operation — validating the controllers against the generated contract.
-- **Storage-pool flow test** runs the create → list → get workflow, asserting the
-  top-level behaviour: listing returns every pool, and a pool is fetchable by id
-  regardless of its creator.
+- **Controller tests** assert routing, path/body binding, status codes, and
+  response shapes for every operation. For the six async mutations they check the
+  cheap synchronous contract — `202` with the right `Task` `kind` and a `Location`
+  header (and the synchronous `400`/`404`/`501` validations) — without running a
+  worker; the freshly-planned task is still `pending`.
+- **Worker-driven tests** then exercise the full async path. A `drainTasks`
+  helper runs a real `task.Worker` — wired with `ProductionRegistry` over the
+  same store, backend, and `Provisioning` the server uses — until every task
+  reaches a terminal status, so the test can poll `getTask` to `succeeded`/
+  `failed` and then read the materialized project/branch/endpoint (its ids and
+  `address`) back through the API exactly as a client would. This covers
+  create-project, branch, create/delete-endpoint, and the delete-project/
+  delete-branch cascades (a duplicate name or single-writer collision asserted as
+  a `failed` task).
+- **Storage-pool flow test** runs the synchronous create → list → get workflow,
+  asserting the top-level behaviour: listing returns every pool, and a pool is
+  fetchable by id regardless of its creator.
 - **List tests** (`lists_test.go`) cover the paginated lists: the `limit`/`offset`
   contract and clamping, `total` (all matches) vs `count` (this page), and the
   parent `404`s on the nested project/branch/endpoint lists.

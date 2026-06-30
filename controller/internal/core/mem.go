@@ -392,6 +392,208 @@ func (m *MemBackend) DeleteEndpoint(_ context.Context, endpointID uuid.UUID) err
 	return nil
 }
 
+// --- task.StateStore: the id-keyed, idempotent operations the write-ahead task
+// step catalog drives (mirroring *PgBackend's provision.go). The caller supplies
+// the ids (assigned write-ahead at plan time), so a replayed step converges: an
+// existing id is a no-op, a name collision with a *different* id is ErrConflict.
+// These let the API tests drive a real worker against this in-memory backend. ---
+
+// EnsureProject idempotently creates a project and its default branch with the
+// given ids. A repeated id is a no-op; a project-name collision within the pool
+// (a different id) is ErrConflict; a missing pool is ErrNotFound.
+func (m *MemBackend) EnsureProject(_ context.Context, poolID, projectID, branchID uuid.UUID, name string, pgVersion int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.pools[poolID]; !ok {
+		return ErrNotFound
+	}
+	if existing, ok := m.projects[projectID]; ok {
+		// Same id => idempotent no-op (mirrors ON CONFLICT (id) DO NOTHING).
+		_ = existing
+		return nil
+	}
+	nk := projectNameKey{poolID: poolID, name: name}
+	if _, taken := m.projectNames[nk]; taken {
+		return ErrConflict
+	}
+	now := m.now()
+	def := Branch{
+		ProjectID: projectID,
+		BranchID:  branchID,
+		Name:      DefaultBranchName,
+		PgVersion: pgVersion,
+		IsDefault: true,
+		CreatedAt: now,
+	}
+	p := Project{ID: projectID, StoragePoolID: poolID, Name: name, CreatedAt: now, DefaultBranch: def}
+	m.projects[projectID] = p
+	m.branches[branchID] = def
+	m.projectNames[nk] = struct{}{}
+	m.branchNames[branchNameKey{projectID: projectID, name: DefaultBranchName}] = struct{}{}
+	return nil
+}
+
+// EnsureBranch idempotently creates a non-default branch with the given id,
+// forked from parentBranchID at forkLSN. A repeated id is a no-op; a name
+// collision within the project (a different id) is ErrConflict; a missing parent
+// is ErrNotFound.
+func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, projectID, branchID uuid.UUID, name, forkLSN string, pgVersion int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.branches[branchID]; ok {
+		return nil // same id => idempotent no-op
+	}
+	parent, ok := m.branches[parentBranchID]
+	if !ok || parent.ProjectID != projectID {
+		return ErrNotFound
+	}
+	nk := branchNameKey{projectID: projectID, name: name}
+	if _, taken := m.branchNames[nk]; taken {
+		return ErrConflict
+	}
+	pid := parentBranchID
+	m.branches[branchID] = Branch{
+		ProjectID:      projectID,
+		BranchID:       branchID,
+		Name:           name,
+		PgVersion:      pgVersion,
+		IsDefault:      false,
+		ParentBranchID: &pid,
+		ForkLSN:        forkLSN,
+		CreatedAt:      m.now(),
+	}
+	m.branchNames[nk] = struct{}{}
+	return nil
+}
+
+// EnsureEndpointRecord idempotently records an endpoint with the given id on the
+// (projectID, branchID) branch. A repeated id is a no-op; a *second* read_write
+// endpoint (a different id on a branch that already has one) is ErrConflict; a
+// missing branch is ErrNotFound.
+func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, projectID, branchID uuid.UUID, role string, _ []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.endpoints[endpointID]; ok {
+		return nil // same id => idempotent no-op
+	}
+	b, ok := m.branches[branchID]
+	if !ok || b.ProjectID != projectID {
+		return ErrNotFound
+	}
+	if role == RoleReadWrite {
+		k := branchKey{projectID: projectID, branchID: branchID}
+		if _, taken := m.writers[k]; taken {
+			return ErrConflict
+		}
+		m.writers[k] = struct{}{}
+	}
+	m.endpoints[endpointID] = Endpoint{
+		ID:        endpointID,
+		ProjectID: projectID,
+		BranchID:  branchID,
+		Role:      role,
+		CreatedAt: m.now(),
+	}
+	return nil
+}
+
+// EndpointIDsForBranch returns the ids of every endpoint on the branch (the
+// delete_branch step's Execute-time enumeration). An absent branch yields an
+// empty slice.
+func (m *MemBackend) EndpointIDsForBranch(_ context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []uuid.UUID
+	for id, e := range m.endpoints {
+		if e.ProjectID == projectID && e.BranchID == branchID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// EndpointIDsForProject returns the ids of every endpoint in the project (the
+// delete_project step's Execute-time enumeration). An absent project yields an
+// empty slice.
+func (m *MemBackend) EndpointIDsForProject(_ context.Context, projectID uuid.UUID) ([]uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []uuid.UUID
+	for id, e := range m.endpoints {
+		if e.ProjectID == projectID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// ChildBranchIDs returns the ids of every branch in projectID forked directly
+// from branchID (the delete_branch step's pre-cascade check). An absent branch
+// yields an empty slice.
+func (m *MemBackend) ChildBranchIDs(_ context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []uuid.UUID
+	for id, b := range m.branches {
+		if b.ProjectID == projectID && b.ParentBranchID != nil && *b.ParentBranchID == branchID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// DeleteBranch removes the (projectID, branchID) branch (idempotent; absent row
+// is a no-op), keeping m.branchNames and the single-writer m.writers slot
+// consistent. It mirrors PgBackend's self-FK RESTRICT: a still-referencing child
+// fork makes the delete an ErrConflict rather than a silent drop.
+func (m *MemBackend) DeleteBranch(_ context.Context, projectID, branchID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.branches[branchID]
+	if !ok || b.ProjectID != projectID {
+		return nil // tolerate absent
+	}
+	for _, child := range m.branches {
+		if child.ProjectID == projectID && child.ParentBranchID != nil && *child.ParentBranchID == branchID {
+			return ErrConflict // a child fork still references this branch (RESTRICT)
+		}
+	}
+	delete(m.branches, branchID)
+	delete(m.branchNames, branchNameKey{projectID: projectID, name: b.Name})
+	delete(m.writers, branchKey{projectID: projectID, branchID: branchID})
+	return nil
+}
+
+// DeleteProject removes the project and all its branches/endpoints (idempotent;
+// absent rows are a no-op), mirroring *PgBackend.DeleteProject: it clears
+// m.endpoints/m.branches/m.projects for the project plus the m.writers /
+// m.branchNames / m.projectNames bookkeeping consistently.
+func (m *MemBackend) DeleteProject(_ context.Context, projectID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.projects[projectID]
+	if !ok {
+		return nil // tolerate absent
+	}
+	for id, e := range m.endpoints {
+		if e.ProjectID == projectID {
+			if e.Role == RoleReadWrite {
+				delete(m.writers, branchKey{projectID: projectID, branchID: e.BranchID})
+			}
+			delete(m.endpoints, id)
+		}
+	}
+	for id, b := range m.branches {
+		if b.ProjectID == projectID {
+			delete(m.branches, id)
+			delete(m.branchNames, branchNameKey{projectID: projectID, name: b.Name})
+		}
+	}
+	delete(m.projects, projectID)
+	delete(m.projectNames, projectNameKey{poolID: p.StoragePoolID, name: p.Name})
+	return nil
+}
+
 // createdBefore orders items by (created_at, id), matching the pg backend's
 // ORDER BY created_at, <id> so the two backends paginate identically.
 func createdBefore(ti, tj time.Time, idi, idj uuid.UUID) bool {

@@ -1,7 +1,7 @@
 # amp-controller — High-Level Design & Guiding Principles
 
 **Status:** Draft
-**Last updated:** 2026-06-17
+**Last updated:** 2026-06-29
 
 This is the guiding-principles document for amp-controller, the control plane for YB Light.
 It is intentionally not a feature design doc — individual features (task framework,
@@ -408,14 +408,19 @@ re-usable steps (§8); none is a special case.
 Implied operator-facing workflows (capacity headroom, node/pool provisioning, universe
 creation through YBA) follow the same pattern but are not user-facing.
 
-**Implemented today (create-project).** `POST .../projects` runs workflow 2 end to
-end inside the controller: it creates the project + default branch (state store),
-records the storage-controller pending-init recipe — keyed by the storage-layer
-`branch_id` (§11.1) — and provisions the write endpoint through the deployer
-(§5.6), returning the endpoint's connection address. It currently runs **synchronously**
-(the call blocks while the endpoint comes up) rather than through the write-ahead task
-framework — moving it onto a task (principle 5, §8) so it is async, durable, and
-resumable is the planned next step. See [`ac-apis.md`](ac-apis.md) for the API shape.
+**Implemented today (the mutation workflows are tasks).** The world-changing
+operations run **through the write-ahead task framework** (principle 5, §8), not
+inline. `POST .../projects` plans a `create_project` task that creates the project
++ default branch (state store) and records the storage-controller pending-init
+recipe — keyed by the storage-layer `branch_id` (§11.1); branching, adding an
+endpoint (provisioned through the deployer, §5.6), and the cascade deletes
+(remove an endpoint, a branch, or a project) are likewise tasks. The API
+validates cheaply, plans the task, and returns `202 Accepted` with the `Task` and
+a `Location` header; the caller polls task status (§8) until it is `succeeded` or
+`failed`, then reads the materialized resource's ids/address back — so the
+operations are async, durable, and resumable. `createUser`/`createStoragePool`
+stay synchronous. See [`ac-apis.md`](ac-apis.md) for the API shape and
+[`ac-tasks.md`](ac-tasks.md) for the step catalog.
 
 ## 7. Longer-term requirements (designed for now, built later)
 

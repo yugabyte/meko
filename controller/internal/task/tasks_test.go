@@ -3,6 +3,7 @@ package task
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -234,4 +235,116 @@ func TestServiceDeleteEndpoint(t *testing.T) {
 	if del.EndpointID != epID {
 		t.Errorf("delete args endpoint = %s, want %s", del.EndpointID, epID)
 	}
+}
+
+func TestServiceDeleteBranch(t *testing.T) {
+	store := NewMemStore()
+	svc := NewService(store)
+	projectID, branchID := uuid.New(), uuid.New()
+	tk, err := svc.DeleteBranch(t.Context(), DeleteBranchInput{PoolID: uuid.New(), ProjectID: projectID, BranchID: branchID})
+	if err != nil {
+		t.Fatalf("DeleteBranch: %v", err)
+	}
+	steps, _ := store.Steps(t.Context(), tk.ID)
+	if tk.Kind != KindDeleteBranch || len(steps) != 1 || steps[0].Kind != StepDeleteBranch {
+		t.Fatalf("task = kind %q with steps %v, want one delete_branch step", tk.Kind, stepKinds(steps))
+	}
+	var del DeleteBranchArgs
+	decodeArgs(t, steps[0], &del)
+	if del.ProjectID != projectID || del.BranchID != branchID {
+		t.Errorf("delete_branch args = %+v, want project=%s branch=%s", del, projectID, branchID)
+	}
+	if tk.ProjectID == nil || *tk.ProjectID != projectID {
+		t.Errorf("task ProjectID = %v, want %s", tk.ProjectID, projectID)
+	}
+}
+
+func TestServiceDeleteProject(t *testing.T) {
+	store := NewMemStore()
+	svc := NewService(store)
+	projectID := uuid.New()
+	tk, err := svc.DeleteProject(t.Context(), DeleteProjectInput{PoolID: uuid.New(), ProjectID: projectID})
+	if err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	steps, _ := store.Steps(t.Context(), tk.ID)
+	if tk.Kind != KindDeleteProject || len(steps) != 1 || steps[0].Kind != StepDeleteProject {
+		t.Fatalf("task = kind %q with steps %v, want one delete_project step", tk.Kind, stepKinds(steps))
+	}
+	var del DeleteProjectArgs
+	decodeArgs(t, steps[0], &del)
+	if del.ProjectID != projectID {
+		t.Errorf("delete_project args project = %s, want %s", del.ProjectID, projectID)
+	}
+}
+
+func TestMemStoreList(t *testing.T) {
+	store := NewMemStore()
+	// A controllable clock so created_at differs per task and the DESC ordering is
+	// deterministic without relying on the id tiebreak.
+	base := time.Unix(1_700_000_000, 0).UTC()
+	tick := 0
+	store.now = func() time.Time {
+		tick++
+		return base.Add(time.Duration(tick) * time.Second)
+	}
+	svc := NewService(store)
+	projectA, projectB := uuid.New(), uuid.New()
+
+	// Three tasks, created oldest-first: A1, A2 (project A), B1 (project B).
+	a1, _ := svc.DeleteProject(t.Context(), DeleteProjectInput{ProjectID: projectA})
+	a2, _ := svc.DeleteBranch(t.Context(), DeleteBranchInput{ProjectID: projectA, BranchID: uuid.New()})
+	b1, _ := svc.DeleteProject(t.Context(), DeleteProjectInput{ProjectID: projectB})
+
+	// Unfiltered: newest-first (b1, a2, a1), total 3.
+	got, total, err := svc.List(t.Context(), TaskFilter{}, 10, 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("total = %d, want 3", total)
+	}
+	wantOrder := []uuid.UUID{b1.ID, a2.ID, a1.ID}
+	for i, w := range wantOrder {
+		if got[i].ID != w {
+			t.Fatalf("order[%d] = %s, want %s (created_at DESC)", i, got[i].ID, w)
+		}
+	}
+
+	// Pagination: limit 2 / offset 1 -> a2, a1.
+	page, total, _ := svc.List(t.Context(), TaskFilter{}, 2, 1)
+	if total != 3 || len(page) != 2 || page[0].ID != a2.ID || page[1].ID != a1.ID {
+		t.Fatalf("page = %v (total %d), want [a2 a1] total 3", taskIDs(page), total)
+	}
+
+	// Filter by project A: a2, a1 only.
+	byProject, total, _ := svc.List(t.Context(), TaskFilter{ProjectID: &projectA}, 10, 0)
+	if total != 2 || len(byProject) != 2 {
+		t.Fatalf("project filter total = %d (got %d rows), want 2", total, len(byProject))
+	}
+
+	// Filter by kind: only the two delete_project tasks (a1, b1).
+	byKind, total, _ := svc.List(t.Context(), TaskFilter{Kind: KindDeleteProject}, 10, 0)
+	if total != 2 {
+		t.Fatalf("kind filter total = %d, want 2", total)
+	}
+	for _, tk := range byKind {
+		if tk.Kind != KindDeleteProject {
+			t.Errorf("kind filter returned a %q task", tk.Kind)
+		}
+	}
+
+	// Filter by status: all are pending; a failed filter matches none.
+	none, total, _ := svc.List(t.Context(), TaskFilter{Status: StatusFailed}, 10, 0)
+	if total != 0 || len(none) != 0 {
+		t.Fatalf("failed-status filter = %d rows (total %d), want 0", len(none), total)
+	}
+}
+
+func taskIDs(ts []*Task) []uuid.UUID {
+	out := make([]uuid.UUID, len(ts))
+	for i, t := range ts {
+		out[i] = t.ID
+	}
+	return out
 }

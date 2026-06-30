@@ -9,15 +9,20 @@ import (
 
 	"github.com/yugabyte/yb-amp/controller/internal/api"
 	"github.com/yugabyte/yb-amp/controller/internal/core"
+	"github.com/yugabyte/yb-amp/controller/internal/task"
 )
 
-// TestEndpointFlow drives the endpoint workflow through the generated client:
-// create (which synchronously deploys), get, list, the single-writer rule,
-// read-only endpoints, and retire. The backend is the in-memory fake; the
-// branch is seeded directly so the test exercises the endpoint lifecycle
-// without going through create-project/create-branch.
+// TestEndpointFlow drives the endpoint workflow through the generated client
+// under the async-task contract: create returns 202 + a create_endpoint Task,
+// and the deployed endpoint (with its address) materializes once the worker runs
+// the task. It then covers get, list, the single-writer rule (now a FAILED task,
+// not a synchronous 409), read-only endpoints, and retire (a delete_endpoint task
+// that, once driven, removes the row). The branch is seeded directly so the test
+// exercises the endpoint lifecycle without going through create-project/branch.
 func TestEndpointFlow(t *testing.T) {
-	client, backend, _ := newTestServer(t)
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 
 	user := mustCreateUser(t, client, false)
@@ -36,15 +41,28 @@ func TestEndpointFlow(t *testing.T) {
 	rw := api.CreateEndpointRequestRoleReadWrite
 	ro := api.CreateEndpointRequestRoleReadOnly
 
-	// Create a read_write endpoint -> 201 with the deployed endpoint (address set).
+	// Create a read_write endpoint -> 202 + a create_endpoint Task.
 	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
-	if created.StatusCode() != http.StatusCreated || created.JSON201 == nil {
-		t.Fatalf("CreateEndpoint status = %d, body = %s", created.StatusCode(), created.Body)
+	if created.StatusCode() != http.StatusAccepted {
+		t.Fatalf("CreateEndpoint status = %d, want 202, body = %s", created.StatusCode(), created.Body)
 	}
-	ep := *created.JSON201
+	assertTaskAccepted(t, created.JSON202, created.HTTPResponse.Header.Get("Location"), "create_endpoint")
+
+	// Drive the task: the endpoint row + address are materialized.
+	drainTasks(t, store, backend, prov)
+
+	// List -> exactly one endpoint, bound to the branch, read_write, with an address.
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	if err != nil {
+		t.Fatalf("ListEndpoints: %v", err)
+	}
+	if list.StatusCode() != http.StatusOK || list.JSON200 == nil || len(list.JSON200.Endpoints) != 1 {
+		t.Fatalf("ListEndpoints status = %d, body = %s", list.StatusCode(), list.Body)
+	}
+	ep := list.JSON200.Endpoints[0]
 	if ep.ProjectId != projectID || ep.BranchId != branchID {
 		t.Errorf("endpoint binding = (%s,%s), want (%s,%s)", ep.ProjectId, ep.BranchId, projectID, branchID)
 	}
@@ -64,41 +82,54 @@ func TestEndpointFlow(t *testing.T) {
 		t.Fatalf("GetEndpoint status = %d, body = %s", got.StatusCode(), got.Body)
 	}
 
-	// List -> exactly one endpoint.
-	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
-	if err != nil {
-		t.Fatalf("ListEndpoints: %v", err)
-	}
-	if list.StatusCode() != http.StatusOK || list.JSON200 == nil || len(list.JSON200.Endpoints) != 1 {
-		t.Fatalf("ListEndpoints status = %d, body = %s", list.StatusCode(), list.Body)
-	}
-
-	// A second read_write on the same branch violates the single-writer rule -> 409.
+	// A second read_write on the same branch violates the single-writer rule. Under
+	// the async contract this is no longer a synchronous 409 — the create is
+	// accepted (202) and the conflict surfaces as a FAILED task when its step's
+	// EnsureEndpointRecord hits the single-writer index.
 	dup, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(dup writer): %v", err)
 	}
-	if dup.StatusCode() != http.StatusConflict || dup.JSON409 == nil {
-		t.Fatalf("dup writer status = %d, body = %s", dup.StatusCode(), dup.Body)
+	if dup.StatusCode() != http.StatusAccepted {
+		t.Fatalf("dup writer status = %d, want 202, body = %s", dup.StatusCode(), dup.Body)
+	}
+	dupID := dup.JSON202.Id
+	drainTasks(t, store, backend, prov)
+	dupTask, err := store.Get(ctx, dupID)
+	if err != nil || dupTask == nil {
+		t.Fatalf("get dup-writer task: task=%v err=%v", dupTask, err)
+	}
+	if dupTask.Status != task.StatusFailed || dupTask.Error == nil {
+		t.Errorf("dup-writer task = {status:%q err:%v}, want failed (single-writer)", dupTask.Status, dupTask.Error)
+	}
+	// Still exactly one endpoint (the duplicate did not materialize a second writer).
+	if l, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil); l.JSON200 == nil || len(l.JSON200.Endpoints) != 1 {
+		t.Errorf("endpoints after a failed dup-writer = %v, want still 1", l.Body)
 	}
 
-	// A read_only endpoint is allowed alongside the writer -> 201.
+	// A read_only endpoint is allowed alongside the writer -> 202, and materializes.
 	roResp, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &ro})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(read_only): %v", err)
 	}
-	if roResp.StatusCode() != http.StatusCreated {
-		t.Fatalf("read_only status = %d, body = %s", roResp.StatusCode(), roResp.Body)
+	if roResp.StatusCode() != http.StatusAccepted {
+		t.Fatalf("read_only status = %d, want 202, body = %s", roResp.StatusCode(), roResp.Body)
+	}
+	drainTasks(t, store, backend, prov)
+	if l, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil); l.JSON200 == nil || len(l.JSON200.Endpoints) != 2 {
+		t.Errorf("endpoints after read_only = %v, want 2 (writer + replica)", l.Body)
 	}
 
-	// Retire the writer -> 204.
+	// Retire the writer -> 202 + a delete_endpoint Task; drive it, then it's gone.
 	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
 	if err != nil {
 		t.Fatalf("DeleteEndpoint: %v", err)
 	}
-	if del.StatusCode() != http.StatusNoContent {
-		t.Fatalf("DeleteEndpoint status = %d, want 204, body = %s", del.StatusCode(), del.Body)
+	if del.StatusCode() != http.StatusAccepted {
+		t.Fatalf("DeleteEndpoint status = %d, want 202, body = %s", del.StatusCode(), del.Body)
 	}
+	assertTaskAccepted(t, del.JSON202, del.HTTPResponse.Header.Get("Location"), "delete_endpoint")
+	drainTasks(t, store, backend, prov)
 
 	// It is gone now -> get 404.
 	gone, err := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
@@ -141,10 +172,12 @@ func TestEndpointErrors(t *testing.T) {
 	}
 }
 
-// TestEndpointDiskType: disk_type=network (or omitted) deploys; disk_type=local
-// is rejected with 400 before any row is committed (local disks not yet supported).
+// TestEndpointDiskType: disk_type=local is rejected with 400 before any task is
+// planned (cheap validation; local disks not yet supported); disk_type=network
+// (or omitted) is accepted (202) and, once driven, deploys exactly one endpoint.
 func TestEndpointDiskType(t *testing.T) {
-	client, backend, _ := newTestServer(t)
+	prov := api.Provisioning{Deployer: &fakeDeployer{}}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 
 	user := mustCreateUser(t, client, false)
@@ -157,7 +190,7 @@ func TestEndpointDiskType(t *testing.T) {
 	network := api.Network
 	local := api.Local
 
-	// disk_type=local -> 400, and no row is committed.
+	// disk_type=local -> 400 (cheap validation), and no endpoint exists.
 	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &local})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(local): %v", err)
@@ -173,13 +206,20 @@ func TestEndpointDiskType(t *testing.T) {
 		t.Fatalf("after rejected local create, endpoints = %v (want none)", list.Body)
 	}
 
-	// disk_type=network -> 201 (the default disk).
+	// disk_type=network -> 202 (the default disk); drive it, then it deployed.
 	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &network})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(network): %v", err)
 	}
-	if ok.StatusCode() != http.StatusCreated {
-		t.Fatalf("network status = %d, want 201; body = %s", ok.StatusCode(), ok.Body)
+	if ok.StatusCode() != http.StatusAccepted {
+		t.Fatalf("network status = %d, want 202; body = %s", ok.StatusCode(), ok.Body)
+	}
+	drainTasks(t, store, backend, prov)
+	if got := soleTask(t, store); got.Status != task.StatusSucceeded {
+		t.Fatalf("create_endpoint(network) task status = %q, want succeeded; error = %v", got.Status, got.Error)
+	}
+	if l, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil); l.JSON200 == nil || len(l.JSON200.Endpoints) != 1 {
+		t.Errorf("endpoints after network create = %v, want 1", l.Body)
 	}
 }
 

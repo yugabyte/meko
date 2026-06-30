@@ -18,21 +18,26 @@ info:
       Pool sharing (pool grants) is out of scope here, but a pool is addressed by
       its own id because multiple users will eventually act on it. Listing
       returns every pool.
-    - **Projects** — a project (a "database") in a pool. *Create* provisions the
-      control-plane record: it creates the project **and its default branch**
-      together and returns the project with its `default_branch`. A project has
-      exactly one default branch, created with it. The branch id is the
-      storage-layer branch id verbatim (the storage layer is flat — a project maps
-      to no storage object).
-      *Delete* is **logged only** (202): the write-ahead task framework that will
-      execute it is not yet wired up.
-    - **Branches** — create / list / get / delete a branch in a project. *Create*
-      forks an existing branch (the parent, defaulting to the project's default
-      branch) into a new branch, recording its fork ancestry
+    - **Projects** — a project (a "database") in a pool. Create and delete are
+      **asynchronous** (`202` + a `Task` + a `Location: /api/v1/tasks/{id}`
+      header): the worker creates the project **and its default branch** (and the
+      storage controller's pending-init recipe), or cascades the delete to the
+      project's branches and endpoints. The default branch id is the storage-layer
+      branch id verbatim (the storage layer is flat — a project maps to no storage
+      object). Poll the task, then read the project to see its `default_branch`.
+    - **Branches** — create / list / get / delete a branch in a project. Create
+      and delete are **asynchronous** (`202` + a `Task` + a `Location` header).
+      *Create* forks an existing branch (the parent, defaulting to the project's
+      default branch) into a new branch, recording its fork ancestry
       (`parent_branch_id`, `fork_lsn`) and inheriting the parent's Postgres
       version. Branches can fork off the default branch or off another branch.
-      *Delete* is **logged only** (202).
+      *Delete* cascades to the branch's endpoints.
     - **Endpoints** — the compute bound to a branch; listed under the branch.
+      Create and delete are **asynchronous** (`202` + a `Task` + a `Location`
+      header): the worker deploys (resp. retires) one container/pod per endpoint.
+    - **Tasks** — the write-ahead log of long-running operations. Every mutation
+      above returns a `Task`; poll `getTask` (or `listTasks`) until it reaches a
+      terminal status (`succeeded` / `failed`).
 
     **Pagination.** List endpoints take `limit` and `offset` query parameters
     (values outside the documented range are clamped) and return a `total` (the
@@ -58,11 +63,11 @@ tags:
   - name: storage-pools
     description: Storage pools (≈ a Meko datapack); top-level, created and owned by a user.
   - name: projects
-    description: Projects (databases) in a pool. Create provisions the project and its default branch; delete is logged only for now.
+    description: Projects (databases) in a pool. Create and delete are async (202 + Task); create records the project and its default branch, delete cascades to its branches and endpoints.
   - name: branches
-    description: Branches (PG cluster timelines) in a project. Create forks an existing branch; delete is logged only for now.
+    description: Branches (PG cluster timelines) in a project. Create and delete are async (202 + Task); create forks an existing branch, delete cascades to the branch's endpoints.
   - name: endpoints
-    description: Compute endpoints bound to a branch; deployed synchronously (one container/pod per endpoint).
+    description: Compute endpoints bound to a branch; create/delete are asynchronous tasks (202 + Task + Location) — one container/pod per endpoint.
   - name: tasks
     description: Status of long-running operations (the write-ahead task log).
 
@@ -206,11 +211,15 @@ paths:
       operationId: createProject
       summary: Create a project (and its default branch) in a pool
       description: |
-        Creates a project (a "database") in the pool together with its default
-        branch (a PG cluster), and returns the project with its `default_branch`
-        populated. The default branch id is the storage-layer branch id verbatim
-        (the storage layer is flat — a project maps to no storage object). The name
-        is unique within the pool. Returns 404 if the pool does not exist.
+        Plans an asynchronous task that creates a project (a "database") in the
+        pool together with its default branch (a PG cluster) and the storage
+        controller's pending-init recipe, and returns `202` + the `Task` with a
+        `Location` header pointing at it. The default branch id is the storage-layer
+        branch id verbatim (the storage layer is flat — a project maps to no storage
+        object). Poll the task, then read the project to see its `default_branch`.
+        Cheap validation is synchronous (`400` bad body / unsupported `pg_version`,
+        `404` unknown pool); a duplicate project name surfaces as a `failed` task,
+        not a `409`.
       requestBody:
         required: true
         content:
@@ -218,18 +227,12 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateProjectRequest'
       responses:
-        '201':
-          description: Project and its default branch created.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Project'
+        '202':
+          $ref: '#/components/responses/Accepted'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -279,17 +282,19 @@ paths:
     delete:
       tags: [projects]
       operationId: deleteProject
-      summary: Delete a project (logged only)
-      description: Records the intent to delete a project and returns 202. Logged only for now (the task framework that will execute it is not yet wired up); the project is not validated.
+      summary: Delete a project
+      description: |
+        Plans an asynchronous `delete_project` cascade task that retires the
+        project's endpoints, drops its branches, then drops the project row, and
+        returns `202` + the `Task` with a `Location` header. A cheap synchronous
+        pre-check returns `404` if the pool or project does not exist.
       responses:
         '202':
-          description: Request accepted and logged.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/OperationAck'
+          $ref: '#/components/responses/Accepted'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -302,16 +307,18 @@ paths:
       operationId: createBranch
       summary: Branch (fork) a branch into a new branch
       description: |
-        Forks a branch (the parent) in the project into a new branch and returns
-        it. The parent defaults to the project's default branch; pass
+        Plans an asynchronous task that forks a branch (the parent) in the project
+        into a new branch, and returns `202` + the `Task` with a `Location` header.
+        The parent defaults to the project's default branch; pass
         `parent_branch_id` to fork off another branch (branch-of-branch). The new
         branch records its fork ancestry (`parent_branch_id`, `fork_lsn`) and
         inherits the parent's Postgres version. The fork point defaults to the
         parent's latest LSN; pass `fork_point_lsn` to branch at an earlier point.
         Like create-project, the branch is recorded as a recipe and materialized
         lazily by the first endpoint deployed on it — no compute is started here.
-        Returns 404 if the pool, project, or parent branch does not exist, or 409
-        if a branch with the given name already exists in the project.
+        Cheap validation is synchronous (`400` bad body / bad or unresolvable
+        `fork_point_lsn`, `404` unknown pool / project / parent); a duplicate branch
+        name surfaces as a `failed` task, not a `409`.
       requestBody:
         required: true
         content:
@@ -319,18 +326,12 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateBranchRequest'
       responses:
-        '201':
-          description: Branch created.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Branch'
+        '202':
+          $ref: '#/components/responses/Accepted'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -381,17 +382,22 @@ paths:
     delete:
       tags: [branches]
       operationId: deleteBranch
-      summary: Delete a branch (logged only)
-      description: Records the intent to delete a branch and returns 202. Logged only for now (see createBranch); the branch is not validated.
+      summary: Delete a branch
+      description: |
+        Plans an asynchronous `delete_branch` cascade task that retires the
+        branch's endpoints, then drops the branch row, and returns `202` + the
+        `Task` with a `Location` header. Cheap synchronous pre-checks return `404`
+        if the pool / project / branch does not exist, or `409` if the branch has
+        child branches (the parent FK is `RESTRICT`, so the delete would be doomed).
       responses:
         '202':
-          description: Request accepted and logged.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/OperationAck'
+          $ref: '#/components/responses/Accepted'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -405,11 +411,14 @@ paths:
       operationId: createEndpoint
       summary: Create and deploy an endpoint on a branch
       description: |
-        Records an endpoint on the addressed branch and synchronously deploys
-        it (one container/pod per endpoint). Returns 201 with the deployed
-        endpoint, its `address` populated. A branch admits at most one
-        `read_write` endpoint (the single-writer rule). Requires the endpoint
-        deployer (`--deploy`); returns 501 otherwise.
+        Plans an asynchronous task that records an endpoint on the addressed
+        branch, deploys it (one container/pod per endpoint), and records its
+        `address`; returns `202` + the `Task` with a `Location` header. Poll the
+        task, then read the endpoint to see its id + `address`. A branch admits at
+        most one `read_write` endpoint (the single-writer rule); a second one
+        surfaces as a `failed` task, not a `409`. Requires the endpoint deployer
+        (`--deploy`); returns `501` otherwise. `404` if the pool / project / branch
+        does not exist.
       requestBody:
         required: false
         content:
@@ -417,18 +426,12 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateEndpointRequest'
       responses:
-        '201':
-          description: Endpoint created and deployed.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Endpoint'
+        '202':
+          $ref: '#/components/responses/Accepted'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -481,16 +484,59 @@ paths:
       operationId: deleteEndpoint
       summary: Retire an endpoint
       description: |
-        Synchronously removes the endpoint's running instance and then deletes
-        the endpoint record. Returns 204 once retired. Requires the endpoint
-        deployer (`--deploy`); returns 501 otherwise.
+        Plans an asynchronous `delete_endpoint` task that removes the endpoint's
+        running instance and then deletes the endpoint record, and returns `202` +
+        the `Task` with a `Location` header. Requires the endpoint deployer
+        (`--deploy`); returns `501` otherwise. `404` if the pool / project / branch
+        / endpoint does not exist.
       responses:
-        '204':
-          description: Endpoint retired.
+        '202':
+          $ref: '#/components/responses/Accepted'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tasks:
+    get:
+      tags: [tasks]
+      operationId: listTasks
+      summary: List tasks
+      description: Lists write-ahead tasks, most recent first, optionally filtered by status, kind, or project.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: status
+          in: query
+          required: false
+          description: Only return tasks in this status.
+          schema:
+            type: string
+            enum: [pending, running, succeeded, failed]
+        - name: kind
+          in: query
+          required: false
+          description: Only return tasks of this kind (e.g. create_project, delete_branch).
+          schema:
+            type: string
+        - name: project_id
+          in: query
+          required: false
+          description: Only return tasks scoped to this project.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: A page of tasks.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -587,6 +633,18 @@ components:
         default: 0
 
   responses:
+    Accepted:
+      description: The request was accepted; a task was planned to perform the work.
+      headers:
+        Location:
+          description: The URL of the planned task (poll it for status).
+          required: true
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Task'
     BadRequest:
       description: The request was malformed.
       content:
@@ -856,17 +914,6 @@ components:
             `local` (a node-local instance SSD, typically NVMe) is not yet
             supported and is rejected with 400.
 
-    OperationAck:
-      type: object
-      required: [acknowledged, detail]
-      properties:
-        acknowledged:
-          type: boolean
-          description: Always true; the request was accepted and logged.
-        detail:
-          type: string
-          description: Human-readable note about what was logged.
-
     Task:
       type: object
       required: [id, kind, status, created_at, updated_at]
@@ -897,6 +944,19 @@ components:
         updated_at:
           type: string
           format: date-time
+
+    TaskList:
+      type: object
+      required: [tasks, total, count]
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+        total:
+          $ref: '#/components/schemas/TotalCount'
+        count:
+          $ref: '#/components/schemas/PageCount'
 
     TotalCount:
       type: integer

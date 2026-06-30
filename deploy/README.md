@@ -73,6 +73,40 @@ The **controller layer** — the `controller` plus the shared `storage_controlle
 this endpoint deliberately omits — has its own bundled image under
 [`controller/`](controller/README.md).
 
+## Smoke test — `smoke-test.sh`
+
+[`smoke-test.sh`](smoke-test.sh) validates a **deployed** stack end-to-end. It is
+the deployment-side companion to the controller-on-Docker e2e in
+[`test/e2e/control_plane`](../test/e2e/control_plane): that suite proves the control
+plane on Docker; this one proves an actual Kubernetes deployment, including the
+write-ahead task contract (#113) and **real data I/O** through a created endpoint.
+
+It port-forwards the controller API and walks the full async-task lifecycle —
+`createProject` / `createEndpoint` / `branch` / `deleteEndpoint` / `deleteProject` /
+`deleteBranch` each return `202 + a Task + a Location` header and run to
+`status=succeeded` (polled via `GET /tasks/{id}`) — then **connects to the new
+endpoint with `psql` and writes + reads actual data**: full CRUD + `CHECKPOINT`
+(forcing the writes through safekeeper → pageserver → YugabyteDB) and a readback,
+and checks that the recorded connection address routes to a ready Service backend.
+It also asserts the contract edges (`GET /tasks` filters + a bad
+`status` → `400`, a duplicate name → a *failed* task, deleting a branch with a
+child fork → `409`, and `delete_project` cascading). `createUser` /
+`createStoragePool` are checked to stay synchronous `201`.
+
+It cleans up everything it creates and exits non-zero on any failure.
+
+```sh
+# prereqs: kubectl (pointed at the cluster), curl, jq; a controller deployed in $NS
+# (deploy/up.sh) with the endpoint deployer on. psql is NOT needed locally — the
+# data-I/O checks exec the psql baked into the endpoint pod.
+deploy/smoke-test.sh                 # namespace amp-test
+NS=amp deploy/smoke-test.sh          # another namespace
+KEEP=1 deploy/smoke-test.sh          # leave the created resources for inspection
+```
+
+For *debugging* a failing deployment (an endpoint that won't come up, a mutation
+task that fails), see [`../runbooks/controller_runbook.md`](../runbooks/controller_runbook.md).
+
 ## What's in the container
 
 One image runs every process that makes up an endpoint, supervised by a small

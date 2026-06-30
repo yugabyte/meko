@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -47,11 +46,11 @@ type Provisioning struct {
 
 // Controllers implements the generated StrictServerInterface: the controller's
 // HTTP behavior, decoupled from the wire format (which the generated code owns)
-// and from persistence (which the core.Backend owns). Project create and branch
-// record the control rows plus the storage controller's pending-init recipe; the
-// branch is materialized later by the first endpoint deployed on it (#108, #130).
-// Project and branch delete still route through the task framework eventually
-// (§6) and are logged-only for now (#92).
+// and from persistence (which the core.Backend owns). Project, branch, and
+// endpoint mutations (create + delete) plan write-ahead tasks and return 202 +
+// the Task + a Location header; the worker performs the work — recording the
+// control rows plus the storage controller's pending-init recipe and deploying
+// compute (#108, #130, #113).
 type Controllers struct {
 	backend core.Backend
 	tasks   *task.Service
@@ -162,9 +161,12 @@ func (c *Controllers) GetStoragePool(ctx context.Context, request GetStoragePool
 }
 
 // --- Projects --------------------------------------------------------------
-// Create records a project + its default branch plus the storage controller's
-// pending-init recipe; the branch is materialized later by the first endpoint
-// deployed on it. Delete remains logged-only until the task framework lands (#92).
+// Create and delete are async: each runs a cheap synchronous pre-check, then
+// plans a task (create_project / delete_project) and returns 202 + the Task.
+// The project + default branch rows and the storage controller's pending-init
+// recipe are written by the create_project worker; the branch is materialized
+// later by the first endpoint deployed on it. Delete cascades to the project's
+// branches and endpoints in the worker.
 
 // defaultPgVersion is used when a create-project request omits pg_version.
 // yb-light is Postgres v17 only.
@@ -188,50 +190,42 @@ func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRe
 		return CreateProject400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
 			fmt.Sprintf("unsupported pg_version %d (only %d is supported)", pgVersion, defaultPgVersion)))}, nil
 	}
-	p, err := c.backend.CreateProject(ctx, request.PoolId, name, pgVersion)
-	switch {
-	case errors.Is(err, core.ErrNotFound):
-		return CreateProject404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
-	case errors.Is(err, core.ErrConflict):
-		return CreateProject409JSONResponse{ConflictJSONResponse(apiError("conflict", "a project with that name already exists in the pool"))}, nil
-	case err != nil:
-		return nil, fmt.Errorf("create project: %w", err)
-	}
-
-	// Record the pending-init recipe for the project's default branch with the
-	// storage controller. The branch is declared here, not yet materialized: the
-	// first endpoint deployed for it attaches a pageserver and bootstraps it
-	// (controller-project-create.md). The recipe lives in both the control DB (the
-	// branch row) and the storage controller, keyed by the single storage branch_id
-	// (the branch's branch_id verbatim — the storage layer is flat now, no enclosing
-	// tenant). The storage-layer branch_id is 32-hex (no dashes); the control plane
-	// stores the same bytes as a SQL uuid. Synchronous for now — #113 moves this onto
-	// the write-ahead task framework. We do NOT eagerly provision storage or deploy an
-	// endpoint here: compute is a separate resource (POST .../endpoints).
-	def := p.DefaultBranch
-	if c.prov.SC != nil {
-		if err := c.prov.SC.RecordPendingTimelineInit(ctx,
-			hex32(def.BranchID),
-			storagecontroller.PendingTimelineInit{
-				BranchName:       def.Name,
-				PgVersion:        pgVersion,
-				AncestorBranchID: nil, // default (Bootstrap) branch
-				StartLSN:         "0/0",
-			}); err != nil {
-			return nil, fmt.Errorf("storage controller record pending timeline init: %w", err)
+	// Cheap pre-check: the pool must exist. The task's create_project step would
+	// also fail on an absent pool, but a 404 here keeps the synchronous
+	// pool-not-found contract rather than surfacing it as a failed task.
+	if _, err := c.backend.GetStoragePool(ctx, request.PoolId); err != nil {
+		switch {
+		case errors.Is(err, core.ErrNotFound):
+			return CreateProject404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
+		default:
+			return nil, fmt.Errorf("get storage pool: %w", err)
 		}
-	} else {
-		c.logger.LogAttrs(ctx, slog.LevelWarn, "storage controller not available; recipe recorded in the control DB only")
 	}
 
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "project created",
-		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
-		slog.String(applog.KeyProjectID, p.ID.String()),
-		slog.String(applog.KeyBranchID, def.BranchID.String()),
-		slog.String("project_name", p.Name),
-		slog.Bool("recipe_recorded", c.prov.SC != nil))
+	// Plan the work as an async task and return 202 + the Task. The project +
+	// default branch rows, the pending-init recipe, and (later) any endpoint are
+	// all created by the worker; a duplicate project name now surfaces as a failed
+	// task rather than a synchronous 409. WithWriter:false preserves "create
+	// project does not deploy an endpoint" — compute is a separate resource.
+	t, err := c.tasks.CreateProject(ctx, task.CreateProjectInput{
+		PoolID:     request.PoolId,
+		Name:       name,
+		PgVersion:  pgVersion,
+		WithWriter: false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create project task: %w", err)
+	}
 
-	return CreateProject201JSONResponse(projectToAPI(p)), nil
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "create project task accepted",
+		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
+		slog.String(applog.KeyTaskID, t.ID.String()),
+		slog.String("project_name", name))
+
+	return CreateProject202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
 }
 
 // hex32 renders a UUID as the storage layer's 32-lowercase-hex BranchId (the
@@ -278,22 +272,48 @@ func (c *Controllers) GetProject(ctx context.Context, request GetProjectRequestO
 }
 
 func (c *Controllers) DeleteProject(ctx context.Context, request DeleteProjectRequestObject) (DeleteProjectResponseObject, error) {
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete project requested (logged only; task framework pending)",
+	// Cheap pre-check: the project must exist (404). The cascade delete itself —
+	// retiring every endpoint and dropping the branches and the project row — runs
+	// as the task's idempotent delete_project step.
+	if _, err := c.backend.GetProject(ctx, request.PoolId, request.ProjectId); err != nil {
+		switch {
+		case errors.Is(err, core.ErrNotFound):
+			return DeleteProject404JSONResponse{NotFoundJSONResponse(apiError("not_found", "project not found"))}, nil
+		default:
+			return nil, fmt.Errorf("get project: %w", err)
+		}
+	}
+
+	t, err := c.tasks.DeleteProject(ctx, task.DeleteProjectInput{
+		PoolID:    request.PoolId,
+		ProjectID: request.ProjectId,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("delete project task: %w", err)
+	}
+
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete project task accepted",
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
-		slog.String(applog.KeyProjectID, request.ProjectId.String()))
-	return DeleteProject202JSONResponse(loggedAck("delete project")), nil
+		slog.String(applog.KeyProjectID, request.ProjectId.String()),
+		slog.String(applog.KeyTaskID, t.ID.String()))
+
+	return DeleteProject202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
 }
 
 // --- Branches --------------------------------------------------------------
 
 // CreateBranch forks an existing branch (the parent) in the project into a new
 // branch. The parent defaults to the project's default branch; pass
-// parent_branch_id to fork off another branch (branch-of-branch). Like
-// create-project it records a recipe — the control-plane row plus the storage
-// controller's pending-init, this time with the ancestor and fork LSN set — and
-// materializes lazily at the first endpoint deployed on the branch
-// (controller-project-create.md). #113 moves the recipe writes onto the
-// write-ahead task framework.
+// parent_branch_id to fork off another branch (branch-of-branch). It validates
+// and resolves the fork point synchronously (resolveForkLSN), then plans a
+// `branch` task (create_branch -> record_branch_recipe with the ancestor set)
+// and returns 202 + the Task. The worker records the branch row and the storage
+// controller's pending-init recipe — this time with the ancestor and fork LSN
+// set — which materializes lazily at the first endpoint deployed on the branch
+// (controller-project-create.md).
 func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequestObject) (CreateBranchResponseObject, error) {
 	if request.Body == nil {
 		return CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
@@ -337,45 +357,36 @@ func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequ
 		return errResp, nil
 	}
 
-	br, err := c.backend.CreateBranch(ctx, request.PoolId, request.ProjectId, parentBranchID, name, forkLSN)
-	switch {
-	case errors.Is(err, core.ErrNotFound):
-		return CreateBranch404JSONResponse{NotFoundJSONResponse(apiError("not_found", "parent branch not found"))}, nil
-	case errors.Is(err, core.ErrConflict):
-		return CreateBranch409JSONResponse{ConflictJSONResponse(apiError("conflict", "a branch with that name already exists in the project"))}, nil
-	case err != nil:
-		return nil, fmt.Errorf("create branch: %w", err)
+	// Plan the work as an async task and return 202 + the Task. The branch row,
+	// its (ancestor-bearing) pending-init recipe, and (later) any endpoint are
+	// created by the worker; a duplicate branch name now surfaces as a failed task
+	// rather than a synchronous 409. The branch inherits the parent's pg_version.
+	// WithWriter:false preserves "create branch does not deploy an endpoint".
+	t, err := c.tasks.Branch(ctx, task.BranchInput{
+		PoolID:         request.PoolId,
+		ProjectID:      request.ProjectId,
+		ParentBranchID: parentBranchID,
+		Name:           name,
+		ForkLSN:        forkLSN,
+		PgVersion:      parent.PgVersion,
+		WithWriter:     false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create branch task: %w", err)
 	}
 
-	// Record the branch recipe with the storage controller, keyed by the new
-	// branch's storage branch_id, with the ancestor (the parent's branch_id) and
-	// the fork LSN set. Synchronous for now (#113).
-	if c.prov.SC != nil {
-		ancestor := hex32(parent.BranchID)
-		if err := c.prov.SC.RecordPendingTimelineInit(ctx,
-			hex32(br.BranchID),
-			storagecontroller.PendingTimelineInit{
-				BranchName:       br.Name,
-				PgVersion:        parent.PgVersion, // a branch inherits the ancestor's version
-				AncestorBranchID: &ancestor,
-				StartLSN:         forkLSN,
-			}); err != nil {
-			return nil, fmt.Errorf("storage controller record pending timeline init: %w", err)
-		}
-	} else {
-		c.logger.LogAttrs(ctx, slog.LevelWarn, "storage controller not available; branch recipe recorded in the control DB only")
-	}
-
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "branch created",
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "create branch task accepted",
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
-		slog.String(applog.KeyProjectID, br.ProjectID.String()),
+		slog.String(applog.KeyProjectID, request.ProjectId.String()),
 		slog.String("parent_branch_id", parent.BranchID.String()),
-		slog.String(applog.KeyBranchID, br.BranchID.String()),
-		slog.String("branch_name", br.Name),
-		slog.String("fork_lsn", forkLSN),
-		slog.Bool("recipe_recorded", c.prov.SC != nil))
+		slog.String(applog.KeyTaskID, t.ID.String()),
+		slog.String("branch_name", name),
+		slog.String("fork_lsn", forkLSN))
 
-	return CreateBranch201JSONResponse(branchToAPI(br)), nil
+	return CreateBranch202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
 }
 
 func (c *Controllers) ListBranches(ctx context.Context, request ListBranchesRequestObject) (ListBranchesResponseObject, error) {
@@ -406,11 +417,51 @@ func (c *Controllers) GetBranch(ctx context.Context, request GetBranchRequestObj
 }
 
 func (c *Controllers) DeleteBranch(ctx context.Context, request DeleteBranchRequestObject) (DeleteBranchResponseObject, error) {
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete branch requested (logged only; task framework pending)",
+	// Cheap pre-check: the branch must exist (404). The cascade delete itself —
+	// retiring the branch's endpoints and dropping the branch row — runs as the
+	// task's idempotent delete_branch step.
+	if _, err := c.backend.GetBranch(ctx, request.PoolId, request.ProjectId, request.BranchId); err != nil {
+		switch {
+		case errors.Is(err, core.ErrNotFound):
+			return DeleteBranch404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
+		default:
+			return nil, fmt.Errorf("get branch: %w", err)
+		}
+	}
+
+	// Synchronous child-fork pre-check: a branch with children cannot be deleted
+	// (the parent FK is RESTRICT). Reject with a clean 409 rather than accepting a
+	// task that is doomed to fail. The step re-checks at Execute time too.
+	branches, _, err := c.backend.ListBranches(ctx, request.PoolId, request.ProjectId, maxPageLimit, 0)
+	if err != nil {
+		return nil, fmt.Errorf("list branches for child-fork check: %w", err)
+	}
+	for _, b := range branches {
+		if b.ParentBranchID != nil && *b.ParentBranchID == request.BranchId {
+			return DeleteBranch409JSONResponse{ConflictJSONResponse(apiError("conflict",
+				"cannot delete a branch that has child branches"))}, nil
+		}
+	}
+
+	t, err := c.tasks.DeleteBranch(ctx, task.DeleteBranchInput{
+		PoolID:    request.PoolId,
+		ProjectID: request.ProjectId,
+		BranchID:  request.BranchId,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("delete branch task: %w", err)
+	}
+
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete branch task accepted",
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
 		slog.String(applog.KeyProjectID, request.ProjectId.String()),
-		slog.String(applog.KeyBranchID, request.BranchId.String()))
-	return DeleteBranch202JSONResponse(loggedAck("delete branch")), nil
+		slog.String(applog.KeyBranchID, request.BranchId.String()),
+		slog.String(applog.KeyTaskID, t.ID.String()))
+
+	return DeleteBranch202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
 }
 
 // lsnRE matches the storage layer's "X/X" LSN form, e.g. "0/16ABCD0". Each half
@@ -490,7 +541,7 @@ func (c *Controllers) parentWriterEndpoint(ctx context.Context, poolID uuid.UUID
 	return core.Endpoint{}, steer
 }
 
-// --- Endpoints (synchronously deployed, #108) ------------------------------
+// --- Endpoints (deployed by a task, #108/#113) -----------------------------
 
 func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpointRequestObject) (CreateEndpointResponseObject, error) {
 	if c.prov.Deployer == nil {
@@ -525,104 +576,34 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		return nil, fmt.Errorf("get branch: %w", err)
 	}
 
-	// config records the spec used to (re)create the endpoint (the endpoint's
-	// own id is the row id, so it is not part of the recreate spec).
-	config, err := json.Marshal(map[string]any{
-		"project_id": br.ProjectID,
-		"branch_id":  br.BranchID,
-		"role":       role,
-		"pg_version": br.PgVersion,
+	// Plan the work as an async task and return 202 + the Task. The endpoint row,
+	// its deploy, and the address record are all created by the worker's
+	// create_endpoint step; the single-writer rule (a duplicate read_write
+	// endpoint) now surfaces as a failed task rather than a synchronous 409. A fork
+	// carries its ancestry so the step clones from the ancestor at the fork LSN
+	// rather than initdb'ing a fresh branch.
+	t, err := c.tasks.CreateEndpoint(ctx, task.CreateEndpointInput{
+		ProjectID:        br.ProjectID,
+		BranchID:         br.BranchID,
+		Role:             role,
+		PgVersion:        br.PgVersion,
+		AncestorBranchID: br.ParentBranchID,
+		AncestorLSN:      br.ForkLSN,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("encode endpoint config: %w", err)
+		return nil, fmt.Errorf("create endpoint task: %w", err)
 	}
 
-	// Record the row first: it enforces the single-writer rule (409) before we
-	// spend a deploy, and gives the deploy a stable endpoint id. The address is
-	// filled in after the deploy reports ready.
-	ep, err := c.backend.CreateEndpoint(ctx, br.ProjectID, br.BranchID, role, config)
-	switch {
-	case errors.Is(err, core.ErrNotFound):
-		return CreateEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
-	case errors.Is(err, core.ErrConflict):
-		return CreateEndpoint409JSONResponse{ConflictJSONResponse(apiError("conflict", "a read_write endpoint already exists for this branch"))}, nil
-	case err != nil:
-		return nil, fmt.Errorf("create endpoint: %w", err)
-	}
-
-	// Deploy synchronously. The deployer launches the endpoint, which (in SC mode,
-	// with bootstrap) materializes the branch and registers/attaches to the
-	// controller, then returns the address clients connect to. On failure, remove
-	// the row we just committed so it doesn't linger with nothing deployed — a
-	// background context so cleanup runs even if the request ctx was cancelled.
-	// The instance name is keyed by the endpoint id (unique per endpoint), since a
-	// branch can carry more than one endpoint (a writer plus read replicas). The
-	// deploy spec speaks the storage layer's single branch id, which is the
-	// product branch id verbatim.
-	spec := deploy.EndpointSpec{
-		Name:                 endpointDeployName(ep.ID),
-		BranchID:             hex32(br.BranchID),
-		PgVersion:            br.PgVersion,
-		YB:                   c.prov.EndpointYB,
-		StorageControllerURL: c.prov.SCEndpointURL,
-		Bootstrap:            c.prov.Bootstrap,
-	}
-	// A fork must clone from its ancestor at the fork LSN, not initdb a fresh
-	// branch — otherwise it comes up empty. The deployer relays the ancestor to
-	// the endpoint, whose pageserver writes a Branch init recipe (lineage reads
-	// serve the pre-fork pages from shared storage). Bootstrap is forced off.
-	if br.ParentBranchID != nil {
-		spec.AncestorBranchID = hex32(*br.ParentBranchID)
-		spec.AncestorLSN = br.ForkLSN
-		spec.Bootstrap = false
-	}
-	deployed, err := c.prov.Deployer.CreateEndpoint(ctx, spec)
-	if err != nil {
-		if derr := c.backend.DeleteEndpoint(context.Background(), ep.ID); derr != nil {
-			c.logger.LogAttrs(ctx, slog.LevelError, "failed to remove endpoint after deploy failure",
-				slog.String(applog.KeyEndpointID, ep.ID.String()), slog.String("error", derr.Error()))
-		}
-		return nil, fmt.Errorf("deploy endpoint: %w", err)
-	}
-	// The deploy succeeded — the endpoint is live, so finish recording it on a
-	// context a cancelled request can't abort. Otherwise a client disconnect
-	// between the deploy and the address write would orphan the running endpoint
-	// (the deploy-failure branch above compensates; this step must too). If the
-	// address genuinely can't be recorded, retire the just-deployed endpoint so a
-	// retry isn't blocked by a half-written row.
-	recCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	if err := c.backend.SetEndpointAddress(recCtx, ep.ID, deployed.Address); err != nil {
-		if derr := c.prov.Deployer.DeleteEndpoint(recCtx, endpointDeployName(ep.ID)); derr != nil {
-			c.logger.LogAttrs(recCtx, slog.LevelError, "failed to retire endpoint after address-record failure",
-				slog.String(applog.KeyEndpointID, ep.ID.String()), slog.String("error", derr.Error()))
-		}
-		if derr := c.backend.DeleteEndpoint(recCtx, ep.ID); derr != nil {
-			c.logger.LogAttrs(recCtx, slog.LevelError, "failed to remove endpoint row after address-record failure",
-				slog.String(applog.KeyEndpointID, ep.ID.String()), slog.String("error", derr.Error()))
-		}
-		return nil, fmt.Errorf("record endpoint address: %w", err)
-	}
-	ep.Address = deployed.Address
-
-	// The endpoint has materialized the branch (its supervisor ran initdb and
-	// registered it with the storage controller), so drop the pending-init recipe.
-	// On recCtx so a cancelled request still consumes it. Best-effort and
-	// idempotent: a no-op for a branch an earlier endpoint already materialized,
-	// and a lingering recipe is harmless (nothing reads it).
-	if c.prov.SC != nil {
-		if err := c.prov.SC.DeletePendingTimelineInit(recCtx, hex32(br.BranchID)); err != nil {
-			c.logger.LogAttrs(recCtx, slog.LevelWarn, "failed to delete pending timeline init (continuing)",
-				slog.String(applog.KeyEndpointID, ep.ID.String()), slog.String("error", err.Error()))
-		}
-	}
-
-	c.logger.LogAttrs(recCtx, slog.LevelInfo, "endpoint created and deployed",
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "create endpoint task accepted",
 		slog.String(applog.KeyProjectID, br.ProjectID.String()),
 		slog.String(applog.KeyBranchID, request.BranchId.String()),
-		slog.String(applog.KeyEndpointID, ep.ID.String()),
-		slog.String("address", deployed.Address))
-	return CreateEndpoint201JSONResponse(endpointToAPI(ep)), nil
+		slog.String(applog.KeyTaskID, t.ID.String()),
+		slog.String("role", role))
+
+	return CreateEndpoint202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
 }
 
 func (c *Controllers) GetEndpoint(ctx context.Context, request GetEndpointRequestObject) (GetEndpointResponseObject, error) {
@@ -656,25 +637,34 @@ func (c *Controllers) DeleteEndpoint(ctx context.Context, request DeleteEndpoint
 	if c.prov.Deployer == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
 	}
-	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ProjectId, request.BranchId, request.EndpointId)
-	switch {
-	case errors.Is(err, core.ErrNotFound):
-		return DeleteEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "endpoint not found"))}, nil
-	case err != nil:
-		return nil, fmt.Errorf("get endpoint: %w", err)
+	if _, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ProjectId, request.BranchId, request.EndpointId); err != nil {
+		switch {
+		case errors.Is(err, core.ErrNotFound):
+			return DeleteEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "endpoint not found"))}, nil
+		default:
+			return nil, fmt.Errorf("get endpoint: %w", err)
+		}
 	}
-	// Retire synchronously: remove the running instance, then drop the record.
-	// Both are idempotent, so a retried request converges. The deployer keys the
-	// instance by the endpoint name (= the spec.Name CreateEndpoint launched).
-	if err := c.prov.Deployer.DeleteEndpoint(ctx, endpointDeployName(ep.ID)); err != nil {
-		return nil, fmt.Errorf("retire endpoint: %w", err)
+
+	// Plan the work as an async task and return 202 + the Task. Retiring the
+	// running instance and dropping the record run as the worker's idempotent
+	// delete_endpoint step.
+	t, err := c.tasks.DeleteEndpoint(ctx, task.DeleteEndpointInput{
+		ProjectID:  request.ProjectId,
+		EndpointID: request.EndpointId,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("delete endpoint task: %w", err)
 	}
-	if err := c.backend.DeleteEndpoint(ctx, ep.ID); err != nil {
-		return nil, fmt.Errorf("delete endpoint: %w", err)
-	}
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "endpoint retired",
-		slog.String(applog.KeyEndpointID, ep.ID.String()))
-	return DeleteEndpoint204Response{}, nil
+
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete endpoint task accepted",
+		slog.String(applog.KeyEndpointID, request.EndpointId.String()),
+		slog.String(applog.KeyTaskID, t.ID.String()))
+
+	return DeleteEndpoint202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
 }
 
 // --- Tasks -----------------------------------------------------------------
@@ -690,14 +680,42 @@ func (c *Controllers) GetTask(ctx context.Context, request GetTaskRequestObject)
 	return GetTask200JSONResponse(taskToAPI(t)), nil
 }
 
-// --- mapping helpers -------------------------------------------------------
+func (c *Controllers) ListTasks(ctx context.Context, request ListTasksRequestObject) (ListTasksResponseObject, error) {
+	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
 
-func loggedAck(what string) OperationAck {
-	return OperationAck{
-		Acknowledged: true,
-		Detail:       what + " logged; execution is pending the task framework",
+	// Zero-value filter fields are unfiltered: an empty Status/Kind matches any,
+	// and a nil ProjectID matches any project. The server has no wire-level enum
+	// validator middleware, so an unrecognized status must be rejected here —
+	// otherwise it reaches the Postgres ::task_status cast and surfaces as a 500.
+	f := task.TaskFilter{}
+	if request.Params.Status != nil {
+		switch task.Status(*request.Params.Status) {
+		case task.StatusPending, task.StatusRunning, task.StatusSucceeded, task.StatusFailed:
+			f.Status = task.Status(*request.Params.Status)
+		default:
+			return ListTasks400JSONResponse{BadRequestJSONResponse(apiError("invalid_argument",
+				"status must be one of pending, running, succeeded, failed"))}, nil
+		}
 	}
+	if request.Params.Kind != nil {
+		f.Kind = *request.Params.Kind
+	}
+	if request.Params.ProjectId != nil {
+		f.ProjectID = request.Params.ProjectId
+	}
+
+	tasks, total, err := c.tasks.List(ctx, f, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks: %w", err)
+	}
+	out := make([]Task, 0, len(tasks))
+	for _, t := range tasks {
+		out = append(out, taskToAPI(t))
+	}
+	return ListTasks200JSONResponse(TaskList{Tasks: out, Total: total, Count: len(out)}), nil
 }
+
+// --- mapping helpers -------------------------------------------------------
 
 func userToAPI(u core.User) User {
 	return User{Id: u.ID, IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt}

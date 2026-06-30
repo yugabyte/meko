@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"sync"
 	"time"
 
@@ -172,6 +173,48 @@ func (s *MemStore) Get(_ context.Context, id uuid.UUID) (*Task, error) {
 		return nil, nil
 	}
 	return cloneTask(t), nil
+}
+
+// List returns a page of tasks matching f, ordered created_at DESC (newest
+// first), plus the total matching count. It mirrors PgStore.List so the two
+// stores paginate identically: ties on created_at break on id DESC.
+func (s *MemStore) List(_ context.Context, f TaskFilter, limit, offset int) ([]*Task, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var matched []*Task
+	for _, t := range s.tasks {
+		if f.Status != "" && t.Status != f.Status {
+			continue
+		}
+		if f.Kind != "" && t.Kind != f.Kind {
+			continue
+		}
+		if f.ProjectID != nil && (t.ProjectID == nil || *t.ProjectID != *f.ProjectID) {
+			continue
+		}
+		matched = append(matched, t)
+	}
+	sort.SliceStable(matched, func(i, j int) bool {
+		if matched[i].CreatedAt.Equal(matched[j].CreatedAt) {
+			return matched[i].ID.String() > matched[j].ID.String() // id DESC tiebreak
+		}
+		return matched[i].CreatedAt.After(matched[j].CreatedAt) // created_at DESC
+	})
+	total := len(matched)
+	matched = page(matched, limit, offset)
+	out := make([]*Task, len(matched))
+	for i, t := range matched {
+		out[i] = cloneTask(t)
+	}
+	return out, total, nil
+}
+
+// page returns the half-open window items[offset : offset+limit], clamped to the
+// slice bounds. The API layer guarantees limit >= 1 and offset >= 0.
+func page[T any](items []T, limit, offset int) []T {
+	start := min(offset, len(items))
+	end := min(start+limit, len(items))
+	return items[start:end]
 }
 
 // Compile-time assertion that MemStore satisfies the Store interface.

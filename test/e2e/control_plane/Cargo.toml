@@ -17,6 +17,7 @@ path = "main.rs"
 [dependencies]
 e2e_common = { path = "../libs/e2e_common" }
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 reqwest = { workspace = true, features = ["json"] }

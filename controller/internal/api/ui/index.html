@@ -121,6 +121,9 @@
     .btn:hover { background: #f3f5f7; }
     .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
     .btn.primary:hover { filter: brightness(0.96); }
+    .btn.danger { color: var(--danger); border-color: #f1c7c7; background: var(--surface); }
+    .btn.danger:hover { background: var(--danger-soft); }
+    .btn.small { padding: 4px 9px; font-size: 12px; }
     .btn:disabled { opacity: 0.55; cursor: default; }
 
     .inline-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -157,7 +160,7 @@
     .meta { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; gap: 16px; flex-wrap: wrap; }
     .meta .k { color: var(--muted); }
     .endpoints { margin-top: 10px; padding-left: 14px; border-left: 2px solid var(--border); }
-    .endpoint { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 3px 0; }
+    .endpoint { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 3px 0; flex-wrap: wrap; }
     .endpoint .addr { font-family: ui-monospace, monospace; }
 
     #toast {
@@ -187,6 +190,31 @@
 
     .spinner { color: var(--muted); padding: 24px 16px; font-size: 13px; }
     .section-actions { margin-bottom: 12px; }
+
+    /* Recent-tasks panel, docked bottom-right above the toast. */
+    #tasks-panel {
+      position: fixed; right: 20px; bottom: 20px; width: 360px; max-width: calc(100vw - 40px);
+      max-height: 50vh; display: flex; flex-direction: column; z-index: 40;
+      box-shadow: 0 8px 24px rgba(16, 24, 40, 0.16);
+    }
+    #tasks-panel .card-head { padding: 10px 14px; }
+    #tasks-panel .card-head h3 { font-size: 13px; }
+    #tasks-body { overflow-y: auto; padding: 8px 14px; }
+    .task-row {
+      display: flex; align-items: center; gap: 8px; padding: 7px 0;
+      border-bottom: 1px solid var(--border); font-size: 12px;
+    }
+    .task-row:last-child { border-bottom: none; }
+    .task-row .kind { font-weight: 600; }
+    .task-row .when { color: var(--muted); margin-left: auto; white-space: nowrap; }
+    .task-row .task-err { flex-basis: 100%; color: var(--danger); font-size: 12px; }
+    .badge.pending { background: #eef1f4; color: var(--muted); }
+    .badge.running { background: var(--info-soft); color: var(--info); }
+    .badge.succeeded { background: var(--ok-soft); color: var(--ok); }
+    .badge.failed { background: var(--danger-soft); color: var(--danger); }
+    @media (max-width: 720px) {
+      #tasks-panel { position: static; right: auto; bottom: auto; width: auto; max-width: none; margin: 18px auto 0; max-width: 980px; }
+    }
   </style>
 </head>
 <body>
@@ -199,6 +227,20 @@
     <a class="docs-link" href="/api/v1/docs" target="_blank" rel="noopener">API docs ↗</a>
   </header>
   <main id="app"><div class="spinner">Loading…</div></main>
+
+  <!-- Recent-tasks panel. Lives outside #app so a route re-render leaves it in
+       place; it is refreshed after every mutation and on demand. -->
+  <section id="tasks-panel" class="card">
+    <div class="card-head">
+      <h3>Recent tasks</h3>
+      <div class="spacer"></div>
+      <button class="btn small" id="tasks-refresh">Refresh</button>
+    </div>
+    <div class="card-body" id="tasks-body">
+      <div class="empty">No tasks yet.</div>
+    </div>
+  </section>
+
   <div id="toast"></div>
 
   <!-- Create-branch modal. Lives outside #app so a route re-render can't wipe it;
@@ -317,6 +359,12 @@
       api("GET", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints${PAGE}`);
     const createEndpoint= (poolId, projectId, branchId, role) =>
       api("POST", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints`, { role });
+    const deleteEndpoint= (poolId, projectId, branchId, endpointId) =>
+      api("DELETE", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints/${endpointId}`);
+    const deleteProject = (poolId, projectId) =>
+      api("DELETE", `/storage-pools/${poolId}/projects/${projectId}`);
+    const deleteBranch  = (poolId, projectId, branchId) =>
+      api("DELETE", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}`);
     // Fork a branch into a new branch. parentBranchId is the branch to fork off
     // (the default branch or another branch — branch-of-branch). forkLsn is
     // optional (defaults to the parent's latest LSN server-side); pass it only
@@ -326,6 +374,34 @@
       if (forkLsn) body.fork_point_lsn = forkLsn;
       return api("POST", `/storage-pools/${poolId}/projects/${projectId}/branches`, body);
     };
+
+    // --- tasks ---------------------------------------------------------------
+    // The six mutating endpoints (create/delete project, branch, endpoint) no
+    // longer return the resource: they return 202 + a Task, and the work runs
+    // asynchronously. The client POSTs, then polls GET /tasks/{id} until the
+    // task reaches a terminal status, then refreshes the relevant list.
+
+    const getTask  = (id) => api("GET", `/tasks/${id}`);
+    const listTasks= (limit) => api("GET", `/tasks?limit=${limit || 20}`);
+
+    // Poll a task to completion. Resolves with the succeeded Task; rejects with
+    // an Error carrying the task's error string on failure (or a timeout). The
+    // ~750ms cadence keeps the UI responsive without hammering the API; the
+    // timeout (default 2min) covers a slow endpoint deploy without hanging forever.
+    async function pollTask(taskId, { intervalMs = 750, timeoutMs = 120000 } = {}) {
+      const deadline = Date.now() + timeoutMs;
+      while (true) {
+        const t = await getTask(taskId);
+        if (t.status === "succeeded") return t;
+        if (t.status === "failed") {
+          throw new Error(t.error || `task ${shortId(taskId)} failed`);
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`timed out waiting for task ${shortId(taskId)} (still ${t.status})`);
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    }
 
     // --- router --------------------------------------------------------------
 
@@ -507,14 +583,19 @@
           const input = app.querySelector(`.new-project[data-pool="${poolId}"]`);
           const name = input.value.trim();
           if (!name) { toast("Enter a project name"); return; }
+          const prev = btn.textContent;
           btn.disabled = true;
+          btn.textContent = "Creating…";
           try {
-            await createProject(poolId, name);
+            const task = await createProject(poolId, name);
+            await pollTask(task.id);
             toast("Project created", true);
             input.value = "";
             await hydratePool(poolId, userId);
           } catch (err) { toast(err.message); }
+          finally { refreshTasks(); }
           btn.disabled = false;
+          btn.textContent = prev;
         });
       });
     }
@@ -536,6 +617,8 @@
           <div class="pj-head">
             <span class="pj-name">${esc(p.name)}</span>
             <span class="badge muted">project</span>
+            <span class="spacer" style="flex:1"></span>
+            <button class="btn danger delete-project" data-pool="${esc(poolId)}" data-project="${esc(p.id)}" data-name="${esc(p.name)}">Delete project</button>
           </div>
           <div class="meta">
             <span><span class="k">project</span> ${idChip(p.id)}</span>
@@ -547,6 +630,30 @@
         </div>`).join("");
 
       bind();
+
+      // Delete-project: confirm, fire the DELETE (202 + Task), poll, then
+      // re-list this pool's projects so the removed one disappears.
+      host.querySelectorAll(".delete-project").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const projectId = btn.getAttribute("data-project");
+          const name = btn.getAttribute("data-name");
+          if (!confirm(`Delete project "${name}"? This retires every endpoint and drops all its branches. This cannot be undone.`)) return;
+          const prev = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = "Deleting…";
+          try {
+            const task = await deleteProject(poolId, projectId);
+            await pollTask(task.id);
+            toast("Project deleted", true);
+            await hydratePool(poolId, userId);
+          } catch (err) {
+            toast(err.message);
+            btn.disabled = false;
+            btn.textContent = prev;
+          } finally { refreshTasks(); }
+        });
+      });
+
       // Branches per project, in parallel.
       projects.forEach((p) => hydrateBranches(poolId, p.id, userId));
     }
@@ -625,6 +732,8 @@
               <span class="br-name">${esc(b.name)}</span>
               ${b.is_default ? '<span class="badge default">default</span>' : '<span class="badge muted">branch</span>'}
               <span class="badge muted">pg ${esc(b.pg_version)}</span>
+              <span class="spacer" style="flex:1"></span>
+              ${b.is_default ? '' : `<button class="btn danger delete-branch">Delete branch</button>`}
             </div>
             <div class="meta">
               <span><span class="k">branch</span> ${idChip(b.branch_id)}</span>
@@ -636,6 +745,28 @@
             </div>
           </div>`;
         bind();
+
+        // Delete-branch: confirm, fire the DELETE (202 + Task), poll, then
+        // re-hydrate the branch list (falling back to the default branch).
+        const delBr = detail.querySelector(".delete-branch");
+        if (delBr) {
+          delBr.addEventListener("click", async () => {
+            if (!confirm(`Delete branch "${b.name}"? This retires its endpoints and drops the branch. This cannot be undone.`)) return;
+            const prev = delBr.textContent;
+            delBr.disabled = true;
+            delBr.textContent = "Deleting…";
+            try {
+              const task = await deleteBranch(poolId, projectId, b.branch_id);
+              await pollTask(task.id);
+              toast("Branch deleted", true);
+              await hydrateBranches(poolId, projectId, userId);
+            } catch (err) {
+              toast(err.message);
+              delBr.disabled = false;
+              delBr.textContent = prev;
+            } finally { refreshTasks(); }
+          });
+        }
 
         hydrateEndpoints(poolId, projectId, b.branch_id);
       }
@@ -664,16 +795,18 @@
               <span class="badge ${cls}">${label}</span>
               <span class="addr">${esc(ep.address)}</span>
               ${idChip(ep.id)}
-              <div class="cred" style="font-size:12px; margin-top:4px; color:var(--muted)">
+              <button class="btn danger delete-endpoint" data-endpoint="${esc(ep.id)}" data-role="${esc(label)}" style="margin-left:auto">Delete</button>
+              <div class="cred" style="font-size:12px; margin-top:4px; color:var(--muted); flex-basis:100%">
                 user <code>cloud_admin</code> · password <code>cloud_admin</code> · db <code>postgres</code>
                 <button class="copy" data-copy="${esc(conn)}" title="Copy connection string">${COPY_ICON}</button>
               </div>
             </div>`;
           }).join("")
         : `<div class="muted" style="font-size:12px">No endpoints yet.</div>`;
-      // Compute is provisioned in a separate, synchronous step: the controller
-      // Helm-deploys the endpoint pod and waits for it to be ready before the
-      // call returns (so the button blocks for the duration).
+      // Compute is a separate resource: the controller accepts the request
+      // (202 + Task) and deploys the endpoint asynchronously in a task. The
+      // client polls GET /tasks/{id} (pollTask) until it succeeds, then
+      // refreshes the endpoint list.
       const provision = `
         <div class="inline-form" style="margin-top:8px">
           <select class="ep-role" aria-label="endpoint role">
@@ -693,16 +826,41 @@
           epBtn.disabled = true;
           epBtn.textContent = "Provisioning… (~30–60s)";
           try {
-            await createEndpoint(poolId, projectId, branchId, role);
+            // POST returns 202 + a Task; the worker deploys the compute pod and
+            // records its address. Poll until the task settles, then re-list.
+            const task = await createEndpoint(poolId, projectId, branchId, role);
+            await pollTask(task.id);
             toast("Endpoint provisioned", true);
             await hydrateEndpoints(poolId, projectId, branchId);
           } catch (err) {
             toast(err.message);
             epBtn.disabled = false;
             epBtn.textContent = prev;
-          }
+          } finally { refreshTasks(); }
         });
       }
+
+      // Delete-endpoint: confirm, fire the DELETE (202 + Task), poll, re-list.
+      host.querySelectorAll(".delete-endpoint").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const endpointId = btn.getAttribute("data-endpoint");
+          const roleLabel = btn.getAttribute("data-role");
+          if (!confirm(`Delete the ${roleLabel} endpoint ${shortId(endpointId)}? The running compute is retired.`)) return;
+          const prev = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = "Deleting…";
+          try {
+            const task = await deleteEndpoint(poolId, projectId, branchId, endpointId);
+            await pollTask(task.id);
+            toast("Endpoint deleted", true);
+            await hydrateEndpoints(poolId, projectId, branchId);
+          } catch (err) {
+            toast(err.message);
+            btn.disabled = false;
+            btn.textContent = prev;
+          } finally { refreshTasks(); }
+        });
+      });
     }
 
     // --- error panel ---------------------------------------------------------
@@ -758,21 +916,67 @@
       const forkLsn = bdLsn.value.trim();
       bdSubmit.disabled = true;
       bdError.hidden = true;
+      bdSubmit.textContent = "Creating…";
       try {
-        const created = await createBranch(bdCtx.poolId, bdCtx.projectId, bdCtx.parentId, name, forkLsn);
+        // POST returns 202 + a Task; poll it to completion, then re-list the
+        // branches. target_ref carries the new branch id, so pre-select it.
+        const task = await createBranch(bdCtx.poolId, bdCtx.projectId, bdCtx.parentId, name, forkLsn);
+        const done = await pollTask(task.id);
         branchDialog.close();
         toast("Branch created", true);
-        await hydrateBranches(bdCtx.poolId, bdCtx.projectId, bdCtx.userId, created.branch_id);
+        await hydrateBranches(bdCtx.poolId, bdCtx.projectId, bdCtx.userId, done.target_ref || undefined);
       } catch (err) {
         bdShowError(err.message);
         bdSubmit.disabled = false;
+      } finally {
+        bdSubmit.textContent = "Create branch";
+        refreshTasks();
       }
     });
+
+    // --- recent-tasks panel --------------------------------------------------
+    // A read-only window onto GET /tasks (newest first). Refreshed after every
+    // mutation (so a just-finished task shows its terminal status) and via the
+    // panel's own Refresh button.
+
+    const tasksBody = document.getElementById("tasks-body");
+
+    function taskRow(t) {
+      const status = String(t.status || "");
+      const err = t.status === "failed" && t.error
+        ? `<span class="task-err">${esc(t.error)}</span>` : "";
+      return `<div class="task-row">
+        <span class="badge ${esc(status)}">${esc(status)}</span>
+        <span class="kind mono">${esc(t.kind)}</span>
+        <span class="when">${fmtDate(t.updated_at || t.created_at)}</span>
+        ${err}
+      </div>`;
+    }
+
+    let tasksRefreshing = false;
+    async function refreshTasks() {
+      if (tasksRefreshing) return;
+      tasksRefreshing = true;
+      try {
+        const data = await listTasks(20);
+        const tasks = data.tasks || [];
+        tasksBody.innerHTML = tasks.length
+          ? tasks.map(taskRow).join("")
+          : `<div class="empty">No tasks yet.</div>`;
+      } catch (e) {
+        tasksBody.innerHTML = `<div class="empty">Failed to load tasks: ${esc(e.message)}</div>`;
+      } finally {
+        tasksRefreshing = false;
+      }
+    }
+
+    document.getElementById("tasks-refresh").addEventListener("click", refreshTasks);
 
     // --- boot ----------------------------------------------------------------
 
     window.addEventListener("hashchange", route);
     route();
+    refreshTasks();
   </script>
 </body>
 </html>

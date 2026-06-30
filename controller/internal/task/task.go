@@ -80,7 +80,8 @@ type TaskSpec struct {
 
 // Step is one executable step in a task: a unit of work that carries its own
 // typed args and its collaborators (both bound at construction — see the
-// New…Step constructors). A plan is an ordered []Step (plan.go); the worker
+// New…Step constructors). A plan is an ordered []Step (tasks.go: Service.CreateX
+// builds the StepSpecs); the worker
 // persists each as a StepRecord, then rebuilds and runs it via the Registry.
 // Implementations must be idempotent: a step can be re-run after a crash or
 // partial execution and must converge to the same result (§8). A step's deps are

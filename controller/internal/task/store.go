@@ -46,6 +46,20 @@ type Store interface {
 
 	// Get returns a task by id, or nil if it does not exist.
 	Get(ctx context.Context, id uuid.UUID) (*Task, error)
+
+	// List returns a page of tasks matching the filter, ordered by created_at
+	// DESC (newest first), plus the total number of matching tasks (ignoring the
+	// page window). A zero-value TaskFilter is unfiltered.
+	List(ctx context.Context, f TaskFilter, limit, offset int) ([]*Task, int, error)
+}
+
+// TaskFilter narrows a List query. Zero-value fields are unfiltered: an empty
+// Status or Kind matches any, and a nil ProjectID matches any project (including
+// project-less tasks).
+type TaskFilter struct {
+	Status    Status     // "" => any
+	Kind      string     // "" => any
+	ProjectID *uuid.UUID // nil => any
 }
 
 // PgStore is the YBDB-backed Store.
@@ -242,6 +256,65 @@ func (s *PgStore) Get(ctx context.Context, id uuid.UUID) (*Task, error) {
 		return nil, nil
 	}
 	return t, err
+}
+
+// List returns a page of tasks matching f, ordered created_at DESC, plus the
+// total matching count. Filters are applied via optional, positionally-numbered
+// predicates so an unset field widens the result rather than excluding rows.
+func (s *PgStore) List(ctx context.Context, f TaskFilter, limit, offset int) ([]*Task, int, error) {
+	var (
+		where string
+		args  []any
+	)
+	add := func(pred string, arg any) {
+		args = append(args, arg)
+		clause := fmt.Sprintf(pred, len(args))
+		if where == "" {
+			where = " WHERE " + clause
+		} else {
+			where += " AND " + clause
+		}
+	}
+	if f.Status != "" {
+		add("status = $%d::task_status", string(f.Status))
+	}
+	if f.Kind != "" {
+		add("kind = $%d", f.Kind)
+	}
+	if f.ProjectID != nil {
+		add("project_id = $%d::uuid", f.ProjectID.String())
+	}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM task`+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count tasks: %w", err)
+	}
+
+	// The page args follow the filter args positionally.
+	limitArg := len(args) + 1
+	offsetArg := len(args) + 2
+	args = append(args, limit, offset)
+	rows, err := s.pool.Query(ctx,
+		fmt.Sprintf(`SELECT %s FROM task%s ORDER BY created_at DESC, id DESC LIMIT $%d OFFSET $%d`,
+			taskColumns, where, limitArg, offsetArg),
+		args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []*Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		tasks = append(tasks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate tasks: %w", err)
+	}
+	return tasks, total, nil
 }
 
 // row is satisfied by both pgx.Row and a single pgx.Rows.

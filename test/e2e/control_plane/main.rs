@@ -28,9 +28,21 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use e2e_common::db;
+
+/// Poll budget for a metadata-only task (create/delete project, create/delete
+/// branch). These only write control-plane rows + recipes, so they settle fast.
+const TASK_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Poll budget for an endpoint task (create/delete endpoint). Creating an
+/// endpoint actually starts a pod/container (and, for the first endpoint on a
+/// branch, materializes it / clones from an ancestor), so it can take tens of
+/// seconds; give it a generous ceiling (real pod deploys on a loaded cluster
+/// need headroom beyond the metadata-task budget).
+const ENDPOINT_TASK_TIMEOUT: Duration = Duration::from_secs(240);
 
 /// Print a step banner. (The storage suite's `step` also tees to a run log;
 /// this suite just prints to stdout.)
@@ -104,6 +116,30 @@ struct ProjectRef {
     default_branch: BranchRef,
 }
 
+/// The lifecycle status of an async task, as the controller reports it. The six
+/// mutating endpoints (create/delete project, branch, endpoint) now return a
+/// `Task` and run the work in the background; the client polls until it reaches
+/// a terminal state.
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TaskStatus {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+}
+
+/// A controller async task. Only the fields the harness acts on are decoded;
+/// `params`/`created_at`/etc. are ignored. `error` is set when `status` is
+/// `failed`.
+#[derive(Deserialize)]
+struct Task {
+    id: String,
+    #[serde(default)]
+    error: Option<String>,
+    status: TaskStatus,
+}
+
 impl AmpClient {
     fn new(base_url: &str) -> Self {
         let root = base_url.trim_end_matches('/').to_string();
@@ -154,6 +190,63 @@ impl AmpClient {
         serde_json::from_str(&text).with_context(|| format!("decoding {url} response: {text}"))
     }
 
+    /// Decode a value the controller already returned (200/201/202) into a
+    /// concrete type. The HTTP-status check lives in `post`/`get`/`send_task`.
+    fn decode<T: serde::de::DeserializeOwned>(url: &str, text: &str) -> Result<T> {
+        serde_json::from_str(text).with_context(|| format!("decoding {url} response: {text}"))
+    }
+
+    /// Issue a mutating request (POST or DELETE), expect `202`, and decode the
+    /// `Task` the controller returns. Used by the async create/delete flows; the
+    /// caller then drives [`poll_task`] to a terminal state.
+    async fn send_task(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Task> {
+        let url = format!("{}{path}", self.base);
+        let mut req = self.http.request(method.clone(), &url);
+        if let Some(b) = body {
+            req = req.json(&b);
+        }
+        let resp = req.send().await.with_context(|| format!("{method} {url}"))?;
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap_or_default();
+        if status != 202 {
+            bail!("{method} {url} -> {status} (want 202): {text}");
+        }
+        Self::decode(&url, &text)
+    }
+
+    /// Poll `GET /tasks/{id}` every ~500ms until the task reaches a terminal
+    /// state. Returns `Ok(())` on `succeeded`, an error carrying `task.error` on
+    /// `failed`, and times out otherwise. The timeout is generous — a
+    /// create_endpoint task actually starts a pod/container.
+    async fn poll_task(&self, task_id: &str, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let v = self.get(&format!("/tasks/{task_id}")).await.with_context(|| format!("poll task {task_id}"))?;
+            let task: Task = serde_json::from_value(v).context("decoding task")?;
+            let last_status = match task.status {
+                TaskStatus::Succeeded => return Ok(()),
+                TaskStatus::Failed => {
+                    let err = task.error.unwrap_or_else(|| "(no error message)".to_string());
+                    bail!("task {task_id} failed: {err}");
+                }
+                TaskStatus::Pending => "pending",
+                TaskStatus::Running => "running",
+            };
+            if Instant::now() >= deadline {
+                bail!("task {task_id} not terminal within {timeout:?} (last status: {last_status})");
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+
+    /// Run a mutating request as an async task end to end: send it, expect a
+    /// `202` + `Task`, then poll to a terminal state. The materialized resource
+    /// (if any) is fetched separately by the caller once this returns `Ok`.
+    async fn run_task(&self, method: reqwest::Method, path: &str, body: Option<Value>, timeout: Duration) -> Result<()> {
+        let task = self.send_task(method, path, body).await?;
+        self.poll_task(&task.id, timeout).await
+    }
+
     async fn create_user(&self, is_admin: bool) -> Result<String> {
         let v = self.post("/users", json!({ "is_admin": is_admin }), 201).await?;
         field(&v, "id")
@@ -169,19 +262,41 @@ impl AmpClient {
 
     /// Create a project (a tenant) and its default branch. Returns the project
     /// path id, its tenant hex, and the default branch. Does not deploy compute.
+    ///
+    /// Async-task flow: `POST .../projects` now returns `202` + a `Task`; we poll
+    /// it to `succeeded`, then list the pool's projects to read back the
+    /// materialized project (its id + default branch) by name.
     async fn create_project(&self, pool: &str, name: &str, pg_version: u32) -> Result<ProjectRef> {
-        let v = self
-            .post(
-                &format!("/storage-pools/{pool}/projects"),
-                json!({ "name": name, "pg_version": pg_version }),
-                201,
-            )
-            .await?;
+        self.run_task(
+            reqwest::Method::POST,
+            &format!("/storage-pools/{pool}/projects"),
+            Some(json!({ "name": name, "pg_version": pg_version })),
+            TASK_TIMEOUT,
+        )
+        .await?;
+
+        let v = self.find_project(pool, name).await?;
         let id = field(&v, "id")?;
         let tenant_hex = id.replace('-', "");
         let default = v.get("default_branch").context("project response missing default_branch")?;
         let default_branch = branch_ref(default)?;
         Ok(ProjectRef { id, tenant_hex, default_branch })
+    }
+
+    /// List the pool's projects and return the one named `name` (the project a
+    /// just-succeeded create-project task materialized).
+    async fn find_project(&self, pool: &str, name: &str) -> Result<Value> {
+        let list = self.get(&format!("/storage-pools/{pool}/projects?limit=1000")).await?;
+        find_named(&list, "projects", name)
+            .with_context(|| format!("project {name:?} not found after create task succeeded"))
+    }
+
+    /// List the project's branches and return the one named `name` (the branch a
+    /// just-succeeded branch task materialized).
+    async fn find_branch(&self, pool: &str, project: &str, name: &str) -> Result<Value> {
+        let list = self.get(&format!("/storage-pools/{pool}/projects/{project}/branches?limit=1000")).await?;
+        find_named(&list, "branches", name)
+            .with_context(|| format!("branch {name:?} not found after create task succeeded"))
     }
 
     /// Fork a branch into a new one and return the created `Branch` JSON (so the
@@ -204,35 +319,63 @@ impl AmpClient {
         if let Some(l) = fork_point_lsn {
             body["fork_point_lsn"] = json!(l);
         }
-        self.post(&format!("/storage-pools/{pool}/projects/{project}/branches"), body, 201).await
+        // Async-task flow: `POST .../branches` returns `202` + a `Task`; poll it
+        // to `succeeded`, then read back the materialized branch (so the caller
+        // still gets the branch JSON it asserts ancestry on, and its branch_id).
+        self.run_task(
+            reqwest::Method::POST,
+            &format!("/storage-pools/{pool}/projects/{project}/branches"),
+            Some(body),
+            TASK_TIMEOUT,
+        )
+        .await?;
+        self.find_branch(pool, project, name).await
     }
 
-    /// Deploy a read_write endpoint on a branch (synchronously) and return its
-    /// `(endpoint_id, address)`. The first endpoint on a branch materializes it.
+    /// Deploy a read_write endpoint on a branch and return its `(endpoint_id,
+    /// address)`. The first endpoint on a branch materializes it.
+    ///
+    /// Async-task flow: `POST .../endpoints` returns `202` + a `Task`; the task
+    /// actually starts a pod/container, so we poll with the longer
+    /// [`ENDPOINT_TASK_TIMEOUT`]. Once it succeeds we list the branch's endpoints
+    /// and read back the deployed read_write endpoint's id + address.
     async fn create_endpoint(&self, pool: &str, project: &str, branch: &str) -> Result<(String, String)> {
-        let v = self
-            .post(
-                &format!("/storage-pools/{pool}/projects/{project}/branches/{branch}/endpoints"),
-                json!({ "role": "read_write" }),
-                201,
-            )
+        self.run_task(
+            reqwest::Method::POST,
+            &format!("/storage-pools/{pool}/projects/{project}/branches/{branch}/endpoints"),
+            Some(json!({ "role": "read_write" })),
+            ENDPOINT_TASK_TIMEOUT,
+        )
+        .await?;
+
+        let list = self
+            .get(&format!("/storage-pools/{pool}/projects/{project}/branches/{branch}/endpoints?limit=1000"))
             .await?;
-        Ok((field(&v, "id")?, field(&v, "address")?))
+        let endpoints = list.get("endpoints").and_then(Value::as_array).context("endpoint list missing endpoints")?;
+        let ep = endpoints
+            .iter()
+            .find(|e| e.get("role").and_then(Value::as_str) == Some("read_write"))
+            .context("no read_write endpoint found after create task succeeded")?;
+        let id = field(ep, "id")?;
+        let address = field(ep, "address")?;
+        if address.is_empty() {
+            bail!("endpoint {id} has an empty address after create task succeeded");
+        }
+        Ok((id, address))
     }
 
-    /// Synchronously retire an endpoint (best-effort cleanup between iterations).
+    /// Retire an endpoint (best-effort cleanup between iterations).
+    ///
+    /// Async-task flow: `DELETE .../endpoints/{id}` returns `202` + a `Task`;
+    /// poll it to `succeeded`.
     async fn delete_endpoint(&self, pool: &str, project: &str, branch: &str, endpoint: &str) -> Result<()> {
-        let url = format!(
-            "{}/storage-pools/{pool}/projects/{project}/branches/{branch}/endpoints/{endpoint}",
-            self.base
-        );
-        let resp = self.http.delete(&url).send().await.with_context(|| format!("DELETE {url}"))?;
-        let status = resp.status().as_u16();
-        if status != 204 {
-            let text = resp.text().await.unwrap_or_default();
-            bail!("DELETE {url} -> {status} (want 204): {text}");
-        }
-        Ok(())
+        self.run_task(
+            reqwest::Method::DELETE,
+            &format!("/storage-pools/{pool}/projects/{project}/branches/{branch}/endpoints/{endpoint}"),
+            None,
+            ENDPOINT_TASK_TIMEOUT,
+        )
+        .await
     }
 
     /// Get one branch's JSON, by path id.
@@ -252,6 +395,19 @@ fn field(v: &Value, key: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .with_context(|| format!("response missing string field {key:?}: {v}"))
+}
+
+/// Find the element of `list[key]` (a JSON array of resources) whose `name`
+/// field equals `name`. Used to read back a resource materialized by a
+/// just-succeeded async task (names are unique within their scope).
+fn find_named(list: &Value, key: &str, name: &str) -> Result<Value> {
+    let items = list.get(key).and_then(Value::as_array).with_context(|| format!("list missing {key:?} array: {list}"))?;
+    let mut matches = items.iter().filter(|e| e.get("name").and_then(Value::as_str) == Some(name));
+    let first = matches.clone().next().cloned().with_context(|| format!("no {key} entry named {name:?}"))?;
+    if matches.nth(1).is_some() {
+        bail!("ambiguous: more than one {key} entry named {name:?}");
+    }
+    Ok(first)
 }
 
 fn branch_ref(v: &Value) -> Result<BranchRef> {

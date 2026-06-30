@@ -18,6 +18,7 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/core"
 	"github.com/yugabyte/yb-amp/controller/internal/node"
 	"github.com/yugabyte/yb-amp/controller/internal/storagecontroller"
+	"github.com/yugabyte/yb-amp/controller/internal/task"
 )
 
 // fakeSCServer is an httptest stand-in for the managed storage controller's
@@ -78,16 +79,17 @@ func (f *fakeSCServer) start(t *testing.T) *storagecontroller.Client {
 	return storagecontroller.NewClient(ts.Listener.Addr().String())
 }
 
-func newProjectControllers(t *testing.T, sc *storagecontroller.Client) (*api.Controllers, *core.MemBackend) {
-	t.Helper()
-	return newProjectControllersProv(t, api.Provisioning{SC: sc})
-}
-
-func newProjectControllersProv(t *testing.T, prov api.Provisioning) (*api.Controllers, *core.MemBackend) {
+// newProjectControllersProv builds the controllers for the direct-call tests over
+// a fresh MemBackend, wiring a REAL task.Service over a MemStore (the mutating
+// handlers now plan tasks, so a nil service would nil-deref). It returns the
+// controllers, the backend, and that store so a test can drainTasks against the
+// same backend and then read the materialized resource.
+func newProjectControllersProv(t *testing.T, prov api.Provisioning) (*api.Controllers, *core.MemBackend, *task.MemStore) {
 	t.Helper()
 	backend := core.NewMemBackend()
+	store := task.NewMemStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return api.NewControllers(backend, nil, prov, logger), backend
+	return api.NewControllers(backend, task.NewService(store), prov, logger), backend, store
 }
 
 // fakeSafekeeper is an httptest stand-in for an endpoint's co-located safekeeper.
@@ -149,13 +151,37 @@ func seedUserPool(t *testing.T, backend *core.MemBackend) uuid.UUID {
 	return p.ID
 }
 
+// acceptedProjectTask asserts a direct CreateProject call returned a 202 + a
+// pending create_project Task and returns the task's id + project id (the task
+// stamps the project it will create).
+func acceptedProjectTask(t *testing.T, resp api.CreateProjectResponseObject) (taskID, projectID uuid.UUID) {
+	t.Helper()
+	created, ok := resp.(api.CreateProject202JSONResponse)
+	if !ok {
+		t.Fatalf("response = %T, want CreateProject202JSONResponse", resp)
+	}
+	body := created.Body
+	if body.Kind != "create_project" || body.Status != api.TaskStatusPending {
+		t.Errorf("task = {kind:%q status:%q}, want {create_project pending}", body.Kind, body.Status)
+	}
+	if want := "/api/v1/tasks/" + body.Id.String(); created.Headers.Location != want {
+		t.Errorf("Location = %q, want %q", created.Headers.Location, want)
+	}
+	if body.ProjectId == nil {
+		t.Fatal("task project_id = nil, want a real project id")
+	}
+	return body.Id, *body.ProjectId
+}
+
 // TestCreateProjectRecordsPendingInit: with a storage controller wired,
-// create-project records the pending-init recipe for the default branch (no
-// ancestor, start LSN 0/0, pg_version 17) keyed by the 32-hex ids, and does NOT
-// delete it (deletion is deferred to the create-endpoint path).
+// create-project plans a task that, once driven, records the pending-init recipe
+// for the default branch (no ancestor, start LSN 0/0, pg_version 17) keyed by the
+// 32-hex branch id, and does NOT delete it (deletion is deferred to
+// create-endpoint). The recipe is now recorded by the record_branch_recipe step.
 func TestCreateProjectRecordsPendingInit(t *testing.T) {
 	sc := &fakeSCServer{}
-	c, backend := newProjectControllers(t, sc.start(t))
+	prov := api.Provisioning{SC: sc.start(t)}
+	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 
 	resp, err := c.CreateProject(context.Background(), api.CreateProjectRequestObject{
@@ -165,12 +191,16 @@ func TestCreateProjectRecordsPendingInit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	created, ok := resp.(api.CreateProject201JSONResponse)
-	if !ok {
-		t.Fatalf("response = %T, want CreateProject201JSONResponse", resp)
+	_, projectID := acceptedProjectTask(t, resp)
+
+	// The recipe is recorded by the worker, not synchronously: drive the task.
+	drainTasks(t, store, backend, prov)
+	if got := soleTask(t, store); got.Status != task.StatusSucceeded {
+		t.Fatalf("create_project task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
-	project := api.Project(created)
-	def := project.DefaultBranch
+
+	// The default branch's id is needed to assert the recipe key — read it back.
+	def := getDefaultBranch(t, c, poolID, projectID)
 
 	if !sc.recordHit {
 		t.Fatal("RecordPendingTimelineInit was not called")
@@ -195,10 +225,11 @@ func TestCreateProjectRecordsPendingInit(t *testing.T) {
 	}
 }
 
-// TestCreateProjectNoStorageController: without a storage controller, the
-// handler records the control-plane row only (no panic, still 201).
+// TestCreateProjectNoStorageController: without a storage controller, the task
+// still succeeds (it records the control-plane rows only, no recipe) — no panic.
 func TestCreateProjectNoStorageController(t *testing.T) {
-	c, backend := newProjectControllers(t, nil)
+	prov := api.Provisioning{}
+	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 
 	resp, err := c.CreateProject(context.Background(), api.CreateProjectRequestObject{
@@ -208,31 +239,93 @@ func TestCreateProjectNoStorageController(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if _, ok := resp.(api.CreateProject201JSONResponse); !ok {
-		t.Fatalf("response = %T, want CreateProject201JSONResponse", resp)
+	acceptedProjectTask(t, resp)
+	drainTasks(t, store, backend, prov)
+	if got := soleTask(t, store); got.Status != task.StatusSucceeded {
+		t.Fatalf("create_project task (no SC) status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
 }
 
 // TestCreateProjectStorageError: a storage-controller failure recording the
-// recipe fails the request.
+// recipe now fails the create_project TASK (the record_branch_recipe step
+// returns the error), not the synchronous handler — which returns 202.
 func TestCreateProjectStorageError(t *testing.T) {
 	sc := &fakeSCServer{failRecord: true}
-	c, backend := newProjectControllers(t, sc.start(t))
+	prov := api.Provisioning{SC: sc.start(t)}
+	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 
-	_, err := c.CreateProject(context.Background(), api.CreateProjectRequestObject{
+	resp, err := c.CreateProject(context.Background(), api.CreateProjectRequestObject{
 		PoolId: poolID,
 		Body:   &api.CreateProjectJSONRequestBody{Name: "main"},
 	})
-	if err == nil {
-		t.Fatal("CreateProject: expected error when storage controller fails, got nil")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	acceptedProjectTask(t, resp)
+	drainTasks(t, store, backend, prov)
+	got := soleTask(t, store)
+	if got.Status != task.StatusFailed || got.Error == nil {
+		t.Fatalf("create_project task = {status:%q err:%v}, want failed (storage controller error)", got.Status, got.Error)
 	}
 }
 
+// soleTaskWithKind returns the single task of the given kind in the store,
+// failing if there is not exactly one (the direct-call branch tests create a
+// create_project task plus the branch task, so they filter by kind).
+func soleTaskWithKind(t *testing.T, store *task.MemStore, kind string) *task.Task {
+	t.Helper()
+	tasks, _, err := store.List(context.Background(), task.TaskFilter{Kind: kind}, 1000, 0)
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks of kind %q = %d, want exactly 1", kind, len(tasks))
+	}
+	return tasks[0]
+}
+
+// branchByName lists a project's branches through the controller and returns the
+// one with the given name, failing if absent.
+func branchByName(t *testing.T, c *api.Controllers, poolID, projectID uuid.UUID, name string) api.Branch {
+	t.Helper()
+	resp, err := c.ListBranches(context.Background(), api.ListBranchesRequestObject{PoolId: poolID, ProjectId: projectID})
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	got, ok := resp.(api.ListBranches200JSONResponse)
+	if !ok {
+		t.Fatalf("ListBranches response = %T, want 200", resp)
+	}
+	for _, b := range api.BranchList(got).Branches {
+		if b.Name == name {
+			return b
+		}
+	}
+	t.Fatalf("branch %q not found in project %s", name, projectID)
+	return api.Branch{}
+}
+
+// getDefaultBranch reads a project back through the controller and returns its
+// default branch.
+func getDefaultBranch(t *testing.T, c *api.Controllers, poolID, projectID uuid.UUID) api.Branch {
+	t.Helper()
+	resp, err := c.GetProject(context.Background(), api.GetProjectRequestObject{PoolId: poolID, ProjectId: projectID})
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	got, ok := resp.(api.GetProject200JSONResponse)
+	if !ok {
+		t.Fatalf("GetProject response = %T, want 200", resp)
+	}
+	return api.Project(got).DefaultBranch
+}
+
 // mustCreateProjectC creates a project + its default branch through the
-// controller (recording the default branch's recipe too) and returns it, for
-// tests that then branch.
-func mustCreateProjectC(t *testing.T, c *api.Controllers, poolID uuid.UUID, name string) api.Project {
+// controller AND drives the resulting task to completion (recording the default
+// branch's recipe too), then returns the materialized project, for tests that
+// then branch off it. It drains every pending task on the shared store.
+func mustCreateProjectC(t *testing.T, c *api.Controllers, store *task.MemStore, backend core.Backend, prov api.Provisioning, poolID uuid.UUID, name string) api.Project {
 	t.Helper()
 	resp, err := c.CreateProject(context.Background(), api.CreateProjectRequestObject{
 		PoolId: poolID,
@@ -241,11 +334,18 @@ func mustCreateProjectC(t *testing.T, c *api.Controllers, poolID uuid.UUID, name
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	created, ok := resp.(api.CreateProject201JSONResponse)
-	if !ok {
-		t.Fatalf("CreateProject response = %T, want 201", resp)
+	_, projectID := acceptedProjectTask(t, resp)
+	drainTasks(t, store, backend, prov)
+
+	gp, err := c.GetProject(context.Background(), api.GetProjectRequestObject{PoolId: poolID, ProjectId: projectID})
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
 	}
-	return api.Project(created)
+	got, ok := gp.(api.GetProject200JSONResponse)
+	if !ok {
+		t.Fatalf("GetProject response = %T, want 200", gp)
+	}
+	return api.Project(got)
 }
 
 // TestCreateBranchDefaultsForkToFlushLSN: branching with no fork_point_lsn and
@@ -258,9 +358,10 @@ func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
 	sc := &fakeSCServer{}
 	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
-	c, backend := newProjectControllersProv(t, api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()})
+	prov := api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()}
+	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, poolID, "main")
+	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
 	def := project.DefaultBranch
 	// The parent (default branch) must have a read_write endpoint whose
 	// safekeeper holds the fork point.
@@ -274,15 +375,25 @@ func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
-	created, ok := resp.(api.CreateBranch201JSONResponse)
+	created, ok := resp.(api.CreateBranch202JSONResponse)
 	if !ok {
-		t.Fatalf("response = %T, want CreateBranch201JSONResponse", resp)
+		t.Fatalf("response = %T, want CreateBranch202JSONResponse", resp)
 	}
-	br := api.Branch(created)
+	if created.Body.Kind != "branch" || created.Body.Status != api.TaskStatusPending {
+		t.Errorf("task = {kind:%q status:%q}, want {branch pending}", created.Body.Kind, created.Body.Status)
+	}
 
+	// The fork point is resolved synchronously (the safekeeper is queried before the
+	// task is planned); the branch row + recipe are materialized by the worker.
 	if !sk.wasHit() {
-		t.Error("the parent safekeeper was not queried to default the fork point")
+		t.Error("the parent safekeeper was not queried to default the fork point (cheap pre-resolution)")
 	}
+	drainTasks(t, store, backend, prov)
+	if got := soleTaskWithKind(t, store, "branch"); got.Status != task.StatusSucceeded {
+		t.Fatalf("branch task status = %q, want succeeded; error = %v", got.Status, got.Error)
+	}
+	br := branchByName(t, c, poolID, project.Id, "feature")
+
 	if br.IsDefault {
 		t.Error("branch is_default = true, want false")
 	}
@@ -325,9 +436,10 @@ func TestCreateBranchExplicitForkLSN(t *testing.T) {
 	sc := &fakeSCServer{}
 	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
-	c, backend := newProjectControllersProv(t, api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()})
+	prov := api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()}
+	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, poolID, "main")
+	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
 
 	lsn := "0/ABCDEF1"
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
@@ -338,15 +450,19 @@ func TestCreateBranchExplicitForkLSN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
-	created, ok := resp.(api.CreateBranch201JSONResponse)
-	if !ok {
-		t.Fatalf("response = %T, want CreateBranch201JSONResponse", resp)
-	}
-	if got := api.Branch(created).ForkLsn; got == nil || *got != lsn {
-		t.Errorf("fork_lsn = %v, want %q", got, lsn)
+	if _, ok := resp.(api.CreateBranch202JSONResponse); !ok {
+		t.Fatalf("response = %T, want CreateBranch202JSONResponse", resp)
 	}
 	if sk.wasHit() {
 		t.Error("the parent safekeeper was queried despite an explicit fork_point_lsn")
+	}
+
+	drainTasks(t, store, backend, prov)
+	if got := soleTaskWithKind(t, store, "branch"); got.Status != task.StatusSucceeded {
+		t.Fatalf("branch task status = %q, want succeeded; error = %v", got.Status, got.Error)
+	}
+	if got := branchByName(t, c, poolID, project.Id, "feature").ForkLsn; got == nil || *got != lsn {
+		t.Errorf("fork_lsn = %v, want %q", got, lsn)
 	}
 	if sc.recordedReq.StartLSN != lsn {
 		t.Errorf("recipe start_lsn = %q, want %q", sc.recordedReq.StartLSN, lsn)
@@ -357,12 +473,13 @@ func TestCreateBranchExplicitForkLSN(t *testing.T) {
 }
 
 // TestCreateBranchInvalidForkLSN: a malformed fork_point_lsn 400s before any
-// state is touched.
+// task is planned (cheap pre-validation).
 func TestCreateBranchInvalidForkLSN(t *testing.T) {
 	sc := &fakeSCServer{}
-	c, backend := newProjectControllers(t, sc.start(t))
+	prov := api.Provisioning{SC: sc.start(t)}
+	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, poolID, "main")
+	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
 
 	bad := "not-an-lsn"
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
@@ -379,15 +496,19 @@ func TestCreateBranchInvalidForkLSN(t *testing.T) {
 }
 
 // TestCreateBranchDuplicateName: a branch whose name is already taken in the
-// project (here, the default branch's own name) conflicts -> 409. The fork point
-// resolves first, so the parent needs a read_write endpoint + safekeeper.
+// project (here, the default branch's own name) is no longer a synchronous 409 —
+// the create is accepted (202) and the conflict surfaces as a FAILED branch task
+// when its create_branch step's EnsureBranch hits the name index. The fork point
+// resolves first (a cheap pre-check), so the parent still needs a read_write
+// endpoint + safekeeper.
 func TestCreateBranchDuplicateName(t *testing.T) {
 	sc := &fakeSCServer{}
 	sk := &fakeSafekeeper{flushLSN: "0/10"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
-	c, backend := newProjectControllersProv(t, api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()})
+	prov := api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()}
+	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, poolID, "main")
+	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
 	seedWriter(t, backend, project.Id, project.DefaultBranch.BranchId)
 
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
@@ -398,8 +519,13 @@ func TestCreateBranchDuplicateName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
-	if _, ok := resp.(api.CreateBranch409JSONResponse); !ok {
-		t.Fatalf("response = %T, want CreateBranch409JSONResponse", resp)
+	if _, ok := resp.(api.CreateBranch202JSONResponse); !ok {
+		t.Fatalf("response = %T, want CreateBranch202JSONResponse", resp)
+	}
+	drainTasks(t, store, backend, prov)
+	got := soleTaskWithKind(t, store, "branch")
+	if got.Status != task.StatusFailed || got.Error == nil {
+		t.Fatalf("duplicate-name branch task = {status:%q err:%v}, want failed (name conflict)", got.Status, got.Error)
 	}
 }
 
@@ -409,7 +535,8 @@ func TestCreateBranchDuplicateName(t *testing.T) {
 // timeline (the bug where branch endpoints came up with no data).
 func TestCreateEndpointOnBranchPassesAncestor(t *testing.T) {
 	dep := &fakeDeployer{}
-	client, backend := newTestServerWithProv(t, api.Provisioning{Deployer: dep})
+	prov := api.Provisioning{Deployer: dep}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
@@ -426,8 +553,13 @@ func TestCreateEndpointOnBranchPassesAncestor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
-	if created.StatusCode() != http.StatusCreated {
-		t.Fatalf("status = %d, want 201; body = %s", created.StatusCode(), created.Body)
+	if created.StatusCode() != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body = %s", created.StatusCode(), created.Body)
+	}
+	// The deploy spec is built by the create_endpoint step, so drive the task first.
+	drainTasks(t, store, backend, prov)
+	if got := soleTask(t, store); got.Status != task.StatusSucceeded {
+		t.Fatalf("create_endpoint task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
 	if len(dep.created) != 1 {
 		t.Fatalf("deploy calls = %d, want 1", len(dep.created))
@@ -448,7 +580,8 @@ func TestCreateEndpointOnBranchPassesAncestor(t *testing.T) {
 // no ancestor (so it bootstraps as before).
 func TestCreateEndpointOnDefaultHasNoAncestor(t *testing.T) {
 	dep := &fakeDeployer{}
-	client, backend := newTestServerWithProv(t, api.Provisioning{Deployer: dep})
+	prov := api.Provisioning{Deployer: dep}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
@@ -460,6 +593,10 @@ func TestCreateEndpointOnDefaultHasNoAncestor(t *testing.T) {
 	rw := api.CreateEndpointRequestRoleReadWrite
 	if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	drainTasks(t, store, backend, prov)
+	if got := soleTask(t, store); got.Status != task.StatusSucceeded {
+		t.Fatalf("create_endpoint task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
 	if len(dep.created) != 1 {
 		t.Fatalf("deploy calls = %d, want 1", len(dep.created))
@@ -474,11 +611,12 @@ func TestCreateEndpointOnDefaultHasNoAncestor(t *testing.T) {
 // branch with no fork_point_lsn is rejected (400) rather than silently forking
 // at 0/0; an explicit fork_point_lsn still works and is recorded on the row.
 func TestCreateBranchNoStorageController(t *testing.T) {
-	c, backend := newProjectControllers(t, nil)
+	prov := api.Provisioning{}
+	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, poolID, "main")
+	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
 
-	// No fork point + no controller -> 400 (no silent 0/0).
+	// No fork point + no controller -> 400 (no silent 0/0); cheap pre-validation.
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
 		ProjectId: project.Id,
@@ -491,7 +629,8 @@ func TestCreateBranchNoStorageController(t *testing.T) {
 		t.Fatalf("response = %T, want CreateBranch400JSONResponse (no SC, no fork_point_lsn)", resp)
 	}
 
-	// Explicit fork point + no controller -> 201, recorded on the control row.
+	// Explicit fork point + no controller -> 202; the task materializes the branch
+	// row carrying the fork LSN (no recipe, since there is no controller).
 	lsn := "0/ABCDEF1"
 	resp, err = c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
@@ -501,11 +640,14 @@ func TestCreateBranchNoStorageController(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBranch(explicit): %v", err)
 	}
-	created, ok := resp.(api.CreateBranch201JSONResponse)
-	if !ok {
-		t.Fatalf("response = %T, want CreateBranch201JSONResponse", resp)
+	if _, ok := resp.(api.CreateBranch202JSONResponse); !ok {
+		t.Fatalf("response = %T, want CreateBranch202JSONResponse", resp)
 	}
-	if got := api.Branch(created).ForkLsn; got == nil || *got != lsn {
+	drainTasks(t, store, backend, prov)
+	if got := soleTaskWithKind(t, store, "branch"); got.Status != task.StatusSucceeded {
+		t.Fatalf("branch task status = %q, want succeeded; error = %v", got.Status, got.Error)
+	}
+	if got := branchByName(t, c, poolID, project.Id, "feature").ForkLsn; got == nil || *got != lsn {
 		t.Errorf("fork_lsn = %v, want %q", got, lsn)
 	}
 }
@@ -517,9 +659,10 @@ func TestCreateBranchDefaultForkNoEndpoint(t *testing.T) {
 	sc := &fakeSCServer{}
 	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
-	c, backend := newProjectControllersProv(t, api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()})
+	prov := api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()}
+	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, poolID, "main")
+	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
 	// No endpoint seeded on the default branch.
 
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
@@ -546,9 +689,10 @@ func TestCreateBranchDefaultForkSafekeeperUnavailable(t *testing.T) {
 	sc := &fakeSCServer{}
 	sk := &fakeSafekeeper{flushLSN: ""} // 404: the safekeeper does not serve the timeline
 	dep := &fakeDeployer{skURL: sk.start(t)}
-	c, backend := newProjectControllersProv(t, api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()})
+	prov := api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()}
+	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, poolID, "main")
+	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
 	seedWriter(t, backend, project.Id, project.DefaultBranch.BranchId)
 
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{

@@ -1,8 +1,10 @@
 -- 0002: give each task step a first-class id, and let the task carry its ordered
 -- list of step ids (controller/architecture/ac-tasks.md §8). The task tables hold
--- no production data yet — no API path plans tasks (#113) — so this drops and
--- recreates them in the new shape rather than migrating rows. The task_status /
--- step_status enums from 0001 are reused unchanged.
+-- no production data yet — no API path plans tasks (#113) (true at the time 0002
+-- was authored, pre-#113; later migrations must not assume the task tables are
+-- empty) — so this drops and recreates them in the new shape rather than
+-- migrating rows. The task_status / step_status enums from 0001 are reused
+-- unchanged.
 
 DROP TABLE IF EXISTS task_step;
 DROP TABLE IF EXISTS task;

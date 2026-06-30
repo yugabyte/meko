@@ -27,6 +27,8 @@ const (
 	KindBranch         = "branch"
 	KindCreateEndpoint = "create_endpoint"
 	KindDeleteEndpoint = "delete_endpoint"
+	KindDeleteBranch   = "delete_branch"
+	KindDeleteProject  = "delete_project"
 )
 
 // Service records tasks against a Store and reads them back. It is the dependency
@@ -44,6 +46,12 @@ func NewService(store Store) *Service {
 // Get returns a task by id (its status, for GET /tasks/{id}), or nil if absent.
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Task, error) {
 	return s.store.Get(ctx, id)
+}
+
+// List returns a page of tasks matching f, ordered newest-first, plus the total
+// matching count (for GET /tasks).
+func (s *Service) List(ctx context.Context, f TaskFilter, limit, offset int) ([]*Task, int, error) {
+	return s.store.List(ctx, f, limit, offset)
 }
 
 // CreateProjectInput is the request for a create_project task: a new project (a
@@ -91,7 +99,9 @@ func (s *Service) CreateProject(ctx context.Context, in CreateProjectInput) (*Ta
 			PgVersion:  in.PgVersion,
 		}))
 	}
-	return s.create(ctx, KindCreateProject, in, projectID, steps)
+	// TargetRef is the new default branch: the UI pre-selects it once the task
+	// succeeds (a project is created together with its default branch).
+	return s.create(ctx, KindCreateProject, in, projectID, branchID.String(), steps)
 }
 
 // BranchInput is the request for a branch task. The new branch stays in its
@@ -146,7 +156,7 @@ func (s *Service) Branch(ctx context.Context, in BranchInput) (*Task, error) {
 			AncestorLSN:      in.ForkLSN,
 		}))
 	}
-	return s.create(ctx, KindBranch, in, in.ProjectID, steps)
+	return s.create(ctx, KindBranch, in, in.ProjectID, branchID.String(), steps)
 }
 
 // CreateEndpointInput is the request for a create_endpoint (scale-up) task on an
@@ -168,9 +178,10 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 	if role == "" {
 		role = roleReadWrite
 	}
+	endpointID := uuid.New()
 	steps := []StepSpec{
 		stepSpec(StepCreateEndpoint, CreateEndpointArgs{
-			EndpointID:       uuid.New(),
+			EndpointID:       endpointID,
 			ProjectID:        in.ProjectID,
 			BranchID:         in.BranchID,
 			Role:             role,
@@ -179,7 +190,7 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 			AncestorLSN:      in.AncestorLSN,
 		}),
 	}
-	return s.create(ctx, KindCreateEndpoint, in, in.ProjectID, steps)
+	return s.create(ctx, KindCreateEndpoint, in, in.ProjectID, endpointID.String(), steps)
 }
 
 // DeleteEndpointInput is the request for a delete_endpoint (scale-down) task.
@@ -193,7 +204,44 @@ func (s *Service) DeleteEndpoint(ctx context.Context, in DeleteEndpointInput) (*
 	steps := []StepSpec{
 		stepSpec(StepDeleteEndpoint, DeleteEndpointArgs{EndpointID: in.EndpointID}),
 	}
-	return s.create(ctx, KindDeleteEndpoint, in, in.ProjectID, steps)
+	return s.create(ctx, KindDeleteEndpoint, in, in.ProjectID, in.EndpointID.String(), steps)
+}
+
+// DeleteBranchInput is the request for a delete_branch (cascade) task.
+type DeleteBranchInput struct {
+	PoolID    uuid.UUID `json:"pool_id"`
+	ProjectID uuid.UUID `json:"project_id"`
+	BranchID  uuid.UUID `json:"branch_id"`
+}
+
+// DeleteBranch records a delete_branch task: a single, self-contained
+// delete_branch step that enumerates and retires the branch's endpoints at
+// Execute time, then drops the branch. The worker has no dynamic sub-step
+// expansion, so the cascade is one idempotent step rather than a planned
+// per-endpoint fan-out.
+func (s *Service) DeleteBranch(ctx context.Context, in DeleteBranchInput) (*Task, error) {
+	steps := []StepSpec{
+		stepSpec(StepDeleteBranch, DeleteBranchArgs{ProjectID: in.ProjectID, BranchID: in.BranchID}),
+	}
+	return s.create(ctx, KindDeleteBranch, in, in.ProjectID, in.BranchID.String(), steps)
+}
+
+// DeleteProjectInput is the request for a delete_project (cascade) task.
+type DeleteProjectInput struct {
+	PoolID    uuid.UUID `json:"pool_id"`
+	ProjectID uuid.UUID `json:"project_id"`
+}
+
+// DeleteProject records a delete_project task: a single, self-contained
+// delete_project step that enumerates and retires all the project's endpoints at
+// Execute time, then drops the project (and all its branches). One idempotent
+// step, for the same reason as DeleteBranch.
+func (s *Service) DeleteProject(ctx context.Context, in DeleteProjectInput) (*Task, error) {
+	steps := []StepSpec{
+		stepSpec(StepDeleteProject, DeleteProjectArgs{ProjectID: in.ProjectID}),
+	}
+	// DeleteProject leaves TargetRef empty: project_id already carries the id.
+	return s.create(ctx, KindDeleteProject, in, in.ProjectID, "", steps)
 }
 
 // EndpointDeployName is the deployer's stable instance handle for an endpoint
@@ -217,10 +265,12 @@ const defaultBranchName = "main"
 
 // create marshals the originating request as params, stamps the task's target
 // project (project_id, exposed by the task API for monitoring; a nil project is
-// left unstamped), and persists the task + its steps via the Store. projectID is
-// taken by value and the address of a copy is stored, so callers can pass a field
-// directly.
-func (s *Service) create(ctx context.Context, kind string, params any, projectID uuid.UUID, steps []StepSpec) (*Task, error) {
+// left unstamped) and the resource the task acts on (targetRef — the branch or
+// endpoint id, so the UI/e2e harness can pre-select it once the task succeeds; an
+// empty targetRef is left unstamped), and persists the task + its steps via the
+// Store. projectID is taken by value and the address of a copy is stored, so
+// callers can pass a field directly.
+func (s *Service) create(ctx context.Context, kind string, params any, projectID uuid.UUID, targetRef string, steps []StepSpec) (*Task, error) {
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s params: %w", kind, err)
@@ -229,6 +279,10 @@ func (s *Service) create(ctx context.Context, kind string, params any, projectID
 	if projectID != uuid.Nil {
 		pid := projectID
 		spec.ProjectID = &pid
+	}
+	if targetRef != "" {
+		ref := targetRef
+		spec.TargetRef = &ref
 	}
 	return s.store.Create(ctx, spec)
 }

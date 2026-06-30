@@ -128,7 +128,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 
 // endpointConfig is the spec stored on the endpoint row for (re)creation. The
 // endpoint's own id is the row id, so it is not part of the recreate spec. This
-// matches the JSON the synchronous create-endpoint handler stores.
+// is the JSON persisted on the endpoint row for (re)creation.
 func endpointConfig(args CreateEndpointArgs) ([]byte, error) {
 	b, err := json.Marshal(map[string]any{
 		"project_id": args.ProjectID,

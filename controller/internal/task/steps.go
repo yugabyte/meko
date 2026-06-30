@@ -24,6 +24,8 @@ import (
 //	record_branch_recipe  step_record_branch_recipe.go
 //	create_endpoint       step_create_endpoint.go
 //	delete_endpoint       step_delete_endpoint.go
+//	delete_branch         step_delete_branch.go
+//	delete_project        step_delete_project.go
 
 // mustResult marshals a step result. The values are small, fixed-shape maps, so
 // marshaling cannot fail; a result is informational (read back via the task API)

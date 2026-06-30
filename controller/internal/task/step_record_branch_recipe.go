@@ -27,9 +27,9 @@ type RecordBranchRecipeArgs struct {
 }
 
 // recordBranchRecipeStep records the storage controller's pending-init recipe.
-// With no storage controller (recipes nil) it no-ops with a warning, matching the
-// synchronous handler — the recipe then lives only in the control DB's branch
-// row. Only the embedded args are serialized; recipes is bound at construction.
+// With no storage controller (recipes nil) it no-ops with a warning; the recipe
+// then lives only in the control DB's branch row. Only the embedded args are
+// serialized; recipes is bound at construction.
 type recordBranchRecipeStep struct {
 	RecordBranchRecipeArgs
 	recipes RecipeStore

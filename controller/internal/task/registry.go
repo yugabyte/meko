@@ -60,7 +60,7 @@ func DefaultRegistry(deps Deps) *Registry {
 // step_*.go files) plus the no-op step, all bound to deps. It is the registry the
 // worker uses. A step whose deps are absent (e.g. an endpoint step built with no
 // deployer) fails when executed; no such task is planned without those deps (see
-// plan.go / the API wiring, #113).
+// tasks.go (Service.CreateX) and the API mutation handlers).
 func ProductionRegistry(deps Deps) *Registry {
 	r := DefaultRegistry(deps)
 	r.Register(StepCreateProject, buildCreateProjectStep)
@@ -68,6 +68,8 @@ func ProductionRegistry(deps Deps) *Registry {
 	r.Register(StepRecordBranchRecipe, buildRecordBranchRecipeStep)
 	r.Register(StepCreateEndpoint, buildCreateEndpointStep)
 	r.Register(StepDeleteEndpoint, buildDeleteEndpointStep)
+	r.Register(StepDeleteBranch, buildDeleteBranchStep)
+	r.Register(StepDeleteProject, buildDeleteProjectStep)
 	return r
 }
 

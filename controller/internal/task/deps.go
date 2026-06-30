@@ -26,9 +26,10 @@ import (
 // recipe) via hex32. A project no longer maps to a storage tenant.
 
 // StateStore is the set of *idempotent, id-keyed* project/branch operations the
-// step catalog drives. Unlike core.Backend's id-generating create methods (which
-// the synchronous API path uses), every operation here takes the ids explicitly
-// so a step can be re-run after a crash and converge instead of creating a
+// step catalog drives. Unlike core.Backend's id-generating create methods (the
+// synchronous read / pre-check path uses the id-generating Get methods and never
+// these), every operation here takes the ids explicitly so a step can be re-run
+// after a crash and converge instead of creating a
 // duplicate or erroring: the ids are assigned write-ahead when the task is
 // planned (§8.1) and baked into the step args. *core.PgBackend satisfies this
 // structurally.
@@ -56,6 +57,39 @@ type StateStore interface {
 
 	// DeleteEndpoint removes an endpoint record (idempotent; absent row is a no-op).
 	DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) error
+
+	// EndpointIDsForBranch returns the ids of every endpoint on the
+	// (projectID, branchID) branch. It is the cascade-delete enumeration the
+	// delete_branch step runs at Execute time (so a concurrently-added endpoint is
+	// still retired on replay). An absent branch yields an empty slice, not an
+	// error — a re-run mid-cascade converges.
+	EndpointIDsForBranch(ctx context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error)
+
+	// EndpointIDsForProject returns the ids of every endpoint in the project. It is
+	// the cascade-delete enumeration the delete_project step runs at Execute time.
+	// An absent project yields an empty slice, not an error.
+	EndpointIDsForProject(ctx context.Context, projectID uuid.UUID) ([]uuid.UUID, error)
+
+	// ChildBranchIDs returns the ids of every branch in projectID forked directly
+	// from branchID (its in-project children). The delete_branch step calls this
+	// before retiring any endpoints: a branch with child forks cannot be deleted
+	// (the parent FK is RESTRICT), so the step fails fast and retires nothing,
+	// avoiding a half-deleted branch. An absent branch yields an empty slice.
+	ChildBranchIDs(ctx context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error)
+
+	// DeleteBranch removes the (projectID, branchID) branch record (idempotent;
+	// absent row is a no-op). The caller (the delete_branch step) checks for child
+	// forks (ChildBranchIDs) and retires the branch's endpoints first; the parent
+	// FK is RESTRICT, so a still-referencing child fork makes this a real error
+	// (ErrConflict) — a belt-and-suspenders guard behind the step's pre-check.
+	DeleteBranch(ctx context.Context, projectID, branchID uuid.UUID) error
+
+	// DeleteProject removes the project and all its branches (idempotent; absent
+	// rows are a no-op). The caller (the delete_project step) retires the project's
+	// endpoints first; this then drops the branches (nulling their in-project
+	// parent pointers first to sidestep the self-FK RESTRICT ordering) and the
+	// project row.
+	DeleteProject(ctx context.Context, projectID uuid.UUID) error
 }
 
 // BranchRecipe is the pending-init recipe a freshly-declared branch carries until
@@ -75,8 +109,8 @@ type BranchRecipe struct {
 // (controller-timeline-create.md). branchID is 32 lowercase hex digits (the
 // storage-layer BranchId the controller maps to — the storage layer is flat, so
 // the recipe is keyed by branch_id alone). It may be unavailable (no managed
-// storage controller), in which case the handlers no-op with a warning —
-// mirroring the synchronous handler.
+// storage controller), in which case the steps no-op with a warning — the
+// recipe then lives only in the control DB's branch row.
 type RecipeStore interface {
 	RecordBranchRecipe(ctx context.Context, branchID string, r BranchRecipe) error
 	// ClearBranchRecipe drops the recipe once the branch is materialized. It is

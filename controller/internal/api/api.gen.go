@@ -40,10 +40,18 @@ const (
 
 // Defines values for TaskStatus.
 const (
-	Failed    TaskStatus = "failed"
-	Pending   TaskStatus = "pending"
-	Running   TaskStatus = "running"
-	Succeeded TaskStatus = "succeeded"
+	TaskStatusFailed    TaskStatus = "failed"
+	TaskStatusPending   TaskStatus = "pending"
+	TaskStatusRunning   TaskStatus = "running"
+	TaskStatusSucceeded TaskStatus = "succeeded"
+)
+
+// Defines values for ListTasksParamsStatus.
+const (
+	ListTasksParamsStatusFailed    ListTasksParamsStatus = "failed"
+	ListTasksParamsStatusPending   ListTasksParamsStatus = "pending"
+	ListTasksParamsStatusRunning   ListTasksParamsStatus = "running"
+	ListTasksParamsStatusSucceeded ListTasksParamsStatus = "succeeded"
 )
 
 // Branch defines model for Branch.
@@ -180,15 +188,6 @@ type ErrorBody struct {
 	Message string `json:"message"`
 }
 
-// OperationAck defines model for OperationAck.
-type OperationAck struct {
-	// Acknowledged Always true; the request was accepted and logged.
-	Acknowledged bool `json:"acknowledged"`
-
-	// Detail Human-readable note about what was logged.
-	Detail string `json:"detail"`
-}
-
 // PageCount The number of items returned in this response (this page).
 type PageCount = int
 
@@ -251,6 +250,16 @@ type Task struct {
 // TaskStatus defines model for Task.Status.
 type TaskStatus string
 
+// TaskList defines model for TaskList.
+type TaskList struct {
+	// Count The number of items returned in this response (this page).
+	Count PageCount `json:"count"`
+	Tasks []Task    `json:"tasks"`
+
+	// Total The number of items matching the request across all pages (ignores limit/offset).
+	Total TotalCount `json:"total"`
+}
+
 // TotalCount The number of items matching the request across all pages (ignores limit/offset).
 type TotalCount = int
 
@@ -296,6 +305,9 @@ type TaskId = openapi_types.UUID
 
 // UserId defines model for UserId.
 type UserId = openapi_types.UUID
+
+// Accepted defines model for Accepted.
+type Accepted = Task
 
 // BadRequest defines model for BadRequest.
 type BadRequest = Error
@@ -344,6 +356,27 @@ type ListEndpointsParams struct {
 	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
 	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
 }
+
+// ListTasksParams defines parameters for ListTasks.
+type ListTasksParams struct {
+	// Limit Maximum number of items to return. Clamped to 1..1000; defaults to 100.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
+	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+
+	// Status Only return tasks in this status.
+	Status *ListTasksParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// Kind Only return tasks of this kind (e.g. create_project, delete_branch).
+	Kind *string `form:"kind,omitempty" json:"kind,omitempty"`
+
+	// ProjectId Only return tasks scoped to this project.
+	ProjectId *openapi_types.UUID `form:"project_id,omitempty" json:"project_id,omitempty"`
+}
+
+// ListTasksParamsStatus defines parameters for ListTasks.
+type ListTasksParamsStatus string
 
 // ListUsersParams defines parameters for ListUsers.
 type ListUsersParams struct {
@@ -494,6 +527,9 @@ type ClientInterface interface {
 
 	// GetEndpoint request
 	GetEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListTasks request
+	ListTasks(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetTask request
 	GetTask(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -728,6 +764,18 @@ func (c *Client) DeleteEndpoint(ctx context.Context, poolId PoolId, projectId Pr
 
 func (c *Client) GetEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetEndpointRequest(c.Server, poolId, projectId, branchId, endpointId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListTasks(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListTasksRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1624,6 +1672,119 @@ func NewGetEndpointRequest(server string, poolId PoolId, projectId ProjectId, br
 	return req, nil
 }
 
+// NewListTasksRequest generates requests for ListTasks
+func NewListTasksRequest(server string, params *ListTasksParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/tasks")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "limit", runtime.ParamLocationQuery, *params.Limit); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Offset != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "offset", runtime.ParamLocationQuery, *params.Offset); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Status != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "status", runtime.ParamLocationQuery, *params.Status); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Kind != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "kind", runtime.ParamLocationQuery, *params.Kind); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.ProjectId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "project_id", runtime.ParamLocationQuery, *params.ProjectId); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetTaskRequest generates requests for GetTask
 func NewGetTaskRequest(server string, taskId TaskId) (*http.Request, error) {
 	var err error
@@ -1893,6 +2054,9 @@ type ClientWithResponsesInterface interface {
 	// GetEndpointWithResponse request
 	GetEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error)
 
+	// ListTasksWithResponse request
+	ListTasksWithResponse(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*ListTasksResponse, error)
+
 	// GetTaskWithResponse request
 	GetTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*GetTaskResponse, error)
 
@@ -2011,10 +2175,9 @@ func (r ListProjectsResponse) StatusCode() int {
 type CreateProjectResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON201      *Project
+	JSON202      *Accepted
 	JSON400      *BadRequest
 	JSON404      *NotFound
-	JSON409      *Conflict
 	JSON500      *InternalError
 }
 
@@ -2037,8 +2200,9 @@ func (r CreateProjectResponse) StatusCode() int {
 type DeleteProjectResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON202      *OperationAck
+	JSON202      *Accepted
 	JSON400      *BadRequest
+	JSON404      *NotFound
 	JSON500      *InternalError
 }
 
@@ -2111,10 +2275,9 @@ func (r ListBranchesResponse) StatusCode() int {
 type CreateBranchResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON201      *Branch
+	JSON202      *Accepted
 	JSON400      *BadRequest
 	JSON404      *NotFound
-	JSON409      *Conflict
 	JSON500      *InternalError
 }
 
@@ -2137,8 +2300,10 @@ func (r CreateBranchResponse) StatusCode() int {
 type DeleteBranchResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON202      *OperationAck
+	JSON202      *Accepted
 	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
 	JSON500      *InternalError
 }
 
@@ -2211,10 +2376,9 @@ func (r ListEndpointsResponse) StatusCode() int {
 type CreateEndpointResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON201      *Endpoint
+	JSON202      *Accepted
 	JSON400      *BadRequest
 	JSON404      *NotFound
-	JSON409      *Conflict
 	JSON500      *InternalError
 }
 
@@ -2237,6 +2401,7 @@ func (r CreateEndpointResponse) StatusCode() int {
 type DeleteEndpointResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
+	JSON202      *Accepted
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
@@ -2277,6 +2442,30 @@ func (r GetEndpointResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r GetEndpointResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ListTasksResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *TaskList
+	JSON400      *BadRequest
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListTasksResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListTasksResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -2548,6 +2737,15 @@ func (c *ClientWithResponses) GetEndpointWithResponse(ctx context.Context, poolI
 	return ParseGetEndpointResponse(rsp)
 }
 
+// ListTasksWithResponse request returning *ListTasksResponse
+func (c *ClientWithResponses) ListTasksWithResponse(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*ListTasksResponse, error) {
+	rsp, err := c.ListTasks(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListTasksResponse(rsp)
+}
+
 // GetTaskWithResponse request returning *GetTaskResponse
 func (c *ClientWithResponses) GetTaskWithResponse(ctx context.Context, taskId TaskId, reqEditors ...RequestEditorFn) (*GetTaskResponse, error) {
 	rsp, err := c.GetTask(ctx, taskId, reqEditors...)
@@ -2794,12 +2992,12 @@ func ParseCreateProjectResponse(rsp *http.Response) (*CreateProjectResponse, err
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
-		var dest Project
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON201 = &dest
+		response.JSON202 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest BadRequest
@@ -2814,13 +3012,6 @@ func ParseCreateProjectResponse(rsp *http.Response) (*CreateProjectResponse, err
 			return nil, err
 		}
 		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest Conflict
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -2849,7 +3040,7 @@ func ParseDeleteProjectResponse(rsp *http.Response) (*DeleteProjectResponse, err
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest OperationAck
+		var dest Accepted
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -2861,6 +3052,13 @@ func ParseDeleteProjectResponse(rsp *http.Response) (*DeleteProjectResponse, err
 			return nil, err
 		}
 		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -2982,12 +3180,12 @@ func ParseCreateBranchResponse(rsp *http.Response) (*CreateBranchResponse, error
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
-		var dest Branch
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON201 = &dest
+		response.JSON202 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest BadRequest
@@ -3002,13 +3200,6 @@ func ParseCreateBranchResponse(rsp *http.Response) (*CreateBranchResponse, error
 			return nil, err
 		}
 		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest Conflict
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -3037,7 +3228,7 @@ func ParseDeleteBranchResponse(rsp *http.Response) (*DeleteBranchResponse, error
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
-		var dest OperationAck
+		var dest Accepted
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -3049,6 +3240,20 @@ func ParseDeleteBranchResponse(rsp *http.Response) (*DeleteBranchResponse, error
 			return nil, err
 		}
 		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -3170,12 +3375,12 @@ func ParseCreateEndpointResponse(rsp *http.Response) (*CreateEndpointResponse, e
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
-		var dest Endpoint
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON201 = &dest
+		response.JSON202 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest BadRequest
@@ -3190,13 +3395,6 @@ func ParseCreateEndpointResponse(rsp *http.Response) (*CreateEndpointResponse, e
 			return nil, err
 		}
 		response.JSON404 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest Conflict
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -3224,6 +3422,13 @@ func ParseDeleteEndpointResponse(rsp *http.Response) (*DeleteEndpointResponse, e
 	}
 
 	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest BadRequest
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -3284,6 +3489,46 @@ func ParseGetEndpointResponse(rsp *http.Response) (*GetEndpointResponse, error) 
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListTasksResponse parses an HTTP response from a ListTasksWithResponse call
+func ParseListTasksResponse(rsp *http.Response) (*ListTasksResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListTasksResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest TaskList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -3488,7 +3733,7 @@ type ServerInterface interface {
 	// Create a project (and its default branch) in a pool
 	// (POST /storage-pools/{poolId}/projects)
 	CreateProject(ctx echo.Context, poolId PoolId) error
-	// Delete a project (logged only)
+	// Delete a project
 	// (DELETE /storage-pools/{poolId}/projects/{projectId})
 	DeleteProject(ctx echo.Context, poolId PoolId, projectId ProjectId) error
 	// Get a project
@@ -3500,7 +3745,7 @@ type ServerInterface interface {
 	// Branch (fork) a branch into a new branch
 	// (POST /storage-pools/{poolId}/projects/{projectId}/branches)
 	CreateBranch(ctx echo.Context, poolId PoolId, projectId ProjectId) error
-	// Delete a branch (logged only)
+	// Delete a branch
 	// (DELETE /storage-pools/{poolId}/projects/{projectId}/branches/{branchId})
 	DeleteBranch(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error
 	// Get a branch
@@ -3518,6 +3763,9 @@ type ServerInterface interface {
 	// Get an endpoint
 	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
 	GetEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error
+	// List tasks
+	// (GET /tasks)
+	ListTasks(ctx echo.Context, params ListTasksParams) error
 	// Get the status of a task
 	// (GET /tasks/{taskId})
 	GetTask(ctx echo.Context, taskId TaskId) error
@@ -3971,6 +4219,52 @@ func (w *ServerInterfaceWrapper) GetEndpoint(ctx echo.Context) error {
 	return err
 }
 
+// ListTasks converts echo context to params.
+func (w *ServerInterfaceWrapper) ListTasks(ctx echo.Context) error {
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListTasksParams
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "limit", ctx.QueryParams(), &params.Limit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter limit: %s", err))
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "offset", ctx.QueryParams(), &params.Offset)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter offset: %s", err))
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "status", ctx.QueryParams(), &params.Status)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter status: %s", err))
+	}
+
+	// ------------- Optional query parameter "kind" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "kind", ctx.QueryParams(), &params.Kind)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter kind: %s", err))
+	}
+
+	// ------------- Optional query parameter "project_id" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "project_id", ctx.QueryParams(), &params.ProjectId)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter project_id: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.ListTasks(ctx, params)
+	return err
+}
+
 // GetTask converts echo context to params.
 func (w *ServerInterfaceWrapper) GetTask(ctx echo.Context) error {
 	var err error
@@ -4080,11 +4374,21 @@ func RegisterHandlersWithBaseURL(router EchoRouter, si ServerInterface, baseURL 
 	router.POST(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints", wrapper.CreateEndpoint)
 	router.DELETE(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints/:endpointId", wrapper.DeleteEndpoint)
 	router.GET(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints/:endpointId", wrapper.GetEndpoint)
+	router.GET(baseURL+"/tasks", wrapper.ListTasks)
 	router.GET(baseURL+"/tasks/:taskId", wrapper.GetTask)
 	router.GET(baseURL+"/users", wrapper.ListUsers)
 	router.POST(baseURL+"/users", wrapper.CreateUser)
 	router.GET(baseURL+"/users/:userId", wrapper.GetUser)
 
+}
+
+type AcceptedResponseHeaders struct {
+	Location string
+}
+type AcceptedJSONResponse struct {
+	Body Task
+
+	Headers AcceptedResponseHeaders
 }
 
 type BadRequestJSONResponse Error
@@ -4281,13 +4585,14 @@ type CreateProjectResponseObject interface {
 	VisitCreateProjectResponse(w http.ResponseWriter) error
 }
 
-type CreateProject201JSONResponse Project
+type CreateProject202JSONResponse struct{ AcceptedJSONResponse }
 
-func (response CreateProject201JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
+func (response CreateProject202JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(201)
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
 
-	return json.NewEncoder(w).Encode(response)
+	return json.NewEncoder(w).Encode(response.Body)
 }
 
 type CreateProject400JSONResponse struct{ BadRequestJSONResponse }
@@ -4304,15 +4609,6 @@ type CreateProject404JSONResponse struct{ NotFoundJSONResponse }
 func (response CreateProject404JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateProject409JSONResponse struct{ ConflictJSONResponse }
-
-func (response CreateProject409JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4335,13 +4631,14 @@ type DeleteProjectResponseObject interface {
 	VisitDeleteProjectResponse(w http.ResponseWriter) error
 }
 
-type DeleteProject202JSONResponse OperationAck
+type DeleteProject202JSONResponse struct{ AcceptedJSONResponse }
 
 func (response DeleteProject202JSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
 	w.WriteHeader(202)
 
-	return json.NewEncoder(w).Encode(response)
+	return json.NewEncoder(w).Encode(response.Body)
 }
 
 type DeleteProject400JSONResponse struct{ BadRequestJSONResponse }
@@ -4349,6 +4646,15 @@ type DeleteProject400JSONResponse struct{ BadRequestJSONResponse }
 func (response DeleteProject400JSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteProject404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteProject404JSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4463,13 +4769,14 @@ type CreateBranchResponseObject interface {
 	VisitCreateBranchResponse(w http.ResponseWriter) error
 }
 
-type CreateBranch201JSONResponse Branch
+type CreateBranch202JSONResponse struct{ AcceptedJSONResponse }
 
-func (response CreateBranch201JSONResponse) VisitCreateBranchResponse(w http.ResponseWriter) error {
+func (response CreateBranch202JSONResponse) VisitCreateBranchResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(201)
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
 
-	return json.NewEncoder(w).Encode(response)
+	return json.NewEncoder(w).Encode(response.Body)
 }
 
 type CreateBranch400JSONResponse struct{ BadRequestJSONResponse }
@@ -4486,15 +4793,6 @@ type CreateBranch404JSONResponse struct{ NotFoundJSONResponse }
 func (response CreateBranch404JSONResponse) VisitCreateBranchResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateBranch409JSONResponse struct{ ConflictJSONResponse }
-
-func (response CreateBranch409JSONResponse) VisitCreateBranchResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4518,13 +4816,14 @@ type DeleteBranchResponseObject interface {
 	VisitDeleteBranchResponse(w http.ResponseWriter) error
 }
 
-type DeleteBranch202JSONResponse OperationAck
+type DeleteBranch202JSONResponse struct{ AcceptedJSONResponse }
 
 func (response DeleteBranch202JSONResponse) VisitDeleteBranchResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
 	w.WriteHeader(202)
 
-	return json.NewEncoder(w).Encode(response)
+	return json.NewEncoder(w).Encode(response.Body)
 }
 
 type DeleteBranch400JSONResponse struct{ BadRequestJSONResponse }
@@ -4532,6 +4831,24 @@ type DeleteBranch400JSONResponse struct{ BadRequestJSONResponse }
 func (response DeleteBranch400JSONResponse) VisitDeleteBranchResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteBranch404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteBranch404JSONResponse) VisitDeleteBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteBranch409JSONResponse struct{ ConflictJSONResponse }
+
+func (response DeleteBranch409JSONResponse) VisitDeleteBranchResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4649,13 +4966,14 @@ type CreateEndpointResponseObject interface {
 	VisitCreateEndpointResponse(w http.ResponseWriter) error
 }
 
-type CreateEndpoint201JSONResponse Endpoint
+type CreateEndpoint202JSONResponse struct{ AcceptedJSONResponse }
 
-func (response CreateEndpoint201JSONResponse) VisitCreateEndpointResponse(w http.ResponseWriter) error {
+func (response CreateEndpoint202JSONResponse) VisitCreateEndpointResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(201)
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
 
-	return json.NewEncoder(w).Encode(response)
+	return json.NewEncoder(w).Encode(response.Body)
 }
 
 type CreateEndpoint400JSONResponse struct{ BadRequestJSONResponse }
@@ -4672,15 +4990,6 @@ type CreateEndpoint404JSONResponse struct{ NotFoundJSONResponse }
 func (response CreateEndpoint404JSONResponse) VisitCreateEndpointResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateEndpoint409JSONResponse struct{ ConflictJSONResponse }
-
-func (response CreateEndpoint409JSONResponse) VisitCreateEndpointResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4705,12 +5014,14 @@ type DeleteEndpointResponseObject interface {
 	VisitDeleteEndpointResponse(w http.ResponseWriter) error
 }
 
-type DeleteEndpoint204Response struct {
-}
+type DeleteEndpoint202JSONResponse struct{ AcceptedJSONResponse }
 
-func (response DeleteEndpoint204Response) VisitDeleteEndpointResponse(w http.ResponseWriter) error {
-	w.WriteHeader(204)
-	return nil
+func (response DeleteEndpoint202JSONResponse) VisitDeleteEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response.Body)
 }
 
 type DeleteEndpoint400JSONResponse struct{ BadRequestJSONResponse }
@@ -4781,6 +5092,41 @@ func (response GetEndpoint404JSONResponse) VisitGetEndpointResponse(w http.Respo
 type GetEndpoint500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response GetEndpoint500JSONResponse) VisitGetEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListTasksRequestObject struct {
+	Params ListTasksParams
+}
+
+type ListTasksResponseObject interface {
+	VisitListTasksResponse(w http.ResponseWriter) error
+}
+
+type ListTasks200JSONResponse TaskList
+
+func (response ListTasks200JSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListTasks400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListTasks400JSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListTasks500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListTasks500JSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -4962,7 +5308,7 @@ type StrictServerInterface interface {
 	// Create a project (and its default branch) in a pool
 	// (POST /storage-pools/{poolId}/projects)
 	CreateProject(ctx context.Context, request CreateProjectRequestObject) (CreateProjectResponseObject, error)
-	// Delete a project (logged only)
+	// Delete a project
 	// (DELETE /storage-pools/{poolId}/projects/{projectId})
 	DeleteProject(ctx context.Context, request DeleteProjectRequestObject) (DeleteProjectResponseObject, error)
 	// Get a project
@@ -4974,7 +5320,7 @@ type StrictServerInterface interface {
 	// Branch (fork) a branch into a new branch
 	// (POST /storage-pools/{poolId}/projects/{projectId}/branches)
 	CreateBranch(ctx context.Context, request CreateBranchRequestObject) (CreateBranchResponseObject, error)
-	// Delete a branch (logged only)
+	// Delete a branch
 	// (DELETE /storage-pools/{poolId}/projects/{projectId}/branches/{branchId})
 	DeleteBranch(ctx context.Context, request DeleteBranchRequestObject) (DeleteBranchResponseObject, error)
 	// Get a branch
@@ -4992,6 +5338,9 @@ type StrictServerInterface interface {
 	// Get an endpoint
 	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
 	GetEndpoint(ctx context.Context, request GetEndpointRequestObject) (GetEndpointResponseObject, error)
+	// List tasks
+	// (GET /tasks)
+	ListTasks(ctx context.Context, request ListTasksRequestObject) (ListTasksResponseObject, error)
 	// Get the status of a task
 	// (GET /tasks/{taskId})
 	GetTask(ctx context.Context, request GetTaskRequestObject) (GetTaskResponseObject, error)
@@ -5430,6 +5779,31 @@ func (sh *strictHandler) GetEndpoint(ctx echo.Context, poolId PoolId, projectId 
 		return err
 	} else if validResponse, ok := response.(GetEndpointResponseObject); ok {
 		return validResponse.VisitGetEndpointResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// ListTasks operation middleware
+func (sh *strictHandler) ListTasks(ctx echo.Context, params ListTasksParams) error {
+	var request ListTasksRequestObject
+
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTasks(ctx.Request().Context(), request.(ListTasksRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTasks")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(ListTasksResponseObject); ok {
+		return validResponse.VisitListTasksResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

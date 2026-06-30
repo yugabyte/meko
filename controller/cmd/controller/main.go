@@ -235,11 +235,11 @@ func runServe(args []string) error {
 	}
 
 	// Wire the write-ahead task framework's step catalog against the same
-	// collaborators the synchronous create paths use. The registry is live, but
-	// no API path plans these task kinds yet (mutations still run synchronously
-	// in the handlers) — moving them onto tasks is #113, so the worker currently
-	// has nothing of these kinds to claim. *core.PgBackend supplies the
-	// idempotent, id-keyed state operations the steps need.
+	// collaborators the API handlers' cheap pre-checks use. The mutation handlers
+	// plan tasks through the Service (#113), so the worker drains every
+	// createProject/createBranch/createEndpoint/deleteEndpoint/deleteBranch/
+	// deleteProject. *core.PgBackend supplies the idempotent, id-keyed state
+	// operations the steps need.
 	deps := task.Deps{
 		State:         backend,
 		Deployer:      prov.Deployer,

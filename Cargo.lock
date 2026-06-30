@@ -1314,6 +1314,7 @@ dependencies = [
  "anyhow",
  "e2e_common",
  "reqwest",
+ "serde",
  "serde_json",
  "tokio",
  "workspace_hack",

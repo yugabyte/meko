@@ -12,10 +12,14 @@
 //
 // Scope: users (no auth), storage pools, project create (which provisions the
 // project and its default branch, #92) and branch (which forks an existing
-// branch, #130), and endpoints on a branch (#108: create records the row and the
-// API synchronously deploys it; get/list/delete round out the lifecycle).
-// Project and branch delete remain logged-only in the API for now (no task
-// framework yet), so they have no Backend method.
+// branch, #130), and endpoints on a branch (#108). The six mutations
+// (create/delete of project, branch, endpoint) now run as write-ahead tasks
+// (#113): the handlers return 202 + a Task and the deploy/cascade work happens
+// in the worker's steps. The synchronous Backend methods here serve the read
+// paths, the create-row records, and the handlers' cheap 404 pre-checks.
+// Cascade delete of branches/projects drops rows via the task StateStore
+// primitives (DeleteBranch/DeleteProject), not core.Backend, which has no
+// delete-branch/delete-project method.
 package core
 
 import (
