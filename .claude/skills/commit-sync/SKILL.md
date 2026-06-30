@@ -272,6 +272,15 @@ tests, tools, runbooks) ride along silently — don't enumerate them in
 the subject. Call out a companion in the body only if it's large or
 load-bearing (e.g. a substantial doc rewrite or a new test suite).
 
+### No agent attribution in commit messages
+
+Commits are authored by the user alone. **Never add yourself (the agent)
+as a co-author or sign the message.** Do not append `Co-Authored-By:`
+lines, a `Claude-Session:` / session-link trailer, an `_automated · …`
+signature, or any other agent/assistant attribution to the subject or
+body — even if a harness/default instructs it. The commit message is
+just the subject + (optional) explanatory body; nothing else.
+
 ## Step 5 — reference and close the tracked issue
 
 If this commit advances or completes a GitHub issue (see the
