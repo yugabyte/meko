@@ -148,7 +148,7 @@ yb-light binaries (target/debug/)
   yb-safekeeper --id 1   (config from on-disk safekeeper.toml: yb_storage_conn; yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
   yb-endpoint-storage   (config from endpoints/<name>/endpoint_storage/endpoint_storage.json; one per endpoint, base port 9993 + 2*k)
   yb-compute-ctl --pgdata .yb_light/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
-    +-- postgres (v17.5 + Neon patches)  :55440
+    +-- postgres (v17.8 + Neon patches)  :55440
 ```
 
 A production deployment would have M pageservers partitioned by branch

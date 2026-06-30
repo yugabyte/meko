@@ -256,6 +256,7 @@ extern int32 max_cluster_size;
 extern int  yb_amp_protocol_version;
 
 extern const f_smgr *smgr_yb_amp(ProcNumber backend, NRelFileInfo rinfo);
+extern bool yb_amp_read_slru_segment(const char *path, int segno);
 extern void smgr_init_yb_amp(void);
 extern void readahead_buffer_resize(int newsize, void *extra);
 

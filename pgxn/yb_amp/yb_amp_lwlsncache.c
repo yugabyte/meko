@@ -49,7 +49,10 @@ static HTAB *lastWrittenLsnCache;
 
 LwLsnCacheCtl* LwLsnCache;
 
-static int lwlsn_cache_size = (128 * 1024); 
+/* Named LWLock tranche protecting lastWrittenLsnCache and LwLsnCache. */
+static LWLockId LastWrittenLsnLock;
+
+static int lwlsn_cache_size = (128 * 1024);
 
 
 static void
@@ -75,9 +78,6 @@ static XLogRecPtr SetLastWrittenLSNForBlockRangeInternal(XLogRecPtr lsn,
 
 
 /* These hold the set_lwlsn_* hooks which were installed before ours, if any */
-static set_lwlsn_block_range_hook_type prev_set_lwlsn_block_range_hook = NULL;
-static set_lwlsn_block_v_hook_type prev_set_lwlsn_block_v_hook = NULL;
-static set_lwlsn_block_hook_type prev_set_lwlsn_block_hook = NULL;
 static set_max_lwlsn_hook_type prev_set_max_lwlsn_hook = NULL;
 static set_lwlsn_relation_hook_type prev_set_lwlsn_relation_hook = NULL;
 static set_lwlsn_db_hook_type prev_set_lwlsn_db_hook = NULL;
@@ -92,12 +92,6 @@ init_lwlsncache(void)
 	
 	lwlc_register_gucs();
 
-	prev_set_lwlsn_block_range_hook = set_lwlsn_block_range_hook;
-	set_lwlsn_block_range_hook = yb_amp_set_lwlsn_block_range;
-	prev_set_lwlsn_block_v_hook = set_lwlsn_block_v_hook;
-	set_lwlsn_block_v_hook = yb_amp_set_lwlsn_block_v;
-	prev_set_lwlsn_block_hook = set_lwlsn_block_hook;
-	set_lwlsn_block_hook = yb_amp_set_lwlsn_block;
 	prev_set_max_lwlsn_hook = set_max_lwlsn_hook;
 	set_max_lwlsn_hook = yb_amp_set_max_lwlsn;
 	prev_set_lwlsn_relation_hook = set_lwlsn_relation_hook;
@@ -115,6 +109,7 @@ LwLsnCacheShmemRequest(void)
 	requested_size += hash_estimate_size(lwlsn_cache_size, sizeof(LastWrittenLsnCacheEntry));
 
 	RequestAddinShmemSpace(requested_size);
+	RequestNamedLWLockTranche("yb_amp_lwlsn", 1);
 }
 
 void
@@ -136,6 +131,7 @@ LwLsnCacheShmemInit(void)
 		if (found) {
 			return;
 		}
+		LastWrittenLsnLock = (LWLockId) GetNamedLWLockTranche("yb_amp_lwlsn");
 	}
 	dlist_init(&LwLsnCache->lastWrittenLsnLRU);
     LwLsnCache->maxLastWrittenLsn = GetRedoRecPtr();

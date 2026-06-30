@@ -1240,6 +1240,7 @@ pg_init_libpagestore(void)
 		smgr_hook = smgr_yb_amp;
 		smgr_init_hook = smgr_init_yb_amp;
 		dbsize_hook = yb_amp_dbsize;
+		read_slru_segment_hook = yb_amp_read_slru_segment;
 	}
 
 	memset(&page_server, 0, sizeof(page_server));

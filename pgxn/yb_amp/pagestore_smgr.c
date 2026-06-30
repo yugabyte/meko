@@ -59,6 +59,9 @@
 #include "storage/fsm_internals.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
+#include "storage/fd.h"
+#include "access/slru.h"
+#include <fcntl.h>
 
 #include "bitmap.h"
 #include "communicator.h"
@@ -2127,14 +2130,23 @@ yb_amp_end_unlogged_build(SMgrRelation reln)
 
 #define STRPREFIX(str, prefix) (strncmp(str, prefix, strlen(prefix)) == 0)
 
-static int
-yb_amp_read_slru_segment(SMgrRelation reln, const char* path, int segno, void* buffer)
+/*
+ * read_slru_segment_hook implementation: download an SLRU segment from the
+ * pageserver and write it to its local path. Postgres core (slru.c) calls this
+ * when an SLRU file is missing, then retries opening the file. Returns true if
+ * the segment was downloaded and written, false if it does not exist on the
+ * pageserver.
+ */
+bool
+yb_amp_read_slru_segment(const char* path, int segno)
 {
 	XLogRecPtr	request_lsn,
 				not_modified_since;
 	SlruKind	kind;
 	int			n_blocks;
 	yb_amp_request_lsns request_lsns;
+	char	   *buffer;
+	int			fd;
 
 	/*
 	 * Compute a request LSN to use, similar to yb_amp_get_request_lsns() but the
@@ -2171,15 +2183,53 @@ yb_amp_read_slru_segment(SMgrRelation reln, const char* path, int segno, void* b
 	else if (STRPREFIX(path, "pg_multixact/offsets"))
 		kind = SLRU_MULTIXACT_OFFSETS;
 	else
-		return -1;
+		return false;
 
 	request_lsns.request_lsn = request_lsn;
 	request_lsns.not_modified_since = not_modified_since;
 	request_lsns.effective_request_lsn = request_lsn;
 
+	buffer = palloc(BLCKSZ * SLRU_PAGES_PER_SEGMENT);
 	n_blocks = communicator_read_slru_segment(kind, segno, &request_lsns, buffer);
 
-	return n_blocks;
+	/* Zero blocks means the segment does not exist on the pageserver. */
+	if (n_blocks <= 0)
+	{
+		pfree(buffer);
+		return false;
+	}
+
+	fd = OpenTransientFile(path, O_RDWR | O_CREAT | PG_BINARY);
+	if (fd < 0)
+	{
+		pfree(buffer);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg(YBAMP_TAG "could not create file \"%s\": %m", path)));
+	}
+
+	if (pg_pwrite(fd, buffer, n_blocks * BLCKSZ, 0) != n_blocks * BLCKSZ)
+	{
+		int			save_errno = errno;
+
+		CloseTransientFile(fd);
+		pfree(buffer);
+		errno = save_errno ? save_errno : ENOSPC;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg(YBAMP_TAG "could not write file \"%s\": %m", path)));
+	}
+
+	if (CloseTransientFile(fd) != 0)
+	{
+		pfree(buffer);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg(YBAMP_TAG "could not close file \"%s\": %m", path)));
+	}
+
+	pfree(buffer);
+	return true;
 }
 
 static void
@@ -2250,8 +2300,6 @@ static const struct f_smgr yb_amp_smgr =
 	.smgr_start_unlogged_build = yb_amp_start_unlogged_build,
 	.smgr_finish_unlogged_build_phase_1 = yb_amp_finish_unlogged_build_phase_1,
 	.smgr_end_unlogged_build = yb_amp_end_unlogged_build,
-
-	.smgr_read_slru_segment = yb_amp_read_slru_segment,
 };
 
 const f_smgr *
