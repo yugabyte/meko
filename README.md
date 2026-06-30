@@ -365,8 +365,12 @@ lib, and the yb_amp PG extensions before invoking `cargo build`, so it is
 the correct entry point for a clean first build. Build artefacts land in
 `target/{debug,release}/`.
 
-`scripts/generate_release_build.sh` packages a release deploy as a single
-versioned tarball (`/tmp/yb-light-bundle-<date>-<sha>.tar.gz`), which
+`scripts/generate_release_build.sh` is the one-shot build wrapper: with no
+flag it builds debug, `--release` builds release, and `--release-tar` builds
+release and packages a deploy as a single versioned tarball
+(`/tmp/yb-light-bundle-<date>-<sha>.tar.gz`). In every mode it first syncs
+the `vendor/postgres-v17` submodule and rebuilds PostgreSQL when the gitlink
+has moved (otherwise it reuses the cached `pg_install/v17`). The tarball
 unpacks into a deploy dir laid out as:
 
 ```
