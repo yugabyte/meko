@@ -310,10 +310,10 @@ operation:
   16 MiB segment header via `postgres_ffi::generate_wal_segment` and INSERTs
   it into the `wals` table itself.
 
-A new constructor, `PhysicalStorage::new_no_local_writes`, skips
-`find_end_of_wal` (which would scan an empty local dir) and takes
-`write_lsn` from the caller. `YbWalStorage::new` rehydrates that
-`write_lsn` from YB:
+A new constructor, `PhysicalStorage::new_no_local_writes`, skips the
+upstream local-directory `find_end_of_wal` scan and takes `write_lsn` from
+the caller. `YbWalStorage::new` computes that `write_lsn` from YB in two
+steps. First, `load_write_lsn` reads the raw end of the byte stream:
 
 ```sql
 SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM safekeeper.wals
@@ -321,9 +321,34 @@ WHERE branch_id = $1
 GROUP BY segno ORDER BY segno DESC LIMIT 1;
 ```
 
+That raw maximum can land mid-record (an ungraceful compute shutdown leaves
+a torn trailing page) or, after an `XLOG_SWITCH`, short of the true end. So
+a second step replays the decoder over the YB-backed WAL: `find_anchor`
+walks back to the nearest fresh-record page — validating `xlp_magic`, so it
+steps over the zero padding a switch leaves — then `find_end_of_wal` scans
+forward to the last complete record boundary. The result refines `write_lsn`:
+
+- **Torn tail** (`end < raw max`): truncate back to the last valid boundary;
+  the compute re-streams from there.
+- **Trailing `XLOG_SWITCH`** (`end > raw max`): `pg_switch_wal()` rounds the
+  record's end up to the next segment, past padding the compute never
+  streams, so the decoder reports a boundary *beyond* the persisted bytes.
+  Honor it — clamping back to the raw max would leave `write_lsn` inside the
+  padding, where the compute resumes, the reader reads zeros, and the
+  safekeeper wedges (#181).
+
 Plus a defensive `delete_after(write_lsn)` at construction to drop any
 rows past the durable end-of-WAL (left over from a crash that INSERTed but
 didn't return).
+
+The same switch padding shows up on the **read** path: a cold reader
+catching up across a *historical* switch (a pageserver whose durable
+`consistent_lsn` lagged behind it) reads into the un-streamed segment tail.
+Once the committed frontier has passed that segment, `YbSegmentReader`
+synthesizes the missing padding as zeros — which the decoder skips to the
+next segment — rather than failing with a WAL-hole; a gap that is *not*
+switch padding still surfaces as a decode error, never silently zero-filled
+(#181).
 
 ### 5. Single-safekeeper constraint in YB WAL mode
 
@@ -564,7 +589,9 @@ The storage broker was removed wholesale, so there is no
   rows (typically 1–N where N is `wal_seg_size / 100 MiB ≤ 1`, but for
   typical per-write rows, N can be hundreds).
 - **Restart**: rehydrates `write_lsn` with one indexed SQL query against
-  YB. No `find_end_of_wal` scan, no segment opens.
+  YB, then a bounded record-boundary replay back from that raw end (no
+  local segment files; reads only the trailing chunks needed to find the
+  last valid boundary / resolve a trailing `XLOG_SWITCH`).
 - **Connection failures** are absorbed by `YsqlClient` — one in-flight
   statement may be retried automatically; a sustained YB outage produces
   a `DurableState::Failed` watermark that propagates as a `flush_wal`

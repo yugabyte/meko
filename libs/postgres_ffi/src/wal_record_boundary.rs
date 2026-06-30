@@ -21,6 +21,7 @@ use std::cmp::min;
 use anyhow::{Context, bail};
 use utils::lsn::Lsn;
 
+use crate::v17::bindings::XLOG_PAGE_MAGIC;
 use crate::v17::xlog_utils::XLP_FIRST_IS_CONTRECORD;
 use crate::waldecoder::WalStreamDecoder;
 use crate::{
@@ -73,13 +74,26 @@ pub fn page_header_size(lsn: Lsn, seg: u64) -> usize {
     }
 }
 
-/// Walk back from `target`'s page to the first page that begins a fresh
-/// record (i.e. `XLP_FIRST_IS_CONTRECORD` is clear, so the page is not a
-/// record continuation). That page boundary is itself a guaranteed
+/// Walk back from `target`'s page to the first *real* WAL page that
+/// begins a fresh record — one whose `xlp_magic` is `XLOG_PAGE_MAGIC`
+/// **and** whose `XLP_FIRST_IS_CONTRECORD` bit is clear (so the page is
+/// not a record continuation). That page boundary is itself a guaranteed
 /// record boundary `<= target`: seeding the decoder there makes it
 /// consume the page header and the first record exactly as a real reader
 /// does, so the boundaries it then reports use the same (page-boundary)
 /// representation that gets persisted.
+///
+/// The magic check is load-bearing: `pg_switch_wal()` (an XLOG_SWITCH
+/// record) zero-pads the rest of the segment, so the pages after it have
+/// `xlp_magic == 0` and, incidentally, `xlp_info == 0` — the contrecord
+/// bit clear. Without the magic check, such a zeroed padding page would
+/// be wrongly accepted as an anchor; seeding the decoder there fails with
+/// `invalid xlog page header` and wedges the safekeeper on restart (#181).
+/// Requiring a valid magic walks the scan back past the padding to the
+/// real page that holds the XLOG_SWITCH, which the decoder then skips to
+/// the next segment. The same conservatism handles a torn trailing page
+/// (zeroed magic, no preceding switch): the scan lands on the last real
+/// page and `find_end_of_wal` stops at the last complete record.
 pub async fn find_anchor<S: WalSource>(reader: &S, target: Lsn) -> anyhow::Result<Lsn> {
     let blk = XLOG_BLCKSZ as u64;
     let mut page = Lsn(target.0 - target.0 % blk);
@@ -90,10 +104,11 @@ pub async fn find_anchor<S: WalSource>(reader: &S, target: Lsn) -> anyhow::Resul
             .read_exact(page, hdr_size)
             .await
             .with_context(|| format!("reading WAL page header at {page}"))?;
-        // xlp_info is the u16 right after xlp_magic (offset 2). See
-        // XLogPageHeaderData layout in postgres_ffi.
+        // xlp_magic is the leading u16; xlp_info the u16 right after it
+        // (offset 2). See XLogPageHeaderData layout in postgres_ffi.
+        let xlp_magic = u16::from_le_bytes([hdr[0], hdr[1]]);
         let xlp_info = u16::from_le_bytes([hdr[2], hdr[3]]);
-        if xlp_info & XLP_FIRST_IS_CONTRECORD == 0 {
+        if xlp_magic == XLOG_PAGE_MAGIC as u16 && xlp_info & XLP_FIRST_IS_CONTRECORD == 0 {
             return Ok(page);
         }
         if page.0 == 0 || page.0 <= scan_floor {
@@ -289,6 +304,54 @@ mod tests {
         assert!(
             starts.contains(&got),
             "stop point {got} must be a real record boundary"
+        );
+    }
+
+    /// XLOG_SWITCH (`pg_switch_wal()`) zero-pads the rest of the segment,
+    /// so the pages after it have `xlp_magic == 0` and `xlp_info == 0`
+    /// (the contrecord bit clear). `find_anchor` must NOT accept such a
+    /// zeroed page as a record anchor: it has to walk back to the last
+    /// *real* WAL page. Regression test for #181 — accepting the padding
+    /// page seeded the decoder inside the zeros, which failed with
+    /// "invalid xlog page header" and wedged the safekeeper on restart.
+    #[tokio::test]
+    async fn find_anchor_skips_xlog_switch_padding() {
+        let (buf, _starts) = gen_wal(4000, 16);
+        // Truncate to a page boundary, then append zeroed pages to mimic
+        // the segment padding an XLOG_SWITCH leaves behind.
+        let real_end = (buf.len() - 1) / XLOG_BLCKSZ * XLOG_BLCKSZ;
+        assert!(real_end > 0, "test needs multi-page WAL");
+        let mut padded = buf[..real_end].to_vec();
+        padded.resize(real_end + 3 * XLOG_BLCKSZ, 0);
+        let src = MemWal { start: START, buf: padded };
+
+        // Target lands inside the zeroed padding — exactly the persisted
+        // "max byte offset" an XLOG_SWITCH produces.
+        let padding_start = Lsn(START.0 + real_end as u64);
+        let target = Lsn(padding_start.0 + XLOG_BLCKSZ as u64 + 100);
+        let anchor = find_anchor(&src, target).await.unwrap();
+
+        assert!(
+            anchor < padding_start,
+            "anchor {anchor} must fall below the zeroed padding at {padding_start}"
+        );
+        // The anchor must be a real WAL page that begins a fresh record,
+        // never a zeroed padding page.
+        let hdr = src
+            .read_exact(anchor, page_header_size(anchor, src.seg()))
+            .await
+            .unwrap();
+        let magic = u16::from_le_bytes([hdr[0], hdr[1]]);
+        let info = u16::from_le_bytes([hdr[2], hdr[3]]);
+        assert_eq!(
+            magic,
+            XLOG_PAGE_MAGIC as u16,
+            "anchor must land on a real WAL page, not zeroed padding"
+        );
+        assert_eq!(
+            info & XLP_FIRST_IS_CONTRECORD,
+            0,
+            "anchor page must begin a fresh record"
         );
     }
 }

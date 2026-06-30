@@ -124,7 +124,13 @@ the highest submitted `end_lsn`.
 
 **On restart:** `load_write_lsn` scans YB for
 `max(segno, chunk_offset + chunk_size)`; falls back to `commit_lsn`
-(= `flush_lsn`) if the table is empty.
+(= `flush_lsn`) if the table is empty. That raw maximum is then refined to
+the last complete record boundary by replaying the decoder
+(`find_anchor` + `find_end_of_wal`): a torn trailing page truncates
+`write_lsn` *back*, while a trailing `XLOG_SWITCH` advances it *forward* to
+the next segment (past padding the compute never streamed). See
+[`safekeeper.md`](safekeeper.md) §"Restart" — clamping the switch case back
+to the raw max wedges the safekeeper (#181).
 
 ---
 

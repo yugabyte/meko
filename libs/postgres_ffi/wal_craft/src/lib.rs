@@ -283,7 +283,7 @@ fn craft_internal<C: postgres::GenericClient>(
     } else if lsn % XLOG_BLCKSZ as u64 == XLOG_SIZE_OF_XLOG_SHORT_PHD as u64 {
         lsn -= XLOG_SIZE_OF_XLOG_SHORT_PHD as u64;
     }
-    client.execute("select neon_xlogflush($1)", &[&PgLsn::from(lsn)])?;
+    client.execute("select yb_amp_xlogflush($1)", &[&PgLsn::from(lsn)])?;
     Ok(intermediate_lsns)
 }
 

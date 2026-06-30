@@ -412,6 +412,26 @@ impl YbWalStorage {
                     );
                     end
                 }
+                Ok(end) if end > max_offset => {
+                    // The last record is an XLOG_SWITCH (pg_switch_wal): its
+                    // end-of-record LSN rounds *up* to the next segment
+                    // boundary, past the segment's trailing zero padding. The
+                    // compute doesn't stream that padding, so the persisted
+                    // byte range stops at (or inside) it while the true flush
+                    // position is the next segment. find_end_of_wal decodes the
+                    // switch and reports that next-segment LSN; honor it rather
+                    // than clamping back to max_offset — clamping leaves
+                    // write_lsn inside the padding, where the compute resumes
+                    // streaming, the reader hits `invalid xl_tot_len 0`, and the
+                    // safekeeper wedges (#181).
+                    tracing::info!(
+                        branch_id = %branch_id_str,
+                        max_offset = %max_offset,
+                        switch_end = %end,
+                        "YbWalStorage::new — trailing XLOG_SWITCH advances end-of-WAL past segment padding",
+                    );
+                    end
+                }
                 Ok(_) => max_offset,
                 Err(e) => {
                     tracing::warn!(
@@ -1423,11 +1443,40 @@ impl AsyncRead for YbSegmentReader {
                     continue;
                 }
                 Poll::Ready(Ok(Ok(None))) => {
-                    // Neither cache nor YB has a chunk covering self.pos.
-                    // This is a *real* hole — far better to fail loudly
-                    // here than serve zeros and let the pageserver hit
-                    // `xlp_magic=0` three layers down.
+                    // Neither cache nor YB has a chunk covering self.pos, and
+                    // the forward search found none later in this segment —
+                    // so [self.pos, segment end) is a gap.
+                    //
+                    // The benign cause is XLOG_SWITCH padding: pg_switch_wal()
+                    // ends a segment with a switch record and leaves the rest
+                    // of the segment zero-padded. The compute streams WAL only
+                    // up to the switch record, not the padding, so a cold
+                    // reader catching up across a *historical* switch (e.g. a
+                    // pageserver whose durable consistent_lsn lagged behind it)
+                    // finds the segment tail missing (#181). When the committed
+                    // frontier has already advanced to or past the next segment
+                    // (flush_lsn >= segment end), this segment is complete and
+                    // the gap is that padding: synthesize the zero bytes
+                    // Postgres would have on disk. The WalStreamDecoder, having
+                    // decoded the switch record (which precedes the gap and is
+                    // always persisted), is in its skip-to-next-segment state
+                    // and consumes them. If the gap is NOT padding (genuine
+                    // missing WAL), the decoder is not skipping and chokes on
+                    // the zeros (`xlp_magic=0`) — surfacing as a decode error,
+                    // never silently masked.
                     me.fetch = None;
+                    let seg_end = me.segno * me.wal_seg_size + me.wal_seg_size;
+                    let committed_past_segment =
+                        me.flush_lsn.load(std::sync::atomic::Ordering::Acquire) >= seg_end;
+                    if committed_past_segment && me.pos < me.wal_seg_size {
+                        let zeros = (me.wal_seg_size - me.pos).min(dst.remaining() as u64) as usize;
+                        if zeros > 0 {
+                            dst.initialize_unfilled_to(zeros)[..zeros].fill(0);
+                            dst.advance(zeros);
+                            me.pos += zeros as u64;
+                            return Poll::Ready(Ok(()));
+                        }
+                    }
                     return Poll::Ready(Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
                         format!(
@@ -2338,6 +2387,96 @@ mod tests {
         assert_eq!(
             tail, tail_new,
             "reader served a stale cached tail after a term rewrite (#139)"
+        );
+
+        drop_wals_table(&fpu, &table).await;
+    }
+
+    /// XLOG_SWITCH padding hole (#181). `pg_switch_wal()` ends a segment with a
+    /// switch record and zero-pads the rest; the compute streams only up to the
+    /// switch record, so the segment tail is absent from `wals`. A cold reader
+    /// catching up across that *historical* switch (a pageserver whose durable
+    /// consistent_lsn lagged behind it) reads into the missing tail. Once the
+    /// committed frontier has advanced to/past the next segment, that gap is the
+    /// padding and the reader must synthesize zeros (which the decoder skips),
+    /// not fail with a "WAL hole" and wedge catch-up. But a gap in a segment
+    /// that is NOT yet fully committed is the live frontier (or genuine loss)
+    /// and must still error.
+    #[tokio::test]
+    async fn segment_reader_zero_fills_xlog_switch_padding() {
+        use std::sync::atomic::AtomicU64;
+        use tokio::io::AsyncReadExt;
+
+        let table = format!("wals_test_switchpad_{}", rand_suffix());
+        let (fpu, _read, _system) = open_three_lanes().await;
+        make_wals_table(&fpu, &table).await;
+
+        let branch_id = BranchId::generate();
+        let branch_s = branch_id.to_string();
+
+        // Segment 0 holds real WAL in [0, 1024) (think: up to the switch
+        // record). Nothing is stored in [1024, SEG_SIZE) — the padding gap.
+        let seg: i64 = 0;
+        let head_bytes: Vec<u8> = vec![0xAA; 1024];
+        let insert_sql = format!(
+            "INSERT INTO {} (branch_id, segno, chunk_offset, \
+                             chunk_size, data, last_modified_us) \
+             VALUES ($1, $2, $3, $4, $5, 0)",
+            quote_relation(&table)
+        );
+        let head_slice = head_bytes.as_slice();
+        let head_size = head_bytes.len() as i32;
+        fpu.execute(&insert_sql, &[&branch_s, &seg, &0i64, &head_size, &head_slice])
+            .await
+            .expect("INSERT head chunk");
+
+        let yb_wal = Arc::new(YbWalConn {
+            fpu_client: fpu.clone(),
+            read_client: fpu.clone(),
+            system_client: fpu.clone(),
+            table: table.clone(),
+            cache: None,
+        });
+
+        // Committed frontier is in the NEXT segment: the gap is switch padding.
+        let flush_past = Arc::new(AtomicU64::new(SEG_SIZE + 4096));
+        let mut reader = YbSegmentReader::new(
+            yb_wal.clone(),
+            &branch_id,
+            0,
+            SEG_SIZE as usize,
+            1024,
+            flush_past,
+        );
+        let mut buf = vec![0xFFu8; 4096];
+        reader
+            .read_exact(&mut buf)
+            .await
+            .expect("padding gap below a completed segment must read back as zeros");
+        assert!(
+            buf.iter().all(|&b| b == 0),
+            "switch padding must be synthesized as zeros"
+        );
+
+        // Same gap, but the frontier is still INSIDE this segment: not padding
+        // (live frontier / genuine loss) — must surface as a hole, not zeros.
+        let flush_inside = Arc::new(AtomicU64::new(2048));
+        let mut reader = YbSegmentReader::new(
+            yb_wal.clone(),
+            &branch_id,
+            0,
+            SEG_SIZE as usize,
+            1024,
+            flush_inside,
+        );
+        let mut buf = vec![0u8; 4096];
+        let err = reader
+            .read_exact(&mut buf)
+            .await
+            .expect_err("a gap below the committed frontier must not be masked as zeros");
+        assert!(
+            err.to_string().contains("WAL hole") || err.kind() == std::io::ErrorKind::UnexpectedEof,
+            "expected a WAL-hole error, got: {err}"
         );
 
         drop_wals_table(&fpu, &table).await;

@@ -1331,6 +1331,7 @@ dependencies = [
  "pageserver_api",
  "pageserver_client_grpc",
  "pageserver_page_api",
+ "postgres",
  "postgres-protocol 0.6.6",
  "regex",
  "reqwest",
@@ -1338,6 +1339,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "utils",
+ "wal_craft",
  "workspace_hack",
 ]
 
