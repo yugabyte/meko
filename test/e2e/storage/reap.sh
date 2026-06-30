@@ -70,25 +70,49 @@ done
 
 [ "$reaped" -gt 0 ] && echo "reap.sh: reaped $reaped dead run(s)" >&2
 
-# Drop ephemeral YB databases left by dead runs. Same leak, same liveness
-# rule: each run's DB is `yb_storage_e2e_<run_id>`, and the harness only
-# creates it AFTER run.sh has taken the run's lock — so a DB whose run is
-# dead (lock free / dir gone) is always safe to drop, never one still
-# starting. A DROP that the run's own teardown never reached (SIGKILL / hung
-# clean) bloats YB's catalog and starves later runs. Best-effort: silently
-# skip if psql or YB is unreachable.
+# Drop ephemeral YB databases left by dead runs. Each run's DB is
+# `yb_storage_e2e_<epoch>_<pid>`, where `<epoch>` is its creation time (see
+# run.sh `RUN_ID`).
+#
+# IMPORTANT: the YB cluster (and thus the `pg_database` namespace) is SHARED
+# across worktrees, but each worktree's run dirs / locks live under its own
+# `.e2e-tests`. So the per-run lock is only authoritative for DBs created by
+# THIS worktree. We therefore reap on two rules:
+#   - Own runs (a `run_<id>` dir exists here): reap as soon as the run is
+#     dead (lock free) — fast local GC of our own leaks.
+#   - Foreign DBs (no run dir here — another worktree's run, or one whose
+#     dir was already GC'd): reap only once they are older than the
+#     cross-worktree grace period, by CREATION DATE parsed from the name.
+#     A concurrent worktree's live run always has a recent DB, so this never
+#     drops a DB out from under it (the bug that caused "terminating
+#     connection due to administrator command" mid-run).
+# Best-effort: silently skip if psql or YB is unreachable.
+CROSS_REAP_GRACE_SECS=$(( 2 * 24 * 60 * 60 ))   # 2 days
 YB_HOST="${YB_HOST:-127.0.0.1}"
 YB_PORT="${YB_PORT:-5433}"
 SKIP_DB="${YB_DBNAME:-}"
 yb() { PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte -tAc "$1" 2>/dev/null; }
 if command -v psql >/dev/null 2>&1; then
+    now=$(date +%s)
     dropped=0
-    for db in $(yb "select datname from pg_database where datname like 'yb_storage_e2e_%'"); do
+    for db in $(yb "SELECT datname FROM pg_database WHERE datname LIKE 'yb_storage_e2e_%'"); do
         [ "$db" = "$SKIP_DB" ] && continue
-        run_is_dead "$TEST_DIR/run_${db#yb_storage_e2e_}" || continue  # live run -> keep its DB
+        id="${db#yb_storage_e2e_}"          # <epoch>_<pid>
+        dir="$TEST_DIR/run_${id}"
+        if [ -d "$dir" ]; then
+            # Our own run: reap as soon as it is dead.
+            run_is_dead "$dir" || continue  # live run -> keep its DB
+        else
+            # Foreign / dir-GC'd run: reap only by create date, past the
+            # cross-worktree grace period.
+            created="${id%%_*}"
+            case "$created" in
+                ''|*[!0-9]*) continue ;;    # unparseable epoch -> leave it
+            esac
+            [ $(( now - created )) -ge "$CROSS_REAP_GRACE_SECS" ] || continue
+        fi
         echo "reap.sh: dropping ephemeral DB of dead run: $db" >&2
-        yb "select pg_terminate_backend(pid) from pg_stat_activity where datname='$db'" >/dev/null
-        yb "drop database if exists \"$db\"" >/dev/null
+        yb "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" >/dev/null
         dropped=$((dropped + 1))
     done
     [ "$dropped" -gt 0 ] && echo "reap.sh: dropped $dropped dead-run DB(s)" >&2

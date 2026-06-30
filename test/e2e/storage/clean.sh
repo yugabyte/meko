@@ -61,9 +61,7 @@ done
 
 step "Drop $YB_DBNAME"
 PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \
-    -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$YB_DBNAME'" >/dev/null 2>&1 || true
-PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \
-    -c "DROP DATABASE IF EXISTS \"$YB_DBNAME\"" >/dev/null
+    -c "DROP DATABASE IF EXISTS \"$YB_DBNAME\" WITH (FORCE)" >/dev/null
 
 step "Remove $YB_LIGHT_REPO_DIR"
 rm -rf "$YB_LIGHT_REPO_DIR"
