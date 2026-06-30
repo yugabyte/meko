@@ -18,6 +18,7 @@
 //! bytes) fires, then drain to `pageserver.pages` in one INSERT.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -583,11 +584,18 @@ impl PageWriter {
     }
 
     /// Apply a serialized WAL value batch. With `ingest_parallelism > 1`
-    /// (and a large enough batch) the per-key deserialize + row build is
-    /// fanned across blocking workers; the buffer pushes and materialiser
-    /// bookkeeping (`push_rows`) stay serial and in batch order, so
-    /// ordering and atomicity are identical to the serial path.
-    pub async fn put_serialized(&self, batch: SerializedValueBatch) -> Result<()> {
+    /// (and a large enough batch) the work is partitioned by page key
+    /// across blocking workers, each of which deserializes, builds, AND
+    /// pushes its keys' rows. Distinct keys live in independent per-key
+    /// DashMap shards so they apply concurrently; every row for a given key
+    /// lands on one worker, preserving that key's chain / ascending-LSN
+    /// order.
+    ///
+    /// This advances no visibility watermark: `put_batch` bumps
+    /// `applied_lsn` only after this returns, and reads filter each key's
+    /// chain by their requested LSN — so a partially-applied batch is never
+    /// observable, even across the parallel workers.
+    pub async fn put_serialized(self: &Arc<Self>, batch: SerializedValueBatch) -> Result<()> {
         let len = batch.metadata.len();
         if len == 0 {
             return Ok(());
@@ -596,39 +604,55 @@ impl PageWriter {
         self.await_backpressure().await;
 
         // Below this size the spawn_blocking hand-off costs more than the
-        // serial build saves.
+        // serial apply saves.
         const MIN_PARALLEL_ENTRIES: usize = 256;
         let parallelism = self.policy.ingest_parallelism;
-        let (rel_rows, slru_rows, meta_rows, slru_mat) =
-            if parallelism > 1 && len >= MIN_PARALLEL_ENTRIES {
-                let batch = std::sync::Arc::new(batch);
-                let mut handles = Vec::new();
-                for range in partition_ranges(len, parallelism) {
-                    let batch = std::sync::Arc::clone(&batch);
-                    handles.push(tokio::task::spawn_blocking(move || {
-                        build_rows_from_batch(&batch, range)
-                    }));
+        if parallelism > 1 && len >= MIN_PARALLEL_ENTRIES {
+            // Partition entry indices by page key so the same key is always
+            // applied by one worker (its chain order + materialiser tally
+            // stay race-free); distinct keys hit distinct shards and apply
+            // in parallel.
+            let batch = Arc::new(batch);
+            let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); parallelism];
+            for (i, meta) in batch.metadata.iter().enumerate() {
+                if matches!(meta, ValueMeta::Serialized(_)) {
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    meta.key().hash(&mut hasher);
+                    let bucket = (hasher.finish() % parallelism as u64) as usize;
+                    buckets[bucket].push(i);
                 }
-                let mut rel_rows = Vec::new();
-                let mut slru_rows = Vec::new();
-                let mut meta_rows = Vec::new();
-                let mut slru_mat = Vec::new();
-                // Joined in range order, so the concatenation reproduces the
-                // batch's key/LSN order exactly as the serial path would.
-                for handle in handles {
-                    let (rel, slru, meta, mat) = handle
-                        .await
-                        .map_err(|e| anyhow::anyhow!("ingest build task failed: {e}"))??;
-                    rel_rows.extend(rel);
-                    slru_rows.extend(slru);
-                    meta_rows.extend(meta);
-                    slru_mat.extend(mat);
+            }
+            let mut handles = Vec::new();
+            for indices in buckets {
+                if indices.is_empty() {
+                    continue;
                 }
-                (rel_rows, slru_rows, meta_rows, slru_mat)
-            } else {
-                build_rows_from_batch(&batch, 0..len)?
-            };
+                let this = Arc::clone(self);
+                let batch = Arc::clone(&batch);
+                handles.push(tokio::task::spawn_blocking(move || {
+                    this.apply_indices(&batch, &indices)
+                }));
+            }
+            for handle in handles {
+                handle
+                    .await
+                    .map_err(|e| anyhow::anyhow!("ingest apply task failed: {e}"))??;
+            }
+            Ok(())
+        } else {
+            let (rel_rows, slru_rows, meta_rows, slru_mat) =
+                build_rows_from_metas(&batch, batch.metadata.iter())?;
+            self.push_rows(rel_rows, slru_rows, meta_rows, slru_mat)
+        }
+    }
 
+    /// Deserialize, build, and push the page rows for `indices` — a
+    /// key-partition of the batch (every row for any key it touches is in
+    /// this slice, in ascending-LSN batch order). Pushes go to the per-key
+    /// shards, so concurrent workers on disjoint keys don't contend.
+    fn apply_indices(&self, batch: &SerializedValueBatch, indices: &[usize]) -> Result<()> {
+        let (rel_rows, slru_rows, meta_rows, slru_mat) =
+            build_rows_from_metas(batch, indices.iter().map(|&i| &batch.metadata[i]))?;
         self.push_rows(rel_rows, slru_rows, meta_rows, slru_mat)
     }
 
@@ -2044,43 +2068,23 @@ fn slru_resets_chain(value: &Value) -> bool {
     }
 }
 
-/// Split `len` items into up to `parts` contiguous, near-equal ranges
-/// (empty ranges omitted). Contiguous and in order, so callers can join
-/// the per-range results back in the original batch order.
-fn partition_ranges(len: usize, parts: usize) -> Vec<std::ops::Range<usize>> {
-    let parts = parts.clamp(1, len.max(1));
-    let base = len / parts;
-    let rem = len % parts;
-    let mut out = Vec::with_capacity(parts);
-    let mut start = 0;
-    for i in 0..parts {
-        let extra = if i < rem { 1 } else { 0 };
-        let end = start + base + extra;
-        if start < end {
-            out.push(start..end);
-        }
-        start = end;
-    }
-    out
-}
-
 /// (rel rows, slru rows, meta rows, slru materialiser tuples).
 type BuiltRows = (Vec<PageRow>, Vec<SlruPageRow>, Vec<MetaRow>, Vec<(Key, Lsn, bool)>);
 
-/// Deserialize values and build page rows for `batch.metadata[range]`.
-/// Pure CPU and self-contained, so it is safe to run on a blocking worker
-/// over an `Arc<SerializedValueBatch>`. The `slru_mat` tuples carry the
-/// `(key, lsn, resets_chain)` the materialiser needs, since the built
-/// `SlruPageRow`s drop the key.
-fn build_rows_from_batch(
-    batch: &SerializedValueBatch,
-    range: std::ops::Range<usize>,
+/// Deserialize values and build page rows for the given `metas` (a subset
+/// of `batch.metadata`). Pure CPU and self-contained, so it is safe to run
+/// on a blocking worker over an `Arc<SerializedValueBatch>`. The `slru_mat`
+/// tuples carry the `(key, lsn, resets_chain)` the materialiser needs,
+/// since the built `SlruPageRow`s drop the key.
+fn build_rows_from_metas<'a>(
+    batch: &'a SerializedValueBatch,
+    metas: impl Iterator<Item = &'a ValueMeta>,
 ) -> Result<BuiltRows> {
     let mut rel_rows = Vec::new();
     let mut slru_rows = Vec::new();
     let mut meta_rows = Vec::new();
     let mut slru_mat = Vec::new();
-    for meta in &batch.metadata[range] {
+    for meta in metas {
         let ValueMeta::Serialized(ser) = meta else {
             continue;
         };
