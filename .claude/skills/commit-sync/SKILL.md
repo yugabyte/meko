@@ -147,7 +147,8 @@ Inspection / diagnostic tooling has to keep working against what you changed:
 - `tools/` — `yb-dump-pages`, `yb-dump-wals`, `cluster-ui` (they read the
   YB-backed page store / WAL / control-plane state directly).
 - `scripts/` — operational helpers (e.g. `download_basebackup.py`,
-  `force_layer_download.py`, `sk_cleanup_tenants`, `generate_release_build.sh`).
+  `force_layer_download.py`, `sk_cleanup_tenants`). The top-level `build.sh`
+  (build wrapper / release tarball) is in the same family.
 
 Check a tool when your change touches **what it reads or renders**:
 - A YB table's schema / columns / key encoding changed → any dump or UI that

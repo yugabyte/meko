@@ -365,7 +365,7 @@ lib, and the yb_amp PG extensions before invoking `cargo build`, so it is
 the correct entry point for a clean first build. Build artefacts land in
 `target/{debug,release}/`.
 
-`scripts/generate_release_build.sh` is the one-shot build wrapper: with no
+`build.sh` (repo root) is the one-shot build wrapper: with no
 flag it builds debug, `--release` builds release, and `--release-tar` builds
 release and packages a deploy as a single versioned tarball
 (`/tmp/yb-light-bundle-<date>-<sha>.tar.gz`). In every mode it first syncs
@@ -431,7 +431,7 @@ the row-store tables and render them in a human-readable form. They share
 one connection-args struct ([`ysql_client::YbConnArgs`](libs/ysql_client/src/lib.rs)),
 so the flags are identical across all three and can't drift — and all work
 against both a local no-TLS cluster (default) and a TLS-required one
-(`--sslmode require`). `scripts/generate_release_build.sh` stages them into
+(`--sslmode require`). `build.sh --release-tar` stages them into
 `${BUNDLE}/tools/` so they ship to deploy hosts alongside the daemons.
 
 - [`yb-dump-pages`](pageserver/src/bin/yb-dump-pages.rs) — dump or decode
