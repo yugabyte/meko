@@ -8,14 +8,18 @@
 // (e.g. HubSpot) from the dashboard, not from here.
 import { RudderAnalytics, type ApiObject } from "@rudderstack/analytics-js";
 import type { TelemetryEventName } from "@/lib/telemetry/events";
+import { readRuntimeEnv } from "@/lib/runtimeEnv";
 
 /** Default Yugabyte data plane, mirroring the snippet used by yugabyte-cloud. Overridable via env. */
 const DEFAULT_DATA_PLANE_URL = "https://yugabyteklhgka.dataplane.rudderstack.com";
 
-const WRITE_KEY = (import.meta.env.VITE_RUDDERSTACK_WRITE_KEY || "").trim();
+// Read at runtime (window.__MEKO_RUNTIME__, served by the Express server from the
+// pod's env) with a build-time import.meta.env fallback — so the same image works
+// across environments and the write key comes from the K8s secret at deploy time.
+const WRITE_KEY = (readRuntimeEnv("VITE_RUDDERSTACK_WRITE_KEY") || "").trim();
 
 const DATA_PLANE_URL = (
-  import.meta.env.VITE_RUDDERSTACK_DATA_PLANE_URL || DEFAULT_DATA_PLANE_URL
+  readRuntimeEnv("VITE_RUDDERSTACK_DATA_PLANE_URL") || DEFAULT_DATA_PLANE_URL
 ).trim();
 
 /** The single SDK instance. `null` until loadTelemetry() runs with a valid write key. */

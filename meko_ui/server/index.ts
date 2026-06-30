@@ -91,6 +91,32 @@ app.use((req, res, next) => {
   }
   await registerRoutes(httpServer, app);
 
+  // Runtime config for the browser. VITE_/MEKO_ vars are normally inlined into
+  // the bundle at build time; this endpoint instead reads them from the pod's
+  // env at request time and exposes an allow-listed set as
+  // `window.__MEKO_RUNTIME__`, so they can be changed per-deployment without a
+  // rebuild. index.html loads this before the app bundle; the client reads it
+  // via readRuntimeEnv() with a build-time import.meta.env fallback.
+  const RUNTIME_ENV_KEYS = [
+    "MEKO_FREE_TIER_QUOTA_ENABLED",
+    "MEKO_FREE_TIER_DATAPACKS",
+    "MEKO_FREE_TIER_KB_BYTES",
+    "MEKO_FREE_TIER_CONVERSATIONS",
+    "MEKO_FREE_TIER_TOKEN_BURN",
+    "VITE_RUDDERSTACK_WRITE_KEY",
+    "VITE_RUDDERSTACK_DATA_PLANE_URL",
+  ];
+  app.get("/runtime-config.js", (_req, res) => {
+    const cfg: Record<string, string> = {};
+    for (const key of RUNTIME_ENV_KEYS) {
+      const val = process.env[key];
+      if (val !== undefined) cfg[key] = val;
+    }
+    res.type("application/javascript");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(`window.__MEKO_RUNTIME__ = ${JSON.stringify(cfg)};`);
+  });
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

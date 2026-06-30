@@ -29,6 +29,7 @@ export type TelemetryEventName = (typeof TELEMETRY_EVENTS)[keyof typeof TELEMETR
  *  wired into the UI; google_oauth / linkedin / github slot in here as they're added. */
 export const AUTH_METHODS = {
   EMAIL_PASSWORD: "email_password",
+  GOOGLE_OAUTH: "google_oauth",
 } as const;
 
 /** Value for the conversation_started `client` property. */

@@ -91,7 +91,9 @@ export default function SignInPage() {
 
   const handleGoogleSignIn = () => {
     if (loading || googleLoading) return;
-    trackEvent(TELEMETRY_EVENTS.SIGN_IN_CLICKED);
+    trackEvent(TELEMETRY_EVENTS.USER_SIGNED_IN, {
+      login_method: AUTH_METHODS.GOOGLE_OAUTH,
+    });
     setError(null);
     setGoogleLoading(true);
     // App-driven Google sign-in: hand off to the api_server, which builds the

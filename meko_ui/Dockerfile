@@ -19,6 +19,9 @@ ENV VITE_COGNITO_CLIENT_ID=$VITE_COGNITO_CLIENT_ID
 ENV VITE_COGNITO_REDIRECT_URI=$VITE_COGNITO_REDIRECT_URI
 ENV VITE_OBSERVE_EMBED_PATH=$VITE_OBSERVE_EMBED_PATH
 ENV VITE_INFERENCE_GATEWAY_URL=$VITE_INFERENCE_GATEWAY_URL
+# RudderStack telemetry is configured at RUNTIME (not baked in here): the server
+# serves window.__MEKO_RUNTIME__ from the pod env, so the write key + data-plane
+# URL come from the K8s secret / deployment env at deploy time.
 COPY . .
 RUN npm run build
 

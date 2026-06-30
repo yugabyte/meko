@@ -6,6 +6,7 @@
 // imports from here so tuning a cap is a one-line edit.
 
 import { MB } from "@/lib/fileSize";
+import { readRuntimeEnv } from "@/lib/runtimeEnv";
 import type { AccountUsage } from "@/lib/api/mekoApi";
 
 /**
@@ -22,7 +23,7 @@ import type { AccountUsage } from "@/lib/api/mekoApi";
  * section update in Settings so the displayed table stays accurate.
  */
 function envInt(name: string, def: number): number {
-  const raw = (import.meta.env as Record<string, string | undefined>)[name];
+  const raw = readRuntimeEnv(name);
   if (!raw) return def;
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : def;
@@ -36,9 +37,7 @@ function envInt(name: string, def: number): number {
  * unaffected until explicitly opted in.
  */
 export const FREE_TIER_QUOTA_ENABLED: boolean = (() => {
-  const raw = (import.meta.env as Record<string, string | undefined>)[
-    "MEKO_FREE_TIER_QUOTA_ENABLED"
-  ];
+  const raw = readRuntimeEnv("MEKO_FREE_TIER_QUOTA_ENABLED");
   return ["1", "true", "yes"].includes((raw ?? "").trim().toLowerCase());
 })();
 
