@@ -271,7 +271,6 @@ def write_pageserver_config(datadir, bootstrap, ancestor_branch_id=None, ancesto
         # The local safekeeper this pageserver streams WAL from is always reached
         # over loopback inside the pod, regardless of the public bind address.
         f"safekeeper_pg_addr='{LISTEN_HOST}:{SAFEKEEPER_PG_PORT}'",
-        "availability_zone='local'",
         f"control_plane_api='{STORAGE_CONTROLLER_URL or CONTROL_PLANE_API}'",
         f"yb_storage_conn={yb_conn_inline_toml()}",
         f"branch_id='{BRANCH_ID}'",
@@ -616,7 +615,7 @@ def main():
     es_cfg = write_endpoint_storage_config(es_dir, pem)
     es = Service(
         "endpoint_storage",
-        [BIN_DIR / "endpoint_storage", es_cfg],
+        [BIN_DIR / "yb-endpoint-storage", es_cfg],
         cwd=es_dir,
         extra_env={"RUST_LOG": "info"},
         health=lambda: tcp_open(LISTEN_HOST, ENDPOINT_STORAGE_HTTP_PORT),
@@ -626,7 +625,7 @@ def main():
     write_safekeeper_config(sk_dir)
     sk = Service(
         "safekeeper",
-        [BIN_DIR / "safekeeper", "-D", sk_dir],
+        [BIN_DIR / "yb-safekeeper", "-D", sk_dir],
         cwd=sk_dir,
         health=lambda: http_request("GET", f"http://{LISTEN_HOST}:{SAFEKEEPER_HTTP_PORT}/v1/status")[0] == 200,
     )
@@ -711,7 +710,7 @@ def main():
     compute = Service(
         "compute_ctl",
         [
-            BIN_DIR / "compute_ctl",
+            BIN_DIR / "yb-compute-ctl",
             "--pgdata", compute_pgdata,
             "-C", f"postgresql://cloud_admin@{LISTEN_HOST}:{COMPUTE_PORT}/postgres",
             "-b", PG_BIN / "postgres",
