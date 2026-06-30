@@ -223,7 +223,7 @@ multi-region, YBM) and point a pageserver + safekeeper at it.
 The bundled developer workflow uses `yb_light_local`:
 
 ```sh
-make -j`nproc` -s             # build patched PG + Rust binaries
+./build.sh                        # build patched PG + Rust binaries (see "Building from source")
 cargo yb_light init               # writes .yb_light repo dir against config.toml
 cargo yb_light start              # storage_broker, safekeeper, pageserver
 cargo yb_light tenant create --set-default
