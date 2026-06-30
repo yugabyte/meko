@@ -54,6 +54,25 @@ export type Endpoint = {
   created_at: string;
 };
 
+/** A write-ahead task. The mutating endpoints (create project / branch /
+ *  endpoint) are async: they return `202` + one of these, and the work runs in
+ *  the controller's task worker. Poll `GET /tasks/{id}` until `status` is
+ *  terminal. On a create, the task carries the ids it produced: `project_id` is
+ *  the project, and `target_ref` is the primary resource created (the new branch
+ *  for a branch task, the endpoint for an endpoint task). `error` is set on
+ *  failure. */
+export type TaskStatus = "pending" | "running" | "succeeded" | "failed";
+export type Task = {
+  id: string;
+  kind: string;
+  status: TaskStatus;
+  project_id: string | null;
+  target_ref: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 /* ---- List-envelope shapes the controller wraps collections in ---- */
 
 export type UserList = { users: User[]; count: number; total: number };
