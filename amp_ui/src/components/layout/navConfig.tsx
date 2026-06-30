@@ -8,7 +8,7 @@ import {
   Crosshair,
   Globe,
   Home,
-  Layers,
+  // Layers, // used only by the Foundations tab, which is commented out below
   Server,
   Sparkles,
   Workflow,
@@ -30,7 +30,8 @@ export type NavItem = {
 /** WORKSPACE section. */
 export const WORKSPACE_NAV: NavItem[] = [
   { label: "Home", to: "/home", icon: Home },
-  { label: "Foundations", to: "/foundations", icon: Layers },
+  // Foundations tab temporarily disabled — no backing API yet.
+  // { label: "Foundations", to: "/foundations", icon: Layers },
   { label: "Shared pools", to: "/shared-pools", icon: Boxes },
   { label: "Fleet", to: "/fleet", icon: Server },
   { label: "Multitenancy", to: "/multitenancy", icon: Globe },
@@ -70,6 +71,11 @@ export type AgentPanelConfig = {
   description: ReactNode;
   /** Primary CTA caption. The button is rendered disabled for now. */
   cta: string;
+  /** Short one-line summary for the Home agent card (the panel uses the
+   *  richer `description`). */
+  blurb: string;
+  /** Render a "NEW" badge on the Home agent card. */
+  isNew?: boolean;
 };
 
 /** Brand highlight used inside agent descriptions. */
@@ -95,6 +101,8 @@ export const AGENT_PANELS: Record<AgentPanelId, AgentPanelConfig> = {
       </>
     ),
     cta: "Start bulk migration",
+    blurb:
+      "Migrates data & databases in bulk into a shared pool and tracks the detail of every migration.",
   },
   "perf-advisor": {
     id: "perf-advisor",
@@ -106,6 +114,8 @@ export const AGENT_PANELS: Record<AgentPanelId, AgentPanelConfig> = {
     labelClass: "text-violet-600 dark:text-violet-400",
     description: <>I tune and troubleshoot the whole fleet across your pools.</>,
     cta: "Apply",
+    blurb:
+      "Watches the fleet for hot tenants and slow queries; recommends index, placement & replication fixes.",
   },
   nexus: {
     id: "nexus",
@@ -124,6 +134,9 @@ export const AGENT_PANELS: Record<AgentPanelId, AgentPanelConfig> = {
       </>
     ),
     cta: "Draft integration plan",
+    blurb:
+      "Designs ecosystem & external integrations — connectors, event streams, BI tools and downstream apps.",
+    isNew: true,
   },
 };
 

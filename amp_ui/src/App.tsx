@@ -8,6 +8,7 @@
 
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
@@ -17,6 +18,20 @@ import SignInPage from "@/pages/SignInPage";
 import SignUpPage from "@/pages/SignUpPage";
 import WelcomePage from "@/pages/WelcomePage";
 import PlaceholderPage from "@/pages/PlaceholderPage";
+import SharedPoolsPage from "@/pages/SharedPoolsPage";
+import FleetPage from "@/pages/FleetPage";
+import MultitenancyPage from "@/pages/MultitenancyPage";
+
+/** Routes that now have a real, API-backed page (replacing the placeholder). */
+const PAGE_OVERRIDES: Record<string, ReactNode> = {
+  "/shared-pools": <SharedPoolsPage />,
+  "/fleet": <FleetPage />,
+  "/multitenancy": <MultitenancyPage />,
+};
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+});
 
 /** Gate for authenticated-only routes. */
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -64,7 +79,9 @@ function AppRoutes() {
           <Route
             key={item.to}
             path={item.to}
-            element={<PlaceholderPage title={item.label} />}
+            element={
+              PAGE_OVERRIDES[item.to!] ?? <PlaceholderPage title={item.label} />
+            }
           />
         ))}
       </Route>
@@ -79,13 +96,15 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <TooltipProvider>
-        <BrowserRouter>
-          <AppRoutes />
-        </BrowserRouter>
-        <Toaster />
-      </TooltipProvider>
-    </AuthProvider>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <TooltipProvider>
+          <BrowserRouter>
+            <AppRoutes />
+          </BrowserRouter>
+          <Toaster />
+        </TooltipProvider>
+      </AuthProvider>
+    </QueryClientProvider>
   );
 }

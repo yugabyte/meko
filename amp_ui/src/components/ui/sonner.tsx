@@ -10,6 +10,12 @@ const Toaster = ({ ...props }: ToasterProps) => {
     <Sonner
       theme={theme as ToasterProps["theme"]}
       className="toaster group"
+      // Match meko's toast behaviour: top-center, green/red richColors, a
+      // close button, and a longer dwell so the message isn't easy to miss.
+      position="top-center"
+      richColors
+      closeButton
+      duration={5000}
       toastOptions={{
         classNames: {
           toast:
