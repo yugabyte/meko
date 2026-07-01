@@ -236,6 +236,20 @@ def main():
         return
 
     say(f"Building {mode} binaries (yb-pageserver + supporting bins)...")
+
+    # postgres_ffi's build script generates bindings from the PostgreSQL server
+    # headers (pg_install/v17/include). On a fresh checkout or after a submodule
+    # bump those headers do not exist yet, and they are only installed by the
+    # neon-pg-ext-v17 step *below* (after this cargo build) -- so bindgen would
+    # fail with "'c.h' file not found". When a (re)build is needed, install the
+    # headers first (cheap, headers-only, idempotent) so the Rust build finds them.
+    if rebuild_pg:
+        say("Installing PostgreSQL server headers first (for postgres_ffi bindgen)...")
+        run(
+            ["make", f"BUILD_TYPE={build_type}", "postgres-headers-install-v17"],
+            env=make_env(cached=False),
+        )
+
     cargo = ["cargo", "build"] + (["--release"] if build_type == "release" else [])
     for crate in BUILD_CRATES:
         cargo += ["-p", crate]
