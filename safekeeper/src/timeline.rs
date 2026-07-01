@@ -153,6 +153,17 @@ impl StateSK {
         }
     }
 
+    /// Watch receiver that fires as WAL becomes durable in YugabyteDB
+    /// (see [`wal_storage::Storage::yb_durable_watch`]). `None` otherwise.
+    pub fn yb_durable_watch(
+        &self,
+    ) -> Option<watch::Receiver<crate::yb_wal_storage::DurableState>> {
+        match self {
+            StateSK::Loaded(sk) => sk.wal_store.yb_durable_watch(),
+            StateSK::Empty => None,
+        }
+    }
+
     /// Get a reference to the control file's timeline state.
     pub fn state(&self) -> &TimelineState<control_file::ControlFileStorage> {
         match self {
@@ -686,6 +697,34 @@ impl Timeline {
     /// Returns commit_lsn watch channel.
     pub fn get_commit_lsn_watch_rx(&self) -> watch::Receiver<Lsn> {
         self.commit_lsn_watch_rx.clone()
+    }
+
+    /// Watch receiver that fires as more WAL becomes durable in YugabyteDB,
+    /// so the acceptor can ack (`AppendResponse`) without blocking ingest on the
+    /// YB round trip. `None` for local-FS.
+    pub async fn yb_get_durable_watch(
+        &self,
+    ) -> Option<watch::Receiver<crate::yb_wal_storage::DurableState>> {
+        self.read_shared_state().await.sk.yb_durable_watch()
+    }
+
+    /// On a durability advance, emit an `AppendResponse` carrying the new
+    /// (durability-capped) flush_lsn so walproposer releases waiting commits.
+    /// Takes the write guard so its `Drop` re-broadcasts `commit_lsn` to the
+    /// local walsenders, and fills hot-standby feedback.
+    pub async fn yb_emit_append_response(
+        self: &Arc<Self>,
+    ) -> Result<Option<AcceptorProposerMessage>> {
+        if self.is_cancelled() {
+            bail!(TimelineError::Cancelled(self.branch_id));
+        }
+        let resp = {
+            let mut shared_state = self.write_shared_state().await;
+            let mut resp = shared_state.sk.safekeeper().yb_emit_append_response().await?;
+            resp.hs_feedback = self.walsenders.get_hotstandby().hs_feedback;
+            resp
+        };
+        Ok(Some(AcceptorProposerMessage::AppendResponse(resp)))
     }
 
     /// Returns term_flush_lsn watch channel.

@@ -1147,11 +1147,26 @@ where
     }
 
     /// Flush WAL to disk. Return AppendResponse with latest LSNs.
+    ///
+    /// Notifies the consumer and returns immediately, so ingest keeps
+    /// flowing. `flush_lsn` stays capped at true durability; acks follow as
+    /// durability advances via `Storage::yb_durable_watch`.
     async fn handle_flush(&mut self) -> Result<Option<AcceptorProposerMessage>> {
-        self.wal_store.flush_wal().await?;
+        self.wal_store
+            .yb_flush(crate::yb_wal_storage::YbFlush::Notify)
+            .await?;
         Ok(Some(AcceptorProposerMessage::AppendResponse(
             self.append_response(),
         )))
+    }
+
+    /// YB durability-ack path: advance the local inner watermark to the new
+    /// durable point, then snapshot the `AppendResponse`.
+    pub(crate) async fn yb_emit_append_response(&mut self) -> Result<AppendResponse> {
+        self.wal_store
+            .yb_flush(crate::yb_wal_storage::YbFlush::LocalAdvanceOnly)
+            .await?;
+        Ok(self.append_response())
     }
 }
 

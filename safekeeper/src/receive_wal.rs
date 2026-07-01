@@ -596,6 +596,18 @@ impl WalAcceptor {
         // Tracks whether we have unflushed appends.
         let mut dirty = false;
 
+        // YB-WAL: durability is asynchronous — the consumer INSERTs batches
+        // into YugabyteDB off the ingest path, so a `FlushWAL` no longer
+        // blocks until durable. This receiver fires each time more WAL becomes
+        // durable, letting us emit an `AppendResponse` carrying the advanced
+        // (durability-capped) flush_lsn so the walproposer can release waiting
+        // synchronous commits — without ever stalling ingest on the round trip.
+        let mut durable_rx = if is_yb_wal {
+            self.tli.yb_get_durable_watch().await
+        } else {
+            None
+        };
+
         while !self.tli.is_cancelled() {
             let reply = tokio::select! {
                 // Process inbound message.
@@ -635,6 +647,41 @@ impl WalAcceptor {
                     self.tli
                         .process_msg(&ProposerAcceptorMessage::FlushWAL)
                         .await?
+                }
+
+                // YB-WAL: the consumer made more WAL durable in YugabyteDB.
+                // Emit an AppendResponse so the walproposer learns the advanced
+                // flush_lsn and releases waiting synchronous commits.
+                // `yb_emit_append_response` advances the local watermark and
+                // re-broadcasts commit_lsn via the write guard's Drop.
+                changed = async {
+                    match durable_rx.as_mut() {
+                        Some(rx) => rx.changed().await.is_ok(),
+                        None => future::pending::<bool>().await,
+                    }
+                }, if durable_rx.is_some() => {
+                    if changed {
+                        // A published `DurableState::Failed` means the consumer
+                        // hit a non-recoverable error and the watermark will
+                        // never advance again. Terminate the connection so
+                        // walproposer reconnects and the failure surfaces —
+                        // parity with the blocking `flush_wal` / `wait_for_durable`
+                        // path, which returns this error to the same effect.
+                        let state = durable_rx.as_ref().unwrap().borrow().clone();
+                        if let crate::yb_wal_storage::DurableState::Failed(msg) = state {
+                            anyhow::bail!("YB WAL consumer failed: {msg}");
+                        }
+                        self.tli.yb_emit_append_response().await?
+                    } else if self.tli.is_cancelled() {
+                        // Clean shutdown: the sender dropped as we tear down.
+                        durable_rx = None;
+                        None
+                    } else {
+                        // Sender dropped without a `Failed` state — the consumer
+                        // task exited unexpectedly. Terminate so the failure
+                        // surfaces instead of hanging on a frozen watermark.
+                        anyhow::bail!("YB WAL consumer task exited unexpectedly");
+                    }
                 }
 
                 // If there are no pending messages, flush the WAL immediately.

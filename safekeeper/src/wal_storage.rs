@@ -52,6 +52,27 @@ pub trait Storage {
     /// Durably store WAL on disk, up to the last written WAL record.
     fn flush_wal(&mut self) -> impl Future<Output = Result<()>> + Send;
 
+    /// Flush the consumer's queue, advancing the local inner watermark; the
+    /// mode selects how far to go (see [`crate::yb_wal_storage::YbFlush`]).
+    /// Local-FS has no async durability, so the default delegates to the
+    /// synchronous [`Self::flush_wal`].
+    fn yb_flush(
+        &mut self,
+        mode: crate::yb_wal_storage::YbFlush,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let _ = mode;
+        self.flush_wal()
+    }
+
+    /// Watch receiver that fires as more WAL becomes durable in YugabyteDB,
+    /// so the acceptor can ack the moment durability advances. `None` for
+    /// local-FS (`flush_wal` is synchronous).
+    fn yb_durable_watch(
+        &self,
+    ) -> Option<tokio::sync::watch::Receiver<crate::yb_wal_storage::DurableState>> {
+        None
+    }
+
     /// Remove all segments <= given segno. Returns function doing that as we
     /// want to perform it without timeline lock.
     fn remove_up_to(&self, segno_up_to: XLogSegNo) -> BoxFuture<'static, anyhow::Result<()>>;

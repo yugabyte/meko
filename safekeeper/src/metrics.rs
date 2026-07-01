@@ -233,6 +233,41 @@ pub static WAL_CACHE_YB_FETCH_BYTES: Lazy<Histogram> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_wal_cache_yb_fetch_bytes histogram")
 });
+// --- YB-WAL commit-path observability (issue #172) ---
+/// Latency of the multi-row `INSERT INTO safekeeper.wals` round trip to YB
+/// (the consumer's `flush_batch`): SK->YB hop + DocDB write + Raft commit.
+pub static YB_WAL_INSERT_SECONDS: Lazy<Histogram> = Lazy::new(|| {
+    register_histogram!(
+        "safekeeper_yb_wal_insert_seconds",
+        "Latency of the batched INSERT into safekeeper.wals, seconds",
+        metrics::exponential_buckets(0.0005, 2.0, 16)
+            .expect("safekeeper_yb_wal_insert_seconds bucket spec")
+    )
+    .expect("Failed to register safekeeper_yb_wal_insert_seconds histogram")
+});
+/// Rows (chunks) coalesced into each INSERT. ~1 = no batching (every commit
+/// pays its own round trip); near `FLUSH_ROWS_THRESHOLD` (50) = batches are
+/// saturating. The headline lever for #172 — decoupling ingest from durability
+/// should drive this up.
+pub static YB_WAL_BATCH_ROWS: Lazy<Histogram> = Lazy::new(|| {
+    register_histogram!(
+        "safekeeper_yb_wal_batch_rows",
+        "Rows (chunks) per safekeeper.wals INSERT",
+        vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 50.0]
+    )
+    .expect("Failed to register safekeeper_yb_wal_batch_rows histogram")
+});
+/// Bytes coalesced into each INSERT (sum of chunk_size).
+pub static YB_WAL_BATCH_BYTES: Lazy<Histogram> = Lazy::new(|| {
+    register_histogram!(
+        "safekeeper_yb_wal_batch_bytes",
+        "Bytes per safekeeper.wals INSERT",
+        metrics::exponential_buckets(1024.0, 2.0, 16)
+            .expect("safekeeper_yb_wal_batch_bytes bucket spec")
+    )
+    .expect("Failed to register safekeeper_yb_wal_batch_bytes histogram")
+});
+
 pub static REMOVED_WAL_SEGMENTS: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "safekeeper_removed_wal_segments_total",

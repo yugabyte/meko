@@ -5,8 +5,9 @@
 //! the local FS remains the read path (used by `WalReader`) and a hot cache
 //! for re-reads of recent WAL.
 //!
-//! Phase 1 (this module): write-through mirror. `flush_wal()` doesn't return
-//! until the corresponding bytes have been INSERT'd into YB.
+//! Phase 1 (this module): write-through mirror. Durability is the WAL landing
+//! in YB; a commit is acked only once its bytes are INSERT'd (see the ack
+//! model under "Batching" below).
 //!
 //! Phase 2 (future): make `WalReader` capable of fetching from YB, so the
 //! local FS becomes truly optional.
@@ -56,14 +57,20 @@
 //! single-threaded design couldn't do (every `flush_pending` held
 //! `&mut self` across the YB round-trip).
 //!
-//! `flush_wal()` is the durability sync point: it records the highest
-//! end_lsn the producer has pushed (`submitted_max_lsn`) and awaits the
-//! watermark catching up. The walproposer only treats data as durable
-//! after a successful `flush_wal()`, so any crash between `write_wal()`
-//! returning and the batch landing in YB is a no-op for the compute (no
-//! commit ack was sent).
+//! Durability is acked off the ingest path. `flush_lsn()` is capped at
+//! `min(inner.flush_lsn, durable_lsn)`, so nothing is ever advertised past
+//! what has landed in YB. Steady-state commits are acked as that watermark
+//! advances: `handle_flush` kicks the consumer without waiting
+//! (`yb_flush(YbFlush::Notify)`), and the WAL acceptor's durable-watch arm
+//! emits an `AppendResponse` per advance — so the ingest loop never blocks on
+//! the YB round trip. The blocking barrier — `flush_wal`
+//! (`yb_flush(YbFlush::NotifyAndWait)`), which records `submitted_max_lsn` and
+//! awaits the watermark — is kept only where consensus needs a synchronous
+//! point (elections / `handle_vote`). A crash between `write_wal()` returning
+//! and the batch landing in YB is a no-op for the compute (no commit ack was
+//! sent).
 //!
-//! `truncate_wal` waits the same way before issuing the DELETE, so a
+//! `truncate_wal` blocks the same way before issuing the DELETE, so a
 //! pending chunk past `end_pos` cannot land after the truncate.
 //!
 //! ## Failure handling
@@ -74,8 +81,10 @@
 //! and exits. The producer's next `tx.send()` then fails (rx dropped),
 //! `write_wal` returns the captured error, the walproposer reconnects,
 //! and the safekeeper handles the rest via the consensus state machine.
-//! `flush_wal` waiters see `Failed` via the watermark and propagate the
-//! same error.
+//! Both durability paths surface the failure: blocking `flush_wal` waiters
+//! propagate it, and the WAL acceptor's durable-watch arm bails on `Failed`
+//! (or on the watch channel closing) so the connection terminates rather
+//! than hanging on a frozen watermark.
 //!
 //! `remove_up_to` does **not** wait — by construction it only deletes
 //! segments well below the writer's current position, which the
@@ -278,7 +287,7 @@ const ACCUMULATION_MAX: Duration = Duration::from_millis(2);
 
 /// Durability state published by the consumer onto the watch channel.
 #[derive(Clone, Debug)]
-enum DurableState {
+pub(crate) enum DurableState {
     /// Every `PendingChunk` whose `end_lsn <= self.0` has been durably
     /// INSERT'd into YugabyteDB.
     Healthy(Lsn),
@@ -286,6 +295,21 @@ enum DurableState {
     /// processing. The string is the rendered error chain for
     /// propagation up through `flush_wal` / `write_wal`.
     Failed(String),
+}
+
+/// How far a YB flush should go — the arg to [`crate::wal_storage::Storage::yb_flush`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum YbFlush {
+    /// Wake the consumer, wait for the batch to be durable in `safekeeper.wals`,
+    /// then advance the local watermark. The synchronous durable-commit
+    /// boundary used by elections / `handle_vote`.
+    NotifyAndWait,
+    /// Wake the consumer, then advance the local watermark without waiting.
+    /// Steady-state commit; durability is acked later off the ingest path.
+    Notify,
+    /// Advance the local watermark only, so `flush_lsn()` reaches the current
+    /// `durable_lsn`. The durability-ack path, reacting to a flush already done.
+    LocalAdvanceOnly,
 }
 
 pub struct YbWalStorage {
@@ -804,16 +828,31 @@ impl Storage for YbWalStorage {
         self.inner.truncate_wal(end_pos).await
     }
 
-    async fn flush_wal(&mut self) -> Result<()> {
-        // Durability sync point — wake the consumer (cut its
-        // accumulation wait short if any), wait for the watermark to
-        // catch up to the highest LSN write_wal has pushed, then advance
-        // the inner LSN watermark. The walproposer treats this as the
-        // durable-commit boundary, so the flush MUST complete (or return
-        // an error) before this returns.
-        self.flush_notify.notify_one();
-        self.wait_for_durable(self.submitted_max_lsn).await?;
+    /// Flush the consumer's queue, then advance the local inner watermark; the
+    /// mode selects how far to go (see [`YbFlush`]). `flush_lsn()` stays capped
+    /// at `durable_lsn` regardless, so `append_response` only ever advertises
+    /// durable WAL.
+    async fn yb_flush(&mut self, mode: YbFlush) -> Result<()> {
+        match mode {
+            YbFlush::NotifyAndWait => {
+                self.flush_notify.notify_one();
+                self.wait_for_durable(self.submitted_max_lsn).await?;
+            }
+            YbFlush::Notify => self.flush_notify.notify_one(),
+            YbFlush::LocalAdvanceOnly => {}
+        }
         self.inner.flush_wal().await
+    }
+
+    /// Durability sync point (elections / `handle_vote`): notify, wait, advance.
+    /// The walproposer treats this as the durable-commit boundary, so it
+    /// completes or errors before returning.
+    async fn flush_wal(&mut self) -> Result<()> {
+        self.yb_flush(YbFlush::NotifyAndWait).await
+    }
+
+    fn yb_durable_watch(&self) -> Option<watch::Receiver<DurableState>> {
+        Some(self.watermark_rx.clone())
     }
 
     fn remove_up_to(&self, segno_up_to: XLogSegNo) -> BoxFuture<'static, anyhow::Result<()>> {
@@ -1183,10 +1222,15 @@ async fn flush_batch(
         params.push(&now_us);
     }
 
-    ysql_fpu_client
-        .execute(&sql, &params)
-        .await
-        .with_context(|| format!("YB WAL batched INSERT ({n} rows)"))?;
+    // Observe the YB round trip + batch shape (issue #172). batch_rows is the
+    // headline signal: it should climb once ingest is decoupled from flush.
+    let batch_bytes: usize = batch.iter().map(|p| p.chunk_size as usize).sum();
+    let started = std::time::Instant::now();
+    let res = ysql_fpu_client.execute(&sql, &params).await;
+    crate::metrics::YB_WAL_INSERT_SECONDS.observe(started.elapsed().as_secs_f64());
+    crate::metrics::YB_WAL_BATCH_ROWS.observe(n as f64);
+    crate::metrics::YB_WAL_BATCH_BYTES.observe(batch_bytes as f64);
+    res.with_context(|| format!("YB WAL batched INSERT ({n} rows)"))?;
     Ok(())
 }
 
