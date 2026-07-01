@@ -1,0 +1,145 @@
+# Default values for yb-amp-controller.
+#
+# Two workloads: the amp controller (always) and its MCP server (gated by
+# mcp.enabled). The release namespace (-n / --namespace) is the deploy namespace;
+# nothing here creates it.
+
+# -- Pull secrets for the controller + MCP images (ECR). List of {name: ...}.
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+controller:
+  # -- Number of controller pods. The controller holds in-pod state (its managed
+  # storage controller subprocess), so keep this at 1.
+  replicaCount: 1
+
+  image:
+    # -- Controller image repository.
+    repository: amp/controller
+    # -- Image tag. Empty string defaults to the chart appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # -- Postgres DSN for the controller's backing YugabyteDB (AMP_DATABASE_URL).
+  databaseUrl: "postgres://yugabyte@yb-tserver:5433/yb_storage?sslmode=disable"
+  # -- Schema the controller's own tables live in (AMP_DB_SCHEMA).
+  dbSchema: "controller"
+  # -- Log format: text | json (AMP_LOG_FORMAT).
+  logFormat: "text"
+
+  # Container ports.
+  ports:
+    # -- REST API + UI port (AMP serves /api/v1, /healthz, /readyz here).
+    api: 8080
+    # -- Managed storage controller listen port (AMP_STORAGE_CONTROLLER_LISTEN).
+    sc: 50051
+
+  # Managed storage controller (in-pod subprocess).
+  storageController:
+    # -- Dev mode (no auth) for the in-pod storage controller (AMP_STORAGE_CONTROLLER_DEV).
+    dev: true
+
+  # External exposure of the controller UI/API. The in-cluster ClusterIP Service
+  # (api + sc) is always created; this `service` block selects an EXTRA external
+  # Service. The MCP server is exposed the same way (see mcp below).
+  service:
+    # -- How to expose the controller externally: nodeport | internal-lb | external-lb | none.
+    type: "internal-lb"
+    # -- Fixed nodePort when type=nodeport (30000-32767); empty => auto-assign.
+    nodePortValue: ""
+    # -- Annotations for the LoadBalancer Service when type=internal-lb, as a list
+    # of "key=value" strings. Defaults to the GKE internal-LB annotations.
+    annotations:
+      - "networking.gke.io/load-balancer-type=Internal"
+      - "networking.gke.io/internal-load-balancer-allow-global-access=true"
+
+  # Config the controller hands to each endpoint it deploys. This chart only ever
+  # deploys on Kubernetes, so the deploy driver is fixed to "kubernetes" in the
+  # template — there is no driver knob here.
+  endpoint:
+    image:
+      # -- Endpoint image repository (AMP_ENDPOINT_IMAGE_REPO).
+      repository: amp/endpoint
+      # -- Endpoint image tag (AMP_ENDPOINT_IMAGE_TAG); empty => chart appVersion.
+      tag: ""
+    # -- CSV of backing-YB tserver host:port the controller hands to endpoints (AMP_DEPLOY_YB_HOST_PORTS).
+    ybHostPorts: "yb-tserver:5433"
+    # -- YB role endpoints connect as (AMP_DEPLOY_YB_USER).
+    ybUser: "yugabyte"
+    # -- YB database endpoints use (AMP_DEPLOY_YB_DBNAME).
+    ybDbname: "yb_storage"
+    # -- Whether the controller bootstraps schema/state on first deploy (AMP_DEPLOY_BOOTSTRAP).
+    bootstrap: true
+    # -- StorageClass for each endpoint's /data PVC; empty => emptyDir (AMP_DEPLOY_STORAGE_CLASS).
+    storageClass: ""
+    # -- Size of each endpoint's /data PVC when storageClass is set (AMP_DEPLOY_DISK_SIZE).
+    diskSize: "10Gi"
+    service:
+      # -- Service type for each deployed endpoint: ClusterIP | NodePort | LoadBalancer (AMP_DEPLOY_SERVICE_TYPE).
+      type: "ClusterIP"
+      # -- Reserved for a fixed endpoint NodePort. The controller's deployer
+      # currently auto-assigns it, so this is not yet wired through.
+      nodePortValue: ""
+      # -- Annotations for LoadBalancer endpoint Services, as a list of "key=value"
+      # strings (joined into the AMP_DEPLOY_SERVICE_ANNOTATIONS CSV).
+      annotations: []
+
+  # -- Compute resources for the controller container.
+  resources: {}
+  # -- Liveness probe (HTTP /healthz on the api port).
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  # -- Readiness probe (HTTP /readyz on the api port).
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+# MCP server: a thin, stateless HTTP wrapper of the controller REST API, in its
+# own pod. Reaches the controller over the in-cluster Service DNS.
+mcp:
+  # -- Deploy the MCP server (Deployment + Service). false drops both.
+  enabled: true
+  # -- Number of MCP pods. Stateless, so this is safe to scale.
+  replicaCount: 1
+
+  image:
+    # -- MCP server image repository (built from controller/mcp/Dockerfile).
+    repository: amp/controller-mcp
+    # -- Image tag. Empty string defaults to the chart appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # -- Controller base URL the MCP server points at (AMP_CONTROLLER_URL). Empty =>
+  # the in-cluster controller Service DNS on the api port (computed in a helper).
+  controllerUrl: ""
+  # -- MCP transport: http (for k8s) | stdio (AMP_MCP_TRANSPORT).
+  transport: "http"
+  # -- Port the MCP server binds and the Service exposes (AMP_MCP_PORT).
+  port: 8000
+
+  # -- Compute resources for the MCP container.
+  resources: {}
+  # -- HTTP GET /healthz liveness/readiness probes on the MCP port. The server
+  # serves /healthz under the http transport (which this pod always runs), so a
+  # 200 confirms the MCP application is serving, not just that the port is bound.
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+  # The MCP server is exposed the SAME way as the controller: an in-cluster
+  # ClusterIP Service (amp-controller-mcp) is always created, and `controller.expose`
+  # additionally creates a matching external Service (amp-controller-mcp-np /
+  # amp-controller-mcp-lb) alongside the controller's. So dev (nodeport / none) keeps
+  # the MCP endpoint internal, and a prod `external-lb` exposes it externally — one
+  # knob, no separate MCP exposure setting.
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

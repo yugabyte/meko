@@ -1,0 +1,31 @@
+[project]
+name = "amp-controller-mcp"
+version = "0.1.0"
+description = "MCP server wrapping the amp controller REST API as Model Context Protocol tools."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp==3.2.4",
+    "httpx~=0.28.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.setuptools]
+py-modules = [
+    "controller_client",
+    "server",
+    "server_instructions",
+    "tools",
+]
+
+[tool.setuptools.package-dir]
+"" = "src"

@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 #
 # Re-deploy the amp controller (cAmp control plane + its managed storage
-# controller) to Kubernetes, wired to deploy compute endpoints via Helm. The
-# controller's own exposure (CONTROLLER_EXPOSE) and the endpoints' Service type
-# (ENDPOINT_SERVICE_TYPE) are both configurable; defaults avoid cloud LBs.
+# controller) to Kubernetes, plus the controller's MCP server, via the
+# yb-amp-controller Helm chart. The chart wires the controller to deploy
+# compute endpoints; the controller's own exposure (CONTROLLER_EXPOSE) and the
+# endpoints' Service type (ENDPOINT_SERVICE_TYPE) are both configurable;
+# defaults avoid cloud LBs.
 #
-# Idempotent: it's all `kubectl apply`, so re-running updates in place.
+# Idempotent: `helm upgrade --install`, so re-running updates in place. Helm
+# also prunes the now-stale external Service when CONTROLLER_EXPOSE changes
+# (the old hand-rolled `kubectl delete svc` cleanup is no longer needed).
 #
 # Assumes these already exist in the namespace (NOT created here):
 #   - the namespace
@@ -38,12 +42,18 @@
 # created. ClusterIP endpoints avoid a per-endpoint cloud LB entirely (reach via
 # Service DNS in-cluster, or `kubectl port-forward` from outside).
 #
+# MCP server: deployed as its own pod (amp-controller-mcp) in the same chart,
+# reaching the controller over in-cluster Service DNS, and exposed the same way
+# as the controller (CONTROLLER_EXPOSE). Toggle with MCP_ENABLED; image via
+# MCP_IMAGE_REPO / MCP_TAG (defaults alongside the controller image).
+#
 # To stand up the prerequisites (namespace, pull secret, single-node YugabyteDB)
 # from scratch and then deploy the controller, use deploy/up.sh instead.
 set -euo pipefail
 
-# Shared ECR credential resolution + pull-secret (re)mint (see deploy/ecr-creds.sh).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHART_DIR="${SCRIPT_DIR}/../helm/yb-amp-controller"
+# Shared ECR credential resolution + pull-secret (re)mint (see deploy/ecr-creds.sh).
 source "${SCRIPT_DIR}/../ecr-creds.sh"
 
 # --- configuration (override via environment) ---
@@ -89,10 +99,30 @@ ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
 CONTROLLER_IMAGE_REPO="${CONTROLLER_IMAGE_REPO:-amp/controller}"
 ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO:-amp/endpoint}"
 
-CONTROLLER_IMAGE="${ECR}/${CONTROLLER_IMAGE_REPO}:${CONTROLLER_TAG}"
-ENDPOINT_REPO="${ECR}/${ENDPOINT_IMAGE_REPO}"
+# MCP server: its own pod in this chart. MCP_ENABLED toggles it; the image
+# defaults to amp/controller-mcp in the same registry, at MCP_TAG (which
+# defaults to the controller tag so the two roll together).
+MCP_ENABLED="${MCP_ENABLED:-true}"
+MCP_IMAGE_REPO="${MCP_IMAGE_REPO:-amp/controller-mcp}"
+MCP_TAG="${MCP_TAG:-${CONTROLLER_TAG}}"
 
-echo ">> namespace=${NS}  controller=${CONTROLLER_IMAGE}  endpoint=${ENDPOINT_REPO}:${ENDPOINT_TAG}"
+# Validate exposure mode early (the chart also validates, but fail fast here).
+case "${CONTROLLER_EXPOSE}" in
+  nodeport|internal-lb|external-lb|none) ;;
+  *)
+    echo "ERROR: invalid CONTROLLER_EXPOSE=${CONTROLLER_EXPOSE} (want nodeport|internal-lb|external-lb|none)" >&2
+    exit 1
+    ;;
+esac
+
+# Full registry+repo (no tag) for the controller image and the endpoint image
+# the controller deploys; the chart appends the tag via .image.tag.
+CONTROLLER_IMAGE_REPOSITORY="${ECR}/${CONTROLLER_IMAGE_REPO}"
+ENDPOINT_IMAGE_REPOSITORY="${ECR}/${ENDPOINT_IMAGE_REPO}"
+MCP_IMAGE_REPOSITORY="${ECR}/${MCP_IMAGE_REPO}"
+
+echo ">> namespace=${NS}  controller=${CONTROLLER_IMAGE_REPOSITORY}:${CONTROLLER_TAG}  endpoint=${ENDPOINT_IMAGE_REPOSITORY}:${ENDPOINT_TAG}"
+echo ">> mcp=${MCP_ENABLED} (${MCP_IMAGE_REPOSITORY}:${MCP_TAG})  expose=${CONTROLLER_EXPOSE}"
 echo ">> endpoint storage class=${ENDPOINT_STORAGE_CLASS:-<emptyDir>}  disk size=${ENDPOINT_DISK_SIZE}"
 
 # Sanity: warn (don't fail) if the namespace is missing (up.sh / an admin creates it).
@@ -102,208 +132,84 @@ kubectl get ns "${NS}" >/dev/null 2>&1 || echo "WARN: namespace ${NS} not found"
 echo ">> ECR pull secret '${PULL_SECRET}' (refreshing — the ECR token is ~12h)"
 ensure_pull_secret "${NS}" "${ECR}" "${PULL_SECRET}" "${REGION}"
 
-# Build the external-facing controller Service per CONTROLLER_EXPOSE. The
-# in-cluster ClusterIP Service (amp-controller) is always created in the manifest
-# below; this is the *extra* Service (NodePort or LoadBalancer), or empty.
-CONTROLLER_SVC_YAML=""
-case "${CONTROLLER_EXPOSE}" in
-  none) ;;
-  nodeport)
-    NP_LINE=""
-    [ -n "${CONTROLLER_NODEPORT}" ] && NP_LINE="
-      nodePort: ${CONTROLLER_NODEPORT}"
-    CONTROLLER_SVC_YAML="---
-# NodePort for the UI/API — reachable at any node IP (VPC-internal), no cloud LB.
-apiVersion: v1
-kind: Service
-metadata:
-  name: amp-controller-np
-  namespace: ${NS}
-  labels: { app: amp-controller }
-spec:
-  type: NodePort
-  selector: { app: amp-controller }
-  ports:
-    - name: api
-      port: 8080
-      targetPort: 8080${NP_LINE}"
-    ;;
-  internal-lb|external-lb)
-    # internal-lb carries LB_ANNOTATIONS; external-lb gets a public IP (no annotations).
-    ANN_YAML=""
-    if [ "${CONTROLLER_EXPOSE}" = "internal-lb" ] && [ -n "${LB_ANNOTATIONS}" ]; then
-      ANN_YAML="  annotations:
-$(echo "${LB_ANNOTATIONS}" | tr ',' '\n' | sed 's/^/    /; s/=/: "/; s/$/"/')"
+# --set flags map the env-var interface onto the chart's values keys.
+HELM_SET=(
+  "imagePullSecrets[0].name=${PULL_SECRET}"
+  "controller.image.repository=${CONTROLLER_IMAGE_REPOSITORY}"
+  "controller.image.tag=${CONTROLLER_TAG}"
+  "controller.endpoint.image.repository=${ENDPOINT_IMAGE_REPOSITORY}"
+  "controller.endpoint.image.tag=${ENDPOINT_TAG}"
+  "controller.endpoint.ybHostPorts=${YB_HOST_PORTS}"
+  "controller.endpoint.service.type=${ENDPOINT_SERVICE_TYPE}"
+  "controller.endpoint.storageClass=${ENDPOINT_STORAGE_CLASS}"
+  "controller.endpoint.diskSize=${ENDPOINT_DISK_SIZE}"
+  "controller.service.type=${CONTROLLER_EXPOSE}"
+  "controller.service.nodePortValue=${CONTROLLER_NODEPORT}"
+  "mcp.enabled=${MCP_ENABLED}"
+  "mcp.image.repository=${MCP_IMAGE_REPOSITORY}"
+  "mcp.image.tag=${MCP_TAG}"
+)
+
+# --set-string for the DSN ('?' + '=' would be mis-tokenized by --set). The
+# Service annotation lists go via the values file below.
+HELM_SET_STRING=(
+  "controller.databaseUrl=${DB_URL}"
+)
+
+# The controller + endpoint Service annotations are YAML lists of "k=v" strings
+# in the chart, but this script's env interface passes them as CSVs (and the GKE
+# keys contain dots that --set treats as path separators). Render them into a
+# tiny values file and pass it with -f, sidestepping --set entirely. The
+# controller LB annotations apply only to internal-lb.
+HELM_VALUES_FILE=""
+# Keep the trap's final status truthy: a falsey last command in an EXIT trap
+# would clobber the script's own exit code.
+cleanup() { [ -n "${HELM_VALUES_FILE}" ] && rm -f "${HELM_VALUES_FILE}"; return 0; }
+trap cleanup EXIT
+
+# emit_csv_list <indent> <csv>: print each "k=v" of the CSV as a quoted YAML list item.
+emit_csv_list() {
+  local indent="$1" csv="$2" item
+  local -a _items
+  IFS=',' read -ra _items <<<"${csv}"
+  for item in "${_items[@]}"; do
+    [ -n "${item}" ] && printf '%s- "%s"\n' "${indent}" "${item}"
+  done
+}
+
+CTRL_ANNOTATIONS=""
+[ "${CONTROLLER_EXPOSE}" = "internal-lb" ] && CTRL_ANNOTATIONS="${LB_ANNOTATIONS}"
+if [ -n "${CTRL_ANNOTATIONS}" ] || [ -n "${ENDPOINT_SERVICE_ANNOTATIONS}" ]; then
+  HELM_VALUES_FILE="$(mktemp)"
+  {
+    echo "controller:"
+    if [ -n "${CTRL_ANNOTATIONS}" ]; then
+      echo "  service:"
+      echo "    annotations:"
+      emit_csv_list "      " "${CTRL_ANNOTATIONS}"
     fi
-    CONTROLLER_SVC_YAML="---
-# LoadBalancer for the UI/API (${CONTROLLER_EXPOSE}); the SC port stays ClusterIP-only.
-apiVersion: v1
-kind: Service
-metadata:
-  name: amp-controller-lb
-  namespace: ${NS}
-${ANN_YAML}
-spec:
-  type: LoadBalancer
-  selector: { app: amp-controller }
-  ports:
-    - { name: api, port: 8080, targetPort: 8080 }"
-    ;;
-  *)
-    echo "ERROR: invalid CONTROLLER_EXPOSE=${CONTROLLER_EXPOSE} (want nodeport|internal-lb|external-lb|none)" >&2
-    exit 1
-    ;;
-esac
+    if [ -n "${ENDPOINT_SERVICE_ANNOTATIONS}" ]; then
+      echo "  endpoint:"
+      echo "    service:"
+      echo "      annotations:"
+      emit_csv_list "        " "${ENDPOINT_SERVICE_ANNOTATIONS}"
+    fi
+  } >"${HELM_VALUES_FILE}"
+fi
 
-kubectl apply -f - <<YAML
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: amp-controller
-  namespace: ${NS}
----
-# The controller drives Helm to deploy endpoint workloads, and reads pods/services
-# (pod-IP / LoadBalancer-IP lookups), so it needs broad access in its namespace.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: amp-controller
-  namespace: ${NS}
-rules:
-  - apiGroups: [""]
-    resources: [pods, services, configmaps, secrets, persistentvolumeclaims, endpoints, events, serviceaccounts]
-    verbs: ["*"]
-  - apiGroups: ["apps"]
-    resources: [deployments, replicasets, statefulsets]
-    verbs: ["*"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: amp-controller
-  namespace: ${NS}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: amp-controller
-subjects:
-  - kind: ServiceAccount
-    name: amp-controller
-    namespace: ${NS}
----
-# Cluster-scoped reads: Helm's --create-namespace probes namespaces, and the
-# NodePort endpoint address resolver reads node IPs.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: amp-controller-namespaces
-rules:
-  - apiGroups: [""]
-    resources: [namespaces]
-    verbs: [get, list, create]
-  - apiGroups: [""]
-    resources: [nodes]
-    verbs: [get, list]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: amp-controller-namespaces
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: amp-controller-namespaces
-subjects:
-  - kind: ServiceAccount
-    name: amp-controller
-    namespace: ${NS}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: amp-controller
-  namespace: ${NS}
-  labels: { app: amp-controller }
-spec:
-  replicas: 1
-  selector:
-    matchLabels: { app: amp-controller }
-  template:
-    metadata:
-      labels: { app: amp-controller }
-    spec:
-      serviceAccountName: amp-controller
-      imagePullSecrets:
-        - name: ${PULL_SECRET}
-      containers:
-        - name: controller
-          image: ${CONTROLLER_IMAGE}
-          imagePullPolicy: IfNotPresent
-          ports:
-            - { name: api, containerPort: 8080 }
-            - { name: sc, containerPort: 50051 }
-          env:
-            - { name: AMP_DATABASE_URL, value: "${DB_URL}" }
-            - { name: AMP_DB_SCHEMA, value: "controller" }
-            - { name: AMP_LOG_FORMAT, value: "text" }
-            # Managed storage controller (in-pod subprocess), dev mode (no auth).
-            - { name: AMP_STORAGE_CONTROLLER_DEV, value: "true" }
-            - { name: AMP_STORAGE_CONTROLLER_LISTEN, value: "0.0.0.0:50051" }
-            # Endpoint deployer: Kubernetes/Helm driver.
-            - { name: AMP_DEPLOY, value: "true" }
-            - { name: AMP_DEPLOY_DRIVER, value: "kubernetes" }
-            - { name: AMP_DEPLOY_NAMESPACE, value: "${NS}" }
-            - { name: AMP_ENDPOINT_IMAGE_REPO, value: "${ENDPOINT_REPO}" }
-            - { name: AMP_ENDPOINT_IMAGE_TAG, value: "${ENDPOINT_TAG}" }
-            - { name: AMP_DEPLOY_PULL_SECRET, value: "${PULL_SECRET}" }
-            - { name: AMP_DEPLOY_YB_HOST_PORTS, value: "${YB_HOST_PORTS}" }
-            - { name: AMP_DEPLOY_YB_USER, value: "yugabyte" }
-            - { name: AMP_DEPLOY_YB_DBNAME, value: "yb_storage" }
-            # The in-cluster URL endpoints use to reach this controller's SC.
-            - { name: AMP_DEPLOY_STORAGE_CONTROLLER_URL, value: "http://amp-controller.${NS}.svc.cluster.local:50051" }
-            - { name: AMP_DEPLOY_BOOTSTRAP, value: "true" }
-            # Endpoint Service exposure. ClusterIP (default) avoids a per-endpoint
-            # cloud LB; LoadBalancer uses ENDPOINT_SERVICE_ANNOTATIONS (e.g. internal-LB).
-            - { name: AMP_DEPLOY_SERVICE_TYPE, value: "${ENDPOINT_SERVICE_TYPE}" }
-            - { name: AMP_DEPLOY_SERVICE_ANNOTATIONS, value: "${ENDPOINT_SERVICE_ANNOTATIONS}" }
-            # Endpoint data volume: a PVC of this storage class (empty => emptyDir).
-            - { name: AMP_DEPLOY_STORAGE_CLASS, value: "${ENDPOINT_STORAGE_CLASS}" }
-            - { name: AMP_DEPLOY_DISK_SIZE, value: "${ENDPOINT_DISK_SIZE}" }
-          readinessProbe:
-            httpGet: { path: /readyz, port: 8080 }
-            initialDelaySeconds: 5
-            periodSeconds: 5
-          livenessProbe:
-            httpGet: { path: /healthz, port: 8080 }
-            initialDelaySeconds: 15
-            periodSeconds: 10
----
-# In-cluster Service: the API + the SC port endpoints register against.
-apiVersion: v1
-kind: Service
-metadata:
-  name: amp-controller
-  namespace: ${NS}
-  labels: { app: amp-controller }
-spec:
-  type: ClusterIP
-  selector: { app: amp-controller }
-  ports:
-    - { name: api, port: 8080, targetPort: 8080 }
-    - { name: sc, port: 50051, targetPort: 50051 }
-${CONTROLLER_SVC_YAML}
-YAML
+HELM_ARGS=(upgrade --install yb-amp-controller "${CHART_DIR}" -n "${NS}")
+for s in "${HELM_SET[@]}"; do HELM_ARGS+=(--set "${s}"); done
+for s in "${HELM_SET_STRING[@]}"; do HELM_ARGS+=(--set-string "${s}"); done
+[ -n "${HELM_VALUES_FILE}" ] && HELM_ARGS+=(-f "${HELM_VALUES_FILE}")
 
-# Drop a controller external Service left over from a different exposure mode.
-case "${CONTROLLER_EXPOSE}" in
-  nodeport|none)       kubectl -n "${NS}" delete svc amp-controller-lb --ignore-not-found >/dev/null 2>&1 || true ;;
-esac
-case "${CONTROLLER_EXPOSE}" in
-  internal-lb|external-lb|none) kubectl -n "${NS}" delete svc amp-controller-np --ignore-not-found >/dev/null 2>&1 || true ;;
-esac
+echo ">> helm ${HELM_ARGS[*]}"
+helm "${HELM_ARGS[@]}"
 
 echo ">> waiting for rollout..."
 kubectl -n "${NS}" rollout status deploy/amp-controller --timeout=180s
+if [ "${MCP_ENABLED}" = "true" ]; then
+  kubectl -n "${NS}" rollout status deploy/amp-controller-mcp --timeout=180s
+fi
 
 echo ">> amp controller is up. Access (UI at /, API under /api/v1):"
 case "${CONTROLLER_EXPOSE}" in
@@ -325,3 +231,10 @@ case "${CONTROLLER_EXPOSE}" in
     ;;
 esac
 echo "   or port-forward:       kubectl -n ${NS} port-forward svc/amp-controller 8080:8080   then http://localhost:8080"
+if [ "${MCP_ENABLED}" = "true" ]; then
+  echo "   MCP server (HTTP /mcp): kubectl -n ${NS} port-forward svc/amp-controller-mcp 8000:8000   then http://localhost:8000/mcp"
+fi
+
+# A bare `[ ... ]` as the script's final command would leak its (possibly
+# falsey) status as our exit code; make success explicit.
+exit 0

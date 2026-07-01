@@ -9,9 +9,12 @@
 #   3. a single-node YugabyteDB (yugabyted) StatefulSet + headless Service
 #   4. the yb_storage database (the controller connects to it at startup)
 #   5. the amp controller (controller + managed storage_controller, Helm endpoint
-#      driver) via deploy/controller/redeploy.sh
+#      driver) plus its MCP server, via deploy/controller/redeploy.sh
 #
 # then prints the URL for the controller UI.
+#
+# Step 5 is now Helm-managed: redeploy.sh runs `helm upgrade --install` of the
+# yb-amp-controller chart (which packages the controller and the MCP pod).
 #
 # This is the from-nothing companion to deploy/controller/redeploy.sh — that
 # script (re-)deploys only the controller and assumes the namespace, YugabyteDB,

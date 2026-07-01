@@ -18,6 +18,8 @@ Design docs (read these first):
 - [`controller-project-create.md`](architecture/controller-project-create.md) — creating a
   project (patterned on `yb_light_local`): declare a recipe at create, materialize
   the storage layer at the first endpoint.
+- [`ac-mcp.md`](architecture/ac-mcp.md) — the MCP server (`controller/mcp/`): a
+  FastMCP wrapper that exposes the REST API as MCP tools for AI agents.
 
 It started as the **base framework** ([#84](https://github.com/yugabyte/yb-light/issues/84)):
 a runnable skeleton — `slog` logging, the write-ahead task framework, and the
@@ -49,6 +51,7 @@ controller/
   internal/helm/      one-shot helm CLI wrapper (upgrade --install / uninstall)
   internal/deploy/    endpoint provisioner: Kubernetes/Helm or Docker (synchronous deploy/retire)
   migrations/         embedded raw-SQL migrations (golang-migrate)
+  mcp/                MCP server (Python/FastMCP, uv): wraps the REST API as MCP tools (ac-mcp.md)
 ```
 
 ## Build / test
@@ -136,6 +139,23 @@ resolved next to the `controller` binary first — the **bundle** layout — the
 an explicit path is used verbatim. `make controller-bundle` produces that layout in
 `target/controller-bundle/`, and the [`deploy/controller`](../deploy/controller/README.md) container
 ships controller + storage controller together, so controller finds it with no configuration.
+
+## MCP server
+
+[`mcp/`](mcp/) is a standalone **MCP server** that exposes the REST API to AI
+agents as [Model Context Protocol](https://modelcontextprotocol.io) tools. It is
+a thin, stateless [FastMCP](https://github.com/jlowin/fastmcp) wrapper (Python,
+built with `uv`) that calls the controller over HTTP — no DB, no auth of its own.
+It registers **18 tools** (one per REST operation; `create_user`/`list_users` are
+deliberately omitted, and `owner_user_id` is a required per-call argument), runs
+over `stdio` (local/desktop clients) or `http` (in-cluster), and is deployed as
+its own pod via the `yb-amp-controller` Helm chart (`mcp.enabled`). See
+[`architecture/ac-mcp.md`](architecture/ac-mcp.md) for the design and
+[`mcp/README.md`](mcp/README.md) for running it. Build/test with `uv`:
+
+```sh
+uv run --project controller/mcp pytest
+```
 
 ## Endpoints (stubs)
 

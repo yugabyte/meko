@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "yb-amp-controller.controllerName" . }}
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+---
+# The controller drives Helm to deploy endpoint workloads, and reads
+# pods/services (pod-IP / LoadBalancer-IP lookups), so it needs broad access in
+# its namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "yb-amp-controller.controllerName" . }}
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, configmaps, secrets, persistentvolumeclaims, endpoints, events, serviceaccounts]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: [deployments, replicasets, statefulsets]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "yb-amp-controller.controllerName" . }}
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "yb-amp-controller.controllerName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "yb-amp-controller.controllerName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Cluster-scoped reads: Helm's --create-namespace probes namespaces, and the
+# NodePort endpoint address resolver reads node IPs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-{{ include "yb-amp-controller.controllerName" . }}-namespaces
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, create]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-{{ include "yb-amp-controller.controllerName" . }}-namespaces
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-{{ include "yb-amp-controller.controllerName" . }}-namespaces
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "yb-amp-controller.controllerName" . }}
+    namespace: {{ .Release.Namespace }}

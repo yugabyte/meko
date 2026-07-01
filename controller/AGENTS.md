@@ -23,6 +23,10 @@ with the design docs in [`architecture/`](architecture/):
 - [`architecture/controller-project-create.md`](architecture/controller-project-create.md) —
   creating a project, patterned on `yb_light_local`: declare a recipe at create,
   materialize the storage layer at the first endpoint.
+- [`architecture/ac-mcp.md`](architecture/ac-mcp.md) — the MCP server
+  ([`mcp/`](mcp/)): a thin FastMCP wrapper exposing the REST API as 18 MCP tools
+  for AI agents, its transports (stdio/http), config, and deployment as its own
+  pod in the `yb-amp-controller` chart.
 
 This guide is scoped to `controller/`. The repo-wide guide is the top-level
 [`AGENTS.md`](../AGENTS.md); where they overlap, the rules here win for code
@@ -51,6 +55,9 @@ under `controller/`.
 
 From the repo root: `make controller`, `make controller-vet`, `make controller-test`. Or directly:
 `go -C controller build ./...`, `go -C controller vet ./...`, `go -C controller test ./...`.
+
+The MCP server under [`mcp/`](mcp/) is a separate **Python/`uv`** project (not
+part of the Go module): test it with `uv run --project controller/mcp pytest`.
 
 ## API code generation
 

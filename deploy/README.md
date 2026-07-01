@@ -12,9 +12,10 @@ deploy/
     supervisor.py   # PID-1 (under tini) process manager for the 5 services
   controller/
     Dockerfile      # the controller layer: controller + storage_controller bundled (see deploy/controller/README.md, #94)
-    redeploy.sh     # (re-)deploy just the controller (assumes ns/YB/pull-secret exist)
+    redeploy.sh     # (re-)deploy the controller via the yb-amp-controller chart (assumes ns/YB/pull-secret exist)
   helm/
-    yb-light-endpoint/   # Helm chart (Deployment + ConfigMap + Secret + Service)
+    yb-light-endpoint/     # Helm chart for an endpoint (Deployment + ConfigMap + Secret + Service)
+    yb-amp-controller/   # Helm chart for the controller layer + the MCP server pod (mcp.enabled)
 ```
 
 ## One-shot bring-up — `up.sh`
@@ -73,7 +74,12 @@ for both. The UI/API is unauthenticated — do not expose it publicly.
 
 The **controller layer** — the `controller` plus the shared `storage_controller`
 this endpoint deliberately omits — has its own bundled image under
-[`controller/`](controller/README.md).
+[`controller/`](controller/README.md) and is deployed via the
+[`yb-amp-controller`](helm/yb-amp-controller) Helm chart. That chart also
+ships the **MCP server** (a FastMCP wrapper that exposes the controller's REST
+API as MCP tools for AI agents; see
+[`controller/architecture/ac-mcp.md`](../controller/architecture/ac-mcp.md)) as
+its own pod, gated by `mcp.enabled` (default on).
 
 ## ECR access & the pull secret
 

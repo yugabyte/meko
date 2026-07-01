@@ -1,0 +1,154 @@
+suite: mcp
+templates:
+  - templates/mcp-deployment.yaml
+  - templates/mcp-service.yaml
+tests:
+  - it: renders the MCP Deployment pointing AMP_CONTROLLER_URL at the controller Service
+    template: templates/mcp-deployment.yaml
+    release:
+      namespace: amp
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: amp-controller-mcp
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_CONTROLLER_URL
+            value: http://amp-controller.amp.svc.cluster.local:8080
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_MCP_TRANSPORT
+            value: http
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_MCP_HOST
+            value: "0.0.0.0"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_MCP_PORT
+            value: "8000"
+
+  - it: honours an explicit mcp.controllerUrl override
+    template: templates/mcp-deployment.yaml
+    set:
+      mcp.controllerUrl: http://my-controller:9000
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_CONTROLLER_URL
+            value: http://my-controller:9000
+
+  - it: defaults the MCP image tag to the chart appVersion and honours overrides
+    template: templates/mcp-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: amp/controller-mcp:0.1.0
+
+  - it: exposes the mcp container port and HTTP /healthz probes
+    template: templates/mcp-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: mcp
+            containerPort: 8000
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: mcp
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: mcp
+
+  # The MCP server is exposed the same way as the controller (controller.service.type):
+  # an in-cluster ClusterIP is always present, plus a matching external Service.
+  - it: always renders the in-cluster MCP ClusterIP Service on the mcp port
+    template: templates/mcp-service.yaml
+    set:
+      controller.service.type: none
+    asserts:
+      - hasDocuments:
+          count: 1
+      - containsDocument:
+          kind: Service
+          apiVersion: v1
+          name: amp-controller-mcp
+        documentIndex: 0
+      - equal:
+          path: spec.type
+          value: ClusterIP
+        documentIndex: 0
+      - contains:
+          path: spec.ports
+          content:
+            name: mcp
+            port: 8000
+            targetPort: mcp
+        documentIndex: 0
+
+  - it: exposes the MCP server as NodePort alongside the controller (expose=nodeport)
+    template: templates/mcp-service.yaml
+    set:
+      controller.service.type: nodeport
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: amp-controller-mcp-np
+        documentIndex: 1
+      - equal:
+          path: spec.type
+          value: NodePort
+        documentIndex: 1
+
+  - it: exposes the MCP server as a LoadBalancer with the controller's annotations (service.type=internal-lb)
+    template: templates/mcp-service.yaml
+    set:
+      controller.service.type: internal-lb
+      controller.service.annotations:
+        - "networking.gke.io/load-balancer-type=Internal"
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: amp-controller-mcp-lb
+        documentIndex: 1
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+        documentIndex: 1
+      - equal:
+          path: metadata.annotations["networking.gke.io/load-balancer-type"]
+          value: Internal
+        documentIndex: 1
+
+  - it: drops the MCP Deployment when mcp.enabled=false
+    template: templates/mcp-deployment.yaml
+    set:
+      mcp.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: drops the MCP Service when mcp.enabled=false
+    template: templates/mcp-service.yaml
+    set:
+      mcp.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

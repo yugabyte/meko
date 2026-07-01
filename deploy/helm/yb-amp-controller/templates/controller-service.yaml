@@ -1,0 +1,64 @@
+# In-cluster Service: the API + the SC port endpoints register against. Always
+# created.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yb-amp-controller.controllerName" . }}
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.controller.ports.api }}
+      targetPort: api
+    - name: sc
+      port: {{ .Values.controller.ports.sc }}
+      targetPort: sc
+{{- if eq .Values.controller.service.type "nodeport" }}
+---
+# NodePort for the UI/API — reachable at any node IP (VPC-internal), no cloud LB.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yb-amp-controller.controllerName" . }}-np
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+spec:
+  type: NodePort
+  selector:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.controller.ports.api }}
+      targetPort: api
+      {{- with .Values.controller.service.nodePortValue }}
+      nodePort: {{ . }}
+      {{- end }}
+{{- else if or (eq .Values.controller.service.type "internal-lb") (eq .Values.controller.service.type "external-lb") }}
+---
+# LoadBalancer for the UI/API ({{ .Values.controller.service.type }}); the SC port stays
+# ClusterIP-only. internal-lb carries service.annotations; external-lb gets a public IP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yb-amp-controller.controllerName" . }}-lb
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+  {{- if and (eq .Values.controller.service.type "internal-lb") .Values.controller.service.annotations }}
+  annotations:
+    {{- include "yb-amp-controller.kvAnnotations" (dict "items" .Values.controller.service.annotations) | nindent 4 }}
+  {{- end }}
+spec:
+  type: LoadBalancer
+  selector:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.controller.ports.api }}
+      targetPort: api
+{{- else if ne .Values.controller.service.type "none" }}
+{{- fail (printf "controller.service.type must be one of nodeport|internal-lb|external-lb|none, got %q" .Values.controller.service.type) }}
+{{- end }}

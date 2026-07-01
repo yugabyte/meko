@@ -200,5 +200,20 @@ the storage-controller knobs the image cares about:
 | `AMP_DEPLOY_STORAGE_CLASS` | _(empty)_ | k8s: storage class for the endpoint `/data` PVC (EBS/PD); empty ⇒ ephemeral `emptyDir` |
 | `AMP_DEPLOY_DISK_SIZE` | `10Gi` | k8s: size of the `/data` PVC when `AMP_DEPLOY_STORAGE_CLASS` is set |
 
-A Helm chart for the controller layer (mirroring
-[`helm/yb-light-endpoint`](../helm/yb-light-endpoint)) is not part of this change.
+## Helm chart
+
+The controller is deployed via the
+[`yb-amp-controller`](../helm/yb-amp-controller) Helm chart (mirroring
+[`helm/yb-light-endpoint`](../helm/yb-light-endpoint)), which packages **both**
+the controller and the MCP server. [`redeploy.sh`](redeploy.sh) is now a
+`helm upgrade --install yb-amp-controller …` that maps its env interface onto
+chart values; Helm owns the RBAC, the Deployment, and the Service(s) (and prunes
+leftover Services on an exposure-mode switch).
+
+The **MCP server** (a FastMCP wrapper that exposes the controller's REST API as
+MCP tools for AI agents — see
+[`controller/architecture/ac-mcp.md`](../../controller/architecture/ac-mcp.md))
+ships as its **own pod** in the same chart: a separate `amp-controller-mcp`
+Deployment + Service, running the `http` transport and pointed at the controller's
+in-cluster Service. It is gated by **`mcp.enabled`** (default `true`); set
+`mcp.enabled=false` for a controller-only release.

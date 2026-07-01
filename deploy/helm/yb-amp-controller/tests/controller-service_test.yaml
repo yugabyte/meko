@@ -1,0 +1,87 @@
+suite: controller-service
+templates:
+  - templates/controller-service.yaml
+tests:
+  - it: always renders the in-cluster ClusterIP Service with api + sc ports
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.name
+          value: amp-controller
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - contains:
+          path: spec.ports
+          content:
+            name: api
+            port: 8080
+            targetPort: api
+      - contains:
+          path: spec.ports
+          content:
+            name: sc
+            port: 50051
+            targetPort: sc
+
+  - it: adds a NodePort Service when expose=nodeport
+    set:
+      controller.service.type: nodeport
+      controller.service.nodePortValue: 31234
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.name
+          value: amp-controller-np
+      - equal:
+          path: spec.type
+          value: NodePort
+      - contains:
+          path: spec.ports
+          content:
+            name: api
+            port: 8080
+            targetPort: api
+            nodePort: 31234
+
+  - it: adds an internal LoadBalancer with annotations when expose=internal-lb
+    set:
+      controller.service.type: internal-lb
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.name
+          value: amp-controller-lb
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: metadata.annotations["networking.gke.io/load-balancer-type"]
+          value: Internal
+
+  - it: adds a public LoadBalancer without annotations when expose=external-lb
+    set:
+      controller.service.type: external-lb
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: metadata.name
+          value: amp-controller-lb
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - notExists:
+          path: metadata.annotations
+
+  - it: renders only the ClusterIP Service when expose=none
+    set:
+      controller.service.type: none
+    asserts:
+      - hasDocuments:
+          count: 1

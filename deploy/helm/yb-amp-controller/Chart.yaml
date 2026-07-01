@@ -1,0 +1,24 @@
+apiVersion: v2
+name: yb-amp-controller
+description: >-
+  The amp controller (cAmp control plane + its managed storage controller) and
+  its MCP server, deployed together. The controller drives endpoint workloads
+  via the Kubernetes/Helm driver and exposes a REST API; the MCP server is a
+  thin, stateless wrapper of that API for AI agents. Backed by an external
+  YugabyteDB.
+type: application
+# Chart version — bump on chart changes.
+version: 0.1.0
+# Tracks the amp controller app; image tags default to this when not overridden.
+appVersion: "0.1.0"
+keywords:
+  - amp
+  - yb-light
+  - controller
+  - mcp
+  - yugabytedb
+home: https://github.com/yugabyte/yb-light
+sources:
+  - https://github.com/yugabyte/yb-light
+maintainers:
+  - name: yb-light

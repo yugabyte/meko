@@ -30,8 +30,8 @@ upstream Neon can skim) and **changes in yb-light**.
 > **amp controller.** The standalone Go control plane being built for YB Light
 > (`amp-controller` / `ac`) is documented separately under
 > [`../controller/architecture/`](../controller/architecture/), with its own subproject guide
-> in [`../controller/AGENTS.md`](../controller/AGENTS.md). It is not yet wired into the cluster
-> topology below.
+> in [`../controller/AGENTS.md`](../controller/AGENTS.md). It deploys to Kubernetes via the
+> `yb-amp-controller` Helm chart (`deploy/`), which also ships its MCP-server pod.
 
 ### HTTP APIs & metrics (per service)
 
