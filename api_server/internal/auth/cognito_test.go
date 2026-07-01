@@ -82,6 +82,18 @@ type mockCognitoAPI struct {
 		ctx context.Context, params *cip.ListUsersInput,
 		optFns ...cipOpt,
 	) (*cip.ListUsersOutput, error)
+	updateUserAttributesFn func(
+		ctx context.Context, params *cip.UpdateUserAttributesInput,
+		optFns ...cipOpt,
+	) (*cip.UpdateUserAttributesOutput, error)
+	getUserAttributeVerificationCodeFn func(
+		ctx context.Context, params *cip.GetUserAttributeVerificationCodeInput,
+		optFns ...cipOpt,
+	) (*cip.GetUserAttributeVerificationCodeOutput, error)
+	verifyUserAttributeFn func(
+		ctx context.Context, params *cip.VerifyUserAttributeInput,
+		optFns ...cipOpt,
+	) (*cip.VerifyUserAttributeOutput, error)
 }
 
 func (m *mockCognitoAPI) SignUp(
@@ -224,6 +236,39 @@ func (m *mockCognitoAPI) ListUsers(
 		return m.listUsersFn(ctx, params, optFns...)
 	}
 	return &cip.ListUsersOutput{}, nil
+}
+
+func (m *mockCognitoAPI) UpdateUserAttributes(
+	ctx context.Context,
+	params *cip.UpdateUserAttributesInput,
+	optFns ...func(*cip.Options),
+) (*cip.UpdateUserAttributesOutput, error) {
+	if m.updateUserAttributesFn != nil {
+		return m.updateUserAttributesFn(ctx, params, optFns...)
+	}
+	return &cip.UpdateUserAttributesOutput{}, nil
+}
+
+func (m *mockCognitoAPI) GetUserAttributeVerificationCode(
+	ctx context.Context,
+	params *cip.GetUserAttributeVerificationCodeInput,
+	optFns ...func(*cip.Options),
+) (*cip.GetUserAttributeVerificationCodeOutput, error) {
+	if m.getUserAttributeVerificationCodeFn != nil {
+		return m.getUserAttributeVerificationCodeFn(ctx, params, optFns...)
+	}
+	return &cip.GetUserAttributeVerificationCodeOutput{}, nil
+}
+
+func (m *mockCognitoAPI) VerifyUserAttribute(
+	ctx context.Context,
+	params *cip.VerifyUserAttributeInput,
+	optFns ...func(*cip.Options),
+) (*cip.VerifyUserAttributeOutput, error) {
+	if m.verifyUserAttributeFn != nil {
+		return m.verifyUserAttributeFn(ctx, params, optFns...)
+	}
+	return &cip.VerifyUserAttributeOutput{}, nil
 }
 
 func strPtr(s string) *string { return &s }

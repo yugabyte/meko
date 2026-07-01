@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/mail"
 	"strings"
 	"unicode/utf8"
 
@@ -51,6 +52,15 @@ type CognitoProvider interface {
 	UpdateUserName(
 		ctx context.Context, sub, firstName, lastName string,
 	) error
+	// UpdateEmailAttribute sets the signed-in user's email (by access token)
+	// and triggers Cognito to email a verification code to the new address.
+	UpdateEmailAttribute(ctx context.Context, accessToken, newEmail string) error
+	// SendEmailAttributeCode (re)sends the email verification code to the
+	// signed-in user's current email attribute.
+	SendEmailAttributeCode(ctx context.Context, accessToken string) error
+	// VerifyEmailAttribute confirms the signed-in user's email with the emailed
+	// code, flipping Cognito's email_verified to true.
+	VerifyEmailAttribute(ctx context.Context, accessToken, code string) error
 }
 
 // ErrForgotPasswordNoAccount is returned when Cognito has no user for this email
@@ -60,6 +70,56 @@ var ErrForgotPasswordNoAccount = errors.New("no account exists for this email ad
 // ErrInvalidProfileName is returned by UpdateProfile when first/last name
 // is blank after trimming. Cognito mandates both, so we reject empties.
 var ErrInvalidProfileName = errors.New("first name and last name are required")
+
+// Email-collection (post-signup, federated-no-email) flow errors.
+var (
+	// ErrInvalidEmail is returned when the submitted email is empty/malformed
+	// or is itself a synthesized placeholder address.
+	ErrInvalidEmail = errors.New("a valid email address is required")
+	// ErrEmailTaken is returned when another account already owns the email.
+	ErrEmailTaken = errors.New("that email address is already in use")
+)
+
+// placeholderEmailHostPrefix / placeholderEmailHostSuffix bound the reserved,
+// non-deliverable addresses the inbound-federation Lambda synthesizes when a
+// federated IdP (LinkedIn / GitHub / ...) doesn't supply an email. They take
+// the shape "<username>@no-reply.<provider>.meko.invalid", so the provider
+// segment is variable — we match on the fixed host prefix + suffix rather than
+// a single domain. MUST stay in sync with the address built in
+// cognito-lambdas/cognito-inbound-federation/index.mjs. Accounts carrying such an
+// address are unverified and gated until they supply + verify a real one.
+const (
+	placeholderEmailHostPrefix = "no-reply."
+	placeholderEmailHostSuffix = ".meko.invalid"
+)
+
+// isPlaceholderEmail reports whether e is a synthesized placeholder address
+// (case-insensitive match on the reserved host prefix + suffix).
+func isPlaceholderEmail(e string) bool {
+	e = strings.ToLower(strings.TrimSpace(e))
+	at := strings.LastIndex(e, "@")
+	if at < 0 {
+		return false
+	}
+	host := e[at+1:]
+	return strings.HasPrefix(host, placeholderEmailHostPrefix) &&
+		strings.HasSuffix(host, placeholderEmailHostSuffix)
+}
+
+// isValidEmailFormat reports whether e is a single, bare RFC 5322 address with
+// a dotted domain. It's a guard (the BE/Cognito are authoritative), not a
+// deliverability check. net/mail.ParseAddress also accepts display-name forms
+// ("Name <a@b>") and dotless domains ("a@b"), so we additionally require the
+// parsed address to equal the trimmed input and the domain to contain a dot.
+func isValidEmailFormat(e string) bool {
+	e = strings.TrimSpace(e)
+	addr, err := mail.ParseAddress(e)
+	if err != nil || addr.Address != e {
+		return false
+	}
+	at := strings.LastIndex(addr.Address, "@")
+	return at >= 0 && strings.Contains(addr.Address[at+1:], ".")
+}
 
 // ErrInvitePasswordExpired is returned by Login when an admin-created user's
 // temporary password has expired. Login rescues the account by re-sending a
@@ -99,6 +159,16 @@ type AccountStore interface {
 	VerifyEmail(ctx context.Context, email string) error
 	SetHasCompletedOnboarding(ctx context.Context, accountID string, completed bool) error
 	UpdateProfile(ctx context.Context, userID, firstName, lastName string) error
+	// EmailInUse reports whether an account other than excludeUserID already
+	// owns the email. Read-only pre-check used to avoid sending an OTP for an
+	// address that's already taken.
+	EmailInUse(ctx context.Context, email, excludeUserID string) (bool, error)
+	// UpdateEmail replaces a user's email and resets it to unverified (the new
+	// address still needs OTP confirmation). Returns ErrEmailTaken if another
+	// account already owns the address.
+	UpdateEmail(ctx context.Context, userID, email string) error
+	// MarkEmailVerified stamps email_verified_at=NOW() for the given user.
+	MarkEmailVerified(ctx context.Context, userID string) error
 }
 
 // Provisioner abstracts post-signup account provisioning (default
@@ -616,11 +686,61 @@ type idTokenClaims struct {
 	Email      string `json:"email"`
 	GivenName  string `json:"given_name"`
 	FamilyName string `json:"family_name"`
+	// EmailVerified is Cognito's standard email_verified claim (set for
+	// native users after they confirm their email, and for federated users
+	// via the IdP attribute mapping). Decoded as `any` because the value can
+	// arrive as a JSON boolean (true) or a quoted string ("true") depending on
+	// how the attribute is mapped; emailIsVerified compares against both shapes.
+	EmailVerified any `json:"email_verified"`
+	// Identities is present (non-empty) only for users federated from an
+	// external IdP (Google, LinkedIn, ...). Its presence is a reliable signal
+	// that the email was vouched for by that provider, even when the IdP
+	// attribute mapping doesn't forward email_verified.
+	Identities []cognitoIdentity `json:"identities"`
+}
+
+// cognitoIdentity is one entry of the Cognito ID token "identities" claim,
+// describing the external IdP a federated user signed in with.
+type cognitoIdentity struct {
+	ProviderName string `json:"providerName"`
+}
+
+// emailIsVerified reports whether the account's email should be treated as
+// verified. We trust Cognito's standard email_verified claim, which for
+// federated users (Google / LinkedIn) is populated from the IdP attribute
+// mapping (e.g. Google's own email_verified). This relies on that mapping
+// being configured in the user pool; the debug logging in
+// EnsureAccountFromIDToken surfaces the raw claim so drift is visible.
+//
+// The claim normally decodes to a JSON boolean, but an IdP-mapped string
+// attribute can surface it as "true"; we accept either shape. Anything else
+// (false, "false", null, absent, a number) is treated as not verified — this
+// also guards against the nOAuth "string-false-is-truthy" footgun.
+//
+// A synthesized placeholder address (LinkedIn signups with no IdP email) is
+// never treated as verified, regardless of the claim: doing so would let a
+// federated user past the post-signup email-collection gate without ever
+// proving a real address.
+func (c idTokenClaims) emailIsVerified() bool {
+	if isPlaceholderEmail(c.Email) {
+		return false
+	}
+	return c.EmailVerified == true || c.EmailVerified == "true" || c.EmailVerified == "True"
+}
+
+// providerNames returns the external IdP names from the Cognito "identities"
+// claim (empty for native users). Used only for debug logging.
+func (c idTokenClaims) providerNames() []string {
+	names := make([]string, 0, len(c.Identities))
+	for _, id := range c.Identities {
+		names = append(names, id.ProviderName)
+	}
+	return names
 }
 
 // federatedNamePlaceholder is the value the Cognito inbound-federation Lambda
 // injects for given_name/family_name that the IdP didn't supply, so Cognito's
-// required-attribute check passes (see cognito-inbound-federation/).
+// required-attribute check passes (see cognito-lambdas/cognito-inbound-federation/).
 const federatedNamePlaceholder = "-"
 
 // normalizeFederatedName maps that placeholder back to an empty string for the
@@ -658,6 +778,19 @@ func (s *AuthService) EnsureAccountFromIDToken(
 		return false, fmt.Errorf("parse id token: %w", err)
 	}
 
+	// Debug: surface the raw verification-related claims so we can confirm
+	// whether Cognito forwards the IdP's email_verified (esp. for Google,
+	// where it depends on the user-pool attribute mapping). If
+	// email_verified is false here for a federated user, the mapping is the
+	// culprit, not the app.
+	slog.Info("JIT id token claims",
+		"cognito_sub", claims.Sub,
+		"email", claims.Email,
+		"email_verified", claims.EmailVerified,
+		"identities", claims.providerNames(),
+		"email_is_verified", claims.emailIsVerified(),
+	)
+
 	existing, err := s.accounts.GetByCognitoSub(ctx, claims.Sub)
 	if err != nil {
 		slog.Error("JIT account lookup failed",
@@ -670,10 +803,11 @@ func (s *AuthService) EnsureAccountFromIDToken(
 	}
 
 	acct, err := s.accounts.Create(ctx, repository.CreateAccountParams{
-		FirstName:  normalizeFederatedName(claims.GivenName),
-		LastName:   normalizeFederatedName(claims.FamilyName),
-		Email:      claims.Email,
-		CognitoSub: claims.Sub,
+		FirstName:     normalizeFederatedName(claims.GivenName),
+		LastName:      normalizeFederatedName(claims.FamilyName),
+		Email:         claims.Email,
+		CognitoSub:    claims.Sub,
+		EmailVerified: claims.emailIsVerified(),
 	})
 	if err != nil {
 		slog.Error("JIT account creation failed",
@@ -748,6 +882,112 @@ func (s *AuthService) UpdateProfile(
 		slog.Warn("update profile: failed to sync name to cognito",
 			"account_id", accountID, "error", err)
 	}
+	return nil
+}
+
+// StartEmailChangeRequest is the body for POST /auth/me/email/start.
+type StartEmailChangeRequest struct {
+	Email string `json:"email"`
+}
+
+// StartEmailChange begins the post-signup email-collection flow for a federated
+// user (e.g. LinkedIn) who arrived without an email and carries a placeholder.
+// It validates the address, writes it to Cognito (which emails an OTP to the
+// new address), and records it locally as unverified. The account stays gated
+// until VerifyEmailChange confirms the code.
+//
+// Cognito is updated first (it's the authoritative store + the OTP source);
+// only on success do we persist locally. Both the access token (identity proof
+// for the Cognito write) and the account ID (for the local write) are required.
+func (s *AuthService) StartEmailChange(
+	ctx context.Context, accountID, accessToken string, req StartEmailChangeRequest,
+) error {
+	if accountID == "" {
+		return fmt.Errorf("account id is required")
+	}
+	if accessToken == "" {
+		return fmt.Errorf("access token is required")
+	}
+	email := strings.TrimSpace(req.Email)
+	if email == "" || !isValidEmailFormat(email) || isPlaceholderEmail(email) {
+		return ErrInvalidEmail
+	}
+
+	// Pre-check BEFORE the Cognito write: if another local account already owns
+	// this address, bail out now so we never fire an OTP for an email that's
+	// already taken. Cognito's AliasExistsException only catches addresses
+	// registered as sign-in aliases, so a collision with e.g. a federated
+	// account whose email isn't an alias would otherwise slip past the Cognito
+	// write (sending a code) and only fail later at the local UpdateEmail.
+	if inUse, err := s.accounts.EmailInUse(ctx, email, accountID); err != nil {
+		return fmt.Errorf("checking email availability: %w", err)
+	} else if inUse {
+		return ErrEmailTaken
+	}
+
+	// Cognito write: sets the email attribute (unverified) and sends the OTP.
+	// AliasExistsException (the address is already a sign-in alias on another
+	// account) is a second guard for the alias case.
+	if err := s.cognito.UpdateEmailAttribute(ctx, accessToken, email); err != nil {
+		if errors.Is(err, auth.ErrEmailExists) {
+			return ErrEmailTaken
+		}
+		return fmt.Errorf("updating cognito email: %w", err)
+	}
+
+	// Persist locally as unverified. A unique-violation here means another
+	// local account already owns the address.
+	if err := s.accounts.UpdateEmail(ctx, accountID, email); err != nil {
+		if errors.Is(err, repository.ErrEmailTaken) {
+			return ErrEmailTaken
+		}
+		return fmt.Errorf("updating local email: %w", err)
+	}
+
+	slog.Info("email change started; verification code sent",
+		"account_id", accountID, "email", email)
+	return nil
+}
+
+// ResendEmailChangeCode re-sends the OTP to the user's pending (current) email
+// attribute in Cognito.
+func (s *AuthService) ResendEmailChangeCode(ctx context.Context, accessToken string) error {
+	if accessToken == "" {
+		return fmt.Errorf("access token is required")
+	}
+	return s.cognito.SendEmailAttributeCode(ctx, accessToken)
+}
+
+// VerifyEmailChangeRequest is the body for POST /auth/me/email/verify.
+type VerifyEmailChangeRequest struct {
+	Code string `json:"code"`
+}
+
+// VerifyEmailChange confirms the pending email with the emailed OTP: it verifies
+// the code against Cognito (flipping Cognito's email_verified) and, on success,
+// stamps email_verified_at locally — which clears the onboarding email gate.
+func (s *AuthService) VerifyEmailChange(
+	ctx context.Context, accountID, accessToken string, req VerifyEmailChangeRequest,
+) error {
+	if accountID == "" {
+		return fmt.Errorf("account id is required")
+	}
+	if accessToken == "" {
+		return fmt.Errorf("access token is required")
+	}
+	code := strings.TrimSpace(req.Code)
+	if code == "" {
+		return fmt.Errorf("verification code is required")
+	}
+	if err := s.cognito.VerifyEmailAttribute(ctx, accessToken, code); err != nil {
+		// Bad/expired codes are surfaced as typed auth sentinels the handler
+		// maps to 400; wrap everything else.
+		return err
+	}
+	if err := s.accounts.MarkEmailVerified(ctx, accountID); err != nil {
+		return fmt.Errorf("marking email verified: %w", err)
+	}
+	slog.Info("email change verified", "account_id", accountID)
 	return nil
 }
 

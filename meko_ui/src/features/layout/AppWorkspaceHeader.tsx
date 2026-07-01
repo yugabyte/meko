@@ -7,6 +7,7 @@
 import { type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { isPlaceholderEmail } from "@/lib/api/mekoApi";
 import { IncomingShareNotificationsBell } from "@/features/layout/IncomingShareNotificationsBell";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 
@@ -35,6 +36,19 @@ export function AppWorkspaceHeader({
 
   const hasLeft = Boolean(leading);
   const hasRight = showUserAvatar;
+
+  // A federated (LinkedIn) signup with no IdP email carries a synthesized
+  // placeholder address until they verify a real one. Surfacing that
+  // `…@no-reply.…meko.invalid` string in the navbar looks broken, so we hide it
+  // and show the user's name (or a neutral label) until verification swaps in
+  // the real email (the modal invalidates /me on success, refreshing this).
+  const email = currentUser?.email ?? "";
+  const showPlaceholder = isPlaceholderEmail(email);
+  // Drop the "-" name placeholders the inbound-federation Lambda injects.
+  const realName = [currentUser?.first_name, currentUser?.last_name]
+    .map((p) => (p ?? "").trim())
+    .filter((p) => p !== "" && p !== "-")
+    .join(" ");
 
   return (
     <header
@@ -68,16 +82,26 @@ export function AppWorkspaceHeader({
           <p className="flex min-w-0 max-w-xs flex-wrap items-baseline justify-end gap-x-1 text-right text-sm leading-tight sm:max-w-sm">
             {userLoading ? (
               <span className="text-muted-foreground">Loading…</span>
-            ) : currentUser?.email ? (
+            ) : showPlaceholder ? (
+              // Never show the synthesized placeholder address. Prefer the
+              // user's name; otherwise a neutral "finish setup" nudge.
+              realName ? (
+                <>
+                  <span className="shrink-0 text-muted-foreground">Signed in as</span>
+                  <span className="min-w-0 truncate font-medium text-foreground" title={realName}>
+                    {realName}
+                  </span>
+                </>
+              ) : (
+                <span className="text-muted-foreground">Finish setting up your account</span>
+              )
+            ) : email ? (
               <>
                 <span className="shrink-0 text-muted-foreground">Signed in as</span>
-                <span
-                  className="min-w-0 truncate font-medium text-foreground"
-                  title={currentUser.email}
-                >
-                  {currentUser.email}
+                <span className="min-w-0 truncate font-medium text-foreground" title={email}>
+                  {email}
                 </span>
-                <TierBadge userType={currentUser.user_type} />
+                <TierBadge userType={currentUser?.user_type} />
               </>
             ) : (
               <span className="text-muted-foreground">Signed in</span>

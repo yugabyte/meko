@@ -362,10 +362,15 @@ func (h *AuthHandler) Me(c echo.Context) error {
 	}
 
 	return ok(c, http.StatusOK, map[string]any{
-		"account_id":               account.ID,
-		"email":                    account.Email,
-		"first_name":               account.FirstName,
-		"last_name":                account.LastName,
+		"account_id": account.ID,
+		"email":      account.Email,
+		"first_name": account.FirstName,
+		"last_name":  account.LastName,
+		// email_verified gates the post-signup email-collection step. It's
+		// false for federated users (LinkedIn) whose IdP sent no email and who
+		// therefore carry a synthesized placeholder; the SPA forces them to
+		// supply + OTP-verify a real address before using the app.
+		"email_verified":           account.EmailVerifiedAt != nil,
 		"has_completed_onboarding": account.HasCompletedOnboarding,
 		// Billing tier from meko_system.users.user_type. UI uses this to
 		// pick the active plan card / metric denominators on the Plans &
@@ -491,6 +496,99 @@ func (h *AuthHandler) UpdateProfile(c echo.Context) error {
 	})
 }
 
+// StartEmailChange handles POST /api/v1/auth/me/email/start.
+//
+// Collects the real email for a federated (LinkedIn) user who arrived without
+// one (and carries a placeholder), writing it to Cognito — which emails an OTP
+// to the new address — and recording it locally as unverified.
+//
+//	@Summary	Begin email collection/verification for the signed-in user
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		service.StartEmailChangeRequest	true	"Email to verify"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Failure	409		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/auth/me/email/start [post]
+func (h *AuthHandler) StartEmailChange(c echo.Context) error {
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
+	}
+	accessToken, err := h.extractAccessToken(c)
+	if err != nil {
+		return err
+	}
+	var req service.StartEmailChangeRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
+	}
+	if err := h.svc.StartEmailChange(c.Request().Context(), account.ID, accessToken, req); err != nil {
+		return h.classifyAuthErr(c, err)
+	}
+	return ok(c, http.StatusOK, map[string]string{
+		"message": "verification code sent",
+	})
+}
+
+// ResendEmailChangeCode handles POST /api/v1/auth/me/email/resend.
+//
+//	@Summary	Resend the email verification code
+//	@Tags		auth
+//	@Produce	json
+//	@Success	200	{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/auth/me/email/resend [post]
+func (h *AuthHandler) ResendEmailChangeCode(c echo.Context) error {
+	accessToken, err := h.extractAccessToken(c)
+	if err != nil {
+		return err
+	}
+	if err := h.svc.ResendEmailChangeCode(c.Request().Context(), accessToken); err != nil {
+		return h.classifyAuthErr(c, err)
+	}
+	return ok(c, http.StatusOK, map[string]string{
+		"message": "verification code sent",
+	})
+}
+
+// VerifyEmailChange handles POST /api/v1/auth/me/email/verify.
+//
+// Confirms the pending email with the emailed OTP, flipping email_verified in
+// both Cognito and the local DB (which clears the onboarding email gate).
+//
+//	@Summary	Verify the collected email with an OTP
+//	@Tags		auth
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		service.VerifyEmailChangeRequest	true	"OTP code"
+//	@Success	200		{object}	APIResponse
+//	@Failure	400		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/auth/me/email/verify [post]
+func (h *AuthHandler) VerifyEmailChange(c echo.Context) error {
+	account, err := auth.GetAccount(c)
+	if err != nil {
+		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
+	}
+	accessToken, err := h.extractAccessToken(c)
+	if err != nil {
+		return err
+	}
+	var req service.VerifyEmailChangeRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
+	}
+	if err := h.svc.VerifyEmailChange(c.Request().Context(), account.ID, accessToken, req); err != nil {
+		return h.classifyAuthErr(c, err)
+	}
+	return ok(c, http.StatusOK, map[string]string{
+		"message": "email verified",
+	})
+}
+
 // classifyAuthErr maps auth/cognito sentinel errors to the appropriate
 // HTTP status and error code.
 func (h *AuthHandler) classifyAuthErr(
@@ -500,6 +598,12 @@ func (h *AuthHandler) classifyAuthErr(
 	case errors.Is(err, auth.ErrUserExists):
 		return apiError(c, http.StatusConflict,
 			"CONFLICT", "user already exists")
+	case errors.Is(err, service.ErrInvalidEmail):
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", err.Error())
+	case errors.Is(err, service.ErrEmailTaken):
+		return apiError(c, http.StatusConflict,
+			"EMAIL_TAKEN", err.Error())
 	case errors.Is(err, auth.ErrNotAuthorized):
 		return apiError(c, http.StatusUnauthorized,
 			"UNAUTHORIZED", "invalid credentials")

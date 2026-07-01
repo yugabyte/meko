@@ -3,11 +3,16 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"meko/api_server/internal/models"
 )
+
+// ErrEmailTaken is returned by UpdateEmail when another account already owns
+// the target email (unique index violation on user_email).
+var ErrEmailTaken = errors.New("email address already in use")
 
 // CreateAccountParams holds the input for creating a new account.
 type CreateAccountParams struct {
@@ -15,6 +20,10 @@ type CreateAccountParams struct {
 	LastName   string
 	Email      string
 	CognitoSub string
+	// EmailVerified marks the email as already verified at creation time —
+	// true for federated sign-ins (Google / LinkedIn) whose IdP vouches for
+	// the address. When true, email_verified_at is stamped to NOW().
+	EmailVerified bool
 }
 
 // AccountRepo encapsulates database operations for user accounts.
@@ -60,14 +69,15 @@ func (r *AccountRepo) Create(
 	err = tx.QueryRowContext(ctx,
 		`INSERT INTO meko_system.users
 			(user_first_name, user_last_name,
-			 user_email, cognito_sub)
-		 VALUES ($1, $2, $3, $4)
+			 user_email, cognito_sub, email_verified_at)
+		 VALUES ($1, $2, $3, $4,
+			 CASE WHEN $5::boolean THEN NOW() ELSE NULL END)
 		 RETURNING user_id, user_first_name, user_last_name,
 			user_email, user_type, user_org, cognito_sub,
 			email_verified_at, has_completed_onboarding,
 			created_at, updated_at`,
 		params.FirstName, params.LastName,
-		params.Email, params.CognitoSub,
+		params.Email, params.CognitoSub, params.EmailVerified,
 	).Scan(
 		&acct.ID, &acct.FirstName, &acct.LastName,
 		&acct.Email, &acct.AccountType, &acct.UserOrg, &acct.CognitoSub,
@@ -350,6 +360,79 @@ func (r *AccountRepo) VerifyEmail(
 	}
 
 	slog.Info("email verified", "email", email)
+	return nil
+}
+
+// EmailInUse reports whether an account other than excludeUserID already owns
+// the given email. It's a read-only pre-check for the federated
+// email-collection flow so we don't fire an OTP to an address that would fail
+// the user_email uniqueness constraint anyway. Match semantics mirror the
+// unique index (exact, case-sensitive) so this and UpdateEmail agree.
+func (r *AccountRepo) EmailInUse(
+	ctx context.Context,
+	email, excludeUserID string,
+) (bool, error) {
+	var inUse bool
+	err := r.db.QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM meko_system.users
+			WHERE user_email = $1 AND user_id <> $2
+		)`,
+		email, excludeUserID,
+	).Scan(&inUse)
+	if err != nil {
+		return false, fmt.Errorf("failed to check email in use: %w", err)
+	}
+	return inUse, nil
+}
+
+// UpdateEmail replaces a user's email and resets verification (the new address
+// is unverified until OTP-confirmed). Used by the federated email-collection
+// flow. Returns ErrEmailTaken when another account already owns the address.
+func (r *AccountRepo) UpdateEmail(
+	ctx context.Context,
+	userID, email string,
+) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE meko_system.users
+		 SET user_email = $1, email_verified_at = NULL, updated_at = NOW()
+		 WHERE user_id = $2`,
+		email, userID,
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrEmailTaken
+		}
+		return fmt.Errorf("failed to update email: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("no account found for user %q", userID)
+	}
+	slog.Info("user email updated (pending verification)", "user_id", userID)
+	return nil
+}
+
+// MarkEmailVerified stamps email_verified_at=NOW() for the given user, clearing
+// the post-signup email gate. Idempotent: a no-op if already verified.
+func (r *AccountRepo) MarkEmailVerified(
+	ctx context.Context,
+	userID string,
+) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE meko_system.users
+		 SET email_verified_at = NOW(), updated_at = NOW()
+		 WHERE user_id = $1
+		   AND email_verified_at IS NULL`,
+		userID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark email verified: %w", err)
+	}
+	slog.Info("user email marked verified", "user_id", userID)
 	return nil
 }
 

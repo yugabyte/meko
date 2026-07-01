@@ -154,6 +154,24 @@ func (m *handlerMockCognito) UpdateUserName(
 	return nil
 }
 
+func (m *handlerMockCognito) UpdateEmailAttribute(
+	_ context.Context, _, _ string,
+) error {
+	return nil
+}
+
+func (m *handlerMockCognito) SendEmailAttributeCode(
+	_ context.Context, _ string,
+) error {
+	return nil
+}
+
+func (m *handlerMockCognito) VerifyEmailAttribute(
+	_ context.Context, _, _ string,
+) error {
+	return nil
+}
+
 // --- mock AccountStore for handler tests ---
 
 type handlerMockAccountStore struct {
@@ -198,6 +216,18 @@ func (m *handlerMockAccountStore) SetHasCompletedOnboarding(
 
 func (m *handlerMockAccountStore) UpdateProfile(
 	_ context.Context, _, _, _ string,
+) error {
+	return nil
+}
+
+func (m *handlerMockAccountStore) UpdateEmail(
+	_ context.Context, _, _ string,
+) error {
+	return nil
+}
+
+func (m *handlerMockAccountStore) MarkEmailVerified(
+	_ context.Context, _ string,
 ) error {
 	return nil
 }

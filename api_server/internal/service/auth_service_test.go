@@ -49,6 +49,9 @@ type mockCognito struct {
 	getUserStatusFn         func(ctx context.Context, email string) (auth.UserStatus, error)
 	resendInviteFn          func(ctx context.Context, email string) error
 	updateUserNameFn        func(ctx context.Context, username, firstName, lastName string) error
+	updateEmailAttrFn       func(ctx context.Context, accessToken, newEmail string) error
+	sendEmailAttrCodeFn     func(ctx context.Context, accessToken string) error
+	verifyEmailAttrFn       func(ctx context.Context, accessToken, code string) error
 }
 
 func (m *mockCognito) SignUp(
@@ -145,14 +148,44 @@ func (m *mockCognito) UpdateUserName(
 	return nil
 }
 
+func (m *mockCognito) UpdateEmailAttribute(
+	ctx context.Context, accessToken, newEmail string,
+) error {
+	if m.updateEmailAttrFn != nil {
+		return m.updateEmailAttrFn(ctx, accessToken, newEmail)
+	}
+	return nil
+}
+
+func (m *mockCognito) SendEmailAttributeCode(
+	ctx context.Context, accessToken string,
+) error {
+	if m.sendEmailAttrCodeFn != nil {
+		return m.sendEmailAttrCodeFn(ctx, accessToken)
+	}
+	return nil
+}
+
+func (m *mockCognito) VerifyEmailAttribute(
+	ctx context.Context, accessToken, code string,
+) error {
+	if m.verifyEmailAttrFn != nil {
+		return m.verifyEmailAttrFn(ctx, accessToken, code)
+	}
+	return nil
+}
+
 // --- mock AccountStore ---
 
 type mockAccountStore struct {
-	createFn          func(ctx context.Context, params repository.CreateAccountParams) (*models.Account, error)
-	getByCognitoSubFn func(ctx context.Context, sub string) (*models.Account, error)
-	getByIDFn         func(ctx context.Context, id string) (*models.Account, error)
-	verifyEmailFn     func(ctx context.Context, email string) error
-	setOnboardingFn   func(ctx context.Context, accountID string, completed bool) error
+	createFn            func(ctx context.Context, params repository.CreateAccountParams) (*models.Account, error)
+	getByCognitoSubFn   func(ctx context.Context, sub string) (*models.Account, error)
+	getByIDFn           func(ctx context.Context, id string) (*models.Account, error)
+	verifyEmailFn       func(ctx context.Context, email string) error
+	setOnboardingFn     func(ctx context.Context, accountID string, completed bool) error
+	emailInUseFn        func(ctx context.Context, email, excludeUserID string) (bool, error)
+	updateEmailFn       func(ctx context.Context, userID, email string) error
+	markEmailVerifiedFn func(ctx context.Context, userID string) error
 }
 
 func (m *mockAccountStore) Create(
@@ -194,6 +227,33 @@ func (m *mockAccountStore) SetHasCompletedOnboarding(
 func (m *mockAccountStore) UpdateProfile(
 	_ context.Context, _, _, _ string,
 ) error {
+	return nil
+}
+
+func (m *mockAccountStore) EmailInUse(
+	ctx context.Context, email, excludeUserID string,
+) (bool, error) {
+	if m.emailInUseFn != nil {
+		return m.emailInUseFn(ctx, email, excludeUserID)
+	}
+	return false, nil
+}
+
+func (m *mockAccountStore) UpdateEmail(
+	ctx context.Context, userID, email string,
+) error {
+	if m.updateEmailFn != nil {
+		return m.updateEmailFn(ctx, userID, email)
+	}
+	return nil
+}
+
+func (m *mockAccountStore) MarkEmailVerified(
+	ctx context.Context, userID string,
+) error {
+	if m.markEmailVerifiedFn != nil {
+		return m.markEmailVerifiedFn(ctx, userID)
+	}
 	return nil
 }
 
@@ -1014,4 +1074,203 @@ func TestEnsureAccountFromIDToken_NoProvisioner_NoPanic(t *testing.T) {
 	svc := service.NewAuthService(nil, store)
 	// Should not panic even without a provisioner.
 	svc.EnsureAccountFromIDToken(context.Background(), idToken)
+}
+
+// --- Email collection / verification (federated no-email) tests ---
+
+func TestStartEmailChange_RejectsBadEmail(t *testing.T) {
+	cases := []string{
+		"",                                 // empty
+		"not-an-email",                     // no @/domain
+		"a@b",                              // no dotted domain
+		"x@no-reply.linkedin.meko.invalid", // the synthesized placeholder itself
+	}
+	for _, in := range cases {
+		var cognitoCalled bool
+		cog := &mockCognito{
+			updateEmailAttrFn: func(_ context.Context, _, _ string) error {
+				cognitoCalled = true
+				return nil
+			},
+		}
+		svc := service.NewAuthService(cog, &mockAccountStore{})
+		err := svc.StartEmailChange(
+			context.Background(), "acct-1", "tok",
+			service.StartEmailChangeRequest{Email: in},
+		)
+		if !errors.Is(err, service.ErrInvalidEmail) {
+			t.Errorf("email %q: expected ErrInvalidEmail, got %v", in, err)
+		}
+		if cognitoCalled {
+			t.Errorf("email %q: Cognito should not be called for invalid input", in)
+		}
+	}
+}
+
+func TestStartEmailChange_Success_UpdatesCognitoThenDB(t *testing.T) {
+	var order []string
+	cog := &mockCognito{
+		updateEmailAttrFn: func(_ context.Context, token, email string) error {
+			if token != "tok" || email != "real@example.com" {
+				t.Errorf("unexpected cognito args: %q %q", token, email)
+			}
+			order = append(order, "cognito")
+			return nil
+		},
+	}
+	store := &mockAccountStore{
+		updateEmailFn: func(_ context.Context, userID, email string) error {
+			if userID != "acct-1" || email != "real@example.com" {
+				t.Errorf("unexpected db args: %q %q", userID, email)
+			}
+			order = append(order, "db")
+			return nil
+		},
+	}
+	svc := service.NewAuthService(cog, store)
+	if err := svc.StartEmailChange(
+		context.Background(), "acct-1", "tok",
+		service.StartEmailChangeRequest{Email: "  real@example.com  "},
+	); err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if len(order) != 2 || order[0] != "cognito" || order[1] != "db" {
+		t.Fatalf("expected cognito-then-db ordering, got %v", order)
+	}
+}
+
+func TestStartEmailChange_CognitoAliasExists_MapsToEmailTaken(t *testing.T) {
+	var dbCalled bool
+	cog := &mockCognito{
+		updateEmailAttrFn: func(_ context.Context, _, _ string) error {
+			return auth.ErrEmailExists
+		},
+	}
+	store := &mockAccountStore{
+		updateEmailFn: func(_ context.Context, _, _ string) error {
+			dbCalled = true
+			return nil
+		},
+	}
+	svc := service.NewAuthService(cog, store)
+	err := svc.StartEmailChange(
+		context.Background(), "acct-1", "tok",
+		service.StartEmailChangeRequest{Email: "taken@example.com"},
+	)
+	if !errors.Is(err, service.ErrEmailTaken) {
+		t.Fatalf("expected ErrEmailTaken, got %v", err)
+	}
+	if dbCalled {
+		t.Error("DB should not be written when Cognito rejects the email")
+	}
+}
+
+func TestStartEmailChange_EmailInUse_NoOTPSent(t *testing.T) {
+	var cognitoCalled, dbCalled bool
+	cog := &mockCognito{
+		updateEmailAttrFn: func(_ context.Context, _, _ string) error {
+			cognitoCalled = true
+			return nil
+		},
+	}
+	store := &mockAccountStore{
+		emailInUseFn: func(_ context.Context, email, excludeUserID string) (bool, error) {
+			if email != "taken@example.com" || excludeUserID != "acct-1" {
+				t.Errorf("unexpected EmailInUse args: %q %q", email, excludeUserID)
+			}
+			return true, nil
+		},
+		updateEmailFn: func(_ context.Context, _, _ string) error {
+			dbCalled = true
+			return nil
+		},
+	}
+	svc := service.NewAuthService(cog, store)
+	err := svc.StartEmailChange(
+		context.Background(), "acct-1", "tok",
+		service.StartEmailChangeRequest{Email: "taken@example.com"},
+	)
+	if !errors.Is(err, service.ErrEmailTaken) {
+		t.Fatalf("expected ErrEmailTaken, got %v", err)
+	}
+	if cognitoCalled {
+		t.Error("Cognito (OTP send) must not be called when the email is already in use")
+	}
+	if dbCalled {
+		t.Error("DB write must not happen when the email is already in use")
+	}
+}
+
+func TestStartEmailChange_DBConflict_MapsToEmailTaken(t *testing.T) {
+	cog := &mockCognito{}
+	store := &mockAccountStore{
+		updateEmailFn: func(_ context.Context, _, _ string) error {
+			return repository.ErrEmailTaken
+		},
+	}
+	svc := service.NewAuthService(cog, store)
+	err := svc.StartEmailChange(
+		context.Background(), "acct-1", "tok",
+		service.StartEmailChangeRequest{Email: "taken@example.com"},
+	)
+	if !errors.Is(err, service.ErrEmailTaken) {
+		t.Fatalf("expected ErrEmailTaken, got %v", err)
+	}
+}
+
+func TestVerifyEmailChange_Success_MarksVerified(t *testing.T) {
+	var marked bool
+	cog := &mockCognito{
+		verifyEmailAttrFn: func(_ context.Context, token, code string) error {
+			if token != "tok" || code != "123456" {
+				t.Errorf("unexpected verify args: %q %q", token, code)
+			}
+			return nil
+		},
+	}
+	store := &mockAccountStore{
+		markEmailVerifiedFn: func(_ context.Context, userID string) error {
+			if userID != "acct-1" {
+				t.Errorf("unexpected userID: %q", userID)
+			}
+			marked = true
+			return nil
+		},
+	}
+	svc := service.NewAuthService(cog, store)
+	if err := svc.VerifyEmailChange(
+		context.Background(), "acct-1", "tok",
+		service.VerifyEmailChangeRequest{Code: " 123456 "},
+	); err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if !marked {
+		t.Error("expected MarkEmailVerified to be called")
+	}
+}
+
+func TestVerifyEmailChange_BadCode_DoesNotMarkVerified(t *testing.T) {
+	var marked bool
+	cog := &mockCognito{
+		verifyEmailAttrFn: func(_ context.Context, _, _ string) error {
+			return auth.ErrCodeMismatch
+		},
+	}
+	store := &mockAccountStore{
+		markEmailVerifiedFn: func(_ context.Context, _ string) error {
+			marked = true
+			return nil
+		},
+	}
+	svc := service.NewAuthService(cog, store)
+	err := svc.VerifyEmailChange(
+		context.Background(), "acct-1", "tok",
+		service.VerifyEmailChangeRequest{Code: "000000"},
+	)
+	if !errors.Is(err, auth.ErrCodeMismatch) {
+		t.Fatalf("expected ErrCodeMismatch, got %v", err)
+	}
+	if marked {
+		t.Error("email must not be marked verified when the code is rejected")
+	}
 }

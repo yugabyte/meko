@@ -7,6 +7,10 @@ export const TELEMETRY_EVENTS = {
   USER_SIGNED_UP: "user_signed_up",
   /** Successful sign-in. Props: email, login_method. */
   USER_SIGNED_IN: "user_signed_in",
+  /** A social sign-in button (Google / LinkedIn) was clicked, before the
+   *  full-page redirect to the IdP. Fired client-side because social sign-in
+   *  completes via a server redirect the SPA can't observe directly. */
+  SIGN_IN_CLICKED: "sign_in_clicked",
   /** User clicked "Sign out". Pairs with user_signed_in to measure session length. */
   USER_LOGGED_OUT: "user_logged_out",
   /** Datapack created via the setup wizard. Props: email, datapack_id, datapack_name, is_first, total_datapacks. */
@@ -30,6 +34,7 @@ export type TelemetryEventName = (typeof TELEMETRY_EVENTS)[keyof typeof TELEMETR
 export const AUTH_METHODS = {
   EMAIL_PASSWORD: "email_password",
   GOOGLE_OAUTH: "google_oauth",
+  LINKEDIN_OAUTH: "linkedin_oauth",
 } as const;
 
 /** Value for the conversation_started `client` property. */

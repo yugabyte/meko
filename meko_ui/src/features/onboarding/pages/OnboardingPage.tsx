@@ -26,7 +26,7 @@ import { dispatchAppEvent } from "@/lib/browserEvents";
 import { ROUTES } from "@/app/routes/paths";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { cn } from "@/lib/utils";
-import ConfirmNameModal from "@/features/onboarding/components/ConfirmNameModal";
+import CompleteAccountModal from "@/features/onboarding/components/CompleteAccountModal";
 
 // "How it works" storyboard. Hoisted out of the component so the array
 // isn't re-allocated on every render. Each entry maps to one numbered
@@ -158,7 +158,21 @@ export default function OnboardingPage() {
    * skip); a user who abandons it is re-prompted next visit because the DB
    * still has the gap.
    */
-  const [confirmName, setConfirmName] = useState<{ first: string; last: string } | null>(null);
+  /**
+   * What the social signup still needs before it can use the app. Driven purely
+   * by server state (`/auth/me`): a name part can be missing (the IdP's last
+   * name is optional) and/or the email can be unverified (`email_verified ===
+   * false` — a LinkedIn signup with no email carries a placeholder). The
+   * combined modal handles any combination and BLOCKS the page until done; a
+   * user who abandons the tab is re-prompted on return because the gap is still
+   * in the DB. Null until /auth/me resolves (we don't flash the modal).
+   */
+  const [completion, setCompletion] = useState<{
+    needsName: boolean;
+    needsEmail: boolean;
+    firstName: string;
+    lastName: string;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -168,9 +182,13 @@ export default function OnboardingPage() {
         setServerOnboardingDone(u.has_completed_onboarding);
         const first = u.first_name ?? "";
         const last = u.last_name ?? "";
-        if (first.trim() === "" || last.trim() === "") {
-          setConfirmName({ first, last });
-        }
+        setCompletion({
+          needsName: first.trim() === "" || last.trim() === "",
+          // Explicit false only (undefined = older BE → treat as verified).
+          needsEmail: u.email_verified === false,
+          firstName: first,
+          lastName: last,
+        });
       })
       .catch(() => {
         if (!cancelled) setServerOnboardingDone(false);
@@ -180,11 +198,13 @@ export default function OnboardingPage() {
     };
   }, []);
 
-  // Only called after a successful save (the modal can't be dismissed any
-  // other way), so by the time we clear it the DB has both name parts.
-  const dismissConfirmName = () => {
-    setConfirmName(null);
+  // The modal can't be dismissed any other way, so by the time this runs the
+  // server has every required piece — clear the gate.
+  const dismissCompletion = () => {
+    setCompletion(null);
   };
+
+  const needsCompletion = completion != null && (completion.needsName || completion.needsEmail);
 
   const finishAndGo = async (target: "workbenchLm" | "datapacks" | "skip") => {
     setError(null);
@@ -237,11 +257,15 @@ export default function OnboardingPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
-      {confirmName ? (
-        <ConfirmNameModal
-          initialFirstName={confirmName.first}
-          initialLastName={confirmName.last}
-          onDone={dismissConfirmName}
+      {/* One blocking modal collects whatever's missing (name and/or a verified
+          email) and holds the user here until it's done. */}
+      {needsCompletion && completion ? (
+        <CompleteAccountModal
+          needsName={completion.needsName}
+          needsEmail={completion.needsEmail}
+          initialFirstName={completion.firstName}
+          initialLastName={completion.lastName}
+          onDone={dismissCompletion}
         />
       ) : null}
       <AppWorkspaceHeader padding="page" className="pl-4 pr-8" />

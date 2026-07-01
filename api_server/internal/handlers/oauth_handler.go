@@ -172,10 +172,18 @@ func completeOAuthCallback(
 // callback can complete the exchange with the matching code_verifier.
 func buildAuthorizeURL(cognitoDomain, clientID, provider, redirectURI, state, codeChallenge string) string {
 	q := url.Values{
-		"client_id":         {clientID},
-		"redirect_uri":      {redirectURI},
-		"response_type":     {"code"},
-		"scope":             {"openid email profile"},
+		"client_id":     {clientID},
+		"redirect_uri":  {redirectURI},
+		"response_type": {"code"},
+		// aws.cognito.signin.user.admin lets the resulting access token call
+		// Cognito self-service attribute APIs (UpdateUserAttributes,
+		// GetUserAttributeVerificationCode, VerifyUserAttribute) — required by
+		// the post-signup email-collection/OTP flow for federated users who
+		// arrive without an email. Without it those calls 401 with
+		// "Access Token does not have required scopes". The app client's allowed
+		// OAuth scopes MUST include this scope or Cognito rejects the authorize
+		// request with invalid_scope.
+		"scope":             {"openid email profile aws.cognito.signin.user.admin"},
 		"identity_provider": {provider},
 		"state":             {state},
 	}

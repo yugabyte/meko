@@ -21,9 +21,11 @@ export default function SignUpPage() {
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [code, setCode] = useState("");
   const [awaitingCode, setAwaitingCode] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -44,6 +46,10 @@ export default function SignUpPage() {
     const passwordErr = getPasswordPolicyError(password);
     if (passwordErr) {
       setError(passwordErr);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Passwords don't match.");
       return;
     }
 
@@ -81,6 +87,10 @@ export default function SignUpPage() {
       setLoading(false);
     }
   };
+
+  // Only warn once the user has started typing the confirmation, so the field
+  // doesn't show an error while it's still empty.
+  const confirmMismatch = confirmPassword.length > 0 && password !== confirmPassword;
 
   return (
     <AuthPageShell>
@@ -155,6 +165,41 @@ export default function SignUpPage() {
                     )}
                   </button>
                 </div>
+                <div className="relative">
+                  <Input
+                    id="signup-confirm-password"
+                    type={showConfirmPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    name="confirmPassword"
+                    aria-label="Confirm password"
+                    aria-invalid={confirmMismatch}
+                    aria-describedby={confirmMismatch ? "signup-confirm-error" : undefined}
+                    enterKeyHint="go"
+                    placeholder="Confirm password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                    className="h-12 border-border bg-input pr-12 text-foreground placeholder:text-muted-foreground"
+                  />
+                  <button
+                    type="button"
+                    aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showConfirmPassword}
+                    className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                    onClick={() => setShowConfirmPassword((value) => !value)}
+                  >
+                    {showConfirmPassword ? (
+                      <EyeOff className="h-4 w-4" aria-hidden />
+                    ) : (
+                      <Eye className="h-4 w-4" aria-hidden />
+                    )}
+                  </button>
+                </div>
+                {confirmMismatch ? (
+                  <p id="signup-confirm-error" className="text-sm text-red-600">
+                    Passwords don't match.
+                  </p>
+                ) : null}
                 <PasswordPolicyPanel id="signup-password-policy" password={password} />
               </div>
             </>
@@ -178,7 +223,7 @@ export default function SignUpPage() {
           <Button
             type="submit"
             className="h-12 w-full bg-primary text-primary-foreground hover:bg-primary/90"
-            disabled={loading}
+            disabled={loading || (!awaitingCode && confirmMismatch)}
           >
             {awaitingCode
               ? loading

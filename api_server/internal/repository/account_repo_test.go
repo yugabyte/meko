@@ -37,7 +37,7 @@ func TestAccountRepo_Create_InsertsUserAndDefaultAgent(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.users`).
-		WithArgs("Jane", "Doe", "jane@example.com", "sub-123").
+		WithArgs("Jane", "Doe", "jane@example.com", "sub-123", false).
 		WillReturnRows(newUserRow("user-1", "jane@example.com"))
 	mock.ExpectExec(`INSERT INTO meko_system\.agents`).
 		WithArgs("user-1", DefaultAgentID).
@@ -71,7 +71,7 @@ func TestAccountRepo_Create_RollsBackWhenAgentInsertFails(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.users`).
-		WithArgs("Jane", "Doe", "jane@example.com", "sub-123").
+		WithArgs("Jane", "Doe", "jane@example.com", "sub-123", false).
 		WillReturnRows(newUserRow("user-2", "jane@example.com"))
 	mock.ExpectExec(`INSERT INTO meko_system\.agents`).
 		WithArgs("user-2", DefaultAgentID).
@@ -102,7 +102,7 @@ func TestAccountRepo_Create_RollsBackWhenUserInsertFails(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT INTO meko_system\.users`).
-		WithArgs("Jane", "Doe", "jane@example.com", "sub-123").
+		WithArgs("Jane", "Doe", "jane@example.com", "sub-123", false).
 		WillReturnError(errors.New("duplicate email"))
 	mock.ExpectRollback()
 

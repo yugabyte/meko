@@ -19,15 +19,15 @@ import (
 // serviceRegistry holds every repository and service the router needs,
 // built once and shared across all route-registration helpers.
 type serviceRegistry struct {
-	accountRepo        *repository.AccountRepo
-	ybaRepo            *repository.YBARepo
-	ybaSvc             *service.YBAService
-	dpRepo             *repository.DatapackRepo
-	dpSvc              *service.DatapackService
+	accountRepo *repository.AccountRepo
+	ybaRepo     *repository.YBARepo
+	ybaSvc      *service.YBAService
+	dpRepo      *repository.DatapackRepo
+	dpSvc       *service.DatapackService
 	// kbRepo: shared by kbSvc and the AccountUsageService (which is
 	// what the /auth/me/usage handler depends on — handlers never touch
 	// repos directly).
-	kbRepo             *repository.KnowledgeBaseRepo
+	kbRepo *repository.KnowledgeBaseRepo
 	// freeTierRepo: read by AccountUsageService for /auth/me/usage's
 	// num_conversations counter. Written by meko-mcp-server's quota gate.
 	freeTierRepo       *repository.FreeTierUsageRepo
@@ -368,17 +368,28 @@ func registerAuthRoutes(
 	authGroup.POST("/login", authH.Login)
 	authGroup.POST("/complete-new-password", authH.CompleteNewPassword)
 	authGroup.POST("/logout", authH.Logout)
-	// App-driven Google sign-in. The browser hits /google/login and we
-	// redirect straight to Google via Cognito's /oauth2/authorize
-	// (identity_provider=Google) — no Hosted UI login screen. The OAuth2
-	// callback lands on /google/callback, which exchanges the code, sets the
-	// auth cookies, and redirects into the SPA. Requires the Cognito domain.
+	// App-driven social sign-in. The browser hits /<provider>/login and we
+	// redirect straight to the IdP via Cognito's /oauth2/authorize
+	// (identity_provider=<Provider>) — no Hosted UI login screen. The OAuth2
+	// callback lands on /<provider>/callback, which exchanges the code, sets
+	// the auth cookies, and redirects into the SPA. Requires the Cognito
+	// domain. LinkedIn is wired into Cognito as a generic OIDC provider
+	// (issuer https://www.linkedin.com/oauth); Google is a native provider.
 	if cfg.CognitoDomain != "" {
 		authGroup.GET("/google/login", handlers.GoogleLoginHandler(handlers.GoogleLoginConfig{
 			CognitoDomain: cfg.CognitoDomain,
 			ClientID:      cfg.CognitoClientID,
 		}))
 		authGroup.GET("/google/callback", handlers.GoogleCallbackHandler(handlers.GoogleCallbackConfig{
+			CognitoClient: cognitoClient,
+			AuthService:   authSvc,
+			CognitoDomain: cfg.CognitoDomain,
+		}))
+		authGroup.GET("/linkedin/login", handlers.LinkedinLoginHandler(handlers.LinkedinLoginConfig{
+			CognitoDomain: cfg.CognitoDomain,
+			ClientID:      cfg.CognitoClientID,
+		}))
+		authGroup.GET("/linkedin/callback", handlers.LinkedinCallbackHandler(handlers.LinkedinCallbackConfig{
 			CognitoClient: cognitoClient,
 			AuthService:   authSvc,
 			CognitoDomain: cfg.CognitoDomain,
@@ -391,9 +402,14 @@ func registerAuthRoutes(
 	authGroup.GET("/me", authH.Me, requireAuth)
 	authGroup.PATCH("/me", authH.UpdateOnboardingStatus, requireAuth)
 	authGroup.PATCH("/me/profile", authH.UpdateProfile, requireAuth)
+	// Post-signup email collection/verification for federated (LinkedIn) users
+	// whose IdP sent no email (they carry a placeholder until they verify a
+	// real address). All require a signed-in access token.
+	authGroup.POST("/me/email/start", authH.StartEmailChange, requireAuth)
+	authGroup.POST("/me/email/resend", authH.ResendEmailChangeCode, requireAuth)
+	authGroup.POST("/me/email/verify", authH.VerifyEmailChange, requireAuth)
 	// Free-tier usage counters; see AuthHandler.GetUsage for shape.
 	authGroup.GET("/me/usage", authH.GetUsage, requireAuth)
-
 
 	*datapackGroup = v1.Group("", requireAuth)
 	*dpDirect = v1.Group("",

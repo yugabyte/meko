@@ -129,6 +129,32 @@ type CognitoAPI interface {
 		params *cip.ListUsersInput,
 		optFns ...func(*cip.Options),
 	) (*cip.ListUsersOutput, error)
+
+	// UpdateUserAttributes updates attributes for the signed-in user
+	// identified by an AccessToken. Used to set a federated user's real email
+	// (changing the auto-verified email attribute makes Cognito send a
+	// verification code to the new address).
+	UpdateUserAttributes(
+		ctx context.Context,
+		params *cip.UpdateUserAttributesInput,
+		optFns ...func(*cip.Options),
+	) (*cip.UpdateUserAttributesOutput, error)
+
+	// GetUserAttributeVerificationCode (re)sends a verification code to the
+	// signed-in user's email attribute.
+	GetUserAttributeVerificationCode(
+		ctx context.Context,
+		params *cip.GetUserAttributeVerificationCodeInput,
+		optFns ...func(*cip.Options),
+	) (*cip.GetUserAttributeVerificationCodeOutput, error)
+
+	// VerifyUserAttribute confirms the signed-in user's email attribute using
+	// the emailed code, flipping email_verified to true.
+	VerifyUserAttribute(
+		ctx context.Context,
+		params *cip.VerifyUserAttributeInput,
+		optFns ...func(*cip.Options),
+	) (*cip.VerifyUserAttributeOutput, error)
 }
 
 // UserStatus is a Cognito account status, returned by GetUserStatus. It wraps
@@ -754,6 +780,105 @@ func (c *CognitoClient) UpdateUserName(
 	return nil
 }
 
+// UpdateEmailAttribute sets the email attribute for the signed-in user
+// (identified by accessToken) to newEmail. Because email is an auto-verified
+// attribute, Cognito marks it unverified and emails a verification code to the
+// new address — so this both records the address and kicks off the OTP. Used by
+// the post-signup email-collection flow for federated users (e.g. LinkedIn)
+// whose IdP didn't supply an email and who therefore carry a placeholder.
+//
+// The access token is the identity proof (no username needed), which also works
+// for federated users whose username is provider-prefixed.
+func (c *CognitoClient) UpdateEmailAttribute(
+	ctx context.Context, accessToken, newEmail string,
+) error {
+	newEmail = strings.TrimSpace(newEmail)
+	if accessToken == "" {
+		return fmt.Errorf("access token is required")
+	}
+	if newEmail == "" {
+		return fmt.Errorf("email is required")
+	}
+	out, err := c.api.UpdateUserAttributes(ctx, &cip.UpdateUserAttributesInput{
+		AccessToken: &accessToken,
+		UserAttributes: []types.AttributeType{
+			{Name: strPtr("email"), Value: &newEmail},
+		},
+	})
+	if err != nil {
+		slog.Warn("cognito update email attribute failed", "error", err)
+		return classifyCognitoErr(err)
+	}
+	// CodeDeliveryDetailsList is the only signal Cognito gives us about the
+	// outgoing OTP. An empty list means Cognito did NOT queue an email (e.g. the
+	// attribute was unchanged) — useful to distinguish "not sent" from "sent but
+	// undelivered" when debugging the COGNITO_DEFAULT mailer.
+	if len(out.CodeDeliveryDetailsList) == 0 {
+		slog.Warn("cognito email attribute updated but NO code delivery queued " +
+			"(attribute may be unchanged or no auto-verify)")
+		return nil
+	}
+	for _, d := range out.CodeDeliveryDetailsList {
+		slog.Info("cognito email attribute updated; verification code queued",
+			"destination", derefStr(d.Destination),
+			"medium", string(d.DeliveryMedium),
+			"attribute", derefStr(d.AttributeName))
+	}
+	return nil
+}
+
+// SendEmailAttributeCode (re)sends a verification code to the signed-in user's
+// current email attribute. Used as the explicit "resend code" action; the
+// initial code is sent by UpdateEmailAttribute.
+func (c *CognitoClient) SendEmailAttributeCode(ctx context.Context, accessToken string) error {
+	if accessToken == "" {
+		return fmt.Errorf("access token is required")
+	}
+	out, err := c.api.GetUserAttributeVerificationCode(ctx, &cip.GetUserAttributeVerificationCodeInput{
+		AccessToken:   &accessToken,
+		AttributeName: strPtr("email"),
+	})
+	if err != nil {
+		slog.Warn("cognito send email verification code failed", "error", err)
+		return classifyCognitoErr(err)
+	}
+	if out.CodeDeliveryDetails == nil {
+		slog.Warn("cognito reported no code delivery details on resend " +
+			"(email may already be verified, so no code is sent)")
+		return nil
+	}
+	slog.Info("cognito email verification code queued",
+		"destination", derefStr(out.CodeDeliveryDetails.Destination),
+		"medium", string(out.CodeDeliveryDetails.DeliveryMedium),
+		"attribute", derefStr(out.CodeDeliveryDetails.AttributeName))
+	return nil
+}
+
+// VerifyEmailAttribute confirms the signed-in user's email attribute with the
+// emailed code, flipping Cognito's email_verified to true. Returns ErrCodeMismatch
+// / ErrCodeExpired (via classifyCognitoErr) on a bad/expired code so the handler
+// can surface a 400.
+func (c *CognitoClient) VerifyEmailAttribute(ctx context.Context, accessToken, code string) error {
+	code = strings.TrimSpace(code)
+	if accessToken == "" {
+		return fmt.Errorf("access token is required")
+	}
+	if code == "" {
+		return fmt.Errorf("verification code is required")
+	}
+	_, err := c.api.VerifyUserAttribute(ctx, &cip.VerifyUserAttributeInput{
+		AccessToken:   &accessToken,
+		AttributeName: strPtr("email"),
+		Code:          &code,
+	})
+	if err != nil {
+		slog.Warn("cognito verify email attribute failed", "error", err)
+		return classifyCognitoErr(err)
+	}
+	slog.Info("cognito email attribute verified")
+	return nil
+}
+
 // ResetTempPassword sets a new temporary password for an existing unconfirmed
 // Cognito user. Used when resending an invite so the fresh SES email contains
 // a valid credential.
@@ -844,6 +969,7 @@ func (c *CognitoClient) secretHash(username string) *string {
 // Sentinel errors returned by CognitoClient methods.
 var (
 	ErrUserExists              = errors.New("user already exists")
+	ErrEmailExists             = errors.New("email address already in use")
 	ErrInvalidPassword         = errors.New("password does not meet requirements")
 	ErrCodeMismatch            = errors.New("invalid confirmation code")
 	ErrCodeExpired             = errors.New("confirmation code has expired")
@@ -864,6 +990,14 @@ func classifyCognitoErr(err error) error {
 	var usernameExistsErr *types.UsernameExistsException
 	if errors.As(err, &usernameExistsErr) {
 		return ErrUserExists
+	}
+
+	// AliasExistsException: the email (a sign-in alias) is already attached to
+	// another user — surfaced when updating a federated user's email to an
+	// address that's taken.
+	var aliasExistsErr *types.AliasExistsException
+	if errors.As(err, &aliasExistsErr) {
+		return ErrEmailExists
 	}
 
 	var invalidPasswordErr *types.InvalidPasswordException
@@ -962,4 +1096,11 @@ func classifyCognitoErr(err error) error {
 
 func strPtr(s string) *string {
 	return &s
+}
+
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

@@ -23,6 +23,7 @@ import { setLocalItem } from "@/lib/browserStorage";
 import { ROUTES } from "@/app/routes/paths";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 import { GoogleIcon } from "@/components/icons/GoogleIcon";
+import { LinkedInIcon } from "@/components/icons/LinkedInIcon";
 
 const MEKO_REQUEST_ACCESS_URL = "https://info.yugabyte.com/meko-request-access" as const;
 
@@ -30,15 +31,19 @@ const MEKO_REQUEST_ACCESS_URL = "https://info.yugabyte.com/meko-request-access" 
 // rest of the SPA uses, so the Google sign-in redirect targets the api_server.
 const API_BASE = (import.meta.env.VITE_MEKO_API_BASE_URL || "/api/v1").replace(/\/$/, "");
 
-// Friendly messages for the ?error=<reason> codes the Google callback appends
-// when it bounces back to /signin. google_* are app-internal reasons; the rest
-// are OAuth2 codes Cognito/Google may forward.
+// Friendly messages for the ?error=<reason> codes a social callback appends
+// when it bounces back to /signin. <provider>_* are app-internal reasons; the
+// rest are OAuth2 codes Cognito/the IdP may forward.
 const OAUTH_ERROR_REASONS: Record<string, string> = {
   google_state: "Your Google sign-in session expired. Please try again.",
   google_no_code: "Google sign-in didn't complete. Please try again.",
   google_exchange: "We couldn't finish signing you in with Google. Please try again.",
   google_provision: "We couldn't finish setting up your account. Please try again.",
-  access_denied: "Google sign-in was cancelled.",
+  linkedin_state: "Your LinkedIn sign-in session expired. Please try again.",
+  linkedin_no_code: "LinkedIn sign-in didn't complete. Please try again.",
+  linkedin_exchange: "We couldn't finish signing you in with LinkedIn. Please try again.",
+  linkedin_provision: "We couldn't finish setting up your account. Please try again.",
+  access_denied: "Sign-in was cancelled.",
 };
 
 /** Query flag used with {@link ROUTES.signup} so the sign-up page opens on the “enter code” step. */
@@ -60,6 +65,7 @@ export default function SignInPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [linkedinLoading, setLinkedinLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Set only after Cognito returns “user not confirmed” for this sign-in attempt. */
   const [showUnconfirmedRecovery, setShowUnconfirmedRecovery] = useState(false);
@@ -90,8 +96,11 @@ export default function SignInPage() {
   }, [searchParams, setSearchParams]);
 
   const handleGoogleSignIn = () => {
-    if (loading || googleLoading) return;
-    trackEvent(TELEMETRY_EVENTS.USER_SIGNED_IN, {
+    if (loading || googleLoading || linkedinLoading) return;
+    // Fires on click, before the redirect to the IdP — the sign-in isn't
+    // confirmed yet (user may cancel/fail), so USER_SIGNED_IN would be
+    // premature. login_method distinguishes the provider.
+    trackEvent(TELEMETRY_EVENTS.SIGN_IN_CLICKED, {
       login_method: AUTH_METHODS.GOOGLE_OAUTH,
     });
     setError(null);
@@ -99,6 +108,19 @@ export default function SignInPage() {
     // App-driven Google sign-in: hand off to the api_server, which builds the
     // Cognito /oauth2/authorize redirect (identity_provider=Google).
     window.location.href = `${API_BASE}/auth/google/login`;
+  };
+
+  const handleLinkedInSignIn = () => {
+    if (loading || googleLoading || linkedinLoading) return;
+    // Click-time event (pre-redirect), mirroring the Google handler.
+    trackEvent(TELEMETRY_EVENTS.SIGN_IN_CLICKED, {
+      login_method: AUTH_METHODS.LINKEDIN_OAUTH,
+    });
+    setError(null);
+    setLinkedinLoading(true);
+    // App-driven LinkedIn sign-in: hand off to the api_server, which builds
+    // the Cognito /oauth2/authorize redirect (identity_provider=LinkedIn).
+    window.location.href = `${API_BASE}/auth/linkedin/login`;
   };
 
   const resetRecoveryUi = () => {
@@ -250,7 +272,7 @@ export default function SignInPage() {
           <Button
             type="submit"
             className="h-12 w-full bg-primary text-primary-foreground hover:bg-primary/90"
-            disabled={loading || googleLoading}
+            disabled={loading || googleLoading || linkedinLoading}
           >
             {loading ? "Please wait..." : "Continue"}
           </Button>
@@ -262,16 +284,29 @@ export default function SignInPage() {
           <div className="h-px flex-1 bg-border" />
         </div>
 
-        <Button
-          type="button"
-          variant="outline"
-          className="h-12 w-full border-border bg-input text-foreground hover:bg-white/10"
-          disabled={loading || googleLoading}
-          onClick={handleGoogleSignIn}
-        >
-          <GoogleIcon className="mr-2 h-5 w-5" />
-          {googleLoading ? "Redirecting to Google…" : "Continue with Google"}
-        </Button>
+        <div className="flex flex-col gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            className="h-12 w-full border-border bg-input text-foreground hover:bg-white/10"
+            disabled={loading || googleLoading || linkedinLoading}
+            onClick={handleGoogleSignIn}
+          >
+            <GoogleIcon className="mr-2 h-5 w-5" />
+            {googleLoading ? "Redirecting to Google…" : "Continue with Google"}
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="h-12 w-full border-border bg-input text-foreground hover:bg-white/10"
+            disabled={loading || googleLoading || linkedinLoading}
+            onClick={handleLinkedInSignIn}
+          >
+            <LinkedInIcon className="mr-2 h-5 w-5 text-[#0A66C2] dark:text-white" />
+            {linkedinLoading ? "Redirecting to LinkedIn…" : "Continue with LinkedIn"}
+          </Button>
+        </div>
 
         {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
 

@@ -209,6 +209,14 @@ export type CurrentUser = {
   email: string;
   first_name: string;
   last_name: string;
+  /**
+   * Whether the account's email is verified. False for a federated (LinkedIn)
+   * signup whose IdP sent no email — those users carry a synthesized
+   * placeholder and must supply + OTP-verify a real address before using the
+   * app (see CompleteAccountModal, gated on the onboarding page). Optional so
+   * older BE deploys that don't emit it are treated as verified (no gate).
+   */
+  email_verified?: boolean;
   has_completed_onboarding: boolean;
   /**
    * Billing tier from `meko_system.users.user_type`. Optional because the
@@ -811,6 +819,52 @@ export async function updateProfile(firstName: string, lastName: string) {
   });
 }
 
+// --- Post-signup email collection/verification (federated, no-email signups) ---
+//
+// For a LinkedIn signup whose IdP sent no email, the account carries a
+// synthesized placeholder and `email_verified` is false. These three calls
+// drive the blocking onboarding modal that collects + OTP-verifies a real
+// address, writing it to both Cognito and the local DB.
+
+// isPlaceholderEmail reports whether an address is the synthesized, non-real
+// placeholder the inbound-federation Lambda mints for a federated signup whose
+// IdP sent no email. Shape: `<local>@no-reply.<provider>.meko.invalid`. Mirrors
+// the backend detector (service.isPlaceholderEmail: "no-reply." host prefix +
+// ".meko.invalid" suffix). Used to avoid surfacing the placeholder in the UI —
+// we show a friendlier label until the user verifies a real address.
+export function isPlaceholderEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  // Trim to match the backend's isPlaceholderEmail (which TrimSpace-es first),
+  // so stray whitespace can't cause a client-side false negative.
+  const trimmed = email.trim();
+  const at = trimmed.lastIndexOf("@");
+  if (at === -1) return false;
+  const host = trimmed.slice(at + 1).toLowerCase();
+  return host.startsWith("no-reply.") && host.endsWith(".meko.invalid");
+}
+
+// Set the real email; the BE writes it to Cognito, which emails a 6-digit OTP
+// to that address. Throws MekoApiRequestError; notable codes:
+//   - 400 VALIDATION_ERROR — malformed address
+//   - 409 EMAIL_TAKEN      — the address already belongs to another account
+export async function startEmailChange(email: string) {
+  return request<{ message: string }>("/auth/me/email/start", "POST", {
+    email: email.trim(),
+  });
+}
+
+// Re-send the OTP to the pending email.
+export async function resendEmailChangeCode() {
+  return request<{ message: string }>("/auth/me/email/resend", "POST");
+}
+
+// Confirm the OTP; on success email_verified flips to true in Cognito + DB,
+// clearing the gate. Throws ApiError (400 INVALID_CODE / CODE_EXPIRED).
+export async function verifyEmailChange(code: string) {
+  return request<{ message: string }>("/auth/me/email/verify", "POST", {
+    code: code.trim(),
+  });
+}
 // --- Meko personal access tokens (MCP PATs) ---
 //
 // Self-service tokens minted from Settings → Security. Used in place of
