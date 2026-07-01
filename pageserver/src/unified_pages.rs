@@ -70,7 +70,7 @@
 //! with `lsn ≤ max_lsn`. Called by the materialiser after a
 //! successful image INSERT to drop the deltas the image superseded.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -246,9 +246,10 @@ impl UnifiedPages {
     /// our CAS observes `Err(true)` and we skip without touching the
     /// counters (insert_entry already adjusted them).
     pub(crate) fn mark_flushed(&self, snapshot: &[Arc<PageEntry>]) {
-        // Per-key list of promoted lsns, so we drop their stale FIFO
-        // refs in one pass at the end instead of scanning per row.
-        let mut promoted_by_key: HashMap<Key, Vec<Lsn>> = HashMap::new();
+        // The (key, lsn) pairs we promote to durable here, so we can drop
+        // their FIFO refs in one front-bounded pass at the end (below)
+        // instead of a full-FIFO scan per flush.
+        let mut promoted: HashSet<(Key, Lsn)> = HashSet::new();
 
         for entry in snapshot {
             if !entry.try_promote() {
@@ -278,19 +279,38 @@ impl UnifiedPages {
                 let mut ks = node.value().lock();
                 ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
             }
-            promoted_by_key
-                .entry(entry.row.key)
-                .or_default()
-                .push(entry.row.lsn);
+            promoted.insert((entry.row.key, entry.row.lsn));
         }
 
-        if !promoted_by_key.is_empty() {
+        if !promoted.is_empty() {
+            // The promoted pairs were snapshotted from the FRONT of the FIFO
+            // (`snapshot_unflushed`) and flush is serialized, so they live in
+            // the FIFO's front region: anything pushed since is appended
+            // behind them, and any slot overwritten meanwhile had its FIFO ref
+            // dropped on the overwrite path (and fails `try_promote` above, so
+            // it is not in `promoted`). Walk from the front, dropping promoted
+            // pairs and preserving the rare non-promoted ones (a #57 anomaly),
+            // and stop as soon as every promoted pair is gone. That makes this
+            // O(flush batch) rather than the old O(fifo len) `retain` full
+            // scan — under a large backlog that scan ran once per flush, i.e.
+            // O(n²), pegging one core in `retain` while getpage/WAL-apply
+            // queued behind the flusher.
             let mut fifo = self.unflushed_fifo.lock();
-            fifo.retain(|(k, l)| {
-                promoted_by_key
-                    .get(k)
-                    .is_none_or(|lsns| !lsns.contains(l))
-            });
+            let mut keep_front: Vec<(Key, Lsn)> = Vec::new();
+            while !promoted.is_empty() {
+                match fifo.pop_front() {
+                    None => break, // invariant slip: phantom promoted pair — safe, just stop.
+                    Some(pair) => {
+                        if !promoted.remove(&pair) {
+                            keep_front.push(pair);
+                        }
+                    }
+                }
+            }
+            // Restore the preserved front entries in their original order.
+            for pair in keep_front.into_iter().rev() {
+                fifo.push_front(pair);
+            }
         }
     }
 
@@ -1195,6 +1215,28 @@ mod tests {
         assert_eq!(snap.len(), 2);
         assert_eq!(snap[0].row.lsn, Lsn(2));
         assert_eq!(snap[1].row.lsn, Lsn(3));
+    }
+
+    /// Regression for the O(n²) flush stall: `mark_flushed` must drop exactly
+    /// the flushed front prefix from the FIFO (via a front-bounded walk, not a
+    /// whole-FIFO `retain`) and leave the newer, still-unflushed entries in
+    /// order.
+    #[test]
+    fn mark_flushed_drains_flushed_front_prefix() {
+        let u = UnifiedPages::new(1 << 20);
+        for i in 1..=5u64 {
+            u.push(mk(b"k", i, false, b"x"));
+        }
+        assert_eq!(u.unflushed_count(), 5);
+
+        flush_first_n(&u, 3);
+        assert_eq!(u.unflushed_count(), 2, "only the flushed front 3 are removed");
+        let remaining: Vec<Lsn> = u.snapshot_unflushed(None).iter().map(|e| e.row.lsn).collect();
+        assert_eq!(remaining, vec![Lsn(4), Lsn(5)], "the two newest remain, in FIFO order");
+
+        flush_first_n(&u, 2);
+        assert_eq!(u.unflushed_count(), 0, "FIFO fully drained");
+        assert!(u.snapshot_unflushed(None).is_empty());
     }
 
     #[test]
