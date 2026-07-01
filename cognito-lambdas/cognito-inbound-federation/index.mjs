@@ -36,6 +36,34 @@ import {
 } from "@aws-sdk/client-cognito-identity-provider";
 
 const PLACEHOLDER = "-";
+
+// Reserved, non-deliverable base domain (RFC 2606 .invalid TLD) used to
+// synthesize a unique placeholder email when a federated IdP (e.g. LinkedIn,
+// whose email claim is OPTIONAL per the OIDC spec) doesn't supply one. The pool
+// marks email required AND uses it as the username alias, so federation can't
+// complete without a value. We mint a per-identity unique, provider-tagged
+// address of the shape "<username>@no-reply.<provider>.meko.invalid" (provider
+// parsed from the Cognito username, which is "<Provider>_<sub>" — e.g. linkedin
+// / github) and leave email_verified=false so it's never treated as a real,
+// verified address. The app gates the account and collects + verifies the
+// user's real email during onboarding, then overwrites both Cognito and the DB.
+//
+// IMPORTANT: the api_server detects these addresses by the "no-reply." host
+// prefix + ".meko.invalid" suffix (see service.isPlaceholderEmail) to drive the
+// "collect your email" onboarding gate. Keep the two in sync.
+const PLACEHOLDER_EMAIL_BASE_DOMAIN = "meko.invalid";
+
+// providerFromUsername parses the IdP/provider name out of a federated Cognito
+// username ("<Provider>_<sub>", e.g. "LinkedIn_abc" / "GitHub_123"), lowercased
+// and sanitized for use in a hostname. Falls back to "federated" when there's
+// no provider segment.
+function providerFromUsername(username) {
+  const u = String(username || "");
+  const sep = u.indexOf("_");
+  const provider = sep === -1 ? "" : u.slice(0, sep);
+  return provider.toLowerCase().replace(/[^a-z0-9-]/g, "") || "federated";
+}
+
 const cognito = new CognitoIdentityProviderClient({});
 
 // userExists reports whether `username` already has a profile in the pool.
@@ -54,20 +82,23 @@ async function userExists(userPoolId, username) {
 }
 
 export const handler = async (event) => {
-  // TEMP DIAGNOSTICS: log the event so we can see provider + which attributes
-  // arrived from the IdP (userInfo vs idToken).
-  console.log("INBOUND_FED_EVENT", JSON.stringify(event));
-
   if (event.triggerSource !== "InboundFederation_ExternalProvider") {
-    console.log("INBOUND_FED_BRANCH", "not external provider", event.triggerSource);
     return event;
   }
 
-  // Returning user: no-op. Leaving `userAttributesToMap` unset makes Cognito
-  // keep the stored attributes and update only what the IdP actually sent, so we
-  // never overwrite a corrected `family_name` with the placeholder again.
+  // Returning user: no-op. We return an explicit EMPTY `userAttributesToMap`
+  // (set below) so Cognito keeps the stored attributes and updates only what the
+  // IdP actually sent, so we never overwrite a corrected `family_name` with the
+  // placeholder again. (An empty map — not an unset/undefined one — is what
+  // makes this a true no-op; see the note on the assignment below.)
   if (await userExists(event.userPoolId, event.userName)) {
-    console.log("INBOUND_FED_BRANCH", "existing user; preserving attributes", event.userName);
+    console.log("INBOUND_FED_EXISTING_USER", event.userName);
+    // Documented no-op: returning an EMPTY map tells Cognito to keep the user's
+    // existing attributes unchanged. Returning undefined (or a partial map) is
+    // NOT a no-op — Cognito drops any attribute absent from userAttributesToMap,
+    // which would wipe a returning user's stored profile (e.g. a corrected
+    // family_name) on every sign-in. So we must set {} explicitly here.
+    event.response = { ...(event.response ?? {}), userAttributesToMap: {} };
     return event;
   }
 
@@ -99,7 +130,23 @@ export const handler = async (event) => {
     merged.name = `${merged.given_name} ${merged.family_name}`.trim() || PLACEHOLDER;
   }
 
+  // Email is required + the username alias, so a missing email (LinkedIn's
+  // email claim is optional) would fail federation outright. Synthesize a
+  // unique, non-deliverable placeholder from the Cognito username (already
+  // "<Provider>_<sub>", so unique per identity → no collisions) and force
+  // email_verified=false. The app detects this domain post-login and makes the
+  // user supply + verify their real email before granting access.
+  if (!merged.email) {
+    const provider = providerFromUsername(event.userName);
+    const localPart = String(event.userName || "user").replace(/[^A-Za-z0-9._-]/g, "_");
+    merged.email = `${localPart}@no-reply.${provider}.${PLACEHOLDER_EMAIL_BASE_DOMAIN}`;
+    merged.email_verified = "false";
+    console.log("INBOUND_FED_PLACEHOLDER_EMAIL", merged.email);
+  }
+
   event.response = { ...(event.response ?? {}), userAttributesToMap: merged };
-  console.log("INBOUND_FED_RETURN", JSON.stringify(event.response.userAttributesToMap));
+  // Log only the attribute KEYS we mapped (not values) to avoid writing the
+  // user's name/email into CloudWatch.
+  console.log("INBOUND_FED_MAPPED_ATTRS", Object.keys(merged).join(","));
   return event;
 };

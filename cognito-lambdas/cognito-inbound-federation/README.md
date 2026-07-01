@@ -50,13 +50,13 @@ overwrite the user's real name in Cognito on each login. The `AdminGetUser`
 check restricts placeholder injection to brand-new users; everyone else is a
 no-op, so Cognito and the local DB stay consistent.
 
-## Relationship to `cognito-presignup-link`
+## Relationship to `cognito-presignup-account-link`
 
 These are **different triggers** and both can be attached at once:
 
 | Trigger | Job | Runs |
 |---|---|---|
-| `cognito-presignup-link` (Pre sign-up) | link Google→existing email account | first federation only |
+| `cognito-presignup-account-link` (Pre sign-up) | link a federated identity → existing email account | first federation only |
 | `cognito-inbound-federation` (Inbound federation) | fill missing required attrs | every federated sign-in |
 
 A PreSignUp trigger can only set `autoConfirmUser` / `autoVerifyEmail` /

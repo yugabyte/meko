@@ -1,8 +1,9 @@
-# cognito-presignup-link
+# cognito-presignup-account-link
 
 A Cognito **PreSignUp** Lambda trigger that links federated identities (Google,
-GitHub, …) to an existing native account with the same **verified email**, so a
-user is always one account (one `sub`) regardless of how they sign in.
+GitHub, LinkedIn, …) to an existing native account with the same **verified
+email**, so a user is always one account (one `sub`) regardless of how they sign
+in.
 
 ## How it works
 
@@ -20,7 +21,7 @@ continues (a fresh user is created).
 ## Deploy (AWS Console)
 
 1. Lambda → Create function → Author from scratch
-   - Name: `meko-dev-cognito-presignup-link`
+   - Name: `meko-dev-cognito-presignup-account-link`
    - Runtime: Node.js 22.x
    - Paste `index.mjs` (handler stays `index.handler`).
 2. Configuration → Permissions → execution role → add inline policy:

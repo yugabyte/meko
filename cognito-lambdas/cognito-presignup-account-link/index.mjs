@@ -11,12 +11,13 @@ const client = new CognitoIdentityProviderClient({});
 // address (not a quoted local-part). Its job is a guard, not RFC validation.
 const EMAIL_RE = /^[^\s@"']+@[^\s@"']+\.[^\s@"']+$/;
 
-// Cognito PreSignUp trigger.
+// Cognito PreSignUp trigger (cognito-presignup-account-link).
 //
 // Runs just before Cognito creates a user. For *federated* first-time sign-ins
-// (Google, GitHub, ...) we look for an existing pool user with the same verified
-// email and link the external identity into it via AdminLinkProviderForUser.
-// This keeps one canonical account (one `sub`) regardless of login method.
+// (Google, GitHub, LinkedIn, ...) we look for an existing pool user with the
+// same verified email and link the external identity into it via
+// AdminLinkProviderForUser. This keeps one canonical account (one `sub`)
+// regardless of login method.
 //
 // Linking is gated on several checks — we never link unless ALL hold, otherwise
 // we fall through and let Cognito create a fresh, separate user for the
@@ -50,7 +51,7 @@ export const handler = async (event) => {
     const email = event.request.userAttributes?.email;
     const emailVerified = event.request.userAttributes?.email_verified === "true";
     // event.userName looks like "Google_1234567890" or "GitHub_42".
-    const [providerName, providerSub] = splitProviderUserName(event.userName);
+    const { providerName, providerSub } = splitFederatedUsername(event.userName);
 
     // Only link on a present, *verified*, well-formed email. The link welds the
     // incoming external identity into an existing account that owns this email,
@@ -134,12 +135,26 @@ export const handler = async (event) => {
   }
 };
 
-function splitProviderUserName(userName) {
-  const idx = userName.indexOf("_");
-  // No underscore → treat the whole thing as the provider sub (avoids
-  // slice(0, -1) lopping off the last char).
-  if (idx === -1) {
-    return ["", userName];
+// Cognito names every federated user "<ProviderName>_<providerSub>", e.g.
+// "Google_104657830809110157497" or "LinkedIn_782bbtaQ". ProviderName is
+// whatever the IdP was called in the user-pool config; providerSub is that
+// IdP's own subject identifier. We split on the FIRST underscore only: provider
+// names contain none, but a provider's sub can, so splitting on a later
+// underscore would corrupt the sub.
+function splitFederatedUsername(cognitoUsername) {
+  const firstUnderscore = cognitoUsername.indexOf("_");
+  // No underscore → not in "<provider>_<sub>" shape. Treat the whole value as
+  // the sub with an empty provider, rather than lopping off a character.
+  // for example, "104657830809110157497" -> { providerName: "", providerSub: "104657830809110157497" }
+  if (firstUnderscore === -1) {
+    return { providerName: "", providerSub: cognitoUsername };
   }
-  return [userName.slice(0, idx), userName.slice(idx + 1)];
+  let tmpProviderName = cognitoUsername.slice(0, firstUnderscore);
+  if (tmpProviderName.toLowerCase() == "google") {
+    tmpProviderName = "Google";
+  }
+  return {
+    providerName: tmpProviderName,
+    providerSub: cognitoUsername.slice(firstUnderscore + 1),
+  };
 }
