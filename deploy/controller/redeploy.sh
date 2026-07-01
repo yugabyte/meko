@@ -11,17 +11,20 @@
 #   - the namespace
 #   - the backing YugabyteDB (the controller + endpoints connect to it; the controller
 #     and storage_controller schemas live there and persist across re-deploys)
-#   - the image pull secret (to pull the controller + endpoint images from ECR)
+#
+# It DOES (re)mint the ECR image pull secret each run (the ~12h token would otherwise
+# go stale), resolving AWS creds via deploy/ecr-creds.sh (env keys > AWS_BOT_JSON >
+# SSO). The amp/controller + amp/endpoint images must already be pushed to ECR.
 #
 # The images must already be pushed to ECR. To rebuild first:
-#   make controller-bundle && docker build -f deploy/controller/Dockerfile -t <repo>/controller/controller:<tag> . && docker push <repo>/controller/controller:<tag>
+#   make controller-bundle && docker build -f deploy/controller/Dockerfile -t <repo>/amp/controller:<tag> . && docker push <repo>/amp/controller:<tag>
 # then run this with CONTROLLER_TAG=<tag>.
 #
 # Usage:  deploy/controller/redeploy.sh
 #   override any default via env, e.g.:  NS=amp CONTROLLER_TAG=latest deploy/controller/redeploy.sh
 #   namespace also reads AMP_NAMESPACE (NS takes precedence); default is amp.
-#   image repo paths default to controller/controller + controller/endpoint;
-#   for the amp/* repos:  CONTROLLER_IMAGE_REPO=amp/controller ENDPOINT_IMAGE_REPO=amp/endpoint ...
+#   image repo paths default to amp/controller + amp/endpoint (override via
+#   CONTROLLER_IMAGE_REPO / ENDPOINT_IMAGE_REPO).
 #
 # Exposure (avoid slow cloud LBs):
 #   CONTROLLER_EXPOSE   nodeport | internal-lb | external-lb | none   (default: internal-lb)
@@ -39,13 +42,18 @@
 # from scratch and then deploy the controller, use deploy/up.sh instead.
 set -euo pipefail
 
+# Shared ECR credential resolution + pull-secret (re)mint (see deploy/ecr-creds.sh).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../ecr-creds.sh"
+
 # --- configuration (override via environment) ---
 # Namespace: NS wins, then AMP_NAMESPACE, then the default.
 NS="${NS:-${AMP_NAMESPACE:-amp}}"
 PULL_SECRET="${PULL_SECRET:-pull-secret}"
 ECR="${ECR:-454529406029.dkr.ecr.us-west-2.amazonaws.com}"
-CONTROLLER_TAG="${CONTROLLER_TAG:-20260618-221855}"   # controller/controller image tag
-ENDPOINT_TAG="${ENDPOINT_TAG:-20260618-184649}"       # controller/endpoint image tag endpoints run
+REGION="${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-west-2}}}"  # for `aws ecr get-login-password`
+CONTROLLER_TAG="${CONTROLLER_TAG:-20260618-221855}"   # amp/controller image tag
+ENDPOINT_TAG="${ENDPOINT_TAG:-20260618-184649}"       # amp/endpoint image tag endpoints run
 # Backing YugabyteDB (reused; not created here).
 YB_HOST_PORTS="${YB_HOST_PORTS:-yb-tserver.${NS}.svc.cluster.local:5433}"
 DB_URL="${DB_URL:-postgres://yugabyte@yb-tserver.${NS}.svc.cluster.local:5433/yb_storage?sslmode=disable}"
@@ -76,10 +84,10 @@ ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
 ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS:-}"
 ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
 
-# Image repo paths within the registry. Override for the amp/* ECR repos, e.g.
-# CONTROLLER_IMAGE_REPO=amp/controller ENDPOINT_IMAGE_REPO=amp/endpoint.
-CONTROLLER_IMAGE_REPO="${CONTROLLER_IMAGE_REPO:-controller/controller}"
-ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO:-controller/endpoint}"
+# Image repo paths within the registry; the canonical repos are amp/controller +
+# amp/endpoint. Override via CONTROLLER_IMAGE_REPO / ENDPOINT_IMAGE_REPO if needed.
+CONTROLLER_IMAGE_REPO="${CONTROLLER_IMAGE_REPO:-amp/controller}"
+ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO:-amp/endpoint}"
 
 CONTROLLER_IMAGE="${ECR}/${CONTROLLER_IMAGE_REPO}:${CONTROLLER_TAG}"
 ENDPOINT_REPO="${ECR}/${ENDPOINT_IMAGE_REPO}"
@@ -87,9 +95,12 @@ ENDPOINT_REPO="${ECR}/${ENDPOINT_IMAGE_REPO}"
 echo ">> namespace=${NS}  controller=${CONTROLLER_IMAGE}  endpoint=${ENDPOINT_REPO}:${ENDPOINT_TAG}"
 echo ">> endpoint storage class=${ENDPOINT_STORAGE_CLASS:-<emptyDir>}  disk size=${ENDPOINT_DISK_SIZE}"
 
-# Sanity: warn (don't fail) if expected prerequisites are missing.
+# Sanity: warn (don't fail) if the namespace is missing (up.sh / an admin creates it).
 kubectl get ns "${NS}" >/dev/null 2>&1 || echo "WARN: namespace ${NS} not found"
-kubectl -n "${NS}" get secret "${PULL_SECRET}" >/dev/null 2>&1 || echo "WARN: pull secret ${PULL_SECRET} not found in ${NS}"
+# (Re)mint the ECR pull secret so a redeploy into an idle namespace doesn't
+# ImagePullBackOff on a stale (~12h) token. Resolves AWS creds via ecr-creds.sh.
+echo ">> ECR pull secret '${PULL_SECRET}' (refreshing — the ECR token is ~12h)"
+ensure_pull_secret "${NS}" "${ECR}" "${PULL_SECRET}" "${REGION}"
 
 # Build the external-facing controller Service per CONTROLLER_EXPOSE. The
 # in-cluster ClusterIP Service (amp-controller) is always created in the manifest

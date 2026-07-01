@@ -115,15 +115,18 @@ only.)
 the ServiceAccount + RBAC, the Deployment (wired for the Kubernetes/Helm endpoint
 driver, `AMP_DEPLOY_DRIVER=kubernetes`), the in-cluster Service (the API + the SC
 port endpoints register against), and an external-facing Service for the UI/API
-per `CONTROLLER_EXPOSE`. It reuses an existing namespace, backing YugabyteDB, and
-image pull secret; override defaults via env:
+per `CONTROLLER_EXPOSE`. It reuses an existing namespace + backing YugabyteDB and
+(re)mints the ECR image pull secret each run; override defaults via env:
 
 ```sh
-NS=amp CONTROLLER_TAG=latest deploy/controller/redeploy.sh   # namespace also reads AMP_NAMESPACE (default amp)
+NS=amp CONTROLLER_TAG=<tag> ENDPOINT_TAG=<tag> deploy/controller/redeploy.sh
+#   (namespace also reads AMP_NAMESPACE, default amp)
 
-# point at the amp/* ECR repos instead of the default controller/* paths:
-CONTROLLER_IMAGE_REPO=amp/controller ENDPOINT_IMAGE_REPO=amp/endpoint \
-  CONTROLLER_TAG=<tag> ENDPOINT_TAG=<tag> deploy/controller/redeploy.sh
+# Images default to amp/controller + amp/endpoint at
+# 454529406029.dkr.ecr.us-west-2.amazonaws.com (override via CONTROLLER_IMAGE_REPO /
+# ENDPOINT_IMAGE_REPO). redeploy.sh (re)mints the `dshubin_bot`-backed `pull-secret`
+# each run (its ECR token expires ~12h), resolving AWS creds via ../ecr-creds.sh
+# (env keys > AWS_BOT_JSON > SSO) — see ../README.md "ECR access & the pull secret".
 ```
 
 **Exposure** (defaults avoid slow per-Service cloud LBs):

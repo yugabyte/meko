@@ -3,8 +3,9 @@
 # Bring up the whole amp stack on Kubernetes from scratch, in one shot:
 #
 #   1. namespace
-#   2. ECR image pull secret  (aws ecr get-login-password | docker login, then a
-#      k8s docker-registry secret so the cluster can pull amp/controller + amp/endpoint)
+#   2. ECR image pull secret  ((re)minted from the dshubin_bot bot account each run —
+#      the ECR token expires ~12h, so it's refreshed every time — so the cluster can
+#      pull amp/controller + amp/endpoint)
 #   3. a single-node YugabyteDB (yugabyted) StatefulSet + headless Service
 #   4. the yb_storage database (the controller connects to it at startup)
 #   5. the amp controller (controller + managed storage_controller, Helm endpoint
@@ -14,14 +15,16 @@
 #
 # This is the from-nothing companion to deploy/controller/redeploy.sh — that
 # script (re-)deploys only the controller and assumes the namespace, YugabyteDB,
-# and pull secret already exist; this one creates all three first.
+# and pull secret already exist; this one creates the namespace + YugabyteDB and
+# (re)mints the pull secret first.
 #
 # Idempotent: every step is create-or-apply, so re-running converges. Re-running
 # does NOT wipe YugabyteDB data (the StatefulSet keeps its PVC).
 #
-# Prereqs: kubectl (pointed at the target cluster), helm, docker, aws (with
-# credentials for the ECR account), and the amp/controller + amp/endpoint images
-# already pushed to ECR.
+# Prereqs: kubectl (pointed at the target cluster), helm, docker, aws (the
+# dshubin_bot bot account creds in the environment — AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY / AWS_DEFAULT_REGION; see deploy/README.md "ECR access &
+# the pull secret"), and the amp/controller + amp/endpoint images already in ECR.
 #
 # Usage:  deploy/up.sh
 #   override any default via env, e.g.:
@@ -32,11 +35,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Shared ECR credential resolution + pull-secret (re)mint (see deploy/ecr-creds.sh).
+source "${SCRIPT_DIR}/ecr-creds.sh"
 
 # --- configuration (override via environment) ---
 # Namespace: NS wins, then AMP_NAMESPACE, then the default.
 NS="${NS:-${AMP_NAMESPACE:-amp}}"
-REGION="${REGION:-us-west-2}"
+REGION="${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-west-2}}}"
 ECR="${ECR:-454529406029.dkr.ecr.us-west-2.amazonaws.com}"
 PULL_SECRET="${PULL_SECRET:-pull-secret}"
 
@@ -92,16 +97,13 @@ say "namespace ${NS}"
 kubectl create namespace "${NS}" --dry-run=client -o yaml | kubectl apply -f -
 
 # --- 2. ECR pull secret ---
-# Log docker in to ECR (lets local `docker pull` work too) and mint/refresh a
-# k8s docker-registry secret from the same token so the cluster can pull.
-say "ECR pull secret '${PULL_SECRET}'"
-ECR_TOKEN="$(aws ecr get-login-password --region "${REGION}")"
-docker login --username AWS --password-stdin "${ECR}" <<<"${ECR_TOKEN}" >/dev/null
-kubectl -n "${NS}" create secret docker-registry "${PULL_SECRET}" \
-  --docker-server="${ECR}" \
-  --docker-username=AWS \
-  --docker-password="${ECR_TOKEN}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+# The docker-registry secret is built from an `aws ecr get-login-password` token
+# (~12h), so refresh it every run. ensure_pull_secret resolves the AWS creds
+# (env keys > AWS_BOT_JSON > SSO — see deploy/ecr-creds.sh) and does an idempotent
+# apply. For an idle namespace between runs, re-run this (or a CronJob) — see
+# deploy/README.md "ECR access & the pull secret".
+say "ECR pull secret '${PULL_SECRET}' (refreshing — the ECR token is ~12h)"
+ensure_pull_secret "${NS}" "${ECR}" "${PULL_SECRET}" "${REGION}"
 
 # --- 3. single-node YugabyteDB (yugabyted) ---
 say "YugabyteDB (single-node yugabyted)"
@@ -234,6 +236,7 @@ say "amp controller (controller=${CONTROLLER_IMAGE_REPO}:${CONTROLLER_TAG}  endp
 NS="${NS}" \
 PULL_SECRET="${PULL_SECRET}" \
 ECR="${ECR}" \
+REGION="${REGION}" \
 CONTROLLER_IMAGE_REPO="${CONTROLLER_IMAGE_REPO}" \
 ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO}" \
 CONTROLLER_TAG="${CONTROLLER_TAG}" \

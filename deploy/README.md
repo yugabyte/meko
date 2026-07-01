@@ -25,9 +25,10 @@ prints the controller UI URL. It is the from-scratch companion to
 controller and assumes its prerequisites already exist). In order, `up.sh`:
 
 1. creates the **namespace**;
-2. logs Docker in to ECR (`aws ecr get-login-password | docker login`) and mints a
-   k8s **docker-registry pull secret** from the same token, so the cluster can pull
-   `amp/controller` + `amp/endpoint`;
+2. **(re)mints the docker-registry pull secret** from the `dshubin_bot` bot account
+   so the cluster can pull `amp/controller` + `amp/endpoint`; the secret's ECR token
+   expires ~12 h, so `up.sh` refreshes it every run (see [Refreshing the pull
+   secret](#refreshing-the-pull-secret));
 3. deploys a **single-node YugabyteDB** (`yugabyted` StatefulSet + headless Service
    + a PVC) and waits for it to be ready;
 4. creates the **`yb_storage` database** (the controller's `db.Connect` targets it
@@ -38,7 +39,8 @@ It is idempotent (create-or-apply throughout) and does **not** wipe YugabyteDB
 data on re-run (the StatefulSet keeps its PVC).
 
 ```sh
-# prereqs: kubectl (pointed at the target cluster), helm, docker, aws (with ECR creds)
+# prereqs: kubectl (target cluster), helm, docker, aws (the dshubin_bot creds in
+#          the environment — see "ECR access & the pull secret" below)
 deploy/up.sh
 
 # common overrides:
@@ -72,6 +74,70 @@ for both. The UI/API is unauthenticated — do not expose it publicly.
 The **controller layer** — the `controller` plus the shared `storage_controller`
 this endpoint deliberately omits — has its own bundled image under
 [`controller/`](controller/README.md).
+
+## ECR access & the pull secret
+
+Images live in ECR at **`454529406029.dkr.ecr.us-west-2.amazonaws.com`**, repos
+**`amp/controller`** and **`amp/endpoint`** (full ref
+`454529406029.dkr.ecr.us-west-2.amazonaws.com/amp/controller:<tag>`). `up.sh` and
+`redeploy.sh` default to these repos.
+
+ECR access — both for pushing images from a dev box / CI and for the cluster's
+pull secret — uses a dedicated **`dshubin_bot`** IAM bot account, not a personal
+SSO session (which expired mid-deploy in the past). The bot's **static access keys
+don't expire**, so you can always authenticate and **refresh** the pull secret
+without an SSO round-trip. That matters because the ECR *login password* the pull
+secret is built from **is only valid ~12 h** — the secret must be refreshed
+periodically (see [Refreshing the pull secret](#refreshing-the-pull-secret) below).
+
+1. **Bot account (one-time, by an admin).** Create the `dshubin_bot` IAM user with
+   ECR pull (and push, for publishing images) on the `amp/*` repos and issue it an
+   access key.
+2. **Provide the bot's credentials to the deploy scripts.** `up.sh` and `redeploy.sh`
+   (via [`ecr-creds.sh`](ecr-creds.sh)) resolve AWS credentials in priority order:
+   `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` already in the environment → else
+   `AWS_BOT_JSON` pointing at a JSON file holding the bot's keys (e.g. the
+   `aws iam create-access-key` output for `dshubin_bot`; the scripts parse the access
+   key + secret out of it) → else the ambient AWS config (an `aws sso login` session).
+   Set `AWS_DEFAULT_REGION` too (used for `get-login-password`; defaults to `us-west-2`).
+   ```sh
+   # option A — keys directly in the environment:
+   export AWS_ACCESS_KEY_ID=<dshubin_bot access key> AWS_SECRET_ACCESS_KEY=<secret>
+   # option B — a JSON keys file (e.g. `aws iam create-access-key` output):
+   export AWS_BOT_JSON=/path/to/dshubin_bot-keys.json
+   export AWS_DEFAULT_REGION=us-west-2
+   ```
+3. **Log Docker in to ECR** (for `docker push` / `docker pull` from this machine):
+   ```sh
+   aws ecr get-login-password --region "$AWS_DEFAULT_REGION" \
+     | docker login --username AWS --password-stdin 454529406029.dkr.ecr.us-west-2.amazonaws.com
+   ```
+
+### Refreshing the pull secret
+
+Each namespace has a docker-registry secret named **`pull-secret`** built from
+`aws ecr get-login-password` — whose token **expires ~12 h after it's minted**. So
+it isn't "set once and forget": a namespace left idle longer than that will
+`ImagePullBackOff` until the secret is refreshed. **Both `up.sh` and `redeploy.sh`
+refresh it on every run** (resolving the bot creds via [`ecr-creds.sh`](ecr-creds.sh)),
+so a normal (re)deploy always mints a fresh token. Refresh it manually only when a
+namespace has sat idle *between* deploys:
+
+To create **or refresh** it in a namespace — idempotent (`apply` updates in place),
+run with the `dshubin_bot` creds in the environment:
+
+```sh
+kubectl -n <ns> create secret docker-registry pull-secret \
+  --docker-server=454529406029.dkr.ecr.us-west-2.amazonaws.com \
+  --docker-username=AWS \
+  --docker-password="$(aws ecr get-login-password --region "$AWS_DEFAULT_REGION")" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+For a long-running dev deployment, run that on a schedule so it never goes stale —
+e.g. an in-cluster CronJob (every ~6 h, mounting the `dshubin_bot` keys) that runs
+the same command. That's the durable "doesn't time out" answer: the ECR token
+can't be made long-lived, so keep re-minting it from the bot account.
 
 ## Smoke test — `smoke-test.sh`
 

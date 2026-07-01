@@ -205,8 +205,12 @@ before redeploying.
 - **Rolling updates briefly run two controllers (two managed storage_controllers) on one DB.** With
   `replicas: 1` + the default RollingUpdate (`maxSurge` makes 2 pods during the swap). If that ever
   causes trouble, `kubectl -n "$NS" delete deploy amp-controller` then redeploy for a clean single pod.
-- **The pull secret is an ECR token that expires (~12h).** A namespace left overnight will
-  `ImagePullBackOff`. `deploy/up.sh` refreshes it (`aws ecr get-login-password | kubectl create secret`).
+- **`ImagePullBackOff` → refresh the `pull-secret`.** It's built from an ECR login
+  token that **expires ~12h**, so a namespace idle between deploys goes stale. `up.sh`
+  and `redeploy.sh` both re-mint it each run (creds via `deploy/ecr-creds.sh`);
+  otherwise refresh it with the `dshubin_bot` creds via the idempotent `kubectl create
+  secret docker-registry … | kubectl apply -f -` one-liner in `deploy/README.md`
+  ("Refreshing the pull secret").
 - **Stale endpoint Helm releases pile up** from failed `create_endpoint` tasks (left `pending-install`).
   Clean up: `for r in $(helm -n "$NS" list -aq | grep '^yb-ep-'); do helm -n "$NS" uninstall "$r"; done`.
 

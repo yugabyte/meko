@@ -146,6 +146,31 @@ handoff doc.)
 - See [`architecture/high-level.md`](architecture/high-level.md) §
   "Topology in our current dev cluster" for ports / commands.
 
+## Kubernetes deploy (ECR images + pull secret)
+
+When asked about deploying amp on Kubernetes — the image repos or the pull secret —
+the canonical details are in [`deploy/README.md`](deploy/README.md) ("One-shot
+bring-up — `up.sh`" + "ECR access & the pull secret"). In short:
+
+- **Images:** registry `454529406029.dkr.ecr.us-west-2.amazonaws.com`, repos
+  **`amp/controller`** and **`amp/endpoint`**. Both `deploy/up.sh` (from nothing)
+  and `deploy/controller/redeploy.sh` (controller-only) default to these.
+- **ECR auth:** the **`dshubin_bot`** IAM bot account (static keys — they don't
+  expire, unlike a personal SSO session). The deploy scripts resolve AWS creds via
+  [`deploy/ecr-creds.sh`](deploy/ecr-creds.sh) in priority order: `AWS_ACCESS_KEY_ID`
+  + `AWS_SECRET_ACCESS_KEY` in the env → else `AWS_BOT_JSON` (a JSON keys file, e.g.
+  `aws iam create-access-key` output) → else the ambient config (`aws sso login`).
+  Set `AWS_DEFAULT_REGION` too. For a local docker login:
+  `aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin 454529406029.dkr.ecr.us-west-2.amazonaws.com`.
+- **Pull secret:** a namespace-scoped `pull-secret` minted from `dshubin_bot`. Its
+  ECR token **expires ~12h**, so it must be **refreshed** (a stale one → the cluster
+  can't pull): **both `up.sh` and `redeploy.sh` re-mint it each run**; for a namespace
+  idle *between* deploys, re-run the idempotent `kubectl create secret docker-registry
+  … | kubectl apply -f -` one-liner (or a CronJob) in `deploy/README.md` ("Refreshing
+  the pull secret").
+- To debug a deploy (endpoint won't come up, a task fails), see
+  [`runbooks/controller_runbook.md`](runbooks/controller_runbook.md).
+
 ## Outstanding work / known sharp edges
 
 - `yb_light_local start` spawns SC + SK + PS via `JoinSet` with no ordering

@@ -38,9 +38,10 @@ The controller is a **single bundled container** — `controller` (the control-p
 - an **internal LoadBalancer** Service (`amp-controller-lb`) for the UI/API on a
   private VPC IP (the SC port stays on the ClusterIP only).
 
-It does **not** create the namespace, the backing YugabyteDB, or the image pull
-secret — those pre-exist (see Assumptions). Everything is env-overridable
-(`NS`, `CONTROLLER_TAG`, `ENDPOINT_TAG`, `YB_HOST_PORTS`, `LB_ANNOTATIONS`, …).
+It does **not** create the namespace or the backing YugabyteDB — those pre-exist
+(see Assumptions) — but it **does (re)mint the image pull secret** each run.
+Everything is env-overridable (`NS`, `CONTROLLER_TAG`, `ENDPOINT_TAG`,
+`YB_HOST_PORTS`, `LB_ANNOTATIONS`, …).
 
 ## The shape — one endpoint = one Helm release = one pod
 
@@ -213,9 +214,14 @@ The deploy is **demo-grade**. What it currently takes for granted:
   universe (`yb_storage`, schemas `controller` / `storage_controller` / `pageserver` /
   `safekeeper`). State **persists across re-deploys** — `redeploy.sh` re-attaches
   to it (migrations are idempotent); deleting the controller does not lose data.
-- **Pre-existing namespace and image pull secret.** Both must exist before
-  `redeploy.sh`; it warns but does not create them. Everything lives in a
-  **single namespace** (no cross-namespace deploys).
+- **Pre-existing namespace; the pull secret is (re)minted.** The namespace must exist
+  before `redeploy.sh` (it warns if absent). The `pull-secret` is **(re)minted on
+  every run** by both `up.sh` and `redeploy.sh` from the `dshubin_bot` bot account
+  (its ECR token expires ~12h; creds resolved via `deploy/ecr-creds.sh` — env keys >
+  `AWS_BOT_JSON` > SSO; see `deploy/README.md` "ECR access & the pull secret"). A
+  stale/missing secret is the usual cause of `ImagePullBackOff`. Images come from
+  `amp/controller` + `amp/endpoint` at `454529406029.dkr.ecr.us-west-2.amazonaws.com`.
+  Everything lives in a **single namespace** (no cross-namespace deploys).
 - **No authentication.** The storage controller runs `--dev` (no auth) and the
   control-plane API + UI are unauthenticated. Mitigated only by **internal
   LoadBalancers** (private VPC IPs, GKE `…/load-balancer-type: Internal`) — not by
