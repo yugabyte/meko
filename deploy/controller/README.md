@@ -204,8 +204,8 @@ the storage-controller knobs the image cares about:
 
 The controller is deployed via the
 [`yb-amp-controller`](../helm/yb-amp-controller) Helm chart (mirroring
-[`helm/yb-light-endpoint`](../helm/yb-light-endpoint)), which packages **both**
-the controller and the MCP server. [`redeploy.sh`](redeploy.sh) is now a
+[`helm/yb-light-endpoint`](../helm/yb-light-endpoint)), which packages the
+controller, the MCP server, and the web UI. [`redeploy.sh`](redeploy.sh) is now a
 `helm upgrade --install yb-amp-controller …` that maps its env interface onto
 chart values; Helm owns the RBAC, the Deployment, and the Service(s) (and prunes
 leftover Services on an exposure-mode switch).
@@ -217,3 +217,14 @@ ships as its **own pod** in the same chart: a separate `amp-controller-mcp`
 Deployment + Service, running the `http` transport and pointed at the controller's
 in-cluster Service. It is gated by **`mcp.enabled`** (default `true`); set
 `mcp.enabled=false` for a controller-only release.
+
+The **web UI** (the [`amp_ui`](../../amp_ui/README.md) React SPA, built into an
+nginx image — see [`amp_ui/Dockerfile`](../../amp_ui/Dockerfile)) likewise ships
+as its **own pod**: a separate `amp-controller-ui` Deployment + Service. nginx
+serves the static build and reverse-proxies `/api/` to the controller's
+in-cluster Service (`CONTROLLER_URL`), so the SPA stays same-origin — no CORS.
+It is exposed the same way as the controller (`CONTROLLER_EXPOSE`) and gated by
+**`ui.enabled`** (default `true`); set `ui.enabled=false` to drop it (the
+controller still serves its own built-in console at `/`). Its image
+(`amp/controller-ui`) is built and pushed separately; `redeploy.sh` exposes
+`UI_ENABLED` / `UI_IMAGE_REPO` / `UI_TAG` (the tag defaults to the controller's).

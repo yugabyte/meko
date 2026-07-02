@@ -104,12 +104,15 @@ A repeatable one-shot install of a whole AMP **foundation** onto a fresh k8s clu
 **Components:** RF3 YugabyteDB universe (the durable backend — AMP doesn't run YB itself;
 the endpoint chart just points at one via `yugabyte.hostPorts`) · amp controller
 (`deploy/controller`, see `controller/architecture/ac-k8s-deploy.md`) · MCP server (#114,
-own pod) · UI (`amp_ui`) · namespace + RBAC + pull secret + networking.
+own pod) · UI (`amp_ui`, own pod) · namespace + RBAC + pull secret + networking.
 
-**Gap today:** only the endpoint chart (`deploy/helm/yb-light-endpoint`) exists;
-`deploy/controller/redeploy.sh` brings up the controller but explicitly does **not** create
-the namespace, backing YB, or pull secret. No single workflow stands up the whole
-foundation. Related: #81 (yb_light_local deploy self-sufficiency).
+**Gap today:** the `deploy/helm/yb-amp-controller` chart now packages the controller, the
+MCP server, and the `amp_ui` UI as their own pods (RBAC + Deployments + Services), and the
+endpoint chart (`deploy/helm/yb-light-endpoint`) covers endpoints — but
+`deploy/controller/redeploy.sh` still assumes the namespace, backing YB, and pull secret
+already exist. `deploy/up.sh` stands up a *single-node* YB + namespace + pull secret for dev;
+no single workflow provisions the productized RF3 foundation. Related: #81 (yb_light_local
+deploy self-sufficiency).
 
 ---
 

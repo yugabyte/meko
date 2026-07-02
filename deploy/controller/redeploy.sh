@@ -22,7 +22,8 @@
 #
 # The images must already be pushed to ECR. To rebuild first:
 #   make controller-bundle && docker build -f deploy/controller/Dockerfile -t <repo>/amp/controller:<tag> . && docker push <repo>/amp/controller:<tag>
-# then run this with CONTROLLER_TAG=<tag>.
+#   docker build -t <repo>/amp/controller-ui:<tag> amp_ui && docker push <repo>/amp/controller-ui:<tag>
+# then run this with CONTROLLER_TAG=<tag> (UI_TAG defaults to it).
 #
 # Usage:  deploy/controller/redeploy.sh
 #   override any default via env, e.g.:  NS=amp CONTROLLER_TAG=latest deploy/controller/redeploy.sh
@@ -46,6 +47,11 @@
 # reaching the controller over in-cluster Service DNS, and exposed the same way
 # as the controller (CONTROLLER_EXPOSE). Toggle with MCP_ENABLED; image via
 # MCP_IMAGE_REPO / MCP_TAG (defaults alongside the controller image).
+#
+# UI: the amp_ui SPA (nginx), its own pod (amp-controller-ui), reverse-proxying
+# /api/ to the controller over in-cluster Service DNS, and exposed the same way
+# as the controller (CONTROLLER_EXPOSE). Toggle with UI_ENABLED; image via
+# UI_IMAGE_REPO / UI_TAG (defaults alongside the controller image).
 #
 # To stand up the prerequisites (namespace, pull secret, single-node YugabyteDB)
 # from scratch and then deploy the controller, use deploy/up.sh instead.
@@ -100,11 +106,18 @@ CONTROLLER_IMAGE_REPO="${CONTROLLER_IMAGE_REPO:-amp/controller}"
 ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO:-amp/endpoint}"
 
 # MCP server: its own pod in this chart. MCP_ENABLED toggles it; the image
-# defaults to amp/controller-mcp in the same registry, at MCP_TAG (which
-# defaults to the controller tag so the two roll together).
+# defaults to amp/mcp in the same registry, at MCP_TAG (which defaults to the
+# controller tag so the two roll together).
 MCP_ENABLED="${MCP_ENABLED:-true}"
-MCP_IMAGE_REPO="${MCP_IMAGE_REPO:-amp/controller-mcp}"
+MCP_IMAGE_REPO="${MCP_IMAGE_REPO:-amp/mcp}"
 MCP_TAG="${MCP_TAG:-${CONTROLLER_TAG}}"
+
+# UI: its own pod in this chart. UI_ENABLED toggles it; the image defaults to
+# amp/controller-ui in the same registry, at UI_TAG (which defaults to the
+# controller tag so they roll together).
+UI_ENABLED="${UI_ENABLED:-true}"
+UI_IMAGE_REPO="${UI_IMAGE_REPO:-amp/controller-ui}"
+UI_TAG="${UI_TAG:-${CONTROLLER_TAG}}"
 
 # Validate exposure mode early (the chart also validates, but fail fast here).
 case "${CONTROLLER_EXPOSE}" in
@@ -120,9 +133,10 @@ esac
 CONTROLLER_IMAGE_REPOSITORY="${ECR}/${CONTROLLER_IMAGE_REPO}"
 ENDPOINT_IMAGE_REPOSITORY="${ECR}/${ENDPOINT_IMAGE_REPO}"
 MCP_IMAGE_REPOSITORY="${ECR}/${MCP_IMAGE_REPO}"
+UI_IMAGE_REPOSITORY="${ECR}/${UI_IMAGE_REPO}"
 
 echo ">> namespace=${NS}  controller=${CONTROLLER_IMAGE_REPOSITORY}:${CONTROLLER_TAG}  endpoint=${ENDPOINT_IMAGE_REPOSITORY}:${ENDPOINT_TAG}"
-echo ">> mcp=${MCP_ENABLED} (${MCP_IMAGE_REPOSITORY}:${MCP_TAG})  expose=${CONTROLLER_EXPOSE}"
+echo ">> mcp=${MCP_ENABLED} (${MCP_IMAGE_REPOSITORY}:${MCP_TAG})  ui=${UI_ENABLED} (${UI_IMAGE_REPOSITORY}:${UI_TAG})  expose=${CONTROLLER_EXPOSE}"
 echo ">> endpoint storage class=${ENDPOINT_STORAGE_CLASS:-<emptyDir>}  disk size=${ENDPOINT_DISK_SIZE}"
 
 # Sanity: warn (don't fail) if the namespace is missing (up.sh / an admin creates it).
@@ -148,6 +162,9 @@ HELM_SET=(
   "mcp.enabled=${MCP_ENABLED}"
   "mcp.image.repository=${MCP_IMAGE_REPOSITORY}"
   "mcp.image.tag=${MCP_TAG}"
+  "ui.enabled=${UI_ENABLED}"
+  "ui.image.repository=${UI_IMAGE_REPOSITORY}"
+  "ui.image.tag=${UI_TAG}"
 )
 
 # --set-string for the DSN ('?' + '=' would be mis-tokenized by --set). The
@@ -210,6 +227,9 @@ kubectl -n "${NS}" rollout status deploy/amp-controller --timeout=180s
 if [ "${MCP_ENABLED}" = "true" ]; then
   kubectl -n "${NS}" rollout status deploy/amp-controller-mcp --timeout=180s
 fi
+if [ "${UI_ENABLED}" = "true" ]; then
+  kubectl -n "${NS}" rollout status deploy/amp-controller-ui --timeout=180s
+fi
 
 echo ">> amp controller is up. Access (UI at /, API under /api/v1):"
 case "${CONTROLLER_EXPOSE}" in
@@ -231,6 +251,24 @@ case "${CONTROLLER_EXPOSE}" in
     ;;
 esac
 echo "   or port-forward:       kubectl -n ${NS} port-forward svc/amp-controller 8080:8080   then http://localhost:8080"
+if [ "${UI_ENABLED}" = "true" ]; then
+  echo ">> amp_ui SPA is up (its own pod, proxies /api/ to the controller):"
+  case "${CONTROLLER_EXPOSE}" in
+    internal-lb|external-lb)
+      UILBIP="$(kubectl -n "${NS}" get svc amp-controller-ui-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+      if [ -n "${UILBIP}" ]; then
+        echo "   ${CONTROLLER_EXPOSE} (UI):  http://${UILBIP}"
+      else
+        echo "   ${CONTROLLER_EXPOSE} IP: still provisioning — check: kubectl -n ${NS} get svc amp-controller-ui-lb -w"
+      fi
+      ;;
+    nodeport)
+      UINP="$(kubectl -n "${NS}" get svc amp-controller-ui-np -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
+      echo "   NodePort (UI):  http://<any-node-ip>:${UINP:-<pending>}   (reachable at any node IP)"
+      ;;
+  esac
+  echo "   or port-forward:       kubectl -n ${NS} port-forward svc/amp-controller-ui 8081:80   then http://localhost:8081"
+fi
 if [ "${MCP_ENABLED}" = "true" ]; then
   echo "   MCP server (HTTP /mcp): kubectl -n ${NS} port-forward svc/amp-controller-mcp 8000:8000   then http://localhost:8000/mcp"
 fi

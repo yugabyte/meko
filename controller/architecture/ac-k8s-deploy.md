@@ -1,7 +1,7 @@
 # controller — Kubernetes endpoint deploy
 
 **Status:** Current (demo-grade — see Assumptions)
-**Last updated:** 2026-06-24
+**Last updated:** 2026-07-01
 
 How the **amp controller** runs on Kubernetes and deploys compute **endpoints**
 there ([#108](https://github.com/yugabyte/yb-light/issues/108)). The k8s deployer
@@ -24,7 +24,9 @@ The controller is a **single bundled container** — `controller` (the control-p
 `helm` CLI and the `yb-light-endpoint` chart baked into the image.
 
 [`deploy/controller/redeploy.sh`](../../deploy/controller/redeploy.sh) is the canonical
-(re-)deploy. It is idempotent (`kubectl apply`) and lays down:
+(re-)deploy. It is idempotent (`helm upgrade --install` of the
+[`yb-amp-controller`](../../deploy/helm/yb-amp-controller) chart, mapping its env
+interface onto chart values) and lays down:
 
 - a **ServiceAccount** + namespaced **Role/RoleBinding** — the controller drives
   Helm to create/delete endpoint Deployments, Services, ConfigMaps, Secrets (and
@@ -36,7 +38,15 @@ The controller is a **single bundled container** — `controller` (the control-p
 - an in-cluster **Service** (`amp-controller`, ClusterIP) exposing the API (`8080`)
   and the storage-controller port (`50051`) that endpoints register against; and
 - an **internal LoadBalancer** Service (`amp-controller-lb`) for the UI/API on a
-  private VPC IP (the SC port stays on the ClusterIP only).
+  private VPC IP (the SC port stays on the ClusterIP only);
+- the **MCP server** as its own pod (`amp-controller-mcp` Deployment + Service) —
+  a stateless HTTP wrapper of the controller REST API — gated by `mcp.enabled`; and
+- the **`amp_ui` UI** as its own pod (`amp-controller-ui` Deployment + Service) —
+  nginx serving the SPA and reverse-proxying `/api/` to the in-cluster controller
+  Service — gated by `ui.enabled`.
+
+The MCP and UI Services are exposed the same way as the controller (one
+`CONTROLLER_EXPOSE` knob adds a matching `-np` / `-lb` Service to each).
 
 It does **not** create the namespace or the backing YugabyteDB — those pre-exist
 (see Assumptions) — but it **does (re)mint the image pull secret** each run.

@@ -24,6 +24,28 @@ Controller exposure: {{ .Values.controller.service.type }}
     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "yb-amp-controller.controllerName" . }} {{ .Values.controller.ports.api }}:{{ .Values.controller.ports.api }}
     then http://localhost:{{ .Values.controller.ports.api }}
 
+{{- if .Values.ui.enabled }}
+
+UI ({{ include "yb-amp-controller.uiName" . }}) is up — the amp_ui SPA, proxying /api/ to:
+
+    {{ include "yb-amp-controller.uiControllerUrl" . }}
+
+  It is exposed the same way as the controller ({{ .Values.controller.service.type }}).
+{{- if eq .Values.controller.service.type "nodeport" }}
+  NodePort:
+    kubectl -n {{ .Release.Namespace }} get svc {{ include "yb-amp-controller.uiName" . }}-np -o jsonpath='{.spec.ports[0].nodePort}'
+{{- else if or (eq .Values.controller.service.type "internal-lb") (eq .Values.controller.service.type "external-lb") }}
+  LoadBalancer:
+    kubectl -n {{ .Release.Namespace }} get svc {{ include "yb-amp-controller.uiName" . }}-lb -w
+{{- end }}
+  Or port-forward:
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "yb-amp-controller.uiName" . }} {{ .Values.ui.port }}:{{ .Values.ui.port }}
+    then http://localhost:{{ .Values.ui.port }}
+{{- else }}
+
+UI disabled (ui.enabled=false) — the controller still serves its built-in console at /.
+{{- end }}
+
 {{- if .Values.mcp.enabled }}
 
 MCP server ({{ include "yb-amp-controller.mcpName" . }}) is up, wrapping the controller at:

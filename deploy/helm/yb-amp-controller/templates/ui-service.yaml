@@ -1,0 +1,60 @@
+{{- if .Values.ui.enabled }}
+# In-cluster Service (always): reach the UI on the http port in-cluster or via
+# `kubectl port-forward`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yb-amp-controller.uiName" . }}
+  labels:
+    {{- include "yb-amp-controller.uiSelectorLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "yb-amp-controller.uiSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.ui.port }}
+      targetPort: http
+{{- if eq .Values.controller.service.type "nodeport" }}
+---
+# NodePort — the UI is exposed the same way as the controller
+# (controller.service.type), so it is reachable wherever the controller UI/API
+# is. Auto-assigned nodePort.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yb-amp-controller.uiName" . }}-np
+  labels:
+    {{- include "yb-amp-controller.uiSelectorLabels" . | nindent 4 }}
+spec:
+  type: NodePort
+  selector:
+    {{- include "yb-amp-controller.uiSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.ui.port }}
+      targetPort: http
+{{- else if or (eq .Values.controller.service.type "internal-lb") (eq .Values.controller.service.type "external-lb") }}
+---
+# LoadBalancer ({{ .Values.controller.service.type }}) — same exposure as the controller.
+# internal-lb carries service.annotations (private VPC IP); external-lb gets a public IP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yb-amp-controller.uiName" . }}-lb
+  labels:
+    {{- include "yb-amp-controller.uiSelectorLabels" . | nindent 4 }}
+  {{- if and (eq .Values.controller.service.type "internal-lb") .Values.controller.service.annotations }}
+  annotations:
+    {{- include "yb-amp-controller.kvAnnotations" (dict "items" .Values.controller.service.annotations) | nindent 4 }}
+  {{- end }}
+spec:
+  type: LoadBalancer
+  selector:
+    {{- include "yb-amp-controller.uiSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.ui.port }}
+      targetPort: http
+{{- end }}
+{{- end }}

@@ -1,9 +1,10 @@
 # yb-amp-controller Helm chart
 
 Deploys the [amp controller](../../../controller/README.md) (the cAmp control
-plane + its managed storage controller) **and** its MCP server, together, backed
-by an external YugabyteDB. Replaces the raw `kubectl apply` manifests that used
-to live inline in [`deploy/controller/redeploy.sh`](../../controller/redeploy.sh).
+plane + its managed storage controller), its MCP server, **and** the
+[`amp_ui`](../../../amp_ui/README.md) web UI, together, backed by an external
+YugabyteDB. Replaces the raw `kubectl apply` manifests that used to live inline
+in [`deploy/controller/redeploy.sh`](../../controller/redeploy.sh).
 
 ## Install
 
@@ -47,6 +48,27 @@ image pull secret — those are prerequisites.
   (`amp-controller-mcp-np` / `amp-controller-mcp-lb`) **per the same
   `controller.service.type`** as the controller — so the MCP endpoint is internal
   for dev and external for a prod release by that one knob.
+- **UI Deployment** `amp-controller-ui` (when `ui.enabled`) — one pod running the
+  [`amp_ui`](../../../amp_ui/README.md) React SPA served by nginx. nginx serves
+  the static build and reverse-proxies `/api/` to the controller (env
+  `CONTROLLER_URL`, defaulting to the in-cluster controller Service on the api
+  port), so the SPA's relative `/api/v1` calls stay same-origin — no CORS, and no
+  per-environment rebuild. Container port `http` (`ui.port`, default 80).
+- **UI Service** `amp-controller-ui` (when `ui.enabled`) — an always-on ClusterIP
+  on `ui.port`, plus an external Service (`amp-controller-ui-np` /
+  `amp-controller-ui-lb`) **per the same `controller.service.type`** as the
+  controller. So the one exposure knob puts the UI wherever the controller UI/API
+  is; this SPA pod is the intended front door, distinct from the controller's own
+  built-in console at `/`.
+
+### UI proxy & probe
+
+The UI pod does not talk to the controller cross-origin: nginx proxies `/api/`
+to `CONTROLLER_URL` (an origin with no trailing path, so the original `/api/...`
+URI is forwarded verbatim) and falls back to `index.html` for client-side
+routes. Its `GET /healthz` liveness/readiness probes are served by nginx itself
+(a static 200), so a 200 confirms the UI is serving and does **not** depend on
+the controller being reachable.
 
 ### MCP probe
 
@@ -79,10 +101,14 @@ a 200 confirms the MCP app is actually serving, not just that the port is bound.
 | `controller.endpoint.service.nodePortValue` | _(empty)_ | reserved — the deployer currently auto-assigns the endpoint NodePort |
 | `controller.endpoint.service.annotations` | `[]` | list of `"k=v"` strings → `AMP_DEPLOY_SERVICE_ANNOTATIONS` (CSV) |
 | `mcp.enabled` | `true` | deploy the MCP server (Deployment + Service) |
-| `mcp.image.repository` / `.tag` | `amp/controller-mcp` / chart appVersion | MCP image |
+| `mcp.image.repository` / `.tag` | `amp/mcp` / chart appVersion | MCP image |
 | `mcp.controllerUrl` | _(empty)_ | `AMP_CONTROLLER_URL`; empty ⇒ in-cluster controller Service DNS on the api port |
 | `mcp.transport` | `http` | `AMP_MCP_TRANSPORT` |
 | `mcp.port` | `8000` | `AMP_MCP_PORT` + MCP Service port |
+| `ui.enabled` | `true` | deploy the UI (Deployment + Service) |
+| `ui.image.repository` / `.tag` | `amp/controller-ui` / chart appVersion | UI image (built from `amp_ui/Dockerfile`) |
+| `ui.controllerUrl` | _(empty)_ | `CONTROLLER_URL` nginx proxies `/api/` to; empty ⇒ in-cluster controller Service DNS on the api port |
+| `ui.port` | `80` | `UI_PORT` nginx listens on + UI Service port |
 
 See [`values.yaml`](values.yaml) for the full set.
 

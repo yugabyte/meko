@@ -32,6 +32,29 @@ The workspace pages call the Meko Controller REST API. The base URL comes from
 there's no CORS to configure. For a deployed build, set `VITE_API_BASE_URL` to
 the controller's origin + `/api/v1`.
 
+## Container image & deployment
+
+[`Dockerfile`](Dockerfile) builds a production image: a Node stage runs
+`npm run build`, then nginx serves the static `dist/` and reverse-proxies `/api/`
+to the controller. Keeping the API same-origin means the default relative
+`/api/v1` base works unchanged — no `VITE_API_BASE_URL` and no CORS. Two runtime
+env vars are templated into the nginx config at container start:
+
+- `CONTROLLER_URL` — controller REST API origin `/api/` is proxied to (no
+  trailing path). Default `http://amp-controller:8080`.
+- `UI_PORT` — port nginx listens on. Default `80`.
+
+```bash
+# build (context = this directory) and run against a local controller on :8080
+docker build -t amp/controller-ui:dev .
+docker run --rm -p 8080:80 -e CONTROLLER_URL=http://host.docker.internal:8080 amp/controller-ui:dev
+```
+
+On Kubernetes the image runs in its own pod via the
+[`yb-amp-controller`](../deploy/helm/yb-amp-controller/README.md) Helm chart
+(the `ui.*` values), which points `CONTROLLER_URL` at the in-cluster controller
+Service.
+
 ## Project structure
 
 ```

@@ -15,7 +15,7 @@ deploy/
     redeploy.sh     # (re-)deploy the controller via the yb-amp-controller chart (assumes ns/YB/pull-secret exist)
   helm/
     yb-light-endpoint/     # Helm chart for an endpoint (Deployment + ConfigMap + Secret + Service)
-    yb-amp-controller/   # Helm chart for the controller layer + the MCP server pod (mcp.enabled)
+    yb-amp-controller/   # Helm chart for the controller layer + the MCP server pod (mcp.enabled) + the amp_ui pod (ui.enabled)
 ```
 
 ## One-shot bring-up — `up.sh`
@@ -79,7 +79,9 @@ this endpoint deliberately omits — has its own bundled image under
 ships the **MCP server** (a FastMCP wrapper that exposes the controller's REST
 API as MCP tools for AI agents; see
 [`controller/architecture/ac-mcp.md`](../controller/architecture/ac-mcp.md)) as
-its own pod, gated by `mcp.enabled` (default on).
+its own pod, gated by `mcp.enabled` (default on), and the **[`amp_ui`](../amp_ui/README.md)
+web UI** (the React SPA served by nginx, reverse-proxying `/api/` to the
+controller) as its own pod, gated by `ui.enabled` (default on).
 
 ## ECR access & the pull secret
 

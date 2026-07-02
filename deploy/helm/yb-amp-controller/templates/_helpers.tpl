@@ -53,6 +53,10 @@ amp-controller
 amp-controller-mcp
 {{- end }}
 
+{{- define "yb-amp-controller.uiName" -}}
+amp-controller-ui
+{{- end }}
+
 {{/*
 Selector labels per workload (controller vs MCP) so the two Deployments/Services
 don't fan out onto each other's pods.
@@ -69,6 +73,12 @@ app.kubernetes.io/component: mcp
 app: amp-controller-mcp
 {{- end }}
 
+{{- define "yb-amp-controller.uiSelectorLabels" -}}
+{{ include "yb-amp-controller.selectorLabels" . }}
+app.kubernetes.io/component: ui
+app: amp-controller-ui
+{{- end }}
+
 {{/*
 Image references; tags fall back to the chart appVersion.
 */}}
@@ -80,6 +90,11 @@ Image references; tags fall back to the chart appVersion.
 {{- define "yb-amp-controller.mcpImage" -}}
 {{- $tag := .Values.mcp.image.tag | default .Chart.AppVersion -}}
 {{- printf "%s:%s" .Values.mcp.image.repository $tag -}}
+{{- end }}
+
+{{- define "yb-amp-controller.uiImage" -}}
+{{- $tag := .Values.ui.image.tag | default .Chart.AppVersion -}}
+{{- printf "%s:%s" .Values.ui.image.repository $tag -}}
 {{- end }}
 
 {{/*
@@ -97,6 +112,19 @@ set, else the in-cluster controller Service DNS on the api port.
 {{- define "yb-amp-controller.mcpControllerUrl" -}}
 {{- if .Values.mcp.controllerUrl -}}
 {{- .Values.mcp.controllerUrl -}}
+{{- else -}}
+{{- printf "http://%s.%s.svc.cluster.local:%v" (include "yb-amp-controller.controllerName" .) .Release.Namespace .Values.controller.ports.api -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Controller origin the UI's nginx proxies /api/ to (CONTROLLER_URL): the explicit
+override if set, else the in-cluster controller Service DNS on the api port. No
+trailing path — nginx forwards the original request URI to it.
+*/}}
+{{- define "yb-amp-controller.uiControllerUrl" -}}
+{{- if .Values.ui.controllerUrl -}}
+{{- .Values.ui.controllerUrl -}}
 {{- else -}}
 {{- printf "http://%s.%s.svc.cluster.local:%v" (include "yb-amp-controller.controllerName" .) .Release.Namespace .Values.controller.ports.api -}}
 {{- end -}}

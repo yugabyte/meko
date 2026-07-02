@@ -9,12 +9,13 @@
 #   3. a single-node YugabyteDB (yugabyted) StatefulSet + headless Service
 #   4. the yb_storage database (the controller connects to it at startup)
 #   5. the amp controller (controller + managed storage_controller, Helm endpoint
-#      driver) plus its MCP server, via deploy/controller/redeploy.sh
+#      driver) plus its MCP server and UI, via deploy/controller/redeploy.sh
 #
-# then prints the URL for the controller UI.
+# then prints the URLs for the controller UI/API and the amp_ui SPA.
 #
 # Step 5 is now Helm-managed: redeploy.sh runs `helm upgrade --install` of the
-# yb-amp-controller chart (which packages the controller and the MCP pod).
+# yb-amp-controller chart (which packages the controller, the MCP pod, and the
+# amp_ui SPA pod).
 #
 # This is the from-nothing companion to deploy/controller/redeploy.sh — that
 # script (re-)deploys only the controller and assumes the namespace, YugabyteDB,
@@ -280,6 +281,31 @@ case "${CONTROLLER_EXPOSE}" in
     ;;
   *)
     echo "    (no external Service — port-forward only)"
+    ;;
+esac
+echo
+echo "  AMP UI  (amp_ui SPA, its own pod — proxies /api/ to the controller):"
+case "${CONTROLLER_EXPOSE}" in
+  nodeport)
+    UINP="$(kubectl -n "${NS}" get svc amp-controller-ui-np -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
+    NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
+    [ -n "${NODEIP}" ] || NODEIP="$(kubectl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
+    if [ -n "${NODEIP}" ] && [ -n "${UINP}" ]; then
+      echo "    http://${NODEIP}:${UINP}   (NodePort — reachable at any node IP)"
+    else
+      echo "    NodePort still settling — check: kubectl -n ${NS} get svc amp-controller-ui-np"
+    fi
+    ;;
+  internal-lb|external-lb)
+    UILBIP="$(kubectl -n "${NS}" get svc amp-controller-ui-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+    if [ -n "${UILBIP}" ]; then
+      echo "    http://${UILBIP}   (${CONTROLLER_EXPOSE})"
+    else
+      echo "    ${CONTROLLER_EXPOSE} IP still provisioning — watch: kubectl -n ${NS} get svc amp-controller-ui-lb -w"
+    fi
+    ;;
+  *)
+    echo "    (no external Service — port-forward: kubectl -n ${NS} port-forward svc/amp-controller-ui 8081:80)"
     ;;
 esac
 echo

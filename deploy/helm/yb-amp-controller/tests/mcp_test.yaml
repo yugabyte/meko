@@ -50,7 +50,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: amp/controller-mcp:0.1.0
+          value: amp/mcp:0.1.0
 
   - it: exposes the mcp container port and HTTP /healthz probes
     template: templates/mcp-deployment.yaml

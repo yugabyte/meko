@@ -106,7 +106,7 @@ mcp:
 
   image:
     # -- MCP server image repository (built from controller/mcp/Dockerfile).
-    repository: amp/controller-mcp
+    repository: amp/mcp
     # -- Image tag. Empty string defaults to the chart appVersion.
     tag: ""
     pullPolicy: IfNotPresent
@@ -137,6 +137,48 @@ mcp:
   # amp-controller-mcp-lb) alongside the controller's. So dev (nodeport / none) keeps
   # the MCP endpoint internal, and a prod `external-lb` exposes it externally — one
   # knob, no separate MCP exposure setting.
+
+# UI: the amp_ui React SPA served by nginx, in its own pod. nginx serves the
+# static build and reverse-proxies /api/ to the controller over the in-cluster
+# Service DNS, so the SPA uses relative /api/v1 URLs with no CORS.
+ui:
+  # -- Deploy the UI (Deployment + Service). false drops both.
+  enabled: true
+  # -- Number of UI pods. Stateless (static assets + a stateless proxy), so this
+  # is safe to scale.
+  replicaCount: 1
+
+  image:
+    # -- UI image repository (built from amp_ui/Dockerfile).
+    repository: amp/controller-ui
+    # -- Image tag. Empty string defaults to the chart appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # -- Controller base URL nginx proxies /api/ to (CONTROLLER_URL). Empty => the
+  # in-cluster controller Service DNS on the api port (computed in a helper). Must
+  # be an origin with no trailing path (nginx forwards the original /api/... URI).
+  controllerUrl: ""
+  # -- Port nginx listens on and the Service exposes (UI_PORT).
+  port: 80
+
+  # -- Compute resources for the UI (nginx) container.
+  resources: {}
+  # -- HTTP GET /healthz liveness/readiness probes on the UI port. nginx serves
+  # /healthz itself (a static 200), so a 200 confirms nginx is serving — it does
+  # not depend on the controller being reachable.
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+  # The UI is exposed the SAME way as the controller (controller.service.type): an
+  # in-cluster ClusterIP Service (amp-controller-ui) is always created, plus a
+  # matching external Service (amp-controller-ui-np / amp-controller-ui-lb)
+  # alongside the controller's — so the one exposure knob puts the UI wherever the
+  # controller UI/API is.
 
 podAnnotations: {}
 podLabels: {}
