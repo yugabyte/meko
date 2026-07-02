@@ -287,7 +287,7 @@ const ACCUMULATION_MAX: Duration = Duration::from_millis(2);
 
 /// Durability state published by the consumer onto the watch channel.
 #[derive(Clone, Debug)]
-pub(crate) enum DurableState {
+pub enum DurableState {
     /// Every `PendingChunk` whose `end_lsn <= self.0` has been durably
     /// INSERT'd into YugabyteDB.
     Healthy(Lsn),
@@ -299,7 +299,7 @@ pub(crate) enum DurableState {
 
 /// How far a YB flush should go — the arg to [`crate::wal_storage::Storage::yb_flush`].
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum YbFlush {
+pub enum YbFlush {
     /// Wake the consumer, wait for the batch to be durable in `safekeeper.wals`,
     /// then advance the local watermark. The synchronous durable-commit
     /// boundary used by elections / `handle_vote`.
