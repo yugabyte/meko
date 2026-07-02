@@ -2,9 +2,12 @@ import { useEffect } from "react";
 import axios from "axios";
 import { getCurrentUser, ONBOARDING_STATUS_CACHE_KEY } from "@/lib/api/mekoApi";
 import { getLocalItem, removeLocalItem, setLocalItem } from "@/lib/browserStorage";
-import { clearPendingLoginMethod, consumePendingLoginMethod } from "@/features/auth/pendingLoginMethod";
+import {
+  clearPendingLoginMethod,
+  consumePendingLoginMethod,
+} from "@/features/auth/pendingLoginMethod";
 import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
-import { identifyUser, trackEvent } from "@/lib/telemetry/rudderstack";
+import { identifyThenTrack } from "@/lib/telemetry/rudderstack";
 
 type Args = {
   setAuthLoading: (value: boolean) => void;
@@ -41,18 +44,22 @@ export function useAuthBootstrap({
         // → record the real sign-in once, with the now-known email + user_id.
         const pendingMethod = consumePendingLoginMethod();
         if (pendingMethod) {
-          identifyUser({
-            id: user.account_id,
-            email: user.email,
-            firstName: user.first_name,
-            lastName: user.last_name,
-            userType: user.user_type,
-          });
-          trackEvent(TELEMETRY_EVENTS.USER_SIGNED_IN, {
-            email: user.email,
-            user_id: user.account_id,
-            login_method: pendingMethod,
-          });
+          // Identify, then fire user_signed_in after a short gap so it maps to the
+          // (now identified) HubSpot contact.
+          identifyThenTrack(
+            {
+              id: user.account_id,
+              email: user.email,
+              firstName: user.first_name,
+              lastName: user.last_name,
+            },
+            TELEMETRY_EVENTS.USER_SIGNED_IN,
+            {
+              email: user.email,
+              user_id: user.account_id,
+              login_method: pendingMethod,
+            },
+          );
         }
       })
       .catch((err) => {

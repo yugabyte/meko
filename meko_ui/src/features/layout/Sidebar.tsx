@@ -156,10 +156,22 @@ export default function Sidebar() {
   const expandSidebar = () => setIsCollapsed(false);
 
   const handleLogout = async () => {
-    // Fire the logout event while the user is still identified, then reset
-    // telemetry so later (anonymous) activity isn't attributed to them.
-    trackEvent(TELEMETRY_EVENTS.USER_LOGGED_OUT);
-    resetTelemetry();
+    // Fire the logout event while still identified, then reset — and AWAIT that
+    // before the logout()/navigate below, so the redirect's /login page view
+    // isn't sent with the logged-out user's traits still attached. Reset runs in
+    // the track callback (so the event flushes with its traits first); a timeout
+    // guards against the callback never firing so logout can't hang.
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resetTelemetry();
+        resolve();
+      };
+      trackEvent(TELEMETRY_EVENTS.USER_LOGGED_OUT, { email: currentUser?.email }, finish);
+      window.setTimeout(finish, 2000);
+    });
     // Best-effort server logout: even if it fails (network, expired
     // session, server down) we must still clear local state and send
     // the user to /login, otherwise they're trapped in an authenticated

@@ -17,7 +17,7 @@ import {
 } from "@/lib/api/mekoApi";
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { AUTH_METHODS, TELEMETRY_EVENTS } from "@/lib/telemetry/events";
-import { identifyUser, trackEvent } from "@/lib/telemetry/rudderstack";
+import { identifyThenTrack } from "@/lib/telemetry/rudderstack";
 import { clearPendingLoginMethod, setPendingLoginMethod } from "@/features/auth/pendingLoginMethod";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 import { setLocalItem } from "@/lib/browserStorage";
@@ -149,18 +149,23 @@ export default function SignInPage() {
       let nextPath: (typeof ROUTES)["datapacks" | "onboarding"] = ROUTES.onboarding;
       try {
         const user = await getCurrentUser();
-        identifyUser({
-          id: user.account_id,
-          email: user.email,
-          firstName: user.first_name,
-          lastName: user.last_name,
-          userType: user.user_type,
-        });
-        trackEvent(TELEMETRY_EVENTS.USER_SIGNED_IN, {
-          email: user.email,
-          user_id: user.account_id,
-          login_method: AUTH_METHODS.EMAIL_PASSWORD,
-        });
+        // Identify, then fire user_signed_in after a short gap so the event maps
+        // to the (now identified) HubSpot contact.
+        identifyThenTrack(
+          {
+            id: user.account_id,
+            email: user.email,
+            firstName: user.first_name,
+            lastName: user.last_name,
+          },
+          TELEMETRY_EVENTS.USER_SIGNED_IN,
+          {
+            email: user.email,
+            user_id: user.account_id,
+            user_type: user.user_type,
+            login_method: AUTH_METHODS.EMAIL_PASSWORD,
+          },
+        );
         setLocalItem(ONBOARDING_STATUS_CACHE_KEY, String(user.has_completed_onboarding));
         dispatchAppEvent(ONBOARDING_STATUS_UPDATED_EVENT, {
           has_completed_onboarding: user.has_completed_onboarding,

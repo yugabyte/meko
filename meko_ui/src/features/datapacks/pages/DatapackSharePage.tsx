@@ -14,6 +14,7 @@ import { TransferOwnershipSection } from "@/features/datapacks/components/datapa
 import { useDatapackOutgoingShares } from "@/features/datapacks/components/datapack-share/useDatapackOutgoingShares";
 import { useDatapackName } from "@/features/datapacks/hooks/useDatapackName";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
+import { DATAPACK_SHARE_GRANT_OWNER } from "@/lib/datapackShareGrants";
 import type { CurrentUser } from "@/lib/api/mekoApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,8 +48,12 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
   // Telemetry inputs for the datapack_shared event: the sharer's own role on this
   // datapack, and how many shares already exist (accepted members excl. owner +
   // pending invites) — drives is_first_share / total_shares.
-  const sharedByRole =
-    members.find((m) => m.user_email_id === currentUser?.email)?.grant ?? null;
+  //
+  // The member list tags the OWNER's own row as "maintainer" (BE quirk in
+  // GetOutgoingMembers), so reading `.grant` would report every owner as a
+  // maintainer. Use the is_owner flag to resolve the real role.
+  const me = members.find((m) => m.user_email_id === currentUser?.email);
+  const sharedByRole = me ? (me.is_owner ? DATAPACK_SHARE_GRANT_OWNER : me.grant) : null;
   const priorShareCount = members.filter((m) => !m.is_owner).length + pendingInvites.length;
 
   /** After invites or member mutations, refresh lists without toggling the global loading skeleton. */

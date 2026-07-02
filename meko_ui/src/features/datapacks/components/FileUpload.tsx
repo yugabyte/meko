@@ -98,14 +98,18 @@ export default function FileUpload({
   const pendingKBReadyNotificationRef = useRef(false);
   const [newUploadsAfterKB, setNewUploadsAfterKB] = useState(0);
   const pollGraceRef = useRef(0);
-  // Names + byte sizes of the files in the batch currently being processed, so
-  // the document_uploaded telemetry (fired once processing completes) can report
-  // file_size and emit only for THIS batch's docs (pipeline_details also includes
-  // previously-indexed docs once a KB exists).
-  const justUploadedRef = useRef<{ names: Set<string>; sizes: Map<string, number> }>({
-    names: new Set(),
-    sizes: new Map(),
-  });
+  // For the document_uploaded telemetry: byte sizes of the current batch's files
+  // (keyed by filename, best-effort for file_size_kb), and the raw pipeline
+  // document_names already present BEFORE this batch. We emit once per genuinely
+  // new COMPLETED doc by comparing RAW server names (robust — no fragile
+  // display-name/filename matching, which is why the event never fired before).
+  const uploadedSizesRef = useRef<Map<string, number>>(new Map());
+  const seenDocNamesRef = useRef<Set<string>>(new Set());
+  // Hold the latest callback in a ref so fetchStatus doesn't depend on it — an
+  // unmemoized parent callback would otherwise recreate fetchStatus every render
+  // and thrash the polling interval (clear + reset each tick).
+  const onKnowledgeBaseCreatedRef = useRef(onKnowledgeBaseCreated);
+  onKnowledgeBaseCreatedRef.current = onKnowledgeBaseCreated;
 
   const showWarning = useCallback((msg: string) => {
     setWarning(msg);
@@ -248,11 +252,10 @@ export default function FileUpload({
   const handleCreateKB = async () => {
     const queuedEntries = files.filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.DONE);
     const queuedNames = queuedEntries.map((f) => f.file.name);
-    // Snapshot this batch's names + sizes for the document_uploaded telemetry.
-    justUploadedRef.current = {
-      names: new Set(queuedNames),
-      sizes: new Map(queuedEntries.map((f) => [f.file.name, f.file.size])),
-    };
+    // Snapshot for the document_uploaded telemetry: this batch's file sizes, and
+    // the docs already indexed BEFORE this batch (so we only emit for new ones).
+    uploadedSizesRef.current = new Map(queuedEntries.map((f) => [f.file.name, f.file.size]));
+    seenDocNamesRef.current = new Set(pipelineDetails.map((d) => d.document_name));
     const previousKbCreated = kbCreated;
 
     // Flip UI state immediately so users see progress feedback right away.
@@ -282,35 +285,30 @@ export default function FileUpload({
     }
   };
 
-  // Fire document_uploaded once per successfully-processed doc in the current
-  // batch. pipeline_details can also list previously-indexed docs, so we filter
-  // to this batch's names and clear the snapshot to avoid re-emitting.
+  // Fire document_uploaded once per newly-completed doc. We compare raw pipeline
+  // document_names against the pre-batch snapshot, so each doc emits exactly once
+  // even though pipeline_details also lists previously-indexed docs.
   const emitDocumentUploadedEvents = useCallback(
     (details: PipelineDetail[]) => {
-      const batch = justUploadedRef.current;
-      if (batch.names.size === 0) return;
-      const batchDetails = details.filter((d) =>
-        batch.names.has(pipelineDocumentDisplayName(d.document_name)),
-      );
+      const seen = seenDocNamesRef.current;
+      const hadDocsBefore = seen.size > 0;
       const totalDocs = details.length;
-      // First docs in the datapack when nothing pre-existed this batch.
-      const isFirstBatch = totalDocs === batchDetails.length;
-      batchDetails
-        .filter((d) => d.document_status === "COMPLETED")
+      details
+        .filter((d) => d.document_status === "COMPLETED" && !seen.has(d.document_name))
         .forEach((d) => {
+          seen.add(d.document_name);
           const name = pipelineDocumentDisplayName(d.document_name);
-          const sizeBytes = batch.sizes.get(name);
+          const sizeBytes = uploadedSizesRef.current.get(name);
           trackEvent(TELEMETRY_EVENTS.DOCUMENT_UPLOADED, {
             email: currentUser?.email,
             datapack_id: datapackId,
             document_id: name,
             file_type: fileTypeFromName(name),
             file_size_kb: sizeBytes !== undefined ? bytesToKb(sizeBytes) : undefined,
-            is_first: isFirstBatch,
+            is_first: !hadDocsBefore,
             total_docs: totalDocs,
           });
         });
-      justUploadedRef.current = { names: new Set(), sizes: new Map() };
     },
     [datapackId, currentUser?.email],
   );
@@ -348,13 +346,13 @@ export default function FileUpload({
         if (pendingKBReadyNotificationRef.current) {
           pendingKBReadyNotificationRef.current = false;
           emitDocumentUploadedEvents(details);
-          onKnowledgeBaseCreated?.();
+          onKnowledgeBaseCreatedRef.current?.();
         }
       }
     } catch {
       // silently retry on next interval
     }
-  }, [datapackId, kbCreated, onKnowledgeBaseCreated, emitDocumentUploadedEvents]);
+  }, [datapackId, kbCreated, emitDocumentUploadedEvents]);
 
   useEffect(() => {
     fetchStatus();

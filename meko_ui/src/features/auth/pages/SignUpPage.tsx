@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getApiErrorMessage, signup, confirmSignup } from "@/lib/api/mekoApi";
 import { AUTH_METHODS, TELEMETRY_EVENTS } from "@/lib/telemetry/events";
-import { trackEvent } from "@/lib/telemetry/rudderstack";
+import { identifyThenTrack } from "@/lib/telemetry/rudderstack";
 import { Eye, EyeOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -62,10 +62,21 @@ export default function SignUpPage() {
         email: email.trim(),
         password,
       });
-      trackEvent(TELEMETRY_EVENTS.USER_SIGNED_UP, {
-        email: email.trim(),
-        signup_method: AUTH_METHODS.EMAIL_PASSWORD,
-      });
+      // Identify FIRST (by email — no account_id exists until confirmation) so the
+      // HubSpot contact is created, then fire user_signed_up after a short gap so
+      // it maps to that contact.
+      identifyThenTrack(
+        {
+          email: email.trim(),
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+        },
+        TELEMETRY_EVENTS.USER_SIGNED_UP,
+        {
+          email: email.trim(),
+          signup_method: AUTH_METHODS.EMAIL_PASSWORD,
+        },
+      );
       setAwaitingCode(true);
     } catch (err) {
       setError(getApiErrorMessage(err, "Sign up failed. Please try again."));
