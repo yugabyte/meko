@@ -18,6 +18,7 @@ import {
 import { dispatchAppEvent } from "@/lib/browserEvents";
 import { AUTH_METHODS, TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { identifyUser, trackEvent } from "@/lib/telemetry/rudderstack";
+import { clearPendingLoginMethod, setPendingLoginMethod } from "@/features/auth/pendingLoginMethod";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
 import { setLocalItem } from "@/lib/browserStorage";
 import { ROUTES } from "@/app/routes/paths";
@@ -97,12 +98,10 @@ export default function SignInPage() {
 
   const handleGoogleSignIn = () => {
     if (loading || googleLoading || linkedinLoading) return;
+    setPendingLoginMethod(AUTH_METHODS.GOOGLE_OAUTH);
     // Fires on click, before the redirect to the IdP — the sign-in isn't
     // confirmed yet (user may cancel/fail), so USER_SIGNED_IN would be
     // premature. login_method distinguishes the provider.
-    trackEvent(TELEMETRY_EVENTS.SIGN_IN_CLICKED, {
-      login_method: AUTH_METHODS.GOOGLE_OAUTH,
-    });
     setError(null);
     setGoogleLoading(true);
     // App-driven Google sign-in: hand off to the api_server, which builds the
@@ -112,10 +111,10 @@ export default function SignInPage() {
 
   const handleLinkedInSignIn = () => {
     if (loading || googleLoading || linkedinLoading) return;
-    // Click-time event (pre-redirect), mirroring the Google handler.
-    trackEvent(TELEMETRY_EVENTS.SIGN_IN_CLICKED, {
-      login_method: AUTH_METHODS.LINKEDIN_OAUTH,
-    });
+    // Mirror the Google handler: stash the method; the redirect leaves the SPA and
+    // the sign-in isn't confirmed until it returns, so USER_SIGNED_IN (with the
+    // real email + user_id) fires on the post-redirect boot in useAuthBootstrap.
+    setPendingLoginMethod(AUTH_METHODS.LINKEDIN_OAUTH);
     setError(null);
     setLinkedinLoading(true);
     // App-driven LinkedIn sign-in: hand off to the api_server, which builds
@@ -131,6 +130,9 @@ export default function SignInPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Email/password fires user_signed_in on success below; clear any stale
+    // Google marker so it can't mis-fire on a later boot.
+    clearPendingLoginMethod();
     setLoading(true);
     setError(null);
     setShowInviteExpired(false);
@@ -156,6 +158,7 @@ export default function SignInPage() {
         });
         trackEvent(TELEMETRY_EVENTS.USER_SIGNED_IN, {
           email: user.email,
+          user_id: user.account_id,
           login_method: AUTH_METHODS.EMAIL_PASSWORD,
         });
         setLocalItem(ONBOARDING_STATUS_CACHE_KEY, String(user.has_completed_onboarding));
