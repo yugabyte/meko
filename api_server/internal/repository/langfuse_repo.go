@@ -214,6 +214,10 @@ type ProcessingStep struct {
 	// retrieved — populated only on the `conversation_search` step. Each
 	// links back to its source conversation/user. Empty on other steps.
 	ConversationChunks []ConversationChunk `json:"conversation_chunks,omitempty"`
+	// Hits produced by this step, so a turn with several searches shows
+	// each step's own chunks instead of the merged turn-level list.
+	MemoryHits []MemoryHit `json:"memory_hits,omitempty"`
+	KBHits     []KBHit     `json:"kb_hits,omitempty"`
 }
 
 type messageWindow struct {
@@ -1705,10 +1709,12 @@ ORDER  BY start_time ASC`
 		case "memory_search":
 			hits := extractAgentMemoryHits(parseJSONValue(obs.Output))
 			res.memoryHits[messageID] = append(res.memoryHits[messageID], hits...)
+			step.MemoryHits = hits // per-step attribution (see ProcessingStep)
 			step.Detail = hitDetail(len(hits))
 		case "knowledgebase_search":
 			hits := extractAgentKBHits(parseJSONValue(obs.Output))
 			res.kbHits[messageID] = append(res.kbHits[messageID], hits...)
+			step.KBHits = hits
 			step.Detail = hitDetail(len(hits))
 		}
 
@@ -1774,11 +1780,16 @@ ORDER  BY start_time ASC`
 	if err := rows.Err(); err != nil {
 		return emptyResult, fmt.Errorf("langfuse db: iterate agent reasoning observations: %w", err)
 	}
-	r.resolveKBDocumentNames(res.kbHits)
+	r.resolveKBDocumentNames(res.kbHits, res.processingSteps)
 	return res, nil
 }
 
-func (r *LangfuseRepo) resolveKBDocumentNames(kbHits map[string][]KBHit) {
+// resolveKBDocumentNames fills in DocumentName on both the message-level
+// kbHits and the per-step KBHits (independent copies, so patch both).
+func (r *LangfuseRepo) resolveKBDocumentNames(
+	kbHits map[string][]KBHit,
+	steps map[string][]ProcessingStep,
+) {
 	if r == nil || r.dataDB == nil || len(kbHits) == 0 {
 		return
 	}
@@ -1808,23 +1819,28 @@ func (r *LangfuseRepo) resolveKBDocumentNames(kbHits map[string][]KBHit) {
 		return
 	}
 
-	for msg := range kbHits {
-		for i := range kbHits[msg] {
-			if kbHits[msg][i].Source == "memory" {
+	applyNames := func(hits []KBHit) {
+		for i := range hits {
+			if hits[i].Source == "memory" {
 				continue
 			}
-			if name, ok := names[kbHits[msg][i].DocumentID]; ok {
-				kbHits[msg][i].DocumentName = name
+			if name, ok := names[hits[i].DocumentID]; ok {
+				hits[i].DocumentName = name
 			}
+		}
+	}
+
+	for msg := range kbHits {
+		applyNames(kbHits[msg])
+	}
+	for msg := range steps {
+		for i := range steps[msg] {
+			applyNames(steps[msg][i].KBHits)
 		}
 	}
 }
 
-const (
-	agentReasoningMaxItems       = 50
-	agentReasoningMemoryMinScore = 0.3
-	agentReasoningKBMaxDistance  = 1.2
-)
+const agentReasoningMaxItems = 50
 
 // kbSearchSpanID returns the knowledgebase_search step's span id, so a
 // synthesized conversation_search step can nest under it in the UI.
@@ -2000,10 +2016,10 @@ func extractAgentMemoryHits(v interface{}) []MemoryHit {
 	for _, item := range firstN(vectorItems, agentReasoningMaxItems) {
 		switch x := item.(type) {
 		case map[string]interface{}:
+			// Mem0's "score" is a cosine similarity in [0..1] (higher =
+			// better). No relevance floor: the MCP
+			// already bounds by top_k.
 			score, hasScore := numberField(x, "score")
-			if hasScore && score < agentReasoningMemoryMinScore {
-				continue
-			}
 			text := firstStringField(x, "memory", "data", "text", "content")
 			if text == "" {
 				continue
@@ -2019,6 +2035,8 @@ func extractAgentMemoryHits(v interface{}) []MemoryHit {
 			}
 		}
 	}
+	// Score is a similarity (higher = better), so sort descending;
+	// unscored hits sort last.
 	sort.SliceStable(memHits, func(i, j int) bool {
 		return scoreOrZero(memHits[i].Score) > scoreOrZero(memHits[j].Score)
 	})
@@ -2056,10 +2074,10 @@ func extractAgentKBHits(v interface{}) []KBHit {
 	for _, item := range firstN(items, agentReasoningMaxItems) {
 		switch x := item.(type) {
 		case map[string]interface{}:
+			// No distance filter: KB relevance is owned by the MCP's
+			// rerank, and reranked hits can exceed any distance floor —
+			// filtering here would hide chunks the agent actually used.
 			distance, hasDistance := numberField(x, "distance")
-			if hasDistance && distance > agentReasoningKBMaxDistance {
-				continue
-			}
 			text := firstStringField(x, "chunk_text", "text", "content", "snippet", "chunk")
 			if text == "" {
 				continue
@@ -2077,15 +2095,13 @@ func extractAgentKBHits(v interface{}) []KBHit {
 					hit.Source = s
 				}
 			}
+			// Cosine similarity = 1 - distance (same value shape as mem0's
+			// memory score). Passed through unclamped — the UI clamps to
+			// [0..100] on display and mem0 clamps memory upstream. We use
+			// distance, not the MCP's relative rerank_score.
 			if hasDistance {
 				d := distance
 				score := 1 - distance
-				if score < 0 {
-					score = 0
-				}
-				if score > 1 {
-					score = 1
-				}
 				hit.Distance = &d
 				hit.Score = &score
 			}
@@ -2096,6 +2112,8 @@ func extractAgentKBHits(v interface{}) []KBHit {
 			}
 		}
 	}
+	// distance is a cosine distance (lower = closer), so sort ascending;
+	// hits with no distance sort last.
 	sort.SliceStable(hits, func(i, j int) bool {
 		return distanceOrInf(hits[i].Distance) < distanceOrInf(hits[j].Distance)
 	})
@@ -2175,18 +2193,18 @@ func formatRelationTriple(item interface{}) string {
 	return source + " " + relation + " " + target
 }
 
-func scoreOrZero(score *float64) float64 {
-	if score == nil {
-		return 0
-	}
-	return *score
-}
-
 func distanceOrInf(distance *float64) float64 {
 	if distance == nil {
 		return 1e9
 	}
 	return *distance
+}
+
+func scoreOrZero(score *float64) float64 {
+	if score == nil {
+		return 0
+	}
+	return *score
 }
 
 // MemoriesPerConversation returns persisted-mem0 row counts for the

@@ -41,7 +41,7 @@ export function PlanContent({
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
         <PlanPane
           accent={accent}
-          icon={<Brain className="h-3 w-3 text-purple-300" aria-hidden />}
+          icon={<Brain className="h-3 w-3 text-purple-600 dark:text-purple-300" aria-hidden />}
           label="Agent reasoning"
           sourceField="reasoning"
           sourceStore="observation.output"
@@ -59,7 +59,7 @@ export function PlanContent({
 
         <PlanPane
           accent={accent}
-          icon={<Workflow className="h-3 w-3 text-purple-300" aria-hidden />}
+          icon={<Workflow className="h-3 w-3 text-purple-600 dark:text-purple-300" aria-hidden />}
           label="Planned execution"
           sourceField="plan"
           sourceStore="observation.metadata.plan"
@@ -100,7 +100,7 @@ export function PlanContent({
             "bg-background/40",
           )}
         >
-          <Cpu className="h-3 w-3 text-purple-300" aria-hidden />
+          <Cpu className="h-3 w-3 text-purple-600 dark:text-purple-300" aria-hidden />
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
             Model
           </span>

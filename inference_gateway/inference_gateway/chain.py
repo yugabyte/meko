@@ -1302,7 +1302,8 @@ def _extract_kb_hits(payload: object) -> List[KbHit]:
 
     Relevance + result count are owned by the MCP's hybrid search — the gateway
     neither filters by distance nor caps the count; it renders all returned
-    chunks. `score = max(0, 1 - distance)` is computed only for UI sort order.
+    chunks. `score = 1 - distance` (same value shape as mem0's memory score,
+    unclamped — the UI clamps on display) is computed only for UI sort order.
     """
     items: list[Any] = []
     if isinstance(payload, dict):
@@ -1321,11 +1322,10 @@ def _extract_kb_hits(payload: object) -> List[KbHit]:
             distance: Optional[float] = (
                 float(raw_distance) if isinstance(raw_distance, (int, float)) else None
             )
-            # Cosine distance → similarity score in [0..1] (clamp the
-            # negative tail that orthogonal-or-beyond vectors produce).
-            score: Optional[float] = (
-                max(0.0, min(1.0, 1.0 - distance)) if distance is not None else None
-            )
+            # Cosine similarity = 1 - distance (same value shape as mem0's
+            # memory score). Passed through unclamped — the UI clamps on
+            # display and mem0 clamps memory upstream.
+            score: Optional[float] = (1.0 - distance) if distance is not None else None
             text = (
                 item.get("chunk_text")
                 or item.get("text")

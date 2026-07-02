@@ -5,11 +5,15 @@
 
 import { useMemo, useState } from "react";
 import {
+  ArrowRight,
+  Brain,
   ChartSpline,
   ChevronDown,
   ChevronRight,
   ExternalLink,
   FileText,
+  type LucideIcon,
+  Network,
   Sparkles,
 } from "lucide-react";
 import { ROUTES, datapackConversationsPath } from "@/app/routes/paths";
@@ -25,6 +29,10 @@ import {
   stepSummary,
   truncateMiddle,
 } from "./helpers";
+
+// MCP step names matched against ProcessingStep.name.
+const STEP_MEMORY_SEARCH = "memory_search";
+const STEP_KNOWLEDGEBASE_SEARCH = "knowledgebase_search";
 
 export function DecisionTraceStep({
   step,
@@ -42,9 +50,8 @@ export function DecisionTraceStep({
   langfuseProjectId?: string;
   datapackName?: string;
   userNameById?: Record<string, string>;
-  /** Per-turn retrieval hits. The matching arrays are rendered as an
-   *  expandable "matched chunks/memories" list on the retrieval step they
-   *  belong to (memory.search → memoryHits, knowledge.retrieve → kbHits). */
+  /** Turn-level hits — fallback for old traces lacking per-step attribution.
+   *  Newer traces prefer `step.memory_hits` / `step.kb_hits`. */
   memoryHits?: MemoryHit[];
   kbHits?: KbHit[];
 }) {
@@ -78,10 +85,11 @@ export function DecisionTraceStep({
   const subTimingEntries = Object.entries(subTimings).filter(([, v]) => v != null);
   const hasSubTimings = subTimingEntries.length > 0;
 
-  // Retrieval hits belonging to this step. memory.search shows its memory
-  // hits; knowledge.retrieve shows its KB chunks (grouped by document).
-  const matchedMemory = step.name === "memory_search" ? (memoryHits ?? []) : [];
-  const matchedKb = step.name === "knowledgebase_search" ? (kbHits ?? []) : [];
+  // Prefer this step's own hits; fall back to turn-level for old traces.
+  const stepMemoryHits = step.memory_hits ?? memoryHits ?? [];
+  const stepKbHits = step.kb_hits ?? kbHits ?? [];
+  const matchedMemory = step.name === STEP_MEMORY_SEARCH ? stepMemoryHits : [];
+  const matchedKb = step.name === STEP_KNOWLEDGEBASE_SEARCH ? stepKbHits : [];
 
   const traceUrl =
     step.span_id && langfuseProjectId && conversationId
@@ -306,14 +314,34 @@ function MatchedHits({
 }) {
   const [open, setOpen] = useState(false);
   const isKb = kbHits.length > 0;
-  const total = isKb ? kbHits.length : memoryHits.length;
-  const noun = isKb
-    ? total === 1
-      ? "matched chunk"
-      : "matched chunks"
-    : total === 1
-      ? "matched memory"
-      : "matched memories";
+
+  // Bucket memory hits by kind once, reused for both the toggle summary and
+  // the group headings so their labels (and pluralization) stay in sync.
+  const { memMems, graphMems, promotedMems } = useMemo(
+    () => ({
+      memMems: memoryHits.filter((h) => h.kind === "mem"),
+      graphMems: memoryHits.filter((h) => h.kind === "graph"),
+      promotedMems: memoryHits.filter((h) => h.kind === "promoted"),
+    }),
+    [memoryHits],
+  );
+
+  // Toggle label breaks the count down by kind so vector "matched memories"
+  // aren't conflated with the graph relations (connected edges, not
+  // similarity-matched) shown alongside them.
+  const summary = useMemo(() => {
+    if (isKb) {
+      const n = kbHits.length;
+      return `${n} matched chunk${n === 1 ? "" : "s"}`;
+    }
+    const parts: string[] = [];
+    if (memMems.length)
+      parts.push(`${memMems.length} matched memor${memMems.length === 1 ? "y" : "ies"}`);
+    if (graphMems.length)
+      parts.push(`${graphMems.length} graph relation${graphMems.length === 1 ? "" : "s"}`);
+    if (promotedMems.length) parts.push(`${promotedMems.length} promoted`);
+    return parts.join(" + ");
+  }, [isKb, kbHits, memMems, graphMems, promotedMems]);
 
   // Split KB hits: document chunks (grouped by source document) vs.
   // promoted-memory hits (memories elevated into the KB — shown together
@@ -349,7 +377,7 @@ function MatchedHits({
         ) : (
           <ChevronRight className="h-3 w-3" aria-hidden />
         )}
-        {open ? `Hide ${noun}` : `See all ${total} ${noun}`}
+        {open ? `Hide ${summary}` : `See all ${summary}`}
       </button>
 
       {open ? (
@@ -417,11 +445,27 @@ function MatchedHits({
               ) : null}
             </>
           ) : (
-            <ul className="space-y-1.5">
-              {memoryHits.map((h, i) => (
-                <HitRow key={i} text={h.text} score={h.score} badge={h.kind} accent={accent} />
-              ))}
-            </ul>
+            <>
+              <MemoryGroup
+                label={`Matched memor${memMems.length === 1 ? "y" : "ies"}`}
+                icon={Brain}
+                hits={memMems}
+                accent={accent}
+              />
+              <MemoryGroup
+                label={`Graph relation${graphMems.length === 1 ? "" : "s"}`}
+                icon={Network}
+                hits={graphMems}
+                variant="graph"
+                accent={accent}
+              />
+              <MemoryGroup
+                label={`Promoted memor${promotedMems.length === 1 ? "y" : "ies"}`}
+                icon={Sparkles}
+                hits={promotedMems}
+                accent={accent}
+              />
+            </>
           )}
         </div>
       ) : null}
@@ -429,34 +473,151 @@ function MatchedHits({
   );
 }
 
+// A single graph node rendered as a cute, modern boxed chip. Long labels
+// are capped and ellipsis-truncated.
+function NodeChip({
+  label,
+  accent,
+  className,
+}: {
+  label: string;
+  accent: AccentKey;
+  className?: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-block max-w-[22ch] truncate rounded-md border px-2 py-1 font-mono text-[10px] leading-none",
+        ACCENT_BADGE[accent],
+        className,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+// Graph triples arrive as a flat "source RELATION target" string
+// (e.g. "studio_ghibli CONNECTED_TO movies"). We render the two nodes as
+// boxed chips joined by an arrow and drop the internal edge label. The raw
+// triple is left untouched in the data (it still feeds the LLM prompt).
+function GraphRelationRow({ text, accent }: { text: string; accent: AccentKey }) {
+  const parts = text.trim().split(/\s+/);
+  const source = parts[0] ?? text;
+  const target = parts.length >= 3 ? parts.slice(2).join(" ") : "";
+  // 3-column grid keeps every source under one column, the arrow always
+  // centered, and every target under one column — regardless of label width.
+  return (
+    <li className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+      <NodeChip label={source} accent={accent} className="justify-self-end" />
+      <ArrowRight className={cn("h-3.5 w-3.5 shrink-0", ACCENT_TEXT[accent])} aria-hidden />
+      {target ? (
+        <NodeChip label={target} accent={accent} className="justify-self-start" />
+      ) : (
+        <span aria-hidden />
+      )}
+    </li>
+  );
+}
+
+// One labelled group of memory rows (e.g. "Matched memories" vs "Graph
+// relations") so vector hits and graph edges render under separate roofs
+// instead of one mixed list. Renders nothing when the group is empty.
+function MemoryGroup({
+  label,
+  icon: Icon,
+  hits,
+  variant,
+  accent,
+}: {
+  label: string;
+  icon: LucideIcon;
+  hits: MemoryHit[];
+  variant?: "graph";
+  accent: AccentKey;
+}) {
+  if (hits.length === 0) return null;
+  return (
+    <div className="overflow-hidden rounded-md border border-border/50 bg-background/30">
+      <div className="flex items-center gap-1.5 border-b border-border/40 bg-muted/30 px-2.5 py-1.5">
+        <Icon className={cn("h-3.5 w-3.5 shrink-0", ACCENT_TEXT[accent])} aria-hidden />
+        <span className="min-w-0 shrink truncate text-[11px] font-medium text-foreground/90">
+          {label}
+        </span>
+        <span className="ml-auto shrink-0 rounded-full border border-border/50 px-1.5 py-[1px] text-[9.5px] tabular-nums text-muted-foreground">
+          {hits.length}
+        </span>
+      </div>
+      <ul className="space-y-1.5 px-2.5 py-2">
+        {hits.map((h, i) =>
+          variant === "graph" ? (
+            <GraphRelationRow key={i} text={h.text} accent={accent} />
+          ) : (
+            <HitRow key={i} text={h.text} score={h.score} accent={accent} />
+          ),
+        )}
+      </ul>
+    </div>
+  );
+}
+
 function HitRow({
   text,
+  score,
   badge,
   accent,
 }: {
   text: string;
-  // Relevance score is accepted but intentionally not displayed for now
-  // (cosine-distance-derived values read misleadingly low).
+  /** Cosine similarity (1 - distance, higher = better), same value shape for
+   *  both memory and KB hits. May be < 0; MatchChip clamps on display.
+   *  Omit (e.g. promoted rows) for no chip. */
   score?: number;
   badge?: string;
   accent: AccentKey;
 }) {
+  // Uniform display: score is a 1 - distance similarity from either source,
+  // shown as a match % via score × 100 (MatchChip clamps to 0..100).
+  const chip =
+    typeof score === "number" && Number.isFinite(score) ? <MatchChip pct={score * 100} /> : null;
   return (
-    <li className="rounded border border-border/40 bg-background/40 px-2 py-1 text-[11px]">
-      {badge ? (
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              "shrink-0 rounded border px-1 py-[1px] font-mono text-[8.5px] uppercase tracking-wider",
-              ACCENT_BADGE[accent],
-            )}
-          >
-            {badge}
-          </span>
+    <li className="flex items-center gap-2 rounded border border-border/40 bg-background/40 px-2 py-1.5 text-[11px]">
+      <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground/90">{text}</p>
+      {badge || chip ? (
+        <div className="flex shrink-0 items-center gap-2">
+          {badge ? (
+            <span
+              className={cn(
+                "shrink-0 rounded border px-1 py-[1px] font-mono text-[8.5px] uppercase tracking-wider",
+                ACCENT_BADGE[accent],
+              )}
+            >
+              {badge}
+            </span>
+          ) : null}
+          {chip}
         </div>
       ) : null}
-      <p className="whitespace-pre-wrap break-words text-foreground/90">{text}</p>
     </li>
+  );
+}
+
+// Renders a "% match" chip from an already-computed percentage (see HitRow
+// for the per-source normalization). Buckets: ≥70% green, ≥40% amber, else grey.
+function MatchChip({ pct: rawPct }: { pct: number }) {
+  const pct = Math.round(Math.max(0, Math.min(100, rawPct)));
+  const tone =
+    pct >= 70
+      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+      : pct >= 40
+        ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+        : "bg-muted/40 text-muted-foreground";
+  return (
+    <span
+      className={cn("ml-auto shrink-0 rounded px-1 py-0.5 font-mono text-[10px] tabular-nums", tone)}
+      title="Relevance match %. 100% = highly relevant, 0% = unrelated."
+    >
+      {pct}% match
+    </span>
   );
 }
 

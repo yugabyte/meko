@@ -70,10 +70,11 @@ export type KbHit = {
    *  than a chunk from an uploaded document. */
   source?: string;
   chunk_text: string;
-  /** Normalized [0..1] similarity (1 - cosine_distance, clamped) so it
-   *  sorts the same way as memory scores. */
+  /** Cosine similarity (1 - distance), same value shape as memory scores.
+   *  Not clamped here — the UI clamps to [0..100] on display. */
   score?: number;
-  /** Raw cosine distance from pgvector. Kept for debugging / tuning. */
+  /** Raw pgvector cosine distance in [0..2]; lower = closer. Clusters near
+   *  ~1.0 even for relevant chunks. Shown as the KB `dist` chip. */
   distance?: number;
   char_count?: number;
 };
@@ -116,6 +117,10 @@ export type ProcessingStep = {
    *  on the `conversation_search` step. Each links back to its source
    *  conversation and the user who authored it. */
   conversation_chunks?: ConversationChunk[];
+  /** Hits produced by this step (only on the matching retrieval step), so a
+   *  turn with several searches shows each step's own chunks. */
+  memory_hits?: MemoryHit[];
+  kb_hits?: KbHit[];
 };
 
 /** One prior-conversation excerpt that fed a conversation_search hit. */

@@ -78,11 +78,11 @@ export function DecisionTraceHeader({
 
   const dbTooltip = (
     <div>
-      <span className="mb-1 block text-[11px] font-medium text-blue-200">
+      <span className="mb-1 block text-[11px] font-medium text-blue-700 dark:text-blue-200">
         DB calls
       </span>
       {dbBreakdown.length === 0 ? (
-        <span className="block text-[10px] text-blue-100/75">None.</span>
+        <span className="block text-[10px] text-blue-700/70 dark:text-blue-100/75">None.</span>
       ) : (
         <span className="block space-y-0.5">
           {dbBreakdown.map((b) => (
@@ -90,10 +90,10 @@ export function DecisionTraceHeader({
               key={b.name}
               className="flex items-center justify-between gap-3"
             >
-              <code className="font-mono text-[10px] text-blue-100/90">
+              <code className="font-mono text-[10px] text-blue-800 dark:text-blue-100/90">
                 {b.prettyName}
               </code>
-              <span className="tabular-nums text-[10px] text-blue-100/70">
+              <span className="tabular-nums text-[10px] text-blue-600/80 dark:text-blue-100/70">
                 ×{b.count}
                 {b.ms > 0 ? ` · ${formatDuration(b.ms)}` : ""}
               </span>
@@ -225,7 +225,7 @@ function HeaderChip({
         align="start"
         sideOffset={8}
         collisionPadding={12}
-        className="z-[90] w-[280px] rounded-lg border border-blue-400/20 bg-[#0A1222]/95 px-2.5 py-2 text-left text-[10px] text-blue-100 shadow-lg"
+        className="z-[90] w-[280px] rounded-lg border border-blue-300/50 bg-white/95 px-2.5 py-2 text-left text-[10px] text-blue-900 shadow-lg dark:border-blue-400/20 dark:bg-[#0A1222]/95 dark:text-blue-100"
       >
         {tooltip}
       </TooltipContent>
