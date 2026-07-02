@@ -113,9 +113,32 @@ foundation. Related: #81 (yb_light_local deploy self-sufficiency).
 
 ---
 
+## 7. Integrate the storage controller in-process — [#202](https://github.com/yugabyte/yb-amp/issues/202)
+
+amp-controller runs the storage controller (the `storage_controller/` crate) as a
+**managed subprocess** today (`amp-controller.md` §11.1, #94): a generic supervisor
+(`controller/internal/process`) spawns the binary, streams its logs, restarts it with
+backoff, and stops it on shutdown, with the SC specifics (`--listen` / `--database-url` /
+`--dev`, `/ready` probe) and a thin loopback HTTP client in
+`controller/internal/storagecontroller`; wired in `controller/cmd/controller/main.go`
+(~L259-266) behind `--storage-controller`. The controller is its **only** caller.
+
+That subprocess carries standing cost — a second binary to bundle (`make controller-bundle`,
+`deploy/controller` under `/opt/yb-light-amp`), a supervisor to babysit, an extra HTTP hop
+per branch op, a listen address to allocate, and an "is it up?" failure surface — for
+isolation we don't use. **Goal: run it in-process, one binary/one process.**
+
+**Open design question:** the controller is Go, the SC is Rust, and §11.1 deliberately
+**reuses the crate rather than rewriting it** (principle 7 — don't touch the proven
+fencing/generation logic). So integration means link-the-crate (cgo/FFI), embed-as-in-process-server,
+or port-the-used-subset-to-Go (§11.2) — pick what drops the process cost without
+re-implementing fencing. Supersedes the subprocess posture in §11.1 / #94.
+
+---
+
 ## Milestones
 
-All six are filed under **Early Access** (due 2026-07-31) — the "before external users"
+All seven are filed under **Early Access** (due 2026-07-31) — the "before external users"
 bucket. The other open milestone, **K8 Deploy** (due 2026-07-07), is the *initial manual*
 full-stack bring-up. #193 (the productized foundation installer) is the closest call and
 could reasonably move to K8 Deploy if it's wanted sooner.
