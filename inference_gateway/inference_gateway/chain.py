@@ -34,7 +34,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -44,6 +44,64 @@ from .config import AppConfig
 from .session_store import InMemorySessionStore
 
 logger = logging.getLogger(__name__)
+
+
+def _format_exc_chain(exc: BaseException) -> str:
+    """Flatten an exception chain into a single-line description that
+    survives `logger.warning("... %s", ...)` formatting.
+
+    Python 3.11+'s `asyncio.TaskGroup` wraps every sub-task failure in
+    an `ExceptionGroup`; logging it directly yields the useless
+    "unhandled errors in a TaskGroup (1 sub-exception)" line, hiding
+    the real cause. This walks the group recursively so operators see
+    which upstream call (memory_search / kb_search / conversation_add_message)
+    actually failed and why.
+
+    Also chases the exception chain:
+      - `__cause__`   — explicit `raise X from Y`.
+      - `__context__` — implicit chaining when an exception is raised
+        inside an `except` block without `from …`. Python sets this
+        automatically; skipping it drops the root cause for the common
+        "wrapped and re-raised" pattern.
+    `__suppress_context__` is honored so `raise X from None` correctly
+    hides the implicit context.
+
+    Newlines in exception messages (multi-line HTTP bodies, SQL errors)
+    are collapsed to a literal `\\n` marker so the output stays a single
+    line — grep-friendly for log-aggregator dashboards.
+    """
+    parts: List[str] = []
+    seen: Set[int] = set()
+
+    def _sanitize(msg: str) -> str:
+        # Replace real newlines/CRs with visible markers so the log stays
+        # on one line but the payload is still readable in the aggregator.
+        return msg.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
+
+    def _walk(e: BaseException, indent: int = 0) -> None:
+        if id(e) in seen:
+            return
+        seen.add(id(e))
+        pad = "  " * indent
+        parts.append(f"{pad}{type(e).__name__}: {_sanitize(str(e))}")
+        # ExceptionGroup / BaseExceptionGroup — recurse into every child.
+        subs = getattr(e, "exceptions", None)
+        if isinstance(subs, (list, tuple)):
+            for i, sub in enumerate(subs):
+                parts.append(f"{pad}  [{i}]")
+                _walk(sub, indent + 2)
+        # Explicit chain wins. If absent, fall back to the implicit
+        # context (unless the raiser explicitly suppressed it via
+        # `raise X from None`).
+        if e.__cause__ is not None:
+            parts.append(f"{pad}  caused by:")
+            _walk(e.__cause__, indent + 2)
+        elif not e.__suppress_context__ and e.__context__ is not None:
+            parts.append(f"{pad}  during handling of:")
+            _walk(e.__context__, indent + 2)
+
+    _walk(exc)
+    return " | ".join(parts)
 
 
 async def _track_token_usage(
@@ -92,7 +150,9 @@ async def _track_token_usage(
     try:
         await tool.ainvoke(args)
     except Exception as exc:  # noqa: BLE001 — best-effort
-        logger.warning("track_token_usage(%s) failed: %s", name, exc)
+        logger.warning(
+            "track_token_usage(%s) failed: %s", name, _format_exc_chain(exc), exc_info=exc,
+        )
 
 
 def _usage_from_langchain_result(result: Any) -> Tuple[int, int, int, Optional[str]]:
@@ -371,7 +431,11 @@ async def _summarize_conversation_hits(
             return _closest_answer()
         return text
     except Exception as exc:  # noqa: BLE001
-        logger.warning("conversation summary failed, falling back to closest answer: %s", exc)
+        logger.warning(
+            "conversation summary failed, falling back to closest answer: %s",
+            _format_exc_chain(exc),
+            exc_info=exc,
+        )
         return _closest_answer()
 
 
@@ -400,7 +464,11 @@ async def _classify_followup(model: BaseChatModel, prior_query: str, message: st
             if v in label:
                 return v
     except Exception as exc:  # noqa: BLE001
-        logger.warning("follow-up classify failed (defaulting to 'other'): %s", exc)
+        logger.warning(
+            "follow-up classify failed (defaulting to 'other'): %s",
+            _format_exc_chain(exc),
+            exc_info=exc,
+        )
     return "other"
 
 
@@ -870,7 +938,11 @@ async def _search_memories(
     try:
         raw = await tool.ainvoke(args)
     except Exception as exc:  # noqa: BLE001 — MCP failure must not break chat
-        logger.warning("memory_search failed: %s", exc)
+        logger.warning(
+            "memory_search failed (agent_id=%s, datapack_id=%s, query=%r): %s",
+            agent_id, datapack_id, query, _format_exc_chain(exc),
+            exc_info=exc,
+        )
         if steps is not None:
             steps.append(
                 ProcessingStep(
@@ -967,7 +1039,11 @@ async def _search_knowledge(
     try:
         raw = await tool.ainvoke(args)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("knowledgebase_search failed: %s", exc)
+        logger.warning(
+            "knowledgebase_search failed (agent_id=%s, datapack_id=%s, query=%r): %s",
+            agent_id, datapack_id, query, _format_exc_chain(exc),
+            exc_info=exc,
+        )
         if steps is not None:
             steps.append(
                 ProcessingStep(
@@ -1096,7 +1172,11 @@ async def _add_message(
     try:
         raw = await tool.ainvoke(args)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("conversation_add_message failed: %s", exc)
+        logger.warning(
+            "conversation_add_message failed (agent_id=%s, conversation_id=%s, datapack_id=%s): %s",
+            agent_id, conversation_id, datapack_id, _format_exc_chain(exc),
+            exc_info=exc,
+        )
         return ""
     payload = _parse_json(raw)
     if isinstance(payload, dict):
