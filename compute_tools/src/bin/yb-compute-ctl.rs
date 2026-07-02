@@ -221,6 +221,12 @@ fn main() -> Result<()> {
         .build()?;
     let _rt_guard = runtime.enter();
 
+    // Suspended-task dump on SIGUSR2 (`kill -USR2 <pid>`). See `utils::tokio_dump`.
+    utils::tokio_dump::spawn_sigusr2_dumper(vec![(
+        "compute_ctl".to_string(),
+        tokio::runtime::Handle::current(),
+    )]);
+
     let mut log_dir = None;
     if cli.lakebase_mode {
         log_dir = std::env::var("COMPUTE_CTL_LOG_DIRECTORY").ok();

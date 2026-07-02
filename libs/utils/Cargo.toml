@@ -70,3 +70,12 @@ tokio = { workspace = true, features = ["test-util"] }
 [[bench]]
 name = "benchmarks"
 harness = false
+
+[lints.rust]
+# `utils::tokio_dump` gates on these (enabled workspace-wide via
+# `.cargo/config.toml` rustflags); declare them so the unexpected-cfg lint
+# doesn't fire on the dump code.
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(tokio_unstable)',
+    'cfg(tokio_taskdump)',
+] }

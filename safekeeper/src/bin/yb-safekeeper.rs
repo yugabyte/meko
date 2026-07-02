@@ -101,6 +101,12 @@ async fn main() -> anyhow::Result<()> {
             .get_matches(),
     )?;
 
+    // Suspended-task dump on SIGUSR2 (`kill -USR2 <pid>`). See `utils::tokio_dump`.
+    utils::tokio_dump::spawn_sigusr2_dumper(vec![(
+        "safekeeper".to_string(),
+        tokio::runtime::Handle::current(),
+    )]);
+
     if let Some(addr) = args.dump_control_file {
         anyhow::bail!(
             "--dump-control-file is unsupported: local-FS control files were removed. \

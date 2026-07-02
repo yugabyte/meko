@@ -272,6 +272,12 @@ fn main() -> anyhow::Result<()> {
 async fn async_main() -> anyhow::Result<()> {
     let launch_ts = Box::leak(Box::new(LaunchTimestamp::generate()));
 
+    // Suspended-task dump on SIGUSR2 (`kill -USR2 <pid>`). See `utils::tokio_dump`.
+    utils::tokio_dump::spawn_sigusr2_dumper(vec![(
+        "storage_controller".to_string(),
+        tokio::runtime::Handle::current(),
+    )]);
+
     preinitialize_metrics();
 
     let args = Cli::parse();

@@ -49,6 +49,12 @@ async fn main() -> anyhow::Result<()> {
         logging::Output::Stdout,
     )?;
 
+    // Suspended-task dump on SIGUSR2 (`kill -USR2 <pid>`). See `utils::tokio_dump`.
+    utils::tokio_dump::spawn_sigusr2_dumper(vec![(
+        "endpoint_storage".to_string(),
+        tokio::runtime::Handle::current(),
+    )]);
+
     let args = Args::parse();
     let config: Config = if let Some(config_path) = args.config_file {
         info!("Reading config from {config_path}");

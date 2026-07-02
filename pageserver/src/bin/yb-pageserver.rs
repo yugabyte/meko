@@ -656,6 +656,28 @@ fn start_pageserver(
 
         tokio::spawn(utils::signals::signal_handler(signal_token));
 
+        // On-demand suspended-task dump on SIGUSR2 (`kill -USR2 <pid>`) across
+        // all four runtimes — for diagnosing async deadlocks that OS-thread
+        // backtraces can't show. See `utils::tokio_dump`.
+        utils::tokio_dump::spawn_sigusr2_dumper(vec![
+            (
+                "walreceiver".to_string(),
+                pageserver::task_mgr::WALRECEIVER_RUNTIME.handle().clone(),
+            ),
+            (
+                "compute_request".to_string(),
+                COMPUTE_REQUEST_RUNTIME.handle().clone(),
+            ),
+            (
+                "mgmt_request".to_string(),
+                MGMT_REQUEST_RUNTIME.handle().clone(),
+            ),
+            (
+                "background_op".to_string(),
+                BACKGROUND_RUNTIME.handle().clone(),
+            ),
+        ]);
+
         // Wait for cancellation signal and shut down the pageserver.
         //
         // This cancels the `shutdown_pageserver` cancellation tree. Right now that tree doesn't

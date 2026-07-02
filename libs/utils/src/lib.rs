@@ -62,6 +62,8 @@ pub mod postgres_client;
 
 pub mod tracing_span_assert;
 
+pub mod tokio_dump;
+
 pub mod leaky_bucket;
 pub mod rate_limit;
 

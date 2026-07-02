@@ -11,7 +11,17 @@ rustdocflags = ["-Arustdoc::private_intra_doc_links"]
 # * <https://github.com/rust-lang/rust/pull/122646>
 #
 # NB: the RUSTFLAGS envvar will replace this. Make sure to update e.g. Dockerfile as well.
-rustflags = ["-Cforce-frame-pointers=yes"]
+# `--cfg tokio_unstable` + `--cfg tokio_taskdump` enable
+# `tokio::runtime::Handle::dump()` (tokio's `cfg_taskdump!` gate) for the
+# on-demand task dumps in `utils::tokio_dump` (SIGUSR2 handler on every
+# daemon). Applies to the whole workspace build.
+rustflags = [
+    "-Cforce-frame-pointers=yes",
+    "--cfg",
+    "tokio_unstable",
+    "--cfg",
+    "tokio_taskdump",
+]
 
 [alias]
 build_testing = ["build", "--features", "testing"]
