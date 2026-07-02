@@ -519,7 +519,11 @@ function FilesTable({
 
   return (
     <section className="rounded-xl border border-border bg-card">
-      <header className="grid grid-cols-[24px_minmax(0,2fr)_minmax(0,0.7fr)_minmax(0,0.6fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,0.7fr)] gap-3 border-b border-border/60 px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      {/* Below md: the 7-column table header is unreadable on a 375px
+          viewport, and the row cells below stack vertically anyway —
+          so hide the header to remove visual clutter and rely on
+          per-cell labels in the row template instead. Desktop unchanged. */}
+      <header className="hidden grid-cols-[24px_minmax(0,2fr)_minmax(0,0.7fr)_minmax(0,0.6fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,0.7fr)] gap-3 border-b border-border/60 px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground md:grid">
         <span aria-hidden />
         <span>File</span>
         <span>Size</span>
@@ -593,7 +597,11 @@ const FileRow = memo(function FileRow({
           Grid is a 6-cell row: chevron · file · chunks · uploaded ·
           md5 · status. The chevron column keeps a fixed 24px width so
           the file-name column aligns regardless of expand state. */}
-      <div className="grid grid-cols-[24px_minmax(0,2fr)_minmax(0,0.7fr)_minmax(0,0.6fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,0.7fr)] gap-3 px-5 py-3">
+      {/* Below md: each row stacks vertically (1 column) so each cell
+          gets the full width — readable as a card. Desktop unchanged:
+          7-column dense table preserved at md+. The expand chevron's
+          fixed 24px column drops to in-flow on mobile (still tappable). */}
+      <div className="grid grid-cols-1 gap-1 px-4 py-3 md:grid-cols-[24px_minmax(0,2fr)_minmax(0,0.7fr)_minmax(0,0.6fr)_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,0.7fr)] md:gap-3 md:px-5">
         <button
           type="button"
           onClick={toggle}

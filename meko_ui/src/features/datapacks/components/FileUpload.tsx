@@ -396,7 +396,10 @@ export default function FileUpload({
   return (
     <div className="space-y-6">
       {/* Upload section */}
-      <div className="rounded-xl border border-dashed border-border bg-card p-6 space-y-4">
+      {/* Tighter padding on mobile (16px) so the dashed upload card has
+          more room for filename + status + actions inside a 390px
+          viewport. Desktop restores the original 24px gutter. */}
+      <div className="rounded-xl border border-dashed border-border bg-card p-4 space-y-4 md:p-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">

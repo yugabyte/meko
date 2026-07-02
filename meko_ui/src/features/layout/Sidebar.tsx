@@ -8,6 +8,7 @@ import {
   Download,
   ChevronDown,
   MessageSquare,
+  Menu,
   PanelLeftClose,
   PanelLeftOpen,
   PlayCircle,
@@ -20,6 +21,7 @@ import {
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
 import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -61,7 +63,23 @@ const DATAPACK_ROW_HEIGHT_PX = 28;
 export default function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
+  // Mobile (< md): sidebar is a slide-in off-canvas drawer triggered by
+  // a fixed hamburger button. Closed by default so chat / datapack
+  // content gets full viewport width. Open state controls a CSS
+  // translate on the outer container — no Sheet primitive needed since
+  // we already own the chrome and want the same JSX in both modes.
+  // Desktop (>= md): unchanged — static positioning, user-controlled
+  // collapse via the existing pill toggle.
+  const isMobile = useIsMobile();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  // Close the drawer on navigation so a link tap doesn't leave it
+  // covering the page the user just navigated to. Watching pathname
+  // covers every link / NavLink without us having to wire onClick on
+  // each one individually.
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
   // Hidden by default — unlocked once the user lands on
   // /billing?showPaymentOptions=true (persisted in localStorage).
   // See useBillingNavFlag for the gate logic.
@@ -161,6 +179,30 @@ export default function Sidebar() {
     location.pathname === ROUTES.datapacks || location.pathname.startsWith(`${ROUTES.datapacks}/`);
 
   return (
+    <>
+      {/* Mobile-only hamburger trigger. Fixed top-left so it stays
+          reachable even when page content scrolls. Hidden on desktop
+          since the sidebar is permanent there. */}
+      <button
+        type="button"
+        onClick={() => setMobileOpen(true)}
+        className="fixed left-2 top-2 z-40 inline-flex h-10 w-10 items-center justify-center rounded-md border border-border bg-background shadow-sm text-foreground md:hidden"
+        aria-label="Open navigation"
+        aria-expanded={mobileOpen}
+      >
+        <Menu className="h-5 w-5" aria-hidden />
+      </button>
+
+      {/* Mobile-only backdrop — taps dismiss the drawer. Below the
+          drawer's z-50, above page content. Hidden on desktop. */}
+      {isMobile && mobileOpen ? (
+        <div
+          onClick={() => setMobileOpen(false)}
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          aria-hidden
+        />
+      ) : null}
+
     <div
       className={cn(
         // `bg-background` keeps the sidebar continuous with the
@@ -169,8 +211,20 @@ export default function Sidebar() {
         // separated from the main content only by the right border.
         // In dark mode this resolves to navy-900 — matches the
         // original design where the sidebar was the deepest surface.
-        "flex-shrink-0 border-r border-border bg-background h-screen flex flex-col transition-all duration-300 relative",
-        isCollapsed ? "w-[68px]" : "w-[240px]",
+        // h-dvh tracks the dynamic viewport (shrinks for iOS keyboard);
+        // h-screen is the desktop fallback. Desktop reads identical
+        // height since dvh == vh outside mobile-keyboard states.
+        "flex-shrink-0 border-r border-border bg-background h-screen h-dvh flex flex-col transition-transform duration-300 relative",
+        // Mobile (< md): fixed off-canvas; slides in/out via translate.
+        // Width is the full 260px since icon-only mode doesn't apply on
+        // mobile (the hamburger handles "out of the way" instead).
+        "fixed inset-y-0 left-0 z-50 w-[260px]",
+        mobileOpen ? "translate-x-0" : "-translate-x-full",
+        // Desktop (>= md): static positioning, user-controlled collapse
+        // restores the original behavior. `md:transition-all` swaps the
+        // width-only transition back in once we leave mobile.
+        "md:static md:translate-x-0 md:z-auto md:transition-all",
+        isCollapsed ? "md:w-[68px]" : "md:w-[240px]",
       )}
     >
       <Button
@@ -190,7 +244,10 @@ export default function Sidebar() {
         // an inward/outward indicator, which matches the actual
         // affordance and is the convention used by VS Code, Cursor,
         // ChatGPT, etc.
-        className="absolute -right-4 top-6 z-50 h-8 w-8 rounded-full border border-border bg-card shadow-md hover:bg-muted text-muted-foreground hover:text-foreground"
+        // Hidden on mobile (< md): the collapsed state is forced by the
+        // viewport, not by user choice, so a toggle that can't actually
+        // expand would be misleading.
+        className="absolute -right-4 top-6 z-50 hidden h-8 w-8 rounded-full border border-border bg-card shadow-md hover:bg-muted text-muted-foreground hover:text-foreground md:flex"
         onClick={() => setIsCollapsed(!isCollapsed)}
         title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -618,5 +675,6 @@ export default function Sidebar() {
         datapackName={activeDatapack?.name ?? null}
       />
     </div>
+    </>
   );
 }

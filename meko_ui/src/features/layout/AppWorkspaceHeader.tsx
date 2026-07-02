@@ -53,16 +53,31 @@ export function AppWorkspaceHeader({
   return (
     <header
       className={cn(
-        "flex items-center border-b border-border bg-background/95 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/60",
-        padding === "page" ? "px-8" : "px-6",
-        hasLeft && hasRight ? "justify-between" : hasLeft ? "justify-start" : "justify-end",
-        // `z-20` (not `z-10`) so the sticky header always paints above
-        // page content. Several pages — notably the Datapacks overview's
-        // "What is a Datapack?" panel — use `relative z-10` to lift their
-        // own inner content above decorative blur blobs in the same
-        // card. With both at the same z, DOM order wins and content
-        // bleeds through the translucent header. A header layer above
-        // every page-content layer is the safer global default.
+        // Mobile (< md): stack vertically — leading content (page title /
+        // datapack picker / description) gets a full-width row, the
+        // user-info cluster (theme / bell / email + tier badge) goes on
+        // its own row below. Otherwise the two compete for ~390px and
+        // the leading column collapses to one-word-per-line wrap.
+        // Mobile also gets `pl-14` so it clears the fixed hamburger
+        // button at top-left (`left-2 + w-10 = 48px`).
+        // gap-y-2 on mobile so the stacked leading row + user-info row
+        // get visual breathing room; reset to 0 at md+ where the
+        // single horizontal row doesn't need vertical spacing.
+        "flex flex-col items-stretch gap-y-2 border-b border-border bg-background/95 py-3 sm:py-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 md:gap-y-0",
+        // Desktop (>= md): back to a single horizontal row.
+        "md:flex-row md:items-center",
+        // Tighter horizontal padding below sm so the chrome doesn't eat
+        // half the phone's viewport. Mobile pl-14 clears the hamburger;
+        // md+ reverts to the original spacious gutters.
+        padding === "page"
+          ? "pl-14 pr-4 sm:pr-6 md:px-8 md:pl-8"
+          : "pl-14 pr-3 sm:pr-4 md:px-6 md:pl-6",
+        // Stacked layout doesn't need `justify-between`; row layout does.
+        hasLeft && hasRight
+          ? "md:justify-between"
+          : hasLeft
+            ? "md:justify-start"
+            : "md:justify-end",
         sticky && "sticky top-0 z-20",
         className,
       )}

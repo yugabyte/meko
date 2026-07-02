@@ -21,6 +21,7 @@
 
 import { ArrowUpRight, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { SALES_CONTACT_URL } from "@/lib/freeTier";
 
@@ -66,83 +67,110 @@ export function PricingSection() {
         </p>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {/* ── Free tier ─────────────────────────────────────────── */}
-        <article className="rounded-lg border border-border bg-background/40 p-4">
-          {/* Header uses min-h-7 so both Free + Pro headers occupy the
-              same vertical space regardless of which action chip lives
-              on the right (badge vs. link), keeping the row-1 baseline
-              aligned across columns. */}
-          <header className="mb-3 flex min-h-7 items-center justify-between gap-2">
-            <h3 className="text-base font-semibold text-foreground">Free</h3>
-            <span
-              className="inline-flex items-center gap-1 rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-blue-700 dark:text-blue-300"
-              aria-label="Your current plan"
-            >
-              <Check className="h-3 w-3" aria-hidden />
-              Current
-            </span>
-          </header>
-
-          <dl className="divide-y divide-border/60 text-sm">
-            {TIER_ROWS.map((row) => (
-              <div key={row.label} className="flex items-center justify-between gap-3 py-2">
-                <dt className="text-muted-foreground">{row.label}</dt>
-                <dd
-                  className={
-                    row.freeValue
-                      ? "font-mono text-xs font-medium text-foreground"
-                      : "font-mono text-xs text-muted-foreground/60"
-                  }
-                >
-                  {row.freeValue ?? "—"}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </article>
-
-        {/* ── Pro tier ──────────────────────────────────────────── */}
-        <article className="rounded-lg border border-blue-500/30 bg-blue-500/[0.04] p-4">
-          {/* Same min-h-7 as the Free header — locks both first-rows to
-              the same Y so "Datapacks" lines up across columns. */}
-          <header className="mb-3 flex min-h-7 items-center justify-between gap-2">
-            <h3 className="text-base font-semibold text-foreground">Pro</h3>
-            <Button
-              asChild
-              variant="link"
-              size="sm"
-              className="h-auto gap-1 p-0 text-xs font-medium text-blue-600 dark:text-blue-400"
-            >
-              <a href={SALES_CONTACT_URL} target="_blank" rel="noopener noreferrer">
-                Talk to our team
-                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
-              </a>
-            </Button>
-          </header>
-
-          {/* Pro's tinted blue background swallows `divide-border/60`, so
-              use a slightly more contrasty blue-tinted divider matching
-              the card border. Keeps row-separators visibly present so
-              Free + Pro feel structurally identical. */}
-          <dl className="divide-y divide-blue-500/15 text-sm">
-            {TIER_ROWS.map((row) => (
-              <div key={row.label} className="flex items-center justify-between gap-3 py-2">
-                <dt className="text-muted-foreground">{row.label}</dt>
-                <dd
-                  className={
-                    row.proValue
-                      ? "font-mono text-xs font-medium text-foreground"
-                      : "font-mono text-xs text-muted-foreground/60"
-                  }
-                >
-                  {row.proValue ?? "—"}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </article>
+      {/* Desktop (≥ md): side-by-side Free + Pro cards, original layout. */}
+      <div className="hidden md:grid md:grid-cols-2 md:gap-4">
+        <FreeCard />
+        <ProCard />
       </div>
+
+      {/* Mobile (< md): tabs to switch between Free and Pro — saves the
+          vertical scroll required to compare in stacked-cards mode and
+          renders one card at full viewport width. Desktop hides this
+          block entirely so the layout above is unaffected. */}
+      <Tabs defaultValue="free" className="md:hidden">
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="free">Free</TabsTrigger>
+          <TabsTrigger value="pro">Pro</TabsTrigger>
+        </TabsList>
+        <TabsContent value="free" className="mt-3">
+          <FreeCard />
+        </TabsContent>
+        <TabsContent value="pro" className="mt-3">
+          <ProCard />
+        </TabsContent>
+      </Tabs>
     </section>
+  );
+}
+
+function FreeCard() {
+  return (
+    <article className="rounded-lg border border-border bg-background/40 p-4">
+      {/* Header uses min-h-7 so both Free + Pro headers occupy the
+          same vertical space regardless of which action chip lives on
+          the right (badge vs. link), keeping the row-1 baseline aligned
+          across columns. */}
+      <header className="mb-3 flex min-h-7 items-center justify-between gap-2">
+        <h3 className="text-base font-semibold text-foreground">Free</h3>
+        <span
+          className="inline-flex items-center gap-1 rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-blue-700 dark:text-blue-300"
+          aria-label="Your current plan"
+        >
+          <Check className="h-3 w-3" aria-hidden />
+          Current
+        </span>
+      </header>
+
+      <dl className="divide-y divide-border/60 text-sm">
+        {TIER_ROWS.map((row) => (
+          <div key={row.label} className="flex items-center justify-between gap-3 py-2">
+            <dt className="text-muted-foreground">{row.label}</dt>
+            <dd
+              className={
+                row.freeValue
+                  ? "font-mono text-xs font-medium text-foreground"
+                  : "font-mono text-xs text-muted-foreground/60"
+              }
+            >
+              {row.freeValue ?? "—"}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </article>
+  );
+}
+
+function ProCard() {
+  return (
+    <article className="rounded-lg border border-blue-500/30 bg-blue-500/[0.04] p-4">
+      {/* Same min-h-7 as the Free header — locks both first-rows to
+          the same Y so "Datapacks" lines up across columns. */}
+      <header className="mb-3 flex min-h-7 items-center justify-between gap-2">
+        <h3 className="text-base font-semibold text-foreground">Pro</h3>
+        <Button
+          asChild
+          variant="link"
+          size="sm"
+          className="h-auto gap-1 p-0 text-xs font-medium text-blue-600 dark:text-blue-400"
+        >
+          <a href={SALES_CONTACT_URL} target="_blank" rel="noopener noreferrer">
+            Talk to our team
+            <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+          </a>
+        </Button>
+      </header>
+
+      {/* Pro's tinted blue background swallows `divide-border/60`, so
+          use a slightly more contrasty blue-tinted divider matching the
+          card border. Keeps row-separators visibly present so Free + Pro
+          feel structurally identical. */}
+      <dl className="divide-y divide-blue-500/15 text-sm">
+        {TIER_ROWS.map((row) => (
+          <div key={row.label} className="flex items-center justify-between gap-3 py-2">
+            <dt className="text-muted-foreground">{row.label}</dt>
+            <dd
+              className={
+                row.proValue
+                  ? "font-mono text-xs font-medium text-foreground"
+                  : "font-mono text-xs text-muted-foreground/60"
+              }
+            >
+              {row.proValue ?? "—"}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </article>
   );
 }

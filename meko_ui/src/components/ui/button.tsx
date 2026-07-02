@@ -36,10 +36,15 @@ const buttonVariants = cva(
       },
       size: {
         // @replit changed sizes
-        default: "min-h-9 px-4 py-2",
-        sm: "min-h-8 rounded-md px-3 text-xs",
-        lg: "min-h-10 rounded-md px-8",
-        icon: "h-9 w-9",
+        // Mobile-first minimums hit ≥44px (iOS HIG / WCAG 2.5.5 target
+        // size); desktop overrides restore the tighter original sizes
+        // where mouse precision is fine. `default`/`sm`/`lg` callers
+        // that want pixel-perfect chrome can still override with a
+        // local className.
+        default: "min-h-11 px-4 py-2 md:min-h-9",
+        sm: "min-h-9 rounded-md px-3 text-xs md:min-h-8",
+        lg: "min-h-11 rounded-md px-8 md:min-h-10",
+        icon: "h-11 w-11 md:h-9 md:w-9",
       },
     },
     defaultVariants: {

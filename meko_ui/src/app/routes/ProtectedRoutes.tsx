@@ -23,8 +23,14 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
     // an onboarding path. Previously this rendered full-screen with
     // no sidebar; the change makes the onboarding experience
     // continuous with the post-onboarding workspace.
+    // `h-screen` resolves to 100vh, which on iOS Safari does NOT shrink
+    // when the on-screen keyboard slides up — the bottom of the page
+    // (incl. the chat input) sits behind the keyboard. `h-dvh` (dynamic
+    // viewport height) does shrink, so the chat input stays visible
+    // above the keyboard. Falls back to h-screen if dvh isn't supported.
+    // Desktop reads identical height since dvh == vh outside keyboard.
     return (
-      <div className="flex h-screen w-full bg-background overflow-hidden text-foreground">
+      <div className="flex h-screen h-dvh w-full bg-background overflow-hidden text-foreground">
         <Sidebar />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
           <OnboardingPage />
@@ -44,8 +50,9 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings. */
   const isDatapacks = !isObserve && !isConnect && !isWorkbenchLM && !isSettings && !isBilling;
 
+  // See onboarding-shell comment above re: h-dvh for iOS keyboard.
   return (
-    <div className="flex h-screen w-full bg-background overflow-hidden text-foreground">
+    <div className="flex h-screen h-dvh w-full bg-background overflow-hidden text-foreground">
       <Sidebar />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <KbImportStatusBanner />

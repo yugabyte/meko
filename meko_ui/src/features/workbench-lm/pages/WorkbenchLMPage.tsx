@@ -1,7 +1,7 @@
 // WorkbenchLM entry: header (datapack picker) + left knowledge panel + center
 // chat (talks to the inference gateway) + right "live observation" rail.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import {
@@ -32,6 +32,9 @@ import { getPersistedItem, removePersistedItem, setPersistedItem } from "@/lib/b
 import { isDatapackGrantEligibleForWorkbenchLM } from "@/lib/datapackShareGrants";
 import { SAMPLE_KNOWLEDGE_FILENAME } from "@/features/workbench-lm/data/sampleKnowledge";
 import { DATAPACK_ID_QUERY_PARAM } from "@/app/routes/paths";
+import { Sparkles } from "lucide-react";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 // Optional dev override for the MCP bearer. When unset (the normal case), we
 // fetch the token from /provision-status per datapack instead.
@@ -450,7 +453,10 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
           {datapacksError}
         </div>
       ) : null}
-      <div className="grid min-h-0 flex-1 grid-cols-[320px_1fr_360px] overflow-hidden">
+      {/* Mobile (< md): stack the three panels vertically so each gets full
+          width. Desktop (>= md): restore the original fixed-width 3-col
+          grid so the laptop / monitor experience is byte-identical. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto md:grid-cols-[320px_1fr_360px] md:overflow-hidden">
         <WorkbenchLMKnowledgePanel
           datapackName={selectedName}
           datapackId={selectedDatapack?.datapack_id ?? null}
@@ -481,15 +487,31 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
           datapackGrant={selectedDatapack?.grant ?? null}
           conversationCount={sessions.length}
         />
-        <WorkbenchLMLiveObservationPanel
-          datapackId={selectedDatapack?.datapack_id ?? null}
-          datapackName={selectedName}
-          refreshTick={refreshTick}
-          // "Promote to Ko" for contributors (owner/maintainer keep it).
-          datapackGrant={selectedDatapack?.grant ?? null}
-          paused={!isRouteActive}
-        />
+        {/* Desktop (>= md): observation panel sits inline as the third
+            grid column, same as before. Hidden on mobile to avoid a
+            tall block of memories pushing chat off-screen. */}
+        <div className="hidden md:contents">
+          <WorkbenchLMLiveObservationPanel
+            datapackId={selectedDatapack?.datapack_id ?? null}
+            datapackName={selectedName}
+            refreshTick={refreshTick}
+            // "Promote to Ko" for contributors (owner/maintainer keep it).
+            datapackGrant={selectedDatapack?.grant ?? null}
+            paused={!isRouteActive}
+          />
+        </div>
       </div>
+
+      {/* Mobile-only: observation panel lives in a bottom-sheet, opened
+          by a floating "Memories" pill above the chat input. Chat keeps
+          full viewport when sheet is closed. Hidden on desktop. */}
+      <MobileObservationSheet
+        datapackId={selectedDatapack?.datapack_id ?? null}
+        datapackName={selectedName}
+        refreshTick={refreshTick}
+        datapackGrant={selectedDatapack?.grant ?? null}
+        paused={!isRouteActive}
+      />
 
       <WorkbenchLMSwitchConfirmDialog
         open={pendingSwitch !== null}
@@ -516,5 +538,40 @@ export default function WorkbenchLMPage({ isRouteActive }: Props) {
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Mobile-only floating trigger + bottom-sheet wrapping the live
+ * observation panel. Renders nothing above `md` since the panel is
+ * inline there. The sheet is dismissed by tapping the backdrop or the
+ * built-in close button; chat stays visible underneath while open
+ * (Radix Dialog handles focus + scroll lock).
+ */
+function MobileObservationSheet(
+  props: ComponentProps<typeof WorkbenchLMLiveObservationPanel>,
+) {
+  const isMobile = useIsMobile();
+  if (!isMobile) return null;
+  return (
+    <Sheet>
+      <SheetTrigger asChild>
+        <button
+          type="button"
+          className="fixed bottom-20 right-3 z-30 inline-flex items-center gap-1.5 rounded-full border border-purple-500/40 bg-purple-500/15 px-3 py-2 text-xs font-semibold text-purple-700 shadow-md backdrop-blur dark:text-purple-200 md:hidden"
+          aria-label="Open memories"
+        >
+          <Sparkles className="h-3.5 w-3.5" aria-hidden />
+          Memories
+        </button>
+      </SheetTrigger>
+      <SheetContent
+        side="bottom"
+        className="h-[85vh] overflow-y-auto p-0 sm:max-w-none"
+      >
+        <SheetTitle className="sr-only">Live observation panel</SheetTitle>
+        <WorkbenchLMLiveObservationPanel {...props} />
+      </SheetContent>
+    </Sheet>
   );
 }

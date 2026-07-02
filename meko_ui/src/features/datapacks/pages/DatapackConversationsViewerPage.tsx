@@ -153,7 +153,11 @@ export default function DatapackConversationsViewerPage({
           </div>
         </div>
 
-        <div className="grid flex-1 grid-cols-[340px_1fr] min-h-0 overflow-hidden">
+        {/* Mobile (< md): stack the conversation list above the detail
+            so each panel gets full width — the 340px-fixed rail next to
+            a 1fr column collapses each side below readable size on a
+            390px phone viewport. Desktop unchanged via md+ override. */}
+        <div className="grid flex-1 grid-cols-1 min-h-0 overflow-y-auto md:grid-cols-[340px_1fr] md:overflow-hidden">
           <ConversationListRail
             datapackId={datapackId}
             selectedId={conversationId ?? ""}

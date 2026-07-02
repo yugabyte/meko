@@ -47,7 +47,9 @@ export default function SettingsPage() {
         leading={<h1 className="text-base font-medium text-foreground">Settings</h1>}
       />
 
-      <div className="flex-1 overflow-y-auto px-8 py-8">
+      {/* Tight padding on mobile (16px) so content gets ~340px of a
+          375px viewport; restore the spacious 32px gutter at md+. */}
+      <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6 md:px-8 md:py-8">
         <div className="mx-auto w-full max-w-2xl space-y-6">
           {loading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">

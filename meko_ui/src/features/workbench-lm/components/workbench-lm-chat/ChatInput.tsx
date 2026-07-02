@@ -71,7 +71,12 @@ export function ChatInput({
         if (disabled || value.trim().length === 0) return;
         onSubmit();
       }}
-      className="border-t border-border bg-background px-6 py-3"
+      // Mobile: sticky-bottom + safe-area-inset so the input rides
+      // above the iOS keyboard and respects the home-indicator gap.
+      // Tighter horizontal padding below sm so the input field gets
+      // most of a 375px viewport. Desktop unchanged: same px-6 py-3,
+      // sticky has no effect inside the (already-bounded) chat column.
+      className="sticky bottom-0 z-10 border-t border-border bg-background px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6"
     >
       <div className="mx-auto w-full max-w-3xl">
         <div className="flex items-end gap-2 rounded-xl border border-border bg-card p-2 transition-colors focus-within:border-blue-500/60">

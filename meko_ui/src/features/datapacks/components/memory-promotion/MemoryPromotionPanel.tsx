@@ -339,19 +339,31 @@ export default function MemoryPromotionPanel({
                     // so navigating between them doesn't feel like
                     // switching designs.
                     className={cn(
-                      "flex items-start gap-3 rounded-lg border bg-card px-4 py-3",
+                      // Mobile: stack the body+checkbox above the action
+                      // buttons so the text gets full row-width. Without
+                      // this, the two wide "Promote / Keep" buttons stay
+                      // shrink-0 on the right and crush the body column
+                      // to ~10px → one-char-per-line wrap.
+                      // Desktop (md+): original single-row layout.
+                      "flex flex-col gap-3 rounded-lg border bg-card px-4 py-3 md:flex-row md:items-start",
                       checked ? "border-purple-500/50 bg-purple-500/5" : "border-border",
                     )}
                   >
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={() => toggleOne(m.id)}
-                      className="mt-0.5 shrink-0"
-                    />
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <MemoryRowBody memory={m} />
+                    {/* Group checkbox + body so they stay on row 1
+                        together on mobile (otherwise checkbox would get
+                        its own row). On desktop this group is just two
+                        siblings in the same flex row. */}
+                    <div className="flex min-w-0 flex-1 items-start gap-3">
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => toggleOne(m.id)}
+                        className="mt-0.5 shrink-0"
+                      />
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <MemoryRowBody memory={m} />
+                      </div>
                     </div>
-                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                    <div className="flex w-full shrink-0 flex-wrap items-center justify-end gap-2 md:w-auto">
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <span className="inline-flex">

@@ -472,9 +472,12 @@ export function TraceDrawer({
             )}
           </div>
 
-          {/* Right: extracted memories — shown only when present */}
+          {/* Right: extracted memories — shown only when present.
+              Mobile (< md): full-width row; md+: original 320px fixed
+              column. `shrink-0` only applies at md+ since on mobile we
+              want the column to flow naturally below the trace text. */}
           {hasMemories ? (
-            <div className="relative w-[320px] shrink-0 overflow-hidden py-4">
+            <div className="relative w-full overflow-hidden py-4 md:w-[320px] md:shrink-0">
               {/* Diagonal shimmer sweep: bottom-left → top-right */}
               {shimmering ? (
                 <div

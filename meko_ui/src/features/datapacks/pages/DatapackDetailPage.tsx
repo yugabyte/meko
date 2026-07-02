@@ -399,7 +399,10 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
     <div className="flex-1 h-screen overflow-y-auto bg-background text-foreground flex flex-col">
       <AppWorkspaceHeader />
 
-      <main className="flex-1 pr-1 pt-6 pl-1 pb-3 max-w-7xl mx-auto w-full space-y-8">
+      {/* Tighter mobile padding + vertical rhythm (16px gap) so sections
+          aren't stretched apart on a 375px viewport; desktop restores
+          the original `space-y-8` and `pt-6 pl-1 pr-1` look. */}
+      <main className="flex-1 px-3 pt-4 pb-3 max-w-7xl mx-auto w-full space-y-5 md:px-1 md:pt-6 md:space-y-8">
         {freeTier.hasHitKbStorageFileSize ? (
           <FreeTierLimitBanner kind="kbStorage" />
         ) : null}
