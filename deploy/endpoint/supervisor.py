@@ -130,12 +130,13 @@ CONTROL_PLANE_API = env("CONTROL_PLANE_API", "http://localhost:6666")
 STORAGE_CONTROLLER_URL = env("STORAGE_CONTROLLER_URL")
 USE_STORAGE_CONTROLLER = STORAGE_CONTROLLER_URL is not None
 SC_REACHABLE_HOST = env("SC_REACHABLE_HOST", "host.docker.internal")
-# How the controller reaches this endpoint's services (default to the in-container
-# ports, i.e. the single-host case where no port remapping happens).
+# How the controller reaches this endpoint's pageserver (default to the
+# in-container ports, i.e. the single-host case where no port remapping happens).
+# Used for node registration + the attach-hook. The safekeeper's published port
+# is no longer declared here: since #171 the controller doesn't track safekeepers,
+# and it reaches this endpoint's SK for fork-point reads at the fixed HTTP port.
 PAGESERVER_HTTP_PUB_PORT = env_int("PAGESERVER_HTTP_PUB_PORT", PAGESERVER_HTTP_PORT)
 PAGESERVER_PG_PUB_PORT = env_int("PAGESERVER_PG_PUB_PORT", PAGESERVER_PG_PORT)
-SAFEKEEPER_HTTP_PUB_PORT = env_int("SAFEKEEPER_HTTP_PUB_PORT", SAFEKEEPER_HTTP_PORT)
-SAFEKEEPER_PG_PUB_PORT = env_int("SAFEKEEPER_PG_PUB_PORT", SAFEKEEPER_PG_PORT)
 # Listen address for the pageserver/safekeeper: 0.0.0.0 under controller
 # coordination (so published host ports route in), loopback otherwise. Internal
 # callers (compute, the supervisor's own probes) keep using 127.0.0.1, which a
@@ -509,37 +510,16 @@ def provision_schema():
 
 
 def sc_register_and_attach():
-    """Register this endpoint's safekeeper + pageserver node with the storage
-    controller and take the pageserver generation from its attach-hook. Mirrors
-    control_plane's register_safekeeper + register_and_attach
-    (control_plane/src/{storage_controller,pageserver}.rs); returns the granted
-    generation. The controller reaches the nodes at SC_REACHABLE_HOST + the *PUB
-    ports, so they must be published and bound on 0.0.0.0 (see BIND_HOST)."""
-    base = STORAGE_CONTROLLER_URL.rstrip("/")
+    """Register this endpoint's pageserver node with the storage controller and
+    take the pageserver generation from its attach-hook. Mirrors control_plane's
+    register_and_attach (control_plane/src/pageserver.rs); returns the granted
+    generation. The controller reaches the node at SC_REACHABLE_HOST + the *PUB
+    ports, so they must be published and bound on 0.0.0.0 (see BIND_HOST).
 
-    # Safekeeper registration is best-effort: with timelines_onto_safekeepers
-    # off the controller doesn't place timelines on it, so this only populates
-    # the controller's registry (and lets it heartbeat the SK).
-    try:
-        http_request("POST", f"{base}/control/v1/safekeeper/{NODE_ID}", body={
-            "id": NODE_ID,
-            "created_at": "2023-10-25T09:11:25Z",
-            "updated_at": "2024-08-28T11:32:43Z",
-            "region_id": "local",
-            "host": SC_REACHABLE_HOST,
-            "port": SAFEKEEPER_PG_PUB_PORT,
-            "http_port": SAFEKEEPER_HTTP_PUB_PORT,
-            "https_port": None,
-            "version": 5957,
-            "availability_zone_id": f"local-{NODE_ID}",
-        })
-        # The controller deserializes this with serde (PascalCase variants), not
-        # its FromStr (which accepts lowercase) — so "Active", not "active", else 400.
-        http_request("POST", f"{base}/control/v1/safekeeper/{NODE_ID}/scheduling_policy",
-                     body={"scheduling_policy": "Active"})
-        log("registered safekeeper with storage controller")
-    except Exception as e:  # noqa: BLE001 - registry-only, never fatal
-        log(f"WARNING: safekeeper registration failed (continuing): {e}")
+    The storage controller no longer tracks safekeepers (#171): in the co-located
+    topology each endpoint owns its single safekeeper and creates the branch on it
+    directly, so there is nothing to register."""
+    base = STORAGE_CONTROLLER_URL.rstrip("/")
 
     # Pageserver node registration is required: the controller assigns the
     # pageserver's generation against this node via the attach-hook.
@@ -676,13 +656,13 @@ def main():
         if e.code not in (409,):
             log(f"safekeeper create_branch returned {e.code}: {e.read()[:200]}")
 
-    # Under controller coordination, tell the storage controller where this
-    # branch's WAL lives (this endpoint's safekeeper). Mirrors control_plane's
-    # timeline_register (control_plane/src/storage_controller.rs): the controller
-    # is the source of truth for the branch's safekeeper placement. Reuse the
-    # exact start LSN already given to the safekeeper create above; the pageserver
-    # API returns it as the controller's `Lsn` "hi/lo" string, so pass it through
-    # (only convert if we somehow hold it as an integer).
+    # Under controller coordination, record the branch in the storage controller
+    # for cluster bookkeeping (its start LSN + branch name). Mirrors control_plane's
+    # timeline_register (control_plane/src/storage_controller.rs). Since #171 the
+    # controller no longer tracks safekeeper placement — it just persists the branch
+    # row. Reuse the exact start LSN already given to the safekeeper create above;
+    # the pageserver API returns it as the controller's `Lsn` "hi/lo" string, so pass
+    # it through (only convert if we somehow hold it as an integer).
     if USE_STORAGE_CONTROLLER:
         sc_start_lsn = start_lsn
         if isinstance(sc_start_lsn, int):
@@ -692,7 +672,7 @@ def main():
             http_request(
                 "POST",
                 f"{base}/control/v1/branch/{BRANCH_ID}/register",
-                body={"start_lsn": sc_start_lsn, "sk_set": [NODE_ID]},
+                body={"start_lsn": sc_start_lsn},
             )
             log("registered branch with storage controller")
         except urllib.error.HTTPError as e:

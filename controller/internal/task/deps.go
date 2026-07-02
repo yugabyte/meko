@@ -93,7 +93,7 @@ type StateStore interface {
 }
 
 // BranchRecipe is the pending-init recipe a freshly-declared branch carries until
-// an endpoint materializes it (controller/architecture/controller-timeline-create.md).
+// an endpoint materializes it (controller/architecture/controller-project-create.md).
 // It mirrors the storage controller's PendingTimelineInit without coupling the
 // task package to that client type; the adapter in ProductionRegistry bridges the
 // two. AncestorBranchID is "" for a project's default branch, set (with StartLSN)
@@ -106,7 +106,7 @@ type BranchRecipe struct {
 }
 
 // RecipeStore records and clears the storage controller's pending-init recipes
-// (controller-timeline-create.md). branchID is 32 lowercase hex digits (the
+// (controller-project-create.md). branchID is 32 lowercase hex digits (the
 // storage-layer BranchId the controller maps to — the storage layer is flat, so
 // the recipe is keyed by branch_id alone). It may be unavailable (no managed
 // storage controller), in which case the steps no-op with a warning — the

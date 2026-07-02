@@ -27,9 +27,8 @@ A project is a purely control-plane grouping (it maps to no storage object); a
 branch's `branch_id` **is** the storage layer's flat `BranchId`. The controller
 carries that `branch_id` verbatim to the storage seam — the storage-controller
 recipe and client, via `hex32` — and the storage controller is keyed by the flat
-`branch_id`. The deploy spec is the one exception: the endpoint image is not yet
-migrated to flat `branch_id`, so `deploy.EndpointSpec` still renders the
-project/branch ids as the endpoint's `TENANT_ID`/`TIMELINE_ID` env vars.
+`branch_id`. `deploy.EndpointSpec` likewise renders the flat `branch_id` as the
+endpoint image's `BRANCH_ID` env var (#168).
 
 ## 1. Where it lives
 
@@ -169,6 +168,12 @@ A few invariants worth calling out:
 - **Clearing the recipe is best-effort.** A lingering recipe is harmless (nothing
   reads it once the branch is materialized), so a clear failure logs a warning and
   the step still succeeds.
+- **Direction (planned).** `create_endpoint` is the landing site for the SC
+  integration: it will additionally mint the pageserver `generation` (attach-hook)
+  and register the node itself — moving that work out of the pod — and evolve
+  toward a create-then-configure model (create an unassigned pod, then push a
+  `configure` binding it to a branch). See
+  [`sc-integration-migration.md`](sc-integration-migration.md).
 
 ## 4. The task service
 
@@ -242,9 +247,8 @@ context):
   PendingTimelineInit`). May be nil (no managed storage controller) — the steps
   degrade with a warning.
 - **`deploy.Deployer`** — the existing runtime-agnostic endpoint deployer, reused
-  as-is (its `EndpointSpec` still renders the storage ids as the endpoint image's
-  `TENANT_ID`/`TIMELINE_ID` env vars, since that image is not yet migrated to flat
-  `branch_id`).
+  as-is (its `EndpointSpec` renders the flat `branch_id` as the endpoint image's
+  `BRANCH_ID` env var, #168).
 
 `ProductionRegistry(deps)` registers the catalog's builders and holds the deps,
 so each step it builds comes out fully wired; `cmd/controller` builds the `Deps`

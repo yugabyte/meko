@@ -95,8 +95,7 @@ Project/branch creation and endpoint creation are **separate** steps, joined by 
 The storage layer identifies a branch by 32 lowercase hex chars; the
 control plane stores the same 16 bytes (the `branch_id`) as a SQL `uuid` and
 converts with `hex.EncodeToString(id[:])` when rendering chart values. (The endpoint
-image, not yet migrated to flat `branch_id`, still receives the project/branch ids as
-`TENANT_ID`/`TIMELINE_ID` env vars.)
+image receives it as the flat `BRANCH_ID` env var, #168.)
 
 ## Storage-controller coordination + addressing
 
@@ -104,7 +103,17 @@ With `storageController.url` set (the controller path), the endpoint pod registe
 co-located pageserver with the controller, takes its pageserver
 **generation from the controller's attach-hook** (not a pinned constant), and
 registers the branch. (The safekeeper is endpoint-owned and not registered with
-the controller.) Two distinct network paths:
+the controller.)
+
+> **Planned direction:** these calls move *out of the pod and into amp's deploy
+> code* — amp does node-register + attach-hook and injects the generation, so the
+> pod stops self-registering. This evolves toward a **create-then-configure /
+> pre-warm** model: pods are created unassigned and bound to a branch on demand via
+> a push `configure` (amp mints `branch_id` + `generation`; the pod returns
+> `start_lsn`). See
+> [`sc-integration-migration.md`](sc-integration-migration.md).
+
+Two distinct network paths:
 
 - **controller → endpoint** (heartbeats, branch ops): the controller dials the
   endpoint's **own stable Service DNS** — `SC_REACHABLE_HOST =

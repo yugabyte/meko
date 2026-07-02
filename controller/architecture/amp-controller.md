@@ -233,6 +233,13 @@ Exactly one of each runs per placement group (§1):
   safekeeper is endpoint-owned and not registered with it). It runs *under* amp-controller as a
   managed service (§11.1): never amp-controller's state store, never exposed to
   users.
+  *(Direction: this managed-subprocess split is being collapsed — the SC's
+  registry + generation authority move in-process into amp-controller, and
+  endpoint registration + generation shift to a **create-then-configure** model
+  where amp mints `branch_id` + `generation` and pushes a configure to the pod
+  (the data plane only enforces the generation; `start_lsn` is its lone output).
+  See [`sc-integration.md`](sc-integration.md) and
+  [`sc-integration-migration.md`](sc-integration-migration.md).)*
 - **endpoint_storage** — YB Light's small standalone store for endpoint-scoped scratch
   data (LFC prewarm/offload state today). Also a managed service (§11.5); its contents
   are performance state, not correctness state.
@@ -263,9 +270,8 @@ distributes — observability is provisioned with the endpoint, not bolted on af
 
 All durable data lives in YBDB. An endpoint's access to that data is purely
 **configuration** — the YBDB connection in its spec, plus its branch binding (the
-storage-layer `branch_id` of the branch it serves; the endpoint image still receives
-this as `TENANT_ID`/`TIMELINE_ID` env vars, as it is not yet migrated to flat
-`branch_id` — see §5.6). Nothing on the
+storage-layer `branch_id` of the branch it serves, delivered as the endpoint image's
+flat `BRANCH_ID` env var (#168) — see §5.6). Nothing on the
 endpoint's node or pod is precious: if an endpoint goes away, creating a new one with the
 same spec — on a completely different node, pod, or even runtime — serves exactly the
 same data.
@@ -316,7 +322,7 @@ The unit of deployment, scheduling, replacement, and upgrade is the whole endpoi
 
 amp-controller is the source of every endpoint's spec. It assembles the spec from its
 state store (§5.3, §10) — YBDB connection, the branch binding (carried to the endpoint
-image as `TENANT_ID`/`TIMELINE_ID`, §5.6), role,
+image as the flat `BRANCH_ID`, §5.6), role,
 version, TLS/cert references, otel config, the endpoint_storage address + scoped token
 (§11.5) — and hands it to that endpoint's compute_ctl, the single point of contact (§5.2).
 compute_ctl accepts a spec by three transports that all carry the **same payload** (one
@@ -379,11 +385,8 @@ this interface, not a change to the workflow.
   `deploy/helm/yb-light-endpoint` chart. VMs (via ybops) follow the same shape.
 
 The endpoint spec carried in `EndpointSpec` (the branch binding rendered as the
-endpoint image's `TENANT_ID`/`TIMELINE_ID` env vars — the endpoint image is not yet
-migrated to flat `branch_id`, so the deploy contract still speaks tenant/timeline even
-though the controller↔storage_controller side is now flat `branch_id` — plus PG version,
-the YBDB connection, the
-storage-controller URL, bootstrap flag) is delivered to the endpoint as
+endpoint image's flat `BRANCH_ID` env var (#168), plus PG version, the YBDB
+connection, the storage-controller URL, bootstrap flag) is delivered to the endpoint as
 environment today; §5.5's `compute_ctl` transports are the longer-term refinement.
 
 ## 6. Core workflows

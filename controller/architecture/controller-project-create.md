@@ -61,11 +61,9 @@ endpoint materializes the branch, and cAmp finalizes.
 **cAmp deploys:**
 - Records the `endpoint` row.
 - Deploys the endpoint (Helm pod or Docker container) with the endpoint image's
-  env-var contract — `TENANT_ID`/`TIMELINE_ID` (the endpoint image is not yet
-  migrated to flat `branch_id`, so the controller still feeds it those env vars;
-  the project id is fed as `TENANT_ID` and the `branch_id` as `TIMELINE_ID`) —
-  plus `pg_version`, `STORAGE_CONTROLLER_URL` (the cAmp-managed storage
-  controller), and `BOOTSTRAP=true`.
+  env-var contract — the flat `BRANCH_ID` (#168) — plus `pg_version`,
+  `STORAGE_CONTROLLER_URL` (the cAmp-managed storage controller), and
+  `BOOTSTRAP=true`.
 
 **The endpoint materializes** (its supervisor, during bring-up):
 1. Registers its pageserver node with the storage controller and runs the
@@ -156,5 +154,13 @@ writes are synchronous today and move onto the task framework under #113.
   cAmp); pageserver-node register, attach-hook, and the
   branch `register` route (`POST /control/v1/branch/{branch_id}/register`, by the
   endpoint). (No safekeeper register — the safekeeper is endpoint-owned; see #171.)
+- **Direction (planned).** The SC is being integrated into amp-controller and the
+  create flow is moving to *create-then-configure*: endpoints created unassigned
+  and bound to a branch on demand (a pre-warm pool, for faster turnaround). amp
+  mints `branch_id` + `generation` (the data plane only enforces the generation)
+  and pushes a `configure` to the pod; node-register + attach-hook move into amp's
+  deploy code; the pod's branch `register` folds into the configure response
+  (`start_lsn` is the pod's lone output). See
+  [`sc-integration-migration.md`](sc-integration-migration.md).
 - **Durability.** These steps run synchronously today; #113 tracks moving them
   onto cAmp's write-ahead task framework as durable, resumable steps.

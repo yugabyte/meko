@@ -1,9 +1,9 @@
 # Storage controller
 
 The storage controller is the **cluster control plane**. It tracks which
-branches live on which pageservers, which safekeepers hold which branches,
-generation numbers, scheduling policies, and so on. It is *not* on the
-data path — neither WAL nor pages flow through it.
+branches live on which pageservers, generation numbers, scheduling policies, and
+so on. It is *not* on the data path — neither WAL nor pages flow through it. As
+of #171 it does **not** track safekeepers at all (see "Diverges from upstream").
 
 In yb-light, the storage controller's relational state has been moved into
 YugabyteDB. **Zero lines of storage-controller code were changed** for
@@ -42,14 +42,14 @@ in the same `yb_storage` DB.
   `pageserver.toml` — see "Single-timeline process model" in
   [`yb-pageserver.md`](yb-pageserver.md). The controller no longer
   pushes attachments to pageservers.
-- **Branch observation**: on `tenant_timeline_create` it polls the
-  attached pageserver's `timeline_detail` until the branch (created
-  by the pageserver itself from its `[timeline_init]` config) reports
-  Active, then runs the safekeeper leg with the observed
-  `last_record_lsn`.
-- **Safekeeper assignment**: picks the safekeeper set for a new branch.
-- **Heartbeats**: pings each pageserver + safekeeper on `--heartbeat-interval`
-  to detect liveness.
+- **Branch observation**: on branch create it polls the attached
+  pageserver's `timeline_detail` until the branch (created by the
+  pageserver itself from its `[timeline_init]` config) reports Active. It
+  no longer runs a safekeeper leg (#171 stripped the SK calls from the
+  create path).
+- **Heartbeats**: pings each pageserver on `--heartbeat-interval` to
+  detect liveness. The safekeeper heartbeater was removed with the
+  safekeeper registry (#171).
 
 ### Diverges from upstream
 
@@ -73,21 +73,23 @@ The pageserver-facing control path is launcher-managed (#16):
   `tenant_timeline_create_pageservers` polls `timeline_detail` instead
   of POSTing a create request.
 
-The safekeeper reconciler path is no longer upstream-parity:
+The safekeeper surface has been removed entirely (#171):
 
-- **Storage broker removed** (#14): SC no longer pushes membership
-  through `storage_broker`; safekeepers learn membership over plain HTTP.
-- **SK control-file in YB** (#10): per-branch safekeeper state lives
-  in `safekeeper.timeline_state` (one row per branch) instead of an
-  on-disk control file blob, so SC reconciles against DB rows rather than
-  the legacy filesystem path.
-- **Membership-switch HTTP surface stripped** (commit `1a9ca7ec1`): the
-  multi-SK membership-change endpoints / state-machine were removed.
-- **Background safekeeper reconciler removed**: the persistent
-  `safekeeper_timeline_pending_ops` queue and its per-SK reconciler task
-  (`safekeeper_reconciler.rs`) are gone. With one compute / one SK / one PS,
-  branch deletions are issued to the safekeeper synchronously
-  (inline, with retries) and the `timelines` row is removed on success.
+- **No safekeeper registry**: the `safekeepers` table, the register /
+  list / scheduling-policy / heartbeat machinery, and the multi-SK
+  `sk_set` / `MemberSet` / quorum abstraction are all gone, along with the
+  `safekeeper.rs` / `safekeeper_client.rs` HTTP clients. In the co-located
+  topology each branch's endpoint provisions and owns its own single
+  safekeeper and creates the branch on it directly, so **the controller
+  never contacts a safekeeper**. It only records branch rows (`timelines`);
+  `branch register` (`/control/v1/branch/:branch_id/register`) carries just
+  `start_lsn` (+ optional `branch_name`), no `sk_set`.
+- Earlier steps led here: the storage broker was dropped (#14), the
+  safekeeper's own state moved into `safekeeper.timeline_state` in YB (#10),
+  and the multi-SK membership-switch surface + the background safekeeper
+  reconciler (`safekeeper_reconciler.rs`, `safekeeper_timeline_pending_ops`)
+  were removed before the registry itself. Branch deletions are now issued
+  to the endpoint's safekeeper synchronously.
 
 ### Wire protocol
 
