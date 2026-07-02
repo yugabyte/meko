@@ -20,7 +20,7 @@ mod simulate_failures;
 mod support;
 mod yb_store;
 
-pub use ysql_client::{YbConnConfig, YbMakeRustlsConnect, YsqlClient, build_yb_rustls_connector};
+pub use ysql_client::{YbConnConfig, YsqlClient, build_yb_rustls_connector};
 
 use std::collections::HashMap;
 use std::fmt::Debug;

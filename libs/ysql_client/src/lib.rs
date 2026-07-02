@@ -44,9 +44,7 @@
 //! statement multiplexing concurrently with no extra serialization.
 
 mod metrics;
-mod rustls_adapter;
 
-pub use rustls_adapter::YbMakeRustlsConnect;
 pub use yb_tokio_postgres as tokio_postgres;
 
 use std::collections::HashMap;
@@ -533,7 +531,7 @@ impl YsqlClient {
     /// `connect_rustls_pooled(config, tls, 1, set_fast_path_upsert)`.
     pub async fn connect_rustls(
         config: tokio_postgres::Config,
-        tls: crate::rustls_adapter::YbMakeRustlsConnect,
+        tls: yb_postgres_rustls::MakeRustlsConnect,
         set_fast_path_upsert: bool,
     ) -> Result<Self> {
         Self::connect_rustls_pooled(config, tls, 1, set_fast_path_upsert, false).await
@@ -545,7 +543,7 @@ impl YsqlClient {
     /// behave as in `connect_no_tls_pooled`.
     pub async fn connect_rustls_pooled(
         config: tokio_postgres::Config,
-        tls: crate::rustls_adapter::YbMakeRustlsConnect,
+        tls: yb_postgres_rustls::MakeRustlsConnect,
         pool_size: usize,
         set_fast_path_upsert: bool,
         disable_transactional_writes: bool,
@@ -1057,12 +1055,11 @@ async fn sleep_with_jitter(base: Duration) {
     tokio::time::sleep(total).await;
 }
 
-/// Build an openssl-based TLS connector suitable for YugabyteDB
+/// Build a rustls-based TLS connector suitable for YugabyteDB
 /// Postgres-wire connections through the yb-tokio-postgres smart
-/// driver, using rustls (pure-Rust / ring) wrapped in the
-/// [`crate::rustls_adapter::YbMakeRustlsConnect`] adapter so the
-/// upstream `tokio-postgres-rustls` impl satisfies the YB fork's
-/// `MakeTlsConnect` trait.
+/// driver, via `yb-postgres-rustls` (pure-Rust / ring) — the rustls
+/// adapter published for the YB fork, which implements the fork's own
+/// `yb_tokio_postgres::tls::MakeTlsConnect` trait directly.
 ///
 /// - `sslrootcert = None`: load the system root store but install
 ///   an `AcceptAll` verifier that logs validation failures and
@@ -1080,7 +1077,7 @@ async fn sleep_with_jitter(base: Duration) {
 /// the diagnosis.
 pub fn build_yb_rustls_connector(
     sslrootcert: Option<&str>,
-) -> anyhow::Result<crate::rustls_adapter::YbMakeRustlsConnect> {
+) -> anyhow::Result<yb_postgres_rustls::MakeRustlsConnect> {
     use rustls::client::WebPkiServerVerifier;
     use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
     use rustls::crypto::ring;
@@ -1177,9 +1174,7 @@ pub fn build_yb_rustls_connector(
             .with_no_client_auth()
     };
 
-    Ok(crate::rustls_adapter::YbMakeRustlsConnect::new(
-        tokio_postgres_rustls::MakeRustlsConnect::new(client_config),
-    ))
+    Ok(yb_postgres_rustls::MakeRustlsConnect::new(client_config))
 }
 
 /// Enable upsert mode on a freshly-opened YsqlClient connection. Plain
@@ -1209,20 +1204,13 @@ fn build_pg_config(cfg: &YbConnConfig, application_name: &str) -> Result<tokio_p
         .user(&cfg.user)
         .dbname(&cfg.dbname)
         .application_name(application_name);
-    // NOTE: smart-driver load balancing is currently disabled. Setting
-    // `pg_config.load_balance("only-primary")` causes
-    // `yb-tokio-postgres 0.7.10-yb-1-beta.3` to fail every connect
-    // attempt with "could not create control connection" — the smart
-    // driver opens an internal "control connection" to run
-    // `yb_servers()` for discovery, and that path doesn't work in the
-    // current YB fork. Direct queries against the same target via the
-    // same TLS connector succeed (verified 2026-06-02 against
-    // 172.151.17.132:5433). Filed alongside the openssl handshake
-    // issue. Until both are fixed upstream we open each pool slot to
-    // the configured seed host; pool size still gives us parallel SQL
-    // via independent connections, just not tserver-spread.
-    //
-    // pg_config.load_balance("only-primary");
+    // Smart-driver load balancing: the driver opens an internal control
+    // connection to run `yb_servers()` for topology discovery and spreads
+    // connections across tservers. This was disabled while
+    // yb-tokio-postgres <= 0.7.10-yb-1-beta.3 failed every connect with
+    // "could not create control connection" (the control connection's TLS
+    // path was broken); 0.7.10-yb-1-beta.4 fixes it, so re-enable it.
+    pg_config.load_balance("only-primary");
     if let Some(env_name) = &cfg.password_env {
         let password = std::env::var(env_name)
             .with_context(|| format!("YsqlClient: password env var `{env_name}` is not set"))?;
@@ -1298,7 +1286,7 @@ async fn open_no_tls(
 
 async fn open_tls(
     config: &tokio_postgres::Config,
-    tls: &crate::rustls_adapter::YbMakeRustlsConnect,
+    tls: &yb_postgres_rustls::MakeRustlsConnect,
     set_fast_path_upsert: bool,
     disable_transactional_writes: bool,
 ) -> Result<tokio_postgres::Client> {
