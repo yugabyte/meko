@@ -728,6 +728,13 @@ async def run_chat_turn(
     memory_context = _memory_hits_to_bullets(memory_hits)
     kb_context = _kb_hits_to_bullets(kb_hits)
 
+    logger.info(
+        "run_chat_turn: retrieval complete session=%s conversation_id=%s "
+        "datapack_id=%s memory_hits=%d kb_hits=%d",
+        session_id, conversation_id, datapack_id,
+        len(memory_hits), len(kb_hits),
+    )
+
     # 3. LLM call. Prior turns from the session store are NOT replayed —
     # Mem0 + KB carry the cross-turn context we care about and replaying
     # full history per turn was the dominant input-token cost. The system
@@ -745,10 +752,23 @@ async def run_chat_turn(
         HumanMessage(content=user_message),
     ]
 
+    logger.info(
+        "run_chat_turn: invoking LLM session=%s conversation_id=%s "
+        "system_prompt_chars=%d user_message_chars=%d",
+        session_id, conversation_id,
+        len(messages[0].content) if messages else 0, len(user_message),
+    )
+
     llm_start = time.monotonic()
     try:
         result = await llm.ainvoke(messages)
     except Exception as exc:
+        logger.warning(
+            "run_chat_turn: LLM invocation FAILED session=%s conversation_id=%s "
+            "llm_ms=%d err=%s",
+            session_id, conversation_id,
+            int((time.monotonic() - llm_start) * 1000), exc,
+        )
         steps.append(
             ProcessingStep(
                 "llm_invoke",
@@ -762,6 +782,13 @@ async def run_chat_turn(
         ProcessingStep("llm_invoke", int((time.monotonic() - llm_start) * 1000), "ok")
     )
     assistant_text = _coerce_text(result.content)
+
+    logger.info(
+        "run_chat_turn: LLM done session=%s conversation_id=%s "
+        "llm_ms=%d assistant_chars=%d",
+        session_id, conversation_id,
+        int((time.monotonic() - llm_start) * 1000), len(assistant_text),
+    )
 
     # Capture token usage from the main LLM call here, but DEFER the
     # `track_token_usage` invocation until after `_add_message` returns
@@ -785,6 +812,11 @@ async def run_chat_turn(
     # own background thread that calls Mem0 with `infer=True`. We no longer
     # run a second LLM extraction call here, so `memory_add` is dropped
     # from the gateway pipeline entirely.
+    logger.info(
+        "run_chat_turn: persisting turn session=%s conversation_id=%s",
+        session_id, conversation_id,
+    )
+
     addmsg_start = time.monotonic()
     try:
         message_id = await _add_message(
@@ -797,6 +829,12 @@ async def run_chat_turn(
             index_for_search=True,  # cache genuine Q&A for future reuse
             rejected_cache=bypass,  # full re-answer after a rejected cache hit
         )
+        logger.info(
+            "run_chat_turn: persisted turn session=%s conversation_id=%s "
+            "message_id=%s addmsg_ms=%d",
+            session_id, conversation_id, message_id or "<empty>",
+            int((time.monotonic() - addmsg_start) * 1000),
+        )
         steps.append(
             ProcessingStep(
                 "conversation_add_message",
@@ -807,6 +845,12 @@ async def run_chat_turn(
     except Exception as exc:
         # `_add_message` is best-effort but doesn't currently raise — keep
         # this branch defensively in case its error contract changes.
+        logger.warning(
+            "run_chat_turn: persist FAILED session=%s conversation_id=%s "
+            "addmsg_ms=%d err=%s",
+            session_id, conversation_id,
+            int((time.monotonic() - addmsg_start) * 1000), exc,
+        )
         steps.append(
             ProcessingStep(
                 "conversation_add_message",
