@@ -93,6 +93,16 @@ Code anchors:
   [`docs/issue-tracking.md`](docs/issue-tracking.md) for the area
   labels, milestones, the create/close contract, and the commit-subject
   format.
+- **Remote branches are `<alias>/<feature_name>`** (e.g.
+  `hsunder/ingest-perf-hardening`). `<alias>` is your git/GitHub alias;
+  `<feature_name>` is kebab-case. A leading GitHub issue number in the
+  feature part (`hsunder/174-ingest-perf-hardening`) is optional but
+  encouraged when the work maps to an issue. Enforced for Claude Code by a
+  `PreToolUse` hook ([`.claude/hooks/check-branch-name.sh`](.claude/hooks/check-branch-name.sh),
+  registered in [`.claude/settings.json`](.claude/settings.json)): it blocks
+  any `git push` that would create a non-conforming branch (`main`/`master`
+  exempt; deletions ignored). No per-clone setup needed — it runs from the
+  committed project settings.
 - **Every YB query must be idempotent.** `YsqlClient` retries
   connection drops internally and can replay an in-flight write whose
   commit status is unknown. New write paths must use `INSERT ... ON
