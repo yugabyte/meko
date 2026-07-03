@@ -53,6 +53,41 @@ export const handler = async (event) => {
     // event.userName looks like "Google_1234567890" or "GitHub_42".
     const { providerName, providerSub } = splitFederatedUsername(event.userName);
 
+    // Cognito lowercases the IdP `sub` when it builds the federated username
+    // (e.g. LinkedIn sub "bAtggErFkr" -> userName "linkedin_batggerfkr"), but at
+    // sign-in it matches the linked identity against the IdP's *original*-cased
+    // sub. Linking with the lowercased value therefore breaks every subsequent
+    // login with "Invalid ProviderName/Username combination". Prefer the
+    // original-cased sub mapped into custom:idp_sub; fall back to the parsed
+    // value for providers whose sub is caseless (e.g. Google's numeric id).
+    const mappedSub = event.request.userAttributes?.["custom:idp_sub"];
+
+    // Safe for every provider: LinkedIn (and any OIDC IdP with a
+    // custom:idp_sub mapping) uses the original-cased sub; Google has no such
+    // mapping so mappedSub is undefined and we fall back to providerSub — which
+    // is fine because Google's sub is all digits (no case to lose). If the
+    // attribute is ever missing (e.g. a provider without the mapping), the
+    // fallback still yields a valid value, so linking never breaks.
+    const originalSub = mappedSub || providerSub;
+
+    // TEMP debug: confirm the custom-attribute mapping actually restores the
+    // casing the auto-generated username stripped. On a real login,
+    // `casingRecovered: true` proves custom:idp_sub is populated AND cased
+    // differently from the lowercased username sub (i.e. the fix is live).
+    // console.log("DEBUG_LINKEDIN_LOG", JSON.stringify({
+    //   userName: event.userName,
+    //   email,
+    //   emailVerified,
+    //   emailRegexTest: email ? EMAIL_RE.test(email) : false,
+    //   userPoolId,
+    //   providerName,
+    //   lowercasedSub: providerSub,
+    //   mappedSub: mappedSub ?? null,
+    //   mappedSubPresent: !!mappedSub,
+    //   casingRecovered: !!mappedSub && mappedSub !== providerSub,
+    //   linkingWith: originalSub,
+    // }));
+
     // Only link on a present, *verified*, well-formed email. The link welds the
     // incoming external identity into an existing account that owns this email,
     // so an unverified/attacker-supplied address would be an account-takeover
@@ -119,7 +154,7 @@ export const handler = async (event) => {
         SourceUser: {
           ProviderName: providerName,
           ProviderAttributeName: "Cognito_Subject",
-          ProviderAttributeValue: providerSub,
+          ProviderAttributeValue: originalSub,
         },
       })
     );
@@ -149,12 +184,25 @@ function splitFederatedUsername(cognitoUsername) {
   if (firstUnderscore === -1) {
     return { providerName: "", providerSub: cognitoUsername };
   }
-  let tmpProviderName = cognitoUsername.slice(0, firstUnderscore);
-  if (tmpProviderName.toLowerCase() == "google") {
-    tmpProviderName = "Google";
-  }
+  const rawProviderName = cognitoUsername.slice(0, firstUnderscore);
   return {
-    providerName: tmpProviderName,
+    providerName: getProperCasingProviderName(rawProviderName),
     providerSub: cognitoUsername.slice(firstUnderscore + 1),
   };
+}
+
+// Map the lowercased username prefix back to the IdP's registered casing,
+// which AdminLinkProviderForUser requires exactly. Unknown providers pass
+// through unchanged.
+function getProperCasingProviderName(name) {
+  switch (String(name || "").toLowerCase()) {
+    case "google":
+      return "Google";
+    case "linkedin":
+      return "LinkedIn";
+    case "github":
+      return "GitHub";
+    default:
+      return name;
+  }
 }
