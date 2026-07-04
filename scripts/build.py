@@ -14,6 +14,12 @@ Modes (pick one; default is debug):
                      `cargo build` / `cargo check` / IDE can find them (the
                      postgres_ffi crate generates bindings from them).
 
+The mode selects the build type for the Rust amp stack (cargo dev vs release
+profile) and the compute extensions. PostgreSQL itself is ALWAYS built in
+release mode (for now) — a debug PG (-O0 + asserts) makes the walredo child
+needlessly slow, and the PG build type is baked into build/<v>/config.status,
+so a cached debug PG is detected and rebuilt in release regardless of mode.
+
 PostgreSQL submodule handling (every mode):
     ybAmp builds against a patched PostgreSQL tree vendored as the
     `vendor/postgres-v17` git submodule. This script checks it out if it is
@@ -38,7 +44,12 @@ from pathlib import Path
 # matter where it's invoked from.
 ROOT = Path(__file__).resolve().parent.parent
 SUBMODULE = "vendor/postgres-v17"
-PG_INSTALL = ROOT / "pg_install" / "v17"
+PG_VERSION = "v17"
+PG_INSTALL = ROOT / "pg_install" / PG_VERSION
+BUILD_DIR = ROOT / "build"
+# PostgreSQL is always built in release mode (see module docstring). Only the
+# compute extensions and the Rust amp stack follow the selected debug/release.
+PG_BUILD_TYPE = "release"
 
 # Binaries launched by yb_light_local (see control_plane local_env.rs).
 DAEMON_BINS = [
@@ -122,6 +133,38 @@ def make_env(*, cached):
     if cached:
         env["PG_INSTALL_CACHED"] = "1"
     return env
+
+
+def pg_install_is_release():
+    """True if the cached pg_install is a *release* PG build.
+
+    The debug configure adds `--enable-cassert` (and builds at -O0); release
+    omits it. We read the recorded configure line from the installed
+    `pg_config` — the ground truth for how the cached PG was actually built,
+    since the type is baked in at configure time (build/<v>/config.status).
+    Returns False if PG isn't installed.
+    """
+    pg_config = PG_INSTALL / "bin" / "pg_config"
+    if not pg_config.is_file():
+        return False
+    res = subprocess.run(
+        [str(pg_config), "--configure"], capture_output=True, text=True
+    )
+    return res.returncode == 0 and "--enable-cassert" not in res.stdout
+
+
+def force_pg_release_reconfigure():
+    """Drop the PG build tree + install so the next build reconfigures release.
+
+    The build type is baked into build/<v>/config.status, and the release
+    configure omits `--enable-depend`, so simply re-running `make` with a new
+    BUILD_TYPE won't switch a debug tree to release — the stale config.status
+    would be reused. Removing both dirs forces a clean release configure.
+    """
+    for p in (BUILD_DIR / PG_VERSION, PG_INSTALL):
+        if p.exists():
+            say(f"Removing {p} to force a clean release PostgreSQL rebuild")
+            shutil.rmtree(p)
 
 
 def stage_and_package(target_dir):
@@ -221,49 +264,61 @@ def main():
     else:
         mode, build_type, target_dir = "debug", "debug", ROOT / "target/debug"
 
-    say(f"Mode: {mode} (BUILD_TYPE={build_type})")
+    say(f"Mode: {mode} (amp stack + extensions BUILD_TYPE={build_type}; "
+        f"PostgreSQL always {PG_BUILD_TYPE})")
     rebuild_pg = sync_submodule_if_needed()
+
+    pg_target = f"postgres-install-{PG_VERSION}"
+    headers_target = f"postgres-headers-install-{PG_VERSION}"
+    ext_target = f"neon-pg-ext-{PG_VERSION}"
 
     if mode == "headers":
         # postgres-headers-install-% installs into pg_install/v17/include so a
-        # bare cargo build/check can generate the postgres_ffi bindings.
-        say("Installing PostgreSQL server headers...")
+        # bare cargo build/check can generate the postgres_ffi bindings. Headers
+        # are build-type-independent, so this mode never wipes/rebuilds PG.
+        say(f"Installing PostgreSQL server headers ({PG_BUILD_TYPE})...")
         run(
-            ["make", f"BUILD_TYPE={build_type}", "postgres-headers-install-v17"],
+            ["make", f"BUILD_TYPE={PG_BUILD_TYPE}", headers_target],
             env=make_env(cached=False),
         )
         say("Headers installed under pg_install/v17/include/. `cargo check` will work now.")
         return
 
-    say(f"Building {mode} binaries (yb-pageserver + supporting bins)...")
+    # PostgreSQL must be a release build regardless of mode. If the cache is a
+    # debug build (or a partially-configured debug tree), wipe it so the build
+    # below reconfigures release — the type is baked into config.status.
+    if not pg_install_is_release():
+        if PG_INSTALL.exists() or (BUILD_DIR / PG_VERSION).exists():
+            say("Cached pg_install is not a release build — rebuilding PostgreSQL in release mode")
+            force_pg_release_reconfigure()
+        rebuild_pg = True
 
-    # postgres_ffi's build script generates bindings from the PostgreSQL server
-    # headers (pg_install/v17/include). On a fresh checkout or after a submodule
-    # bump those headers do not exist yet, and they are only installed by the
-    # neon-pg-ext-v17 step *below* (after this cargo build) -- so bindgen would
-    # fail with "'c.h' file not found". When a (re)build is needed, install the
-    # headers first (cheap, headers-only, idempotent) so the Rust build finds them.
+    # Build (or rebuild) PostgreSQL in release *before* cargo: postgres_ffi's
+    # build script generates bindings from the installed server headers
+    # (pg_install/v17/include), and postgres-install installs those headers.
+    # Skipped when the cached PG is already release and the submodule matches.
     if rebuild_pg:
-        say("Installing PostgreSQL server headers first (for postgres_ffi bindgen)...")
+        say(f"Building PostgreSQL {PG_VERSION} from source ({PG_BUILD_TYPE})...")
         run(
-            ["make", f"BUILD_TYPE={build_type}", "postgres-headers-install-v17"],
+            ["make", f"BUILD_TYPE={PG_BUILD_TYPE}", pg_target],
             env=make_env(cached=False),
         )
 
+    say(f"Building {mode} binaries (yb-pageserver + supporting bins)...")
     cargo = ["cargo", "build"] + (["--release"] if build_type == "release" else [])
     for crate in BUILD_CRATES:
         cargo += ["-p", crate]
     run(cargo)
 
     # `neon.so` + walredo/utils extensions are loaded by the compute postgres;
-    # their wire protocol must match these binaries. We always recompile the
-    # extensions (they link the Rust walproposer-lib, which rolls every commit);
-    # when rebuild_pg is set we also drop PG_INSTALL_CACHED so the
-    # postgres-install-v17 prereq recompiles PostgreSQL from the synced source.
-    say("Building compute extensions (pgxn/yb_amp/*.so for v17)...")
+    # their wire protocol must match these binaries, and they link the Rust
+    # walproposer-lib (which rolls every commit), so recompile them every run.
+    # They follow the selected build type. PG is already built (release) above,
+    # so PG_INSTALL_CACHED=1 keeps this step from touching it.
+    say(f"Building compute extensions (pgxn/yb_amp/*.so for {PG_VERSION}, {build_type})...")
     run(
-        ["make", f"BUILD_TYPE={build_type}", "neon-pg-ext-v17"],
-        env=make_env(cached=not rebuild_pg),
+        ["make", f"BUILD_TYPE={build_type}", ext_target],
+        env=make_env(cached=True),
     )
 
     if mode != "release-tar":
