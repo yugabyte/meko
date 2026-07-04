@@ -47,8 +47,6 @@ Default builds are debug; `--release` builds and runs the release binaries.
   `YB_HOST`/`YB_PORT`).
 - `psql` on `PATH` (used for the `.sql` workloads and the background
   write/read loops).
-- `/tmp/neon-init.toml` — the base init config the per-run config is
-  derived from (the ephemeral DB name is swapped in).
 
 ## How it works
 
