@@ -1326,7 +1326,16 @@ def _extract_memory_hits(payload: object, relation_cap: Optional[int] = None) ->
     # memory_top_k (the limit sent to memory_search), so we iterate all returned.
     for item in vector_items:
         if isinstance(item, dict):
-            raw_score = item.get("score")
+            # Prefer rerank_score (cross-encoder, set by MCP hybrid_search.rerank)
+            # over the raw mem0 cosine score. The cosine score is depressed by the
+            # query-document semantic gap (question vs. assertion form) and would
+            # incorrectly filter out relevant memories that the cross-encoder ranks
+            # highly. Fall back to cosine score for results that weren't reranked.
+            # Use explicit None check rather than `or` so a rerank_score of 0.0
+            # (cross-encoder judged irrelevant) is honored instead of falling
+            # through to the cosine score.
+            _rerank = item.get("rerank_score")
+            raw_score = _rerank if _rerank is not None else item.get("score")
             score: Optional[float] = (
                 float(raw_score) if isinstance(raw_score, (int, float)) else None
             )
