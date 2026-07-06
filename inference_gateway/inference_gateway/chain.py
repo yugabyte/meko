@@ -728,7 +728,7 @@ async def run_chat_turn(
     memory_context = _memory_hits_to_bullets(memory_hits)
     kb_context = _kb_hits_to_bullets(kb_hits)
 
-    logger.info(
+    logger.debug(
         "run_chat_turn: retrieval complete session=%s conversation_id=%s "
         "datapack_id=%s memory_hits=%d kb_hits=%d",
         session_id, conversation_id, datapack_id,
@@ -752,7 +752,7 @@ async def run_chat_turn(
         HumanMessage(content=user_message),
     ]
 
-    logger.info(
+    logger.debug(
         "run_chat_turn: invoking LLM session=%s conversation_id=%s "
         "system_prompt_chars=%d user_message_chars=%d",
         session_id, conversation_id,
@@ -783,7 +783,7 @@ async def run_chat_turn(
     )
     assistant_text = _coerce_text(result.content)
 
-    logger.info(
+    logger.debug(
         "run_chat_turn: LLM done session=%s conversation_id=%s "
         "llm_ms=%d assistant_chars=%d",
         session_id, conversation_id,
@@ -812,7 +812,7 @@ async def run_chat_turn(
     # own background thread that calls Mem0 with `infer=True`. We no longer
     # run a second LLM extraction call here, so `memory_add` is dropped
     # from the gateway pipeline entirely.
-    logger.info(
+    logger.debug(
         "run_chat_turn: persisting turn session=%s conversation_id=%s",
         session_id, conversation_id,
     )
@@ -829,7 +829,7 @@ async def run_chat_turn(
             index_for_search=True,  # cache genuine Q&A for future reuse
             rejected_cache=bypass,  # full re-answer after a rejected cache hit
         )
-        logger.info(
+        logger.debug(
             "run_chat_turn: persisted turn session=%s conversation_id=%s "
             "message_id=%s addmsg_ms=%d",
             session_id, conversation_id, message_id or "<empty>",
@@ -1002,6 +1002,17 @@ async def _search_memories(
     # Vector hits are capped by `top_k` server-side; graph/promoted relations
     # are not, so cap them at 2× top_k to bound the prompt.
     hits = _extract_memory_hits(_parse_json(raw), relation_cap=2 * top_k)
+    # One line per KEPT hit (post MEMORY_MIN_SCORE filter) so dev logs show
+    # exactly which memories fed the prompt and at what similarity. DEBUG:
+    # unbounded per-turn volume + carries user content — run the gateway
+    # with --log-level debug (INFERENCE_LOG_LEVEL=debug) to see these.
+    for h in hits:
+        logger.debug(
+            "memory_search: kept hit kind=%s score=%s text=%r",
+            h.kind,
+            f"{h.score:.3f}" if h.score is not None else "-",
+            _truncate(h.text, 80),
+        )
     if steps is not None:
         steps.append(
             ProcessingStep(
@@ -1120,6 +1131,17 @@ async def _search_knowledge(
             )
         return [], {"hits": ch, "thread": thread if isinstance(thread, list) else []}
     hits = _extract_kb_hits(parsed)
+    # One line per KEPT chunk so dev logs show exactly which KB chunks fed
+    # the prompt, with their similarity/distance. DEBUG for the same reason
+    # as the memory-hit lines above (volume + user content).
+    for h in hits:
+        logger.debug(
+            "knowledgebase_search: kept chunk doc=%s score=%s distance=%s text=%r",
+            h.document_id or "-",
+            f"{h.score:.3f}" if h.score is not None else "-",
+            f"{h.distance:.3f}" if h.distance is not None else "-",
+            _truncate(h.chunk_text, 80),
+        )
     if steps is not None:
         steps.append(
             ProcessingStep(
@@ -1227,6 +1249,26 @@ async def _add_message(
         mid = payload.get("message_id")
         if isinstance(mid, str) and mid:
             return mid
+    # The tool call SUCCEEDED transport-wise but returned no message_id —
+    # typically an application-level error body like
+    # {"error": "not_found"} / {"error": "free_tier_..."}. Without this
+    # line the turn vanishes silently (best-effort persistence swallows
+    # it). Log only the error fields (never the full payload — the tool
+    # may echo the user's message, and warnings must stay PII-free).
+    if isinstance(payload, dict):
+        error_detail = "; ".join(
+            _truncate(str(payload[k]), 150)
+            for k in ("error", "message", "detail")
+            if payload.get(k)
+        ) or f"keys: {list(payload.keys())}"
+    else:
+        error_detail = f"non-dict payload of type {type(payload).__name__}"
+    logger.warning(
+        "conversation_add_message returned no message_id "
+        "(agent_id=%s, conversation_id=%s, datapack_id=%s): %s",
+        agent_id, conversation_id, datapack_id,
+        error_detail,
+    )
     return ""
 
 
