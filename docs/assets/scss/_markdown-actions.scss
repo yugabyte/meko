@@ -18,7 +18,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #d7dee4d9;
+    color: $text-body;
     background: 0 0 !important;
     border: none;
     transition: color 0.15s ease;
@@ -30,7 +30,7 @@
     &:hover {
       background-color: transparent;
       border: none;
-      color: rgba(255, 255, 255, 88%);
+      color: rgba($text-ui, 0.88);
     }
 
     &.copy-link {
@@ -45,7 +45,7 @@
         width: 0;
         overflow: hidden;
         border-radius: 4px;
-        color: #fff;
+        color: $text-ui;
         background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
         background-size: 200% 200%;
         font-size: 15px;

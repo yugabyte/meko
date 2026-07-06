@@ -1,4 +1,13 @@
 $orange: #ff6900;
+
+// Dark theme palette — avoid pure #000 / #fff for long-form reading (reduces halation).
+$bg-base: #14141c;
+$text-body: #e4e4e7;
+$text-heading: #f0f0f2;
+$text-muted: #a1a1aa;
+$text-ui: #f4f4f5;
+
+// Keep Bootstrap/Docsy theme tokens at high-contrast values (used by color-contrast()).
 $white: #fff;
 $colors: (
   'orange': $orange,
@@ -7,11 +16,11 @@ $colors: (
 $primary: $black;
 $secondary: $white;
 $light: $white;
-$dark: $black;
+$dark: $bg-base;
 $background-color-primary: #1a1a2e;
 $background-color-secondary: #20202c;
-$code-background: #030712;
-$link-color: $white;
+$code-background: #0c0c12;
+$link-color: $text-body;
 $link-hover-color: $orange;
 $td-enable-google-fonts: false;
 $font-family-sans-serif:

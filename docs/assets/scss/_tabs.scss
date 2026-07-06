@@ -17,7 +17,7 @@ body {
       .nav-link {
         background: transparent;
         border: none;
-        color: #a1a1aa;
+        color: $text-muted;
         padding: 10px 16px;
         font-size: 14px;
         position: relative;
@@ -25,12 +25,12 @@ body {
         white-space: nowrap;
 
         &:hover {
-          color: #e4e4e7;
+          color: $text-body;
           background: transparent;
         }
 
         &.active {
-          color: #fff;
+          color: $text-heading;
           background: transparent;
           font-weight: 500;
 
@@ -60,7 +60,7 @@ body {
       .tab-body.tab-pane {
         background: $background-color-primary;
         border: 1px solid $background-color-secondary;
-        color: #e5e7eb;
+        color: $text-body;
         font-size: 15px;
         line-height: 1.6;
         margin: 0;

@@ -14,19 +14,29 @@ body {
         margin-bottom: 0;
       }
 
-      .td-sidebar-link__page {
-        color: $white;
+      .td-sidebar-link {
+        color: $text-muted;
         font-weight: 400;
       }
 
-      a:focus,
-      a:hover,
-      a.active {
-        background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
-        background-size: 200% 200%;
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+      .td-sidebar-link__page {
+        font-weight: 400;
+      }
+
+      // Gradient text needs inline-block; display:flex on the anchor breaks background-clip.
+      a.td-sidebar-link {
         display: inline-block;
+
+        &:focus,
+        &:hover,
+        &.active {
+          color: transparent;
+          background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
+          background-size: 200% 200%;
+          -webkit-background-clip: text;
+          background-clip: text;
+          -webkit-text-fill-color: transparent;
+        }
       }
 
       .td-sidebar-nav__section {
@@ -48,7 +58,7 @@ body {
               content: '\f054';
               font-size: 0.75rem;
               line-height: 1;
-              margin-left: auto; // 🔑 pushes arrow to right
+              margin-left: auto;
               padding-left: 0.5rem;
               transition: transform 0.2s ease;
             }

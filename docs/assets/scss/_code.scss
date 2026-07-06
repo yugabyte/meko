@@ -68,7 +68,7 @@ body {
 
           button.td-click-to-copy {
             position: static;
-            color: #fff;
+            color: $text-ui;
             background: transparent;
             border: 1px solid #959595;
             padding: 10px;
@@ -76,12 +76,12 @@ body {
 
             &:hover {
               background: transparent;
-              border: 1px solid #fff;
+              border: 1px solid $text-ui;
             }
 
             &:active {
               background: transparent;
-              border: 1px solid #fff;
+              border: 1px solid $text-ui;
               transform: translateY(2px);
             }
           }

@@ -1,7 +1,7 @@
 .td-page-meta__feedback {
   .td-docs-feedback__toggle {
     position: relative;
-    color: $white;
+    color: $text-ui;
     background: $background-color-primary;
     border: 1px solid $background-color-secondary;
     transition:
@@ -32,7 +32,7 @@
     &:hover,
     &:focus-visible,
     &.show {
-      color: $white;
+      color: $text-ui;
       border-color: transparent;
       background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
       background-size: 200% 200%;
@@ -49,11 +49,11 @@
   }
 
   .dropdown-item {
-    color: #ffffffd9;
+    color: $text-body;
 
     &:hover,
     &:focus {
-      color: $white;
+      color: $text-ui;
       background: linear-gradient(270deg, #2d94ee, #9b46d8, #2d94ee);
       background-size: 200% 200%;
     }

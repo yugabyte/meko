@@ -11,7 +11,7 @@
         display: inline-flex;
         align-items: center;
         gap: 0.5rem;
-        color: $white;
+        color: $text-ui;
         padding: 0 !important;
         transition: all 0.3s ease;
 
@@ -23,7 +23,7 @@
 
         i {
           font-size: 24px;
-          color: $white;
+          color: $text-ui;
           position: relative;
           transition: all 0.3s ease;
 
@@ -37,7 +37,7 @@
         }
 
         &:hover span {
-          color: $white;
+          color: $text-ui;
         }
       }
 
@@ -45,9 +45,9 @@
         position: relative;
         display: inline-block;
         font-size: 16px;
-        color: $white;
+        color: $text-ui;
         border-radius: 40px;
-        background: $black;
+        background: $bg-base;
         overflow: hidden;
         z-index: 1;
 
