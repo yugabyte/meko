@@ -1,11 +1,11 @@
 ---
 title: Traceability, efficient conversation history, and resumability
-linkTitle: Traceability, resumability and more
+linkTitle: Traces and resumability
 description: Meko captures chain-of-thought history, stores & archives conversations, and enables agent resumability.
 weight: 2020
 ---
 
-Today, agents work as individuals but pretend to be a team. They can share outputs — a spec, a summary, a result — but not the reasoning behind them. The less context you share, the more every agent re-derives from first principles, burning tokens and producing results that diverge — because LLMs are not deterministic.
+Today, agents work as individuals but pretend to be a team. They can share outputs, such as a spec, a summary, and a result, but not the reasoning behind them. The less context you share, the more every agent re-derives from first principles, burning tokens and producing results that diverge, because LLMs are not deterministic.
 
 Meko is agent-native data infrastructure: a single data layer for memory, knowledge, and decision traces, built for the primitives agents actually need.
 
@@ -34,13 +34,21 @@ This matters for two reasons. First, compliance: regulated industries need to re
     within 48 hours.
     ```
 
-1. Auditors or downstream systems query the trail later.
+    The agent should persist these entries with MCP. For example, via `memory_add` for durable facts, or `conversation_add_message` with a `reasoning` field for turn-by-turn audit text.
+
+1. Later, ask the agent to retrieve what it logged, or review it in the portal.
 
     ```text
-    Retrieve the full decision log for the invoice-processing workflow run on 2026-04-30.
+    Search Meko for the decisions you logged about invoice #4872 and duplicate detection.
     ```
 
-    The full chain — what was retrieved, what was decided, and why — is available for review or replay.
+    ```text
+    List the memories and conversation messages you stored about invoice-processing holds in April.
+    ```
+
+    Agents can only retrieve what they stored as conversations or memories. There is no separate "decision log API" beyond those MCP tools.
+
+    To review the full technical trace, including MCP spans, LLM token usage, and nested observations, open the portal's **[Observe](../../guides/observability/#observe-full-langfuse-traces)** section, or expand **Decision trace** / **View execution trace** on a message in **Datapack > Conversations** or [WorkbenchLM](../../guides/workbench-lm/).
 
 ## Conversation history with tiering
 
@@ -48,7 +56,7 @@ This matters for two reasons. First, compliance: regulated industries need to re
 
 Long-running agents accumulate conversation history. Keeping all of it in a fast database is expensive; dropping it loses context.
 
-Meko handles this automatically: recent history stays hot in the database for fast retrieval, while older history is transparently tiered to S3-backed object storage. The full history remains queryable — so when a decision no longer makes sense, you can trace it back to the conversations from months ago that led to it.
+Meko handles this automatically: recent history stays hot in the database for fast retrieval, while older history is transparently tiered to S3-backed object storage. The full history remains queryable, so when a decision no longer makes sense, you can trace it back to the conversations from months ago that led to it.
 
 **How to use it**
 
@@ -98,3 +106,18 @@ Meko keeps an audit trail of sub-agent operations, so the supervisor knows exact
     ```text
     My last run failed midway. Retrieve your last checkpoint from Meko and resume from there.
     ```
+
+## Next steps
+
+{{< card-group >}}
+  {{< card
+    href="guides/observability/"
+    title="Observability"
+    desc="Where to find Observe, decision traces, and execution traces in the portal."
+  >}}
+  {{< card
+    href="guides/workbench-lm/"
+    title="WorkbenchLM"
+    desc="Try memory, knowledge, and traces in the portal without an MCP install."
+  >}}
+{{< /card-group >}}

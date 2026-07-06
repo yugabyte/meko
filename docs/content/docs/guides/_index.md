@@ -28,7 +28,7 @@ Use the following guides to learn key concepts and workflows for Meko.
   {{< card
     href="guides/observability/"
     title="Observability"
-    desc="Traces, conversation history, and chain-of-thought visibility."
+    desc="View decision traces and execution traces."
   >}}
 {{< /card-group >}}
 

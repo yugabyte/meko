@@ -33,7 +33,7 @@ If it is not your first time signing in, do the following:
 - Knowledge: Upload or manage knowledge-base documents in the left panel. Chat is available after a document has finished indexing.
 - Chat: Send messages in the center panel. Meko routes requests through the inference gateway and MCP tools on your behalf.
 - Live observation: The right panel shows memories, shared knowledge, and conversations, updated as you chat.
-- Traces: Open execution traces for individual messages (click **View decision trace**), similar to the datapack **Conversations** viewer.
+- Traces: Expand **Decision trace** above each reply, or click **View execution trace** under it to view decision traces. See [Observability](../observability/).
 
 ## WorkbenchLM vs Choose your tool (via external MCP clients)
 

@@ -190,13 +190,12 @@ What does Meko remember about me?
 
 Check what's happening inside your datapack:
 
-- **Conversations**: View stored conversation history. Provides access to reasoning traces and execution logs for all your conversations.
+- **Conversations**: View stored conversation history, and per-message decision and execution traces.
 - **Memories**: View stored memories and their extracted entities.
 - **Learnings**: Meko highlights memories that might be worth promoting to shared knowledge (Ko).
 - **Knowledge**: See indexed document sources and their status.
 
-<!-- TODO: Add LangFuse observability walkthrough once integration details are finalized -->
-<!-- TODO: Add screenshots showing costs, calls, and timings -->
+For full Langfuse traces across all datapacks, select **Observe**. See [Observability](../../guides/observability/).
 
 ## Next steps
 
