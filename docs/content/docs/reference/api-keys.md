@@ -8,6 +8,8 @@ type: docs
 
 Meko uses long-lived API keys (personal access tokens) to authenticate MCP clients. You manage them in the portal under **Settings > API Keys**.
 
+API keys are available on all tiers. Every MCP call from an external client counts toward your account's Free tier quotas (conversations, retrievals, and related caps). See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+
 ## Generate an API key
 
 **From Settings**

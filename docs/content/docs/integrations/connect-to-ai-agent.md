@@ -8,6 +8,10 @@ type: docs
 
 Integrate with AI agents for interactive use cases, such as saving personal, team, and organizational preferences, standards, and policies.
 
+> [!NOTE] Free tier
+>
+> Every MCP call from an external client counts toward your account's Free tier quotas (conversations, retrievals, and related caps). See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+
 ## Before you connect
 
 1. **Generate an API key**. In the portal, open **Settings>API Keys>Generate API key**, enter a name, then copy or download the key before closing the dialog (it starts with `mko_tkn_` and is shown only once).

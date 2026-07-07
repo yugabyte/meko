@@ -16,6 +16,8 @@ Meko has three levels of integration. Each gives you more control over how your 
 
 Before you start, [request access](https://info.yugabyte.com/meko-request-access) and sign in to the [Meko portal](https://cloud.mekodata.ai/). You land on the **Welcome to Meko** page with a default datapack already created for you.
 
+New accounts start on the **Free** tier. See [Meko pricing](https://mekodata.ai/pricing/) for plan details and limits.
+
 > [!NOTE]
 >
 > Meko itself is not an AI agent — it's the data layer (shared knowledge, collective memory, decision traces) that your agents connect to. WorkbenchLM is an embedded chat agent so you can try Meko in the portal without installing anything; it's not the daily-use surface.

@@ -30,6 +30,11 @@ Inside a trace you can inspect:
 
 This is the full-fidelity view. Use it when you need span-level timing, token costs, or raw tool payloads.
 
+> [!NOTE] Pro
+>
+> **Decision traces** in the portal (WorkbenchLM, Conversations viewer) are available on Free. **Audit log export** and enterprise compliance features require [Pro](https://mekodata.ai/pricing/).
+
+## Key metrics
 ### Deep-link from a conversation
 
 You can also access traces directly from conversations, memories, and knowledge:

@@ -8,6 +8,10 @@ type: docs
 
 **WorkbenchLM** is Meko's built-in chat experience in the [Meko portal](https://cloud.mekodata.ai/). Use it to try memory, knowledge, and traces without configuring Cursor, Claude, or another external MCP client.
 
+> [!NOTE] Free tier
+>
+> Free accounts are limited to **1,000 conversations** and **10M WorkbenchLM tokens**. When a cap is reached, the chat composer is disabled. See [Meko pricing](https://mekodata.ai/pricing/) for plan details and upgrade options.
+
 ## When to use WorkbenchLM
 
 - First session: Onboarding offers **Try the WorkbenchLM** so you can explore a sample knowledge base and see memories form in real time.

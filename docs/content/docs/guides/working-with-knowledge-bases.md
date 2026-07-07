@@ -46,6 +46,10 @@ Currently, you must upload knowledge via the Meko portal:
 
 Currently, Meko accepts PDF, TXT, MD, JSON, and CSV files up to 5MB each, up to 10 per batch.
 
+> [!NOTE] Free tier
+>
+> Free accounts are limited to **100 MB** of total knowledge-base storage across all datapacks, with individual files capped at **5 MB**. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+
 <!--
 | Source | Example URL |
 | :----- | :---------- |

@@ -28,6 +28,10 @@ To create additional datapacks:
 1. Click **Add Datapack**.
 1. Follow the instructions in the configure wizard.
 
+> [!NOTE] Free tier
+>
+> Free accounts can create up to **10 datapacks**. When you reach the limit, **Add Datapack** is disabled until you upgrade. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+
 <!-- Using the CLI:
 
 ```bash

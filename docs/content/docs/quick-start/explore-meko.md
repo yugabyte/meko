@@ -14,6 +14,10 @@ Meko provides a persistent datastore for the full spectrum of information that A
 
 We'll start by adding knowledge, then move on to creating memories.
 
+> [!NOTE] Free tier
+>
+> Free accounts can store up to **100 MB** of knowledge across all datapacks (5 MB per file). MCP conversation and retrieval limits also apply when you use an external client. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+
 ## Upload knowledge
 
 To see how Meko stores knowledge, add documents to your datapack and query them from your AI client.

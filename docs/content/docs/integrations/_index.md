@@ -11,6 +11,10 @@ type: docs
 
 Meko integrates via the Model Context Protocol (MCP). Each Datapack exposes an MCP server that your AI coding tools, agent frameworks, or consumer chat applications connect to.
 
+> [!NOTE] Free tier
+>
+> MCP tool usage counts toward Free tier limits, including **1,000 conversation messages** and **10,000 retrieval requests** per month (memory and knowledge-base searches). See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+
 You follow the same basic pattern with all tools and frameworks:
 
 1. **Create a datapack** using the Meko web portal.

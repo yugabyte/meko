@@ -9,6 +9,17 @@ The Meko MCP Server provides the primary tools for managing datapacks, conversat
 
 To connect from IDEs and MCP-compatible clients, use the Meko MCP URL `https://mcp.mekodata.ai/mcp` and a user **API key** from **Settings>API Keys**. See [Integrations](../../integrations/) and [Quick start](../../quick-start/).
 
+## Free tier quotas
+
+On the **Free** tier, MCP tool calls are metered per account:
+
+| Metric | Limit (per month) | Example tools |
+| :----- | :--------- | :------------ |
+| Conversations | 1,000 | `conversation_add_message` |
+| Retrievals | 10,000 | `memory_search`, `knowledgebase_search` |
+
+When a quota is exceeded, further calls are blocked until you upgrade. Datapack creation and knowledge-base uploads are capped separately. See [Meko pricing](https://mekodata.ai/pricing/) for the full plan table.
+
 ## Tools
 
 The Meko MCP Server provides the following tools.

@@ -26,6 +26,10 @@ One of Meko's four pillars is _Full Chain-of-Thought Traceability_. This means y
 - **Explain agent behavior**. Trace back from an agent's output to the data operations and reasoning that produced it.
 - **Audit compliance**. Maintain a complete record of what data agents accessed and how they used it.
 
+> [!NOTE] Pro
+>
+> Viewing **decision traces** in the portal is included on Free. **Audit logs** for compliance and long-term retention requires [Pro](https://mekodata.ai/pricing/).
+
 ## Next steps
 
 - [Use traces for monitoring and debugging](../../../guides/observability/)
