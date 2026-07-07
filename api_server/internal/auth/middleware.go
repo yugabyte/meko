@@ -513,9 +513,6 @@ func RequireDatapackAccess(datapacks DatapackAccessLookup) echo.MiddlewareFunc {
 	}
 }
 
-// datapackGrantOwner is the API grant string for the datapack row owner.
-const datapackGrantOwner = "owner"
-
 // RequireDatapackOwnerOrMaintainerGrant runs after RequireDatapackAccess. It
 // allows only callers whose resolved datapack grant is owner or maintainer
 // (e.g. outgoing-shares pending invites, invite/resend/revoke). Viewer and contributor receive 403.
@@ -538,8 +535,7 @@ func RequireDatapackOwnerOrMaintainerGrant() echo.MiddlewareFunc {
 					},
 				})
 			}
-			g := strings.ToLower(strings.TrimSpace(dp.Grant))
-			if g == datapackGrantOwner || g == string(models.GrantMaintainer) {
+			if models.IsOwnerOrMaintainerGrant(dp.Grant) {
 				return next(c)
 			}
 			return c.JSON(http.StatusForbidden, map[string]any{

@@ -45,7 +45,9 @@ func (h *PromoteMemoriesHandler) Promote(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	if _, err := RequireDatapackAccess(c, h.dpLookup, req.DatapackID); err != nil {
+	// Promotion writes to the shared tenant KB, so it's owner/maintainer-only —
+	// viewers and contributors get 403.
+	if _, err := RequireDatapackOwnerOrMaintainer(c, h.dpLookup, req.DatapackID); err != nil {
 		return err
 	}
 

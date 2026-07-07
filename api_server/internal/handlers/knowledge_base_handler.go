@@ -465,8 +465,7 @@ func canDeleteKBDocument(
 	callerUserID string,
 	fileUploaderUserID *string,
 ) bool {
-	g := strings.ToLower(strings.TrimSpace(dpGrant))
-	if g == "owner" || g == string(models.GrantMaintainer) {
+	if models.IsOwnerOrMaintainerGrant(dpGrant) {
 		return true
 	}
 	if fileUploaderUserID != nil &&

@@ -324,6 +324,18 @@ func ValidGrantRole(s string) bool {
 	return false
 }
 
+// GrantOwner is the resolved grant string for a datapack's row owner (not a
+// shared GrantRole — the owner isn't stored in agent_access).
+const GrantOwner = "owner"
+
+// IsOwnerOrMaintainerGrant reports whether a resolved datapack grant confers
+// owner/maintainer privileges. Single source of truth for the "who can perform
+// privileged datapack actions" rule (promotion, invite management, KB delete).
+func IsOwnerOrMaintainerGrant(grant string) bool {
+	g := strings.ToLower(strings.TrimSpace(grant))
+	return g == GrantOwner || g == string(GrantMaintainer)
+}
+
 // DatapackInvite represents a row from meko_system.datapack_invites.
 type DatapackInvite struct {
 	InviteID        string    `json:"invite_id"`
