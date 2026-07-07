@@ -139,9 +139,9 @@ pub fn update_pg_hba(pgdata_path: &Path, databricks_pg_hba: Option<&String>) -> 
     // XXX: consider making it a part of config.json
     let pghba_path = pgdata_path.join("pg_hba.conf");
 
-    // Update pg_hba to contains databricks specfic settings before adding neon settings
+    // Update pg_hba to contains databricks specfic settings before adding yb_amp settings
     // PG uses the first record that matches to perform authentication, so we need to have
-    // our rules before the default ones from neon.
+    // our rules before the default ones from yb_amp.
     // See https://www.postgresql.org/docs/current/auth-pg-hba-conf.html
     if let Some(databricks_pg_hba) = databricks_pg_hba {
         if config::line_in_file(
@@ -231,19 +231,19 @@ pub fn add_standby_signal(pgdata_path: &Path) -> Result<()> {
 }
 
 #[instrument(skip_all)]
-pub async fn handle_neon_extension_upgrade(client: &mut Client) -> Result<()> {
-    // The neon C library is preloaded into every backend via
+pub async fn handle_yb_amp_extension_upgrade(client: &mut Client) -> Result<()> {
+    // The yb_amp C library is preloaded into every backend via
     // shared_preload_libraries, but the SQL extension object (a
     // `pg_extension` row, created by `CREATE EXTENSION yb_amp`) only exists in
     // the databases the spec installs it into — not the `postgres`
     // maintenance database that post_apply_config connects to. Running
     // `ALTER EXTENSION yb_amp UPDATE` there would fail with
-    // `extension "neon" does not exist` and log a spurious error on every
-    // startup, even though neon is loaded and working. Only upgrade when the
+    // `extension "yb_amp" does not exist` and log a spurious error on every
+    // startup, even though yb_amp is loaded and working. Only upgrade when the
     // extension is actually installed in the connected database.
     let installed = client
         .query_opt(
-            "SELECT 1 FROM pg_catalog.pg_extension WHERE extname OPERATOR(pg_catalog.=) 'neon'",
+            "SELECT 1 FROM pg_catalog.pg_extension WHERE extname OPERATOR(pg_catalog.=) 'yb_amp'",
             &[],
         )
         .await?
@@ -254,7 +254,7 @@ pub async fn handle_neon_extension_upgrade(client: &mut Client) -> Result<()> {
     }
 
     let query = "ALTER EXTENSION yb_amp UPDATE";
-    info!("update neon extension version with query: {}", query);
+    info!("update yb_amp extension version with query: {}", query);
     client.simple_query(query).await?;
 
     Ok(())

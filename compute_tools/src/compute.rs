@@ -1819,7 +1819,7 @@ impl ComputeNode {
     }
 
     /// Do post configuration of the already started Postgres. This function spawns a background task to
-    /// configure the database after applying the compute spec. Currently, it upgrades the neon extension
+    /// configure the database after applying the compute spec. Currently, it upgrades the yb_amp extension
     /// version. In the future, it may upgrade all 3rd-party extensions.
     #[instrument(skip_all)]
     pub fn post_apply_config(&self) -> Result<()> {
@@ -1833,9 +1833,9 @@ impl ComputeNode {
                     }
                 });
 
-                handle_neon_extension_upgrade(&mut client)
+                handle_yb_amp_extension_upgrade(&mut client)
                     .await
-                    .context("handle_neon_extension_upgrade")?;
+                    .context("handle_yb_amp_extension_upgrade")?;
                 Ok::<_, anyhow::Error>(())
             }
             .await;
@@ -2552,7 +2552,7 @@ LIMIT 100",
         if let Some(libs) = spec.cluster.settings.find("shared_preload_libraries") {
             libs_vec = libs
                 .split(&[',', '\'', ' '])
-                .filter(|s| *s != "neon" && *s != "databricks_auth" && !s.is_empty())
+                .filter(|s| *s != "yb_amp" && *s != "databricks_auth" && !s.is_empty())
                 .map(str::to_string)
                 .collect();
         }
@@ -2571,7 +2571,7 @@ LIMIT 100",
             if let Some(libs) = shared_preload_libraries_line.split("='").nth(1) {
                 preload_libs_vec = libs
                     .split(&[',', '\'', ' '])
-                    .filter(|s| *s != "neon" && *s != "databricks_auth" && !s.is_empty())
+                    .filter(|s| *s != "yb_amp" && *s != "databricks_auth" && !s.is_empty())
                     .map(str::to_string)
                     .collect();
             }
@@ -2656,13 +2656,13 @@ LIMIT 100",
         let mut installed_extensions_collection_interval =
             2 * atomic_interval.load(std::sync::atomic::Ordering::SeqCst);
         info!(
-            "[NEON_EXT_SPAWN] Spawning background installed extensions worker with Timeout: {}",
+            "[YB_AMP_EXT_SPAWN] Spawning background installed extensions worker with Timeout: {}",
             installed_extensions_collection_interval
         );
         let handle = tokio::spawn(async move {
             loop {
                 info!(
-                    "[NEON_EXT_INT_SLEEP]: Interval: {}",
+                    "[YB_AMP_EXT_INT_SLEEP]: Interval: {}",
                     installed_extensions_collection_interval
                 );
                 // Sleep at the start of the loop to ensure that two collections don't happen at the same time.
@@ -2779,7 +2779,7 @@ pub async fn installed_extensions(conf: tokio_postgres::Config) -> Result<()> {
     match res {
         Ok(extensions) => {
             info!(
-                "[NEON_EXT_STAT] {}",
+                "[YB_AMP_EXT_STAT] {}",
                 serde_json::to_string(&extensions).expect("failed to serialize extensions list")
             );
         }

@@ -22,9 +22,9 @@ use crate::pg_helpers::{
 use crate::spec_apply::ApplySpecPhase::{
     AddDatabricksGrants, AlterDatabricksRoles, CreateAndAlterDatabases, CreateAndAlterRoles,
     CreateAvailabilityCheck, CreateDatabricksMisc, CreateDatabricksRoles, CreatePgauditExtension,
-    CreatePgauditlogtofileExtension, CreatePrivilegedRole, CreateSchemaNeon,
+    CreatePgauditlogtofileExtension, CreatePrivilegedRole, CreateSchemaYbAmp,
     DisablePostgresDBPgAudit, DropInvalidDatabases, DropRoles, FinalizeDropLogicalSubscriptions,
-    HandleDatabricksAuthExtension, HandleNeonExtension, HandleOtherExtensions,
+    HandleDatabricksAuthExtension, HandleYbAmpExtension, HandleOtherExtensions,
     RenameAndDeleteDatabases, RenameRoles, RunInEachDatabase,
 };
 use crate::spec_apply::PerDatabasePhase::{
@@ -199,7 +199,7 @@ impl ComputeNode {
                 CreateAndAlterRoles,
                 RenameAndDeleteDatabases,
                 CreateAndAlterDatabases,
-                CreateSchemaNeon,
+                CreateSchemaYbAmp,
             ]
             } else {
                 vec![
@@ -209,7 +209,7 @@ impl ComputeNode {
                 CreateAndAlterRoles,
                 RenameAndDeleteDatabases,
                 CreateAndAlterDatabases,
-                CreateSchemaNeon,
+                CreateSchemaYbAmp,
             ]
             };
 
@@ -289,7 +289,7 @@ impl ComputeNode {
             let mut phases = if self.params.lakebase_mode {
                 vec![
                 HandleOtherExtensions,
-                HandleNeonExtension, // This step depends on CreateSchemaNeon
+                HandleYbAmpExtension, // This step depends on CreateSchemaYbAmp
                 HandleDatabricksAuthExtension,
                 CreateAvailabilityCheck,
                 DropRoles,
@@ -299,13 +299,13 @@ impl ComputeNode {
             } else {
                 vec![
                 HandleOtherExtensions,
-                HandleNeonExtension, // This step depends on CreateSchemaNeon
+                HandleYbAmpExtension, // This step depends on CreateSchemaYbAmp
                 CreateAvailabilityCheck,
                 DropRoles,
             ]
             };
 
-            // This step depends on CreateSchemaNeon
+            // This step depends on CreateSchemaYbAmp
             if spec.drop_subscriptions_before_start && !drop_subscriptions_done {
                 info!("Adding FinalizeDropLogicalSubscriptions phase because drop_subscriptions_before_start is set");
                 phases.push(FinalizeDropLogicalSubscriptions);
@@ -520,13 +520,13 @@ pub enum ApplySpecPhase {
     CreateAndAlterRoles,
     RenameAndDeleteDatabases,
     CreateAndAlterDatabases,
-    CreateSchemaNeon,
+    CreateSchemaYbAmp,
     RunInEachDatabase { db: DB, subphase: PerDatabasePhase },
     CreatePgauditExtension,
     CreatePgauditlogtofileExtension,
     DisablePostgresDBPgAudit,
     HandleOtherExtensions,
-    HandleNeonExtension,
+    HandleYbAmpExtension,
     HandleDatabricksAuthExtension,
     CreateAvailabilityCheck,
     AddDatabricksGrants,
@@ -715,7 +715,7 @@ async fn get_operations<'a>(
             // See:
             //   https://github.com/postgres/postgres/commit/a4b4cc1d60f7e8ccfcc8ff8cb80c28ee411ad9a9
             //
-            // Postgres Neon extension is done the way, that db is de-registered
+            // Postgres yb_amp extension is done the way, that db is de-registered
             // in the control plane metadata only after it is dropped. So there is
             // a chance that it still thinks that the db should exist. This means
             // that it will be re-created by the `CreateDatabases` phase. This
@@ -964,10 +964,10 @@ async fn get_operations<'a>(
 
             Ok(Box::new(operations))
         }
-        ApplySpecPhase::CreateSchemaNeon => Ok(Box::new(once(Operation {
-            query: String::from("CREATE SCHEMA IF NOT EXISTS neon"),
+        ApplySpecPhase::CreateSchemaYbAmp => Ok(Box::new(once(Operation {
+            query: String::from("CREATE SCHEMA IF NOT EXISTS yb_amp"),
             comment: Some(String::from(
-                "create schema for neon extension and utils tables",
+                "create schema for the yb_amp extension and utils tables",
             )),
         }))),
         ApplySpecPhase::RunInEachDatabase { db, subphase } => {
@@ -1061,7 +1061,7 @@ async fn get_operations<'a>(
                                     query: format!("REASSIGN OWNED BY {quoted} TO {new_owner}",),
                                     comment: None,
                                 },
-                                // Revoke some potentially blocking privileges (Neon-specific currently)
+                                // Revoke some potentially blocking privileges (yb_amp-specific currently)
                                 Operation {
                                     query: format!(
                                         include_str!("sql/pre_drop_role_revoke_privileges.sql"),
@@ -1143,7 +1143,7 @@ async fn get_operations<'a>(
             comment: Some(String::from("create pgauditlogtofile extensions")),
         }))),
         // Disable pgaudit logging for postgres database.
-        // Postgres is neon system database used by monitors
+        // Postgres is the system database used by monitors
         // and compute_ctl tuning functions and thus generates a lot of noise.
         // We do not consider data stored in this database as sensitive.
         ApplySpecPhase::DisablePostgresDBPgAudit => {
@@ -1153,7 +1153,7 @@ async fn get_operations<'a>(
                 comment: Some(query.to_string()),
             })))
         }
-        ApplySpecPhase::HandleNeonExtension => {
+        ApplySpecPhase::HandleYbAmpExtension => {
             let operations = vec![
                 Operation {
                     query: String::from("CREATE EXTENSION IF NOT EXISTS yb_amp WITH SCHEMA yb_amp"),
@@ -1163,17 +1163,17 @@ async fn get_operations<'a>(
                 },
                 Operation {
                     query: String::from(
-                        "UPDATE pg_catalog.pg_extension SET extrelocatable = true WHERE extname OPERATOR(pg_catalog.=) 'neon'::pg_catalog.name AND extrelocatable OPERATOR(pg_catalog.=) false",
+                        "UPDATE pg_catalog.pg_extension SET extrelocatable = true WHERE extname OPERATOR(pg_catalog.=) 'yb_amp'::pg_catalog.name AND extrelocatable OPERATOR(pg_catalog.=) false",
                     ),
-                    comment: Some(String::from("compat/fix: make neon relocatable")),
+                    comment: Some(String::from("compat/fix: make yb_amp relocatable")),
                 },
                 Operation {
                     query: String::from("ALTER EXTENSION yb_amp SET SCHEMA yb_amp"),
-                    comment: Some(String::from("compat/fix: alter neon extension schema")),
+                    comment: Some(String::from("compat/fix: alter yb_amp extension schema")),
                 },
                 Operation {
                     query: String::from("ALTER EXTENSION yb_amp UPDATE"),
-                    comment: Some(String::from("compat/update: update neon extension version")),
+                    comment: Some(String::from("compat/update: update yb_amp extension version")),
                 },
             ]
             .into_iter();
@@ -1225,7 +1225,7 @@ async fn get_operations<'a>(
                 Operation {
                     query: String::from("GRANT USAGE ON SCHEMA yb_amp TO databricks_monitor"),
                     comment: Some(String::from(
-                        "Permissions needed to execute neon.* functions (in the postgres database)",
+                        "Permissions needed to execute yb_amp.* functions (in the postgres database)",
                     )),
                 },
                 Operation {
@@ -1247,7 +1247,7 @@ async fn get_operations<'a>(
                         "GRANT SELECT ON yb_amp.yb_amp_perf_counters TO databricks_monitor",
                     ),
                     comment: Some(String::from(
-                        "Permissions needed to access neon performance counters view",
+                        "Permissions needed to access yb_amp performance counters view",
                     )),
                 },
                 Operation {
