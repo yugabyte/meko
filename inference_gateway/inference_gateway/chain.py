@@ -196,25 +196,6 @@ def _usage_from_langchain_result(result: Any) -> Tuple[int, int, int, Optional[s
     return input_tokens, output_tokens, total_tokens, model
 
 
-# --------------------------------------------------------------------------- #
-# Retrieval relevance tuning
-# --------------------------------------------------------------------------- #
-#
-# memory_search returns top-K by similarity with no relevance floor, so a vague
-# query like "hi" returns basically-unrelated hits. MEMORY_MIN_SCORE clips that
-# long tail before the LLM sees it. KB relevance + result count are owned by the
-# MCP's hybrid search, so the gateway neither filters nor caps KB results.
-#
-# Tune from observation:
-#   - Bump `MEMORY_MIN_SCORE` up if you see Mem0 hits the agent shouldn't have used.
-#   - Lower it if relevant memories disappear from the panel.
-#   - Same logic mirror-flipped for `KB_MAX_DISTANCE`.
-
-# Mem0 score is cosine similarity in [0, 1] — higher is better. 0.45 keeps
-# moderately-relevant memories while dropping near-orthogonal hits. Short
-# factual memories ("Editor is Marcus Thompson") score 0.5–0.65 against
-# queries like "Who is my editor?" — 0.7 was dropping these correct hits.
-MEMORY_MIN_SCORE = 0.5
 
 
 # Greetings / acknowledgements that don't need any retrieval grounding —
@@ -1002,7 +983,7 @@ async def _search_memories(
     # Vector hits are capped by `top_k` server-side; graph/promoted relations
     # are not, so cap them at 2× top_k to bound the prompt.
     hits = _extract_memory_hits(_parse_json(raw), relation_cap=2 * top_k)
-    # One line per KEPT hit (post MEMORY_MIN_SCORE filter) so dev logs show
+    # One line per hit so dev logs show
     # exactly which memories fed the prompt and at what similarity. DEBUG:
     # unbounded per-turn volume + carries user content — run the gateway
     # with --log-level debug (INFERENCE_LOG_LEVEL=debug) to see these.
@@ -1296,10 +1277,9 @@ def _extract_memory_hits(payload: object, relation_cap: Optional[int] = None) ->
     ``memories`` or ``data`` instead of ``results``; we keep those as
     fallbacks. A bare list is treated as the vector hits with no relations.
 
-    Score filtering: vector hits without a rerank_score are dropped if their
-    cosine score is below `MEMORY_MIN_SCORE`. Reranked hits (rerank_score
-    present) are passed through — the MCP server already applied relative
-    thresholds. Items with no score at all are kept (legacy / string shapes).
+    All vector hits returned by memory_search are passed through — relevance
+    filtering is owned by the MCP server (top-K limit sent with the query).
+    Items with no score at all are kept (legacy / string shapes).
     """
     vector_items: list[Any] = []
     relations: list[Any] = []
@@ -1327,23 +1307,10 @@ def _extract_memory_hits(payload: object, relation_cap: Optional[int] = None) ->
     # memory_top_k (the limit sent to memory_search), so we iterate all returned.
     for item in vector_items:
         if isinstance(item, dict):
-            # For display and sorting, prefer rerank_score (cross-encoder sigmoid,
-            # set by MCP hybrid_search.rerank) over the raw mem0 cosine score.
-            # Use explicit None check so rerank_score=0.0 is not treated as absent.
-            _rerank = item.get("rerank_score")
-            raw_score = _rerank if _rerank is not None else item.get("score")
+            raw_score = item.get("score")
             score: Optional[float] = (
                 float(raw_score) if isinstance(raw_score, (int, float)) else None
             )
-            # MEMORY_MIN_SCORE is calibrated for cosine similarity. Cross-encoder
-            # sigmoid scores (rerank_score) land in a different range — a relevant
-            # memory can score 0.35–0.48 — so applying the absolute 0.5 floor to
-            # them would drop correct results. When rerank_score is present the MCP
-            # server has already filtered via relative thresholds in
-            # hybrid_search.determine_result_count; trust that and skip the floor.
-            # Only apply the absolute floor to raw cosine scores (non-reranked results).
-            if _rerank is None and score is not None and score < MEMORY_MIN_SCORE:
-                continue
             text = (
                 item.get("memory")
                 or item.get("data")
