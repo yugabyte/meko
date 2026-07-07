@@ -503,22 +503,24 @@ fn build_read_chain_sql(schema: &str) -> String {
     )
 }
 
-/// One-fork range scan (`scan_range`). `$1`=branch_id;
-/// `$2..$8` = spcnode, dbnode, relnode, forknum, blknum_lo, blknum_hi,
-/// target_lsn.
-fn build_scan_one_fork_sql(schema: &str) -> String {
+/// Shared body of the one-fork block-chain scan, used by both the contiguous
+/// range scan ([`build_scan_one_fork_sql`]) and the scattered set scan
+/// ([`build_scan_one_fork_scattered_sql`]). For each `b(blknum)` row the
+/// `driver` produces, a CROSS JOIN LATERAL resolves that block's chain: rows
+/// from the newest image at-or-below `lsn` onward, newest-first (the per-block
+/// InitPlan anchor is a pushable lower bound, so both ends of the lsn range
+/// push into the DocDB scan). Results are ordered by blknum then lsn.
+///
+/// - `prefix`: any leading `WITH` clause the driver needs (empty for the set).
+/// - `driver`: the `FROM` source yielding `b(blknum)` — a `blocks` CTE for the
+///   range, `unnest($6::bigint[])` for the set.
+/// - `lsn`: the placeholder holding target_lsn (`$8` for range, `$7` for set).
+fn build_scan_one_fork_lateral_sql(schema: &str, prefix: &str, driver: &str, lsn: &str) -> String {
     format!(
-        "WITH blocks AS ( \
-             SELECT DISTINCT blknum FROM \"{schema}\".pages \
-             WHERE branch_id=$1 \
-               AND spcnode=$2 AND dbnode=$3 AND relnode=$4 \
-               AND forknum=$5 \
-               AND blknum >= $6 AND blknum < $7 \
-               AND lsn <= $8 \
-         ) \
+        "{prefix}\
          SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                 p.lsn, p.is_image, p.will_init, p.payload \
-         FROM blocks b \
+         FROM {driver} \
          CROSS JOIN LATERAL ( \
              SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                     p.lsn, p.is_image, p.will_init, p.payload \
@@ -526,18 +528,52 @@ fn build_scan_one_fork_sql(schema: &str) -> String {
              WHERE p.branch_id=$1 \
                AND p.spcnode=$2 AND p.dbnode=$3 AND p.relnode=$4 \
                AND p.forknum=$5 AND p.blknum = b.blknum \
-               AND p.lsn <= $8 \
+               AND p.lsn <= {lsn} \
                AND p.lsn >= COALESCE(( \
                      SELECT a.lsn FROM \"{schema}\".pages a \
                      WHERE a.branch_id=$1 \
                        AND a.spcnode=$2 AND a.dbnode=$3 AND a.relnode=$4 \
                        AND a.forknum=$5 AND a.blknum = b.blknum \
-                       AND a.is_image=TRUE AND a.lsn <= $8 \
+                       AND a.is_image=TRUE AND a.lsn <= {lsn} \
                      ORDER BY a.lsn DESC LIMIT 1), 0) \
              ORDER BY p.lsn DESC, p.is_image DESC \
          ) p \
          ORDER BY p.blknum, p.lsn DESC, p.is_image DESC"
     )
+}
+
+/// One-fork range scan (`scan_range`). `$1`=branch_id;
+/// `$2..$8` = spcnode, dbnode, relnode, forknum, blknum_lo, blknum_hi,
+/// target_lsn. Driver: the DISTINCT blknums that actually exist in `[$6, $7)`
+/// (a Distinct Index Scan ⇒ one row per block) feeding the shared LATERAL.
+fn build_scan_one_fork_sql(schema: &str) -> String {
+    let prefix = format!(
+        "WITH blocks AS ( \
+             SELECT DISTINCT blknum FROM \"{schema}\".pages \
+             WHERE branch_id=$1 \
+               AND spcnode=$2 AND dbnode=$3 AND relnode=$4 \
+               AND forknum=$5 \
+               AND blknum >= $6 AND blknum < $7 \
+               AND lsn <= $8 \
+         ) "
+    );
+    build_scan_one_fork_lateral_sql(schema, &prefix, "blocks b", "$8")
+}
+
+/// Multi-key ("scattered") one-fork scan (`scan_scattered_set`). Same LATERAL
+/// body as [`build_scan_one_fork_sql`], but driven directly from the
+/// caller-supplied blknum array via `unnest` rather than a contiguous `[lo, hi)`
+/// range discovered by a `DISTINCT` pages scan. `$1`=branch_id; `$2..$5`=
+/// spcnode, dbnode, relnode, forknum; `$6`=blknum bigint[]; `$7`=target_lsn.
+///
+/// We already know the blocks, so we do NOT re-scan pages with a
+/// `SELECT DISTINCT ... blknum = ANY(...)` (that would bet on YB skip-scanning
+/// the `= ANY` on the range column). `unnest` makes every tablet touch below a
+/// single-blknum point seek (hash `=` + blknum `=`). A blknum absent from the
+/// table yields an empty LATERAL → CROSS JOIN drops it (no row), same as the
+/// old DISTINCT-CTE excluding it.
+fn build_scan_one_fork_scattered_sql(schema: &str) -> String {
+    build_scan_one_fork_lateral_sql(schema, "", "unnest($6::bigint[]) AS b(blknum)", "$7")
 }
 
 /// Cross-fork range scan (`scan_range`). `$1`=branch_id;
@@ -577,6 +613,44 @@ fn build_scan_cross_fork_sql(schema: &str) -> String {
          ) p \
          ORDER BY p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, p.lsn DESC, p.is_image DESC"
     )
+}
+
+/// Bucket flat SQL rows into per-key chains. Rows arrive LSN-descending per
+/// block (per the scan `ORDER BY`); each chain is truncated at the first
+/// `will_init` row, since older rows are shadowed by that anchor (the image
+/// row for blocks with an image, else the latest will_init delta). `label`
+/// names the caller for the ordering assertion. Shared tail of
+/// [`PageStore::scan_range`] and [`PageStore::scan_scattered_set`].
+fn group_page_rows_by_key(
+    rows: Vec<tokio_postgres::Row>,
+    label: &str,
+) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
+    let mut by_key: HashMap<Key, Vec<Arc<PageRow>>> = HashMap::new();
+    let mut order_check: HashMap<Key, Vec<(Lsn, bool, bool)>> = HashMap::new();
+    for r in rows {
+        let row = row_to_page(r)?;
+        let key = row.key;
+        order_check
+            .entry(key)
+            .or_default()
+            .push((row.lsn, row.is_image, row.will_init));
+        assert_chain_step(order_check.get(&key).unwrap(), label);
+        let chain = by_key.entry(key).or_default();
+        if chain.last().is_some_and(|last| last.will_init) {
+            continue;
+        }
+        chain.push(Arc::new(row));
+    }
+    Ok(by_key)
+}
+
+/// What a lineage scan resolves at each ancestor segment: a contiguous key
+/// range ([`PageStore::scan_range`]) or a scattered set of same-fork keys
+/// ([`PageStore::scan_scattered_set`]). Lets [`PageStore::scan_lineage`] share
+/// the ancestor-walk skeleton across both callers.
+enum LineageScanTarget<'a> {
+    Range(Range<Key>),
+    Set(&'a [Key]),
 }
 
 /// Memoized full-chunk INSERT SQL for a `branch_id`, with the
@@ -968,30 +1042,57 @@ impl PageStore {
                 .context("scan_range cross-fork")?
         };
 
-        // Bucket rows by key. Each chain comes back LSN-descending (per
-        // the SQL ORDER BY); truncate at the first will_init=true row
-        // since older rows are shadowed by that anchor. For blocks with
-        // an image, this kicks in at the image row (always will_init).
-        // For blocks without an image, it finds the latest will_init
-        // delta and trims older rows.
-        let mut by_key: HashMap<Key, Vec<Arc<PageRow>>> = HashMap::new();
-        let mut order_check: HashMap<Key, Vec<(Lsn, bool, bool)>> = HashMap::new();
-        for r in rows {
-            let row = row_to_page(r)?;
-            let key = row.key;
-            order_check.entry(key).or_default().push((
-                row.lsn,
-                row.is_image,
-                row.will_init,
-            ));
-            assert_chain_step(order_check.get(&key).unwrap(), "scan_range");
-            let chain = by_key.entry(key).or_default();
-            if chain.last().is_some_and(|last| last.will_init) {
-                continue;
-            }
-            chain.push(Arc::new(row));
+        group_page_rows_by_key(rows, "scan_range")
+    }
+
+    /// Multi-key ("scattered") variant of [`Self::scan_range`]: fetch
+    /// the chains for an arbitrary SET of same-fork relation-page keys
+    /// in ONE query (`unnest($6::bigint[])`) instead of one query per
+    /// block. All keys must share (spcnode, dbnode, relnode, forknum) —
+    /// the caller buckets by fork. Per-block image-anchor + will_init
+    /// trim semantics are identical to `scan_range` (the SQL body is the
+    /// same LATERAL, only the block-selection driver differs).
+    pub async fn scan_scattered_set(
+        &self,
+        branch_id: BranchId,
+        keys: &[Key],
+        target_lsn: Lsn,
+    ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
+        if keys.is_empty() {
+            return Ok(HashMap::new());
         }
-        Ok(by_key)
+        let (sp, db, rel, fork, _) = key_columns(&keys[0])?;
+        let mut blknums: Vec<i64> = Vec::with_capacity(keys.len());
+        for k in keys {
+            let (sp2, db2, rel2, fork2, blk) = key_columns(k)?;
+            if sp2 != sp || db2 != db || rel2 != rel || fork2 != fork {
+                bail!(
+                    "PageStore::scan_scattered_set: keys span multiple forks: \
+                     ({sp},{db},{rel},{fork}) vs ({sp2},{db2},{rel2},{fork2}); \
+                     caller must bucket keys by fork before calling"
+                );
+            }
+            blknums.push(blk);
+        }
+        // Distinct blknums only: a repeated key would emit a duplicate
+        // `unnest` row → a duplicate chain entry (this path doesn't dedup by
+        // lsn). Callers pass disjoint keys today, but harden here and hand YB
+        // a clean array.
+        blknums.sort_unstable();
+        blknums.dedup();
+
+        // branch_id stays bound ($1), NOT baked — same lineage reason
+        // as `read_chain`/`scan_range` (ancestor timelines hit this).
+        let branch_s = branch_id.to_string();
+        let target = target_lsn.0 as i64;
+        let sql = build_scan_one_fork_scattered_sql(&self.schema);
+        let rows = self
+            .ysql_client
+            .query(&sql, &[&branch_s, &sp, &db, &rel, &fork, &blknums, &target])
+            .await
+            .context("scan_scattered_set one-fork")?;
+
+        group_page_rows_by_key(rows, "scan_scattered_set")
     }
 
     pub async fn delete_all_pages(&self, branch_id: BranchId) -> Result<()> {
@@ -1489,26 +1590,72 @@ impl PageStore {
         range: Range<Key>,
         target_lsn: Lsn,
     ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
+        self.scan_lineage("scan_range_lineage", lineage, target_lsn, LineageScanTarget::Range(range))
+            .await
+    }
+
+    /// Lineage-aware [`Self::scan_scattered_set`]. Mirrors `scan_range_lineage`
+    /// exactly, walking the same ancestor segments, but with a scattered
+    /// key set instead of a range.
+    pub async fn scan_scattered_set_lineage(
+        &self,
+        lineage: &[LineageSegment],
+        keys: &[Key],
+        target_lsn: Lsn,
+    ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
+        self.scan_lineage("scan_scattered_set_lineage", lineage, target_lsn, LineageScanTarget::Set(keys))
+            .await
+    }
+
+    /// Resolve one lineage segment's chains — a contiguous range or a scattered
+    /// key set, per `target`. The per-segment step of [`Self::scan_lineage`].
+    async fn scan_lineage_segment(
+        &self,
+        target: &LineageScanTarget<'_>,
+        branch_id: BranchId,
+        lsn: Lsn,
+    ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
+        match target {
+            LineageScanTarget::Range(range) => self.scan_range(branch_id, range.clone(), lsn).await,
+            LineageScanTarget::Set(keys) => self.scan_scattered_set(branch_id, keys, lsn).await,
+        }
+    }
+
+    /// Shared skeleton of [`Self::scan_range_lineage`] and
+    /// [`Self::scan_scattered_set_lineage`]. Walk `lineage` newest-branch-first,
+    /// scanning each segment via [`Self::scan_lineage_segment`] (capped at that
+    /// segment's `cap_lsn`), fold every segment's chains into one map, then
+    /// merge (sort/dedup/truncate) per key. Only the per-segment scan differs
+    /// between the two callers — a contiguous range vs a scattered key set —
+    /// carried by `target`. `label` names the caller for the empty-lineage
+    /// error. The single-segment case returns the segment's output directly (it
+    /// is already ordered); the merge only runs when ancestors contribute rows.
+    async fn scan_lineage(
+        &self,
+        label: &str,
+        lineage: &[LineageSegment],
+        target_lsn: Lsn,
+        target: LineageScanTarget<'_>,
+    ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
         let Some((first, rest)) = lineage.split_first() else {
-            bail!("scan_range_lineage: empty lineage");
+            bail!("{label}: empty lineage");
         };
         let mut out = self
-            .scan_range(
-                first.branch_id,
-                range.clone(),
-                std::cmp::min(target_lsn, first.cap_lsn),
-            )
+            .scan_lineage_segment(&target, first.branch_id, std::cmp::min(target_lsn, first.cap_lsn))
             .await?;
         if rest.is_empty() {
             return Ok(out);
         }
         for seg in rest {
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
-            let anc = self.scan_range(seg.branch_id, range.clone(), eff).await?;
+            let anc = self.scan_lineage_segment(&target, seg.branch_id, eff).await?;
             for (key, rows) in anc {
                 out.entry(key).or_default().extend(rows);
             }
         }
+        // Concatenating chains across ancestor segments breaks per-key LSN
+        // order, so re-merge each: sort newest-first, dedup by lsn, truncate at
+        // the newest will_init.
         for chain in out.values_mut() {
             chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
             dedup_page_chain_by_lsn(chain);
@@ -3626,6 +3773,136 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![10],
             "ancestor-only key must be discovered"
+        );
+        assert_eq!(
+            out[&Key::from_slice(&k_shared)].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![30, 10],
+            "shared key blends child delta over ancestor image"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Core correctness of the batched-reads change: `scan_scattered_set` on a
+    /// set of non-contiguous same-fork keys must return byte-identical chains
+    /// to reading each key on its own (same image anchor, same `will_init`
+    /// trim, same order). The multi-key `unnest` query is purely a batching
+    /// optimization — it must not change what a read returns. Also covers the
+    /// edge cases: an absent block is simply missing from the result, a
+    /// repeated key is de-duplicated, and keys spanning forks are rejected.
+    #[tokio::test]
+    async fn scan_scattered_set_matches_per_key_reads() {
+        let (store, schema) = make_store("scattered_eq").await;
+        let br = rand_branch();
+        // Non-contiguous blocks in one fork: an image+delta chain, an
+        // image-only block, and a delta-only (image-less) block.
+        let k1 = page_key(1663, 5, 16384, 0, 1);
+        let k4 = page_key(1663, 5, 16384, 0, 4);
+        let k9 = page_key(1663, 5, 16384, 0, 9);
+        store
+            .put_pages(
+                br,
+                &[
+                    page_row(k1.clone(), 10, true, true, b"k1-img"),
+                    page_row(k1.clone(), 20, false, false, b"k1-d20"),
+                    page_row(k4.clone(), 10, true, true, b"k4-img"),
+                    page_row(k9.clone(), 15, false, false, b"k9-d15"),
+                    page_row(k9.clone(), 25, false, false, b"k9-d25"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let k_absent = Key::from_slice(&page_key(1663, 5, 16384, 0, 999));
+        let keys: Vec<Key> = [&k1, &k4, &k9]
+            .iter()
+            .map(|b| Key::from_slice(b))
+            .chain(std::iter::once(k_absent))
+            .collect();
+        let target = Lsn(100);
+
+        let set = store.scan_scattered_set(br, &keys, target).await.unwrap();
+
+        // Full-payload shape comparison against the single-key path (read_chain).
+        let shape = |c: &[Arc<PageRow>]| {
+            c.iter()
+                .map(|r| (r.lsn.0, r.is_image, r.will_init, r.payload.clone()))
+                .collect::<Vec<_>>()
+        };
+        for k in [Key::from_slice(&k1), Key::from_slice(&k4), Key::from_slice(&k9)] {
+            let one = store.scan_range(br, k..k.next(), target).await.unwrap();
+            let expect = one.get(&k).cloned().unwrap_or_default();
+            let got = set.get(&k).cloned().unwrap_or_default();
+            assert_eq!(shape(&got), shape(&expect), "scattered chain must match per-key read for {k}");
+        }
+        // Absent block: no rows → key missing from the result (not an error,
+        // not an empty-chain entry).
+        assert!(!set.contains_key(&k_absent), "absent block must not appear in the result");
+
+        // Repeated key is de-duplicated: same result as the unique set.
+        let dup = store
+            .scan_scattered_set(br, &[Key::from_slice(&k1), Key::from_slice(&k1)], target)
+            .await
+            .unwrap();
+        assert_eq!(
+            shape(&dup[&Key::from_slice(&k1)]),
+            shape(&set[&Key::from_slice(&k1)]),
+            "a repeated key must not duplicate chain rows"
+        );
+
+        // Keys spanning forks are rejected (caller must bucket by fork).
+        let cross_fork = vec![
+            Key::from_slice(&page_key(1663, 5, 16384, 0, 1)),
+            Key::from_slice(&page_key(1663, 5, 16384, 1, 1)),
+        ];
+        assert!(
+            store.scan_scattered_set(br, &cross_fork, target).await.is_err(),
+            "keys spanning forks must error"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// Lineage variant: `scan_scattered_set_lineage` must surface scattered
+    /// keys that exist ONLY in the ancestor and blend child deltas over
+    /// ancestor images — the scattered analog of
+    /// `scan_range_lineage_discovers_ancestor_only_keys`.
+    #[tokio::test]
+    async fn scan_scattered_set_lineage_discovers_ancestor_only_keys() {
+        let (store, schema) = make_store("scattered_lin").await;
+        let anc = rand_branch();
+        let child = rand_branch();
+        // Non-contiguous keys so the set is genuinely scattered.
+        let k_anc_only = page_key(1663, 5, 16384, 0, 1);
+        let k_shared = page_key(1663, 5, 16384, 0, 8);
+
+        store
+            .put_pages(
+                anc,
+                &[
+                    page_row(k_anc_only.clone(), 10, true, true, b"a-img"),
+                    page_row(k_shared.clone(), 10, true, true, b"s-img"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_pages(
+                child,
+                &[page_row(k_shared.clone(), 30, false, false, b"s-child")],
+            )
+            .await
+            .unwrap();
+
+        let lineage = lineage2(child, anc, 25);
+        let keys = vec![Key::from_slice(&k_anc_only), Key::from_slice(&k_shared)];
+        let out = store
+            .scan_scattered_set_lineage(&lineage, &keys, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(
+            out[&Key::from_slice(&k_anc_only)].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![10],
+            "ancestor-only scattered key must be discovered"
         );
         assert_eq!(
             out[&Key::from_slice(&k_shared)].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),

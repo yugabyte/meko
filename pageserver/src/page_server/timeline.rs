@@ -905,17 +905,41 @@ impl Timeline {
         > = std::collections::HashMap::new();
         // Meta keys go straight into the results map — no walredo.
         let mut meta_results: BTreeMap<Key, Result<Bytes, PageReconstructError>> = BTreeMap::new();
+        // batched-reads: gather scattered single-block rel-page reads,
+        // bucketed by fork, so a same-fork scattered set is fetched in
+        // ONE multi-key query (`scan_scattered_set`) — one YB round trip —
+        // rather than a serial per-block read loop. Contiguous (multi-block)
+        // ranges keep the range path, and an isolated single block (the getpage
+        // hot path) still uses the single-key `scan_range` → `read_chain` fast path.
+        let mut scattered: std::collections::HashMap<(u32, u32, u32, u8), Vec<Key>> =
+            std::collections::HashMap::new();
 
         for range in &total_keyspace.ranges {
             if range.start.is_rel_block_key() {
-                let scan = page_writer
-                    .scan_range(range.clone(), target_lsn)
-                    .await
-                    .map_err(|e| {
-                        GetVectoredError::Other(anyhow!("PageStore scan_range failed: {e:#}"))
-                    })?;
-                for (key, chain) in scan {
-                    chains_by_key.entry(key).or_default().extend(chain);
+                let s = range.start;
+                let e = range.end;
+                let single_block = s.field1 == e.field1
+                    && s.field2 == e.field2
+                    && s.field3 == e.field3
+                    && s.field4 == e.field4
+                    && s.field5 == e.field5
+                    && e.field6 == s.field6.wrapping_add(1);
+                if single_block {
+                    scattered
+                        .entry((s.field2, s.field3, s.field4, s.field5))
+                        .or_default()
+                        .push(s);
+                } else {
+                    // Contiguous multi-block range → one range query.
+                    let scan = page_writer
+                        .scan_range(range.clone(), target_lsn)
+                        .await
+                        .map_err(|e| {
+                            GetVectoredError::Other(anyhow!("PageStore scan_range failed: {e:#}"))
+                        })?;
+                    for (key, chain) in scan {
+                        chains_by_key.entry(key).or_default().extend(chain);
+                    }
                 }
             } else if range.start.is_slru_block_key() {
                 // SLRU range — always stays within one (kind, segno).
@@ -958,6 +982,41 @@ impl Timeline {
                         let k = Key::from_slice(&row.key);
                         meta_results.insert(k, Ok(row.payload));
                     }
+                }
+            }
+        }
+
+        // batched-reads: flush the scattered single-block buckets. A
+        // bucket with ≥2 keys becomes ONE multi-key `scan_scattered_set` (all keys
+        // share a fork by construction). A 1-key bucket (e.g. the getpage
+        // hot path) uses the single-key range path (`scan_range` →
+        // `read_chain` fast path). chains_by_key is order-independent.
+        for (_fork, keys) in scattered {
+            if keys.len() >= 2 {
+                // Fold size (batched-reads observability): keys collapsed into
+                // this one multi-key query.
+                crate::metrics::SCATTERED_SET_KEYS_GLOBAL.observe(keys.len() as f64);
+                let scan = page_writer
+                    .scan_scattered_set(&keys, target_lsn)
+                    .await
+                    .map_err(|e| {
+                        GetVectoredError::Other(anyhow!("PageStore scan_scattered_set failed: {e:#}"))
+                    })?;
+                for (key, chain) in scan {
+                    chains_by_key.entry(key).or_default().extend(chain);
+                }
+            } else {
+                let k = keys[0];
+                let mut e = k;
+                e.field6 = k.field6.wrapping_add(1);
+                let scan = page_writer
+                    .scan_range(k..e, target_lsn)
+                    .await
+                    .map_err(|e| {
+                        GetVectoredError::Other(anyhow!("PageStore scan_range failed: {e:#}"))
+                    })?;
+                for (key, chain) in scan {
+                    chains_by_key.entry(key).or_default().extend(chain);
                 }
             }
         }

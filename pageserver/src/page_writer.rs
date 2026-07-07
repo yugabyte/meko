@@ -1038,37 +1038,114 @@ impl PageWriter {
         for (k, chain) in cached {
             out.entry(k).or_default().extend(chain);
         }
+        self.finalize_blended_chains(&mut out, target_lsn);
+        let t_merge = t_merge_start.elapsed();
+        self.log_scan_perf(
+            "scan_range", t0, t_yb, t_cache, t_merge, persisted_rows, cached_rows, out.len(),
+        );
+        Ok(out)
+    }
+
+    /// Emit the shared `scan_*` perf log when the op was slow (≥5 ms). `tag`
+    /// distinguishes the caller (`scan_range` / `scan_scattered_set`); the
+    /// scattered fold size lives in the `pageserver_scattered_set_keys_global`
+    /// metric rather than a log field.
+    #[allow(clippy::too_many_arguments)]
+    fn log_scan_perf(
+        &self,
+        tag: &'static str,
+        t0: Instant,
+        t_yb: Duration,
+        t_cache: Duration,
+        t_merge: Duration,
+        yb_rows: usize,
+        cache_rows: usize,
+        keys_out: usize,
+    ) {
+        let total = t0.elapsed();
+        if total.as_millis() < 5 {
+            return;
+        }
+        info!(
+            tag,
+            total_ms = total.as_millis() as u64,
+            yb_ms = t_yb.as_millis() as u64,
+            cache_ms = t_cache.as_millis() as u64,
+            merge_ms = t_merge.as_millis() as u64,
+            yb_rows,
+            cache_rows,
+            keys_out,
+            "perf",
+        );
+    }
+
+    /// Multi-key ("scattered") variant of [`Self::scan_range`]: fetch
+    /// chains for a SET of same-fork relation-page keys in ONE YB query
+    /// (`PageStore::scan_scattered_set_lineage`) instead of one per block, then
+    /// blend with the in-RAM UnifiedPages exactly as `scan_range` does.
+    /// Correctness (image-anchor, dedup, will_init trim, read-side
+    /// materialize trigger) is identical to `scan_range`; only the
+    /// number of YB queries differs. Caller must pass same-fork keys.
+    pub async fn scan_scattered_set(
+        &self,
+        keys: &[Key],
+        target_lsn: Lsn,
+    ) -> Result<std::collections::HashMap<Key, Vec<Arc<PageRow>>>> {
+        if keys.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let t0 = Instant::now();
+        let persisted = self
+            .compute_page_store
+            .scan_scattered_set_lineage(&self.lineage, keys, target_lsn)
+            .await?;
+        let t_yb = t0.elapsed();
+        let t_lock_start = Instant::now();
+        let mut out: std::collections::HashMap<Key, Vec<Arc<PageRow>>> =
+            std::collections::HashMap::with_capacity(keys.len());
+        let persisted_rows: usize = persisted.values().map(|v| v.len()).sum();
+        for (k, chain) in persisted {
+            out.insert(k, chain);
+        }
+        // In-RAM UnifiedPages (pre- + post-flush cache) per key.
+        let mut cached_rows = 0usize;
+        for k in keys {
+            let cached = self.pages.lookup_chain(k, target_lsn);
+            if !cached.is_empty() {
+                cached_rows += cached.len();
+                out.entry(*k).or_default().extend(cached);
+            }
+        }
+        let t_cache = t_lock_start.elapsed();
+        let t_merge_start = Instant::now();
+        self.finalize_blended_chains(&mut out, target_lsn);
+        let t_merge = t_merge_start.elapsed();
+        self.log_scan_perf(
+            "scan_scattered_set", t0, t_yb, t_cache, t_merge, persisted_rows, cached_rows, out.len(),
+        );
+        Ok(out)
+    }
+
+    /// Finalize each key's blended chain: sort newest-first (image wins ties),
+    /// dedup by lsn, truncate at the newest `will_init`, then fire the per-key
+    /// read-side materialize trigger (a chain longer than the write-side
+    /// `count_limit` means the write trigger lost a job — PS crash, queue
+    /// overflow — so enqueue a fresh materialise to self-heal the next read).
+    /// Shared tail of [`Self::scan_range`] and [`Self::scan_scattered_set`].
+    fn finalize_blended_chains(
+        &self,
+        out: &mut std::collections::HashMap<Key, Vec<Arc<PageRow>>>,
+        target_lsn: Lsn,
+    ) {
         for (key, chain) in out.iter_mut() {
-            // Descending LSN; on ties prefer the image (see `read_chain`
-            // for the rationale).
             chain.sort_by(|a, b| b.lsn.cmp(&a.lsn).then_with(|| b.is_image.cmp(&a.is_image)));
             dedup_page_chain_by_lsn(chain);
             if let Some(idx) = chain.iter().position(|r| r.will_init) {
                 chain.truncate(idx + 1);
             }
-            // Per-key read-side trigger: a chain longer than
-            // count_limit means the write trigger lost a job (PS
-            // crash, queue overflow). Enqueue a fresh materialise so
-            // the next read of the same key is fast.
             let crossed = self.chain_crossed_segment(chain);
             self.maybe_dispatch_read_side_materialize(*key, target_lsn, chain.len(), crossed);
         }
-        let t_merge = t_merge_start.elapsed();
-        let total = t0.elapsed();
-        if total.as_millis() >= 5 {
-            info!(
-                tag = "scan_range",
-                total_ms = total.as_millis() as u64,
-                yb_ms = t_yb.as_millis() as u64,
-                cache_ms = t_cache.as_millis() as u64,
-                merge_ms = t_merge.as_millis() as u64,
-                yb_rows = persisted_rows,
-                cache_rows = cached_rows,
-                keys_out = out.len(),
-                "perf",
-            );
-        }
-        Ok(out)
     }
 
     /// Read the chain for `key` at `target_lsn`, blending UnifiedPages
