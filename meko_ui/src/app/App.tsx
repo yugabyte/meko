@@ -63,6 +63,10 @@ function AppRouter() {
       controller = new AbortController();
       const signal = controller.signal;
 
+      // Start the session with a clean cache in case the prior one ended
+      // without an explicit logout
+      queryClient.clear();
+
       setAuthLoading(true);
       try {
         const user = await getCurrentUser({ signal });
@@ -93,6 +97,9 @@ function AppRouter() {
   // through /onboarding before the next bootstrap runs.
   useEffect(() => {
     const onLogout = () => {
+      // Drop all cached queries so the next user in this tab can't see the
+      // previous user's data (query keys aren't scoped per user).
+      queryClient.clear();
       setAuthenticated(false);
       setHasCompletedOnboarding(false);
       setAuthLoading(false);
