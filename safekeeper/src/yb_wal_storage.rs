@@ -663,8 +663,7 @@ impl YbWalStorage {
             // not yet flushed to YB — and on safekeeper crash before
             // the consumer drained, the pageserver was left holding a
             // persisted disk_consistent_lsn for WAL the restarted SK
-            // could no longer serve. See findings-ps-wal-replay-
-            // restart-bug-2026-06-04.
+            // could no longer serve.
 
             let pc = PendingChunk {
                 segno,
@@ -712,7 +711,7 @@ impl YbWalStorage {
     /// requests — every receiver/sender times out and the walproposer
     /// churns until the wait resolves. Under a YB tablet-split storm the
     /// consumer's batch can take minutes, and that presented as a full
-    /// safekeeper wedge (tpcc-safekeeper-wedge-2026-07-06). Timing out
+    /// safekeeper wedge. Timing out
     /// converts the wedge into a dropped connection: the guard releases,
     /// the manager breathes, and the walproposer retries against a
     /// recovering consumer.
@@ -1178,9 +1177,9 @@ async fn consumer_main(
                 // WAL sender's fast path; we only insert chunks here
                 // (after a successful INSERT) so the cache never
                 // serves bytes that aren't durable in
-                // `safekeeper.wals`. See findings-ps-wal-replay-
-                // restart-bug-2026-06-04 for the failure mode that
-                // earlier pre-INSERT cache population caused.
+                // `safekeeper.wals` — the invariant that pre-INSERT
+                // cache population violated (the 2026-06 PS-restart
+                // WAL replay bug).
                 if let Some(c) = &cache {
                     let mut guard = c.lock().unwrap();
                     for pc in &batch {
@@ -1824,8 +1823,7 @@ mod tests {
     /// `YsqlClient` Arc here — production opens three independent
     /// connections, but the tests don't exercise per-lane isolation and
     /// keeping it to one connection cuts setup time.
-    /// Regression for the TPC-C safekeeper wedge
-    /// (findings: tpcc-safekeeper-wedge-2026-07-06). Every
+    /// Regression for the 2026-07 TPC-C safekeeper wedge. Every
     /// `wait_for_durable` caller sits inside `process_msg`, holding the
     /// timeline shared_state WRITE lock. When the durability target can
     /// outrun what the consumer will ever publish (YB stalled by a

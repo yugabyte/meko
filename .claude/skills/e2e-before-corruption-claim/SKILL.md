@@ -133,8 +133,7 @@ enough." This skill is the operational form of that memory.
 
 ## Failure mode this prevents
 
-The PS-restart WAL replay bug
-(`findings-ps-wal-replay-restart-bug-2026-06-04`) — the eager
+The 2026-06 PS-restart WAL replay bug — the eager
 `applied_lsn` was wired into `disk_consistent_lsn` on the
 `PageserverFeedback` wire, so the safekeeper truncated WAL the
 pageserver had buffered-but-not-flushed. A PS crash-restart between

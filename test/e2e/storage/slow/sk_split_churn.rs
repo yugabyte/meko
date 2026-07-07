@@ -1,5 +1,5 @@
-//! Reproducer / regression guard for the TPC-C safekeeper wedge
-//! (findings: tpcc-safekeeper-wedge-2026-07-06).
+//! Reproducer / regression guard for the 2026-07 TPC-C safekeeper
+//! wedge.
 //!
 //! Under sustained write load, `safekeeper.wals` tablet splits ("Tablet
 //! not running (CREATING)") plus walproposer reconnect churn wedged the

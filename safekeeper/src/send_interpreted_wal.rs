@@ -369,7 +369,7 @@ impl InterpretedWalReader {
                 // pageserver walreceiver) only see the generic "interpreted wal
                 // reader finished" wrapper message and have no idea whether it
                 // was an I/O error from YB, a missing WAL segment, a closed
-                // stream, etc. See findings-ps-wal-replay-restart-bug-2026-06-04.
+                // stream, etc.
                 //
                 // {err:?} dumps the full anyhow source chain — Display alone
                 // truncates to the outermost `.with_context()` and hides the

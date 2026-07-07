@@ -185,8 +185,7 @@ return                              │
   every 10 s): every caller sits inside `process_msg` holding the
   timeline shared_state write lock, and an unbounded wait there
   starves the manager and wedges the whole timeline — timing out
-  drops the connection and releases the lock instead
-  (tpcc-safekeeper-wedge-2026-07-06).
+  drops the connection and releases the lock instead.
 - **Async durability acks are gated on election.** The acceptor's
   durability-watch branch (emit an `AppendResponse` as the watermark
   advances) marks the watch seen at subscription and only arms after
@@ -195,8 +194,8 @@ return                              │
   unbiased select could put an `AppendResponse` on the wire before the
   `AcceptorGreeting`, which the walproposer treats as fatal during the
   handshake. That race produced a permanent reconnect storm (commits
-  frozen; same finding as above); regression-guarded by the
-  `sk_split_churn` slow e2e scenario.
+  frozen); regression-guarded by the `sk_split_churn` slow e2e
+  scenario.
 - **`chunk_offset`** (the chunk's byte offset within its segment) is the
   in-segment identity — the writer never produces overlapping chunks
   (`truncate_wal` aligns the next write at the truncation point), so offset

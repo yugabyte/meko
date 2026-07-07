@@ -614,10 +614,10 @@ impl WalAcceptor {
         // below could emit an AppendResponse ('a') before the
         // AcceptorGreeting ('g'). The walproposer kills the connection on
         // an 'a' during handshake/voting and reconnects into the same
-        // poisoned race forever: the permanent reconnect storm behind the
-        // TPC-C safekeeper wedge (findings 2026-07-06; locally reproduced
-        // by the sk_split_churn scenario as ~175 reconnects/s with
-        // "unexpected message tag a ... in state handshake").
+        // poisoned race forever: a permanent reconnect storm (observed
+        // under TPC-C as ~175 reconnects/s with "unexpected message tag a
+        // ... in state handshake" in the compute log; reproduced by the
+        // sk_split_churn scenario).
         if let Some(rx) = durable_rx.as_mut() {
             rx.borrow_and_update();
         }

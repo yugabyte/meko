@@ -3730,9 +3730,9 @@ mod tests {
     /// success path, AFTER `try_write_rows` has landed the rows in YB
     /// AND the gen-fenced `advance_consistent_lsn` UPSERT has updated
     /// `timeline_state`. Wiring a buffer-write to the slot would
-    /// reintroduce the gap-on-crash bug (`findings-ps-wal-replay-
-    /// restart-bug-2026-06-04`): SK feedback / restart-resume would
-    /// see an LSN whose rows aren't actually in `pageserver.pages`.
+    /// reintroduce the 2026-06 gap-on-crash bug: SK feedback /
+    /// restart-resume would see an LSN whose rows aren't actually in
+    /// `pageserver.pages`.
     #[tokio::test]
     async fn put_alone_does_not_advance_consistent_lsn_slot() {
         let (store, schema) = make_store("clsn_slot_no_advance_on_put").await;
