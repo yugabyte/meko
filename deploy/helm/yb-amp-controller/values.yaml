@@ -178,7 +178,22 @@ ui:
   # in-cluster ClusterIP Service (amp-controller-ui) is always created, plus a
   # matching external Service (amp-controller-ui-np / amp-controller-ui-lb)
   # alongside the controller's — so the one exposure knob puts the UI wherever the
-  # controller UI/API is.
+  # controller UI/API is. With controller.service.type=internal-lb (the default),
+  # the UI is reachable on an internal LoadBalancer (amp-controller-ui-lb) out of
+  # the box — this is the front door for the SPA (it reverse-proxies /api/ to the
+  # controller in-cluster).
+  service:
+    # -- How to expose the UI externally, on its OWN Service independent of the
+    # controller: nodeport | internal-lb | external-lb | none. Default internal-lb
+    # => the UI gets its own internal LoadBalancer (amp-controller-ui-lb) out of the
+    # box (the SPA reverse-proxies /api/ to the controller in-cluster). Set to none
+    # to only keep the in-cluster ClusterIP Service.
+    type: "internal-lb"
+    # -- Annotations for the UI LoadBalancer when type=internal-lb, as a list of
+    # "key=value" strings. Defaults to the GKE internal-LB annotations.
+    annotations:
+      - "networking.gke.io/load-balancer-type=Internal"
+      - "networking.gke.io/internal-load-balancer-allow-global-access=true"
 
 podAnnotations: {}
 podLabels: {}

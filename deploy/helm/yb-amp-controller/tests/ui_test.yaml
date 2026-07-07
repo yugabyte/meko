@@ -63,12 +63,12 @@ tests:
           path: spec.template.spec.containers[0].livenessProbe.httpGet.port
           value: http
 
-  # The UI is exposed the same way as the controller (controller.service.type):
-  # an in-cluster ClusterIP is always present, plus a matching external Service.
+  # The UI is exposed on its OWN Service via ui.service.type (default internal-lb),
+  # independent of the controller. An in-cluster ClusterIP is always present.
   - it: always renders the in-cluster UI ClusterIP Service on the http port
     template: templates/ui-service.yaml
     set:
-      controller.service.type: none
+      ui.service.type: none
     asserts:
       - hasDocuments:
           count: 1
@@ -89,28 +89,8 @@ tests:
             targetPort: http
         documentIndex: 0
 
-  - it: exposes the UI as NodePort alongside the controller (expose=nodeport)
+  - it: gives the UI its own internal LoadBalancer by default (ui.service.type=internal-lb)
     template: templates/ui-service.yaml
-    set:
-      controller.service.type: nodeport
-    asserts:
-      - hasDocuments:
-          count: 2
-      - equal:
-          path: metadata.name
-          value: amp-controller-ui-np
-        documentIndex: 1
-      - equal:
-          path: spec.type
-          value: NodePort
-        documentIndex: 1
-
-  - it: exposes the UI as a LoadBalancer with the controller's annotations (service.type=internal-lb)
-    template: templates/ui-service.yaml
-    set:
-      controller.service.type: internal-lb
-      controller.service.annotations:
-        - "networking.gke.io/load-balancer-type=Internal"
     asserts:
       - hasDocuments:
           count: 2
@@ -125,6 +105,52 @@ tests:
       - equal:
           path: metadata.annotations["networking.gke.io/load-balancer-type"]
           value: Internal
+        documentIndex: 1
+
+  - it: exposes the UI as NodePort when ui.service.type=nodeport
+    template: templates/ui-service.yaml
+    set:
+      ui.service.type: nodeport
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: amp-controller-ui-np
+        documentIndex: 1
+      - equal:
+          path: spec.type
+          value: NodePort
+        documentIndex: 1
+
+  - it: gives the UI an internal LB independent of the controller (controller nodeport)
+    template: templates/ui-service.yaml
+    set:
+      controller.service.type: nodeport
+      ui.service.type: internal-lb
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: amp-controller-ui-lb
+        documentIndex: 1
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+        documentIndex: 1
+
+  - it: honours custom ui.service.annotations on the UI LoadBalancer
+    template: templates/ui-service.yaml
+    set:
+      ui.service.type: internal-lb
+      ui.service.annotations:
+        - "networking.gke.io/load-balancer-type=Internal"
+        - "example.com/team=amp"
+    asserts:
+      - equal:
+          path: metadata.annotations["example.com/team"]
+          value: amp
         documentIndex: 1
 
   - it: drops the UI Deployment when ui.enabled=false

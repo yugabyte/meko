@@ -56,10 +56,10 @@ image pull secret — those are prerequisites.
   per-environment rebuild. Container port `http` (`ui.port`, default 80).
 - **UI Service** `amp-controller-ui` (when `ui.enabled`) — an always-on ClusterIP
   on `ui.port`, plus an external Service (`amp-controller-ui-np` /
-  `amp-controller-ui-lb`) **per the same `controller.service.type`** as the
-  controller. So the one exposure knob puts the UI wherever the controller UI/API
-  is; this SPA pod is the intended front door, distinct from the controller's own
-  built-in console at `/`.
+  `amp-controller-ui-lb`) selected by its **own `ui.service.type`**, independent of
+  the controller's exposure. It defaults to `internal-lb`, so the UI gets its own
+  internal LoadBalancer out of the box; this SPA pod is the intended front door,
+  distinct from the controller's own built-in console at `/`.
 
 ### UI proxy & probe
 
@@ -109,6 +109,8 @@ a 200 confirms the MCP app is actually serving, not just that the port is bound.
 | `ui.image.repository` / `.tag` | `amp/controller-ui` / chart appVersion | UI image (built from `amp_ui/Dockerfile`) |
 | `ui.controllerUrl` | _(empty)_ | `CONTROLLER_URL` nginx proxies `/api/` to; empty ⇒ in-cluster controller Service DNS on the api port |
 | `ui.port` | `80` | `UI_PORT` nginx listens on + UI Service port |
+| `ui.service.type` | `internal-lb` | how to expose the UI on its **own** Service, independent of the controller: `nodeport` \| `internal-lb` \| `external-lb` \| `none`; default gives the UI its own internal LoadBalancer (`amp-controller-ui-lb`) |
+| `ui.service.annotations` | GKE internal-LB annotations | list of `"k=v"` annotations for the UI LB when `ui.service.type=internal-lb` |
 
 See [`values.yaml`](values.yaml) for the full set.
 

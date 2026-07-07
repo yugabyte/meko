@@ -15,11 +15,10 @@ spec:
     - name: http
       port: {{ .Values.ui.port }}
       targetPort: http
-{{- if eq .Values.controller.service.type "nodeport" }}
+{{- if eq .Values.ui.service.type "nodeport" }}
 ---
-# NodePort — the UI is exposed the same way as the controller
-# (controller.service.type), so it is reachable wherever the controller UI/API
-# is. Auto-assigned nodePort.
+# NodePort — the UI on its OWN Service (ui.service.type), independent of the
+# controller's exposure. Auto-assigned nodePort.
 apiVersion: v1
 kind: Service
 metadata:
@@ -34,19 +33,20 @@ spec:
     - name: http
       port: {{ .Values.ui.port }}
       targetPort: http
-{{- else if or (eq .Values.controller.service.type "internal-lb") (eq .Values.controller.service.type "external-lb") }}
+{{- else if or (eq .Values.ui.service.type "internal-lb") (eq .Values.ui.service.type "external-lb") }}
 ---
-# LoadBalancer ({{ .Values.controller.service.type }}) — same exposure as the controller.
-# internal-lb carries service.annotations (private VPC IP); external-lb gets a public IP.
+# LoadBalancer ({{ .Values.ui.service.type }}) — the UI's OWN LoadBalancer,
+# independent of the controller's exposure. internal-lb carries
+# ui.service.annotations (private VPC IP); external-lb gets a public IP.
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "yb-amp-controller.uiName" . }}-lb
   labels:
     {{- include "yb-amp-controller.uiSelectorLabels" . | nindent 4 }}
-  {{- if and (eq .Values.controller.service.type "internal-lb") .Values.controller.service.annotations }}
+  {{- if and (eq .Values.ui.service.type "internal-lb") .Values.ui.service.annotations }}
   annotations:
-    {{- include "yb-amp-controller.kvAnnotations" (dict "items" .Values.controller.service.annotations) | nindent 4 }}
+    {{- include "yb-amp-controller.kvAnnotations" (dict "items" .Values.ui.service.annotations) | nindent 4 }}
   {{- end }}
 spec:
   type: LoadBalancer
