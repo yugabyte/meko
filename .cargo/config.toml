@@ -14,13 +14,25 @@ rustdocflags = ["-Arustdoc::private_intra_doc_links"]
 # `--cfg tokio_unstable` + `--cfg tokio_taskdump` enable
 # `tokio::runtime::Handle::dump()` (tokio's `cfg_taskdump!` gate) for the
 # on-demand task dumps in `utils::tokio_dump` (SIGUSR2 handler on every
-# daemon). Applies to the whole workspace build.
+# daemon). These apply to all targets except the macOS override below.
 rustflags = [
     "-Cforce-frame-pointers=yes",
     "--cfg",
     "tokio_unstable",
     "--cfg",
     "tokio_taskdump",
+]
+
+# tokio only supports taskdump on Linux (aarch64/x86/x86_64), so a macOS build
+# hits tokio's `compile_error!`. Carve macOS out with tokio_taskdump dropped.
+# cargo does not merge rustflags across sources (the highest-priority source
+# with a value wins), so this section wholesale-replaces [build].rustflags on
+# macOS and must re-list the flags macOS keeps.
+[target.'cfg(target_os = "macos")']
+rustflags = [
+    "-Cforce-frame-pointers=yes",
+    "--cfg",
+    "tokio_unstable",
 ]
 
 [alias]

@@ -90,7 +90,7 @@ RUN --mount=type=secret,uid=1000,id=SUBZERO_ACCESS_TOKEN \
         export CARGO_NET_GIT_FETCH_WITH_CLI=true && \
         git config --global url."https://$(cat /run/secrets/SUBZERO_ACCESS_TOKEN)@github.com/neondatabase/subzero".insteadOf "https://github.com/neondatabase/subzero"; \
     fi \
-    && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes ${ADDITIONAL_RUSTFLAGS}" cargo chef cook --locked --release --recipe-path recipe.json
+    && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes --cfg tokio_unstable --cfg tokio_taskdump ${ADDITIONAL_RUSTFLAGS}" cargo chef cook --locked --release --recipe-path recipe.json
 
 # Perform the main build. We reuse the Postgres build artifacts from the intermediate 'pg-build'
 # layer, and the cargo dependencies built in the previous step.
@@ -109,7 +109,7 @@ RUN  --mount=type=secret,uid=1000,id=SUBZERO_ACCESS_TOKEN \
     elif [ "$IO_ALIGNMENT" = "512" ]; then \
         export CARGO_FEATURES="${CARGO_FEATURES},io-align-512"; \
     fi \
-    && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes ${ADDITIONAL_RUSTFLAGS}" cargo auditable build \
+    && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes --cfg tokio_unstable --cfg tokio_taskdump ${ADDITIONAL_RUSTFLAGS}" cargo auditable build \
       --features $CARGO_FEATURES \
       --bin pg_sni_router  \
       --bin pageserver  \
