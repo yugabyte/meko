@@ -164,6 +164,65 @@ func completeOAuthCallback(
 	return c.Redirect(http.StatusFound, appHomeRedirect(c))
 }
 
+// FederatedLogoutConfig holds the Cognito coordinates the browser-driven
+// sign-out needs to clear the hosted "cognito" session cookie.
+type FederatedLogoutConfig struct {
+	AuthService   *service.AuthService
+	CognitoDomain string
+	ClientID      string
+}
+
+// FederatedLogoutHandler handles GET /api/v1/auth/logout as a browser-driven
+// sign-out. Token revocation alone (GlobalSignOut, done here best-effort)
+// can't clear Cognito's hosted "cognito" session cookie — that cookie lives
+// on the Cognito domain and, while it's valid (~1h), makes /oauth2/authorize
+// skip the upstream IdP and silently reuse the last identity (the "stuck on
+// the previous account" bug). So we revoke tokens, clear our own auth
+// cookies, then 302 the browser to Cognito's /logout endpoint to clear that
+// cookie. The next login re-federates through the IdP, so Google shows its
+// account chooser when multiple accounts are present (and auto-signs-in a
+// single one).
+//
+// logout_uri is the app origin root (e.g. https://app.mekodev.com/), not a
+// sign-in path: Cognito matches it against the app client's Allowed sign-out
+// URLs by *exact string compare* (trailing slash included), so sending the
+// root means only the root has to be registered (not every sign-in route).
+// The trailing slash is deliberate — the registered value is the origin with
+// a slash (e.g. "http://localhost:5000/"); dropping it here is a silent
+// mismatch that lands the user on Cognito's /error page. Cognito clears its
+// cookie and 302s back to "/", where the SPA routes the signed-out user to
+// the sign-in page.
+func FederatedLogoutHandler(cfg FederatedLogoutConfig) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Revoke tokens with the current access token before clearing cookies.
+		// Best-effort: never block sign-out on a revocation failure.
+		if cfg.AuthService != nil {
+			if cookie, err := c.Cookie("access_token"); err == nil && cookie.Value != "" {
+				if err := cfg.AuthService.Logout(c.Request().Context(), cookie.Value); err != nil {
+					slog.Warn("federated logout: cognito global sign-out failed", "error", err)
+				}
+			}
+		}
+
+		clearAuthCookie(c, "access_token")
+		clearAuthCookie(c, "id_token")
+		clearAuthCookie(c, "refresh_token")
+
+		if cfg.CognitoDomain == "" || cfg.ClientID == "" {
+			// Cognito not configured (local dev) — no hosted session to clear.
+			return c.Redirect(http.StatusFound, appSignInRedirect(c, ""))
+		}
+
+		q := url.Values{
+			"client_id": {cfg.ClientID},
+			"logout_uri": {strings.TrimRight(requestOrigin(c), "/") + "/"},
+		}
+		domain := strings.TrimRight(cfg.CognitoDomain, "/")
+		return c.Redirect(http.StatusFound,
+			fmt.Sprintf("https://%s/logout?%s", domain, q.Encode()))
+	}
+}
+
 // buildAuthorizeURL builds the Cognito /oauth2/authorize URL that forwards
 // directly to the given identity provider. identity_provider is what makes
 // Cognito skip the Hosted UI login screen; it must match the IdP name

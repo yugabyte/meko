@@ -1,4 +1,4 @@
-import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import {
   Database,
   Activity,
@@ -27,7 +27,7 @@ import { Button } from "@/components/ui/button";
 import {
   AUTH_LOGOUT_EVENT,
   DATAPACKS_LIST_UPDATED_EVENT,
-  logout,
+  federatedLogoutUrl,
   ONBOARDING_STATUS_CACHE_KEY,
   PROVISION_STATUS_CACHE_KEY,
 } from "@/lib/api/mekoApi";
@@ -62,7 +62,6 @@ const DATAPACK_ROW_HEIGHT_PX = 28;
 
 export default function Sidebar() {
   const location = useLocation();
-  const navigate = useNavigate();
   // Mobile (< md): sidebar is a slide-in off-canvas drawer triggered by
   // a fixed hamburger button. Closed by default so chat / datapack
   // content gets full viewport width. Open state controls a CSS
@@ -157,10 +156,10 @@ export default function Sidebar() {
 
   const handleLogout = async () => {
     // Fire the logout event while still identified, then reset — and AWAIT that
-    // before the logout()/navigate below, so the redirect's /login page view
-    // isn't sent with the logged-out user's traits still attached. Reset runs in
-    // the track callback (so the event flushes with its traits first); a timeout
-    // guards against the callback never firing so logout can't hang.
+    // before the redirect below, so the ensuing /login page view isn't sent
+    // with the logged-out user's traits still attached. Reset runs in the track
+    // callback (so the event flushes with its traits first); a timeout guards
+    // against the callback never firing so logout can't hang.
     await new Promise<void>((resolve) => {
       let settled = false;
       const finish = () => {
@@ -172,19 +171,16 @@ export default function Sidebar() {
       trackEvent(TELEMETRY_EVENTS.USER_LOGGED_OUT, { email: currentUser?.email }, finish);
       window.setTimeout(finish, 2000);
     });
-    // Best-effort server logout: even if it fails (network, expired
-    // session, server down) we must still clear local state and send
-    // the user to /login, otherwise they're trapped in an authenticated
-    // shell with no way out.
-    try {
-      await logout();
-    } catch (err) {
-      console.error("Failed to call logout API:", err);
-    }
     removeSessionItem(PROVISION_STATUS_CACHE_KEY);
     removeLocalItem(ONBOARDING_STATUS_CACHE_KEY);
     dispatchAppEvent(AUTH_LOGOUT_EVENT);
-    navigate(ROUTES.login, { replace: true });
+    // Full-page navigation (not an SPA route) to the server federated-logout
+    // endpoint: it revokes the Cognito tokens, clears our auth cookies, then
+    // 302s the browser through Cognito's /logout to drop the hosted session
+    // cookie before landing back on the app. A real navigation is required so
+    // the browser follows the cross-domain redirect chain; the SPA state is
+    // discarded on the ensuing page load.
+    window.location.assign(federatedLogoutUrl());
   };
 
   const isDatapacksSectionActive =

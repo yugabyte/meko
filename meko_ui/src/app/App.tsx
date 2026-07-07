@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
+import { Loader2 } from "lucide-react";
 import { BrowserRouter, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -32,6 +33,11 @@ function AppRouter() {
   const navigate = useNavigate();
   const [authLoading, setAuthLoading] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
+  // Set on explicit logout so we paint a "Signing out…" interstitial while
+  // the browser does the (~1s) federated-logout round-trip to Cognito. Without
+  // it, flipping authenticated=false renders the login form for that window,
+  // which flashes on screen before the full-page navigation unloads the SPA.
+  const [loggingOut, setLoggingOut] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean>(
     () => readOnboardingStatusCache() ?? false,
   );
@@ -97,6 +103,7 @@ function AppRouter() {
   // through /onboarding before the next bootstrap runs.
   useEffect(() => {
     const onLogout = () => {
+      setLoggingOut(true);
       // Drop all cached queries so the next user in this tab can't see the
       // previous user's data (query keys aren't scoped per user).
       queryClient.clear();
@@ -119,6 +126,21 @@ function AppRouter() {
     hasCompletedOnboarding,
     navigate,
   });
+
+  // Cover the federated-logout redirect window so the login form never flashes
+  // between clearing auth state and the full-page navigation to Cognito.
+  if (loggingOut) {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="min-h-screen flex flex-col items-center justify-center gap-3 bg-background text-muted-foreground"
+      >
+        <Loader2 aria-hidden="true" className="h-6 w-6 animate-spin" />
+        <span>Signing out…</span>
+      </div>
+    );
+  }
 
   if (authLoading) {
     return (

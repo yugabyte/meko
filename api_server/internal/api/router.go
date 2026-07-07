@@ -368,6 +368,16 @@ func registerAuthRoutes(
 	authGroup.POST("/login", authH.Login)
 	authGroup.POST("/complete-new-password", authH.CompleteNewPassword)
 	authGroup.POST("/logout", authH.Logout)
+	// Browser-driven federated sign-out. Unlike POST /logout (token
+	// revocation only), this 302s the browser through Cognito's /logout so
+	// the hosted "cognito" session cookie is cleared — otherwise the next
+	// login silently reuses the previous identity. Provider-agnostic: works
+	// for native, Google, LinkedIn, and GitHub sessions.
+	authGroup.GET("/logout", handlers.FederatedLogoutHandler(handlers.FederatedLogoutConfig{
+		AuthService:   authSvc,
+		CognitoDomain: cfg.CognitoDomain,
+		ClientID:      cfg.CognitoClientID,
+	}))
 	// App-driven social sign-in. The browser hits /<provider>/login and we
 	// redirect straight to the IdP via Cognito's /oauth2/authorize
 	// (identity_provider=<Provider>) — no Hosted UI login screen. The OAuth2

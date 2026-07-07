@@ -779,6 +779,17 @@ export async function logout() {
   return request<{ message: string }>("/auth/logout", "POST");
 }
 
+/**
+ * Absolute URL of the browser-driven federated sign-out (GET /auth/logout).
+ * The browser must *navigate* here (not fetch it): the endpoint revokes the
+ * Cognito tokens, clears our auth cookies, then 302s through Cognito's
+ * /logout to drop the hosted session cookie so the next login re-federates
+ * through the IdP (Google's account chooser instead of a silent re-login).
+ */
+export function federatedLogoutUrl() {
+  return `${API_BASE}/auth/logout`;
+}
+
 export async function getCurrentUser(options: { signal?: AbortSignal } = {}) {
   return request<CurrentUser>("/auth/me", "GET", undefined, options);
 }
