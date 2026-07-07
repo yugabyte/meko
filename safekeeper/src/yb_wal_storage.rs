@@ -285,6 +285,14 @@ const CHUNK_CHANNEL_CAPACITY: usize = 1024;
 /// for this accumulation.
 const ACCUMULATION_MAX: Duration = Duration::from_millis(2);
 
+/// Log-progress interval for [`YbWalStorage::wait_for_durable`].
+const YB_DURABLE_WAIT_LOG_EVERY: Duration = Duration::from_secs(10);
+
+/// Hard bound for [`YbWalStorage::wait_for_durable`]. Callers hold the
+/// timeline shared_state write lock; see the method docs for why an
+/// unbounded wait wedges the whole safekeeper.
+const YB_DURABLE_WAIT_MAX: Duration = Duration::from_secs(60);
+
 /// Durability state published by the consumer onto the watch channel.
 #[derive(Clone, Debug)]
 pub enum DurableState {
@@ -332,6 +340,10 @@ pub struct YbWalStorage {
     /// Highest `end_lsn` the producer has pushed onto `tx`. `flush_wal`
     /// awaits the watermark catching up to this.
     submitted_max_lsn: Lsn,
+    /// Bounds for [`Self::wait_for_durable`]; the consts by default,
+    /// shrinkable in tests.
+    durable_wait_log_every: Duration,
+    durable_wait_max: Duration,
     /// In-memory cache of recent WAL chunks, shared with
     /// [`YbSegmentReader`] (the reader side). Populated by
     /// [`Self::upsert_writes`] immediately, in addition to the
@@ -540,6 +552,8 @@ impl YbWalStorage {
             watermark_rx,
             flush_notify,
             submitted_max_lsn: write_lsn,
+            durable_wait_log_every: YB_DURABLE_WAIT_LOG_EVERY,
+            durable_wait_max: YB_DURABLE_WAIT_MAX,
             cache,
             delete_lower_bound: Arc::new(AtomicU64::new(min_segno)),
             durable_lsn,
@@ -690,23 +704,59 @@ impl YbWalStorage {
 
     /// Wait for the consumer to publish durability up to `target` LSN,
     /// or propagate a captured error if the consumer has failed.
+    ///
+    /// Bounded and chatty: every caller sits inside `process_msg`, i.e.
+    /// holds the timeline shared_state WRITE lock. An unbounded wait
+    /// there starves the manager (fair RwLock ⇒ its read queues behind
+    /// any writer), which then can't serve WalResidentTimeline guard
+    /// requests — every receiver/sender times out and the walproposer
+    /// churns until the wait resolves. Under a YB tablet-split storm the
+    /// consumer's batch can take minutes, and that presented as a full
+    /// safekeeper wedge (tpcc-safekeeper-wedge-2026-07-06). Timing out
+    /// converts the wedge into a dropped connection: the guard releases,
+    /// the manager breathes, and the walproposer retries against a
+    /// recovering consumer.
     async fn wait_for_durable(&mut self, target: Lsn) -> Result<()> {
-        let res = self
-            .watermark_rx
-            .wait_for(|state| match state {
-                DurableState::Healthy(d) => *d >= target,
-                DurableState::Failed(_) => true,
-            })
+        let started = std::time::Instant::now();
+        // Cloned receiver: the timeout arm needs to inspect the current
+        // value while the wait future's borrow is still in scope.
+        let mut rx = self.watermark_rx.clone();
+        loop {
+            let res = tokio::time::timeout(
+                self.durable_wait_log_every,
+                rx.wait_for(|state| match state {
+                    DurableState::Healthy(d) => *d >= target,
+                    DurableState::Failed(_) => true,
+                }),
+            )
             .await;
-        let state = match res {
-            Ok(guard) => guard.clone(),
-            Err(_) => {
-                anyhow::bail!("YB WAL consumer task gone (watermark channel closed)");
-            }
-        };
-        match state {
-            DurableState::Healthy(_) => Ok(()),
-            DurableState::Failed(msg) => Err(anyhow::anyhow!(msg)),
+            let state = match res {
+                Ok(Ok(guard)) => guard.clone(),
+                Ok(Err(_)) => {
+                    anyhow::bail!("YB WAL consumer task gone (watermark channel closed)");
+                }
+                Err(_elapsed) => {
+                    let durable = match self.watermark_rx.borrow().clone() {
+                        DurableState::Healthy(d) => d,
+                        DurableState::Failed(msg) => anyhow::bail!(msg),
+                    };
+                    if started.elapsed() >= self.durable_wait_max {
+                        anyhow::bail!(
+                            "YB WAL durability wait timed out after {:?}: target {target},                              durable {durable} (YB slow or wals tablet splitting?);                              dropping the connection so the timeline lock is released",
+                            started.elapsed(),
+                        );
+                    }
+                    tracing::warn!(
+                        "still waiting for YB WAL durability: target {target}, durable                          {durable}, elapsed {:?}",
+                        started.elapsed(),
+                    );
+                    continue;
+                }
+            };
+            return match state {
+                DurableState::Healthy(_) => Ok(()),
+                DurableState::Failed(msg) => Err(anyhow::anyhow!(msg)),
+            };
         }
     }
 }
@@ -1774,6 +1824,52 @@ mod tests {
     /// `YsqlClient` Arc here — production opens three independent
     /// connections, but the tests don't exercise per-lane isolation and
     /// keeping it to one connection cuts setup time.
+    /// Regression for the TPC-C safekeeper wedge
+    /// (findings: tpcc-safekeeper-wedge-2026-07-06). Every
+    /// `wait_for_durable` caller sits inside `process_msg`, holding the
+    /// timeline shared_state WRITE lock. When the durability target can
+    /// outrun what the consumer will ever publish (YB stalled by a
+    /// splitting `safekeeper.wals` tablet, walproposer churn re-entering
+    /// vote/elected waits), an unbounded wait froze the lock forever:
+    /// the manager blocked in `state_snapshot`, every WAL receiver died
+    /// on residence-guard timeouts, `flush_lsn` froze, and all commits
+    /// hung. The wait must instead time out — dropping the connection
+    /// releases the lock and lets the system retry — and the storage
+    /// must keep working afterwards.
+    #[tokio::test]
+    async fn durable_wait_times_out_instead_of_wedging() {
+        let table = format!("wals_test_wedge_{}", rand_suffix());
+        let start = Lsn(SEG_SIZE);
+        let (mut storage, _tmp) = make_storage(&table, start).await;
+        storage.durable_wait_log_every = Duration::from_millis(50);
+        storage.durable_wait_max = Duration::from_millis(300);
+
+        // Wedge precondition: an accounted flush target that no enqueued
+        // chunk will ever satisfy (consumer idle, queue empty — exactly
+        // the task-dump state from the finding).
+        storage.submitted_max_lsn = Lsn(start.0 + 12345);
+
+        let res = tokio::time::timeout(Duration::from_secs(30), storage.flush_wal()).await;
+        let err = res
+            .expect("flush_wal must return (timeout), not wedge the caller forever")
+            .expect_err("flush_wal must fail when durability can never be reached");
+        assert!(
+            err.to_string().contains("durability wait timed out"),
+            "unexpected error: {err:#}"
+        );
+
+        // The storage recovers: the next producer write overwrites
+        // `submitted_max_lsn` (assignment, not max), so a later flush waits
+        // on a reachable target again. Simulate that overwrite directly —
+        // generating valid WAL bytes is out of scope here — and verify the
+        // flush completes instantly.
+        storage.submitted_max_lsn = Lsn(storage.durable_lsn.load(Ordering::Acquire));
+        tokio::time::timeout(Duration::from_secs(60), storage.flush_wal())
+            .await
+            .expect("recovered flush must not hang")
+            .expect("recovered flush must succeed");
+    }
+
     async fn make_storage(table: &str, start_lsn: Lsn) -> (YbWalStorage, Utf8TempDir) {
         let client = Arc::new(
             YsqlClient::connect_no_tls(pgcfg(), true)

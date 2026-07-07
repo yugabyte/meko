@@ -607,6 +607,24 @@ impl WalAcceptor {
         } else {
             None
         };
+        // Mark the watch's current value as seen. The clone inherits the
+        // storage receiver's seen-version, which lags every consumer
+        // publish since the last blocking flush — so a fresh acceptor's
+        // `changed()` would fire IMMEDIATELY, and the unbiased select
+        // below could emit an AppendResponse ('a') before the
+        // AcceptorGreeting ('g'). The walproposer kills the connection on
+        // an 'a' during handshake/voting and reconnects into the same
+        // poisoned race forever: the permanent reconnect storm behind the
+        // TPC-C safekeeper wedge (findings 2026-07-06; locally reproduced
+        // by the sk_split_churn scenario as ~175 reconnects/s with
+        // "unexpected message tag a ... in state handshake").
+        if let Some(rx) = durable_rx.as_mut() {
+            rx.borrow_and_update();
+        }
+        // Durability acks are only meaningful — and only protocol-legal —
+        // once this connection's walproposer has been elected and is
+        // streaming; gate the watch branch on it.
+        let mut elected = false;
 
         while !self.tli.is_cancelled() {
             let reply = tokio::select! {
@@ -624,6 +642,7 @@ impl WalAcceptor {
                     // Update walreceiver state in shmem for reporting.
                     if let ProposerAcceptorMessage::Elected(_) = &msg {
                         walreceiver_guard.get().status = WalReceiverStatus::Streaming;
+                        elected = true;
                     }
 
                     // Don't flush the WAL on every append, only periodically via flush_ticker.
@@ -659,7 +678,7 @@ impl WalAcceptor {
                         Some(rx) => rx.changed().await.is_ok(),
                         None => future::pending::<bool>().await,
                     }
-                }, if durable_rx.is_some() => {
+                }, if durable_rx.is_some() && elected => {
                     if changed {
                         // A published `DurableState::Failed` means the consumer
                         // hit a non-recoverable error and the watermark will

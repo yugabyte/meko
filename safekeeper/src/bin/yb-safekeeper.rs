@@ -102,10 +102,26 @@ async fn main() -> anyhow::Result<()> {
     )?;
 
     // Suspended-task dump on SIGUSR2 (`kill -USR2 <pid>`). See `utils::tokio_dump`.
-    utils::tokio_dump::spawn_sigusr2_dumper(vec![(
-        "safekeeper".to_string(),
-        tokio::runtime::Handle::current(),
-    )]);
+    // Register EVERY runtime: the WAL acceptors (the usual suspects in a
+    // wedge — they take the timeline shared_state write lock) live on
+    // WAL_SERVICE_RUNTIME, not the main runtime, and a dump that misses
+    // them shows a blocked reader with an invisible holder (see the
+    // tpcc-safekeeper-wedge-2026-07-06 finding).
+    utils::tokio_dump::spawn_sigusr2_dumper(vec![
+        (
+            "safekeeper".to_string(),
+            tokio::runtime::Handle::current(),
+        ),
+        (
+            "wal_service".to_string(),
+            WAL_SERVICE_RUNTIME.handle().clone(),
+        ),
+        ("http".to_string(), HTTP_RUNTIME.handle().clone()),
+        (
+            "background".to_string(),
+            BACKGROUND_RUNTIME.handle().clone(),
+        ),
+    ]);
 
     if let Some(addr) = args.dump_control_file {
         anyhow::bail!(

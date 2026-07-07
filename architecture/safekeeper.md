@@ -181,7 +181,22 @@ return                              │
   walproposer treats the post-`flush_wal` LSN as the durable-commit
   boundary, so any crash between `write_wal` returning and the
   consumer's INSERT landing in YB is a no-op for the compute (no
-  commit ack was sent).
+  commit ack was sent). The wait is **bounded** (60 s, progress-logged
+  every 10 s): every caller sits inside `process_msg` holding the
+  timeline shared_state write lock, and an unbounded wait there
+  starves the manager and wedges the whole timeline — timing out
+  drops the connection and releases the lock instead
+  (tpcc-safekeeper-wedge-2026-07-06).
+- **Async durability acks are gated on election.** The acceptor's
+  durability-watch branch (emit an `AppendResponse` as the watermark
+  advances) marks the watch seen at subscription and only arms after
+  `ProposerElected` is processed. A fresh clone of the watch carries a
+  stale seen-version, so its `changed()` fires immediately — and the
+  unbiased select could put an `AppendResponse` on the wire before the
+  `AcceptorGreeting`, which the walproposer treats as fatal during the
+  handshake. That race produced a permanent reconnect storm (commits
+  frozen; same finding as above); regression-guarded by the
+  `sk_split_churn` slow e2e scenario.
 - **`chunk_offset`** (the chunk's byte offset within its segment) is the
   in-segment identity — the writer never produces overlapping chunks
   (`truncate_wal` aligns the next write at the truncation point), so offset
