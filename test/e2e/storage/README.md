@@ -32,6 +32,15 @@ essential: `yb_light_local` launches them from `target/<profile>/` at
 runtime without rebuilding, so a missing one silently runs a stale binary.
 Default builds are debug; `--release` builds and runs the release binaries.
 
+`run.sh` also rebuilds the **`yb_amp` Postgres extension**
+(`make neon-pg-ext-v17`) when its C sources changed — `cargo` does not build
+it, and the compute loads `pg_install/v17/lib/postgresql/yb_amp.so` at runtime,
+so a stale `.so` runs an old walproposer/compute against fresh cluster binaries
+(a wire/ABI skew that looks like a hang or segfault). Staleness is tracked via
+`build/.yb_amp_ext.stamp`; because the PGXS build has no header-dependency
+tracking, any C change forces a **clean** extension rebuild (~1–2 min), while
+Rust-only edits skip it entirely.
+
 - **`-n <count>`** repeats the selection and prints a cumulative
   `passed / failed` count. It runs *all* selected tests each iteration
   (failures are tallied, not fatal) — for hunting flakiness. Without
