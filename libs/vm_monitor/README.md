@@ -10,7 +10,7 @@ out upscaling and downscaling decisions.
 
 We scale CPU and memory using NeonVM, our in-house QEMU tool for use with Kubernetes.
 To control thresholds for receiving memory usage notifications, we start Postgres
-in the `yb_amp-postgres` cgroup and set its `memory.{max,high}`.
+in the `yb-amp-postgres` cgroup and set its `memory.{max,high}`.
 
 * See also: [`neondatabase/autoscaling`](https://github.com/neondatabase/autoscaling/)
 * See also: [`neondatabase/vm-monitor`](https://github.com/neondatabase/vm-monitor/),
@@ -27,7 +27,7 @@ and old one if it exists.
 * the filecache: a struct that allows communication with the Postgres file cache.
 On startup, we connect to the filecache and hold on to the connection for the
 entire monitor lifetime.
-* the cgroup watcher: the `CgroupWatcher` polls the `yb_amp-postgres` cgroup's memory
+* the cgroup watcher: the `CgroupWatcher` polls the `yb-amp-postgres` cgroup's memory
 usage and sends rolling aggregates to the runner.
 * the runner: the runner marries the filecache and cgroup watcher together,
 communicating with the agent throught the `Dispatcher`, and then calling filecache

@@ -105,7 +105,7 @@ struct Cli {
     pub privileged_role_name: String,
 
     #[cfg(target_os = "linux")]
-    #[arg(long, default_value = "yb_amp-postgres")]
+    #[arg(long, default_value = "yb-amp-postgres")]
     pub cgroup: String,
 
     #[cfg(target_os = "linux")]

@@ -75,7 +75,7 @@ files:
   - filename: cgconfig.conf
     content: |
       # Configuration for cgroups in VM compute nodes
-      group yb_amp-postgres {
+      group yb-amp-postgres {
           perm {
               admin {
                   uid = postgres;
