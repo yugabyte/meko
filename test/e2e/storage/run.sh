@@ -90,6 +90,12 @@ done
 #
 # The diagnostic tools are compiled bins too; the `tools` scenario shells
 # out to them, so build them in the same step.
+#
+# `pageserver/testing` compiles in the `fail_point!` macro so scenarios can
+# drive failpoints via the pageserver's /v1/failpoints API (e.g.
+# ps_pipeline_ordering forces out-of-order batch completion). The
+# `pkg/feature` form scopes it to the pageserver crate only; untriggered
+# failpoints cost a single atomic load per site.
 CLUSTER_BINS=(
     --bin storage_controller
     --bin yb-pageserver
@@ -99,12 +105,12 @@ CLUSTER_BINS=(
 )
 TOOL_BINS=(--bin yb-dump-pages --bin yb-dump-wals --bin yb-reset-consistent-lsn)
 if [[ $PROFILE == release ]]; then
-    cargo build --release --bin e2e_tests --bin yb_light_local \
+    cargo build --release --features pageserver/testing --bin e2e_tests --bin yb_light_local \
         "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
     export YB_LIGHT=${YB_LIGHT:-$REPO/target/release/yb_light_local}
     BIN=$REPO/target/release/e2e_tests
 else
-    cargo build --bin e2e_tests --bin yb_light_local \
+    cargo build --features pageserver/testing --bin e2e_tests --bin yb_light_local \
         "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
     BIN=$REPO/target/debug/e2e_tests
 fi

@@ -38,6 +38,8 @@ dimension.
 | `pageserver_page_service_batch_break_reason_global` | IntCounter | `reason` | Why a getpage batch was broken. |
 | `pageserver_page_service_batch_break_reason` | IntCounter | `branch_id`, `reason` | Batch-break reason, per branch. |
 | `pageserver_page_service_config_max_batch_size` | IntGauge | `mode`, `execution`, `batching` | Configured max batch size + pipelining config. |
+| `pageserver_page_service_pipeline_inflight_batches` | Histogram | — | #173: getpage batches in flight per connection in the pipelined executor (batch-concurrency), sampled when a batch is admitted. |
+| `pageserver_scattered_set_keys_global` | Histogram | — | #220: scattered single-block keys folded into one multi-key `scan_scattered_set` YB query (batched-reads fold size; only folds of >=2 keys recorded). |
 | `pageserver_page_service_pagestream_batch_wait_time_seconds` | Histogram | `branch_id` | Time a request waited in its batch before throttle+execution. |
 | `pageserver_page_service_pagestream_batch_wait_time_seconds_global` | Histogram | — | Instance-wide batch wait time. |
 | `pageserver_page_service_pagestream_flush_in_progress_micros` | IntCounter | `branch_id` | Microseconds a pagestream response spent flushing to TCP (in-progress sum, not completion latency). |

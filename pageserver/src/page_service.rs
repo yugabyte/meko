@@ -16,7 +16,8 @@ use anyhow::{Context as _, bail};
 use bytes::{Buf as _, BufMut as _, BytesMut};
 use chrono::Utc;
 use futures::future::BoxFuture;
-use futures::{FutureExt, Stream};
+use futures::stream::FuturesOrdered;
+use futures::{FutureExt, Stream, StreamExt};
 use itertools::Itertools;
 use jsonwebtoken::TokenData;
 use once_cell::sync::OnceCell;
@@ -1368,6 +1369,29 @@ impl PageServerHandler {
     where
         IO: AsyncRead + AsyncWrite + Send + Sync + Unpin,
     {
+        let (handler_results, span) = Self::execute_batch(batch, ctx.attached_child()).await?;
+        Self::write_batch_responses(pgb_writer, handler_results, span, protocol_version, cancel).await
+    }
+
+    /// Run a batch's page reads (get_vectored) and return the response data + span,
+    /// WITHOUT touching the connection writer. Owns its `ctx` so it can be driven
+    /// concurrently inside a `FuturesOrdered` (the pipelined executor). Used by both
+    /// the serial and pipelined paths. Paired with [`Self::write_batch_responses`].
+    async fn execute_batch(
+        batch: BatchedFeMessage,
+        ctx: RequestContext,
+    ) -> Result<
+        (
+            Vec<Result<(PagestreamBeMessage, SmgrOpTimer, RequestContext), BatchedPageStreamError>>,
+            Span,
+        ),
+        QueryError,
+    > {
+        // #173: test hook to force out-of-order batch completion, so the
+        // pipeline's submission-order draining is exercised under adversarial
+        // timing. No-op unless the failpoint is configured (async sleep via a
+        // `return(<ms>)` action, e.g. `50%return(80)`); see ps_pipeline_ordering.
+        failpoint_support::sleep_millis_async!("ps::pipeline-execute-batch");
         let started_at = Instant::now();
         let batch = {
             let mut batch = batch;
@@ -1377,18 +1401,31 @@ impl PageServerHandler {
 
         // Dispatch the batch to the appropriate request handler.
         let log_slow_name = batch.as_static_str();
-        let (mut handler_results, span) = {
-            // TODO: we unfortunately have to pin the future on the heap, since GetPage futures are huge and
-            // won't fit on the stack.
-            let mut boxpinned = Box::pin(Self::pagestream_dispatch_batched_message(batch, ctx));
-            log_slow(
-                log_slow_name,
-                LOG_SLOW_GETPAGE_THRESHOLD,
-                boxpinned.as_mut(),
-            )
-            .await?
-        };
+        // TODO: we unfortunately have to pin the future on the heap, since GetPage futures are huge and
+        // won't fit on the stack.
+        let mut boxpinned = Box::pin(Self::pagestream_dispatch_batched_message(batch, &ctx));
+        log_slow(
+            log_slow_name,
+            LOG_SLOW_GETPAGE_THRESHOLD,
+            boxpinned.as_mut(),
+        )
+        .await
+    }
 
+    /// Write a batch's already-computed responses onto the wire, in request order.
+    /// Used by both the serial and pipelined paths. Paired with [`Self::execute_batch`].
+    async fn write_batch_responses<IO>(
+        pgb_writer: &mut PostgresBackend<IO>,
+        mut handler_results: Vec<
+            Result<(PagestreamBeMessage, SmgrOpTimer, RequestContext), BatchedPageStreamError>,
+        >,
+        span: Span,
+        protocol_version: PagestreamProtocolVersion,
+        cancel: &CancellationToken,
+    ) -> Result<(), QueryError>
+    where
+        IO: AsyncRead + AsyncWrite + Send + Sync + Unpin,
+    {
         // We purposefully don't count flush time into the smgr operation timer.
         //
         // The reason is that current compute client will not perform protocol processing
@@ -1964,6 +2001,7 @@ impl PageServerHandler {
             max_batch_size,
             execution,
             batching: batching_strategy,
+            pipeline_depth,
         } = pipelining_config;
 
         // Macro to _define_ a pipeline stage.
@@ -2045,53 +2083,76 @@ impl PageServerHandler {
             let ctx = ctx.attached_child();
             async move {
                 let _cancel_batcher = cancel_batcher.drop_guard();
+                // #173: pipeline up to `pipeline_depth` getpage reads (get_vectored / YB round
+                // trips) concurrently per connection, draining responses in submission order.
+                // The compute prefetches a window of requests (e.g. seqscan via read_stream),
+                // but the old executor processed one batch at a time — so a connection could
+                // only have one batch's reads outstanding even when more were already queued.
+                // Depth 1 reproduces the serial behavior.
+                let pipeline_depth: usize = pipeline_depth.get();
+                let mut inflight = FuturesOrdered::new();
+                let mut sender_gone = false;
                 loop {
-                    let maybe_batch = batch_rx.recv().await;
-                    let batch = match maybe_batch {
-                        Ok(batch) => batch,
-                        Err(spsc_fold::RecvError::SenderGone) => {
-                            debug!("upstream gone");
-                            // If the batcher exited because of graceful
-                            // shutdown, send a GoingAway frame so the
-                            // compute disconnects + reconnects now.
-                            if graceful_cancel_executor.is_cancelled() {
-                                if let Err(e) =
-                                    Self::send_going_away(pgb_writer, protocol_version).await
-                                {
-                                    debug!("failed to write GoingAway frame: {e}");
+                    let can_accept = inflight.len() < pipeline_depth && !sender_gone;
+                    let has_inflight = !inflight.is_empty();
+                    if sender_gone && !has_inflight {
+                        // Batcher gone and all in-flight batches drained: send GoingAway
+                        // now — after every response is on the wire, so the compute does
+                        // not disconnect before reading them — then exit.
+                        if graceful_cancel_executor.is_cancelled() {
+                            if let Err(e) =
+                                Self::send_going_away(pgb_writer, protocol_version).await
+                            {
+                                debug!("failed to write GoingAway frame: {e}");
+                            }
+                        }
+                        return Ok(());
+                    }
+                    tokio::select! {
+                        biased;
+                        // Drain the oldest completed read and write its responses (in order).
+                        Some(read_res) = inflight.next(), if has_inflight => {
+                            let (handler_results, span) = read_res?;
+                            Self::write_batch_responses(
+                                pgb_writer,
+                                handler_results,
+                                span,
+                                protocol_version,
+                                &cancel,
+                            )
+                            .await?;
+                        }
+                        // Accept a new batch and start its read, if we have capacity.
+                        maybe_batch = batch_rx.recv(), if can_accept => {
+                            match maybe_batch {
+                                Ok(batch) => {
+                                    let mut batch = match batch {
+                                        Ok(batch) => batch,
+                                        Err(e) => return Err(e),
+                                    };
+                                    if let BatchedFeMessage::GetPage { pages, .. } = &mut batch {
+                                        for req in pages {
+                                            req.batch_wait_ctx.take();
+                                        }
+                                    }
+                                    inflight.push_back(Self::execute_batch(
+                                        batch,
+                                        ctx.attached_child(),
+                                    ));
+                                    crate::metrics::PAGE_SERVICE_PIPELINE_INFLIGHT_BATCHES
+                                        .observe(inflight.len() as f64);
+                                }
+                                Err(spsc_fold::RecvError::SenderGone) => {
+                                    debug!("upstream gone");
+                                    // Batcher gone: stop accepting new batches; drain the
+                                    // in-flight ones and send GoingAway at the loop exit,
+                                    // after all their responses are written.
+                                    sender_gone = true;
                                 }
                             }
-                            return Ok(());
                         }
-                    };
-                    let mut batch = match batch {
-                        Ok(batch) => batch,
-                        Err(e) => {
-                            return Err(e);
-                        }
-                    };
-
-                    if let BatchedFeMessage::GetPage {
-                        pages,
-                        span: _,
-                        shard: _,
-                        applied_gc_cutoff_guard: _,
-                        batch_break_reason: _,
-                    } = &mut batch
-                    {
-                        for req in pages {
-                            req.batch_wait_ctx.take();
-                        }
+                        else => {}
                     }
-
-                    self.pagestream_handle_batched_message(
-                        pgb_writer,
-                        batch,
-                        &cancel,
-                        protocol_version,
-                        &ctx,
-                    )
-                    .await?;
                 }
             }
         });

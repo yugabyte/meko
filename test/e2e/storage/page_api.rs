@@ -198,3 +198,35 @@ pub fn restore_ps(c: &Cluster, original: &str) {
         crate::tee_println!("  (WARN: failed to restart PS after config restore: {e:#})");
     }
 }
+
+/// #173: rewrite `pageserver.toml` to run the pipelined page_service at a
+/// specific `pipeline_depth` (plus the tiny stress read-cache so reads miss
+/// the PS RAM cache and actually hit YB), then restart the pageserver.
+/// Always rebuilds from the caller-provided pristine `original`, so repeated
+/// calls don't accumulate config. Pair with [`restore_ps`].
+pub fn restart_with_pipeline_depth(c: &Cluster, original: &str, depth: usize) -> anyhow::Result<()> {
+    let toml = c
+        .repo_dir()
+        .join("endpoints/main/pageserver/pageserver.toml");
+    // Drop any pre-existing top-level pipelining key, then set our own at the
+    // top (top-level keys must precede the [yb_page_writer] section we append).
+    let stripped: String = original
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("page_service_pipelining"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let pipelining = format!(
+        "page_service_pipelining = {{ mode = \"pipelined\", max_batch_size = 32, \
+         execution = \"concurrent-futures\", batching = \"scattered-lsn\", \
+         pipeline_depth = {depth} }}\n"
+    );
+    std::fs::write(&toml, format!("{pipelining}{stripped}{STRESS_PAGE_WRITER}"))
+        .context("write pipeline_depth pageserver.toml")?;
+    // Immediate stop + start rather than a graceful `restart`: this is setup
+    // (we just want the PS back on the new toml with a cold cache), and a
+    // graceful stop can exceed yb_light's timeout while draining a fresh WAL
+    // backlog. Matches the suite convention (e.g. restart_wal_replay).
+    c.yb(&["pageserver", "stop", "-m", "immediate"])?;
+    c.yb(&["pageserver", "start"])?;
+    Ok(())
+}

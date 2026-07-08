@@ -1623,6 +1623,16 @@ pub(crate) static PAGE_SERVICE_CONFIG_MAX_BATCH_SIZE: Lazy<IntGaugeVec> = Lazy::
     .expect("failed to define a metric")
 });
 
+pub(crate) static PAGE_SERVICE_PIPELINE_INFLIGHT_BATCHES: Lazy<Histogram> = Lazy::new(|| {
+    register_histogram!(
+        "pageserver_page_service_pipeline_inflight_batches",
+        "Number of batches (each a folded getpage set = one get_vectored / YB read request) \
+         the executor has in flight, sampled when a new batch is admitted (#173).",
+        vec![1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0]
+    )
+    .expect("failed to define a metric")
+});
+
 fn set_page_service_config_max_batch_size(conf: &PageServicePipeliningConfig) {
     PAGE_SERVICE_CONFIG_MAX_BATCH_SIZE.reset();
     let (label_values, value) = match conf {
@@ -1631,6 +1641,7 @@ fn set_page_service_config_max_batch_size(conf: &PageServicePipeliningConfig) {
             max_batch_size,
             execution,
             batching,
+            ..
         }) => {
             let mode = "pipelined";
             let execution = match execution {

@@ -586,6 +586,14 @@ pub struct PageServicePipeliningConfigPipelined {
     // with the old configuration.
     #[serde(default)]
     pub batching: PageServiceProtocolPipelinedBatchingStrategy,
+    /// #173: max number of batches the executor can execute concurrently on a
+    /// single page_service (getpage) connection.
+    #[serde(default = "default_pipeline_depth")]
+    pub pipeline_depth: NonZeroUsize,
+}
+
+fn default_pipeline_depth() -> NonZeroUsize {
+    NonZeroUsize::new(16).unwrap()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -900,6 +908,7 @@ impl Default for ConfigToml {
                     max_batch_size: NonZeroUsize::new(32).unwrap(),
                     execution: PageServiceProtocolPipelinedExecutionStrategy::ConcurrentFutures,
                     batching: PageServiceProtocolPipelinedBatchingStrategy::ScatteredLsn,
+                    pipeline_depth: NonZeroUsize::new(16).unwrap(),
                 },
             ),
             get_vectored_concurrent_io: GetVectoredConcurrentIo::SidecarTask,
