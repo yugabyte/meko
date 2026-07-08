@@ -75,7 +75,7 @@ files:
   - filename: cgconfig.conf
     content: |
       # Configuration for cgroups in VM compute nodes
-      group neon-postgres {
+      group yb_amp-postgres {
           perm {
               admin {
                   uid = postgres;

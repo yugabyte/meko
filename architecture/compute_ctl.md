@@ -221,7 +221,7 @@ rsyslog config.
 | `lsn_lease.rs` | Static mode: renew the pageserver LSN lease (`GET /lsn_lease`) so the pinned LSN survives GC. |
 | `extension_server.rs` | Download remote extensions from the proxy gateway (`--remote-ext-base-url`), unpack into PG's `lib`/`share`. |
 | `installed_extensions.rs` | Periodically inventory `pg_extension` across databases → `compute_installed_extensions` metric. |
-| `migration.rs` | Ordered, tracked catalog migrations (`neon_migration.migration_id`). |
+| `migration.rs` | Ordered, tracked catalog migrations (`yb_amp_migration.migration_id`). |
 | `catalog.rs`, `checker.rs` | `dbs_and_roles` / schema dump; the `health_check` writability probe. |
 | `disk_quota.rs` | Enforce a filesystem quota when `disk_quota_bytes` is set. |
 

@@ -377,11 +377,11 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
     }
 }
 
-/// If we are a VM, returns a [`Command`] that will run in the `neon-postgres`
+/// If we are a VM, returns a [`Command`] that will run in the `yb_amp-postgres`
 /// cgroup. Otherwise returns the default `Command::new(cmd)`
 ///
 /// This function should be used to start postgres, as it will start it in the
-/// neon-postgres cgroup if we are a VM. This allows autoscaling to control
+/// yb_amp-postgres cgroup if we are a VM. This allows autoscaling to control
 /// postgres' resource usage. The cgroup will exist in VMs because vm-builder
 /// creates it during the sysinit phase of its inittab.
 fn maybe_cgexec(cmd: &str) -> Command {
@@ -390,7 +390,7 @@ fn maybe_cgexec(cmd: &str) -> Command {
     // unicode. Should never be an concern . . . but just in case
     if env::var_os("AUTOSCALING").is_some() {
         let mut command = Command::new("cgexec");
-        command.args(["-g", "memory:neon-postgres"]);
+        command.args(["-g", "memory:yb_amp-postgres"]);
         command.arg(cmd);
         command
     } else {
@@ -744,7 +744,7 @@ impl ComputeNode {
         this.terminate_lfc_offload_task();
 
         // Terminate the vm_monitor so it releases the file watcher on
-        // /sys/fs/cgroup/neon-postgres.
+        // /sys/fs/cgroup/yb_amp-postgres.
         // Note: the vm-monitor only runs on linux because it requires cgroups.
         if let Some(vm_monitor) = vm_monitor {
             cfg_if::cfg_if! {
@@ -1386,7 +1386,7 @@ impl ComputeNode {
         let mut attempts = 0;
         const DEFAULT_ATTEMPTS: u16 = 10;
         #[cfg(feature = "testing")]
-        let max_attempts = if let Ok(v) = env::var("NEON_COMPUTE_TESTING_BASEBACKUP_RETRIES") {
+        let max_attempts = if let Ok(v) = env::var("YB_AMP_COMPUTE_TESTING_BASEBACKUP_RETRIES") {
             u16::from_str(&v).unwrap()
         } else {
             DEFAULT_ATTEMPTS
