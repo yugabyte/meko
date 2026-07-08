@@ -7,15 +7,13 @@ use std::time::SystemTime;
 use anyhow::{Result, bail};
 use postgres_ffi::WAL_SEGMENT_SIZE;
 use postgres_versioninfo::{PgMajorVersion, PgVersionId};
-use safekeeper_api::membership::Configuration;
-use safekeeper_api::{INITIAL_TERM, ServerInfo};
+use safekeeper_api::ServerInfo;
 use serde::{Deserialize, Serialize};
-use tracing::info;
 use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::control_file;
-use crate::safekeeper::{AcceptorState, PgUuid, TermHistory, TermLsn, UNKNOWN_SERVER_VERSION};
+use crate::safekeeper::UNKNOWN_SERVER_VERSION;
 use crate::timeline::TimelineError;
 
 /// Persistent information stored on safekeeper node about timeline.
@@ -25,16 +23,8 @@ use crate::timeline::TimelineError;
 pub struct TimelinePersistentState {
     #[serde(with = "hex")]
     pub branch_id: BranchId,
-    /// Membership configuration.
-    pub mconf: Configuration,
-    /// persistent acceptor state
-    pub acceptor_state: AcceptorState,
     /// information about server
     pub server: ServerInfo,
-    /// Unique id of the last *elected* proposer we dealt with. Not needed
-    /// for correctness, exists for monitoring purposes.
-    #[serde(with = "hex")]
-    pub proposer_uuid: PgUuid,
     /// Since which LSN this timeline generally starts. Safekeeper might have
     /// joined later.
     pub timeline_start_lsn: Lsn,
@@ -51,10 +41,9 @@ pub struct TimelinePersistentState {
 
 impl TimelinePersistentState {
     /// yb-light: `commit_lsn` collapsed into `flush_lsn`, so creation only
-    /// needs `start_lsn`. Term history is seeded when `start_lsn` is known.
+    /// needs `start_lsn`.
     pub fn new(
         branch_id: &BranchId,
-        mconf: Configuration,
         server_info: ServerInfo,
         start_lsn: Lsn,
     ) -> anyhow::Result<TimelinePersistentState> {
@@ -66,29 +55,9 @@ impl TimelinePersistentState {
             bail!(TimelineError::UninitialinzedPgVersion(*branch_id));
         }
 
-        // If we are given with init LSN, initialize term history with it. It
-        // ensures that walproposer always must be able to find a common point
-        // in histories; if it can't something is corrupted. Not having LSN here
-        // is so far left for legacy case where timeline is created by compute
-        // and LSN during creation is not known yet.
-        let term_history = if start_lsn != Lsn::INVALID {
-            TermHistory(vec![TermLsn {
-                term: INITIAL_TERM,
-                lsn: start_lsn,
-            }])
-        } else {
-            TermHistory::empty()
-        };
-
         Ok(TimelinePersistentState {
             branch_id: *branch_id,
-            mconf,
-            acceptor_state: AcceptorState {
-                term: INITIAL_TERM,
-                term_history,
-            },
             server: server_info,
-            proposer_uuid: [0; 16],
             timeline_start_lsn: start_lsn,
             local_start_lsn: start_lsn,
             remote_consistent_lsn: Lsn(0),
@@ -99,7 +68,6 @@ impl TimelinePersistentState {
     pub fn empty() -> Self {
         TimelinePersistentState::new(
             &BranchId::from_array([0u8; 16]),
-            Configuration::empty(),
             ServerInfo {
                 pg_version: PgVersionId::from(PgMajorVersion::PG17),
                 system_id: 0, /* Postgres system identifier */
@@ -116,8 +84,6 @@ impl TimelinePersistentState {
 // are not flushed yet.
 pub struct TimelineMemState {
     pub remote_consistent_lsn: Lsn,
-    #[serde(with = "hex")]
-    pub proposer_uuid: PgUuid,
 }
 
 /// Safekeeper persistent state plus in memory layer.
@@ -140,7 +106,6 @@ where
         TimelineState {
             inmem: TimelineMemState {
                 remote_consistent_lsn: state.remote_consistent_lsn,
-                proposer_uuid: state.proposer_uuid,
             },
             pers: state,
         }
@@ -152,7 +117,6 @@ where
     pub fn start_change(&self) -> TimelinePersistentState {
         let mut s = self.pers.clone();
         s.remote_consistent_lsn = self.inmem.remote_consistent_lsn;
-        s.proposer_uuid = self.inmem.proposer_uuid;
         s
     }
 
@@ -166,7 +130,6 @@ where
 
         // keep in memory values up to date
         self.inmem.remote_consistent_lsn = s.remote_consistent_lsn;
-        self.inmem.proposer_uuid = s.proposer_uuid;
         Ok(())
     }
 
@@ -174,26 +137,6 @@ where
     pub async fn flush(&mut self) -> Result<()> {
         let s = self.start_change();
         self.finish_change(&s).await
-    }
-
-    /// Switch into membership configuration `to` if it is higher than the
-    /// current one. Called from `handle_elected` in the walproposer protocol;
-    /// in single-SK yb-light `to.generation` is always equal to the current
-    /// generation so this is effectively a no-op.
-    pub async fn membership_switch(&mut self, to: Configuration) -> Result<()> {
-        if to.generation <= self.mconf.generation {
-            info!(
-                "ignoring request to switch membership conf to {}, current conf {}",
-                to, self.mconf
-            );
-            return Ok(());
-        }
-        let before = self.mconf.clone();
-        let mut state = self.start_change();
-        state.mconf = to.clone();
-        self.finish_change(&state).await?;
-        info!("switched membership conf to {} from {}", to, before);
-        Ok(())
     }
 }
 

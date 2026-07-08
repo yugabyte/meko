@@ -1,10 +1,8 @@
 //! Safekeeper control-file storage.
 //!
 //! yb-light persists the per-timeline `TimelinePersistentState` as a
-//! row in the YB table `safekeeper.timeline_state`. Hot-update LSN
-//! scalars get their own BIGINT columns; slow-update structures
-//! (`mconf`, `term_history`) go in JSONB so their internal Rust-side
-//! shape can evolve without an SQL migration.
+//! row in the YB table `safekeeper.timeline_state`, one BIGINT/INT
+//! column per scalar field.
 //!
 //! Prior history: upstream Neon used a local-FS blob, then yb-light's
 //! Phase 2 reduction stored the same bincode blob in
@@ -20,16 +18,12 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use postgres_versioninfo::PgVersionId;
-use safekeeper_api::Term;
-use safekeeper_api::membership::Configuration;
-use serde::{Deserialize, Serialize};
 use utils::id::BranchId;
 use utils::lsn::Lsn;
 use yb_tokio_postgres::types::ToSql;
 use ysql_client::YsqlClient;
 
 use crate::metrics::PERSIST_CONTROL_FILE_SECONDS;
-use crate::safekeeper::{AcceptorState, PgUuid, TermHistory};
 use crate::state::TimelinePersistentState;
 
 /// Storage should keep actual state inside of it. It should implement
@@ -62,42 +56,8 @@ impl std::fmt::Debug for YbControlFileStorage {
     }
 }
 
-/// Wire shape for the `term_history` JSONB column.
-#[derive(Serialize, Deserialize)]
-struct TermSwitchJson {
-    term: Term,
-    lsn: u64,
-}
-
-fn term_history_to_json(th: &TermHistory) -> serde_json::Value {
-    serde_json::to_value(
-        th.0.iter()
-            .map(|e| TermSwitchJson {
-                term: e.term,
-                lsn: e.lsn.0,
-            })
-            .collect::<Vec<_>>(),
-    )
-    .expect("TermSwitchJson serializes")
-}
-
-fn term_history_from_json(v: serde_json::Value) -> Result<TermHistory> {
-    let entries: Vec<TermSwitchJson> =
-        serde_json::from_value(v).context("decode term_history JSONB")?;
-    Ok(TermHistory(
-        entries
-            .into_iter()
-            .map(|e| crate::safekeeper::TermLsn {
-                term: e.term,
-                lsn: Lsn(e.lsn),
-            })
-            .collect(),
-    ))
-}
-
 const COLUMNS: &str = "timeline_start_lsn, local_start_lsn, remote_consistent_lsn, \
-                       pg_version, system_id, wal_seg_size, term, term_history, proposer_uuid, \
-                       mconf, creation_ts";
+                       pg_version, system_id, wal_seg_size, creation_ts";
 
 impl YbControlFileStorage {
     /// Load the row for `branch_id`. Errors if no row exists — callers
@@ -124,28 +84,16 @@ impl YbControlFileStorage {
             PgVersionId::from_full_pg_version(row.try_get::<_, i32>(3)? as u32);
         let system_id = row.try_get::<_, i64>(4)? as u64;
         let wal_seg_size = row.try_get::<_, i32>(5)? as u32;
-        let term: Term = row.try_get::<_, i64>(6)? as Term;
-        let term_history = term_history_from_json(row.try_get::<_, serde_json::Value>(7)?)?;
-        let proposer_uuid_bytes: Vec<u8> = row.try_get(8)?;
-        let proposer_uuid: PgUuid = proposer_uuid_bytes
-            .as_slice()
-            .try_into()
-            .context("proposer_uuid is not 16 bytes")?;
-        let mconf: Configuration = serde_json::from_value(row.try_get::<_, serde_json::Value>(9)?)
-            .context("decode mconf JSONB")?;
-        let creation_ts_dt: DateTime<Utc> = row.try_get(10)?;
+        let creation_ts_dt: DateTime<Utc> = row.try_get(6)?;
         let creation_ts: std::time::SystemTime = creation_ts_dt.into();
 
         let state = TimelinePersistentState {
             branch_id: *branch_id,
-            mconf,
-            acceptor_state: AcceptorState { term, term_history },
             server: safekeeper_api::ServerInfo {
                 pg_version,
                 system_id,
                 wal_seg_size,
             },
-            proposer_uuid,
             timeline_start_lsn,
             local_start_lsn,
             remote_consistent_lsn,
@@ -210,13 +158,10 @@ impl YbControlFileStorage {
 
     async fn write_row(&self, s: &TimelinePersistentState, insert: bool) -> Result<()> {
         let pg_version_i32: i32 = s.server.pg_version.as_u32() as i32;
-        let proposer_uuid: &[u8] = &s.proposer_uuid[..];
         let creation_ts: DateTime<Utc> = s.creation_ts.into();
-        let mconf_json = serde_json::to_value(&s.mconf).context("encode mconf JSONB")?;
-        let term_history_json = term_history_to_json(&s.acceptor_state.term_history);
 
         let branch_id = self.branch_id.to_string();
-        let params: [&(dyn ToSql + Sync); 12] = [
+        let params: [&(dyn ToSql + Sync); 8] = [
             &branch_id,
             &(s.timeline_start_lsn.0 as i64),
             &(s.local_start_lsn.0 as i64),
@@ -224,10 +169,6 @@ impl YbControlFileStorage {
             &pg_version_i32,
             &(s.server.system_id as i64),
             &(s.server.wal_seg_size as i32),
-            &(s.acceptor_state.term as i64),
-            &term_history_json,
-            &proposer_uuid,
-            &mconf_json,
             &creation_ts,
         ];
 
@@ -235,9 +176,8 @@ impl YbControlFileStorage {
             "INSERT INTO safekeeper.timeline_state (\
                  branch_id, timeline_start_lsn, local_start_lsn, \
                  remote_consistent_lsn, pg_version, system_id, \
-                 wal_seg_size, term, term_history, proposer_uuid, mconf, \
-                 creation_ts) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"
+                 wal_seg_size, creation_ts) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
                 .to_string()
         } else {
             "UPDATE safekeeper.timeline_state SET \
@@ -247,11 +187,7 @@ impl YbControlFileStorage {
                  pg_version            = $5, \
                  system_id             = $6, \
                  wal_seg_size          = $7, \
-                 term                  = $8, \
-                 term_history          = $9, \
-                 proposer_uuid         = $10, \
-                 mconf                 = $11, \
-                 creation_ts           = $12 \
+                 creation_ts           = $8 \
              WHERE branch_id           = $1"
                 .to_string()
         };

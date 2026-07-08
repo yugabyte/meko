@@ -61,41 +61,17 @@ typedef enum
 	SS_WAIT_EXEC_RESULT,
 
 	/*
-	 * Executing the receiving half of the handshake. After receiving, moves
-	 * to SS_VOTING.
+	 * Executing the receiving half of the handshake. In yb-amp receiving the
+	 * greeting immediately elects us (no voting), so we move straight to
+	 * SS_SEND_ELECTED_FLUSH.
 	 */
 	SS_HANDSHAKE_RECV,
-
-	/*
-	 * Waiting to participate in voting, but a quorum hasn't yet been reached.
-	 * This is an idle state - we do not expect AdvancePollState to be called.
-	 *
-	 * Moved externally by execution of SS_HANDSHAKE_RECV, when we received a
-	 * quorum of handshakes.
-	 */
-	SS_WAIT_VOTING,
-
-	/*
-	 * Already sent voting information, waiting to receive confirmation from
-	 * the node. After receiving, moves to SS_WAIT_ELECTED, if the quorum
-	 * isn't reached yet.
-	 */
-	SS_WAIT_VERDICT,
 
 	/* Need to flush ProposerElected message. */
 	SS_SEND_ELECTED_FLUSH,
 
 	/*
-	 * Waiting for quorum to send WAL. Idle state. If the socket becomes
-	 * read-ready, the connection has been closed.
-	 *
-	 * Moves to SS_ACTIVE only by call to StartStreaming.
-	 */
-	SS_WAIT_ELECTED,
-
-	/*
-	 * Active phase, when we acquired quorum and have WAL to send or feedback
-	 * to read.
+	 * Active phase, when we have WAL to send or feedback to read.
 	 */
 	SS_ACTIVE,
 } SafekeeperState;
@@ -141,39 +117,6 @@ typedef uint64 term_t;
 typedef uint64 NNodeId;
 
 /*
- * Number uniquely identifying safekeeper membership configuration.
- * This and following structs pair ones in membership.rs.
- */
-typedef uint32 Generation;
-#define INVALID_GENERATION 0
-
-typedef struct SafekeeperId
-{
-	NNodeId		node_id;
-	char		host[MAXCONNINFO];
-	uint16		port;
-} SafekeeperId;
-
-/* Set of safekeepers. */
-typedef struct MemberSet
-{
-	uint32		len;			/* number of members */
-	SafekeeperId *m;			/* ids themselves */
-} MemberSet;
-
-/*
- * Timeline safekeeper membership configuration as sent in the
- * protocol.
- */
-typedef struct MembershipConfiguration
-{
-	Generation	generation;
-	MemberSet	members;
-	/* Has 0 n_members in non joint conf. */
-	MemberSet	new_members;
-} MembershipConfiguration;
-
-/*
  * Proposer <-> Acceptor messaging.
  */
 
@@ -193,8 +136,6 @@ typedef struct ProposerGreeting
 	 * also passed as a libpq option.
 	 */
 	char	   *branch_id;
-	/* Full conf is carried to allow safekeeper switch */
-	MembershipConfiguration mconf;
 
 	/*
 	 * pg_version and wal_seg_size are used for timeline creation until we
@@ -212,75 +153,28 @@ typedef struct AcceptorProposerMessage
 } AcceptorProposerMessage;
 
 /*
- * Acceptor -> Proposer initial response: the highest term acceptor voted for,
- * its node id and configuration.
+ * Acceptor -> Proposer initial response: its node id and current end-of-WAL.
+ * yb-amp runs a single safekeeper per branch with WAL durability provided by
+ * YugabyteDB, so the inherited Neon consensus (terms/voting) and membership
+ * are gone. The walproposer resumes streaming at `flushLsn` (which the
+ * safekeeper truncates its WAL to).
  */
 typedef struct AcceptorGreeting
 {
 	AcceptorProposerMessage apm;
 	NNodeId		nodeId;
-	MembershipConfiguration mconf;
-	term_t		term;
+	XLogRecPtr	flushLsn;
 } AcceptorGreeting;
 
 /*
- * Proposer -> Acceptor vote request.
- */
-typedef struct VoteRequest
-{
-	ProposerAcceptorMessage pam;	/* message tag */
-	Generation	generation;		/* membership conf generation */
-	term_t		term;
-} VoteRequest;
-
-/* Element of term switching chain. */
-typedef struct TermSwitchEntry
-{
-	term_t		term;
-	XLogRecPtr	lsn;
-} TermSwitchEntry;
-
-typedef struct TermHistory
-{
-	uint32		n_entries;
-	TermSwitchEntry *entries;
-} TermHistory;
-
-/* Vote itself, sent from safekeeper to proposer */
-typedef struct VoteResponse
-{
-	AcceptorProposerMessage apm;
-
-	/*
-	 * Membership conf generation. It's not strictly required because on
-	 * mismatch safekeeper is expected to ERROR the connection, but let's
-	 * sanity check it.
-	 */
-	Generation	generation;
-	term_t		term;
-	uint8		voteGiven;
-
-	/*
-	 * Safekeeper flush_lsn (end of WAL) + history of term switches allow
-	 * proposer to choose the most advanced one.
-	 */
-	XLogRecPtr	flushLsn;
-	TermHistory termHistory;
-} VoteResponse;
-
-/*
- * Proposer -> Acceptor message announcing proposer is elected and communicating
- * epoch history to it.
+ * Proposer -> Acceptor message announcing the proposer and the point from
+ * which it will stream WAL. The safekeeper truncates its WAL beyond this.
  */
 typedef struct ProposerElected
 {
 	AcceptorProposerMessage apm;
-	Generation	generation;		/* membership conf generation */
-	term_t		term;
 	/* proposer will send since this point */
 	XLogRecPtr	startStreamingAt;
-	/* history of term switches up to this proposer */
-	TermHistory *termHistory;
 } ProposerElected;
 
 /*
@@ -289,12 +183,8 @@ typedef struct ProposerElected
 typedef struct AppendRequestHeader
 {
 	AcceptorProposerMessage apm;
-	Generation	generation;		/* membership conf generation */
-	term_t		term;			/* term of the proposer */
 	XLogRecPtr	beginLsn;		/* start position of message in WAL */
 	XLogRecPtr	endLsn;			/* end position of message in WAL */
-	/* yb-mode: commit_lsn / truncate_lsn removed (single-SK quorum = no */
-	/* peer recovery; commit_lsn ≡ flush_lsn). */
 	/* in the AppendRequest message, WAL data follows */
 } AppendRequestHeader;
 
@@ -388,19 +278,7 @@ typedef struct AppendResponse
 {
 	AcceptorProposerMessage apm;
 
-	/*
-	 * Membership conf generation. It's not strictly required because on
-	 * mismatch safekeeper is expected to ERROR the connection, but let's
-	 * sanity check it.
-	 */
-	Generation	generation;
-
-	/*
-	 * Current term of the safekeeper; if it is higher than proposer's, the
-	 * compute is out of date.
-	 */
-	term_t		term;
-	/* TODO: add comment */
+	/* Flushed end of WAL on the safekeeper. */
 	XLogRecPtr	flushLsn;
 	/* yb-mode: commit_lsn removed (single-SK = no peer recovery; */
 	/* commit_lsn ≡ flush_lsn). */
@@ -412,8 +290,8 @@ typedef struct AppendResponse
 } AppendResponse;
 
 /*  PageserverFeedback is extensible part of the message that is parsed separately */
-/*  Other fields are fixed part */
-#define APPENDRESPONSE_FIXEDPART_SIZE 56
+/*  Other fields are fixed part: flushLsn(8) + hs{ts,xmin,catalog_xmin}(24) */
+#define APPENDRESPONSE_FIXEDPART_SIZE 32
 
 struct WalProposer;
 typedef struct WalProposer WalProposer;
@@ -457,7 +335,6 @@ typedef struct Safekeeper
 	SafekeeperActiveState active_state;
 	TimestampTz latestMsgReceivedAt;	/* when latest msg is received */
 	AcceptorGreeting greetResponse; /* acceptor greeting */
-	VoteResponse voteResponse;	/* the vote */
 	AppendResponse appendResponse;	/* feedback for master */
 
 
@@ -759,51 +636,26 @@ typedef struct WalProposerConfig
 
 typedef enum
 {
-	/* collecting greetings to determine term to campaign for */
+	/* connecting / handshaking, not yet elected */
 	WPS_COLLECTING_TERMS,
-	/* campaing started, waiting for votes */
-	WPS_CAMPAIGN,
-	/* successfully elected */
+	/* successfully elected (single-SK: immediately after the greeting) */
 	WPS_ELECTED,
 } WalProposerState;
 
 /*
  * WAL proposer state.
+ *
+ * yb-amp runs a single safekeeper per branch with WAL durability provided by
+ * YugabyteDB, so the inherited Neon consensus (terms/voting) and membership
+ * have been removed: the walproposer connects, learns the safekeeper's
+ * end-of-WAL from the greeting, and immediately resumes streaming from there.
  */
 typedef struct WalProposer
 {
 	WalProposerConfig *config;
 	WalProposerState state;
-	/* Current walproposer membership configuration */
-	MembershipConfiguration mconf;
 
-	/*
-	 * Parallels mconf.members with pointers to the member's slot in
-	 * safekeepers array of connections, or NULL if such member is not
-	 * connected. Helps to avoid looking slot per id through all
-	 * .safekeepers[] when doing quorum checks.
-	 */
-	Safekeeper *members_safekeepers[MAX_SAFEKEEPERS];
-	/* As above, but for new_members. */
-	Safekeeper *new_members_safekeepers[MAX_SAFEKEEPERS];
-
-	/* (n_safekeepers / 2) + 1. Used for static pre-generations quorum checks. */
-	int			quorum;
-
-	/*
-	 * Generation of the membership conf of which safekeepers[] are presumably
-	 * members. To make cplane life a bit easier and have more control in
-	 * tests with which sks walproposer gets connected yb_amp.safekeepers GUC
-	 * doesn't provide full mconf, only the list of endpoints to connect to.
-	 * We still would like to know generation associated with it because 1) we
-	 * need some handle to enforce using generations in walproposer, and
-	 * non-zero value of this serves the purpose; 2) currently we don't do
-	 * that, but in theory walproposer can update list of safekeepers to
-	 * connect to upon receiving mconf from safekeepers, and generation number
-	 * must be checked to see which list is newer.
-	 */
-	Generation	safekeepers_generation;
-	/* Number of occupied slots in safekeepers[] */
+	/* Number of occupied slots in safekeepers[] (exactly 1 in yb-amp). */
 	int			n_safekeepers;
 	/* Safekeepers walproposer is connecting to. */
 	Safekeeper	safekeeper[MAX_SAFEKEEPERS];
@@ -814,36 +666,15 @@ typedef struct WalProposer
 	/* WAL has been generated up to this point */
 	XLogRecPtr	availableLsn;
 
-	/* cached GetAcknowledgedByQuorumWALPosition result. yb-mode: ≡ flush_lsn */
-	/* of the (sole) SK; used to gate compute visibility. */
+	/* yb-mode: ≡ flush_lsn of the (sole) SK; used to gate compute visibility. */
 	XLogRecPtr	commitLsn;
 
 	ProposerGreeting greetRequest;
 
-	/* Vote request for safekeeper */
-	VoteRequest voteRequest;
-
-	/* yb-mode: truncateLsn removed (no peer-recovery in single-SK mode). */
-
-	/*
-	 * Term of the proposer. We want our term to be highest and unique, so we
-	 * collect terms from safekeepers quorum, choose max and +1. After that
-	 * our term is fixed and must not change. If we observe that some
-	 * safekeeper has higher term, it means that we have another running
-	 * compute, so we must stop immediately.
-	 */
-	term_t		propTerm;
-
-	/* term history of the proposer */
-	TermHistory propTermHistory;
-
-	/* epoch start lsn of the proposer */
+	/* point from which the proposer resumes streaming (= the SK's flush_lsn) */
 	XLogRecPtr	propTermStartLsn;
 
-	/* Most advanced acceptor epoch */
-	term_t		donorLastLogTerm;
-
-	/* Most advanced acceptor */
+	/* The (sole) safekeeper we stream to. */
 	Safekeeper *donor;
 
 	/* timeline globally starts at this LSN */

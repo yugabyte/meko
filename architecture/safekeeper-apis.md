@@ -42,9 +42,9 @@ below.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/v1/branch` | Create a branch. Body = `TimelineCreateRequest` (`branch_id`, `pg_version`, optional `system_id`, `wal_seg_size`, `mconf`, `start_lsn`). Defaults: `system_id=0`, `wal_seg_size=WAL_SEGMENT_SIZE`. |
+| POST | `/v1/branch` | Create a branch. Body = `TimelineCreateRequest` (`branch_id`, `pg_version`, optional `system_id`, `wal_seg_size`, `start_lsn`). Defaults: `system_id=0`, `wal_seg_size=WAL_SEGMENT_SIZE`. |
 | GET | `/v1/branch` | List all non-deleted branches as `[BranchId]`. Global scope. |
-| GET | `/v1/branch/:branch_id` | Branch status: `TimelineStatus` with `mconf`, `acceptor_state` (term/epoch/term_history), `pg_info`, `flush_lsn`, `commit_lsn`, `remote_consistent_lsn`, peers, walsenders, walreceivers. In-memory values (may be lost on crash). |
+| GET | `/v1/branch/:branch_id` | Branch status: `TimelineStatus` with `pg_info`, `flush_lsn`, `commit_lsn`, `timeline_start_lsn`, `local_start_lsn`, `remote_consistent_lsn`, peers, walsenders, walreceivers. In-memory values (may be lost on crash). |
 | DELETE | `/v1/branch/:branch_id` | Deactivate a branch and remove its data dir. Query `only_local=<bool>` (default false): `DeleteLocal` vs full `Delete`. |
 
 ### Timeline maintenance / debug
@@ -61,7 +61,7 @@ below.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | PUT | `/v1/failpoints` | Configure failpoints (testing). Global scope. |
-| GET | `/v1/debug_dump` | Stream a full debug dump of SK state as `application/octet-stream`. Query toggles: `dump_all`, `dump_control_file`, `dump_memory`, `dump_disk_content`, `dump_term_history` (default true), `dump_wal_last_modified`, plus an optional `branch_id` filter. Most toggles default to the value of `dump_all` (default false). |
+| GET | `/v1/debug_dump` | Stream a full debug dump of SK state as `application/octet-stream`. Query toggles: `dump_all`, `dump_control_file`, `dump_memory`, `dump_disk_content`, `dump_wal_last_modified`, plus an optional `branch_id` filter. Most toggles default to the value of `dump_all` (default false). |
 
 ## yb-light specifics
 
@@ -86,7 +86,7 @@ connect over a libpq-style replication protocol on the `--listen-pg` port,
 handled in `safekeeper/src/handler.rs` (`parse_cmd`). Recognized commands:
 
 - `START_WAL_PUSH` — walproposer pushes WAL into the SK.
-- `START_REPLICATION [SLOT ..] [PHYSICAL] <lsn> [(term='<n>')]` — consumer
+- `START_REPLICATION [SLOT ..] [PHYSICAL] <lsn>` — consumer
   streams WAL forward from `<lsn>` (pageservers use the version-portable
   interpreted-WAL stream, `send_interpreted_wal`).
 - `IDENTIFY_SYSTEM` — system identification handshake.

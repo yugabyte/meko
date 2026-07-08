@@ -10,7 +10,6 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use http_utils::error::ApiError;
-use safekeeper_api::Term;
 use safekeeper_api::models::PeerInfo;
 use tokio::fs::{self};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, watch};
@@ -27,7 +26,7 @@ use crate::metrics::{
 
 use crate::disk_usage::GLOBAL_DISK_LIMIT_EXCEEDED;
 use crate::receive_wal::WalReceivers;
-use crate::safekeeper::{AcceptorProposerMessage, ProposerAcceptorMessage, SafeKeeper, TermLsn};
+use crate::safekeeper::{AcceptorProposerMessage, ProposerAcceptorMessage, SafeKeeper};
 use crate::send_wal::{WalSenders, WalSendersTimelineMetricValues};
 use crate::state::{TimelineMemState, TimelinePersistentState, TimelineState};
 use crate::timeline_guard::ResidenceGuard;
@@ -42,8 +41,6 @@ use crate::{SafeKeeperConf, control_file, debug_dump, timeline_manager};
 /// previously consumed `storage_broker::proto::SafekeeperTimelineInfo`.
 #[derive(Debug, Clone)]
 pub struct LocalSkInfo {
-    pub term: safekeeper_api::Term,
-    pub last_log_term: safekeeper_api::Term,
     pub flush_lsn: Lsn,
     pub commit_lsn: Lsn,
 }
@@ -99,21 +96,10 @@ impl DerefMut for WriteGuardSharedState<'_> {
 
 impl Drop for WriteGuardSharedState<'_> {
     fn drop(&mut self) {
-        let term_flush_lsn =
-            TermLsn::from((self.guard.sk.last_log_term(), self.guard.sk.flush_lsn()));
-        // yb-light: commit_lsn = flush_lsn (single-SK quorum, every flush is
+        // yb-light: commit_lsn = flush_lsn (single-SK, every flush is
         // committed). The watcher subscribers (walsenders, yb_wal) see
         // updates every time flush_lsn advances.
         let commit_lsn = self.guard.sk.flush_lsn();
-
-        let _ = self.tli.term_flush_lsn_watch_tx.send_if_modified(|old| {
-            if *old != term_flush_lsn {
-                *old = term_flush_lsn;
-                true
-            } else {
-                false
-            }
-        });
 
         let _ = self.tli.commit_lsn_watch_tx.send_if_modified(|old| {
             if *old != commit_lsn {
@@ -179,24 +165,10 @@ impl StateSK {
         }
     }
 
-    pub fn last_log_term(&self) -> Term {
-        self.state()
-            .acceptor_state
-            .get_last_log_term(self.flush_lsn())
-    }
-
     /// Close open WAL files to release FDs.
     fn close_wal_store(&mut self) {
         if let StateSK::Loaded(sk) = self {
             sk.wal_store.close();
-        }
-    }
-
-    /// Previously known as epoch_start_lsn. Needed only for reference in some APIs.
-    pub fn term_start_lsn(&self) -> Lsn {
-        match self {
-            StateSK::Loaded(sk) => sk.term_start_lsn,
-            StateSK::Empty => unreachable!(),
         }
     }
 
@@ -263,20 +235,11 @@ impl SharedState {
             bail!(TimelineError::UninitializedWalSegSize(*branch_id));
         }
 
-        // YB WAL mode forbids multi-member safekeeper configurations (see
-        // `SafeKeeperConf::is_yb_wal_mode`). Fail fast at boot if the
-        // loaded control file says otherwise — better than silently
-        // accepting a config we can't honor.
-        if conf.is_yb_wal_mode() {
-            crate::require_single_safekeeper(&control_store.mconf)?;
-        }
-
         let wal_store = YbWalStorage::new(branch_id, &control_store, yb_wal.clone()).await?;
         let sk = StateSK::Loaded(SafeKeeper::new(
             TimelineState::new(control_store),
             wal_store,
             conf.my_id,
-            conf.is_yb_wal_mode(),
         )?);
 
         Ok(Self::new(sk))
@@ -294,8 +257,6 @@ impl SharedState {
     ) -> LocalSkInfo {
         let flush_lsn = self.sk.flush_lsn();
         LocalSkInfo {
-            term: self.sk.state().acceptor_state.term,
-            last_log_term: self.sk.last_log_term(),
             flush_lsn,
             commit_lsn: flush_lsn,
         }
@@ -381,13 +342,6 @@ pub struct Timeline {
     commit_lsn_watch_tx: watch::Sender<Lsn>,
     commit_lsn_watch_rx: watch::Receiver<Lsn>,
 
-    /// Broadcasts (current term, flush_lsn) updates, walsender is interested in
-    /// them when sending in recovery mode (to walproposer or peers). Note: this
-    /// is just a notification, WAL reading should always done with lock held as
-    /// term can change otherwise.
-    term_flush_lsn_watch_tx: watch::Sender<TermLsn>,
-    term_flush_lsn_watch_rx: watch::Receiver<TermLsn>,
-
     /// Broadcasts shared state updates.
     shared_state_version_tx: watch::Sender<usize>,
     shared_state_version_rx: watch::Receiver<usize>,
@@ -435,13 +389,9 @@ impl Timeline {
         conf: Arc<SafeKeeperConf>,
         yb_wal: Option<Arc<YbWalConn>>,
     ) -> Arc<Self> {
-        // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum).
+        // yb-light: commit_lsn ≡ flush_lsn (single-SK).
         let (commit_lsn_watch_tx, commit_lsn_watch_rx) =
             watch::channel(shared_state.sk.flush_lsn());
-        let (term_flush_lsn_watch_tx, term_flush_lsn_watch_rx) = watch::channel(TermLsn::from((
-            shared_state.sk.last_log_term(),
-            shared_state.sk.flush_lsn(),
-        )));
         let (shared_state_version_tx, shared_state_version_rx) = watch::channel(0);
 
         let walreceivers = WalReceivers::new();
@@ -451,8 +401,6 @@ impl Timeline {
             timeline_dir: timeline_dir.to_owned(),
             commit_lsn_watch_tx,
             commit_lsn_watch_rx,
-            term_flush_lsn_watch_tx,
-            term_flush_lsn_watch_rx,
             shared_state_version_tx,
             shared_state_version_rx,
             mutex: RwLock::new(shared_state),
@@ -727,11 +675,6 @@ impl Timeline {
         Ok(Some(AcceptorProposerMessage::AppendResponse(resp)))
     }
 
-    /// Returns term_flush_lsn watch channel.
-    pub fn get_term_flush_lsn_watch_rx(&self) -> watch::Receiver<TermLsn> {
-        self.term_flush_lsn_watch_rx.clone()
-    }
-
     /// Returns watch channel for SharedState update version.
     pub fn get_state_version_rx(&self) -> watch::Receiver<usize> {
         self.shared_state_version_rx.clone()
@@ -801,7 +744,6 @@ impl Timeline {
             num_computes: self.walreceivers.get_num() as u32,
             last_removed_segno: self.last_removed_segno.load(Ordering::Relaxed),
             interpreted_wal_reader_tasks,
-            epoch_start_lsn: state.sk.term_start_lsn(),
             mem_state: state.sk.state().inmem.clone(),
             persisted_state: TimelinePersistentState::clone(state.sk.state()),
             flush_lsn: state.sk.flush_lsn(),
@@ -823,7 +765,6 @@ impl Timeline {
             active: self.broker_active.load(Ordering::Relaxed),
             num_computes: self.walreceivers.get_num() as u32,
             last_removed_segno: self.last_removed_segno.load(Ordering::Relaxed),
-            epoch_start_lsn: state.sk.term_start_lsn(),
             mem_state: state.sk.state().inmem.clone(),
             mgr_status: self.mgr_status.get(),
             write_lsn,
@@ -977,19 +918,6 @@ impl WalResidentTimeline {
             return flush_lsn == Lsn(0) || reported_remote_consistent_lsn >= flush_lsn;
         }
         false
-    }
-
-    /// Ensure that current term is t, erroring otherwise, and lock the state.
-    pub async fn acquire_term(&self, t: Term) -> Result<ReadGuardSharedState> {
-        let ss = self.read_shared_state().await;
-        if ss.sk.state().acceptor_state.term != t {
-            bail!(
-                "failed to acquire term {}, current term {}",
-                t,
-                ss.sk.state().acceptor_state.term
-            );
-        }
-        Ok(ss)
     }
 
     // Check if disk usage by WAL segment files for this timeline exceeds the configured limit.

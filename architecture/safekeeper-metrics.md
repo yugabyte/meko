@@ -91,7 +91,6 @@ and reset each scrape.
 | --- | --- | --- |
 | `safekeeper_commit_lsn` | GaugeVec | Current commit_lsn. **yb-light: ≡ `flush_lsn`** (single-SK quorum). |
 | `safekeeper_flush_lsn` | GaugeVec | Current flush_lsn. |
-| `safekeeper_epoch_start_lsn` | GaugeVec | LSN since which compute generates new WAL in the current term. |
 | `safekeeper_remote_consistent_lsn` | GaugeVec | LSN persisted to remote storage in the pageserver. |
 | `safekeeper_ps_last_received_lsn` | GaugeVec | Last LSN received by the pageserver (per feedback). |
 | `safekeeper_feedback_last_time_seconds` | GaugeVec | Unix timestamp of last pageserver feedback. |
@@ -100,7 +99,6 @@ and reset each scrape.
 | `safekeeper_timeline_active` | GaugeVec | 1 for active timelines, 0 for inactive. |
 | `safekeeper_connected_computes` | IntGaugeVec | Active compute connections. |
 | `safekeeper_disk_usage_bytes` | GaugeVec | Estimated disk space used by WAL segments. |
-| `safekeeper_acceptor_term` | GaugeVec | Current consensus term. |
 | `safekeeper_written_wal_bytes_total` | GaugeVec | WAL bytes written to disk. |
 | `safekeeper_written_wal_seconds_total` | GaugeVec | Total time in `write(2)` writing WAL. |
 | `safekeeper_flushed_wal_seconds_total` | GaugeVec | Total time in `fsync(2)` flushing WAL. |

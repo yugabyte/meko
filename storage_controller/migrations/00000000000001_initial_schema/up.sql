@@ -224,9 +224,10 @@ CREATE TABLE pageserver.timeline_state (
 --
 -- Column choice: hot-update LSN scalars get their own BIGINT
 -- columns so a control-file save is a column-scoped UPDATE rather
--- than a 400-byte blob rewrite. Slow-update structures (`mconf`,
--- `term_history`) go in JSONB so their internal Rust-side shape can
--- evolve without an SQL migration.
+-- than a full-row rewrite. yb-amp runs a single safekeeper per branch
+-- with WAL durability provided by YugabyteDB, so the inherited Neon
+-- consensus state (term / term_history) and membership (mconf) have
+-- been removed entirely.
 CREATE TABLE safekeeper.timeline_state (
     branch_id              TEXT        NOT NULL,
     timeline_start_lsn     BIGINT      NOT NULL,
@@ -235,10 +236,6 @@ CREATE TABLE safekeeper.timeline_state (
     pg_version             INT         NOT NULL,
     system_id              BIGINT      NOT NULL,
     wal_seg_size           INT         NOT NULL,
-    term                   BIGINT      NOT NULL,
-    term_history           JSONB       NOT NULL,
-    proposer_uuid          BYTEA       NOT NULL,
-    mconf                  JSONB       NOT NULL,
     creation_ts            TIMESTAMPTZ NOT NULL,
     PRIMARY KEY ((branch_id) HASH)
 );

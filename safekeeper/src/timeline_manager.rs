@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use futures::channel::oneshot;
 use postgres_ffi::XLogSegNo;
-use safekeeper_api::Term;
 use safekeeper_api::models::PeerInfo;
 use serde::{Deserialize, Serialize};
 use tokio::task::{JoinError, JoinHandle};
@@ -41,8 +40,6 @@ pub(crate) struct StateSnapshot {
 
     // latest state
     pub(crate) flush_lsn: Lsn,
-    #[allow(dead_code)]
-    pub(crate) last_log_term: Term,
 
     // misc
     pub(crate) cfile_last_persist_at: std::time::Instant,
@@ -60,7 +57,6 @@ impl StateSnapshot {
             remote_consistent_lsn: state.inmem.remote_consistent_lsn,
             cfile_remote_consistent_lsn: state.remote_consistent_lsn,
             flush_lsn: read_guard.sk.flush_lsn(),
-            last_log_term: read_guard.sk.last_log_term(),
             cfile_last_persist_at: state.pers.last_persist_at(),
             inmem_flush_pending: Self::has_unflushed_inmem_state(state),
             wal_removal_on_hold: read_guard.wal_removal_on_hold,

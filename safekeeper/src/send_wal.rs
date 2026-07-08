@@ -5,7 +5,7 @@ use std::cmp::{max, min};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{Context as AnyhowContext, bail};
+use anyhow::Context as AnyhowContext;
 use bytes::{Bytes, BytesMut};
 use futures::FutureExt;
 use itertools::Itertools;
@@ -14,7 +14,6 @@ use postgres_backend::{CopyStreamHandlerEnd, PostgresBackend, PostgresBackendRea
 use postgres_ffi::{MAX_SEND_SIZE, PgMajorVersion};
 use postgres_ffi_types::TimestampTz;
 use pq_proto::BeMessage;
-use safekeeper_api::Term;
 use safekeeper_api::models::{
     HotStandbyFeedback, INVALID_FULL_TRANSACTION_ID, ReplicationFeedback, StandbyFeedback,
     StandbyReply,
@@ -30,7 +29,6 @@ use utils::postgres_client::PostgresClientProtocol;
 use crate::handler::SafekeeperPostgresHandler;
 use crate::metrics::RECEIVED_PS_FEEDBACKS;
 use crate::receive_wal::WalReceivers;
-use crate::safekeeper::TermLsn;
 use crate::send_interpreted_wal::{
     Batch, InterpretedWalReader, InterpretedWalReaderHandle, InterpretedWalSender,
 };
@@ -437,19 +435,18 @@ impl SafekeeperPostgresHandler {
         &mut self,
         pgb: &mut PostgresBackend<IO>,
         start_pos: Lsn,
-        term: Option<Term>,
     ) -> Result<(), QueryError> {
         let tli = self.global_timelines.get(self.branch_id)?;
         let residence_guard = tli.wal_residence_guard().await?;
 
         if let Err(end) = self
-            .handle_start_replication_guts(pgb, start_pos, term, residence_guard)
+            .handle_start_replication_guts(pgb, start_pos, residence_guard)
             .await
         {
             let info = tli.get_safekeeper_info(&self.conf).await;
             // Log the result and probably send it to the client, closing the stream.
             pgb.handle_copy_stream_end(end)
-            .instrument(info_span!("", term=%info.term, last_log_term=%info.last_log_term, flush_lsn=%info.flush_lsn, commit_lsn=%info.commit_lsn))
+            .instrument(info_span!("", flush_lsn=%info.flush_lsn, commit_lsn=%info.commit_lsn))
             .await;
         }
         Ok(())
@@ -459,7 +456,6 @@ impl SafekeeperPostgresHandler {
         &mut self,
         pgb: &mut PostgresBackend<IO>,
         start_pos: Lsn,
-        term: Option<Term>,
         tli: WalResidentTimeline,
     ) -> Result<(), CopyStreamHandlerEnd> {
         let appname = self.appname.clone();
@@ -480,17 +476,9 @@ impl SafekeeperPostgresHandler {
             )),
         };
 
-        // Walsender can operate in one of two modes which we select by
-        // application_name: give only committed WAL (used by pageserver) or all
-        // existing WAL (up to flush_lsn, used by walproposer or peer recovery).
-        // The second case is always driven by a consensus leader which term
-        // must be supplied.
-        let end_watch = if term.is_some() {
-            EndWatch::Flush(tli.get_term_flush_lsn_watch_rx())
-        } else {
-            EndWatch::Commit(tli.get_commit_lsn_watch_rx())
-        };
-        // we don't check term here; it will be checked on first waiting/WAL reading anyway.
+        // yb-light: commit_lsn ≡ flush_lsn (single-SK), so the walsender
+        // always streams up to the committed frontier.
+        let end_watch = EndWatch::new(tli.get_commit_lsn_watch_rx());
         let end_pos = end_watch.get();
 
         if end_pos < start_pos {
@@ -501,10 +489,9 @@ impl SafekeeperPostgresHandler {
         }
 
         info!(
-            "starting streaming from {:?}, available WAL ends at {}, recovery={}, appname={:?}, protocol={:?}",
+            "starting streaming from {:?}, available WAL ends at {}, appname={:?}, protocol={:?}",
             start_pos,
             end_pos,
-            matches!(end_watch, EndWatch::Flush(_)),
             appname,
             self.protocol(),
         );
@@ -551,7 +538,6 @@ impl SafekeeperPostgresHandler {
 
                             let wal_stream = StreamingWalReader::new(
                                 wal_residence_guard,
-                                term,
                                 start_pos,
                                 end_pos,
                                 end_watch,
@@ -581,7 +567,6 @@ impl SafekeeperPostgresHandler {
                 } else {
                     let wal_reader = StreamingWalReader::new(
                         wal_residence_guard,
-                        term,
                         start_pos,
                         end_pos,
                         end_watch,
@@ -656,54 +641,36 @@ impl SafekeeperPostgresHandler {
     }
 }
 
-/// TODO(vlad): maybe lift this instead
-/// Walsender streams either up to commit_lsn (normally) or flush_lsn in the
-/// given term (recovery by walproposer or peer safekeeper).
+/// Walsender streams up to the commit_lsn frontier. In yb-light
+/// commit_lsn ≡ flush_lsn (single-SK), so this is also the flush frontier.
 #[derive(Clone)]
-pub(crate) enum EndWatch {
-    Commit(Receiver<Lsn>),
-    Flush(Receiver<TermLsn>),
-}
+pub(crate) struct EndWatch(Receiver<Lsn>);
 
 impl EndWatch {
+    pub(crate) fn new(rx: Receiver<Lsn>) -> Self {
+        EndWatch(rx)
+    }
+
     pub(crate) fn view(&self) -> EndWatchView {
         EndWatchView(self.clone())
     }
 
     /// Get current end of WAL.
     pub(crate) fn get(&self) -> Lsn {
-        match self {
-            EndWatch::Commit(r) => *r.borrow(),
-            EndWatch::Flush(r) => r.borrow().lsn,
-        }
+        *self.0.borrow()
     }
 
     /// Wait for the update.
     pub(crate) async fn changed(&mut self) -> anyhow::Result<()> {
-        match self {
-            EndWatch::Commit(r) => r.changed().await?,
-            EndWatch::Flush(r) => r.changed().await?,
-        }
+        self.0.changed().await?;
         Ok(())
     }
 
-    pub(crate) async fn wait_for_lsn(
-        &mut self,
-        lsn: Lsn,
-        client_term: Option<Term>,
-    ) -> anyhow::Result<Lsn> {
+    pub(crate) async fn wait_for_lsn(&mut self, lsn: Lsn) -> anyhow::Result<Lsn> {
         loop {
             let end_pos = self.get();
             if end_pos > lsn {
                 return Ok(end_pos);
-            }
-            if let EndWatch::Flush(rx) = &self {
-                let curr_term = rx.borrow().term;
-                if let Some(client_term) = client_term {
-                    if curr_term != client_term {
-                        bail!("term changed: requested {}, now {}", client_term, curr_term);
-                    }
-                }
             }
             self.changed().await?;
         }

@@ -558,7 +558,6 @@ pub struct FullTimelineInfo {
     pub last_removed_segno: XLogSegNo,
     pub interpreted_wal_reader_tasks: usize,
 
-    pub epoch_start_lsn: Lsn,
     pub mem_state: TimelineMemState,
     pub persisted_state: TimelinePersistentState,
 
@@ -573,7 +572,6 @@ pub struct TimelineCollector {
     descs: Vec<Desc>,
     commit_lsn: GenericGaugeVec<AtomicU64>,
     flush_lsn: GenericGaugeVec<AtomicU64>,
-    epoch_start_lsn: GenericGaugeVec<AtomicU64>,
     remote_consistent_lsn: GenericGaugeVec<AtomicU64>,
     ps_last_received_lsn: GenericGaugeVec<AtomicU64>,
     feedback_last_time_seconds: GenericGaugeVec<AtomicU64>,
@@ -582,7 +580,6 @@ pub struct TimelineCollector {
     timeline_active: GenericGaugeVec<AtomicU64>,
     connected_computes: IntGaugeVec,
     disk_usage: GenericGaugeVec<AtomicU64>,
-    acceptor_term: GenericGaugeVec<AtomicU64>,
     written_wal_bytes: GenericGaugeVec<AtomicU64>,
     interpreted_wal_reader_tasks: GenericGaugeVec<AtomicU64>,
     written_wal_seconds: GaugeVec,
@@ -615,16 +612,6 @@ impl TimelineCollector {
         )
         .unwrap();
         descs.extend(flush_lsn.desc().into_iter().cloned());
-
-        let epoch_start_lsn = GenericGaugeVec::new(
-            Opts::new(
-                "safekeeper_epoch_start_lsn",
-                "Point since which compute generates new WAL in the current consensus term",
-            ),
-            &["branch_id"],
-        )
-        .unwrap();
-        descs.extend(epoch_start_lsn.desc().into_iter().cloned());
 
         let remote_consistent_lsn = GenericGaugeVec::new(
             Opts::new(
@@ -704,13 +691,6 @@ impl TimelineCollector {
         .unwrap();
         descs.extend(disk_usage.desc().into_iter().cloned());
 
-        let acceptor_term = GenericGaugeVec::new(
-            Opts::new("safekeeper_acceptor_term", "Current consensus term"),
-            &["branch_id"],
-        )
-        .unwrap();
-        descs.extend(acceptor_term.desc().into_iter().cloned());
-
         let written_wal_bytes = GenericGaugeVec::new(
             Opts::new(
                 "safekeeper_written_wal_bytes_total",
@@ -777,7 +757,6 @@ impl TimelineCollector {
             descs,
             commit_lsn,
             flush_lsn,
-            epoch_start_lsn,
             remote_consistent_lsn,
             ps_last_received_lsn,
             feedback_last_time_seconds,
@@ -786,7 +765,6 @@ impl TimelineCollector {
             timeline_active,
             connected_computes,
             disk_usage,
-            acceptor_term,
             written_wal_bytes,
             written_wal_seconds,
             flushed_wal_seconds,
@@ -809,7 +787,6 @@ impl Collector for TimelineCollector {
         // reset all metrics to clean up inactive timelines
         self.commit_lsn.reset();
         self.flush_lsn.reset();
-        self.epoch_start_lsn.reset();
         self.remote_consistent_lsn.reset();
         self.ps_last_received_lsn.reset();
         self.feedback_last_time_seconds.reset();
@@ -817,7 +794,6 @@ impl Collector for TimelineCollector {
         self.timeline_active.reset();
         self.connected_computes.reset();
         self.disk_usage.reset();
-        self.acceptor_term.reset();
         self.written_wal_bytes.reset();
         self.interpreted_wal_reader_tasks.reset();
         self.written_wal_seconds.reset();
@@ -854,9 +830,6 @@ impl Collector for TimelineCollector {
             self.flush_lsn
                 .with_label_values(labels)
                 .set(tli.flush_lsn.into());
-            self.epoch_start_lsn
-                .with_label_values(labels)
-                .set(tli.epoch_start_lsn.into());
             self.remote_consistent_lsn
                 .with_label_values(labels)
                 .set(tli.mem_state.remote_consistent_lsn.into());
@@ -866,9 +839,6 @@ impl Collector for TimelineCollector {
             self.connected_computes
                 .with_label_values(labels)
                 .set(tli.num_computes as i64);
-            self.acceptor_term
-                .with_label_values(labels)
-                .set(tli.persisted_state.acceptor_state.term);
             self.written_wal_bytes
                 .with_label_values(labels)
                 .set(tli.wal_storage.write_wal_bytes);
@@ -917,7 +887,6 @@ impl Collector for TimelineCollector {
         let mut mfs = Vec::new();
         mfs.extend(self.commit_lsn.collect());
         mfs.extend(self.flush_lsn.collect());
-        mfs.extend(self.epoch_start_lsn.collect());
         mfs.extend(self.remote_consistent_lsn.collect());
         mfs.extend(self.ps_last_received_lsn.collect());
         mfs.extend(self.feedback_last_time_seconds.collect());
@@ -926,7 +895,6 @@ impl Collector for TimelineCollector {
         mfs.extend(self.timeline_active.collect());
         mfs.extend(self.connected_computes.collect());
         mfs.extend(self.disk_usage.collect());
-        mfs.extend(self.acceptor_term.collect());
         mfs.extend(self.written_wal_bytes.collect());
         mfs.extend(self.interpreted_wal_reader_tasks.collect());
         mfs.extend(self.written_wal_seconds.collect());

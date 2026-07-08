@@ -23,10 +23,11 @@ The local filesystem holds only a log file and a pidfile.
 
 ### Per-branch state
 
-- **Control file**: 388 B binary blob holding the consensus state (`term`,
-  `vote`, peer set, `commit_lsn`, `backup_lsn`, `peer_horizon_lsn`,
-  `remote_consistent_lsn`, `eviction_state`, etc.). Atomically renamed
-  (`safekeeper.control.partial` → `safekeeper.control`) per update.
+- **Control file**: originally a 388 B binary blob holding consensus state
+  (`term`, `vote`, peer set, `commit_lsn`, `backup_lsn`, …). In yb-amp the
+  inherited Neon consensus (terms/voting) and membership were removed
+  entirely (see "Changes in yb-light" §1 and §5), so the surviving durable
+  per-branch state is just a handful of LSN scalars + server info.
 - **WAL segments**: vanilla Postgres XLog 16 MiB segment files named
   `XLogFileName(PG_TLI, segno, wal_seg_size)` → e.g.
   `000000010000000000000001`.
@@ -59,7 +60,8 @@ Surviving background work:
   slot)>` plus one branch-tombstone slot, not `HashMap`s;
   `init()` loads only the baked branch, never the whole shared table. The
   external API (`get`, `get_all` → `Vec`, `timelines_count`, …) is unchanged.
-- `safekeeper/src/safekeeper.rs` — the consensus state machine.
+- `safekeeper/src/safekeeper.rs` — the acceptor: greeting handshake, WAL
+  truncate-on-elected, and append/flush handling (consensus/membership removed, §5).
 - `safekeeper/src/bin/yb-safekeeper.rs` — entry point; reads
   `<datadir>/safekeeper.toml` into `SafeKeeperConf` (only `-D`/`--init`/
   `--dump-control-file` are CLI flags).
@@ -87,10 +89,6 @@ CREATE TABLE safekeeper.timeline_state (
     pg_version             INT      NOT NULL,
     system_id              BIGINT   NOT NULL,
     wal_seg_size           INT      NOT NULL,
-    term                   BIGINT   NOT NULL,
-    term_history           JSONB    NOT NULL,        -- Vec<{term, lsn}>
-    proposer_uuid          BYTEA    NOT NULL,        -- 16 bytes
-    mconf                  JSONB    NOT NULL,        -- membership Configuration
     creation_ts            TIMESTAMPTZ NOT NULL,
     PRIMARY KEY ((branch_id) HASH)
 );
@@ -99,7 +97,10 @@ CREATE TABLE safekeeper.timeline_state (
 The `commit_lsn` / `backup_lsn` / `peer_horizon_lsn` / `partial_backup` /
 `eviction_state` columns from the original #10 design were dropped
 once their in-memory counterparts went away (`a8fe507cb`, plus the
-`commit_lsn` / `peer_horizon_lsn` removals in earlier sessions).
+`commit_lsn` / `peer_horizon_lsn` removals in earlier sessions). The
+`term` / `term_history` (consensus) and `proposer_uuid` / `mconf`
+(membership) columns were dropped when the inherited Neon consensus and
+membership were removed wholesale — see §5.
 
 - `persist()` is an UPSERT against the row, scoped via `YsqlClient`.
 - `SharedState::restore` and `Timeline::load_timeline` are `async` to
@@ -186,15 +187,14 @@ return                              │
   timeline shared_state write lock, and an unbounded wait there
   starves the manager and wedges the whole timeline — timing out
   drops the connection and releases the lock instead.
-- **Async durability acks are gated on election.** The acceptor's
+- **Async durability acks must not precede the greeting.** The acceptor's
   durability-watch branch (emit an `AppendResponse` as the watermark
-  advances) marks the watch seen at subscription and only arms after
-  `ProposerElected` is processed. A fresh clone of the watch carries a
-  stale seen-version, so its `changed()` fires immediately — and the
-  unbiased select could put an `AppendResponse` on the wire before the
-  `AcceptorGreeting`, which the walproposer treats as fatal during the
-  handshake. That race produced a permanent reconnect storm (commits
-  frozen); regression-guarded by the `sk_split_churn` slow e2e
+  advances) marks the watch seen at subscription. A fresh clone of the
+  watch carries a stale seen-version, so its `changed()` fires immediately
+  — and the unbiased select could put an `AppendResponse` on the wire
+  before the `AcceptorGreeting`, which the walproposer treats as fatal
+  during the handshake. That race produced a permanent reconnect storm
+  (commits frozen); regression-guarded by the `sk_split_churn` slow e2e
   scenario.
 - **`chunk_offset`** (the chunk's byte offset within its segment) is the
   in-segment identity — the writer never produces overlapping chunks
@@ -364,42 +364,53 @@ next segment — rather than failing with a WAL-hole; a gap that is *not*
 switch padding still surfaces as a decode error, never silently zero-filled
 (#181).
 
-### 5. Single-safekeeper constraint in YB WAL mode
+### 5. Consensus and membership removed (single safekeeper per branch)
 
 YB itself is a quorum-replicated store. The safekeeper's Raft acceptor
-exists to give Neon's local-FS storage durability + replication. Once WAL
-lives in YB, layering Paxos on top of YB would be double consensus — two
-protocols racing on different LSN views, harder semantics, no extra
-safety.
+existed to give Neon's local-FS storage durability + replication. Once WAL
+lives in YB, layering Paxos on top would be double consensus — two
+protocols racing on different LSN views, harder semantics, no extra safety.
 
-The yb-light build therefore **requires exactly one safekeeper per
-branch** when `yb_storage_conn` is configured (the membership configuration
-must have a single member). Multiple safekeeper *processes* may run on
-a host — the per-endpoint topology gives each branch its own dedicated
-safekeeper — but each branch's membership is always one safekeeper.
-The enforcement is in two places:
+yb-amp therefore runs **exactly one safekeeper per branch** and the
+inherited Neon consensus (terms, voting, term-history reconciliation) and
+membership (`mconf` / generation / `require_single_safekeeper`) have been
+**removed entirely** from both ends of the proposer↔acceptor wire protocol
+— the C walproposer (`pgxn/yb_amp/`) and the Rust safekeeper
+(`safekeeper/src/safekeeper.rs`). That protocol is used only between those
+two (hardcoded v3, no external consumers), so the removal is a clean
+lock-step change. What survives is the WAL **truncate-on-(re)connect**
+handshake:
 
-- **Boot**: `SharedState::restore` loads the control file, and if YB WAL
-  mode is on (`SafeKeeperConf::is_yb_wal_mode()`), calls
-  `require_single_safekeeper(&control_store.mconf)`. Fails fast at startup
-  if the persisted membership has > 1 member or a joint configuration
-  with > 1 new members.
-- **Runtime**: `SafeKeeper::process_greeting` (which handles every
-  walproposer `ProposerGreeting`) calls the same check on `msg.mconf`
-  before passing it to `state.membership_switch`. A walproposer that
-  tries to add a sibling safekeeper gets a hard error response.
+- `ProposerGreeting` (P→A): `branch_id`, `pg_version`, `system_id`,
+  `wal_seg_size`.
+- `AcceptorGreeting` (A→P): `node_id` + **`flush_lsn`** — the safekeeper's
+  end-of-WAL. There is no voting round; the greeting alone "elects" the
+  walproposer, which resumes streaming at `flush_lsn`.
+- `ProposerElected` (P→A): just `start_streaming_at`. `handle_elected`
+  truncates the safekeeper's WAL to it, seeds `timeline_start_lsn` /
+  `local_start_lsn` (from `start_streaming_at` on the first election, where
+  it equals the timeline's WAL start), and force-flushes the control file
+  so `sync-safekeepers` polls a durable, aligned LSN.
+- `AppendRequest` (P→A): `begin_lsn`, `end_lsn`, WAL bytes.
+- `AppendResponse` (A→P): `flush_lsn` + hot-standby / pageserver feedback.
 
-The check itself is `require_single_safekeeper` in `safekeeper/src/lib.rs`:
-allows `len == 0` (pre-generations / empty configs) and `len == 1`; rejects
-anything larger with a descriptive error pointing at the redundant-consensus
-issue.
+**Correctness note.** In the single-SK case the walproposer's old
+term-history divergence computation already degenerated to
+`start_streaming_at = donor.flush_lsn`, so the truncate point is unchanged;
+only the machinery that computed it is gone. The `handle_append_request`
+`write_lsn` gap/rewrite guards are retained. The basebackup cross-check in
+the walproposer's `ProcessPropStartPos` is kept but adapted: it now PANICs
+(retake basebackup) only when the safekeeper's end-of-WAL is *behind* the
+basebackup redo start — a genuine gap. A resume point *ahead* of the
+basebackup is the normal reconnect/restart case (single compute lineage, so
+no competing proposer), replacing the old term-based "was this my term?"
+escape hatch, which was always true for a single SK.
 
-Unit tests in `yb_light_tests` cover: empty config accepted, single-member
-accepted, two-member rejected, joint config with two new members rejected.
+Multiple safekeeper *processes* still run on a host — the per-endpoint
+topology gives each branch its own dedicated safekeeper — but each branch is
+served by exactly one.
 
-**Single-branch identity (one branch per process).** The
-single-safekeeper constraint above is about *membership* (one acceptor per
-branch); this is its dual on the *process* side: one safekeeper process
+**Single-branch identity (one branch per process).** One safekeeper process
 serves exactly one `branch_id` for its lifetime, baked into
 `safekeeper.toml`'s `branch_id` (`SafeKeeperConf::yb_branch_id`,
 required in YB-WAL mode). It matters because `safekeeper.timeline_state` is shared across the

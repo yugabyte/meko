@@ -20,7 +20,7 @@ the replication link (what LSN the pageserver sends in
    (`safekeeper.wals` chunks).
 3. **Streaming protocol** — walsender positions, interpreted-WAL batch
    bounds, standby feedback.
-4. **Ephemeral / derived** — term switches, GC horizon, broker activity.
+4. **Ephemeral / derived** — GC horizon, broker activity.
 
 ```mermaid
 flowchart LR
@@ -69,10 +69,7 @@ Authoritative current column list is `COLUMNS` in
 | `timeline_start_lsn` | Earliest LSN this timeline conceptually covers (branch/bootstrap point). Set on first `ProposerElected` if still zero. |
 | `local_start_lsn` | Earliest LSN this **safekeeper node** has contiguous WAL from. Set to `start_streaming_at` on election. |
 | `remote_consistent_lsn` | Oldest checkpoint the pageserver has durably ingested — **do not delete WAL at or above this** from the pageserver's perspective. Fed by `PageserverFeedback.remote_consistent_lsn`. |
-| `term` (BIGINT) + `term_history` (JSONB `Vec<TermLsn>`) | Raft acceptor state: current term + the term-switch LSN trail. |
 | `pg_version`, `system_id`, `wal_seg_size` | Server info, set at timeline create; immutable thereafter. |
-| `proposer_uuid` (BYTEA, 16 B) | Last *elected* proposer's id — monitoring only, not load-bearing. |
-| `mconf` (JSONB) | Membership `Configuration` — generation + safekeeper set. |
 | `creation_ts` (TIMESTAMPTZ) | When the row was first inserted. |
 
 **In-memory overlay** (`TimelineMemState`):
@@ -86,8 +83,9 @@ Authoritative current column list is `COLUMNS` in
 **Not persisted as separate columns** (gone or in-memory only):
 - `commit_lsn` — alias of `flush_lsn` in yb-light.
 - `backup_lsn`, `peer_horizon_lsn` — removed with S3 offloader.
-- `term_start_lsn` — in-memory field on `SafeKeeper` struct only
-  (epoch start for current proposer term).
+- `term` / `term_history` / `proposer_uuid` / `mconf` — removed with the
+  consensus + membership layer (single safekeeper per branch; see
+  `safekeeper.md` §5).
 
 ---
 
@@ -134,14 +132,15 @@ to the raw max wedges the safekeeper (#181).
 
 ---
 
-## Consensus / proposer LSNs
+## Proposer resume LSN
+
+Consensus (terms/voting) and membership were removed — yb-amp runs a single
+safekeeper per branch (see `safekeeper.md` §5). The only proposer-side LSN left
+is the resume point.
 
 | LSN | Storage | Role |
 |-----|---------|------|
-| `start_streaming_at` | Message only (`ProposerElected`) | Where walproposer wants to start appending; SK truncates WAL here after finding common term history. Must be `≥ flush_lsn` (yb-light: don't truncate durable tail). |
-| `term_start_lsn` | `SafeKeeper` in-memory | LSN of current term's first record; set from elected proposer's term history. Triggers control-file sync when `flush_lsn` crosses it. |
-| `term_history` | Persisted JSONB | `(term, lsn)` switches; `find_highest_common_point` picks resume/truncation point with proposer. |
-| `last_log_term` | Derived | Term of WAL at `flush_lsn` from term history. |
+| `start_streaming_at` | Message only (`ProposerElected`) | Where the walproposer resumes appending; the SK truncates WAL here. Derived from the SK's `flush_lsn` (reported in the `AcceptorGreeting`), so in steady state it equals the SK's end-of-WAL. Must be `≥ flush_lsn` (yb-light: don't truncate durable tail). |
 
 ---
 
@@ -161,9 +160,9 @@ yet in YB — and a subsequent crash would lose them.
 Safekeeper accepts the requested LSN and streams forward:
 
 ```rust
-// send_wal.rs — pageserver path (no term)
-let end_watch = EndWatch::Commit(tli.get_commit_lsn_watch_rx());
-// end_pos = flush_lsn (yb-light)
+// send_wal.rs — single commit-frontier watch (yb-light)
+let end_watch = EndWatch::new(tli.get_commit_lsn_watch_rx());
+// end_pos = commit_lsn = flush_lsn (yb-light)
 ```
 
 If `start_pos > end_pos`, streaming starts anyway (logged as info) —
@@ -200,14 +199,15 @@ self.tli.update_remote_consistent_lsn(ps_feedback.remote_consistent_lsn).await;
 
 ## Compute / walproposer streaming
 
+All consumers (pageserver, walproposer, replicas) use a single `end_watch`
+over the commit-frontier watch; there is no term-gated recovery variant.
+
 | Mode | `end_watch` | `available_wal_end_lsn` |
 |------|-------------|-------------------------|
-| Recovery / peer (term supplied) | `EndWatch::Flush` (term + flush_lsn) | `flush_lsn` |
-| Pageserver (no term) | `EndWatch::Commit` | `commit_lsn` (= `flush_lsn`) |
+| All consumers | `EndWatch` (commit_lsn watch) | `commit_lsn` (= `flush_lsn`) |
 
-Walproposer receives `AppendResponse` with `flush_lsn`, `commit_lsn`
-(collapsed), and `hs_feedback` (hot-standby xmin hints aggregated from
-standby replicas).
+Walproposer receives `AppendResponse` with `flush_lsn` and `hs_feedback`
+(hot-standby xmin hints aggregated from standby replicas).
 
 ---
 
@@ -313,8 +313,11 @@ interval), SK retains extra WAL — safe, not data loss.
    now carry the same durable, gap-free value from
    `Timeline::get_consistent_lsn()`; the duplicate wire field is
    kept for SK protocol back-compat.
-4. **Multi-SK / quorum paths** still exist in wire format but yb-light
-   runs single-SK; term history + membership switch are mostly vestigial.
+4. **Consensus + membership are gone.** yb-light runs a single safekeeper
+   per branch, so terms/voting, term-history reconciliation, and membership
+   were removed from both the walproposer and the safekeeper (see
+   `safekeeper.md` §5). The surviving handshake just resumes streaming at the
+   SK's `flush_lsn`.
 
 ---
 
@@ -325,10 +328,8 @@ interval), SK retains extra WAL — safe, not data loss.
 | `timeline_start_lsn` | Yes | — | — |
 | `local_start_lsn` | Yes | — | — |
 | `remote_consistent_lsn` | Yes (lagging) | — | `TimelineMemState` (live) |
-| `term` / `term_history` | Yes (JSONB) | — | — |
 | `flush_lsn` / `commit_lsn` | — | implied by chunk ends | `PhysicalStorage` |
 | WAL bytes | — | Yes (per chunk) | `WalCache` optional |
-| `term_start_lsn` | — | — | `SafeKeeper` struct |
 | Walsender positions | — | — | per-connection state |
 | Standby `apply_lsn` | — | — | `WalSenders` |
 

@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use camino_tempfile::Utf8TempDir;
 use postgres_ffi::v17::wal_generator::{LogicalMessageGenerator, WalGenerator};
-use safekeeper_api::membership::SafekeeperGeneration as Generation;
 use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
@@ -106,7 +105,7 @@ impl Env {
         let (msg_tx, msg_rx) = tokio::sync::mpsc::channel(receive_wal::MSG_QUEUE_SIZE);
         let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(receive_wal::REPLY_QUEUE_SIZE);
 
-        let end_watch = EndWatch::Commit(tli.get_commit_lsn_watch_rx());
+        let end_watch = EndWatch::new(tli.get_commit_lsn_watch_rx());
 
         WalAcceptor::spawn(tli.wal_residence_guard().await?, msg_rx, reply_tx, Some(0));
 
@@ -124,8 +123,6 @@ impl Env {
 
             let req = AppendRequest {
                 h: AppendRequestHeader {
-                    generation: Generation::new(0),
-                    term: 1,
                     begin_lsn: lsn,
                     end_lsn: lsn + record.len() as u64,
                 },

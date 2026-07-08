@@ -6,17 +6,10 @@ use serde::{Deserialize, Serialize};
 
 /// On-disk safekeeper configuration (`safekeeper.toml`).
 pub mod config;
-pub mod membership;
 /// Public API types
 pub mod models;
 
 pub use postgres_versioninfo::{PgMajorVersion, PgVersionId};
-
-/// Consensus logical timestamp. Note: it is a part of sk control file.
-pub type Term = u64;
-/// With this term timeline is created initially. It
-/// is a normal term except wp is never elected with it.
-pub const INITIAL_TERM: Term = 0;
 
 /// Information about Postgres. Safekeeper gets it once and then verifies all
 /// further connections from computes match. Note: it is a part of sk control

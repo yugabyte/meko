@@ -12,7 +12,6 @@ use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use postgres_backend::{CopyStreamHandlerEnd, PostgresBackend, PostgresBackendReader, QueryError};
 use pq_proto::BeMessage;
 use safekeeper_api::ServerInfo;
-use safekeeper_api::membership::Configuration;
 use safekeeper_api::models::{ConnectionId, WalReceiverState, WalReceiverStatus};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::error::SendTimeoutError;
@@ -209,7 +208,7 @@ impl SafekeeperPostgresHandler {
             if let Some(tli) = tli {
                 let info = tli.get_safekeeper_info(&self.conf).await;
                 handle_end_fut
-                    .instrument(info_span!("", term=%info.term, last_log_term=%info.last_log_term, flush_lsn=%info.flush_lsn, commit_lsn=%info.commit_lsn))
+                    .instrument(info_span!("", flush_lsn=%info.flush_lsn, commit_lsn=%info.commit_lsn))
                     .await;
             } else {
                 handle_end_fut.await;
@@ -347,12 +346,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> NetworkReader<'_, IO> {
                 };
                 let tli = if allow_timeline_creation {
                     self.global_timelines
-                        .create(
-                            self.branch_id,
-                            Configuration::empty(),
-                            server_info,
-                            Lsn::INVALID,
-                        )
+                        .create(self.branch_id, server_info, Lsn::INVALID)
                         .await
                         .context("create timeline")?
                 } else {

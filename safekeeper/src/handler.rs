@@ -11,7 +11,6 @@ use postgres_backend::{PostgresBackend, QueryError};
 use postgres_ffi::PG_TLI;
 use pq_proto::{BeMessage, FeStartupPacket, INT4_OID, RowDescriptor, TEXT_OID};
 use regex::Regex;
-use safekeeper_api::Term;
 use safekeeper_api::models::ConnectionId;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{Instrument, debug, info, info_span};
@@ -55,7 +54,6 @@ enum SafekeeperPostgresCommand {
     },
     StartReplication {
         start_lsn: Lsn,
-        term: Option<Term>,
     },
     IdentifySystem,
     TimelineStatus,
@@ -107,8 +105,7 @@ fn parse_cmd(cmd: &str) -> anyhow::Result<SafekeeperPostgresCommand> {
         })
     } else if cmd.starts_with("START_REPLICATION") {
         let re = Regex::new(
-            // We follow postgres START_REPLICATION LOGICAL options to pass term.
-            r"START_REPLICATION(?: SLOT [^ ]+)?(?: PHYSICAL)? ([[:xdigit:]]+/[[:xdigit:]]+)(?: \(term='(\d+)'\))?",
+            r"START_REPLICATION(?: SLOT [^ ]+)?(?: PHYSICAL)? ([[:xdigit:]]+/[[:xdigit:]]+)",
         )
         .unwrap();
         let caps = re
@@ -116,12 +113,7 @@ fn parse_cmd(cmd: &str) -> anyhow::Result<SafekeeperPostgresCommand> {
             .context(format!("failed to parse START_REPLICATION command {cmd}"))?;
         let start_lsn =
             Lsn::from_str(&caps[1]).context("parse start LSN from START_REPLICATION command")?;
-        let term = if let Some(m) = caps.get(2) {
-            Some(m.as_str().parse::<u64>().context("invalid term")?)
-        } else {
-            None
-        };
-        Ok(SafekeeperPostgresCommand::StartReplication { start_lsn, term })
+        Ok(SafekeeperPostgresCommand::StartReplication { start_lsn })
     } else if cmd.starts_with("IDENTIFY_SYSTEM") {
         Ok(SafekeeperPostgresCommand::IdentifySystem)
     } else if cmd.starts_with("TIMELINE_STATUS") {
@@ -289,8 +281,8 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
                         .instrument(info_span!("WAL receiver"))
                         .await
                 }
-                SafekeeperPostgresCommand::StartReplication { start_lsn, term } => {
-                    self.handle_start_replication(pgb, start_lsn, term)
+                SafekeeperPostgresCommand::StartReplication { start_lsn } => {
+                    self.handle_start_replication(pgb, start_lsn)
                         .instrument(info_span!("WAL sender"))
                         .await
                 }

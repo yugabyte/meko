@@ -10,8 +10,7 @@ use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
 
-use crate::membership::{Configuration, SafekeeperGeneration};
-use crate::{ServerInfo, Term};
+use crate::ServerInfo;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SafekeeperStatus {
@@ -21,7 +20,6 @@ pub struct SafekeeperStatus {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TimelineCreateRequest {
     pub branch_id: BranchId,
-    pub mconf: Configuration,
     pub pg_version: PgVersionId,
     pub system_id: Option<u64>,
     // By default WAL_SEGMENT_SIZE
@@ -33,30 +31,11 @@ pub struct TimelineCreateRequest {
     pub commit_lsn: Option<Lsn>,
 }
 
-/// Same as TermLsn, but serializes LSN using display serializer
-/// in Postgres format, i.e. 0/FFFFFFFF. Used only for the API response.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct TermSwitchApiEntry {
-    pub term: Term,
-    pub lsn: Lsn,
-}
-
-/// Augment AcceptorState with last_log_term for convenience
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AcceptorStateStatus {
-    pub term: Term,
-    pub epoch: Term, // aka last_log_term, old `epoch` name is left for compatibility
-    pub term_history: Vec<TermSwitchApiEntry>,
-}
-
 /// Things safekeeper should know about timeline state on peers.
 /// Used as both model and internally.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerInfo {
     pub sk_id: NodeId,
-    pub term: Term,
-    /// Term of the last entry.
-    pub last_log_term: Term,
     /// LSN of the last record.
     pub flush_lsn: Lsn,
     pub commit_lsn: Lsn,
@@ -184,8 +163,6 @@ pub enum WalReceiverStatus {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TimelineStatus {
     pub branch_id: BranchId,
-    pub mconf: Configuration,
-    pub acceptor_state: AcceptorStateStatus,
     pub pg_info: ServerInfo,
     pub flush_lsn: Lsn,
     pub timeline_start_lsn: Lsn,
@@ -207,13 +184,4 @@ pub type TenantDeleteResult = std::collections::HashMap<String, TimelineDeleteRe
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SafekeeperUtilization {
     pub timeline_count: u64,
-}
-
-/// Response to a timeline locate request.
-/// Storcon-only API.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct TimelineLocateResponse {
-    pub generation: SafekeeperGeneration,
-    pub sk_set: Vec<NodeId>,
-    pub new_sk_set: Option<Vec<NodeId>>,
 }

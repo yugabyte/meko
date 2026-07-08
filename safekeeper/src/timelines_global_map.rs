@@ -9,7 +9,6 @@ use anyhow::{Context, Result, bail};
 use camino::Utf8PathBuf;
 use camino_tempfile::Utf8TempDir;
 use safekeeper_api::ServerInfo;
-use safekeeper_api::membership::{Configuration, SafekeeperGeneration};
 use safekeeper_api::models::{SafekeeperUtilization, TimelineDeleteResult};
 use tracing::*;
 use utils::id::{BranchId, NodeId};
@@ -34,12 +33,9 @@ struct GlobalTimelinesState {
     /// [`SafeKeeperConf::yb_branch_id`]), so the registry is one slot, not a map.
     timeline: Option<(BranchId, GlobalMapTimeline)>,
 
-    /// A tombstone indicates this timeline used to exist has been deleted. These are used to prevent
-    /// on-demand timeline creation from recreating deleted timelines. This is only soft-enforced, as
-    /// this slot is dropped on restart.
-    /// The timeline might also be locally deleted (excluded) via safekeeper migration algorithm. In that case,
-    /// the tombsone contains the corresponding safekeeper generation. The pull_timeline requests with
-    /// higher generation ignore such tombstones and can recreate the timeline.
+    /// A tombstone indicates this timeline used to exist and has been deleted. These are used to
+    /// prevent on-demand timeline creation from recreating deleted timelines. This is only
+    /// soft-enforced, as this slot is dropped on restart.
     timeline_tombstone: Option<(BranchId, TimelineTombstone)>,
 
     conf: Arc<SafeKeeperConf>,
@@ -80,7 +76,7 @@ impl GlobalTimelinesState {
                 Err(TimelineError::CreationInProgress(*branch_id))
             }
             None => {
-                if self.has_tombstone(branch_id, None) {
+                if self.has_tombstone(branch_id) {
                     Err(TimelineError::Deleted(*branch_id))
                 } else {
                     Err(TimelineError::NotFound(*branch_id))
@@ -89,32 +85,11 @@ impl GlobalTimelinesState {
         }
     }
 
-    fn has_timeline_tombstone(
-        &self,
-        branch_id: &BranchId,
-        generation: Option<SafekeeperGeneration>,
-    ) -> bool {
-        let tombstone = self
-            .timeline_tombstone
+    /// Check if the state has a timeline tombstone for `branch_id`.
+    fn has_tombstone(&self, branch_id: &BranchId) -> bool {
+        self.timeline_tombstone
             .as_ref()
-            .filter(|(k, _)| k == branch_id)
-            .map(|(_, t)| t);
-        if let Some(generation) = generation {
-            tombstone.is_some_and(|t| t.is_valid(generation))
-        } else {
-            tombstone.is_some()
-        }
-    }
-
-    /// Check if the state has a timeline tombstone.
-    /// If `generation` is provided, check only for timeline tombsotnes with same or higher generation.
-    /// If `generation` is `None`, check for any timeline tombstone.
-    fn has_tombstone(
-        &self,
-        branch_id: &BranchId,
-        generation: Option<SafekeeperGeneration>,
-    ) -> bool {
-        self.has_timeline_tombstone(branch_id, generation)
+            .is_some_and(|(k, _)| k == branch_id)
     }
 
     /// Removes timeline tombstone for the given branch ID.
@@ -132,11 +107,11 @@ impl GlobalTimelinesState {
         }
     }
 
-    fn delete(&mut self, branch_id: BranchId, generation: Option<SafekeeperGeneration>) {
+    fn delete(&mut self, branch_id: BranchId) {
         if self.timeline.as_ref().is_some_and(|(k, _)| *k == branch_id) {
             self.timeline = None;
         }
-        self.timeline_tombstone = Some((branch_id, TimelineTombstone::new(generation)));
+        self.timeline_tombstone = Some((branch_id, TimelineTombstone::new()));
     }
 }
 
@@ -226,12 +201,9 @@ impl GlobalTimelines {
     pub(crate) async fn create(
         &self,
         branch_id: BranchId,
-        mconf: Configuration,
         server_info: ServerInfo,
         start_lsn: Lsn,
     ) -> Result<Arc<Timeline>> {
-        let generation = Some(mconf.generation);
-
         let (conf, _, yb_wal) = {
             let state = self.state.lock().unwrap();
             if let Ok(timeline) = state.get(&branch_id) {
@@ -239,7 +211,7 @@ impl GlobalTimelines {
                 return Ok(timeline);
             }
 
-            if state.has_tombstone(&branch_id, generation) {
+            if state.has_tombstone(&branch_id) {
                 anyhow::bail!(TimelineError::Deleted(branch_id));
             }
 
@@ -253,14 +225,14 @@ impl GlobalTimelines {
 
         // TODO: currently we create only cfile. It would be reasonable to
         // immediately initialize first WAL segment as well.
-        let state = TimelinePersistentState::new(&branch_id, mconf, server_info, start_lsn)?;
+        let state = TimelinePersistentState::new(&branch_id, server_info, start_lsn)?;
         let yb_wal = yb_wal
             .clone()
             .context("control-file create requires yb_storage_conn")?;
         control_file::ControlFileStorage::create_new(yb_wal.fpu_client.clone(), &branch_id, state)
             .await?;
         let timeline = self
-            .load_temp_timeline(branch_id, &tmp_dir_path, generation)
+            .load_temp_timeline(branch_id, &tmp_dir_path)
             .await?;
         Ok(timeline)
     }
@@ -280,7 +252,6 @@ impl GlobalTimelines {
         &self,
         branch_id: BranchId,
         tmp_path: &Utf8PathBuf,
-        generation: Option<SafekeeperGeneration>,
     ) -> Result<Arc<Timeline>> {
         // Check for existence and mark that we're creating it.
         let (conf, broker_active_set, yb_wal) = {
@@ -295,15 +266,13 @@ impl GlobalTimelines {
                 _ => {}
             }
 
-            if state.has_tombstone(&branch_id, generation) {
+            if state.has_tombstone(&branch_id) {
                 // If the timeline is deleted, we refuse to recreate it.
                 // This is a safeguard against accidentally overwriting a timeline that was deleted
                 // by concurrent request.
                 anyhow::bail!(TimelineError::Deleted(branch_id));
             }
 
-            // We might have an outdated tombstone with the older generation.
-            // Remove it unconditionally.
             state.remove_timeline_tombstone(&branch_id);
 
             state.timeline = Some((branch_id, GlobalMapTimeline::CreationInProgress));
@@ -415,7 +384,7 @@ impl GlobalTimelines {
         let tli_res = {
             let state = self.state.lock().unwrap();
 
-            if state.has_timeline_tombstone(branch_id, None) {
+            if state.has_tombstone(branch_id) {
                 // Presence of a tombstone guarantees that a previous deletion has completed and there is no work to do.
                 info!("Timeline {branch_id} was already deleted");
                 return Ok(TimelineDeleteResult { dir_existed: false });
@@ -450,7 +419,7 @@ impl GlobalTimelines {
         };
 
         // Finalize deletion, by dropping Timeline objects and storing smaller tombstones.
-        self.state.lock().unwrap().delete(*branch_id, None);
+        self.state.lock().unwrap().delete(*branch_id);
 
         result
     }
@@ -506,62 +475,16 @@ pub async fn create_temp_timeline_dir(
     Ok((tli_dir, tli_dir_path))
 }
 
-/// Validate a freshly-created temp timeline by reading its control-file
-/// blob back from remote storage and checking generation bounds.
-/// Returns `(commit_lsn, flush_lsn)` which in yb-light both collapse to
-/// `timeline_start_lsn` at creation time.
-#[allow(dead_code)]
-pub async fn validate_temp_timeline(
-    _conf: &SafeKeeperConf,
-    branch_id: BranchId,
-    _path: &Utf8PathBuf,
-    generation: Option<SafekeeperGeneration>,
-    yb_wal: Option<&Arc<YbWalConn>>,
-) -> Result<(Lsn, Lsn)> {
-    let yb_wal = yb_wal
-        .cloned()
-        .context("control-file validate requires yb_storage_conn")?;
-    let control_store =
-        control_file::ControlFileStorage::restore_new(yb_wal.system_client.clone(), &branch_id)
-            .await?;
-    if control_store.server.wal_seg_size == 0 {
-        bail!("wal_seg_size is not set");
-    }
-
-    if let Some(generation) = generation {
-        if control_store.mconf.generation > generation {
-            bail!(
-                "tmp timeline generation {} is higher than expected {generation}",
-                control_store.mconf.generation
-            );
-        }
-    }
-
-    let lsn = control_store.timeline_start_lsn;
-    Ok((lsn, lsn))
-}
-
-/// A tombstone for a deleted timeline.
-/// The generation is passed with "exclude" request and stored in the tombstone.
-/// We ignore the tombstone if the request generation is higher than
-/// the tombstone generation.
-/// If the tombstone doesn't have a generation, it's considered permanent,
-/// e.g. after "delete" request.
+/// A tombstone for a deleted timeline. Held only in memory (dropped on
+/// restart) to stop on-demand re-creation of a just-deleted timeline.
 struct TimelineTombstone {
     timestamp: Instant,
-    generation: Option<SafekeeperGeneration>,
 }
 
 impl TimelineTombstone {
-    fn new(generation: Option<SafekeeperGeneration>) -> Self {
+    fn new() -> Self {
         TimelineTombstone {
             timestamp: Instant::now(),
-            generation,
         }
-    }
-
-    /// Check if the timeline is still valid for the given generation.
-    fn is_valid(&self, generation: SafekeeperGeneration) -> bool {
-        self.generation.is_none_or(|g| g >= generation)
     }
 }

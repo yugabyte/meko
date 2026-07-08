@@ -156,8 +156,6 @@ components:
         branch_id:
           type: string
           format: hex
-        acceptor_state:
-          $ref: '#/components/schemas/AcceptorStateStatus'
         flush_lsn:
           type: string
         timeline_start_lsn:
@@ -167,35 +165,6 @@ components:
         commit_lsn:
           type: string
         remote_consistent_lsn:
-          type: string
-
-    AcceptorStateStatus:
-      type: object
-      required:
-        - term
-        - epoch
-      properties:
-        term:
-          type: integer
-          minimum: 0 # kind of unsigned integer
-        epoch:
-          type: integer
-          minimum: 0 # kind of unsigned integer
-        term_history:
-          type: array
-          items:
-            $ref: '#/components/schemas/TermSwitchEntry'
-
-    TermSwitchEntry:
-      type: object
-      required:
-        - term
-        - lsn
-      properties:
-        term:
-          type: integer
-          minimum: 0 # kind of unsigned integer
-        lsn:
           type: string
 
     TimelineDeleteResult:

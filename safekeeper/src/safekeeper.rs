@@ -1,7 +1,6 @@
 //! Acceptor part of proposer-acceptor consensus algorithm.
 
-use std::cmp::{max, min};
-use std::fmt;
+use std::cmp::max;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
@@ -9,15 +8,9 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use postgres_ffi::MAX_SEND_SIZE;
 use postgres_versioninfo::{PgMajorVersion, PgVersionId};
 use pq_proto::SystemId;
-use safekeeper_api::membership::{
-    INVALID_GENERATION, MemberSet, SafekeeperGeneration as Generation, SafekeeperId,
-};
 use safekeeper_api::models::HotStandbyFeedback;
-use safekeeper_api::{Term, membership};
 use serde::{Deserialize, Serialize};
 use tracing::*;
-#[cfg(test)]
-use utils::bin_ser::BeSer;
 use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
@@ -35,215 +28,35 @@ use crate::{control_file, wal_storage};
 pub const SK_PROTO_VERSION_3: u32 = 3;
 pub const UNKNOWN_SERVER_VERSION: PgVersionId = PgVersionId::UNKNOWN;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TermLsn {
-    pub term: Term,
-    pub lsn: Lsn,
-}
-
-// Creation from tuple provides less typing (e.g. for unit tests).
-impl From<(Term, Lsn)> for TermLsn {
-    fn from(pair: (Term, Lsn)) -> TermLsn {
-        TermLsn {
-            term: pair.0,
-            lsn: pair.1,
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, PartialEq)]
-pub struct TermHistory(pub Vec<TermLsn>);
-
-impl TermHistory {
-    pub fn empty() -> TermHistory {
-        TermHistory(Vec::new())
-    }
-
-    // Parse TermHistory as n_entries followed by TermLsn pairs in network order.
-    pub fn from_bytes(bytes: &mut Bytes) -> Result<TermHistory> {
-        let n_entries = bytes
-            .get_u32_f()
-            .with_context(|| "TermHistory misses len")?;
-        let mut res = Vec::with_capacity(n_entries as usize);
-        for i in 0..n_entries {
-            let term = bytes
-                .get_u64_f()
-                .with_context(|| format!("TermHistory pos {i} misses term"))?;
-            let lsn = bytes
-                .get_u64_f()
-                .with_context(|| format!("TermHistory pos {i} misses lsn"))?
-                .into();
-            res.push(TermLsn { term, lsn })
-        }
-        Ok(TermHistory(res))
-    }
-
-    /// Return copy of self with switches happening strictly after up_to
-    /// truncated.
-    pub fn up_to(&self, up_to: Lsn) -> TermHistory {
-        let mut res = Vec::with_capacity(self.0.len());
-        for e in &self.0 {
-            if e.lsn > up_to {
-                break;
-            }
-            res.push(*e);
-        }
-        TermHistory(res)
-    }
-
-    /// Find point of divergence between leader (walproposer) term history and
-    /// safekeeper. Arguments are not symmetric as proposer history ends at
-    /// +infinity while safekeeper at flush_lsn.
-    /// C version is at walproposer SendProposerElected.
-    pub fn find_highest_common_point(
-        prop_th: &TermHistory,
-        sk_th: &TermHistory,
-        sk_wal_end: Lsn,
-    ) -> Option<TermLsn> {
-        let (prop_th, sk_th) = (&prop_th.0, &sk_th.0); // avoid .0 below
-
-        if let Some(sk_th_last) = sk_th.last() {
-            assert!(
-                sk_th_last.lsn <= sk_wal_end,
-                "safekeeper term history end {sk_th_last:?} LSN is higher than WAL end {sk_wal_end:?}"
-            );
-        }
-
-        // find last common term, if any...
-        let mut last_common_idx = None;
-        for i in 0..min(sk_th.len(), prop_th.len()) {
-            if prop_th[i].term != sk_th[i].term {
-                break;
-            }
-            // If term is the same, LSN must be equal as well.
-            assert!(
-                prop_th[i].lsn == sk_th[i].lsn,
-                "same term {} has different start LSNs: prop {}, sk {}",
-                prop_th[i].term,
-                prop_th[i].lsn,
-                sk_th[i].lsn
-            );
-            last_common_idx = Some(i);
-        }
-        let last_common_idx = last_common_idx?;
-        // Now find where it ends at both prop and sk and take min. End of
-        // (common) term is the start of the next except it is the last one;
-        // there it is flush_lsn in case of safekeeper or, in case of proposer
-        // +infinity, so we just take flush_lsn then.
-        if last_common_idx == prop_th.len() - 1 {
-            Some(TermLsn {
-                term: prop_th[last_common_idx].term,
-                lsn: sk_wal_end,
-            })
-        } else {
-            let prop_common_term_end = prop_th[last_common_idx + 1].lsn;
-            let sk_common_term_end = if last_common_idx + 1 < sk_th.len() {
-                sk_th[last_common_idx + 1].lsn
-            } else {
-                sk_wal_end
-            };
-            Some(TermLsn {
-                term: prop_th[last_common_idx].term,
-                lsn: min(prop_common_term_end, sk_common_term_end),
-            })
-        }
-    }
-}
-
-/// Display only latest entries for Debug.
-impl fmt::Debug for TermHistory {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let n_printed = 20;
-        write!(
-            fmt,
-            "{}{:?}",
-            if self.0.len() > n_printed { "... " } else { "" },
-            self.0
-                .iter()
-                .rev()
-                .take(n_printed)
-                .map(|&e| (e.term, e.lsn)) // omit TermSwitchEntry
-                .collect::<Vec<_>>()
-        )
-    }
-}
-
-/// Unique id of proposer. Not needed for correctness, used for monitoring.
-pub type PgUuid = [u8; 16];
-
-/// Persistent consensus state of the acceptor.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AcceptorState {
-    /// acceptor's last term it voted for (advanced in 1 phase)
-    pub term: Term,
-    /// History of term switches for safekeeper's WAL.
-    /// Actually it often goes *beyond* WAL contents as we adopt term history
-    /// from the proposer before recovery.
-    pub term_history: TermHistory,
-}
-
-impl AcceptorState {
-    /// acceptor's last_log_term is the term of the highest entry in the log
-    pub fn get_last_log_term(&self, flush_lsn: Lsn) -> Term {
-        let th = self.term_history.up_to(flush_lsn);
-        match th.0.last() {
-            Some(e) => e.term,
-            None => 0,
-        }
-    }
-}
-
 // protocol messages
 
 /// Initial Proposer -> Acceptor message
 #[derive(Debug, Deserialize)]
 pub struct ProposerGreeting {
     pub branch_id: BranchId,
-    pub mconf: membership::Configuration,
     /// Postgres server version
     pub pg_version: PgVersionId,
     pub system_id: SystemId,
     pub wal_seg_size: u32,
 }
 
-/// Acceptor -> Proposer initial response: the highest term known to me
-/// (acceptor voted for).
+/// Acceptor -> Proposer initial response. Carries the safekeeper's node id and
+/// its current end-of-WAL (`flush_lsn`), from which the walproposer derives the
+/// point at which it resumes streaming (and which the safekeeper truncates to).
 #[derive(Debug, Serialize)]
 pub struct AcceptorGreeting {
     node_id: NodeId,
-    mconf: membership::Configuration,
-    term: u64,
-}
-
-/// Vote request sent from proposer to safekeepers
-#[derive(Debug)]
-pub struct VoteRequest {
-    pub generation: Generation,
-    pub term: Term,
-}
-
-/// Vote itself, sent from safekeeper to proposer
-#[derive(Debug, Serialize)]
-pub struct VoteResponse {
-    generation: Generation, // membership conf generation
-    pub term: Term, // safekeeper's current term; if it is higher than proposer's, the compute is out of date.
-    vote_given: bool,
-    // Safekeeper flush_lsn (end of WAL) + history of term switches allow
-    // proposer to choose the most advanced one.
-    pub flush_lsn: Lsn,
-    pub term_history: TermHistory,
+    flush_lsn: Lsn,
 }
 
 /*
- * Proposer -> Acceptor message announcing proposer is elected and communicating
- * term history to it.
+ * Proposer -> Acceptor message announcing the proposer and communicating the
+ * point from which it will stream WAL. The safekeeper truncates its WAL beyond
+ * this point.
  */
 #[derive(Debug, Clone)]
 pub struct ProposerElected {
-    pub generation: Generation, // membership conf generation
-    pub term: Term,
     pub start_streaming_at: Lsn,
-    pub term_history: TermHistory,
 }
 
 /// Request with WAL message sent from proposer to safekeeper.
@@ -254,9 +67,6 @@ pub struct AppendRequest {
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppendRequestHeader {
-    pub generation: Generation, // membership conf generation
-    // safekeeper's current term; if it is higher than proposer's, the compute is out of date.
-    pub term: Term,
     /// start position of message in WAL
     pub begin_lsn: Lsn,
     /// end position of message in WAL
@@ -266,38 +76,16 @@ pub struct AppendRequestHeader {
 /// Report safekeeper state to proposer
 #[derive(Debug, Serialize, Clone)]
 pub struct AppendResponse {
-    // Membership conf generation. Not strictly required because on mismatch
-    // connection is reset, but let's sanity check it.
-    generation: Generation,
-    // Current term of the safekeeper; if it is higher than proposer's, the
-    // compute is out of date.
-    pub term: Term,
-    // Flushed end of wal on safekeeper; one should be always mindful from what
-    // term history this value comes, either checking history directly or
-    // observing term being set to one for which WAL truncation is known to have
-    // happened.
+    // Flushed end of wal on safekeeper.
     pub flush_lsn: Lsn,
     pub hs_feedback: HotStandbyFeedback,
     pub pageserver_feedback: Option<PageserverFeedback>,
-}
-
-impl AppendResponse {
-    fn term_only(generation: Generation, term: Term) -> AppendResponse {
-        AppendResponse {
-            generation,
-            term,
-            flush_lsn: Lsn(0),
-            hs_feedback: HotStandbyFeedback::empty(),
-            pageserver_feedback: None,
-        }
-    }
 }
 
 /// Proposer -> Acceptor messages
 #[derive(Debug)]
 pub enum ProposerAcceptorMessage {
     Greeting(ProposerGreeting),
-    VoteRequest(VoteRequest),
     Elected(ProposerElected),
     AppendRequest(AppendRequest),
     NoFlushAppendRequest(AppendRequest),
@@ -308,7 +96,6 @@ pub enum ProposerAcceptorMessage {
 /// All reads are in network (big endian) order.
 trait BytesF {
     fn get_u8_f(&mut self) -> Result<u8>;
-    fn get_u16_f(&mut self) -> Result<u16>;
     fn get_u32_f(&mut self) -> Result<u32>;
     fn get_u64_f(&mut self) -> Result<u64>;
 }
@@ -319,12 +106,6 @@ impl BytesF for Bytes {
             bail!("no bytes left, expected 1");
         }
         Ok(self.get_u8())
-    }
-    fn get_u16_f(&mut self) -> Result<u16> {
-        if self.remaining() < 2 {
-            bail!("no bytes left, expected 2");
-        }
-        Ok(self.get_u16())
     }
     fn get_u32_f(&mut self) -> Result<u32> {
         if self.remaining() < 4 {
@@ -355,65 +136,6 @@ impl ProposerAcceptorMessage {
         }
     }
 
-    /// Read membership::Configuration from Bytes.
-    fn get_mconf(buf: &mut Bytes) -> Result<membership::Configuration> {
-        let generation = Generation::new(buf.get_u32_f().with_context(|| "reading generation")?);
-        let members_len = buf.get_u32_f().with_context(|| "reading members_len")?;
-        // Main member set must have at least someone in valid configuration.
-        // Empty conf is allowed until we fully migrate.
-        if generation != INVALID_GENERATION && members_len == 0 {
-            bail!("empty members_len");
-        }
-        let mut members = MemberSet::empty();
-        for i in 0..members_len {
-            let id = buf
-                .get_u64_f()
-                .with_context(|| format!("reading member {i} node_id"))?;
-            let host = Self::get_cstr(buf).with_context(|| format!("reading member {i} host"))?;
-            let pg_port = buf
-                .get_u16_f()
-                .with_context(|| format!("reading member {i} port"))?;
-            let sk = SafekeeperId {
-                id: NodeId(id),
-                host,
-                pg_port,
-            };
-            members.add(sk)?;
-        }
-        let new_members_len = buf.get_u32_f().with_context(|| "reading new_members_len")?;
-        // Non joint conf.
-        if new_members_len == 0 {
-            Ok(membership::Configuration {
-                generation,
-                members,
-                new_members: None,
-            })
-        } else {
-            let mut new_members = MemberSet::empty();
-            for i in 0..new_members_len {
-                let id = buf
-                    .get_u64_f()
-                    .with_context(|| format!("reading new member {i} node_id"))?;
-                let host =
-                    Self::get_cstr(buf).with_context(|| format!("reading new member {i} host"))?;
-                let pg_port = buf
-                    .get_u16_f()
-                    .with_context(|| format!("reading new member {i} port"))?;
-                let sk = SafekeeperId {
-                    id: NodeId(id),
-                    host,
-                    pg_port,
-                };
-                new_members.add(sk)?;
-            }
-            Ok(membership::Configuration {
-                generation,
-                members,
-                new_members: Some(new_members),
-            })
-        }
-    }
-
     /// Parse proposer message. yb-light only supports v3; v2 was
     /// dropped in Phase 9 Wave 2.
     pub fn parse(mut msg_bytes: Bytes, proto_version: u32) -> Result<ProposerAcceptorMessage> {
@@ -432,7 +154,6 @@ impl ProposerAcceptorMessage {
                     let branch_id_str =
                         Self::get_cstr(&mut msg_bytes).with_context(|| "reading branch_id")?;
                     let branch_id = BranchId::from_str(&branch_id_str)?;
-                    let mconf = Self::get_mconf(&mut msg_bytes)?;
                     let pg_version = msg_bytes
                         .get_u32_f()
                         .with_context(|| "reading pg_version")?;
@@ -442,50 +163,21 @@ impl ProposerAcceptorMessage {
                         .with_context(|| "reading wal_seg_size")?;
                     let g = ProposerGreeting {
                         branch_id,
-                        mconf,
                         pg_version: PgVersionId::from_full_pg_version(pg_version),
                         system_id,
                         wal_seg_size,
                     };
                     Ok(ProposerAcceptorMessage::Greeting(g))
                 }
-                'v' => {
-                    let generation = Generation::new(
-                        msg_bytes
-                            .get_u32_f()
-                            .with_context(|| "reading generation")?,
-                    );
-                    let term = msg_bytes.get_u64_f().with_context(|| "reading term")?;
-                    let v = VoteRequest { generation, term };
-                    Ok(ProposerAcceptorMessage::VoteRequest(v))
-                }
                 'e' => {
-                    let generation = Generation::new(
-                        msg_bytes
-                            .get_u32_f()
-                            .with_context(|| "reading generation")?,
-                    );
-                    let term = msg_bytes.get_u64_f().with_context(|| "reading term")?;
                     let start_streaming_at: Lsn = msg_bytes
                         .get_u64_f()
                         .with_context(|| "reading start_streaming_at")?
                         .into();
-                    let term_history = TermHistory::from_bytes(&mut msg_bytes)?;
-                    let msg = ProposerElected {
-                        generation,
-                        term,
-                        start_streaming_at,
-                        term_history,
-                    };
+                    let msg = ProposerElected { start_streaming_at };
                     Ok(ProposerAcceptorMessage::Elected(msg))
                 }
                 'a' => {
-                    let generation = Generation::new(
-                        msg_bytes
-                            .get_u32_f()
-                            .with_context(|| "reading generation")?,
-                    );
-                    let term = msg_bytes.get_u64_f().with_context(|| "reading term")?;
                     let begin_lsn: Lsn = msg_bytes
                         .get_u64_f()
                         .with_context(|| "reading begin_lsn")?
@@ -494,12 +186,7 @@ impl ProposerAcceptorMessage {
                         .get_u64_f()
                         .with_context(|| "reading end_lsn")?
                         .into();
-                    let hdr = AppendRequestHeader {
-                        generation,
-                        term,
-                        begin_lsn,
-                        end_lsn,
-                    };
+                    let hdr = AppendRequestHeader { begin_lsn, end_lsn };
                     let rec_size = hdr
                         .end_lsn
                         .checked_sub(hdr.begin_lsn)
@@ -540,15 +227,11 @@ impl ProposerAcceptorMessage {
         size += match self {
             Self::Greeting(_) => 0,
 
-            Self::VoteRequest(_) => 0,
-
             Self::Elected(_) => 0,
 
             Self::AppendRequest(AppendRequest {
                 h:
                     AppendRequestHeader {
-                        generation: _,
-                        term: _,
                         begin_lsn: _,
                         end_lsn: _,
                     },
@@ -558,8 +241,6 @@ impl ProposerAcceptorMessage {
             Self::NoFlushAppendRequest(AppendRequest {
                 h:
                     AppendRequestHeader {
-                        generation: _,
-                        term: _,
                         begin_lsn: _,
                         end_lsn: _,
                     },
@@ -577,37 +258,10 @@ impl ProposerAcceptorMessage {
 #[derive(Debug)]
 pub enum AcceptorProposerMessage {
     Greeting(AcceptorGreeting),
-    VoteResponse(VoteResponse),
     AppendResponse(AppendResponse),
 }
 
 impl AcceptorProposerMessage {
-    fn put_cstr(buf: &mut BytesMut, s: &str) {
-        buf.put_slice(s.as_bytes());
-        buf.put_u8(0); // null terminator
-    }
-
-    /// Serialize membership::Configuration into buf.
-    fn serialize_mconf(buf: &mut BytesMut, mconf: &membership::Configuration) {
-        buf.put_u32(mconf.generation.into_inner());
-        buf.put_u32(mconf.members.m.len() as u32);
-        for sk in &mconf.members.m {
-            buf.put_u64(sk.id.0);
-            Self::put_cstr(buf, &sk.host);
-            buf.put_u16(sk.pg_port);
-        }
-        if let Some(ref new_members) = mconf.new_members {
-            buf.put_u32(new_members.m.len() as u32);
-            for sk in &new_members.m {
-                buf.put_u64(sk.id.0);
-                Self::put_cstr(buf, &sk.host);
-                buf.put_u16(sk.pg_port);
-            }
-        } else {
-            buf.put_u32(0);
-        }
-    }
-
     /// Serialize acceptor -> proposer message. yb-light only supports
     /// v3; v2 was dropped in Phase 9 Wave 2.
     pub fn serialize(&self, buf: &mut BytesMut, proto_version: u32) -> Result<()> {
@@ -619,25 +273,10 @@ impl AcceptorProposerMessage {
                 AcceptorProposerMessage::Greeting(msg) => {
                     buf.put_u8(b'g');
                     buf.put_u64(msg.node_id.0);
-                    Self::serialize_mconf(buf, &msg.mconf);
-                    buf.put_u64(msg.term)
-                }
-                AcceptorProposerMessage::VoteResponse(msg) => {
-                    buf.put_u8(b'v');
-                    buf.put_u32(msg.generation.into_inner());
-                    buf.put_u64(msg.term);
-                    buf.put_u8(msg.vote_given as u8);
                     buf.put_u64(msg.flush_lsn.into());
-                    buf.put_u32(msg.term_history.0.len() as u32);
-                    for e in &msg.term_history.0 {
-                        buf.put_u64(e.term);
-                        buf.put_u64(e.lsn.into());
-                    }
                 }
                 AcceptorProposerMessage::AppendResponse(msg) => {
                     buf.put_u8(b'a');
-                    buf.put_u32(msg.generation.into_inner());
-                    buf.put_u64(msg.term);
                     buf.put_u64(msg.flush_lsn.into());
                     buf.put_i64(msg.hs_feedback.ts);
                     buf.put_u64(msg.hs_feedback.xmin);
@@ -662,21 +301,10 @@ impl AcceptorProposerMessage {
 /// - messages from compute (proposers) and provides replies
 /// - messages from broker peers
 pub struct SafeKeeper<CTRL: control_file::Storage, WAL: wal_storage::Storage> {
-    /// LSN since the proposer safekeeper currently talking to appends WAL;
-    /// determines last_log_term switch point.
-    pub term_start_lsn: Lsn,
-
     pub state: TimelineState<CTRL>, // persistent state storage
     pub wal_store: WAL,
 
     node_id: NodeId, // safekeeper's node id
-
-    /// When true, this safekeeper is running with YB as the durable WAL
-    /// store. YB itself replicates via Raft, so any walproposer-driven
-    /// membership change that would create a multi-safekeeper set is
-    /// rejected (would be double consensus on different LSN views).
-    /// See [`crate::require_single_safekeeper`].
-    yb_wal_mode: bool,
 }
 
 impl<CTRL, WAL> SafeKeeper<CTRL, WAL>
@@ -691,7 +319,6 @@ where
         state: TimelineState<CTRL>,
         wal_store: WAL,
         node_id: NodeId,
-        yb_wal_mode: bool,
     ) -> Result<SafeKeeper<CTRL, WAL>> {
         if state.branch_id == BranchId::from([0u8; 16]) {
             bail!(
@@ -701,29 +328,14 @@ where
         }
 
         Ok(SafeKeeper {
-            term_start_lsn: Lsn(0),
             state,
             wal_store,
             node_id,
-            yb_wal_mode,
         })
     }
 
-    /// Get history of term switches for the available WAL
-    fn get_term_history(&self) -> TermHistory {
-        self.state
-            .acceptor_state
-            .term_history
-            .up_to(self.flush_lsn())
-    }
-
-    pub fn get_last_log_term(&self) -> Term {
-        self.state
-            .acceptor_state
-            .get_last_log_term(self.flush_lsn())
-    }
-
-    /// wal_store wrapper avoiding commit_lsn <= flush_lsn violation when we don't have WAL yet.
+    /// wal_store wrapper avoiding flush_lsn < timeline_start_lsn when we don't
+    /// have WAL yet.
     pub fn flush_lsn(&self) -> Lsn {
         max(self.wal_store.flush_lsn(), self.state.timeline_start_lsn)
     }
@@ -736,7 +348,6 @@ where
     ) -> Result<Option<AcceptorProposerMessage>> {
         let res = match msg {
             ProposerAcceptorMessage::Greeting(msg) => self.handle_greeting(msg).await,
-            ProposerAcceptorMessage::VoteRequest(msg) => self.handle_vote_request(msg).await,
             ProposerAcceptorMessage::Elected(msg) => self.handle_elected(msg).await,
             ProposerAcceptorMessage::AppendRequest(msg) => {
                 self.handle_append_request(msg, true).await
@@ -813,27 +424,14 @@ where
             self.state.finish_change(&state).await?;
         }
 
-        if msg.mconf.generation > self.state.mconf.generation && !msg.mconf.contains(self.node_id) {
-            bail!(
-                "refused to switch into {}, node {} is not a member of it",
-                msg.mconf,
-                self.node_id,
-            );
-        }
-
-        // In YB WAL mode, only single-safekeeper configurations are valid
-        // (YB already replicates the WAL; multi-SK would be double consensus).
-        if self.yb_wal_mode {
-            crate::require_single_safekeeper(&msg.mconf)?;
-        }
-
-        // Switch into conf given by proposer conf if it is higher.
-        self.state.membership_switch(msg.mconf.clone()).await?;
+        // Flush everything we've already received so the walproposer resumes
+        // streaming at the end of our WAL, without overlap. On a reconnect the
+        // Elected message truncates WAL back to this point.
+        self.wal_store.flush_wal().await?;
 
         let apg = AcceptorGreeting {
             node_id: self.node_id,
-            mconf: self.state.mconf.clone(),
-            term: self.state.acceptor_state.term,
+            flush_lsn: self.flush_lsn(),
         };
         info!(
             "processed greeting {:?} from walproposer, sending {:?}",
@@ -842,50 +440,9 @@ where
         Ok(Some(AcceptorProposerMessage::Greeting(apg)))
     }
 
-    /// Give vote for the given term, if we haven't done that previously.
-    async fn handle_vote_request(
-        &mut self,
-        msg: &VoteRequest,
-    ) -> Result<Option<AcceptorProposerMessage>> {
-        if self.state.mconf.generation != msg.generation {
-            bail!(
-                "refusing {:?} due to generation mismatch: sk generation {}",
-                msg,
-                self.state.mconf.generation
-            );
-        }
-        // Once voted, we won't accept data from older proposers; flush
-        // everything we've already received so that new proposer starts
-        // streaming at end of our WAL, without overlap. WAL is truncated at
-        // streaming point and commit_lsn may be advanced from peers, so this
-        // also avoids possible spurious attempt to truncate committed WAL.
-        self.wal_store.flush_wal().await?;
-        // initialize with refusal
-        let mut resp = VoteResponse {
-            generation: self.state.mconf.generation,
-            term: self.state.acceptor_state.term,
-            vote_given: false,
-            flush_lsn: self.flush_lsn(),
-            term_history: self.get_term_history(),
-        };
-        if self.state.acceptor_state.term < msg.term {
-            let mut state = self.state.start_change();
-            state.acceptor_state.term = msg.term;
-            // persist vote before sending it out
-            self.state.finish_change(&state).await?;
-
-            resp.term = self.state.acceptor_state.term;
-            resp.vote_given = true;
-        }
-        info!("processed {:?}: sending {:?}", msg, &resp);
-        Ok(Some(AcceptorProposerMessage::VoteResponse(resp)))
-    }
-
     /// Form AppendResponse from current state.
     fn append_response(&self) -> AppendResponse {
         let ar = AppendResponse {
-            generation: self.state.mconf.generation,
-            term: self.state.acceptor_state.term,
             flush_lsn: self.flush_lsn(),
             // will be filled by the upper code to avoid bothering safekeeper
             hs_feedback: HotStandbyFeedback::empty(),
@@ -904,77 +461,21 @@ where
             .start_timer();
 
         info!(
-            "received ProposerElected {:?}, term={}, last_log_term={}, flush_lsn={}",
+            "received ProposerElected {:?}, flush_lsn={}",
             msg,
-            self.state.acceptor_state.term,
-            self.get_last_log_term(),
             self.flush_lsn()
         );
-        if self.state.mconf.generation != msg.generation {
-            bail!(
-                "refusing {:?} due to generation mismatch: sk generation {}",
-                msg,
-                self.state.mconf.generation
-            );
-        }
-        if self.state.acceptor_state.term < msg.term {
-            let mut state = self.state.start_change();
-            state.acceptor_state.term = msg.term;
-            self.state.finish_change(&state).await?;
-        }
 
-        // If our term is higher, ignore the message (next feedback will inform the compute)
-        if self.state.acceptor_state.term > msg.term {
-            return Ok(None);
-        }
-
-        // Before truncating WAL check-cross the check divergence point received
-        // from the walproposer.
-        let sk_th = self.get_term_history();
-        let last_common_point = match TermHistory::find_highest_common_point(
-            &msg.term_history,
-            &sk_th,
-            self.flush_lsn(),
-        ) {
-            // No common point. Expect streaming from the beginning of the
-            // history like walproposer while we don't have proper init.
-            None => *msg.term_history.0.first().ok_or(anyhow::anyhow!(
-                "empty walproposer term history {:?}",
-                msg.term_history
-            ))?,
-            Some(lcp) => lcp,
-        };
-        // This is expected to happen in a rare race when another connection
-        // from the same walproposer writes + flushes WAL after this connection
-        // sent flush_lsn in VoteRequest; for instance, very late
-        // ProposerElected message delivery after another connection was
-        // established and wrote WAL. In such cases error is transient;
-        // reconnection makes safekeeper send newest term history and flush_lsn
-        // and walproposer recalculates the streaming point. OTOH repeating
-        // error indicates a serious bug.
-        if last_common_point.lsn != msg.start_streaming_at {
-            bail!(
-                "refusing ProposerElected with unexpected truncation point: lcp={:?} start_streaming_at={}, term={}, sk_th={:?} flush_lsn={}, wp_th={:?}",
-                last_common_point,
-                msg.start_streaming_at,
-                self.state.acceptor_state.term,
-                sk_th,
-                self.flush_lsn(),
-                msg.term_history,
-            );
-        }
-
-        // We are also expected to never attempt to truncate committed data.
+        // We are expected to never attempt to truncate committed data.
         // yb-light: commit_lsn ≡ flush_lsn, so the invariant is identical to
-        // "don't truncate before our durable end-of-WAL".
+        // "don't truncate before our durable end-of-WAL". The walproposer
+        // derives `start_streaming_at` from the `flush_lsn` we reported in the
+        // greeting, so in steady state this is exactly our end-of-WAL.
         assert!(
             msg.start_streaming_at >= self.flush_lsn(),
-            "attempt to truncate committed data: start_streaming_at={}, flush_lsn={}, term={}, sk_th={:?}, wp_th={:?}",
+            "attempt to truncate committed data: start_streaming_at={}, flush_lsn={}",
             msg.start_streaming_at,
             self.flush_lsn(),
-            self.state.acceptor_state.term,
-            sk_th,
-            msg.term_history,
         );
 
         // Before first WAL write initialize its segment. It makes first segment
@@ -992,62 +493,41 @@ where
         // truncate wal, update the LSNs
         self.wal_store.truncate_wal(msg.start_streaming_at).await?;
 
-        // and now adopt term history from proposer
         {
             let mut state = self.state.start_change();
 
-            // Here we learn initial LSN for the first time, set fields
-            // interested in that.
-
-            if let Some(start_lsn) = msg.term_history.0.first() {
-                if state.timeline_start_lsn == Lsn(0) {
-                    // Remember point where WAL begins globally. In the future it
-                    // will be intialized immediately on timeline creation.
-                    state.timeline_start_lsn = start_lsn.lsn;
-                    info!(
-                        "setting timeline_start_lsn to {:?}",
-                        state.timeline_start_lsn
-                    );
-                }
+            // Here we learn the initial LSN for the first time. On the very
+            // first election `start_streaming_at` is the timeline's WAL start
+            // (previously carried as `term_history[0].lsn`).
+            if state.timeline_start_lsn == Lsn(0) {
+                state.timeline_start_lsn = msg.start_streaming_at;
+                info!(
+                    "setting timeline_start_lsn to {:?}",
+                    state.timeline_start_lsn
+                );
             }
 
             if state.local_start_lsn == Lsn(0) {
                 state.local_start_lsn = msg.start_streaming_at;
                 info!("setting local_start_lsn to {:?}", state.local_start_lsn);
             }
-            // yb-light: commit_lsn collapsed to flush_lsn; nothing to seed.
 
             // Seed remote_consistent_lsn at the timeline start so that
             // post-restart catch-up doesn't read a pre-timeline LSN.
             state.remote_consistent_lsn =
                 max(state.remote_consistent_lsn, state.timeline_start_lsn);
 
-            state.acceptor_state.term_history = msg.term_history.clone();
             self.state.finish_change(&state).await?;
         }
 
+        // Force a control-file sync at the truncation/resume point so
+        // `postgres --sync-safekeepers` polls a durable, aligned LSN.
+        // (Replaces the old term-crossing fsync trigger.)
+        self.state.flush().await?;
+
         info!("start receiving WAL since {:?}", msg.start_streaming_at);
 
-        // Cache LSN where term starts to immediately fsync control file with
-        // commit_lsn once we reach it -- sync-safekeepers finishes when
-        // persisted commit_lsn on majority of safekeepers aligns.
-        self.term_start_lsn = match msg.term_history.0.last() {
-            None => bail!("proposer elected with empty term history"),
-            Some(term_lsn_start) => term_lsn_start.lsn,
-        };
-
         Ok(None)
-    }
-
-    /// If a write/flush moved `flush_lsn` across `term_start_lsn`, force a
-    /// control-file sync — walproposer in sync-safekeepers mode polls for
-    /// this.
-    async fn maybe_sync_on_term_crossing(&mut self, prev_flush: Lsn) -> Result<()> {
-        let flush_lsn = self.flush_lsn();
-        if flush_lsn >= self.term_start_lsn && prev_flush < self.term_start_lsn {
-            self.state.flush().await?;
-        }
-        Ok(())
     }
 
     /// Handle request to append WAL.
@@ -1057,32 +537,6 @@ where
         msg: &AppendRequest,
         require_flush: bool,
     ) -> Result<Option<AcceptorProposerMessage>> {
-        // Refuse message on generation mismatch. On reconnect wp will get full
-        // configuration from greeting.
-        if self.state.mconf.generation != msg.h.generation {
-            bail!(
-                "refusing append request due to generation mismatch: request {}, sk {}",
-                msg.h.generation,
-                self.state.mconf.generation
-            );
-        }
-
-        if self.state.acceptor_state.term < msg.h.term {
-            bail!("got AppendRequest before ProposerElected");
-        }
-
-        // If our term is higher, immediately refuse the message. Send term only
-        // response; elected walproposer can never advance the term, so it will
-        // figure out the refusal from it -- which is important as term change
-        // should cause not just reconnection but whole walproposer re-election.
-        if self.state.acceptor_state.term > msg.h.term {
-            let resp = AppendResponse::term_only(
-                self.state.mconf.generation,
-                self.state.acceptor_state.term,
-            );
-            return Ok(Some(AcceptorProposerMessage::AppendResponse(resp)));
-        }
-
         // Disallow any non-sequential writes, which can result in gaps or
         // overwrites. If we need to move the pointer, ProposerElected message
         // should have truncated WAL first accordingly. Note that the first
@@ -1107,9 +561,6 @@ where
             );
         }
 
-        // Now we know that we are in the same term as the proposer, process the
-        // message.
-
         // do the job
         if !msg.wal_data.is_empty() {
             self.wal_store
@@ -1121,11 +572,6 @@ where
         if require_flush {
             self.wal_store.flush_wal().await?;
         }
-
-        // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum). The
-        // walproposer's `msg.h.commit_lsn` / `msg.h.truncate_lsn` are
-        // Sync the control file if this write crossed the term boundary.
-        self.maybe_sync_on_term_crossing(flush_lsn).await?;
 
         trace!(
             "processed AppendRequest of len {}, begin_lsn={}, end_lsn={:?}, flushed={:?}",
@@ -1179,9 +625,7 @@ mod tests {
     use futures::future::BoxFuture;
     use postgres_ffi::{WAL_SEGMENT_SIZE, XLogSegNo};
     use safekeeper_api::ServerInfo;
-    use safekeeper_api::membership::{
-        Configuration, MemberSet, SafekeeperGeneration, SafekeeperId,
-    };
+    use utils::bin_ser::BeSer;
 
     use super::*;
     use crate::state::TimelinePersistentState;
@@ -1258,143 +702,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_voting() {
-        let storage = InMemoryState {
-            persisted_state: test_sk_state(),
-        };
-        let wal_store = DummyWalStore { lsn: Lsn(0) };
-        let mut sk =
-            SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
-
-        // Vote with generation mismatch should be rejected.
-        let gen_mismatch_vote_request = ProposerAcceptorMessage::VoteRequest(VoteRequest {
-            generation: SafekeeperGeneration::new(42),
-            term: 1,
-        });
-        assert!(sk.process_msg(&gen_mismatch_vote_request).await.is_err());
-
-        // check voting for 1 is ok
-        let vote_request = ProposerAcceptorMessage::VoteRequest(VoteRequest {
-            generation: Generation::new(0),
-            term: 1,
-        });
-        let mut vote_resp = sk.process_msg(&vote_request).await;
-        match vote_resp.unwrap() {
-            Some(AcceptorProposerMessage::VoteResponse(resp)) => assert!(resp.vote_given),
-            r => panic!("unexpected response: {r:?}"),
-        }
-
-        // reboot...
-        let state = sk.state.deref().clone();
-        let storage = InMemoryState {
-            persisted_state: state,
-        };
-
-        sk = SafeKeeper::new(TimelineState::new(storage), sk.wal_store, NodeId(0), false).unwrap();
-
-        // and ensure voting second time for 1 is not ok
-        vote_resp = sk.process_msg(&vote_request).await;
-        match vote_resp.unwrap() {
-            Some(AcceptorProposerMessage::VoteResponse(resp)) => assert!(!resp.vote_given),
-            r => panic!("unexpected response: {r:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_last_log_term_switch() {
-        let storage = InMemoryState {
-            persisted_state: test_sk_state(),
-        };
-        let wal_store = DummyWalStore { lsn: Lsn(0) };
-
-        let mut sk =
-            SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
-
-        let mut ar_hdr = AppendRequestHeader {
-            generation: Generation::new(0),
-            term: 2,
-            begin_lsn: Lsn(1),
-            end_lsn: Lsn(2),
-        };
-        let mut append_request = AppendRequest {
-            h: ar_hdr.clone(),
-            wal_data: Bytes::from_static(b"b"),
-        };
-
-        let pem = ProposerElected {
-            generation: Generation::new(0),
-            term: 2,
-            start_streaming_at: Lsn(1),
-            term_history: TermHistory(vec![
-                TermLsn {
-                    term: 1,
-                    lsn: Lsn(1),
-                },
-                TermLsn {
-                    term: 2,
-                    lsn: Lsn(3),
-                },
-            ]),
-        };
-
-        // check that elected msg with generation mismatch is rejected
-        let mut pem_gen_mismatch = pem.clone();
-        pem_gen_mismatch.generation = SafekeeperGeneration::new(42);
-        assert!(
-            sk.process_msg(&ProposerAcceptorMessage::Elected(pem_gen_mismatch))
-                .await
-                .is_err()
-        );
-
-        sk.process_msg(&ProposerAcceptorMessage::Elected(pem))
-            .await
-            .unwrap();
-
-        // check that AppendRequest before term_start_lsn doesn't switch last_log_term.
-        sk.process_msg(&ProposerAcceptorMessage::AppendRequest(append_request))
-            .await
-            .unwrap();
-        assert_eq!(sk.get_last_log_term(), 1);
-
-        // but record at term_start_lsn does the switch
-        ar_hdr.begin_lsn = Lsn(2);
-        ar_hdr.end_lsn = Lsn(3);
-        append_request = AppendRequest {
-            h: ar_hdr,
-            wal_data: Bytes::from_static(b"b"),
-        };
-        sk.process_msg(&ProposerAcceptorMessage::AppendRequest(append_request))
-            .await
-            .unwrap();
-        assert_eq!(sk.get_last_log_term(), 2);
-    }
-
-    #[tokio::test]
     async fn test_non_consecutive_write() {
         let storage = InMemoryState {
             persisted_state: test_sk_state(),
         };
         let wal_store = DummyWalStore { lsn: Lsn(0) };
 
-        let mut sk =
-            SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0), false).unwrap();
+        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0)).unwrap();
 
         let pem = ProposerElected {
-            generation: Generation::new(0),
-            term: 1,
             start_streaming_at: Lsn(1),
-            term_history: TermHistory(vec![TermLsn {
-                term: 1,
-                lsn: Lsn(1),
-            }]),
         };
         sk.process_msg(&ProposerAcceptorMessage::Elected(pem))
             .await
             .unwrap();
 
         let ar_hdr = AppendRequestHeader {
-            generation: Generation::new(0),
-            term: 1,
             begin_lsn: Lsn(1),
             end_lsn: Lsn(2),
         };
@@ -1402,21 +725,6 @@ mod tests {
             h: ar_hdr.clone(),
             wal_data: Bytes::from_static(b"b"),
         };
-
-        // check that append request with generation mismatch is rejected
-        let mut ar_hdr_gen_mismatch = ar_hdr.clone();
-        ar_hdr_gen_mismatch.generation = SafekeeperGeneration::new(42);
-        let append_request_gen_mismatch = AppendRequest {
-            h: ar_hdr_gen_mismatch,
-            wal_data: Bytes::from_static(b"b"),
-        };
-        assert!(
-            sk.process_msg(&ProposerAcceptorMessage::AppendRequest(
-                append_request_gen_mismatch
-            ))
-            .await
-            .is_err()
-        );
 
         // do write ending at 2, it should be ok
         sk.process_msg(&ProposerAcceptorMessage::AppendRequest(append_request))
@@ -1426,7 +734,7 @@ mod tests {
         ar_hrd2.begin_lsn = Lsn(4);
         ar_hrd2.end_lsn = Lsn(5);
         let append_request = AppendRequest {
-            h: ar_hdr,
+            h: ar_hrd2,
             wal_data: Bytes::from_static(b"b"),
         };
         // and now starting at 4, it must fail
@@ -1436,97 +744,14 @@ mod tests {
     }
 
     #[test]
-    fn test_find_highest_common_point_none() {
-        let prop_th = TermHistory(vec![(0, Lsn(1)).into()]);
-        let sk_th = TermHistory(vec![(1, Lsn(1)).into(), (2, Lsn(2)).into()]);
-        assert_eq!(
-            TermHistory::find_highest_common_point(&prop_th, &sk_th, Lsn(3),),
-            None
-        );
-    }
-
-    #[test]
-    fn test_find_highest_common_point_middle() {
-        let prop_th = TermHistory(vec![
-            (1, Lsn(10)).into(),
-            (2, Lsn(20)).into(),
-            (4, Lsn(40)).into(),
-        ]);
-        let sk_th = TermHistory(vec![
-            (1, Lsn(10)).into(),
-            (2, Lsn(20)).into(),
-            (3, Lsn(30)).into(), // sk ends last common term 2 at 30
-        ]);
-        assert_eq!(
-            TermHistory::find_highest_common_point(&prop_th, &sk_th, Lsn(40),),
-            Some(TermLsn {
-                term: 2,
-                lsn: Lsn(30),
-            })
-        );
-    }
-
-    #[test]
-    fn test_find_highest_common_point_sk_end() {
-        let prop_th = TermHistory(vec![
-            (1, Lsn(10)).into(),
-            (2, Lsn(20)).into(), // last common term 2, sk will end it at 32 sk_end_lsn
-            (4, Lsn(40)).into(),
-        ]);
-        let sk_th = TermHistory(vec![(1, Lsn(10)).into(), (2, Lsn(20)).into()]);
-        assert_eq!(
-            TermHistory::find_highest_common_point(&prop_th, &sk_th, Lsn(32),),
-            Some(TermLsn {
-                term: 2,
-                lsn: Lsn(32),
-            })
-        );
-    }
-
-    #[test]
-    fn test_find_highest_common_point_walprop() {
-        let prop_th = TermHistory(vec![(1, Lsn(10)).into(), (2, Lsn(20)).into()]);
-        let sk_th = TermHistory(vec![(1, Lsn(10)).into(), (2, Lsn(20)).into()]);
-        assert_eq!(
-            TermHistory::find_highest_common_point(&prop_th, &sk_th, Lsn(32),),
-            Some(TermLsn {
-                term: 2,
-                lsn: Lsn(32),
-            })
-        );
-    }
-
-    #[test]
     fn test_sk_state_bincode_serde_roundtrip() {
         let branch_id = BranchId::from_str("112ded66422aa5e953e5440fa5427ac4").unwrap();
         let state = TimelinePersistentState {
             branch_id,
-            mconf: Configuration {
-                generation: SafekeeperGeneration::new(42),
-                members: MemberSet::new(vec![SafekeeperId {
-                    id: NodeId(1),
-                    host: "hehe.org".to_owned(),
-                    pg_port: 5432,
-                }])
-                .expect("duplicate member"),
-                new_members: None,
-            },
-            acceptor_state: AcceptorState {
-                term: 42,
-                term_history: TermHistory(vec![TermLsn {
-                    lsn: Lsn(0x1),
-                    term: 41,
-                }]),
-            },
             server: ServerInfo {
                 pg_version: PgVersionId::from_full_pg_version(140000),
                 system_id: 0x1234567887654321,
                 wal_seg_size: 0x12345678,
-            },
-            proposer_uuid: {
-                let mut arr = branch_id.as_arr();
-                arr.reverse();
-                arr
             },
             timeline_start_lsn: Lsn(0x12345600),
             local_start_lsn: Lsn(0x12),

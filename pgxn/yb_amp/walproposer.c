@@ -55,12 +55,7 @@ static void SendStartWALPush(Safekeeper *sk);
 static void RecvStartWALPushResult(Safekeeper *sk);
 static void SendProposerGreeting(Safekeeper *sk);
 static void RecvAcceptorGreeting(Safekeeper *sk);
-static void SendVoteRequest(Safekeeper *sk);
-static void RecvVoteResponse(Safekeeper *sk);
-static bool VotesCollected(WalProposer *wp);
 static void HandleElectedProposer(WalProposer *wp);
-static term_t GetHighestTerm(TermHistory *th);
-static term_t GetLastLogTerm(Safekeeper *sk);
 static void ProcessPropStartPos(WalProposer *wp);
 static void SendProposerElected(Safekeeper *sk);
 static void StartStreaming(Safekeeper *sk);
@@ -77,14 +72,10 @@ static bool AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg);
 static bool BlockingWrite(Safekeeper *sk, void *msg, size_t msg_size, SafekeeperState success_state);
 static bool AsyncWrite(Safekeeper *sk, void *msg, size_t msg_size, SafekeeperState flush_state);
 static bool AsyncFlush(Safekeeper *sk);
-static int	CompareLsn(const void *a, const void *b);
 static char *FormatSafekeeperState(Safekeeper *sk);
 static void AssertEventsOkForState(uint32 events, Safekeeper *sk);
 static char *FormatEvents(WalProposer *wp, uint32 events);
 static void UpdateDonorShmem(WalProposer *wp);
-static char *MembershipConfigurationToString(MembershipConfiguration *mconf);
-static void MembershipConfigurationCopy(MembershipConfiguration *src, MembershipConfiguration *dst);
-static void MembershipConfigurationFree(MembershipConfiguration *mconf);
 
 WalProposer *
 WalProposerCreate(WalProposerConfig *config, walproposer_api api)
@@ -99,39 +90,14 @@ WalProposerCreate(WalProposerConfig *config, walproposer_api api)
 	wp->api = api;
 	wp->localTimeLineID = config->pgTimeline;
 	wp->state = WPS_COLLECTING_TERMS;
-	wp->mconf.generation = INVALID_GENERATION;
-	wp->mconf.members.len = 0;
-	wp->mconf.new_members.len = 0;
 
 	wp_log(LOG, "yb_amp.safekeepers=%s", wp->config->safekeepers_list);
 
 	/*
-	 * If safekeepers list starts with g# parse generation number followed by
-	 * :
+	 * Membership/generations were removed in yb-amp (single safekeeper per
+	 * branch), so the list is a plain comma-separated set of host:port pairs.
 	 */
-	if (strncmp(wp->config->safekeepers_list, "g#", 2) == 0)
-	{
-		char	   *endptr;
-
-		errno = 0;
-		wp->safekeepers_generation = strtoul(wp->config->safekeepers_list + 2, &endptr, 10);
-		if (errno != 0)
-		{
-			wp_log(FATAL, "failed to parse yb_amp.safekeepers generation number: %m");
-		}
-		if (*endptr != ':')
-		{
-			wp_log(FATAL, "failed to parse yb_amp.safekeepers: no colon after generation");
-		}
-		/* Skip past : to the first hostname. */
-		host = endptr + 1;
-	}
-	else
-	{
-		wp->safekeepers_generation = INVALID_GENERATION;
-		host = wp->config->safekeepers_list;
-	}
-	wp_log(LOG, "safekeepers_generation=%u", wp->safekeepers_generation);
+	host = wp->config->safekeepers_list;
 
 	for (; host != NULL && *host != '\0'; host = sep)
 	{
@@ -177,7 +143,6 @@ WalProposerCreate(WalProposerConfig *config, walproposer_api api)
 	{
 		wp_log(FATAL, "safekeepers addresses are not specified");
 	}
-	wp->quorum = wp->n_safekeepers / 2 + 1;
 
 	if (wp->config->proto_version != 3)
 		wp_log(FATAL, "unsupported safekeeper protocol version %d; only v3 is supported",
@@ -205,29 +170,15 @@ WalProposerCreate(WalProposerConfig *config, walproposer_api api)
 void
 WalProposerFree(WalProposer *wp)
 {
-	MembershipConfigurationFree(&wp->mconf);
 	for (int i = 0; i < wp->n_safekeepers; i++)
 	{
 		Safekeeper *sk = &wp->safekeeper[i];
 
 		Assert(sk->outbuf.data != NULL);
 		pfree(sk->outbuf.data);
-		MembershipConfigurationFree(&sk->greetResponse.mconf);
-		if (sk->voteResponse.termHistory.entries)
-			pfree(sk->voteResponse.termHistory.entries);
-		sk->voteResponse.termHistory.entries = NULL;
 	}
-	if (wp->propTermHistory.entries != NULL)
-		pfree(wp->propTermHistory.entries);
-	wp->propTermHistory.entries = NULL;
 
 	pfree(wp);
-}
-
-static bool
-WalProposerGenerationsEnabled(WalProposer *wp)
-{
-	return wp->safekeepers_generation != INVALID_GENERATION;
 }
 
 /*
@@ -359,11 +310,6 @@ ShutdownConnection(Safekeeper *sk)
 	/* BEGIN_HADRON */
 	sk->wp->api.update_safekeeper_status_for_metrics(sk->wp, sk->index, 0);
 	/* END_HADRON */
-
-	MembershipConfigurationFree(&sk->greetResponse.mconf);
-	if (sk->voteResponse.termHistory.entries)
-		pfree(sk->voteResponse.termHistory.entries);
-	sk->voteResponse.termHistory.entries = NULL;
 
 	sk->wp->api.conn_finish(sk);
 	sk->wp->api.rm_safekeeper_event_set(sk);
@@ -524,28 +470,12 @@ AdvancePollState(Safekeeper *sk, uint32 events)
 			break;
 
 			/*
-			 * Finish handshake comms: receive information about the
-			 * safekeeper.
+			 * Finish handshake comms: receive the safekeeper's greeting. In
+			 * yb-amp this also elects us and sends ProposerElected (there is no
+			 * voting), transitioning straight to SS_SEND_ELECTED_FLUSH.
 			 */
 		case SS_HANDSHAKE_RECV:
 			RecvAcceptorGreeting(sk);
-			break;
-
-			/*
-			 * Voting is an idle state - we don't expect any events to
-			 * trigger. Refer to the execution of SS_HANDSHAKE_RECV to see how
-			 * nodes are transferred from SS_VOTING to sending actual vote
-			 * requests.
-			 */
-		case SS_WAIT_VOTING:
-			wp_log(WARNING, "EOF from node %s:%s in %s state", sk->host,
-				   sk->port, FormatSafekeeperState(sk));
-			ResetConnection(sk);
-			return;
-
-			/* Read the safekeeper response for our candidate */
-		case SS_WAIT_VERDICT:
-			RecvVoteResponse(sk);
 			break;
 
 			/* Flush proposer announcement message */
@@ -562,15 +492,6 @@ AdvancePollState(Safekeeper *sk, uint32 events)
 			/* flush is done, event set and state will be updated later */
 			StartStreaming(sk);
 			break;
-
-			/*
-			 * Idle state for waiting votes from quorum.
-			 */
-		case SS_WAIT_ELECTED:
-			wp_log(WARNING, "EOF from node %s:%s in %s state", sk->host,
-				   sk->port, FormatSafekeeperState(sk));
-			ResetConnection(sk);
-			return;
 
 			/*
 			 * Active state is used for streaming WAL and receiving feedback.
@@ -652,8 +573,11 @@ SendStartWALPush(Safekeeper *sk)
 {
 	WalProposer *wp = sk->wp;
 
-	/* Forbid implicit timeline creation if generations are enabled. */
-	char	   *allow_timeline_creation = WalProposerGenerationsEnabled(wp) ? "false" : "true";
+	/*
+	 * yb-amp allows implicit timeline creation via the walproposer handshake
+	 * (membership/generations were removed).
+	 */
+	char	   *allow_timeline_creation = "true";
 #define CMD_LEN 512
 	char		cmd[CMD_LEN];
 
@@ -725,10 +649,8 @@ static void
 SendProposerGreeting(Safekeeper *sk)
 {
 	WalProposer *wp = sk->wp;
-	char	   *mconf_toml = MembershipConfigurationToString(&wp->greetRequest.mconf);
 
-	wp_log(LOG, "sending ProposerGreeting to safekeeper %s:%s with mconf = %s", sk->host, sk->port, mconf_toml);
-	pfree(mconf_toml);
+	wp_log(LOG, "sending ProposerGreeting to safekeeper %s:%s", sk->host, sk->port);
 
 	PAMessageSerialize(wp, (ProposerAcceptorMessage *) &wp->greetRequest,
 					   &sk->outbuf, wp->config->proto_version);
@@ -741,182 +663,17 @@ SendProposerGreeting(Safekeeper *sk)
 }
 
 /*
- * Assuming `sk` sent its node id, find such member(s) in wp->mconf and set ptr in
- * members_safekeepers & new_members_safekeepers to sk.
- */
-static void
-UpdateMemberSafekeeperPtr(WalProposer *wp, Safekeeper *sk)
-{
-	/* members_safekeepers etc are fixed size, sanity check mconf size */
-	if (wp->mconf.members.len > MAX_SAFEKEEPERS)
-		wp_log(FATAL, "too many members %d in mconf", wp->mconf.members.len);
-	if (wp->mconf.new_members.len > MAX_SAFEKEEPERS)
-		wp_log(FATAL, "too many new_members %d in mconf", wp->mconf.new_members.len);
-
-	/* node id is not known until greeting is received */
-	if (sk->state < SS_WAIT_VOTING)
-		return;
-
-	/* 0 is assumed to be invalid node id, should never happen */
-	if (sk->greetResponse.nodeId == 0)
-	{
-		wp_log(WARNING, "safekeeper %s:%s sent zero node id", sk->host, sk->port);
-		return;
-	}
-
-	for (uint32 i = 0; i < wp->mconf.members.len; i++)
-	{
-		SafekeeperId *sk_id = &wp->mconf.members.m[i];
-
-		if (sk_id->node_id == sk->greetResponse.nodeId)
-		{
-			/*
-			 * If mconf or list of safekeepers to connect to changed (the
-			 * latter always currently goes through restart though),
-			 * ResetMemberSafekeeperPtrs is expected to be called before
-			 * UpdateMemberSafekeeperPtr. So, other value suggests that we are
-			 * connected to the same sk under different host name, complain
-			 * about that.
-			 */
-			if (wp->members_safekeepers[i] != NULL && wp->members_safekeepers[i] != sk)
-			{
-				wp_log(WARNING, "safekeeper {id = %lu, ep = %s:%u } in members[%u] is already mapped to connection slot %lu",
-					   sk_id->node_id, sk_id->host, sk_id->port, i, wp->members_safekeepers[i] - wp->safekeeper);
-			}
-			wp_log(LOG, "safekeeper {id = %lu, ep = %s:%u } in members[%u] mapped to connection slot %lu",
-				   sk_id->node_id, sk_id->host, sk_id->port, i, sk - wp->safekeeper);
-			wp->members_safekeepers[i] = sk;
-		}
-	}
-	/* repeat for new_members */
-	for (uint32 i = 0; i < wp->mconf.new_members.len; i++)
-	{
-		SafekeeperId *sk_id = &wp->mconf.new_members.m[i];
-
-		if (sk_id->node_id == sk->greetResponse.nodeId)
-		{
-			if (wp->new_members_safekeepers[i] != NULL && wp->new_members_safekeepers[i] != sk)
-			{
-				wp_log(WARNING, "safekeeper {id = %lu, ep = %s:%u } in new_members[%u] is already mapped to connection slot %lu",
-					   sk_id->node_id, sk_id->host, sk_id->port, i, wp->new_members_safekeepers[i] - wp->safekeeper);
-			}
-			wp_log(LOG, "safekeeper {id = %lu, ep = %s:%u } in new_members[%u] mapped to connection slot %lu",
-				   sk_id->node_id, sk_id->host, sk_id->port, i, sk - wp->safekeeper);
-			wp->new_members_safekeepers[i] = sk;
-		}
-	}
-}
-
-/*
- * Reset wp->members_safekeepers & new_members_safekeepers and refill them.
- * Called after wp changes mconf.
- */
-static void
-ResetMemberSafekeeperPtrs(WalProposer *wp)
-{
-	memset(&wp->members_safekeepers, 0, sizeof(Safekeeper *) * MAX_SAFEKEEPERS);
-	memset(&wp->new_members_safekeepers, 0, sizeof(Safekeeper *) * MAX_SAFEKEEPERS);
-	for (int i = 0; i < wp->n_safekeepers; i++)
-	{
-		if (wp->safekeeper[i].state >= SS_WAIT_VOTING)
-			UpdateMemberSafekeeperPtr(wp, &wp->safekeeper[i]);
-	}
-}
-
-static uint32
-MsetQuorum(MemberSet *mset)
-{
-	Assert(mset->len > 0);
-	return mset->len / 2 + 1;
-}
-
-/* Does n forms quorum in mset? */
-static bool
-MsetHasQuorum(MemberSet *mset, uint32 n)
-{
-	return n >= MsetQuorum(mset);
-}
-
-/*
- * TermsCollected helper for a single member set `mset`.
+ * Receive the acceptor greeting from the (single) safekeeper.
  *
- * `msk` is the member -> safekeeper mapping for mset, i.e. members_safekeepers
- * or new_members_safekeepers.
+ * yb-amp has no elections: the greeting carries the safekeeper's node id and
+ * its end-of-WAL (flushLsn). We immediately treat this proposer as elected,
+ * resume streaming from that point, and send the ProposerElected message which
+ * truncates the safekeeper's WAL to it.
  */
-static bool
-TermsCollectedMset(WalProposer *wp, MemberSet *mset, Safekeeper **msk, StringInfo s)
-{
-	uint32		n_greeted = 0;
-
-	for (uint32 i = 0; i < mset->len; i++)
-	{
-		Safekeeper *sk = msk[i];
-
-		if (sk != NULL && sk->state == SS_WAIT_VOTING)
-		{
-			if (n_greeted > 0)
-				appendStringInfoString(s, ", ");
-			appendStringInfo(s, "{id = %lu, ep = %s:%s}", sk->greetResponse.nodeId, sk->host, sk->port);
-			n_greeted++;
-		}
-	}
-	appendStringInfo(s, ", %u/%u total", n_greeted, mset->len);
-	return MsetHasQuorum(mset, n_greeted);
-}
-
-/*
- * Have we received greeting from enough (quorum) safekeepers to start voting?
- */
-static bool
-TermsCollected(WalProposer *wp)
-{
-	StringInfoData s;			/* str for logging */
-	bool		collected = false;
-
-	/* legacy: generations disabled */
-	if (!WalProposerGenerationsEnabled(wp) && wp->mconf.generation == INVALID_GENERATION)
-	{
-		collected = wp->n_connected >= wp->quorum;
-		if (collected)
-		{
-			wp->propTerm++;
-			wp_log(LOG, "walproposer connected to quorum (%d) safekeepers, propTerm=" INT64_FORMAT ", starting voting", wp->quorum, wp->propTerm);
-		}
-		return collected;
-	}
-
-	/*
-	 * With generations enabled, we start campaign only when 1) some mconf is
-	 * actually received 2) we have greetings from majority of members as well
-	 * as from majority of new_members if it exists.
-	 */
-	if (wp->mconf.generation == INVALID_GENERATION)
-		return false;
-
-	initStringInfo(&s);
-	appendStringInfoString(&s, "mset greeters: ");
-	if (!TermsCollectedMset(wp, &wp->mconf.members, wp->members_safekeepers, &s))
-		goto res;
-	if (wp->mconf.new_members.len > 0)
-	{
-		appendStringInfoString(&s, ", new_mset greeters: ");
-		if (!TermsCollectedMset(wp, &wp->mconf.new_members, wp->new_members_safekeepers, &s))
-			goto res;
-	}
-	wp->propTerm++;
-	wp_log(LOG, "walproposer connected to quorum of safekeepers: %s, propTerm=" INT64_FORMAT ", starting voting", s.data, wp->propTerm);
-	collected = true;
-
-res:
-	pfree(s.data);
-	return collected;
-}
-
 static void
 RecvAcceptorGreeting(Safekeeper *sk)
 {
 	WalProposer *wp = sk->wp;
-	char	   *mconf_toml;
 
 	/*
 	 * If our reading doesn't immediately succeed, any necessary error
@@ -927,308 +684,25 @@ RecvAcceptorGreeting(Safekeeper *sk)
 	if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->greetResponse))
 		return;
 
-	mconf_toml = MembershipConfigurationToString(&sk->greetResponse.mconf);
-	wp_log(LOG, "received AcceptorGreeting from safekeeper %s:%s, node_id = %lu, mconf = %s, term=" UINT64_FORMAT,
-		   sk->host, sk->port, sk->greetResponse.nodeId, mconf_toml, sk->greetResponse.term);
-	pfree(mconf_toml);
+	wp_log(LOG, "received AcceptorGreeting from safekeeper %s:%s, node_id = %lu, flushLsn=%X/%X",
+		   sk->host, sk->port, sk->greetResponse.nodeId,
+		   LSN_FORMAT_ARGS(sk->greetResponse.flushLsn));
 
-	/*
-	 * Adopt mconf of safekeepers if it is higher.
-	 */
-	if (sk->greetResponse.mconf.generation > wp->mconf.generation)
-	{
-		/* sanity check before adopting, should never happen */
-		if (sk->greetResponse.mconf.members.len == 0)
-		{
-			wp_log(FATAL, "mconf %u has zero members", sk->greetResponse.mconf.generation);
-		}
-
-		/*
-		 * If we at least started campaign, restart wp to get elected in the
-		 * new mconf. Note: in principle once wp is already elected
-		 * re-election is not required, but being conservative here is not
-		 * bad.
-		 *
-		 * TODO: put mconf to shmem to immediately pick it up on start,
-		 * otherwise if some safekeeper(s) misses latest mconf and gets
-		 * connected the first, it may cause redundant restarts here.
-		 *
-		 * More generally, it would be nice to restart walproposer (wiping
-		 * election state) without restarting the process. In particular, that
-		 * would allow sync-safekeepers not to die here if it intersected with
-		 * sk migration (as well as remove 1s delay).
-		 *
-		 * Note that assign_yb_amp_safekeepers also currently restarts the
-		 * process, so during normal migration walproposer may restart twice.
-		 */
-		if (wp->state >= WPS_CAMPAIGN)
-		{
-			wp_log(FATAL, "restarting to adopt mconf generation %d", sk->greetResponse.mconf.generation);
-		}
-		MembershipConfigurationFree(&wp->mconf);
-		MembershipConfigurationCopy(&sk->greetResponse.mconf, &wp->mconf);
-		ResetMemberSafekeeperPtrs(wp);
-		/* full conf was just logged above */
-		wp_log(LOG, "changed mconf to generation %u", wp->mconf.generation);
-	}
-
-	/* Protocol is all good, move to voting. */
-	sk->state = SS_WAIT_VOTING;
-
-	/* In greeting safekeeper sent its id; update mappings accordingly. */
-	UpdateMemberSafekeeperPtr(wp, sk);
-
-	/*
-	 * Note: it would be better to track the counter on per safekeeper basis,
-	 * but at worst walproposer would restart with 'term rejected', so leave
-	 * as is for now.
-	 */
 	++wp->n_connected;
-	if (wp->state == WPS_COLLECTING_TERMS)
-	{
-		/* We're still collecting terms from the majority. */
-		wp->propTerm = Max(sk->greetResponse.term, wp->propTerm);
-
-		/* Quorum is acquired, prepare the vote request. */
-		if (TermsCollected(wp))
-		{
-			wp->state = WPS_CAMPAIGN;
-			wp->voteRequest.pam.tag = 'v';
-			wp->voteRequest.generation = wp->mconf.generation;
-			wp->voteRequest.term = wp->propTerm;
-		}
-	}
-	else if (sk->greetResponse.term > wp->propTerm)
-	{
-		/* Another compute with higher term is running. */
-		wp_log(FATAL, "WAL acceptor %s:%s with term " INT64_FORMAT " rejects our connection request with term " INT64_FORMAT "",
-			   sk->host, sk->port,
-			   sk->greetResponse.term, wp->propTerm);
-	}
 
 	/*
-	 * If we have quorum, start (or just send vote request to newly connected
-	 * node) election, otherwise wait until we have more greetings.
+	 * Single safekeeper: the greeting alone elects us. Resume streaming from
+	 * the safekeeper's end-of-WAL (which it truncates to on ProposerElected).
 	 */
-	if (wp->state == WPS_COLLECTING_TERMS)
-	{
-		/*
-		 * SS_VOTING is an idle state; read-ready indicates the connection
-		 * closed.
-		 */
-		wp->api.update_event_set(sk, WL_SOCKET_READABLE);
-	}
-	else
-	{
-		/*
-		 * Now send voting request to the cohort and wait responses
-		 */
-		for (int j = 0; j < wp->n_safekeepers; j++)
-		{
-			if (wp->safekeeper[j].state == SS_WAIT_VOTING)
-				SendVoteRequest(&wp->safekeeper[j]);
-		}
-	}
-}
-
-static void
-SendVoteRequest(Safekeeper *sk)
-{
-	WalProposer *wp = sk->wp;
-
-	PAMessageSerialize(wp, (ProposerAcceptorMessage *) &wp->voteRequest,
-					   &sk->outbuf, wp->config->proto_version);
-
-	/* We have quorum for voting, send our vote request */
-	wp_log(LOG, "requesting vote from sk {id = %lu, ep = %s:%s} for generation %u term " UINT64_FORMAT,
-		   sk->greetResponse.nodeId, sk->host, sk->port, wp->voteRequest.generation, wp->voteRequest.term);
-	/* On failure, logging & resetting is handled */
-	BlockingWrite(sk, sk->outbuf.data, sk->outbuf.len, SS_WAIT_VERDICT);
-	/* If successful, wait for read-ready with SS_WAIT_VERDICT */
-}
-
-static void
-RecvVoteResponse(Safekeeper *sk)
-{
-	WalProposer *wp = sk->wp;
-
-	Assert(wp->state >= WPS_CAMPAIGN);
-
-	sk->voteResponse.apm.tag = 'v';
-	if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->voteResponse))
-		return;
-
-	wp_log(LOG,
-		   "got VoteResponse from sk {id = %lu, ep = %s:%s}, generation=%u, term=%lu, voteGiven=%u, last_log_term=" UINT64_FORMAT ", flushLsn=%X/%X",
-		   sk->greetResponse.nodeId, sk->host, sk->port, sk->voteResponse.generation, sk->voteResponse.term,
-		   sk->voteResponse.voteGiven,
-		   GetHighestTerm(&sk->voteResponse.termHistory),
-		   LSN_FORMAT_ARGS(sk->voteResponse.flushLsn));
-
-	/*
-	 * In case of acceptor rejecting our vote, bail out, but only if either it
-	 * already lives in strictly higher term (concurrent compute spotted) or
-	 * we are not elected yet and thus need the vote.
-	 */
-	if ((!sk->voteResponse.voteGiven) &&
-		(sk->voteResponse.term > wp->propTerm || wp->state == WPS_CAMPAIGN))
-	{
-		wp_log(FATAL, "WAL acceptor %s:%s with term " INT64_FORMAT " rejects our connection request with term " INT64_FORMAT "",
-			   sk->host, sk->port,
-			   sk->voteResponse.term, wp->propTerm);
-	}
-	Assert(sk->voteResponse.term == wp->propTerm);
-
-	/* ready for elected message */
-	sk->state = SS_WAIT_ELECTED;
-
-	/* Are we already elected? */
-	if (wp->state == WPS_CAMPAIGN)
-	{
-		/* no; check if this vote makes us elected */
-		if (VotesCollected(wp))
-		{
-			wp->state = WPS_ELECTED;
-			HandleElectedProposer(wp);
-		}
-		else
-		{
-			/* can't do much yet, no quorum */
-			return;
-		}
-	}
-	else
-	{
-		Assert(wp->state == WPS_ELECTED);
-		/* send elected only to this sk */
-		SendProposerElected(sk);
-	}
+	wp->donor = sk;
+	wp->propTermStartLsn = sk->greetResponse.flushLsn;
+	wp->state = WPS_ELECTED;
+	HandleElectedProposer(wp);
 }
 
 /*
- * VotesCollected helper for a single member set `mset`.
- *
- * `msk` is the member -> safekeeper mapping for mset, i.e. members_safekeepers
- * or new_members_safekeepers.
- */
-static bool
-VotesCollectedMset(WalProposer *wp, MemberSet *mset, Safekeeper **msk, StringInfo s)
-{
-	uint32		n_votes = 0;
-
-	for (uint32 i = 0; i < mset->len; i++)
-	{
-		Safekeeper *sk = msk[i];
-
-		if (sk != NULL && sk->state == SS_WAIT_ELECTED)
-		{
-			Assert(sk->voteResponse.voteGiven);
-
-			/*
-			 * Find the highest vote. NULL check is for the legacy case where
-			 * safekeeper might be not initialized with LSN at all and return
-			 * 0 LSN in the vote response; we still want to set donor to
-			 * something in this case.
-			 */
-			if (GetLastLogTerm(sk) > wp->donorLastLogTerm ||
-				(GetLastLogTerm(sk) == wp->donorLastLogTerm &&
-				 sk->voteResponse.flushLsn > wp->propTermStartLsn) ||
-				wp->donor == NULL)
-			{
-				wp->donorLastLogTerm = GetLastLogTerm(sk);
-				wp->propTermStartLsn = sk->voteResponse.flushLsn;
-				wp->donor = sk;
-			}
-			if (n_votes > 0)
-				appendStringInfoString(s, ", ");
-			appendStringInfo(s, "{id = %lu, ep = %s:%s}", sk->greetResponse.nodeId, sk->host, sk->port);
-			n_votes++;
-		}
-	}
-	appendStringInfo(s, ", %u/%u total", n_votes, mset->len);
-	return MsetHasQuorum(mset, n_votes);
-}
-
-
-/*
- * Checks if enough votes has been collected to get elected and if that's the
- * case finds the highest vote, setting donor, donorLastLogTerm,
- * propTermStartLsn fields. Also sets truncateLsn.
- */
-static bool
-VotesCollected(WalProposer *wp)
-{
-	StringInfoData s;			/* str for logging */
-	bool		collected = false;
-
-	/* assumed to be called only when not elected yet */
-	Assert(wp->state == WPS_CAMPAIGN);
-
-	wp->propTermStartLsn = InvalidXLogRecPtr;
-	wp->donorLastLogTerm = 0;
-
-	/* legacy: generations disabled */
-	if (!WalProposerGenerationsEnabled(wp) && wp->mconf.generation == INVALID_GENERATION)
-	{
-		int			n_ready = 0;
-
-		for (int i = 0; i < wp->n_safekeepers; i++)
-		{
-			if (wp->safekeeper[i].state == SS_WAIT_ELECTED)
-			{
-				n_ready++;
-
-				if (GetLastLogTerm(&wp->safekeeper[i]) > wp->donorLastLogTerm ||
-					(GetLastLogTerm(&wp->safekeeper[i]) == wp->donorLastLogTerm &&
-					 wp->safekeeper[i].voteResponse.flushLsn > wp->propTermStartLsn) ||
-					wp->donor == NULL)
-				{
-					wp->donorLastLogTerm = GetLastLogTerm(&wp->safekeeper[i]);
-					wp->propTermStartLsn = wp->safekeeper[i].voteResponse.flushLsn;
-					wp->donor = &wp->safekeeper[i];
-				}
-			}
-		}
-		collected = n_ready >= wp->quorum;
-		if (collected)
-		{
-			wp_log(LOG, "walproposer elected with %d/%d votes", n_ready, wp->n_safekeepers);
-		}
-		return collected;
-	}
-
-	/*
-	 * if generations are enabled we're expected to get to voting only when
-	 * mconf is established.
-	 */
-	Assert(wp->mconf.generation != INVALID_GENERATION);
-
-	/*
-	 * We must get votes from both msets if both are present.
-	 */
-	initStringInfo(&s);
-	appendStringInfoString(&s, "mset voters: ");
-	if (!VotesCollectedMset(wp, &wp->mconf.members, wp->members_safekeepers, &s))
-		goto res;
-	if (wp->mconf.new_members.len > 0)
-	{
-		appendStringInfoString(&s, ", new_mset voters: ");
-		if (!VotesCollectedMset(wp, &wp->mconf.new_members, wp->new_members_safekeepers, &s))
-			goto res;
-	}
-	wp_log(LOG, "walproposer elected, %s", s.data);
-	collected = true;
-
-res:
-	pfree(s.data);
-	return collected;
-}
-
-/*
- * Called once a majority of acceptors have voted for us and current proposer
- * has been elected.
- *
- * Sends ProposerElected message to all acceptors in SS_WAIT_ELECTED state and starts
+ * Called once the (single) safekeeper has greeted us and we are the elected
+ * proposer. Computes the start position and sends ProposerElected, then starts
  * replication from walsender.
  */
 static void
@@ -1238,8 +712,8 @@ HandleElectedProposer(WalProposer *wp)
 	Assert(wp->propTermStartLsn != InvalidXLogRecPtr);
 
 	/*
-	 * Synchronously download WAL from the most advanced safekeeper. We do
-	 * that only for logical replication (and switching logical walsenders to
+	 * Synchronously download WAL from the safekeeper. We do that only for
+	 * logical replication (and switching logical walsenders to
 	 * yb_amp_walreader is a todo.)
 	 */
 	if (!wp->api.recovery_download(wp, wp->donor))
@@ -1249,55 +723,18 @@ HandleElectedProposer(WalProposer *wp)
 
 	if (wp->config->syncSafekeepers)
 	{
-		/* yb-mode: sync-safekeepers is trivially satisfied after election
-		 * because there are no peers to sync to. */
+		/*
+		 * yb-mode: sync-safekeepers is trivially satisfied after election
+		 * because there are no peers to sync to.
+		 */
 		wp->api.finish_sync_safekeepers(wp, wp->propTermStartLsn);
 		/* unreachable */
 	}
 
-	for (int i = 0; i < wp->n_safekeepers; i++)
-	{
-		if (wp->safekeeper[i].state == SS_WAIT_ELECTED)
-			SendProposerElected(&wp->safekeeper[i]);
-	}
-
-	/*
-	 * The proposer has been elected, and there will be no quorum waiting
-	 * after this point. There will be no safekeeper with state
-	 * SS_WAIT_ELECTED also, because that state is used only for quorum
-	 * waiting.
-	 */
-
-	if (wp->config->syncSafekeepers)
-	{
-		/*
-		 * Send empty message to enforce receiving feedback even from nodes
-		 * who are fully recovered; this is required to learn they switched
-		 * epoch which finishes sync-safeekepers who doesn't generate any real
-		 * new records. Will go away once we switch to async acks.
-		 */
-		BroadcastAppendRequest(wp);
-
-		/* keep polling until all safekeepers are synced */
-		return;
-	}
+	SendProposerElected(wp->donor);
 
 	wp->api.start_streaming(wp, wp->propTermStartLsn);
 	/* Should not return here */
-}
-
-/* latest term in TermHistory, or 0 is there is no entries */
-static term_t
-GetHighestTerm(TermHistory *th)
-{
-	return th->n_entries > 0 ? th->entries[th->n_entries - 1].term : 0;
-}
-
-/* safekeeper's epoch is the term of the highest entry in the log */
-static term_t
-GetLastLogTerm(Safekeeper *sk)
-{
-	return GetHighestTerm(&sk->voteResponse.termHistory);
 }
 
 /* If LSN points to the page header, skip it */
@@ -1316,29 +753,25 @@ SkipXLogPageHeader(WalProposer *wp, XLogRecPtr lsn)
 }
 
 /*
- * Called after quorum gave votes and proposer starting position (highest vote
- * term + flush LSN) -- is determined (VotesCollected true), this function
- * adopts it: pushes LSN to shmem, sets wp term history, verifies that the
- * basebackup matches.
+ * Determine the proposer's starting position and validate it against the
+ * basebackup, then push it to shmem.
+ *
+ * yb-amp: the single safekeeper's flushLsn (reported in the greeting) is the
+ * resume point. On bootstrap (flushLsn == 0) start from the basebackup LSN.
  */
 static void
 ProcessPropStartPos(WalProposer *wp)
 {
-	TermHistory *dth;
 	WalproposerShmemState *walprop_shared;
 
-	/* must have collected votes */
 	Assert(wp->state == WPS_ELECTED);
 
 	/*
-	 * If propTermStartLsn is 0, it means flushLsn is 0 everywhere, we are
-	 * bootstrapping and nothing was committed yet. Start streaming from the
+	 * If propTermStartLsn is 0 the safekeeper has no WAL yet: we are
+	 * bootstrapping and nothing was committed. Start streaming from the
 	 * basebackup LSN then.
 	 *
-	 * In case of sync-safekeepers just exit: proceeding is not only pointless
-	 * but harmful, because we'd give safekeepers term history starting with
-	 * 0/0. These hacks will go away once we disable implicit timeline
-	 * creation on safekeepers and create it with non zero LSN from the start.
+	 * In case of sync-safekeepers just exit: there is nothing to sync.
 	 */
 	if (wp->propTermStartLsn == InvalidXLogRecPtr)
 	{
@@ -1354,7 +787,6 @@ ProcessPropStartPos(WalProposer *wp)
 		}
 	}
 	pg_atomic_write_u64(&wp->api.get_shmem_state(wp)->propEpochStartLsn, wp->propTermStartLsn);
-	/* yb-mode: truncateLsn removed; no analogous assertion needed. */
 
 	/*
 	 * We will be generating WAL since propTermStartLsn, so we should set
@@ -1362,26 +794,22 @@ ProcessPropStartPos(WalProposer *wp)
 	 */
 	wp->availableLsn = wp->propTermStartLsn;
 
-	/*
-	 * Proposer's term history is the donor's + its own entry.
-	 */
-	dth = &wp->donor->voteResponse.termHistory;
-	wp->propTermHistory.n_entries = dth->n_entries + 1;
-	wp->propTermHistory.entries = palloc(sizeof(TermSwitchEntry) * wp->propTermHistory.n_entries);
-	if (dth->n_entries > 0)
-		memcpy(wp->propTermHistory.entries, dth->entries, sizeof(TermSwitchEntry) * dth->n_entries);
-	wp->propTermHistory.entries[wp->propTermHistory.n_entries - 1].term = wp->propTerm;
-	wp->propTermHistory.entries[wp->propTermHistory.n_entries - 1].lsn = wp->propTermStartLsn;
-
-	wp_log(LOG, "walproposer elected in term " UINT64_FORMAT ", epochStartLsn %X/%X, donor %s:%s",
-		   wp->propTerm,
+	wp_log(LOG, "walproposer elected, epochStartLsn %X/%X, donor %s:%s",
 		   LSN_FORMAT_ARGS(wp->propTermStartLsn),
 		   wp->donor->host, wp->donor->port);
 
 	/*
-	 * Ensure the basebackup we are running (at RedoStartLsn) matches LSN
-	 * since which we are going to write according to the consensus. If not,
-	 * we must bail out, as clog and other non rel data is inconsistent.
+	 * Ensure the safekeeper's WAL is not *behind* the basebackup we are running
+	 * (at RedoStartLsn). If it were, streaming would begin before our redo
+	 * point, leaving a gap the compute can't fill — clog and other non-rel data
+	 * would be inconsistent, so we bail out and retake the basebackup.
+	 *
+	 * The safekeeper being *ahead* is the normal reconnect/restart case: yb-amp
+	 * has a single safekeeper and thus a single compute lineage (no competing
+	 * proposer), so resuming from a point past the basebackup is a legitimate
+	 * continuation — the compute replays [redo_start, propTermStartLsn) from the
+	 * safekeeper before writing new WAL. (This replaces the old term-based
+	 * "was this my term?" escape hatch, which is always true for a single SK.)
 	 */
 	walprop_shared = wp->api.get_shmem_state(wp);
 	if (!wp->config->syncSafekeepers && !walprop_shared->replica_promote)
@@ -1392,42 +820,24 @@ ProcessPropStartPos(WalProposer *wp)
 		 * Safekeepers don't skip header as they need continious stream of
 		 * data, so correct LSN for comparison.
 		 */
-		if (SkipXLogPageHeader(wp, wp->propTermStartLsn) != wp->api.get_redo_start_lsn(wp))
+		if (SkipXLogPageHeader(wp, wp->propTermStartLsn) < wp->api.get_redo_start_lsn(wp))
 		{
 			/*
-			 * However, allow to proceed if last_log_term on the node which
-			 * gave the highest vote (i.e. point where we are going to start
-			 * writing) actually had been won by me; plain restart of
-			 * walproposer not intervened by concurrent compute which wrote
-			 * WAL is ok.
-			 *
-			 * This avoids compute crash after manual term_bump.
+			 * Panic to restart PG as we need to retake basebackup. However,
+			 * don't dump core as this is kinda expected scenario.
 			 */
-			if (!((dth->n_entries >= 1) && (dth->entries[dth->n_entries - 1].term ==
-											pg_atomic_read_u64(&walprop_shared->mineLastElectedTerm))))
-			{
-				/*
-				 * Panic to restart PG as we need to retake basebackup.
-				 * However, don't dump core as this is kinda expected
-				 * scenario.
-				 */
-				disable_core_dump();
-				wp_log(PANIC,
-					   "collected propTermStartLsn %X/%X, but basebackup LSN %X/%X",
-					   LSN_FORMAT_ARGS(wp->propTermStartLsn),
-					   LSN_FORMAT_ARGS(wp->api.get_redo_start_lsn(wp)));
-			}
+			disable_core_dump();
+			wp_log(PANIC,
+				   "safekeeper end-of-WAL %X/%X is behind basebackup LSN %X/%X",
+				   LSN_FORMAT_ARGS(wp->propTermStartLsn),
+				   LSN_FORMAT_ARGS(wp->api.get_redo_start_lsn(wp)));
 		}
 	}
-	pg_atomic_write_u64(&walprop_shared->mineLastElectedTerm, wp->propTerm);
 }
 
 /*
- * Determine for sk the starting streaming point and send it message
- * 1) Announcing we are elected proposer (which immediately advances epoch if
- *    safekeeper is synced, being important for sync-safekeepers)
- * 2) Communicating starting streaming point -- safekeeper must truncate its WAL
- *    beyond it -- and history of term switching.
+ * Send the ProposerElected message to the safekeeper, announcing the point
+ * from which we will stream (the safekeeper truncates its WAL beyond it).
  *
  * Sets sk->startStreamingAt.
  */
@@ -1436,76 +846,22 @@ SendProposerElected(Safekeeper *sk)
 {
 	WalProposer *wp = sk->wp;
 	ProposerElected msg;
-	TermHistory *th;
-	term_t		lastCommonTerm;
-	int			idx;
 
 	/* Now that we are ready to send it's a good moment to create WAL reader */
 	wp->api.wal_reader_allocate(sk);
 
-	/*
-	 * Determine start LSN by comparing safekeeper's log term switch history
-	 * and proposer's, searching for the divergence point.
-	 *
-	 * Note: there is a vanishingly small chance of no common point even if
-	 * there is some WAL on safekeeper, if immediately after bootstrap compute
-	 * wrote some WAL on single sk and died; we stream since the beginning
-	 * then.
-	 */
-	th = &sk->voteResponse.termHistory;
-
-	/* We must start somewhere. */
-	Assert(wp->propTermHistory.n_entries >= 1);
-
-	for (idx = 0; idx < Min(wp->propTermHistory.n_entries, th->n_entries); idx++)
-	{
-		if (wp->propTermHistory.entries[idx].term != th->entries[idx].term)
-			break;
-		/* term must begin everywhere at the same point */
-		Assert(wp->propTermHistory.entries[idx].lsn == th->entries[idx].lsn);
-	}
-	idx--;						/* step back to the last common term */
-	if (idx < 0)
-	{
-		/* safekeeper is empty or no common point, start from the beginning */
-		sk->startStreamingAt = wp->propTermHistory.entries[0].lsn;
-		wp_log(LOG, "no common point with sk %s:%s, streaming since first term at %X/%X, termHistory.n_entries=%u",
-			   sk->host, sk->port, LSN_FORMAT_ARGS(sk->startStreamingAt), wp->propTermHistory.n_entries);
-	}
-	else
-	{
-		/*
-		 * End of (common) term is the start of the next except it is the last
-		 * one; there it is flush_lsn in case of safekeeper or, in case of
-		 * proposer, LSN it is currently writing, but then we just pick
-		 * safekeeper pos as it obviously can't be higher.
-		 */
-		if (wp->propTermHistory.entries[idx].term == wp->propTerm)
-		{
-			sk->startStreamingAt = sk->voteResponse.flushLsn;
-		}
-		else
-		{
-			XLogRecPtr	propEndLsn = wp->propTermHistory.entries[idx + 1].lsn;
-			XLogRecPtr	skEndLsn = (idx + 1 < th->n_entries ? th->entries[idx + 1].lsn : sk->voteResponse.flushLsn);
-
-			sk->startStreamingAt = Min(propEndLsn, skEndLsn);
-		}
-	}
+	/* Single safekeeper: resume streaming at its reported end-of-WAL. */
+	sk->startStreamingAt = wp->propTermStartLsn;
 
 	Assert(sk->startStreamingAt <= wp->availableLsn);
 
 	msg.apm.tag = 'e';
-	msg.generation = wp->mconf.generation;
-	msg.term = wp->propTerm;
 	msg.startStreamingAt = sk->startStreamingAt;
-	msg.termHistory = &wp->propTermHistory;
 
-	lastCommonTerm = idx >= 0 ? wp->propTermHistory.entries[idx].term : 0;
 	wp_log(LOG,
-		   "sending elected msg to node " UINT64_FORMAT " generation=%u term=" UINT64_FORMAT ", startStreamingAt=%X/%X (lastCommonTerm=" UINT64_FORMAT "), termHistory.n_entries=%u to %s:%s",
-		   sk->greetResponse.nodeId, msg.generation, msg.term, LSN_FORMAT_ARGS(msg.startStreamingAt),
-		   lastCommonTerm, msg.termHistory->n_entries, sk->host, sk->port);
+		   "sending elected msg to node " UINT64_FORMAT ", startStreamingAt=%X/%X to %s:%s",
+		   sk->greetResponse.nodeId, LSN_FORMAT_ARGS(msg.startStreamingAt),
+		   sk->host, sk->port);
 
 	PAMessageSerialize(wp, (ProposerAcceptorMessage *) &msg, &sk->outbuf, wp->config->proto_version);
 	if (!AsyncWrite(sk, sk->outbuf.data, sk->outbuf.len, SS_SEND_ELECTED_FLUSH))
@@ -1578,11 +934,9 @@ PrepareAppendRequest(WalProposer *wp, AppendRequestHeader *req, XLogRecPtr begin
 {
 	Assert(endLsn >= beginLsn);
 	req->apm.tag = 'a';
-	req->generation = wp->mconf.generation;
-	req->term = wp->propTerm;
 	req->beginLsn = beginLsn;
 	req->endLsn = endLsn;
-	/* yb-mode: commit_lsn / truncate_lsn removed from the wire. */
+	/* yb-mode: generation / term / commit_lsn / truncate_lsn removed from the wire. */
 }
 
 /*
@@ -1787,38 +1141,11 @@ RecvAppendResponses(Safekeeper *sk)
 		if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->appendResponse))
 			break;
 
-		wp_log(DEBUG2, "received message term=" INT64_FORMAT " flushLsn=%X/%X from %s:%s",
-			   sk->appendResponse.term,
+		wp_log(DEBUG2, "received message flushLsn=%X/%X from %s:%s",
 			   LSN_FORMAT_ARGS(sk->appendResponse.flushLsn),
 			   sk->host, sk->port);
 
 		readAnything = true;
-
-		/* should never happen: sk is expected to send ERROR instead */
-		if (sk->appendResponse.generation != wp->mconf.generation)
-		{
-			wp_log(FATAL, "safekeeper {id = %lu, ep = %s:%s} sent response with generation %u, expected %u",
-				   sk->greetResponse.nodeId, sk->host, sk->port,
-				   sk->appendResponse.generation, wp->mconf.generation);
-		}
-
-		if (sk->appendResponse.term > wp->propTerm)
-		{
-			/*
-			 *
-			 * Term has changed to higher one, probably another compute is
-			 * running. If this is the case we could PANIC as well because
-			 * likely it inserted some data and our basebackup is unsuitable
-			 * anymore. However, we also bump term manually (term_bump
-			 * endpoint) on safekeepers for migration purposes, in this case
-			 * we do want compute to stay alive. So restart walproposer with
-			 * FATAL instead of panicking; if basebackup is spoiled next
-			 * election will notice this.
-			 */
-			wp_log(FATAL, "WAL acceptor %s:%s with term " INT64_FORMAT " rejected our request, our term " INT64_FORMAT ", meaning another compute is running at the same time, and it conflicts with us",
-				   sk->host, sk->port,
-				   sk->appendResponse.term, wp->propTerm);
-		}
 
 		HandleSafekeeperResponse(wp, sk);
 	}
@@ -1899,103 +1226,23 @@ ParsePageserverFeedbackMessage(WalProposer *wp, StringInfo reply_message, Pagese
 	}
 }
 
-
 /*
- * GetAcknowledgedByQuorumWALPosition for a single member set `mset`.
- *
- * `msk` is the member -> safekeeper mapping for mset, i.e. members_safekeepers
- * or new_members_safekeepers.
- */
-static XLogRecPtr
-GetCommittedMset(WalProposer *wp, MemberSet *mset, Safekeeper **msk)
-{
-	XLogRecPtr	responses[MAX_SAFEKEEPERS];
-
-	/*
-	 * Ascending sort acknowledged LSNs.
-	 */
-	Assert(mset->len <= MAX_SAFEKEEPERS);
-	for (uint32 i = 0; i < mset->len; i++)
-	{
-		Safekeeper *sk = msk[i];
-
-		/*
-		 * Like in Raft, we aren't allowed to commit entries from previous
-		 * terms, so ignore reported LSN until it gets to propTermStartLsn.
-		 *
-		 * Note: we ignore sk state, which is ok: before first ack flushLsn is
-		 * 0, and later we just preserve value across reconnections. It would
-		 * be ok to check for SS_ACTIVE as well.
-		 */
-		if (sk != NULL && sk->appendResponse.flushLsn >= wp->propTermStartLsn)
-		{
-			responses[i] = sk->appendResponse.flushLsn;
-		}
-		else
-		{
-			responses[i] = 0;
-		}
-	}
-	qsort(responses, mset->len, sizeof(XLogRecPtr), CompareLsn);
-
-	/*
-	 * And get value committed by the quorum. A way to view this: to get the
-	 * highest value committed on the quorum, in the ordered array we skip n -
-	 * n_quorum elements to get to the first (lowest) value present on all sks
-	 * of the highest quorum.
-	 */
-	return responses[mset->len - MsetQuorum(mset)];
-}
-
-/*
- * Calculate WAL position acknowledged by quorum, i.e. which may be regarded
- * committed.
- *
- * Zero may be returned when there is no quorum of nodes recovered to term start
- * lsn which sent feedback yet.
+ * Calculate WAL position acknowledged as committed. With a single safekeeper
+ * whose WAL is durably backed by YugabyteDB, that is simply its reported
+ * flushLsn (once it has caught up to our streaming start point).
  */
 static XLogRecPtr
 GetAcknowledgedByQuorumWALPosition(WalProposer *wp)
 {
-	XLogRecPtr	committed;
+	Safekeeper *sk = &wp->safekeeper[0];
 
-	/* legacy: generations disabled */
-	if (!WalProposerGenerationsEnabled(wp) && wp->mconf.generation == INVALID_GENERATION)
-	{
-		XLogRecPtr	responses[MAX_SAFEKEEPERS];
-
-		/*
-		 * Sort acknowledged LSNs
-		 */
-		for (int i = 0; i < wp->n_safekeepers; i++)
-		{
-			/*
-			 * Like in Raft, we aren't allowed to commit entries from previous
-			 * terms, so ignore reported LSN until it gets to
-			 * propTermStartLsn.
-			 *
-			 * Note: we ignore sk state, which is ok: before first ack
-			 * flushLsn is 0, and later we just preserve value across
-			 * reconnections. It would be ok to check for SS_ACTIVE as well.
-			 */
-			responses[i] = wp->safekeeper[i].appendResponse.flushLsn >= wp->propTermStartLsn ? wp->safekeeper[i].appendResponse.flushLsn : 0;
-		}
-		qsort(responses, wp->n_safekeepers, sizeof(XLogRecPtr), CompareLsn);
-
-		/*
-		 * Get the smallest LSN committed by quorum
-		 */
-		return responses[wp->n_safekeepers - wp->quorum];
-	}
-
-	committed = GetCommittedMset(wp, &wp->mconf.members, wp->members_safekeepers);
-	if (wp->mconf.new_members.len > 0)
-	{
-		XLogRecPtr	new_mset_committed = GetCommittedMset(wp, &wp->mconf.new_members, wp->new_members_safekeepers);
-
-		committed = Min(committed, new_mset_committed);
-	}
-	return committed;
+	/*
+	 * Ignore reported LSN until it reaches propTermStartLsn: before the first
+	 * ack flushLsn is 0, and we don't commit anything before our start point.
+	 */
+	return sk->appendResponse.flushLsn >= wp->propTermStartLsn
+		? sk->appendResponse.flushLsn
+		: 0;
 }
 
 /*
@@ -2021,7 +1268,7 @@ UpdateDonorShmem(WalProposer *wp)
 	 * about its position immediately after election before any feedbacks are
 	 * sent.
 	 */
-	if (wp->donor->state >= SS_WAIT_ELECTED)
+	if (wp->donor->state >= SS_ACTIVE)
 	{
 		donor = wp->donor;
 		donor_lsn = wp->propTermStartLsn;
@@ -2123,35 +1370,6 @@ HandleSafekeeperResponse(WalProposer *wp, Safekeeper *fromsk)
 	}
 }
 
-/* Serialize MembershipConfiguration into buf. */
-static void
-MembershipConfigurationSerialize(MembershipConfiguration *mconf, StringInfo buf)
-{
-	uint32		i;
-
-	pq_sendint32(buf, mconf->generation);
-
-	pq_sendint32(buf, mconf->members.len);
-	for (i = 0; i < mconf->members.len; i++)
-	{
-		pq_sendint64(buf, mconf->members.m[i].node_id);
-		pq_send_ascii_string(buf, mconf->members.m[i].host);
-		pq_sendint16(buf, mconf->members.m[i].port);
-	}
-
-	/*
-	 * There is no special mark for absent new_members; zero members in
-	 * invalid, so zero len means absent.
-	 */
-	pq_sendint32(buf, mconf->new_members.len);
-	for (i = 0; i < mconf->new_members.len; i++)
-	{
-		pq_sendint64(buf, mconf->new_members.m[i].node_id);
-		pq_send_ascii_string(buf, mconf->new_members.m[i].host);
-		pq_sendint16(buf, mconf->new_members.m[i].port);
-	}
-}
-
 /* Serialize proposer -> acceptor message into buf. yb-light only
  * supports v3; v2 was dropped in Phase 9 Wave 2 to match the
  * safekeeper. */
@@ -2172,33 +1390,16 @@ PAMessageSerialize(WalProposer *wp, ProposerAcceptorMessage *msg, StringInfo buf
 				ProposerGreeting *m = (ProposerGreeting *) msg;
 
 				pq_send_ascii_string(buf, m->branch_id);
-				MembershipConfigurationSerialize(&m->mconf, buf);
 				pq_sendint32(buf, m->pg_version);
 				pq_sendint64(buf, m->system_id);
 				pq_sendint32(buf, m->wal_seg_size);
-				break;
-			}
-		case 'v':
-			{
-				VoteRequest *m = (VoteRequest *) msg;
-
-				pq_sendint32(buf, m->generation);
-				pq_sendint64(buf, m->term);
 				break;
 			}
 		case 'e':
 			{
 				ProposerElected *m = (ProposerElected *) msg;
 
-				pq_sendint32(buf, m->generation);
-				pq_sendint64(buf, m->term);
 				pq_sendint64(buf, m->startStreamingAt);
-				pq_sendint32(buf, m->termHistory->n_entries);
-				for (uint32 i = 0; i < m->termHistory->n_entries; i++)
-				{
-					pq_sendint64(buf, m->termHistory->entries[i].term);
-					pq_sendint64(buf, m->termHistory->entries[i].lsn);
-				}
 				break;
 			}
 		case 'a':
@@ -2206,8 +1407,6 @@ PAMessageSerialize(WalProposer *wp, ProposerAcceptorMessage *msg, StringInfo buf
 				/* Header only; caller appends WAL data after. */
 				AppendRequestHeader *m = (AppendRequestHeader *) msg;
 
-				pq_sendint32(buf, m->generation);
-				pq_sendint64(buf, m->term);
 				pq_sendint64(buf, m->beginLsn);
 				pq_sendint64(buf, m->endLsn);
 				break;
@@ -2244,37 +1443,6 @@ AsyncRead(Safekeeper *sk, char **buf, int *buf_size)
 	}
 	Assert(false);
 	return false;
-}
-
-/* Deserialize membership configuration from buf to mconf. */
-static void
-MembershipConfigurationDeserialize(MembershipConfiguration *mconf, StringInfo buf)
-{
-	uint32		i;
-
-	mconf->generation = pq_getmsgint32(buf);
-	mconf->members.len = pq_getmsgint32(buf);
-	mconf->members.m = palloc0(sizeof(SafekeeperId) * mconf->members.len);
-	for (i = 0; i < mconf->members.len; i++)
-	{
-		const char *buf_host;
-
-		mconf->members.m[i].node_id = pq_getmsgint64(buf);
-		buf_host = pq_getmsgrawstring(buf);
-		strlcpy(mconf->members.m[i].host, buf_host, sizeof(mconf->members.m[i].host));
-		mconf->members.m[i].port = pq_getmsgint16(buf);
-	}
-	mconf->new_members.len = pq_getmsgint32(buf);
-	mconf->new_members.m = palloc0(sizeof(SafekeeperId) * mconf->new_members.len);
-	for (i = 0; i < mconf->new_members.len; i++)
-	{
-		const char *buf_host;
-
-		mconf->new_members.m[i].node_id = pq_getmsgint64(buf);
-		buf_host = pq_getmsgrawstring(buf);
-		strlcpy(mconf->new_members.m[i].host, buf_host, sizeof(mconf->new_members.m[i].host));
-		mconf->new_members.m[i].port = pq_getmsgint16(buf);
-	}
 }
 
 /*
@@ -2330,26 +1498,7 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 				AcceptorGreeting *msg = (AcceptorGreeting *) anymsg;
 
 				msg->nodeId = pq_getmsgint64(&s);
-				MembershipConfigurationDeserialize(&msg->mconf, &s);
-				msg->term = pq_getmsgint64(&s);
-				pq_getmsgend(&s);
-				return true;
-			}
-		case 'v':
-			{
-				VoteResponse *msg = (VoteResponse *) anymsg;
-
-				msg->generation = pq_getmsgint32(&s);
-				msg->term = pq_getmsgint64(&s);
-				msg->voteGiven = pq_getmsgbyte(&s);
 				msg->flushLsn = pq_getmsgint64(&s);
-				msg->termHistory.n_entries = pq_getmsgint32(&s);
-				msg->termHistory.entries = palloc(sizeof(TermSwitchEntry) * msg->termHistory.n_entries);
-				for (uint32 i = 0; i < msg->termHistory.n_entries; i++)
-				{
-					msg->termHistory.entries[i].term = pq_getmsgint64(&s);
-					msg->termHistory.entries[i].lsn = pq_getmsgint64(&s);
-				}
 				pq_getmsgend(&s);
 				return true;
 			}
@@ -2357,8 +1506,6 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 			{
 				AppendResponse *msg = (AppendResponse *) anymsg;
 
-				msg->generation = pq_getmsgint32(&s);
-				msg->term = pq_getmsgint64(&s);
 				msg->flushLsn = pq_getmsgint64(&s);
 				msg->hs.ts = pq_getmsgint64(&s);
 				msg->hs.xmin.value = pq_getmsgint64(&s);
@@ -2496,20 +1643,6 @@ AsyncFlush(Safekeeper *sk)
 	}
 }
 
-static int
-CompareLsn(const void *a, const void *b)
-{
-	XLogRecPtr	lsn1 = *((const XLogRecPtr *) a);
-	XLogRecPtr	lsn2 = *((const XLogRecPtr *) b);
-
-	if (lsn1 < lsn2)
-		return -1;
-	else if (lsn1 == lsn2)
-		return 0;
-	else
-		return 1;
-}
-
 /* Returns a human-readable string corresonding to the SafekeeperState
  *
  * The string should not be freed.
@@ -2542,17 +1675,8 @@ FormatSafekeeperState(Safekeeper *sk)
 		case SS_HANDSHAKE_RECV:
 			return_val = "handshake (receiving)";
 			break;
-		case SS_WAIT_VOTING:
-			return_val = "voting";
-			break;
-		case SS_WAIT_VERDICT:
-			return_val = "wait-for-verdict";
-			break;
 		case SS_SEND_ELECTED_FLUSH:
 			return_val = "send-announcement-flush";
-			break;
-		case SS_WAIT_ELECTED:
-			return_val = "idle";
 			break;
 		case SS_ACTIVE:
 			switch (sk->active_state)
@@ -2632,16 +1756,6 @@ SafekeeperStateDesiredEvents(Safekeeper *sk, uint32 *sk_events, uint32 *nwr_even
 			/* Reading states need the socket to be read-ready to continue */
 		case SS_WAIT_EXEC_RESULT:
 		case SS_HANDSHAKE_RECV:
-		case SS_WAIT_VERDICT:
-			*sk_events = WL_SOCKET_READABLE;
-			return;
-
-			/*
-			 * Idle states use read-readiness as a sign that the connection
-			 * has been disconnected.
-			 */
-		case SS_WAIT_VOTING:
-		case SS_WAIT_ELECTED:
 			*sk_events = WL_SOCKET_READABLE;
 			return;
 
@@ -2752,56 +1866,3 @@ FormatEvents(WalProposer *wp, uint32 events)
 	return (char *) &return_str;
 }
 
-/* Dump mconf as toml for observability / debugging. Result is palloc'ed. */
-static char *
-MembershipConfigurationToString(MembershipConfiguration *mconf)
-{
-	StringInfoData s;
-	uint32		i;
-
-	initStringInfo(&s);
-	appendStringInfo(&s, "{gen = %u", mconf->generation);
-	appendStringInfoString(&s, ", members = [");
-	for (i = 0; i < mconf->members.len; i++)
-	{
-		if (i > 0)
-			appendStringInfoString(&s, ", ");
-		appendStringInfo(&s, "{node_id = %lu", mconf->members.m[i].node_id);
-		appendStringInfo(&s, ", host = %s", mconf->members.m[i].host);
-		appendStringInfo(&s, ", port = %u }", mconf->members.m[i].port);
-	}
-	appendStringInfo(&s, "], new_members = [");
-	for (i = 0; i < mconf->new_members.len; i++)
-	{
-		if (i > 0)
-			appendStringInfoString(&s, ", ");
-		appendStringInfo(&s, "{node_id = %lu", mconf->new_members.m[i].node_id);
-		appendStringInfo(&s, ", host = %s", mconf->new_members.m[i].host);
-		appendStringInfo(&s, ", port = %u }", mconf->new_members.m[i].port);
-	}
-	appendStringInfoString(&s, "]}");
-	return s.data;
-}
-
-static void
-MembershipConfigurationCopy(MembershipConfiguration *src, MembershipConfiguration *dst)
-{
-	dst->generation = src->generation;
-	dst->members.len = src->members.len;
-	dst->members.m = palloc0(sizeof(SafekeeperId) * dst->members.len);
-	memcpy(dst->members.m, src->members.m, sizeof(SafekeeperId) * dst->members.len);
-	dst->new_members.len = src->new_members.len;
-	dst->new_members.m = palloc0(sizeof(SafekeeperId) * dst->new_members.len);
-	memcpy(dst->new_members.m, src->new_members.m, sizeof(SafekeeperId) * dst->new_members.len);
-}
-
-static void
-MembershipConfigurationFree(MembershipConfiguration *mconf)
-{
-	if (mconf->members.m)
-		pfree(mconf->members.m);
-	mconf->members.m = NULL;
-	if (mconf->new_members.m)
-		pfree(mconf->new_members.m);
-	mconf->new_members.m = NULL;
-}

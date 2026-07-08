@@ -39,7 +39,6 @@ use pageserver_api::config::{
 use pageserver_api::controller_api::{NodeAvailabilityWrapper, PlacementPolicy};
 use pageserver_api::models::TimelineInfo;
 use postgres_backend::AuthType;
-use safekeeper_api::membership::{SafekeeperGeneration, SafekeeperId};
 use safekeeper_api::{
     DEFAULT_HTTP_LISTEN_PORT as DEFAULT_SAFEKEEPER_HTTP_PORT,
     DEFAULT_PG_LISTEN_PORT as DEFAULT_SAFEKEEPER_PG_PORT, PgMajorVersion, PgVersionId,
@@ -710,9 +709,6 @@ struct EndpointStartCmdArgs {
     /// Pageserver ID.
     #[clap(long = "pageserver-id")]
     endpoint_pageserver_id: Option<NodeId>,
-    /// Safekeepers membership generation to prefix yb_amp.safekeepers with.
-    #[clap(long)]
-    safekeepers_generation: Option<u32>,
     /// List of safekeepers endpoint will talk to.
     #[clap(long)]
     safekeepers: Option<String>,
@@ -1771,25 +1767,9 @@ async fn provision_bootstrap(
     // pick any registered safekeeper — wrong in the co-located topology
     // once more than one pair exists (the compute talks to its own
     // safekeeper). Mirrors `provision_branch`.
-    let sk_host = sk_conf
-        .listen_addr
-        .clone()
-        .unwrap_or_else(|| "localhost".to_string());
-    let mconf = safekeeper_api::membership::Configuration {
-        generation: SafekeeperGeneration::new(1),
-        members: safekeeper_api::membership::MemberSet {
-            m: vec![SafekeeperId {
-                host: sk_host,
-                id: sk_conf.id,
-                pg_port: sk_conf.get_compute_port(),
-            }],
-        },
-        new_members: None,
-    };
     safekeeper
         .create_timeline(&safekeeper_api::models::TimelineCreateRequest {
             branch_id,
-            mconf,
             pg_version: PgVersionId::from(pg_version),
             system_id: None,
             wal_seg_size: None,
@@ -1858,25 +1838,9 @@ async fn provision_branch(
         .await
         .context("start branch safekeeper")?;
     timer.tick("safekeeper started");
-    let sk_host = sk_conf
-        .listen_addr
-        .clone()
-        .unwrap_or_else(|| "localhost".to_string());
-    let mconf = safekeeper_api::membership::Configuration {
-        generation: SafekeeperGeneration::new(1),
-        members: safekeeper_api::membership::MemberSet {
-            m: vec![SafekeeperId {
-                host: sk_host,
-                id: sk_conf.id,
-                pg_port: sk_conf.get_compute_port(),
-            }],
-        },
-        new_members: None,
-    };
     safekeeper
         .create_timeline(&safekeeper_api::models::TimelineCreateRequest {
             branch_id,
-            mconf,
             pg_version: PgVersionId::from(pg_version),
             system_id: None,
             wal_seg_size: None,
@@ -2225,14 +2189,6 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             let pageserver_id = args.endpoint_pageserver_id;
             let remote_ext_base_url = &args.remote_ext_base_url;
 
-            let default_generation = env
-                .storage_controller
-                .timelines_onto_safekeepers
-                .then_some(1);
-            let safekeepers_generation = args
-                .safekeepers_generation
-                .or(default_generation)
-                .map(SafekeeperGeneration::new);
             let endpoint = cplane
                 .endpoints
                 .get(endpoint_id.as_str())
@@ -2324,7 +2280,6 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 auth_token,
                 endpoint_storage_token,
                 endpoint_storage_addr,
-                safekeepers_generation,
                 safekeepers,
                 pageserver_conninfo,
                 remote_ext_base_url: remote_ext_base_url.clone(),
@@ -2398,7 +2353,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             // safekeeper nodes; otherwise all from the env.
             let safekeepers = parse_safekeepers(&args.safekeepers)?;
             endpoint
-                .reconfigure(Some(&pageserver_conninfo), safekeepers, None)
+                .reconfigure(Some(&pageserver_conninfo), safekeepers)
                 .await?;
         }
         EndpointCmd::Stop(args) => {

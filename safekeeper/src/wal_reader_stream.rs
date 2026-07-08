@@ -10,7 +10,6 @@ use anyhow::Context as _;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
-use safekeeper_api::Term;
 use utils::id::BranchId;
 use utils::lsn::Lsn;
 
@@ -61,7 +60,6 @@ impl WalOrReset {
 impl StreamingWalReader {
     pub(crate) fn new(
         tli: WalResidentTimeline,
-        term: Option<Term>,
         start: Lsn,
         end: Lsn,
         end_watch: EndWatch,
@@ -77,7 +75,6 @@ impl StreamingWalReader {
                 end,
                 reader: None,
             },
-            term,
             end_watch,
             buffer: vec![0; buffer_size],
             buffer_size,
@@ -149,13 +146,12 @@ impl Stream for StreamingWalReader {
 struct WalReaderStreamState {
     tli: WalResidentTimeline,
     wal_reader: PositionedWalReader,
-    term: Option<Term>,
     end_watch: EndWatch,
     buffer: Vec<u8>,
     buffer_size: usize,
     /// Live committed/flush frontier (`= wal_reader.end`), shared into the
     /// `WalReader` and the `YbSegmentReader`s it opens so they never serve YB
-    /// bytes that were uncommitted when fetched — a later walproposer term can
+    /// bytes that were uncommitted when fetched — a reconnect truncate can
     /// rewrite those, and a stale held chunk would splice them in (#139). Kept
     /// in step with `end` before each read.
     flush_lsn: Arc<std::sync::atomic::AtomicU64>,
@@ -187,13 +183,10 @@ impl WalReaderStreamState {
             );
             self.wal_reader.end = self
                 .end_watch
-                .wait_for_lsn(self.wal_reader.start, self.term)
+                .wait_for_lsn(self.wal_reader.start)
                 .await
                 .with_context(|| {
-                    format!(
-                        "wait_for_lsn failed at start={} (term={:?})",
-                        self.wal_reader.start, self.term
-                    )
+                    format!("wait_for_lsn failed at start={}", self.wal_reader.start)
                 })?;
             tracing::debug!(
                 "Done waiting for wal: start={}, end={}",
@@ -210,7 +203,8 @@ impl WalReaderStreamState {
         // Publish the (possibly just-advanced) committed frontier to the YB
         // readers before we read: each `YbSegmentReader` will only serve bytes
         // it fetched at or below this, and re-fetch anything above — so a held
-        // chunk can't shadow a later term's rewrite of once-uncommitted bytes.
+        // chunk can't shadow a reconnect truncate's rewrite of once-uncommitted
+        // bytes.
         self.flush_lsn.store(self.wal_reader.end.0, Ordering::Release);
 
         // Calculate chunk size
@@ -228,28 +222,19 @@ impl WalReaderStreamState {
 
         // Read WAL
         let read_start = self.wal_reader.start;
-        let send_size = {
-            let _term_guard =
-                if let Some(t) = self.term {
-                    Some(self.tli.acquire_term(t).await.with_context(|| {
-                        format!("acquire_term({t}) failed at start={read_start}")
-                    })?)
-                } else {
-                    None
-                };
-            self.wal_reader
-                .reader
-                .as_mut()
-                .unwrap()
-                .read(buffer)
-                .await
-                .with_context(|| {
-                    format!(
-                        "WalReader::read failed at start={read_start} \
-                         (chunk_end={chunk_end_pos}, send_size={send_size})"
-                    )
-                })?
-        };
+        let send_size = self
+            .wal_reader
+            .reader
+            .as_mut()
+            .unwrap()
+            .read(buffer)
+            .await
+            .with_context(|| {
+                format!(
+                    "WalReader::read failed at start={read_start} \
+                     (chunk_end={chunk_end_pos}, send_size={send_size})"
+                )
+            })?;
 
         let wal = Bytes::copy_from_slice(&buffer[..send_size]);
         let result = WalBytes {
@@ -302,7 +287,6 @@ mod tests {
 
         let mut streaming_wal_reader = StreamingWalReader::new(
             resident_tli,
-            None,
             start_lsn,
             end_pos,
             end_watch,

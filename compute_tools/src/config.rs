@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::fmt::Write as FmtWrite;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::Write;
@@ -94,16 +93,7 @@ pub fn write_postgres_conf(
     }
 
     if !spec.safekeeper_connstrings.is_empty() {
-        let mut neon_safekeepers_value = String::new();
-        tracing::info!(
-            "safekeepers_connstrings is not zero, gen: {:?}",
-            spec.safekeepers_generation
-        );
-        // If generation is given, prepend sk list with g#number:
-        if let Some(generation) = spec.safekeepers_generation {
-            write!(neon_safekeepers_value, "g#{generation}:")?;
-        }
-        neon_safekeepers_value.push_str(&spec.safekeeper_connstrings.join(","));
+        let neon_safekeepers_value = spec.safekeeper_connstrings.join(",");
         writeln!(
             file,
             "yb_amp.safekeepers={}",

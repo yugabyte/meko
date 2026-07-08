@@ -17,7 +17,6 @@ use sha2::{Digest, Sha256};
 use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
-use crate::safekeeper::TermHistory;
 use crate::state::{TimelineMemState, TimelinePersistentState};
 use crate::timeline::{WalResidentTimeline, get_timeline_dir};
 use crate::{GlobalTimelines, SafeKeeperConf, timeline_manager};
@@ -36,9 +35,6 @@ pub struct Args {
 
     /// Dump all disk files in a timeline directory. Uses value of `dump_all` by default.
     pub dump_disk_content: bool,
-
-    /// Dump full term history. True by default.
-    pub dump_term_history: bool,
 
     /// Dump last modified time of WAL segments. Uses value of `dump_all` by default.
     pub dump_wal_last_modified: bool,
@@ -93,10 +89,7 @@ async fn build_from_tli_dump(
     timeline_dir: &Utf8Path,
 ) -> Timeline {
     let control_file = if args.dump_control_file {
-        let mut state = timeline.get_state().await.1;
-        if !args.dump_term_history {
-            state.acceptor_state.term_history = TermHistory(vec![]);
-        }
+        let state = timeline.get_state().await.1;
         Some(state)
     } else {
         None
@@ -158,7 +151,6 @@ pub struct Memory {
     pub active: bool,
     pub num_computes: u32,
     pub last_removed_segno: XLogSegNo,
-    pub epoch_start_lsn: Lsn,
     pub mem_state: TimelineMemState,
     pub mgr_status: timeline_manager::Status,
 

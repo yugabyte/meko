@@ -72,7 +72,6 @@ use nix::sys::signal::{Signal, kill};
 use pem::Pem;
 use reqwest::header::CONTENT_TYPE;
 use safekeeper_api::PgMajorVersion;
-use safekeeper_api::membership::SafekeeperGeneration;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use spki::der::Decode;
@@ -409,7 +408,6 @@ pub struct EndpointStartArgs {
     pub auth_token: Option<String>,
     pub endpoint_storage_token: String,
     pub endpoint_storage_addr: String,
-    pub safekeepers_generation: Option<SafekeeperGeneration>,
     pub safekeepers: Vec<NodeId>,
     pub pageserver_conninfo: PageserverConnectionInfo,
     pub remote_ext_base_url: Option<String>,
@@ -832,7 +830,6 @@ impl Endpoint {
                 mode: self.mode,
                 pageserver_connection_info: Some(args.pageserver_conninfo.clone()),
                 pageserver_connstring,
-                safekeepers_generation: args.safekeepers_generation.map(|g| g.into_inner()),
                 safekeeper_connstrings,
                 storage_auth_token: args.auth_token.clone(),
                 remote_extensions,
@@ -1072,7 +1069,6 @@ impl Endpoint {
         &self,
         pageserver_conninfo: Option<&PageserverConnectionInfo>,
         safekeepers: Option<Vec<NodeId>>,
-        safekeeper_generation: Option<SafekeeperGeneration>,
     ) -> Result<()> {
         let (mut spec, compute_ctl_config) = {
             let config_path = self.endpoint_path().join("config.json");
@@ -1099,9 +1095,6 @@ impl Endpoint {
         if let Some(safekeepers) = safekeepers {
             let safekeeper_connstrings = self.build_safekeepers_connstrs(safekeepers)?;
             spec.safekeeper_connstrings = safekeeper_connstrings;
-            if let Some(g) = safekeeper_generation {
-                spec.safekeepers_generation = Some(g.into_inner());
-            }
         }
 
         let client = reqwest::Client::builder()
@@ -1143,16 +1136,11 @@ impl Endpoint {
         &self,
         pageservers: &PageserverConnectionInfo,
     ) -> Result<()> {
-        self.reconfigure(Some(pageservers), None, None).await
+        self.reconfigure(Some(pageservers), None).await
     }
 
-    pub async fn reconfigure_safekeepers(
-        &self,
-        safekeepers: Vec<NodeId>,
-        generation: SafekeeperGeneration,
-    ) -> Result<()> {
-        self.reconfigure(None, Some(safekeepers), Some(generation))
-            .await
+    pub async fn reconfigure_safekeepers(&self, safekeepers: Vec<NodeId>) -> Result<()> {
+        self.reconfigure(None, Some(safekeepers)).await
     }
 
     pub async fn stop(

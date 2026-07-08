@@ -15,10 +15,7 @@ use http_utils::{RequestExt, RouterBuilder};
 use hyper::{Body, Request, Response, StatusCode};
 use postgres_ffi::WAL_SEGMENT_SIZE;
 use safekeeper_api::ServerInfo;
-use safekeeper_api::models::{
-    AcceptorStateStatus, SafekeeperStatus, TermSwitchApiEntry, TimelineCreateRequest,
-    TimelineStatus,
-};
+use safekeeper_api::models::{SafekeeperStatus, TimelineCreateRequest, TimelineStatus};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -29,7 +26,6 @@ use utils::lsn::Lsn;
 
 use crate::debug_dump::TimelineDigestRequest;
 use crate::disk_usage::{get_filesystem_capacity, get_filesystem_usage};
-use crate::safekeeper::TermLsn;
 use crate::timelines_global_map::DeleteOrExclude;
 use crate::{GlobalTimelines, SafeKeeperConf, debug_dump, patch_control_file};
 use serde_json::json;
@@ -75,12 +71,7 @@ async fn timeline_create_handler(mut request: Request<Body>) -> Result<Response<
     };
     let global_timelines = get_global_timelines(&request);
     global_timelines
-        .create(
-            branch_id,
-            request_data.mconf,
-            server_info,
-            request_data.start_lsn,
-        )
+        .create(branch_id, server_info, request_data.start_lsn)
         .await
         .map_err(ApiError::InternalServerError)?;
 
@@ -122,15 +113,6 @@ async fn timeline_list_handler(request: Request<Body>) -> Result<Response<Body>,
     json_response(StatusCode::OK, res)
 }
 
-impl From<TermSwitchApiEntry> for TermLsn {
-    fn from(api_val: TermSwitchApiEntry) -> Self {
-        TermLsn {
-            term: api_val.term,
-            lsn: api_val.lsn,
-        }
-    }
-}
-
 /// Report info about timeline.
 async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
     let branch_id = parse_request_param(&request, "branch_id")?;
@@ -141,34 +123,15 @@ async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body
     let (inmem, state) = tli.get_state().await;
     let flush_lsn = tli.get_flush_lsn().await;
 
-    let last_log_term = state.acceptor_state.get_last_log_term(flush_lsn);
-    let term_history = state
-        .acceptor_state
-        .term_history
-        .0
-        .into_iter()
-        .map(|ts| TermSwitchApiEntry {
-            term: ts.term,
-            lsn: ts.lsn,
-        })
-        .collect();
-    let acc_state = AcceptorStateStatus {
-        term: state.acceptor_state.term,
-        epoch: last_log_term,
-        term_history,
-    };
-
     let conf = get_conf(&request);
     // Note: we report in memory values which can be lost.
     let status = TimelineStatus {
         branch_id,
-        mconf: state.mconf,
-        acceptor_state: acc_state,
         pg_info: state.server,
         flush_lsn,
         timeline_start_lsn: state.timeline_start_lsn,
         local_start_lsn: state.local_start_lsn,
-        // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum).
+        // yb-light: commit_lsn ≡ flush_lsn (single-SK).
         commit_lsn: flush_lsn,
         remote_consistent_lsn: inmem.remote_consistent_lsn,
         peers: tli.get_peers(conf).await,
@@ -293,7 +256,6 @@ async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>
     let mut dump_control_file: Option<bool> = None;
     let mut dump_memory: Option<bool> = None;
     let mut dump_disk_content: Option<bool> = None;
-    let mut dump_term_history: Option<bool> = None;
     let mut dump_wal_last_modified: Option<bool> = None;
     let mut branch_id: Option<BranchId> = None;
 
@@ -306,7 +268,6 @@ async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>
             "dump_control_file" => dump_control_file = Some(parse_kv_str(&k, &v)?),
             "dump_memory" => dump_memory = Some(parse_kv_str(&k, &v)?),
             "dump_disk_content" => dump_disk_content = Some(parse_kv_str(&k, &v)?),
-            "dump_term_history" => dump_term_history = Some(parse_kv_str(&k, &v)?),
             "dump_wal_last_modified" => dump_wal_last_modified = Some(parse_kv_str(&k, &v)?),
             "branch_id" => branch_id = Some(parse_kv_str(&k, &v)?),
             _ => Err(ApiError::BadRequest(anyhow::anyhow!(
@@ -320,7 +281,6 @@ async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>
     let dump_control_file = dump_control_file.unwrap_or(dump_all);
     let dump_memory = dump_memory.unwrap_or(dump_all);
     let dump_disk_content = dump_disk_content.unwrap_or(dump_all);
-    let dump_term_history = dump_term_history.unwrap_or(true);
     let dump_wal_last_modified = dump_wal_last_modified.unwrap_or(dump_all);
 
     let global_timelines = get_global_timelines(&request);
@@ -330,7 +290,6 @@ async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>
         dump_control_file,
         dump_memory,
         dump_disk_content,
-        dump_term_history,
         dump_wal_last_modified,
         branch_id,
     };
@@ -464,26 +423,4 @@ pub fn make_router(
             request_span(r, timeline_backup_partial_reset)
         })
         .get("/v1/debug_dump", |r| request_span(r, dump_debug_handler))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_term_switch_entry_api_serialize() {
-        let state = AcceptorStateStatus {
-            term: 1,
-            epoch: 1,
-            term_history: vec![TermSwitchApiEntry {
-                term: 1,
-                lsn: Lsn(0x16FFDDDD),
-            }],
-        };
-        let json = serde_json::to_string(&state).unwrap();
-        assert_eq!(
-            json,
-            "{\"term\":1,\"epoch\":1,\"term_history\":[{\"term\":1,\"lsn\":\"0/16FFDDDD\"}]}"
-        );
-    }
 }
