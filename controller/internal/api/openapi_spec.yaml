@@ -773,7 +773,7 @@ components:
           description: Project (database) name; unique within the pool. The project's default branch is always named "main".
         pg_version:
           type: integer
-          description: Postgres major version for the project's default branch. Defaults to 17.
+          description: Postgres major version for the project's default branch. Defaults to 18.
 
     Project:
       type: object

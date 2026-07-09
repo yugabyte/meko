@@ -214,7 +214,7 @@ This `[storage_controller.yb]` block is the same shared YB connection
 block (`YbConnConfig`) used by the pageserver `yb_storage_conn`, the
 safekeeper `yb_storage_conn`, and endpoint_storage — identical field set.
 
-The controller itself still links against `libpq`, so the Postgres v17
+The controller itself still links against `libpq`, so the Postgres v18
 libs must exist locally — but no Postgres *server* runs.
 
 ### TLS-aware admin connections

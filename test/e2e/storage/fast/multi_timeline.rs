@@ -33,12 +33,12 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     step("Provision + start an endpoint on each (one co-located PS+SK pair per branch)");
     c.yb(&[
         "endpoint", "create", "ep_a", "--branch-id", &ba, "--branch-name", "main",
-        "--pg-version", "17", "--pg-port", &a_port.to_string(),
+        "--pg-version", "18", "--pg-port", &a_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_a"])?;
     c.yb(&[
         "endpoint", "create", "ep_b", "--branch-id", &bb, "--branch-name", "main",
-        "--pg-version", "17", "--pg-port", &b_port.to_string(),
+        "--pg-version", "18", "--pg-port", &b_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_b"])?;
 

@@ -6,7 +6,7 @@ use bytes::BytesMut;
 use camino_tempfile::tempfile;
 use criterion::{BatchSize, Bencher, Criterion, criterion_group, criterion_main};
 use itertools::Itertools as _;
-use postgres_ffi::v17::wal_generator::{LogicalMessageGenerator, WalGenerator};
+use postgres_ffi::v18::wal_generator::{LogicalMessageGenerator, WalGenerator};
 use pprof::criterion::{Output, PProfProfiler};
 use safekeeper::receive_wal::{self, WalAcceptor};
 use safekeeper::safekeeper::{

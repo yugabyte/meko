@@ -43,7 +43,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     step("Create + start an endpoint on the branch");
     c.yb(&[
         "endpoint", "create", ENDPOINT_ID, "--branch-id", BRANCH_ID, "--branch-name", BRANCH_NAME,
-        "--pg-version", "17", "--pg-port", &branch_pg_port.to_string(),
+        "--pg-version", "18", "--pg-port", &branch_pg_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", ENDPOINT_ID])?;
 

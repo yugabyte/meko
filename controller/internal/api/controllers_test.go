@@ -349,7 +349,7 @@ func TestCreateProject(t *testing.T) {
 	// Create project -> 202 + a pending create_project Task with a Location header.
 	// The project carries the chosen name; its default branch is always "main"
 	// (independent of the project name), so use a distinct project name here.
-	pgv := 17
+	pgv := 18
 	cp, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "shop", PgVersion: &pgv})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
@@ -384,8 +384,8 @@ func TestCreateProject(t *testing.T) {
 	if def.ProjectId != p.Id || def.BranchId == uuid.Nil {
 		t.Errorf("default branch ids = (%s,%s), want project %s and a non-nil branch", def.ProjectId, def.BranchId, p.Id)
 	}
-	if !def.IsDefault || def.Name != "main" || def.PgVersion != 17 {
-		t.Errorf("default branch = %+v, want {is_default name=main pg_version=17}", def)
+	if !def.IsDefault || def.Name != "main" || def.PgVersion != 18 {
+		t.Errorf("default branch = %+v, want {is_default name=main pg_version=18}", def)
 	}
 
 	// Empty name -> 400 (cheap validation, before any task is planned).
@@ -426,7 +426,7 @@ func TestCreateProject(t *testing.T) {
 		t.Fatalf("CreateProject(missing pool) status = %d, body = %s", missing.StatusCode(), missing.Body)
 	}
 
-	// Unsupported pg_version -> 400 (yb-light is v17 only; cheap validation).
+	// Unsupported pg_version -> 400 (yb-light is v18 only; cheap validation).
 	badVer := 15
 	bv, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "pg15", PgVersion: &badVer})
 	if err != nil {
@@ -487,7 +487,7 @@ func TestCreateEndpointDeployFailure(t *testing.T) {
 	pool := mustCreatePool(t, client, u.Id, "pool")
 	projectID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
@@ -547,7 +547,7 @@ func TestCreateEndpointAddressRecordFailure(t *testing.T) {
 	pool := mustCreatePool(t, client, u.Id, "pool")
 	projectID := uuid.New()
 	branchID := uuid.New()
-	mem.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	mem.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
@@ -586,8 +586,8 @@ func TestProjectDeleteCascade(t *testing.T) {
 	projectID := uuid.New()
 	branchID := uuid.New()
 	branch2ID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branch2ID, Name: "feature", PgVersion: 17})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branch2ID, Name: "feature", PgVersion: 18})
 	if _, err := backend.CreateEndpoint(ctx, projectID, branchID, core.RoleReadWrite, nil); err != nil {
 		t.Fatalf("seed endpoint (main): %v", err)
 	}
@@ -739,7 +739,7 @@ func TestCreateBranchReturnsTask(t *testing.T) {
 	pool := mustCreatePool(t, client, u.Id, "pool")
 	projectID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	lsn := "0/16ABCD0"
 	resp, err := client.CreateBranchWithResponse(ctx, pool.Id, projectID, api.CreateBranchRequest{Name: "feature", ForkPointLsn: &lsn})
@@ -759,7 +759,7 @@ func TestCreateEndpointReturnsTask(t *testing.T) {
 	pool := mustCreatePool(t, client, u.Id, "pool")
 	projectID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 	resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
@@ -779,7 +779,7 @@ func TestDeleteEndpointReturnsTask(t *testing.T) {
 	pool := mustCreatePool(t, client, u.Id, "pool")
 	projectID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 	ep, err := backend.CreateEndpoint(ctx, projectID, branchID, core.RoleReadWrite, nil)
 	if err != nil {
 		t.Fatalf("seed endpoint: %v", err)
@@ -802,7 +802,7 @@ func TestDeleteProjectReturnsTask(t *testing.T) {
 	pool := mustCreatePool(t, client, u.Id, "pool")
 	projectID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	resp, err := client.DeleteProjectWithResponse(ctx, pool.Id, projectID)
 	if err != nil {
@@ -821,7 +821,7 @@ func TestDeleteBranchReturnsTask(t *testing.T) {
 	pool := mustCreatePool(t, client, u.Id, "pool")
 	projectID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	resp, err := client.DeleteBranchWithResponse(ctx, pool.Id, projectID, branchID)
 	if err != nil {
@@ -848,8 +848,8 @@ func TestBranchDeleteCascade(t *testing.T) {
 	projectID := uuid.New()
 	target := uuid.New()
 	sibling := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: target, Name: "main", PgVersion: 17, IsDefault: true})
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: sibling, Name: "sibling", PgVersion: 17})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: target, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: sibling, Name: "sibling", PgVersion: 18})
 	if _, err := backend.CreateEndpoint(ctx, projectID, target, core.RoleReadWrite, nil); err != nil {
 		t.Fatalf("seed endpoint (target): %v", err)
 	}
@@ -904,10 +904,10 @@ func TestDeleteBranchWithChildForkConflict(t *testing.T) {
 	projectID := uuid.New()
 	parent := uuid.New()
 	child := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: parent, Name: "main", PgVersion: 17, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: parent, Name: "main", PgVersion: 18, IsDefault: true})
 	// A child branch forked from the parent (ParentBranchID set).
 	parentRef := parent
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: child, Name: "child", PgVersion: 17, ParentBranchID: &parentRef})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: child, Name: "child", PgVersion: 18, ParentBranchID: &parentRef})
 	if _, err := backend.CreateEndpoint(ctx, projectID, parent, core.RoleReadWrite, nil); err != nil {
 		t.Fatalf("seed endpoint (parent): %v", err)
 	}

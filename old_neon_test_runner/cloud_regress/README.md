@@ -15,9 +15,9 @@
   }
 ```
 * Checkout the actual `Neon` sources
-* Patch the sql and expected files for the specific PostgreSQL version, e.g. for v17:
+* Patch the sql and expected files for the specific PostgreSQL version, e.g. for v18:
 ```bash
-$ cd vendor/postgres-v17
+$ cd vendor/postgres-v18
 $ patch -p1 <../../compute/patches/cloud_regress_pg17.patch
 ```
 * Set the environment variables (please modify according your configuration):

@@ -11,4 +11,7 @@
 #include "storage/block.h"
 #include "storage/bufpage.h"
 #include "storage/off.h"
+#include "utils/palloc.h"
 #include "access/multixact.h"
+#include "access/xact.h"
+#include "storage/sinval.h"

@@ -249,7 +249,7 @@ The deploy is **demo-grade**. What it currently takes for granted:
   same `cloud_admin` / `cloud_admin` superuser (the `COMPUTE_PASSWORD` default);
   there is no per-endpoint credential generation or project isolation at the SQL
   layer.
-- **Postgres v17 only.** create-project rejects any other `pg_version`.
+- **Postgres v18 only.** create-project rejects any other `pg_version`.
 - **One pageserver+safekeeper per endpoint pod**, registered with a **unique SC
   node id derived from the branch id** (a 31-bit hash). Collision-resistant, not
   collision-proof. One `read_write` endpoint per branch (single-writer).

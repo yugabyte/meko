@@ -26,7 +26,7 @@ TIMELINE=d91b99d6de69060d19df6fe59c61c84d
 export YB_STORAGE_PASSWORD='Yugabyte!1'
 
 # YB backing store (for page-store size probe)
-YB_PSQL=/home/ec2-user/yb-neon-bundle/pg_install/v17/bin/psql
+YB_PSQL=/home/ec2-user/yb-neon-bundle/pg_install/v18/bin/psql
 ybq() { PGPASSWORD='Yugabyte!1' $YB_PSQL -h 172.151.17.132 -p 5433 -U yugabyte -d yb_storage -tAc "$1" 2>/dev/null; }
 
 TS=$(date -u +%Y%m%d-%H%M)

@@ -58,7 +58,7 @@ macro_rules! postgres_ffi {
 #[macro_export]
 macro_rules! for_all_postgres_versions {
     ($macro:tt) => {
-        $macro!(v17);
+        $macro!(v18);
     };
 }
 
@@ -90,7 +90,7 @@ macro_rules! dispatch_pgversion {
             $version => $code,
             default = $invalid_pgver_handling,
             pgversions = [
-                $crate::PgMajorVersion::PG17 => v17,
+                $crate::PgMajorVersion::PG18 => v18,
             ]
         )
     };
@@ -119,7 +119,7 @@ macro_rules! enum_pgversion_dispatch {
             typ = $typ,
             code = $code,
             pgversions = [
-                V17 : v17,
+                V18 : v18,
             ]
         )
     };
@@ -146,7 +146,7 @@ macro_rules! enum_pgversion {
             name = $name,
             typ = $t,
             pgversions = [
-                V17 : v17,
+                V18 : v18,
             ]
         }
     };
@@ -156,7 +156,7 @@ macro_rules! enum_pgversion {
             path = $p,
             typ = $t,
             pgversions = [
-                V17 : v17,
+                V18 : v18,
             ]
         }
     };
@@ -211,13 +211,13 @@ pub mod wal_record_boundary;
 pub mod walrecord;
 
 // Export some widely used datatypes that are unlikely to change across Postgres versions
-pub use v17::bindings::{
+pub use v18::bindings::{
     BlockNumber, CheckPoint, ControlFileData, MultiXactId, OffsetNumber, Oid, PageHeaderData,
     RepOriginId, TimeLineID, TransactionId, XLogRecPtr, XLogRecord, XLogSegNo, uint32, uint64,
 };
 // Likewise for these, although the assumption that these don't change is a little more iffy.
-pub use v17::bindings::{MultiXactOffset, MultiXactStatus};
-pub use v17::xlog_utils::{
+pub use v18::bindings::{MultiXactOffset, MultiXactStatus};
+pub use v18::xlog_utils::{
     XLOG_SIZE_OF_XLOG_LONG_PHD, XLOG_SIZE_OF_XLOG_RECORD, XLOG_SIZE_OF_XLOG_SHORT_PHD,
 };
 
@@ -231,8 +231,8 @@ pub const WAL_SEGMENT_SIZE: usize = 16 * 1024 * 1024;
 pub const MAX_SEND_SIZE: usize = XLOG_BLCKSZ * 16;
 
 // Export some version independent functions that are used outside of this mod
-pub use v17::bindings::DBState_DB_SHUTDOWNED;
-pub use v17::xlog_utils::{
+pub use v18::bindings::DBState_DB_SHUTDOWNED;
+pub use v18::xlog_utils::{
     XLogFileName, encode_logical_message, get_current_timestamp, to_pg_timestamp,
     try_from_pg_timestamp,
 };

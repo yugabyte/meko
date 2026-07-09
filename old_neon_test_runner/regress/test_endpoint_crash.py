@@ -31,7 +31,7 @@ def test_endpoint_crash(neon_env_builder: NeonEnvBuilder, sql_func: str):
         endpoint.safe_psql(f"SELECT {sql_func}();")
 
 
-@run_only_on_postgres([PgVersion.V17], "Currently, build vith sanitizers is possible with v17 only")
+@run_only_on_postgres([PgVersion.V17], "Currently, build vith sanitizers is possible with v18 only")
 def test_sanitizers(neon_env_builder: NeonEnvBuilder):
     """
     Test that undefined behavior leads to endpoint abort with sanitizers enabled

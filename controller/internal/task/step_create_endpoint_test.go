@@ -21,7 +21,7 @@ func endpointDeps(state *fakeStateStore, recipes *fakeRecipeStore, dep *fakeDepl
 func TestCreateEndpointStepDefaultBranchBootstrap(t *testing.T) {
 	state, recipes, dep := newFakeStateStore(), newFakeRecipeStore(), &fakeDeployer{}
 	epID, projectID, branchID := uuid.New(), uuid.New(), uuid.New()
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ProjectID: projectID, BranchID: branchID, Role: "read_write", PgVersion: 17}, endpointDeps(state, recipes, dep, true))
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ProjectID: projectID, BranchID: branchID, Role: "read_write", PgVersion: 18}, endpointDeps(state, recipes, dep, true))
 
 	res := step.Execute(t.Context())
 	if res.Failed() {
@@ -64,7 +64,7 @@ func TestCreateEndpointStepForkNoBootstrap(t *testing.T) {
 	state, recipes, dep := newFakeStateStore(), newFakeRecipeStore(), &fakeDeployer{}
 	ancestor := uuid.New()
 	step := NewCreateEndpointStep(CreateEndpointArgs{
-		EndpointID: uuid.New(), ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 17,
+		EndpointID: uuid.New(), ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 18,
 		AncestorBranchID: &ancestor, AncestorLSN: "0/16ABCD0",
 	}, endpointDeps(state, recipes, dep, true)) // bootstrap enabled...
 	if res := step.Execute(t.Context()); res.Failed() {
@@ -81,7 +81,7 @@ func TestCreateEndpointStepForkNoBootstrap(t *testing.T) {
 
 func TestCreateEndpointStepIdempotent(t *testing.T) {
 	state, recipes, dep := newFakeStateStore(), newFakeRecipeStore(), &fakeDeployer{}
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 17}, endpointDeps(state, recipes, dep, false))
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 18}, endpointDeps(state, recipes, dep, false))
 
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)
@@ -97,7 +97,7 @@ func TestCreateEndpointStepIdempotent(t *testing.T) {
 func TestCreateEndpointStepDeployFailureStops(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{createErr: errors.New("deploy failed")}
 	epID := uuid.New()
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_only", PgVersion: 17}, endpointDeps(state, newFakeRecipeStore(), dep, false))
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_only", PgVersion: 18}, endpointDeps(state, newFakeRecipeStore(), dep, false))
 	if res := step.Execute(t.Context()); !res.Failed() {
 		t.Fatal("Execute succeeded, want the deploy error propagated")
 	}
@@ -109,7 +109,7 @@ func TestCreateEndpointStepDeployFailureStops(t *testing.T) {
 func TestCreateEndpointStepRecordConflictSkipsDeploy(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	state.errEnsureEndpoint = errConflict
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 17}, endpointDeps(state, newFakeRecipeStore(), dep, false))
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 18}, endpointDeps(state, newFakeRecipeStore(), dep, false))
 	if res := step.Execute(t.Context()); !res.Failed() {
 		t.Fatal("Execute succeeded, want the record conflict propagated")
 	}
@@ -125,7 +125,7 @@ func TestCreateEndpointStepRecipeClearIsBestEffort(t *testing.T) {
 	recipes := newFakeRecipeStore()
 	recipes.errClear = errors.New("clear failed")
 	epID := uuid.New()
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 17}, endpointDeps(state, recipes, dep, false))
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 18}, endpointDeps(state, recipes, dep, false))
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute failed on a best-effort recipe-clear error: %v", res.Err)
 	}

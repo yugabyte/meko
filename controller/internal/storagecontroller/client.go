@@ -52,7 +52,7 @@ func (c *Client) Ready(ctx context.Context) error {
 // AncestorBranchID is null for a root (Bootstrap) branch; set, with start_lsn,
 // for a branch off another. branch_name is a non-unique human-readable label.
 // start_lsn is the controller's Lsn string form ("hi/lo" uppercase hex, e.g.
-// "0/0"); pg_version is the bare major version (17).
+// "0/0"); pg_version is the bare major version (18).
 type PendingTimelineInit struct {
 	BranchName       string  `json:"branch_name"`
 	PgVersion        int     `json:"pg_version"`

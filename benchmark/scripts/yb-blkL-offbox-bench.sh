@@ -42,7 +42,7 @@ PS_HTTP=172.151.20.28:9988
 PS_TLDIR=/mnt/ps/pageserver_layered/tenants/$TENANT/timelines/$TIMELINE
 
 # YB backing store (for blob-store size probe)
-YB_PSQL=/home/ec2-user/yb-neon-bundle/pg_install/v17/bin/psql
+YB_PSQL=/home/ec2-user/yb-neon-bundle/pg_install/v18/bin/psql
 ybq() { PGPASSWORD='Yugabyte!1' $YB_PSQL "host=172.151.17.132 port=5433 user=yugabyte dbname=yb_storage sslmode=require" -tAc "$1" 2>/dev/null; }
 
 TS=$(date -u +%Y%m%d-%H%M)

@@ -39,6 +39,7 @@
 
 #include "postgres.h"
 #include "libpq/pqformat.h"
+#include "storage/waiteventset.h"
 #include "yb_amp.h"
 #include "walproposer.h"
 #include "yb_amp_utils.h"

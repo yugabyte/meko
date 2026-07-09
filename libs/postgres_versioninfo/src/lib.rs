@@ -8,7 +8,7 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Deserialize_repr, Serialize_repr)]
 #[repr(u32)]
 pub enum PgMajorVersion {
-    PG17 = 17,
+    PG18 = 18,
     // !!! When you add a new PgMajorVersion, don't forget to update PgMajorVersion::ALL
 }
 
@@ -23,7 +23,7 @@ impl PgVersionId {
     pub fn from_full_pg_version(version: u32) -> PgVersionId {
         match version {
             0 => PgVersionId(version), // unknown version
-            140000..180000 => PgVersionId(version),
+            180000..190000 => PgVersionId(version),
             _ => panic!("Invalid full PostgreSQL version ID {version}"),
         }
     }
@@ -70,8 +70,28 @@ impl PgMajorVersion {
     /// Get the numerical representation of the represented Major Version
     pub const fn major_version_num(&self) -> u32 {
         match self {
-            PgMajorVersion::PG17 => 17,
+            PgMajorVersion::PG18 => 18,
         }
+    }
+
+    /// Whether this version uses the 64-bit two-phase (2PC) state format.
+    ///
+    /// PostgreSQL 17 widened 2PC state to 64-bit `FullTransactionId`: the
+    /// `pg_twophase` directory stores `u64` xids (`TwoPhaseDirectoryV17`) and
+    /// state-file names use 16 hex digits. v16 and earlier used 32-bit / 8-hex.
+    /// Centralised here so every 2PC read/write site agrees on the boundary
+    /// (which is v17, not v18 — this single-version tree just happens to only
+    /// build v18).
+    pub const fn has_64bit_twophase(&self) -> bool {
+        self.major_version_num() >= 17
+    }
+
+    /// Whether this version uses 64-bit SLRU page numbers.
+    ///
+    /// PostgreSQL 17 widened SLRU page numbers (clog / multixact / etc.) from
+    /// 32-bit to 64-bit in the WAL records that carry them.
+    pub const fn has_64bit_slru_pageno(&self) -> bool {
+        self.major_version_num() >= 17
     }
 
     /// Get the contents of this version's PG_VERSION file.
@@ -80,7 +100,7 @@ impl PgMajorVersion {
     /// owns the data in a PostgreSQL data directory.
     pub fn versionfile_string(&self) -> &'static str {
         match self {
-            PgMajorVersion::PG17 => "17\x0A",
+            PgMajorVersion::PG18 => "18\x0A",
         }
     }
 
@@ -90,19 +110,19 @@ impl PgMajorVersion {
     /// implementation.
     pub fn v_str(&self) -> String {
         match self {
-            PgMajorVersion::PG17 => "v17",
+            PgMajorVersion::PG18 => "v18",
         }
         .to_string()
     }
 
     /// All currently supported major versions of PostgreSQL.
-    pub const ALL: &'static [PgMajorVersion] = &[PgMajorVersion::PG17];
+    pub const ALL: &'static [PgMajorVersion] = &[PgMajorVersion::PG18];
 }
 
 impl Display for PgMajorVersion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            PgMajorVersion::PG17 => "PgMajorVersion::PG17",
+            PgMajorVersion::PG18 => "PgMajorVersion::PG18",
         })
     }
 }
@@ -122,7 +142,7 @@ impl TryFrom<PgVersionId> for PgMajorVersion {
 
     fn try_from(value: PgVersionId) -> Result<Self, Self::Error> {
         Ok(match value.0 / 10000 {
-            17 => PgMajorVersion::PG17,
+            18 => PgMajorVersion::PG18,
             _ => return Err(InvalidPgVersion(value.0)),
         })
     }
@@ -148,7 +168,7 @@ impl FromStr for PgMajorVersion {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
-            "17" => PgMajorVersion::PG17,
+            "18" => PgMajorVersion::PG18,
             _ => return Err(PgMajorVersionParseError(s.to_string())),
         })
     }

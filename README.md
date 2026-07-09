@@ -344,10 +344,10 @@ fresh clone and for every build after:
 It does everything the build needs, so there's no manual `git submodule
 update` or `make` to remember. Specifically it:
 
-- Checks out the vendored **PostgreSQL v17** tree (`vendor/postgres-v17`)
+- Checks out the vendored **PostgreSQL v18** tree (`vendor/postgres-v18`)
   on a fresh clone, and re-syncs + rebuilds PostgreSQL whenever the
   submodule gitlink has moved; otherwise it reuses the cached
-  `pg_install/v17`.
+  `pg_install/v18`.
 - Installs the **PostgreSQL server headers** before `cargo build` (the
   `postgres_ffi` crate generates Rust bindings from them, so a bare
   `cargo build` would otherwise fail with `bindgen_deps.h: 'c.h' file not
@@ -373,7 +373,7 @@ yb-compute-ctl
 yb-endpoint-storage
 tools/                   # yb-dump-pages, yb-dump-wals, yb-reset-consistent-lsn
 lib/                     # libssl/libcrypto 1.1 + libicu 60 (not on stock RHEL 9)
-pg_install/v17/          # patched PG + extensions + the same runtime libs
+pg_install/v18/          # patched PG + extensions + the same runtime libs
 REVISION.txt             # build host / date / commit
 ```
 

@@ -1237,8 +1237,12 @@ pg_init_libpagestore(void)
 	if (pageserver_connstring[0])
 	{
 		yb_amp_log(PageStoreTrace, "set yb_amp_smgr hook");
+#if PG_MAJORVERSION_NUM >= 18
+		smgr_register_yb_amp();
+#else
 		smgr_hook = smgr_yb_amp;
 		smgr_init_hook = smgr_init_yb_amp;
+#endif
 		dbsize_hook = yb_amp_dbsize;
 		read_slru_segment_hook = yb_amp_read_slru_segment;
 	}

@@ -27,7 +27,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
     c.yb(&[
         "endpoint", "create", ENDPOINT_ID, "--branch-id", &branch, "--branch-name", "main",
-        "--pg-version", "17", "--pg-port", &tools_port.to_string(),
+        "--pg-version", "18", "--pg-port", &tools_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", ENDPOINT_ID])?;
 

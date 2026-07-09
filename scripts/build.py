@@ -22,11 +22,11 @@ so a cached debug PG is detected and rebuilt in release regardless of mode.
 
 PostgreSQL submodule handling (every mode):
     ybAmp builds against a patched PostgreSQL tree vendored as the
-    `vendor/postgres-v17` git submodule. This script checks it out if it is
+    `vendor/postgres-v18` git submodule. This script checks it out if it is
     missing, and when the gitlink recorded in HEAD differs from the commit in
     the working tree (e.g. a rebase/pull bumped it) it re-syncs and rebuilds
     PostgreSQL from source. When the submodule already matches and
-    pg_install/v17 exists, the cached install is reused (PG_INSTALL_CACHED=1)
+    pg_install/v18 exists, the cached install is reused (PG_INSTALL_CACHED=1)
     and only the C extensions are recompiled. This closes the footgun where a
     bumped gitlink would otherwise ship a stale Postgres against the cache.
 """
@@ -43,8 +43,8 @@ from pathlib import Path
 # Repo root = parent of this script's scripts/ dir, so the build works no
 # matter where it's invoked from.
 ROOT = Path(__file__).resolve().parent.parent
-SUBMODULE = "vendor/postgres-v17"
-PG_VERSION = "v17"
+SUBMODULE = "vendor/postgres-v18"
+PG_VERSION = "v18"
 PG_INSTALL = ROOT / "pg_install" / PG_VERSION
 BUILD_DIR = ROOT / "build"
 # PostgreSQL is always built in release mode (see module docstring). Only the
@@ -74,7 +74,7 @@ BUILD_CRATES = [
 ]
 # Runtime libs not present on stock AlmaLinux/RHEL 9 (OpenSSL 1.1, ICU 60).
 # See memory/bundle-runtime-libs.md. Staged top-level for the daemons and into
-# pg_install/v17/lib/ for the walredo postgres child (LD_LIBRARY_PATH is only
+# pg_install/v18/lib/ for the walredo postgres child (LD_LIBRARY_PATH is only
 # that dir — see #33).
 RUNTIME_LIBS = [
     "libssl.so.1.1",
@@ -104,10 +104,10 @@ def git_out(*args):
 
 
 def sync_submodule_if_needed():
-    """Check out / re-sync vendor/postgres-v17. Return True if PG needs a rebuild.
+    """Check out / re-sync vendor/postgres-v18. Return True if PG needs a rebuild.
 
     PG must be rebuilt when the working tree doesn't match the gitlink (a bump,
-    or a fresh/absent checkout) or when pg_install/v17 was never built.
+    or a fresh/absent checkout) or when pg_install/v18 was never built.
     """
     want = git_out("rev-parse", f"HEAD:{SUBMODULE}")
     have = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
@@ -120,10 +120,10 @@ def sync_submodule_if_needed():
         run(["git", "submodule", "update", "--init", "--recursive", "--", SUBMODULE])
         return True
     if not pg_built:
-        say("pg_install/v17 missing — building PostgreSQL from source...")
+        say("pg_install/v18 missing — building PostgreSQL from source...")
         run(["git", "submodule", "update", "--init", "--recursive", "--", SUBMODULE])
         return True
-    say(f"{SUBMODULE} up to date ({have[:12]}) — reusing cached pg_install/v17")
+    say(f"{SUBMODULE} up to date ({have[:12]}) — reusing cached pg_install/v18")
     return False
 
 
@@ -191,14 +191,14 @@ def stage_and_package(target_dir):
     for lib in RUNTIME_LIBS:
         shutil.copy2(f"/usr/lib64/{lib}", bundle / "lib" / lib)
 
-    # pg_install/v17/ — postgres binaries the compute spawns + the neon .so
+    # pg_install/v18/ — postgres binaries the compute spawns + the neon .so
     # extensions. Without a matching tree the compute loads a wire-incompatible
     # neon.so. copytree(symlinks=True) preserves the tree's symlinks.
-    say(f"Staging pg_install/v17/ ({_du(PG_INSTALL)})...")
+    say(f"Staging pg_install/v18/ ({_du(PG_INSTALL)})...")
     (bundle / "pg_install").mkdir()
-    shutil.copytree(PG_INSTALL, bundle / "pg_install" / "v17", symlinks=True)
+    shutil.copytree(PG_INSTALL, bundle / "pg_install" / "v18", symlinks=True)
     for lib in RUNTIME_LIBS:
-        shutil.copy2(f"/usr/lib64/{lib}", bundle / "pg_install" / "v17" / "lib" / lib)
+        shutil.copy2(f"/usr/lib64/{lib}", bundle / "pg_install" / "v18" / "lib" / lib)
 
     pg_commit = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
     head = git_out("rev-parse", "HEAD")
@@ -273,7 +273,7 @@ def main():
     ext_target = f"neon-pg-ext-{PG_VERSION}"
 
     if mode == "headers":
-        # postgres-headers-install-% installs into pg_install/v17/include so a
+        # postgres-headers-install-% installs into pg_install/v18/include so a
         # bare cargo build/check can generate the postgres_ffi bindings. Headers
         # are build-type-independent, so this mode never wipes/rebuilds PG.
         say(f"Installing PostgreSQL server headers ({PG_BUILD_TYPE})...")
@@ -281,7 +281,7 @@ def main():
             ["make", f"BUILD_TYPE={PG_BUILD_TYPE}", headers_target],
             env=make_env(cached=False),
         )
-        say("Headers installed under pg_install/v17/include/. `cargo check` will work now.")
+        say("Headers installed under pg_install/v18/include/. `cargo check` will work now.")
         return
 
     # PostgreSQL must be a release build regardless of mode. If the cache is a
@@ -295,7 +295,7 @@ def main():
 
     # Build (or rebuild) PostgreSQL in release *before* cargo: postgres_ffi's
     # build script generates bindings from the installed server headers
-    # (pg_install/v17/include), and postgres-install installs those headers.
+    # (pg_install/v18/include), and postgres-install installs those headers.
     # Skipped when the cached PG is already release and the submodule matches.
     if rebuild_pg:
         say(f"Building PostgreSQL {PG_VERSION} from source ({PG_BUILD_TYPE})...")
@@ -322,7 +322,7 @@ def main():
     )
 
     if mode != "release-tar":
-        say(f"Build complete ({mode}). Binaries in {target_dir}/, extensions in pg_install/v17/.")
+        say(f"Build complete ({mode}). Binaries in {target_dir}/, extensions in pg_install/v18/.")
         say("Re-run with --release-tar to package a shippable bundle.")
         return
 

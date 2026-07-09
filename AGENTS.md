@@ -116,7 +116,7 @@ Code anchors:
 - `./build.sh` is the single build entry point: no flag = debug, `--release`
   = release, `--release-tar` = release + shippable tarball, `--headers` =
   install just the PG headers (for `cargo check` / IDE). It checks out the
-  `vendor/postgres-v17` submodule on a fresh clone and rebuilds PostgreSQL
+  `vendor/postgres-v18` submodule on a fresh clone and rebuilds PostgreSQL
   when the gitlink moves, so prefer it over a bare `make`/`cargo build`. The
   logic lives in [`scripts/build.py`](scripts/build.py); `build.sh` is a thin
   shim.

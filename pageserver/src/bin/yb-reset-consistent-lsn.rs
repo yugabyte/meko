@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = read_timeline_state(&client, &branch).await?;
     let pg_version = match state.pg_version {
-        17 => PgMajorVersion::PG17,
+        18 => PgMajorVersion::PG18,
         v => bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
     };
 
@@ -293,7 +293,7 @@ impl WalSource for WalReader<'_> {
 mod tests {
     use super::*;
     use postgres_ffi::XLOG_BLCKSZ;
-    use postgres_ffi::v17::wal_generator::{LogicalMessageGenerator, WalGenerator};
+    use postgres_ffi::v18::wal_generator::{LogicalMessageGenerator, WalGenerator};
 
     /// In-memory WAL: a single contiguous byte buffer covering
     /// `[start, start + buf.len())`. Serves the whole buffer as one
@@ -352,7 +352,7 @@ mod tests {
 
         // Decode the whole thing from the very start (itself a boundary).
         let target = *starts.last().unwrap();
-        let (boundaries, stop) = decode_forward(&src, START, target, PgMajorVersion::PG17)
+        let (boundaries, stop) = decode_forward(&src, START, target, PgMajorVersion::PG18)
             .await
             .unwrap();
         assert!(stop.is_none(), "unexpected early stop: {stop:?}");
@@ -381,7 +381,7 @@ mod tests {
         let target = starts[k];
         let anchor = find_anchor(&src, target).await.unwrap();
         assert!(anchor <= target, "anchor {anchor} must be <= target {target}");
-        let (boundaries, _) = decode_forward(&src, anchor, target, PgMajorVersion::PG17)
+        let (boundaries, _) = decode_forward(&src, anchor, target, PgMajorVersion::PG18)
             .await
             .unwrap();
         let idx = boundaries.iter().rposition(|b| *b <= target).unwrap();
@@ -397,7 +397,7 @@ mod tests {
         let mid = Lsn(starts[k].0 + 8);
         assert!(mid < starts[k + 1], "test setup: 8 bytes stays within record k");
         let anchor = find_anchor(&src, mid).await.unwrap();
-        let (boundaries, _) = decode_forward(&src, anchor, mid, PgMajorVersion::PG17)
+        let (boundaries, _) = decode_forward(&src, anchor, mid, PgMajorVersion::PG18)
             .await
             .unwrap();
         let idx = boundaries.iter().rposition(|b| *b <= mid).unwrap();
@@ -435,7 +435,7 @@ mod tests {
         assert!(target < after_big);
         let anchor = find_anchor(&src, target).await.unwrap();
         assert!(anchor <= target);
-        let (boundaries, _) = decode_forward(&src, anchor, target, PgMajorVersion::PG17)
+        let (boundaries, _) = decode_forward(&src, anchor, target, PgMajorVersion::PG18)
             .await
             .unwrap();
         let idx = boundaries.iter().rposition(|b| *b <= target).unwrap();

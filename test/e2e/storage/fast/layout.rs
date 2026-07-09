@@ -86,7 +86,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     ));
     c.yb(&[
         "endpoint", "create", LAYOUT_EP, "--branch-name", LAYOUT_BRANCH,
-        "--pg-version", "17", "--pg-port", &layout_pg_port.to_string(),
+        "--pg-version", "18", "--pg-port", &layout_pg_port.to_string(),
     ])?;
     let ep_dir = r.join("endpoints").join(LAYOUT_EP);
     must_exist(

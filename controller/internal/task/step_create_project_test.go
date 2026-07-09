@@ -11,7 +11,7 @@ func TestCreateProjectStep(t *testing.T) {
 	state := newFakeStateStore()
 	branchID := uuid.New()
 	step := NewCreateProjectStep(CreateProjectArgs{
-		PoolID: uuid.New(), ProjectID: uuid.New(), BranchID: branchID, Name: "main", PgVersion: 17,
+		PoolID: uuid.New(), ProjectID: uuid.New(), BranchID: branchID, Name: "main", PgVersion: 18,
 	}, Deps{State: state})
 
 	res := step.Execute(t.Context())
@@ -40,7 +40,7 @@ func TestCreateProjectStep(t *testing.T) {
 func TestCreateProjectStepPropagatesError(t *testing.T) {
 	state := newFakeStateStore()
 	state.errEnsureProject = errors.New("name taken")
-	step := NewCreateProjectStep(CreateProjectArgs{ProjectID: uuid.New(), BranchID: uuid.New(), Name: "main", PgVersion: 17}, Deps{State: state})
+	step := NewCreateProjectStep(CreateProjectArgs{ProjectID: uuid.New(), BranchID: uuid.New(), Name: "main", PgVersion: 18}, Deps{State: state})
 	if res := step.Execute(t.Context()); !res.Failed() {
 		t.Fatal("Execute succeeded, want the state-store error propagated")
 	}

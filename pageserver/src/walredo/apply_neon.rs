@@ -3,7 +3,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::BytesMut;
 use pageserver_api::key::Key;
 use pageserver_api::reltag::SlruKind;
-use postgres_ffi::v17::nonrelfile_utils::{
+use postgres_ffi::v18::nonrelfile_utils::{
     mx_offset_to_flags_bitshift, mx_offset_to_flags_offset, mx_offset_to_member_offset,
     transaction_id_set_status,
 };

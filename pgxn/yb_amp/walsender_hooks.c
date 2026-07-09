@@ -16,6 +16,8 @@
 #include "access/xlog_internal.h"
 #include "access/xlogreader.h"
 #include "miscadmin.h"
+#include "storage/latch.h"
+#include "storage/waiteventset.h"
 #include "utils/wait_event.h"
 #include "utils/guc.h"
 #include "postmaster/interrupt.h"

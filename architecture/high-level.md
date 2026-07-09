@@ -4,7 +4,7 @@
 
 | Component | Role | Process binary |
 |---|---|---|
-| Compute | User-facing Postgres backend. Speaks Postgres wire protocol to clients. | `pg_install/v17/bin/postgres` (with Neon smgr patches) |
+| Compute | User-facing Postgres backend. Speaks Postgres wire protocol to clients. | `pg_install/v18/bin/postgres` (with Neon smgr patches) |
 | `compute_ctl` | Supervisor for the compute: applies config, starts/stops PG, runs catalog migrations. | `target/debug/yb-compute-ctl` |
 | Safekeeper | Raft acceptor for WAL. Receives WAL from compute, durably stores it, streams to pageserver. **Limited to one instance per cluster in YB WAL mode** — YB's own Raft already provides quorum durability. | `target/debug/yb-safekeeper` |
 | Pageserver | Materializes pages from WAL and serves them to compute on demand. Holds the only durable copy of relfiles (via `remote_storage`). | `target/debug/yb-pageserver` |
@@ -90,8 +90,8 @@ key the pageserver/safekeeper use. In YB the path is split across the
 
 These subsystems run unmodified upstream Neon code in yb-light:
 
-- The Postgres compute itself (`pg_install/v17/bin/postgres` with Neon smgr
-  patches from `vendor/postgres-v17`).
+- The Postgres compute itself (`pg_install/v18/bin/postgres` with Neon smgr
+  patches from `vendor/postgres-v18`).
 - `compute_ctl` and the compute spec. (The endpoint *registry* — what
   `yb_light_local` persists per endpoint — moved out of `endpoint.json` folders
   into the `storage_controller.endpoints` table; `compute_ctl` itself is
@@ -148,7 +148,7 @@ yb-light binaries (target/debug/)
   yb-safekeeper --id 1   (config from on-disk safekeeper.toml: yb_storage_conn; yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
   yb-endpoint-storage   (config from endpoints/<name>/endpoint_storage/endpoint_storage.json; one per endpoint, base port 9993 + 2*k)
   yb-compute-ctl --pgdata .yb_light/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
-    +-- postgres (v17.8 + Neon patches)  :55440
+    +-- postgres (18.2 + Neon/yb_amp patches)  :55440
 ```
 
 A production deployment would have M pageservers partitioned by branch

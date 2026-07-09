@@ -19,8 +19,8 @@ import (
 )
 
 // defaultPgVersion backs an endpoint whose spec omits a version (the chart's
-// own default is the same). yb-light is Postgres v17 only.
-const defaultPgVersion = 17
+// own default is the same). yb-light is Postgres v18 only.
+const defaultPgVersion = 18
 
 // serviceTypeLoadBalancer is the endpoint Service type that gets an external IP;
 // the deployer then reports that IP as the endpoint's client address.

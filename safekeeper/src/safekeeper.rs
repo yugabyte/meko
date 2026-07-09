@@ -749,7 +749,7 @@ mod tests {
         let state = TimelinePersistentState {
             branch_id,
             server: ServerInfo {
-                pg_version: PgVersionId::from_full_pg_version(140000),
+                pg_version: PgVersionId::from_full_pg_version(180000),
                 system_id: 0x1234567887654321,
                 wal_seg_size: 0x12345678,
             },

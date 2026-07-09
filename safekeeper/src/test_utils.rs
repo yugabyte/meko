@@ -2,7 +2,7 @@ use std::ffi::CStr;
 use std::sync::Arc;
 
 use camino_tempfile::Utf8TempDir;
-use postgres_ffi::v17::wal_generator::{LogicalMessageGenerator, WalGenerator};
+use postgres_ffi::v18::wal_generator::{LogicalMessageGenerator, WalGenerator};
 use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 

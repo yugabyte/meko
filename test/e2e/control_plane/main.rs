@@ -592,7 +592,7 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
     let readiness = Duration::from_secs(90);
 
     step("controller: create project (tenant + default branch 'main')");
-    let project = client.create_project(pool, &proj_name, 17).await.context("create project")?;
+    let project = client.create_project(pool, &proj_name, 18).await.context("create project")?;
     let main_b = project.default_branch.clone();
     let main_meta = client.get_branch(pool, &project.id, &main_b.id).await.context("get default branch")?;
     assert_branch_meta(&main_meta, true, None).context("default branch metadata")?;

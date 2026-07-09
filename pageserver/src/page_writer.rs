@@ -3789,7 +3789,7 @@ mod tests {
                 ancestor_branch_id: None,
                 ancestor_lsn: None,
                 current_generation: 1,
-                pg_version: 17,
+                pg_version: 18,
                 initdb_lsn: None,
                 prev_record_lsn: None,
                 archived_at: None,

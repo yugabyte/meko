@@ -3,7 +3,7 @@
 # different images for each PostgreSQL major version.
 #
 # We use Debian as the base for all the steps. The production images use Debian bookworm
-# for v17, and Debian bullseye for older PostgreSQL versions.
+# for v18, and Debian bullseye for older PostgreSQL versions.
 #
 # ## Intermediary layers
 #
@@ -136,7 +136,7 @@ RUN case $DEBIAN_VERSION in \
         echo "deb http://archive.debian.org/debian bullseye-backports main" > /etc/apt/sources.list.d/bullseye-backports.list; \
         VERSION_INSTALLS="cmake/bullseye-backports cmake-data/bullseye-backports libstdc++-10-dev"; \
       ;; \
-      # Version-specific installs for Bookworm (PG17):
+      # Version-specific installs for Bookworm (PG18):
       bookworm) \
         VERSION_INSTALLS="cmake libstdc++-12-dev"; \
       ;; \
@@ -185,7 +185,7 @@ RUN cd postgres && \
     "v14" | "v15" | "v16") \
     patch -p1 < /pg_stat_statements_pg14-16.patch; \
     ;; \
-    "v17") \
+    "v18") \
     patch -p1 < /pg_stat_statements_pg17.patch; \
     ;; \
     *) \
@@ -236,7 +236,7 @@ ARG PG_VERSION
 # SFCGAL > 1.3 requires CGAL > 5.2, Bullseye's libcgal-dev is 5.2
 # and also we must check backward compatibility with older versions of PostGIS.
 #
-# Use new version only for v17
+# Use new version only for v18
 WORKDIR /ext-src
 RUN case "${DEBIAN_VERSION}" in \
     "bookworm") \
@@ -255,10 +255,10 @@ RUN case "${DEBIAN_VERSION}" in \
     echo "${SFCGAL_CHECKSUM} SFCGAL.tar.gz" | sha256sum --check && \
     mkdir sfcgal-src && cd sfcgal-src && tar xzf ../SFCGAL.tar.gz --strip-components=1 -C .
 
-# Postgis 3.5.0 supports v17
+# Postgis 3.5.0 supports v18
 WORKDIR /ext-src
 RUN case "${PG_VERSION:?}" in \
-    "v17") \
+    "v18") \
         export POSTGIS_VERSION=3.5.0 \
         export POSTGIS_CHECKSUM=ca698a22cc2b2b3467ac4e063b43a28413f3004ddd505bdccdd74c56a647f510 \
     ;; \
@@ -327,14 +327,14 @@ RUN ./autogen.sh && \
 # and may introduce function signature changes between releases
 # i.e. release 3.5.0 has new signature for pg_dijkstra function
 #
-# Use new version only for v17
+# Use new version only for v18
 # last release v3.6.2 - Mar 30, 2024
 FROM build-deps AS pgrouting-src
 ARG DEBIAN_VERSION
 ARG PG_VERSION
 WORKDIR /ext-src
 RUN case "${PG_VERSION:?}" in \
-    "v17") \
+    "v18") \
         export PGROUTING_VERSION=3.6.2 \
         export PGROUTING_CHECKSUM=f4a1ed79d6f714e52548eca3bb8e5593c6745f1bde92eb5fb858efd8984dffa2 \
     ;; \
@@ -371,16 +371,16 @@ WORKDIR /ext-src
 
 COPY compute/patches/plv8* .
 
-# plv8 3.2.3 supports v17
+# plv8 3.2.3 supports v18
 # last release v3.2.3 - Sep 7, 2024
 #
 # clone the repo instead of downloading the release tarball because plv8 has submodule dependencies
 # and the release tarball doesn't include them
 #
-# Use new version only for v17
+# Use new version only for v18
 # because since v3.2, plv8 doesn't include plcoffee and plls extensions
 RUN case "${PG_VERSION:?}" in \
-    "v17") \
+    "v18") \
         export PLV8_TAG=v3.2.3 \
     ;; \
     "v14" | "v15" | "v16") \
@@ -393,7 +393,7 @@ RUN case "${PG_VERSION:?}" in \
     git clone --recurse-submodules --depth 1 --branch ${PLV8_TAG} https://github.com/plv8/plv8.git plv8-src && \
     tar -czf plv8.tar.gz --exclude .git plv8-src && \
     cd plv8-src && \
-    if [[ "${PG_VERSION:?}" < "v17" ]]; then patch -p1 < /ext-src/plv8_v3.1.10.patch; else patch -p1 < /ext-src/plv8_v3.2.3.patch; fi
+    if [[ "${PG_VERSION:?}" < "v18" ]]; then patch -p1 < /ext-src/plv8_v3.1.10.patch; else patch -p1 < /ext-src/plv8_v3.2.3.patch; fi
 
 # Step 1: Build the vendored V8 engine. It doesn't depend on PostgreSQL, so use
 # 'build-deps' as the base. This enables caching and avoids unnecessary rebuilds.
@@ -421,7 +421,7 @@ RUN \
     # don't break computes with installed old version of plv8
     cd /usr/local/pgsql/lib/ && \
     case "${PG_VERSION:?}" in \
-    "v17") \
+    "v18") \
         ln -s plv8-3.2.3.so plv8-3.1.8.so && \
         ln -s plv8-3.2.3.so plv8-3.1.5.so && \
         ln -s plv8-3.2.3.so plv8-3.1.10.so \
@@ -521,7 +521,7 @@ COPY compute/patches/pgvector.patch .
 # because we build the images on different machines than where we run them.
 # Pass OPTFLAGS="" to remove it.
 #
-# vector >0.7.4 supports v17
+# vector >0.7.4 supports v18
 # last release v0.8.0 - Oct 30, 2024
 RUN wget https://github.com/pgvector/pgvector/archive/refs/tags/v0.8.0.tar.gz -O pgvector.tar.gz && \
     echo "867a2c328d4928a5a9d6f052cd3bc78c7d60228a9b914ad32aa3db88e9de27b0 pgvector.tar.gz" | sha256sum --check && \
@@ -568,7 +568,7 @@ RUN make -j $(getconf _NPROCESSORS_ONLN) install && \
 FROM build-deps AS hypopg-src
 ARG PG_VERSION
 
-# HypoPG 1.4.1 supports v17
+# HypoPG 1.4.1 supports v18
 # last release 1.4.1 - Apr 28, 2024
 WORKDIR /ext-src
 RUN wget https://github.com/HypoPG/hypopg/archive/refs/tags/1.4.1.tar.gz -O hypopg.tar.gz && \
@@ -591,11 +591,11 @@ RUN make -j $(getconf _NPROCESSORS_ONLN) && \
 FROM build-deps AS online_advisor-src
 ARG PG_VERSION
 
-# online_advisor supports all Postgres version starting from PG14, but prior to PG17 has to be included in preload_shared_libraries
+# online_advisor supports all Postgres version starting from PG14, but prior to PG18 has to be included in preload_shared_libraries
 # last release 1.0 - May 15, 2025
 WORKDIR /ext-src
 RUN case "${PG_VERSION:?}" in \
-    "v17") \
+    "v18") \
         ;; \
     *) \
         echo "skipping the version of online_advistor for $PG_VERSION" && exit 0 \
@@ -649,7 +649,7 @@ ARG PG_VERSION
 WORKDIR /ext-src
 COPY compute/patches/rum.patch .
 
-# supports v17 since https://github.com/postgrespro/rum/commit/cb1edffc57736cd2a4455f8d0feab0d69928da25
+# supports v18 since https://github.com/postgrespro/rum/commit/cb1edffc57736cd2a4455f8d0feab0d69928da25
 # doesn't use releases since 1.3.13 - Sep 19, 2022
 # use latest commit from the master branch
 RUN wget https://github.com/postgrespro/rum/archive/cb1edffc57736cd2a4455f8d0feab0d69928da25.tar.gz -O rum.tar.gz && \
@@ -673,7 +673,7 @@ RUN make -j $(getconf _NPROCESSORS_ONLN) USE_PGXS=1 && \
 FROM build-deps AS pgtap-src
 ARG PG_VERSION
 
-# pgtap 1.3.3 supports v17
+# pgtap 1.3.3 supports v18
 # last release v1.3.3 - Apr 8, 2024
 WORKDIR /ext-src
 RUN wget https://github.com/theory/pgtap/archive/refs/tags/v1.3.3.tar.gz -O pgtap.tar.gz && \
@@ -765,7 +765,7 @@ RUN make -j $(getconf _NPROCESSORS_ONLN) && \
 FROM build-deps AS plpgsql_check-src
 ARG PG_VERSION
 
-# plpgsql_check v2.7.11 supports v17
+# plpgsql_check v2.7.11 supports v18
 # last release v2.7.11 - Sep 16, 2024
 WORKDIR /ext-src
 RUN wget https://github.com/okbob/plpgsql_check/archive/refs/tags/v2.7.11.tar.gz -O plpgsql_check.tar.gz && \
@@ -798,7 +798,7 @@ RUN case "${PG_VERSION:?}" in \
         export TIMESCALEDB_VERSION=2.13.0 \
         export TIMESCALEDB_CHECKSUM=584a351c7775f0e067eaa0e7277ea88cab9077cc4c455cbbf09a5d9723dce95d \
         ;; \
-      "v17") \
+      "v18") \
         export TIMESCALEDB_VERSION=2.17.1 \
         export TIMESCALEDB_CHECKSUM=6277cf43f5695e23dae1c5cfeba00474d730b66ed53665a84b787a6bb1a57e28 \
         ;; \
@@ -840,7 +840,7 @@ RUN case "${PG_VERSION:?}" in \
         export PG_HINT_PLAN_VERSION=16_1_6_0 \
         export PG_HINT_PLAN_CHECKSUM=fc85a9212e7d2819d4ae4ac75817481101833c3cfa9f0fe1f980984e12347d00 \
         ;; \
-      "v17") \
+      "v18") \
         export PG_HINT_PLAN_VERSION=17_1_7_0 \
         export PG_HINT_PLAN_CHECKSUM=06dd306328c67a4248f48403c50444f30959fb61ebe963248dbc2afb396fe600 \
         ;; \
@@ -895,16 +895,16 @@ RUN make -j $(getconf _NPROCESSORS_ONLN) && \
 FROM build-deps AS rdkit-src
 ARG PG_VERSION
 
-# rdkit Release_2024_09_1 supports v17
+# rdkit Release_2024_09_1 supports v18
 # last release Release_2024_09_1 - Sep 27, 2024
 #
-# Use new version only for v17
+# Use new version only for v18
 # because Release_2024_09_1 has some backward incompatible changes
 # https://github.com/rdkit/rdkit/releases/tag/Release_2024_09_1
 
 WORKDIR /ext-src
 RUN case "${PG_VERSION:?}" in \
-    "v17") \
+    "v18") \
         export RDKIT_VERSION=Release_2024_09_1 \
         export RDKIT_CHECKSUM=034c00d6e9de323506834da03400761ed8c3721095114369d06805409747a60f \
     ;; \
@@ -1026,12 +1026,12 @@ ARG PG_VERSION
 
 # Release 0.40.0 breaks backward compatibility with previous versions
 # see release note https://github.com/theory/pg-semver/releases/tag/v0.40.0
-# Use new version only for v17
+# Use new version only for v18
 #
 # last release v0.40.0 - Jul 22, 2024
 WORKDIR /ext-src
 RUN case "${PG_VERSION:?}" in \
-    "v17") \
+    "v18") \
         export SEMVER_VERSION=0.40.0 \
         export SEMVER_CHECKSUM=3e50bcc29a0e2e481e7b6d2bc937cadc5f5869f55d983b5a1aafeb49f5425cfc \
     ;; \
@@ -1100,8 +1100,8 @@ FROM pg-build-with-cargo AS rust-extensions-build
 ARG PG_VERSION
 
 RUN case "${PG_VERSION:?}" in \
-        'v17') \
-            echo 'v17 is not supported yet by pgrx. Quit' && exit 0;; \
+        'v18') \
+            echo 'v18 is not supported yet by pgrx. Quit' && exit 0;; \
     esac && \
     cargo install --locked --version 0.11.3 cargo-pgrx && \
     /bin/bash -c 'cargo pgrx init --pg${PG_VERSION:1}=/usr/local/pgsql/bin/pg_config'
@@ -1321,7 +1321,7 @@ RUN if [ -d pgx_ulid-src ]; then \
 #########################################################################################
 #
 # Layer "pgx_ulid-pgrx12-build"
-# Compile "pgx_ulid" extension for v17 and up
+# Compile "pgx_ulid" extension for v18 and up
 #
 #########################################################################################
 
@@ -1330,7 +1330,7 @@ ARG PG_VERSION
 
 WORKDIR /ext-src
 RUN case "${PG_VERSION:?}" in \
-    "v17") \
+    "v18") \
         ;; \
     *) \
         echo "skipping the version of pgx_ulid for $PG_VERSION" && exit 0 \
@@ -1423,7 +1423,7 @@ RUN cd pg_anon-src && \
 FROM build-deps AS wal2json-src
 ARG PG_VERSION
 
-# wal2json wal2json_2_6 supports v17
+# wal2json wal2json_2_6 supports v18
 # last release wal2json_2_6 - Apr 25, 2024
 WORKDIR /ext-src
 RUN wget https://github.com/eulerto/wal2json/archive/refs/tags/wal2json_2_6.tar.gz -O wal2json.tar.gz && \
@@ -1445,7 +1445,7 @@ RUN make -j $(getconf _NPROCESSORS_ONLN) && \
 FROM build-deps AS pg_ivm-src
 ARG PG_VERSION
 
-# pg_ivm v1.9 supports v17
+# pg_ivm v1.9 supports v18
 # last release v1.9 - Jul 31
 WORKDIR /ext-src
 RUN wget https://github.com/sraoss/pg_ivm/archive/refs/tags/v1.9.tar.gz -O pg_ivm.tar.gz && \
@@ -1468,7 +1468,7 @@ RUN make -j $(getconf _NPROCESSORS_ONLN) && \
 FROM build-deps AS pg_partman-src
 ARG PG_VERSION
 
-# should support v17 https://github.com/pgpartman/pg_partman/discussions/693
+# should support v18 https://github.com/pgpartman/pg_partman/discussions/693
 # last release 5.1.0  Apr 2, 2024
 WORKDIR /ext-src
 RUN wget https://github.com/pgpartman/pg_partman/archive/refs/tags/v5.1.0.tar.gz -O pg_partman.tar.gz && \
@@ -1579,7 +1579,7 @@ RUN case "${PG_VERSION}" in \
     export PGAUDIT_VERSION=16.1 \
     export PGAUDIT_CHECKSUM=3bae908ab70ba0c6f51224009dbcfff1a97bd6104c6273297a64292e1b921fee \
     ;; \
-    "v17") \
+    "v18") \
     export PGAUDIT_VERSION=17.1 \
     export PGAUDIT_CHECKSUM=9c5f37504d393486cc75d2ced83f75f5899be64fa85f689d6babb833b4361e6c \
     ;; \
@@ -1607,7 +1607,7 @@ FROM build-deps AS pgauditlogtofile-src
 ARG PG_VERSION
 WORKDIR /ext-src
 RUN case "${PG_VERSION}" in \
-    "v14" | "v15" | "v16" | "v17") \
+    "v14" | "v15" | "v16" | "v18") \
     export PGAUDITLOGTOFILE_VERSION=v1.6.4 \
     export PGAUDITLOGTOFILE_CHECKSUM=ef801eb09c26aaa935c0dabd92c81eb9ebe338930daa9674d420a280c6bc2d70 \
     ;; \
@@ -1949,7 +1949,7 @@ RUN apt update && \
       bullseye) \
         VERSION_INSTALLS="libicu67 libgdal28 libproj19"; \
       ;; \
-      # Version-specific installs for Bookworm (PG17):
+      # Version-specific installs for Bookworm (PG18):
       # libicu72, locales for collations (including ICU and plpgsql_check)
       # libgdal32, libproj25 for PostGIS
       bookworm) \

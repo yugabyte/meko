@@ -299,7 +299,7 @@ pub struct ConfigToml {
 /// ```toml
 /// [timeline_init]
 /// mode       = "bootstrap"
-/// pg_version = 17
+/// pg_version = 18
 /// ```
 /// or
 /// ```toml

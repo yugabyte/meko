@@ -509,6 +509,38 @@ _PG_init(void)
 	 */
 
 	/* Stage 1: Define GUCs, and other early intialization */
+
+	/*
+	 * Force io_method=sync.
+	 *
+	 * yb-amp's read concurrency comes from PostgreSQL's read_stream prefetch
+	 * ("advice") path: it issues smgr_prefetch ahead of the actual reads, which
+	 * feeds the compute<->pageserver prefetch ring so getpages pipeline. Core
+	 * only enables that advice path when io_method == sync (read_stream derives
+	 * its sync_mode from this GUC). The non-sync methods (worker, io_uring)
+	 * instead drive reads through the AIO path, where yb-amp's smgr satisfies
+	 * each getpage synchronously -- so the prefetch/pipelining collapses and
+	 * streaming reads regress badly (measured ~7x on bitmap, ~2x on seqscan on
+	 * RF-3). In short: the non-sync modes disable the prefetch that yb-amp
+	 * relies on. Forcing sync keeps it, and costs nothing here -- a compute has
+	 * no local file IO for the async methods to overlap. PGC_S_OVERRIDE so a
+	 * user-set io_method cannot reintroduce the regression.
+	 *
+	 * REQUIRED FOR CORRECTNESS, not just performance: yb-amp's smgrs are fd-less.
+	 * Synchronously-executed reads complete via the fd=-1 sentinel gate in
+	 * pgaio_io_perform_synchronously() (aio_io.c). But under the async methods
+	 * (worker, io_uring) the async-eligible reads are dispatched to a worker/kernel
+	 * that reopens the fd via the smgr reopen/smgr_fd callback -- yb-amp's smgr_fd
+	 * errors out -- so those reads would FAIL. Tracked in #228 (async getpage /
+	 * AIO integration).
+	 *
+	 * Runs in _PG_init (before shmem is created), so this value is in effect by
+	 * the time the AIO subsystem reads io_method.
+	 */
+#if PG_MAJORVERSION_NUM >= 18
+	SetConfigOption("io_method", "sync", PGC_POSTMASTER, PGC_S_OVERRIDE);
+#endif
+
 	pg_init_libpagestore();
 	relsize_hash_init();
 	lfc_init();

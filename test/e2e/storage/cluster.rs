@@ -312,7 +312,7 @@ impl Cluster {
         let pg_port = self.compute_port.to_string();
         self.yb(&[
             "endpoint", "create", "main", "--branch-id", &branch, "--branch-name", "main",
-            "--pg-version", "17", "--pg-port", &pg_port,
+            "--pg-version", "18", "--pg-port", &pg_port,
         ])?;
         self.yb(&["endpoint", "start", "main"])?;
         Ok(())
@@ -388,12 +388,12 @@ impl Cluster {
         }
     }
 
-    /// `branch create --pg-version 17`, parsing the branch id out of the
+    /// `branch create --pg-version 18`, parsing the branch id out of the
     /// "branch <id> successfully created" stdout line.
     pub fn branch_create(&self) -> anyhow::Result<String> {
         let out = self
             .yb_command()
-            .args(["branch", "create", "--pg-version", "17"])
+            .args(["branch", "create", "--pg-version", "18"])
             .output()
             .context("spawning yb_light_local branch create")?;
         let text = format!(

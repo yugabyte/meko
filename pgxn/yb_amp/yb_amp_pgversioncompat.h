@@ -171,8 +171,11 @@ extern void InitMaterializedSRF(FunctionCallInfo fcinfo, bits32 flags);
 extern TimeLineID GetWALInsertionTimeLine(void);
 #endif
 
-/* format codes not present in PG17-; but available in PG18+ */
-#define INT64_HEX_FORMAT "%" INT64_MODIFIER "x"
-#define UINT64_HEX_FORMAT "%" INT64_MODIFIER "x"
+/*
+ * PG18 removed INT64_MODIFIER and standardized on the <inttypes.h> format
+ * macros (INT64_FORMAT is now "%" PRId64). Use PRIx64 for the hex variants.
+ */
+#define INT64_HEX_FORMAT "%" PRIx64
+#define UINT64_HEX_FORMAT "%" PRIx64
 
 #endif							/* YBAMP_PGVERSIONCOMPAT_H */

@@ -120,15 +120,15 @@ pub fn get_pg_version_string(pgbin: &str) -> String {
 fn parse_pg_version(human_version: &str) -> PgMajorVersion {
     use PgMajorVersion::*;
     // Normal releases have version strings like "PostgreSQL 15.4". But there
-    // are also pre-release versions like "PostgreSQL 17devel" or "PostgreSQL
-    // 16beta2" or "PostgreSQL 17rc1". And with the --with-extra-version
+    // are also pre-release versions like "PostgreSQL 18devel" or "PostgreSQL
+    // 16beta2" or "PostgreSQL 18rc1". And with the --with-extra-version
     // configure option, you can tack any string to the version number,
     // e.g. "PostgreSQL 15.4foobar".
     match Regex::new(r"^PostgreSQL (?<major>\d+).+")
         .unwrap()
         .captures(human_version)
     {
-        Some(captures) if captures.len() == 2 => if &captures["major"] == "17" { return PG17 },
+        Some(captures) if captures.len() == 2 => if &captures["major"] == "18" { return PG18 },
         _ => {}
     }
     panic!("Unsuported postgres version {human_version}");
@@ -324,17 +324,17 @@ mod tests {
     #[test]
     fn test_parse_pg_version() {
         use postgres_versioninfo::PgMajorVersion::*;
-        assert_eq!(parse_pg_version("PostgreSQL 17.4"), PG17);
-        assert_eq!(parse_pg_version("PostgreSQL 17.14"), PG17);
+        assert_eq!(parse_pg_version("PostgreSQL 18.4"), PG18);
+        assert_eq!(parse_pg_version("PostgreSQL 18.14"), PG18);
         assert_eq!(
-            parse_pg_version("PostgreSQL 17.4 (Ubuntu 17.4-0ubuntu0.23.04.1)"),
-            PG17
+            parse_pg_version("PostgreSQL 18.4 (Ubuntu 18.4-0ubuntu0.23.04.1)"),
+            PG18
         );
 
-        assert_eq!(parse_pg_version("PostgreSQL 17devel"), PG17);
-        assert_eq!(parse_pg_version("PostgreSQL 17beta1"), PG17);
-        assert_eq!(parse_pg_version("PostgreSQL 17rc2"), PG17);
-        assert_eq!(parse_pg_version("PostgreSQL 17extra"), PG17);
+        assert_eq!(parse_pg_version("PostgreSQL 18devel"), PG18);
+        assert_eq!(parse_pg_version("PostgreSQL 18beta1"), PG18);
+        assert_eq!(parse_pg_version("PostgreSQL 18rc2"), PG18);
+        assert_eq!(parse_pg_version("PostgreSQL 18extra"), PG18);
     }
 
     #[test]

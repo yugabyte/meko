@@ -5,7 +5,7 @@
 #
 # Unlike run.sh (the Rust e2e harness with checked-in golden workloads),
 # this drives the FULL upstream suite straight from the vendored Postgres
-# source (vendor/postgres-v17/src/test/regress) via the stock pg_regress
+# source (vendor/postgres-v18/src/test/regress) via the stock pg_regress
 # binary. It brings up a throwaway yb_light_local cluster (compute ->
 # yb-pageserver/safekeeper -> YugabyteDB), creates the `regression`
 # database, runs the parallel schedule, and tears the cluster down.
@@ -18,7 +18,7 @@
 # then points pg_regress at them with --dlpath, so the dynlib-gated tests
 # actually run rather than erroring on the restricted-loader path.
 #
-# Expected result (PG17, see #119): 0 failures. The only diffs the suite
+# Expected result (PG18, see #119): 0 failures. The only diffs the suite
 # produces are the one by-design limitation — `CREATE TABLESPACE`
 # unsupported — in 4 tests (`test_setup`, `tablespace`, `stats`,
 # `database`). Those are blessed via yb-light expected-output variants in
@@ -71,8 +71,8 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-REG="$REPO/vendor/postgres-v17/src/test/regress"
-PGINST="$REPO/pg_install/v17"
+REG="$REPO/vendor/postgres-v18/src/test/regress"
+PGINST="$REPO/pg_install/v18"
 # yb-light expected-output variants for the by-design CREATE TABLESPACE
 # diffs; overlaid into the vendored expected/ at run time (see below).
 YBEXP="$REPO/test/e2e/storage/regress_yb_expected"
@@ -80,8 +80,8 @@ OVERLAID=()   # variant files copied into expected/, removed by finish()
 
 # 1) Vendored Postgres source carries the suite (sql/expected/schedule).
 if [[ ! -f "$REG/parallel_schedule" ]]; then
-    echo ">>> populating vendor/postgres-v17 submodule (one-time)..."
-    git submodule update --init vendor/postgres-v17
+    echo ">>> populating vendor/postgres-v18 submodule (one-time)..."
+    git submodule update --init vendor/postgres-v18
 fi
 [[ "$SCHEDULE" = /* ]] || SCHEDULE="$REG/$SCHEDULE"
 [[ -f "$SCHEDULE" ]] || { echo "schedule not found: $SCHEDULE" >&2; exit 1; }
@@ -115,8 +115,8 @@ PKGLIB="$(readlink -f "$PGINST/lib/postgresql")"
 echo ">>> building regression support modules (regress, refint, autoinc) -> $PKGLIB"
 tmod="$(mktemp -d)"
 cp "$REG/regress.c" \
-   "$REPO/vendor/postgres-v17/contrib/spi/refint.c" \
-   "$REPO/vendor/postgres-v17/contrib/spi/autoinc.c" "$tmod/"
+   "$REPO/vendor/postgres-v18/contrib/spi/refint.c" \
+   "$REPO/vendor/postgres-v18/contrib/spi/autoinc.c" "$tmod/"
 # -DREFINT_VERBOSE matches contrib/spi/Makefile: without it refint's
 # check_foreign_key skips the cascade NOTICEs the `triggers` test expects
 # (the cascade still runs correctly — only the NOTICE text is gated).
@@ -202,9 +202,9 @@ echo ">>> bringing up yb-light cluster (db=$YB_DBNAME base=$BASE compute=$COMPUT
 yb() { "$YB_LIGHT" "$@"; }
 yb init --yb-dbname "$YB_DBNAME" --yb-host "$YB_HOST" --yb-port "$YB_PORT" --port-base "$BASE"
 yb start
-TID=$(yb tenant create --pg-version 17 | grep -oE '[0-9a-f]{32}' | head -1)
+TID=$(yb tenant create --pg-version 18 | grep -oE '[0-9a-f]{32}' | head -1)
 [[ -n "$TID" ]] || { echo "tenant create failed" >&2; clean; exit 1; }
-yb endpoint create main --tenant-id "$TID" --branch-name main --pg-version 17 --pg-port "$COMPUTE"
+yb endpoint create main --tenant-id "$TID" --branch-name main --pg-version 18 --pg-port "$COMPUTE"
 yb endpoint start main --start-timeout 600s
 
 echo ">>> running pg_regress (schedule=$(basename "$SCHEDULE") jobs=$JOBS) against 127.0.0.1:$COMPUTE"

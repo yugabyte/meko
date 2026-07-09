@@ -25,6 +25,10 @@
 #include "storage/buf_internals.h"
 #include RELFILEINFO_HDR
 #include "storage/smgr.h"
+#if PG_MAJORVERSION_NUM >= 18
+#include "storage/aio.h"
+#include "storage/aio_internal.h"
+#endif
 
 #if PG_VERSION_NUM >= 150000
 #include "access/xlogutils.h"
@@ -361,8 +365,49 @@ inmem_registersync(SMgrRelation reln, ForkNumber forknum)
 }
 #endif
 
+#if PG_MAJORVERSION_NUM >= 18
+/*
+ * PG18 issues buffer reads through the AIO framework. The in-memory smgr holds
+ * pages in a local array, so we read synchronously and complete the handle in
+ * place, mirroring yb_amp_startreadv() in the main extension.
+ */
+static void
+inmem_startreadv(PgAioHandle *ioh, SMgrRelation reln, ForkNumber forknum,
+				 BlockNumber blocknum, void **buffers, BlockNumber nblocks)
+{
+	inmem_readv(reln, forknum, blocknum, buffers, nblocks);
+
+	pgaio_io_set_target_smgr(ioh, reln, forknum, blocknum, nblocks, false);
+
+	/*
+	 * inmem_readv() always fills every block. There is no file to read, so mark
+	 * the handle with the fd=-1 sentinel and stage it; perform_synchronously()
+	 * sees fd<0, skips the preadv, and completes reporting all nblocks read.
+	 * See the PGAIO_OP_READV branch in aio_io.c and yb_amp_startreadv().
+	 */
+	ioh->op_data.read.fd = -1;
+	pgaio_io_stage(ioh, PGAIO_OP_READV);
+}
+
+static uint32
+inmem_maxcombine(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
+{
+	return PG_IOV_MAX;
+}
+
+static int
+inmem_fd(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off)
+{
+	elog(ERROR, "inmem smgr does not support fd-based (reopened) IO");
+	return -1;
+}
+#endif
+
 static const struct f_smgr inmem_smgr =
 {
+#if PG_MAJORVERSION_NUM >= 18
+	.smgr_name = "inmem",
+#endif
 	.smgr_init = inmem_init,
 	.smgr_shutdown = NULL,
 	.smgr_open = inmem_open,
@@ -374,7 +419,14 @@ static const struct f_smgr inmem_smgr =
 #if PG_MAJORVERSION_NUM >= 16
 	.smgr_zeroextend = inmem_zeroextend,
 #endif
-#if PG_MAJORVERSION_NUM >= 17
+#if PG_MAJORVERSION_NUM >= 18
+	.smgr_maxcombine = inmem_maxcombine,
+	.smgr_prefetch = inmem_prefetch,
+	.smgr_readv = inmem_readv,
+	.smgr_startreadv = inmem_startreadv,
+	.smgr_writev = inmem_writev,
+	.smgr_fd = inmem_fd,
+#elif PG_MAJORVERSION_NUM >= 17
 	.smgr_prefetch = inmem_prefetch,
 	.smgr_readv = inmem_readv,
 	.smgr_writev = inmem_writev,
@@ -392,11 +444,30 @@ static const struct f_smgr inmem_smgr =
 	.smgr_registersync = inmem_registersync,
 #endif
 
+#if PG_MAJORVERSION_NUM >= 18
+	/* The in-memory smgr owns every relation during walredo. */
+	.smgr_owns = inmem_owns,
+#else
 	.smgr_start_unlogged_build = NULL,
 	.smgr_finish_unlogged_build_phase_1 = NULL,
 	.smgr_end_unlogged_build = NULL,
+#endif
 };
 
+#if PG_MAJORVERSION_NUM >= 18
+bool
+inmem_owns(RelFileLocator rlocator, ProcNumber backend, char relpersistence)
+{
+	Assert(InRecovery);
+	return true;
+}
+
+void
+smgr_register_inmem(void)
+{
+	smgrregister(&inmem_smgr);
+}
+#else
 const f_smgr *
 smgr_inmem(ProcNumber backend, NRelFileInfo rinfo)
 {
@@ -407,6 +478,7 @@ smgr_inmem(ProcNumber backend, NRelFileInfo rinfo)
 	// else
 	return &inmem_smgr;
 }
+#endif
 
 void
 smgr_init_inmem()

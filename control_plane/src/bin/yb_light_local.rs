@@ -56,8 +56,8 @@ const DEFAULT_BRANCH_NAME: &str = "main";
 project_git_version!(GIT_VERSION);
 
 #[allow(dead_code)]
-const DEFAULT_PG_VERSION: PgMajorVersion = PgMajorVersion::PG17;
-const DEFAULT_PG_VERSION_NUM: &str = "17";
+const DEFAULT_PG_VERSION: PgMajorVersion = PgMajorVersion::PG18;
+const DEFAULT_PG_VERSION_NUM: &str = "18";
 
 const DEFAULT_PAGESERVER_CONTROL_PLANE_API: &str = "http://127.0.0.1:1234/upcall/v1/";
 
@@ -3083,9 +3083,9 @@ mod tests {
 
     #[test]
     fn branch_create_root_has_no_ancestor() {
-        // `branch create --pg-version 17` with no ancestor is a ROOT branch.
-        let cli = Cli::try_parse_from(["yb_light_local", "branch", "create", "--pg-version", "17"])
-            .expect("`branch create --pg-version 17` should parse");
+        // `branch create --pg-version 18` with no ancestor is a ROOT branch.
+        let cli = Cli::try_parse_from(["yb_light_local", "branch", "create", "--pg-version", "18"])
+            .expect("`branch create --pg-version 18` should parse");
 
         let YbLightLocalCmd::Branch(BranchCmd::Create(args)) = cli.command else {
             panic!("expected `branch create` to parse into Branch(Create)");

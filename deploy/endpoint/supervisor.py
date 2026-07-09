@@ -9,7 +9,7 @@ Services (in start order):
   1. endpoint_storage   - LFC scratch blobs           (YugabyteDB-backed)
   2. safekeeper         - WAL                          (YugabyteDB-backed)
   3. yb-pageserver      - page service                 (YugabyteDB-backed)
-  4. compute_ctl        - supervises Postgres v17 + the `yb_amp` extension
+  4. compute_ctl        - supervises Postgres v18 + the `yb_amp` extension
 
 The storage_controller is NOT here: it is a shared, cluster-level control
 plane that lives in the controller layer. This container assumes the `yb_storage`

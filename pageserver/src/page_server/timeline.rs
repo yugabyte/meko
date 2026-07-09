@@ -24,7 +24,7 @@ use pageserver_api::key::{Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFI
 use pageserver_api::models::{LsnLease, PageTraceEvent, RelSizeMigration, TimelineState};
 use pageserver_api::reltag::{BlockNumber, RelTag};
 use postgres_connection::PgConnectionConfig;
-use postgres_ffi::v17::xlog_utils;
+use postgres_ffi::v18::xlog_utils;
 use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE, to_pg_timestamp};
 use rand::Rng;
 use tokio::sync::mpsc::Sender;

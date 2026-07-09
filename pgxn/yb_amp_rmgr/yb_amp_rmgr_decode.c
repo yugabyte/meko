@@ -406,7 +406,16 @@ DecodeXLogTuple(char *data, Size len, ReorderBufferTupleBuf *tuple)
 }
 #endif
 
-#if PG_MAJORVERSION_NUM == 17
+#if PG_MAJORVERSION_NUM >= 17
+
+#if PG_MAJORVERSION_NUM >= 18
+/*
+ * PG18 renamed the reorder-buffer allocation helpers. Map the old names used
+ * below onto the new ones.
+ */
+#define ReorderBufferGetChange(rb) ReorderBufferAllocChange(rb)
+#define ReorderBufferGetTupleBuf(rb, len) ReorderBufferAllocTupleBuf(rb, len)
+#endif
 
 /* individual record(group)'s handlers */
 static void DecodeYbAmpInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);

@@ -21,8 +21,8 @@ use std::cmp::min;
 use anyhow::{Context, bail};
 use utils::lsn::Lsn;
 
-use crate::v17::bindings::XLOG_PAGE_MAGIC;
-use crate::v17::xlog_utils::XLP_FIRST_IS_CONTRECORD;
+use crate::v18::bindings::XLOG_PAGE_MAGIC;
+use crate::v18::xlog_utils::XLP_FIRST_IS_CONTRECORD;
 use crate::waldecoder::WalStreamDecoder;
 use crate::{
     PgMajorVersion, XLOG_BLCKSZ, XLOG_SIZE_OF_XLOG_LONG_PHD, XLOG_SIZE_OF_XLOG_SHORT_PHD,
@@ -221,7 +221,7 @@ mod tests {
     use super::*;
     use crate::WAL_SEGMENT_SIZE;
     use crate::XLOG_BLCKSZ;
-    use crate::v17::wal_generator::{LogicalMessageGenerator, WalGenerator};
+    use crate::v18::wal_generator::{LogicalMessageGenerator, WalGenerator};
 
     /// In-memory WAL covering `[start, start + buf.len())`, served as one
     /// chunk. A segment-aligned `start` makes the buffer open with a long
@@ -271,7 +271,7 @@ mod tests {
             start: START,
             buf: buf[..(max.0 - START.0) as usize].to_vec(),
         };
-        let got = find_end_of_wal(&src, START, PgMajorVersion::PG17)
+        let got = find_end_of_wal(&src, START, PgMajorVersion::PG18)
             .await
             .unwrap();
         assert_eq!(got, max, "clean WAL must scan through to the end boundary");
@@ -293,7 +293,7 @@ mod tests {
         let torn_page_lsn = START.0 + last_page as u64;
         let src = MemWal { start: START, buf };
 
-        let got = find_end_of_wal(&src, START, PgMajorVersion::PG17)
+        let got = find_end_of_wal(&src, START, PgMajorVersion::PG18)
             .await
             .unwrap();
         assert!(

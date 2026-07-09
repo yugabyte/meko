@@ -59,6 +59,10 @@
 #include "storage/fsm_internals.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
+#if PG_MAJORVERSION_NUM >= 18
+#include "storage/aio.h"
+#include "storage/aio_internal.h"
+#endif
 #include "storage/fd.h"
 #include "access/slru.h"
 #include <fcntl.h>
@@ -2138,7 +2142,11 @@ yb_amp_end_unlogged_build(SMgrRelation reln)
  * pageserver.
  */
 bool
+#if PG_MAJORVERSION_NUM >= 18
+yb_amp_read_slru_segment(const char* path, int64 segno)
+#else
 yb_amp_read_slru_segment(const char* path, int segno)
+#endif
 {
 	XLogRecPtr	request_lsn,
 				not_modified_since;
@@ -2267,9 +2275,72 @@ AtEOXact_yb_amp(XactEvent event, void *arg)
 	communicator_reconfigure_timeout_if_needed();
 }
 
+#if PG_MAJORVERSION_NUM >= 18
+/*
+ * smgr_startreadv() -- PG18 issues all buffer reads through the AIO framework.
+ *
+ * yb_amp pages come from the page server over the network (via the
+ * communicator), not from a local file, so there is nothing to hand to a
+ * kernel AIO backend. We read synchronously into the caller's buffers -- the
+ * same path smgrreadv() uses -- and then complete the handle in place.
+ * Latency hiding still comes from the communicator's prefetch pipeline, as it
+ * did before PG18.
+ */
+static void
+yb_amp_startreadv(PgAioHandle *ioh, SMgrRelation reln, ForkNumber forknum,
+				  BlockNumber blocknum, void **buffers, BlockNumber nblocks)
+{
+	yb_amp_readv(reln, forknum, blocknum, buffers, nblocks);
+
+	pgaio_io_set_target_smgr(ioh, reln, forknum, blocknum, nblocks, false);
+
+	/*
+	 * yb_amp_readv() already filled every block (or raised an ERROR). There is
+	 * no file to read, so mark the handle with the fd=-1 sentinel and stage it:
+	 * pgaio_io_stage() -> pgaio_io_perform_synchronously() sees fd<0, skips the
+	 * preadv, and completes the handle reporting all nblocks read. (See the
+	 * PGAIO_OP_READV branch in aio_io.c.)
+	 */
+	ioh->op_data.read.fd = -1;
+	pgaio_io_stage(ioh, PGAIO_OP_READV);
+}
+
+/*
+ * smgr_maxcombine() -- how many blocks starting at blocknum may be combined
+ * into a single read. yb_amp is not segmented, so the only limit is the batch
+ * size yb_amp_readv() accepts.
+ */
+static uint32
+yb_amp_maxcombine(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
+{
+	return PG_IOV_MAX;
+}
+
+/*
+ * smgr_fd() -- only reached via the AIO reopen path, which runs when an IO was
+ * submitted to a worker or io_uring backend. yb_amp completes every read
+ * synchronously and never submits to such a backend, so this cannot be hit.
+ */
+static int
+yb_amp_fd(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off)
+{
+	yb_amp_log(ERROR, "yb_amp smgr does not support fd-based (reopened) IO");
+	return -1;					/* keep the compiler happy */
+}
+#endif
+
 static const struct f_smgr yb_amp_smgr =
 {
+#if PG_MAJORVERSION_NUM >= 18
+	.smgr_name = "yb_amp",
+	/*
+	 * PG18 calls each registered smgr's init from smgrinit(); fold the
+	 * former smgr_init_hook work (xact callback, communicator) in here.
+	 */
+	.smgr_init = smgr_init_yb_amp,
+#else
 	.smgr_init = yb_amp_init,
+#endif
 	.smgr_shutdown = NULL,
 	.smgr_open = yb_amp_open,
 	.smgr_close = yb_amp_close,
@@ -2280,7 +2351,14 @@ static const struct f_smgr yb_amp_smgr =
 #if PG_MAJORVERSION_NUM >= 16
 	.smgr_zeroextend = yb_amp_zeroextend,
 #endif
-#if PG_MAJORVERSION_NUM >= 17
+#if PG_MAJORVERSION_NUM >= 18
+	.smgr_maxcombine = yb_amp_maxcombine,
+	.smgr_prefetch = yb_amp_prefetch,
+	.smgr_readv = yb_amp_readv,
+	.smgr_startreadv = yb_amp_startreadv,
+	.smgr_writev = yb_amp_writev,
+	.smgr_fd = yb_amp_fd,
+#elif PG_MAJORVERSION_NUM >= 17
 	.smgr_prefetch = yb_amp_prefetch,
 	.smgr_readv = yb_amp_readv,
 	.smgr_writev = yb_amp_writev,
@@ -2297,11 +2375,46 @@ static const struct f_smgr yb_amp_smgr =
 #if PG_MAJORVERSION_NUM >= 17
 	.smgr_registersync = yb_amp_registersync,
 #endif
+#if PG_MAJORVERSION_NUM >= 18
+	/*
+	 * PG18 replaced the smgr_hook per-relation dispatch with smgr_owns(), and
+	 * moved the unlogged-build callbacks out of f_smgr into global hooks (set
+	 * in smgr_register_yb_amp()).
+	 */
+	.smgr_owns = yb_amp_owns,
+#else
 	.smgr_start_unlogged_build = yb_amp_start_unlogged_build,
 	.smgr_finish_unlogged_build_phase_1 = yb_amp_finish_unlogged_build_phase_1,
 	.smgr_end_unlogged_build = yb_amp_end_unlogged_build,
+#endif
 };
 
+#if PG_MAJORVERSION_NUM >= 18
+/*
+ * smgr_owns() -- claim non-temp relations for the yb_amp smgr. Temp relations
+ * (backend != INVALID_PROC_NUMBER) fall through to the md smgr. Registered
+ * after md, so smgropen() consults this first.
+ */
+bool
+yb_amp_owns(RelFileLocator rlocator, ProcNumber backend, char relpersistence)
+{
+	return backend == INVALID_PROC_NUMBER;
+}
+
+/*
+ * Register the yb_amp smgr and its global hooks. Called from _PG_init (in the
+ * postmaster, before backends fork) so smgrregister()'s malloc'd table is
+ * inherited by every backend.
+ */
+void
+smgr_register_yb_amp(void)
+{
+	smgrregister(&yb_amp_smgr);
+	start_unlogged_build_hook = yb_amp_start_unlogged_build;
+	finish_unlogged_build_phase_1_hook = yb_amp_finish_unlogged_build_phase_1;
+	end_unlogged_build_hook = yb_amp_end_unlogged_build;
+}
+#else
 const f_smgr *
 smgr_yb_amp(ProcNumber backend, NRelFileInfo rinfo)
 {
@@ -2312,13 +2425,17 @@ smgr_yb_amp(ProcNumber backend, NRelFileInfo rinfo)
 	else
 		return &yb_amp_smgr;
 }
+#endif
 
 void
 smgr_init_yb_amp(void)
 {
 	RegisterXactCallback(AtEOXact_yb_amp, NULL);
 
+#if PG_MAJORVERSION_NUM < 18
+	/* PG18 auto-initialises the md smgr via smgrinit(). */
 	smgr_init_standard();
+#endif
 	yb_amp_init();
 	communicator_init();
 }

@@ -1,6 +1,6 @@
 # Compute
 
-The compute is a vanilla Postgres 17.8 backend (built from `vendor/postgres-v17`)
+The compute is a vanilla Postgres 18.2 backend (built from `vendor/postgres-v18`)
 with Neon's smgr / extension patches applied. The Postgres source tree itself
 is unmodified; `compute_ctl` is upstream Neon. The `yb_amp` extension at
 `pgxn/yb_amp/` lives in this repo and has had a small number of wire-protocol
@@ -77,7 +77,7 @@ on `destroy`. The endpoint's `pgdata` directory holds:
 
 ## Changes in yb-light
 
-The Postgres source (`vendor/postgres-v17/`) and `compute_tools/` are
+The Postgres source (`vendor/postgres-v18/`) and `compute_tools/` are
 untouched. The `yb_amp` extension at `pgxn/yb_amp/` has a small number of
 yb-light-specific edits:
 
@@ -108,7 +108,7 @@ deployment using a local-FS or S3 backend.
 
 ## Where the code lives
 
-- Postgres source: `vendor/postgres-v17/` (git submodule, Neon's patched fork).
+- Postgres source: `vendor/postgres-v18/` (git submodule, Neon's patched fork).
 - `compute_ctl`: `compute_tools/` — the per-endpoint supervisor. Its lifecycle,
   spec, and HTTP control API have their own page: [`compute_ctl.md`](compute_ctl.md).
 - Neon's PG extension (`yb_amp.so`, smgr hooks, walproposer): `pgxn/yb_amp/`

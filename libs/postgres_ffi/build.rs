@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     {
-        let pg_version = &"v17";
+        let pg_version = &"v18";
         let mut pg_install_dir_versioned = pg_install_dir.join(pg_version);
         if pg_install_dir_versioned.is_relative() {
             let cwd = env::current_dir().context("Failed to get current_dir")?;
@@ -128,6 +128,8 @@ fn main() -> anyhow::Result<()> {
             .allowlist_type("DBState")
             .allowlist_type("RelMapFile")
             .allowlist_type("RepOriginId")
+            .allowlist_type("xl_xact_stats_item")
+            .allowlist_type("SharedInvalidationMessage")
             // Because structs are used for serialization, tell bindgen to emit
             // explicit padding fields.
             .explicit_padding(true)

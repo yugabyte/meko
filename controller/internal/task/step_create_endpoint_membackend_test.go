@@ -29,13 +29,13 @@ func TestCreateEndpointStepReplayConvergesAgainstMemBackend(t *testing.T) {
 	}
 	projectID := uuid.New()
 	branchID := uuid.New()
-	be.SeedBranch(pool.ID, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	be.SeedBranch(pool.ID, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	epID := uuid.New()
 	dep := &memReplayDeployer{}
 	// *core.MemBackend structurally satisfies task.StateStore.
 	deps := task.Deps{State: be, Deployer: dep, SCEndpointURL: "http://sc:50051"}
-	args := task.CreateEndpointArgs{EndpointID: epID, ProjectID: projectID, BranchID: branchID, Role: core.RoleReadWrite, PgVersion: 17}
+	args := task.CreateEndpointArgs{EndpointID: epID, ProjectID: projectID, BranchID: branchID, Role: core.RoleReadWrite, PgVersion: 18}
 
 	if res := task.NewCreateEndpointStep(args, deps).Execute(t.Context()); res.Failed() {
 		t.Fatalf("first Execute: %v", res.Err)

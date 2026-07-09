@@ -22,7 +22,7 @@ use utils::id::{BranchId, NodeId};
 
 use crate::endpoint_storage::ENDPOINT_STORAGE_DEFAULT_ADDR;
 
-pub const DEFAULT_PG_VERSION: u32 = 17;
+pub const DEFAULT_PG_VERSION: u32 = 18;
 
 //
 // This data structures represents yb_light_local CLI config

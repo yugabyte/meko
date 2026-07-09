@@ -18,7 +18,7 @@ import (
 // task and its steps and returns the Task to surface to the user. Building the
 // specs performs no effects; the steps only become executable later, when the
 // worker rebuilds them via the Registry. The default Postgres major version
-// yb-light targets is v17.
+// yb-light targets is v18.
 
 // Task kinds — the task.kind values. Each corresponds to a user-visible
 // operation whose status the API exposes (GET /tasks/{id}).

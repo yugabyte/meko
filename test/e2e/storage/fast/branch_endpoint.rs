@@ -46,7 +46,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     step("Create + start endpoint on b1 (provisions pageserver 2 + safekeeper 2)");
     c.yb(&[
         "endpoint", "create", "ep_b1", "--branch-name", "b1",
-        "--pg-version", "17", "--pg-port", &branch_pg_port.to_string(),
+        "--pg-version", "18", "--pg-port", &branch_pg_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_b1"])?;
 

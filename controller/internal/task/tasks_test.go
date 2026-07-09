@@ -57,7 +57,7 @@ func TestServiceCreateProjectNoWriter(t *testing.T) {
 	store := NewMemStore()
 	svc := NewService(store)
 	poolID := uuid.New()
-	tk, err := svc.CreateProject(t.Context(), CreateProjectInput{PoolID: poolID, Name: "shop", PgVersion: 17})
+	tk, err := svc.CreateProject(t.Context(), CreateProjectInput{PoolID: poolID, Name: "shop", PgVersion: 18})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -72,8 +72,8 @@ func TestServiceCreateProjectNoWriter(t *testing.T) {
 
 	var cp CreateProjectArgs
 	decodeArgs(t, stepByKind(t, steps, StepCreateProject), &cp)
-	if cp.PoolID != poolID || cp.Name != "shop" || cp.PgVersion != 17 {
-		t.Errorf("create-project args = %+v, want pool=%s name=shop pgv=17", cp, poolID)
+	if cp.PoolID != poolID || cp.Name != "shop" || cp.PgVersion != 18 {
+		t.Errorf("create-project args = %+v, want pool=%s name=shop pgv=18", cp, poolID)
 	}
 	if cp.ProjectID == uuid.Nil || cp.BranchID == uuid.Nil {
 		t.Error("project/branch ids were not generated")
@@ -106,7 +106,7 @@ func TestServiceCreateProjectNoWriter(t *testing.T) {
 func TestServiceCreateProjectWithWriter(t *testing.T) {
 	store := NewMemStore()
 	svc := NewService(store)
-	tk, err := svc.CreateProject(t.Context(), CreateProjectInput{PoolID: uuid.New(), Name: "shop", PgVersion: 17, WithWriter: true})
+	tk, err := svc.CreateProject(t.Context(), CreateProjectInput{PoolID: uuid.New(), Name: "shop", PgVersion: 18, WithWriter: true})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestServiceBranch(t *testing.T) {
 	poolID, projectID, parentID := uuid.New(), uuid.New(), uuid.New()
 	tk, err := svc.Branch(t.Context(), BranchInput{
 		PoolID: poolID, ProjectID: projectID, ParentBranchID: parentID,
-		Name: "feature", ForkLSN: "0/16ABCD0", PgVersion: 17, WithWriter: true,
+		Name: "feature", ForkLSN: "0/16ABCD0", PgVersion: 18, WithWriter: true,
 	})
 	if err != nil {
 		t.Fatalf("Branch: %v", err)
@@ -191,7 +191,7 @@ func TestServiceCreateEndpointDefaultsRoleAndPassesAncestor(t *testing.T) {
 	projectID, branchID, ancestor := uuid.New(), uuid.New(), uuid.New()
 
 	// Role unset defaults to read_write.
-	tk, err := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ProjectID: projectID, BranchID: branchID, PgVersion: 17})
+	tk, err := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ProjectID: projectID, BranchID: branchID, PgVersion: 18})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestServiceCreateEndpointDefaultsRoleAndPassesAncestor(t *testing.T) {
 	}
 
 	// A fork target passes the ancestor through.
-	tk2, _ := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ProjectID: projectID, BranchID: branchID, Role: "read_only", PgVersion: 17, AncestorBranchID: &ancestor, AncestorLSN: "0/9"})
+	tk2, _ := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ProjectID: projectID, BranchID: branchID, Role: "read_only", PgVersion: 18, AncestorBranchID: &ancestor, AncestorLSN: "0/9"})
 	steps2, _ := store.Steps(t.Context(), tk2.ID)
 	var ep2 CreateEndpointArgs
 	decodeArgs(t, steps2[0], &ep2)

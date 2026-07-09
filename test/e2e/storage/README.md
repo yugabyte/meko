@@ -33,8 +33,8 @@ runtime without rebuilding, so a missing one silently runs a stale binary.
 Default builds are debug; `--release` builds and runs the release binaries.
 
 `run.sh` also rebuilds the **`yb_amp` Postgres extension**
-(`make neon-pg-ext-v17`) when its C sources changed — `cargo` does not build
-it, and the compute loads `pg_install/v17/lib/postgresql/yb_amp.so` at runtime,
+(`make neon-pg-ext-v18`) when its C sources changed — `cargo` does not build
+it, and the compute loads `pg_install/v18/lib/postgresql/yb_amp.so` at runtime,
 so a stale `.so` runs an old walproposer/compute against fresh cluster binaries
 (a wire/ABI skew that looks like a hang or segfault). Staleness is tracked via
 `build/.yb_amp_ext.stamp`; because the PGXS build has no header-dependency
@@ -110,7 +110,7 @@ Nothing central to edit — tests are auto-discovered.
   `.out` golden. A workload with *intentional* errors should `\set
   ON_ERROR_STOP 0` in its `.sql` (the runner otherwise aborts on the first
   error); see `fast/event-triggers.sql`. The `psql` used is the one built from
-  yb-light's own Postgres (`pg_install/v17/bin/psql`), not whatever is on
+  yb-light's own Postgres (`pg_install/v18/bin/psql`), not whatever is on
   `PATH` — its meta-commands (e.g. `\d`) must match the compute's major
   version. Generate/refresh the golden with
   `E2E_REGEN_EXPECTED=1 test/e2e/storage/run.sh <name>` and review the diff
@@ -139,7 +139,7 @@ test/e2e/storage/pg_regress.sh -h         # full help
 ```
 
 It drives the ~200-test suite straight from the vendored Postgres source
-(`vendor/postgres-v17/src/test/regress`) via the stock `pg_regress`
+(`vendor/postgres-v18/src/test/regress`) via the stock `pg_regress`
 binary: it builds + installs the suite's C support modules (regress,
 refint, autoinc), brings up a throwaway `yb_light_local` cluster, creates
 the `regression` database, runs the parallel schedule, and tears down on
@@ -147,7 +147,7 @@ exit (unless `--keep`). The by-design `CREATE TABLESPACE`-unsupported
 diffs are blessed via the expected-output variants in
 [`regress_yb_expected/`](regress_yb_expected) (overlaid onto pg_regress's
 `expected/<test>_N.out` alternative-file mechanism, not by editing the
-upstream goldens), so a clean tree is a genuine green (0 failures on PG17).
+upstream goldens), so a clean tree is a genuine green (0 failures on PG18).
 See the header of `pg_regress.sh` and issue #119 for details.
 
 > Defaults to a **release** build — a debug build of the full suite is

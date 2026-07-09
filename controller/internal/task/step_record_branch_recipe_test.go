@@ -11,7 +11,7 @@ func TestRecordBranchRecipeStepDefault(t *testing.T) {
 	recipes := newFakeRecipeStore()
 	projectID, branchID := uuid.New(), uuid.New()
 	step := NewRecordBranchRecipeStep(RecordBranchRecipeArgs{
-		ProjectID: projectID, BranchID: branchID, BranchName: "main", PgVersion: 17, StartLSN: "0/0",
+		ProjectID: projectID, BranchID: branchID, BranchName: "main", PgVersion: 18, StartLSN: "0/0",
 	}, Deps{Recipes: recipes})
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)
@@ -35,7 +35,7 @@ func TestRecordBranchRecipeStepFork(t *testing.T) {
 	recipes := newFakeRecipeStore()
 	ancestor := uuid.New()
 	step := NewRecordBranchRecipeStep(RecordBranchRecipeArgs{
-		ProjectID: uuid.New(), BranchID: uuid.New(), BranchName: "feature", PgVersion: 17,
+		ProjectID: uuid.New(), BranchID: uuid.New(), BranchName: "feature", PgVersion: 18,
 		AncestorBranchID: &ancestor, StartLSN: "0/16ABCD0",
 	}, Deps{Recipes: recipes})
 	if res := step.Execute(t.Context()); res.Failed() {

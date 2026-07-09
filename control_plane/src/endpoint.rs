@@ -603,7 +603,7 @@ impl Endpoint {
                 conf.append("hot_standby", "on");
                 // prefetching of blocks referenced in WAL doesn't make sense for us
                 // Neon hot standby ignores pages that are not in the shared_buffers
-                if self.pg_version >= PgMajorVersion::PG17 {
+                if self.pg_version >= PgMajorVersion::PG18 {
                     conf.append("recovery_prefetch", "off");
                 }
             }

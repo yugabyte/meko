@@ -734,7 +734,7 @@ async fn create_page_store_with_app_name(
 /// opens, so this one carries the DDL.
 ///
 /// Pool size 4: compute-side Postgres backends issue prefetch reads in
-/// parallel (`effective_io_concurrency` + the PG17 read_stream API +
+/// parallel (`effective_io_concurrency` + the PG18 read_stream API +
 /// pg_neon's prefetch ring), and the pageserver page_service handler
 /// dispatches each one as a concurrent gRPC stream. A single YSQL
 /// connection would serialise them on the YB side (Postgres processes

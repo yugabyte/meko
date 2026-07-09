@@ -204,7 +204,7 @@ impl DecodedWALRecord {
         if self.xl_rmid == pg_constants::RM_DBASE_ID {
             let info = self.xl_info & pg_constants::XLR_RMGR_INFO_MASK;
             match pg_version {
-                PgMajorVersion::PG17 => info == crate::v17::bindings::XLOG_DBASE_CREATE_FILE_COPY,
+                PgMajorVersion::PG18 => info == crate::v18::bindings::XLOG_DBASE_CREATE_FILE_COPY,
             }
         } else {
             false
@@ -850,7 +850,7 @@ pub mod v16 {
     }
 }
 
-pub mod v17 {
+pub mod v18 {
     use bytes::{Buf, Bytes};
 
     pub use super::v14::XlHeapLockUpdated;
@@ -1046,19 +1046,24 @@ impl XlXactParsedRecord {
             }
         }
 
-        if xinfo & crate::v17::bindings::XACT_XINFO_HAS_DROPPED_STATS != 0 {
+        if xinfo & crate::v18::bindings::XACT_XINFO_HAS_DROPPED_STATS != 0 {
             let nitems = buf.get_i32_le();
             tracing::debug!(
                 "XLOG_XACT_COMMIT-XACT_XINFO_HAS_DROPPED_STAT nitems {}",
                 nitems
             );
-            let sizeof_xl_xact_stats_item = 12;
+            // PG18 widened xl_xact_stats_item: PgStat_HashKey.objid became 64-bit,
+            // stored as two uint32 (objid_lo/objid_hi), so the struct grew from
+            // 12 bytes (kind, dboid, objoid) to 16 (kind, dboid, objid_lo, objid_hi).
+            let sizeof_xl_xact_stats_item =
+                size_of::<crate::v18::bindings::xl_xact_stats_item>() as i32;
             buf.advance((nitems * sizeof_xl_xact_stats_item).try_into().unwrap());
         }
 
         if xinfo & pg_constants::XACT_XINFO_HAS_INVALS != 0 {
             let nmsgs = buf.get_i32_le();
-            let sizeof_shared_invalidation_message = 16;
+            let sizeof_shared_invalidation_message =
+                size_of::<crate::v18::bindings::SharedInvalidationMessage>() as i32;
             buf.advance(
                 (nmsgs * sizeof_shared_invalidation_message)
                     .try_into()
@@ -1101,10 +1106,10 @@ pub struct XlClogTruncate {
 impl XlClogTruncate {
     pub fn decode(buf: &mut Bytes, pg_version: PgMajorVersion) -> XlClogTruncate {
         XlClogTruncate {
-            pageno: if pg_version < PgMajorVersion::PG17 {
-                buf.get_u32_le()
-            } else {
+            pageno: if pg_version.has_64bit_slru_pageno() {
                 buf.get_u64_le() as u32
+            } else {
+                buf.get_u32_le()
             },
             oldest_xid: buf.get_u32_le(),
             oldest_xid_db: buf.get_u32_le(),

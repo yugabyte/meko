@@ -25,7 +25,7 @@ use pageserver_api::key::{
 use pageserver_api::keyspace::KeySpaceRandomAccum;
 use pageserver_api::models::RelSizeMigration;
 use pageserver_api::reltag::{BlockNumber, RelTag, SlruKind};
-use postgres_ffi::{BLCKSZ, PgMajorVersion, TransactionId};
+use postgres_ffi::{BLCKSZ, TransactionId};
 use postgres_ffi_types::forknum::{FSM_FORKNUM, VISIBILITYMAP_FORKNUM};
 use postgres_ffi_types::{Oid, RepOriginId, TimestampTz};
 use serde::{Deserialize, Serialize};
@@ -1215,7 +1215,7 @@ impl Timeline {
         // fetch directory entry
         let buf = self.get(TWOPHASEDIR_KEY, lsn, ctx).await?;
 
-        if self.pg_version >= PgMajorVersion::PG17 {
+        if self.pg_version.has_64bit_twophase() {
             Ok(TwoPhaseDirectoryV17::des(&buf)?.xids)
         } else {
             Ok(TwoPhaseDirectory::des(&buf)?
@@ -1577,7 +1577,7 @@ impl DatadirModification<'_> {
             .push((DirectoryKind::Db, MetricsUpdate::Set(0)));
         self.put(DBDIR_KEY, Value::Image(buf.into()));
 
-        let buf = if self.tline.pg_version >= PgMajorVersion::PG17 {
+        let buf = if self.tline.pg_version.has_64bit_twophase() {
             TwoPhaseDirectoryV17::ser(&TwoPhaseDirectoryV17 {
                 xids: HashSet::new(),
             })
@@ -1946,7 +1946,7 @@ impl DatadirModification<'_> {
     ) -> Result<(), WalIngestError> {
         // Add it to the directory entry
         let dirbuf = self.get(TWOPHASEDIR_KEY, ctx).await?;
-        let newdirbuf = if self.tline.pg_version >= PgMajorVersion::PG17 {
+        let newdirbuf = if self.tline.pg_version.has_64bit_twophase() {
             let mut dir = TwoPhaseDirectoryV17::des(&dirbuf)?;
             if !dir.xids.insert(xid) {
                 Err(WalIngestErrorKind::FileAlreadyExists(xid))?;
@@ -2273,7 +2273,22 @@ impl DatadirModification<'_> {
         // decision instead of seeing its own prior-pass write
         // (see get_committed_before; #22).
         let size_key = rel_size_to_key(rel);
-        let old_size = self.get_committed_before(size_key, ctx).await?.get_u32_le();
+        // #36: a torn-recovery reldir can list an FSM/VM fork whose rel-size
+        // key is absent at this LSN (the directory write landed but the first
+        // size write did not), and recovery can then replay an extension of
+        // that fork. FSM/VM are advisory (rebuilt by VACUUM), so treat a
+        // missing size as 0 rather than letting `MissingKey` wedge the
+        // walreceiver on the extend. Same spirit as the get_rel_size / drop
+        // tolerances; a missing MAIN-fork size still surfaces as an error.
+        let old_size = match self.get_committed_before(size_key, ctx).await {
+            Ok(mut buf) => buf.get_u32_le(),
+            Err(PageReconstructError::MissingKey(_))
+                if rel.forknum == FSM_FORKNUM || rel.forknum == VISIBILITYMAP_FORKNUM =>
+            {
+                0
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         let plan = rel_extend_plan(old_size, nblocks);
         if let Some(new_size) = plan.write_size {
@@ -2312,7 +2327,23 @@ impl DatadirModification<'_> {
                 if found {
                     // update logical size
                     let size_key = rel_size_to_key(rel_tag);
-                    let old_size = self.get(size_key, ctx).await?.get_u32_le();
+                    // #36: a torn-recovery reldir can list an FSM/VM fork whose
+                    // rel-size key is absent at this LSN (the directory write
+                    // landed but the first size write did not). FSM/VM are
+                    // advisory (rebuilt by VACUUM), so treat a missing size as 0
+                    // rather than letting `MissingKey` wedge the walreceiver on
+                    // the drop. Same spirit as the get_rel_size tolerance; a
+                    // missing MAIN-fork size still surfaces as an error.
+                    let old_size = match self.get(size_key, ctx).await {
+                        Ok(mut buf) => buf.get_u32_le(),
+                        Err(PageReconstructError::MissingKey(_))
+                            if rel_tag.forknum == FSM_FORKNUM
+                                || rel_tag.forknum == VISIBILITYMAP_FORKNUM =>
+                        {
+                            0
+                        }
+                        Err(e) => return Err(e.into()),
+                    };
                     self.pending_nblocks -= old_size as i64;
 
                     // Remove entry from relation size cache
@@ -2483,7 +2514,7 @@ impl DatadirModification<'_> {
     ) -> Result<(), WalIngestError> {
         // Remove it from the directory entry
         let buf = self.get(TWOPHASEDIR_KEY, ctx).await?;
-        let newdirbuf = if self.tline.pg_version >= PgMajorVersion::PG17 {
+        let newdirbuf = if self.tline.pg_version.has_64bit_twophase() {
             let mut dir = TwoPhaseDirectoryV17::des(&buf)?;
 
             if !dir.xids.remove(&xid) {

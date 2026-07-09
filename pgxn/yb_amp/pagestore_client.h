@@ -255,8 +255,18 @@ extern char *yb_amp_branch_id;
 extern int32 max_cluster_size;
 extern int  yb_amp_protocol_version;
 
-extern const f_smgr *smgr_yb_amp(ProcNumber backend, NRelFileInfo rinfo);
+#if PG_MAJORVERSION_NUM >= 18
+extern bool yb_amp_read_slru_segment(const char *path, int64 segno);
+#else
 extern bool yb_amp_read_slru_segment(const char *path, int segno);
+#endif
+
+#if PG_MAJORVERSION_NUM >= 18
+extern bool yb_amp_owns(RelFileLocator rlocator, ProcNumber backend, char relpersistence);
+extern void smgr_register_yb_amp(void);
+#else
+extern const f_smgr *smgr_yb_amp(ProcNumber backend, NRelFileInfo rinfo);
+#endif
 extern void smgr_init_yb_amp(void);
 extern void readahead_buffer_resize(int newsize, void *extra);
 

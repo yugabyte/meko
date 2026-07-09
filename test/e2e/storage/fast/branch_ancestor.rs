@@ -40,7 +40,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     c.yb(&["branch", "create", "--branch-name", "anc_b1", "--ancestor-branch-name", "main"])?;
     c.yb(&[
         "endpoint", "create", "ep_anc_b1", "--branch-name", "anc_b1",
-        "--pg-version", "17", "--pg-port", &b1_port.to_string(),
+        "--pg-version", "18", "--pg-port", &b1_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_anc_b1"])?;
 
@@ -75,7 +75,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     ])?;
     c.yb(&[
         "endpoint", "create", "ep_anc_b2", "--branch-name", "anc_b2",
-        "--pg-version", "17", "--pg-port", &b2_port.to_string(),
+        "--pg-version", "18", "--pg-port", &b2_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_anc_b2"])?;
 

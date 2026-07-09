@@ -1,6 +1,6 @@
 use crate::PgMajorVersion;
 
-pub const MY_PGVERSION: PgMajorVersion = PgMajorVersion::PG17;
+pub const MY_PGVERSION: PgMajorVersion = PgMajorVersion::PG18;
 
 pub const XACT_XINFO_HAS_DROPPED_STATS: u32 = 1u32 << 8;
 

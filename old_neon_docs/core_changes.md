@@ -29,7 +29,7 @@ disk, so prefetching is critical for performance, also for sequential scans.
 
 ### How to get rid of the patch
 
-Upcoming "streaming read" work in v17 might simplify this. And async I/O work in v18 will hopefully
+Upcoming "streaming read" work in v18 might simplify this. And async I/O work in v18 will hopefully
 do more.
 
 
@@ -428,7 +428,7 @@ Create an upstream patch with more fine-grained privileges for publications CREA
 
 ### How to get rid of the patch
 
-Utilize the upcoming v17 "slot sync worker", or a similar neon-specific background worker process, to periodically WAL-log the slots, or to export them somewhere else.
+Utilize the upcoming v18 "slot sync worker", or a similar neon-specific background worker process, to periodically WAL-log the slots, or to export them somewhere else.
 
 
 ## WAL-log replication snapshots

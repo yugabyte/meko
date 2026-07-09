@@ -608,7 +608,7 @@ mod tests {
         .unwrap();
 
         rspec
-            .get_ext("ext", false, "latest", "v17")
+            .get_ext("ext", false, "latest", "v18")
             .expect_err("Extension should not be found");
 
         let rspec: RemoteExtSpec = serde_json::from_value(serde_json::json!({
@@ -620,7 +620,7 @@ mod tests {
         .unwrap();
 
         rspec
-            .get_ext("ext", false, "latest", "v17")
+            .get_ext("ext", false, "latest", "v18")
             .expect_err("Extension should not be found");
 
         let rspec: RemoteExtSpec = serde_json::from_value(serde_json::json!({
@@ -641,7 +641,7 @@ mod tests {
         .unwrap();
 
         rspec
-            .get_ext("ext", false, "latest", "v17")
+            .get_ext("ext", false, "latest", "v18")
             .expect_err("Extension should not be found");
 
         let rspec: RemoteExtSpec = serde_json::from_value(serde_json::json!({
@@ -662,7 +662,7 @@ mod tests {
         .unwrap();
 
         rspec
-            .get_ext("ext", false, "latest", "v17")
+            .get_ext("ext", false, "latest", "v18")
             .expect("Extension should be found");
 
         let rspec: RemoteExtSpec = serde_json::from_value(serde_json::json!({
@@ -683,13 +683,13 @@ mod tests {
         .unwrap();
 
         rspec
-            .get_ext("ext", false, "latest", "v17")
+            .get_ext("ext", false, "latest", "v18")
             .expect("Extension should be found");
 
         // test library index for the case when library name
         // doesn't match the extension name
         rspec
-            .get_ext("extlib", true, "latest", "v17")
+            .get_ext("extlib", true, "latest", "v18")
             .expect("Library should be found");
     }
 
@@ -713,14 +713,14 @@ mod tests {
         .unwrap();
 
         let (_ext_name, ext_path) = rspec
-            .get_ext("ext", false, "latest", "v17")
+            .get_ext("ext", false, "latest", "v18")
             .expect("Extension should be found");
         // Starting with a forward slash would have consequences for the
         // Url::join() that occurs when downloading a remote extension.
         assert!(!ext_path.to_string().starts_with("/"));
         assert_eq!(
             ext_path,
-            RemoteExtSpec::build_remote_path("latest", "v17", "ext").unwrap()
+            RemoteExtSpec::build_remote_path("latest", "v18", "ext").unwrap()
         );
     }
 

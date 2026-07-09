@@ -211,8 +211,8 @@ func TestCreateProjectRecordsPendingInit(t *testing.T) {
 	if sc.recordedReq.BranchName != "main" {
 		t.Errorf("branch_name = %q, want main", sc.recordedReq.BranchName)
 	}
-	if sc.recordedReq.PgVersion != 17 {
-		t.Errorf("pg_version = %d, want 17", sc.recordedReq.PgVersion)
+	if sc.recordedReq.PgVersion != 18 {
+		t.Errorf("pg_version = %d, want 18", sc.recordedReq.PgVersion)
 	}
 	if sc.recordedReq.AncestorBranchID != nil {
 		t.Errorf("ancestor_branch_id = %v, want nil (default branch)", *sc.recordedReq.AncestorBranchID)
@@ -545,8 +545,8 @@ func TestCreateEndpointOnBranchPassesAncestor(t *testing.T) {
 	parentID := uuid.New()
 	branchID := uuid.New()
 	// A default branch and a branch off it, in the same project.
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: parentID, Name: "main", PgVersion: 17, IsDefault: true})
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "feature", PgVersion: 17, ParentBranchID: &parentID, ForkLSN: "0/236A730"})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: parentID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "feature", PgVersion: 18, ParentBranchID: &parentID, ForkLSN: "0/236A730"})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
@@ -588,7 +588,7 @@ func TestCreateEndpointOnDefaultHasNoAncestor(t *testing.T) {
 
 	projectID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 	if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {

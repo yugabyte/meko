@@ -5,7 +5,7 @@ ROOT_PROJECT_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 POSTGRES_INSTALL_DIR ?= $(ROOT_PROJECT_DIR)/pg_install
 
 # Supported PostgreSQL versions
-POSTGRES_VERSIONS = v17
+POSTGRES_VERSIONS = v18
 
 # CARGO_BUILD_FLAGS: Extra flags to pass to `cargo build`. `--locked`
 # and `--features testing` are popular examples.
@@ -142,14 +142,14 @@ neon-pg-ext-%: postgres-install-% cargo-target-dir
 # they depend on openssl and other libraries that are not included in our
 # Rust build.
 .PHONY: walproposer-lib
-walproposer-lib: neon-pg-ext-v17
+walproposer-lib: neon-pg-ext-v18
 	+@echo "Compiling walproposer-lib"
 	mkdir -p $(BUILD_DIR)/walproposer-lib
-	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/v17/bin/pg_config COPT='$(COPT)' \
+	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/v18/bin/pg_config COPT='$(COPT)' \
 		-C $(BUILD_DIR)/walproposer-lib \
 		-f $(ROOT_PROJECT_DIR)/pgxn/yb_amp/Makefile walproposer-lib
-	cp $(POSTGRES_INSTALL_DIR)/v17/lib/libpgport.a $(BUILD_DIR)/walproposer-lib
-	cp $(POSTGRES_INSTALL_DIR)/v17/lib/libpgcommon.a $(BUILD_DIR)/walproposer-lib
+	cp $(POSTGRES_INSTALL_DIR)/v18/lib/libpgport.a $(BUILD_DIR)/walproposer-lib
+	cp $(POSTGRES_INSTALL_DIR)/v18/lib/libpgcommon.a $(BUILD_DIR)/walproposer-lib
 	$(AR) d $(BUILD_DIR)/walproposer-lib/libpgport.a \
 		pg_strong_random.o
 	$(AR) d $(BUILD_DIR)/walproposer-lib/libpgcommon.a \
@@ -197,18 +197,18 @@ controller-generate:
 # in one directory, so controller resolves and runs the storage controller from its own
 # location with no extra configuration (#94).
 #
-# storage_controller compiles against the Postgres v17 server headers (its
+# storage_controller compiles against the Postgres v18 server headers (its
 # transitive postgres_ffi dependency), so this installs them first via
-# postgres-headers-install-v17 — headers only, no Postgres server built, and no
+# postgres-headers-install-v18 — headers only, no Postgres server built, and no
 # build-tools image: just the repo's normal toolchain (rust-toolchain.toml +
-# clang/libclang for bindgen). controller-bundle initializes the vendor/postgres-v17
+# clang/libclang for bindgen). controller-bundle initializes the vendor/postgres-v18
 # submodule itself (the postgres_ffi headers need it), so a fresh checkout builds
 # without a separate `git submodule update` step.
 # The Rust build follows BUILD_TYPE like the rest of the workspace; the deploy/controller
 # container packages the same layout. Output: $(CONTROLLER_BUNDLE_DIR)/{controller,storage_controller}.
 CONTROLLER_BUNDLE_DIR ?= $(ROOT_PROJECT_DIR)/target/controller-bundle
 
-# Initialize submodules (currently just vendor/postgres-v17). Idempotent: a no-op
+# Initialize submodules (currently just vendor/postgres-v18). Idempotent: a no-op
 # when they are already present and at the recorded commit, so it is safe to run
 # on every build.
 .PHONY: submodules
@@ -216,7 +216,7 @@ submodules:
 	git submodule update --init --recursive --depth 2 --progress .
 
 # controller-bundle initializes the submodule before building so the postgres-headers
-# step finds vendor/postgres-v17. The sub-make keeps that ordered ahead of the
+# step finds vendor/postgres-v18. The sub-make keeps that ordered ahead of the
 # headers build even under parallel make (-j), where listing it as a sibling
 # prerequisite would race the postgres configure check.
 .PHONY: controller-bundle
@@ -225,7 +225,7 @@ controller-bundle:
 	+$(MAKE) controller-bundle-build
 
 .PHONY: controller-bundle-build
-controller-bundle-build: postgres-headers-install-v17 cargo-target-dir
+controller-bundle-build: postgres-headers-install-v18 cargo-target-dir
 	+@echo "Bundling controller + storage_controller -> $(CONTROLLER_BUNDLE_DIR)"
 	mkdir -p "$(CONTROLLER_BUNDLE_DIR)"
 	# controller is built static (CGO off) so it runs unchanged in a slim runtime image.
@@ -234,7 +234,7 @@ controller-bundle-build: postgres-headers-install-v17 cargo-target-dir
 	cp "$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)/storage_controller" "$(CONTROLLER_BUNDLE_DIR)/storage_controller"
 
 # controller-only bundle: just the Go controller, no storage_controller. Needs no Rust
-# toolchain, no Postgres headers, and no vendor/postgres-v17 submodule — so it
+# toolchain, no Postgres headers, and no vendor/postgres-v18 submodule — so it
 # builds in environments where the full bundle can't. Pair it with the deploy/controller
 # image run with AMP_STORAGE_CONTROLLER=false. Used by the docker e2e (controller/tasks).
 .PHONY: controller-bundle-only
@@ -283,12 +283,12 @@ postgres-%-pgindent: postgres-%-pg-bsd-indent postgres-%-typedefs.list
 
 # Indent pxgn/neon.
 .PHONY: neon-pgindent
-neon-pgindent: postgres-v17-pg-bsd-indent neon-pg-ext-v17
-	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/v17/bin/pg_config COPT='$(COPT)' \
-		FIND_TYPEDEF=$(ROOT_PROJECT_DIR)/vendor/postgres-v17/src/tools/find_typedef \
-		INDENT=$(BUILD_DIR)/v17/src/tools/pg_bsd_indent/pg_bsd_indent \
-		PGINDENT_SCRIPT=$(ROOT_PROJECT_DIR)/vendor/postgres-v17/src/tools/pgindent/pgindent \
-		-C $(BUILD_DIR)/pgxn-v17/yb_amp \
+neon-pgindent: postgres-v18-pg-bsd-indent neon-pg-ext-v18
+	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/v18/bin/pg_config COPT='$(COPT)' \
+		FIND_TYPEDEF=$(ROOT_PROJECT_DIR)/vendor/postgres-v18/src/tools/find_typedef \
+		INDENT=$(BUILD_DIR)/v18/src/tools/pg_bsd_indent/pg_bsd_indent \
+		PGINDENT_SCRIPT=$(ROOT_PROJECT_DIR)/vendor/postgres-v18/src/tools/pgindent/pgindent \
+		-C $(BUILD_DIR)/pgxn-v18/yb_amp \
 		-f $(ROOT_PROJECT_DIR)/pgxn/yb_amp/Makefile pgindent
 
 

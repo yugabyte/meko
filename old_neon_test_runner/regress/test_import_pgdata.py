@@ -109,7 +109,7 @@ def test_pgdata_import_smoke(
     env.pageserver.start()
 
     # By default our tests run with a tiny shared_buffers=1MB setting. That
-    # doesn't allow any prefetching on v17 and above, where the new streaming
+    # doesn't allow any prefetching on v18 and above, where the new streaming
     # read machinery keeps buffers pinned while prefetching them.  Use a higher
     # setting to enable prefetching and speed up the tests
     # use shared_buffers size like in production for 8 CU compute

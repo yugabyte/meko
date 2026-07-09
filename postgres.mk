@@ -54,7 +54,7 @@ postgres-check-%: postgres-install-%
 
 # Same as the above main targets, but for all supported PostgreSQL versions
 # For example, 'make postgres-install' is equivalent to
-# 'make postgres-install-v14 postgres-install-v15 postgres-install-v16 postgres-install-v17'
+# 'make postgres-install-v14 postgres-install-v15 postgres-install-v16 postgres-install-v18'
 all_version_targets=postgres-install postgres-headers-install postgres-check
 .PHONY: $(all_version_targets)
 $(all_version_targets): postgres-%: $(foreach pg_version,$(POSTGRES_VERSIONS),postgres-%-$(pg_version))
@@ -65,7 +65,7 @@ postgres: postgres-install
 .PHONY: postgres-headers
 postgres-headers: postgres-headers-install
 
-# 'postgres-v17' is an alias for 'postgres-install-v17' etc.
+# 'postgres-v18' is an alias for 'postgres-install-v18' etc.
 $(foreach pg_version,$(POSTGRES_VERSIONS),postgres-$(pg_version)): postgres-%: postgres-install-%
 
 ###

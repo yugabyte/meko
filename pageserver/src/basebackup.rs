@@ -22,7 +22,7 @@ use pageserver_api::key::{Key, rel_block_to_key};
 use pageserver_api::reltag::{RelTag, SlruKind};
 use postgres_ffi::pg_constants::{PG_HBA, PGDATA_SPECIAL_FILES};
 use postgres_ffi::{
-    BLCKSZ, PG_TLI, PgMajorVersion, RELSEG_SIZE, WAL_SEGMENT_SIZE, XLogFileName,
+    BLCKSZ, PG_TLI, RELSEG_SIZE, WAL_SEGMENT_SIZE, XLogFileName,
     dispatch_pgversion, pg_constants,
 };
 use postgres_ffi_types::constants::{DEFAULTTABLESPACE_OID, GLOBALTABLESPACE_OID};
@@ -723,10 +723,12 @@ where
         buf.extend_from_slice(&img[..]);
         let crc = crc32c::crc32c(&img[..]);
         buf.put_u32_le(crc);
-        let path = if self.timeline.pg_version < PgMajorVersion::PG17 {
-            format!("pg_twophase/{xid:>08X}")
-        } else {
+        // 2PC state-file names use 16 hex digits (64-bit FullTransactionId) since
+        // PG17; v16 and earlier use 8. See PgMajorVersion::has_64bit_twophase.
+        let path = if self.timeline.pg_version.has_64bit_twophase() {
             format!("pg_twophase/{xid:>016X}")
+        } else {
+            format!("pg_twophase/{xid:>08X}")
         };
         let header = new_tar_header(&path, buf.len() as u64)?;
         self.ar

@@ -111,7 +111,7 @@ func TestClientRecordPendingTimelineInit(t *testing.T) {
 	err := clientForServer(t, srv).RecordPendingTimelineInit(context.Background(), "branch-1",
 		PendingTimelineInit{
 			BranchName:       "feature",
-			PgVersion:        17,
+			PgVersion:        18,
 			AncestorBranchID: &ancestor,
 			StartLSN:         "0/16ABCD0",
 		})
@@ -172,8 +172,8 @@ func TestClientListPendingTimelineInits(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod, gotPath = r.Method, r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `[{"branch_id":"b1","branch_name":"main","pg_version":17,"ancestor_branch_id":null,"start_lsn":"0/0"},`+
-			`{"branch_id":"b2","branch_name":"feature","pg_version":17,"ancestor_branch_id":"b1","start_lsn":"0/16ABCD0"}]`)
+		io.WriteString(w, `[{"branch_id":"b1","branch_name":"main","pg_version":18,"ancestor_branch_id":null,"start_lsn":"0/0"},`+
+			`{"branch_id":"b2","branch_name":"feature","pg_version":18,"ancestor_branch_id":"b1","start_lsn":"0/16ABCD0"}]`)
 	}))
 	defer srv.Close()
 
@@ -205,7 +205,7 @@ func TestClientErrorIncludesStatusAndBody(t *testing.T) {
 	defer srv.Close()
 
 	err := clientForServer(t, srv).RecordPendingTimelineInit(context.Background(), "branch-x",
-		PendingTimelineInit{BranchName: "x", PgVersion: 17, StartLSN: "0/0"})
+		PendingTimelineInit{BranchName: "x", PgVersion: 18, StartLSN: "0/0"})
 	if err == nil {
 		t.Fatal("expected error on 500")
 	}

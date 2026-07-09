@@ -8,7 +8,7 @@ PostGIS is a spatial database extension for PostgreSQL that adds support for geo
 
 ## PostGIS Versions
 
-- PostgreSQL v17: PostGIS 3.5.0
+- PostgreSQL v18: PostGIS 3.5.0
 - PostgreSQL v14/v15/v16: PostGIS 3.3.3
 
 ## Test Configuration
@@ -17,7 +17,7 @@ The test setup includes:
 
 - `postgis-no-upgrade-test.patch`: Disables upgrade tests by removing the upgrade test section from regress/runtest.mk
 - `postgis-regular-v16.patch`: Version-specific patch for PostgreSQL v16
-- `postgis-regular-v17.patch`: Version-specific patch for PostgreSQL v17
+- `postgis-regular-v18.patch`: Version-specific patch for PostgreSQL v18
 - `regular-test.sh`: Script to run PostGIS tests as a regular user
 - `neon-test.sh`: Script to handle version-specific test configurations
 - `raster_outdb_template.sql`: Template for raster tests with explicit file paths
@@ -59,7 +59,7 @@ These tests attempt to modify the `postgis.gdal_enabled_drivers` parameter, whic
 - `raster/test/regress/permitted_gdal_drivers`
 - Loader tests: `BasicOutDB`, `Tiled10x10`, `Tiled10x10Copy`, `Tiled8x8`, `TiledAuto`, `TiledAutoSkipNoData`, `TiledAutoCopyn`
 
-### Topology Tests (v17 only)
+### Topology Tests (v18 only)
 - `populate_topology_layer`
 - `renametopogeometrycolumn`
 

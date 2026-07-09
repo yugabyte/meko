@@ -89,7 +89,7 @@ func TestKubernetesValuesPgVersionDefault(t *testing.T) {
 		spec := testEndpointSpec()
 		spec.PgVersion = pg
 		v := k.values(spec, spec.Name)
-		if v.Endpoint.PgVersion != "17" {
+		if v.Endpoint.PgVersion != "18" {
 			t.Errorf("PgVersion=%d -> Endpoint.PgVersion = %q, want default %q", pg, v.Endpoint.PgVersion, "17")
 		}
 	}

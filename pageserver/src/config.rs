@@ -626,7 +626,7 @@ mod tests {
 
             [timeline_init]
             mode       = "bootstrap"
-            pg_version = 17
+            pg_version = 18
         "#;
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("identity config is valid");
@@ -642,7 +642,7 @@ mod tests {
         assert!(matches!(
             conf.timeline_init,
             Some(pageserver_api::config::TimelineInitConfig::Bootstrap { pg_version })
-                if pg_version.major_version_num() == 17
+                if pg_version.major_version_num() == 18
         ));
 
         // serialize → reparse → same identity fields survive the round trip
@@ -706,7 +706,7 @@ mod tests {
 
             [timeline_init]
             mode       = "bootstrap"
-            pg_version = 17
+            pg_version = 18
         "#;
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("fields parse");

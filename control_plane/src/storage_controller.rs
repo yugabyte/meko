@@ -52,7 +52,7 @@ pub struct StorageController {
 
 const COMMAND: &str = "storage_controller";
 
-const STORAGE_CONTROLLER_POSTGRES_VERSION: PgMajorVersion = PgMajorVersion::PG17;
+const STORAGE_CONTROLLER_POSTGRES_VERSION: PgMajorVersion = PgMajorVersion::PG18;
 
 // All three subsystems (storage_controller, pageserver YbStore for blobs,
 // safekeeper for wals) share `yb_storage` on the YB cluster by default.

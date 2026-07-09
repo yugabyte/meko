@@ -23,7 +23,11 @@ ExceptionalCondition(const char *conditionName,
 }
 
 void
+#if PG_MAJORVERSION_NUM >= 18
+pq_copymsgbytes(StringInfo msg, void *buf, int datalen)
+#else
 pq_copymsgbytes(StringInfo msg, char *buf, int datalen)
+#endif
 {
 	if (datalen < 0 || datalen > (msg->len - msg->cursor))
 		ExceptionalCondition("insufficient data left in message", __FILE__, __LINE__);

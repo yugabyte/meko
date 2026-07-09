@@ -4,7 +4,7 @@
 #   - yb-pageserver        (page service, backed by YugabyteDB)
 #   - safekeeper           (WAL, backed by YugabyteDB)
 #   - endpoint_storage     (LFC scratch blobs, backed by YugabyteDB)
-#   - compute_ctl + postgres v17 + the `neon` extension (the compute)
+#   - compute_ctl + postgres v18 + the `neon` extension (the compute)
 # plus a small Python supervisor (PID 1 under tini) that renders each
 # service's config from environment variables, brings the stack up in
 # order, and monitors/restarts the children.
@@ -19,7 +19,7 @@
 # Build (from the repo root):
 #   docker build -t yb-light/neon-endpoint:dev -f deploy/endpoint/Dockerfile .
 #
-# yb-light is Postgres v17 only (vendor/postgres-v17, POSTGRES_VERSIONS=v17).
+# yb-light is Postgres v18 only (vendor/postgres-v18, POSTGRES_VERSIONS=v18).
 
 ARG REPOSITORY=ghcr.io/neondatabase
 ARG IMAGE=build-tools
@@ -27,10 +27,10 @@ ARG TAG=pinned
 ARG DEBIAN_VERSION=bookworm
 ARG DEBIAN_FLAVOR=${DEBIAN_VERSION}-slim
 
-# 1. Build patched Postgres v17 -> pg_install/v17.
+# 1. Build patched Postgres v18 -> pg_install/v18.
 FROM $REPOSITORY/$IMAGE:$TAG AS pg-build
 WORKDIR /home/nonroot
-COPY --chown=nonroot vendor/postgres-v17 vendor/postgres-v17
+COPY --chown=nonroot vendor/postgres-v18 vendor/postgres-v18
 COPY --chown=nonroot Makefile Makefile
 COPY --chown=nonroot postgres.mk postgres.mk
 COPY --chown=nonroot scripts/ninstall.sh scripts/ninstall.sh
@@ -115,8 +115,8 @@ COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-compute-ctl    
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/storage_controller  /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb_light_local      /usr/local/bin/
 
-# Postgres v17 install (binaries + the `neon` extension installed by neon-pg-ext).
-COPY --from=build /home/nonroot/pg_install/v17 /usr/local/v17/
+# Postgres v18 install (binaries + the `neon` extension installed by neon-pg-ext).
+COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
 # Schema migrations, for the optional DEV_PROVISION_SCHEMA path.
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/storage_controller/migrations /usr/local/share/yb-light/migrations
@@ -127,8 +127,8 @@ RUN chmod +x /usr/local/bin/yb-endpoint-supervisor
 
 ENV PG_DISTRIB_DIR=/usr/local \
     YB_LIGHT_MIGRATIONS_DIR=/usr/local/share/yb-light/migrations \
-    LD_LIBRARY_PATH=/usr/local/v17/lib \
-    PATH=/usr/local/bin:/usr/local/v17/bin:$PATH
+    LD_LIBRARY_PATH=/usr/local/v18/lib \
+    PATH=/usr/local/bin:/usr/local/v18/bin:$PATH
 
 USER yugabyte
 

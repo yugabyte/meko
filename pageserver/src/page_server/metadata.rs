@@ -210,7 +210,7 @@ impl TimelineMetadata {
             ancestor_lsn: body.ancestor_lsn,
             latest_gc_cutoff_lsn: body.latest_gc_cutoff_lsn,
             initdb_lsn: body.initdb_lsn,
-            pg_version: PgMajorVersion::PG17, // v17-only fork; this legacy-metadata default is otherwise unreachable
+            pg_version: PgMajorVersion::PG18, // v18-only fork; this legacy-metadata default is otherwise unreachable
         };
 
         hdr.format_version = METADATA_FORMAT_VERSION;
@@ -414,7 +414,7 @@ pub(crate) mod modern_serde {
         );
 
         // Build the blob the fork-native way rather than hardcoding an
-        // upstream PG15 byte array: this is a v17-only fork (PgMajorVersion
+        // upstream PG15 byte array: this is a v18-only fork (PgMajorVersion
         // has no PG15 variant), so a 15-tagged blob can't round-trip. The
         // 512-byte buffer `to_bytes` emits dwarfs the ~54-byte body — the
         // trailing-padding ("too many bytes") case this test guards — and
@@ -427,7 +427,7 @@ pub(crate) mod modern_serde {
             Lsn(0),               // ancestor_lsn
             Lsn(0x149FD18),       // latest_gc_cutoff_lsn
             Lsn(0x149FD18),       // initdb_lsn
-            PgMajorVersion::PG17,
+            PgMajorVersion::PG18,
         )
         .to_bytes()
         .unwrap();
@@ -448,7 +448,7 @@ pub(crate) mod modern_serde {
                 "ancestor_lsn": "0/0",
                 "latest_gc_cutoff_lsn": "0/149FD18",
                 "initdb_lsn": "0/149FD18",
-                "pg_version": 17
+                "pg_version": 18
             }}
         );
 

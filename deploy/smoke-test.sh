@@ -41,8 +41,8 @@ set -uo pipefail
 
 NS="${NS:-amp-test}"
 PF_PORT="${PF_PORT:-18080}"
-# Path to psql INSIDE the endpoint pod (PG v17 install; not needed on the host).
-PSQL_BIN="${PSQL_BIN:-/usr/local/v17/bin/psql}"
+# Path to psql INSIDE the endpoint pod (PG v18 install; not needed on the host).
+PSQL_BIN="${PSQL_BIN:-/usr/local/v18/bin/psql}"
 KEEP="${KEEP:-0}"
 SUFFIX="smoke-$$"
 

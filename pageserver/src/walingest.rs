@@ -771,7 +771,7 @@ impl WalIngest {
     ) -> Result<(), WalIngestError> {
         let (xact_common, is_commit, is_prepared) = match record {
             XactRecord::Prepare(XactPrepare { xl_xid, data }) => {
-                let xid: u64 = if modification.tline.pg_version >= PgMajorVersion::PG17 {
+                let xid: u64 = if modification.tline.pg_version.has_64bit_twophase() {
                     self.adjust_to_full_transaction_id(xl_xid)?
                 } else {
                     xl_xid as u64
@@ -876,7 +876,7 @@ impl WalIngest {
                 xl_xid, parsed.xid, lsn,
             );
 
-            let xid: u64 = if modification.tline.pg_version >= PgMajorVersion::PG17 {
+            let xid: u64 = if modification.tline.pg_version.has_64bit_twophase() {
                 self.adjust_to_full_transaction_id(parsed.xid)?
             } else {
                 parsed.xid as u64
@@ -1173,13 +1173,13 @@ impl WalIngest {
         let pg_version = modification.tline.pg_version;
 
         if info == pg_constants::XLOG_PARAMETER_CHANGE {
-            let CheckPoint::V17(cp) = &mut self.checkpoint;
-            let rec = v17::XlParameterChange::decode(&mut buf);
+            let CheckPoint::V18(cp) = &mut self.checkpoint;
+            let rec = v18::XlParameterChange::decode(&mut buf);
             cp.wal_level = rec.wal_level;
             self.checkpoint_modified = true;
         } else if info == pg_constants::XLOG_END_OF_RECOVERY {
-            let CheckPoint::V17(cp) = &mut self.checkpoint;
-            let rec = v17::XlEndOfRecovery::decode(&mut buf);
+            let CheckPoint::V18(cp) = &mut self.checkpoint;
+            let rec = v18::XlEndOfRecovery::decode(&mut buf);
             cp.wal_level = rec.wal_level;
             self.checkpoint_modified = true;
         }
@@ -1225,7 +1225,7 @@ impl WalIngest {
                 if xlog_checkpoint.oldestActiveXid == pg_constants::INVALID_TRANSACTION_ID
                     && info == pg_constants::XLOG_CHECKPOINT_SHUTDOWN
                 {
-                    let oldest_active_xid = if pg_version >= PgMajorVersion::PG17 {
+                    let oldest_active_xid = if pg_version.has_64bit_twophase() {
                         let mut oldest_active_full_xid = cp.nextXid.value;
                         for xid in modification.tline.list_twophase_files(lsn, ctx).await? {
                             if xid < oldest_active_full_xid {
@@ -1438,8 +1438,8 @@ impl WalIngest {
                         &self,
                         pg_version: PgMajorVersion,
                     ) -> Option<&Lazy<Mutex<RateLimit>>> {
-                        const MIN_PG_VERSION: u32 = PgMajorVersion::PG17.major_version_num();
-                        const MAX_PG_VERSION: u32 = PgMajorVersion::PG17.major_version_num();
+                        const MIN_PG_VERSION: u32 = PgMajorVersion::PG18.major_version_num();
+                        const MAX_PG_VERSION: u32 = PgMajorVersion::PG18.major_version_num();
                         let pg_version = pg_version.major_version_num();
 
                         if pg_version < MIN_PG_VERSION || pg_version > MAX_PG_VERSION {

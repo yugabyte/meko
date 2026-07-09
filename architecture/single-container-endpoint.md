@@ -21,7 +21,7 @@ in order, and monitors/restarts them:
           ├─ endpoint_storage      (HTTP; LFC scratch blobs → public.blobs)
           ├─ safekeeper            (WAL → safekeeper.wals; YB-WAL mode)
           ├─ yb-pageserver         (page service → pageserver.* ; initdb on bootstrap)
-          └─ compute_ctl ─ postgres 17 + neon extension   (the compute)
+          └─ compute_ctl ─ postgres 18 + yb_amp extension   (the compute)
 ```
 
 All durable state is in YugabyteDB; the pod's local disk holds only logs,
@@ -84,13 +84,13 @@ one (no `initdb`).
 
 ## Image notes
 
-yb-light is Postgres v17 only (`POSTGRES_VERSIONS = v17`,
-`vendor/postgres-v17`). The endpoint image has its own multi-stage Dockerfile
+yb-light is Postgres v18 only (`POSTGRES_VERSIONS = v18`,
+`vendor/postgres-v18`). The endpoint image has its own multi-stage Dockerfile
 rather than reusing the repo-root `Dockerfile`, which is unmaintained upstream
 cruft for this fork (it references absent `postgres-v14..v16` submodules, a
 `pageserver` binary that no longer exists — it is `yb-pageserver` — and the
 removed `storage_broker`). The Postgres-family binaries link
-`pg_install/v17/lib` (`libpq.so.5`), so `LD_LIBRARY_PATH` is set image-wide; the
+`pg_install/v18/lib` (`libpq.so.5`), so `LD_LIBRARY_PATH` is set image-wide; the
 `yb_amp` extension additionally needs `libcurl4` at runtime.
 
 See [`deploy/README.md`](../deploy/README.md) for the build/run/config details

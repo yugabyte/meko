@@ -62,6 +62,18 @@ pub async fn do_run_initdb(args: RunInitdbArgs<'_>) -> Result<(), Error> {
         .args(["--locale", locale])
         .arg("--no-instructions")
         .arg("--no-sync")
+        // PG18 defaults data page checksums ON; force them OFF (as on PG<=17).
+        // walredo returns redo-materialized pages without recomputing pd_checksum,
+        // so the compute would otherwise reject every materialized page with a
+        // "page verification failed" checksum error.
+        //
+        // This is correct, not a workaround: pages are materialized by walredo,
+        // never written through Postgres's checksum-on-write path, so page
+        // checksums were never populated. At-rest integrity of the durable data
+        // (WAL + page images) is YugabyteDB's job — its own block checksums +
+        // Raft replication — not PG page checksums. PG<=17's off-by-default made
+        // this implicit; PG18's default-flip just requires stating it.
+        .arg("--no-data-checksums")
         .env_clear()
         .env("LD_LIBRARY_PATH", library_search_path)
         .env("DYLD_LIBRARY_PATH", library_search_path)

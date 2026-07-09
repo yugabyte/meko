@@ -8,7 +8,7 @@
 # Example:
 #   benchmark/scripts/microbenchmarks/run_microbench.sh 'postgresql://cloud_admin@127.0.0.1:55432/postgres'
 #
-# Picks `psql` from $PSQL if set, else pg_install/v17/bin/psql, else $PATH.
+# Picks `psql` from $PSQL if set, else pg_install/v18/bin/psql, else $PATH.
 
 set -euo pipefail
 
@@ -21,8 +21,8 @@ SQL="$SCRIPT_DIR/microbench.sql"
 PARSE="$SCRIPT_DIR/parse_results.py"
 
 if [[ -z "${PSQL:-}" ]]; then
-    if [[ -x "$SCRIPT_DIR/../../../pg_install/v17/bin/psql" ]]; then
-        PSQL="$SCRIPT_DIR/../../../pg_install/v17/bin/psql"
+    if [[ -x "$SCRIPT_DIR/../../../pg_install/v18/bin/psql" ]]; then
+        PSQL="$SCRIPT_DIR/../../../pg_install/v18/bin/psql"
     else
         PSQL="psql"
     fi

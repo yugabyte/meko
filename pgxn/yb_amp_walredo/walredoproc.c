@@ -93,6 +93,9 @@
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/postmaster.h"
+#if PG_MAJORVERSION_NUM >= 18
+#include "storage/aio_subsys.h"
+#endif
 #include "replication/logicallauncher.h"
 #include "replication/origin.h"
 #include "replication/slot.h"
@@ -271,6 +274,7 @@ WalRedoMain(int argc, char *argv[])
 #endif
 
 	am_wal_redo_postgres = true;
+
 	/*
 	 * Pageserver treats any output to stderr as an ERROR, so we must
 	 * set the log level as early as possible to only log FATAL and 
@@ -281,6 +285,21 @@ WalRedoMain(int argc, char *argv[])
 	SetConfigOption("log_min_messages", "WARNING", PGC_SUSET, PGC_S_OVERRIDE);
 	SetConfigOption("client_min_messages", "ERROR", PGC_SUSET,
 					PGC_S_OVERRIDE);
+
+#if PG_MAJORVERSION_NUM >= 18
+	/*
+	 * Force io_method=sync, mirroring the compute's yb_amp _PG_init. The inmem
+	 * smgr is fd-less and completes reads via the fd<0 gate in
+	 * pgaio_io_perform_synchronously(), which is reached only for a read the
+	 * buffer manager runs synchronously. walredo's reads are synchronous today
+	 * (single-block immediate ReadBuffers), but under an async io_method a
+	 * non-immediate read would dispatch the fd=-1 handle to a worker/io_uring
+	 * (pgaio_uring_ops has no needs_synchronous_execution) -> garbage read.
+	 * Forcing sync keeps every read on the gate path. Tracked for removal with
+	 * the compute override in #228.
+	 */
+	SetConfigOption("io_method", "sync", PGC_POSTMASTER, PGC_S_OVERRIDE);
+#endif
 
 	/*
 	 * WAL redo does not need a large number of buffers. And speed of
@@ -293,8 +312,12 @@ WalRedoMain(int argc, char *argv[])
 	/*
 	 * install the simple in-memory smgr
 	 */
+#if PG_MAJORVERSION_NUM >= 18
+	smgr_register_inmem();
+#else
 	smgr_hook = smgr_inmem;
 	smgr_init_hook = smgr_init_inmem;
+#endif
 
 #if PG_VERSION_NUM >= 160000
 	/* make rmgr registry believe we can register the resource manager */
@@ -309,6 +332,29 @@ WalRedoMain(int argc, char *argv[])
 	max_parallel_workers = 0;
 	max_wal_senders = 0;
 	InitializeMaxBackends();
+
+#if PG_MAJORVERSION_NUM >= 18
+	/*
+	 * PG18 requires the postmaster child-slot array to be initialised before
+	 * anything that sizes shared memory from MaxLivePostmasterChildren() --
+	 * that includes InitializeShmemGUCs() below (via PMSignalShmemSize) and
+	 * PMSignalShmemInit() later. The real postmaster/bootstrap path calls this
+	 * right after InitializeMaxBackends(); our fake shmem setup must too, or
+	 * walredo dies with "PM child array not initialized yet".
+	 */
+	InitPostmasterChildSlots();
+
+	/*
+	 * PG18 sizes each backend's fast-path lock arrays based on
+	 * max_locks_per_transaction; InitializeFastPathLocks() computes that and
+	 * must run before the lock-manager shared memory is sized/created.
+	 * bootstrap does this right after InitPostmasterChildSlots(). Without it,
+	 * LockAcquire() dereferences uninitialised fast-path state and the walredo
+	 * child SIGSEGVs (e.g. taking a relation-extension lock while pinning the
+	 * visibility map during heap_multi_insert redo).
+	 */
+	InitializeFastPathLocks();
+#endif
 
 #if PG_VERSION_NUM >= 150000
 	process_shmem_requests();
@@ -338,6 +384,26 @@ WalRedoMain(int argc, char *argv[])
 	 * this before we can use LWLocks.
 	 */
 	InitAuxiliaryProcess();
+
+#if PG_MAJORVERSION_NUM >= 18
+	/*
+	 * Per-backend AIO initialisation. A regular backend gets this from
+	 * InitPostgres(); walredo does its own startup, so we must call it here --
+	 * after MyProc is set by InitAuxiliaryProcess() and before any buffer
+	 * access goes through the AIO read path.
+	 */
+	pgaio_init_backend();
+
+	/*
+	 * Create this backend's local lock hash (LockMethodLocalHash). PG18 split
+	 * this out of the shared lock-manager init into InitLockManagerAccess(),
+	 * called from InitPostgres() for regular backends. walredo bypasses
+	 * InitPostgres, so without this LockAcquire() dereferences a NULL
+	 * LockMethodLocalHash and SIGSEGVs (e.g. taking a relation-extension lock
+	 * while extending the visibility map during heap-insert redo).
+	 */
+	InitLockManagerAccess();
+#endif
 
 	SetProcessingMode(NormalProcessing);
 
@@ -555,32 +621,53 @@ CreateFakeSharedMemoryAndSemaphores(void)
 	CommitTsShmemInit();
 	SUBTRANSShmemInit();
 	MultiXactShmemInit();
+#if PG_MAJORVERSION_NUM >= 18
+	BufferManagerShmemInit();
+#else
 	InitBufferPool();
+#endif
 
 	/*
 	 * Set up lock manager
 	 */
+#if PG_MAJORVERSION_NUM >= 18
+	LockManagerShmemInit();
+#else
 	InitLocks();
+#endif
 
 	/*
 	 * Set up predicate lock manager
 	 */
+#if PG_MAJORVERSION_NUM >= 18
+	PredicateLockShmemInit();
+#else
 	InitPredicateLocks();
+#endif
 
 	/*
 	 * Set up process table
 	 */
 	if (!IsUnderPostmaster)
 		InitProcGlobal();
+#if PG_MAJORVERSION_NUM >= 18
+	ProcArrayShmemInit();
+	BackendStatusShmemInit();
+#else
 	CreateSharedProcArray();
 	CreateSharedBackendStatus();
+#endif
 	TwoPhaseShmemInit();
 	BackgroundWorkerShmemInit();
 
 	/*
 	 * Set up shared-inval messaging
 	 */
+#if PG_MAJORVERSION_NUM >= 18
+	SharedInvalShmemInit();
+#else
 	CreateSharedInvalidationState();
+#endif
 
 	/*
 	 * Set up interprocess signaling mechanisms
@@ -607,6 +694,16 @@ CreateFakeSharedMemoryAndSemaphores(void)
 	SyncScanShmemInit();
 	/* Skip due to the 'pg_notify' directory check */
 	/* AsyncShmemInit(); */
+
+#if PG_MAJORVERSION_NUM >= 18
+	/*
+	 * PG18 routes all buffer reads/writes through the AIO subsystem, so its
+	 * shared state must exist even in the walredo process (which reads the
+	 * base page via the in-memory smgr). Without this, the AIO read path
+	 * dereferences uninitialised state and the walredo child SIGSEGVs.
+	 */
+	AioShmemInit();
+#endif
 
 #ifdef EXEC_BACKEND
 
@@ -854,7 +951,20 @@ ApplyRecord(StringInfo input_message)
 	 */
 	lsn = pq_getmsgint64(input_message);
 
+#if PG_MAJORVERSION_NUM >= 18
+	/*
+	 * Reset the in-memory smgr's page store before applying this record. We
+	 * call the inmem smgr's own reset rather than smgrinit(), because PG18's
+	 * smgrinit() registers an on_proc_exit(smgrshutdown) callback on every
+	 * call. walredo calls this per record, so smgrinit() would exhaust the
+	 * on_proc_exit slots ("out of on_proc_exit slots") after ~20 records.
+	 * (Pre-18 smgrinit() is retained; the reset semantics are identical --
+	 * both just run the inmem smgr's init.)
+	 */
+	smgr_init_inmem();
+#else
 	smgrinit();					/* reset inmem smgr state */
+#endif
 
 	/* note: the input must be aligned here */
 	record = (XLogRecord *) pq_getmsgbytes(input_message, sizeof(XLogRecord));

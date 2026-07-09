@@ -31,7 +31,7 @@ export YB_STORAGE_PASSWORD='Yugabyte!1'
 PS_HTTP=172.151.20.28:9988
 
 # YB backing store (for page-store size probe)
-YB_PSQL=/home/ec2-user/yb-neon-bundle/pg_install/v17/bin/psql
+YB_PSQL=/home/ec2-user/yb-neon-bundle/pg_install/v18/bin/psql
 ybq() { PGPASSWORD='Yugabyte!1' $YB_PSQL "host=172.151.17.132 port=5433 user=yugabyte dbname=yb_storage sslmode=require" -tAc "$1" 2>/dev/null; }
 
 TS=$(date -u +%Y%m%d-%H%M)

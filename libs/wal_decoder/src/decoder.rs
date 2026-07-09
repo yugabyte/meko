@@ -117,25 +117,25 @@ impl MetadataRecord {
         let mut flags = pg_constants::VISIBILITYMAP_VALID_BITS;
 
         match pg_version {
-            PgMajorVersion::PG17 => {
+            PgMajorVersion::PG18 => {
                 if decoded.xl_rmid == pg_constants::RM_HEAP_ID {
                     let info = decoded.xl_info & pg_constants::XLOG_HEAP_OPMASK;
 
                     if info == pg_constants::XLOG_HEAP_INSERT {
-                        let xlrec = v17::XlHeapInsert::decode(buf);
+                        let xlrec = v18::XlHeapInsert::decode(buf);
                         assert_eq!(0, buf.remaining());
                         if (xlrec.flags & pg_constants::XLH_INSERT_ALL_VISIBLE_CLEARED) != 0 {
                             new_heap_blkno = Some(decoded.blocks[0].blkno);
                         }
                     } else if info == pg_constants::XLOG_HEAP_DELETE {
-                        let xlrec = v17::XlHeapDelete::decode(buf);
+                        let xlrec = v18::XlHeapDelete::decode(buf);
                         if (xlrec.flags & pg_constants::XLH_DELETE_ALL_VISIBLE_CLEARED) != 0 {
                             new_heap_blkno = Some(decoded.blocks[0].blkno);
                         }
                     } else if info == pg_constants::XLOG_HEAP_UPDATE
                         || info == pg_constants::XLOG_HEAP_HOT_UPDATE
                     {
-                        let xlrec = v17::XlHeapUpdate::decode(buf);
+                        let xlrec = v18::XlHeapUpdate::decode(buf);
                         // the size of tuple data is inferred from the size of the record.
                         // we can't validate the remaining number of bytes without parsing
                         // the tuple data.
@@ -150,7 +150,7 @@ impl MetadataRecord {
                             new_heap_blkno = Some(decoded.blocks[0].blkno);
                         }
                     } else if info == pg_constants::XLOG_HEAP_LOCK {
-                        let xlrec = v17::XlHeapLock::decode(buf);
+                        let xlrec = v18::XlHeapLock::decode(buf);
                         if (xlrec.flags & pg_constants::XLH_LOCK_ALL_FROZEN_CLEARED) != 0 {
                             old_heap_blkno = Some(decoded.blocks[0].blkno);
                             flags = pg_constants::VISIBILITYMAP_ALL_FROZEN;
@@ -159,7 +159,7 @@ impl MetadataRecord {
                 } else if decoded.xl_rmid == pg_constants::RM_HEAP2_ID {
                     let info = decoded.xl_info & pg_constants::XLOG_HEAP_OPMASK;
                     if info == pg_constants::XLOG_HEAP2_MULTI_INSERT {
-                        let xlrec = v17::XlHeapMultiInsert::decode(buf);
+                        let xlrec = v18::XlHeapMultiInsert::decode(buf);
 
                         let offset_array_len =
                             if decoded.xl_info & pg_constants::XLOG_HEAP_INIT_PAGE > 0 {
@@ -174,7 +174,7 @@ impl MetadataRecord {
                             new_heap_blkno = Some(decoded.blocks[0].blkno);
                         }
                     } else if info == pg_constants::XLOG_HEAP2_LOCK_UPDATED {
-                        let xlrec = v17::XlHeapLockUpdated::decode(buf);
+                        let xlrec = v18::XlHeapLockUpdated::decode(buf);
                         if (xlrec.flags & pg_constants::XLH_LOCK_ALL_FROZEN_CLEARED) != 0 {
                             old_heap_blkno = Some(decoded.blocks[0].blkno);
                             flags = pg_constants::VISIBILITYMAP_ALL_FROZEN;
@@ -224,26 +224,26 @@ impl MetadataRecord {
         assert_eq!(decoded.xl_rmid, pg_constants::RM_NEON_ID);
 
         match pg_version {
-            PgMajorVersion::PG17 => {
+            PgMajorVersion::PG18 => {
                 let info = decoded.xl_info & pg_constants::XLOG_HEAP_OPMASK;
 
                 match info {
                     pg_constants::XLOG_NEON_HEAP_INSERT => {
-                        let xlrec = v17::rm_neon::XlNeonHeapInsert::decode(buf);
+                        let xlrec = v18::rm_neon::XlNeonHeapInsert::decode(buf);
                         assert_eq!(0, buf.remaining());
                         if (xlrec.flags & pg_constants::XLH_INSERT_ALL_VISIBLE_CLEARED) != 0 {
                             new_heap_blkno = Some(decoded.blocks[0].blkno);
                         }
                     }
                     pg_constants::XLOG_NEON_HEAP_DELETE => {
-                        let xlrec = v17::rm_neon::XlNeonHeapDelete::decode(buf);
+                        let xlrec = v18::rm_neon::XlNeonHeapDelete::decode(buf);
                         if (xlrec.flags & pg_constants::XLH_DELETE_ALL_VISIBLE_CLEARED) != 0 {
                             new_heap_blkno = Some(decoded.blocks[0].blkno);
                         }
                     }
                     pg_constants::XLOG_NEON_HEAP_UPDATE
                     | pg_constants::XLOG_NEON_HEAP_HOT_UPDATE => {
-                        let xlrec = v17::rm_neon::XlNeonHeapUpdate::decode(buf);
+                        let xlrec = v18::rm_neon::XlNeonHeapUpdate::decode(buf);
                         // the size of tuple data is inferred from the size of the record.
                         // we can't validate the remaining number of bytes without parsing
                         // the tuple data.
@@ -259,7 +259,7 @@ impl MetadataRecord {
                         }
                     }
                     pg_constants::XLOG_NEON_HEAP_MULTI_INSERT => {
-                        let xlrec = v17::rm_neon::XlNeonHeapMultiInsert::decode(buf);
+                        let xlrec = v18::rm_neon::XlNeonHeapMultiInsert::decode(buf);
 
                         let offset_array_len =
                             if decoded.xl_info & pg_constants::XLOG_HEAP_INIT_PAGE > 0 {
@@ -275,7 +275,7 @@ impl MetadataRecord {
                         }
                     }
                     pg_constants::XLOG_NEON_HEAP_LOCK => {
-                        let xlrec = v17::rm_neon::XlNeonHeapLock::decode(buf);
+                        let xlrec = v18::rm_neon::XlNeonHeapLock::decode(buf);
                         if (xlrec.flags & pg_constants::XLH_LOCK_ALL_FROZEN_CLEARED) != 0 {
                             old_heap_blkno = Some(decoded.blocks[0].blkno);
                             flags = pg_constants::VISIBILITYMAP_ALL_FROZEN;
@@ -343,10 +343,10 @@ impl MetadataRecord {
         tracing::debug!(%info, %pg_version, "handle RM_DBASE_ID");
 
         match pg_version {
-            PgMajorVersion::PG17 => {
-                if info == postgres_ffi::v17::bindings::XLOG_DBASE_CREATE_WAL_LOG {
+            PgMajorVersion::PG18 => {
+                if info == postgres_ffi::v18::bindings::XLOG_DBASE_CREATE_WAL_LOG {
                     tracing::debug!("XLOG_DBASE_CREATE_WAL_LOG: noop");
-                } else if info == postgres_ffi::v17::bindings::XLOG_DBASE_CREATE_FILE_COPY {
+                } else if info == postgres_ffi::v18::bindings::XLOG_DBASE_CREATE_FILE_COPY {
                     // The XLOG record was renamed between v14 and v15,
                     // but the record format is the same.
                     // So we can reuse XlCreateDatabase here.
@@ -361,7 +361,7 @@ impl MetadataRecord {
                     }));
 
                     return Ok(Some(record));
-                } else if info == postgres_ffi::v17::bindings::XLOG_DBASE_DROP {
+                } else if info == postgres_ffi::v18::bindings::XLOG_DBASE_DROP {
                     let dropdb = XlDropDatabase::decode(buf);
                     let record = MetadataRecord::Dbase(DbaseRecord::Drop(DbaseDrop {
                         db_id: dropdb.db_id,
@@ -384,10 +384,10 @@ impl MetadataRecord {
         let info = decoded.xl_info & !pg_constants::XLR_INFO_MASK;
 
         if info == pg_constants::CLOG_ZEROPAGE {
-            let pageno = if pg_version < PgMajorVersion::PG17 {
-                buf.get_u32_le()
-            } else {
+            let pageno = if pg_version.has_64bit_slru_pageno() {
                 buf.get_u64_le() as u32
+            } else {
+                buf.get_u32_le()
             };
             let segno = pageno / pg_constants::SLRU_PAGES_PER_SEGMENT;
             let rpageno = pageno % pg_constants::SLRU_PAGES_PER_SEGMENT;
@@ -476,10 +476,10 @@ impl MetadataRecord {
         if info == pg_constants::XLOG_MULTIXACT_ZERO_OFF_PAGE
             || info == pg_constants::XLOG_MULTIXACT_ZERO_MEM_PAGE
         {
-            let pageno = if pg_version < PgMajorVersion::PG17 {
-                buf.get_u32_le()
-            } else {
+            let pageno = if pg_version.has_64bit_slru_pageno() {
                 buf.get_u64_le() as u32
+            } else {
+                buf.get_u32_le()
             };
             let segno = pageno / pg_constants::SLRU_PAGES_PER_SEGMENT;
             let rpageno = pageno % pg_constants::SLRU_PAGES_PER_SEGMENT;

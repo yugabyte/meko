@@ -11,7 +11,7 @@ func TestCreateBranchStep(t *testing.T) {
 	branchID := uuid.New()
 	step := NewCreateBranchStep(CreateBranchArgs{
 		ParentBranchID: uuid.New(), ProjectID: uuid.New(),
-		BranchID: branchID, Name: "feature", ForkLSN: "0/16ABCD0", PgVersion: 17,
+		BranchID: branchID, Name: "feature", ForkLSN: "0/16ABCD0", PgVersion: 18,
 	}, Deps{State: state})
 
 	if res := step.Execute(t.Context()); res.Failed() {

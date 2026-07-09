@@ -115,7 +115,7 @@ def test_twophase_nonzero_epoch(
     """
     Same as 'test_twophase' test, but with a non-zero XID epoch, i.e. after 4 billion XIDs
     have been consumed. (This is to ensure that we correctly use the full 64-bit XIDs in
-    pg_twophase filenames with PostgreSQL v17.)
+    pg_twophase filenames with PostgreSQL v18.)
     """
     env = neon_simple_env
 

@@ -14,7 +14,7 @@ use futures::StreamExt;
 use postgres_backend::is_expected_io_error;
 use postgres_connection::PgConnectionConfig;
 use postgres_ffi::WAL_SEGMENT_SIZE;
-use postgres_ffi::v17::xlog_utils::normalize_lsn;
+use postgres_ffi::v18::xlog_utils::normalize_lsn;
 use postgres_ffi::waldecoder::WalDecodeError;
 use postgres_protocol::message::backend::ReplicationMessage;
 use postgres_types::PgLsn;

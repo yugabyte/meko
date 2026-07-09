@@ -50,9 +50,9 @@ set_target() {
 }
 
 # Bundled libpq + psql + pgbench (needed for Neon extensions; libpq RUNPATH workaround).
-export PSQL=~/yb-neon-bundle/pg_install/v17/bin/psql
-export PGBENCH=~/yb-neon-bundle/pg_install/v17/bin/pgbench
-export LD_LIBRARY_PATH=~/yb-neon-bundle/pg_install/v17/lib:${LD_LIBRARY_PATH:-}
+export PSQL=~/yb-neon-bundle/pg_install/v18/bin/psql
+export PGBENCH=~/yb-neon-bundle/pg_install/v18/bin/pgbench
+export LD_LIBRARY_PATH=~/yb-neon-bundle/pg_install/v18/lib:${LD_LIBRARY_PATH:-}
 
 # Results dir for this run, set by callers (default: timestamped).
 results_dir() {

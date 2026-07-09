@@ -34,7 +34,7 @@ func TestEndpointFlow(t *testing.T) {
 		ProjectID: projectID,
 		BranchID:  branchID,
 		Name:      "main",
-		PgVersion: 17,
+		PgVersion: 18,
 		IsDefault: true,
 	})
 
@@ -162,7 +162,7 @@ func TestEndpointErrors(t *testing.T) {
 	// Get against a missing endpoint (branch seeded) -> 404.
 	projectID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 	getMissing, err := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, uuid.New())
 	if err != nil {
 		t.Fatalf("GetEndpoint(missing): %v", err)
@@ -184,7 +184,7 @@ func TestEndpointDiskType(t *testing.T) {
 	pool := mustCreatePool(t, client, user.Id, "disk-pool")
 	projectID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 	network := api.Network
@@ -234,7 +234,7 @@ func TestEndpointDeployDisabled(t *testing.T) {
 	pool := mustCreatePool(t, client, user.Id, "off-pool")
 	projectID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 17, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})

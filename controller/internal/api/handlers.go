@@ -195,8 +195,8 @@ func (c *Controllers) GetStoragePool(ctx context.Context, request GetStoragePool
 // branches and endpoints in the worker.
 
 // defaultPgVersion is used when a create-project request omits pg_version.
-// yb-light is Postgres v17 only.
-const defaultPgVersion = 17
+// yb-light is Postgres v18 only.
+const defaultPgVersion = 18
 
 func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRequestObject) (CreateProjectResponseObject, error) {
 	if request.Body == nil {
@@ -210,8 +210,8 @@ func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRe
 	if request.Body.PgVersion != nil {
 		pgVersion = *request.Body.PgVersion
 	}
-	// yb-light is Postgres v17 only; reject anything else up front rather than
-	// failing opaquely when the endpoint image (v17) can't honor it.
+	// yb-light is Postgres v18 only; reject anything else up front rather than
+	// failing opaquely when the endpoint image (v18) can't honor it.
 	if pgVersion != defaultPgVersion {
 		return CreateProject400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
 			fmt.Sprintf("unsupported pg_version %d (only %d is supported)", pgVersion, defaultPgVersion)))}, nil

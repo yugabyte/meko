@@ -191,7 +191,7 @@ Python script (`supervisor.py`) started by `tini` as PID 1:
 | `endpoint_storage` | LFC pre-warm scratch blobs           | YugabyteDB  |
 | `safekeeper`       | WAL                                  | YugabyteDB  |
 | `yb-pageserver`    | page service                         | YugabyteDB  |
-| `compute_ctl`      | supervises Postgres v17 + `neon` ext | (compute)   |
+| `compute_ctl`      | supervises Postgres v18 + `neon` ext | (compute)   |
 
 The supervisor renders each service's config from environment variables,
 brings the stack up in order (endpoint_storage → safekeeper → pageserver →
@@ -213,13 +213,13 @@ create the database and apply the bundled migrations itself.
 
 ## Building the image
 
-yb-light is Postgres v17 only. From the **repo root**:
+yb-light is Postgres v18 only. From the **repo root**:
 
 ```sh
 docker build -t yb-light/neon-endpoint:dev -f deploy/endpoint/Dockerfile .
 ```
 
-This compiles patched Postgres v17, the Rust services, and the `neon`
+This compiles patched Postgres v18, the Rust services, and the `neon`
 extension, so the first build is slow. The `ghcr.io/neondatabase/build-tools`
 base image is required (same as the repo-root Dockerfile).
 

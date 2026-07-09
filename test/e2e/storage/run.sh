@@ -118,7 +118,7 @@ fi
 
 # Rebuild the yb_amp Postgres extension when its C sources changed. cargo does
 # NOT build it — the launcher spawns a compute whose postgres loads
-# pg_install/v17/lib/postgresql/yb_amp.so at runtime (the walproposer +
+# pg_install/v18/lib/postgresql/yb_amp.so at runtime (the walproposer +
 # pagestore smgr live in that .so). A stale .so silently runs an old compute
 # against freshly-built cluster binaries; when the change is to the
 # walproposer<->safekeeper wire/structs that surfaces as a hang or a segfault
@@ -136,13 +136,13 @@ fi
 # fire on every run). This is a no-op on the common Rust-only edit (the mtime
 # check is instant) and only pays the ~1-2 min recompile when C actually
 # changed.
-EXT_SO=$REPO/pg_install/v17/lib/postgresql/yb_amp.so
+EXT_SO=$REPO/pg_install/v18/lib/postgresql/yb_amp.so
 EXT_STAMP=$REPO/build/.yb_amp_ext.stamp
 if [[ ! -f $EXT_SO ]] || [[ ! -f $EXT_STAMP ]] \
     || [[ -n "$(find "$REPO/pgxn" -type f \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) -newer "$EXT_STAMP" -print -quit)" ]]; then
     echo "run.sh: yb_amp extension is stale (C sources changed or not yet built) — clean-rebuilding" >&2
-    rm -rf "$REPO/build/pgxn-v17"
-    make -C "$REPO" neon-pg-ext-v17
+    rm -rf "$REPO/build/pgxn-v18"
+    make -C "$REPO" neon-pg-ext-v18
     mkdir -p "$REPO/build"
     touch "$EXT_STAMP"
 fi

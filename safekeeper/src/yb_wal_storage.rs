@@ -416,7 +416,7 @@ impl YbWalStorage {
         // back to the raw offset so startup is never worse than before.
         let write_lsn = {
             let pg_version = postgres_ffi::PgMajorVersion::try_from(state.server.pg_version)
-                .unwrap_or(postgres_ffi::PgMajorVersion::PG17);
+                .unwrap_or(postgres_ffi::PgMajorVersion::PG18);
             let src = YbWalSource {
                 client: &system_client,
                 table: &table_name,

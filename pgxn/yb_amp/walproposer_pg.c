@@ -1370,7 +1370,26 @@ StartProposerReplication(WalProposer *wp, StartReplicationCmd *cmd)
 
 	if (cmd->slotname)
 	{
+		/*
+		 * The walproposer re-enters this function on every safekeeper
+		 * reconnect: WalSndLoop() below streams until process exit and never
+		 * falls through to the ReplicationSlotRelease() at the end, so from
+		 * the second pass on we still hold the slot acquired by the previous
+		 * pass. ReplicationSlotAcquire() requires MyReplicationSlot == NULL on
+		 * entry and Assert()s it. That assert aborts the process only under
+		 * --enable-cassert: the PG18 build enables it and the PG17 build does
+		 * not, which is the sole reason the same re-acquire crashes on PG18
+		 * but not on PG17. Release any slot we still hold so the re-acquire is
+		 * well-formed on both builds; on the first (non-reconnect) pass
+		 * MyReplicationSlot is NULL and this is a no-op.
+		 */
+		if (MyReplicationSlot != NULL)
+			ReplicationSlotRelease();
+#if PG_MAJORVERSION_NUM >= 18
+		ReplicationSlotAcquire(cmd->slotname, true, true);
+#else
 		ReplicationSlotAcquire(cmd->slotname, true);
+#endif
 		if (SlotIsLogical(MyReplicationSlot))
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
