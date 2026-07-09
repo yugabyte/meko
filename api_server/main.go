@@ -164,6 +164,11 @@ func run() error {
 		os.Getenv("STRIPE_PRICE_SCALE"),
 		"Stripe Price ID for the Scale plan (e.g. price_...)")
 
+	// Artifact upload limit.
+	maxArtifactSizeBytes := flag.Int64("max-artifact-size-bytes",
+		envInt64OrDefault("MEKO_MAX_ARTIFACT_SIZE_BYTES", 5*1024*1024),
+		"maximum decoded file size in bytes accepted by POST /datapacks/:id/artifacts (default 5 MiB)")
+
 	flag.Parse()
 
 	resolvedLogLevel := parseLogLevel(*logLevel)
@@ -334,6 +339,7 @@ func run() error {
 		StripePriceIDStarter:     *stripePriceStarter,
 		StripePriceIDGrowth:      *stripePriceGrowth,
 		StripePriceIDScale:       *stripePriceScale,
+		MaxArtifactSizeBytes:     *maxArtifactSizeBytes,
 	})
 }
 
@@ -354,6 +360,15 @@ func envOrDefault(key, fallback string) string {
 func envIntOrDefault(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func envInt64OrDefault(key string, fallback int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			return n
 		}
 	}

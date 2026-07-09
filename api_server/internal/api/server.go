@@ -99,6 +99,12 @@ type ServerConfig struct {
 	// even if the steady rate is below the cap. Default applied in
 	// main.go.
 	PATRateLimitBurst int
+
+	// MaxArtifactSizeBytes caps the decoded file size accepted by
+	// POST /datapacks/:id/artifacts. 0 falls back to the handler
+	// default (5 MiB). Set via --max-artifact-size-bytes or
+	// MEKO_MAX_ARTIFACT_SIZE_BYTES.
+	MaxArtifactSizeBytes int64
 }
 
 // defaultMCPPATFlushInterval is the fallback flush cadence used when

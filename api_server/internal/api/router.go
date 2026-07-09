@@ -47,6 +47,8 @@ type serviceRegistry struct {
 	mcpPATSvc          *service.MCPPATService
 	billingRepo        *repository.BillingRepo
 	billingSvc         *service.BillingService
+	artifactRepo       *repository.ArtifactRepo
+	artifactSvc        *service.ArtifactService
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -151,6 +153,9 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	accountUsageSvc := service.NewAccountUsageService(dpRepo, kbRepo, langfuseSvc.Repo(), freeTierRepo)
 
+	artifactRepo := repository.NewArtifactRepo(cfg.SystemDB)
+	artifactSvc := service.NewArtifactService(artifactRepo, s3Svc)
+
 	slog.Info("service registry initialized")
 	return &serviceRegistry{
 		accountRepo:        accountRepo,
@@ -176,6 +181,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		mcpPATSvc:          mcpPATSvc,
 		billingRepo:        billingRepo,
 		billingSvc:         billingSvc,
+		artifactRepo:       artifactRepo,
+		artifactSvc:        artifactSvc,
 	}
 }
 
@@ -245,7 +252,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 
 	e.GET("/success", handlers.SuccessHandler(successCfg))
 
-	registerDatapackRoutes(datapackGroup, dpDirect, reg)
+	registerDatapackRoutes(datapackGroup, dpDirect, reg, cfg.MaxArtifactSizeBytes)
 	registerBillingRoutes(v1, datapackGroup, reg)
 
 	return e, reg, nil
@@ -462,7 +469,7 @@ func buildProvisioner(_ ServerConfig, reg *serviceRegistry) service.Provisioner 
 // also has the per-PAT rate limiter attached. Each PAT-bearing
 // route is additionally guarded by auth.RequireScope so a token
 // minted with scopes={"read"} can't issue mutations.
-func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
+func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxArtifactSizeBytes int64) {
 	dpH := handlers.NewDatapackHandler(reg.dpSvc, reg.langfuseSvc, reg.memoriesSvc, reg.kbSvc)
 	observeH := handlers.NewObserveHandler(reg.langfuseSvc)
 	agentH := handlers.NewAgentHandler(reg.agentSvc)
@@ -662,6 +669,18 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry) {
 	g.PATCH("/datapacks/:datapack_id/share/:share_user_id", shareH.UpdateGrant,
 		auth.RequireDatapackAccess(reg.dpRepo),
 		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
+
+	artifactH := handlers.NewArtifactHandler(reg.artifactSvc, maxArtifactSizeBytes)
+	// Artifact upload: any member with write access (owner or maintainer).
+	// Artifact get: any member with datapack access (owner, maintainer, contributor, viewer).
+	dpDirect.POST("/datapacks/:datapack_id/artifacts", artifactH.Put,
+		auth.RequireScope(auth.ScopeWrite),
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+	dpDirect.GET("/datapacks/:datapack_id/artifacts/:content_hash", artifactH.Get,
+		auth.RequireScope(auth.ScopeRead),
+		auth.RequireDatapackAccess(reg.dpRepo),
 	)
 
 	slog.Info("datapack routes registered")

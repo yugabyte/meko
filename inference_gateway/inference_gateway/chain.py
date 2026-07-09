@@ -462,6 +462,7 @@ async def run_chat_turn(
     session_id: str,
     user_message: str,
     datapack_id: Optional[str],
+    user_id: Optional[str] = None,
     resume_conversation_id: Optional[str] = None,
     summary_llm: Optional[BaseChatModel] = None,
     bypass_conversation_cache: bool = False,
@@ -700,6 +701,7 @@ async def run_chat_turn(
             conversation_id=conversation_id,
             datapack_id=datapack_id,
             top_k=cfg.memory_top_k,
+            user_id=user_id,
             steps=steps,
         )
 
@@ -918,9 +920,13 @@ async def _search_memories(
     conversation_id: str,
     datapack_id: Optional[str],
     top_k: int,
+    user_id: Optional[str] = None,
     steps: Optional[List[ProcessingStep]] = None,
 ) -> List[MemoryHit]:
     """Run `memory_search` and return the structured hits.
+
+    The MCP server resolves the user from its auth context (the forwarded
+    bearer token); `user_id` is no longer passed explicitly.
 
     Best-effort: a missing tool / transient failure logs a warning and
     returns []. Appends a step to `steps` if provided so the per-turn

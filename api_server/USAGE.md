@@ -27,6 +27,110 @@
 ./meko-api-server -port 25433 -db-host 127.0.0.1 -db-port 5433 -db-user-name yugabyte -db-password secret
 ```
 
+---
+
+## Environment Variables
+
+Every flag that has an env-var equivalent is listed here. When both a flag and an env var are set, the flag takes precedence. Variables with no default shown are **required** when their feature is enabled.
+
+### Logging
+
+| Variable | Default | Description |
+|---|---|---|
+| `LOG_LEVEL` | `info` | slog level: `debug`, `info`, `warn`, `error` |
+| `MEKO_DEPLOY_ENV` | `prod` | Deployment environment: `prod` or `dev` |
+
+### System (control-plane) Database
+
+The `meko_system.*` schema can live on a separate database from the data-plane. Leave these unset to inherit the `--db-*` values (single-database deployments).
+
+| Variable | Default | Description |
+|---|---|---|
+| `SYSTEM_DB_HOST` | inherits `--db-host` | meko_system database host |
+| `SYSTEM_DB_USER_NAME` | inherits `--db-user-name` | meko_system database user |
+| `SYSTEM_DB_PASSWORD` | inherits `--db-password` | meko_system database password |
+| `SYSTEM_DB_PORT` | inherits `--db-port` | meko_system database port |
+| `SYSTEM_DB_NAME` | inherits `--db-name` | meko_system database name |
+| `SYSTEM_DB_SSLMODE` | inherits `--db-sslmode` | meko_system database sslmode |
+
+### Langfuse
+
+| Variable | Default | Description |
+|---|---|---|
+| `LANGFUSE_HOST` | — | Langfuse base URL (e.g. `http://localhost:3000`) |
+| `LANGFUSE_ADMIN_API_KEY` | — | Langfuse admin API key for per-account org/project provisioning |
+| `LANGFUSE_DB_HOST` | — | Langfuse Postgres host (optional; required for observability endpoints) |
+| `LANGFUSE_DB_PORT` | `5433` | Langfuse Postgres port |
+| `LANGFUSE_DB_NAME` | `langfuse` | Langfuse Postgres database name |
+| `LANGFUSE_DB_USER` | `yugabyte` | Langfuse Postgres user |
+| `LANGFUSE_DB_PASSWORD` | — | Langfuse Postgres password |
+| `LANGFUSE_DB_SSLMODE` | `disable` | Langfuse Postgres sslmode (`disable`, `require`, `verify-ca`, `verify-full`) |
+
+### OpenAI
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENAI_API_KEY` | — | OpenAI API key |
+| `OPEN_AI_LLM_MODEL` | `gpt-4o` | OpenAI LLM model |
+| `OPEN_AI_EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI embedding model |
+| `MEMORY_LIST_SKIP_VECTOR_SORT` | `true` | Skip vector embedding for memory list; sort by `created_at DESC` instead |
+
+### S3
+
+| Variable | Default | Description |
+|---|---|---|
+| `S3_AUTH_MODE` | `minio` | S3 auth mode: `minio`, `iam-user`, `iam-role` |
+| `S3_ENDPOINT` | `http://localhost:19094` | S3-compatible endpoint URL (minio / iam-user modes) |
+| `S3_ACCESS_KEY` | `meko` | S3 access key (minio / iam-user modes) |
+| `S3_SECRET_KEY` | `mekosecret` | S3 secret key (minio / iam-user modes) |
+| `S3_BUCKET` | `meko-kb-uploads` | S3 bucket for KB file uploads |
+| `S3_REGION` | `us-east-2` | S3 region |
+
+### Email (SES)
+
+| Variable | Default | Description |
+|---|---|---|
+| `SES_FROM_ADDRESS` | — | Verified SES sender address (e.g. `no-reply@example.com`). Empty disables invite emails. |
+| `SES_REGION` | inherits `--cognito-region` | AWS region for SES |
+
+### Stripe / Billing
+
+All five Stripe variables must be set for the `/billing/*` routes to register. With any blank value the routes stay off and upgrade buttons are disabled.
+
+| Variable | Default | Description |
+|---|---|---|
+| `STRIPE_SECRET_KEY` | — | Stripe API secret key (`sk_live_...` or `sk_test_...`) |
+| `STRIPE_WEBHOOK_SECRET` | — | Stripe webhook signing secret (`whsec_...`) |
+| `STRIPE_PRICE_STARTER` | — | Stripe Price ID for the Starter plan (`price_...`) |
+| `STRIPE_PRICE_GROWTH` | — | Stripe Price ID for the Growth plan (`price_...`) |
+| `STRIPE_PRICE_SCALE` | — | Stripe Price ID for the Scale plan (`price_...`) |
+
+### MCP / PAT
+
+| Variable | Default | Description |
+|---|---|---|
+| `MCP_INTERNAL_SECRET` | — | Shared secret for `/internal/meko-tokens/validate` (MCP server → api_server). Empty disables the endpoint. |
+| `MCP_PAT_FLUSH_INTERVAL` | `30s` | Cadence for flushing PAT `last_used_at` touches to the DB. Accepts Go duration strings (e.g. `30s`, `2m`). Values < 1s are clamped to 1s. |
+| `PAT_RATE_LIMIT_PER_MIN` | `60` | Max requests per minute per PAT on rate-limited routes. `0` or negative disables the limiter. |
+| `PAT_RATE_LIMIT_BURST` | `10` | Burst allowance on top of `PAT_RATE_LIMIT_PER_MIN`. |
+
+### Free-Tier Caps
+
+Applied only to accounts with `user_type = "free"`. Mirrored in `meko_ui/src/lib/freeTier.ts` — both sides read the same env vars.
+
+| Variable | Default | Description |
+|---|---|---|
+| `MEKO_FREE_TIER_DATAPACKS` | `10` | Max datapacks per free account |
+| `MEKO_FREE_TIER_KB_BYTES` | `104857600` (100 MiB) | Max total KB storage in bytes per free account |
+| `MEKO_FREE_TIER_CONVERSATIONS` | `1000` | Max conversations per free account |
+| `MEKO_FREE_TIER_TOKEN_BURN` | `10000000` | Max token burn per free account |
+
+### Artifacts
+
+| Flag | Variable | Default | Description |
+|---|---|---|---|
+| `--max-artifact-size-bytes` | `MEKO_MAX_ARTIFACT_SIZE_BYTES` | `5242880` (5 MiB) | Maximum decoded file size accepted by `POST /datapacks/:id/artifacts`. Files exceeding this limit return `413`. |
+
 The server runs database migrations on startup, then listens on the configured port.
 
 ### Running the migration

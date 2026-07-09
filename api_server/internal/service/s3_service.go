@@ -1,9 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"path"
 	"strings"
@@ -347,6 +349,44 @@ func (s *S3Service) ListObjects(ctx context.Context, prefix string) ([]S3Object,
 		}
 	}
 	return objects, nil
+}
+
+// UploadObject writes data directly to S3 under the artifact key path
+// "<userID>/<datapackID>/<contentHash>/<filename>". Used by the artifact
+// service for server-side uploads (caller has already computed the hash).
+func (s *S3Service) UploadObject(
+	ctx context.Context,
+	userID, datapackID, contentHash, filename, contentType string,
+	data []byte,
+) (string, error) {
+	key := fmt.Sprintf("%s/%s/%s/%s", userID, datapackID, contentHash, sanitizeFilename(filename))
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(key),
+		ContentType: aws.String(contentType),
+		Body:        bytes.NewReader(data),
+	})
+	if err != nil {
+		return "", fmt.Errorf("put object %s: %w", key, err)
+	}
+	return key, nil
+}
+
+// DownloadObject fetches the bytes for key from S3 and returns them.
+func (s *S3Service) DownloadObject(ctx context.Context, key string) ([]byte, error) {
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get object %s: %w", key, err)
+	}
+	defer out.Body.Close()
+	data, err := io.ReadAll(out.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read object %s: %w", key, err)
+	}
+	return data, nil
 }
 
 // sanitizeFilename replaces invalid characters in a filename with underscores which is accepted by S3.

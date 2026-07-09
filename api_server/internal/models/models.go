@@ -577,6 +577,34 @@ type MCPPATAuditEntry struct {
 
 // EmbeddingDims returns the vector dimension for a given embedding model name.
 // Defaults to 1536 for unrecognized models.
+// Artifact represents a file uploaded by an agent and stored in
+// meko_system.artifacts. Small files (< 1 MB) carry their bytes in
+// InlineContent; large files are stored in S3 under S3Key.
+type Artifact struct {
+	ID             string     `json:"id"`
+	DatapackID     string     `json:"datapack_id"`
+	ContentHash    string     `json:"content_hash"` // SHA-256 hex
+	Filename       string     `json:"filename"`
+	ContentType    string     `json:"content_type"`
+	SizeBytes      int64      `json:"size_bytes"`
+	InlineContent  []byte     `json:"-"`             // only for small files; not serialised
+	S3Key          string     `json:"s3_key,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	LastAccessedAt *time.Time `json:"last_accessed_at,omitempty"`
+	ExpiredAt      *time.Time `json:"expired_at,omitempty"`
+}
+
+// StoredIn returns "db" when the artifact is inlined, "s3" when it lives in S3.
+func (a *Artifact) StoredIn() string {
+	if len(a.InlineContent) > 0 {
+		return "db"
+	}
+	return "s3"
+}
+
+// MaxInlineBytes is the size threshold below which artifacts are stored inline.
+const MaxInlineBytes = 1 * 1024 * 1024 // 1 MB
+
 func EmbeddingDims(embedModel string) int {
 	dims := map[string]int{
 		"text-embedding-ada-002": 1536,
