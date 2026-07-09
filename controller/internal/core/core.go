@@ -104,7 +104,11 @@ type Endpoint struct {
 	BranchID  uuid.UUID
 	Role      string
 	Address   string
-	CreatedAt time.Time
+	// TailnetAddress is the endpoint's Tailscale (tailnet) connection target,
+	// set alongside Address when the endpoint is exposed on the tailnet; empty
+	// otherwise.
+	TailnetAddress string
+	CreatedAt      time.Time
 }
 
 // DefaultBranchName is the name given to a project's default (root) branch. The
@@ -214,9 +218,10 @@ type Backend interface {
 	// Returns ErrNotFound if the pool, project, or branch does not exist.
 	ListEndpoints(ctx context.Context, poolID, projectID, branchID uuid.UUID, limit, offset int) ([]Endpoint, int, error)
 
-	// SetEndpointAddress records an endpoint's client address. Idempotent
+	// SetEndpointAddress records an endpoint's client address and its tailnet
+	// address (tailnetAddress is "" when not tailnet-exposed). Idempotent
 	// (absolute UPDATE keyed by id); a missing endpoint is not an error.
-	SetEndpointAddress(ctx context.Context, endpointID uuid.UUID, address string) error
+	SetEndpointAddress(ctx context.Context, endpointID uuid.UUID, address, tailnetAddress string) error
 
 	// DeleteEndpoint removes an endpoint record. Idempotent: deleting an absent
 	// row is a no-op.

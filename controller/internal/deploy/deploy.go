@@ -51,7 +51,11 @@ type EndpointSpec struct {
 // connects to over the Postgres wire (user cloud_admin, database postgres).
 type Endpoint struct {
 	ID      string
-	Address string // host:port
+	Address string // host:port — the primary (e.g. Kubernetes LoadBalancer) address
+	// TailnetAddress is the endpoint's Tailscale (tailnet) host:port, populated
+	// when the endpoint Service is exposed on the tailnet (see KubernetesConfig.
+	// TailnetSuffix). Empty when not tailnet-exposed.
+	TailnetAddress string
 }
 
 // Deployer places and removes compute endpoints on a runtime. CreateEndpoint

@@ -136,6 +136,7 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				ComputePort:                cfg.Deploy.ComputePort,
 				ServiceType:                cfg.Deploy.ServiceType,
 				ServiceAnnotations:         cfg.Deploy.ServiceAnnotations,
+				TailnetSuffix:              cfg.Deploy.TailnetSuffix,
 				StorageClass:               cfg.Deploy.StorageClass,
 				DiskSize:                   cfg.Deploy.DiskSize,
 				BackingYBExistingSecret:    cfg.Deploy.BackingYBExistingSecret,

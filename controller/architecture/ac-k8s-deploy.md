@@ -48,6 +48,10 @@ interface onto chart values) and lays down:
 The MCP and UI Services are exposed the same way as the controller (one
 `CONTROLLER_EXPOSE` knob adds a matching `-np` / `-lb` Service to each).
 
+For reaching the control plane and endpoints over a Tailscale tailnet (and the
+`tailnet_address` the controller reports alongside the LB address), see
+[`ac-tailnet.md`](ac-tailnet.md).
+
 It does **not** create the namespace or the backing YugabyteDB — those pre-exist
 (see Assumptions) — but it **does (re)mint the image pull secret** each run.
 Everything is env-overridable (`NS`, `CONTROLLER_TAG`, `ENDPOINT_TAG`,

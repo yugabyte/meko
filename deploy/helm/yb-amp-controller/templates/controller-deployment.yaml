@@ -81,6 +81,11 @@ spec:
               value: {{ .Values.controller.endpoint.service.type | quote }}
             - name: AMP_DEPLOY_SERVICE_ANNOTATIONS
               value: {{ join "," .Values.controller.endpoint.service.annotations | quote }}
+            # Tailscale MagicDNS suffix (e.g. tail5955.ts.net) for deriving each
+            # endpoint's tailnet address when its Service is tailnet-exposed;
+            # empty disables tailnet address reporting.
+            - name: AMP_DEPLOY_TAILNET_SUFFIX
+              value: {{ .Values.controller.endpoint.tailnetSuffix | quote }}
             # Endpoint data volume: a PVC of this storage class (empty => emptyDir).
             - name: AMP_DEPLOY_STORAGE_CLASS
               value: {{ .Values.controller.endpoint.storageClass | quote }}

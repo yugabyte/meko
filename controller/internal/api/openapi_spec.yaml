@@ -873,7 +873,7 @@ components:
 
     Endpoint:
       type: object
-      required: [id, project_id, branch_id, role, address, created_at]
+      required: [id, project_id, branch_id, role, address, tailnet_address, created_at]
       properties:
         id:
           type: string
@@ -892,6 +892,9 @@ components:
         address:
           type: string
           description: 'Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed.'
+        tailnet_address:
+          type: string
+          description: 'Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.'
         created_at:
           type: string
           format: date-time

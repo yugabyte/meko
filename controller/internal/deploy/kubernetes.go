@@ -55,6 +55,15 @@ type KubernetesConfig struct {
 	// ServiceAnnotations are set on the endpoint Service (e.g. GKE internal-LB annotations).
 	ServiceAnnotations map[string]string
 
+	// TailnetSuffix, when non-empty AND the endpoint Service is exposed on the
+	// tailnet (ServiceAnnotations has "tailscale.com/expose"="true"), is the
+	// Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") used to derive the
+	// endpoint's tailnet address "<hostname>.<suffix>:<computePort>", where
+	// <hostname> is the operator's device name — the explicit
+	// "tailscale.com/hostname" annotation if set, else "<namespace>-<release>".
+	// Empty disables tailnet address reporting.
+	TailnetSuffix string
+
 	// StorageClass, when non-empty, provisions the endpoint's data volume as a
 	// PersistentVolumeClaim of that class (a network block volume — EBS/PD) of
 	// size DiskSize, instead of an ephemeral emptyDir. Empty = emptyDir.
@@ -132,8 +141,30 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 			addr = podAddr
 		}
 	}
-	k.logger.Info("endpoint ready", "endpoint", release, "address", addr)
-	return Endpoint{ID: release, Address: addr}, nil
+	tailnet := k.tailnetAddress(release)
+	k.logger.Info("endpoint ready", "endpoint", release, "address", addr, "tailnet_address", tailnet)
+	return Endpoint{ID: release, Address: addr, TailnetAddress: tailnet}, nil
+}
+
+// tailnetAddress derives the endpoint's Tailscale (tailnet) host:port when the
+// endpoint Service is exposed on the tailnet and a TailnetSuffix is configured;
+// otherwise it returns "". The Tailscale operator names the proxy device after
+// the explicit "tailscale.com/hostname" annotation if present, else
+// "<namespace>-<serviceName>" (the release name is the Service name), so the
+// MagicDNS name is "<device>.<TailnetSuffix>". This is a pure function of the
+// name + config — it does not confirm the tailnet device is registered yet.
+func (k *KubernetesDeployer) tailnetAddress(release string) string {
+	if k.cfg.TailnetSuffix == "" {
+		return ""
+	}
+	if k.cfg.ServiceAnnotations["tailscale.com/expose"] != "true" {
+		return ""
+	}
+	device := k.cfg.ServiceAnnotations["tailscale.com/hostname"]
+	if device == "" {
+		device = k.cfg.Namespace + "-" + release
+	}
+	return fmt.Sprintf("%s.%s:%d", device, k.cfg.TailnetSuffix, k.cfg.ComputePort)
 }
 
 // k8sAPIGet does an authenticated GET against the in-cluster Kubernetes API and

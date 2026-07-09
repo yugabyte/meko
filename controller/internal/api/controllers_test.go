@@ -528,7 +528,7 @@ type addrFailBackend struct {
 	*core.MemBackend
 }
 
-func (addrFailBackend) SetEndpointAddress(context.Context, uuid.UUID, string) error {
+func (addrFailBackend) SetEndpointAddress(context.Context, uuid.UUID, string, string) error {
 	return errors.New("simulated address-record failure")
 }
 

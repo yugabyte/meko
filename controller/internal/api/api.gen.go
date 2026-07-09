@@ -165,6 +165,9 @@ type Endpoint struct {
 	// ProjectId The project (control-plane grouping) this endpoint is bound to.
 	ProjectId openapi_types.UUID `json:"project_id"`
 	Role      EndpointRole       `json:"role"`
+
+	// TailnetAddress Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.
+	TailnetAddress string `json:"tailnet_address"`
 }
 
 // EndpointRole defines model for Endpoint.Role.

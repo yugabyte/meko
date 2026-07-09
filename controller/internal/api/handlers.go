@@ -779,12 +779,13 @@ func branchToAPI(b core.Branch) Branch {
 
 func endpointToAPI(e core.Endpoint) Endpoint {
 	return Endpoint{
-		Id:        e.ID,
-		ProjectId: e.ProjectID,
-		BranchId:  e.BranchID,
-		Role:      EndpointRole(e.Role),
-		Address:   e.Address,
-		CreatedAt: e.CreatedAt,
+		Id:             e.ID,
+		ProjectId:      e.ProjectID,
+		BranchId:       e.BranchID,
+		Role:           EndpointRole(e.Role),
+		Address:        e.Address,
+		TailnetAddress: e.TailnetAddress,
+		CreatedAt:      e.CreatedAt,
 	}
 }
 

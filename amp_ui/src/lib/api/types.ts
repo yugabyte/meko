@@ -51,6 +51,7 @@ export type Endpoint = {
   project_id: string;
   role: EndpointRole;
   address: string;
+  tailnet_address: string;
   created_at: string;
 };
 

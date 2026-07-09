@@ -75,6 +75,11 @@ controller:
     storageClass: ""
     # -- Size of each endpoint's /data PVC when storageClass is set (AMP_DEPLOY_DISK_SIZE).
     diskSize: "10Gi"
+    # -- Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") used to derive each
+    # endpoint's tailnet address when its Service is tailnet-exposed
+    # (tailscale.com/expose=true in service.annotations). Empty disables tailnet
+    # address reporting (AMP_DEPLOY_TAILNET_SUFFIX).
+    tailnetSuffix: ""
     service:
       # -- Service type for each deployed endpoint: ClusterIP | NodePort | LoadBalancer (AMP_DEPLOY_SERVICE_TYPE).
       type: "ClusterIP"

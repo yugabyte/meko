@@ -157,7 +157,7 @@ func (f *fakeStateStore) EnsureEndpointRecord(_ context.Context, endpointID, _, 
 	return nil
 }
 
-func (f *fakeStateStore) SetEndpointAddress(_ context.Context, endpointID uuid.UUID, address string) error {
+func (f *fakeStateStore) SetEndpointAddress(_ context.Context, endpointID uuid.UUID, address, tailnetAddress string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.setAddressCalls++

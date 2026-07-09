@@ -51,9 +51,10 @@ type StateStore interface {
 	// missing branch is a real error.
 	EnsureEndpointRecord(ctx context.Context, endpointID, projectID, branchID uuid.UUID, role string, config []byte) error
 
-	// SetEndpointAddress records an endpoint's client address (absolute UPDATE,
-	// idempotent). A missing endpoint is not an error.
-	SetEndpointAddress(ctx context.Context, endpointID uuid.UUID, address string) error
+	// SetEndpointAddress records an endpoint's client address and its tailnet
+	// address (absolute UPDATE, idempotent). tailnetAddress is "" when the
+	// endpoint is not exposed on the tailnet. A missing endpoint is not an error.
+	SetEndpointAddress(ctx context.Context, endpointID uuid.UUID, address, tailnetAddress string) error
 
 	// DeleteEndpoint removes an endpoint record (idempotent; absent row is a no-op).
 	DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) error

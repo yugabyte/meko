@@ -416,7 +416,7 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, projectID, branchID uuid
 // endpointSelect projects an endpoint row; address is NULL until the endpoint
 // is deployed (SetEndpointAddress), so it is coalesced to the empty string to
 // match Endpoint.Address being a plain string.
-const endpointSelect = `SELECT e.id::text, e.project_id::text, e.branch_id::text, e.role::text, COALESCE(e.address, ''), e.created_at
+const endpointSelect = `SELECT e.id::text, e.project_id::text, e.branch_id::text, e.role::text, COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), e.created_at
 	FROM endpoint e`
 
 func (b *PgBackend) getEndpointByID(ctx context.Context, id uuid.UUID) (Endpoint, error) {
@@ -474,10 +474,10 @@ func (b *PgBackend) ListEndpoints(ctx context.Context, poolID, projectID, branch
 	return endpoints, total, nil
 }
 
-func (b *PgBackend) SetEndpointAddress(ctx context.Context, endpointID uuid.UUID, address string) error {
+func (b *PgBackend) SetEndpointAddress(ctx context.Context, endpointID uuid.UUID, address, tailnetAddress string) error {
 	_, err := b.pool.Exec(ctx,
-		`UPDATE endpoint SET address = $2 WHERE id = $1::uuid`,
-		endpointID.String(), address)
+		`UPDATE endpoint SET address = $2, tailnet_address = $3 WHERE id = $1::uuid`,
+		endpointID.String(), address, tailnetAddress)
 	if err != nil {
 		return fmt.Errorf("set endpoint address: %w", err)
 	}
@@ -632,7 +632,7 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 		branchStr  string
 		ep         Endpoint
 	)
-	if err := r.Scan(&idStr, &projectStr, &branchStr, &ep.Role, &ep.Address, &ep.CreatedAt); err != nil {
+	if err := r.Scan(&idStr, &projectStr, &branchStr, &ep.Role, &ep.Address, &ep.TailnetAddress, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
 	}
 	id, err := uuid.Parse(idStr)

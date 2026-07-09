@@ -423,8 +423,19 @@ function ComputeInstance({ ep }: { ep: Endpoint }) {
     <li className="rounded-md border border-border bg-background/40 p-3">
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <Server className="h-4 w-4 text-muted-foreground" />
-        <span className="font-mono text-xs">
-          {ep.address || "provisioning…"}
+        <span className="flex flex-col gap-0.5 font-mono text-xs">
+          <span>
+            {ep.tailnet_address && (
+              <span className="text-muted-foreground">primary: </span>
+            )}
+            {ep.address || "provisioning…"}
+          </span>
+          {ep.tailnet_address && (
+            <span>
+              <span className="text-muted-foreground">tailnet: </span>
+              {ep.tailnet_address}
+            </span>
+          )}
         </span>
         <Badge variant="secondary" className="font-mono text-[10px]">
           {ep.role.replace("_", "-")}

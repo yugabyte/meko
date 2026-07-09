@@ -384,11 +384,12 @@ func (m *MemBackend) ListEndpoints(_ context.Context, poolID, projectID, branchI
 	return page(endpoints, limit, offset), len(endpoints), nil
 }
 
-func (m *MemBackend) SetEndpointAddress(_ context.Context, endpointID uuid.UUID, address string) error {
+func (m *MemBackend) SetEndpointAddress(_ context.Context, endpointID uuid.UUID, address, tailnetAddress string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if ep, ok := m.endpoints[endpointID]; ok {
 		ep.Address = address
+		ep.TailnetAddress = tailnetAddress
 		m.endpoints[endpointID] = ep
 	}
 	return nil

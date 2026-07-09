@@ -108,7 +108,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	if err != nil {
 		return Fail(fmt.Errorf("deploy endpoint: %w", err))
 	}
-	if err := s.state.SetEndpointAddress(ctx, s.EndpointID, deployed.Address); err != nil {
+	if err := s.state.SetEndpointAddress(ctx, s.EndpointID, deployed.Address, deployed.TailnetAddress); err != nil {
 		return Fail(fmt.Errorf("record endpoint address: %w", err))
 	}
 
@@ -122,8 +122,8 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		}
 	}
 
-	logger.Info("endpoint created and deployed", "address", deployed.Address)
-	return Ok(mustResult(map[string]string{"endpoint_id": s.EndpointID.String(), "address": deployed.Address}))
+	logger.Info("endpoint created and deployed", "address", deployed.Address, "tailnet_address", deployed.TailnetAddress)
+	return Ok(mustResult(map[string]string{"endpoint_id": s.EndpointID.String(), "address": deployed.Address, "tailnet_address": deployed.TailnetAddress}))
 }
 
 // endpointConfig is the spec stored on the endpoint row for (re)creation. The
