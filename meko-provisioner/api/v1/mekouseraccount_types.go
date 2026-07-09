@@ -35,9 +35,9 @@ type MekoUserAccountSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	AccountID string `json:"accountId"`
 	// +kubebuilder:validation:Enum=free;pro;enterprise
-	AccountTier   AccountTier `json:"accountTier"`
-	MCPImage string `json:"mcpImage"`
-	RAGImage string `json:"ragImage"`
+	AccountTier AccountTier `json:"accountTier"`
+	MCPImage    string      `json:"mcpImage"`
+	RAGImage    string      `json:"ragImage"`
 	// +kubebuilder:validation:MinLength=1
 	YugabyteDBHost string `json:"yugabyteDBHost"`
 	// +kubebuilder:default=5433
