@@ -688,6 +688,13 @@ components:
     CreateUserRequest:
       type: object
       properties:
+        id:
+          type: string
+          format: uuid
+          description: >-
+            Optional explicit id — e.g. an external identity subject (the Meko
+            user id) so AMP and the caller share one identity. Omit to
+            auto-generate. Idempotent: re-creating an existing id is a no-op.
         is_admin:
           type: boolean
           default: false
@@ -739,6 +746,13 @@ components:
       type: object
       required: [name, owner_user_id]
       properties:
+        id:
+          type: string
+          format: uuid
+          description: >-
+            Optional explicit id — e.g. a Meko datapack UUID, so the pool and
+            the datapack share one id (no separate mapping). Omit to
+            auto-generate. Idempotent: re-creating an existing id returns it.
         name:
           type: string
           minLength: 1

@@ -83,11 +83,18 @@ func (m *MemBackend) SeedBranch(poolID uuid.UUID, b Branch) {
 
 func (m *MemBackend) Healthy(context.Context) error { return nil }
 
-func (m *MemBackend) CreateUser(_ context.Context, isAdmin bool) (User, error) {
+func (m *MemBackend) CreateUser(ctx context.Context, isAdmin bool) (User, error) {
+	return m.EnsureUser(ctx, uuid.New(), isAdmin)
+}
+
+func (m *MemBackend) EnsureUser(_ context.Context, id uuid.UUID, isAdmin bool) (User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	u := User{ID: uuid.New(), IsAdmin: isAdmin, CreatedAt: m.now()}
-	m.users[u.ID] = u
+	if u, ok := m.users[id]; ok {
+		return u, nil // idempotent — first-seen wins
+	}
+	u := User{ID: id, IsAdmin: isAdmin, CreatedAt: m.now()}
+	m.users[id] = u
 	return u, nil
 }
 
@@ -101,16 +108,23 @@ func (m *MemBackend) GetUser(_ context.Context, id uuid.UUID) (User, error) {
 	return u, nil
 }
 
-func (m *MemBackend) CreateStoragePool(_ context.Context, owner uuid.UUID, name string) (StoragePool, error) {
+func (m *MemBackend) CreateStoragePool(ctx context.Context, owner uuid.UUID, name string) (StoragePool, error) {
+	return m.CreateStoragePoolWithID(ctx, uuid.New(), owner, name)
+}
+
+func (m *MemBackend) CreateStoragePoolWithID(_ context.Context, id, owner uuid.UUID, name string) (StoragePool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if p, ok := m.pools[id]; ok {
+		return p, nil // idempotent — the id already maps to a pool
+	}
 	if _, ok := m.users[owner]; !ok {
 		return StoragePool{}, ErrNotFound
 	}
 	if _, taken := m.names[name]; taken {
 		return StoragePool{}, ErrConflict
 	}
-	p := StoragePool{ID: uuid.New(), Name: name, OwnerUserID: owner, CreatedAt: m.now()}
+	p := StoragePool{ID: id, Name: name, OwnerUserID: owner, CreatedAt: m.now()}
 	m.pools[p.ID] = p
 	m.names[name] = struct{}{}
 	return p, nil

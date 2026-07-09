@@ -72,10 +72,25 @@ var _ StrictServerInterface = (*Controllers)(nil)
 
 func (c *Controllers) CreateUser(ctx context.Context, request CreateUserRequestObject) (CreateUserResponseObject, error) {
 	isAdmin := false
-	if request.Body != nil && request.Body.IsAdmin != nil {
-		isAdmin = *request.Body.IsAdmin
+	var explicitID *uuid.UUID
+	if request.Body != nil {
+		if request.Body.IsAdmin != nil {
+			isAdmin = *request.Body.IsAdmin
+		}
+		explicitID = request.Body.Id
 	}
-	u, err := c.backend.CreateUser(ctx, isAdmin)
+	// An explicit id (e.g. the caller's identity subject) makes creation
+	// idempotent; omitting it auto-generates one.
+	var u core.User
+	var err error
+	if explicitID != nil {
+		if *explicitID == uuid.Nil {
+			return CreateUser400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "user id cannot be the nil UUID"))}, nil
+		}
+		u, err = c.backend.EnsureUser(ctx, *explicitID, isAdmin)
+	} else {
+		u, err = c.backend.CreateUser(ctx, isAdmin)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
 	}
@@ -121,7 +136,18 @@ func (c *Controllers) CreateStoragePool(ctx context.Context, request CreateStora
 	if owner == uuid.Nil {
 		return CreateStoragePool400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "owner_user_id is required"))}, nil
 	}
-	p, err := c.backend.CreateStoragePool(ctx, owner, name)
+	// An explicit id (e.g. a Meko datapack UUID) reuses that id for the pool and
+	// makes the call idempotent; omitting it auto-generates one.
+	var p core.StoragePool
+	var err error
+	if request.Body.Id != nil {
+		if *request.Body.Id == uuid.Nil {
+			return CreateStoragePool400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "pool id cannot be the nil UUID"))}, nil
+		}
+		p, err = c.backend.CreateStoragePoolWithID(ctx, *request.Body.Id, owner, name)
+	} else {
+		p, err = c.backend.CreateStoragePool(ctx, owner, name)
+	}
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return CreateStoragePool404JSONResponse{NotFoundJSONResponse(apiError("not_found", "user not found"))}, nil

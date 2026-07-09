@@ -5,7 +5,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { GitBranch, Loader2, Plus, Server } from "lucide-react";
+import { Check, Copy, GitBranch, Loader2, Plus, Server } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -343,12 +343,10 @@ function EndpointsSection({
       { poolId, projectId, branchId, role },
       {
         onSuccess: (ep) =>
-          toast.success(`Endpoint provisioned (${ep.role.replace("_", "-")})`),
+          toast.success(`Compute provisioned (${ep.role.replace("_", "-")})`),
         onError: (err) =>
           toast.error(
-            err instanceof Error
-              ? err.message
-              : "Failed to provision endpoint",
+            err instanceof Error ? err.message : "Failed to provision compute",
           ),
       },
     );
@@ -356,27 +354,22 @@ function EndpointsSection({
 
   return (
     <div className="mt-3 border-t border-border pt-3">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Compute
+      </div>
       {loading ? (
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />
-          Loading endpoints…
+          Loading compute…
         </p>
       ) : endpoints.length ? (
-        <ul className="space-y-1.5">
+        <ul className="space-y-2">
           {endpoints.map((ep) => (
-            <li key={ep.id} className="flex flex-wrap items-center gap-2 text-sm">
-              <Server className="h-4 w-4 text-muted-foreground" />
-              <span className="font-mono text-xs">
-                {ep.address || "provisioning…"}
-              </span>
-              <Badge variant="secondary" className="font-mono text-[10px]">
-                {ep.role.replace("_", "-")}
-              </Badge>
-            </li>
+            <ComputeInstance key={ep.id} ep={ep} />
           ))}
         </ul>
       ) : (
-        <p className="text-sm text-muted-foreground">No endpoints yet.</p>
+        <p className="text-sm text-muted-foreground">No compute instances yet.</p>
       )}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -399,6 +392,65 @@ function EndpointsSection({
         </Button>
       </div>
     </div>
+  );
+}
+
+// One provisioned compute instance: its address, role, and a copyable psql
+// connect string. The controller returns `address` (host:port) once the
+// instance is deployed; it connects as user `cloud_admin`, database `postgres`.
+function ComputeInstance({ ep }: { ep: Endpoint }) {
+  const [copied, setCopied] = useState(false);
+  const connStr = ep.address
+    ? `postgresql://cloud_admin@${ep.address}/postgres`
+    : "";
+  const psql = connStr ? `psql "${connStr}"` : "";
+
+  function copy() {
+    if (!psql || !navigator.clipboard) return;
+    navigator.clipboard
+      .writeText(psql)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch((err) => {
+        toast.error("Couldn't copy to clipboard");
+        console.error("Clipboard copy failed:", err);
+      });
+  }
+
+  return (
+    <li className="rounded-md border border-border bg-background/40 p-3">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <Server className="h-4 w-4 text-muted-foreground" />
+        <span className="font-mono text-xs">
+          {ep.address || "provisioning…"}
+        </span>
+        <Badge variant="secondary" className="font-mono text-[10px]">
+          {ep.role.replace("_", "-")}
+        </Badge>
+      </div>
+      {ep.address && (
+        <div className="mt-2 flex items-center gap-2">
+          <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
+            {psql}
+          </code>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={copy}
+            className="h-7 shrink-0 gap-1"
+          >
+            {copied ? (
+              <Check className="h-3.5 w-3.5" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </div>
+      )}
+    </li>
   );
 }
 

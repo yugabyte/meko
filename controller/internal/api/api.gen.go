@@ -133,6 +133,9 @@ type CreateProjectRequest struct {
 
 // CreateStoragePoolRequest defines model for CreateStoragePoolRequest.
 type CreateStoragePoolRequest struct {
+	// Id Optional explicit id — e.g. a Meko datapack UUID, so the pool and the datapack share one id (no separate mapping). Omit to auto-generate. Idempotent: re-creating an existing id returns it.
+	Id *openapi_types.UUID `json:"id,omitempty"`
+
 	// Name Pool name; unique across the placement group.
 	Name string `json:"name"`
 
@@ -142,6 +145,9 @@ type CreateStoragePoolRequest struct {
 
 // CreateUserRequest defines model for CreateUserRequest.
 type CreateUserRequest struct {
+	// Id Optional explicit id — e.g. an external identity subject (the Meko user id) so AMP and the caller share one identity. Omit to auto-generate. Idempotent: re-creating an existing id is a no-op.
+	Id *openapi_types.UUID `json:"id,omitempty"`
+
 	// IsAdmin Create the user as an admin.
 	IsAdmin *bool `json:"is_admin,omitempty"`
 }

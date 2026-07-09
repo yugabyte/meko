@@ -36,7 +36,10 @@ func (b *PgBackend) Healthy(ctx context.Context) error {
 }
 
 func (b *PgBackend) CreateUser(ctx context.Context, isAdmin bool) (User, error) {
-	id := uuid.New()
+	return b.EnsureUser(ctx, uuid.New(), isAdmin)
+}
+
+func (b *PgBackend) EnsureUser(ctx context.Context, id uuid.UUID, isAdmin bool) (User, error) {
 	if _, err := b.pool.Exec(ctx,
 		`INSERT INTO app_user (id, is_admin) VALUES ($1::uuid, $2)
 		 ON CONFLICT (id) DO NOTHING`,
@@ -58,7 +61,10 @@ func (b *PgBackend) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
 }
 
 func (b *PgBackend) CreateStoragePool(ctx context.Context, owner uuid.UUID, name string) (StoragePool, error) {
-	id := uuid.New()
+	return b.CreateStoragePoolWithID(ctx, uuid.New(), owner, name)
+}
+
+func (b *PgBackend) CreateStoragePoolWithID(ctx context.Context, id, owner uuid.UUID, name string) (StoragePool, error) {
 	_, err := b.pool.Exec(ctx,
 		`INSERT INTO storage_pool (id, name, owner_user_id) VALUES ($1::uuid, $2, $3::uuid)
 		 ON CONFLICT (id) DO NOTHING`,

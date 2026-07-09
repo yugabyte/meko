@@ -130,8 +130,12 @@ type Backend interface {
 	// Healthy reports whether the state store is reachable (readiness probe).
 	Healthy(ctx context.Context) error
 
-	// CreateUser creates a user and returns it.
+	// CreateUser creates a user (auto-generated id) and returns it.
 	CreateUser(ctx context.Context, isAdmin bool) (User, error)
+	// EnsureUser creates a user with an explicit id (e.g. an external identity
+	// subject) or, if one with that id already exists, returns it unchanged.
+	// Idempotent — the integration path calls it on every request.
+	EnsureUser(ctx context.Context, id uuid.UUID, isAdmin bool) (User, error)
 	// GetUser returns a user by id, or ErrNotFound.
 	GetUser(ctx context.Context, id uuid.UUID) (User, error)
 	// ListUsers returns a page of users ordered by (created_at, id), and the
@@ -139,9 +143,15 @@ type Backend interface {
 	// offset >= 0 (the API layer clamps them).
 	ListUsers(ctx context.Context, limit, offset int) ([]User, int, error)
 
-	// CreateStoragePool creates a pool owned by owner. Returns ErrNotFound if
-	// owner does not exist, or ErrConflict if the name is already taken.
+	// CreateStoragePool creates a pool (auto-generated id) owned by owner.
+	// Returns ErrNotFound if owner does not exist, or ErrConflict if the name is
+	// already taken.
 	CreateStoragePool(ctx context.Context, owner uuid.UUID, name string) (StoragePool, error)
+	// CreateStoragePoolWithID creates a pool with an explicit id (e.g. a Meko
+	// datapack UUID), or returns the existing pool if that id is already present
+	// (idempotent). Returns ErrNotFound if owner does not exist, or ErrConflict
+	// if the name is taken by a different pool.
+	CreateStoragePoolWithID(ctx context.Context, id, owner uuid.UUID, name string) (StoragePool, error)
 	// ListStoragePools returns a page of every pool in the placement group
 	// ordered by (created_at, id), and the total number of pools (ignoring
 	// limit/offset). Owner filtering is out of scope for now (pool sharing is
