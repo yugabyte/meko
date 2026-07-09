@@ -193,7 +193,16 @@ The binary name is `yb-pageserver`. Builds with
 | Disk eviction + heatmap downloader | None |
 
 The `getpage` gRPC, basebackup, walreceiver, walingest, walredo, and the
-storage-controller handshake are unchanged.
+storage-controller handshake are unchanged, with one default change:
+**`lazy_slru_download` defaults to `true`** (`default_tenant_conf`,
+`libs/pageserver_api/src/config.rs`). Basebackup therefore ships no
+SLRU (clog/multixact) pages — the compute faults them in on demand via
+`communicator_read_slru_segment`. With the upstream default (`false`)
+basebackup eagerly packs the entire SLRU into the tarball, which under
+a heavy workload (a 4000-warehouse TPC-C run bloats clog/multixact to
+hundreds of thousands of pages) made compute startup read the whole
+SLRU one page per RPC and overrun the 180s Init timeout — acute on the
+serial `pgclient` read lane, but wasteful on every lane.
 
 ## Schema
 

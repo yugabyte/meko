@@ -75,3 +75,15 @@ fn test_node_metadata_v3_backward_compatibilty() {
         }
     )
 }
+
+/// yb-light ships SLRU on demand, not in basebackup. A revert to the
+/// upstream default (false) reintroduces the 2026-07 compute-startup
+/// stall: basebackup packs the whole (workload-bloated) SLRU and the
+/// compute reads it one page per RPC, overrunning the Init timeout.
+#[test]
+fn lazy_slru_download_defaults_on() {
+    assert!(
+        BranchConfigToml::default().lazy_slru_download,
+        "yb-light default_tenant_conf must keep lazy_slru_download = true"
+    );
+}

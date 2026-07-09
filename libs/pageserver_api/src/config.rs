@@ -967,8 +967,17 @@ pub struct BranchConfigToml {
     /// safekeeper by more than this; a lagging safekeeper is
     /// swapped after `lagging_wal_timeout` elapses without progress.
     pub max_lsn_wal_lag: NonZeroU64,
-    /// If true SLRU segments are downloaded on demand; if false they
-    /// are included in basebackup.
+    /// If true SLRU segments (pg_xact/clog, pg_multixact, ...) are
+    /// downloaded on demand; if false they are included wholesale in
+    /// basebackup. yb-light defaults this to **true**: the compute
+    /// faults SLRU pages in via `communicator_read_slru_segment`, and a
+    /// heavy workload (e.g. a 4000-warehouse TPC-C run, hundreds of
+    /// millions of txns) grows clog/multixact to hundreds of thousands
+    /// of pages — eagerly packing all of them into every basebackup
+    /// made compute startup read the entire SLRU one page per RPC,
+    /// overrunning the 180s Init timeout (acute on the serial pgclient
+    /// read lane). Lazy download keeps basebackup small regardless of
+    /// SLRU size.
     pub lazy_slru_download: bool,
     /// Per-tenant pagestream getpage throttle config.
     pub timeline_get_throttle: crate::models::ThrottleConfig,
@@ -1021,7 +1030,7 @@ impl Default for BranchConfigToml {
                 .expect("cannot parse default walreceiver lagging wal timeout"),
             max_lsn_wal_lag: NonZeroU64::new(DEFAULT_MAX_WALRECEIVER_LSN_WAL_LAG)
                 .expect("cannot parse default max walreceiver Lsn wal lag"),
-            lazy_slru_download: false,
+            lazy_slru_download: true,
             timeline_get_throttle: crate::models::ThrottleConfig::disabled(),
             lsn_lease_length: LsnLease::DEFAULT_LENGTH,
             lsn_lease_length_for_ts: LsnLease::DEFAULT_LENGTH_FOR_TS,
