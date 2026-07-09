@@ -94,11 +94,36 @@ pub fn page_header_size(lsn: Lsn, seg: u64) -> usize {
 /// the next segment. The same conservatism handles a torn trailing page
 /// (zeroed magic, no preceding switch): the scan lands on the last real
 /// page and `find_end_of_wal` stops at the last complete record.
-pub async fn find_anchor<S: WalSource>(reader: &S, target: Lsn) -> anyhow::Result<Lsn> {
+///
+/// `floor` is the lowest known WAL record boundary — the start of the
+/// persisted WAL (`Lsn(0)` if the caller has none). The backward walk stops
+/// there: probing below `floor` reads a hole (the store never held those
+/// bytes), and when a single record spans all the way back to the WAL start
+/// — e.g. wal_craft's segment-filling padding record right before an
+/// XLOG_SWITCH — no fresh-record page exists above `floor` to anchor on.
+/// `floor` is itself a valid seed even when it lands mid-page: the decoder
+/// starts cleanly at a record boundary and parses page headers as it later
+/// crosses page boundaries. Without this stop, a mid-page `floor` makes the
+/// page-aligned walk overshoot to the page *below* the store, error on the
+/// hole, and abort the whole end-of-WAL scan — leaving the safekeeper's
+/// `write_lsn` short of the post-switch segment boundary, which wedges the
+/// catch-up reader (#181).
+pub async fn find_anchor<S: WalSource>(
+    reader: &S,
+    target: Lsn,
+    floor: Lsn,
+) -> anyhow::Result<Lsn> {
     let blk = XLOG_BLCKSZ as u64;
+    let floor_page = Lsn(floor.0 - floor.0 % blk);
     let mut page = Lsn(target.0 - target.0 % blk);
     let scan_floor = target.0.saturating_sub(MAX_ANCHOR_SCAN_BYTES);
     loop {
+        // Reached the page holding the known WAL start: anchor at `floor`
+        // itself rather than reading below it. `Lsn(0)` means "no known
+        // floor" — fall through and walk to the bottom as before.
+        if floor.0 != 0 && page <= floor_page {
+            return Ok(floor);
+        }
         let hdr_size = page_header_size(page, reader.seg());
         let hdr = reader
             .read_exact(page, hdr_size)
@@ -329,7 +354,7 @@ mod tests {
         // "max byte offset" an XLOG_SWITCH produces.
         let padding_start = Lsn(START.0 + real_end as u64);
         let target = Lsn(padding_start.0 + XLOG_BLCKSZ as u64 + 100);
-        let anchor = find_anchor(&src, target).await.unwrap();
+        let anchor = find_anchor(&src, target, Lsn(0)).await.unwrap();
 
         assert!(
             anchor < padding_start,
@@ -353,5 +378,46 @@ mod tests {
             0,
             "anchor page must begin a fresh record"
         );
+    }
+
+    /// The persisted WAL can begin at a mid-page record boundary (the
+    /// safekeeper's `timeline_start_lsn`), and a single record can span from
+    /// there across several pages — e.g. wal_craft's segment-filling padding
+    /// record right before an XLOG_SWITCH. Then every page *above* the start
+    /// is a contrecord continuation, so the walk-back finds no fresh-record
+    /// page and, page-aligning down, probes the page *below* the store — a
+    /// hole, since the start page's pre-`floor` bytes were never persisted.
+    /// Without a floor the scan errors there and the caller falls back to the
+    /// raw end offset, leaving `write_lsn` short of the post-switch segment
+    /// and wedging the reader. Passing the start as `floor` must stop the
+    /// walk and anchor at that boundary. Regression test for #181.
+    #[tokio::test]
+    async fn find_anchor_stops_at_midpage_floor() {
+        // One record big enough to span several pages, so the pages above the
+        // start are all contrecord continuations.
+        let (buf, _starts) = gen_wal(1, 3 * XLOG_BLCKSZ);
+        // The first record begins just past START's long page header — a
+        // mid-page boundary, exactly like a real `timeline_start_lsn`.
+        let hdr = page_header_size(START, WAL_SEGMENT_SIZE as u64);
+        let floor = Lsn(START.0 + hdr as u64);
+        assert_ne!(floor.0 % XLOG_BLCKSZ as u64, 0, "floor must be mid-page");
+
+        // Serve the WAL as if the store begins at `floor`: the start page's
+        // header bytes [START, floor) are absent — a hole below `floor`.
+        let src = MemWal {
+            start: floor,
+            buf: buf[hdr..].to_vec(),
+        };
+        // Target lands in a continuation page of the big record.
+        let target = Lsn(floor.0 + 2 * XLOG_BLCKSZ as u64);
+
+        // No floor: the walk overshoots below the store and errors.
+        assert!(
+            find_anchor(&src, target, Lsn(0)).await.is_err(),
+            "no-floor walk must overshoot the mid-page start and fail"
+        );
+        // With the floor: anchor exactly at the mid-page WAL start.
+        let anchor = find_anchor(&src, target, floor).await.unwrap();
+        assert_eq!(anchor, floor, "must anchor at the mid-page WAL start");
     }
 }

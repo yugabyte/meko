@@ -340,7 +340,16 @@ a torn trailing page) or, after an `XLOG_SWITCH`, short of the true end. So
 a second step replays the decoder over the YB-backed WAL: `find_anchor`
 walks back to the nearest fresh-record page — validating `xlp_magic`, so it
 steps over the zero padding a switch leaves — then `find_end_of_wal` scans
-forward to the last complete record boundary. The result refines `write_lsn`:
+forward to the last complete record boundary. The walk is floored at
+`timeline_start_lsn` (the start of persisted WAL, itself a record boundary):
+a single record can span all the way back to that start — `wal_craft`'s
+segment-filling padding record right before an `XLOG_SWITCH` does exactly
+this, leaving no fresh-record page above the floor — and when the start is
+mid-page, page-aligning the walk *below* it reads a hole (bytes the compute
+never streamed), which would abort the scan and drop `write_lsn` back to the
+raw max, re-wedging on the switch. Anchoring at the floor instead seeds the
+decoder cleanly at that mid-page boundary (#181). The result refines
+`write_lsn`:
 
 - **Torn tail** (`end < raw max`): truncate back to the last valid boundary;
   the compute re-streams from there.

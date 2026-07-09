@@ -122,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
     // 1. Anchor: walk back from target's page to one that starts a fresh
     //    record (XLP_FIRST_IS_CONTRECORD clear). That page boundary is a
     //    guaranteed record boundary the decoder can be seeded at.
-    let anchor = find_anchor(&reader, args.target_lsn).await?;
+    let anchor = find_anchor(&reader, args.target_lsn, Lsn(0)).await?;
     println!("anchor (decode start)   {anchor}");
 
     // 2. Replay the real decoder forward, collecting record boundaries.
@@ -379,7 +379,7 @@ mod tests {
         // Target exactly on a boundary -> that boundary, prev = the one before.
         let k = 2500;
         let target = starts[k];
-        let anchor = find_anchor(&src, target).await.unwrap();
+        let anchor = find_anchor(&src, target, Lsn(0)).await.unwrap();
         assert!(anchor <= target, "anchor {anchor} must be <= target {target}");
         let (boundaries, _) = decode_forward(&src, anchor, target, PgMajorVersion::PG18)
             .await
@@ -396,7 +396,7 @@ mod tests {
         // that boundary, never above it.
         let mid = Lsn(starts[k].0 + 8);
         assert!(mid < starts[k + 1], "test setup: 8 bytes stays within record k");
-        let anchor = find_anchor(&src, mid).await.unwrap();
+        let anchor = find_anchor(&src, mid, Lsn(0)).await.unwrap();
         let (boundaries, _) = decode_forward(&src, anchor, mid, PgMajorVersion::PG18)
             .await
             .unwrap();
@@ -433,7 +433,7 @@ mod tests {
         // at or below it is the record's own start.
         let target = Lsn(big_start.0 + 3 * XLOG_BLCKSZ as u64);
         assert!(target < after_big);
-        let anchor = find_anchor(&src, target).await.unwrap();
+        let anchor = find_anchor(&src, target, Lsn(0)).await.unwrap();
         assert!(anchor <= target);
         let (boundaries, _) = decode_forward(&src, anchor, target, PgMajorVersion::PG18)
             .await
@@ -453,7 +453,7 @@ mod tests {
         let (buf, starts) = gen_wal(START, 4000, 200);
         let src = MemWal { start: START, buf };
         let target = starts[3000];
-        let anchor = find_anchor(&src, target).await.unwrap();
+        let anchor = find_anchor(&src, target, Lsn(0)).await.unwrap();
         assert!(anchor <= target);
         // The anchor is itself a generator record-start (a true boundary).
         assert!(

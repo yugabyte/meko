@@ -433,7 +433,11 @@ impl YbWalStorage {
             let scanned = if max_offset <= state.timeline_start_lsn {
                 Ok(max_offset)
             } else {
-                match find_anchor(&src, max_offset).await {
+                // `timeline_start_lsn` is the start of persisted WAL and a
+                // guaranteed record boundary; pass it as the anchor-scan floor
+                // so a record spanning back to a mid-page start (wal_craft's
+                // XLOG_SWITCH padding) doesn't overshoot below the store (#181).
+                match find_anchor(&src, max_offset, state.timeline_start_lsn).await {
                     Ok(anchor) => find_end_of_wal(&src, anchor, pg_version).await,
                     Err(e) => Err(e),
                 }
