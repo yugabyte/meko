@@ -25,25 +25,25 @@
   "license": "Apache License 2.0",
   "homepage": "https://github.com/yugabyte/meko/tree/master/docs#readme",
   "dependencies": {
-    "clipboard": "2.0.11",
     "browser-cookie-utils": "2.0.1",
-    "browser-query-utils": "2.0.1"
+    "browser-query-utils": "2.0.1",
+    "clipboard": "2.0.11"
   },
   "devDependencies": {
-    "@babel/core": "7.29.0",
+    "@babel/core": "7.29.7",
     "@babel/plugin-proposal-decorators": "7.29.0",
     "@babel/preset-env": "7.29.2",
     "@eslint/js": "9.39.2",
     "@stylistic/eslint-plugin": "5.10.0",
     "autoprefixer": "10.4.27",
     "babel-loader": "10.1.1",
+    "detect-external-link": "2.0.1",
     "eslint": "9.39.2",
     "eslint-plugin-import": "2.32.0",
     "eslint-webpack-plugin": "5.0.2",
-    "detect-external-link": "2.0.1",
     "globals": "17.4.0",
     "npm-run-all": "4.1.5",
-    "postcss": "8.5.8",
+    "postcss": "8.5.10",
     "postcss-cli": "11.0.1",
     "prettier": "3.8.1",
     "sass": "1.98.0",
@@ -53,6 +53,12 @@
     "stylelint-scss": "7.0.0",
     "webpack": "5.105.4",
     "webpack-cli": "7.0.2",
-    "webpack-dev-server": "5.2.3"
+    "webpack-dev-server": "5.2.5"
+  },
+  "overrides": {
+    "qs": "^6.15.2",
+    "sockjs": {
+      "uuid": "^11.1.1"
+    }
   }
 }
