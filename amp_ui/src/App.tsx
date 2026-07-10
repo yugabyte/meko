@@ -21,12 +21,14 @@ import PlaceholderPage from "@/pages/PlaceholderPage";
 import SharedPoolsPage from "@/pages/SharedPoolsPage";
 import FleetPage from "@/pages/FleetPage";
 import MultitenancyPage from "@/pages/MultitenancyPage";
+import TasksPage from "@/pages/TasksPage";
 
 /** Routes that now have a real, API-backed page (replacing the placeholder). */
 const PAGE_OVERRIDES: Record<string, ReactNode> = {
   "/shared-pools": <SharedPoolsPage />,
   "/fleet": <FleetPage />,
   "/multitenancy": <MultitenancyPage />,
+  "/tasks": <TasksPage />,
 };
 
 const queryClient = new QueryClient({

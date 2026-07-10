@@ -9,6 +9,7 @@ import {
   Globe,
   Home,
   // Layers, // used only by the Foundations tab, which is commented out below
+  ListChecks,
   Server,
   Sparkles,
   Workflow,
@@ -34,7 +35,8 @@ export const WORKSPACE_NAV: NavItem[] = [
   // { label: "Foundations", to: "/foundations", icon: Layers },
   { label: "Shared pools", to: "/shared-pools", icon: Boxes },
   { label: "Fleet", to: "/fleet", icon: Server },
-  { label: "Multitenancy", to: "/multitenancy", icon: Globe },
+  { label: "Cluster", to: "/multitenancy", icon: Globe },
+  { label: "Tasks", to: "/tasks", icon: ListChecks },
 ];
 
 /** AGENTS · MCP section. Architect routes to its own page; the other

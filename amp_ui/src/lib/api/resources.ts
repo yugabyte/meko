@@ -18,6 +18,7 @@ import type {
   StoragePool,
   StoragePoolList,
   Task,
+  TaskList,
   User,
   UserList,
 } from "./types";
@@ -33,6 +34,27 @@ const TASK_TIMEOUT_MS = 5 * 60 * 1000;
 
 export function getTask(taskId: string): Promise<Task> {
   return apiRequest<Task>(`/tasks/${taskId}`);
+}
+
+/** List tasks, most-recent-first. Unlike the other list fns this one paginates
+ *  (the Tasks page pages through history), so limit/offset are caller-supplied;
+ *  undefined params are dropped by apiRequest so the controller's defaults apply. */
+export function listTasks(params: {
+  limit?: number;
+  offset?: number;
+  status?: string;
+  kind?: string;
+  projectId?: string;
+}): Promise<TaskList> {
+  return apiRequest<TaskList>("/tasks", {
+    query: {
+      limit: params.limit,
+      offset: params.offset,
+      status: params.status,
+      kind: params.kind,
+      project_id: params.projectId,
+    },
+  });
 }
 
 /** Poll a task to a terminal state: resolve with the succeeded Task, or throw an

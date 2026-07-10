@@ -17,6 +17,7 @@ import {
   listBranches,
   listProjects,
   listStoragePools,
+  listTasks,
   listUsers,
 } from "./resources";
 import type {
@@ -37,6 +38,7 @@ export const qk = {
     ["branches", poolId, projectId] as const,
   endpoints: (poolId: string, projectId: string, branchId: string) =>
     ["endpoints", poolId, projectId, branchId] as const,
+  tasks: (params: TaskListParams) => ["tasks", params] as const,
 };
 
 /* ====================================================================
@@ -177,3 +179,32 @@ export function useCreateBranch() {
 
 // Endpoint hooks (useBranchEndpoints / useCreateEndpoint) live in
 // src/hooks/useEndpoints.ts; they reuse `qk.endpoints` above.
+
+/* ---- Tasks (async operation history) ---- */
+
+export type TaskListParams = {
+  limit?: number;
+  offset?: number;
+  status?: string;
+  kind?: string;
+  projectId?: string;
+};
+
+/** Paged task history. Keeps the previous page on screen while the next one
+ *  loads (smooth paging), but only when just the page changed — a filter change
+ *  (status/kind/project) drops the stale rows and shows the loading state. */
+export function useTasks(params: TaskListParams) {
+  return useQuery({
+    queryKey: qk.tasks(params),
+    queryFn: () => listTasks(params),
+    placeholderData: (previousData, previousQuery) => {
+      const prev = previousQuery?.queryKey[1] as TaskListParams | undefined;
+      const sameFilter =
+        prev &&
+        prev.status === params.status &&
+        prev.kind === params.kind &&
+        prev.projectId === params.projectId;
+      return sameFilter ? previousData : undefined;
+    },
+  });
+}

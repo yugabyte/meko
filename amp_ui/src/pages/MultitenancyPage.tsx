@@ -87,7 +87,7 @@ export default function MultitenancyPage() {
   return (
     <PageContainer>
       <PageHeader
-        eyebrow="Multitenancy"
+        eyebrow="Cluster"
         title="Data branching"
         description="Pick a shared pool and one of its databases to see the branch tree, then fork zero-copy sub-branches off any branch."
         action={

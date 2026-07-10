@@ -89,6 +89,7 @@ export type EndpointList = {
   count: number;
   total: number;
 };
+export type TaskList = { tasks: Task[]; count: number; total: number };
 
 /* ---- Create payloads ---- */
 
