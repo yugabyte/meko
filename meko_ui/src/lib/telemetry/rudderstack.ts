@@ -8,6 +8,7 @@
 // (e.g. HubSpot) from the dashboard, not from here.
 import { RudderAnalytics, type ApiObject } from "@rudderstack/analytics-js";
 import type { TelemetryEventName } from "@/lib/telemetry/events";
+import { getAttribution } from "@/lib/telemetry/attribution";
 import { readRuntimeEnv } from "@/lib/runtimeEnv";
 
 /** Default Yugabyte data plane, mirroring the snippet used by yugabyte-cloud. Overridable via env. */
@@ -78,10 +79,13 @@ export function trackEvent(
  *  account_id when known; otherwise by email trait alone (e.g. at signup). */
 export function identifyUser(user: TelemetryUser): void {
   if (!analytics) return;
+  // Merge first-touch ad attribution (UTMs + click ids) so HubSpot records the
+  // source on the contact. Empty for organic/direct signups.
   const traits = {
     email: user.email,
     firstName: user.firstName,
     lastName: user.lastName,
+    ...getAttribution(),
   };
   if (user.id) {
     analytics.identify(user.id, traits);

@@ -22,7 +22,6 @@ import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
 import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   AUTH_LOGOUT_EVENT,
@@ -567,22 +566,6 @@ export default function Sidebar() {
       </div>
 
       <div className="p-3 flex flex-col gap-1">
-        {/* Pre-GA marker. Uses the shared `Badge` (outline variant)
-            from `@/components/ui/badge` to inherit the app-wide chip
-            styling — same token outlines used by the wizard step
-            badges and KB status pills. Hidden in collapsed mode
-            because the narrow rail can't fit the label cleanly. */}
-        {!isCollapsed ? (
-          <Badge
-            variant="outline"
-            className="mb-2 self-start gap-1 border-amber-500/35 bg-amber-500/10 text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-200"
-            title="Meko is in early access — features and APIs may change"
-          >
-            <Sparkles className="h-3 w-3" aria-hidden />
-            Early access
-          </Badge>
-        ) : null}
-
         {/* Docs lives at the top of this group so first-time users have
             an obvious "I don't know what this product is — where do I read
             up?" exit. The subtle ring + the trailing ↗ both signal "this
