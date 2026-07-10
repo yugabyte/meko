@@ -12,7 +12,7 @@ import (
 	"meko/api_server/internal/models"
 )
 
-// ArtifactRepo handles persistence for meko_system.artifacts.
+// ArtifactRepo handles persistence for datapacks.artifacts.
 type ArtifactRepo struct {
 	db *sql.DB
 }
@@ -29,7 +29,7 @@ func (r *ArtifactRepo) FindByHash(ctx context.Context, datapackID, contentHash s
 		SELECT id, datapack_id, content_hash, filename, content_type,
 		       size_bytes, inline_content, s3_key,
 		       created_at, last_accessed_at, expired_at
-		FROM   meko_system.artifacts
+		FROM   datapacks.artifacts
 		WHERE  datapack_id = $1
 		AND    content_hash = $2`
 
@@ -48,7 +48,7 @@ func (r *ArtifactRepo) Insert(ctx context.Context, a *models.Artifact) (*models.
 		a.ID = uuid.NewString()
 	}
 	const q = `
-		INSERT INTO meko_system.artifacts
+		INSERT INTO datapacks.artifacts
 		    (id, datapack_id, content_hash, filename, content_type,
 		     size_bytes, inline_content, s3_key, created_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
@@ -70,20 +70,21 @@ func (r *ArtifactRepo) Insert(ctx context.Context, a *models.Artifact) (*models.
 }
 
 // TouchLastAccessed sets last_accessed_at = now() for the given artifact.
-func (r *ArtifactRepo) TouchLastAccessed(ctx context.Context, datapackID, contentHash string) {
-	_, _ = r.db.ExecContext(ctx,
-		`UPDATE meko_system.artifacts
+func (r *ArtifactRepo) TouchLastAccessed(ctx context.Context, datapackID, contentHash string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE datapacks.artifacts
 		    SET last_accessed_at = now()
 		  WHERE datapack_id = $1 AND content_hash = $2`,
 		datapackID, contentHash,
 	)
+	return err
 }
 
 // Reactivate clears expired_at and refreshes last_accessed_at for an artifact
 // that was previously soft-expired, making it live again.
 func (r *ArtifactRepo) Reactivate(ctx context.Context, datapackID, contentHash string) (*models.Artifact, error) {
 	const q = `
-		UPDATE meko_system.artifacts
+		UPDATE datapacks.artifacts
 		   SET expired_at       = NULL,
 		       last_accessed_at = now()
 		 WHERE datapack_id  = $1

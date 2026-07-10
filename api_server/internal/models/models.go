@@ -578,7 +578,7 @@ type MCPPATAuditEntry struct {
 // EmbeddingDims returns the vector dimension for a given embedding model name.
 // Defaults to 1536 for unrecognized models.
 // Artifact represents a file uploaded by an agent and stored in
-// meko_system.artifacts. Small files (< 1 MB) carry their bytes in
+// datapacks.artifacts. Small files (< 1 MB) carry their bytes in
 // InlineContent; large files are stored in S3 under S3Key.
 type Artifact struct {
 	ID             string     `json:"id"`

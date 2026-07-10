@@ -19,9 +19,9 @@ func TestArtifact_PutAndGet_SmallFile(t *testing.T) {
 	var exists bool
 	if err := db.QueryRow(
 		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
-		               WHERE table_schema='meko_system' AND table_name='artifacts')`,
+		               WHERE table_schema='datapacks' AND table_name='artifacts')`,
 	).Scan(&exists); err != nil || !exists {
-		t.Skip("meko_system.artifacts table missing; run migration 000006 first")
+		t.Skip("datapacks.artifacts table missing; run data migration 000003 first")
 	}
 
 	createDatapack(t, srv.URL, "dp-artifact-put")
@@ -107,9 +107,9 @@ func TestArtifact_Put_Idempotent(t *testing.T) {
 	var exists bool
 	if err := db.QueryRow(
 		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
-		               WHERE table_schema='meko_system' AND table_name='artifacts')`,
+		               WHERE table_schema='datapacks' AND table_name='artifacts')`,
 	).Scan(&exists); err != nil || !exists {
-		t.Skip("meko_system.artifacts table missing; run migration 000006 first")
+		t.Skip("datapacks.artifacts table missing; run data migration 000003 first")
 	}
 
 	createDatapack(t, srv.URL, "dp-artifact-idem")
@@ -163,9 +163,9 @@ func TestArtifact_Put_MissingFields_Returns400(t *testing.T) {
 	var exists bool
 	if err := db.QueryRow(
 		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
-		               WHERE table_schema='meko_system' AND table_name='artifacts')`,
+		               WHERE table_schema='datapacks' AND table_name='artifacts')`,
 	).Scan(&exists); err != nil || !exists {
-		t.Skip("meko_system.artifacts table missing; run migration 000006 first")
+		t.Skip("datapacks.artifacts table missing; run data migration 000003 first")
 	}
 
 	createDatapack(t, srv.URL, "dp-artifact-val")
@@ -195,9 +195,9 @@ func TestArtifact_Get_UnknownHash_Returns404(t *testing.T) {
 	var exists bool
 	if err := db.QueryRow(
 		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
-		               WHERE table_schema='meko_system' AND table_name='artifacts')`,
+		               WHERE table_schema='datapacks' AND table_name='artifacts')`,
 	).Scan(&exists); err != nil || !exists {
-		t.Skip("meko_system.artifacts table missing; run migration 000006 first")
+		t.Skip("datapacks.artifacts table missing; run data migration 000003 first")
 	}
 
 	createDatapack(t, srv.URL, "dp-artifact-404")
@@ -223,9 +223,9 @@ func TestArtifact_Put_InvalidBase64_Returns400(t *testing.T) {
 	var exists bool
 	if err := db.QueryRow(
 		`SELECT EXISTS (SELECT 1 FROM information_schema.tables
-		               WHERE table_schema='meko_system' AND table_name='artifacts')`,
+		               WHERE table_schema='datapacks' AND table_name='artifacts')`,
 	).Scan(&exists); err != nil || !exists {
-		t.Skip("meko_system.artifacts table missing; run migration 000006 first")
+		t.Skip("datapacks.artifacts table missing; run data migration 000003 first")
 	}
 
 	createDatapack(t, srv.URL, "dp-artifact-b64")

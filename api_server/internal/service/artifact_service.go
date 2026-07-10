@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"path"
 	"strings"
 	"time"
@@ -20,7 +21,7 @@ import (
 type ArtifactRepo interface {
 	FindByHash(ctx context.Context, datapackID, hash string) (*models.Artifact, error)
 	Insert(ctx context.Context, a *models.Artifact) (*models.Artifact, error)
-	TouchLastAccessed(ctx context.Context, datapackID, hash string)
+	TouchLastAccessed(ctx context.Context, datapackID, hash string) error
 	Reactivate(ctx context.Context, datapackID, hash string) (*models.Artifact, error)
 }
 
@@ -136,7 +137,10 @@ func (s *ArtifactService) Get(ctx context.Context, datapackID, contentHash strin
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		s.repo.TouchLastAccessed(ctx, datapackID, contentHash)
+		if err := s.repo.TouchLastAccessed(ctx, datapackID, contentHash); err != nil {
+			slog.Warn("failed to touch artifact last_accessed_at",
+				"datapack_id", datapackID, "content_hash", contentHash, "error", err)
+		}
 	}()
 
 	resp := &ArtifactGetResponse{Artifact: a}

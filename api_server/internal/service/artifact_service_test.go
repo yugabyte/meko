@@ -33,7 +33,7 @@ func (r *stubArtifactRepo) Insert(_ context.Context, a *models.Artifact) (*model
 	return a, nil
 }
 
-func (r *stubArtifactRepo) TouchLastAccessed(_ context.Context, _, _ string) {}
+func (r *stubArtifactRepo) TouchLastAccessed(_ context.Context, _, _ string) error { return nil }
 
 func (r *stubArtifactRepo) Reactivate(_ context.Context, datapackID, hash string) (*models.Artifact, error) {
 	key := datapackID + ":" + hash

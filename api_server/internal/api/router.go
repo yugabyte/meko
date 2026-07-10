@@ -171,7 +171,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		slog.Warn("amp routes disabled (set --show-pg-amp to enable)")
 	}
 
-	artifactRepo := repository.NewArtifactRepo(cfg.SystemDB)
+	artifactRepo := repository.NewArtifactRepo(cfg.DB)
 	artifactSvc := service.NewArtifactService(artifactRepo, s3Svc)
 
 	slog.Info("service registry initialized")

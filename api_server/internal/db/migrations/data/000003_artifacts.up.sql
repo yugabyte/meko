@@ -15,7 +15,7 @@
  *   outside the tier TTL (free: 30 days; pro: never). Expired artifacts
  *   return 410 from artifact_get but remain recoverable by an admin.
  */
-CREATE TABLE IF NOT EXISTS meko_system.artifacts (
+CREATE TABLE IF NOT EXISTS datapacks.artifacts (
     id               UUID        NOT NULL DEFAULT gen_random_uuid(),
     datapack_id      UUID        NOT NULL,
     content_hash     TEXT        NOT NULL,  -- SHA-256 hex of file bytes
@@ -31,4 +31,4 @@ CREATE TABLE IF NOT EXISTS meko_system.artifacts (
 ) SPLIT INTO 12 TABLETS;
 
 CREATE INDEX IF NOT EXISTS idx_artifacts_datapack_expired
-    ON meko_system.artifacts (datapack_id, expired_at, last_accessed_at);
+    ON datapacks.artifacts (datapack_id, expired_at, last_accessed_at);
