@@ -341,7 +341,8 @@ a second step replays the decoder over the YB-backed WAL: `find_anchor`
 walks back to the nearest fresh-record page — validating `xlp_magic`, so it
 steps over the zero padding a switch leaves — then `find_end_of_wal` scans
 forward to the last complete record boundary. The walk is floored at
-`timeline_start_lsn` (the start of persisted WAL, itself a record boundary):
+`local_start_lsn` (where this safekeeper's persisted WAL begins, itself a
+record boundary — `timeline_start_lsn` can sit below it):
 a single record can span all the way back to that start — `wal_craft`'s
 segment-filling padding record right before an `XLOG_SWITCH` does exactly
 this, leaving no fresh-record page above the floor — and when the start is

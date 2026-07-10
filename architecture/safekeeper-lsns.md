@@ -125,12 +125,12 @@ the highest submitted `end_lsn`.
 (= `flush_lsn`) if the table is empty. That raw maximum is then refined to
 the last complete record boundary by replaying the decoder
 (`find_anchor` + `find_end_of_wal`, the back-walk floored at
-`timeline_start_lsn`): a torn trailing page truncates `write_lsn` *back*,
+`local_start_lsn`): a torn trailing page truncates `write_lsn` *back*,
 while a trailing `XLOG_SWITCH` advances it *forward* to the next segment
 (past padding the compute never streamed). See
 [`safekeeper.md`](safekeeper.md) §"Restart" — clamping the switch case back
 to the raw max, or letting the anchor walk overshoot a mid-page
-`timeline_start_lsn`, wedges the safekeeper (#181).
+`local_start_lsn`, wedges the safekeeper (#181).
 
 ---
 
