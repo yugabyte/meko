@@ -58,6 +58,9 @@ import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfu
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
 import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailAgentsTile";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
+import { DatapackDetailDatabasesTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailDatabasesTile";
+import { CreateDatabaseDialog } from "@/features/datapacks/components/datapack-detail/dialogs/CreateDatabaseDialog";
+import { isAmpEnabled } from "@/lib/amp";
 import {
   DatapackDetailKnowledgeTile,
   KNOWLEDGE_PREVIEW_LIMIT,
@@ -148,6 +151,8 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
 
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isCreateDatabaseOpen, setIsCreateDatabaseOpen] = useState(false);
+  const [databasesReloadToken, setDatabasesReloadToken] = useState(0);
 
   // const [knowledgeBaseCount, setKnowledgeBaseCount] = useState(0);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeBaseDocument[]>([]);
@@ -461,6 +466,14 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                 datapackName={displayDatapackName}
                 onConfirm={handleDeleteConfirm}
               />
+              {isAmpEnabled() ? (
+                <CreateDatabaseDialog
+                  open={isCreateDatabaseOpen}
+                  onOpenChange={setIsCreateDatabaseOpen}
+                  datapackId={routeDatapackId}
+                  onCreated={() => setDatabasesReloadToken((t) => t + 1)}
+                />
+              ) : null}
               {showDatapackActionsDropdown ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -540,6 +553,9 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
           knowledgeFileAndPromotedCount={knowledgeTotalCount ?? undefined}
           onSelectSection={handlePipelineSelect}
           onUploadKnowledgeFiles={() => setIsUploadOpen(true)}
+          onCreateDatabase={
+            isAmpEnabled() ? () => setIsCreateDatabaseOpen(true) : undefined
+          }
           statusLoading={statusLoading}
         />
 
@@ -569,6 +585,12 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
             mcpServerUrl={provisionStatus?.mcp_server_url ?? null}
             onOpenConnect={() => setIsConnectOpen(true)}
           />
+          {isAmpEnabled() ? (
+            <DatapackDetailDatabasesTile
+              datapackId={routeDatapackId}
+              reloadToken={databasesReloadToken}
+            />
+          ) : null}
         </div>
       </main>
     </div>

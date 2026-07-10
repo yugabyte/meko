@@ -36,6 +36,7 @@ export const DATAPACK_SUB_ROUTE = {
   knowledge: "knowledge",
   members: "members",
   conversations: "conversations",
+  databases: "databases",
 } as const;
 
 /** Default datapack provisioned for new accounts; used from onboarding (“Choose your tool” → configure). */
@@ -173,6 +174,12 @@ export function datapackKnowledgePath(datapackId: string): string {
  *  the Members tile on the datapack detail page. */
 export function datapackMembersPath(datapackId: string): string {
   return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.members);
+}
+
+/** Full databases page (AMP) — linked from the "View all" footer on the
+ *  Databases tile. Gated by SHOW_PG_AMP at the call sites. */
+export function datapackDatabasesPath(datapackId: string): string {
+  return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.databases);
 }
 
 /** Full conversation viewer route. When `conversationId` is provided

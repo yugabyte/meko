@@ -105,6 +105,12 @@ type ServerConfig struct {
 	// default (5 MiB). Set via --max-artifact-size-bytes or
 	// MEKO_MAX_ARTIFACT_SIZE_BYTES.
 	MaxArtifactSizeBytes int64
+
+	// ShowPGAMP gates the AMP (Postgres databases) feature. Off by default;
+	// exposed to the UI via the runtime-config flag SHOW_PG_AMP. The AMP
+	// controller endpoint itself is NOT configured here — an admin registers
+	// it at runtime (meko_system.amp_registration, via POST /amp/registration).
+	ShowPGAMP bool
 }
 
 // defaultMCPPATFlushInterval is the fallback flush cadence used when

@@ -8,6 +8,7 @@ import {
   ArrowUpRight,
   BookOpen,
   ChevronRight,
+  Database,
   Loader2,
   MessageSquare,
   Settings,
@@ -302,6 +303,8 @@ type Props = {
   datapackId?: string | null;
   onSelectSection?: (tab: DatapackDetailTab) => void;
   onUploadKnowledgeFiles?: () => void;
+  /** When provided (AMP enabled), renders a "Create database" action. */
+  onCreateDatabase?: () => void;
   statusLoading?: boolean;
 };
 
@@ -317,6 +320,7 @@ export function CollectiveLearningPipeline({
   datapackId = null,
   onSelectSection,
   onUploadKnowledgeFiles,
+  onCreateDatabase,
   statusLoading = false,
 }: Props) {
   const [totalPromotionProposals, setTotalPromotionProposals] = useState<number | undefined>(
@@ -570,6 +574,18 @@ export function CollectiveLearningPipeline({
 
         <div className="border-t border-border/55 bg-input/25 px-4 py-3 sm:px-6">
           <div className="flex flex-wrap items-center justify-end gap-2">
+            {onCreateDatabase ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2 border-border/80 bg-background/40 text-foreground hover:bg-muted/30"
+                onClick={() => onCreateDatabase()}
+              >
+                <Database className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
+                Create database
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="outline"

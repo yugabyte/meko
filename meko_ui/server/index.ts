@@ -105,6 +105,9 @@ app.use((req, res, next) => {
     "MEKO_FREE_TIER_TOKEN_BURN",
     "VITE_RUDDERSTACK_WRITE_KEY",
     "VITE_RUDDERSTACK_DATA_PLANE_URL",
+    // Gates the AMP (Postgres databases) UI inside a datapack. Runtime flag so
+    // it can be flipped per environment without a rebuild. Default off.
+    "SHOW_PG_AMP",
   ];
   app.get("/runtime-config.js", (_req, res) => {
     const cfg: Record<string, string> = {};

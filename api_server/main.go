@@ -103,6 +103,12 @@ func run() error {
 	memoryListSkipVectorSort := flag.Bool("memory-list-skip-vector-sort", envBoolOrDefault("MEMORY_LIST_SKIP_VECTOR_SORT", true), "Skip OpenAI vector embedding for memory/learning list and sort by created_at DESC")
 	deployEnv := flag.String("deploy-env", envOrDefault("MEKO_DEPLOY_ENV", "prod"), "deployment environment: prod or dev")
 
+	// AMP (Postgres databases) integration. --show-pg-amp gates the feature
+	// (mirrored to the UI via the SHOW_PG_AMP runtime flag). The AMP controller
+	// endpoint is NOT an env var — an admin registers it at runtime via
+	// POST /api/v1/amp/registration (stored in meko_system.amp_registration).
+	showPGAMP := flag.Bool("show-pg-amp", envBoolOrDefault("SHOW_PG_AMP", false), "enable the AMP (Postgres databases) feature")
+
 	// MCP internal validation endpoint shared secret. When empty, the
 	// /api/v1/internal/meko-tokens/validate endpoint returns 503.
 	mcpInternalSecret := flag.String("mcp-internal-secret",
@@ -340,6 +346,7 @@ func run() error {
 		StripePriceIDGrowth:      *stripePriceGrowth,
 		StripePriceIDScale:       *stripePriceScale,
 		MaxArtifactSizeBytes:     *maxArtifactSizeBytes,
+		ShowPGAMP:                *showPGAMP,
 	})
 }
 

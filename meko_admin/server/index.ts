@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import metricsRouter from "./routes/metrics";
 import authRouter from "./routes/auth";
+import ampRegistrationRouter from "./routes/ampRegistration";
 import { requireAdminAuth } from "./middleware/requireAdminAuth";
 import { serveStatic } from "./static";
 
@@ -34,6 +35,18 @@ app.use((req, res, next) => {
 app.get("/api/admin/health", (_req, res) => res.json({ status: "ok" }));
 app.use("/api/admin/auth", authRouter);
 app.use("/api/admin/metrics", requireAdminAuth, metricsRouter);
+app.use("/api/admin/amp-registration", requireAdminAuth, ampRegistrationRouter);
+
+// Runtime feature flags, exposed to the client as window.__ADMIN_RUNTIME__ so
+// they can be flipped per-deployment without a rebuild. Read via readRuntimeEnv
+// (src/lib/runtimeEnv.ts). SHOW_AMP_ADMIN gates the AMP controller section.
+const RUNTIME_ENV_KEYS = ["SHOW_AMP_ADMIN"] as const;
+app.get("/runtime-config.js", (_req, res) => {
+  const cfg: Record<string, string | undefined> = {};
+  for (const key of RUNTIME_ENV_KEYS) cfg[key] = process.env[key];
+  res.type("application/javascript");
+  res.send(`window.__ADMIN_RUNTIME__ = ${JSON.stringify(cfg)};`);
+});
 
 (async () => {
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

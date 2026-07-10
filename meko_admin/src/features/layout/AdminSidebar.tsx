@@ -1,15 +1,17 @@
-import { LayoutDashboard, Moon, Sun, LogOut } from "lucide-react";
+import { Database, LayoutDashboard, Moon, Sun, LogOut } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
 import { useThemeToggle } from "@/lib/theme";
 import { useAuth } from "@/lib/authContext";
+import { isAmpAdminEnabled } from "@/lib/amp";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 
 export function AdminSidebar() {
   const { theme, toggle } = useThemeToggle();
   const { user, logout } = useAuth();
+  const ampEnabled = isAmpAdminEnabled();
 
   return (
     <aside className="flex h-screen w-56 flex-col border-r border-border bg-card">
@@ -36,6 +38,22 @@ export function AdminSidebar() {
           <LayoutDashboard className="h-4 w-4" />
           Dashboard
         </NavLink>
+        {ampEnabled && (
+          <NavLink
+            to={ROUTES.ampRegistration}
+            className={({ isActive }) =>
+              cn(
+                "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
+                isActive
+                  ? "bg-accent text-accent-foreground font-medium"
+                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+              )
+            }
+          >
+            <Database className="h-4 w-4" />
+            AMP
+          </NavLink>
+        )}
       </nav>
 
       <div className="p-3">

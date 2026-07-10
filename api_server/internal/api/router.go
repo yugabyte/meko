@@ -49,6 +49,11 @@ type serviceRegistry struct {
 	billingSvc         *service.BillingService
 	artifactRepo       *repository.ArtifactRepo
 	artifactSvc        *service.ArtifactService
+	// ampSvc is nil unless the AMP feature is enabled (--show-pg-amp); the AMP
+	// datapack-database routes are registered only when it is non-nil. The AMP
+	// controller endpoint is resolved at request time from the registration row,
+	// not a flag.
+	ampSvc *service.AMPService
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -153,6 +158,19 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	accountUsageSvc := service.NewAccountUsageService(dpRepo, kbRepo, langfuseSvc.Repo(), freeTierRepo)
 
+	// AMP (Postgres databases) integration. Enabled only when the feature flag
+	// is on; the controller endpoint is resolved from the database at runtime.
+	var ampSvc *service.AMPService
+	if cfg.ShowPGAMP {
+		ampSvc = service.NewAMPService(
+			repository.NewAMPRepo(cfg.SystemDB),
+			repository.NewAMPRegistrationRepo(cfg.SystemDB),
+		)
+		slog.Info("amp routes enabled (controller endpoint resolved from amp_registration)")
+	} else {
+		slog.Warn("amp routes disabled (set --show-pg-amp to enable)")
+	}
+
 	artifactRepo := repository.NewArtifactRepo(cfg.SystemDB)
 	artifactSvc := service.NewArtifactService(artifactRepo, s3Svc)
 
@@ -183,6 +201,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		billingSvc:         billingSvc,
 		artifactRepo:       artifactRepo,
 		artifactSvc:        artifactSvc,
+		ampSvc:             ampSvc,
 	}
 }
 
@@ -477,6 +496,21 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	dpDirect.POST("/datapacks", dpH.Create, auth.RequireScope(auth.ScopeWrite))
 	dpDirect.GET("/datapacks", dpH.List, auth.RequireScope(auth.ScopeRead))
 	g.POST("/observe/session/bootstrap", observeH.BootstrapSession)
+
+	// AMP (Postgres databases) inside a datapack — only when the feature is
+	// enabled. Guarded by datapack access so a user only reaches their own.
+	if reg.ampSvc != nil {
+		ampH := handlers.NewAMPHandler(reg.ampSvc)
+		// AMP controller registration is managed by meko_admin (writes the
+		// meko_system.amp_registration row directly); api_server only reads it.
+		dpAccess := auth.RequireDatapackAccess(reg.dpRepo)
+		g.POST("/datapacks/:datapack_id/databases", ampH.CreateDatabase, dpAccess)
+		g.GET("/datapacks/:datapack_id/databases", ampH.ListDatabases, dpAccess)
+		g.GET("/datapacks/:datapack_id/databases/:project_id/branches", ampH.ListBranches, dpAccess)
+		g.POST("/datapacks/:datapack_id/databases/:project_id/branches", ampH.CreateBranch, dpAccess)
+		g.GET("/datapacks/:datapack_id/databases/:project_id/branches/:branch_id/compute", ampH.ListCompute, dpAccess)
+		g.POST("/datapacks/:datapack_id/databases/:project_id/branches/:branch_id/compute", ampH.CreateCompute, dpAccess)
+	}
 
 	g.POST("/agents", agentH.CreateUser)
 	g.GET("/agents", agentH.ListUser)
