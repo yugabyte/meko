@@ -498,18 +498,20 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	g.POST("/observe/session/bootstrap", observeH.BootstrapSession)
 
 	// AMP (Postgres databases) inside a datapack — only when the feature is
-	// enabled. Guarded by datapack access so a user only reaches their own.
+	// enabled. Reads are allowed for anyone with datapack access (owner or
+	// shared); writes (spin up database / branch / compute) are owner-only.
 	if reg.ampSvc != nil {
 		ampH := handlers.NewAMPHandler(reg.ampSvc)
 		// AMP controller registration is managed by meko_admin (writes the
 		// meko_system.amp_registration row directly); api_server only reads it.
 		dpAccess := auth.RequireDatapackAccess(reg.dpRepo)
-		g.POST("/datapacks/:datapack_id/databases", ampH.CreateDatabase, dpAccess)
+		dpOwner := auth.RequireDatapackOwnership(reg.dpRepo)
+		g.POST("/datapacks/:datapack_id/databases", ampH.CreateDatabase, dpOwner)
 		g.GET("/datapacks/:datapack_id/databases", ampH.ListDatabases, dpAccess)
 		g.GET("/datapacks/:datapack_id/databases/:project_id/branches", ampH.ListBranches, dpAccess)
-		g.POST("/datapacks/:datapack_id/databases/:project_id/branches", ampH.CreateBranch, dpAccess)
+		g.POST("/datapacks/:datapack_id/databases/:project_id/branches", ampH.CreateBranch, dpOwner)
 		g.GET("/datapacks/:datapack_id/databases/:project_id/branches/:branch_id/compute", ampH.ListCompute, dpAccess)
-		g.POST("/datapacks/:datapack_id/databases/:project_id/branches/:branch_id/compute", ampH.CreateCompute, dpAccess)
+		g.POST("/datapacks/:datapack_id/databases/:project_id/branches/:branch_id/compute", ampH.CreateCompute, dpOwner)
 	}
 
 	g.POST("/agents", agentH.CreateUser)
