@@ -1121,6 +1121,160 @@ func (h *KnowledgeBaseHandler) Summary(c echo.Context) error {
 	return ok(c, http.StatusOK, summary)
 }
 
+// PendingUploadItem describes one S3 object that was uploaded via the
+// presigned-URL flow but has never been registered with dist_rag (no
+// row exists in dist_rag.documents for it, in any status). Surfacing
+// these lets the UI recover from the case where a user PUT a file to
+// S3 but never clicked "Create / Add to Knowledge Base".
+type PendingUploadItem struct {
+	// Key is the full S3 key, e.g. "<user_id>/<datapack_id>/<sha>/<filename>".
+	Key string `json:"key"`
+	// Filename is the basename shown to the user.
+	Filename string `json:"filename"`
+	// Size is the S3 object size in bytes (0 = unknown).
+	Size int64 `json:"size"`
+	// UploadedAt is the S3 LastModified timestamp, RFC3339 UTC.
+	UploadedAt string `json:"uploaded_at,omitempty"`
+}
+
+// PendingUploadsResponse is the envelope returned by /pending-uploads.
+type PendingUploadsResponse struct {
+	Items []PendingUploadItem `json:"items"`
+	Count int                 `json:"count"`
+}
+
+// PendingUploads handles GET /api/v1/datapacks/:datapack_id/knowledge-bases/pending-uploads.
+//
+// Returns S3 objects under the datapack's prefix that are NOT yet
+// tracked in dist_rag.documents. These are files the user uploaded
+// (via a presigned PUT) but never followed up with a Create/Add-to-KB
+// call, so the ingestion pipeline has never seen them.
+//
+// Logic:
+//
+//  1. Resolve the datapack's rag_source_id values (may be zero — the
+//     source is created lazily on first CreateKB).
+//  2. List every S3 object under "<user_id>/<datapack_id>/".
+//  3. If a source exists, load the set of URIs already known to
+//     dist_rag.documents (any status).
+//  4. Return the diff: S3 keys whose s3://bucket/key is not in that
+//     set. When no source exists yet, every S3 object is pending.
+//
+//	@Summary	List S3 uploads not yet registered with dist_rag
+//	@Tags		knowledge-bases
+//	@Produce	json
+//	@Param		datapack_id	path		string	true	"Datapack ID"
+//	@Success	200		{object}	APIResponse
+//	@Failure	401		{object}	APIResponse
+//	@Failure	500		{object}	APIResponse
+//	@Failure	503		{object}	APIResponse
+//	@Security	BearerAuth
+//	@Router		/datapacks/{datapack_id}/knowledge-bases/pending-uploads [get]
+func (h *KnowledgeBaseHandler) PendingUploads(c echo.Context) error {
+	if h.s3Svc == nil || !h.s3Svc.Enabled() {
+		return apiError(c, http.StatusServiceUnavailable,
+			"S3_DISABLED", "file uploads are not configured")
+	}
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack context missing")
+	}
+
+	s3Prefix := fmt.Sprintf("%s/%s/", dp.UserID, dp.ID)
+	objects, err := h.s3Svc.ListObjects(c.Request().Context(), s3Prefix)
+	if err != nil {
+		slog.Error("pending-uploads: failed to list S3 objects",
+			"datapack_id", dp.ID, "prefix", s3Prefix, "error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"S3_ERROR", "failed to list uploaded files")
+	}
+	if len(objects) == 0 {
+		return ok(c, http.StatusOK, PendingUploadsResponse{Items: []PendingUploadItem{}, Count: 0})
+	}
+
+	// existingURIs is the set of documents already known to dist_rag
+	// (any status). Missing from this set = the pipeline has never
+	// seen this file, i.e. it's an orphan awaiting a Create/Add-to-KB.
+	// Union across ALL source_ids for the datapack — historically
+	// each CreateKB call could produce a new source row, so orphans
+	// must be tested against the full union, not just the first.
+	existingURIs := make(map[string]bool)
+	if h.ragSvc != nil {
+		sourceIDs, err := h.knowledgeBaseSvc.GetSourceIDs(dp)
+		if err != nil {
+			slog.Error("pending-uploads: failed to load source ids",
+				"datapack_id", dp.ID, "error", err)
+			return apiError(c, http.StatusInternalServerError,
+				"INTERNAL_ERROR", "failed to check existing documents")
+		}
+		for _, sourceID := range sourceIDs {
+			uris, err := h.ragSvc.GetExistingDocURIs(sourceID)
+			if err != nil {
+				slog.Error("pending-uploads: failed to load dist_rag URIs",
+					"datapack_id", dp.ID, "source_id", sourceID, "error", err)
+				return apiError(c, http.StatusInternalServerError,
+					"RAG_ERROR", "failed to check existing documents")
+			}
+			for uri := range uris {
+				existingURIs[uri] = true
+			}
+		}
+	}
+
+	items := make([]PendingUploadItem, 0)
+	for _, obj := range objects {
+		docURI := fmt.Sprintf("s3://%s/%s", h.s3Svc.Bucket(), obj.Key)
+		if existingURIs[docURI] {
+			continue
+		}
+		var uploadedAt string
+		if !obj.UploadedAt.IsZero() {
+			uploadedAt = obj.UploadedAt.UTC().Format(time.RFC3339)
+		}
+		items = append(items, PendingUploadItem{
+			Key:        obj.Key,
+			Filename:   filepath.Base(obj.Key),
+			Size:       obj.Size,
+			UploadedAt: uploadedAt,
+		})
+	}
+
+	return ok(c, http.StatusOK, PendingUploadsResponse{Items: items, Count: len(items)})
+}
+
+// DeletePendingUpload handles DELETE /api/v1/datapacks/:datapack_id/knowledge-bases/pending-uploads?key=<encoded>.
+//
+// Removes a single S3 orphan — nothing else exists for it (no dist_rag
+// row, no chunks), so this is an S3 DeleteObject and nothing more. The
+// prefix check is the only real safety bit: it stops a caller from
+// reaching outside their own datapack's key space.
+func (h *KnowledgeBaseHandler) DeletePendingUpload(c echo.Context) error {
+	if h.s3Svc == nil || !h.s3Svc.Enabled() {
+		return apiError(c, http.StatusServiceUnavailable,
+			"S3_DISABLED", "file uploads are not configured")
+	}
+	dp, err := auth.GetDatapack(c)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError,
+			"INTERNAL_ERROR", "datapack context missing")
+	}
+	key := strings.TrimSpace(c.QueryParam("key"))
+	if key == "" {
+		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "key is required")
+	}
+	if !strings.HasPrefix(key, fmt.Sprintf("%s/%s/", dp.UserID, dp.ID)) {
+		return apiError(c, http.StatusForbidden, "FORBIDDEN", "key does not belong to this datapack")
+	}
+	if err := h.s3Svc.DeleteObject(c.Request().Context(), key); err != nil {
+		slog.Error("pending upload delete: S3 failed",
+			"datapack_id", dp.ID, "key", key, "error", err)
+		return apiError(c, http.StatusInternalServerError, "S3_ERROR", "failed to delete file")
+	}
+	slog.Info("pending upload deleted", "datapack_id", dp.ID, "key", key)
+	return ok(c, http.StatusOK, map[string]string{"key": key})
+}
+
 // ActivityLog handles GET /api/v1/datapacks/:datapack_id/knowledge-bases/activity-log.
 //
 // Merged feed of file uploads + memory promotions for this datapack,

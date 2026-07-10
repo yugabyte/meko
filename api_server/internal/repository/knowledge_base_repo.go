@@ -1502,19 +1502,22 @@ func (r *KnowledgeBaseRepo) GetKnowledgeBaseSummary(
 	)
 
 	// Aggregate query: collapses the view's per-pipeline-run rows to the
-	// latest run per document, then narrows to COMPLETED-only before
-	// counting / summing / picking the heaviest source. This matches
-	// product semantics — "files" in the header tile and "heaviest
-	// source" both mean successfully-ingested files, not in-flight ones.
+	// latest run per document, then narrows to statuses the user
+	// perceives as "a file is here" (COMPLETED or PROCESSING) before
+	// counting / summing / picking the heaviest source. Users expect
+	// the "files" tile to jump to 1 as soon as an upload starts
+	// ingesting, not only after ingestion finishes.
 	//
 	// Two-step CTE intentional:
 	//   `latest_per_document` (1) picks the most recent pipeline run
 	//     per document (DISTINCT ON); without this step a doc with N
 	//     prior failed re-indexes would expose a failed status even
 	//     though its latest run succeeded.
-	//   `completed_documents` (2) then filters that "latest snapshot"
-	//     to COMPLETED-only. So a file that previously succeeded but
-	//     just re-failed is correctly excluded.
+	//   `visible_documents` (2) then filters that "latest snapshot"
+	//     to statuses users perceive as "a file is here":
+	//     QUEUED (waiting for the worker), PROCESSING (mid-ingest),
+	//     and COMPLETED (searchable). FAILED is excluded so a
+	//     dead-on-arrival file doesn't inflate the tile.
 	//
 	// Step 1 (systemDB): resolve the datapack's rag_source_id values.
 	// Done as a separate round-trip because meko_system and dist_rag
@@ -1544,24 +1547,24 @@ func (r *KnowledgeBaseRepo) GetKnowledgeBaseSummary(
 		             pipeline_created_at DESC NULLS LAST,
 		             pipeline_id DESC
 		 ),
-		 completed_documents AS (
+		 visible_documents AS (
 		   SELECT document_id, document_name, pipeline_completed_at, chunks_processed
 		   FROM   latest_per_document
-		   WHERE  status = 'COMPLETED'
+		   WHERE  status IN ('COMPLETED', 'PROCESSING', 'QUEUED')
 		 )
 		 SELECT
 		   COUNT(*)                                   AS total_files,
 		   COALESCE(SUM(chunks_processed), 0)::bigint AS total_chunks,
 		   MAX(pipeline_completed_at)                 AS last_uploaded,
-		   (SELECT document_name FROM completed_documents
+		   (SELECT document_name FROM visible_documents
 		      WHERE chunks_processed IS NOT NULL
 		      ORDER BY chunks_processed DESC NULLS LAST
 		      LIMIT 1)                                AS heaviest_name,
-		   (SELECT chunks_processed FROM completed_documents
+		   (SELECT chunks_processed FROM visible_documents
 		      WHERE chunks_processed IS NOT NULL
 		      ORDER BY chunks_processed DESC NULLS LAST
 		      LIMIT 1)                                AS heaviest_chunks
-		 FROM completed_documents`,
+		 FROM visible_documents`,
 			pq.Array(sourceIDs), schema, indexName,
 		).Scan(&s.TotalFiles, &s.TotalChunks, &lastUploaded, &heaviestName, &heaviestChunk); err != nil {
 			return s, fmt.Errorf("kb summary aggregates: %w", err)

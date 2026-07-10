@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Upload, X, FileText, CheckCircle2, AlertCircle, Loader2, Database } from "lucide-react";
+import { Upload, X, FileText, CheckCircle2, AlertCircle, Loader2, Database, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { cn } from "@/lib/utils";
@@ -8,8 +8,11 @@ import {
   requestUploadURL,
   confirmUpload,
   createKnowledgeBase,
+  deletePendingUpload,
   getKBStatus,
+  listPendingUploads,
   sha256Hex,
+  type PendingUpload,
   type PipelineDetail,
   type SourceStatus,
 } from "@/lib/api/mekoApi";
@@ -20,6 +23,7 @@ import {
   filterFilesForKnowledgeUploadBatch,
 } from "@/lib/knowledgeFileUploadRules";
 import { formatFileSize } from "@/lib/fileSize";
+import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
 import { uploadFileToS3 } from "@/lib/uploadFileToS3";
 import { KNOWLEDGE_UPLOAD_STATUS, type KnowledgeUploadStatus } from "@/lib/knowledgeUploadStatus";
 import { queryClient } from "@/lib/queryClient";
@@ -37,8 +41,24 @@ type FileEntry = {
   note?: string;
 };
 
-/** Message shown when a content-hash dedup skips the actual upload. */
-function dedupNote(uploadedName: string, existingName?: string): string {
+/** Message shown when a content-hash dedup skips the actual upload.
+ *  `awaitingProcessing` = the deduplicated file matches an S3 object
+ *  that has NOT yet been registered with dist_rag (i.e. it's an orphan
+ *  from a previous session where the user closed the dialog before
+ *  clicking Create/Add-to-KB). Saying "already in this knowledge base"
+ *  in that case is misleading — the file exists in S3 but nothing has
+ *  ingested it yet. */
+function dedupNote(
+  uploadedName: string,
+  existingName: string | undefined,
+  awaitingProcessing: boolean,
+): string {
+  if (awaitingProcessing) {
+    if (existingName && existingName !== uploadedName) {
+      return `Already uploaded as "${existingName}" and awaiting processing — click Add to Knowledge Base to process it.`;
+    }
+    return "Already uploaded and awaiting processing — click Add to Knowledge Base to process it.";
+  }
   if (existingName && existingName !== uploadedName) {
     return `Identical content already in this knowledge base as "${existingName}" — skipped re-upload.`;
   }
@@ -85,6 +105,14 @@ export default function FileUpload({
   const [sourceStatuses, setSourceStatuses] = useState<SourceStatus[]>([]);
   const [pipelineDetails, setPipelineDetails] = useState<PipelineDetail[]>([]);
   const [queuedDocNames, setQueuedDocNames] = useState<string[]>([]);
+  // S3-side orphans: files PUT to S3 but never registered with
+  // dist_rag (user closed dialog before clicking Create/Add). Fetched
+  // once on mount and after each successful Create/Add-to-KB. Kept in
+  // a separate list from `files` so the existing fresh-upload state
+  // machine stays untouched.
+  const [pendingOrphans, setPendingOrphans] = useState<PendingUpload[]>([]);
+  const [deletingOrphanKeys, setDeletingOrphanKeys] = useState<Set<string>>(() => new Set());
+  const nowMs = useNowMs();
   const pollRef = useRef<ReturnType<typeof setInterval>>(undefined);
   // Armed (true) when the user just triggered `createKnowledgeBase` so
   // we can fire `onKnowledgeBaseCreated` ONCE — and only after polling
@@ -201,10 +229,17 @@ export default function FileUpload({
         );
 
         if (already_uploaded) {
-          // Identical content already exists server-side: nothing is uploaded
-          // or added. Mark it skipped (not "uploaded") and let the user remove
-          // the row to continue with other files.
-          const note = dedupNote(entry.file.name, existing_filename);
+          // Identical content already exists server-side. Two flavours:
+          //   1. `existing_filename` matches an orphan in `pendingOrphans` →
+          //      the file exists in S3 but hasn't been ingested. Tell the
+          //      user to click "Add to Knowledge Base", NOT that it's
+          //      already indexed (which would be a lie).
+          //   2. Otherwise → truly already in the KB; keep the existing
+          //      "skipped re-upload" copy.
+          const awaitingProcessing = pendingOrphans.some(
+            (o) => existing_filename && o.filename === existing_filename,
+          );
+          const note = dedupNote(entry.file.name, existing_filename, awaitingProcessing);
           showWarning(note);
           setFiles((prev) =>
             prev.map((f, idx) =>
@@ -313,6 +348,56 @@ export default function FileUpload({
     [datapackId, currentUser?.email],
   );
 
+  // Load the S3-orphan list. Called on mount, and again once a
+  // Create/Add-to-KB run finishes (those orphans should now be tracked
+  // in dist_rag, so the list should collapse to empty). Silent failure
+  // — orphans are a UX affordance, not load-bearing.
+  const fetchPendingOrphans = useCallback(async () => {
+    try {
+      const resp = await listPendingUploads(datapackId);
+      setPendingOrphans(resp.items);
+    } catch {
+      // ignore
+    }
+  }, [datapackId]);
+
+  // Read the "already deleting?" flag through the functional updater
+  // so the callback doesn't have to depend on `deletingOrphanKeys` —
+  // that state mutates on every X click, and closing over it would
+  // recreate the callback each time (and cascade through anything
+  // memoized on it).
+  const removeOrphan = useCallback(
+    async (key: string) => {
+      let alreadyDeleting = false;
+      setDeletingOrphanKeys((prev) => {
+        if (prev.has(key)) {
+          alreadyDeleting = true;
+          return prev;
+        }
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+      if (alreadyDeleting) return;
+
+      try {
+        await deletePendingUpload(datapackId, key);
+        setPendingOrphans((prev) => prev.filter((o) => o.key !== key));
+        void queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] });
+      } catch (err) {
+        showWarning(getApiErrorMessage(err, "Failed to remove file."));
+      } finally {
+        setDeletingOrphanKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      }
+    },
+    [datapackId, showWarning],
+  );
+
+
   const fetchStatus = useCallback(async () => {
     try {
       const status = await getKBStatus(datapackId, {});
@@ -347,16 +432,20 @@ export default function FileUpload({
           pendingKBReadyNotificationRef.current = false;
           emitDocumentUploadedEvents(details);
           onKnowledgeBaseCreatedRef.current?.();
+          // The orphans that just got processed are now tracked in
+          // dist_rag; refetch to collapse the "already uploaded" list.
+          void fetchPendingOrphans();
         }
       }
     } catch {
       // silently retry on next interval
     }
-  }, [datapackId, kbCreated, emitDocumentUploadedEvents]);
+  }, [datapackId, kbCreated, emitDocumentUploadedEvents, fetchPendingOrphans]);
 
   useEffect(() => {
     fetchStatus();
-  }, [fetchStatus]);
+    void fetchPendingOrphans();
+  }, [fetchStatus, fetchPendingOrphans]);
 
   useEffect(() => {
     if (pollingActive) {
@@ -585,10 +674,77 @@ export default function FileUpload({
             ))}
           </ul>
         )}
+
+        {/* Orphan uploads — files that were PUT to S3 in a previous
+            session but never processed. Rendered in the same list
+            style as fresh uploads, immediately below them, with an
+            inline "(already uploaded · <ts>)" note so users can tell
+            them apart from files they just picked. Read-only in v1:
+            they'll get processed on the next Add-to-Knowledge-Base
+            click, no per-row action needed. */}
+        {pendingOrphans.length > 0 && !kbBusy && (
+          <ul
+            className="grid gap-2 pr-1"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 18rem), 1fr))" }}
+          >
+            {pendingOrphans.map((o) => {
+              const isDeleting = deletingOrphanKeys.has(o.key);
+              return (
+                <li
+                  key={o.key}
+                  className={cn(
+                    "rounded-lg border border-border bg-card px-4 py-2.5 space-y-1",
+                    isDeleting && "opacity-50",
+                  )}
+                >
+                  {/* Two-row layout: filename + X on top so the
+                      filename can use the full row width, then a
+                      metadata line indented under the file icon for
+                      size + upload time. Keeps long filenames from
+                      squeezing the timestamp on narrow viewports. */}
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
+                      <span className="text-sm text-foreground truncate">{o.filename}</span>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="Remove file"
+                      disabled={isDeleting}
+                      className="shrink-0 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => void removeOrphan(o.key)}
+                    >
+                      {isDeleting ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <X className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between pl-7 text-xs text-muted-foreground">
+                    <span>{formatFileSize(o.size)}</span>
+                    <div className="flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5" aria-hidden />
+                      <span>
+                        already uploaded
+                        {o.uploaded_at ? ` · ${formatRelativeTime(o.uploaded_at, nowMs)}` : ""}
+                      </span>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
 
-      {/* Knowledge Base section */}
-      {(totalUploaded > 0 || kbCreated) && (
+      {/* Knowledge Base section — visible whenever there is anything
+          to process: fresh uploads (`totalUploaded`), an in-flight or
+          completed KB run (`kbCreated`), OR pre-existing S3 orphans
+          waiting to be added. The orphan branch lets a user who
+          reopened the dialog kick off a Create/Add-to-KB even without
+          picking any new files. */}
+      {(totalUploaded > 0 || kbCreated || pendingOrphans.length > 0) && (
         <div className="rounded-xl border border-border bg-card p-6 space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -596,7 +752,13 @@ export default function FileUpload({
               <h3 className="text-sm font-medium text-foreground">Knowledge Base</h3>
             </div>
             <div className="flex items-center gap-2">
-              {!kbCreated && totalUploaded > 0 && (
+              {/* "Create Knowledge Base" fires the first-ever build for
+                  this datapack. Available when there's anything for the
+                  BE to sync from S3 — either fresh uploads the user
+                  just PUT, or pre-existing orphans left behind from an
+                  earlier session. Either kicks off the same
+                  createKnowledgeBase call. */}
+              {!kbCreated && (totalUploaded > 0 || pendingOrphans.length > 0) && (
                 <Button
                   className="gap-2 bg-purple-100 hover:bg-purple-200 text-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 dark:text-white"
                   onClick={handleCreateKB}
@@ -610,7 +772,7 @@ export default function FileUpload({
                   {creatingKB ? "Creating..." : "Create Knowledge Base"}
                 </Button>
               )}
-              {kbCreated && allDone && newUploadsAfterKB > 0 && (
+              {kbCreated && allDone && (newUploadsAfterKB > 0 || pendingOrphans.length > 0) && (
                 <Button
                   className="gap-2 bg-purple-100 hover:bg-purple-200 text-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 dark:text-white"
                   onClick={handleCreateKB}

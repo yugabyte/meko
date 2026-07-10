@@ -662,6 +662,11 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	g.POST("/datapacks/:datapack_id/knowledge-bases/upload-complete", kbH.ConfirmUpload, kbOwnerOrMaintainer...)
 	g.POST("/datapacks/:datapack_id/knowledge-bases/create", kbH.CreateKB, kbOwnerOrMaintainer...)
 	g.GET("/datapacks/:datapack_id/knowledge-bases/status", kbH.KBStatus, kbOwnerOrMaintainer...)
+	// Files PUT to S3 via a presigned URL but never registered with dist_rag
+	// (user closed the dialog before clicking Create/Add-to-KB). Owner/maintainer
+	// only — same gate as the upload/create path that produces these orphans.
+	g.GET("/datapacks/:datapack_id/knowledge-bases/pending-uploads", kbH.PendingUploads, kbOwnerOrMaintainer...)
+	g.DELETE("/datapacks/:datapack_id/knowledge-bases/pending-uploads", kbH.DeletePendingUpload, kbOwnerOrMaintainer...)
 
 	// Update a member's grant: owner or maintainer only (same gate as invite/resend/revoke).
 	// Uses RequireDatapackAccess so shared maintainers can act; dp.UserID in the handler

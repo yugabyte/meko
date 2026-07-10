@@ -1514,6 +1514,60 @@ export async function getKnowledgeBaseSummary(
   );
 }
 
+/** One entry from GET /knowledge-bases/pending-uploads — a file that
+ *  was PUT to S3 via the presigned-URL flow but never registered with
+ *  dist_rag (no matching document row exists in any status). Surfaced
+ *  in the upload dialog so the user can resume with a single
+ *  Create/Add-to-Knowledge-Base click instead of re-picking the file. */
+export type PendingUpload = {
+  /** Full S3 key, e.g. "<user_id>/<datapack_id>/<sha>/<filename>". */
+  key: string;
+  filename: string;
+  /** S3 object size in bytes; 0 = unknown. */
+  size: number;
+  /** S3 LastModified, RFC3339 UTC. Empty string on legacy objects
+   *  where S3 omitted the timestamp. */
+  uploaded_at?: string;
+};
+
+export type PendingUploadsResponse = {
+  items: PendingUpload[];
+  count: number;
+};
+
+/** DELETE /datapacks/:datapack_id/knowledge-bases/pending-uploads?key=… —
+ *  removes a single S3 orphan. Just an S3 DeleteObject on the BE — no
+ *  dist_rag row / chunks exist for orphans by definition. */
+export async function deletePendingUpload(
+  datapackId: string,
+  key: string,
+  options: DatapackRouteOptions = {},
+) {
+  return request<{ key: string }>(
+    `${datapackRoute(datapackId)}/knowledge-bases/pending-uploads?key=${encodeURIComponent(key)}`,
+    "DELETE",
+    undefined,
+    options,
+  );
+}
+
+/** GET /datapacks/:datapack_id/knowledge-bases/pending-uploads — returns
+ *  S3 objects that never made it into dist_rag.documents. Owner or
+ *  maintainer only (same gate as the upload path that produces them). */
+export async function listPendingUploads(
+  datapackId: string,
+  options: DatapackRouteOptions = {},
+): Promise<PendingUploadsResponse> {
+  const resp = await request<PendingUploadsResponse>(
+    `${datapackRoute(datapackId)}/knowledge-bases/pending-uploads`,
+    "GET",
+    undefined,
+    options,
+  );
+  return { items: resp?.items ?? [], count: resp?.count ?? 0 };
+}
+
+
 /** Discriminated row for the SharedKnowledge "Activity log" feed.
  *  `type` selects which side of the BE's UNION populated this row — the
  *  fields keyed off the other side stay null/undefined. */
