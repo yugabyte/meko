@@ -142,7 +142,13 @@ if [[ ! -f $EXT_SO ]] || [[ ! -f $EXT_STAMP ]] \
     || [[ -n "$(find "$REPO/pgxn" -type f \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) -newer "$EXT_STAMP" -print -quit)" ]]; then
     echo "run.sh: yb_amp extension is stale (C sources changed or not yet built) — clean-rebuilding" >&2
     rm -rf "$REPO/build/pgxn-v18"
-    make -C "$REPO" neon-pg-ext-v18
+    # `env -u PROFILE`: our `$PROFILE` (debug|release build type) collides with
+    # PostgreSQL PGXS's own PROFILE variable (Makefile.global: `ifdef PROFILE →
+    # CFLAGS += $(PROFILE)`, meant for profiling flags like -pg). If the caller
+    # exported PROFILE, our reassignment above re-exports it, the extension
+    # make inherits it, and PGXS appends its value as a bogus C flag
+    # (`gcc: error: <value>: No such file or directory`). Strip it for this make.
+    env -u PROFILE make -C "$REPO" neon-pg-ext-v18
     mkdir -p "$REPO/build"
     touch "$EXT_STAMP"
 fi
