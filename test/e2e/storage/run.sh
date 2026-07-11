@@ -105,6 +105,18 @@ CLUSTER_BINS=(
     --bin yb-compute-ctl
 )
 TOOL_BINS=(--bin yb-dump-pages --bin yb-dump-wals --bin yb-reset-consistent-lsn)
+
+# Ensure the installed PostgreSQL matches the checked-out submodule commit
+# before cargo runs — postgres_ffi's bindings and the compute's extension .so
+# both link against it, so a stale pg_install (after a submodule bump or a PG
+# header/source change) surfaces as baffling ABI/wire mismatches. run.sh does
+# not build PG itself; delegate that single step to the build entry point, which
+# rebuilds PG only when the submodule commit drifted and drops the extension
+# stamp so the guard below recompiles the .so against the new headers.
+# `env -u PROFILE`: PGXS reads $PROFILE as profiling C flags (see the extension
+# guard below), so keep our debug|release value out of the sub-build's env.
+env -u PROFILE "$REPO/build.sh" --pg-only
+
 if [[ $PROFILE == release ]]; then
     cargo build --release --features pageserver/testing --bin e2e_tests --bin yb_light_local \
         "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"

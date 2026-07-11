@@ -47,6 +47,10 @@ SUBMODULE = "vendor/postgres-v18"
 PG_VERSION = "v18"
 PG_INSTALL = ROOT / "pg_install" / PG_VERSION
 BUILD_DIR = ROOT / "build"
+# Stamp test/e2e/storage/run.sh touches after building the compute extensions;
+# removed here on a PG rebuild so run.sh's guard recompiles them against the new
+# headers (see --pg-only).
+EXT_STAMP = BUILD_DIR / ".yb_amp_ext.stamp"
 # PostgreSQL is always built in release mode (see module docstring). Only the
 # compute extensions and the Rust amp stack follow the selected debug/release.
 PG_BUILD_TYPE = "release"
@@ -103,11 +107,37 @@ def git_out(*args):
     return res.stdout.strip() if res.returncode == 0 else None
 
 
+# Stamp recording the submodule commit pg_install/v18 was built from. It is the
+# only way to notice that a header/source change (e.g. an FMGR_ABI_EXTRA bump)
+# invalidated the cached PG + every extension linked against it, since the
+# gitlink and the checked-out working tree can match while the *install* is
+# stale. Shared with test/e2e/storage/run.sh, which reads/writes the same file.
+PG_COMMIT_STAMP = PG_INSTALL / ".pg_commit"
+
+
+def built_pg_commit():
+    """The submodule commit pg_install/v18 was last built from, or None."""
+    return PG_COMMIT_STAMP.read_text().strip() if PG_COMMIT_STAMP.is_file() else None
+
+
+def record_pg_commit():
+    """Stamp pg_install with the submodule commit it was just built from."""
+    have = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
+    if have:
+        PG_COMMIT_STAMP.write_text(have + "\n")
+
+
 def sync_submodule_if_needed():
     """Check out / re-sync vendor/postgres-v18. Return True if PG needs a rebuild.
 
     PG must be rebuilt when the working tree doesn't match the gitlink (a bump,
-    or a fresh/absent checkout) or when pg_install/v18 was never built.
+    or a fresh/absent checkout), when pg_install/v18 was never built, or when
+    the cached install was built from a DIFFERENT submodule commit than the one
+    now checked out. The last case is the one a bare gitlink/working-tree check
+    misses: after a commit bumps the submodule and the tree is re-synced, the
+    gitlink and working tree agree while the install still holds the old PG (and
+    old headers), so a header change like FMGR_ABI_EXTRA would otherwise ship a
+    stale ABI to every extension.
     """
     want = git_out("rev-parse", f"HEAD:{SUBMODULE}")
     have = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
@@ -122,6 +152,11 @@ def sync_submodule_if_needed():
     if not pg_built:
         say("pg_install/v18 missing — building PostgreSQL from source...")
         run(["git", "submodule", "update", "--init", "--recursive", "--", SUBMODULE])
+        return True
+    built = built_pg_commit()
+    if built != have:
+        say(f"pg_install/v18 was built from {(built or 'unknown')[:12]} but the "
+            f"submodule is at {have[:12]} — rebuilding PostgreSQL")
         return True
     say(f"{SUBMODULE} up to date ({have[:12]}) — reusing cached pg_install/v18")
     return False
@@ -253,6 +288,12 @@ def main():
         action="store_true",
         help="only install PostgreSQL server headers (for cargo check / IDE)",
     )
+    grp.add_argument(
+        "--pg-only",
+        action="store_true",
+        help="only (re)build PostgreSQL when the submodule commit drifted; skip "
+             "the Rust workspace + extension build (used by run.sh)",
+    )
     args = ap.parse_args()
 
     if args.release_tar:
@@ -261,6 +302,8 @@ def main():
         mode, build_type, target_dir = "release", "release", ROOT / "target/release"
     elif args.headers:
         mode, build_type, target_dir = "headers", "debug", None
+    elif args.pg_only:
+        mode, build_type, target_dir = "pg-only", "debug", None
     else:
         mode, build_type, target_dir = "debug", "debug", ROOT / "target/debug"
 
@@ -303,6 +346,24 @@ def main():
             ["make", f"BUILD_TYPE={PG_BUILD_TYPE}", pg_target],
             env=make_env(cached=False),
         )
+        record_pg_commit()
+        # PG headers just moved (struct layout, FMGR_ABI_EXTRA, ...). The PGXS
+        # extension build has no header-dependency tracking, so an incremental
+        # `make` would relink stale .o files into an ABI-mismatched .so. Wipe the
+        # extension build tree so it recompiles clean against the freshly
+        # installed headers.
+        ext_build = BUILD_DIR / f"pgxn-{PG_VERSION}"
+        if ext_build.exists():
+            say(f"PostgreSQL rebuilt — extensions will recompile against new {PG_VERSION} headers")
+            shutil.rmtree(ext_build)
+        # In --pg-only we don't build the extensions (run.sh does); drop its
+        # stamp so run.sh's guard notices and clean-rebuilds them.
+        if mode == "pg-only":
+            EXT_STAMP.unlink(missing_ok=True)
+
+    if mode == "pg-only":
+        say("--pg-only: PostgreSQL is current; skipping Rust + extension build.")
+        return
 
     say(f"Building {mode} binaries (yb-pageserver + supporting bins)...")
     cargo = ["cargo", "build"] + (["--release"] if build_type == "release" else [])

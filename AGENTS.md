@@ -116,10 +116,11 @@ Code anchors:
 - `./build.sh` is the single build entry point: no flag = debug, `--release`
   = release, `--release-tar` = release + shippable tarball, `--headers` =
   install just the PG headers (for `cargo check` / IDE). It checks out the
-  `vendor/postgres-v18` submodule on a fresh clone and rebuilds PostgreSQL
-  when the gitlink moves, so prefer it over a bare `make`/`cargo build`. The
-  logic lives in [`scripts/build.py`](scripts/build.py); `build.sh` is a thin
-  shim.
+  `vendor/postgres-v18` submodule and rebuilds PostgreSQL (and the compute
+  extensions) whenever the installed PG no longer matches the checked-out
+  submodule commit, so prefer it over a bare `make`/`cargo build`. The logic
+  lives in [`scripts/build.py`](scripts/build.py); `build.sh` is a thin shim
+  (`--pg-only` does just the PostgreSQL step, which `run.sh` reuses).
 - Workspace builds with stable Rust. Some files use the `2024` edition.
 - Protobuf-codegen needs **protoc ≥ 3.15** (proto3 `optional` keyword).
   On `dev-server-hsunder` the system `protoc` is 3.5.0; release builds
