@@ -1,7 +1,7 @@
 //! WAL bookkeeping + reader.
 //!
 //! Historically this module wrote WAL to a local pg_wal-style directory.
-//! yb-light keeps WAL only in YB (`safekeeper.wals`); `PhysicalStorage` is
+//! yb-light keeps WAL only in YB (`safekeeper.wals`); `WalBookkeeping` is
 //! now a pure bookkeeping helper used by `YbWalStorage` to track LSN
 //! watermarks and feed the `WalStreamDecoder`. `WalReader` continues to
 //! serve WAL bytes to the WAL sender — locally from the in-memory
@@ -93,7 +93,7 @@ pub trait Storage {
 ///
 /// Relationship of LSNs:
 /// `write_lsn` >= `write_record_lsn` >= `flush_record_lsn`
-pub struct PhysicalStorage {
+pub struct WalBookkeeping {
     metrics: WalStorageMetrics,
 
     /// Size of WAL segment in bytes.
@@ -117,7 +117,7 @@ pub struct PhysicalStorage {
     decoder: WalStreamDecoder,
 }
 
-impl PhysicalStorage {
+impl WalBookkeeping {
     /// Build the bookkeeping helper. `write_lsn` is supplied by the caller
     /// (`YbWalStorage` rehydrates it from `safekeeper.wals`); all watermarks
     /// start there.
@@ -125,13 +125,13 @@ impl PhysicalStorage {
         branch_id: &BranchId,
         state: &TimelinePersistentState,
         write_lsn: Lsn,
-    ) -> Result<PhysicalStorage> {
+    ) -> Result<WalBookkeeping> {
         let wal_seg_size = state.server.wal_seg_size as usize;
         debug!(
             "initialized WAL bookkeeping for branch {}, write_lsn={}",
             branch_id, write_lsn,
         );
-        Ok(PhysicalStorage {
+        Ok(WalBookkeeping {
             metrics: WalStorageMetrics::default(),
             wal_seg_size,
             pg_version: state.server.pg_version,
@@ -168,7 +168,7 @@ impl PhysicalStorage {
     }
 }
 
-impl Storage for PhysicalStorage {
+impl Storage for WalBookkeeping {
     fn write_lsn(&self) -> Lsn {
         self.write_lsn
     }

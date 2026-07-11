@@ -51,7 +51,7 @@ Surviving background work:
 ### Code layout
 
 - `safekeeper/src/control_file.rs` — control-file `Storage` trait + impls.
-- `safekeeper/src/wal_storage.rs` — WAL `Storage` trait + `PhysicalStorage` impl + `WalReader`.
+- `safekeeper/src/wal_storage.rs` — WAL `Storage` trait + `WalBookkeeping` impl + `WalReader`.
 - `safekeeper/src/yb_wal_storage.rs` — YB mirror (`safekeeper.wals`),
   producer/consumer writer, `load_write_lsn` restart rehydrate.
 - `safekeeper/src/timeline.rs` — `SharedState`, `Timeline::load_timeline`.
@@ -107,17 +107,11 @@ membership were removed wholesale — see §5.
   await the YB load.
 - No CLI flag selects the backend — there's nothing to dispatch over.
 
-### 2. Live WAL → YB-mirrored (Phase 1, commit `35e610db6`)
+### 2. Live WAL → YB-mirrored (commit `35e610db6`)
 
-New `yb_wal_storage.rs` module with `YbWalStorage` (a wrapper) and a
-`WalStore` dispatch enum:
-
-```
-+- enum WalStore
-   +- Physical(PhysicalStorage)  <-- unchanged path; no YB
-   +- Yb(YbWalStorage)           <-- writes every WAL chunk into safekeeper.wals
-                                     inside a wrapped PhysicalStorage
-```
+`yb_wal_storage.rs` defines `YbWalStorage`, the safekeeper's WAL storage. It
+wraps a `WalBookkeeping` (in-memory LSN + record-boundary tracking) and
+mirrors every WAL chunk into `safekeeper.wals`.
 
 Schema (operator-provisioned in `yb_storage` DB):
 
@@ -230,23 +224,20 @@ return                              │
   next `tx.send` then fails, `write_wal` propagates the captured error,
   the walproposer reconnects.
 
-Config: the `yb_storage_conn` inline table in `safekeeper.toml` (optional,
-the shared YB connection block — the same key the pageserver and
-endpoint_storage use). When absent, the safekeeper uses
-`WalStore::Physical(...)` and the wals table is untouched.
+Config: the `yb_storage_conn` inline table in `safekeeper.toml` (the shared
+YB connection block — the same key the pageserver and endpoint_storage use).
+yb-light always configures it, so live WAL is always mirrored to
+`safekeeper.wals`.
 
-### 3. WalReader falls back to YB (Phase 2, commit `77553419b`, lazy/cached in `d7eef8275`+)
+### 3. WalReader reads from YB (commit `77553419b`, lazy/cached in `d7eef8275`+)
 
-`WalReader::open_segment` tries two sources, in order:
+`WalReader::open_segment` serves reads from the **YB `wals` table** via
+`YbSegmentReader`, a lazy chunk-streaming `AsyncRead` that consults the
+in-memory [`WalCache`](#wal-cache--lazy-yb-reader) first and falls through to
+a single-chunk YB `SELECT` on a miss.
 
-1. Local FS (`<workdir>/branches/<branch_id>/<XLogFileName>`). With YB-WAL
-   mode + `no_local_writes` this always misses, so we fall through.
-2. **YB `wals` table** — via `YbSegmentReader`, a lazy chunk-streaming
-   `AsyncRead` that consults the in-memory [`WalCache`](#wal-cache--lazy-yb-reader)
-   first and falls through to a single-chunk YB `SELECT` only on miss.
-
-A safekeeper with `yb_storage_conn` configured can lose its entire local WAL
-directory and still serve every past-LSN streaming request from YB.
+The safekeeper holds no WAL on the local filesystem; it serves every past-LSN
+streaming request from YB.
 
 #### WAL cache & lazy YB reader
 
@@ -308,26 +299,24 @@ Replaced with two pieces, both in `safekeeper/src/yb_wal_storage.rs` +
    `Receiver` is, so we can hold it inside the reader without losing
    `Sync`.
 
-### 4. No local-FS writes when YB is on (commit `8ea570aeb`)
+### 4. No local-FS writes (commit `8ea570aeb`)
 
-A new `PhysicalStorage::no_local_writes: bool` field gates every file/fs
-operation:
+`WalBookkeeping` performs no filesystem I/O; it tracks the WAL LSN watermarks
+and record boundaries in memory:
 
-- `write_in_segment` early-returns; LSN/segment tracking still runs so the
-  decoder + `write_record_lsn` advance correctly.
-- `flush_wal` skips fdatasync; just updates `flush_lsn`/`flush_record_lsn`
-  watermarks (data is already durable in YB).
-- `truncate_wal` skips the open/set_len/fsync/rename/remove sequence.
-- `remove_up_to` returns immediately.
-- `initialize_first_segment` skips the local segment-bootstrap write — the
-  wrapper (`YbWalStorage::initialize_first_segment`) instead generates the
-  16 MiB segment header via `postgres_ffi::generate_wal_segment` and INSERTs
-  it into the `wals` table itself.
+- `write_wal` advances `write_lsn`/`flush_lsn` and feeds the
+  `WalStreamDecoder` so `write_record_lsn`/`flush_record_lsn` follow record
+  boundaries.
+- `flush_wal` aligns the flush watermarks with the write watermarks (data is
+  already durable in YB).
+- `truncate_wal` resets the watermarks to the truncation point.
+- `remove_up_to` is a no-op.
+- `initialize_first_segment` is YB-backed: `YbWalStorage::initialize_first_segment`
+  generates the 16 MiB segment header via `postgres_ffi::generate_wal_segment`
+  and INSERTs it into `safekeeper.wals`.
 
-A new constructor, `PhysicalStorage::new_no_local_writes`, skips the
-upstream local-directory `find_end_of_wal` scan and takes `write_lsn` from
-the caller. `YbWalStorage::new` computes that `write_lsn` from YB in two
-steps. First, `load_write_lsn` reads the raw end of the byte stream:
+`YbWalStorage::new` seeds `WalBookkeeping`'s `write_lsn` from YB in two steps.
+First, `load_write_lsn` reads the raw end of the byte stream:
 
 ```sql
 SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM safekeeper.wals

@@ -91,7 +91,7 @@ Authoritative current column list is `COLUMNS` in
 
 ## WAL storage watermarks
 
-### `PhysicalStorage` (in-memory bookkeeping)
+### `WalBookkeeping` (in-memory bookkeeping)
 
 Used by `YbWalStorage`. No local pg_wal files in yb-light.
 
@@ -330,7 +330,7 @@ interval), SK retains extra WAL — safe, not data loss.
 | `timeline_start_lsn` | Yes | — | — |
 | `local_start_lsn` | Yes | — | — |
 | `remote_consistent_lsn` | Yes (lagging) | — | `TimelineMemState` (live) |
-| `flush_lsn` / `commit_lsn` | — | implied by chunk ends | `PhysicalStorage` |
+| `flush_lsn` / `commit_lsn` | — | implied by chunk ends | `WalBookkeeping` |
 | WAL bytes | — | Yes (per chunk) | `WalCache` optional |
 | Walsender positions | — | — | per-connection state |
 | Standby `apply_lsn` | — | — | `WalSenders` |
@@ -344,7 +344,7 @@ interval), SK retains extra WAL — safe, not data loss.
 - `safekeeper/src/control_file.rs` — YB row read/write.
 - `safekeeper/src/safekeeper.rs` — consensus, `flush_lsn()`,
   `handle_elected`, `handle_append_request`.
-- `safekeeper/src/wal_storage.rs` — `PhysicalStorage` watermarks,
+- `safekeeper/src/wal_storage.rs` — `WalBookkeeping` watermarks,
   `Storage` trait.
 - `safekeeper/src/yb_wal_storage.rs` — YB mirror, `load_write_lsn`,
   `flush_wal` durability.

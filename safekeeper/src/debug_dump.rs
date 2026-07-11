@@ -154,7 +154,7 @@ pub struct Memory {
     pub mem_state: TimelineMemState,
     pub mgr_status: timeline_manager::Status,
 
-    // PhysicalStorage state.
+    // WalBookkeeping state.
     pub write_lsn: Lsn,
     pub write_record_lsn: Lsn,
     pub flush_lsn: Lsn,

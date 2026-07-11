@@ -1,16 +1,14 @@
 //! YugabyteDB-mirrored WAL storage.
 //!
-//! Wraps [`PhysicalStorage`] so that every WAL write is also persisted to a
-//! YB table (`safekeeper.wals`). YB becomes the durable copy;
-//! the local FS remains the read path (used by `WalReader`) and a hot cache
-//! for re-reads of recent WAL.
+//! The safekeeper keeps no WAL on the local filesystem. Every WAL write is
+//! persisted to a YB table (`safekeeper.wals`) — the durable copy — and reads
+//! are served from YB (`WalReader` opens a [`YbSegmentReader`]) fronted by an
+//! in-memory hot cache for recent WAL. Durability is the WAL landing in YB: a
+//! commit is acked only once its bytes are INSERT'd (see the ack model under
+//! "Batching" below).
 //!
-//! Phase 1 (this module): write-through mirror. Durability is the WAL landing
-//! in YB; a commit is acked only once its bytes are INSERT'd (see the ack
-//! model under "Batching" below).
-//!
-//! Phase 2 (future): make `WalReader` capable of fetching from YB, so the
-//! local FS becomes truly optional.
+//! [`YbWalStorage`] wraps a [`WalBookkeeping`] — an in-memory tracker of the
+//! WAL LSN watermarks and record boundaries, with no filesystem interaction.
 //!
 //! Schema (one row per `write_wal()` call within a segment; multiple rows
 //! across a segment boundary):
@@ -36,8 +34,9 @@
 //!   `yb_enable_upsert_mode = true`.
 //! - `truncate_wal` deletes rows whose end offset (`chunk_offset + chunk_size`)
 //!   lies entirely past the new end; rows that straddle the cut are left
-//!   intact (the local-FS truncation is the source of truth for that case —
-//!   the reader uses local FS, so a tiny over-keep in YB is harmless).
+//!   intact. Reads are bounded by the committed flush frontier — every
+//!   [`YbSegmentReader`] is capped at `flush_lsn`, which sits at the
+//!   truncation point — so the over-kept tail is never served.
 //! - `remove_up_to(segno)` deletes all rows with `segno < segno_up_to`.
 //!
 //! ## Batching (producer / consumer)
@@ -108,7 +107,7 @@ use yb_tokio_postgres::types::ToSql;
 use crate::metrics::WalStorageMetrics;
 use crate::state::TimelinePersistentState;
 use crate::wal_cache::WalCache;
-use crate::wal_storage::{PhysicalStorage, Storage};
+use crate::wal_storage::{WalBookkeeping, Storage};
 
 // Re-export the auto-reconnecting Postgres client wrapper shared with
 // the pageserver's `YbStore`. See `ysql_client::YsqlClient` for the
@@ -321,7 +320,7 @@ pub enum YbFlush {
 }
 
 pub struct YbWalStorage {
-    inner: PhysicalStorage,
+    inner: WalBookkeeping,
     /// Background-write lane (no upsert GUC). Used by
     /// [`Self::remove_up_to`] for the GC DELETE. The hot-path INSERTs
     /// run on the FPU lane owned by the consumer task; SELECTs run on
@@ -520,9 +519,9 @@ impl YbWalStorage {
              (last valid record boundary; falls back to timeline_start_lsn on empty)",
         );
 
-        // PhysicalStorage holds the LSN tracker + WAL decoder for this
+        // WalBookkeeping holds the LSN tracker + WAL decoder for this
         // stream — durability is our job.
-        let inner = PhysicalStorage::new(branch_id, state, write_lsn)?;
+        let inner = WalBookkeeping::new(branch_id, state, write_lsn)?;
 
         // Producer/consumer plumbing. The watermark starts at
         // `write_lsn` so an immediately-following `flush_wal()` with
@@ -1721,7 +1720,7 @@ async fn fetch_chunks_from_yb(
 pub type WalStore = YbWalStorage;
 
 impl YbWalStorage {
-    /// Forwarded passthrough for `PhysicalStorage::internal_state`. Used by
+    /// Forwarded passthrough for `WalBookkeeping::internal_state`. Used by
     /// debug-dump / metrics endpoints.
     pub fn internal_state(&self) -> (Lsn, Lsn, Lsn, bool) {
         self.inner.internal_state()
@@ -2284,7 +2283,7 @@ mod tests {
     /// `YbSegmentReader` is the read path the WAL sender plugs into.
     /// Stage a couple of non-overlapping chunks directly in YB, then
     /// drive a reader across them and verify the bytes come back in
-    /// order. Bypasses `PhysicalStorage::write_wal` (which validates a
+    /// order. Bypasses `WalBookkeeping::write_wal` (which validates a
     /// real PG WAL page header that we don't want to synthesise here),
     /// so this stays focused on the YB read path: chunk-row selection,
     /// `pos` advance across chunk boundaries, and the read-lane SELECT.

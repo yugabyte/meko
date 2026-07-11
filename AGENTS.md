@@ -58,9 +58,9 @@ Code anchors:
 - `libs/remote_storage/src/config.rs` — `YbStoreConfig` (host, port,
   user, `password_env`, `sslmode`, etc.).
 - `safekeeper/src/control_file.rs` — `ControlFileStorage` enum.
-- `safekeeper/src/yb_wal_storage.rs` — `YbWalStorage` + `WalStore`.
-- `safekeeper/src/wal_storage.rs::PhysicalStorage` — `no_local_writes`
-  gating.
+- `safekeeper/src/yb_wal_storage.rs` — `YbWalStorage`, the YB WAL mirror.
+- `safekeeper/src/wal_storage.rs::WalBookkeeping` — in-memory WAL
+  LSN/record-boundary bookkeeping.
 - `storage_controller/src/persistence.rs` — `establish_connection_rustls`,
   AcceptAll TLS verifier.
 - `control_plane/src/storage_controller.rs` — yb_light_local wrapper:

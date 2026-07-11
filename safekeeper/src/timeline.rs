@@ -624,11 +624,9 @@ impl Timeline {
     }
 
     /// True when this safekeeper is running with `yb_storage_conn`, i.e.
-    /// live-WAL writes go through `YbWalStorage` rather than only the
-    /// local-FS `PhysicalStorage`. Used by the WAL acceptor loop to pick a
-    /// flush cadence tuned for YB's per-statement cost model (where
-    /// batching pays off) instead of the local-FS model (where immediate
-    /// fsync minimizes commit latency).
+    /// live-WAL writes go through `YbWalStorage`. Used by the WAL acceptor
+    /// loop to pick a flush cadence tuned for YB's per-statement cost model,
+    /// where batching pays off.
     pub fn is_yb_wal_mode(&self) -> bool {
         self.conf.is_yb_wal_mode()
     }
