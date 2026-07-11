@@ -252,7 +252,7 @@ pub static YB_WAL_INSERT_SECONDS: Lazy<Histogram> = Lazy::new(|| {
 pub static YB_WAL_BATCH_ROWS: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "safekeeper_yb_wal_batch_rows",
-        "Rows (chunks) per safekeeper.wals INSERT",
+        "Rows (coalesced runs) per safekeeper.wals INSERT",
         vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 50.0]
     )
     .expect("Failed to register safekeeper_yb_wal_batch_rows histogram")

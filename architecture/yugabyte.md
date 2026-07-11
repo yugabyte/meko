@@ -161,23 +161,35 @@ LIMIT 10;
 
 Per-write log used by the safekeeper's live-WAL mirror (when
 `yb_storage_conn` is configured). Schema is *different* from `blobs` — keyed by
-`(branch_id, segno, chunk_offset)`. Each row is one chunk of
-one `write_wal()` call; the writer never produces overlapping chunks
-(`truncate_wal` aligns the next write at exactly the truncation
-point), so `chunk_offset` alone identifies a chunk within a segment
-and a same-PK INSERT is an idempotent retry of the same bytes.
+`(branch_id, bucket_id, segno, chunk_offset)`. Each row is one coalesced
+run of a consumer batch (contiguous chunks concatenated before the
+INSERT; the typical batch is one row); the writer never produces
+overlapping rows (`truncate_wal` aligns the next write at exactly the
+truncation point), so `chunk_offset` alone identifies a row within a
+segment and a same-PK INSERT is an idempotent retry of the same bytes.
 
 ```sql
 CREATE TABLE safekeeper.wals (
-    branch_id        TEXT    NOT NULL,
-    segno            BIGINT  NOT NULL,
-    chunk_offset     BIGINT  NOT NULL,
-    chunk_size       INT     NOT NULL,
-    data             BYTEA   NOT NULL,
-    last_modified_us BIGINT  NOT NULL,
-    PRIMARY KEY ((branch_id) HASH, segno, chunk_offset)
-);
+    branch_id        TEXT     NOT NULL,
+    bucket_id        SMALLINT NOT NULL,  -- per-batch placement bucket, 0..9
+    segno            BIGINT   NOT NULL,
+    chunk_offset     BIGINT   NOT NULL,
+    chunk_size       INT      NOT NULL,
+    data             BYTEA    NOT NULL,
+    last_modified_us BIGINT   NOT NULL,
+    PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset)
+) SPLIT INTO 10 TABLETS;
 ```
+
+`bucket_id` exists purely for tablet placement: the `(branch_id,
+bucket_id)` hash key spreads a branch's WAL across all
+`WALS_BUCKETS = 10` tablets. The consumer stamps each write BATCH with one
+bucket, rotating through the buckets one batch at a time — each batch lands
+on ONE tablet (single-shard INSERT fast path) while sustained load spreads
+across all tablets. Readers can't derive a
+chunk's bucket, so index-tight reads name every bucket with a
+`bucket_id IN (0..9)` hash-key list — YSQL executes that as batched
+per-bucket index probes, not a scan.
 
 Schema documented in detail in [`safekeeper.md`](safekeeper.md).
 
@@ -457,7 +469,7 @@ by hand.
 | `pageserver` | `meta` | Metadata blobs (relsize sentinels, dir listings, aux, two-phase, repl origins); full-overwrite semantics; PK `((branch_id, key) HASH, lsn DESC)`. |
 | `pageserver` | `timeline_state` | Per-branch state (replaces `metadata` + `index_part.json` + `tenant-manifest.json`); generation-fenced via `current_generation`; PK `((branch_id) HASH)`. |
 | `safekeeper` | `timeline_state` | Per-branch safekeeper control file (replaces upstream's local-FS `safekeeper.control` blob); PK `((branch_id) HASH)`. |
-| `safekeeper` | `wals` | Live-WAL chunks; PK `((branch_id) HASH, segno, chunk_offset)`. |
+| `safekeeper` | `wals` | Live-WAL rows (coalesced consumer batches); PK `((branch_id, bucket_id) HASH, segno, chunk_offset)`, 10 per-batch placement buckets across 10 tablets. |
 | `storage_controller` | 8 tables | `branches`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `pending_timeline_inits`, `timeline_imports`, `endpoints`. |
 
 See `up.sql` for the exact column lists, PK ordering, and FK

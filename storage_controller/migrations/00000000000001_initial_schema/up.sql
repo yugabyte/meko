@@ -242,19 +242,22 @@ CREATE TABLE safekeeper.timeline_state (
 
 -- Live WAL chunks the safekeeper mirrors into YB — the durable copy of
 -- the WAL stream (replaces upstream Neon's local-FS segment files).
--- Hash-partitioned on `branch_id` so a branch's WAL
--- lives on one tablet; `segno`/`chunk_offset` range within it.
+-- Partitioned into buckets to spread the load across multiple DocDB
+-- tablets.
 CREATE TABLE safekeeper.wals (
-    branch_id        TEXT    NOT NULL,
-    segno            BIGINT  NOT NULL,
-    chunk_offset     BIGINT  NOT NULL,
-    chunk_size       INT     NOT NULL,
-    data             BYTEA   NOT NULL,
-    last_modified_us BIGINT  NOT NULL,
-    -- PK is the chunk's natural identity within a segment. The
-    -- writer never produces overlapping chunks (truncate_wal aligns
-    -- the next write at exactly the truncation point), so the
-    -- chunk_offset alone uniquely identifies a chunk and a same-PK
-    -- INSERT is necessarily an idempotent retry of the same bytes.
-    PRIMARY KEY ((branch_id) HASH, segno, chunk_offset)
-);
+    branch_id        TEXT     NOT NULL,
+    bucket_id        SMALLINT NOT NULL,
+    segno            BIGINT   NOT NULL,
+    chunk_offset     BIGINT   NOT NULL,
+    chunk_size       INT      NOT NULL,
+    data             BYTEA    NOT NULL,
+    last_modified_us BIGINT   NOT NULL,
+    -- (segno, chunk_offset) is the chunk's natural identity within the
+    -- branch. The writer never produces overlapping chunks
+    -- (truncate_wal aligns the next write at exactly the truncation
+    -- point), so a same-PK INSERT is necessarily an idempotent retry of
+    -- the same bytes. `bucket_id` is placement only — it carries no
+    -- identity (retries replay the same stamped batch, keeping its
+    -- original bucket).
+    PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset)
+) SPLIT INTO 10 TABLETS;

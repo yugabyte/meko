@@ -262,8 +262,13 @@ impl WalSource for WalReader<'_> {
     async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
         let segno = (lsn.0 / self.seg) as i64;
         let off = (lsn.0 % self.seg) as i64;
+        // A chunk's placement bucket can't be derived, so probe every
+        // bucket via the hash-key IN-list (0..WALS_BUCKETS in
+        // safekeeper/src/yb_wal_storage.rs) — batched index probes, and
+        // this decoder walk issues one lookup per chunk.
         let sql = "SELECT chunk_offset, data FROM safekeeper.wals \
-                   WHERE branch_id = $1 AND segno = $2 AND chunk_offset <= $3 \
+                   WHERE branch_id = $1 AND bucket_id IN (0,1,2,3,4,5,6,7,8,9) \
+                     AND segno = $2 AND chunk_offset <= $3 \
                    ORDER BY chunk_offset DESC LIMIT 1";
         let params: [&(dyn ToSql + Sync); 3] = [&self.branch, &segno, &off];
         let row = self

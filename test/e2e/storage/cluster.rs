@@ -517,6 +517,7 @@ impl Cluster {
             }
         }
         self.corruption_gate(label, before)?;
+        self.wals_overlap_gate(label).await?;
         tee_println!("PASS — {label}  ({}s)", t0.elapsed().as_secs());
         Ok(())
     }
@@ -570,6 +571,7 @@ impl Cluster {
         let t0 = Instant::now();
         crate::workload::run_sql_workload(self, label, sql)?;
         self.corruption_gate(label, before)?;
+        self.wals_overlap_gate(label).await?;
         tee_println!("PASS — {label}  ({}s)", t0.elapsed().as_secs());
         Ok(())
     }
@@ -769,6 +771,59 @@ impl Cluster {
             bail!("corruption markers introduced by {label}");
         }
         Ok(())
+    }
+
+    /// Post-scenario invariant on the run's YB db: no two rows in
+    /// `safekeeper.wals` within one `(branch_id, segno)` may have
+    /// overlapping `[chunk_offset, chunk_offset + chunk_size)` ranges.
+    /// The writer never produces overlapping chunks and everything
+    /// downstream leans on it — `load_write_lsn`'s "highest offset ⇒
+    /// highest end" rehydration, `truncate_wals_above`'s straddle math,
+    /// and the segment reader's covering-chunk selection. Per-batch
+    /// bucket stamping replays the same coalesced runs on retry, so any
+    /// overlap here means a real write-path bug.
+    ///
+    /// One window-function query per scenario (lag over chunk_offset per
+    /// partition); an empty table — early scenarios, or post-GC — is a
+    /// trivial pass. Wired exactly like the corruption-marker gate: any
+    /// violating pair fails the scenario, with the rows printed.
+    async fn wals_overlap_gate(&self, label: &str) -> anyhow::Result<()> {
+        let conninfo = crate::db::yb_conn(&self.yb_host, self.yb_port, &self.db_name);
+        let client = crate::db::connect(&conninfo)
+            .await
+            .context("wals overlap gate: connecting to the run's YB db")?;
+        let sql = "SELECT branch_id, segno, prev_off, prev_size, chunk_offset, chunk_size \
+                   FROM (SELECT branch_id, segno, chunk_offset, chunk_size, \
+                                lag(chunk_offset) OVER w AS prev_off, \
+                                lag(chunk_size)  OVER w AS prev_size \
+                         FROM safekeeper.wals \
+                         WINDOW w AS (PARTITION BY branch_id, segno ORDER BY chunk_offset)) t \
+                   WHERE prev_off + prev_size > chunk_offset";
+        let rows = client
+            .query(sql, &[])
+            .await
+            .context("wals overlap gate: overlap query")?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        eprintln!(
+            "FAIL — {} overlapping safekeeper.wals row pair(s) after {label}",
+            rows.len()
+        );
+        for r in rows.iter().take(5) {
+            let branch: String = r.get("branch_id");
+            let segno: i64 = r.get("segno");
+            let prev_off: i64 = r.get("prev_off");
+            let prev_size: i32 = r.get("prev_size");
+            let off: i64 = r.get("chunk_offset");
+            let size: i32 = r.get("chunk_size");
+            eprintln!(
+                "  branch {branch} segno {segno}: [{prev_off}, {}) overlaps [{off}, {})",
+                prev_off + prev_size as i64,
+                off + size as i64,
+            );
+        }
+        bail!("overlapping safekeeper.wals chunk ranges introduced by {label}");
     }
 
     /// Final verdict: the `pageserver_yb_correctness_errors_total` metric

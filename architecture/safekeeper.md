@@ -117,15 +117,30 @@ Schema (operator-provisioned in `yb_storage` DB):
 
 ```sql
 CREATE TABLE safekeeper.wals (
-    branch_id        TEXT    NOT NULL,
-    segno            BIGINT  NOT NULL,
-    chunk_offset     BIGINT  NOT NULL,   -- byte offset of `data` within the segment
-    chunk_size       INT     NOT NULL,
-    data             BYTEA   NOT NULL,
-    last_modified_us BIGINT  NOT NULL,
-    PRIMARY KEY ((branch_id) HASH, segno, chunk_offset)
-);
+    branch_id        TEXT     NOT NULL,
+    bucket_id        SMALLINT NOT NULL,  -- per-batch placement bucket, 0..9
+    segno            BIGINT   NOT NULL,
+    chunk_offset     BIGINT   NOT NULL,  -- byte offset of `data` within the segment
+    chunk_size       INT      NOT NULL,
+    data             BYTEA    NOT NULL,
+    last_modified_us BIGINT   NOT NULL,
+    PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset)
+) SPLIT INTO 10 TABLETS;
 ```
+
+`bucket_id` is placement, not identity: the `(branch_id, bucket_id)`
+hash key spreads a branch's WAL across all `WALS_BUCKETS = 10` tablets.
+The consumer stamps each assembled BATCH with one bucket,
+rotating through the buckets one batch at a time — so every batch targets
+ONE tablet (single-shard txn fast path on YSQL) while sustained load
+rotates across all tablets. The stamp happens once, before any write
+attempt; an INSERT retry replays the stamped batch, so a row's bucket
+never changes. After stamping, contiguous chunks of the batch are
+coalesced into single rows (runs break at segment boundaries and byte
+discontinuities), so the typical batch INSERTs one row. Readers can't
+derive a row's bucket, so index-tight reads carry a
+`bucket_id IN (0..9)` hash-key list, which YSQL executes as batched
+per-bucket index probes.
 
 The write path is **producer / consumer** (commits
 `485a76ece`, `fba8410e7`):
@@ -190,12 +205,12 @@ return                              │
   during the handshake. That race produced a permanent reconnect storm
   (commits frozen); regression-guarded by the `sk_split_churn` slow e2e
   scenario.
-- **`chunk_offset`** (the chunk's byte offset within its segment) is the
-  in-segment identity — the writer never produces overlapping chunks
+- **`chunk_offset`** (the row's byte offset within its segment) is the
+  in-segment identity — the writer never produces overlapping rows
   (`truncate_wal` aligns the next write at the truncation point), so offset
   order is write order and a same-offset re-INSERT is an idempotent replay.
-  On restart, the per-segment high-water position is rehydrated via
-  `SELECT segno, max(chunk_offset + chunk_size) … GROUP BY segno`.
+  On restart, the end of WAL is rehydrated with one max-end probe per
+  bucket (see "No local-FS writes" below).
 - **Force drain on flush.** Between the greedy `try_recv` drain and the
   INSERT, the consumer waits up to `ACCUMULATION_MAX` (2 ms) for more
   chunks via `tokio::select!`. The wait is short-circuited by
@@ -283,11 +298,14 @@ Replaced with two pieces, both in `safekeeper/src/yb_wal_storage.rs` +
       it. The fetch issues:
       ```sql
       SELECT chunk_offset, data FROM safekeeper.wals
-      WHERE branch_id=$1 AND segno=$2 AND chunk_offset <= $3
+      WHERE branch_id=$1 AND bucket_id IN (0,...,9)
+        AND segno=$2 AND chunk_offset <= $3
       ORDER BY chunk_offset DESC LIMIT 1
       ```
       `ORDER BY chunk_offset DESC LIMIT 1` returns the chunk whose offset
-      most-closely precedes the requested byte — the one covering it.
+      most-closely precedes the requested byte — the one covering it
+      (the bucket of a chunk can't be derived, so the IN-list probes
+      every bucket).
    4. If neither cache nor YB has a covering chunk, return
       `io::ErrorKind::UnexpectedEof` — failing loudly is much better
       than serving zeros and letting the pageserver hit `xlp_magic=0`
@@ -316,16 +334,31 @@ and record boundaries in memory:
   and INSERTs it into `safekeeper.wals`.
 
 `YbWalStorage::new` seeds `WalBookkeeping`'s `write_lsn` from YB in two steps.
-First, `load_write_lsn` reads the raw end of the byte stream:
+First, `load_write_lsn` reads the raw end of the byte stream with one
+**max-end probe per bucket** (metadata only, never `data`):
 
 ```sql
-SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM safekeeper.wals
-WHERE branch_id = $1
-GROUP BY segno ORDER BY segno DESC LIMIT 1;
+SELECT segno, chunk_offset + chunk_size AS end_off FROM safekeeper.wals
+WHERE branch_id = $1 AND bucket_id = <b>          -- b = 0..9, one probe each
+ORDER BY segno DESC, chunk_offset DESC LIMIT 1;
 ```
 
-That raw maximum can land mid-record (an ungraceful compute shutdown leaves
-a torn trailing page) or, after an `XLOG_SWITCH`, short of the true end. So
+The global max across buckets is the end of WAL. Within a segno the
+top-`chunk_offset` row also has the highest end, because rows never
+overlap (in general `max(chunk_offset + chunk_size)` is NOT the last
+row's end — an earlier, longer row could reach further — but the
+truncate discipline rules that out). No hole detection is needed:
+every consumer batch carries ONE bucket, so it lands atomically as one
+single-shard INSERT statement on YSQL, and batches are written
+sequentially — the durable row set is always a contiguous prefix of
+the WAL stream. If either property changes (batches spanning tablets,
+or concurrent in-flight batches), hole detection must return; git
+history has the hole-aware `contiguous_end` tail scan this replaced.
+
+That raw probe result can land mid-record (an ungraceful compute shutdown
+leaves a torn trailing page) or, after an `XLOG_SWITCH`, short of the true
+end (the switch's zero padding is never stored as rows, so the probe stops
+at the pre-switch bytes). So
 a second step replays the decoder over the YB-backed WAL: `find_anchor`
 walks back to the nearest fresh-record page — validating `xlp_magic`, so it
 steps over the zero padding a switch leaves — then `find_end_of_wal` scans
@@ -341,12 +374,12 @@ raw max, re-wedging on the switch. Anchoring at the floor instead seeds the
 decoder cleanly at that mid-page boundary (#181). The result refines
 `write_lsn`:
 
-- **Torn tail** (`end < raw max`): truncate back to the last valid boundary;
+- **Torn tail** (`end < raw probe end`): truncate back to the last valid boundary;
   the compute re-streams from there.
-- **Trailing `XLOG_SWITCH`** (`end > raw max`): `pg_switch_wal()` rounds the
+- **Trailing `XLOG_SWITCH`** (`end > raw probe end`): `pg_switch_wal()` rounds the
   record's end up to the next segment, past padding the compute never
   streams, so the decoder reports a boundary *beyond* the persisted bytes.
-  Honor it — clamping back to the raw max would leave `write_lsn` inside the
+  Honor it — clamping back to the raw probe end would leave `write_lsn` inside the
   padding, where the compute resumes, the reader reads zeros, and the
   safekeeper wedges (#181).
 
@@ -612,7 +645,8 @@ The storage broker was removed wholesale, so there is no
   of a segment + reassembly in Rust. ~16 MiB per segment, batched as N
   rows (typically 1–N where N is `wal_seg_size / 100 MiB ≤ 1`, but for
   typical per-write rows, N can be hundreds).
-- **Restart**: rehydrates `write_lsn` with one indexed SQL query against
+- **Restart**: rehydrates `write_lsn` with one indexed single-row
+  max-end probe per bucket against
   YB, then a bounded record-boundary replay back from that raw end (no
   local segment files; reads only the trailing chunks needed to find the
   last valid boundary / resolve a trailing `XLOG_SWITCH`).

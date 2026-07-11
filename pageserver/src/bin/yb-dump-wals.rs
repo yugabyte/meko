@@ -140,14 +140,21 @@ async fn main() -> Result<()> {
         } else {
             String::new()
         };
-        let mut h = vec!["segno", "chunk_offset", "chunk_size", "start_lsn", "modified_at"];
+        let mut h = vec![
+            "segno",
+            "bucket",
+            "chunk_offset",
+            "chunk_size",
+            "start_lsn",
+            "modified_at",
+        ];
         if !args.no_data {
             h.push("bytes");
             h.push("data_head");
         }
         (
             format!(
-                "SELECT segno::text, chunk_offset::text, chunk_size::text, {start_lsn}, \
+                "SELECT segno::text, bucket_id::text, chunk_offset::text, chunk_size::text, {start_lsn}, \
                         to_char(to_timestamp(last_modified_us/1000000.0),'YYYY-MM-DD HH24:MI:SS'){data_cols} \
                  FROM safekeeper.wals {w} ORDER BY segno ASC, chunk_offset ASC {lim}"
             ),

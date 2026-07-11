@@ -10,20 +10,22 @@
 //! [`YbWalStorage`] wraps a [`WalBookkeeping`] — an in-memory tracker of the
 //! WAL LSN watermarks and record boundaries, with no filesystem interaction.
 //!
-//! Schema (one row per `write_wal()` call within a segment; multiple rows
-//! across a segment boundary):
+//! The table (`safekeeper.wals`, defined in the storage_controller
+//! migration) holds one row per coalesced run of a consumer batch:
+//! contiguous chunks of a segment are concatenated into a single row
+//! before the INSERT, so the typical batch is ONE row; runs break at
+//! segment boundaries and at byte discontinuities.
 //!
-//! ```sql
-//! CREATE TABLE safekeeper.wals (
-//!     branch_id        TEXT    NOT NULL,
-//!     segno            BIGINT  NOT NULL,
-//!     chunk_offset     BIGINT  NOT NULL,   -- byte offset of `data` within the segment
-//!     chunk_size       INT     NOT NULL,   -- redundant: length(data)
-//!     data             BYTEA   NOT NULL,
-//!     last_modified_us BIGINT  NOT NULL,
-//!     PRIMARY KEY ((branch_id) HASH, segno, chunk_offset)
-//! );
-//! ```
+//! Bucketing: the hash key is `(branch_id, bucket_id)`, so a branch's WAL
+//! spreads across [`WALS_BUCKETS`] tablets. `bucket_id` is assigned per
+//! consumer BATCH by [`consumer_main`], rotating through the buckets one
+//! batch at a time. One bucket per batch means every batch targets ONE
+//! tablet: the multi-VALUES INSERT hits the single-shard transaction fast
+//! path (no distributed txn), while write load rotates across all tablets.
+//! Readers can't derive a
+//! chunk's bucket, so index-tight reads add a
+//! `bucket_id IN (0..WALS_BUCKETS-1)` hash-key list (batched index probes
+//! in YSQL).
 //!
 //! Notes:
 //! - `chunk_offset` uniquely identifies a chunk within a segment because
@@ -120,6 +122,23 @@ pub use ysql_client::YsqlClient;
 /// references it fully so it doesn't depend on the connection's
 /// `search_path`.
 const WALS_TABLE: &str = "safekeeper.wals";
+
+/// Number of placement buckets in `safekeeper.wals`. `bucket_id` is the
+/// second hash-key column; the consumer stamps each BATCH with one
+/// bucket, rotating `(counter + 1) % WALS_BUCKETS` per batch, so a
+/// branch's write load spreads across tablets instead of funneling into
+/// one, while each batch stays single-tablet-atomic.
+const WALS_BUCKETS: i16 = 10;
+
+/// `bucket_id IN (0,1,...,WALS_BUCKETS-1)` for interpolation into `wals`
+/// queries. Readers can't derive a chunk's bucket (assignment is
+/// per consumer batch at write time, placement-only), so every
+/// index-tight read names every bucket; YSQL executes a hash-key IN-list
+/// as batched per-bucket index probes, not a scan.
+fn bucket_in_list() -> String {
+    let ids: Vec<String> = (0..WALS_BUCKETS).map(|b| b.to_string()).collect();
+    format!("bucket_id IN ({})", ids.join(","))
+}
 
 /// Handles to the YB connections that mirror live WAL into
 /// `safekeeper.wals`. Constructed at safekeeper boot via
@@ -259,6 +278,13 @@ const FLUSH_BYTES_THRESHOLD: usize = 4 * 1024 * 1024;
 /// the in-memory [`WalCache`] entry — the read path doesn't need a copy.
 struct PendingChunk {
     segno: u64,
+    /// Placement bucket. The producer leaves this at 0 (placeholder);
+    /// [`consumer_main`] stamps every chunk of an assembled batch with
+    /// ONE bucket before any write attempt, so the whole batch lands on
+    /// one tablet. Placement only, not identity: the multi-VALUES INSERT
+    /// retry replays the same stamped chunks, so a chunk keeps its bucket
+    /// across retried flushes.
+    bucket_id: i16,
     chunk_offset: i64,
     chunk_size: i32,
     data: Arc<Vec<u8>>,
@@ -574,9 +600,24 @@ impl YbWalStorage {
         Ok(me)
     }
 
-    /// Find the end of the persisted WAL by scanning the YB table for the
-    /// highest end-byte across all segnos for this timeline. Falls back to
-    /// `commit_lsn` when the table is empty (fresh timeline).
+    /// Find the end of the persisted WAL: the highest end-byte
+    /// (`chunk_offset + chunk_size` folded into an absolute LSN) across all
+    /// buckets for this timeline. One index-tight single-row probe per
+    /// bucket (`ORDER BY segno DESC, chunk_offset DESC LIMIT 1`), then the
+    /// max of those. Falls back to `commit_lsn` when the table is empty
+    /// (fresh timeline). Startup-only, so the fan-out of `WALS_BUCKETS`
+    /// single-row index probes is fine.
+    ///
+    /// Why a simple max is safe (no hole detection): every consumer
+    /// batch is stamped with ONE bucket, so a batch targets one tablet
+    /// and lands atomically as a single-statement (single-shard) INSERT
+    /// on YSQL — and the consumer writes batches sequentially, one at a
+    /// time. Batch-atomic + sequential batches ⇒ the durable row set is
+    /// always a contiguous prefix of the WAL stream; no bucket's max end
+    /// can sit above a hole. If either property changes (a batch spanning
+    /// tablets again, or concurrent in-flight batches), hole detection
+    /// must return; git history has the hole-aware `contiguous_end` tail
+    /// scan this replaced.
     async fn load_write_lsn(
         client: &YsqlClient,
         table: &str,
@@ -584,28 +625,30 @@ impl YbWalStorage {
         wal_seg_size: usize,
         commit_lsn: Lsn,
     ) -> Result<Lsn> {
-        let sql = bake_branch_id(
-            &format!(
-                "SELECT segno, max(chunk_offset + chunk_size) AS end_off FROM {} \
-                 WHERE branch_id = $1 \
-                 GROUP BY segno ORDER BY segno DESC LIMIT 1",
-                quote_relation(table)
-            ),
-            branch_id,
-        );
-        let row_opt = client
-            .query_opt(&sql, &[])
-            .await
-            .context("YbWalStorage: rehydrate write_lsn from YB")?;
-        let lsn = match row_opt {
-            Some(row) => {
+        let mut max_end: Option<u64> = None;
+        for bucket in 0..WALS_BUCKETS {
+            let sql = bake_branch_id(
+                &format!(
+                    "SELECT segno, chunk_offset + chunk_size AS end_off FROM {} \
+                     WHERE branch_id = $1 AND bucket_id = {bucket} \
+                     ORDER BY segno DESC, chunk_offset DESC \
+                     LIMIT 1",
+                    quote_relation(table)
+                ),
+                branch_id,
+            );
+            let row = client
+                .query_opt(&sql, &[])
+                .await
+                .context("YbWalStorage: rehydrate write_lsn from YB (bucket max-end probe)")?;
+            if let Some(row) = row {
                 let segno: i64 = row.get("segno");
                 let end_off: i64 = row.get("end_off");
-                Lsn((segno as u64) * (wal_seg_size as u64) + end_off as u64)
+                let end = (segno as u64) * (wal_seg_size as u64) + end_off as u64;
+                max_end = Some(max_end.map_or(end, |m| m.max(end)));
             }
-            None => commit_lsn,
-        };
-        Ok(lsn)
+        }
+        Ok(max_end.map(Lsn).unwrap_or(commit_lsn))
     }
 
     /// Lowest segno still present in `wals` for this timeline. Used to
@@ -613,11 +656,16 @@ impl YbWalStorage {
     /// `remove_up_to(N)` DELETE after a safekeeper restart is bounded
     /// from below rather than scanning from 0.
     async fn load_min_segno(client: &YsqlClient, table: &str, branch_id: &str) -> Result<u64> {
+        // The bucket list completes the hash key for every bucket, so the
+        // aggregate hash-routes to per-bucket index probes rather than
+        // scanning the whole branch. min(segno) is index-tight: segno is the
+        // leading range key, so each bucket's minimum is its first index row.
         let sql = bake_branch_id(
             &format!(
                 "SELECT min(segno) AS m FROM {} \
-                 WHERE branch_id = $1",
-                quote_relation(table)
+                 WHERE branch_id = $1 AND {}",
+                quote_relation(table),
+                bucket_in_list()
             ),
             branch_id,
         );
@@ -673,6 +721,7 @@ impl YbWalStorage {
 
             let pc = PendingChunk {
                 segno,
+                bucket_id: 0, // placeholder; consumer stamps the batch bucket
                 chunk_offset: offset as i64,
                 chunk_size: take as i32,
                 data,
@@ -804,6 +853,7 @@ impl Storage for YbWalStorage {
         // lazily from YB if needed.
         let pc = PendingChunk {
             segno,
+            bucket_id: 0, // placeholder; consumer stamps the batch bucket
             chunk_offset: 0,
             chunk_size: wal_seg.len() as i32,
             data: Arc::new(wal_seg.to_vec()),
@@ -935,11 +985,15 @@ impl Storage for YbWalStorage {
             // `segno_up_to <= lower`: the predicate is unsatisfiable and
             // the DELETE is a no-op.
             let lower = delete_lower_bound.load(Ordering::Relaxed);
+            // The bucket list completes the hash key for every bucket, so the
+            // DELETE hash-routes to a per-bucket index range on `segno`
+            // instead of scanning the branch across all tablets.
             let sql = bake_branch_id(
                 &format!(
-                    "DELETE FROM {} WHERE branch_id = $1 \
+                    "DELETE FROM {} WHERE branch_id = $1 AND {} \
                      AND segno >= $2 AND segno < $3",
-                    quote_relation(&table)
+                    quote_relation(&table),
+                    bucket_in_list()
                 ),
                 &branch_id,
             );
@@ -999,11 +1053,15 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
     async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
         let segno = (lsn.0 / self.seg) as i64;
         let off = (lsn.0 % self.seg) as i64;
+        // The bucket of a chunk can't be derived, so probe all buckets
+        // (hash-key IN-list = batched index probes) and take the highest
+        // covering offset across them.
         let sql = format!(
             "SELECT chunk_offset, data FROM {} \
-             WHERE branch_id = $1 AND segno = $2 AND chunk_offset <= $3 \
+             WHERE branch_id = $1 AND {} AND segno = $2 AND chunk_offset <= $3 \
              ORDER BY chunk_offset DESC LIMIT 1",
-            quote_relation(self.table)
+            quote_relation(self.table),
+            bucket_in_list()
         );
         let params: [&(dyn ToSql + Sync); 3] = [&self.branch_id, &segno, &off];
         let row = self
@@ -1057,6 +1115,10 @@ fn bake_branch_id(sql: &str, branch_id: &str) -> String {
 /// honor a walproposer truncation on election. Both statements are
 /// idempotent (keyed DELETE; absolute-`SET` UPDATE whose predicate stops
 /// matching once the chunk has been truncated).
+///
+/// The bucket list completes the hash key for all buckets, so both
+/// statements hash-route to the buckets' tablets rather than scatter-scanning
+/// the branch; the cut still spans every bucket.
 async fn truncate_wals_above(
     client: &YsqlClient,
     table: &str,
@@ -1069,9 +1131,10 @@ async fn truncate_wals_above(
     let end = end_pos.0 as i64;
     let params: [&(dyn ToSql + Sync); 2] = [&branch_id, &end];
 
+    let buckets = bucket_in_list();
     // Chunks that begin at or after end_pos are entirely torn — drop them.
     let del = format!(
-        "DELETE FROM {table} WHERE branch_id = $1 \
+        "DELETE FROM {table} WHERE branch_id = $1 AND {buckets} \
          AND segno * {seg} + chunk_offset >= $2"
     );
     client
@@ -1085,7 +1148,7 @@ async fn truncate_wals_above(
         "UPDATE {table} SET \
            data = substring(data FROM 1 FOR ($2 - (segno * {seg} + chunk_offset))::int), \
            chunk_size = ($2 - (segno * {seg} + chunk_offset))::int \
-         WHERE branch_id = $1 \
+         WHERE branch_id = $1 AND {buckets} \
            AND segno * {seg} + chunk_offset < $2 \
            AND segno * {seg} + chunk_offset + chunk_size > $2"
     );
@@ -1104,8 +1167,12 @@ async fn truncate_wals_above(
 ///      channel is momentarily empty.
 ///   3. If still under threshold, waiting up to `ACCUMULATION_MAX` for
 ///      additional chunks — or until `flush_notify` is pinged.
-///   4. INSERTing the whole batch via `YsqlClient`.
-///   5. Publishing the highest `end_lsn` of the batch onto `watermark_tx`
+///   4. Stamping EVERY chunk of the batch with one placement bucket from
+///      a local rotating counter (one bucket per batch → one tablet per
+///      batch; see the stamping comment in the body).
+///   5. Writing the batch via [`flush_batch`] (contiguous chunks
+///      coalesced into single rows through one multi-row INSERT).
+///   6. Publishing the highest `end_lsn` of the batch onto `watermark_tx`
 ///      as `DurableState::Healthy`.
 ///
 /// `flush_wal` / `truncate_wal` ping `flush_notify` before they await
@@ -1131,6 +1198,12 @@ async fn consumer_main(
     durable_lsn: Arc<AtomicU64>,
     cache: Option<Arc<std::sync::Mutex<crate::wal_cache::WalCache>>>,
 ) {
+    // Placement-bucket rotation, one bucket per BATCH. Restart resets the
+    // phase to 0 — the bucket is placement only, not identity, so the
+    // phase doesn't matter. Rotating one bucket per batch spreads write load
+    // across all WALS_BUCKETS tablets, while keeping each batch on ONE
+    // tablet (atomic single-shard INSERT).
+    let mut next_batch_bucket: i16 = 0;
     loop {
         // Block until at least one chunk arrives.
         let first = match rx.recv().await {
@@ -1174,6 +1247,18 @@ async fn consumer_main(
             }
         }
 
+        // Stamp the assembled batch with its placement bucket — the ONE
+        // stamping site, after assembly and before any write attempt, so
+        // an INSERT retry (which replays this same Vec) inherits the same
+        // bucket and produces identical rows. One bucket per batch means
+        // the batch targets one tablet: the single-shard transaction fast
+        // path on YSQL (no distributed txn).
+        let bucket = next_batch_bucket;
+        next_batch_bucket = (next_batch_bucket + 1) % WALS_BUCKETS;
+        for pc in &mut batch {
+            pc.bucket_id = bucket;
+        }
+
         let highest_lsn = batch.last().map(|c| c.end_lsn).expect("batch is non-empty");
 
         match flush_batch(&ysql_fpu_client, &table_name, &branch_id, &batch).await {
@@ -1185,7 +1270,11 @@ async fn consumer_main(
                 // serves bytes that aren't durable in
                 // `safekeeper.wals` — the invariant that pre-INSERT
                 // cache population violated (the 2026-06 PS-restart
-                // WAL replay bug).
+                // WAL replay bug). Deliberately the ORIGINAL chunks,
+                // not the coalesced rows `flush_batch` wrote: coalescing
+                // exists only at the YB row layer, and the cache keeps
+                // the producer's chunk boundaries (shared `Arc<Vec<u8>>`
+                // allocations, no copy).
                 if let Some(c) = &cache {
                     let mut guard = c.lock().unwrap();
                     for pc in &batch {
@@ -1216,9 +1305,92 @@ async fn consumer_main(
     }
 }
 
+/// Group a batch's chunks into coalescible runs. Input is the batch's
+/// `(segno, chunk_offset, chunk_size)` tuples in production (= arrival =
+/// byte) order; output is index ranges into that slice, where each range
+/// is one maximal run of chunks that share a segno AND are
+/// byte-contiguous (`prev.chunk_offset + prev.chunk_size ==
+/// next.chunk_offset`). Each run becomes ONE `safekeeper.wals` row —
+/// `write_wal` splits at segment boundaries and streams sequentially, so
+/// the typical batch is a single run. Runs break at segment boundaries
+/// (different segno) and at any byte discontinuity (e.g. after a
+/// `truncate_wal` re-aligned the stream). Pure helper for
+/// [`flush_batch`]; unit-tested below.
+fn coalesce_runs(chunks: &[(u64, i64, i32)]) -> Vec<std::ops::Range<usize>> {
+    let mut runs = Vec::with_capacity(1);
+    let mut start = 0;
+    for i in 1..chunks.len() {
+        let (prev_segno, prev_off, prev_size) = chunks[i - 1];
+        let (segno, off, _) = chunks[i];
+        if segno != prev_segno || prev_off + prev_size as i64 != off {
+            runs.push(start..i);
+            start = i;
+        }
+    }
+    if !chunks.is_empty() {
+        runs.push(start..chunks.len());
+    }
+    runs
+}
+
+/// Zero-copy BYTEA bind for one coalesced run. Holds the run's original
+/// `&[PendingChunk]` slice (each chunk's `data` an `Arc<Vec<u8>>` shared
+/// with the WalCache) instead of pre-concatenating into a scratch Vec:
+/// `to_sql` appends each chunk's bytes into the wire buffer
+/// sequentially, which is byte-identical to binding one concatenated
+/// bytea — the binary BYTEA encoding is just the raw bytes (the
+/// upstream `impl ToSql for &[u8]` delegates to
+/// `postgres_protocol::types::bytea_to_sql`, a bare `put_slice`; the
+/// length header is derived by the caller from the buffer growth). This
+/// keeps the single wire-buffer copy a plain `&[u8]` bind already pays,
+/// with no intermediate allocation.
+struct RunData<'a>(&'a [PendingChunk]);
+
+impl std::fmt::Debug for RunData<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RunData({} chunks, {} bytes)",
+            self.0.len(),
+            self.0.iter().map(|p| p.data.len()).sum::<usize>()
+        )
+    }
+}
+
+impl ToSql for RunData<'_> {
+    fn to_sql(
+        &self,
+        _ty: &yb_tokio_postgres::types::Type,
+        out: &mut bytes::BytesMut,
+    ) -> std::result::Result<
+        yb_tokio_postgres::types::IsNull,
+        Box<dyn std::error::Error + Sync + Send>,
+    > {
+        for pc in self.0 {
+            out.extend_from_slice(&pc.data);
+        }
+        Ok(yb_tokio_postgres::types::IsNull::No)
+    }
+
+    fn accepts(ty: &yb_tokio_postgres::types::Type) -> bool {
+        *ty == yb_tokio_postgres::types::Type::BYTEA
+    }
+
+    yb_tokio_postgres::types::to_sql_checked!();
+}
+
 /// Build and execute one multi-row `INSERT ... VALUES (...), (...)`
-/// for the entire batch. Returns the error chain on failure (the
-/// statement is atomic — all rows commit or none).
+/// with one row per coalesced run. Returns the error chain on failure
+/// (the statement is atomic — all rows commit or none; and since the
+/// batch carries one bucket, all rows hash to one tablet, so the
+/// statement takes the single-shard transaction fast path).
+///
+/// Contiguous chunks are coalesced into single rows: the run grouping
+/// ([`coalesce_runs`]) collapses the typical sequential-within-a-segment
+/// batch to ONE row. Each run becomes one row keyed by its first chunk,
+/// sized/valued as the concatenation of the run's chunks (`data` binds
+/// the run's chunk slice through [`RunData`] — the bytes are concatenated
+/// straight into the wire buffer, never into an intermediate Vec).
 async fn flush_batch(
     ysql_fpu_client: &YsqlClient,
     table_name: &str,
@@ -1228,7 +1400,12 @@ async fn flush_batch(
     if batch.is_empty() {
         return Ok(());
     }
-    let n = batch.len();
+    let keys: Vec<(u64, i64, i32)> = batch
+        .iter()
+        .map(|p| (p.segno, p.chunk_offset, p.chunk_size))
+        .collect();
+    let runs = coalesce_runs(&keys);
+    let n = runs.len();
     let now_us: i64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_micros() as i64)
@@ -1238,38 +1415,44 @@ async fn flush_batch(
     sql.push_str("INSERT INTO ");
     sql.push_str(&quote_relation(table_name));
     sql.push_str(
-        " (branch_id, segno, chunk_offset, \
+        " (branch_id, bucket_id, segno, chunk_offset, \
           chunk_size, data, last_modified_us) VALUES ",
     );
     for i in 0..n {
         if i > 0 {
             sql.push_str(", ");
         }
-        let b = i * 5;
+        let b = i * 6;
         use std::fmt::Write as _;
         // branch_id baked as a literal (fixed for this instance's
-        // lifetime); only the 5 per-row columns bind.
+        // lifetime); only the 6 per-row columns bind.
         let _ = write!(
             sql,
-            "('{branch_id}',${},${},${},${},${})",
+            "('{branch_id}',${},${},${},${},${},${})",
             b + 1,
             b + 2,
             b + 3,
             b + 4,
             b + 5,
+            b + 6,
         );
     }
 
-    let segno_is: Vec<i64> = batch.iter().map(|p| p.segno as i64).collect();
-    let offset_is: Vec<i64> = batch.iter().map(|p| p.chunk_offset).collect();
-    let size_is: Vec<i32> = batch.iter().map(|p| p.chunk_size).collect();
-    // `PendingChunk::data` is `Arc<Vec<u8>>` (shared with WalCache).
-    // tokio_postgres' ToSql doesn't see through Arc, so deref each entry
-    // to a `&[u8]` for the param vector.
-    let datas: Vec<&[u8]> = batch.iter().map(|p| p.data.as_slice()).collect();
+    // One row per run, keyed by the run's first chunk. `data` binds the
+    // run's chunk slice through `RunData` — the bytes are concatenated
+    // straight into the wire buffer, never into an intermediate Vec.
+    let bucket_is: Vec<i16> = runs.iter().map(|r| batch[r.start].bucket_id).collect();
+    let segno_is: Vec<i64> = runs.iter().map(|r| batch[r.start].segno as i64).collect();
+    let offset_is: Vec<i64> = runs.iter().map(|r| batch[r.start].chunk_offset).collect();
+    let size_is: Vec<i32> = runs
+        .iter()
+        .map(|r| batch[r.clone()].iter().map(|p| p.chunk_size).sum())
+        .collect();
+    let datas: Vec<RunData<'_>> = runs.iter().map(|r| RunData(&batch[r.clone()])).collect();
 
-    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * 5);
+    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * 6);
     for i in 0..n {
+        params.push(&bucket_is[i]);
         params.push(&segno_is[i]);
         params.push(&offset_is[i]);
         params.push(&size_is[i]);
@@ -1277,8 +1460,9 @@ async fn flush_batch(
         params.push(&now_us);
     }
 
-    // Observe the YB round trip + batch shape (issue #172). batch_rows is the
-    // headline signal: it should climb once ingest is decoupled from flush.
+    // Observe the YB round trip + batch shape (issue #172). batch_rows counts
+    // the coalesced rows actually written (typically 1); batch_bytes still
+    // measures the payload, i.e. the pre-coalescing chunk bytes.
     let batch_bytes: usize = batch.iter().map(|p| p.chunk_size as usize).sum();
     let started = std::time::Instant::now();
     let res = ysql_fpu_client.execute(&sql, &params).await;
@@ -1653,19 +1837,23 @@ async fn fetch_chunks_from_yb(
     // old-term covering chunk onto new-term forward chunks — a torn read the
     // interpreted-WAL decoder trips on ("invalid xlog page header", #139).
     // Both arms stay index-tight on the (segno, chunk_offset) PK; the hot
-    // boundary-aligned path simply returns no covering row.
+    // boundary-aligned path simply returns no covering row. The bucket of
+    // a chunk can't be derived, so each arm carries the hash-key
+    // `bucket_id IN (…)` list — YSQL turns it into batched per-bucket
+    // index probes, still within this ONE statement / ONE read snapshot.
     let sql = bake_branch_id(
         &format!(
             "(SELECT chunk_offset, chunk_size, data FROM {tbl} \
-                WHERE branch_id = $1 AND segno = $2 \
+                WHERE branch_id = $1 AND {buckets} AND segno = $2 \
                   AND chunk_offset < $3 \
                 ORDER BY chunk_offset DESC LIMIT 1) \
              UNION ALL \
              (SELECT chunk_offset, chunk_size, data FROM {tbl} \
-                WHERE branch_id = $1 AND segno = $2 \
+                WHERE branch_id = $1 AND {buckets} AND segno = $2 \
                   AND chunk_offset >= $3 AND chunk_offset < $4 \
                 ORDER BY chunk_offset ASC LIMIT $5)",
-            tbl = quote_relation(table)
+            tbl = quote_relation(table),
+            buckets = bucket_in_list()
         ),
         branch_id,
     );
@@ -1772,6 +1960,45 @@ mod tests {
         assert!(!sql.contains("$5"));
     }
 
+    /// `coalesce_runs` backs the consumer's chunk→row coalescing: each
+    /// returned range becomes ONE `safekeeper.wals` row, so runs must
+    /// break at every segment boundary and byte discontinuity — and
+    /// nowhere else.
+    #[test]
+    fn coalesce_runs_empty() {
+        assert_eq!(coalesce_runs(&[]), Vec::<std::ops::Range<usize>>::new());
+    }
+
+    #[test]
+    fn coalesce_runs_single_chunk() {
+        assert_eq!(coalesce_runs(&[(3, 100, 50)]), vec![0..1]);
+    }
+
+    #[test]
+    fn coalesce_runs_single_run() {
+        // Three byte-contiguous chunks in one segment → one row.
+        let chunks = [(7, 0, 100), (7, 100, 400), (7, 500, 24)];
+        assert_eq!(coalesce_runs(&chunks), vec![0..3]);
+    }
+
+    #[test]
+    fn coalesce_runs_splits_at_discontinuity() {
+        // Gap between chunk 1 and 2 (600 != 500) → two rows. A
+        // discontinuity mid-batch can only come from a truncate/rewrite
+        // realigning the stream; the grouping must not paper over it.
+        let chunks = [(7, 0, 100), (7, 100, 400), (7, 600, 24)];
+        assert_eq!(coalesce_runs(&chunks), vec![0..2, 2..3]);
+    }
+
+    #[test]
+    fn coalesce_runs_splits_at_segment_boundary() {
+        // Byte-adjacent across the segment switch, but segno differs →
+        // split; rows never span segments (chunk_offset is
+        // segment-relative).
+        let chunks = [(7, 100, 400), (8, 0, 100), (8, 100, 32)];
+        assert_eq!(coalesce_runs(&chunks), vec![0..1, 1..3]);
+    }
+
     fn pgcfg() -> tokio_postgres::Config {
         let mut cfg = tokio_postgres::Config::new();
         cfg.host(&std::env::var("YB_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".into()));
@@ -1795,17 +2022,21 @@ mod tests {
             .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
             .await
             .expect("drop scratch wals table");
+        // Same shape as the production schema (bucketed hash key); the
+        // migration's `SPLIT INTO 10 TABLETS` is omitted — placement is
+        // not under test and default tablet counts keep setup fast.
         client
             .execute(
                 &format!(
                     "CREATE TABLE {q} (\
-                       branch_id        TEXT    NOT NULL,\
-                       segno            BIGINT  NOT NULL,\
-                       chunk_offset     BIGINT  NOT NULL,\
-                       chunk_size       INT     NOT NULL,\
-                       data             BYTEA   NOT NULL,\
-                       last_modified_us BIGINT  NOT NULL,\
-                       PRIMARY KEY ((branch_id) HASH, segno, chunk_offset)\
+                       branch_id        TEXT     NOT NULL,\
+                       bucket_id        SMALLINT NOT NULL,\
+                       segno            BIGINT   NOT NULL,\
+                       chunk_offset     BIGINT   NOT NULL,\
+                       chunk_size       INT      NOT NULL,\
+                       data             BYTEA    NOT NULL,\
+                       last_modified_us BIGINT   NOT NULL,\
+                       PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset)\
                      )"
                 ),
                 &[],
@@ -2158,9 +2389,9 @@ mod tests {
             };
             fpu.execute(
                 &format!(
-                    "INSERT INTO {} (branch_id, segno, chunk_offset, \
+                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES ($1, $2, $3, $4, $5, $6)",
+                     VALUES ($1, 0, $2, $3, $4, $5, $6)",
                     quote_relation(&table)
                 ),
                 &[&branch_s, segno, offset, size, &blob, &now_us],
@@ -2214,9 +2445,9 @@ mod tests {
             let blob = vec![0x5au8; *size as usize];
             fpu.execute(
                 &format!(
-                    "INSERT INTO {} (branch_id, segno, chunk_offset, \
+                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES ($1, $2, $3, $4, $5, $6)",
+                     VALUES ($1, 0, $2, $3, $4, $5, $6)",
                     quote_relation(&table)
                 ),
                 &[&branch_s, segno, offset, size, &blob, &0i64],
@@ -2308,9 +2539,9 @@ mod tests {
         ] {
             fpu.execute(
                 &format!(
-                    "INSERT INTO {} (branch_id, segno, chunk_offset, \
+                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
                                      chunk_size, data, last_modified_us) \
-                     VALUES ($1, $2, $3, $4, $5, $6)",
+                     VALUES ($1, 0, $2, $3, $4, $5, $6)",
                     quote_relation(&table)
                 ),
                 &[
@@ -2377,9 +2608,9 @@ mod tests {
         let chunk: Vec<u8> = (0u8..=255).cycle().take(2048).collect();
         fpu.execute(
             &format!(
-                "INSERT INTO {} (branch_id, segno, chunk_offset, \
+                "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
                                  chunk_size, data, last_modified_us) \
-                 VALUES ($1, 0, 0, 2048, $2, 0)",
+                 VALUES ($1, 0, 0, 0, 2048, $2, 0)",
                 quote_relation(&table)
             ),
             &[&branch_s, &chunk.as_slice()],
@@ -2453,9 +2684,9 @@ mod tests {
         let tail_new: Vec<u8> = vec![0xCC; 3072]; // the rewrite
 
         let insert_sql = format!(
-            "INSERT INTO {} (branch_id, segno, chunk_offset, \
+            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, 0)",
+             VALUES ($1, 0, $2, $3, $4, $5, 0)",
             quote_relation(&table)
         );
         let delete_sql = format!(
@@ -2563,9 +2794,9 @@ mod tests {
         let seg: i64 = 0;
         let head_bytes: Vec<u8> = vec![0xAA; 1024];
         let insert_sql = format!(
-            "INSERT INTO {} (branch_id, segno, chunk_offset, \
+            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, 0)",
+             VALUES ($1, 0, $2, $3, $4, $5, 0)",
             quote_relation(&table)
         );
         let head_slice = head_bytes.as_slice();
@@ -2665,9 +2896,9 @@ mod tests {
         new[1024..].fill(0xCD); // rewritten tail
 
         let insert_sql = format!(
-            "INSERT INTO {} (branch_id, segno, chunk_offset, \
+            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, 0)",
+             VALUES ($1, 0, $2, $3, $4, $5, 0)",
             quote_relation(&table)
         );
         let delete_sql = format!(
@@ -2763,9 +2994,9 @@ mod tests {
         new[1024..].fill(0xCD); // rewritten tail
 
         let insert_sql = format!(
-            "INSERT INTO {} (branch_id, segno, chunk_offset, \
+            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
                              chunk_size, data, last_modified_us) \
-             VALUES ($1, $2, $3, $4, $5, 0)",
+             VALUES ($1, 0, $2, $3, $4, $5, 0)",
             quote_relation(&table)
         );
         let delete_sql = format!(
@@ -2819,6 +3050,272 @@ mod tests {
             "seg-1 reader served stale past-flush WAL after a term rewrite — \
              the absolute-vs-segment-relative flush-bound no-op (#139)"
         );
+
+        drop_wals_table(&fpu, &table).await;
+    }
+
+    /// Multi-chunk batch coalescing, end to end through the real
+    /// producer/consumer: many small contiguous `upsert_writes` must land
+    /// as FEWER `safekeeper.wals` rows (contiguous runs concatenated by
+    /// [`coalesce_runs`]) whose concatenation is byte-identical to the
+    /// submitted stream.
+    ///
+    /// Determinism: `#[tokio::test]` runs a current-thread runtime, and
+    /// `mpsc::Sender::send` on a channel with free capacity resolves
+    /// without yielding to the scheduler — so the consumer task (spawned
+    /// in `YbWalStorage::new`, parked in `rx.recv()`) cannot run between
+    /// our submissions. All 20 chunks are queued when `flush_wal` first
+    /// yields; the consumer's greedy `try_recv` drain then assembles them
+    /// into ONE multi-chunk batch (20 < FLUSH_ROWS_THRESHOLD). If that
+    /// ever stops holding, the explicit "no coalescing happened" assert
+    /// below fails loudly rather than letting the test pass while
+    /// exercising only single-chunk batches.
+    #[tokio::test]
+    async fn consumer_coalesces_contiguous_chunks_byte_equivalent() {
+        let table = format!("wals_test_coalesce_rt_{}", rand_suffix());
+        let start = Lsn(SEG_SIZE); // segno 1, offset 0
+        let (mut storage, _tmp) = make_storage(&table, start).await;
+
+        // 20 small contiguous chunks with distinct, position-dependent
+        // bytes (so any reordering/duplication corrupts the comparison).
+        let mut stream: Vec<u8> = Vec::new();
+        let mut pos = start;
+        let mut max_submitted = 0usize;
+        for i in 0..20u8 {
+            let len = 64 + (i as usize) * 7;
+            max_submitted = max_submitted.max(len);
+            let buf: Vec<u8> = (0..len)
+                .map(|j| i.wrapping_mul(31).wrapping_add(j as u8))
+                .collect();
+            storage
+                .upsert_writes(pos, &buf)
+                .await
+                .expect("upsert_writes");
+            pos = Lsn(pos.0 + len as u64);
+            stream.extend_from_slice(&buf);
+        }
+
+        // Durability barrier: wakes the consumer and waits for the batch.
+        storage.flush_wal().await.expect("flush_wal");
+
+        let rows = storage
+            .ysql_system_client
+            .query(
+                &format!(
+                    "SELECT segno, chunk_offset, chunk_size, data FROM {} \
+                     WHERE branch_id = $1 ORDER BY segno, chunk_offset",
+                    quote_relation(&table)
+                ),
+                &[&storage.branch_id],
+            )
+            .await
+            .expect("select wals rows");
+        assert!(!rows.is_empty(), "flushed WAL must be visible in the table");
+
+        // (a) Coalescing actually happened: at least one row is larger
+        // than ANY single submitted chunk.
+        let max_row_size = rows
+            .iter()
+            .map(|r| r.get::<_, i32>("chunk_size"))
+            .max()
+            .unwrap();
+        assert!(
+            max_row_size as usize > max_submitted,
+            "no coalescing happened: largest row is {max_row_size} B but the largest \
+             submitted chunk was {max_submitted} B — every chunk landed as its own \
+             row, so the multi-chunk coalescing path was NOT exercised"
+        );
+
+        // (b) The rows tile the submitted range exactly and concatenate
+        // back to the original byte stream.
+        let mut got: Vec<u8> = Vec::with_capacity(stream.len());
+        for row in &rows {
+            let segno: i64 = row.get("segno");
+            let off: i64 = row.get("chunk_offset");
+            let size: i32 = row.get("chunk_size");
+            let data: Vec<u8> = row.get("data");
+            assert_eq!(data.len(), size as usize, "chunk_size must equal length(data)");
+            let abs = segno as u64 * SEG_SIZE + off as u64;
+            assert_eq!(
+                abs,
+                start.0 + got.len() as u64,
+                "rows must tile the submitted range with no gap or overlap"
+            );
+            got.extend_from_slice(&data);
+        }
+        assert_eq!(
+            got, stream,
+            "concatenated row bytes must equal the submitted byte stream exactly"
+        );
+
+        drop_wals_table(&storage.ysql_system_client, &table).await;
+    }
+
+    /// Per-batch bucket stamping + rotation: every row written by one
+    /// consumer batch must carry ONE `bucket_id` (the whole batch targets
+    /// one tablet — the atomicity `load_write_lsn`'s simple max-end
+    /// rehydration relies on), and the bucket must rotate across batches
+    /// (the load spread across tablets).
+    ///
+    /// Three flush cycles, one batch each (same current-thread-runtime
+    /// determinism as `consumer_coalesces_contiguous_chunks_byte_equivalent`).
+    /// Each cycle submits two contiguous pairs separated by a byte gap,
+    /// so the batch coalesces into two rows — making "all rows of the
+    /// batch share one bucket" a real multi-row assertion. Batch
+    /// membership is tracked by diffing the table's row set across
+    /// flushes.
+    #[tokio::test]
+    async fn consumer_stamps_one_bucket_per_batch_and_rotates() {
+        use std::collections::HashSet;
+
+        let table = format!("wals_test_bucket_rot_{}", rand_suffix());
+        let start = Lsn(SEG_SIZE);
+        let (mut storage, _tmp) = make_storage(&table, start).await;
+
+        let select = format!(
+            "SELECT bucket_id, segno, chunk_offset FROM {} WHERE branch_id = $1",
+            quote_relation(&table)
+        );
+        let mut seen: HashSet<(i64, i64)> = HashSet::new();
+        let mut batch_buckets: Vec<i16> = Vec::new();
+
+        for cycle in 0..3u64 {
+            // Two contiguous pairs with a gap between them: coalesces to
+            // exactly two rows within ONE batch.
+            let base = start.0 + cycle * 100_000;
+            for (delta, len) in [(0u64, 64usize), (64, 64), (1000, 96), (1096, 32)] {
+                let buf = vec![(0xA0 ^ cycle as u8).wrapping_add(delta as u8); len];
+                storage
+                    .upsert_writes(Lsn(base + delta), &buf)
+                    .await
+                    .expect("upsert_writes");
+            }
+            storage.flush_wal().await.expect("flush_wal");
+
+            let rows = storage
+                .ysql_system_client
+                .query(&select, &[&storage.branch_id])
+                .await
+                .expect("select wals rows");
+            let new_rows: Vec<(i16, i64, i64)> = rows
+                .iter()
+                .map(|r| {
+                    (
+                        r.get::<_, i16>("bucket_id"),
+                        r.get::<_, i64>("segno"),
+                        r.get::<_, i64>("chunk_offset"),
+                    )
+                })
+                .filter(|(_, s, o)| !seen.contains(&(*s, *o)))
+                .collect();
+            assert!(
+                new_rows.len() >= 2,
+                "flush {cycle} must have written its two coalesced runs, got {new_rows:?}"
+            );
+            let bucket = new_rows[0].0;
+            assert!(
+                (0..WALS_BUCKETS).contains(&bucket),
+                "bucket_id {bucket} out of range"
+            );
+            assert!(
+                new_rows.iter().all(|(b, _, _)| *b == bucket),
+                "rows written by ONE flushed batch must all carry one bucket_id; \
+                 flush {cycle} wrote {new_rows:?}"
+            );
+            batch_buckets.push(bucket);
+            for (_, s, o) in &new_rows {
+                seen.insert((*s, *o));
+            }
+        }
+
+        // Rotation happened: the batches did not all share one bucket.
+        let distinct: HashSet<i16> = batch_buckets.iter().copied().collect();
+        assert!(
+            distinct.len() >= 2,
+            "bucket must rotate across batches; per-batch buckets: {batch_buckets:?}"
+        );
+        // And the SQL form of the same invariant, across the whole table.
+        let distinct_sql: i64 = storage
+            .ysql_system_client
+            .query_opt(
+                &format!(
+                    "SELECT count(DISTINCT bucket_id) FROM {} WHERE branch_id = $1",
+                    quote_relation(&table)
+                ),
+                &[&storage.branch_id],
+            )
+            .await
+            .expect("count distinct buckets")
+            .map(|r| r.get(0))
+            .unwrap();
+        assert!(
+            distinct_sql >= 2,
+            "COUNT(DISTINCT bucket_id) = {distinct_sql}, expected >= 2 (rotation)"
+        );
+
+        drop_wals_table(&storage.ysql_system_client, &table).await;
+    }
+
+    /// Rehydration must take the max end position ACROSS buckets, not
+    /// from any single bucket's top row. Adversarial placement: the
+    /// globally-highest end lives in bucket 7 (which also holds a low
+    /// decoy the per-bucket `ORDER BY segno DESC, chunk_offset DESC`
+    /// probe must skip), while other buckets hold their own bucket-local
+    /// maxima that end lower — including one in the same top segno.
+    ///
+    /// Calls `load_write_lsn` directly (the same restore seam
+    /// `YbWalStorage::new` uses) rather than constructing the full
+    /// storage: construction additionally runs the record-boundary
+    /// end-of-WAL scan over the row bytes, which on this synthetic
+    /// payload could nondeterministically trim the tail and obscure what
+    /// is under test — the cross-bucket max itself.
+    #[tokio::test]
+    async fn load_write_lsn_takes_max_across_adversarial_buckets() {
+        let table = format!("wals_test_bucket_max_{}", rand_suffix());
+        let (fpu, _read, system) = open_three_lanes().await;
+        make_wals_table(&fpu, &table).await;
+        let branch_s = BranchId::generate().to_string();
+
+        // (bucket_id, segno, chunk_offset, chunk_size); rows never
+        // overlap within a segno, per the writer invariant.
+        let rows: &[(i16, i64, i64, i32)] = &[
+            (7, 5, 8192, 128),  // TRUE global max end: 5*SEG + 8320
+            (7, 3, 0, 64),      // low decoy in the SAME bucket as the max
+            (2, 5, 0, 8192),    // second-highest end, same top segno, other bucket
+            (0, 4, 16000, 384), // bucket-local max in an older segno
+            (9, 1, 0, 512),     // ancient decoy
+        ];
+        let insert_sql = format!(
+            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                             chunk_size, data, last_modified_us) \
+             VALUES ($1, $2, $3, $4, $5, $6, 0)",
+            quote_relation(&table)
+        );
+        for (bucket, segno, off, size) in rows {
+            let blob = vec![0x77u8; *size as usize];
+            let slice = blob.as_slice();
+            fpu.execute(&insert_sql, &[&branch_s, bucket, segno, off, size, &slice])
+                .await
+                .expect("insert adversarial row");
+        }
+
+        let got = YbWalStorage::load_write_lsn(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(0))
+            .await
+            .expect("load_write_lsn");
+        assert_eq!(
+            got,
+            Lsn(5 * SEG_SIZE + 8192 + 128),
+            "load_write_lsn must return the global max end across ALL buckets, \
+             not a single bucket's top row"
+        );
+
+        // Fresh-timeline fallback: an unknown branch yields commit_lsn.
+        let other = BranchId::generate().to_string();
+        let fallback =
+            YbWalStorage::load_write_lsn(&system, &table, &other, SEG_SIZE as usize, Lsn(4242))
+                .await
+                .expect("load_write_lsn (empty branch)");
+        assert_eq!(fallback, Lsn(4242), "empty branch must fall back to commit_lsn");
 
         drop_wals_table(&fpu, &table).await;
     }
