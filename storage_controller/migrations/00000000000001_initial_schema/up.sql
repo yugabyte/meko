@@ -175,7 +175,7 @@ CREATE TABLE pageserver.slru_pages (
 
 -- Metadata blobs — everything that isn't a relation page or SLRU
 -- block: relsize sentinels, directory listings (TenantDir/DbDir/
--- RelDir/SlruDir), aux files (zenith.signal, postgresql.auto.conf,
+-- RelDir/SlruDir), aux files (yb_amp.signal, postgresql.auto.conf,
 -- replication-slot state), two-phase commit files, replication
 -- origins, SLRU segment-size sentinels. Full-overwrite semantics:
 -- read = latest row ≤ target_lsn. No walredo, no chains.
