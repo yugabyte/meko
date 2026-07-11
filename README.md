@@ -2,7 +2,7 @@
   <img src="docs/yb-amp-logo.png" alt="YugabyteDB AMP" width="600">
 </p>
 
-# YugabyteDB Amp
+# YugabyteDB AMP
 
 **YugabyteDB AMP** — **A**gentic **M**ultitenant **P**ostgres — is a
 serverless Postgres-compatible storage system that runs PostgreSQL
@@ -560,17 +560,14 @@ endpoint_storage — e.g.
 
 ## Issue tracking
 
-Cross-session work is tracked as **GitHub issues** on
-[`yugabyte/yb-amp`](https://github.com/yugabyte/yb-amp/issues) (the
-old file-based `tasks/` tracker has been retired and migrated to
-issues). See [`docs/issue-tracking.md`](docs/issue-tracking.md) for the
+Cross-session work is tracked as **GitHub issues**.
+See [`docs/issue-tracking.md`](docs/issue-tracking.md) for the
 area labels, milestones, the create/filter contract, and how commit
 subjects reference issues.
 
 ## Contributing
 
 - Read [`AGENTS.md`](AGENTS.md) — applies to humans too.
-- Read [`CONTRIBUTING.md`](/CONTRIBUTING.md) for style and process.
 
 ## What's left of Neon, what's new
 
