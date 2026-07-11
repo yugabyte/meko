@@ -1,4 +1,4 @@
 [submodule "vendor/postgres-v18"]
 	path = vendor/postgres-v18
-	url = ../yb-amp-postgres.git
+	url = ../amp-postgres.git
 	branch = REL_18_STABLE_amp
