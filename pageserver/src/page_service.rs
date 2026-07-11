@@ -319,6 +319,23 @@ async fn page_service_conn_main(
         .set_nodelay(true)
         .context("could not set TCP_NODELAY")?;
 
+    // Defense-in-depth against the getpage fd leak: the client-disconnect abort
+    // in `handle_pagerequests_pipelined` relies on a read EOF/reset to notice
+    // the compute is gone. A compute that vanishes *without* a clean shutdown
+    // (host death, network partition) sends neither, so the connection would
+    // sit idle holding an fd forever. TCP keepalive makes the kernel probe an
+    // idle peer and drop the connection (~30s idle + 3×10s probes) so the fd is
+    // reclaimed. Best-effort: a failure to set it must not fail the connection.
+    {
+        let ka = socket2::TcpKeepalive::new()
+            .with_time(Duration::from_secs(30))
+            .with_interval(Duration::from_secs(10))
+            .with_retries(3);
+        if let Err(e) = socket2::SockRef::from(&socket).set_tcp_keepalive(&ka) {
+            tracing::warn!("could not set TCP keepalive on page_service socket: {e}");
+        }
+    }
+
     let socket_fd = socket.as_raw_fd();
 
     let peer_addr = socket.peer_addr().context("get peer address")?;
@@ -2030,6 +2047,16 @@ impl PageServerHandler {
         let graceful_cancel_batcher = self.graceful_cancel.clone();
         let batcher_graceful_watch = graceful_cancel_batcher.clone();
         let (mut batch_tx, mut batch_rx) = spsc_fold::channel();
+        // Fired by the batcher when the compute closes the connection (read
+        // EOF / FIN). Distinct from `graceful_cancel` (server shutdown — the
+        // client is still there, so we drain in-flight reads and send
+        // GoingAway): a client disconnect means nobody will read further
+        // responses, so the executor must abort in-flight reads and drop the
+        // socket immediately. Draining instead leaves stalled getpage reads
+        // holding the fd in CLOSE-WAIT; under load that exhausts the fd limit
+        // and the accept loop dies with EMFILE.
+        let client_gone = CancellationToken::new();
+        let client_gone_batcher = client_gone.clone();
         let batcher = pipeline_stage!("batcher", cancel_batcher.clone(), move |cancel_batcher| {
             let ctx = ctx.attached_child();
             async move {
@@ -2059,9 +2086,19 @@ impl PageServerHandler {
                         ) => r,
                     };
                     let Some(read_res) = read_res.transpose() else {
+                        // Compute closed the connection (FIN → read EOF). Tell
+                        // the executor to abort in-flight reads and drop the
+                        // socket now rather than draining to a dead peer.
+                        client_gone_batcher.cancel();
                         debug!("client-initiated shutdown");
                         break;
                     };
+                    if read_res.is_err() {
+                        // Read / protocol error (e.g. the peer reset the
+                        // connection): it's dead either way, so abort in-flight
+                        // rather than drain — same fd-release reasoning as EOF.
+                        client_gone_batcher.cancel();
+                    }
                     exit |= read_res.is_err();
                     let could_send = batch_tx
                         .send(read_res, |batch, res| {
@@ -2110,6 +2147,14 @@ impl PageServerHandler {
                     }
                     tokio::select! {
                         biased;
+                        // Compute disconnected: abort. Returning drops
+                        // `inflight`, cancelling the outstanding getpage reads
+                        // and releasing the socket fd immediately (no
+                        // CLOSE-WAIT pile-up). No GoingAway — the peer is gone.
+                        _ = client_gone.cancelled() => {
+                            debug!("client disconnected; aborting in-flight reads");
+                            return Ok(());
+                        }
                         // Drain the oldest completed read and write its responses (in order).
                         Some(read_res) = inflight.next(), if has_inflight => {
                             let (handler_results, span) = read_res?;

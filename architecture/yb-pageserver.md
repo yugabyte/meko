@@ -717,9 +717,17 @@ where they differ from upstream:
 | Reconnect attempts before erroring back to compute | `max_reconnect_attempts` (`libpagestore.c:83`) | **60** (1 s backoff each) | Combined with the disconnect timeout, a hard-down pageserver surfaces to the compute query in ~30 s + 60 × 1 s ≈ ~90 s. |
 | Pageserver-side activation wait | none | — | The branch is opened synchronously before listeners start; until then, computes get ECONNREFUSED and retry via the reconnect loop above. |
 
-Pageserver doesn't apply an idle/recv timeout to inbound compute
-libpq connections (the keepalive constants in `page_service.rs` are
-gRPC-only).
+Pageserver sets **TCP keepalive** on inbound compute libpq connections
+(30 s idle + 3×10 s probes, in `page_service.rs`) so a compute that
+vanishes *without* a clean FIN (host death, partition) is reaped and its
+getpage-connection fd reclaimed. In the common case the disconnect
+arrives as a read EOF/reset, and the pipelined page-service **aborts** the
+connection's in-flight getpage reads immediately (dropping the
+`FuturesOrdered`) instead of draining them to a gone peer. Without that
+abort, a getpage read stalled on a slow YB round-trip would pin the
+socket fd in `CLOSE-WAIT` for the stall's duration; under a getpage-stall
+storm those accumulate until the accept loop dies with
+`EMFILE`/"Too many open files".
 
 ## Implementation status
 
