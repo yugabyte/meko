@@ -449,8 +449,8 @@ async fn import_file(
         debug!("imported twophase file");
     } else if file_path.starts_with("pg_wal") {
         debug!("found wal file in base section. ignore it");
-    } else if file_path.starts_with("zenith.signal") || file_path.starts_with("yb_amp.signal") {
-        // Parse zenith signal file to set correct previous LSN
+    } else if file_path.starts_with("yb_amp.signal") {
+        // Parse yb_amp.signal file to set correct previous LSN
         let bytes = read_all_bytes(reader).await?;
         // yb_amp.signal format is "PREV LSN: prev_lsn"
         // TODO write serialization and deserialization in the same place.

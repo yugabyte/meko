@@ -33,7 +33,6 @@
 //!     pgdata/
 //!         postgresql.conf       - copy of postgresql.conf created by `compute_ctl`
 //!         yb_amp.signal
-//!         zenith.signal         - copy of yb_amp.signal, for backward compatibility
 //!         <other PostgreSQL files>
 //! ```
 //!

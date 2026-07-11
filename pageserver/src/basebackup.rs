@@ -741,7 +741,7 @@ where
 
     //
     // Add generated pg_control file and bootstrap WAL segment.
-    // Also send yb_amp.signal and zenith.signal file with extra bootstrap data.
+    // Also send the yb_amp.signal file with extra bootstrap data.
     //
     async fn add_pgcontrol_file(
         &mut self,
@@ -763,17 +763,13 @@ where
                 .map_err(|e| BasebackupError::Server(e.into()))?;
         }
 
-        // TODO: Remove zenith.signal once all historical computes have been replaced
-        // ... and thus support the yb_amp.signal file.
-        for signalfilename in ["yb_amp.signal", "zenith.signal"] {
-            self.ar
-                .append(
-                    &new_tar_header(signalfilename, neon_signal.len() as u64)?,
-                    neon_signal.as_bytes(),
-                )
-                .await
-                .map_err(|e| BasebackupError::Client(e, "add_pgcontrol_file,yb_amp.signal"))?;
-        }
+        self.ar
+            .append(
+                &new_tar_header("yb_amp.signal", neon_signal.len() as u64)?,
+                neon_signal.as_bytes(),
+            )
+            .await
+            .map_err(|e| BasebackupError::Client(e, "add_pgcontrol_file,yb_amp.signal"))?;
 
         //send pg_control
         let header = new_tar_header("global/pg_control", pg_control_bytes.len() as u64)?;
