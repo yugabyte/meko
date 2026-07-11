@@ -1263,7 +1263,7 @@ impl ComputeNode {
     fn fix_zenith_signal_neon_signal(&self) -> Result<()> {
         let datadir = Path::new(&self.params.pgdata);
 
-        let neonsig = datadir.join("neon.signal");
+        let neonsig = datadir.join("yb_amp.signal");
 
         if neonsig.is_file() {
             return Ok(());

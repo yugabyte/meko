@@ -278,7 +278,7 @@ mod tests {
             .unwrap();
 
         let resident_tli = tli.wal_residence_guard().await.unwrap();
-        let end_watch = Env::write_wal(tli, start_lsn, SIZE, MSG_COUNT, c"neon-file:", None)
+        let end_watch = Env::write_wal(tli, start_lsn, SIZE, MSG_COUNT, c"yb_amp-file:", None)
             .await
             .unwrap();
         let end_pos = end_watch.get();

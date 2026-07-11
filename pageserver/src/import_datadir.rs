@@ -449,10 +449,10 @@ async fn import_file(
         debug!("imported twophase file");
     } else if file_path.starts_with("pg_wal") {
         debug!("found wal file in base section. ignore it");
-    } else if file_path.starts_with("zenith.signal") || file_path.starts_with("neon.signal") {
+    } else if file_path.starts_with("zenith.signal") || file_path.starts_with("yb_amp.signal") {
         // Parse zenith signal file to set correct previous LSN
         let bytes = read_all_bytes(reader).await?;
-        // neon.signal format is "PREV LSN: prev_lsn"
+        // yb_amp.signal format is "PREV LSN: prev_lsn"
         // TODO write serialization and deserialization in the same place.
         let neon_signal = std::str::from_utf8(&bytes)?.trim();
         let prev_lsn = match neon_signal {
@@ -463,11 +463,11 @@ async fn import_file(
                 split[1]
                     .trim()
                     .parse::<Lsn>()
-                    .context("can't parse neon.signal")?
+                    .context("can't parse yb_amp.signal")?
             }
         };
 
-        // neon.signal is not necessarily the last file, that we handle
+        // yb_amp.signal is not necessarily the last file, that we handle
         // but it is ok to call `finish_write()`, because final `modification.commit()`
         // will update lsn once more to the final one.
         let writer = modification.tline.writer().await;

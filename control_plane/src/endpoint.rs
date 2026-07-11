@@ -32,8 +32,8 @@
 //!     compute_ctl.pid           - pid of the `compute_ctl` process
 //!     pgdata/
 //!         postgresql.conf       - copy of postgresql.conf created by `compute_ctl`
-//!         neon.signal
-//!         zenith.signal         - copy of neon.signal, for backward compatibility
+//!         yb_amp.signal
+//!         zenith.signal         - copy of yb_amp.signal, for backward compatibility
 //!         <other PostgreSQL files>
 //! ```
 //!

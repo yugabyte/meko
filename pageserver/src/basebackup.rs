@@ -114,7 +114,7 @@ where
     // Compute postgres doesn't have any previous WAL files, but the first
     // record that it's going to write needs to include the LSN of the
     // previous record (xl_prev). We include prev_record_lsn in the
-    // "neon.signal" file, so that postgres can read it during startup.
+    // "yb_amp.signal" file, so that postgres can read it during startup.
     //
     // We don't keep full history of record boundaries in the page server,
     // however, only the predecessor of the latest record on each
@@ -741,14 +741,14 @@ where
 
     //
     // Add generated pg_control file and bootstrap WAL segment.
-    // Also send neon.signal and zenith.signal file with extra bootstrap data.
+    // Also send yb_amp.signal and zenith.signal file with extra bootstrap data.
     //
     async fn add_pgcontrol_file(
         &mut self,
         pg_control_bytes: Bytes,
         system_identifier: u64,
     ) -> Result<(), BasebackupError> {
-        // add neon.signal file
+        // add yb_amp.signal file
         let mut neon_signal = String::new();
         if self.prev_record_lsn == Lsn(0) {
             if self.timeline.is_ancestor_lsn(self.lsn) {
@@ -764,15 +764,15 @@ where
         }
 
         // TODO: Remove zenith.signal once all historical computes have been replaced
-        // ... and thus support the neon.signal file.
-        for signalfilename in ["neon.signal", "zenith.signal"] {
+        // ... and thus support the yb_amp.signal file.
+        for signalfilename in ["yb_amp.signal", "zenith.signal"] {
             self.ar
                 .append(
                     &new_tar_header(signalfilename, neon_signal.len() as u64)?,
                     neon_signal.as_bytes(),
                 )
                 .await
-                .map_err(|e| BasebackupError::Client(e, "add_pgcontrol_file,neon.signal"))?;
+                .map_err(|e| BasebackupError::Client(e, "add_pgcontrol_file,yb_amp.signal"))?;
         }
 
         //send pg_control

@@ -254,7 +254,7 @@ fn rmgr(rmid: u8) -> String {
         9 => "Heap2".into(),
         10 => "Heap".into(),
         11 => "Btree".into(),
-        134 => "neon".into(),
+        134 => "yb_amp".into(),
         x => format!("rm{x}"),
     }
 }
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn rmgr_names() {
-        assert_eq!(rmgr(134), "neon");
+        assert_eq!(rmgr(134), "yb_amp");
         assert_eq!(rmgr(10), "Heap");
         assert_eq!(rmgr(200), "rm200");
     }

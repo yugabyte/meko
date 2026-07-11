@@ -560,7 +560,7 @@ impl MetadataRecord {
                 )));
             }
 
-            if let Some(path) = prefix.strip_prefix("neon-file:") {
+            if let Some(path) = prefix.strip_prefix("yb_amp-file:") {
                 let buf_size = xlrec.prefix_size + xlrec.message_size;
                 let buf = Bytes::copy_from_slice(&buf[xlrec.prefix_size..buf_size]);
                 return Ok(Some(MetadataRecord::LogicalMessage(
