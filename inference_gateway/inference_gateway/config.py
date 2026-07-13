@@ -90,3 +90,9 @@ class AppConfig:
     # Small model for summarizing conversation-history hits. None → reuse the
     # main llm_model (still works, just not as cheap).
     conv_summary_model: Optional[str] = None
+    # When True, retrieval runs the MCP server's unified `contextual_prominence_search`
+    # tool (one call covering conversation cache + memory + knowledgebase) instead of
+    # the separate `knowledgebase_search` + `memory_search` calls. Shares the literal
+    # env var name (MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH) with the MCP server's own
+    # flag so one setting toggles both sides of the integration together. Default off.
+    contextual_prominence_search_enabled: bool = False

@@ -154,6 +154,26 @@ type MemoryCountResponse struct {
 	Count      int    `json:"count"`
 }
 
+// TokenSavingsSummary is the response for both GET
+// /datapacks/{datapack_id}/token-savings (ByDatapack has exactly one entry,
+// for the requested datapack) and GET /me/token-savings (ByDatapack has one
+// entry per datapack the caller's account can access). Sourced from
+// meko_system.token_savings_log, written by meko-mcp-server's
+// contextual_prominence_search tool.
+type TokenSavingsSummary struct {
+	TotalRequests    int                    `json:"total_requests"`
+	TotalTokensSaved int                    `json:"total_tokens_saved"`
+	BySource         map[string]int         `json:"tokens_saved_by_source"`
+	ByDatapack       []DatapackTokenSavings `json:"by_datapack"`
+}
+
+// DatapackTokenSavings is one datapack's contribution to a TokenSavingsSummary.
+type DatapackTokenSavings struct {
+	DatapackID       string `json:"datapack_id"`
+	TotalRequests    int    `json:"total_requests"`
+	TotalTokensSaved int    `json:"total_tokens_saved"`
+}
+
 // CreateFeedbackRequest is the body for POST /api/v1/feedback.
 // user_id is required and must match the authenticated user (non-pointer string;
 // JSON null unmarshals to empty and fails validation). Optional pointers may be

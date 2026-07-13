@@ -49,6 +49,8 @@ type serviceRegistry struct {
 	billingSvc         *service.BillingService
 	artifactRepo       *repository.ArtifactRepo
 	artifactSvc        *service.ArtifactService
+	tokenSavingsRepo   *repository.TokenSavingsRepo
+	tokenSavingsSvc    *service.TokenSavingsService
 	// ampSvc is nil unless the AMP feature is enabled (--show-pg-amp); the AMP
 	// datapack-database routes are registered only when it is non-nil. The AMP
 	// controller endpoint is resolved at request time from the registration row,
@@ -174,6 +176,9 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	artifactRepo := repository.NewArtifactRepo(cfg.DB)
 	artifactSvc := service.NewArtifactService(artifactRepo, s3Svc)
 
+	tokenSavingsRepo := repository.NewTokenSavingsRepo(cfg.SystemDB)
+	tokenSavingsSvc := service.NewTokenSavingsService(tokenSavingsRepo, dpRepo)
+
 	slog.Info("service registry initialized")
 	return &serviceRegistry{
 		accountRepo:        accountRepo,
@@ -201,6 +206,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		billingSvc:         billingSvc,
 		artifactRepo:       artifactRepo,
 		artifactSvc:        artifactSvc,
+		tokenSavingsRepo:   tokenSavingsRepo,
+		tokenSavingsSvc:    tokenSavingsSvc,
 		ampSvc:             ampSvc,
 	}
 }
@@ -536,6 +543,11 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	g.GET("/me/meko-tokens", patH.List)
 	g.DELETE("/me/meko-tokens/:id", patH.Revoke)
 
+	// Token savings (contextual_prominence_search): self-service account
+	// rollup on the JWT-only group, same as /me/meko-tokens above.
+	tokenSavingsH := handlers.NewTokenSavingsHandler(reg.tokenSavingsSvc)
+	g.GET("/me/token-savings", tokenSavingsH.GetForAccount)
+
 	promoteMemoriesH := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc, reg.dpRepo)
 	g.POST("/promote-memories", promoteMemoriesH.Promote)
 	g.POST("/keep-as-memory", promoteMemoriesH.KeepAsMemory)
@@ -586,6 +598,14 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	dpDirect.GET(
 		"/datapacks/:datapack_id/conversations/:conversation_id/messages/:message_id/decision-trace",
 		observeH.MessageDecisionTrace,
+		auth.RequireScope(auth.ScopeRead),
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+
+	// Token savings (contextual_prominence_search): read-only, same access
+	// as conversations above (owner or shared member). On dpDirect so PAT
+	// bearers (eval harnesses, MCP-adjacent tooling) are accepted.
+	dpDirect.GET("/datapacks/:datapack_id/token-savings", tokenSavingsH.GetForDatapack,
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)

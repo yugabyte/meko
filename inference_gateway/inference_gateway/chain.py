@@ -604,20 +604,43 @@ async def run_chat_turn(
                 ProcessingStep("conversation_search", 0, "skipped", "user rejected cache answer", query=user_message)
             )
 
-        # 2. Knowledge-base search runs FIRST and (when enabled and NOT bypassed)
-        #    performs conversation-history search INSIDE it. Returns either a
-        #    conversation hit (chunks + thread → summarize) or KB chunks (a miss
-        #    → then run memory search). `skip_conversation` forces pure KB when
-        #    the user rejected the cache.
-        kb_hits, conv_result = await _search_knowledge(
-            tools_by_name=tools_by_name,
-            agent_id=cfg.agent_id,
-            query=user_message,
-            conversation_id=conversation_id,
-            datapack_id=datapack_id,
-            steps=steps,
-            skip_conversation=bypass,
-        )
+        # 2. Retrieval. Two paths, chosen by cfg.contextual_prominence_search_enabled
+        #    (MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH — shared with the MCP server):
+        #
+        #    - Unified: one `contextual_prominence_search` call covers the
+        #      conversation cache, memory, and the knowledgebase, tiered by
+        #      relevance server-side.
+        #    - Legacy: knowledge-base search runs FIRST and (when enabled and NOT
+        #      bypassed) performs conversation-history search INSIDE it. Returns
+        #      either a conversation hit (chunks + thread → summarize) or KB
+        #      chunks (a miss → then run memory search).
+        #
+        #    `bypass` (user rejected the cache answer) always forces the legacy
+        #    path with `skip_conversation=True` — the unified tool doesn't yet
+        #    support bypassing its own conversation tier, and re-serving the
+        #    same rejected cache summary would be worse than the extra call.
+        use_unified_search = cfg.contextual_prominence_search_enabled and not bypass
+        if use_unified_search:
+            kb_hits, memory_hits, conv_result = await _search_contextual_prominence(
+                tools_by_name=tools_by_name,
+                agent_id=cfg.agent_id,
+                query=user_message,
+                conversation_id=conversation_id,
+                datapack_id=datapack_id,
+                top_k=cfg.memory_top_k,
+                steps=steps,
+            )
+        else:
+            kb_hits, conv_result = await _search_knowledge(
+                tools_by_name=tools_by_name,
+                agent_id=cfg.agent_id,
+                query=user_message,
+                conversation_id=conversation_id,
+                datapack_id=datapack_id,
+                steps=steps,
+                skip_conversation=bypass,
+            )
+            memory_hits = []
 
         if conv_result:
             hits = conv_result.get("hits") or []
@@ -692,18 +715,21 @@ async def run_chat_turn(
                 processing_steps=tuple(steps),
             )
 
-        # 2b. No conversation hit → KB chunks are already in hand from the call
-        #     above; run memory search to complete the memory + KB grounding.
-        memory_hits = await _search_memories(
-            tools_by_name=tools_by_name,
-            agent_id=cfg.agent_id,
-            query=user_message,
-            conversation_id=conversation_id,
-            datapack_id=datapack_id,
-            top_k=cfg.memory_top_k,
-            user_id=user_id,
-            steps=steps,
-        )
+        # 2b. Legacy path only: no conversation hit → KB chunks are already in
+        #     hand from the call above; run memory search separately to
+        #     complete the memory + KB grounding. The unified path already
+        #     populated memory_hits itself (one call covered both).
+        if not use_unified_search:
+            memory_hits = await _search_memories(
+                tools_by_name=tools_by_name,
+                agent_id=cfg.agent_id,
+                query=user_message,
+                conversation_id=conversation_id,
+                datapack_id=datapack_id,
+                top_k=cfg.memory_top_k,
+                user_id=user_id,
+                steps=steps,
+            )
 
     # Derive the bulleted system-prompt blocks from the structured hits.
     # The structured lists are the source of truth; the bullets are the
@@ -1026,11 +1052,13 @@ async def _search_knowledge(
 ) -> Tuple[List[KbHit], Optional[Dict[str, Any]]]:
     """Run `knowledgebase_search` and return (kb_hits, conv_result).
 
-    When MEKO_ENABLE_CONVERSATION_SEARCH is on, the MCP `knowledgebase_search`
-    tool runs conversation-history search INTERNALLY and, on a hit, returns
-    `conversation_hits` + `thread` instead of KB chunks. We surface that as
-    conv_result (`{"hits", "thread"}`) so the caller can summarize it and skip
-    memory. On a miss, conv_result is None and kb_hits holds the KB chunks.
+    `knowledgebase_search` is pure KB search now — conversation-history
+    search moved out to the standalone `conversation_search` tool (and is
+    orchestrated by `_search_contextual_prominence` for the unified path).
+    This legacy helper never gets a conversation hit from the MCP call
+    itself, so `conv_result` is always None here; the second element of the
+    return tuple only still exists so `run_chat_turn`'s conversation-hit
+    branch (shared with the unified path) doesn't need two call shapes.
 
     Skips entirely when `datapack_id` is missing. Best-effort on failures.
     """
@@ -1099,24 +1127,6 @@ async def _search_knowledge(
             )
         return [], None
     parsed = _parse_json(raw)
-    # Conversation hit — knowledgebase_search ran conversation search internally
-    # and returned the matched conversation's chunks + thread instead of KB rows.
-    if isinstance(parsed, dict) and parsed.get("conversation_hits"):
-        ch = parsed["conversation_hits"]
-        thread = parsed.get("thread")
-        if steps is not None:
-            top_d = ch[0].get("distance") if ch else None
-            steps.append(
-                ProcessingStep(
-                    "conversation_search",
-                    int((time.monotonic() - start) * 1000),
-                    "ok",
-                    f"{len(ch)} chunk(s)" + (f", top_distance={top_d}" if ch else ""),
-                    query=query,
-                    tool_args=kb_tool_args,
-                )
-            )
-        return [], {"hits": ch, "thread": thread if isinstance(thread, list) else []}
     hits = _extract_kb_hits(parsed)
     # One line per KEPT chunk so dev logs show exactly which KB chunks fed
     # the prompt, with their similarity/distance. DEBUG for the same reason
@@ -1141,6 +1151,185 @@ async def _search_knowledge(
             )
         )
     return hits, None
+
+
+async def _search_contextual_prominence(
+    *,
+    tools_by_name: Dict[str, BaseTool],
+    agent_id: str,
+    query: str,
+    conversation_id: str,
+    datapack_id: Optional[str],
+    top_k: int,
+    steps: Optional[List[ProcessingStep]] = None,
+) -> Tuple[List[KbHit], List[MemoryHit], Optional[Dict[str, Any]]]:
+    """Run the MCP server's unified `contextual_prominence_search` tool — one
+    call covering the conversation cache, memory, and the knowledgebase — and
+    return `(kb_hits, memory_hits, conv_result)`.
+
+    `conv_result` uses the exact `{"hits", "thread"}` contract `_search_knowledge`
+    returns on a conversation-cache hit, so `run_chat_turn`'s conversation-hit
+    branch (summarize + skip memory/KB + early return) works unchanged
+    regardless of which retrieval path produced it.
+
+    Synthesizes `conversation_search` / `memory_search` / `knowledgebase_search`
+    ProcessingStep entries — the same names the two-call path records — based
+    on which tier the tool actually used (`source` in its response), plus one
+    `contextual_prominence_search` step carrying the tool's own token-savings
+    figure. This keeps the Agent Reasoning panel's per-stage timeline shape
+    stable whichever retrieval path is active.
+
+    Best-effort: tool-missing / no-datapack_id / MCP failure / a malformed
+    response all return `([], [], None)` — the same empty-hits fallback
+    `_search_knowledge` and `_search_memories` use independently, so a bad
+    call here degrades to no-context rather than breaking the turn.
+    """
+    start = time.monotonic()
+    tool_args: Dict[str, Any] = {
+        "scope": "read",
+        "conversation_id": conversation_id,
+        "agent_id": agent_id,
+        "limit": top_k,
+    }
+    if datapack_id:
+        tool_args["datapack_id"] = datapack_id
+
+    if not datapack_id:
+        if steps is not None:
+            steps.append(
+                ProcessingStep(
+                    "contextual_prominence_search", 0, "skipped", "no datapack_id",
+                    query=query, tool_args=tool_args,
+                )
+            )
+        return [], [], None
+
+    tool = tools_by_name.get("contextual_prominence_search")
+    if tool is None:
+        logger.warning(
+            "contextual_prominence_search tool unavailable; skipping unified grounding"
+        )
+        if steps is not None:
+            steps.append(
+                ProcessingStep(
+                    "contextual_prominence_search", 0, "skipped", "tool unavailable",
+                    query=query, tool_args=tool_args,
+                )
+            )
+        return [], [], None
+
+    args: Dict[str, Any] = dict(tool_args, query=query)
+    try:
+        raw = await tool.ainvoke(args)
+    except Exception as exc:  # noqa: BLE001 — MCP failure must not break chat
+        logger.warning(
+            "contextual_prominence_search failed (agent_id=%s, datapack_id=%s, query=%r): %s",
+            agent_id, datapack_id, query, _format_exc_chain(exc),
+            exc_info=exc,
+        )
+        if steps is not None:
+            steps.append(
+                ProcessingStep(
+                    "contextual_prominence_search",
+                    int((time.monotonic() - start) * 1000),
+                    "error", str(exc), query=query, tool_args=tool_args,
+                )
+            )
+        return [], [], None
+
+    parsed = _parse_json(raw)
+    if not isinstance(parsed, dict) or parsed.get("error"):
+        detail = parsed.get("error") if isinstance(parsed, dict) else "malformed response"
+        logger.warning("contextual_prominence_search returned an error: %s", detail)
+        if steps is not None:
+            steps.append(
+                ProcessingStep(
+                    "contextual_prominence_search",
+                    int((time.monotonic() - start) * 1000),
+                    "error", str(detail), query=query, tool_args=tool_args,
+                )
+            )
+        return [], [], None
+
+    duration_ms = int((time.monotonic() - start) * 1000)
+    source = parsed.get("source")
+    savings = parsed.get("token_savings") or {}
+    tokens_saved = savings.get("tokens_saved", 0)
+
+    if source == "conversation":
+        hits = parsed.get("conversation_hits") or []
+        thread = parsed.get("thread")
+        if steps is not None:
+            top_d = hits[0].get("distance") if hits else None
+            steps.append(
+                ProcessingStep(
+                    "conversation_search", duration_ms, "ok",
+                    f"{len(hits)} chunk(s)" + (f", top_distance={top_d}" if hits else "")
+                    + " (via contextual_prominence_search)",
+                    query=query, tool_args=tool_args,
+                )
+            )
+            steps.append(
+                ProcessingStep(
+                    "contextual_prominence_search", 0, "ok",
+                    f"source=conversation tokens_saved={tokens_saved}",
+                    tool_args=tool_args,
+                )
+            )
+        return [], [], {"hits": hits, "thread": thread if isinstance(thread, list) else []}
+
+    results = parsed.get("results") or []
+    kb_results = [r for r in results if isinstance(r, dict) and r.get("source") == "knowledge_base"]
+    mem_results = [r for r in results if isinstance(r, dict) and r.get("source") == "memory"]
+    kb_hits = _extract_kb_hits({"results": kb_results})
+    memory_hits = _extract_memory_hits({"results": mem_results})
+
+    for h in memory_hits:
+        logger.debug(
+            "contextual_prominence_search: kept memory hit kind=%s score=%s text=%r",
+            h.kind, f"{h.score:.3f}" if h.score is not None else "-", _truncate(h.text, 80),
+        )
+    for h in kb_hits:
+        logger.debug(
+            "contextual_prominence_search: kept kb chunk doc=%s score=%s distance=%s text=%r",
+            h.document_id or "-",
+            f"{h.score:.3f}" if h.score is not None else "-",
+            f"{h.distance:.3f}" if h.distance is not None else "-",
+            _truncate(h.chunk_text, 80),
+        )
+
+    if steps is not None:
+        steps.append(
+            ProcessingStep(
+                "memory_search", duration_ms, "ok",
+                f"{len(memory_hits)} hit{'' if len(memory_hits) == 1 else 's'} (via contextual_prominence_search)",
+                query=query, tool_args=tool_args,
+            )
+        )
+        if source == "memory":
+            steps.append(
+                ProcessingStep(
+                    "knowledgebase_search", 0, "skipped",
+                    "contextual_prominence_search: memory sufficient",
+                )
+            )
+        else:  # "knowledge_base+memory"
+            steps.append(
+                ProcessingStep(
+                    "knowledgebase_search", duration_ms, "ok",
+                    f"{len(kb_hits)} hit{'' if len(kb_hits) == 1 else 's'} (via contextual_prominence_search)",
+                    query=query, tool_args=tool_args,
+                )
+            )
+        steps.append(
+            ProcessingStep(
+                "contextual_prominence_search", 0, "ok",
+                f"source={source} tokens_saved={tokens_saved}",
+                tool_args=tool_args,
+            )
+        )
+
+    return kb_hits, memory_hits, None
 
 
 async def _add_message(

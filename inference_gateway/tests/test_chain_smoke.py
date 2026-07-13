@@ -28,7 +28,7 @@ from inference_gateway.config import AppConfig
 from inference_gateway.session_store import InMemorySessionStore
 
 
-def _make_cfg() -> AppConfig:
+def _make_cfg(*, contextual_prominence_search_enabled: bool = False) -> AppConfig:
     return AppConfig(
         llm_provider="openai",
         llm_model="gpt-4o-mini",
@@ -39,6 +39,7 @@ def _make_cfg() -> AppConfig:
         agent_id="agent",
         max_history=10,
         memory_top_k=5,
+        contextual_prominence_search_enabled=contextual_prominence_search_enabled,
     )
 
 
@@ -604,3 +605,211 @@ async def test_missing_conversation_create_raises_clearly() -> None:
             cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
             session_id="s1", user_message="hi", datapack_id=None,
         )
+
+
+class TestContextualProminenceSearchIntegration:
+    """cfg.contextual_prominence_search_enabled (MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH)
+    routes retrieval through one `contextual_prominence_search` MCP call instead of
+    separate `memory_search` + `knowledgebase_search` calls."""
+
+    async def test_flag_off_never_calls_unified_tool(self) -> None:
+        """Default (flag off): behaves exactly like today, even if the unified
+        tool happens to be present in tools_by_name."""
+        cfg = _make_cfg(contextual_prominence_search_enabled=False)
+        llm = _FakeLLM(["hi"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        unified = _mock_tool({"source": "knowledge_base+memory", "results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "contextual_prominence_search": unified,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="plan a trip to spain", datapack_id="dp-1",
+        )
+
+        mem_search.ainvoke.assert_awaited_once()
+        kb_search.ainvoke.assert_awaited_once()
+        unified.ainvoke.assert_not_awaited()
+
+    async def test_conversation_tier_short_circuits_like_legacy_hit(self) -> None:
+        """source=conversation: summarizes the thread, never calls memory_search
+        or knowledgebase_search — same early-return contract as a legacy
+        knowledgebase_search conversation-cache hit."""
+        cfg = _make_cfg(contextual_prominence_search_enabled=True)
+        llm = _FakeLLM(["unused — should not be called"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        unified = _mock_tool({
+            "source": "conversation",
+            "conversation_hits": [{"question": "q1", "answer": "a1", "conversation_id": "old-conv", "message_id": "m1", "distance": 0.1}],
+            "thread": [{"question": "q1", "answer": "a1"}],
+            "token_savings": {"tokens_sent": 1000, "tokens_if_raw": 10000, "tokens_saved": 9000},
+        })
+        addmsg = _mock_tool({"status": "accepted", "message_id": "m2"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "contextual_prominence_search": unified,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        out = await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="what did we decide about the auth flow?",
+            datapack_id="dp-1",
+        )
+
+        unified.ainvoke.assert_awaited_once()
+        mem_search.ainvoke.assert_not_awaited()
+        kb_search.ainvoke.assert_not_awaited()
+        # Main LLM never invoked — answered by the small summary model instead
+        # (falls back to summary_llm or llm; here llm.ainvoke would blow the
+        # assertion below if it were called for the main reply).
+        assert out.assistant_text != ""
+
+        step_names = [s.name for s in out.processing_steps]
+        assert "conversation_search" in step_names
+        assert "contextual_prominence_search" in step_names
+        assert "llm_invoke" in step_names
+        llm_invoke_step = next(s for s in out.processing_steps if s.name == "llm_invoke")
+        assert llm_invoke_step.status == "skipped"
+
+    async def test_memory_tier_skips_knowledgebase_search(self) -> None:
+        """source=memory: memory_hits populated from the tagged results,
+        knowledgebase_search never called."""
+        cfg = _make_cfg(contextual_prominence_search_enabled=True)
+        llm = _FakeLLM(["answer from memory"])
+        create = _mock_tool({"conversation_id": "c1"})
+        kb_search = _mock_tool({"results": [{"chunk_text": "should not be used"}]})
+        unified = _mock_tool({
+            "source": "memory",
+            "results": [
+                {"memory": "user prefers hiking", "score": 0.9, "source": "memory"},
+            ],
+            "token_savings": {"tokens_sent": 200, "tokens_if_raw": 10000, "tokens_saved": 9800},
+        })
+        addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
+
+        tools = {
+            "conversation_create": create,
+            "knowledgebase_search": kb_search,
+            "contextual_prominence_search": unified,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        out = await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="what activity do I like?", datapack_id="dp-1",
+        )
+
+        kb_search.ainvoke.assert_not_awaited()
+        assert "user prefers hiking" in llm.calls[0][0].content  # memory_context
+        step_names = {s.name: s for s in out.processing_steps}
+        assert step_names["knowledgebase_search"].status == "skipped"
+        assert step_names["memory_search"].status == "ok"
+
+    async def test_knowledge_base_plus_memory_tier_splits_by_source_tag(self) -> None:
+        """source=knowledge_base+memory: the pooled `results` list is split by
+        each item's `source` tag into kb_hits vs memory_hits."""
+        cfg = _make_cfg(contextual_prominence_search_enabled=True)
+        llm = _FakeLLM(["blended answer"])
+        create = _mock_tool({"conversation_id": "c1"})
+        unified = _mock_tool({
+            "source": "knowledge_base+memory",
+            "results": [
+                {"chunk_text": "Patagonia trek W circuit", "document_name": "europe.md",
+                 "distance": 0.1, "source": "knowledge_base"},
+                {"memory": "user prefers hiking", "score": 0.8, "source": "memory"},
+            ],
+            "token_savings": {"tokens_sent": 1200, "tokens_if_raw": 1200, "tokens_saved": 0},
+        })
+        addmsg = _mock_tool({"status": "accepted", "message_id": "m1"})
+
+        tools = {
+            "conversation_create": create,
+            "contextual_prominence_search": unified,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        out = await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+        )
+
+        assert len(out.kb_hits) == 1
+        assert len(out.memory_hits) == 1
+        sys_content = llm.calls[0][0].content
+        assert "Patagonia trek W circuit" in sys_content
+        assert "user prefers hiking" in sys_content
+
+    async def test_bypass_forces_legacy_path_even_when_flag_enabled(self) -> None:
+        """A rejected cache answer (bypass_conversation_cache=True) always uses
+        the legacy two-call path — the unified tool has no skip_conversation
+        equivalent yet, so re-serving the same cached summary must not happen."""
+        cfg = _make_cfg(contextual_prominence_search_enabled=True)
+        llm = _FakeLLM(["fresh answer"])
+        create = _mock_tool({"conversation_id": "c1"})
+        mem_search = _mock_tool({"results": []})
+        kb_search = _mock_tool({"results": []})
+        unified = _mock_tool({"source": "knowledge_base+memory", "results": []})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "memory_search": mem_search,
+            "knowledgebase_search": kb_search,
+            "contextual_prominence_search": unified,
+            "conversation_add_message": addmsg,
+        }
+        store = InMemorySessionStore()
+
+        await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="that's not right, try again",
+            datapack_id="dp-1", bypass_conversation_cache=True,
+        )
+
+        unified.ainvoke.assert_not_awaited()
+        kb_search.ainvoke.assert_awaited_once()
+        assert kb_search.ainvoke.call_args.args[0]["skip_conversation"] is True
+        mem_search.ainvoke.assert_awaited_once()
+
+    async def test_unified_tool_missing_degrades_to_empty_context(self) -> None:
+        """Flag on but the connected MCP server doesn't expose the tool yet
+        (older server version) — best-effort: no crash, empty context."""
+        cfg = _make_cfg(contextual_prominence_search_enabled=True)
+        llm = _FakeLLM(["ok anyway"])
+        create = _mock_tool({"conversation_id": "c1"})
+        addmsg = _mock_tool({"status": "accepted"})
+
+        tools = {
+            "conversation_create": create,
+            "conversation_add_message": addmsg,
+            # No "contextual_prominence_search", no "memory_search"/"knowledgebase_search".
+        }
+        store = InMemorySessionStore()
+
+        out = await run_chat_turn(
+            cfg=cfg, llm=llm, tools_by_name=tools, session_store=store,  # type: ignore[arg-type]
+            session_id="s1", user_message="plan a trip", datapack_id="dp-1",
+        )
+
+        assert out.assistant_text == "ok anyway"
+        assert out.kb_hits == ()
+        assert out.memory_hits == ()

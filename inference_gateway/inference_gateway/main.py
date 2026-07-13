@@ -105,6 +105,15 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         "--log-level",
         default=os.getenv("INFERENCE_LOG_LEVEL", "INFO"),
     )
+    p.add_argument(
+        "--enable-contextual-prominence-search",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH", "").strip().lower()
+        in ("1", "true", "yes"),
+        help="Route retrieval through the MCP server's unified contextual_prominence_search "
+             "tool instead of separate knowledgebase_search + memory_search calls. Shares "
+             "the MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH env var with the MCP server.",
+    )
     args = p.parse_args(argv)
 
     # Pick a sensible default model per provider when the user didn't set one.
@@ -143,6 +152,7 @@ def parse_args(argv: Sequence[str] | None = None) -> tuple[AppConfig, str]:
         memory_top_k=args.memory_top_k,
         llm_max_tokens=args.llm_max_tokens,
         conv_summary_model=args.conv_summary_model,
+        contextual_prominence_search_enabled=args.enable_contextual_prominence_search,
     )
     return cfg, args.log_level
 
