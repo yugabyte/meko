@@ -353,6 +353,30 @@ impl Cluster {
         Ok(())
     }
 
+    /// Run a `yb_light_local` subcommand, capturing its output and teeing
+    /// every line into the run log. [`Self::yb`]'s inherited stdio reaches
+    /// the console but never the run log file, so when a cleanup restart
+    /// failed post-hoc forensics had nothing to go on (#241). Capture
+    /// buffers until exit, so keep this to short commands (restarts,
+    /// stop/start) — long ones would lose live output.
+    pub fn yb_logged(&self, args: &[&str]) -> anyhow::Result<()> {
+        let out = self
+            .yb_command()
+            .args(args)
+            .output()
+            .with_context(|| format!("spawning yb_light_local {}", args.join(" ")))?;
+        for line in String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .chain(String::from_utf8_lossy(&out.stderr).lines())
+        {
+            tee_line(&format!("  | {line}"));
+        }
+        if !out.status.success() {
+            bail!("yb_light_local {} exited with {}", args.join(" "), out.status);
+        }
+        Ok(())
+    }
+
     /// Run a `yb_light_local` subcommand, ignoring its exit status (for
     /// best-effort cleanup calls).
     pub fn yb_quiet(&self, args: &[&str]) {
@@ -708,6 +732,13 @@ impl Cluster {
             self.yb(&["endpoint-storage", "start"])?;
         }
 
+        // The pid check above can pass while the PS serves nothing — a
+        // failed config-restore restart leaves a live-but-wedged process,
+        // and every later test then fails confusingly on connection
+        // refused (#241). Probe the management port and force one restart
+        // if it won't accept.
+        self.ensure_ps_serving().await?;
+
         // Drain the pageserver's ingest backlog while the compute is
         // still up, so the recycle below doesn't pay it inside the timed
         // basebackup `wait_lsn` (#115).
@@ -725,6 +756,46 @@ impl Cluster {
             tee_println!("  (endpoint recycle: {secs}s)");
         }
         Ok(())
+    }
+
+    /// Ensure the main pageserver accepts TCP on its management port,
+    /// forcing one `pageserver restart` if it doesn't. Complements the
+    /// pid-file liveness check in [`Self::prep_for_next_test`], which a
+    /// live-but-wedged PS passes (#241).
+    async fn ensure_ps_serving(&self) -> anyhow::Result<()> {
+        if self.ps_accepts(Duration::from_secs(10)).await {
+            return Ok(());
+        }
+        step("pageserver alive but not serving — forcing restart (prior test left it wedged)");
+        self.yb_logged(&["pageserver", "restart"])?;
+        if self.ps_accepts(Duration::from_secs(20)).await {
+            return Ok(());
+        }
+        bail!(
+            "pageserver still not accepting on 127.0.0.1:{} after a forced restart",
+            self.ps_http_port()
+        )
+    }
+
+    /// True once the PS management port accepts a TCP connection within
+    /// `budget`, polling every 500ms.
+    async fn ps_accepts(&self, budget: Duration) -> bool {
+        let addr = format!("127.0.0.1:{}", self.ps_http_port());
+        let t0 = Instant::now();
+        loop {
+            if let Ok(Ok(_)) = tokio::time::timeout(
+                Duration::from_secs(1),
+                tokio::net::TcpStream::connect(&addr),
+            )
+            .await
+            {
+                return true;
+            }
+            if t0.elapsed() >= budget {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
     }
 
     // ---- corruption gate -------------------------------------------

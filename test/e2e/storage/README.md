@@ -62,9 +62,11 @@ Rust-only edits skip it entirely.
 - **One shared cluster.** A single `yb_light_local` cluster + tenant +
   `main` endpoint is set up once; all tests share it. Between tests the
   cluster is recycled — any component the prior test left down is
-  restarted and the compute endpoint is recreated — so each test starts
-  from a clean compute state. The tenant + timeline persist, so **tests
-  must use unique table names**.
+  restarted, a pageserver that is alive but not accepting connections is
+  force-restarted (a failed config-restore restart can wedge it, #241),
+  and the compute endpoint is recreated — so each test starts from a
+  clean compute state. The tenant + timeline persist, so **tests must
+  use unique table names**.
 - **Ephemeral DB.** Each run uses its own `yb_storage_e2e_*` database,
   dropped on success.
 - **Corruption gate.** After every test the new tail of the pageserver

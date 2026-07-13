@@ -19,7 +19,7 @@
 use anyhow::{Context, ensure};
 
 use crate::cluster::{Cluster, step};
-use crate::db;
+use crate::{db, page_api};
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let toml = c
@@ -34,19 +34,13 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     );
     std::fs::write(&toml, &forced).context("write parallel pageserver.toml")?;
     step("restart PS with parallel apply forced on every batch (ingest_parallelism=4, min_batch=1)");
-    c.yb(&["pageserver", "restart"])?;
+    c.yb_logged(&["pageserver", "restart"])?;
 
     let result = run_inner(c).await;
 
-    // Restore the default config + restart on every exit path; warn (don't
-    // mask the scenario result) if it fails.
-    if let Err(e) = std::fs::write(&toml, &original) {
-        crate::tee_println!("  (WARN: failed to restore pageserver.toml: {e:#})");
-    }
-    if let Err(e) = c.yb(&["pageserver", "restart"]) {
-        crate::tee_println!("  (WARN: failed to restart PS after config restore: {e:#})");
-    }
-    result
+    // Restore the default config + restart on every exit path. The
+    // scenario's own failure takes precedence over a restore failure.
+    result.and(page_api::restore_ps(c, &original))
 }
 
 async fn run_inner(c: &Cluster) -> anyhow::Result<()> {

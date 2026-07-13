@@ -44,8 +44,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         .join("endpoints/main/pageserver/pageserver.toml");
     let original = std::fs::read_to_string(&toml)?;
     let result = run_inner(c, &reference).await;
-    page_api::restore_ps(c, &original);
-    result?;
+    result.and(page_api::restore_ps(c, &original))?;
 
     db::batch(&main, "DROP TABLE IF EXISTS pipe_mc").await?;
     Ok(())

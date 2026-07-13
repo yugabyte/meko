@@ -4,9 +4,10 @@
 //!
 //! All tests share a single cluster + `main` branch + endpoint to
 //! minimize setup cost; between tests the cluster is recycled (any
-//! component the prior test left down is restarted, and the compute
-//! endpoint is recreated for a clean compute state). The `main` branch
-//! persists across tests, so tests use unique table names.
+//! component the prior test left down is restarted, a wedged pageserver
+//! is force-restarted, and the compute endpoint is recreated for a clean
+//! compute state). The `main` branch persists across tests, so tests use
+//! unique table names.
 //!
 //! This is intentionally a binary, not a `cargo test` target: the
 //! shared-cluster, fixed-order, gate-after-each, fast-then-slow-on-one-

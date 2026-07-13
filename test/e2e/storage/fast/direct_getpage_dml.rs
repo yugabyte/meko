@@ -27,8 +27,7 @@ use crate::{db, page_api};
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let original = page_api::stress_ps(c)?;
     let result = run_inner(c).await;
-    page_api::restore_ps(c, &original);
-    result
+    result.and(page_api::restore_ps(c, &original))
 }
 
 async fn run_inner(c: &Cluster) -> anyhow::Result<()> {

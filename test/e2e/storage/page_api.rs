@@ -180,23 +180,28 @@ pub fn stress_ps(c: &Cluster) -> anyhow::Result<String> {
     std::fs::write(&toml, format!("{original}{STRESS_PAGE_WRITER}"))
         .context("write stressed pageserver.toml")?;
     step("restart PS under tiny limits (image_chain_limit=2, read_cache_bytes=64KiB)");
-    c.yb(&["pageserver", "restart"])?;
+    c.yb_logged(&["pageserver", "restart"])?;
     Ok(original)
 }
 
-/// Restore the original `pageserver.toml` and restart node 1. Best-effort:
-/// logs (rather than fails) so a restore failure doesn't mask the
-/// scenario's own result, but a stuck stressed config is loud.
-pub fn restore_ps(c: &Cluster, original: &str) {
+/// Restore the original `pageserver.toml` and restart node 1. A failure
+/// here used to be logged-and-forgotten, which let a scenario PASS while
+/// leaving the shared cluster's PS down for every later test (#241); now
+/// a restore that can't bring the PS back fails the calling scenario.
+/// Call as `result.and(restore_ps(c, &original))` so the scenario's own
+/// failure still takes precedence.
+pub fn restore_ps(c: &Cluster, original: &str) -> anyhow::Result<()> {
     let toml = c
         .repo_dir()
         .join("endpoints/main/pageserver/pageserver.toml");
-    if let Err(e) = std::fs::write(&toml, original) {
-        crate::tee_println!("  (WARN: failed to restore pageserver.toml: {e:#})");
+    std::fs::write(&toml, original).context("restore pageserver.toml")?;
+    if let Err(e) = c.yb_logged(&["pageserver", "restart"]) {
+        crate::tee_println!("  (restart after config restore failed, retrying as stop+start: {e:#})");
+        c.yb_quiet(&["pageserver", "stop", "-m", "immediate"]);
+        c.yb_logged(&["pageserver", "start"])
+            .context("pageserver would not come back after config restore (restart, then stop+start)")?;
     }
-    if let Err(e) = c.yb(&["pageserver", "restart"]) {
-        crate::tee_println!("  (WARN: failed to restart PS after config restore: {e:#})");
-    }
+    Ok(())
 }
 
 /// #173: rewrite `pageserver.toml` to run the pipelined page_service at a
@@ -226,7 +231,7 @@ pub fn restart_with_pipeline_depth(c: &Cluster, original: &str, depth: usize) ->
     // (we just want the PS back on the new toml with a cold cache), and a
     // graceful stop can exceed yb_light's timeout while draining a fresh WAL
     // backlog. Matches the suite convention (e.g. restart_wal_replay).
-    c.yb(&["pageserver", "stop", "-m", "immediate"])?;
-    c.yb(&["pageserver", "start"])?;
+    c.yb_logged(&["pageserver", "stop", "-m", "immediate"])?;
+    c.yb_logged(&["pageserver", "start"])?;
     Ok(())
 }

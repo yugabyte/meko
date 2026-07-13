@@ -61,8 +61,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // restore the PS config.
     let _ = clear_failpoint(c).await;
     let _ = db::batch(&conninfo, "DROP TABLE IF EXISTS ps_disc").await;
-    page_api::restore_ps(c, &original);
-    result
+    result.and(page_api::restore_ps(c, &original))
 }
 
 async fn run_inner(c: &Cluster, conninfo: &str, original: &str) -> anyhow::Result<()> {

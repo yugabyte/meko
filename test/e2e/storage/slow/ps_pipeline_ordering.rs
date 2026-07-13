@@ -64,8 +64,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let original = std::fs::read_to_string(&toml)?;
     let result = run_inner(c, &main, &original, &reference).await;
     let _ = set_failpoint(c, "off").await; // best-effort clear (restore_ps also restarts)
-    page_api::restore_ps(c, &original);
-    result?;
+    result.and(page_api::restore_ps(c, &original))?;
 
     db::batch(&main, "DROP TABLE IF EXISTS pipe_oow").await?;
     Ok(())
