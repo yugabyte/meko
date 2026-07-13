@@ -48,10 +48,15 @@ SKIP_DIR="${2:-${YB_LIGHT_REPO_DIR:-}}"
 [ -d "$TEST_DIR" ] || exit 0
 
 # A dead run's lock is free; flock -n acquires it (and immediately releases
-# it on return). A live run's lock is held; flock -n fails. A run dir with
-# no lock file at all is a legacy/pre-lock run — also treated as dead.
+# it on return). A live run's lock is held; flock -n fails. The lock is the
+# SIBLING file `<run_dir>.lock` — it must live outside the run dir because
+# the harness's setup clean removes and recreates the dir (an in-dir lock
+# vanishing made every live run look dead). Fall back to the legacy in-dir
+# `.run.lock` for runs started by an older run.sh; a run with neither is
+# legacy/dead.
 run_is_dead() {
-    local lock="$1/.run.lock"
+    local lock="$1.lock"
+    [ -e "$lock" ] || lock="$1/.run.lock"
     [ -e "$lock" ] || return 0           # no lock -> legacy/dead
     flock -n "$lock" -c true 2>/dev/null  # 0 = acquired -> dead; 1 = held -> alive
 }
@@ -75,6 +80,16 @@ for dir in "$TEST_DIR"/run_*; do
 done
 
 [ "$reaped" -gt 0 ] && echo "reap.sh: reaped $reaped dead run(s)" >&2
+
+# Housekeeping: drop sibling lock files whose run dir is gone (e.g. the
+# harness's 7-day dir GC removed it) and whose lock is free. A held lock
+# with a missing dir is a LIVE run inside its setup clean-and-recreate
+# window — leave it alone.
+for lock in "$TEST_DIR"/run_*.lock; do
+    dir="${lock%.lock}"
+    [ -d "$dir" ] && continue
+    flock -n "$lock" -c true 2>/dev/null && rm -f "$lock"
+done
 
 # Drop ephemeral YB databases left by dead runs. Each run's DB is
 # `yb_storage_e2e_<epoch>_<pid>`, where `<epoch>` is its creation time (see

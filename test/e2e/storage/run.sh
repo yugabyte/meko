@@ -174,14 +174,21 @@ RUN_ID="${EPOCHSECONDS:-$(date +%s)}_$$"
 export YB_LIGHT_REPO_DIR="${YB_LIGHT_REPO_DIR:-$REPO/.e2e-tests/run_${RUN_ID}}"
 export YB_DBNAME="${YB_DBNAME:-yb_storage_e2e_${RUN_ID}}"
 
-# Liveness lock for THIS run. We hold an exclusive flock on the run dir's
-# `.run.lock` for run.sh's whole lifetime; the kernel releases it when run.sh
-# exits OR is killed (SIGKILL / OOM included). So "lock held" reliably means
-# "this run is alive", which is what reap.sh keys on to tell a dead run's
-# orphans from a live concurrent run. Held by run.sh only — closed in the
-# harness child below — so an orphaned cluster process can never keep it held.
+# Liveness lock for THIS run. We hold an exclusive flock on the SIBLING
+# file `<run_dir>.lock` for run.sh's whole lifetime; the kernel releases it
+# when run.sh exits OR is killed (SIGKILL / OOM included). So "lock held"
+# reliably means "this run is alive", which is what reap.sh keys on to tell
+# a dead run's orphans from a live concurrent run. Held by run.sh only —
+# closed in the harness child below — so an orphaned cluster process can
+# never keep it held.
+#
+# The lock MUST live outside the run dir: the harness's own setup clean
+# (`Cluster::setup` -> clean.sh) removes and recreates the run dir, and an
+# in-dir lock file vanishing made reap.sh treat every live run as dead —
+# a concurrently starting run then killed its processes and dropped its
+# ephemeral DB mid-run.
 mkdir -p "$YB_LIGHT_REPO_DIR"
-exec {RUN_LOCK_FD}>"$YB_LIGHT_REPO_DIR/.run.lock"
+exec {RUN_LOCK_FD}>"${YB_LIGHT_REPO_DIR}.lock"
 flock -n "$RUN_LOCK_FD" \
     || { echo "run.sh: $YB_LIGHT_REPO_DIR is locked by another run; aborting" >&2; exit 1; }
 
