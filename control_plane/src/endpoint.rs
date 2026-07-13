@@ -1011,27 +1011,6 @@ impl Endpoint {
         Ok(())
     }
 
-    // Update the pageservers in the spec file of the endpoint. This is useful to test the spec refresh scenario.
-    pub async fn update_pageservers_in_config(
-        &self,
-        pageserver_conninfo: &PageserverConnectionInfo,
-    ) -> Result<()> {
-        let config_path = self.endpoint_path().join("config.json");
-        let mut config: ComputeConfig = {
-            let file = std::fs::File::open(&config_path)?;
-            serde_json::from_reader(file)?
-        };
-
-        let mut spec = config.spec.unwrap();
-        spec.pageserver_connection_info = Some(pageserver_conninfo.clone());
-        config.spec = Some(spec);
-
-        let file = std::fs::File::create(&config_path)?;
-        serde_json::to_writer_pretty(file, &config)?;
-
-        Ok(())
-    }
-
     // Call the /status HTTP API
     pub async fn get_status(&self) -> Result<ComputeStatusResponse> {
         let client = reqwest::Client::new();

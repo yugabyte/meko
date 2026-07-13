@@ -598,7 +598,6 @@ enum EndpointCmd {
     Start(EndpointStartCmdArgs),
     Reconfigure(EndpointReconfigureCmdArgs),
     Stop(EndpointStopCmdArgs),
-    UpdatePageservers(EndpointUpdatePageserversCmdArgs),
     GenerateJwt(EndpointGenerateJwtCmdArgs),
 }
 
@@ -630,8 +629,6 @@ struct EndpointCreateCmdArgs {
     external_http_port: Option<u16>,
     #[clap(long)]
     internal_http_port: Option<u16>,
-    #[clap(long = "pageserver-id")]
-    endpoint_pageserver_id: Option<NodeId>,
 
     /// Don't do basebackup, create endpoint directory with only config files.
     #[clap(long, action = clap::ArgAction::Set, default_value_t = false)]
@@ -706,9 +703,6 @@ fn parse_pg_setting(s: &str) -> Result<(String, String), String> {
 struct EndpointStartCmdArgs {
     /// Postgres endpoint ID.
     endpoint_id: String,
-    /// Pageserver ID.
-    #[clap(long = "pageserver-id")]
-    endpoint_pageserver_id: Option<NodeId>,
     /// List of safekeepers endpoint will talk to.
     #[clap(long)]
     safekeepers: Option<String>,
@@ -748,9 +742,6 @@ struct EndpointReconfigureCmdArgs {
     branch_id: Option<BranchId>,
     /// Postgres endpoint ID.
     endpoint_id: String,
-    /// Pageserver ID.
-    #[clap(long = "pageserver-id")]
-    endpoint_pageserver_id: Option<NodeId>,
     #[clap(long)]
     safekeepers: Option<String>,
 }
@@ -768,17 +759,6 @@ struct EndpointStopCmdArgs {
     #[clap(long)]
     #[clap(default_value = "fast")]
     mode: EndpointTerminateMode,
-}
-
-/// Update the pageservers in the spec file of the compute endpoint
-#[derive(clap::Args)]
-struct EndpointUpdatePageserversCmdArgs {
-    /// Postgres endpoint id
-    endpoint_id: String,
-
-    /// Specified pageserver id
-    #[clap(short = 'p', long)]
-    pageserver_id: Option<NodeId>,
 }
 
 /// Generate a JWT for an endpoint.
@@ -2186,7 +2166,6 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
         }
         EndpointCmd::Start(args) => {
             let endpoint_id = &args.endpoint_id;
-            let pageserver_id = args.endpoint_pageserver_id;
             let remote_ext_base_url = &args.remote_ext_base_url;
 
             let endpoint = cplane
@@ -2220,30 +2199,26 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 PageserverProtocol::Libpq
             };
 
-            let mut pageserver_conninfo = if let Some(ps_id) = pageserver_id {
-                let conf = env.get_pageserver_conf(ps_id).unwrap();
-                local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?
-            } else {
-                // Per-endpoint pageserver topology: the pageserver
-                // serving this endpoint's branch is identified by
-                // the identity in its pageserver.toml.
-                let conf = env
-                    .pageserver_conf_for_timeline(endpoint.branch_id)
-                    .with_context(|| {
-                        format!("no pageserver serves branch {}", endpoint.branch_id)
-                    })?;
+            // Per-endpoint pageserver topology: the pageserver
+            // serving this endpoint's branch is identified by
+            // the identity in its pageserver.toml.
+            let conf = env
+                .pageserver_conf_for_timeline(endpoint.branch_id)
+                .with_context(|| {
+                    format!("no pageserver serves branch {}", endpoint.branch_id)
+                })?;
 
-                // Initialize an LSN lease for static computes.
-                if let ComputeMode::Static(lsn) = endpoint.mode {
-                    let pageserver = PageServerNode::from_env(env, conf);
-                    pageserver
-                        .http_client
-                        .branch_init_lsn_lease(endpoint.branch_id, lsn)
-                        .await?;
-                }
+            // Initialize an LSN lease for static computes.
+            if let ComputeMode::Static(lsn) = endpoint.mode {
+                let pageserver = PageServerNode::from_env(env, conf);
+                pageserver
+                    .http_client
+                    .branch_init_lsn_lease(endpoint.branch_id, lsn)
+                    .await?;
+            }
 
-                local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?
-            };
+            let mut pageserver_conninfo =
+                local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?;
             pageserver_conninfo.prefer_protocol = prefer_protocol;
 
             let ps_conf = env.get_pageserver_conf(DEFAULT_PAGESERVER_ID)?;
@@ -2293,37 +2268,6 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             println!("Starting existing endpoint {endpoint_id}...");
             endpoint.start(args).await?;
         }
-        EndpointCmd::UpdatePageservers(args) => {
-            let endpoint_id = &args.endpoint_id;
-            let endpoint = cplane
-                .endpoints
-                .get(endpoint_id.as_str())
-                .with_context(|| format!("postgres endpoint {endpoint_id} is not found"))?;
-            let prefer_protocol = if endpoint.grpc {
-                PageserverProtocol::Grpc
-            } else {
-                PageserverProtocol::Libpq
-            };
-            let mut pageserver_conninfo = match args.pageserver_id {
-                Some(pageserver_id) => {
-                    let conf = env.get_pageserver_conf(pageserver_id)?;
-                    local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?
-                }
-                None => {
-                    let conf = env
-                        .pageserver_conf_for_timeline(endpoint.branch_id)
-                        .with_context(|| {
-                            format!("no pageserver serves branch {}", endpoint.branch_id)
-                        })?;
-                    local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?
-                }
-            };
-            pageserver_conninfo.prefer_protocol = prefer_protocol;
-
-            endpoint
-                .update_pageservers_in_config(&pageserver_conninfo)
-                .await?;
-        }
         EndpointCmd::Reconfigure(args) => {
             let endpoint_id = &args.endpoint_id;
             let endpoint = cplane
@@ -2336,17 +2280,13 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             } else {
                 PageserverProtocol::Libpq
             };
-            let mut pageserver_conninfo = if let Some(ps_id) = args.endpoint_pageserver_id {
-                let conf = env.get_pageserver_conf(ps_id)?;
-                local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?
-            } else {
-                let conf = env
-                    .pageserver_conf_for_timeline(endpoint.branch_id)
-                    .with_context(|| {
-                        format!("no pageserver serves branch {}", endpoint.branch_id)
-                    })?;
-                local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?
-            };
+            let conf = env
+                .pageserver_conf_for_timeline(endpoint.branch_id)
+                .with_context(|| {
+                    format!("no pageserver serves branch {}", endpoint.branch_id)
+                })?;
+            let mut pageserver_conninfo =
+                local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?;
             pageserver_conninfo.prefer_protocol = prefer_protocol;
 
             // If --safekeepers argument is given, use only the listed
