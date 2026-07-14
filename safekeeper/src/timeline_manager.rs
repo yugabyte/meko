@@ -21,7 +21,7 @@ use tracing::{Instrument, debug, info, info_span, instrument, warn};
 use utils::lsn::Lsn;
 
 use crate::SafeKeeperConf;
-use crate::control_file::{ControlFileStorage, Storage};
+use crate::control_file::{AdvisoryPersist, ControlFileStorage, Storage};
 use crate::metrics::{MANAGER_ACTIVE_CHANGES, MANAGER_ITERATIONS_TOTAL, MISC_OPERATION_SECONDS};
 use crate::remove_wal::calc_horizon_lsn;
 use crate::send_wal::WalSenders;
@@ -192,6 +192,21 @@ pub(crate) struct Manager {
 
     // background tasks
     pub(crate) wal_removal_task: Option<JoinHandle<anyhow::Result<u64>>>,
+    /// In-flight periodic control-file save (at most one). Runs WITHOUT
+    /// the shared_state lock — holding that lock across a YB round trip
+    /// froze WAL appends and starved residence-guard issuance (2026-07
+    /// TPC-C wedge, `UpdateControlFile`). Resolves to the persisted
+    /// `remote_consistent_lsn` on success, `None` on failure.
+    pub(crate) cfile_save_task: Option<JoinHandle<Option<Lsn>>>,
+    /// When the last periodic save was *attempted* (spawned), regardless of
+    /// outcome. Gates the next spawn independently of the persisted clock: a
+    /// FAILED save never advances the persisted watermark, so without this a
+    /// failing save would re-spawn every manager tick (~300 ms) — a retry
+    /// storm hammering YB during an outage. With it, a failed save retries at
+    /// most once per `control_file_save_interval`. `None` = never attempted.
+    cfile_last_attempt: Option<std::time::Instant>,
+    /// Lock-free persist handle for the task above.
+    cfile_persist: AdvisoryPersist,
 
     // misc
     pub(crate) access_service: AccessService,
@@ -237,8 +252,7 @@ pub async fn main_task(
             mgr.update_is_active(is_wal_backup_required, num_computes, &state_snapshot);
 
             mgr.set_status(Status::UpdateControlFile);
-            mgr.update_control_file_save(&state_snapshot, &mut next_event)
-                .await;
+            mgr.update_control_file_save(&state_snapshot, &mut next_event);
 
             mgr.set_status(Status::UpdateWalRemoval);
             mgr.update_wal_removal(&state_snapshot).await;
@@ -270,6 +284,11 @@ pub async fn main_task(
                 mgr.wal_removal_task = None;
                 mgr.update_wal_removal_end(res);
             }
+            res = await_task_finish(mgr.cfile_save_task.as_mut()) => {
+                // control-file save task finished
+                mgr.cfile_save_task = None;
+                mgr.update_cfile_save_end(res).await;
+            }
 
             msg = manager_rx.recv() => {
                 mgr.set_status(Status::HandleMessage);
@@ -287,6 +306,12 @@ pub async fn main_task(
         mgr.update_wal_removal_end(res);
     }
 
+    // The advisory save is safe to abandon: it's a monotonic UPDATE of a
+    // row the timeline-delete flow removes anyway.
+    if let Some(cfile_save_task) = &mgr.cfile_save_task {
+        cfile_save_task.abort();
+    }
+
     mgr.set_status(Status::Finished);
 }
 
@@ -298,6 +323,13 @@ impl Manager {
         manager_tx: tokio::sync::mpsc::UnboundedSender<ManagerCtlMessage>,
         yb_wal: Option<Arc<YbWalConn>>,
     ) -> Manager {
+        let cfile_persist = tli
+            .read_shared_state()
+            .await
+            .sk
+            .state()
+            .pers
+            .advisory_persist_handle();
         Manager {
             wal_seg_size: tli.get_wal_seg_size().await,
             walsenders: tli.get_walsenders().clone(),
@@ -307,6 +339,9 @@ impl Manager {
             tli_broker_active: broker_active_set.guard(tli.clone()),
             last_removed_segno: 0,
             wal_removal_task: None,
+            cfile_save_task: None,
+            cfile_last_attempt: None,
+            cfile_persist,
             access_service: AccessService::new(manager_tx),
             tli,
             conf,
@@ -385,29 +420,84 @@ impl Manager {
             .store(is_active, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Save control file if needed. Returns Instant if we should persist the control file in the future.
-    async fn update_control_file_save(
-        &self,
-        state: &StateSnapshot,
-        next_event: &mut Option<Instant>,
-    ) {
-        if !state.inmem_flush_pending {
+    /// Kick off the periodic control-file save if needed; sets `next_event`
+    /// when the save is due in the future.
+    ///
+    /// The save runs as a background task holding NO shared_state lock.
+    /// This loop is the sole servicer of residence-guard requests, and
+    /// WAL appends need the shared_state write lock — the previous
+    /// in-loop, under-lock `flush()` meant one slow
+    /// `safekeeper.timeline_state` UPDATE froze commits and timed out
+    /// every new WAL receiver (2026-07 TPC-C wedge, manager status
+    /// `UpdateControlFile`). Only `remote_consistent_lsn` needs this
+    /// periodic persist; it goes through a monotonic single-column
+    /// UPDATE that is safe to land concurrently with the full-row
+    /// consensus persists (see [`AdvisoryPersist`]).
+    fn update_control_file_save(&mut self, state: &StateSnapshot, next_event: &mut Option<Instant>) {
+        if !state.inmem_flush_pending || self.cfile_save_task.is_some() {
             return;
         }
 
-        if state.cfile_last_persist_at.elapsed() > self.conf.control_file_save_interval {
-            let mut write_guard = self.tli.write_shared_state().await;
-            // it should be done in the background because it blocks manager task, but flush() should
-            // be fast enough not to be a problem now
-            if let Err(e) = write_guard.sk.state_mut().flush().await {
-                warn!("failed to save control file: {:?}", e);
-            }
+        let interval = self.conf.control_file_save_interval;
+        // Gate on BOTH the persisted watermark AND the last *attempt*. A failed
+        // save never advances the persisted clock, so gating on it alone would
+        // re-spawn every manager tick (~300 ms) once the interval first elapses
+        // — a retry storm on YB during an outage. The attempt clock, advanced
+        // on every spawn (success or failure), bounds retries to one per
+        // interval. (This is the async twin of the sync clock-reset guard in
+        // control_file.rs.)
+        let persist_due = state.cfile_last_persist_at.elapsed() > interval;
+        let attempt_due = self
+            .cfile_last_attempt
+            .is_none_or(|t| t.elapsed() > interval);
+        if persist_due && attempt_due {
+            self.cfile_last_attempt = Some(std::time::Instant::now());
+            let persist = self.cfile_persist.clone();
+            let lsn = state.remote_consistent_lsn;
+            let branch_id = self.tli.branch_id;
+            self.cfile_save_task = Some(tokio::spawn(
+                async move {
+                    // Simulates the YB write stalling under load (e2e
+                    // sk_cfile_stall); configure with return(<millis>).
+                    utils::failpoint_support::sleep_millis_async!("sk-cfile-save");
+                    // Simulates the save FAILING (e2e sk_cfile_save_retry_storm),
+                    // to exercise the failure-retry gate without a real YB
+                    // outage; configure with `return`.
+                    fail::fail_point!("sk-cfile-save-fail", |_| {
+                        warn!("sk-cfile-save-fail: injected control-file save failure");
+                        None
+                    });
+                    match persist.persist_remote_consistent_lsn(lsn).await {
+                        Ok(()) => Some(lsn),
+                        Err(e) => {
+                            warn!("failed to save control file: {:?}", e);
+                            None
+                        }
+                    }
+                }
+                .instrument(info_span!("cfile save", branch_id=%branch_id)),
+            ));
         } else {
-            // we should wait until some time passed until the next save
-            update_next_event(
-                next_event,
-                (state.cfile_last_persist_at + self.conf.control_file_save_interval).into(),
-            );
+            // Wake when whichever gate clears last has elapsed.
+            let mut next = state.cfile_last_persist_at + interval;
+            if let Some(t) = self.cfile_last_attempt {
+                next = next.max(t + interval);
+            }
+            update_next_event(next_event, next.into());
+        }
+    }
+
+    /// Fold a finished control-file save back into the in-memory row
+    /// mirror (brief write lock, no I/O under it). A failed save was
+    /// already logged by the task; the interval check retries it.
+    async fn update_cfile_save_end(&self, res: Result<Option<Lsn>, JoinError>) {
+        match res {
+            Ok(Some(lsn)) => {
+                let mut write_guard = self.tli.write_shared_state().await;
+                write_guard.sk.state_mut().pers.note_advisory_persisted(lsn);
+            }
+            Ok(None) => {}
+            Err(e) => warn!("control file save task failed: {:?}", e),
         }
     }
 

@@ -139,6 +139,11 @@ impl Cluster {
     pub fn sk_pg_port(&self) -> u16 {
         self.port_base + 100
     }
+    /// HTTP port of safekeeper node 1 (`port_base + 200`). Scenarios use
+    /// it for `/v1/failpoints` and the metrics endpoint.
+    pub fn sk_http_port(&self) -> u16 {
+        self.port_base + 200
+    }
     /// The branch id of the shared `main` branch, as a hex string.
     /// Public wrapper over the PS branch listing for scenarios that need
     /// to address the branch directly (e.g. the gRPC page client).
@@ -342,9 +347,17 @@ impl Cluster {
     /// Run a `yb_light_local` subcommand, inheriting stdio, and fail if
     /// it exits non-zero.
     pub fn yb(&self, args: &[&str]) -> anyhow::Result<()> {
+        self.yb_env(args, &[])
+    }
+
+    /// Like [`Self::yb`], with extra environment variables set for the
+    /// child only (e.g. daemon-config overrides the control plane reads
+    /// when writing `safekeeper.toml` / `pageserver.toml`).
+    pub fn yb_env(&self, args: &[&str], envs: &[(&str, &str)]) -> anyhow::Result<()> {
         let status = self
             .yb_command()
             .args(args)
+            .envs(envs.iter().map(|(k, v)| (*k, *v)))
             .status()
             .with_context(|| format!("spawning yb_light_local {}", args.join(" ")))?;
         if !status.success() {

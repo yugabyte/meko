@@ -117,13 +117,19 @@ TOOL_BINS=(--bin yb-dump-pages --bin yb-dump-wals --bin yb-reset-consistent-lsn)
 # guard below), so keep our debug|release value out of the sub-build's env.
 env -u PROFILE "$REPO/build.sh" --pg-only
 
+# The safekeeper is built with its `testing` feature so failpoints
+# (`PUT /v1/failpoints`) are usable by fault-injection scenarios (e.g.
+# sk_cfile_stall). Failpoints are inert unless configured, so the binary
+# behaves identically to the production build otherwise.
 if [[ $PROFILE == release ]]; then
-    cargo build --release --features pageserver/testing --bin e2e_tests --bin yb_light_local \
+    cargo build --release --features pageserver/testing,safekeeper/testing \
+        --bin e2e_tests --bin yb_light_local \
         "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
     export YB_LIGHT=${YB_LIGHT:-$REPO/target/release/yb_light_local}
     BIN=$REPO/target/release/e2e_tests
 else
-    cargo build --features pageserver/testing --bin e2e_tests --bin yb_light_local \
+    cargo build --features pageserver/testing,safekeeper/testing \
+        --bin e2e_tests --bin yb_light_local \
         "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
     BIN=$REPO/target/debug/e2e_tests
 fi

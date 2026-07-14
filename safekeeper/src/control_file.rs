@@ -204,6 +204,61 @@ impl YbControlFileStorage {
     }
 }
 
+/// Client + branch id cloned out of a [`YbControlFileStorage`] so the
+/// timeline manager can persist the advisory (non-consensus)
+/// control-file field without holding the timeline `shared_state`
+/// lock. Holding that lock across a YB round trip freezes WAL appends
+/// and starves residence-guard issuance (the 2026-07 TPC-C safekeeper
+/// wedge, second occurrence: manager stuck in `UpdateControlFile`).
+#[derive(Clone)]
+pub struct AdvisoryPersist {
+    client: Arc<YsqlClient>,
+    branch_id: BranchId,
+}
+
+impl AdvisoryPersist {
+    /// Persist `remote_consistent_lsn` with a narrow, monotonic UPDATE.
+    ///
+    /// `GREATEST()` makes the statement safe under any interleaving
+    /// with the full-row persists that consensus transitions issue
+    /// under the shared_state lock (elections, term crossings,
+    /// `map_control_file`): a late-landing advisory write can never
+    /// regress the row, and it touches none of the consensus fields
+    /// (`term`, `term_history`, ...).
+    pub async fn persist_remote_consistent_lsn(&self, lsn: Lsn) -> Result<()> {
+        let _timer = PERSIST_CONTROL_FILE_SECONDS.start_timer();
+        self.client
+            .execute(
+                "UPDATE safekeeper.timeline_state \
+                 SET remote_consistent_lsn = GREATEST(remote_consistent_lsn, $2) \
+                 WHERE branch_id = $1",
+                &[&self.branch_id.to_string(), &(lsn.0 as i64)],
+            )
+            .await
+            .context("UPDATE safekeeper.timeline_state (advisory)")?;
+        Ok(())
+    }
+}
+
+impl YbControlFileStorage {
+    /// Handle for lock-free advisory persists; see [`AdvisoryPersist`].
+    pub fn advisory_persist_handle(&self) -> AdvisoryPersist {
+        AdvisoryPersist {
+            client: self.client.clone(),
+            branch_id: self.branch_id,
+        }
+    }
+
+    /// Fold a completed [`AdvisoryPersist`] write back into the
+    /// in-memory mirror of the row. `max()` because a full-row persist
+    /// (election etc.) may have advanced the mirror while the advisory
+    /// write was in flight.
+    pub fn note_advisory_persisted(&mut self, lsn: Lsn) {
+        self.state.remote_consistent_lsn = std::cmp::max(self.state.remote_consistent_lsn, lsn);
+        self.last_persist_at = Instant::now();
+    }
+}
+
 impl Deref for YbControlFileStorage {
     type Target = TimelinePersistentState;
     fn deref(&self) -> &Self::Target {
@@ -216,6 +271,11 @@ impl Storage for YbControlFileStorage {
         let _timer = PERSIST_CONTROL_FILE_SECONDS.start_timer();
         self.write_row(s, /* insert= */ false).await?;
         self.state = s.clone();
+        // Reset the save-interval clock: without this the manager
+        // re-persisted every loop iteration (300ms) once the first
+        // interval elapsed, hammering YB with row UPDATEs for as long
+        // as remote_consistent_lsn kept advancing.
+        self.last_persist_at = Instant::now();
         Ok(())
     }
 

@@ -175,9 +175,19 @@ impl SafekeeperNode {
             None => None,
         };
 
+        // Test-only override of the periodic control-file save cadence
+        // (humantime format, e.g. "1s"). The e2e cfile-stall scenario
+        // shrinks it so the save path fires within the test budget.
+        let control_file_save_interval = match std::env::var("YB_SK_CONTROL_FILE_SAVE_INTERVAL") {
+            Ok(s) => humantime::parse_duration(&s)
+                .with_context(|| format!("parse YB_SK_CONTROL_FILE_SAVE_INTERVAL={s:?}"))?,
+            Err(_) => SafekeeperConfigToml::default().control_file_save_interval,
+        };
+
         let toml_cfg = SafekeeperConfigToml {
             id,
             branch_id: self.conf.branch_id,
+            control_file_save_interval,
             listen_pg: format!("{}:{}", self.listen_addr, self.conf.pg_port),
             listen_pg_tenant_only: self
                 .conf
