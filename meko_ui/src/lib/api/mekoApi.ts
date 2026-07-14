@@ -814,6 +814,50 @@ export async function getCurrentUserUsage(options: { signal?: AbortSignal } = {}
   return request<AccountUsage>("/auth/me/usage", "GET", undefined, options);
 }
 
+// --- Token savings (contextual_prominence_search) ---
+
+/**
+ * TokenSavingsSummary mirrors api_server's models.TokenSavingsSummary.
+ * `total_tokens_saved` is the sum of (tokens_if_raw - tokens_sent) recorded by
+ * meko-mcp-server's contextual_prominence_search; `tokens_saved_by_source`
+ * breaks it down by retrieval tier. Lifetime counters (no time range).
+ *
+ *  - GET /me/token-savings           → account-wide; `by_datapack` has one
+ *    entry per datapack the caller can access.
+ *  - GET /datapacks/{id}/token-savings → single datapack; `by_datapack` has
+ *    exactly one entry.
+ */
+export type DatapackTokenSavings = {
+  datapack_id: string;
+  total_requests: number;
+  total_tokens_saved: number;
+};
+
+export type TokenSavingsSummary = {
+  total_requests: number;
+  total_tokens_saved: number;
+  tokens_saved_by_source: Record<string, number>;
+  by_datapack: DatapackTokenSavings[];
+};
+
+// Account-wide token savings across every datapack the caller can access.
+export async function getAccountTokenSavings(options: { signal?: AbortSignal } = {}) {
+  return request<TokenSavingsSummary>("/me/token-savings", "GET", undefined, options);
+}
+
+// Token savings for a single datapack (by UUID).
+export async function getDatapackTokenSavings(
+  datapackId: string,
+  options: { signal?: AbortSignal } = {},
+) {
+  return request<TokenSavingsSummary>(
+    `/datapacks/${encodeURIComponent(datapackId)}/token-savings`,
+    "GET",
+    undefined,
+    options,
+  );
+}
+
 export async function updateOnboardingStatus(hasCompletedOnboarding: boolean) {
   return request<{ message: string; has_completed_onboarding: boolean }>("/auth/me", "PATCH", {
     has_completed_onboarding: hasCompletedOnboarding,

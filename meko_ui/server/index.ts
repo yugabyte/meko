@@ -108,6 +108,10 @@ app.use((req, res, next) => {
     // Gates the AMP (Postgres databases) UI inside a datapack. Runtime flag so
     // it can be flipped per environment without a rebuild. Default off.
     "SHOW_PG_AMP",
+    // Gates the "Meko efficiency" token-burn tiles. Mirrors the BE/MCP flag of
+    // the same name so the tiles only show where contextual prominence search
+    // (which produces the token-savings data) is enabled. Default off.
+    "MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH",
   ];
   app.get("/runtime-config.js", (_req, res) => {
     const cfg: Record<string, string> = {};

@@ -56,6 +56,8 @@ import { toast } from "@/hooks/use-toast";
 import { formatDatapackCreatedAtUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";
 import { useEnsureLangfuseProjectKeysForTechPreviewDatapack } from "@/lib/langfuseProjectKeysBootstrap";
 import { CollectiveLearningPipeline } from "@/features/datapacks/components/datapack-detail/CollectiveLearningPipeline";
+import { DatapackTokenBurnTile } from "@/features/datapacks/components/efficiency/TokenBurnTile";
+import { CONTEXTUAL_PROMINENCE_SEARCH_ENABLED } from "@/lib/tokenSavings";
 import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailAgentsTile";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
 import { DatapackDetailDatabasesTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailDatabasesTile";
@@ -541,6 +543,13 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
         />
 
         {statusError ? <WarningBanner>{statusError}</WarningBanner> : null}
+
+        {/* Meko efficiency — token burn saved for this datapack, above the
+            collective-learning pipeline it summarizes. Only shown where
+            contextual prominence search (which produces the data) is enabled. */}
+        {CONTEXTUAL_PROMINENCE_SEARCH_ENABLED ? (
+          <DatapackTokenBurnTile datapackId={datapack?.datapack_id ?? null} />
+        ) : null}
 
         <CollectiveLearningPipeline
           currentUser={currentUser}

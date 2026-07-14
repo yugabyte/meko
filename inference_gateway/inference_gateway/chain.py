@@ -744,6 +744,15 @@ async def run_chat_turn(
         len(memory_hits), len(kb_hits),
     )
 
+    # TEMP DEBUG: dump the exact memory/KB context fed to the LLM so we can see
+    # whether the answer is actually in the grounding (vs the model ignoring it).
+    # logger.info(
+    #     "run_chat_turn: LLM GROUNDING session=%s memory_hits=%d kb_hits=%d\n"
+    #     "----- MEMORY CONTEXT -----\n%s\n----- KB CONTEXT -----\n%s\n--------------------------",
+    #     session_id, len(memory_hits), len(kb_hits),
+    #     memory_context or "(none)", kb_context or "(none)",
+    # )
+
     # 3. LLM call. Prior turns from the session store are NOT replayed —
     # Mem0 + KB carry the cross-turn context we care about and replaying
     # full history per turn was the dominant input-token cost. The system
@@ -1012,6 +1021,11 @@ async def _search_memories(
                 )
             )
         return []
+    # TEMP DEBUG: dump the raw memory_search response so we can see the actual
+    # item keys. _extract_memory_hits keeps an item only if its text is under
+    # memory/data/text/content — anything else is silently dropped.
+    # logger.info("memory_search RAW (agent_id=%s): %s", agent_id, _truncate(str(_parse_json(raw)), 3000))
+
     # Vector hits are capped by `top_k` server-side; graph/promoted relations
     # are not, so cap them at 2× top_k to bound the prompt.
     hits = _extract_memory_hits(_parse_json(raw), relation_cap=2 * top_k)
@@ -1238,6 +1252,10 @@ async def _search_contextual_prominence(
         return [], [], None
 
     parsed = _parse_json(raw)
+    # TEMP DEBUG: raw unified-search response. The unified path skips
+    # _search_memories, so this is where memory results show up when contextual
+    # prominence search is ON. Unconditional so it always prints on this path.
+    # logger.info("contextual_prominence_search RAW (agent_id=%s): %s", agent_id, _truncate(str(parsed), 3000))
     if not isinstance(parsed, dict) or parsed.get("error"):
         detail = parsed.get("error") if isinstance(parsed, dict) else "malformed response"
         logger.warning("contextual_prominence_search returned an error: %s", detail)

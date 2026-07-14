@@ -35,6 +35,8 @@ import {
 import { queryClient } from "@/lib/queryClient";
 import { DATAPACKS_QUERY_KEY, useDatapacks } from "@/features/datapacks/hooks/useDatapacks";
 import DatapacksTilesSection from "@/features/datapacks/components/DatapacksTilesSection";
+import { AccountTokenBurnTile } from "@/features/datapacks/components/efficiency/TokenBurnTile";
+import { CONTEXTUAL_PROMINENCE_SEARCH_ENABLED } from "@/lib/tokenSavings";
 import { DatapackConnectDialog } from "@/features/datapacks/components/datapack-detail/dialogs";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
@@ -473,6 +475,21 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
 
         {freeTier.hasHitDatapackCount ? (
           <FreeTierLimitBanner kind="datapack" className="mb-4" />
+        ) : null}
+
+        {/* Meko efficiency — account-wide savings across every datapack. The
+            grid has room for the future Context Quality / Infra tiles. Only
+            shown where contextual prominence search (which produces the
+            token-savings data) is enabled. */}
+        {CONTEXTUAL_PROMINENCE_SEARCH_ENABLED ? (
+          <section className="space-y-3">
+            <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+              Meko efficiency
+            </h2>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <AccountTokenBurnTile />
+            </div>
+          </section>
         ) : null}
 
         <DatapacksTilesSection
