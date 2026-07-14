@@ -7207,6 +7207,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "yb_pgclient"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "prost 0.13.5",
+ "prost-build 0.13.3",
+ "protoc-bin-vendored",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "yoke"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
