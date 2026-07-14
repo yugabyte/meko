@@ -650,7 +650,7 @@ struct EndpointCreateCmdArgs {
     /// If set, the node will be a hot replica on the specified timeline.
     #[clap(long, action = clap::ArgAction::Set, default_value_t = false)]
     hot_standby: bool,
-    /// If set, will set up the catalog for neon_superuser.
+    /// If set, will set up the catalog for yb_amp_superuser.
     #[clap(long)]
     update_catalog: bool,
     /// Allow multiple primary endpoints running on the same branch. Shouldn't be used normally, but
@@ -709,7 +709,7 @@ struct EndpointStartCmdArgs {
     /// Configure the remote extensions storage proxy gateway URL to request for extensions.
     #[clap(long, alias = "remote-ext-config")]
     remote_ext_base_url: Option<String>,
-    /// If set, will create test user `user` and `neondb` database. Requires `update-catalog = true`
+    /// If set, will create test user `user` and `ybampdb` database. Requires `update-catalog = true`
     #[clap(long)]
     create_test_user: bool,
     /// Allow multiple primary endpoints running on the same branch. Shouldn't be used normally, but

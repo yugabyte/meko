@@ -807,7 +807,7 @@ impl Endpoint {
                     },
                     databases: if args.create_test_user {
                         vec![Database {
-                            name: PgIdent::from_str("neondb").unwrap(),
+                            name: PgIdent::from_str("ybampdb").unwrap(),
                             owner: PgIdent::from_str("test").unwrap(),
                             options: None,
                             restrict_conn: false,
@@ -861,7 +861,7 @@ impl Endpoint {
                         options: None,
                     });
                     spec.cluster.databases.push(Database {
-                        name: PgIdent::from_str("neondb").unwrap(),
+                        name: PgIdent::from_str("ybampdb").unwrap(),
                         owner: PgIdent::from_str("test").unwrap(),
                         options: None,
                         restrict_conn: false,
@@ -890,7 +890,7 @@ impl Endpoint {
         let conn_str = self.connstr("cloud_admin", "postgres");
         println!("Starting postgres node at '{conn_str}'");
         if args.create_test_user {
-            let conn_str = self.connstr("test", "neondb");
+            let conn_str = self.connstr("test", "ybampdb");
             println!("Also at '{conn_str}'");
         }
         let mut cmd = Command::new(self.env.yb_light_distrib_dir.join("yb-compute-ctl"));

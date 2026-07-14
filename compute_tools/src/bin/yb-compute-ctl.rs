@@ -98,7 +98,7 @@ struct Cli {
 
     #[arg(
         long,
-        default_value = "neon_superuser",
+        default_value = "yb_amp_superuser",
         value_name = "PRIVILEGED_ROLE_NAME",
         value_parser = Self::parse_privileged_role_name
     )]
@@ -450,7 +450,7 @@ mod test {
             "--connstr=test",
             "--compute-id=test",
             "--privileged-role-name",
-            "$'neon_superuser",
+            "$'yb_amp_superuser",
         ])
         .expect_err("special characters are not allowed");
 

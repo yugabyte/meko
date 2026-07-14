@@ -1951,7 +1951,6 @@ impl ComputeNode {
         }
 
         // Run migrations separately to not hold up cold starts
-        let lakebase_mode = self.params.lakebase_mode;
         let params = self.params.clone();
         tokio::spawn(async move {
             let mut conf = conf.as_ref().clone();
@@ -1964,7 +1963,7 @@ impl ComputeNode {
                             eprintln!("connection error: {e}");
                         }
                     });
-                    if let Err(e) = handle_migrations(params, &mut client, lakebase_mode).await {
+                    if let Err(e) = handle_migrations(params, &mut client).await {
                         error!("Failed to run migrations: {}", e);
                     }
                 }

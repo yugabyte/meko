@@ -261,11 +261,7 @@ pub async fn handle_yb_amp_extension_upgrade(client: &mut Client) -> Result<()> 
 }
 
 #[instrument(skip_all)]
-pub async fn handle_migrations(
-    params: ComputeNodeParams,
-    client: &mut Client,
-    lakebase_mode: bool,
-) -> Result<()> {
+pub async fn handle_migrations(params: ComputeNodeParams, client: &mut Client) -> Result<()> {
     info!("handle migrations");
 
     // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -329,7 +325,7 @@ pub async fn handle_migrations(
         ),
     ];
 
-    MigrationRunner::new(client, &migrations, lakebase_mode)
+    MigrationRunner::new(client, &migrations)
         .run_migrations()
         .await?;
 

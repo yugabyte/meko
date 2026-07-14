@@ -1070,7 +1070,7 @@ async fn get_operations<'a>(
                                         outer_tag = outer_tag,
                                     )
                                     // 
-                                    .replace("neon_superuser", &params.privileged_role_name),
+                                    .replace("yb_amp_superuser", &params.privileged_role_name),
                                     comment: None,
                                 },
                                 // This now will only drop privileges of the role
@@ -1107,7 +1107,7 @@ async fn get_operations<'a>(
                         },
                         Operation {
                             query: String::from(include_str!("sql/default_grants.sql"))
-                                .replace("neon_superuser", &params.privileged_role_name),
+                                .replace("yb_amp_superuser", &params.privileged_role_name),
                             comment: None,
                         },
                     ]

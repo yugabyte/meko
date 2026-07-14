@@ -646,7 +646,7 @@ _PG_init(void)
 							"Name of the 'weak' superuser role, which we give to the users",
 							NULL,
 							&privileged_role_name,
-							"neon_superuser",
+							"yb_amp_superuser",
 							PGC_POSTMASTER, 0, NULL, NULL, NULL);
 
 	DefineCustomBoolVariable(

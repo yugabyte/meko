@@ -20,11 +20,11 @@ begin
 end;
 $$;
 
-create role neon_superuser;
-create role neon_admin login inherit createrole createdb in role neon_superuser;
-grant create on schema public to neon_admin;
-create database neondb with owner neon_admin;
-grant all privileges on database neondb to neon_superuser;
+create role yb_amp_superuser;
+create role yb_amp_admin login inherit createrole createdb in role yb_amp_superuser;
+grant create on schema public to yb_amp_admin;
+create database ybampdb with owner yb_amp_admin;
+grant all privileges on database ybampdb to yb_amp_superuser;
 
 create role neon_user;
 grant create on schema public to neon_user;
@@ -41,9 +41,9 @@ set yb_amp.event_triggers to false;
 create event trigger on_ddl2 on ddl_command_end
 execute procedure admin_proc();
 
-set role neon_admin;
+set role yb_amp_admin;
 
--- neon_superuser should be able to create event trigers
+-- yb_amp_superuser should be able to create event trigers
 create or replace function neon_proc()
     returns event_trigger
     language plpgsql as
@@ -56,36 +56,36 @@ $$;
 create event trigger on_ddl2 on ddl_command_end
 execute procedure neon_proc();
 
-\c neondb neon_admin
+\c ybampdb yb_amp_admin
 
-create or replace function neondb_proc()
+create or replace function ybampdb_proc()
     returns event_trigger
     language plpgsql as
 $$
 begin
-    raise notice 'neondb event trigger is executed for %', current_user;
+    raise notice 'ybampdb event trigger is executed for %', current_user;
 end;
 $$;
 
-create or replace function neondb_secdef_proc()
+create or replace function ybampdb_secdef_proc()
     returns event_trigger
     language plpgsql
     SECURITY DEFINER
 as
 $$
 begin
-    raise notice 'neondb secdef event trigger is executed for %', current_user;
+    raise notice 'ybampdb secdef event trigger is executed for %', current_user;
 end;
 $$;
 
--- neon_admin (neon_superuser member) should be able to create event triggers
+-- yb_amp_admin (yb_amp_superuser member) should be able to create event triggers
 create event trigger on_ddl3 on ddl_command_end
-execute procedure neondb_proc();
+execute procedure ybampdb_proc();
 
 create event trigger on_ddl4 on ddl_command_end
-execute procedure neondb_secdef_proc();
+execute procedure ybampdb_secdef_proc();
 
--- Check that event trigger is fired for neon_admin
+-- Check that event trigger is fired for yb_amp_admin
 create table t1(x integer);
 
 -- Check that event trigger can be skipped
@@ -97,19 +97,19 @@ create table t2(x integer);
 -- Check that event triggers are not fired for superuser
 create table t3(x integer);
 
-\c neondb cloud_admin
+\c ybampdb cloud_admin
 
 -- Check that user-defined event triggers are not fired for superuser
 create table t4(x integer);
 
-\c neondb neon_admin
+\c ybampdb yb_amp_admin
 
--- Check that neon_admin can drop event triggers
+-- Check that yb_amp_admin can drop event triggers
 drop event trigger on_ddl3;
 drop event trigger on_ddl4;
 
 -- Clean up everything this test created so it doesn't leak into the shared
--- e2e cluster (drop triggers before their functions; drop neondb before the
+-- e2e cluster (drop triggers before their functions; drop ybampdb before the
 -- roles that own it; DROP OWNED BY clears the schema-public grants that
 -- would otherwise block DROP ROLE).
 \c postgres cloud_admin
@@ -117,8 +117,8 @@ drop event trigger if exists on_ddl1;
 drop event trigger if exists on_ddl2;
 drop function if exists neon_proc();
 drop function if exists admin_proc();
-drop database if exists neondb;
-drop owned by neon_admin, neon_user, neon_superuser cascade;
-drop role if exists neon_admin;
+drop database if exists ybampdb;
+drop owned by yb_amp_admin, neon_user, yb_amp_superuser cascade;
+drop role if exists yb_amp_admin;
 drop role if exists neon_user;
-drop role if exists neon_superuser;
+drop role if exists yb_amp_superuser;

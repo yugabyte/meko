@@ -9,20 +9,20 @@ GRANT
 CREATE EVENT TRIGGER
 SET
 psql:event-triggers.sql:38: ERROR:  permission denied to set yb_amp.event_triggers
-DETAIL:  Only "neon_superuser" is allowed to set the GUC
+DETAIL:  Only "yb_amp_superuser" is allowed to set the GUC
 psql:event-triggers.sql:42: ERROR:  permission denied to create event trigger "on_ddl2"
 HINT:  Must be superuser to create an event trigger.
 SET
-psql:event-triggers.sql:54: NOTICE:  admin event trigger is executed for neon_admin
+psql:event-triggers.sql:54: NOTICE:  admin event trigger is executed for yb_amp_admin
 CREATE FUNCTION
 CREATE EVENT TRIGGER
-You are now connected to database "neondb" as user "neon_admin".
+You are now connected to database "ybampdb" as user "yb_amp_admin".
 CREATE FUNCTION
 CREATE FUNCTION
 CREATE EVENT TRIGGER
 CREATE EVENT TRIGGER
-psql:event-triggers.sql:89: NOTICE:  neondb event trigger is executed for neon_admin
-psql:event-triggers.sql:89: NOTICE:  neondb secdef event trigger is executed for neon_admin
+psql:event-triggers.sql:89: NOTICE:  ybampdb event trigger is executed for yb_amp_admin
+psql:event-triggers.sql:89: NOTICE:  ybampdb secdef event trigger is executed for yb_amp_admin
 CREATE TABLE
 SET
 psql:event-triggers.sql:93: WARNING:  Skipping Event Trigger: yb_amp.event_triggers is false
@@ -31,15 +31,15 @@ CREATE TABLE
 You are now connected to database "postgres" as user "cloud_admin".
 psql:event-triggers.sql:98: NOTICE:  admin event trigger is executed for cloud_admin
 psql:event-triggers.sql:98: WARNING:  Skipping Event Trigger
-DETAIL:  Event Trigger function "neon_proc" is owned by non-superuser role "neon_admin", and current_user "cloud_admin" is superuser
+DETAIL:  Event Trigger function "neon_proc" is owned by non-superuser role "yb_amp_admin", and current_user "cloud_admin" is superuser
 CREATE TABLE
-You are now connected to database "neondb" as user "cloud_admin".
+You are now connected to database "ybampdb" as user "cloud_admin".
 psql:event-triggers.sql:103: WARNING:  Skipping Event Trigger
-DETAIL:  Event Trigger function "neondb_proc" is owned by non-superuser role "neon_admin", and current_user "cloud_admin" is superuser
+DETAIL:  Event Trigger function "ybampdb_proc" is owned by non-superuser role "yb_amp_admin", and current_user "cloud_admin" is superuser
 psql:event-triggers.sql:103: WARNING:  Skipping Event Trigger
-DETAIL:  Event Trigger function "neondb_secdef_proc" is owned by non-superuser role "neon_admin", and current_user "cloud_admin" is superuser
+DETAIL:  Event Trigger function "ybampdb_secdef_proc" is owned by non-superuser role "yb_amp_admin", and current_user "cloud_admin" is superuser
 CREATE TABLE
-You are now connected to database "neondb" as user "neon_admin".
+You are now connected to database "ybampdb" as user "yb_amp_admin".
 DROP EVENT TRIGGER
 DROP EVENT TRIGGER
 You are now connected to database "postgres" as user "cloud_admin".

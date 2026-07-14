@@ -579,7 +579,7 @@ components:
         database:
           type: string
           description: Database name.
-          example: "neondb"
+          example: "ybampdb"
 
     ExtensionInstallResult:
       type: object
@@ -700,7 +700,7 @@ components:
         database:
           type: string
           description: Database name.
-          example: "neondb"
+          example: "ybampdb"
         schema:
           type: string
           description: Schema name.
@@ -738,7 +738,7 @@ components:
         database:
           type: string
           description: Database name.
-          example: "neondb"
+          example: "ybampdb"
         schema:
           type: string
           description: Schema name.

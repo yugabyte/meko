@@ -27,4 +27,4 @@ cargo yb_light endpoint create main --pg-version 16 --update-catalog true
 cargo yb_light endpoint start main --create-test-user true
 ```
 
-The first command creates `neon_superuser` and necessary roles. The second command creates `test` user and `neondb` database. You will see a connection string that connects you to the test user after running the second command.
+The first command creates `yb_amp_superuser` and necessary roles. The second command creates `test` user and `ybampdb` database. You will see a connection string that connects you to the test user after running the second command.
