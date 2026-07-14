@@ -476,7 +476,7 @@ corruption: `put_rel_extend` no-opped, the rel-size cache pinned at
 the replay-start size, and the gap-fill zero-filled
 `[pinned_size, blkno)` on every record, stamping all-zero page images
 over live tail blocks. The regression test is
-`test/e2e/storage/fast/restart_relsize_zero_shadow.rs` (SIGKILL
+`test/e2e/storage/slow/restart_relsize_zero_shadow.rs` (SIGKILL
 + replay + branch-wide zero-image shadowing assertions).
 
 **Replay windows are quarantined (#240).** Whenever a walreceiver
