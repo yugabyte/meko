@@ -1369,9 +1369,15 @@ impl Timeline {
     pub fn get_cached_rel_size(&self, tag: &RelTag, version: Version<'_>) -> Option<BlockNumber> {
         let lsn = version.get_lsn();
         {
+            let is_ingest = matches!(version, Version::Modified(_));
             let rel_size_cache = self.rel_size_latest_cache.read().unwrap();
             if let Some((cached_lsn, nblocks)) = rel_size_cache.get(tag) {
-                if lsn >= *cached_lsn {
+                if latest_rel_size_cache_hit(
+                    lsn,
+                    *cached_lsn,
+                    self.rel_size_cache_horizon,
+                    is_ingest,
+                ) {
                     RELSIZE_LATEST_CACHE_HITS.inc();
                     return Some(*nblocks);
                 }
@@ -1419,11 +1425,34 @@ impl Timeline {
         }
     }
 
-    /// Store cached relation size
+    /// Store cached relation size. Forward-only: an entry never moves to
+    /// an older LSN.
+    ///
+    /// All callers are ingest-side. During a walreceiver RECONNECT the
+    /// stream re-applies `(consistent_lsn, wal_end]` over a LIVE
+    /// pageserver, and the per-record seeding in `get_rel_size_in_reldir`
+    /// used to rewind the shared entry to the replay position — an
+    /// external `nblocks` read arriving mid-replay then satisfied
+    /// `request_lsn >= cached_lsn` against the rewound entry and was
+    /// served a size from the middle of the window (#240 mode E: a
+    /// recycled compute pinned 60 of 80 blocks for its lifetime).
+    /// Dropping the backdated store is safe for the replayer itself: its
+    /// reads at the replay position miss the (newer) entry and fall
+    /// through to an LSN-correct YB read, and the #22 zero-fill hazard
+    /// needs the cache to not be BELOW the replay position, which
+    /// forward-only preserves.
     pub fn set_cached_rel_size(&self, tag: RelTag, lsn: Lsn, nblocks: BlockNumber) {
         let mut rel_size_cache = self.rel_size_latest_cache.write().unwrap();
-        if rel_size_cache.insert(tag, (lsn, nblocks)).is_none() {
-            RELSIZE_LATEST_CACHE_ENTRIES.inc();
+        match rel_size_cache.entry(tag) {
+            hash_map::Entry::Occupied(mut entry) => {
+                if lsn >= entry.get().0 {
+                    *entry.get_mut() = (lsn, nblocks);
+                }
+            }
+            hash_map::Entry::Vacant(entry) => {
+                entry.insert((lsn, nblocks));
+                RELSIZE_LATEST_CACHE_ENTRIES.inc();
+            }
         }
     }
 
@@ -1434,6 +1463,38 @@ impl Timeline {
             RELSIZE_LATEST_CACHE_ENTRIES.dec();
         }
     }
+}
+
+/// Whether a `rel_size_latest_cache` entry `(cached_lsn, nblocks)` may
+/// serve a read at `request_lsn`.
+///
+/// The latest cache answers any `request_lsn >= cached_lsn` on the
+/// premise that ingest updates the entry on every size change, so a
+/// cached value is the relation's current size. That premise breaks in
+/// the attach replay window: after a restart the walreceiver re-ingests
+/// `(consistent_lsn, horizon]` while `last_record_lsn` already sits at
+/// `horizon`, so replay-seeded entries (stamped mid-window) describe a
+/// past size, yet `request_lsn >= cached_lsn` accepts them for reads at
+/// the horizon — a basebackup taken in that window shipped a relation
+/// truncated at the replay frontier (#240). External readers
+/// (`Version::LsnRange`) therefore never get entries stamped below
+/// `horizon`; they fall through to the YB read, which is durably
+/// correct at any LSN.
+///
+/// Ingest reads (`Version::Modified`, `is_ingest`) are exempt: the
+/// replaying walreceiver is the one WRITER of those mid-window entries
+/// and reads them at its own replay position, where they are exact —
+/// the #22 replay semantics (pre-record state + same-pass effects via
+/// the cache) depend on that, and gating them would add a YB point
+/// read per replayed record for no correctness gain.
+#[inline]
+fn latest_rel_size_cache_hit(
+    request_lsn: Lsn,
+    cached_lsn: Lsn,
+    horizon: Lsn,
+    is_ingest: bool,
+) -> bool {
+    request_lsn >= cached_lsn && (is_ingest || cached_lsn >= horizon)
 }
 
 /// DatadirModification represents an operation to ingest an atomic set of
@@ -3082,7 +3143,8 @@ static ZERO_PAGE: Bytes = Bytes::from_static(&[0u8; BLCKSZ as usize]);
 
 #[cfg(test)]
 mod tests {
-    use super::rel_extend_plan;
+    use super::{latest_rel_size_cache_hit, rel_extend_plan};
+    use utils::lsn::Lsn;
 
     /// Replay below the durable horizon: storage already knows a size
     /// >= nblocks. No size-key rewrite, but the cache MUST advance to
@@ -3109,5 +3171,35 @@ mod tests {
         let plan = rel_extend_plan(61, 61);
         assert_eq!(plan.write_size, None);
         assert_eq!(plan.cache_size, 61);
+    }
+
+    /// #240: entries seeded by attach-replay ingest (stamped inside the
+    /// replay window, i.e. below the horizon) must never serve — a
+    /// basebackup at the horizon read a mid-replay size and shipped a
+    /// truncated relation. Entries at/above the horizon behave as before.
+    #[test]
+    fn rel_size_cache_rejects_replay_window_entries() {
+        let horizon = Lsn(0x6BA4278);
+        let mid_replay = Lsn(0x6AED7C0);
+        let reader = false;
+        let ingest = true;
+        // The #240 shape: replay-seeded entry, external read at the horizon.
+        assert!(!latest_rel_size_cache_hit(horizon, mid_replay, horizon, reader));
+        // Same entry can't serve external mid-replay reads either.
+        assert!(!latest_rel_size_cache_hit(mid_replay, mid_replay, horizon, reader));
+        // Ingest replaying at its own frontier keeps the fast path (#22
+        // replay semantics track the cache).
+        assert!(latest_rel_size_cache_hit(mid_replay, mid_replay, horizon, ingest));
+        // Entry stamped exactly at the horizon serves reads at/after it.
+        assert!(latest_rel_size_cache_hit(horizon, horizon, horizon, reader));
+        assert!(latest_rel_size_cache_hit(Lsn(0x6BA5000), horizon, horizon, reader));
+        // Post-catch-up ingest entry: normal fast-path behavior.
+        assert!(latest_rel_size_cache_hit(Lsn(0x7000000), Lsn(0x6BB0000), horizon, reader));
+        // Request below the entry is always a miss (pre-existing rule),
+        // for ingest too.
+        assert!(!latest_rel_size_cache_hit(Lsn(0x6BB0000), Lsn(0x7000000), horizon, reader));
+        assert!(!latest_rel_size_cache_hit(Lsn(0x6BB0000), Lsn(0x7000000), horizon, ingest));
+        // Bootstrap timeline (horizon 0): unchanged semantics.
+        assert!(latest_rel_size_cache_hit(Lsn(100), Lsn(50), Lsn(0), reader));
     }
 }

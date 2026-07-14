@@ -280,6 +280,21 @@ pub(super) async fn handle_walreceiver_connection(
         "consistent_lsn {last_rec_lsn} starting replication from {startpoint}, safekeeper is at {end_of_wal}..."
     );
 
+    // Replay-window quarantine (#240). A non-empty window means the
+    // stream below is about to re-apply `(startpoint, end_of_wal]` — on
+    // attach that rebuilds in-memory state from scratch; on a RECONNECT
+    // (safekeeper restart under a live pageserver) it re-applies over
+    // live state. Either way, state derived mid-window must not outlive
+    // it (materializer folds, basebackups), so close the latch until the
+    // catch-up below. An empty window opens it immediately — the
+    // streaming loop only marks catch-up on XLogData, which never
+    // arrives on an idle timeline, and basebackups would block.
+    if startpoint >= end_of_wal {
+        timeline.mark_replay_caught_up();
+    } else {
+        timeline.begin_replay_window();
+    }
+
     let query = format!("START_REPLICATION PHYSICAL {startpoint}");
 
     let copy_stream = replication_client.copy_both_simple(&query).await?;
@@ -499,6 +514,7 @@ pub(super) async fn handle_walreceiver_connection(
                 if !caught_up && streaming_lsn >= end_of_wal {
                     info!("caught up at LSN {streaming_lsn}");
                     caught_up = true;
+                    timeline.mark_replay_caught_up();
                 }
 
                 tracing::debug!(

@@ -112,6 +112,15 @@ pub struct MaterializeJob {
 /// equivalent to `image_chain_limit = 0`).
 #[derive(Clone)]
 pub struct MaterializerHandle {
+    /// Latched true once the walreceiver's first post-attach catch-up
+    /// completes (see `Timeline::mark_replay_caught_up`). While false,
+    /// no materialize job may be dispatched: a fold that runs while the
+    /// attach replay window is being re-ingested can anchor on state
+    /// that predates deltas it has not seen, and the resulting image is
+    /// stamped above its own content — a durable lie every later read
+    /// anchors on (#240: a clog image at the basebackup LSN was missing
+    /// the final ~30 durable commits' bits).
+    pub replay_caught_up: tokio::sync::watch::Receiver<bool>,
     pub count_limit: u32,
     /// Per-key delta threshold for SLRU (clog/multixact) block keys.
     /// SLRU keys ignore `count_limit`/`payload_bytes_limit` and use this
@@ -135,6 +144,14 @@ pub struct MaterializerHandle {
     /// able to fire). Task panics leak entries; pageserver restart
     /// clears all timeline state including this set.
     pub in_flight: Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
+}
+
+impl MaterializerHandle {
+    /// False while the attach replay window is still being re-ingested;
+    /// no fold may be dispatched (see `replay_caught_up`).
+    pub fn folds_allowed(&self) -> bool {
+        *self.replay_caught_up.borrow()
+    }
 }
 
 /// Running per-key delta tally — count, payload bytes, and the LSN
@@ -935,6 +952,12 @@ impl PageWriter {
         let Some(m) = self.materializer.as_ref() else {
             return Vec::new();
         };
+        if !m.folds_allowed() {
+            // Attach replay still in flight — folding now can produce an
+            // image stamped above content it never saw (#240). Tallies
+            // keep accumulating; dispatch resumes after catch-up.
+            return Vec::new();
+        }
         if m.count_limit == 0 && m.payload_bytes_limit == 0 && m.slru_count_limit == 0 {
             return Vec::new();
         }
@@ -1199,14 +1222,16 @@ impl PageWriter {
         } else {
             chain_len
         };
-        if try_dispatch_read_side(
-            key,
-            bounded_target,
-            effective_len,
-            m.count_limit,
-            &m.in_flight,
-            &m.tx,
-        ) {
+        if m.folds_allowed()
+            && try_dispatch_read_side(
+                key,
+                bounded_target,
+                effective_len,
+                m.count_limit,
+                &m.in_flight,
+                &m.tx,
+            )
+        {
             crate::metrics::MATERIALIZER_READ_SIDE_DISPATCHES.inc();
         }
     }
@@ -1537,6 +1562,7 @@ impl PageWriter {
             // flush walk grows O(forever) instead of O(active keys).
             let mut to_materialize: Vec<MaterializeJob> = Vec::new();
             if let Some(m) = self.materializer.as_ref()
+                && m.folds_allowed()
                 && (m.count_limit > 0 || m.payload_bytes_limit > 0 || m.slru_count_limit > 0)
             {
                 let mut max_lsn_per_key: HashMap<Key, Lsn> = HashMap::new();
@@ -2597,7 +2623,11 @@ mod tests {
         );
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let in_flight = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+        // Tests exercise steady-state dispatch: open the attach
+        // quarantine (`true`) so folds are allowed.
+        let (_caught_up_tx, caught_up_rx) = tokio::sync::watch::channel(true);
         w.set_materializer(MaterializerHandle {
+            replay_caught_up: caught_up_rx,
             count_limit,
             slru_count_limit,
             payload_bytes_limit,

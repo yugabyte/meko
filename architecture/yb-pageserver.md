@@ -479,6 +479,54 @@ over live tail blocks. The regression test is
 `test/e2e/storage/fast/restart_relsize_zero_shadow.rs` (SIGKILL
 + replay + branch-wide zero-image shadowing assertions).
 
+**Replay windows are quarantined (#240).** Whenever a walreceiver
+connection starts below the safekeeper's WAL end it re-applies
+`(startpoint, wal_end]` — on attach that rebuilds in-memory state from
+scratch; on a *reconnect* (safekeeper restart under a live pageserver,
+#240 mode E) it re-applies over live state. Until the window's catch-up,
+per-record-seeded state describes the replay frontier, not the LSN a
+reader asks for, and anything built from the window that *outlives* it
+bakes the staleness permanently. Two rules plus three gates close the
+demonstrated paths:
+
+- **`set_cached_rel_size` is forward-only.** Reconnect replay used to
+  rewind the shared rel-size entry to the replay position record by
+  record; an external `nblocks` read arriving mid-window then satisfied
+  `request_lsn >= cached_lsn` against the rewound entry and pinned a
+  mid-window size into the asking compute for its lifetime (mode E's
+  60-of-80-block truncation). The replayer's own reads tolerate the
+  newer entry: they miss (`replay_lsn < cached_lsn`) and fall through to
+  an LSN-correct YB read, and #22's zero-fill hazard only needs the
+  cache to not be BELOW the replay position.
+- **The quarantine latch is per-window, not per-process.** A connection
+  discovering a non-empty window closes it (`begin_replay_window`);
+  catch-up — or an empty window at connect — opens it
+  (`mark_replay_caught_up`).
+
+- **Rel-size cache.** `rel_size_latest_cache` serves any read at
+  `request_lsn >= cached_lsn` on the premise that the entry is the
+  relation's *current* size — false mid-window. #240's first shape: a
+  basebackup-time `nblocks` read returned a 46-of-67-block relation,
+  which the compute pinned for its lifetime (`count(*)`=828 vs durable
+  1200). `get_cached_rel_size` serves external (`Version::LsnRange`)
+  reads only from entries stamped at or above `rel_size_cache_horizon`
+  (the construction-time `disk_consistent_lsn`); mid-window entries fall
+  through to the YB read, which is durably correct at any LSN. Ingest
+  reads (`Version::Modified`) are exempt — the #22 semantics above
+  *depend* on the cache tracking the replay position. See
+  `latest_rel_size_cache_hit` and its unit test.
+- **Image materializer.** A fold dispatched mid-window can anchor on
+  state that predates deltas it has not seen and stamp the image at the
+  chain tip — a durable lie every later read anchors on (#240's second
+  shape: a clog image at the basebackup LSN missing the final ~30
+  durable commits' bits). All three dispatch paths (flush trigger,
+  cold-residue, read-side) check `MaterializerHandle::folds_allowed`;
+  tallies keep accumulating and folding resumes after catch-up.
+- **Basebackup.** `handle_basebackup_request` waits (bounded) on the
+  same latch before building a tarball, so no compute is born from
+  window-state.
+
+
 FSM and visibility-map forks are a tolerated exception to the implicit
 "relation exists ⇒ its size key is readable" coupling. The rel-directory
 can list an FSM/VM fork at a record's *pre-record* LSN while that fork's

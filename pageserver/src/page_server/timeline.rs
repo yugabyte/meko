@@ -216,6 +216,26 @@ pub struct Timeline {
     pub(crate) rel_size_latest_cache: RwLock<HashMap<RelTag, (Lsn, BlockNumber)>>,
     pub(crate) rel_size_snapshot_cache: Mutex<LruCache<(Lsn, RelTag), BlockNumber>>,
 
+    /// See the construction-site comment: latched true at the first
+    /// walreceiver catch-up; gates materializer folds and basebackups
+    /// against attach-replay-window state (#240).
+    replay_caught_up_tx: tokio::sync::watch::Sender<bool>,
+
+    /// End of the attach-time replay window: the `disk_consistent_lsn`
+    /// this timeline was constructed with (also the seed for
+    /// `last_record_lsn`). After a restart the walreceiver re-ingests
+    /// `(remote_state.consistent_lsn, this]` to rebuild in-memory state;
+    /// records replayed inside that window seed `rel_size_latest_cache`
+    /// with sizes that were only current mid-window, while
+    /// `last_record_lsn` already sits at this horizon — so `wait_lsn`
+    /// passes and a reader at `lsn ≥ cached_lsn` would be served a stale
+    /// size (#240: a basebackup taken mid-replay shipped a relation
+    /// truncated at the replay frontier). `get_cached_rel_size` therefore
+    /// only trusts latest-cache entries stamped at or above this horizon;
+    /// entries seeded by the replay fall through to the YB read, which is
+    /// always durably correct.
+    pub(crate) rel_size_cache_horizon: Lsn,
+
     state: watch::Sender<TimelineState>,
 
     /// Gate to prevent shutdown completing while I/O is still happening to this timeline's data
@@ -1098,6 +1118,49 @@ impl Timeline {
         self.remote_state.consistent_lsn.load()
     }
 
+    /// Latch the replay quarantine open: the walreceiver has caught up
+    /// to the safekeeper's connect-time WAL end, so in-memory state no
+    /// longer lags the advertised frontier. Idempotent; called from the
+    /// walreceiver connection.
+    pub(crate) fn mark_replay_caught_up(&self) {
+        self.replay_caught_up_tx.send_replace(true);
+    }
+
+    /// Close the replay quarantine: a walreceiver connection found a
+    /// non-empty replay window (its start point is below the
+    /// safekeeper's WAL end), so the stream is about to re-apply that
+    /// window — over a fresh process (attach) or over a LIVE pageserver
+    /// (reconnect after a safekeeper restart; #240 mode E). Until the
+    /// matching catch-up, materializer folds are suppressed and
+    /// basebackups wait.
+    pub(crate) fn begin_replay_window(&self) {
+        self.replay_caught_up_tx.send_replace(false);
+    }
+
+    /// Wait until the first post-attach walreceiver catch-up (#240).
+    /// Basebackup must not build a tarball from mid-replay state — a
+    /// stale pg_xact or relation size shipped there poisons the compute
+    /// for its lifetime. Errors after `timeout` (e.g. no safekeeper
+    /// reachable) so the caller can surface a retryable failure.
+    pub(crate) async fn wait_replay_caught_up(
+        &self,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<()> {
+        let mut rx = self.replay_caught_up_tx.subscribe();
+        if !*rx.borrow() {
+            tracing::info!("basebackup waiting for attach-replay catch-up (#240 gate engaged)");
+        }
+        tokio::time::timeout(timeout, rx.wait_for(|caught_up| *caught_up))
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "timed out after {timeout:?} waiting for the walreceiver to finish                      replaying the attach window (safekeeper unreachable or replay slow)"
+                )
+            })?
+            .map_err(|_| anyhow::anyhow!("timeline shutting down"))?;
+        Ok(())
+    }
+
     /// #57: flush the `PageWriter` so every write with LSN ≤ the
     /// applied frontier is durable in `pageserver.{pages,slru_pages,meta}`
     /// before a basebackup reads at `backup_lsn`.
@@ -1955,6 +2018,15 @@ impl Timeline {
         // PageWriter routes reads through `compute_page_store` and writes
         // through `fpu_page_store` so compute getPage stays off the
         // walreceiver/materialiser write conn.
+        // Attach-replay quarantine (#240): latched true the first time a
+        // walreceiver connection catches up to the safekeeper's
+        // connect-time WAL end. Until then, in-memory state is mid-replay:
+        // materializer folds are suppressed (an image stamped above
+        // content it never saw is a durable lie) and basebackups wait
+        // (a tarball built from window-state ships stale pg_xact /
+        // relation sizes into a compute permanently).
+        let (replay_caught_up_tx, replay_caught_up_rx) = tokio::sync::watch::channel(false);
+
         let (page_writer, page_writer_flush_task, image_materializer_task) = {
             let compute_ps = &resources.compute_page_store;
             let internal_ps = &resources.fpu_page_store;
@@ -1996,6 +2068,7 @@ impl Timeline {
                 let in_flight =
                     std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
                 writer.set_materializer(crate::page_writer::MaterializerHandle {
+                    replay_caught_up: replay_caught_up_rx.clone(),
                     count_limit: pw_cfg.image_chain_limit,
                     slru_count_limit: pw_cfg.image_chain_limit_slru,
                     payload_bytes_limit: pw_cfg.image_chain_payload_bytes_limit,
@@ -2107,6 +2180,8 @@ impl Timeline {
                 last_received_wal: Mutex::new(None),
                 rel_size_latest_cache: RwLock::new(HashMap::new()),
                 rel_size_snapshot_cache: Mutex::new(LruCache::new(relsize_snapshot_cache_capacity)),
+                rel_size_cache_horizon: disk_consistent_lsn,
+                replay_caught_up_tx,
 
                 state,
 

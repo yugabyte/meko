@@ -2725,6 +2725,18 @@ impl PageServerHandler {
             return Err(QueryError::NotFound("timeline is archived".into()));
         }
 
+        // #240: never build a tarball from attach-replay-window state. A
+        // basebackup taken while the walreceiver is still re-ingesting
+        // `(consistent_lsn, wal_end]` can capture pg_xact / relation sizes
+        // that are stale relative to the requested LSN, and the compute
+        // pins that view for its lifetime. `wait_lsn` below does not cover
+        // this: it waits on the applied frontier, which mid-replay caches
+        // can lag semantically even when the frontier has passed the LSN.
+        timeline
+            .wait_replay_caught_up(std::time::Duration::from_secs(60))
+            .await
+            .map_err(|e| QueryError::Other(anyhow::anyhow!("basebackup replay gate: {e:#}")))?;
+
         let latest_gc_cutoff_lsn = timeline.get_applied_gc_cutoff_lsn();
         if let Some(lsn) = lsn {
             // Backup was requested at a particular LSN. Wait for it to arrive.
