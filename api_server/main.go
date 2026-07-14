@@ -111,6 +111,10 @@ func run() error {
 
 	// MCP internal validation endpoint shared secret. When empty, the
 	// /api/v1/internal/meko-tokens/validate endpoint returns 503.
+	adminAPIKey := flag.String("admin-api-key",
+		os.Getenv("ADMIN_API_KEY"),
+		"Shared secret gating the /admin/* metrics endpoints (X-Meko-Admin-Secret). Empty disables them (503).")
+
 	mcpInternalSecret := flag.String("mcp-internal-secret",
 		os.Getenv("MCP_INTERNAL_SECRET"),
 		"shared secret for /internal/meko-tokens/validate (MCP server -> api_server). Empty disables the endpoint.")
@@ -334,6 +338,7 @@ func run() error {
 		MCPServerURL:             mcpServerURLForEnv(repository.ParseDeployEnv(*deployEnv)),
 		DeployEnv:                repository.ParseDeployEnv(*deployEnv),
 		MCPInternalSecret:        *mcpInternalSecret,
+		AdminAPIKey:              *adminAPIKey,
 		MCPPATFlushInterval:      *mcpPATFlushInterval,
 		PATRateLimitPerMin:       *patRateLimitPerMin,
 		PATRateLimitBurst:        *patRateLimitBurst,

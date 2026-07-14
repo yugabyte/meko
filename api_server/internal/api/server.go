@@ -62,6 +62,11 @@ type ServerConfig struct {
 	// empty, the endpoint returns 503.
 	MCPInternalSecret string
 
+	// AdminAPIKey gates the /admin/* metrics endpoints consumed by
+	// meko_admin (X-Meko-Admin-Secret header). When empty, those
+	// endpoints return 503.
+	AdminAPIKey string
+
 	// SES configuration for invite / share notification emails.
 	// When SESFromAddress is empty, email sending is disabled.
 	SESRegion      string

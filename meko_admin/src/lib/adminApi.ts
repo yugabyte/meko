@@ -70,3 +70,65 @@ export async function updateAmpRegistration(
 export async function unregisterAmp(): Promise<void> {
   await http.delete("/amp-registration");
 }
+
+/* ---- usage metrics (proxied from api_server) ---- */
+
+export type AdminUser = {
+  id: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  tier: "free" | "pro";
+  created_at: string;
+};
+
+export type UsageMetrics = {
+  scope: string; // "all" or a user id
+  total_users: number;
+  free_users: number;
+  pro_users: number;
+  tier: "free" | "pro" | null; // per-user only
+  datapacks: number;
+  shared_datapacks: number;
+  kb_documents: number;
+  kb_chunks: number;
+  private_memories: number;
+  collective_memories: number;
+  // Langfuse-derived (Phase 2); zero/empty when langfuse_enabled is false.
+  conversations: number;
+  conversations_by_agent: { agent: string; conversations: number }[];
+  token_burn: number;
+  langfuse_enabled: boolean;
+};
+
+/** List users for the dashboard scope dropdown. */
+export async function fetchAdminUsers(): Promise<AdminUser[]> {
+  const { data } = await http.get<{ users: AdminUser[] }>("/usage/users");
+  return data.users;
+}
+
+/** Usage metrics overall ("all") or for a single user, optionally windowed by a
+ *  date range (YYYY-MM-DD, inclusive). */
+export async function fetchUsageMetrics(
+  userId: string,
+  start?: string,
+  end?: string,
+): Promise<UsageMetrics> {
+  const params: Record<string, string> = { user_id: userId };
+  if (start) params.start = start;
+  if (end) params.end = end;
+  const { data } = await http.get<UsageMetrics>("/usage", { params });
+  return data;
+}
+
+/** Override a single user's tier (Free <-> Pro). */
+export async function updateUserTier(
+  userId: string,
+  tier: string,
+): Promise<{ id: string; tier: string }> {
+  const { data } = await http.patch<{ id: string; tier: string }>(
+    `/usage/users/${userId}/tier`,
+    { tier },
+  );
+  return data;
+}

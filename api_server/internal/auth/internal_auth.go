@@ -16,6 +16,11 @@ import (
 // here.
 const InternalSecretHeader = "X-Meko-Internal-Secret" //nolint:gosec // header name, not a credential
 
+// AdminSecretHeader is the request header carrying the shared secret
+// that protects the /admin/* metrics endpoints consumed by meko_admin.
+// Like InternalSecretHeader this is a header NAME, not a credential.
+const AdminSecretHeader = "X-Meko-Admin-Secret" //nolint:gosec // header name, not a credential
+
 // RequireInternalSecret returns Echo middleware that gates a route
 // group on a static shared secret.
 //
@@ -39,10 +44,26 @@ const InternalSecretHeader = "X-Meko-Internal-Secret" //nolint:gosec // header n
 // trusted server-to-server traffic only and should be wired on a
 // dedicated /internal/* route group.
 func RequireInternalSecret(secret string) echo.MiddlewareFunc {
+	return requireSecret(InternalSecretHeader, secret)
+}
+
+// RequireAdminSecret gates the /admin/* metrics endpoints on a static
+// shared secret carried in the X-Meko-Admin-Secret header, using the
+// same disabled-when-empty / constant-time-compare semantics as
+// RequireInternalSecret. Intended for the trusted meko_admin console.
+func RequireAdminSecret(secret string) echo.MiddlewareFunc {
+	return requireSecret(AdminSecretHeader, secret)
+}
+
+// requireSecret builds shared-secret middleware for a given header:
+// 503 when secret is empty, 401 on mismatch (constant-time compare),
+// and never logs the header value.
+func requireSecret(header, secret string) echo.MiddlewareFunc {
 	expected := []byte(secret)
 	enabled := len(expected) > 0
 	if !enabled {
-		slog.Warn("internal-secret middleware initialized with empty secret; endpoints will return 503")
+		slog.Warn("shared-secret middleware initialized with empty secret; endpoints will return 503",
+			"header", header)
 	}
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -52,14 +73,14 @@ func RequireInternalSecret(secret string) echo.MiddlewareFunc {
 					"data": nil,
 					"error": map[string]any{
 						"code":    "SERVICE_UNAVAILABLE",
-						"message": "internal endpoint disabled (no shared secret configured)",
+						"message": "endpoint disabled (no shared secret configured)",
 					},
 				})
 			}
 
-			provided := []byte(c.Request().Header.Get(InternalSecretHeader))
+			provided := []byte(c.Request().Header.Get(header))
 			if subtle.ConstantTimeCompare(provided, expected) != 1 {
-				slog.Warn("internal endpoint auth failed",
+				slog.Warn("shared-secret endpoint auth failed",
 					"path", c.Path(),
 					"remote_addr", c.Request().RemoteAddr,
 				)
@@ -67,7 +88,7 @@ func RequireInternalSecret(secret string) echo.MiddlewareFunc {
 					"data": nil,
 					"error": map[string]any{
 						"code":    "UNAUTHORIZED",
-						"message": "missing or invalid internal secret",
+						"message": "missing or invalid secret",
 					},
 				})
 			}

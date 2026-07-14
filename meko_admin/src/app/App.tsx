@@ -5,6 +5,7 @@ import { queryClient } from "@/lib/queryClient";
 import { AuthProvider, useAuth } from "@/lib/authContext";
 import { AdminSidebar } from "@/features/layout/AdminSidebar";
 import { DashboardPage } from "@/features/dashboard/pages/DashboardPage";
+import { UsersPage } from "@/features/users/pages/UsersPage";
 import { AmpRegistrationPage } from "@/features/amp/pages/AmpRegistrationPage";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { isAmpAdminEnabled } from "@/lib/amp";
@@ -32,6 +33,7 @@ function AppShell() {
       <main className="flex flex-1 flex-col overflow-hidden">
         <Routes>
           <Route path={ROUTES.dashboard} element={<DashboardPage />} />
+          <Route path={ROUTES.users} element={<UsersPage />} />
           {isAmpAdminEnabled() && (
             <Route path={ROUTES.ampRegistration} element={<AmpRegistrationPage />} />
           )}

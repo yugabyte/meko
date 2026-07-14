@@ -13,7 +13,9 @@ import (
 	"meko/api_server/internal/email"
 	"meko/api_server/internal/handlers"
 	"meko/api_server/internal/repository"
+	adminrepo "meko/api_server/internal/repository/admin"
 	"meko/api_server/internal/service"
+	adminsvc "meko/api_server/internal/service/admin"
 )
 
 // serviceRegistry holds every repository and service the router needs,
@@ -47,6 +49,7 @@ type serviceRegistry struct {
 	mcpPATSvc          *service.MCPPATService
 	billingRepo        *repository.BillingRepo
 	billingSvc         *service.BillingService
+	adminMetricsSvc    *adminsvc.AdminMetricsService
 	artifactRepo       *repository.ArtifactRepo
 	artifactSvc        *service.ArtifactService
 	tokenSavingsRepo   *repository.TokenSavingsRepo
@@ -160,6 +163,11 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	accountUsageSvc := service.NewAccountUsageService(dpRepo, kbRepo, langfuseSvc.Repo(), freeTierRepo)
 
+	// Admin metrics span all three data stores (control plane, data plane,
+	// Langfuse) via a dedicated admin repo/service pair.
+	adminRepo := adminrepo.NewAdminRepo(cfg.SystemDB, cfg.DB, cfg.LangfuseDB)
+	adminMetricsSvc := adminsvc.NewAdminMetricsService(adminRepo)
+
 	// AMP (Postgres databases) integration. Enabled only when the feature flag
 	// is on; the controller endpoint is resolved from the database at runtime.
 	var ampSvc *service.AMPService
@@ -204,6 +212,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		mcpPATSvc:          mcpPATSvc,
 		billingRepo:        billingRepo,
 		billingSvc:         billingSvc,
+		adminMetricsSvc:    adminMetricsSvc,
 		artifactRepo:       artifactRepo,
 		artifactSvc:        artifactSvc,
 		tokenSavingsRepo:   tokenSavingsRepo,
@@ -245,6 +254,14 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	internalGroup := v1.Group("/internal", auth.RequireInternalSecret(cfg.MCPInternalSecret))
 	patIntH := handlers.NewMCPPATInternalHandler(reg.mcpPATSvc)
 	internalGroup.POST("/meko-tokens/validate", patIntH.Validate)
+
+	// Admin metrics routes consumed by meko_admin. Gated by the admin
+	// shared secret (X-Meko-Admin-Secret); 503 when the secret is unset.
+	adminGroup := v1.Group("/admin", auth.RequireAdminSecret(cfg.AdminAPIKey))
+	adminH := handlers.NewAdminHandler(reg.adminMetricsSvc)
+	adminGroup.GET("/users", adminH.Users)
+	adminGroup.GET("/metrics", adminH.Metrics)
+	adminGroup.PATCH("/users/:id/tier", adminH.UpdateUserTier)
 
 	authEnabled := cfg.CognitoRegion != "" &&
 		cfg.CognitoPoolID != "" &&

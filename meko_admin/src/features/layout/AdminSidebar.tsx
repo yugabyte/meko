@@ -1,4 +1,4 @@
-import { Database, LayoutDashboard, Moon, Sun, LogOut } from "lucide-react";
+import { Database, LayoutDashboard, Users, Moon, Sun, LogOut } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
@@ -37,6 +37,20 @@ export function AdminSidebar() {
         >
           <LayoutDashboard className="h-4 w-4" />
           Dashboard
+        </NavLink>
+        <NavLink
+          to={ROUTES.users}
+          className={({ isActive }) =>
+            cn(
+              "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
+              isActive
+                ? "bg-accent text-accent-foreground font-medium"
+                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+            )
+          }
+        >
+          <Users className="h-4 w-4" />
+          Users
         </NavLink>
         {ampEnabled && (
           <NavLink

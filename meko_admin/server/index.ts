@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import metricsRouter from "./routes/metrics";
+import usageRouter from "./routes/usage";
 import authRouter from "./routes/auth";
 import ampRegistrationRouter from "./routes/ampRegistration";
 import { requireAdminAuth } from "./middleware/requireAdminAuth";
@@ -35,6 +36,7 @@ app.use((req, res, next) => {
 app.get("/api/admin/health", (_req, res) => res.json({ status: "ok" }));
 app.use("/api/admin/auth", authRouter);
 app.use("/api/admin/metrics", requireAdminAuth, metricsRouter);
+app.use("/api/admin/usage", requireAdminAuth, usageRouter);
 app.use("/api/admin/amp-registration", requireAdminAuth, ampRegistrationRouter);
 
 // Runtime feature flags, exposed to the client as window.__ADMIN_RUNTIME__ so
