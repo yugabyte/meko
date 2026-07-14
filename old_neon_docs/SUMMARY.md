@@ -13,7 +13,7 @@ in this repository.
 - [Separation of Compute and Storage](./separation-compute-storage.md)
 
 - [Compute]()
-  - [Postgres changes](./core_changes.md)
+  - [Postgres changes](../architecture/core_changes.md)
 
 - [Pageserver](./pageserver.md)
     - [Services](./pageserver-services.md)
