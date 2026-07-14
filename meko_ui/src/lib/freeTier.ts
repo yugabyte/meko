@@ -94,7 +94,12 @@ export function getFreeTierStatus(
       hasHitAny: false,
     };
   }
-  const hasHitDatapackCount = usage.datapack_count >= FREE_TIER_LIMITS.datapacks;
+  // Gate on LIFETIME creations (never decremented on delete) so
+  // delete-and-recreate cannot reset the quota. Take the max with the
+  // live count so a missing/zero counter (stale BE, best-effort read
+  // failure, legacy user predating the counter) can't under-gate.
+  const datapackCreations = Math.max(usage.datapack_creations ?? 0, usage.datapack_count);
+  const hasHitDatapackCount = datapackCreations >= FREE_TIER_LIMITS.datapacks;
   const hasHitKbStorageFileSize = usage.kb_storage_file_size >= FREE_TIER_LIMITS.kbStorageBytes;
   const hasHitNumConversations = usage.num_conversations >= FREE_TIER_LIMITS.conversations;
   const hasHitTokenBurn = usage.token_burn >= FREE_TIER_LIMITS.tokenBurn;

@@ -15,7 +15,14 @@ const AgentIDWorkbenchLM = "WorkbenchLM"
 // /auth/me/usage. Storage is bytes; conversations and tokens are
 // scoped to WorkbenchLM specifically (see field comments).
 type AccountUsage struct {
-	DatapackCount     int64 `json:"datapack_count"`
+	// DatapackCount is the LIVE count of datapacks the user currently
+	// owns — display only. Free-tier gating uses DatapackCreations.
+	DatapackCount int64 `json:"datapack_count"`
+	// DatapackCreations is the lifetime `datapack_creation` counter
+	// from `meko_system.free_tier_usage` (incremented on create, never
+	// decremented on delete). The FE gates the datapack cap on this so
+	// delete-and-recreate cannot reset the quota.
+	DatapackCreations int64 `json:"datapack_creations"`
 	KBStorageFileSize int64 `json:"kb_storage_file_size"`
 	// NumConversations counts `conversation_add_message` invocations
 	// from `meko_system.free_tier_usage` — the same counter MCP's
@@ -81,15 +88,24 @@ func (s *AccountUsageService) GetUsage(userID string) (AccountUsage, error) {
 	}
 	usage.KBStorageFileSize = kbBytes
 
-	// num_conversations source: meko_system.free_tier_usage counter
-	// table, written by meko-mcp-server's quota gate. Indexed PK
-	// lookup. Best-effort: failure logs + zero rather than abort.
+	// num_conversations + datapack_creations source:
+	// meko_system.free_tier_usage counter table (conversation counter
+	// written by meko-mcp-server's quota gate, creation counter by
+	// DatapackRepo.Create). Indexed PK lookups. Best-effort: failure
+	// logs + zero rather than abort.
 	if s.freeTierRepo != nil {
 		nMsgs, msgsErr := s.freeTierRepo.RequestCount(userID, "conversation_add_message")
 		if msgsErr != nil {
 			slog.Warn("usage: read free_tier_usage", "user_id", userID, "error", msgsErr)
 		} else {
 			usage.NumConversations = nMsgs
+		}
+
+		nCreations, crErr := s.freeTierRepo.RequestCount(userID, repository.MetricDatapackCreation)
+		if crErr != nil {
+			slog.Warn("usage: read datapack_creation counter", "user_id", userID, "error", crErr)
+		} else {
+			usage.DatapackCreations = nCreations
 		}
 	}
 

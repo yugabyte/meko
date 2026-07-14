@@ -804,7 +804,12 @@ export async function getCurrentUser(options: { signal?: AbortSignal } = {}) {
  * user has connected over MCP are NOT included.
  */
 export type AccountUsage = {
+  /** Live count of datapacks currently owned — display only. */
   datapack_count: number;
+  /** Lifetime datapack creations (never decremented on delete); the
+   *  free-tier datapack gate uses this so delete-and-recreate cannot
+   *  reset the quota. */
+  datapack_creations: number;
   kb_storage_file_size: number;
   num_conversations: number;
   token_burn: number;

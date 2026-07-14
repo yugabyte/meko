@@ -87,6 +87,9 @@ func TestDatapackRepo_Create_HappyPath_StampsAgentAndLinks(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO meko_system\.agent_access`).
 		WithArgs("user-1", "meko_agent", "dp-uuid-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO meko_system\.free_tier_usage`).
+		WithArgs("user-1", MetricDatapackCreation).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	repo := NewDatapackRepo(db, "", DeployEnvProd)
@@ -135,6 +138,9 @@ func TestDatapackRepo_Create_WithDescription(t *testing.T) {
 		)
 	mock.ExpectExec(`INSERT INTO meko_system\.agent_access`).
 		WithArgs("user-1", "meko_agent", "dp-uuid-2").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO meko_system\.free_tier_usage`).
+		WithArgs("user-1", MetricDatapackCreation).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 

@@ -192,6 +192,16 @@ func (r *DatapackRepo) Create(p CreateDatapackParams) (*CreateResult, error) {
 		return nil, fmt.Errorf("failed to link agent to datapack: %w", err)
 	}
 
+	// Lifetime creation counter — incremented for every user (the
+	// free-tier cap is applied at check time in DatapackService), and
+	// never decremented on delete, so delete-and-recreate cannot reset
+	// the free-tier quota.
+	if err = IncrementRequestCountTx(tx, p.UserID, MetricDatapackCreation); err != nil {
+		slog.Error("failed to increment datapack_creation counter",
+			"user_id", p.UserID, "datapack", p.Name, "error", err)
+		return nil, err
+	}
+
 	if err = tx.Commit(); err != nil {
 		slog.Error("failed to commit datapack transaction",
 			"datapack", p.Name, "datapack_id", datapackID, "error", err)

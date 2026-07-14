@@ -78,6 +78,11 @@ type DatapackService struct {
 	ybaSvc      *YBAService
 	accountRepo *repository.AccountRepo
 	langfuseSvc *LangfuseService
+	// freeTierRepo reads the lifetime `datapack_creation` counter the
+	// Create transaction increments; the free-tier cap gates on it so
+	// deleting a datapack never refunds quota. Optional: when nil the
+	// cap is not enforced (matches early-bootstrap minimal wiring).
+	freeTierRepo *repository.FreeTierUsageRepo
 }
 
 // NewDatapackService creates a new DatapackService.
@@ -86,12 +91,14 @@ func NewDatapackService(
 	ybaSvc *YBAService,
 	accountRepo *repository.AccountRepo,
 	langfuseSvc *LangfuseService,
+	freeTierRepo *repository.FreeTierUsageRepo,
 ) *DatapackService {
 	return &DatapackService{
-		repo:        repo,
-		ybaSvc:      ybaSvc,
-		accountRepo: accountRepo,
-		langfuseSvc: langfuseSvc,
+		repo:         repo,
+		ybaSvc:       ybaSvc,
+		accountRepo:  accountRepo,
+		langfuseSvc:  langfuseSvc,
+		freeTierRepo: freeTierRepo,
 	}
 }
 
@@ -158,12 +165,31 @@ func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 	// Free-tier cap. Applies ONLY when user_type is explicitly "free";
 	// every other tier (Pro / Enterprise / unknown) skips this block.
 	// Up front so the failure is cheap for free tier.
-	if IsFreeUserType(req.UserType) {
-		if n, err := s.repo.CountByOwner(req.UserID); err != nil {
+	//
+	// Gates on the LIFETIME `datapack_creation` counter (incremented by
+	// DatapackRepo.Create, never decremented) rather than the live
+	// datapack count, so delete-and-recreate cannot reset the quota.
+	// When the counter is below the cap, take the max with the live
+	// count so legacy users whose datapacks predate the counter can't
+	// under-gate; the extra query is skipped once the lifetime cap is
+	// already hit.
+	if IsFreeUserType(req.UserType) && s.freeTierRepo != nil {
+		n, err := s.freeTierRepo.RequestCount(req.UserID, repository.MetricDatapackCreation)
+		if err != nil {
 			return nil, fmt.Errorf("free-tier cap check: %w", err)
-		} else if n >= FreeTierMaxDatapacks {
+		}
+		if n < FreeTierMaxDatapacks {
+			liveCount, liveErr := s.repo.CountByOwner(req.UserID)
+			if liveErr != nil {
+				return nil, fmt.Errorf("free-tier cap check (live count): %w", liveErr)
+			}
+			if liveCount > n {
+				n = liveCount
+			}
+		}
+		if n >= FreeTierMaxDatapacks {
 			slog.Info("datapack create blocked by free-tier cap",
-				"user_id", req.UserID, "count", n, "cap", FreeTierMaxDatapacks)
+				"user_id", req.UserID, "lifetime_creations", n, "cap", FreeTierMaxDatapacks)
 			return nil, ErrFreeTierDatapackLimit
 		}
 	}

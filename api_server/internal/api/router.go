@@ -137,7 +137,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		slog.Warn("ses invite emails disabled (set SES_FROM_ADDRESS to enable)")
 	}
 
-	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo, langfuseSvc)
+	dpSvc := service.NewDatapackService(dpRepo, ybaSvc, accountRepo, langfuseSvc, freeTierRepo)
 
 	mcpPATRepo := repository.NewMCPPATRepo(cfg.SystemDB)
 	mcpPATAuditRepo := repository.NewMCPPATAuditRepo(cfg.SystemDB)

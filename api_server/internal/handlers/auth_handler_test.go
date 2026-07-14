@@ -232,6 +232,12 @@ func (m *handlerMockAccountStore) MarkEmailVerified(
 	return nil
 }
 
+func (m *handlerMockAccountStore) EmailInUse(
+	_ context.Context, _, _ string,
+) (bool, error) {
+	return false, nil
+}
+
 // setupAuthTestServer creates an Echo instance with auth routes wired
 // to the provided mock dependencies.
 func setupAuthTestServer(
@@ -826,14 +832,14 @@ func TestAuth_ForgotPasswordConfirm_Success(t *testing.T) {
 	resp := postJSON(t, srv.URL+"/api/v1/auth/forgot-password/confirm", map[string]string{
 		"email":            "u@example.com",
 		"code":             "123456",
-		"new_password":     "abcdefg",
-		"confirm_password": "abcdefg",
+		"new_password":     "Abcdef1!",
+		"confirm_password": "Abcdef1!",
 	})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
-	if gotEmail != "u@example.com" || gotCode != "123456" || gotPw != "abcdefg" {
+	if gotEmail != "u@example.com" || gotCode != "123456" || gotPw != "Abcdef1!" {
 		t.Fatalf("unexpected args: %q %q %q", gotEmail, gotCode, gotPw)
 	}
 }

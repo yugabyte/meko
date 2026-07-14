@@ -5,11 +5,19 @@ import (
 	"fmt"
 )
 
-// FreeTierUsageRepo wraps reads of the `meko_system.free_tier_usage`
-// counter table that meko-mcp-server's free-tier-quota gate
-// atomically increments (see meko-mcp-server PR #151). The table is
-// the single source of truth for per-user / per-tool request counts;
-// this repo only reads (writes happen from MCP).
+// MetricDatapackCreation is the free_tier_usage metric_name for
+// lifetime datapack creations. Incremented by DatapackRepo.Create
+// (never decremented on delete) so the free-tier datapack cap counts
+// creations, not currently-held datapacks — deleting a datapack does
+// not refund quota.
+const MetricDatapackCreation = "datapack_creation"
+
+// FreeTierUsageRepo wraps the `meko_system.free_tier_usage` counter
+// table. Most metrics are atomically incremented by meko-mcp-server's
+// free-tier-quota gate (see meko-mcp-server PR #151); api_server
+// writes only MetricDatapackCreation (via IncrementRequestCountTx
+// inside DatapackRepo.Create's transaction). The table is the single
+// source of truth for per-user / per-tool lifetime request counts.
 type FreeTierUsageRepo struct {
 	db *sql.DB
 }
@@ -39,4 +47,27 @@ func (r *FreeTierUsageRepo) RequestCount(userID, metricName string) (int64, erro
 		return 0, fmt.Errorf("free_tier_usage: read %s for %s: %w", metricName, userID, err)
 	}
 	return count, nil
+}
+
+// IncrementRequestCountTx bumps the lifetime counter for
+// (user_id, metric_name) by one inside the caller's transaction, so
+// the increment commits or rolls back atomically with the operation
+// being counted. Package-level (not a method) because callers hold a
+// *sql.Tx, not this repo.
+func IncrementRequestCountTx(tx *sql.Tx, userID, metricName string) error {
+	if tx == nil {
+		return fmt.Errorf("free_tier_usage: transaction is nil")
+	}
+	_, err := tx.Exec(
+		`INSERT INTO meko_system.free_tier_usage (user_id, metric_name, request_count, updated_at)
+		 VALUES ($1, $2, 1, now())
+		 ON CONFLICT (user_id, metric_name)
+		 DO UPDATE SET request_count = meko_system.free_tier_usage.request_count + 1,
+		               updated_at    = now()`,
+		userID, metricName,
+	)
+	if err != nil {
+		return fmt.Errorf("free_tier_usage: increment %s for %s: %w", metricName, userID, err)
+	}
+	return nil
 }
