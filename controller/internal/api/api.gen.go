@@ -291,6 +291,21 @@ type UserList struct {
 	Users []User     `json:"users"`
 }
 
+// Version defines model for Version.
+type Version struct {
+	// BuildDate UTC RFC-3339 build timestamp.
+	BuildDate string `json:"build_date"`
+
+	// GitCommit Short git commit the binary was built from.
+	GitCommit string `json:"git_commit"`
+
+	// StorageController Version reported by the bundled storage_controller (a sibling release stamped from the same VERSION file); omitted when no managed storage_controller is running.
+	StorageController *string `json:"storage_controller,omitempty"`
+
+	// Version Hybrid CalVer version from the repo-root VERSION file (MAJOR.YYMMDD.PATCH, e.g. "0.260714.0"); "dev" for an un-stamped build.
+	Version string `json:"version"`
+}
+
 // BranchId defines model for BranchId.
 type BranchId = openapi_types.UUID
 
@@ -553,6 +568,9 @@ type ClientInterface interface {
 
 	// GetUser request
 	GetUser(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetVersion request
+	GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) ListStoragePools(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -845,6 +863,18 @@ func (c *Client) CreateUser(ctx context.Context, body CreateUserJSONRequestBody,
 
 func (c *Client) GetUser(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetUserRequest(c.Server, userId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetVersionRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -1967,6 +1997,33 @@ func NewGetUserRequest(server string, userId UserId) (*http.Request, error) {
 	return req, nil
 }
 
+// NewGetVersionRequest generates requests for GetVersion
+func NewGetVersionRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/version")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -2079,6 +2136,9 @@ type ClientWithResponsesInterface interface {
 
 	// GetUserWithResponse request
 	GetUserWithResponse(ctx context.Context, userId UserId, reqEditors ...RequestEditorFn) (*GetUserResponse, error)
+
+	// GetVersionWithResponse request
+	GetVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetVersionResponse, error)
 }
 
 type ListStoragePoolsResponse struct {
@@ -2579,6 +2639,28 @@ func (r GetUserResponse) StatusCode() int {
 	return 0
 }
 
+type GetVersionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Version
+}
+
+// Status returns HTTPResponse.Status
+func (r GetVersionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetVersionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 // ListStoragePoolsWithResponse request returning *ListStoragePoolsResponse
 func (c *ClientWithResponses) ListStoragePoolsWithResponse(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*ListStoragePoolsResponse, error) {
 	rsp, err := c.ListStoragePools(ctx, params, reqEditors...)
@@ -2797,6 +2879,15 @@ func (c *ClientWithResponses) GetUserWithResponse(ctx context.Context, userId Us
 		return nil, err
 	}
 	return ParseGetUserResponse(rsp)
+}
+
+// GetVersionWithResponse request returning *GetVersionResponse
+func (c *ClientWithResponses) GetVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetVersionResponse, error) {
+	rsp, err := c.GetVersion(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetVersionResponse(rsp)
 }
 
 // ParseListStoragePoolsResponse parses an HTTP response from a ListStoragePoolsWithResponse call
@@ -3725,6 +3816,32 @@ func ParseGetUserResponse(rsp *http.Response) (*GetUserResponse, error) {
 	return response, nil
 }
 
+// ParseGetVersionResponse parses an HTTP response from a GetVersionWithResponse call
+func ParseGetVersionResponse(rsp *http.Response) (*GetVersionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetVersionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Version
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// List storage pools
@@ -3787,6 +3904,9 @@ type ServerInterface interface {
 	// Get a user
 	// (GET /users/{userId})
 	GetUser(ctx echo.Context, userId UserId) error
+	// Controller build version
+	// (GET /version)
+	GetVersion(ctx echo.Context) error
 }
 
 // ServerInterfaceWrapper converts echo contexts to parameters.
@@ -4340,6 +4460,15 @@ func (w *ServerInterfaceWrapper) GetUser(ctx echo.Context) error {
 	return err
 }
 
+// GetVersion converts echo context to params.
+func (w *ServerInterfaceWrapper) GetVersion(ctx echo.Context) error {
+	var err error
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetVersion(ctx)
+	return err
+}
+
 // This is a simple interface which specifies echo.Route addition functions which
 // are present on both echo.Echo and echo.Group, since we want to allow using
 // either of them for path registration
@@ -4388,6 +4517,7 @@ func RegisterHandlersWithBaseURL(router EchoRouter, si ServerInterface, baseURL 
 	router.GET(baseURL+"/users", wrapper.ListUsers)
 	router.POST(baseURL+"/users", wrapper.CreateUser)
 	router.GET(baseURL+"/users/:userId", wrapper.GetUser)
+	router.GET(baseURL+"/version", wrapper.GetVersion)
 
 }
 
@@ -5300,6 +5430,22 @@ func (response GetUser500JSONResponse) VisitGetUserResponse(w http.ResponseWrite
 	return json.NewEncoder(w).Encode(response)
 }
 
+type GetVersionRequestObject struct {
+}
+
+type GetVersionResponseObject interface {
+	VisitGetVersionResponse(w http.ResponseWriter) error
+}
+
+type GetVersion200JSONResponse Version
+
+func (response GetVersion200JSONResponse) VisitGetVersionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// List storage pools
@@ -5362,6 +5508,9 @@ type StrictServerInterface interface {
 	// Get a user
 	// (GET /users/{userId})
 	GetUser(ctx context.Context, request GetUserRequestObject) (GetUserResponseObject, error)
+	// Controller build version
+	// (GET /version)
+	GetVersion(ctx context.Context, request GetVersionRequestObject) (GetVersionResponseObject, error)
 }
 
 type StrictHandlerFunc = strictecho.StrictEchoHandlerFunc
@@ -5917,6 +6066,29 @@ func (sh *strictHandler) GetUser(ctx echo.Context, userId UserId) error {
 		return err
 	} else if validResponse, ok := response.(GetUserResponseObject); ok {
 		return validResponse.VisitGetUserResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetVersion operation middleware
+func (sh *strictHandler) GetVersion(ctx echo.Context) error {
+	var request GetVersionRequestObject
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetVersion(ctx.Request().Context(), request.(GetVersionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetVersion")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetVersionResponseObject); ok {
+		return validResponse.VisitGetVersionResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

@@ -14,6 +14,7 @@ import {
   createProject,
   createStoragePool,
   createUser,
+  getVersion,
   listBranches,
   listProjects,
   listStoragePools,
@@ -30,6 +31,7 @@ import type {
 
 /** Centralised query keys — every hook + invalidation references these. */
 export const qk = {
+  version: ["version"] as const,
   currentUser: ["current-user"] as const,
   users: ["users"] as const,
   storagePools: ["storage-pools"] as const,
@@ -40,6 +42,16 @@ export const qk = {
     ["endpoints", poolId, projectId, branchId] as const,
   tasks: (params: TaskListParams) => ["tasks", params] as const,
 };
+
+/** The controller's build identity (GET /version). Effectively static for the
+ *  life of a controller pod, so it never goes stale. */
+export function useVersion() {
+  return useQuery({
+    queryKey: qk.version,
+    queryFn: getVersion,
+    staleTime: Infinity,
+  });
+}
 
 /* ====================================================================
  * Identity bootstrap

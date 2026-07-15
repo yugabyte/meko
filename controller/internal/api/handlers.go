@@ -20,6 +20,7 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/node"
 	"github.com/yugabyte/yb-amp/controller/internal/storagecontroller"
 	"github.com/yugabyte/yb-amp/controller/internal/task"
+	"github.com/yugabyte/yb-amp/controller/internal/version"
 )
 
 // Provisioning holds the collaborators the create-project / create-endpoint
@@ -67,6 +68,21 @@ func NewControllers(backend core.Backend, tasks *task.Service, prov Provisioning
 
 // Compile-time assertion that the controllers satisfy the generated contract.
 var _ StrictServerInterface = (*Controllers)(nil)
+
+// --- Meta ------------------------------------------------------------------
+
+// GetVersion returns the controller's build identity — semantic version (from
+// the repo-root VERSION file), git commit, and build date — stamped into the
+// binary at build time (see internal/version).
+func (c *Controllers) GetVersion(_ context.Context, _ GetVersionRequestObject) (GetVersionResponseObject, error) {
+	v := version.Get()
+	resp := GetVersion200JSONResponse{Version: v.Version, GitCommit: v.Commit, BuildDate: v.BuildDate}
+	if v.StorageController != "" {
+		sc := v.StorageController
+		resp.StorageController = &sc
+	}
+	return resp, nil
+}
 
 // --- Users -----------------------------------------------------------------
 

@@ -68,8 +68,13 @@ NS="${NS:-${AMP_NAMESPACE:-amp}}"
 PULL_SECRET="${PULL_SECRET:-pull-secret}"
 ECR="${ECR:-454529406029.dkr.ecr.us-west-2.amazonaws.com}"
 REGION="${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-west-2}}}"  # for `aws ecr get-login-password`
-CONTROLLER_TAG="${CONTROLLER_TAG:-20260618-221855}"   # amp/controller image tag
-ENDPOINT_TAG="${ENDPOINT_TAG:-20260618-184649}"       # amp/endpoint image tag endpoints run
+# Default image tag = this build's version tag (release "v<VERSION>", or
+# "v<VERSION>-dev.<commit>[-dirty]" for a dev build; "latest" if VERSION is
+# absent) — centralised in scripts/version.sh. Override via CONTROLLER_TAG /
+# ENDPOINT_TAG; set RELEASE=1 for the clean release tag.
+_VERSION_TAG="$("${SCRIPT_DIR}/../../scripts/version.sh" image-tag 2>/dev/null || echo latest)"
+CONTROLLER_TAG="${CONTROLLER_TAG:-${_VERSION_TAG}}"   # amp/controller image tag
+ENDPOINT_TAG="${ENDPOINT_TAG:-${_VERSION_TAG}}"       # amp/endpoint image tag endpoints run
 # Backing YugabyteDB (reused; not created here).
 YB_HOST_PORTS="${YB_HOST_PORTS:-yb-tserver.${NS}.svc.cluster.local:5433}"
 DB_URL="${DB_URL:-postgres://yugabyte@yb-tserver.${NS}.svc.cluster.local:5433/yb_storage?sslmode=disable}"

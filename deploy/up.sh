@@ -226,13 +226,19 @@ discover_tag() {
     --query 'reverse(sort_by(imageDetails[?imageTags],&imagePushedAt))[0].imageTags[0]' \
     --output text 2>/dev/null || true
 }
+# version_tag: the image tag for this build — "v<VERSION>" for a release
+# (RELEASE=1), else "v<VERSION>-dev.<commit>[-dirty]"; "latest" when VERSION is
+# absent. Centralised in scripts/version.sh so build + deploy agree.
+version_tag() {
+  "${SCRIPT_DIR}/../scripts/version.sh" image-tag 2>/dev/null || echo latest
+}
 if [ -z "${CONTROLLER_TAG}" ]; then
   CONTROLLER_TAG="$(discover_tag "${CONTROLLER_IMAGE_REPO}")"
-  { [ -n "${CONTROLLER_TAG}" ] && [ "${CONTROLLER_TAG}" != "None" ]; } || CONTROLLER_TAG=latest
+  { [ -n "${CONTROLLER_TAG}" ] && [ "${CONTROLLER_TAG}" != "None" ]; } || CONTROLLER_TAG="$(version_tag)"
 fi
 if [ -z "${ENDPOINT_TAG}" ]; then
   ENDPOINT_TAG="$(discover_tag "${ENDPOINT_IMAGE_REPO}")"
-  { [ -n "${ENDPOINT_TAG}" ] && [ "${ENDPOINT_TAG}" != "None" ]; } || ENDPOINT_TAG=latest
+  { [ -n "${ENDPOINT_TAG}" ] && [ "${ENDPOINT_TAG}" != "None" ]; } || ENDPOINT_TAG="$(version_tag)"
 fi
 
 # --- 6. the amp controller ---

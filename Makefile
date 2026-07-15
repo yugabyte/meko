@@ -16,6 +16,19 @@ POSTGRES_VERSIONS = v18
 # All intermediate build artifacts are stored here.
 BUILD_DIR := $(ROOT_PROJECT_DIR)/build
 
+# --- Controller versioning ---------------------------------------------------
+# The repo-root VERSION file is the single source of truth for the controller's
+# version (a hybrid CalVer, MAJOR.YYMMDD.PATCH, via scripts/version.sh, so the
+# binary, image tag, and chart agree). It is stamped into the binary via -ldflags and served at
+# GET /api/v1/version. By default a build is a pre-release ("<VERSION>-dev.
+# <commit>[-dirty]"); set RELEASE=1 for the clean release version. Override
+# AMP_VERSION to force a specific value.
+AMP_VERSION ?= $(shell $(ROOT_PROJECT_DIR)/scripts/version.sh binary-version)
+AMP_GIT_COMMIT ?= $(shell git -C $(ROOT_PROJECT_DIR) rev-parse --short HEAD 2>/dev/null || echo unknown)
+AMP_BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+CONTROLLER_VERSION_PKG := github.com/yugabyte/yb-amp/controller/internal/version
+CONTROLLER_LDFLAGS := -X '$(CONTROLLER_VERSION_PKG).Version=$(AMP_VERSION)' -X '$(CONTROLLER_VERSION_PKG).Commit=$(AMP_GIT_COMMIT)' -X '$(CONTROLLER_VERSION_PKG).BuildDate=$(AMP_BUILD_DATE)'
+
 ICU_PREFIX_DIR := /usr/local/icu
 
 #
@@ -219,6 +232,21 @@ submodules:
 # step finds vendor/postgres-v18. The sub-make keeps that ordered ahead of the
 # headers build even under parallel make (-j), where listing it as a sibling
 # prerequisite would race the postgres configure check.
+# --- versioning targets (thin wrappers over scripts/version.sh) ---
+.PHONY: version version-image-tag version-sync version-bump-patch version-bump-minor version-bump-major
+version:            ## print the current semantic version
+	@$(ROOT_PROJECT_DIR)/scripts/version.sh
+version-image-tag:  ## print the container image tag (v<VERSION>)
+	@$(ROOT_PROJECT_DIR)/scripts/version.sh image-tag
+version-sync:       ## stamp Chart.yaml version/appVersion from the VERSION file
+	@$(ROOT_PROJECT_DIR)/scripts/version.sh sync
+version-bump-patch: ## re-cut the current date: bump the same-day PATCH and sync the chart
+	@$(ROOT_PROJECT_DIR)/scripts/version.sh bump patch
+version-bump-minor: ## roll the CalVer date (YYMMDD) to today and reset PATCH, then sync the chart
+	@$(ROOT_PROJECT_DIR)/scripts/version.sh bump date
+version-bump-major: ## bump the MAJOR epoch (re-stamps the date, resets PATCH) and sync the chart
+	@$(ROOT_PROJECT_DIR)/scripts/version.sh bump major
+
 .PHONY: controller-bundle
 controller-bundle:
 	+$(MAKE) submodules
@@ -229,8 +257,11 @@ controller-bundle-build: postgres-headers-install-v18 cargo-target-dir
 	+@echo "Bundling controller + storage_controller -> $(CONTROLLER_BUNDLE_DIR)"
 	mkdir -p "$(CONTROLLER_BUNDLE_DIR)"
 	# controller is built static (CGO off) so it runs unchanged in a slim runtime image.
-	CGO_ENABLED=0 go -C controller build -trimpath -o "$(CONTROLLER_BUNDLE_DIR)/controller" ./cmd/controller
-	$(CARGO_CMD_PREFIX) cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE) --bin storage_controller
+	CGO_ENABLED=0 go -C controller build -trimpath -ldflags "$(CONTROLLER_LDFLAGS)" -o "$(CONTROLLER_BUNDLE_DIR)/controller" ./cmd/controller
+	# Stamp the bundled storage_controller with the same release version: its
+	# project_build_tag!/project_git_version! macros read BUILD_TAG/GIT_VERSION at
+	# compile time, so the whole bundle self-reports one version (v<VERSION>).
+	BUILD_TAG="v$(AMP_VERSION)" GIT_VERSION="$(AMP_GIT_COMMIT)" $(CARGO_CMD_PREFIX) cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE) --bin storage_controller
 	cp "$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)/storage_controller" "$(CONTROLLER_BUNDLE_DIR)/storage_controller"
 
 # controller-only bundle: just the Go controller, no storage_controller. Needs no Rust
@@ -242,7 +273,7 @@ controller-bundle-only:
 	+@echo "Bundling controller (Go only, no storage controller) -> $(CONTROLLER_BUNDLE_DIR)"
 	$(RM) -r "$(CONTROLLER_BUNDLE_DIR)"
 	mkdir -p "$(CONTROLLER_BUNDLE_DIR)"
-	CGO_ENABLED=0 go -C controller build -trimpath -o "$(CONTROLLER_BUNDLE_DIR)/controller" ./cmd/controller
+	CGO_ENABLED=0 go -C controller build -trimpath -ldflags "$(CONTROLLER_LDFLAGS)" -o "$(CONTROLLER_BUNDLE_DIR)/controller" ./cmd/controller
 
 # This removes everything
 .PHONY: distclean

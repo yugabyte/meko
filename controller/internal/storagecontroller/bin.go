@@ -1,10 +1,27 @@
 package storagecontroller
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// ReportedVersion runs `<bin> --version` (bin resolved per resolveBin) and
+// returns its trimmed output — the bundled storage_controller's self-reported
+// version. Best-effort: a short timeout bounds it, and any error is returned to
+// the caller (which treats the version as unavailable).
+func ReportedVersion(bin string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, resolveBin(bin), "--version").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
 
 // resolveBin locates the storage controller binary given the configured bin
 // value.

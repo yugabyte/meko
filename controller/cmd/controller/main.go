@@ -27,6 +27,7 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/process"
 	"github.com/yugabyte/yb-amp/controller/internal/storagecontroller"
 	"github.com/yugabyte/yb-amp/controller/internal/task"
+	"github.com/yugabyte/yb-amp/controller/internal/version"
 )
 
 func main() {
@@ -193,6 +194,9 @@ func runMigrate(args []string) error {
 	logger := applog.New(cfg.Log)
 	slog.SetDefault(logger)
 
+	ver := version.Get()
+	logger.Info("amp controller starting", "version", ver.Version, "commit", ver.Commit, "build_date", ver.BuildDate)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := db.Migrate(ctx, cfg.DB.URL, cfg.DB.Schema); err != nil {
@@ -264,6 +268,14 @@ func runServe(args []string) error {
 		mgr.Add(storagecontroller.Spec(cfg.StorageController))
 		logger.Info("storage controller managed as subprocess",
 			"bin", cfg.StorageController.BinPath, "listen", cfg.StorageController.ListenAddr)
+		// Record the bundled storage_controller's version so GET /version reports
+		// it alongside the controller's (best-effort; empty on any error).
+		if scv, verr := storagecontroller.ReportedVersion(cfg.StorageController.BinPath); verr == nil {
+			version.SetStorageController(scv)
+			logger.Info("storage controller version", "version", scv)
+		} else {
+			logger.Warn("could not read storage controller version", "error", verr)
+		}
 	}
 
 	var wg sync.WaitGroup

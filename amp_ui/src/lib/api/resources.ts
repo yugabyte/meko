@@ -21,6 +21,7 @@ import type {
   TaskList,
   User,
   UserList,
+  Version,
 } from "./types";
 
 /* ---- Tasks (the mutating create endpoints are async: 202 + a Task) ---- */
@@ -86,6 +87,13 @@ export function listUsers(): Promise<UserList> {
 
 export function getUser(userId: string): Promise<User> {
   return apiRequest<User>(`/users/${userId}`);
+}
+
+/* ---- Meta ---- */
+
+/** Controller build identity (semantic version, git commit, build date). */
+export function getVersion(): Promise<Version> {
+  return apiRequest<Version>("/version");
 }
 
 export function createUser(input: CreateUserInput): Promise<User> {

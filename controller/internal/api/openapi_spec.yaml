@@ -72,6 +72,19 @@ tags:
     description: Status of long-running operations (the write-ahead task log).
 
 paths:
+  /version:
+    get:
+      tags: [meta]
+      operationId: getVersion
+      summary: Controller build version
+      description: Returns the controller's semantic version, git commit, and build date (stamped at build time).
+      responses:
+        '200':
+          description: Build version info.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Version'
   /users:
     post:
       tags: [users]
@@ -671,6 +684,22 @@ components:
             $ref: '#/components/schemas/Error'
 
   schemas:
+    Version:
+      type: object
+      required: [version, git_commit, build_date]
+      properties:
+        version:
+          type: string
+          description: 'Hybrid CalVer version from the repo-root VERSION file (MAJOR.YYMMDD.PATCH, e.g. "0.260714.0"); "dev" for an un-stamped build.'
+        git_commit:
+          type: string
+          description: Short git commit the binary was built from.
+        build_date:
+          type: string
+          description: UTC RFC-3339 build timestamp.
+        storage_controller:
+          type: string
+          description: Version reported by the bundled storage_controller (a sibling release stamped from the same VERSION file); omitted when no managed storage_controller is running.
     User:
       type: object
       required: [id, is_admin, created_at]

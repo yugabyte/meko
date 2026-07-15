@@ -27,6 +27,15 @@ use utils::{project_build_tag, project_git_version, tcp_listener};
 project_git_version!(GIT_VERSION);
 project_build_tag!(BUILD_TAG);
 
+/// Version reported by `--version`: the release build tag stamped at compile
+/// time (BUILD_TAG = v<VERSION>[-dev.<commit>[-dirty]]; see the Makefile), so it
+/// matches the amp controller's version. Falls back to the crate version for an
+/// un-stamped build.
+const CLI_VERSION: &str = match option_env!("BUILD_TAG") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
@@ -42,7 +51,7 @@ const DEFAULT_SSL_CERT_FILE: &str = "server.crt";
 const DEFAULT_SSL_CERT_RELOAD_PERIOD: &str = "60s";
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version = CLI_VERSION, about, long_about = None)]
 #[command(arg_required_else_help(true))]
 #[clap(group(
     clap::ArgGroup::new("listen-addresses")

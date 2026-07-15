@@ -62,6 +62,15 @@ export type Endpoint = {
  *  the project, and `target_ref` is the primary resource created (the new branch
  *  for a branch task, the endpoint for an endpoint task). `error` is set on
  *  failure. */
+/** Controller build identity from GET /api/v1/version. */
+export type Version = {
+  version: string;
+  git_commit: string;
+  build_date: string;
+  /** Version of the bundled storage_controller, when one is running. */
+  storage_controller?: string;
+};
+
 export type TaskStatus = "pending" | "running" | "succeeded" | "failed";
 export type Task = {
   id: string;
