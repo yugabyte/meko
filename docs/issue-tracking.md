@@ -17,9 +17,9 @@ milestone**. Both are required — an unlabelled or unmilestoned issue is
 invisible to the team's filtered views.
 
 ```sh
-gh issue list  --label storage --milestone POC          # filter
+gh issue list  --label compute --milestone POC          # filter
 gh issue create --title "..." --body "..." \
-  --label storage --milestone POC                        # both required
+  --label compute --milestone POC                        # both required
 ```
 
 A new area or milestone needs agreement first — don't invent names.
@@ -30,7 +30,7 @@ Inspect the live set with `gh label list` and
 
 | Label | Commit `<area>` token | Covers |
 |---|---|---|
-| `storage` | `storage` | pageserver / safekeeper / storage_controller, the YB-backed page store, WAL durability, read/write paths, page-service wire protocol, e2e harness. |
+| `compute` | `compute` | The amp compute: Postgres, extensions including the `yb_amp` extension, and `compute_ctl`; pageserver / safekeeper (the compute's storage connector to YugabyteDB — YB is the durable storage layer); the page store, WAL durability, read/write paths, page-service wire protocol, e2e harness. |
 | `control plane` | `control_plane` | `storage_controller` orchestration, `yb_light_local` (local-dev orchestrator, CLI, child-process management), endpoint/branch lifecycle. |
 
 A cross-cutting issue may carry both labels. The repo's stock labels
@@ -58,7 +58,7 @@ delivery phases:
 [#<issue>] <area>: <sub-component>: <title>
 ```
 
-`<area>` is either a **subsystem** — `storage` / `control_plane`,
+`<area>` is either a **subsystem** — `compute` / `control_plane`,
 mirroring the issue labels above (`control plane` written
 `control_plane` in a subject) — or a **meta token** for work that
 touches neither subsystem: `pm` (project management: tracker, issues,

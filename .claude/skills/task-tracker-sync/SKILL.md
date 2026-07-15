@@ -42,8 +42,9 @@ The authoritative area/milestone taxonomy and contract live in
 below must stay consistent with it. Every issue MUST carry:
 
 - **An area label**, one (or both) of:
-  - `storage` — pageserver / safekeeper / storage_controller, page
-    store, WAL, read/write paths, page-service wire protocol, e2e.
+  - `compute` — Postgres, extensions including the `yb_amp` extension, `compute_ctl`,
+    pageserver, safekeeper,
+    read/write paths, page-service wire protocol.
   - `control plane` — `storage_controller` orchestration,
     `yb_light_local`, endpoint/branch lifecycle.
   Stock labels (`bug`, `enhancement`, …) are optional extras, not a
@@ -54,7 +55,7 @@ On create, pass both:
 
 ```
 gh issue create --title "..." --body "..." \
-  --label storage --milestone POC
+  --label compute --milestone POC
 ```
 
 On an existing issue missing either, fix it:
@@ -110,10 +111,10 @@ reminds you to reference and close issues at commit time.
 
 When a commit is work on an issue, lead the subject with the `[#<num>]`
 tag — the full format is `[#<issue>] <area>: <sub-component>: <title>`,
-where `<area>` is a subsystem (`storage` / `control_plane`) or a meta
+where `<area>` is a subsystem (`compute` / `control_plane`) or a meta
 token (`pm` / `docs` / `ci` / `build` / `tools`); see the `commit-sync`
 skill's "Subject format". Example:
-`[#42] storage: pageserver: strip multi-timeline machinery`. This lets
+`[#42] compute: pageserver: strip multi-timeline machinery`. This lets
 `git log --oneline` be cross-referenced against the issue list, and
 GitHub auto-links the commit on the issue. Use `Closes #<num>` /
 `Fixes #<num>` in the PR body or final commit to auto-close on merge.
@@ -138,7 +139,7 @@ GitHub auto-links the commit on the issue. Use `Closes #<num>` /
 - **Phantom progress.** A body that says "DONE" up top and "Wave 2 —
   pending" below. Pick one; split the pending part into its own issue.
 - **Inventing labels/milestones** on the fly instead of using the
-  agreed `storage` / `control plane` and `POC` / `Early Access` /
+  agreed `compute` / `control plane` and `POC` / `Early Access` /
   `K8 Deploy`.
 
 ## Failure modes this prevents
