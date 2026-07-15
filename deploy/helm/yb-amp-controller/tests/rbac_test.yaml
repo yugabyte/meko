@@ -60,6 +60,33 @@ tests:
             name: amp-controller
             namespace: amp
 
+  # rbac.clusterScoped=false drops the two cluster-scoped documents (for
+  # namespace-scoped installs on shared clusters); the namespaced SA/Role/RoleBinding
+  # stay.
+  - it: omits the cluster-scoped docs when rbac.clusterScoped is false
+    release:
+      namespace: amp
+    set:
+      rbac.clusterScoped: false
+    asserts:
+      - hasDocuments:
+          count: 3
+      - containsDocument:
+          kind: ServiceAccount
+          apiVersion: v1
+          name: amp-controller
+        documentIndex: 0
+      - containsDocument:
+          kind: Role
+          apiVersion: rbac.authorization.k8s.io/v1
+          name: amp-controller
+        documentIndex: 1
+      - containsDocument:
+          kind: RoleBinding
+          apiVersion: rbac.authorization.k8s.io/v1
+          name: amp-controller
+        documentIndex: 2
+
   # The ClusterRole/ClusterRoleBinding are cluster-scoped, so their names are
   # namespace-prefixed to stay unique when the chart is installed into more than
   # one namespace.

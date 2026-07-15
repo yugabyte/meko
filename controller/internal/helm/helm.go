@@ -44,13 +44,12 @@ func New(bin, kubeconfig string, logger *slog.Logger) *Client {
 
 // Release describes one `helm upgrade --install` invocation.
 type Release struct {
-	Name            string        // release name (unique per endpoint)
-	Chart           string        // chart path or reference
-	Namespace       string        // target namespace
-	Values          any           // marshaled to a temp values file passed with --values
-	CreateNamespace bool          // pass --create-namespace
-	Wait            bool          // pass --wait (block until resources are ready)
-	Timeout         time.Duration // pass --timeout; 0 = helm's default
+	Name      string        // release name (unique per endpoint)
+	Chart     string        // chart path or reference
+	Namespace string        // target namespace (must already exist)
+	Values    any           // marshaled to a temp values file passed with --values
+	Wait      bool          // pass --wait (block until resources are ready)
+	Timeout   time.Duration // pass --timeout; 0 = helm's default
 }
 
 // UpgradeInstall runs `helm upgrade --install`, creating the release if absent
@@ -117,9 +116,6 @@ func (c *Client) Uninstall(ctx context.Context, release, namespace string, wait 
 // without invoking helm.
 func upgradeArgs(r Release, valuesPath string) []string {
 	args := []string{"upgrade", "--install", r.Name, r.Chart, "--namespace", r.Namespace}
-	if r.CreateNamespace {
-		args = append(args, "--create-namespace")
-	}
 	if valuesPath != "" {
 		args = append(args, "--values", valuesPath)
 	}

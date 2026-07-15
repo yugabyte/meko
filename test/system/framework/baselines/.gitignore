@@ -1,0 +1,3 @@
+# Perf baselines are environment-specific artifacts, established per target
+# cluster by an operator (ampqa run ... -o perf.update_baseline=bool:true). Not committed.
+*.json

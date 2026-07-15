@@ -107,14 +107,17 @@ var _ Deployer = (*KubernetesDeployer)(nil)
 // fullnameOverride, so the address is a pure function of the name and config.
 func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) (Endpoint, error) {
 	release := spec.Name
+	// The deploy namespace is the controller's own namespace (the chart sets
+	// AMP_DEPLOY_NAMESPACE to .Release.Namespace), so it always exists — no
+	// --create-namespace, which would otherwise demand cluster-scoped
+	// namespaces:create the controller need not hold on a shared cluster.
 	if err := k.helm.UpgradeInstall(ctx, helm.Release{
-		Name:            release,
-		Chart:           k.cfg.ChartPath,
-		Namespace:       k.cfg.Namespace,
-		Values:          k.values(spec, release),
-		CreateNamespace: true,
-		Wait:            true,
-		Timeout:         k.cfg.Timeout,
+		Name:      release,
+		Chart:     k.cfg.ChartPath,
+		Namespace: k.cfg.Namespace,
+		Values:    k.values(spec, release),
+		Wait:      true,
+		Timeout:   k.cfg.Timeout,
 	}); err != nil {
 		return Endpoint{}, fmt.Errorf("helm deploy %s: %w", release, err)
 	}

@@ -1,0 +1,1016 @@
+# ampqa canonical defaults — the ONE place every framework default lives.
+#
+# Embedded into the binary (configs/configs.go) and loaded first as layer zero.
+# Precedence (later wins): embedded default.yaml → -c files (deep-merged, in
+# order) → -jc JSON files → -o typed key=value overrides.
+#
+# Every default the code reads lives here (core/defaults_test.go asserts this).
+# A commented-out key, or a struct field with no key, has no sensible default:
+# the owning provider/task requires the caller to set it (e.g. env.docker.host).
+# --no-default-config skips this file entirely (debugging only).
+
+# owner is stamped as the yb_owner ownership tag/label on every cloud resource
+# this framework creates (apps/cloud/aws, apps/cloud/gcp, apps/yba universe
+# instance tags) and used as the resource name prefix. The dev-account
+# governance SCP conditions RunInstances on yb_owner being present, so the tag
+# itself is mandatory — only its value is configurable. Override per run with
+# -o owner=<name> (e.g. your username) to make resources identifiable as yours.
+owner: "ampqa"
+
+# --- Scheduler (sched/scheduler.go, sched/lease.go) ---
+sched:
+  # Total environments that may exist at once across the whole run.
+  capacity: 8
+  # Worker-pool size (default for --parallel; an explicit flag wins).
+  parallel: 1
+  # SHARED tests packed onto one shared env (default for --per-env-parallelism).
+  per_env_parallelism: 4
+  # Lease weight per env Shape (used when a test's EnvSpec sets no Weight).
+  # Shapes not listed fall back to 1 (2 for dedicated_stack).
+  weights:
+    single_container: 1
+    shared_control_plane: 1
+    dedicated_stack: 2
+    remote: 1
+    universe: 1
+
+# --- Per-test / lifecycle timeouts (core/timeouts.go, core/lifecycle.go) ---
+# time.ParseDuration strings (bare numbers = seconds).
+timeouts:
+  # Category default test-body timeout (when a Test sets none).
+  functional: 10m
+  stress: 60m
+  perf: 30m
+  long_running: 24h
+  # EnvProvider.Provision deadline.
+  provision: 5m
+  # EnvProvider.Teardown deadline (runs even after a body timeout, own budget).
+  teardown: 5m
+  # Environment.Collect deadline (best-effort, before teardown).
+  collect: 2m
+
+# --- Environment providers ---
+env:
+  # env/docker: single-container amp on a remote docker host.
+  # host/ssh_user/ssh_key/ssh_port/endpoint_image/name_token: no default —
+  # Configured() is true only once host is set.
+  docker:
+    yb_image: "yugabytedb/yugabyte:latest"
+    compute_port_base: 55433
+    yb_port_base: 5433
+    # true → one shared YugabyteDB container per host; false → one per test.
+    yb_shared: true
+
+  # env/sharedk8s: project-per-test on a control plane.
+  # controller_url/context/namespace/user_id/pool_id: no default —
+  # Configured() is true only once controller_url or context (deploy: a context)
+  # is set.
+  #   deploy (dynamic default): when true this provider self-builds ONE
+  #     run-scoped amp control plane (the same ampstack the exclusivek8s provider
+  #     and deploy-amp task build, read from env.ampstack.* below) in an owned
+  #     ampqa-labelled namespace, and carves projects out of it — "self-building
+  #     k8s". When false it ATTACHES to a standing control plane. Defaults on
+  #     unless a standing controller is already configured (controller_url or a
+  #     namespace to attach to), so a bare kube-context self-builds and
+  #     `run --env <id>` attaches.
+  #   deploy_timeout (dynamic default): bounds the one-time control-plane
+  #     bring-up (rooted in a background deadline, NOT a per-test provision
+  #     timeout, since the control plane must outlive any single Provision).
+  #     Defaults to env.ampstack.yb_ready_timeout + controller_ready_timeout + 2m.
+  sharedk8s:
+    controller_service: "amp-controller"
+    controller_port: 8080
+    endpoint_port: 55433
+    # 0 → kubectl auto-allocates each local forward port (parallel-safe); a
+    # positive value restores the legacy deterministic base/base+1 scheme.
+    local_port_base: 0
+    pool_name: "ampqa"
+    controller_ready_timeout: 2m
+    pg_ready_timeout: 3m
+
+  # apps/ampstack: the amp control-plane App, driven by the deploy/status/
+  # teardown-amp tasks and composed by exclusivek8s.
+  # namespace: no default (Deploy requires it). context: empty → current
+  # kube-context. controller_chart: no default (required for a helm deploy).
+  # storage_class empty → endpoint /data is an emptyDir. pull_secret_b64 empty →
+  # mint the pull secret from `aws ecr get-login-password` against ecr_registry.
+  ampstack:
+    # Pinned to known-good tags: the registry's :latest is stale (June 18) and
+    # predates the nested storage-pools/{id}/projects route, so create_project
+    # 404s against it (breaks amp_on_yb_k8s + the amp-feature tests). Bump these
+    # when the amp team refreshes :latest, or override per-run in an overlay.
+    controller_image: "amp/controller:tailnet-mig0010"
+    endpoint_image: "amp/endpoint:phase1-20260703-154251"
+    yb_image: "yugabytedb/yugabyte:latest"
+    yb_storage: "20Gi"
+    db_name: "yb_storage"
+    # backing: where the control plane's YugabyteDB lives.
+    #   builtin_yugabyted (default) → ampstack deploys the single-node yugabyted
+    #     and wires the controller at it.
+    #   external → ampstack deploys NO yugabyted; it ensures yb_storage on a
+    #     cluster owned elsewhere and points controller+endpoints at it (teardown
+    #     never touches it). host_ports (CSV of tserver host:port) required;
+    #     user/db_name/sslmode default to yugabyte/yb_storage/disable.
+    # admin_host_ports: coordinator-reachable CSV used ONLY for the one-shot
+    #   CREATE DATABASE; empty → host_ports. Set only for co-located YB-in-k8s
+    #   where host_ports is an in-cluster name this coordinator cannot resolve.
+    backing:
+      mode: "builtin_yugabyted"
+      host_ports: ""
+      user: ""
+      db_name: ""
+      password: ""
+      sslmode: ""
+      admin_host_ports: ""
+    # false → NO ClusterRole/ClusterRoleBinding ever created (namespace-scoped
+    # RBAC only, for a shared cluster).
+    rbac_cluster_scoped: false
+    # true → install the helm shim that strips --create-namespace (needed until
+    # a controller image built without that flag ships).
+    helm_shim: true
+    mcp_enabled: false
+    ui_enabled: false
+    ecr_registry: "454529406029.dkr.ecr.us-west-2.amazonaws.com"
+    region: "us-west-2"
+    pull_secret_name: "pull-secret"
+    controller_service: "amp-controller"
+    controller_container: "controller"
+    controller_name: "amp-controller"
+    controller_port: 8080
+    endpoint_service_type: "ClusterIP"
+    controller_expose: "none"
+    helm_release: "yb-amp-controller"
+    # How the controller is reached once deployed:
+    #   tailnet (default) — resolve its cluster-internal address and talk direct
+    #     (no port-forward that can die mid-test).
+    #   portforward — the historical kubectl port-forward (reconnected on death).
+    controller_reach: "tailnet"
+    # 0 → kubectl auto-allocates the port-forward local port (portforward only).
+    local_port: 0
+    yb_ready_timeout: 15m
+    controller_ready_timeout: 5m
+
+  # env/universe: a YugabyteDB universe used directly as the test TARGET (not the
+  # amp control plane). Off unless env.universe.mode is set.
+  #   mode (no default): attach_yba (existing YBA universe by name/id),
+  #     attach_address (host:port list), provision_yugabyted (fresh yugabyted on
+  #     ssh nodes), provision_yba (stand up our own YBA in k8s [apps.ybastack.*],
+  #     create a provider+universe [apps.yba.*], always owned — teardown deletes
+  #     the universe then the YBA).
+  #   attach_yba.*: url/api_token/customer_uuid/universe required; insecure_tls
+  #     defaults true (YBA is commonly self-signed).
+  #   attach_address.addresses: "host:port" list (host alone takes ysql_port).
+  #   provision_yugabyted.*: hosts required; ssh_*/install_dir/base_dir/data_dir/
+  #     rf optional (yugabyted defaults apply).
+  universe:
+    # owned (attach_yba only): true → Teardown DELETES the universe. Default
+    # false so an attached (someone else's) universe is never destroyed.
+    owned: false
+    ysql_port: 5433
+    yba:
+      insecure_tls: true
+    yugabyted:
+      rf: 0
+
+  # env/vm: N cloud VMs as a bare cluster HOST. Cloud-agnostic: cloud selects the
+  # driver; per-cloud instance settings live under apps.cloud.<cloud>.*.
+  vm:
+    # aws (default; the only Wave-1 driver), later gcp/azure. An unimplemented
+    # cloud fails fast. node_count/instance_type are read from env.awsvm.* below;
+    # set env.vm.node_count/env.vm.instance_type here to override.
+    cloud: "aws"
+
+  # env.awsvm: node-set knobs for the env/vm host (documented home + back-compat
+  # alias of env.vm.node_count/env.vm.instance_type). AWS instance settings come
+  # from apps.cloud.aws.*.
+  awsvm:
+    # Instances to launch (minimal RF=3 host is 3).
+    node_count: 3
+    # empty → inherit the driver default (aws m7g.xlarge).
+    instance_type: ""
+
+  # env/exclusivek8s: namespace-per-test dedicated stack.
+  # context: no default (Configured() true only once set). helm_chart/
+  # helm_values/controller_image/controller_manifest/pull_secret_b64: no default
+  # (one of helm_chart or controller_manifest must be set).
+  exclusivek8s:
+    namespace_prefix: "ampqa"
+    pull_secret_name: "pull-secret"
+    yb_image: "yugabytedb/yugabyte:latest"
+    yb_storage: "20Gi"
+    helm_release: "amp-controller"
+    controller_service: "amp-controller"
+    controller_port: 8080
+    # "" inherits apps/ampstack's default (tailnet); "portforward" forces the
+    # legacy kubectl-forward fallback.
+    controller_reach: ""
+    local_port_base: 18080
+    yb_ready_timeout: 15m
+    controller_ready_timeout: 5m
+
+# --- Functional suite: amp-on-backing tests (suites/functional) ---
+# End-to-end: for one YugabyteDB backing store, provision the cluster, run a
+# YB-native workload (layer 1), deploy amp on it (ampstack external), run a
+# workload through amp compute (layer 2), cross-check, tear down as one unit.
+# Self-provisions real infra, so opt-in: nothing spins unless functional.enabled
+# AND each test's required config is present (amp: env.ampstack.controller_chart;
+# amp_on_yba_universe: env.universe.yba.* + a universe; amp_on_yba_provisioned:
+# a k8s cluster [apps.ybastack.kubecontext/kubeconfig] + quay & AWS secrets).
+functional:
+  enabled: false
+  # Backing-cluster host shape (awsvm tests); override env.awsvm.*/apps.cloud.aws.*.
+  nodes: 3
+  instance_type: ""
+  # IP nodes advertise / the coordinator reaches YSQL at: "private" or "public".
+  advertise: "private"
+  # Workload shape (both layers): databases/schemas, tables per namespace, rows
+  # per table, tablets per table (YB-native SPLIT INTO N TABLETS). Small = cheap.
+  dbs: 4
+  tables_per_db: 3
+  rows_per_table: 2000
+  tablets: 3
+  # Bounded parallelism across namespaces.
+  concurrency: 4
+  # amp project/endpoint PG version (0 → the controller chooses).
+  pg_version: 0
+  # Backing-cluster runtime layout on the bare awsvm AMI (no YugabyteDB baked in).
+  #   install_dir empty + deploy true (defaults) → deploy the versions.yugabytedb
+  #     artifact onto every node, use its extracted dir as install_dir.
+  #   install_dir set → deploy SKIPPED (pre-baked-AMI path).
+  #   deploy false + install_dir empty → binaries assumed on PATH.
+  # base_dir is yugabyted's --base_dir only; empty → yugabyted default
+  # (/home/ec2-user/yugabyte-data — must NOT default under /root).
+  cluster:
+    install_dir: ""
+    deploy: true
+    deploy_dir: "/home/ec2-user/yb-software"
+    data_dir: ""
+    base_dir: ""
+    rf: 0
+    ysql_port: 5433
+  # amp endpoint connection knobs (layer 2). Every amp compute endpoint
+  # provisions this cloud_admin superuser (NOT postgres/postgres). sslmode empty
+  # → apps/pg default (disable). create_spec (yba, owned): no default.
+  amp:
+    endpoint_user: "cloud_admin"
+    endpoint_password: "cloud_admin"
+    endpoint_db: "postgres"
+    endpoint_sslmode: ""
+
+# --- Apps ---
+apps:
+  # apps/cloud/aws: EC2 lifecycle app, shelling the ambient-authed `aws` CLI. The
+  # shared us-west-2 dev-VPC settings (AWS_TEST_INSTANCES.md) are real defaults.
+  # key_name is the SHARED yb-dev-aws-2 keypair — this app NEVER mints one.
+  cloud:
+    aws:
+      region: "us-west-2"
+      subnet: "subnet-11798e59"
+      security_groups:
+        - "sg-0427247c274837cdc"
+        - "sg-0ab0af5e93728f73a"
+        - "sg-05b6d45d3ab93c852"
+        - "sg-0271332bdd9fa1313"
+      key_name: "yb-dev-aws-2"
+      key_file: "~/.ssh/yb-dev-aws-2.pem"
+      ami: "ami-0eb514f4c0f885334" # AlmaLinux 9 ARM (aarch64) — must match instance_type arch
+      instance_type: "m7g.xlarge"
+      ssh_user: "ec2-user"
+      # name_prefix has NO entry here (unlike other keys): its default is
+      # DERIVED from the top-level `owner` value at read time (FromConfig), so
+      # instances are named "<owner>-<run>-<n>" by default. A key present here
+      # — even as "" — would short-circuit that fallback (GetString only
+      # applies its default on a lookup MISS). Set apps.cloud.aws.name_prefix
+      # explicitly only to prefix names differently from the owner tag.
+      # reach: "private" (default) is the VPC private IP — the only inbound path
+      # the dev VPC's SGs allow. Instances still get a public IP for outbound
+      # (artifact downloads). Set "public" only for a VPC allowing public SSH.
+      reach: "private"
+      # WaitSSH budget: an unreachable instance fails here instead of hanging the
+      # whole provision, so teardown can reclaim it promptly.
+      ssh_wait_timeout: "4m"
+      # access_key_secret/secret_key_secret name secrets holding static AWS creds.
+      # Both empty (default) → the aws CLI uses its AMBIENT chain (the working
+      # default; don't set unless you need explicit creds). Set BOTH or neither
+      # (partial errors); values go into the process env only, never argv/logs.
+      access_key_secret: ""
+      secret_key_secret: ""
+
+    # apps/cloud/gcp: GCE lifecycle app, shelling `gcloud`. project/zone/region/
+    # network/subnetwork/disk_type/ssh_user are the shared dev-project values.
+    gcp:
+      project: "yugabyte"
+      zone: "us-west1-b"
+      region: "us-west1"
+      network: "yugabyte-network"
+      subnetwork: "subnet-us-west1"
+      disk_type: "pd-standard"
+      machine_type: "e2-standard-4"
+      # image/image_family/image_project: one of image or image_family MUST be
+      # set before a live GCP run (no reusable shared image identified).
+      # image_family (`--image-family`, e.g. almalinux-8) resolves to the current
+      # family image; image (`--image`) pins a build; image_family wins if both.
+      image: ""
+      image_family: ""
+      image_project: ""
+      ssh_user: "centos"
+      # key_file/public_key_file: no GCP shared key exists yet — MUST be filled
+      # before a live run. public_key_file's CONTENT is injected into instance
+      # metadata so RunInstances never mints a key or uses OS Login.
+      key_file: ""
+      public_key_file: ""
+      # name_prefix has NO entry here — its default is DERIVED from the
+      # top-level `owner` value at read time; see apps.cloud.aws.name_prefix.
+      # reach/ssh_wait_timeout mirror aws.
+      reach: "private"
+      ssh_wait_timeout: "4m"
+      # service_account_secret names a secret resolving to a PATH to a
+      # service-account JSON key. Empty (default) → ambient `gcloud auth`. The
+      # path is injected as CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE, never logged.
+      service_account_secret: ""
+
+  # apps/yba: YugabyteDB Anywhere REST app. base_url/customer_uuid/
+  # api_token_secret (NAME of a secret) have NO default — all three required to
+  # reach a YBA. aws.*/gcp.*/k8s.* are provider specs, universe.* the universe spec.
+  yba:
+    base_url: ""
+    customer_uuid: ""
+    api_token_secret: ""
+    # provider_type: backing cloud the provision_yba flow stands a universe on.
+    #   aws (default) — EC2 provider (apps.yba.aws.*); teardown backstop is the
+    #     ampqa-run=<tag> EC2 tag sweep.
+    #   kubernetes — universe ON the same k8s cluster the YBA runs in (cheapest,
+    #     fully-in-cluster); reads apps.yba.k8s.*; needs kubecontext + quay.
+    #   gcp — GCE VMs (apps.yba.gcp.*); needs the gcp_key SA-JSON secret.
+    provider_type: "aws"
+    # release_url: DB-release tarball the provision_yba flow imports before
+    # universe-create. Empty → derived from versions.yugabytedb + aws.arch as the
+    # public software.yugabyte.com el8 tarball.
+    release_url: ""
+    aws:
+      # provider_name is the idempotent identity: an existing provider with this
+      # name is REUSED, never duplicated.
+      provider_name: "ampqa-aws"
+      ssh_user: "ec2-user"
+      arch: "arm"
+      # keypair_name+keypair_file are the SHARED yb-dev-aws-2 keypair, passed with
+      # skipKeyValidateAndUpload so YBA REUSES it and NEVER mints a new AWS key.
+      keypair_name: "yb-dev-aws-2"
+      keypair_file: "~/.ssh/yb-dev-aws-2.pem"
+      # access_key_secret/secret_key_secret name secrets with the static AWS creds
+      # baked into the provider — REQUIRED (YBA stores them; unlike ambient chain).
+      access_key_secret: "aws_access_key"
+      secret_key_secret: "aws_secret_key"
+      # regions → zones → subnets. security_group_id/vpc_id empty (env-specific).
+      # ami is the region ybImage and MUST match arch — an empty ami makes YBA
+      # default to x86_64, which RunInstances rejects against the arm64 m7g.xlarge.
+      # Default is the shared us-west-2 ARM server AMI; for x86 set arch: x86 +
+      # an x86_64 ami + an x86 instance_type.
+      regions:
+        - code: "us-west-2"
+          security_group_id: ""
+          vpc_id: ""
+          ami: "ami-03cd4ec64de195719"
+          zones:
+            - name: "us-west-2a"
+              subnet: "subnet-11798e59"
+    universe:
+      # name_prefix tags every universe (name = "<prefix>-<run-tag>") so it is
+      # identifiable and reapable.
+      name_prefix: "ampqa"
+      num_nodes: 3
+      replication_factor: 3
+      instance_type: "m7g.xlarge"
+      # instance_num_cores/instance_mem_gb describe instance_type (m7g.xlarge =
+      # 4 vCPU / 16 GiB) and are registered on the provider — YBA does not
+      # auto-populate an API-created provider's instance-type catalog.
+      instance_num_cores: 4
+      instance_mem_gb: 16
+      region: "us-west-2"
+      # yb_version empty → fall back to versions.yugabytedb.
+      yb_version: ""
+      volume_size_gb: 100
+      volume_count: 1
+      # storage_type EBS class. GP3 (default) requires disk_iops+throughput (YBA
+      # 400s without them; these are the GP3 baseline). IO1/IO2 use disk_iops
+      # only; gp2/other ignore both.
+      storage_type: "GP3"
+      disk_iops: 3000
+      throughput: 125
+      # instance_tags stamp every node. The dev-account SCP conditions
+      # ec2:RunInstances on ownership tags, so a universe missing them is DENIED.
+      # The mandatory set (yb_owner/yb_task/yb_dept/autoclean/ampqa) is always
+      # applied; keys here override/extend it; ampqa-run is added automatically.
+      instance_tags: {}
+      # enable_ybc toggles YBC install. false (default) skips it + WaitForYbcServer
+      # (the amp-compute workload needs no YBC); set true only for YBC/backup tests.
+      enable_ybc: false
+    # k8s.*: KUBERNETES provider+universe (provider_type "kubernetes"): a universe
+    # ON the same k8s cluster the YBA runs in (apps.ybastack.kubecontext), no VMs.
+    k8s:
+      # provider_name idempotent identity. kube_provider = KUBECONFIG_PROVIDER
+      # hint. service_account = in-namespace ServiceAccount YBA uses.
+      provider_name: "ampqa-k8s"
+      kube_provider: "gke"
+      service_account: "yugabyte-helm"
+      # universe DB image registry (quay itest) — k8s universes pull from here.
+      image_registry: "quay.io/yugabyte/yugabyte-itest"
+      # in-cluster image-pull Secret YBA references.
+      pull_secret_name: "quay-secret"
+      # StorageClass the universe PVCs bind to.
+      storage_class: "standard"
+      # cluster DNS domain (KUBE_DOMAIN); empty → cluster.local.
+      kube_domain: ""
+      # use_in_cluster true → YBA uses its OWN in-cluster service account (no
+      # kubeconfig sent); false (default) → kubeconfig from kubeconfig_secret.
+      # kubeconfig_secret/pull_secret_secret name secrets; kubeconfig required at
+      # a live run unless use_in_cluster.
+      use_in_cluster: false
+      kubeconfig_secret: ""
+      pull_secret_secret: ""
+      # region + zones (co-located GKE; shared dev us-west1). empty → single zone.
+      region: "us-west1"
+      zones:
+        - code: "us-west1-b"
+      # Universe shape (cheap RF1: 1 tserver). Set 3 for RF3.
+      num_nodes: 1
+      replication_factor: 1
+      volume_count: 1
+      volume_size_gb: 50
+      # master/tserver K8SNodeResourceSpec cpu cores + memory GiB (within YBA's
+      # MIN_CPU 0.5 / MIN_MEMORY 2.0 GiB bounds).
+      master_cpu: 2
+      master_mem_gib: 4
+      tserver_cpu: 2
+      tserver_mem_gib: 4
+    # gcp.*: GCP provider+universe (provider_type "gcp"): a universe on GCE VMs.
+    gcp:
+      # provider_name idempotent identity. project/network/subnetwork/region/zone
+      # are the shared dev-project values; network is the existing VPC (destVpcId).
+      provider_name: "ampqa-gcp"
+      project: "yugabyte"
+      network: "yugabyte-network"
+      subnetwork: "subnet-us-west1"
+      region: "us-west1"
+      zone: "us-west1-b"
+      ssh_user: "centos"
+      ssh_port: 22
+      # arch x86 by default (GCP universes run x86); tarball+image bundle resolve
+      # for this arch.
+      arch: "x86"
+      # credentials_secret names a secret resolving to a PATH to the SA JSON key.
+      # Contents go into gceApplicationCredentials (never logged); the path
+      # re-auths gcloud for the teardown reap. REQUIRED for a live gcp run.
+      credentials_secret: "gcp_key"
+      # keypair_name+keypair_file: an EXISTING key reused (skipKeyValidateAndUpload)
+      # so YBA never mints one. Both empty (default) → no allAccessKeys block (YBA
+      # falls back to project/OS-login keys). Set both before a live SSH run.
+      keypair_name: ""
+      keypair_file: ""
+      # image: optional GCE image (name or family) for the default image bundle;
+      # empty → YBA's default GCP image. regions optional; empty → single us-west1.
+      image: ""
+      # Universe shape (cheap RF1). instance_type is the GCE machine type
+      # (n2-standard-4, analogous to AWS m7g.xlarge). storage_type Persistent.
+      instance_type: "n2-standard-4"
+      num_nodes: 1
+      replication_factor: 1
+      volume_size_gb: 100
+      volume_count: 1
+      storage_type: "Persistent"
+
+  # apps/ybastack: YugabyteDB-Anywhere-in-Kubernetes deploy App. Stands up our
+  # OWN YBA in a per-run namespace and returns a token-bootstrapped yba.Client
+  # (what env.universe.yba.* needs). kubectl/helm shelled, ambient-authed.
+  ybastack:
+    # kubecontext empty → current context. kubeconfig empty → ambient KUBECONFIG;
+    # set → exported into the shelled child env only (parallel-safe).
+    kubecontext: ""
+    kubeconfig: ""
+    namespace_prefix: "ampqa-yba"
+    # chart_version empty → versions.yugabytedb. Chart tarball:
+    # s3://releases.yugabyte.com/<chart_version>/helm/yugaware-<short>.tgz
+    # (<short> = first three version components).
+    chart_version: ""
+    # image_registry patches the chart's YBA control-plane image repo.
+    # yb_image_registry is the SEPARATE universe image registry (provider wave).
+    image_registry: "quay.io/yugabyte/yugaware-itest"
+    yb_image_registry: "quay.io/yugabyte/yugabyte-itest"
+    # quay_secret is the NAME of the secret with the quay pull credential;
+    # pull_secret_name is the in-cluster Secret it becomes.
+    quay_secret: "quay_images"
+    pull_secret_name: "quay-secret"
+    service_account: "yw-sa"
+    storage_class: "standard"
+    # rbac_dir: optional universe-management RBAC templates; each
+    # ClusterRoleBinding is renamed "<name>-<namespace>" so parallel YBAs never
+    # clobber a cluster-scoped binding. Empty → the chart's own namespaced RBAC.
+    rbac_dir: ""
+    # reach: tailnet (default) resolves the yugaware Service cluster-internal
+    # address and talks direct; loadbalancer reads the external ingress IP.
+    reach: "tailnet"
+    # empty → service_name "<release>-yugaware-ui", pod_selector
+    # "app=<release>-yugaware", helm_release "<namespace>-yugaware".
+    service_name: ""
+    pod_selector: ""
+    helm_release: ""
+    service_port: 80
+    helm_timeout: "40m"
+    # insecure_tls true (default) → reach client skips TLS verify (self-signed).
+    insecure_tls: true
+    # bootstrap.* are the first-customer credentials (well-known non-secret YBA
+    # dev default, routed through config not hardcoded). bootstrap_timeout bounds
+    # the retry-until-the-pod-answers loop.
+    bootstrap:
+      name: "demo"
+      email: "demo@yugabyte.com"
+      password: "Password#123"
+    bootstrap_timeout: "10m"
+
+  # apps/ybk8s: YugabyteDB-in-Kubernetes deploy App. Stands up a YB cluster in a
+  # per-run namespace via the upstream `yugabyte` helm chart, for the cheapest
+  # fully-GCP CO-LOCATED mode (YB + amp in one GKE cluster). Powers
+  # functional/amp_on_yb_k8s.
+  ybk8s:
+    # kubecontext/kubeconfig as ybastack. For co-location the amp deploy must
+    # target the SAME cluster: set env.ampstack.context to match (or both empty).
+    kubecontext: ""
+    kubeconfig: ""
+    namespace_prefix: "ampqa-yb"
+    # chart_version empty → versions.yugabytedb. Chart tarball:
+    # s3://releases.yugabyte.com/<chart_version>/helm/yugabyte-<short>.tgz.
+    chart_version: ""
+    # image_registry is the chart Image.repository; image_tag empty → chart_version.
+    image_registry: "yugabytedb/yugabyte"
+    image_tag: ""
+    # image_pull_secret: NAME of a secrets: entry whose value is a "<user>:<pass>"
+    # registry token, for pulling build-specific images from a PRIVATE registry
+    # (e.g. quay.io/yugabyte/yugabyte-itest, where -bNNN builds live but public
+    # Docker Hub does not). "" → no pull secret (public yugabytedb/yugabyte,
+    # unchanged). image_pull_registry is the registry the token authenticates
+    # (the dockerconfigjson "auths" key); image_pull_secret_name is the k8s Secret
+    # object created in the YB namespace and set as the chart's Image.pullSecretName.
+    image_pull_secret: ""
+    image_pull_registry: "quay.io"
+    image_pull_secret_name: "yb-pull-secret"
+    # replication_factor drives default master/tserver counts (RF1 = cheap: 1+1;
+    # set 3 for RF3). master_replicas/tserver_replicas (0 → RF) override each.
+    replication_factor: 1
+    master_replicas: 0
+    tserver_replicas: 0
+    storage_class: "standard"
+    storage_size: "10Gi"
+    # service_name is the tserver Service whose in-cluster DNS the amp controller
+    # connects at; the framework reaches YSQL over the tailnet via pod IPs.
+    service_name: "yb-tserver-service"
+    ysql_port: 5433
+    # Small resource requests keep a real run cheap.
+    master_cpu: "0.5"
+    master_memory: "1Gi"
+    tserver_cpu: "0.5"
+    tserver_memory: "2Gi"
+    # reach: tailnet (default, only mode) resolves tserver pod IPs (a ClusterIP is
+    # not routable from the coordinator).
+    reach: "tailnet"
+    # helm_release empty → the per-run namespace name.
+    helm_release: ""
+    helm_timeout: "30m"
+
+  # apps/ybpod: yugabyted-in-pod deploy App. Stands up a single-node (RF1)
+  # YugabyteDB inside a bare pod by installing the release TARBALL and running
+  # `yugabyted start` by hand — image-promotion-INDEPENDENT (unlike ybk8s, which
+  # needs a promoted container image at a tag). The tarball always exists in the
+  # S3 release bucket for every build.
+  ybpod:
+    # kubecontext/kubeconfig as ybk8s. For co-location the amp deploy must target
+    # the SAME cluster: set env.ampstack.context to match (or both empty).
+    kubecontext: ""
+    kubeconfig: ""
+    namespace_prefix: "ampqa-ybpod"
+    # base_image: a PUBLIC el8 base that can run the el8 tarball — needs glibc,
+    # tar/gzip (remote untar) and dnf (yugabyted needs Python 3.7+; almalinux:8's
+    # stock python3 is 3.6, provisioned on start). base_image_pull_secret: NAME of
+    # a PRE-EXISTING docker-registry Secret in the namespace for a PRIVATE base
+    # image; "" → public.
+    base_image: "almalinux:8"
+    base_image_pull_secret: ""
+    # version empty → versions.yugabytedb. arch selects the S3 tarball variant:
+    # x86_64 → yugabyte-<ver>-centos-x86_64.tar.gz, aarch64 → -almalinux8-aarch64.
+    # The k8s node the pod lands on MUST match arch.
+    version: ""
+    arch: "x86_64"
+    # install_dir: pod dir the tarball lands in + unpacks under (install root is
+    # <install_dir>/yugabyte-<base>). base_dir: yugabyted --base_dir. Both under
+    # /root (the pod runs as root, unlike the awsvm ec2-user default).
+    install_dir: "/root/yb-software"
+    base_dir: "/root/yugabyte-data"
+    # service_name: the YSQL Service whose in-cluster DNS the amp controller
+    # connects at; the framework reaches YSQL over the tailnet via the pod IP.
+    service_name: "ybpod-ysql"
+    ysql_port: 5433
+    ready_timeout: "10m"
+
+  # apps/sampleapp: the YugabyteDB Java sample-apps jar (yb-stress-sample-apps
+  # fork), run against the backing YB as a real workload. workload is the
+  # --workload value (Sql* → YSQL, Cassandra* → YCQL). skip_workload = create
+  # schema only; skip_ddl = load data into existing tables — the two together are
+  # the two-phase SqlDataLoad pattern. run_time 0 → the jar runs until stopped.
+  sampleapp:
+    workload: "SqlInserts"
+    num_tables: 1
+    num_value_columns: 0
+    num_threads_read: 0
+    num_threads_write: 0
+    run_time: "0s"
+    uuid: ""
+    skip_workload: false
+    skip_ddl: false
+    ysql_port: 5433
+    ycql_port: 9042
+
+  # apps/benchbase: the BenchBase benchmark suite (yugabyte fork), run against the
+  # backing YSQL. TPC-C default with small load params so a real run stays cheap.
+  # For TPC-C the warehouse count IS the scalefactor; scalefactor 0 → warehouses.
+  benchbase:
+    benchmark: "tpcc"
+    warehouses: 1
+    terminals: 1
+    duration: "60s"
+    scalefactor: 0
+    rate: "unlimited"
+
+# --- Artifacts (artifact/artifact.go, artifact/deploy.go) ---
+artifact:
+  # Local download cache dir. Empty (default) → ~/.ampqa/artifacts at use.
+  cache_dir: ""
+
+# versions{}: short name → version string, consumed by {name} placeholder
+# substitution in artifacts{} (artifact.Resolve) and the pre-provision version
+# gate (versions.product/versions.yb, cmd/ampqa/run.go). Otherwise per-project.
+#
+# yugabytedb is the one framework-owned entry: the functional suite's awsvm host
+# is bare (no YugabyteDB), so the release its cluster provisioners deploy is a
+# genuine framework default. A single build-suffixed string; consumers derive the
+# bare form ({yugabytedb_base}, "-bNNN" stripped — the public release DIRECTORY)
+# from it. A real current stable (LTS); bump for a newer build, or override
+# artifacts.yugabytedb.glob_path/url for a different line.
+versions:
+  yugabytedb: "2025.2.1.0-b141"
+  # sampleapp: the yb-stress-sample-apps jar release tag suffix (github release
+  # ssa_<version> in yugabyte/yb-stress-test). benchbase: the yugabyte/benchbase
+  # release tag. Both mirror the stress framework's pinned versions.
+  sampleapp: "1.4.90"
+  benchbase: "1.12"
+
+# artifacts{}: fetchable artifacts by name (glob_path, url, type, target, secret,
+# delivery flags). Consumed by artifact.Resolve and the deploy-artifact task.
+# Otherwise per-project.
+#
+# yugabytedb: the release the functional awsvm cluster provisioners deploy onto
+# the bare-AMI host (functional.cluster.deploy). remote_download (curl on the
+# node) + remote_unzip; the public URL needs no secret/AWS creds. target "server"
+# matches the Label the provisioners pass.
+#
+# ARCH el8-aarch64 — the awsvm AMI is ARM AlmaLinux. For x86_64, override
+# glob_path/url to the linux-x86_64 filename.
+#
+# version is declared as "yugabyte-{yugabytedb_base}": the tarball extracts to a
+# directory named just yugabyte-<base-version> (no build/os/arch suffix). The
+# provisioners join it onto functional.cluster.deploy_dir for install_dir.
+artifacts:
+  yugabytedb:
+    version: "yugabyte-{yugabytedb_base}"
+    glob_path: "yugabyte-{yugabytedb}-el8-aarch64.tar.gz"
+    url: "https://software.yugabyte.com/releases/{yugabytedb_base}/yugabyte-{yugabytedb}-el8-aarch64.tar.gz"
+    type: http
+    remote_download: true
+    remote_unzip: true
+    target: "server"
+
+  # sampleapp: the yb-stress-sample-apps jar, a github_release asset in the
+  # yugabyte/yb-stress-test repo under the tag ssa_<version>. Private repo → the
+  # fetch authenticates with the gh_package secret (see secrets{} below). The url
+  # is the GitHub "get a release by tag" API endpoint; the fetcher resolves the
+  # asset matching glob_path and downloads it into the local cache, then delivers
+  # it to the client. Mirrors stress artifacts.conf `stress-sample-app-tool`.
+  sampleapp:
+    glob_path: "yb-stress-sample-apps-{sampleapp}.jar"
+    url: "https://api.github.com/repos/yugabyte/yb-stress-test/releases/tags/ssa_{sampleapp}"
+    type: github_release
+    secret: "gh_package"
+    target: "client"
+
+  # benchbase: the BenchBase (yugabyte fork) release tarball — a PUBLIC github
+  # release asset, no secret needed. remote_download (curl on the client) +
+  # remote_unzip extracts benchbase-yugabyte/. Mirrors stress artifacts.conf
+  # `benchbase`.
+  benchbase:
+    glob_path: "benchbase-yugabyte.tgz"
+    url: "https://github.com/yugabyte/benchbase/releases/download/{benchbase}/benchbase-yugabyte.tgz"
+    type: http
+    target: "client"
+    remote_download: true
+    remote_unzip: true
+
+  # pgbench: the YugabyteDB release tarball, delivered to the perf CLIENT pod
+  # ONLY to obtain postgres/bin/ysql_bench — YB's fork of pgbench. Upstream
+  # `pgbench` is NOT bundled in the release; perf/pgbench symlinks/wraps
+  # ysql_bench as `pgbench` on the client PATH (apps/pgbench shells the bare
+  # `pgbench` name). It is the SAME S3 tarball apps/ybpod/apps/yugabyted deploy,
+  # fetched coordinator-side (aws s3 cp, ambient-authed) then kubectl-cp'd into
+  # the pod and untarred there — the pod needs no AWS creds (mirrors ybpod).
+  # version "yugabyte-{yugabytedb_base}" is the tarball's real extracted
+  # directory (build/os/arch suffix dropped). centos-x86_64 by default (GKE nodes
+  # are x86); for an arm client node override glob_path/url to the
+  # -almalinux8-aarch64 tarball. remote_unzip needs tar+gzip on the client image.
+  pgbench:
+    version: "yugabyte-{yugabytedb_base}"
+    glob_path: "yugabyte-{yugabytedb}-centos-x86_64.tar.gz"
+    url: "s3://releases.yugabyte.com/{yugabytedb}/yugabyte-{yugabytedb}-centos-x86_64.tar.gz"
+    type: s3
+    target: "client"
+    remote_unzip: true
+
+# --- Secrets (core/secret.go) ---
+# Named credentials, resolved by name and NEVER recorded into results (the
+# secrets subtree is redacted from every config snapshot; resolved values are
+# masked in logs/errors). Each entry supplies its value EXACTLY ONE way:
+#
+#   secrets:
+#     gh_package:     {env: GH_PACKAGE_TOKEN}   # value = the env var's value
+#     gcp_key:        {file: /path/to/key.json} # value = file CONTENTS; Path() = path
+#     inline_token:   {token: "ghp_..."}        # literal (prefer env/file)
+#
+# Referenced BY NAME elsewhere (an artifact's `secret:`, apps.cloud.aws.
+# access_key_secret, ...). Empty by default; declare per-project.
+secrets: {}
+
+# --- Reporting sinks (cmd/ampqa/run.go, report/jsonfile, report/junit) ---
+report:
+  # Per-result JSON dir, under <out_dir>/<runid>/. Empty → sink not attached.
+  out_dir: ""
+  # JUnit XML path. Empty → sink not attached.
+  junit_path: ""
+  # Self-contained HTML report path, rendered when the run finishes (same output
+  # as `ampqa report --from`). Empty → sink not attached.
+  html_path: ""
+  # Per-test caps on how many steps/metrics a single Result retains in memory.
+  # The live sink already got every event; these only bound the snapshot so a
+  # 24h soak emitting per-cycle events can't balloon RAM. Beyond the cap the
+  # oldest are dropped and a dropped-count is recorded. 0 → unbounded.
+  max_steps_retained: 10000
+  max_metrics_retained: 10000
+  # When to collect Kubernetes failure diagnostics (controller/endpoint/YB pod
+  # logs — current AND previous-instance — plus namespace events and a describe
+  # of unhealthy pods) into the run's artifacts BEFORE teardown deletes the
+  # namespace. on_failure (default) collects only when the test failed; always
+  # collects every run; never disables it.
+  collect_diagnostics: on_failure
+
+# task.* keys are per-invocation `ampqa task <name>` arguments (task.host,
+# task.artifact, ...), not framework defaults, so they are not declared here
+# (task.dry_run's "false" default is the zero value, no entry needed).
+
+# --- Chaos engine (chaos/chaos.go, chaos/config.go) ---
+# The fault-injection ("nemesis") loop: named, always-recoverable disruptions run
+# against resources a test OWNS (YB pods on k8s / YB nodes on a host) while a
+# workload runs. Severity/cadence are deliberately moderate so a background loop
+# disrupts a workload without permanently wedging it. chaos.FromConfig reads these.
+chaos:
+  # actions restricts the loop to these action names (empty → every registered
+  # action, in a stable order). Names: pod_delete, process_kill, process_restart,
+  # node_restart, network_partition, network_slowdown, packet_loss, node_stop.
+  actions: []
+  # owner_prefix guards which resources may be targeted: a pod whose namespace
+  # lacks this prefix is refused (the loop will not start).
+  owner_prefix: "ampqa-"
+  # net_device is the interface tc/iptables actions operate on.
+  net_device: "eth0"
+  # partition_ports are the TCP ports network_partition drops (YB RPC/SQL/CQL).
+  partition_ports: [7100, 9100, 5433, 9042]
+  # delay_ms / loss_percent are the network_slowdown latency and packet_loss rate.
+  delay_ms: 200
+  loss_percent: 30
+  # process_pattern / service_unit are the pkill match and systemd unit the
+  # process_* actions signal/recover; node_units are the units node_restart cycles.
+  process_pattern: "yb-tserver"
+  service_unit: "yb-tserver"
+  node_units: ["yb-master", "yb-tserver"]
+  # hold_min/max bound how long a fault stays applied; gap_min/max the quiet
+  # interval between recovery and the next injection.
+  hold_min: "15s"
+  hold_max: "45s"
+  gap_min: "20s"
+  gap_max: "60s"
+  # wait_timeout bounds "wait until healthy again" recovery steps; recover_timeout
+  # bounds each Recover's own background context so recovery survives cancellation.
+  wait_timeout: "3m"
+  recover_timeout: "2m"
+
+# --- Stress suite (suites/stress) ---
+stress:
+  # load_sustain: RandomOps phase length (suites/stress/load_sustain.go).
+  duration: "60s"
+  # combined: the signature COMBINED STRESS scenario (suites/stress/combined_load.go)
+  # — sample-app workloads (SqlTransactions + SqlBankTransfer + two-phase
+  # SqlDataLoad) run IN PARALLEL with BenchBase TPC-C in an in-cluster client pod,
+  # while the chaos NemesisLoop injects faults against the co-located YB pods; then
+  # it asserts the cluster is healthy and a seeded workloadgen dataset is still
+  # consistent. Self-provisions real infra (k8s + secrets), so it is opt-in.
+  combined:
+    # enabled gates the whole scenario (self-provisioning + private jar + k8s).
+    enabled: false
+    # rf is the co-located YB replication factor. >=3 so the cluster survives
+    # single-node chaos (pod delete / process kill); the deploy clamps up to this.
+    rf: 3
+    # run_time is how long the four concurrent workloads run (kept short + cheap).
+    run_time: "3m"
+    # client_image is the client-pod image the workloads run in. It MUST carry
+    # java, sh, coreutils (tail/cat), procps (pgrep/pkill), curl and tar. The
+    # default is a public JDK image; override to an amp/quay workload image (and
+    # set client_pull_secret) for a private one.
+    client_image: "eclipse-temurin:21-jdk"
+    # client_pull_secret names a PRE-EXISTING docker-registry Secret in the YB
+    # namespace for a private client_image ("" → the image is public).
+    client_pull_secret: ""
+    # remote_dir is where the sample-app jar and benchbase unpack in the client pod.
+    remote_dir: "/opt/ampqa"
+    # jar_secret is the config secret authenticating the PRIVATE sample-app jar
+    # fetch (github_release in yugabyte/yb-stress-test): GH_PACKAGE_TOKEN.
+    jar_secret: "gh_package"
+    # Small load params keep the run cheap.
+    sample_tables: 2
+    sample_value_columns: 10
+    sample_threads_read: 1
+    sample_threads_write: 2
+    benchbase_warehouses: 1
+    benchbase_terminals: 2
+    # workloadgen consistency-oracle dataset (loaded before chaos, verified after).
+    verify_tables: 4
+    verify_rows: 500
+    # chaos_actions is the k8s-safe subset the loop draws from (pod/process level;
+    # the tc/iptables ones need privileged host tooling not present in YB pods).
+    chaos_actions: ["pod_delete", "process_kill", "process_restart"]
+    # Timeouts.
+    ready_timeout: "5m"
+    verify_timeout: "5m"
+    health_timeout: "5m"
+
+# --- Perf suite (suites/perf) ---
+# perf/tpcc: provision a co-located RF3 YugabyteDB-in-k8s backing + an in-cluster
+# client pod, run BenchBase TPC-C at a small fixed scale, parse throughput +
+# p95/p99 latency, and gate those datapoints against a stored baseline (a
+# regression fails the test). BenchBase is a PUBLIC release, so — unlike the
+# combined stress scenario — no private jar secret is needed. Self-provisions
+# real infra (k8s + a chart), so it is opt-in.
+perf:
+  # enabled gates the whole tier (self-provisioning + k8s + chart).
+  enabled: false
+  # rf is the co-located YB replication factor (the deploy clamps up to this).
+  rf: 3
+  # Small but perf-meaningful TPC-C load, fixed so runs are comparable. For
+  # TPC-C the warehouse count IS the scalefactor. Kept modest to stay cheap, but
+  # above the 1-2 warehouse floor where run-to-run variance (throughput ~14%,
+  # tail latency up to ~48% observed at 2wh) drowns any real regression signal.
+  warehouses: 4
+  terminals: 8
+  # client_image is the client-pod image benchbase runs in. It MUST carry java,
+  # sh, coreutils, curl and tar. The default is a public JDK image; override to a
+  # private one (and set client_pull_secret) if needed.
+  client_image: "eclipse-temurin:21-jdk"
+  # client_pull_secret names a PRE-EXISTING docker-registry Secret in the YB
+  # namespace for a private client_image ("" → the image is public).
+  client_pull_secret: ""
+  # remote_dir is where benchbase unpacks in the client pod.
+  remote_dir: "/opt/ampqa"
+  # max_heap is the benchmark JVM's -Xmx. A small TPC-C needs little; the modest
+  # default fits a client pod with no explicit memory limit (a large -Xmx can
+  # fail JVM init on a small node).
+  max_heap: "2g"
+  # baseline_path is the JSON baseline store (per version → test → datapoint). A
+  # relative path resolves against the process working directory. A first run (no
+  # baseline) establishes it and WARNs; a later run gates against it. Baselines
+  # are ENVIRONMENT-SPECIFIC (hardware, cluster size, node contention) and are NOT
+  # committed — each operator establishes their own on their target cluster
+  # (baselines/ is gitignored). Ship default: no baseline → the tier runs in WARN
+  # mode, emitting datapoints without a hard gate until a baseline is established.
+  baseline_path: "baselines/perf.json"
+  # update_baseline forces a refresh of the baseline from this run's datapoints
+  # instead of asserting against it (the write-back knob; the CLI equivalent is
+  # -o perf.update_baseline=bool:true).
+  update_baseline: false
+  # Regression tolerance, per direction: throughput may DROP up to
+  # throughput_drop_pct, latency may RISE up to latency_rise_pct, before the
+  # datapoint is flagged regressed and the test fails. Sized to absorb the
+  # residual run-to-run variance of a small co-located TPC-C (tail latency is the
+  # noisiest); tighten these once you drive a larger, steadier load.
+  throughput_drop_pct: 20.0
+  latency_rise_pct: 35.0
+  # Timeouts.
+  ready_timeout: "5m"
+  health_timeout: "5m"
+  # bench is the multi-iteration benchmark HARNESS shared by every perf workload
+  # (perf/tpcc, perf/pgbench). A workload is prepared ONCE (schema + initial
+  # load), then driven for a discarded warmup + N measured iterations; the kept
+  # iterations are aggregated with robust statistics (the MEDIAN is the gated
+  # headline — never the mean — plus mean/stddev/CV/min/max). Each metric's
+  # coefficient of variation is emitted as a `<metric>.cv` datapoint so a noisy
+  # run is visible in the report. The measured-iteration run length is
+  # measurement_duration (it supersedes any per-workload duration knob).
+  bench:
+    # iterations is the number of MEASURED runs (excludes the warmup below).
+    iterations: 3
+    # warmup is one discarded run before the measured iterations (0 → skip). It
+    # absorbs cold-cache / JIT / compaction warmup so the measured runs are steady.
+    warmup: "30s"
+    # measurement_duration is the length of each measured iteration.
+    measurement_duration: "60s"
+    # cooldown is an optional pause between measured iterations (0 → none).
+    cooldown: "0s"
+    # discard_first drops the first MEASURED iteration from the aggregate (still
+    # recorded) — a second line of defence against a not-fully-warm first run.
+    discard_first: true
+    # sample_interval requests periodic in-run progress (for the time series);
+    # a workload whose tool cannot report progress leaves the series empty.
+    sample_interval: "10s"
+    # min_iterations is the aggregation floor: fewer kept iterations than this
+    # (iterations minus the discarded first) fails fast before any provisioning.
+    min_iterations: 1
+    # Phase control (config-only, no code change), mutually exclusive:
+    #   skip_load  — run ONLY the measured phase against an ALREADY-loaded cluster
+    #                (pair with --env-mode attach to execute on a standing, loaded
+    #                env). Skips the workload's load/schema step.
+    #   load_only  — run ONLY the load phase and stop (no measurement) — e.g.
+    #                stand up + load an env once (with --env-mode keep), then later
+    #                re-run execute-only against it via skip_load.
+    skip_load: false
+    load_only: false
+  # pgbench sub-tier (perf/pgbench): the same self-provisioned backing + client
+  # pod as perf/tpcc, but the workload is pgbench (YugabyteDB ships its fork
+  # `ysql_bench` in postgres/bin; perf/pgbench delivers it via the `pgbench`
+  # artifact and bridges it to the `pgbench` name on the client PATH). It reuses
+  # the perf.* knobs above (rf, client_image, remote_dir, baseline_path,
+  # thresholds, timeouts); only the pgbench load shape lives here. Cheap defaults.
+  pgbench:
+    # scale is pgbench -s (the pgbench_accounts row multiplier at init).
+    scale: 10
+    # clients / jobs are pgbench -c / -j (concurrent sessions / worker threads).
+    clients: 8
+    jobs: 2
+    # duration is the pgbench -T surfaced in the pgbench_client preset's copy-paste
+    # dev command. The perf/pgbench TEST times its measured iterations by
+    # perf.bench.measurement_duration instead (the harness owns run length).
+    duration: "90s"
+  # history is the HISTORICAL perf tracking store: distinct from the baseline
+  # (which holds ONE reference value per test/metric to gate against), the
+  # history APPENDS every run's aggregate so the report can render a TREND of
+  # median TPS (and latency) across past runs/versions — drawn with the same
+  # chart primitive as the per-run graphs. Like the baseline it is
+  # ENVIRONMENT-SPECIFIC and NOT committed (baselines/ is gitignored).
+  history:
+    # enabled turns the append + trend chart on (best-effort: a store IO failure
+    # is logged, never fails an otherwise-passing perf run).
+    enabled: true
+    # path is the JSON history store (a flat, append-ordered list of run records).
+    # A relative path resolves against the process working directory.
+    path: "baselines/perf-history.json"
+    # max_runs bounds the trend to the most-recent N runs (the file keeps every
+    # record; only the chart is tailed), so the trend stays readable.
+    max_runs: 20
+  # compare turns a perf test into an A/B (N-way) VARIANT COMPARISON: instead of
+  # gating one run against a (possibly stale) local baseline, it runs the SAME
+  # workload at the SAME load (perf.bench.* / perf.warehouses / perf.pgbench.*
+  # held constant) across labelled variants that differ ONLY in the overrides
+  # below, then reports each variant's median + noise and the delta vs the FIRST
+  # (reference) variant. This is the meaningful comparison: like-with-like, so a
+  # delta is a real signal, not a config artifact. Empty variants → the test runs
+  # the normal single-run path.
+  compare:
+    # variants is a list of {label, overrides}. overrides are config KEYS applied
+    # on top of the base config for that variant only (e.g. apps.ybk8s.image_tag,
+    # apps.ybk8s.image_registry, env.ampstack.controller_image). Supply via a -c
+    # YAML file, a -jc JSON file, or a json_text override. Default: none.
+    variants: []
+    # fail_on_regression turns a SIGNIFICANT regression vs the reference variant
+    # (delta beyond combined noise, in the metric's worse direction) into a test
+    # failure. Default false: a comparison reports deltas, it does not gate.
+    fail_on_regression: false
+    # mode picks the STRATEGY over the SAME ordered variants list above:
+    #   all    — benchmark EVERY variant and report the N-way comparison (default).
+    #   bisect — binary-search the ordered variants (oldest→newest / good→bad) for
+    #            the FIRST one whose metric regressed beyond bisect.threshold_pct
+    #            vs the assumed-good reference (variant[0]), like `git bisect` for
+    #            a perf metric. It probes only ~log2(N) variants (+1 reference),
+    #            NOT all N — the same per-variant benchmark at the same fixed load.
+    #            A bisect PASSES (it is diagnostic), reporting the localized
+    #            first-regressed variant; it fails only if a probe can't
+    #            provision/benchmark. Needs at least 2 variants.
+    mode: "all"
+    # bisect parameterizes mode=bisect (ignored by mode=all).
+    bisect:
+      # metric decides good/bad: one of tps, latency_avg, latency_p95,
+      # latency_p99. Direction is the metric's own (tps drop / latency rise).
+      metric: "tps"
+      # threshold_pct: a candidate is BAD when its metric regressed (dropped for
+      # tps, rose for latency) more than this % vs the reference variant[0].
+      threshold_pct: 10.0

@@ -36,6 +36,7 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "yb-amp-controller.controllerName" . }}
     namespace: {{ .Release.Namespace }}
+{{- if .Values.rbac.clusterScoped }}
 ---
 # Cluster-scoped reads: Helm's --create-namespace probes namespaces, and the
 # NodePort endpoint address resolver reads node IPs.
@@ -67,3 +68,4 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "yb-amp-controller.controllerName" . }}
     namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -9,6 +9,16 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+# RBAC. The namespaced ServiceAccount + Role + RoleBinding are always created.
+rbac:
+  # -- Also create the cluster-scoped ClusterRole + ClusterRoleBinding: namespaces
+  # get/list/create (Helm --create-namespace probing) and nodes get/list (NodePort
+  # endpoint node-IP resolution). Default off — with the default controller
+  # (internal-lb) and endpoint (ClusterIP) service types nothing reads nodes, and
+  # namespace-scoped installs on shared clusters have no cluster-scope rights.
+  # Enable only for a NodePort deploy (which needs node-IP reads).
+  clusterScoped: false
+
 controller:
   # -- Number of controller pods. The controller holds in-pod state (its managed
   # storage controller subprocess), so keep this at 1.

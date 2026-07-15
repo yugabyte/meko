@@ -1,0 +1,11 @@
+# never commit local secrets
+.env
+
+# build artifacts (go build ./cmd/ampqa drops the binary in-tree)
+/ampqa
+/cmd/ampqa/ampqa
+*.test
+
+# local run output (--out-dir / reports)
+/ampqa-out/
+/out/

@@ -21,11 +21,6 @@ func TestUpgradeArgs(t *testing.T) {
 			want:    []string{"upgrade", "--install", "ep-1", "chart", "--namespace", "ns"},
 		},
 		{
-			name:    "create namespace",
-			release: Release{Name: "ep-1", Chart: "chart", Namespace: "ns", CreateNamespace: true},
-			want:    []string{"upgrade", "--install", "ep-1", "chart", "--namespace", "ns", "--create-namespace"},
-		},
-		{
 			name:       "with values",
 			release:    Release{Name: "ep-1", Chart: "chart", Namespace: "ns"},
 			valuesPath: "/tmp/values.yaml",
@@ -49,17 +44,16 @@ func TestUpgradeArgs(t *testing.T) {
 		{
 			name: "all options ordered",
 			release: Release{
-				Name:            "ep-1",
-				Chart:           "chart",
-				Namespace:       "ns",
-				CreateNamespace: true,
-				Wait:            true,
-				Timeout:         10 * time.Minute,
+				Name:      "ep-1",
+				Chart:     "chart",
+				Namespace: "ns",
+				Wait:      true,
+				Timeout:   10 * time.Minute,
 			},
 			valuesPath: "/tmp/values.yaml",
 			want: []string{
 				"upgrade", "--install", "ep-1", "chart", "--namespace", "ns",
-				"--create-namespace", "--values", "/tmp/values.yaml", "--wait", "--timeout", "10m0s",
+				"--values", "/tmp/values.yaml", "--wait", "--timeout", "10m0s",
 			},
 		},
 	}
