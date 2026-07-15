@@ -4928,6 +4928,7 @@ dependencies = [
  "wal_decoder",
  "workspace_hack",
  "yb-tokio-postgres",
+ "yb_tsclient",
  "ysql_client",
 ]
 

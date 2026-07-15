@@ -45,9 +45,14 @@ yb-light-specific.
 | `safekeeper_wal_cache_misses_total` | IntCounter | — | WalCache lookups that fell through to YB. |
 | `safekeeper_wal_cache_evictions_total` | IntCounter | — | Chunks evicted by the FIFO over-capacity policy. |
 | `safekeeper_wal_cache_bytes` | IntGauge | — | Current WalCache occupancy in bytes (sum across instances). |
-| `safekeeper_wal_cache_yb_fetch_seconds` | Histogram | — | Latency of `YbSegmentReader` fetches that fell through to `safekeeper.wals`. |
+| `safekeeper_wal_cache_yb_fetch_seconds` | HistogramVec | `path` | Latency of `YbSegmentReader` fetches that fell through to `safekeeper.wals`. `path` = `ysql` or `tsclient` (pure-Rust pggate RPC, `hot_path = "tsclient"`). |
 | `safekeeper_wal_cache_yb_fetch_chunks` | Histogram | — | Chunks returned per `safekeeper.wals` fetch (>1 = range-fetch amortizing round trips). |
 | `safekeeper_wal_cache_yb_fetch_bytes` | Histogram | — | Bytes returned per `safekeeper.wals` fetch. |
+| `safekeeper_yb_wal_insert_seconds` | HistogramVec | `path` | Latency of the batched write into `safekeeper.wals` (`flush_batch`): YB hop + DocDB write + Raft commit. `path` = `ysql` (multi-row INSERT) or `tsclient` (pure-Rust pggate RPC upsert batch, `hot_path = "tsclient"`). |
+| `safekeeper_yb_wal_batch_rows` | Histogram | — | Chunks coalesced per `flush_batch` write (~1 = no batching; near 50 = saturating). |
+| `safekeeper_yb_wal_batch_bytes` | Histogram | — | Bytes coalesced per `flush_batch` write. |
+| `safekeeper_yb_wal_session_recoveries_total` | IntCounter | — | `yb_tsclient` session recoveries (reconnect + fresh tserver session + table re-validation) on the thin-RPC lane. Occasional after tserver restarts; sustained rate = flapping endpoint. |
+| `safekeeper_yb_wal_call_timeouts_total` | IntCounter | — | `yb_tsclient` per-attempt call timeouts (transport healthy, no response within `rpc_timeout`) on the thin-RPC lane. Retried internally, so callers only see terminal failures — this is the early signal of a server-side stall. |
 
 ## WAL senders / receivers / connections (global)
 

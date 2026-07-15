@@ -66,6 +66,7 @@ postgres_versioninfo.workspace = true
 pq_proto.workspace = true
 remote_storage.workspace = true
 ysql_client.workspace = true
+yb_tsclient.workspace = true
 safekeeper_api.workspace = true
 safekeeper_client.workspace = true
 sha2.workspace = true

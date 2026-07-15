@@ -45,8 +45,18 @@ upload). Both modules are deleted in yb-light — durability is the
 `safekeeper.wals` mirror, not S3 — see "Changes in yb-light" §8 below.
 
 Surviving background work:
-- Periodic control-file flush every `control_file_save_interval`
+- Periodic control-file save every `control_file_save_interval`
   (default 300 s) plus on-state-change flushes via `finish_change()`.
+  The periodic save persists only `remote_consistent_lsn`, as a
+  **background task without the shared_state lock** — a monotonic
+  single-column `UPDATE … GREATEST(…)` on `safekeeper.timeline_state`
+  (`AdvisoryPersist`, `control_file.rs`), folded back into the row
+  mirror under a brief lock when it completes. Running it off the lock
+  keeps a slow `UPDATE` from blocking the manager loop, which services
+  residence-guard requests and WAL appends (both need the shared_state
+  write lock). Consensus transitions (elections, term crossings,
+  `map_control_file`) still persist the full row synchronously under
+  the lock — those must be durable before replying.
 
 ### Code layout
 
@@ -134,8 +144,8 @@ The consumer stamps each assembled BATCH with one bucket,
 rotating through the buckets one batch at a time — so every batch targets
 ONE tablet (single-shard txn fast path on YSQL) while sustained load
 rotates across all tablets. The stamp happens once, before any write
-attempt; an INSERT retry replays the stamped batch, so a row's bucket
-never changes. After stamping, contiguous chunks of the batch are
+attempt; retries and the YSQL fallback replay the stamped batch, so a
+row's bucket never changes. After stamping, contiguous chunks of the batch are
 coalesced into single rows (runs break at segment boundaries and byte
 discontinuities), so the typical batch INSERTs one row. Readers can't
 derive a row's bucket, so index-tight reads carry a
@@ -348,8 +358,9 @@ top-`chunk_offset` row also has the highest end, because rows never
 overlap (in general `max(chunk_offset + chunk_size)` is NOT the last
 row's end — an earlier, longer row could reach further — but the
 truncate discipline rules that out). No hole detection is needed:
-every consumer batch carries ONE bucket, so it lands atomically as one
-single-shard INSERT statement on YSQL, and batches are written
+every consumer batch carries ONE bucket, so it lands atomically on
+both write lanes (one `WriteRequestPB` on the direct lane, one
+single-shard INSERT statement on YSQL), and batches are written
 sequentially — the durable row set is always a contiguous prefix of
 the WAL stream. If either property changes (batches spanning tablets,
 or concurrent in-flight batches), hole detection must return; git
@@ -571,6 +582,34 @@ not a design invariant; the consuming pageserver(s) may live elsewhere (see
 Delete the entire
 `endpoints/<endpoint_id>/safekeeper` dir and the safekeeper rebuilds from
 YB on next start. Logs and pidfile are recreated.
+
+## Direct-to-tserver hot path (optional)
+
+With `hot_path = "tsclient"` in `yb_storage_conn` (see
+`architecture/yugabyte.md` §"Direct-to-tserver hot path"), `YbWalConn`
+additionally opens a pure-Rust thin-RPC client (`YbWalConn::yb_tsclient`,
+`libs/yb_tsclient` — pggate RPC to a tserver's RPC port) to
+`safekeeper.wals` at startup (fail-fast health check). The consumer's
+WAL write batch (`flush_batch`)
+then runs as ONE Perform per coalesced batch (typically one run); the
+tserver session applies it as one single-tablet write batch. Rows hash
+on `(branch_id, bucket_id)` and the whole batch carries one bucket, so
+the batch lands on ONE tablet as a single `WriteRequestPB` — atomic as a
+group, same as the YSQL multi-VALUES INSERT; a crash mid-flush cannot
+leave a hole, which is what lets `load_write_lsn`'s rehydration be a
+simple per-bucket max-end probe. The write retries across tservers
+(round-robin, one session per endpoint) with no YSQL fallback;
+`safekeeper_yb_wal_insert_seconds{path}` records the latency. The
+walsender fetch (`YbSegmentReader`) likewise uses the tsclient lane: a
+chunk's bucket can't be derived, so it issues all 2×`WALS_BUCKETS`
+(arm, bucket) read ops as ops of ONE Perform, which the proxy serves at
+a single read time — one snapshot by construction
+(`safekeeper_wal_cache_yb_fetch_seconds{path}`). The reader's
+flush-bound gating stays as defense in depth against torn fetches. The
+`yb_enable_upsert_mode` GUC doesn't exist on the tsclient
+lane — `PGSQL_UPSERT` write ops carry the same skip-read-before-write
+semantics natively. Control file, `timeline_state`, GC, truncation, and
+rehydration always stay on the YSQL lanes.
 
 ## Run / configure
 

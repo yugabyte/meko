@@ -71,7 +71,12 @@ const DEFAULT_YB_DBNAME: &str = "yb_storage";
 /// endpoint_storage and storage_controller (`--yb-config`) all consume this
 /// same block — each hardcodes the table(s) it owns, so it carries none.
 fn default_yb_conn_config(target: &YbStoreTarget) -> ysql_client::YbConnConfig {
-    let YbStoreTarget { host, port, dbname } = target;
+    let YbStoreTarget {
+        host,
+        port,
+        dbname,
+        hot_path,
+    } = target;
     ysql_client::YbConnConfig {
         host_ports: format!("{host}:{port}").parse().expect("valid host:port"),
         user: DEFAULT_YB_USER.to_string(),
@@ -80,18 +85,19 @@ fn default_yb_conn_config(target: &YbStoreTarget) -> ysql_client::YbConnConfig {
         sslmode: None,
         sslrootcert: None,
         disable_transactional_writes: false,
-        hot_path: ysql_client::HotPath::default(),
+        hot_path: *hot_path,
         tserver_rpc_addrs: None,
     }
 }
 
 /// Which YugabyteDB the default (no `--config`) init config points at.
 /// Each field falls back to its `DEFAULT_YB_*` constant; `init` overrides
-/// them from `--yb-host` / `--yb-port` / `--yb-dbname`.
+/// them from `--yb-host` / `--yb-port` / `--yb-dbname` / `--yb-hot-path`.
 struct YbStoreTarget {
     host: String,
     port: u16,
     dbname: String,
+    hot_path: ysql_client::HotPath,
 }
 
 /// ybLight CLI.
@@ -159,6 +165,13 @@ struct InitCmdArgs {
     /// `5433`. Ignored when `--config` is given.
     #[clap(long)]
     yb_port: Option<u16>,
+
+    /// Hot-path transport for the default (no `--config`) config:
+    /// `tsclient` (default; pure-Rust thin RPC to the tserver RPC port)
+    /// or `ysql` (Postgres wire escape hatch). Ignored when `--config` is
+    /// given.
+    #[clap(long)]
+    yb_hot_path: Option<String>,
 
     /// Relocate the whole default (no `--config`) cluster into a free port
     /// block starting at this base, so it can run alongside another cluster
@@ -1046,6 +1059,13 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                 .yb_dbname
                 .clone()
                 .unwrap_or_else(|| DEFAULT_YB_DBNAME.to_string()),
+            hot_path: match args.yb_hot_path.as_deref() {
+                None | Some("tsclient") => ysql_client::HotPath::TsClient,
+                Some("ysql") => ysql_client::HotPath::Ysql,
+                Some(other) => {
+                    anyhow::bail!("--yb-hot-path must be ysql or tsclient, got {other:?}")
+                }
+            },
         };
         // Port layout. With `--port-base B` the whole cluster moves into a
         // free block — one 100-port lane per service family — so it can run

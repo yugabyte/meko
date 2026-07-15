@@ -40,9 +40,9 @@ Options:
   -h, --help      show this help
 
 Honoured env vars (passed through): E2E_REGEN_EXPECTED, TEST_DIR,
-YB_LIGHT_REPO_DIR, YB_DBNAME, YB_HOST, YB_PORT, COMPUTE_PORT, SOAK_SECS,
-PS_HTTP_TIMEOUT, ENDPOINT_START_TIMEOUT, YB_PS_VERIFY_WAL_ROUNDTRIP,
-YB_LIGHT, E2E_PORT_BASE.
+YB_LIGHT_REPO_DIR, YB_DBNAME, YB_HOST, YB_PORT, YB_HOT_PATH, COMPUTE_PORT,
+SOAK_SECS, PS_HTTP_TIMEOUT, ENDPOINT_START_TIMEOUT,
+YB_PS_VERIFY_WAL_ROUNDTRIP, YB_LIGHT, E2E_PORT_BASE.
 
 Every run is isolated: it synthesizes its own config on a free port
 block (auto-picked in 20000..60000), uses an ephemeral db + run dir, and

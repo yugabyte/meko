@@ -202,10 +202,13 @@ pub static WAL_CACHE_BYTES: Lazy<IntGauge> = Lazy::new(|| {
 /// network-latency-bound (`fetch_seconds × chunks_per_fetch` ≈ wall
 /// clock) or really payload-bound (`fetch_seconds` scales with
 /// `fetch_bytes`).
-pub static WAL_CACHE_YB_FETCH_SECONDS: Lazy<Histogram> = Lazy::new(|| {
-    register_histogram!(
+/// `path` = which transport served the fetch: `ysql` or `tsclient`
+/// (pure-Rust pggate RPC, `hot_path = "tsclient"`).
+pub static WAL_CACHE_YB_FETCH_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
         "safekeeper_wal_cache_yb_fetch_seconds",
         "Latency of YbSegmentReader fetches that fell through to safekeeper.wals, seconds",
+        &["path"],
         metrics::exponential_buckets(0.0005, 2.0, 16)
             .expect("safekeeper_wal_cache_yb_fetch_seconds bucket spec")
     )
@@ -234,16 +237,44 @@ pub static WAL_CACHE_YB_FETCH_BYTES: Lazy<Histogram> = Lazy::new(|| {
     .expect("Failed to register safekeeper_wal_cache_yb_fetch_bytes histogram")
 });
 // --- YB-WAL commit-path observability (issue #172) ---
-/// Latency of the multi-row `INSERT INTO safekeeper.wals` round trip to YB
-/// (the consumer's `flush_batch`): SK->YB hop + DocDB write + Raft commit.
-pub static YB_WAL_INSERT_SECONDS: Lazy<Histogram> = Lazy::new(|| {
-    register_histogram!(
+/// Latency of the batched write into safekeeper.wals (the consumer's
+/// `flush_batch`): SK->YB hop + DocDB write + Raft commit. `path` is
+/// which transport served it: `ysql` (multi-row INSERT over the Postgres
+/// wire) or `tsclient` (pure-Rust pggate RPC upsert batch,
+/// `hot_path = "tsclient"`).
+pub static YB_WAL_INSERT_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
         "safekeeper_yb_wal_insert_seconds",
-        "Latency of the batched INSERT into safekeeper.wals, seconds",
+        "Latency of the batched write into safekeeper.wals, seconds",
+        &["path"],
         metrics::exponential_buckets(0.0005, 2.0, 16)
             .expect("safekeeper_yb_wal_insert_seconds bucket spec")
     )
     .expect("Failed to register safekeeper_yb_wal_insert_seconds histogram")
+});
+/// Thin-RPC (`hot_path = "tsclient"`) lane: successful `yb_tsclient`
+/// session recoveries (reconnect + fresh server session + table
+/// re-validation). Occasional after tserver restarts; a sustained rate
+/// means the lane's endpoint is flapping.
+pub static YB_WAL_SESSION_RECOVERIES: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "safekeeper_yb_wal_session_recoveries_total",
+        "yb_tsclient session recoveries on the safekeeper's thin-RPC lane"
+    )
+    .expect("Failed to register safekeeper_yb_wal_session_recoveries_total counter")
+});
+/// Thin-RPC lane: per-attempt `yb_tsclient` calls that timed out waiting
+/// for a response (transport healthy, server never answered within
+/// `rpc_timeout`). The client retries these internally, so callers only
+/// see the terminal failure — this counter is the early signal of a
+/// server-side stall; a prior incident where reads stalled silently for
+/// hours motivated it.
+pub static YB_WAL_CALL_TIMEOUTS: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "safekeeper_yb_wal_call_timeouts_total",
+        "yb_tsclient per-attempt call timeouts on the safekeeper's thin-RPC lane"
+    )
+    .expect("Failed to register safekeeper_yb_wal_call_timeouts_total counter")
 });
 /// Rows (chunks) coalesced into each INSERT. ~1 = no batching (every commit
 /// pays its own round trip); near `FLUSH_ROWS_THRESHOLD` (50) = batches are

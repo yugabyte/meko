@@ -74,7 +74,8 @@ Authoritative current column list is `COLUMNS` in
 
 **In-memory overlay** (`TimelineMemState`):
 - `remote_consistent_lsn` — updated immediately on pageserver feedback;
-  persisted copy lags until `state.flush()` (default interval
+  persisted copy lags until the manager's periodic advisory save (a
+  lock-free monotonic `UPDATE`, default interval
   `control_file_save_interval`, 300 s) or another `finish_change`.
 
 `has_unflushed_inmem_state` is true when

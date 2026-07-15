@@ -379,6 +379,29 @@ Operators can opt back in per-component once the incident is resolved.
 Set on the dev cluster. Required for the storage
 controller's transactional updates to behave as expected.
 
+## Direct-to-tserver hot path (`hot_path = "tsclient"`)
+
+The shared `yb_storage_conn` block accepts two optional keys:
+
+```toml
+yb_storage_conn = { host_ports = "...", hot_path = "tsclient", tserver_rpc_addrs = "host:9100,..." }
+```
+
+- `hot_path` — `"tsclient"` (default) runs the hot paths over a pure-Rust
+  thin RPC client (`libs/yb_tsclient`) speaking the pggate RPC protocol
+  directly to a tserver's RPC port (9100), skipping the PG backend (wire
+  framing, parse/plan, pggate); `"ysql"` is the Postgres-wire escape hatch.
+  The safekeeper honors it for the WAL write/read path on `safekeeper.wals`
+  (see `architecture/safekeeper.md` §"Direct-to-tserver hot path"). The
+  pageserver page path uses YSQL. Cold paths
+  (DDL, GC, rehydration, control file, `timeline_state`) always use YSQL.
+  Old binaries fail to parse a config that sets these keys
+  (`deny_unknown_fields`).
+- `tserver_rpc_addrs` — yb-tserver RPC endpoints for the `tsclient`
+  transport. When unset, the `host_ports` hosts on port 9100; set it
+  explicitly to reach every tserver when `host_ports` is only a subset
+  (e.g. a single YSQL VIP).
+
 ## Client-side retry contract — every YB query must be idempotent
 
 `YsqlClient::run_with_retries` (the wrapper every component goes
