@@ -163,9 +163,62 @@ pub struct YbConnConfig {
     /// in the TOML connection block to re-enable it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disable_transactional_writes: bool,
+    /// Which transport the hot paths (pageserver page reads/writes,
+    /// safekeeper WAL reads/writes) use. `"pgclient"` (default): the
+    /// pure-Rust `yb_pgclient` crate speaking the pggate RPC protocol
+    /// to a tserver's RPC port (no native library; routing stays
+    /// server-side). `"ysql"`: Postgres wire via this crate only. The
+    /// pgclient path keeps per-op fallback to YSQL at runtime; cold paths
+    /// (DDL, GC, rehydration, control file) always use YSQL. NOTE: an
+    /// old binary reading a config that sets this fails to parse
+    /// (`deny_unknown_fields`) — intentional, not silently ignored.
+    #[serde(default, skip_serializing_if = "HotPath::is_default")]
+    pub hot_path: HotPath,
+    /// yb-tserver RPC endpoints for the `pgclient` hot path, CSV. When unset,
+    /// the `host_ports` hosts on port 9100; set explicitly to reach every
+    /// tserver when `host_ports` is only a subset (e.g. a single YSQL VIP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tserver_rpc_addrs: Option<HostPorts>,
 }
 
+/// See [`YbConnConfig::hot_path`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HotPath {
+    Ysql,
+    /// Pure-Rust thin RPC client (`yb_pgclient`) against the tserver
+    /// RPC port; serde wire form `"pgclient"`.
+    #[default]
+    PgClient,
+}
+
+impl HotPath {
+    fn is_default(&self) -> bool {
+        *self == HotPath::PgClient
+    }
+}
+
+/// Default yb-tserver RPC port, used when `tserver_rpc_addrs` is derived
+/// from the YSQL `host_ports` hosts.
+pub const DEFAULT_YB_TSERVER_RPC_PORT: u16 = 9100;
+
 impl YbConnConfig {
+    /// yb-tserver RPC endpoints: `tserver_rpc_addrs` if set, else the
+    /// `host_ports` hosts on [`DEFAULT_YB_TSERVER_RPC_PORT`].
+    pub fn effective_tserver_rpc_addrs(&self) -> Vec<String> {
+        if let Some(hp) = &self.tserver_rpc_addrs {
+            return hp
+                .0
+                .iter()
+                .map(|h| format!("{}:{}", h.host, h.port))
+                .collect();
+        }
+        self.host_ports
+            .0
+            .iter()
+            .map(|h| format!("{}:{}", h.host, DEFAULT_YB_TSERVER_RPC_PORT))
+            .collect()
+    }
     /// Render this connection config as a libpq/diesel `postgresql://` URL.
     ///
     /// The storage_controller's persistence layer (diesel-async) takes a
@@ -234,8 +287,60 @@ impl YbConnConfig {
         if self.disable_transactional_writes {
             parts.push("disable_transactional_writes = true".to_string());
         }
+        match self.hot_path {
+            HotPath::PgClient => {} // default → omitted
+            HotPath::Ysql => parts.push("hot_path = \"ysql\"".to_string()),
+        }
+        if let Some(t) = &self.tserver_rpc_addrs {
+            parts.push(format!("tserver_rpc_addrs = {}", q(&t.to_string())));
+        }
         format!("{{ {} }}", parts.join(", "))
     }
+}
+
+/// One-time catalog lookup for the `pgclient` hot path: the database OID
+/// plus the pg_class OID of each named table in `schema`. The
+/// `yb_pgclient` crate derives DocDB table ids from these. Errors if any
+/// requested table is missing — callers fail hard at startup rather than
+/// run with a partially-enabled direct path.
+pub async fn lookup_table_oids(
+    client: &YsqlClient,
+    schema: &str,
+    tables: &[&str],
+) -> Result<(u32, std::collections::HashMap<String, u32>)> {
+    // Non-empty is what makes `db_oid.expect(...)` below sound: the db OID is
+    // only read off a returned row, and with no requested tables the query
+    // returns none. Callers pass a fixed non-empty list; guard it explicitly.
+    anyhow::ensure!(
+        !tables.is_empty(),
+        "lookup_table_oids: tables list must not be empty"
+    );
+    let rows = client
+        .query(
+            "SELECT (SELECT oid FROM pg_database WHERE datname = current_database())::bigint, \
+             c.relname::text, c.oid::bigint \
+             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 AND c.relname = ANY($2)",
+            &[
+                &schema,
+                &tables.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+            ],
+        )
+        .await
+        .context("looking up table OIDs for the direct-to-tserver hot path")?;
+    let mut db_oid = None;
+    let mut out = std::collections::HashMap::new();
+    for row in &rows {
+        db_oid = Some(row.get::<_, i64>(0) as u32);
+        out.insert(row.get::<_, String>(1), row.get::<_, i64>(2) as u32);
+    }
+    for t in tables {
+        anyhow::ensure!(
+            out.contains_key(*t),
+            "table {schema}.{t} not found (direct-to-tserver hot path requires it)"
+        );
+    }
+    Ok((db_oid.expect("tables checked non-empty above"), out))
 }
 
 /// Percent-encode a URL component, escaping everything outside the
@@ -312,6 +417,9 @@ impl YbConnArgs {
             // Diagnostic tools open read-only connections (no fast-path
             // upsert), so the GUC is never set regardless; keep the default.
             disable_transactional_writes: false,
+            // Diagnostic tools always use YSQL.
+            hot_path: HotPath::Ysql,
+            tserver_rpc_addrs: None,
         }
     }
 }
@@ -383,6 +491,8 @@ mod database_url_tests {
             sslmode: None,
             sslrootcert: None,
             disable_transactional_writes: false,
+            hot_path: super::HotPath::default(),
+            tserver_rpc_addrs: None,
         }
     }
 
@@ -445,12 +555,76 @@ mod database_url_tests {
     fn inline_toml_emits_disable_transactional_writes_only_when_on() {
         // Off by default → omitted from the wire form (keeps existing
         // configs byte-identical and round-trips through `#[serde(default)]`).
-        assert!(!cfg("127.0.0.1:5433").to_inline_toml().contains("disable_transactional_writes"));
+        assert!(
+            !cfg("127.0.0.1:5433")
+                .to_inline_toml()
+                .contains("disable_transactional_writes")
+        );
         // Enabled → emitted so it survives a re-serialize hop between
         // components (pageserver → safekeeper, `--yb-config`, etc.).
         let mut c = cfg("127.0.0.1:5433");
         c.disable_transactional_writes = true;
-        assert!(c.to_inline_toml().contains("disable_transactional_writes = true"));
+        assert!(
+            c.to_inline_toml()
+                .contains("disable_transactional_writes = true")
+        );
+    }
+
+    #[test]
+    fn hot_path_round_trips_and_defaults_off_the_wire() {
+        // Default (pgclient) → omitted from the wire form.
+        let t = cfg("127.0.0.1:5433").to_inline_toml();
+        assert!(!t.contains("hot_path"));
+
+        // Explicit ysql (the escape hatch) is emitted and round-trips.
+        let mut c = cfg("h1:5433,h2:5433");
+        c.hot_path = super::HotPath::Ysql;
+        let t = c.to_inline_toml();
+        assert!(t.contains("hot_path = \"ysql\""));
+        let back: YbConnConfig = toml::from_str(&format!("v = {t}"))
+            .map(|v: std::collections::HashMap<String, YbConnConfig>| v["v"].clone())
+            .unwrap();
+        assert_eq!(back, c);
+    }
+
+    #[test]
+    fn hot_path_pgclient_round_trips() {
+        // pgclient is the default transport, so it is OMITTED from the
+        // wire form and round-trips through `#[serde(default)]` back to
+        // `PgClient` — both with and without the tserver_rpc_addrs
+        // override.
+        let mut c = cfg("h1:5433,h2:5433");
+        c.hot_path = super::HotPath::PgClient;
+        let t = c.to_inline_toml();
+        assert!(!t.contains("hot_path"));
+        assert!(!t.contains("tserver_rpc_addrs"));
+        let back: YbConnConfig = toml::from_str(&format!("v = {t}"))
+            .map(|v: std::collections::HashMap<String, YbConnConfig>| v["v"].clone())
+            .unwrap();
+        assert_eq!(back, c);
+        assert_eq!(back.hot_path, super::HotPath::PgClient);
+
+        c.tserver_rpc_addrs = Some("t1:9100,t2:9101".parse().unwrap());
+        let t = c.to_inline_toml();
+        assert!(t.contains("tserver_rpc_addrs = \"t1:9100,t2:9101\""));
+        let back: YbConnConfig = toml::from_str(&format!("v = {t}"))
+            .map(|v: std::collections::HashMap<String, YbConnConfig>| v["v"].clone())
+            .unwrap();
+        assert_eq!(back, c);
+        assert_eq!(back.effective_tserver_rpc_addrs(), ["t1:9100", "t2:9101"]);
+    }
+
+    #[test]
+    fn tserver_rpc_addrs_default_derives_from_host_ports() {
+        let c = cfg("h1:5433,h2:5440");
+        assert_eq!(c.effective_tserver_rpc_addrs(), ["h1:9100", "h2:9100"]);
+    }
+
+    #[test]
+    fn tserver_rpc_addrs_explicit_wins() {
+        let mut c = cfg("ysql-vip:5433");
+        c.tserver_rpc_addrs = Some("t1:9100,t2:9200".parse().unwrap());
+        assert_eq!(c.effective_tserver_rpc_addrs(), ["t1:9100", "t2:9200"]);
     }
 }
 

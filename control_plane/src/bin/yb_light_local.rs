@@ -80,6 +80,8 @@ fn default_yb_conn_config(target: &YbStoreTarget) -> ysql_client::YbConnConfig {
         sslmode: None,
         sslrootcert: None,
         disable_transactional_writes: false,
+        hot_path: ysql_client::HotPath::default(),
+        tserver_rpc_addrs: None,
     }
 }
 

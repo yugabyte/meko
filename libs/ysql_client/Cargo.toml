@@ -32,3 +32,6 @@ yb-postgres-rustls.workspace = true
 rustls = { workspace = true, features = ["ring"] }
 rustls-native-certs.workspace = true
 rustls-pemfile.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

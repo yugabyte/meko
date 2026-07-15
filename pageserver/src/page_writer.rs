@@ -2463,6 +2463,8 @@ mod tests {
             sslmode: None,
             sslrootcert: None,
             disable_transactional_writes: false,
+            hot_path: ysql_client::HotPath::Ysql,
+            tserver_rpc_addrs: None,
         }
     }
 
