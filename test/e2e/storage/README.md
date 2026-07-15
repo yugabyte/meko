@@ -53,7 +53,9 @@ Rust-only edits skip it entirely.
 ### Prerequisites
 
 - A YugabyteDB reachable at `127.0.0.1:5433` (override with
-  `YB_HOST`/`YB_PORT`).
+  `YB_HOST`/`YB_PORT`). If you don't already run one, start the same
+  image CI uses with `scripts/yb-local.sh start` (Docker; `stop` to tear
+  it down) — see that script's header for details.
 - `psql` on `PATH` (used for the `.sql` workloads and the background
   write/read loops).
 
