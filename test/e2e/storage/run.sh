@@ -106,6 +106,21 @@ CLUSTER_BINS=(
 )
 TOOL_BINS=(--bin yb-dump-pages --bin yb-dump-wals --bin yb-reset-consistent-lsn)
 
+# Preflight: every suite needs a YugabyteDB reachable at YB_HOST:YB_PORT — the
+# harness connects to it but never starts it. Check before the (multi-minute)
+# build so a missing YB fails fast with a pointer, not after a long build.
+_yb_host="${YB_HOST:-127.0.0.1}"
+_yb_port="${YB_PORT:-5433}"
+if ! timeout 5 bash -c ": <>/dev/tcp/${_yb_host}/${_yb_port}" 2>/dev/null; then
+    cat >&2 <<EOF
+run.sh: no YugabyteDB reachable at ${_yb_host}:${_yb_port}.
+The e2e harness needs one running — it does not start it for you. Either:
+  * start the CI-matched image:  scripts/yb-local.sh start
+  * point at an existing YB:      YB_HOST=<host> YB_PORT=<port> $0 ...
+EOF
+    exit 1
+fi
+
 # Ensure the installed PostgreSQL matches the checked-out submodule commit
 # before cargo runs — postgres_ffi's bindings and the compute's extension .so
 # both link against it, so a stale pg_install (after a submodule bump or a PG
