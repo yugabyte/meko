@@ -131,8 +131,16 @@ Code anchors:
 
 ## Testing
 
-- Unit/workspace tests: `cargo test`.
-- End-to-end: `test/e2e/compute/run.sh [fast|slow|all|<name>]` — a Rust harness
+- Unit/workspace tests: `cargo test`. Several live-DB tests
+  (`pageserver::page_store::tests`, `pageserver::page_writer::tests`,
+  `safekeeper::yb_wal_storage::tests`, and the `yb_tsclient` live suite
+  `libs/yb_tsclient/tests/live.rs`) need a live YB with the production
+  schema migrated — they default to a developer cluster on
+  `5433`/`yb_storage`; without one, run them via
+  `test/e2e/compute/run.sh unit`, which points them at an isolated
+  ephemeral cluster instead.
+- End-to-end: `test/e2e/compute/run.sh [unit|fast|slow|all|<name>]`
+  (default: unit then fast) — a Rust harness
   (`e2e_tests` crate) that brings up a real `yb_light_local` + YB, runs
   scenario tests + golden `.sql` workloads, and scans the pageserver log
   for corruption markers after every test. `-n <count>` repeats for

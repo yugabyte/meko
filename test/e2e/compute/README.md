@@ -1,4 +1,4 @@
-# Storage e2e suite
+# Compute e2e suite
 
 A Rust harness (`e2e_tests` crate) that brings up a real `yb_light_local`
 cluster against a real YugabyteDB and exercises it with scenario tests
@@ -13,10 +13,11 @@ markers after every test. This is the verification gate the
 ## Running
 
 ```sh
-test/e2e/compute/run.sh                 # fast suite (default)
-test/e2e/compute/run.sh fast            # explicit
-test/e2e/compute/run.sh slow            # slow suite only
-test/e2e/compute/run.sh all             # fast then slow (one shared cluster)
+test/e2e/compute/run.sh                 # unit then fast (default)
+test/e2e/compute/run.sh unit            # only the live-DB cargo-test modules
+test/e2e/compute/run.sh fast            # only the fast suite
+test/e2e/compute/run.sh slow            # only the slow suite
+test/e2e/compute/run.sh all             # unit, fast, then slow (one shared cluster)
 test/e2e/compute/run.sh smoke           # one test by name (substring also matches)
 test/e2e/compute/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, cumulative pass/fail
 test/e2e/compute/run.sh --release all   # build + run in release mode
@@ -40,6 +41,18 @@ so a stale `.so` runs an old walproposer/compute against fresh cluster binaries
 `build/.yb_amp_ext.stamp`; because the PGXS build has no header-dependency
 tracking, any C change forces a **clean** extension rebuild (~1–2 min), while
 Rust-only edits skip it entirely.
+
+The **`unit`** selection (part of the default and of `all`) runs the
+live-DB tests via `cargo test`, pointed at this run's cluster: the
+pageserver/safekeeper modules (`pageserver::page_store::tests`,
+`pageserver::page_writer::tests`, `safekeeper::yb_wal_storage::tests`,
+with `YB_TEST_HOST/PORT/DB`) and the `yb_tsclient` live suite
+(`tests/live.rs`, with `YB_LIVE_TSERVERS`/`YB_LIVE_YSQL`/`YB_LIVE_DB` —
+its tserver RPC endpoint lives on `:9100`). These need a real YB with the
+production schema migrated; out of the box they assume a developer-managed
+cluster on `5433`/`yb_storage`, which `unit` replaces with the run's
+isolated ephemeral database (this is how CI runs them — see
+`.github/workflows/pr-build.yml`).
 
 - **`-n <count>`** repeats the selection and prints a cumulative
   `passed / failed` count. It runs *all* selected tests each iteration
@@ -162,7 +175,7 @@ See the header of `pg_regress.sh` and issue #119 for details.
 
 ```
 test/e2e/
-  storage/                 this suite (the `e2e_tests` crate)
+  compute/                 this suite (the `e2e_tests` crate)
     run.sh                 wrapper: build + run the harness (signal-trap cleanup)
     pg_regress.sh          driver for the FULL upstream pg_regress suite (see above)
     regress_yb_expected/   yb-light expected-output variants for pg_regress.sh

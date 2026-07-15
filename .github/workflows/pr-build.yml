@@ -1,0 +1,378 @@
+name: CI
+
+# Per-component PR validation, gated on which files actually changed:
+#   compute    — Rust workspace (safekeeper, pageserver, ...) + the yb_amp
+#                compute extensions: `./build.sh` (debug), clippy with
+#                `-D warnings` via ./run_clippy.sh, then the unit tests
+#                via cargo-nextest (the three live-DB test modules
+#                are excluded here and run in the e2e job instead, where a
+#                migrated cluster exists). PostgreSQL itself is built from
+#                the vendor/postgres-v18 submodule and cached keyed on the
+#                submodule commit, so warm runs skip it.
+#   e2e        — `test/e2e/compute/run.sh` against a YugabyteDB container:
+#                live-DB unit tests + the fast scenario suite on PRs
+#                (run.sh's default), `all` (unit, fast, slow) on main.
+#   controller — Go controller: `go build`, `go vet`, `go test`.
+#   ui         — amp_ui: `npm ci`, `tsc --noEmit` (npm run check), vite build.
+#
+# Unit-test results are published as PR checks (dorny/test-reporter) from
+# the JUnit XML that nextest/gotestsum emit, so failures show up as a
+# per-test pass/fail report instead of a wall of log.
+#
+# NOTE: vendor/postgres-v18 resolves to yugabyte/amp-postgres (internal),
+# which the repo-scoped default GITHUB_TOKEN cannot read. The compute and
+# e2e jobs mint a short-lived, read-only installation token for that repo
+# alone from the yb-agentk-dev GitHub App (App ID 3784852; private key in
+# the AGENTK_PRIVATE_KEY secret) and apply it only to the submodule via a
+# git insteadOf rewrite (the main-repo checkout keeps the default token).
+# Using a GitHub App rather than a personal PAT keeps CI working regardless
+# of any individual's org membership.
+
+# The push trigger exists to populate the shared cache scope: caches written
+# by PR runs are only visible to that PR, while caches written on main are
+# visible to every PR — so the post-merge run on main is what lets all PRs
+# reuse one PostgreSQL build (and warm cargo caches).
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  # One group per PR (cancel superseded commits); pushes to main get a group
+  # per commit so cache-populating runs are never cancelled by a later merge.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    # NB: job-level permissions REPLACE the workflow-level block, so
+    # contents: read must be restated or checkout loses repo access.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      compute: ${{ steps.filter.outputs.compute }}
+      controller: ${{ steps.filter.outputs.controller }}
+      ui: ${{ steps.filter.outputs.ui }}
+    steps:
+      # paths-filter uses the GitHub API for pull_request events, but for
+      # push events it diffs locally and needs the repo checked out. On a
+      # push to main it detects changes against the commit before the push.
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            compute:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'clippy.toml'
+              - '.yb-light_clippy_args'
+              - 'run_clippy.sh'
+              - '.config/nextest.toml'
+              - 'libs/**'
+              - 'pgxn/**'
+              - 'test/e2e/compute/**'
+              - 'vendor/postgres-v18'
+              - 'Makefile'
+              - 'postgres.mk'
+              - 'build.sh'
+              - 'scripts/build.py'
+              - '.github/workflows/pr-build.yml'
+            controller:
+              - 'controller/**'
+              - '.github/workflows/pr-build.yml'
+            ui:
+              - 'amp_ui/**'
+              - '.github/workflows/pr-build.yml'
+
+  compute:
+    name: Compute — build, lint & unit tests
+    needs: changes
+    if: needs.changes.outputs.compute == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      checks: write # dorny/test-reporter publishes a check run
+    steps:
+      # The full PG + workspace debug build is large; drop the big
+      # preinstalled toolchains we don't use to avoid running out of disk.
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /usr/local/share/boost
+          df -h /
+
+      - uses: actions/checkout@v5
+
+      # Mint a short-lived, read-only installation token for amp-postgres
+      # alone from the yb-agentk-dev GitHub App (see the NOTE at the top).
+      - name: Mint amp-postgres read token
+        id: amp-postgres-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: "3784852"
+          private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
+          owner: yugabyte
+          repositories: amp-postgres
+
+      # The submodule lives in yugabyte/amp-postgres (internal), which the
+      # repo-scoped GITHUB_TOKEN cannot read, and passing this token to
+      # actions/checkout would make it fetch the MAIN repo with it too —
+      # so keep the default token above and fetch just the submodule with
+      # the App token via an insteadOf rewrite. The global rule also covers
+      # build.py's own `git submodule update` re-syncs later in the job.
+      - name: Check out PostgreSQL submodule
+        env:
+          TOKEN: ${{ steps.amp-postgres-token.outputs.token }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${TOKEN}@github.com/yugabyte/amp-postgres".insteadOf \
+            "https://github.com/yugabyte/amp-postgres"
+          git submodule update --init --recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool libreadline-dev zlib1g-dev flex bison \
+            libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
+            protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev
+
+      - name: Install pinned Rust toolchain
+        # Reads rust-toolchain.toml (channel + clippy/rustfmt components).
+        run: rustup toolchain install
+
+      - name: Parallelize make
+        run: echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      # scripts/build.py reuses pg_install/v18 when its .pg_commit stamp
+      # matches the checked-out submodule commit, so key the cache on the
+      # gitlink plus the build plumbing that shapes the install.
+      - name: Compute PostgreSQL cache key
+        id: pgrev
+        run: echo "rev=$(git rev-parse HEAD:vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache PostgreSQL install
+        uses: actions/cache@v4
+        with:
+          path: pg_install
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
+
+      - name: Build (PostgreSQL + Rust workspace + compute extensions)
+        run: ./build.sh
+
+      - name: Lint (clippy, -D warnings)
+        run: ./run_clippy.sh
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      # Unit tests. The three live-DB modules assert against
+      # a real YB with the migrated production schema; they run in the e2e
+      # job (run.sh's `unit` selection) where that cluster exists. Keep
+      # this filter in sync with test/e2e/compute/main.rs::unit_tests.
+      # NB: nextest does not run doctests; add `cargo test --doc` here if
+      # the workspace ever grows some.
+      - name: Unit tests
+        run: |
+          cargo nextest run --workspace --locked --profile ci \
+            -E 'not (test(/^page_store::tests::/) | test(/^page_writer::tests::/) | test(/^yb_wal_storage::tests::/))'
+
+      - name: Publish unit-test report
+        uses: dorny/test-reporter@v3
+        if: ${{ !cancelled() }}
+        with:
+          name: Compute unit-test results
+          path: target/nextest/ci/junit.xml
+          reporter: java-junit
+          # v3 defaults to the Actions run summary; keep the standalone
+          # per-test PR check instead.
+          use-actions-summary: false
+
+  e2e:
+    name: Compute — end-to-end tests
+    needs: changes
+    if: needs.changes.outputs.compute == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # Pinned to the 2026.1.0 official release; bump deliberately, not via
+      # `latest`, so CI can't drift to an untested YB.
+      YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+    steps:
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /usr/local/share/boost
+          df -h /
+
+      - uses: actions/checkout@v5
+
+      # Mint a short-lived, read-only installation token for amp-postgres
+      # alone from the yb-agentk-dev GitHub App (see the NOTE at the top).
+      - name: Mint amp-postgres read token
+        id: amp-postgres-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: "3784852"
+          private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
+          owner: yugabyte
+          repositories: amp-postgres
+
+      # The submodule lives in yugabyte/amp-postgres (internal), which the
+      # repo-scoped GITHUB_TOKEN cannot read, and passing this token to
+      # actions/checkout would make it fetch the MAIN repo with it too —
+      # so keep the default token above and fetch just the submodule with
+      # the App token via an insteadOf rewrite. The global rule also covers
+      # build.py's own `git submodule update` re-syncs later in the job.
+      - name: Check out PostgreSQL submodule
+        env:
+          TOKEN: ${{ steps.amp-postgres-token.outputs.token }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${TOKEN}@github.com/yugabyte/amp-postgres".insteadOf \
+            "https://github.com/yugabyte/amp-postgres"
+          git submodule update --init --recursive
+
+      # Start YB first so it initializes while the toolchain installs.
+      # Use host networking + advertise 127.0.0.1 so YB advertises an address
+      # the host-side clients (safekeeper, yb_tsclient) can actually reach —
+      # without --advertise_address it hands back the container hostname and
+      # cluster bring-up fails ("could not find a server to connect to"). This
+      # mirrors the developer setup. Host networking also exposes YSQL (5433)
+      # and the tserver RPC (9100, for the yb_tsclient live tests) directly.
+      # The harness defaults to 127.0.0.1:5433 (see test/e2e/compute/
+      # cluster.rs) and creates its own ephemeral database per run.
+      - name: Start YugabyteDB
+        run: |
+          docker run -d --name yb --network host "$YB_IMAGE" \
+            bin/yugabyted start --advertise_address=127.0.0.1 --background=false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool libreadline-dev zlib1g-dev flex bison \
+            libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
+            protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev \
+            postgresql-client
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Parallelize make
+        run: echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compute PostgreSQL cache key
+        id: pgrev
+        run: echo "rev=$(git rev-parse HEAD:vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache PostgreSQL install
+        uses: actions/cache@v4
+        with:
+          path: pg_install
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
+
+      - name: Wait for YugabyteDB
+        run: |
+          for i in $(seq 1 120); do
+            pg_isready -h 127.0.0.1 -p 5433 -q && exit 0
+            sleep 2
+          done
+          echo "YugabyteDB never became ready" >&2
+          docker logs yb
+          exit 1
+
+      # PRs run run.sh's default (live-DB unit tests + fast suite); pushes
+      # to main run everything (unit, fast, slow).
+      - name: End-to-end tests (live-DB unit + scenarios)
+        run: test/e2e/compute/run.sh ${{ github.event_name == 'push' && 'all' || '' }}
+
+      - name: Upload run logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ github.run_id }}
+          path: .e2e-tests/
+          if-no-files-found: ignore
+
+  controller:
+    name: Controller — build & tests
+    needs: changes
+    if: needs.changes.outputs.controller == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      checks: write # dorny/test-reporter publishes a check run
+    defaults:
+      run:
+        working-directory: controller
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: controller/go.mod
+          cache-dependency-path: controller/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Static analysis (go vet)
+        run: go vet ./...
+
+      # gotestsum wraps `go test`, emitting JUnit XML for the report below.
+      - name: Unit tests
+        run: go run gotest.tools/gotestsum@latest --format testname --junitfile junit.xml -- ./...
+
+      - name: Publish test report
+        uses: dorny/test-reporter@v3
+        if: ${{ !cancelled() }}
+        with:
+          name: Controller test results
+          path: controller/junit.xml
+          reporter: java-junit
+          use-actions-summary: false
+
+  ui:
+    name: UI — typecheck & build
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: amp_ui
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: amp_ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (tsc --noEmit)
+        run: npm run check
+
+      - name: Build
+        run: npm run build

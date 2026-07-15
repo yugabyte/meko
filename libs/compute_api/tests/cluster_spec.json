@@ -177,7 +177,7 @@
             },
             {
                 "name": "shared_preload_libraries",
-                "value": "neon",
+                "value": "yb_amp",
                 "vartype": "string"
             },
             {

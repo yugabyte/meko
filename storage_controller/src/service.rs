@@ -917,7 +917,7 @@ impl Service {
             if let Some(node_id) = attach_req.node_id {
                 branch.observed.locations = HashMap::from([(
                     node_id,
-                    ObservedStateLocation {
+                    crate::branch::ObservedStateLocation {
                         conf: Some(models::LocationConfig {
                             generation: branch.generation.unwrap().into(),
                         }),

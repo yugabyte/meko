@@ -1,2 +1,8 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 3 }
+
+# CI profile (inherits default): emits JUnit XML under
+# target/nextest/ci/junit.xml for the PR test report — see
+# .github/workflows/pr-build.yml.
+[profile.ci.junit]
+path = "junit.xml"

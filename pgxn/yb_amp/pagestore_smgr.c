@@ -1049,7 +1049,7 @@ yb_amp_zeroextend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blocknum,
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg(YBAMP_TAG "cannot extend file \"%s\" beyond %u blocks",
-						relpath(reln->smgr_rlocator, forkNum),
+						relpath(reln->smgr_rlocator, forkNum).str,
 						InvalidBlockNumber)));
 
 	if (debug_compare_local)

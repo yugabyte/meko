@@ -21,10 +21,15 @@ usage() {
     cat <<'EOF'
 Usage: test/e2e/compute/run.sh [options] [selection]
 
-Selection (default: fast):
-  fast            the fast suite
-  slow            the slow suite
-  all             fast then slow
+Selection (default: unit then fast):
+  unit            only the live-DB tests — the pageserver/safekeeper
+                  modules (page_store, page_writer, yb_wal_storage) plus
+                  the yb_tsclient live suite (tests/live.rs) — pointed at
+                  this run's cluster; no developer-managed cluster on
+                  5433/yb_storage needed
+  fast            only the fast suite
+  slow            only the slow suite
+  all             unit, fast, then slow
   <name>          one test by name (substring also matches), e.g.
                   branch_ancestor, restart_wal_replay_yb, smoke
 
@@ -54,8 +59,9 @@ E2E_SKIP=going_away,restart_wal_replay_yb to skip some); the skipped names
 are printed, never silently dropped.
 
 Examples:
-  test/e2e/compute/run.sh                       # fast suite, debug
-  test/e2e/compute/run.sh all                   # fast then slow
+  test/e2e/compute/run.sh                       # unit + fast, debug
+  test/e2e/compute/run.sh all                   # unit, fast, then slow
+  test/e2e/compute/run.sh unit                  # live-DB cargo tests only
   test/e2e/compute/run.sh smoke                 # one golden workload
   test/e2e/compute/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, count
   test/e2e/compute/run.sh --release all         # full suite, release build

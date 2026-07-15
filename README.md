@@ -388,6 +388,13 @@ Rust unit tests:
 cargo test --workspace
 ```
 
+Several live-DB tests (`pageserver::page_store::tests`, `pageserver::page_writer::tests`,
+`safekeeper::yb_wal_storage::tests`, and the `yb_tsclient` live suite in
+`libs/yb_tsclient/tests/live.rs`) assert against a live YB with the
+production schema migrated. They default to a developer-managed cluster on
+`5433`/`yb_storage` (override with `YB_TEST_HOST/PORT/USER/DB`); without one,
+`test/e2e/compute/run.sh unit` runs them against an isolated ephemeral cluster.
+
 Integration tests (require a YB cluster reachable from the test runner):
 
 ```sh
@@ -402,8 +409,9 @@ boot, write, branch, restart, and WAL-replay-catch-up paths, scanning
 (see [`test/e2e/compute/README.md`](test/e2e/compute/README.md)):
 
 ```sh
-test/e2e/compute/run.sh                 # fast suite
-test/e2e/compute/run.sh all             # fast then slow
+test/e2e/compute/run.sh                 # unit then fast (default)
+test/e2e/compute/run.sh all             # unit, fast, then slow
+test/e2e/compute/run.sh unit            # live-DB cargo-test modules only
 test/e2e/compute/run.sh smoke           # one test by name (substring matches)
 test/e2e/compute/run.sh -n 20 <name>    # repeat N times, cumulative pass/fail
 test/e2e/compute/run.sh --release all   # release build
