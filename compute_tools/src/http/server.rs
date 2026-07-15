@@ -109,10 +109,7 @@ impl From<&Server> for Router<Arc<ComputeNode>> {
                     .route("/metrics.json", get(metrics_json::get_metrics))
                     .route("/status", get(status::get_status))
                     .route("/terminate", post(terminate::terminate))
-                    .route(
-                        "/liveness_probe",
-                        get(liveness_probe::liveness_probe),
-                    )
+                    .route("/liveness_probe", get(liveness_probe::liveness_probe))
                     .layer(AsyncRequireAuthorizationLayer::new(Authorize::new(
                         compute_id.clone(),
                         instance_id.clone(),
@@ -192,9 +189,7 @@ impl Server {
             attempt += 1;
             match TcpListener::bind(&addr).await {
                 Ok(listener) => return Ok(listener),
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::AddrInUse && attempt < MAX_ATTEMPTS =>
-                {
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && attempt < MAX_ATTEMPTS => {
                     if attempt == 1 {
                         info!(
                             "compute_ctl {self} HTTP server: {addr} in use \

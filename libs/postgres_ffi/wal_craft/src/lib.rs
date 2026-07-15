@@ -41,7 +41,7 @@ pub struct PostgresServer {
 }
 
 pub static REQUIRED_POSTGRES_CONFIG: [&str; 4] = [
-    "wal_keep_size=50MB",            // Ensure old WAL is not removed
+    "wal_keep_size=50MB",              // Ensure old WAL is not removed
     "shared_preload_libraries=yb_amp", // can only be loaded at startup
     // Disable background processes as much as possible
     "wal_writer_delay=10s",

@@ -6,11 +6,11 @@ use std::borrow::Cow;
 use std::num::NonZeroUsize;
 use std::os::fd::AsRawFd;
 use std::pin::Pin;
+use std::str;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime};
-use std::str;
 
 use anyhow::{Context as _, bail};
 use bytes::{Buf as _, BufMut as _, BytesMut};
@@ -71,13 +71,13 @@ use crate::metrics::{
     self, COMPUTE_COMMANDS_COUNTERS, ComputeCommandKind, GetPageBatchBreakReason, LIVE_CONNECTIONS,
     MISROUTED_PAGESTREAM_REQUESTS, PAGESTREAM_HANDLER_RESULTS_TOTAL, SmgrOpTimer, TimelineMetrics,
 };
-use crate::pgdatadir_mapping::{LsnRange, Version};
-use crate::span::debug_assert_current_span_has_branch_id;
-use crate::task_mgr::{self, COMPUTE_REQUEST_RUNTIME, TaskKind};
 use crate::page_server::mgr::{GetTenantError, TenantManager};
 use crate::page_server::timeline::handle::{Handle, HandleUpgradeError, WeakHandle};
 use crate::page_server::timeline::{self, WaitLsnError, WaitLsnTimeout, WaitLsnWaiter};
 use crate::page_server::{GetTimelineError, PageReconstructError, Timeline};
+use crate::pgdatadir_mapping::{LsnRange, Version};
+use crate::span::debug_assert_current_span_has_branch_id;
+use crate::task_mgr::{self, COMPUTE_REQUEST_RUNTIME, TaskKind};
 use crate::{CancellableTask, PERF_TRACE_TARGET, timed_after_cancellation};
 
 /// Threshold at which to log slow GetPage requests.
@@ -642,9 +642,7 @@ impl From<GetActiveTimelineError> for PageStreamError {
             GetActiveTimelineError::Timeline(GetTimelineError::ShuttingDown) => Self::Shutdown,
             GetActiveTimelineError::Tenant(e) => Self::NotFound(format!("{e}").into()),
             GetActiveTimelineError::Timeline(e) => Self::NotFound(format!("{e}").into()),
-            e @ GetActiveTimelineError::SwitchedTenant => {
-                Self::Reconnect(format!("{e}").into())
-            }
+            e @ GetActiveTimelineError::SwitchedTenant => Self::Reconnect(format!("{e}").into()),
         }
     }
 }
@@ -1009,9 +1007,7 @@ impl PageServerHandler {
 
         let batched_msg = match neon_fe_msg {
             PagestreamFeMessage::Exists(req) => {
-                let shard = timeline_handles
-                    .get(branch_id)
-                    .await?;
+                let shard = timeline_handles.get(branch_id).await?;
                 debug_assert_current_span_has_branch_id();
                 let span = tracing::info_span!(parent: &parent_span, "handle_get_rel_exists_request", rel = %req.rel, req_lsn = %req.hdr.request_lsn);
                 let timer = Self::record_op_start_and_throttle(
@@ -1028,9 +1024,7 @@ impl PageServerHandler {
                 }
             }
             PagestreamFeMessage::Nblocks(req) => {
-                let shard = timeline_handles
-                    .get(branch_id)
-                    .await?;
+                let shard = timeline_handles.get(branch_id).await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_get_nblocks_request", rel = %req.rel, req_lsn = %req.hdr.request_lsn);
                 let timer = Self::record_op_start_and_throttle(
                     &shard,
@@ -1046,9 +1040,7 @@ impl PageServerHandler {
                 }
             }
             PagestreamFeMessage::DbSize(req) => {
-                let shard = timeline_handles
-                    .get(branch_id)
-                    .await?;
+                let shard = timeline_handles.get(branch_id).await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_db_size_request", dbnode = %req.dbnode, req_lsn = %req.hdr.request_lsn);
                 let timer = Self::record_op_start_and_throttle(
                     &shard,
@@ -1064,9 +1056,7 @@ impl PageServerHandler {
                 }
             }
             PagestreamFeMessage::GetSlruSegment(req) => {
-                let shard = timeline_handles
-                    .get(branch_id)
-                    .await?;
+                let shard = timeline_handles.get(branch_id).await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_get_slru_segment_request", kind = %req.kind, segno = %req.segno, req_lsn = %req.hdr.request_lsn);
                 let timer = Self::record_op_start_and_throttle(
                     &shard,
@@ -1247,9 +1237,7 @@ impl PageServerHandler {
             }
             #[cfg(feature = "testing")]
             PagestreamFeMessage::Test(req) => {
-                let shard = timeline_handles
-                    .get(branch_id)
-                    .await?;
+                let shard = timeline_handles.get(branch_id).await?;
                 let span = tracing::info_span!(parent: &parent_span, "handle_test_request");
                 let timer = Self::record_op_start_and_throttle(
                     &shard,
@@ -1387,7 +1375,8 @@ impl PageServerHandler {
         IO: AsyncRead + AsyncWrite + Send + Sync + Unpin,
     {
         let (handler_results, span) = Self::execute_batch(batch, ctx.attached_child()).await?;
-        Self::write_batch_responses(pgb_writer, handler_results, span, protocol_version, cancel).await
+        Self::write_batch_responses(pgb_writer, handler_results, span, protocol_version, cancel)
+            .await
     }
 
     /// Run a batch's page reads (get_vectored) and return the response data + span,
@@ -2719,9 +2708,7 @@ impl PageServerHandler {
         let ctx = ctx.with_scope_timeline(&timeline);
 
         if timeline.is_archived() == Some(true) {
-            tracing::info!(
-                "branch {branch_id} is archived, but got basebackup request for it."
-            );
+            tracing::info!("branch {branch_id} is archived, but got basebackup request for it.");
             return Err(QueryError::NotFound("timeline is archived".into()));
         }
 
@@ -3031,10 +3018,7 @@ impl LeaseLsnCmd {
             .with_context(|| format!("Failed to parse branch id from {}", parameters[0]))?;
         let lsn = Lsn::from_str(parameters[1])
             .with_context(|| format!("Failed to parse lsn from {}", parameters[1]))?;
-        Ok(Self {
-            branch_id,
-            lsn,
-        })
+        Ok(Self { branch_id, lsn })
     }
 }
 
@@ -3204,8 +3188,7 @@ where
                 branch_id,
                 protocol_version,
             }) => {
-                tracing::Span::current()
-                    .record("branch_id", field::display(branch_id));
+                tracing::Span::current().record("branch_id", field::display(branch_id));
 
                 self.check_permission(Some(branch_id))?;
                 let command_kind = match protocol_version {
@@ -3223,8 +3206,7 @@ where
                 gzip,
                 replica,
             }) => {
-                tracing::Span::current()
-                    .record("branch_id", field::display(branch_id));
+                tracing::Span::current().record("branch_id", field::display(branch_id));
 
                 self.check_permission(Some(branch_id))?;
 
@@ -3234,14 +3216,7 @@ where
                 let metric_recording = metrics::BASEBACKUP_QUERY_TIME.start_recording();
                 let res = async {
                     self.handle_basebackup_request(
-                        pgb,
-                        branch_id,
-                        lsn,
-                        None,
-                        false,
-                        gzip,
-                        replica,
-                        &ctx,
+                        pgb, branch_id, lsn, None, false, gzip, replica, &ctx,
                     )
                     .await?;
                     pgb.write_message_noflush(&BeMessage::CommandComplete(b"SELECT 1"))?;
@@ -3257,8 +3232,7 @@ where
                 lsn,
                 prev_lsn,
             }) => {
-                tracing::Span::current()
-                    .record("branch_id", field::display(branch_id));
+                tracing::Span::current().record("branch_id", field::display(branch_id));
 
                 self.check_permission(Some(branch_id))?;
 
@@ -3268,14 +3242,7 @@ where
 
                 // Check that the timeline exists
                 self.handle_basebackup_request(
-                    pgb,
-                    branch_id,
-                    lsn,
-                    prev_lsn,
-                    true,
-                    false,
-                    false,
-                    &ctx,
+                    pgb, branch_id, lsn, prev_lsn, true, false, false, &ctx,
                 )
                 .await?;
                 pgb.write_message_noflush(&BeMessage::CommandComplete(b"SELECT 1"))?;
@@ -3286,12 +3253,8 @@ where
                 // TODO: allow setting options, i.e., application_name/compute_mode via SET commands
                 pgb.write_message_noflush(&BeMessage::CommandComplete(b"SELECT 1"))?;
             }
-            PageServiceCmd::LeaseLsn(LeaseLsnCmd {
-                branch_id,
-                lsn,
-            }) => {
-                tracing::Span::current()
-                    .record("branch_id", field::display(branch_id));
+            PageServiceCmd::LeaseLsn(LeaseLsnCmd { branch_id, lsn }) => {
+                tracing::Span::current().record("branch_id", field::display(branch_id));
 
                 self.check_permission(Some(branch_id))?;
 
@@ -3299,10 +3262,7 @@ where
                     .for_command(ComputeCommandKind::LeaseLsn)
                     .inc();
 
-                match self
-                    .handle_make_lsn_lease(pgb, branch_id, lsn, &ctx)
-                    .await
-                {
+                match self.handle_make_lsn_lease(pgb, branch_id, lsn, &ctx).await {
                     Ok(()) => {
                         pgb.write_message_noflush(&BeMessage::CommandComplete(b"SELECT 1"))?
                     }
@@ -3611,7 +3571,6 @@ impl GrpcPageServiceHandler {
 
         Ok(resp)
     }
-
 }
 
 /// Implements the gRPC page service.
@@ -4225,8 +4184,6 @@ impl From<GetTimelineError> for tonic::Status {
     }
 }
 
-
-
 impl From<HandleUpgradeError> for QueryError {
     fn from(e: HandleUpgradeError) -> Self {
         match e {
@@ -4257,8 +4214,7 @@ mod tests {
     #[test]
     fn pageservice_cmd_parse() {
         let branch_id = BranchId::generate();
-        let cmd =
-            PageServiceCmd::parse(&format!("pagestream_v2 {branch_id}")).unwrap();
+        let cmd = PageServiceCmd::parse(&format!("pagestream_v2 {branch_id}")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::PageStream(PageStreamCmd {
@@ -4276,8 +4232,7 @@ mod tests {
                 replica: false
             })
         );
-        let cmd =
-            PageServiceCmd::parse(&format!("basebackup {branch_id} --gzip")).unwrap();
+        let cmd = PageServiceCmd::parse(&format!("basebackup {branch_id} --gzip")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::BaseBackup(BaseBackupCmd {
@@ -4287,8 +4242,7 @@ mod tests {
                 replica: false
             })
         );
-        let cmd =
-            PageServiceCmd::parse(&format!("basebackup {branch_id} latest")).unwrap();
+        let cmd = PageServiceCmd::parse(&format!("basebackup {branch_id} latest")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::BaseBackup(BaseBackupCmd {
@@ -4298,8 +4252,7 @@ mod tests {
                 replica: false
             })
         );
-        let cmd = PageServiceCmd::parse(&format!("basebackup {branch_id} 0/16ABCDE"))
-            .unwrap();
+        let cmd = PageServiceCmd::parse(&format!("basebackup {branch_id} 0/16ABCDE")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::BaseBackup(BaseBackupCmd {
@@ -4309,10 +4262,8 @@ mod tests {
                 replica: false
             })
         );
-        let cmd = PageServiceCmd::parse(&format!(
-            "basebackup {branch_id} --replica --gzip"
-        ))
-        .unwrap();
+        let cmd =
+            PageServiceCmd::parse(&format!("basebackup {branch_id} --replica --gzip")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::BaseBackup(BaseBackupCmd {
@@ -4344,10 +4295,8 @@ mod tests {
                 prev_lsn: None
             })
         );
-        let cmd = PageServiceCmd::parse(&format!(
-            "fullbackup {branch_id} 0/16ABCDE 0/16ABCDF"
-        ))
-        .unwrap();
+        let cmd =
+            PageServiceCmd::parse(&format!("fullbackup {branch_id} 0/16ABCDE 0/16ABCDF")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::FullBackup(FullBackupCmd {
@@ -4356,10 +4305,7 @@ mod tests {
                 prev_lsn: Some(Lsn::from_str("0/16ABCDF").unwrap()),
             })
         );
-        let cmd = PageServiceCmd::parse(&format!(
-            "lease lsn {branch_id} 0/16ABCDE"
-        ))
-        .unwrap();
+        let cmd = PageServiceCmd::parse(&format!("lease lsn {branch_id} 0/16ABCDE")).unwrap();
         assert_eq!(
             cmd,
             PageServiceCmd::LeaseLsn(LeaseLsnCmd {
@@ -4385,17 +4331,11 @@ mod tests {
         assert!(cmd.is_err());
         let cmd = PageServiceCmd::parse(&format!("pagestream_v2 {branch_id}xxx"));
         assert!(cmd.is_err());
-        let cmd = PageServiceCmd::parse(&format!(
-            "basebackup {branch_id} --gzip --gzip"
-        ));
+        let cmd = PageServiceCmd::parse(&format!("basebackup {branch_id} --gzip --gzip"));
         assert!(cmd.is_err());
-        let cmd = PageServiceCmd::parse(&format!(
-            "basebackup {branch_id} --gzip --unknown"
-        ));
+        let cmd = PageServiceCmd::parse(&format!("basebackup {branch_id} --gzip --unknown"));
         assert!(cmd.is_err());
-        let cmd = PageServiceCmd::parse(&format!(
-            "basebackup {branch_id} --gzip 0/16ABCDE"
-        ));
+        let cmd = PageServiceCmd::parse(&format!("basebackup {branch_id} --gzip 0/16ABCDE"));
         assert!(cmd.is_err());
         let cmd = PageServiceCmd::parse(&format!("lease {branch_id} gzip 0/16ABCDE"));
         assert!(cmd.is_err());

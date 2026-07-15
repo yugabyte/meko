@@ -180,7 +180,10 @@ mod tests {
             hash(&[v(Value::BinaryValue(vec![0xde, 0xad, 0xbe, 0xef]))]),
             54485
         );
-        assert_eq!(hash(&[v(Value::BinaryValue(vec![0x00, 0xff, 0x10]))]), 64699);
+        assert_eq!(
+            hash(&[v(Value::BinaryValue(vec![0x00, 0xff, 0x10]))]),
+            64699
+        );
         // Multi-column hash keys concatenate in schema order.
         assert_eq!(
             hash(&[

@@ -508,12 +508,7 @@ impl StorageController {
                 // connect_to_database() path below (used only for the startup
                 // script) still works when external_yb is None at some sites.
                 // The port here is otherwise unused on the external path.
-                let port = yb
-                    .host_ports
-                    .0
-                    .first()
-                    .map(|hp| hp.port)
-                    .unwrap_or(5433);
+                let port = yb.host_ports.0.first().map(|hp| hp.port).unwrap_or(5433);
                 (base_port, port)
             }
             (Some(_), None) => {
@@ -997,10 +992,7 @@ impl StorageController {
     }
 
     #[instrument(skip(self))]
-    pub async fn inspect(
-        &self,
-        branch_id: BranchId,
-    ) -> anyhow::Result<Option<(u32, NodeId)>> {
+    pub async fn inspect(&self, branch_id: BranchId) -> anyhow::Result<Option<(u32, NodeId)>> {
         let request = InspectRequest { branch_id };
 
         let response = self
@@ -1120,9 +1112,7 @@ impl StorageController {
     /// List the pending timeline inits recorded for a branch. Used by
     /// `endpoint create` to resolve an unprovisioned branch and read its
     /// materialization recipe.
-    pub async fn list_pending_timeline_inits(
-        &self,
-    ) -> anyhow::Result<Vec<PendingTimelineInit>> {
+    pub async fn list_pending_timeline_inits(&self) -> anyhow::Result<Vec<PendingTimelineInit>> {
         self.dispatch::<(), _>(
             Method::GET,
             "control/v1/pending_timeline_inits".to_string(),
@@ -1132,10 +1122,7 @@ impl StorageController {
     }
 
     /// Delete a pending timeline init after its PS+SK have been materialized.
-    pub async fn delete_pending_timeline_init(
-        &self,
-        branch_id: BranchId,
-    ) -> anyhow::Result<()> {
+    pub async fn delete_pending_timeline_init(&self, branch_id: BranchId) -> anyhow::Result<()> {
         self.dispatch::<(), ()>(
             Method::DELETE,
             format!("control/v1/branch/{branch_id}/pending_init"),
@@ -1148,10 +1135,7 @@ impl StorageController {
     /// any un-materialized init recipe, and mark the branch dropped. The
     /// caller (`yb_light_local timeline drop`) stops the compute processes
     /// first. Idempotent.
-    pub async fn timeline_drop(
-        &self,
-        branch_id: BranchId,
-    ) -> anyhow::Result<()> {
+    pub async fn timeline_drop(&self, branch_id: BranchId) -> anyhow::Result<()> {
         self.dispatch::<(), ()>(
             Method::PUT,
             format!("control/v1/branch/{branch_id}/drop"),

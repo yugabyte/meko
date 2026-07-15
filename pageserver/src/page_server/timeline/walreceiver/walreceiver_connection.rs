@@ -37,11 +37,9 @@ use wal_decoder::wire_format::FromWireFormat;
 use super::TaskStateUpdate;
 use crate::context::RequestContext;
 use crate::metrics::{LIVE_CONNECTIONS, WAL_INGEST, WALRECEIVER_STARTED_CONNECTIONS};
+use crate::page_server::{Timeline, WalReceiverInfo, debug_assert_current_span_has_branch_id};
 use crate::pgdatadir_mapping::DatadirModification;
 use crate::task_mgr::{TaskKind, WALRECEIVER_RUNTIME};
-use crate::page_server::{
-    Timeline, WalReceiverInfo, debug_assert_current_span_has_branch_id,
-};
 use crate::walingest::WalIngest;
 
 /// Status of the connection.

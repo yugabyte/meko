@@ -45,11 +45,11 @@ use crate::context;
 use crate::context::RequestContextBuilder;
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::{
-    CONCURRENT_INITDBS, INITDB_RUN_TIME, INITDB_SEMAPHORE_ACQUISITION_TIME,
-    TENANT, remove_tenant_metrics,
+    CONCURRENT_INITDBS, INITDB_RUN_TIME, INITDB_SEMAPHORE_ACQUISITION_TIME, TENANT,
+    remove_tenant_metrics,
 };
-use crate::task_mgr::TaskKind;
 use crate::page_server::gc_result::GcResult;
+use crate::task_mgr::TaskKind;
 use initdb_storage::INITDB_PATH;
 
 use crate::page_server::timeline::uninit::cleanup_timeline_directory;
@@ -126,8 +126,7 @@ impl AttachedTenantConf {
         // lease length gives the leases we granted before restart a chance
         // to renew when we run GC for the first time after attaching.
         let lsn_lease_deadline = Some(
-            tokio::time::Instant::now()
-                + PageServer::get_lsn_lease_length_impl(conf, &tenant_conf),
+            tokio::time::Instant::now() + PageServer::get_lsn_lease_length_impl(conf, &tenant_conf),
         );
 
         Self {
@@ -136,7 +135,6 @@ impl AttachedTenantConf {
             lsn_lease_deadline,
         }
     }
-
 
     fn is_gc_blocked_by_lsn_lease_deadline(&self) -> bool {
         self.lsn_lease_deadline
@@ -341,7 +339,6 @@ impl WalRedoManager {
         mgr.request_redo(key, lsn, base_img, records, pg_version, redo_attempt_type)
             .await
     }
-
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -354,9 +351,7 @@ pub enum GetTimelineError {
         state: TimelineState,
     },
     #[error("Timeline {branch_id} was not found")]
-    NotFound {
-        branch_id: BranchId,
-    },
+    NotFound { branch_id: BranchId },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -413,7 +408,6 @@ enum CreateTimelineResult {
     Created(Arc<Timeline>),
     Idempotent(Arc<Timeline>),
 }
-
 
 #[derive(thiserror::Error, Debug)]
 pub enum CreateTimelineError {
@@ -591,9 +585,8 @@ impl PageServer {
         attached_conf: AttachedTenantConf,
         ctx: &RequestContext,
     ) -> anyhow::Result<Arc<PageServer>> {
-        let wal_redo_manager =
-            WalRedoManager::new(PostgresRedoManager::new(conf, branch_id))
-                .map_err(|GlobalShutDown| anyhow::anyhow!("pageserver is shutting down"))?;
+        let wal_redo_manager = WalRedoManager::new(PostgresRedoManager::new(conf, branch_id))
+            .map_err(|GlobalShutDown| anyhow::anyhow!("pageserver is shutting down"))?;
 
         let TenantSharedResources {
             remote_storage,
@@ -789,8 +782,9 @@ impl PageServer {
                         }
                         Err(DownloadError::NotFound) => None,
                         Err(e) => {
-                            return Err(anyhow::anyhow!(e)
-                                .context("probe initdb tar before bootstrap"));
+                            return Err(
+                                anyhow::anyhow!(e).context("probe initdb tar before bootstrap")
+                            );
                         }
                     };
                     info!(
@@ -809,25 +803,24 @@ impl PageServer {
                             load_existing_initdb,
                             ctx,
                         )
-                        .instrument(info_span!("bootstrap_timeline", branch_id = %identity.branch_id))
+                        .instrument(
+                            info_span!("bootstrap_timeline", branch_id = %identity.branch_id),
+                        )
                         .await
                         .map_err(|e| anyhow::anyhow!("bootstrap configured timeline: {e}"))?;
                     // finish_creation inserted the timeline into
                     // self.timelines and wrote the timeline_state row;
                     // activation happens in PageServer::activate.
-                    let (CreateTimelineResult::Created(t)
-                    | CreateTimelineResult::Idempotent(t)) = result;
+                    let (CreateTimelineResult::Created(t) | CreateTimelineResult::Idempotent(t)) =
+                        result;
                     bootstrapped_timeline = Some(t.branch_id);
                 }
                 Some(TimelineInitConfig::Branch {
                     ancestor_branch_id,
                     ancestor_lsn,
                 }) => {
-                    let generation_i32: i32 = self
-                        .generation
-                        .into()
-                        .map(|g: u32| g as i32)
-                        .unwrap_or(0);
+                    let generation_i32: i32 =
+                        self.generation.into().map(|g: u32| g as i32).unwrap_or(0);
                     info!(
                         branch_id = %identity.branch_id,
                         ancestor = %ancestor_branch_id,
@@ -840,8 +833,7 @@ impl PageServer {
                     // to one flush interval (5 s default). Retry the
                     // durability validation until it catches up;
                     // other validation failures are fatal.
-                    let deadline =
-                        tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+                    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
                     let row = loop {
                         match self
                             .fpu_page_store
@@ -979,9 +971,7 @@ impl PageServer {
             .timeline
             .get()
             .filter(|tl| tl.branch_id == branch_id)
-            .ok_or(GetTimelineError::NotFound {
-                branch_id,
-            })?;
+            .ok_or(GetTimelineError::NotFound { branch_id })?;
 
         if active_only && !timeline.is_active() {
             Err(GetTimelineError::NotActive {
@@ -1059,8 +1049,7 @@ impl PageServer {
         // Freeze ephemeral layers on idle timelines so they don't sit
         // open indefinitely.
         if let Some(timeline) = self.timeline().filter(|tl| tl.is_active()) {
-            let span =
-                info_span!("maybe_freeze_ephemeral_layer", branch_id = %timeline.branch_id);
+            let span = info_span!("maybe_freeze_ephemeral_layer", branch_id = %timeline.branch_id);
             timeline
                 .maybe_freeze_ephemeral_layer()
                 .instrument(span)
@@ -1131,7 +1120,6 @@ impl PageServer {
 
         remove_tenant_metrics(&self.id);
     }
-
 }
 
 impl PageServer {
@@ -1511,8 +1499,9 @@ impl PageServer {
                 // Apply the cutoffs we found to the Timeline's GcInfo.  Why might we _not_ have cutoffs for a timeline?
                 // - this timeline was created while we were finding cutoffs
                 // - lsn for timestamp search fails for this timeline repeatedly
-                if let Some((_, cutoffs)) =
-                    gc_cutoffs.as_ref().filter(|(id, _)| *id == timeline.branch_id)
+                if let Some((_, cutoffs)) = gc_cutoffs
+                    .as_ref()
+                    .filter(|(id, _)| *id == timeline.branch_id)
                 {
                     let original_cutoffs = target.cutoffs.clone();
                     // GC cutoffs should never go back
@@ -1752,11 +1741,7 @@ impl PageServer {
                     &timeline_ctx,
                 )
                 .await
-                .with_context(|| {
-                    format!(
-                        "Failed to import pgdatadir for timeline {branch_id}"
-                    )
-                })?;
+                .with_context(|| format!("Failed to import pgdatadir for timeline {branch_id}"))?;
 
                 fail::fail_point!("before-checkpoint-new-timeline", |_| {
                     Err(CreateTimelineError::Other(anyhow::anyhow!(
@@ -1836,16 +1821,10 @@ impl PageServer {
             return Err(e);
         }
 
-        debug!(
-            "Successfully created initial files for timeline {branch_id}/{new_branch_id}"
-        );
+        debug!("Successfully created initial files for timeline {branch_id}/{new_branch_id}");
 
         Ok((
-            UninitializedTimeline::new(
-                self,
-                new_branch_id,
-                Some((timeline_struct, create_guard)),
-            ),
+            UninitializedTimeline::new(self, new_branch_id, Some((timeline_struct, create_guard))),
             timeline_ctx,
         ))
     }
@@ -1898,7 +1877,6 @@ impl PageServer {
 
         Ok(create_guard)
     }
-
 
     /// How much local disk space the timeline wants (initdb tarballs and
     /// basebackup cache only in yb-light — page data lives in YB).

@@ -124,7 +124,9 @@ impl YbStore {
             table_name: BLOBS_TABLE.to_string(),
             prefix: None,
             timeout,
-            concurrency_limiter: ConcurrencyLimiter::new(crate::DEFAULT_REMOTE_STORAGE_CONCURRENCY_LIMIT),
+            concurrency_limiter: ConcurrencyLimiter::new(
+                crate::DEFAULT_REMOTE_STORAGE_CONCURRENCY_LIMIT,
+            ),
         })
     }
 
@@ -304,9 +306,7 @@ impl YbStore {
 
         let key_body: String = rest
             .split('/')
-            .filter(|seg| {
-                *seg != "branches" && (branch_id.is_empty() || *seg != branch_id)
-            })
+            .filter(|seg| *seg != "branches" && (branch_id.is_empty() || *seg != branch_id))
             .collect::<Vec<_>>()
             .join("/");
 
@@ -538,8 +538,7 @@ impl RemoteStorage for YbStore {
                     // full original path (`index_part.json-00000005`,
                     // `tenant-manifest-00000005.json`, etc.).
                     let key_with_gen = Self::rejoin_key_generation(&row_key_body, row_generation);
-                    let full_key =
-                        self.reconstruct_key(namespace, &row_branch, &key_with_gen);
+                    let full_key = self.reconstruct_key(namespace, &row_branch, &key_with_gen);
                     let remote_path = self
                         .db_key_to_remote_path(&full_key)
                         .map_err(DownloadError::Other)?;
@@ -579,8 +578,7 @@ impl RemoteStorage for YbStore {
                     let last_modified_us: i64 = row.get("last_modified_us");
 
                     let key_with_gen = Self::rejoin_key_generation(&row_key_body, row_generation);
-                    let full_key =
-                        self.reconstruct_key(namespace, &row_branch, &key_with_gen);
+                    let full_key = self.reconstruct_key(namespace, &row_branch, &key_with_gen);
                     let relative = match full_key.strip_prefix(listing_prefix.as_str()) {
                         Some(r) => r.to_string(),
                         None => continue,
@@ -1130,9 +1128,7 @@ mod tests {
 
     #[test]
     fn extract_neon_id_pageserver_branch_path() {
-        let b = YbStore::extract_neon_id(&format!(
-            "branches/{B_LEGACY}/index_part.json-00000005"
-        ));
+        let b = YbStore::extract_neon_id(&format!("branches/{B_LEGACY}/index_part.json-00000005"));
         assert_eq!(b, B_LEGACY, "branch_id from a pageserver branch path");
     }
 

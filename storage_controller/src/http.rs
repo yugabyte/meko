@@ -17,16 +17,15 @@ use hyper::header::CONTENT_TYPE;
 use hyper::{Body, Request, Response, StatusCode};
 use metrics::{BuildInfo, NeonMetrics};
 use pageserver_api::controller_api::{
-    ComputeEndpoint, MetadataHealthListOutdatedRequest, MetadataHealthListOutdatedResponse,
-    MetadataHealthListUnhealthyResponse, MetadataHealthUpdateRequest, MetadataHealthUpdateResponse,
-    NodeAvailability, NodeConfigureRequest, NodeRegisterRequest, PendingTimelineInitRequest,
-    SetTimelineBranchNameRequest, BranchCreateRequest,
-    BranchPolicyRequest, TimelineBranchName, TimelineImportRequest,
- TimelineRegisterRequest,
+    BranchCreateRequest, BranchPolicyRequest, ComputeEndpoint, MetadataHealthListOutdatedRequest,
+    MetadataHealthListOutdatedResponse, MetadataHealthListUnhealthyResponse,
+    MetadataHealthUpdateRequest, MetadataHealthUpdateResponse, NodeAvailability,
+    NodeConfigureRequest, NodeRegisterRequest, PendingTimelineInitRequest,
+    SetTimelineBranchNameRequest, TimelineBranchName, TimelineImportRequest,
+    TimelineRegisterRequest,
 };
 use pageserver_api::models::{
-    DetachBehavior, LsnLeaseRequest, TimelineArchivalConfigRequest,
-    TimelineCreateRequest,
+    DetachBehavior, LsnLeaseRequest, TimelineArchivalConfigRequest, TimelineCreateRequest,
 };
 use pageserver_api::upcall_api::{PutTimelineImportStatusRequest, TimelineImportStatusRequest};
 use pageserver_client::{BlockUnblock, mgmt_api};
@@ -41,9 +40,7 @@ use crate::metrics::{
     HttpRequestLatencyLabelGroup, HttpRequestStatusLabelGroup, METRICS_REGISTRY,
     PageserverRequestLabelGroup,
 };
-use crate::service::{
-    BranchMutationLocations, STARTUP_RECONCILE_TIMEOUT, Service,
-};
+use crate::service::{BranchMutationLocations, STARTUP_RECONCILE_TIMEOUT, Service};
 
 /// State available to HTTP request handlers
 pub struct HttpState {
@@ -828,9 +825,7 @@ async fn handle_metadata_health_list_unhealthy(
 
     json_response(
         StatusCode::OK,
-        MetadataHealthListUnhealthyResponse {
-            unhealthy_branches,
-        },
+        MetadataHealthListUnhealthyResponse { unhealthy_branches },
     )
 }
 
@@ -870,7 +865,6 @@ async fn handle_tenant_update_policy(req: Request<Body>) -> Result<Response<Body
     )
 }
 
-
 async fn handle_tenant_drop(req: Request<Body>) -> Result<Response<Body>, ApiError> {
     let branch_id: BranchId = parse_request_param(&req, "branch_id")?;
     check_permissions(&req, Scope::PageServerApi)?;
@@ -888,7 +882,10 @@ async fn handle_tenant_import(req: Request<Body>) -> Result<Response<Body>, ApiE
 
     let state = get_state(&req);
 
-    json_response(StatusCode::OK, state.service.tenant_import(branch_id).await?)
+    json_response(
+        StatusCode::OK,
+        state.service.tenant_import(branch_id).await?,
+    )
 }
 
 async fn handle_timeline_import(req: Request<Body>) -> Result<Response<Body>, ApiError> {
@@ -908,7 +905,10 @@ async fn handle_timeline_import(req: Request<Body>) -> Result<Response<Body>, Ap
         )));
     }
 
-    json_response(StatusCode::OK, state.service.timeline_import(import_req).await?)
+    json_response(
+        StatusCode::OK,
+        state.service.timeline_import(import_req).await?,
+    )
 }
 
 async fn handle_tenants_dump(req: Request<Body>) -> Result<Response<Body>, ApiError> {

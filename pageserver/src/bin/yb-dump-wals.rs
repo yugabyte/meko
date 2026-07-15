@@ -80,10 +80,7 @@ async fn main() -> Result<()> {
         .context("connecting to yb_storage")?;
 
     // WHERE — interpolating only clap-parsed ids (hex) and integers.
-    let mut w = format!(
-        "WHERE branch_id='{}'",
-        args.branch
-    );
+    let mut w = format!("WHERE branch_id='{}'", args.branch);
     if let Some(s) = args.segno {
         w += &format!(" AND segno = {s}");
     }
@@ -124,7 +121,13 @@ async fn main() -> Result<()> {
                  FROM safekeeper.wals {w} GROUP BY segno ORDER BY segno"
             ),
             vec![
-                "segno", "chunks", "min_off", "max_end", "min_lsn", "max_lsn", "total_bytes",
+                "segno",
+                "chunks",
+                "min_off",
+                "max_end",
+                "min_lsn",
+                "max_lsn",
+                "total_bytes",
                 "gap_bytes",
             ],
         )
@@ -162,7 +165,10 @@ async fn main() -> Result<()> {
         )
     };
 
-    let rows = client.query(&sql, &[]).await.context("query safekeeper.wals")?;
+    let rows = client
+        .query(&sql, &[])
+        .await
+        .context("query safekeeper.wals")?;
     print_table(&headers, &rows);
     Ok(())
 }
@@ -192,7 +198,10 @@ fn print_table(headers: &[&str], rows: &[ysql_client::tokio_postgres::Row]) {
             .collect::<Vec<_>>()
             .join("  ")
     };
-    println!("{}", line(&headers.iter().map(|h| h.to_string()).collect::<Vec<_>>()));
+    println!(
+        "{}",
+        line(&headers.iter().map(|h| h.to_string()).collect::<Vec<_>>())
+    );
     for row in &cells {
         println!("{}", line(row));
     }

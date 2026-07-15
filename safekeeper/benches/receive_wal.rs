@@ -76,11 +76,8 @@ fn bench_process_msg(c: &mut Criterion) {
 
         // Set up the Safekeeper.
         let env = Env::new(fsync)?;
-        let mut safekeeper = runtime.block_on(env.make_safekeeper(
-            NodeId(1),
-            BranchId::generate(),
-            Lsn(0),
-        ))?;
+        let mut safekeeper =
+            runtime.block_on(env.make_safekeeper(NodeId(1), BranchId::generate(), Lsn(0)))?;
 
         b.iter_batched_ref(
             // Pre-construct WAL records and requests. Criterion will batch them.

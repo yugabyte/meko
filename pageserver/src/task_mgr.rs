@@ -519,10 +519,7 @@ where
 ///
 ///   shutdown_tasks(None, Some(branch_id))
 ///
-pub async fn shutdown_tasks(
-    kind: Option<TaskKind>,
-    branch_id: Option<BranchId>,
-) {
+pub async fn shutdown_tasks(kind: Option<TaskKind>, branch_id: Option<BranchId>) {
     let mut victim_tasks = Vec::new();
 
     {
@@ -532,11 +529,7 @@ pub async fn shutdown_tasks(
                 && (branch_id.is_none() || task.branch_id == branch_id)
             {
                 task.cancel.cancel();
-                victim_tasks.push((
-                    Arc::clone(task),
-                    task.kind,
-                    task.branch_id,
-                ));
+                victim_tasks.push((Arc::clone(task), task.kind, task.branch_id));
             }
         }
     }

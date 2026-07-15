@@ -23,9 +23,9 @@ use utils::pausable_failpoint;
 
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::{self, BackgroundLoopSemaphoreMetricsRecorder, TENANT_TASK_EVENTS};
-use crate::task_mgr::{self, BACKGROUND_RUNTIME, TOKIO_WORKER_THREADS, TaskKind};
-use crate::page_server::throttle::Stats;
 use crate::page_server::PageServer;
+use crate::page_server::throttle::Stats;
+use crate::task_mgr::{self, BACKGROUND_RUNTIME, TOKIO_WORKER_THREADS, TaskKind};
 
 /// Semaphore limiting concurrent background tasks (across all tenants).
 ///

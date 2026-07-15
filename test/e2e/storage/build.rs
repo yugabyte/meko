@@ -50,7 +50,11 @@ fn main() {
         writeln!(code, "pub fn {cat}(c: &Cluster) -> Vec<Scenario<'_>> {{").unwrap();
         writeln!(code, "    vec![").unwrap();
         for stem in &stems {
-            writeln!(code, "        ({stem:?}, Box::pin({cat}_mods::{stem}::run(c))),").unwrap();
+            writeln!(
+                code,
+                "        ({stem:?}, Box::pin({cat}_mods::{stem}::run(c))),"
+            )
+            .unwrap();
         }
         writeln!(code, "    ]\n}}\n").unwrap();
     }

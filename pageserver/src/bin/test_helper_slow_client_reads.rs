@@ -16,10 +16,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let Args {
-        connstr,
-        branch_id,
-    } = Args::parse();
+    let Args { connstr, branch_id } = Args::parse();
     let client = pageserver_client::page_service::Client::new(connstr).await?;
     let client = client.pagestream(branch_id).await?;
     let (mut sender, _receiver) = client.split();

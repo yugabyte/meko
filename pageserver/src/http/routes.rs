@@ -13,9 +13,7 @@ use http_utils::endpoint::{
 use http_utils::error::{ApiError, HttpErrorBody};
 use http_utils::failpoints::failpoints_handler;
 use http_utils::json::{json_request, json_response};
-use http_utils::request::{
-    must_get_query_param, parse_query_param, parse_request_param,
-};
+use http_utils::request::{must_get_query_param, parse_query_param, parse_request_param};
 use http_utils::{RequestExt, RouterBuilder};
 use humantime::format_rfc3339;
 use hyper::{Body, Request, Response, StatusCode, Uri, header};
@@ -32,12 +30,12 @@ use utils::lsn::Lsn;
 
 use crate::config::PageServerConf;
 use crate::context::{DownloadBehavior, RequestContext};
-use crate::pgdatadir_mapping::LsnForTimestamp;
-use crate::task_mgr::TaskKind;
+use crate::page_server;
 use crate::page_server::mgr::{GetTenantError, TenantManager};
 use crate::page_server::timeline::Timeline;
 use crate::page_server::{GetTimelineError, PageReconstructError};
-use crate::page_server;
+use crate::pgdatadir_mapping::LsnForTimestamp;
+use crate::task_mgr::TaskKind;
 
 pub struct State {
     conf: &'static PageServerConf,
@@ -404,8 +402,7 @@ async fn get_lsn_by_timestamp_handler(
 
     let with_lease = parse_query_param(&request, "with_lease")?.unwrap_or(false);
 
-    let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
+    let timeline = active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
         .with_scope_timeline(&timeline);
     let result = timeline
@@ -469,8 +466,7 @@ async fn get_timestamp_of_lsn_handler(
         .with_context(|| format!("Invalid LSN: {lsn_str:?}"))
         .map_err(ApiError::BadRequest)?;
 
-    let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
+    let timeline = active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
         .with_scope_timeline(&timeline);
     let result = timeline.get_timestamp_for_lsn(lsn, &ctx).await?;
@@ -511,8 +507,7 @@ async fn lsn_lease_handler(
 
     let state = get_state(&request);
 
-    let timeline =
-        active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
+    let timeline = active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
 
     let result = async {
         timeline
@@ -567,8 +562,7 @@ async fn timeline_flush_handler(
     let state = get_state(&request);
 
     async {
-        let timeline =
-            active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
+        let timeline = active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
         let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
             .with_scope_timeline(&timeline);
 
@@ -884,18 +878,15 @@ pub fn make_router(
         .get("/v1/branch/:branch_id", |r| {
             api_handler(r, timeline_detail_handler)
         })
-        .get(
-            "/v1/branch/:branch_id/get_lsn_by_timestamp",
-            |r| api_handler(r, get_lsn_by_timestamp_handler),
-        )
-        .get(
-            "/v1/branch/:branch_id/get_timestamp_of_lsn",
-            |r| api_handler(r, get_timestamp_of_lsn_handler),
-        )
-        .post(
-            "/v1/branch/:branch_id/lsn_lease",
-            |r| api_handler(r, lsn_lease_handler),
-        )
+        .get("/v1/branch/:branch_id/get_lsn_by_timestamp", |r| {
+            api_handler(r, get_lsn_by_timestamp_handler)
+        })
+        .get("/v1/branch/:branch_id/get_timestamp_of_lsn", |r| {
+            api_handler(r, get_timestamp_of_lsn_handler)
+        })
+        .post("/v1/branch/:branch_id/lsn_lease", |r| {
+            api_handler(r, lsn_lease_handler)
+        })
         .put("/v1/branch/:branch_id/do_gc", |r| {
             api_handler(r, timeline_gc_handler)
         })

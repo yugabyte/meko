@@ -937,7 +937,6 @@ mod tests {
         (page_count, fragments)
     }
 
-
     #[test]
     fn range_fragment_by_size() {
         let input_start = Key::from_hex("000000067f00000001000000ae0000000000").unwrap();

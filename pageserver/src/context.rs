@@ -96,8 +96,8 @@ use tracing::warn;
 
 use crate::{
     metrics::{StorageIoSizeMetrics, TimelineMetrics},
-    task_mgr::TaskKind,
     page_server::Timeline,
+    task_mgr::TaskKind,
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;

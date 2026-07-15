@@ -96,14 +96,14 @@ use prost::Message;
 use crate::connection::Connection;
 use crate::error::{ErrorClass, YbError, check_app_status, check_pgsql_response};
 use crate::ops::{RangeRead, UpsertRow};
+use crate::pb::yb::tserver::ReadTimeManipulation;
 use crate::pb::yb::tserver::{
     PgHeartbeatRequestPb, PgHeartbeatResponsePb, PgOpenTableRequestPb, PgOpenTableResponsePb,
     PgPerformOpPb, PgPerformOptionsPb, PgPerformRequestPb, PgPerformResponsePb, pg_perform_op_pb,
 };
-use crate::pb::yb::tserver::ReadTimeManipulation;
 use crate::pb::yb::{PgsqlPagingStatePb, PgsqlResponsePb, ReadHybridTimePb};
-use crate::session::{ConnState, Endpoints, SessionCore, SessionMeta, SessionPool};
 use crate::rows::{Row, ValueType};
+use crate::session::{ConnState, Endpoints, SessionCore, SessionMeta, SessionPool};
 use crate::table::{TableHandle, columns_from_schema, pgsql_table_id};
 
 const SERVICE: &str = "yb.tserver.PgClientService";
@@ -283,8 +283,7 @@ impl Drop for PgClient {
 impl PgClient {
     pub async fn connect(config: PgClientConfig) -> Result<Arc<PgClient>, YbError> {
         let endpoints = Endpoints::new(config.tserver_addrs, config.preferred_addr.as_deref())?;
-        let pool =
-            establish_pool(&endpoints, config.rpc_timeout, 0, config.write_sessions).await?;
+        let pool = establish_pool(&endpoints, config.rpc_timeout, 0, config.write_sessions).await?;
         let client = Arc::new(PgClient {
             rpc_timeout: config.rpc_timeout,
             endpoints,
@@ -386,27 +385,33 @@ impl PgClient {
             });
         }
         let ops = &ops;
-        self.with_retries_bounded("upsert_batch", SessionSel::Write, max_attempts, |session| async move {
-            // Writes need no read point; a fresh read serial forces a
-            // read-point reset so they never entangle with scans.
-            let mut options = self.base_options();
-            options.read_time_serial_no = self.alloc_read_serial();
-            // Writes are stateless: any session serves any write, so
-            // reopening a Cold one is fine.
-            let (resp, _sidecars) =
-                self.perform_on(&session, ops.clone(), options, true).await?;
-            if resp.responses.len() != ops.len() {
-                return Err(YbError::other(format!(
-                    "upsert_batch: sent {} ops, got {} responses",
-                    ops.len(),
-                    resp.responses.len()
-                )));
-            }
-            for r in &resp.responses {
-                check_pgsql_response(r, "upsert")?;
-            }
-            Ok(())
-        })
+        self.with_retries_bounded(
+            "upsert_batch",
+            SessionSel::Write,
+            max_attempts,
+            |session| async move {
+                // Writes need no read point; a fresh read serial forces a
+                // read-point reset so they never entangle with scans.
+                let mut options = self.base_options();
+                options.read_time_serial_no = self.alloc_read_serial();
+                // Writes are stateless: any session serves any write, so
+                // reopening a Cold one is fine.
+                let (resp, _sidecars) = self
+                    .perform_on(&session, ops.clone(), options, true)
+                    .await?;
+                if resp.responses.len() != ops.len() {
+                    return Err(YbError::other(format!(
+                        "upsert_batch: sent {} ops, got {} responses",
+                        ops.len(),
+                        resp.responses.len()
+                    )));
+                }
+                for r in &resp.responses {
+                    check_pgsql_response(r, "upsert")?;
+                }
+                Ok(())
+            },
+        )
         .await
     }
 
@@ -528,8 +533,9 @@ impl PgClient {
             let read_serial = self.alloc_read_serial();
             let options = self.read_options(read_serial, pin_ht);
             // First pages of fresh scans: no pin to lose, so reopen is OK.
-            let (resp, sidecars) =
-                self.perform_on(&session, ops.clone(), options, true).await?;
+            let (resp, sidecars) = self
+                .perform_on(&session, ops.clone(), options, true)
+                .await?;
             if resp.responses.len() != reads_ref.len() {
                 return Err(YbError::other(format!(
                     "read_pages: sent {} ops, got {} responses",
@@ -587,7 +593,10 @@ impl PgClient {
             peers.dedup();
             peers.len()
         };
-        (distinct(&pool.read_sessions), distinct(&pool.write_sessions))
+        (
+            distinct(&pool.read_sessions),
+            distinct(&pool.write_sessions),
+        )
     }
 
     /// The current server-side session id of the first read session
@@ -660,10 +669,12 @@ impl PgClient {
         let pool = self.current_pool();
         match sel {
             SessionSel::Read => Some(Arc::clone(pool.read())),
-            SessionSel::Write => Some(Arc::clone(pool.write(
-                self.next_write_ticket
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            ))),
+            SessionSel::Write => Some(Arc::clone(
+                pool.write(
+                    self.next_write_ticket
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                ),
+            )),
             SessionSel::PinnedRead(id) => pool.by_session_id(id).map(Arc::clone),
         }
     }
@@ -710,12 +721,8 @@ impl PgClient {
         }
         // Cold: this task won the lock, so it reconnects; others awaiting
         // the lock will see Warm below and reuse the connection.
-        let established = establish_session_conn(
-            &self.endpoints,
-            session.endpoint_idx,
-            self.rpc_timeout,
-        )
-        .await?;
+        let established =
+            establish_session_conn(&self.endpoints, session.endpoint_idx, self.rpc_timeout).await?;
         let conn = Arc::clone(&established.conn);
         session.meta.reopened_with(established.session_id);
         *guard = ConnState::Warm(established.conn);
@@ -776,7 +783,10 @@ impl PgClient {
     /// escape hatch that makes concurrent Performs on one session legal;
     /// see the module docs) and the read-point history window.
     fn base_options(&self) -> PgPerformOptionsPb {
-        let latest_read_serial = self.next_read_serial.load(Ordering::Relaxed).saturating_sub(1);
+        let latest_read_serial = self
+            .next_read_serial
+            .load(Ordering::Relaxed)
+            .saturating_sub(1);
         PgPerformOptionsPb {
             txn_serial_no: self.next_txn_serial.fetch_add(1, Ordering::Relaxed),
             read_time_serial_no_history_min: latest_read_serial
@@ -873,7 +883,9 @@ impl PgClient {
             op: Some(pg_perform_op_pb::Op::Read(req)),
             ..Default::default()
         };
-        let (resp, sidecars) = self.perform_on(session, vec![op], options, reopen_ok).await?;
+        let (resp, sidecars) = self
+            .perform_on(session, vec![op], options, reopen_ok)
+            .await?;
         let mut responses = resp.responses;
         if responses.len() != 1 {
             return Err(YbError::other(format!(
@@ -1581,7 +1593,9 @@ mod tests {
             let next_session = Arc::new(AtomicU64::new(1));
             tokio::spawn(async move {
                 loop {
-                    let Ok((stream, _)) = listener.accept().await else { return };
+                    let Ok((stream, _)) = listener.accept().await else {
+                        return;
+                    };
                     tokio::spawn(serve_conn(
                         stream,
                         script,
@@ -1614,7 +1628,9 @@ mod tests {
             return;
         }
         loop {
-            let Ok(len) = stream.read_u32().await else { return };
+            let Ok(len) = stream.read_u32().await else {
+                return;
+            };
             let mut frame = vec![0u8; len as usize];
             if stream.read_exact(&mut frame).await.is_err() {
                 return;
@@ -1654,10 +1670,11 @@ mod tests {
                     counts.perform.fetch_add(1, Ordering::Relaxed);
                     let req = PgPerformRequestPb::decode(rest.clone()).unwrap();
                     let serial = req.options.as_ref().map_or(0, |o| o.read_time_serial_no);
-                    clamps
-                        .lock()
-                        .unwrap()
-                        .push(req.options.as_ref().is_some_and(|o| o.clamp_uncertainty_window));
+                    clamps.lock().unwrap().push(
+                        req.options
+                            .as_ref()
+                            .is_some_and(|o| o.clamp_uncertainty_window),
+                    );
                     let first = {
                         let mut seen = serials.lock().unwrap();
                         seen.push(serial);
@@ -1946,7 +1963,10 @@ mod tests {
             Err(e) => e,
         };
         assert_eq!(err.class(), ErrorClass::Other, "fatal, not retried: {err}");
-        assert!(err.to_string().contains("session"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("session"),
+            "unexpected error: {err}"
+        );
     }
 
     /// The no-progress guard: a continuation whose response carries the
@@ -1979,7 +1999,10 @@ mod tests {
             Err(e) => e,
         };
         assert_eq!(err.class(), ErrorClass::Other, "fatal, not retried: {err}");
-        assert!(err.to_string().contains("no progress"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("no progress"),
+            "unexpected error: {err}"
+        );
 
         // Exactly two Performs: the guard error must not burn retries.
         assert_eq!(server.read_serials.lock().unwrap().len(), 2);

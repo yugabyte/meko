@@ -37,9 +37,9 @@ use utils::id::BranchId;
 use utils::lsn::Lsn;
 use wal_decoder::models::record::NeonWalRecord;
 
+use crate::page_server::WalRedoManager;
 use crate::page_store::{PageRow, PageStore, SlruPageRow};
 use crate::page_writer::{MaterializeJob, PageWriter};
-use crate::page_server::WalRedoManager;
 use crate::walredo::RedoAttemptType;
 
 /// Drain up to this many queued `MaterializeJob`s per worker iteration
@@ -362,10 +362,7 @@ impl ImageMaterializer {
                     utils::abort::fatal_abort(format_args!(
                         "MATERIALIZER REDO ERROR branch={} \
                          target_lsn={} key={:?}: {:#}",
-                        self.branch_id,
-                        job.target_lsn,
-                        job.key,
-                        e,
+                        self.branch_id, job.target_lsn, job.key, e,
                     ));
                 }
             }
@@ -458,11 +455,13 @@ impl ImageMaterializer {
         // `slru_pages` and need no cache install — there is no long-lived
         // in-RAM SLRU read cache, and the `is_image` row anchors
         // subsequent `read_slru_chain` reads on its own.
-        let (slru_images, rel_images): (Vec<std::sync::Arc<PageRow>>, Vec<std::sync::Arc<PageRow>>) =
-            images
-                .iter()
-                .cloned()
-                .partition(|img| img.key.is_slru_block_key());
+        let (slru_images, rel_images): (
+            Vec<std::sync::Arc<PageRow>>,
+            Vec<std::sync::Arc<PageRow>>,
+        ) = images
+            .iter()
+            .cloned()
+            .partition(|img| img.key.is_slru_block_key());
 
         let t_insert_start = std::time::Instant::now();
         if !rel_images.is_empty() {
@@ -561,13 +560,7 @@ impl ImageMaterializer {
             };
             match self
                 .fpu_page_store
-                .read_slru_chain(
-                    self.branch_id,
-                    kind,
-                    segno,
-                    blknum,
-                    job.target_lsn,
-                )
+                .read_slru_chain(self.branch_id, kind, segno, blknum, job.target_lsn)
                 .await
             {
                 Ok(rows) => rows

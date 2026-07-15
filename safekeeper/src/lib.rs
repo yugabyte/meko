@@ -135,9 +135,7 @@ impl SafeKeeperConf {
     pub fn yb_branch_id(&self) -> anyhow::Result<BranchId> {
         match self.branch_id {
             Some(branch_id) => Ok(branch_id),
-            None => anyhow::bail!(
-                "YB-WAL mode requires --branch-id (single-branch-per-process)"
-            ),
+            None => anyhow::bail!("YB-WAL mode requires --branch-id (single-branch-per-process)"),
         }
     }
 }

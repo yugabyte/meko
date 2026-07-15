@@ -143,7 +143,6 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
     ) -> Result<(), QueryError> {
         if let FeStartupPacket::StartupMessage { params, .. } = sm {
             if let Some(options) = params.options_raw() {
-
                 for opt in options {
                     match opt.split_once('=') {
                         Some(("protocol", value)) => {
@@ -175,9 +174,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
                 }
             }
 
-            let branch_id = self
-                .parsed_branch_id
-                .unwrap_or(BranchId::from([0u8; 16]));
+            let branch_id = self.parsed_branch_id.unwrap_or(BranchId::from([0u8; 16]));
             tracing::Span::current()
                 .record("branch_id", tracing::field::display(branch_id))
                 .record(

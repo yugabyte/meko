@@ -110,7 +110,11 @@ async fn field_exact_hot_anchorless_chains() {
     let db_oid = rows[0].get::<_, i64>(0) as u32;
     let rel_oid = rows[0].get::<_, i64>(1) as u32;
     let relfilenode = rows[0].get::<_, i64>(2) as u32;
-    let table_oid = if relfilenode != 0 { relfilenode } else { rel_oid };
+    let table_oid = if relfilenode != 0 {
+        relfilenode
+    } else {
+        rel_oid
+    };
 
     let tservers: Vec<String> = env_or("YB_LIVE_TSERVERS", "127.0.0.1:9100")
         .split(',')
@@ -272,7 +276,11 @@ async fn field_exact_hot_anchorless_chains() {
                 Err(e) => failures.push(e),
             }
         }
-        println!("{pass}: 16 concurrent full-chain reads in {:?}, {} failures", t.elapsed(), failures.len());
+        println!(
+            "{pass}: 16 concurrent full-chain reads in {:?}, {} failures",
+            t.elapsed(),
+            failures.len()
+        );
         for f in &failures {
             println!("  {f}");
         }
@@ -280,7 +288,9 @@ async fn field_exact_hot_anchorless_chains() {
     }
     stop.store(true, Ordering::Relaxed);
     writer.await.unwrap();
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -382,7 +392,11 @@ async fn field_scale_chain_reads() {
     let db_oid = rows[0].get::<_, i64>(0) as u32;
     let rel_oid = rows[0].get::<_, i64>(1) as u32;
     let relfilenode = rows[0].get::<_, i64>(2) as u32;
-    let table_oid = if relfilenode != 0 { relfilenode } else { rel_oid };
+    let table_oid = if relfilenode != 0 {
+        relfilenode
+    } else {
+        rel_oid
+    };
 
     let tservers: Vec<String> = env_or("YB_LIVE_TSERVERS", "127.0.0.1:9100")
         .split(',')
@@ -535,7 +549,10 @@ async fn field_scale_chain_reads() {
             .unwrap()
             .cond(&table, "lsn", CondOp::Le, BindValue::I64(target))
             .unwrap()
-            .targets(&table, &["blknum", "lsn", "is_image", "will_init", "payload"])
+            .targets(
+                &table,
+                &["blknum", "lsn", "is_image", "will_init", "payload"],
+            )
             .unwrap()
             .limit(128);
             let started = std::time::Instant::now();
@@ -588,5 +605,7 @@ async fn field_scale_chain_reads() {
         println!("  {f}");
     }
     assert!(failures.is_empty(), "{failures:#?}");
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }

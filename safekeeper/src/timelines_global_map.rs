@@ -231,9 +231,7 @@ impl GlobalTimelines {
             .context("control-file create requires yb_storage_conn")?;
         control_file::ControlFileStorage::create_new(yb_wal.fpu_client.clone(), &branch_id, state)
             .await?;
-        let timeline = self
-            .load_temp_timeline(branch_id, &tmp_dir_path)
-            .await?;
+        let timeline = self.load_temp_timeline(branch_id, &tmp_dir_path).await?;
         Ok(timeline)
     }
 
@@ -411,7 +409,8 @@ impl GlobalTimelines {
             }
             Err(_) => {
                 // Timeline not in memory, but it may still exist on disk in broken state.
-                let dir_path = get_timeline_dir(self.state.lock().unwrap().conf.as_ref(), branch_id);
+                let dir_path =
+                    get_timeline_dir(self.state.lock().unwrap().conf.as_ref(), branch_id);
                 let dir_existed = delete_dir(&dir_path).await?;
 
                 Ok(TimelineDeleteResult { dir_existed })

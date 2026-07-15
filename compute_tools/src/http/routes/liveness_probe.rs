@@ -6,9 +6,7 @@ use std::sync::Arc;
 /// NOTE: NOT ENABLED YET
 /// Detect if the compute is alive.
 /// Called by the liveness probe of the compute container.
-pub(in crate::http) async fn liveness_probe(
-    State(compute): State<Arc<ComputeNode>>,
-) -> Response {
+pub(in crate::http) async fn liveness_probe(State(compute): State<Arc<ComputeNode>>) -> Response {
     let port = match compute.params.connstr.port() {
         Some(port) => port,
         None => {

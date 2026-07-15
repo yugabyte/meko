@@ -161,12 +161,20 @@ async fn main_impl(
 
         let client: Box<dyn Client> = match scheme.as_str() {
             "postgresql" | "postgres" => Box::new(
-                LibpqClient::new(&args.page_service_connstring, branch_id, !args.no_compression)
-                    .await?,
+                LibpqClient::new(
+                    &args.page_service_connstring,
+                    branch_id,
+                    !args.no_compression,
+                )
+                .await?,
             ),
             "grpc" => Box::new(
-                GrpcClient::new(&args.page_service_connstring, branch_id, !args.no_compression)
-                    .await?,
+                GrpcClient::new(
+                    &args.page_service_connstring,
+                    branch_id,
+                    !args.no_compression,
+                )
+                .await?,
             ),
             scheme => return Err(anyhow!("invalid scheme {scheme}")),
         };
@@ -278,11 +286,7 @@ struct LibpqClient {
 }
 
 impl LibpqClient {
-    async fn new(
-        connstring: &str,
-        branch_id: BranchId,
-        compression: bool,
-    ) -> anyhow::Result<Self> {
+    async fn new(connstring: &str, branch_id: BranchId, compression: bool) -> anyhow::Result<Self> {
         Ok(Self {
             inner: pageserver_client::page_service::Client::new(connstring.to_string()).await?,
             branch_id,
@@ -316,11 +320,7 @@ struct GrpcClient {
 }
 
 impl GrpcClient {
-    async fn new(
-        connstring: &str,
-        branch_id: BranchId,
-        compression: bool,
-    ) -> anyhow::Result<Self> {
+    async fn new(connstring: &str, branch_id: BranchId, compression: bool) -> anyhow::Result<Self> {
         let inner = page_api::Client::connect(
             connstring.to_string(),
             branch_id,

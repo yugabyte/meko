@@ -142,11 +142,19 @@ fn parse_args() -> Result<Args, String> {
         Some(name) => Mode::Filter(name.to_string()),
     };
 
-    Ok(Args { mode, repeat, fail_fast })
+    Ok(Args {
+        mode,
+        repeat,
+        fail_fast,
+    })
 }
 
 async fn run(args: Args) -> anyhow::Result<()> {
-    let Args { mode, repeat, mut fail_fast } = args;
+    let Args {
+        mode,
+        repeat,
+        mut fail_fast,
+    } = args;
     // #57: stop at the FIRST failing iteration while still running
     // multiple iterations for churn. `-n` normally disables fail_fast
     // (run-all + tally); this env flips it back so the failing
@@ -229,7 +237,11 @@ fn collect_items<'a>(c: &'a Cluster, mode: &Mode) -> anyhow::Result<Vec<(String,
     // `E2E_SKIP=<substr>[,<substr>...]` drops matching tests from the run
     // (e.g. a known-flaky one). Reported, never silent.
     if let Ok(skip) = std::env::var("E2E_SKIP") {
-        let pats: Vec<&str> = skip.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        let pats: Vec<&str> = skip
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
         if !pats.is_empty() {
             let mut skipped: Vec<String> = Vec::new();
             items.retain(|(name, _)| {
@@ -241,7 +253,11 @@ fn collect_items<'a>(c: &'a Cluster, mode: &Mode) -> anyhow::Result<Vec<(String,
                 }
             });
             if !skipped.is_empty() {
-                eprintln!("E2E_SKIP: skipping {} test(s): {}", skipped.len(), skipped.join(", "));
+                eprintln!(
+                    "E2E_SKIP: skipping {} test(s): {}",
+                    skipped.len(),
+                    skipped.join(", ")
+                );
             }
         }
     }

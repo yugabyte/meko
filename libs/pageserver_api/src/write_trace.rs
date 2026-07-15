@@ -58,8 +58,13 @@ fn parse_filter(env: &str) -> Option<TraceFilter> {
 
 fn filter() -> Option<&'static TraceFilter> {
     static F: OnceLock<Option<TraceFilter>> = OnceLock::new();
-    F.get_or_init(|| std::env::var("YB_PS_TRACE_REL_BLK").ok().as_deref().and_then(parse_filter))
-        .as_ref()
+    F.get_or_init(|| {
+        std::env::var("YB_PS_TRACE_REL_BLK")
+            .ok()
+            .as_deref()
+            .and_then(parse_filter)
+    })
+    .as_ref()
 }
 
 /// `true` iff the trace filter is set AND this key matches it.

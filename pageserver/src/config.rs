@@ -681,7 +681,10 @@ mod tests {
                     ancestor_branch_id.to_string(),
                     "77ffde89f43d4ca08ef0a0ed1f089eaa"
                 );
-                assert_eq!(ancestor_lsn, utils::lsn::Lsn::from_str("0/169AD58").unwrap());
+                assert_eq!(
+                    ancestor_lsn,
+                    utils::lsn::Lsn::from_str("0/169AD58").unwrap()
+                );
             }
             other => panic!("expected branch init, got {other:?}"),
         }

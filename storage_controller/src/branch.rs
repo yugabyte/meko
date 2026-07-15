@@ -8,8 +8,8 @@ use utils::generation::Generation;
 use utils::id::{BranchId, NodeId};
 
 use crate::metrics;
-use crate::persistence::split_state::SplitState;
 use crate::persistence::BranchPersistence;
+use crate::persistence::split_state::SplitState;
 use crate::scheduler::{
     AttachedShardTag, RefCountUpdate, ScheduleContext, ScheduleError, Scheduler, SecondaryShardTag,
 };
@@ -230,14 +230,10 @@ impl ObservedState {
             locations: HashMap::new(),
         }
     }
-
 }
 
 impl Branch {
-    pub(crate) fn new(
-        branch_id: BranchId,
-        policy: PlacementPolicy,
-    ) -> Self {
+    pub(crate) fn new(branch_id: BranchId, policy: PlacementPolicy) -> Self {
         metrics::METRICS_REGISTRY
             .metrics_group
             .storage_controller_branches
@@ -447,7 +443,6 @@ impl Branch {
             scheduling_policy: serde_json::to_string(&self.scheduling_policy).unwrap(),
         }
     }
-
 }
 
 impl Drop for Branch {
@@ -579,10 +574,7 @@ pub(crate) mod tests {
         assert_eq!(tenant.intent.secondary.len(), 1);
         assert!(tenant.intent.attached.is_some());
         // Attached and secondary should be on different nodes
-        assert_ne!(
-            Some(tenant.intent.secondary[0]),
-            tenant.intent.attached
-        );
+        assert_ne!(Some(tenant.intent.secondary[0]), tenant.intent.attached);
 
         // Switch back to PlacementPolicy::Secondary
         tenant.policy = PlacementPolicy::Secondary;

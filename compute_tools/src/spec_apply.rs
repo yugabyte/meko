@@ -24,7 +24,7 @@ use crate::spec_apply::ApplySpecPhase::{
     CreateAvailabilityCheck, CreateDatabricksMisc, CreateDatabricksRoles, CreatePgauditExtension,
     CreatePgauditlogtofileExtension, CreatePrivilegedRole, CreateSchemaYbAmp,
     DisablePostgresDBPgAudit, DropInvalidDatabases, DropRoles, FinalizeDropLogicalSubscriptions,
-    HandleDatabricksAuthExtension, HandleYbAmpExtension, HandleOtherExtensions,
+    HandleDatabricksAuthExtension, HandleOtherExtensions, HandleYbAmpExtension,
     RenameAndDeleteDatabases, RenameRoles, RunInEachDatabase,
 };
 use crate::spec_apply::PerDatabasePhase::{
@@ -1069,7 +1069,7 @@ async fn get_operations<'a>(
                                         role_name = escaped_role,
                                         outer_tag = outer_tag,
                                     )
-                                    // 
+                                    //
                                     .replace("yb_amp_superuser", &params.privileged_role_name),
                                     comment: None,
                                 },

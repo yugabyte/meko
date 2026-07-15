@@ -17,7 +17,6 @@ use crate::pg_helpers::{
 };
 use crate::tls::{self, SERVER_CRT, SERVER_KEY};
 
-
 /// Check that `line` is inside a text file and put it there if it is not.
 /// Create file if it doesn't exist.
 pub fn line_in_file(path: &Path, line: &str) -> Result<bool> {
@@ -89,7 +88,11 @@ pub fn write_postgres_conf(
         }
     } else if let Some(s) = &spec.pageserver_connstring {
         writeln!(file, "# from compute spec's pageserver_connstring field")?;
-        writeln!(file, "yb_amp.pageserver_connstring={}", escape_conf_value(s))?;
+        writeln!(
+            file,
+            "yb_amp.pageserver_connstring={}",
+            escape_conf_value(s)
+        )?;
     }
 
     if !spec.safekeeper_connstrings.is_empty() {
@@ -101,7 +104,11 @@ pub fn write_postgres_conf(
         )?;
     }
     if let Some(s) = &spec.storage_branch_id {
-        writeln!(file, "yb_amp.branch_id={}", escape_conf_value(&s.to_string()))?;
+        writeln!(
+            file,
+            "yb_amp.branch_id={}",
+            escape_conf_value(&s.to_string())
+        )?;
     }
     if let Some(s) = &spec.project_id {
         writeln!(file, "yb_amp.project_id={}", escape_conf_value(s))?;

@@ -270,11 +270,11 @@ impl UnifiedPages {
             // (durability rides the `unflushed_fifo` + `durable` bits), so
             // clamping at 0 is always safe; `unflushed_count` below saturates
             // for the same reason.
-            let _ = self.unflushed_bytes.fetch_update(
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-                |v| Some(v.saturating_sub(size)),
-            );
+            let _ = self
+                .unflushed_bytes
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    Some(v.saturating_sub(size))
+                });
             if let Some(node) = self.by_key.get(&entry.row.key) {
                 let mut ks = node.value().lock();
                 ks.unflushed_count = ks.unflushed_count.saturating_sub(1);
@@ -560,7 +560,8 @@ impl UnifiedPages {
             self.total_bytes.fetch_sub(total_sub, Ordering::Relaxed);
         }
         if unflushed_sub > 0 {
-            self.unflushed_bytes.fetch_sub(unflushed_sub, Ordering::Relaxed);
+            self.unflushed_bytes
+                .fetch_sub(unflushed_sub, Ordering::Relaxed);
         }
 
         // Bump the (present) key to the back of the LRU — most recently
@@ -689,9 +690,8 @@ impl UnifiedPages {
 
                 use once_cell::sync::Lazy;
                 use utils::rate_limit::RateLimit;
-                static LOGGED: Lazy<Mutex<RateLimit>> = Lazy::new(|| {
-                    Mutex::new(RateLimit::new(std::time::Duration::from_secs(10)))
-                });
+                static LOGGED: Lazy<Mutex<RateLimit>> =
+                    Lazy::new(|| Mutex::new(RateLimit::new(std::time::Duration::from_secs(10))));
                 if let Ok(mut limiter) = LOGGED.try_lock() {
                     let (lsn, tgt) = (e.row.lsn, target_lsn);
                     limiter.call(|| {
@@ -791,8 +791,7 @@ impl UnifiedPages {
                     .inc();
                 let mut kb = [0u8; KEY_SIZE];
                 key.write_to_byte_slice(&mut kb);
-                let prefix: String =
-                    kb.iter().map(|b| format!("{b:02x}")).collect();
+                let prefix: String = kb.iter().map(|b| format!("{b:02x}")).collect();
                 tracing::error!(
                     key = %prefix,
                     %lsn,
@@ -868,9 +867,7 @@ impl UnifiedPages {
             //     reconnect-replay re-push (see the durable arm below); in that
             //     case we overwrite it with the image and reverse the unflushed
             //     accounting + drop the stale FIFO entry.
-            let node = self
-                .by_key
-                .get_or_insert(key, Mutex::new(KeyState::new()));
+            let node = self.by_key.get_or_insert(key, Mutex::new(KeyState::new()));
             let mut ks_guard = node.value().lock();
             if node.is_removed() {
                 // Raced an eviction/trim that removed this node between
@@ -1128,10 +1125,7 @@ mod tests {
         u.push_durable(mk(b"k2", 2, true, b"BBBBBBBBBBBBBBBB"));
         u.evict_to_capacity();
         // k1 was inserted first → at the front → evicted first.
-        assert!(
-            u.lookup_chain(&tkey(b"k1"), Lsn(100))
-                .is_empty()
-        );
+        assert!(u.lookup_chain(&tkey(b"k1"), Lsn(100)).is_empty());
     }
 
     #[test]
@@ -1154,14 +1148,8 @@ mod tests {
         u.push_durable(mk(b"k1", 1, true, b"AAAAAAAAAAAAAAAA"));
         u.push(mk(b"k2", 2, true, b"BBBBBBBBBBBBBBBB"));
         u.evict_to_capacity();
-        assert!(
-            u.lookup_chain(&tkey(b"k1"), Lsn(100))
-                .is_empty()
-        );
-        assert!(
-            !u.lookup_chain(&tkey(b"k2"), Lsn(100))
-                .is_empty()
-        );
+        assert!(u.lookup_chain(&tkey(b"k1"), Lsn(100)).is_empty());
+        assert!(!u.lookup_chain(&tkey(b"k2"), Lsn(100)).is_empty());
     }
 
     #[test]
@@ -1230,9 +1218,21 @@ mod tests {
         assert_eq!(u.unflushed_count(), 5);
 
         flush_first_n(&u, 3);
-        assert_eq!(u.unflushed_count(), 2, "only the flushed front 3 are removed");
-        let remaining: Vec<Lsn> = u.snapshot_unflushed(None).iter().map(|e| e.row.lsn).collect();
-        assert_eq!(remaining, vec![Lsn(4), Lsn(5)], "the two newest remain, in FIFO order");
+        assert_eq!(
+            u.unflushed_count(),
+            2,
+            "only the flushed front 3 are removed"
+        );
+        let remaining: Vec<Lsn> = u
+            .snapshot_unflushed(None)
+            .iter()
+            .map(|e| e.row.lsn)
+            .collect();
+        assert_eq!(
+            remaining,
+            vec![Lsn(4), Lsn(5)],
+            "the two newest remain, in FIFO order"
+        );
 
         flush_first_n(&u, 2);
         assert_eq!(u.unflushed_count(), 0, "FIFO fully drained");
@@ -1258,8 +1258,7 @@ mod tests {
         u.push(mk(b"k", 60, false, b"d60"));
         u.push(mk(b"k", 70, false, b"d70"));
         assert!(
-            u.lookup_chain_if_complete(&tkey(b"k"), Lsn(100))
-                .is_none(),
+            u.lookup_chain_if_complete(&tkey(b"k"), Lsn(100)).is_none(),
             "no will_init → must consult YB"
         );
     }
@@ -1294,8 +1293,7 @@ mod tests {
             None => {
                 // Acceptable: hot got evicted whole.
                 assert!(
-                    u.lookup_chain(&tkey(b"hot"), Lsn(200))
-                        .is_empty(),
+                    u.lookup_chain(&tkey(b"hot"), Lsn(200)).is_empty(),
                     "key absent ⇒ no rows at all (no partial cache state)"
                 );
             }
@@ -1335,14 +1333,8 @@ mod tests {
         u.push_durable(mk(b"k1", 3, false, b"CCCCCCCCCCCCCCCC"));
         u.evict_to_capacity();
         // k2 was at the front after the k1 promotion → evicted.
-        assert!(
-            u.lookup_chain(&tkey(b"k2"), Lsn(100))
-                .is_empty()
-        );
-        assert!(
-            !u.lookup_chain(&tkey(b"k1"), Lsn(100))
-                .is_empty()
-        );
+        assert!(u.lookup_chain(&tkey(b"k2"), Lsn(100)).is_empty());
+        assert!(!u.lookup_chain(&tkey(b"k1"), Lsn(100)).is_empty());
     }
 
     /// Range-scan: confirm the half-open `[start, end)` filter and that
@@ -1354,11 +1346,7 @@ mod tests {
         u.push(mk(b"b", 20, true, b"y"));
         u.push(mk(b"b", 30, false, b"z"));
         u.push(mk(b"c", 40, true, b"w"));
-        let out = u.lookup_range(
-            &tkey(b"b"),
-            &tkey(b"c"),
-            Lsn(100),
-        );
+        let out = u.lookup_range(&tkey(b"b"), &tkey(b"c"), Lsn(100));
         assert_eq!(out.len(), 1, "only 'b' falls in [b, c)");
         let b_chain = &out[&tkey(b"b")];
         let lsns: Vec<u64> = b_chain.iter().map(|r| r.lsn.0).collect();
@@ -1475,7 +1463,11 @@ mod tests {
 
         // Replay of the same record while still unflushed: no-op.
         u.push(mk(b"k", 10, false, b"first"));
-        assert_eq!(u.unflushed_count(), 1, "FIFO must not double-count the replayed row");
+        assert_eq!(
+            u.unflushed_count(),
+            1,
+            "FIFO must not double-count the replayed row"
+        );
         assert_eq!(
             u.total_bytes(),
             bytes_after_first,
@@ -1494,7 +1486,11 @@ mod tests {
         // Replay after the row is durable: still a no-op — the slot
         // stays durable rather than being re-pinned as unflushed.
         u.push(mk(b"k", 10, false, b"first"));
-        assert_eq!(u.unflushed_count(), 0, "re-push over a durable slot must not re-pin it");
+        assert_eq!(
+            u.unflushed_count(),
+            0,
+            "re-push over a durable slot must not re-pin it"
+        );
     }
 
     /// The idempotent skip is only sound if the replayed row is
@@ -1743,8 +1739,7 @@ mod tests {
             for i in 0..PER_THREAD {
                 let key = ((t as u64) << 32) | i as u64;
                 assert_eq!(
-                    u.lookup_chain(&tkey(&key.to_be_bytes()), Lsn(key))
-                        .len(),
+                    u.lookup_chain(&tkey(&key.to_be_bytes()), Lsn(key)).len(),
                     1,
                     "missing unflushed row for key {key}"
                 );

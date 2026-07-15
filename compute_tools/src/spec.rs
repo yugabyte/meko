@@ -249,7 +249,9 @@ pub async fn handle_yb_amp_extension_upgrade(client: &mut Client) -> Result<()> 
         .await?
         .is_some();
     if !installed {
-        info!("yb_amp extension not installed in this database; skipping ALTER EXTENSION yb_amp UPDATE");
+        info!(
+            "yb_amp extension not installed in this database; skipping ALTER EXTENSION yb_amp UPDATE"
+        );
         return Ok(());
     }
 

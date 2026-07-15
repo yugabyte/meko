@@ -13,11 +13,11 @@ use futures::{FutureExt, StreamExt};
 use http_utils::tls_certs::ReloadingCertificateResolver;
 use metrics::set_build_info_metric;
 use safekeeper::yb_wal_storage::YbWalConn;
-use safekeeper_api::config::SafekeeperConfigToml;
 use safekeeper::{
     BACKGROUND_RUNTIME, GlobalTimelines, HTTP_RUNTIME, SafeKeeperConf, WAL_SERVICE_RUNTIME, http,
     wal_service,
 };
+use safekeeper_api::config::SafekeeperConfigToml;
 use sd_notify::NotifyState;
 use tokio::runtime::Handle;
 use tokio::signal::unix::{SignalKind, signal};
@@ -107,10 +107,7 @@ async fn main() -> anyhow::Result<()> {
     // WAL_SERVICE_RUNTIME, not the main runtime, and a dump that misses
     // them shows a blocked reader with an invisible holder.
     utils::tokio_dump::spawn_sigusr2_dumper(vec![
-        (
-            "safekeeper".to_string(),
-            tokio::runtime::Handle::current(),
-        ),
+        ("safekeeper".to_string(), tokio::runtime::Handle::current()),
         (
             "wal_service".to_string(),
             WAL_SERVICE_RUNTIME.handle().clone(),
@@ -182,7 +179,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // An empty path string means "auth disabled" for that surface.
-    let key_path = |p: &Option<String>| p.as_deref().filter(|s| !s.is_empty()).map(Utf8PathBuf::from);
+    let key_path = |p: &Option<String>| {
+        p.as_deref()
+            .filter(|s| !s.is_empty())
+            .map(Utf8PathBuf::from)
+    };
     let load_jwt = |path: &Utf8PathBuf| -> anyhow::Result<JwtAuth> {
         JwtAuth::from_key_path(path).context("failed to load the auth key")
     };
@@ -241,7 +242,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let yb_storage_conn = match cfg.yb_storage_conn.as_deref() {
-        Some(s) => Some(parse_yb_conn_config(s).context("parse yb_storage_conn from safekeeper.toml")?),
+        Some(s) => {
+            Some(parse_yb_conn_config(s).context("parse yb_storage_conn from safekeeper.toml")?)
+        }
         None => None,
     };
 

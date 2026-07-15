@@ -30,7 +30,7 @@ use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
 use crate::background_process;
-use crate::local_env::{LocalEnv, YbLightLocalInitPageserverConf, PageServerConf};
+use crate::local_env::{LocalEnv, PageServerConf, YbLightLocalInitPageserverConf};
 
 //
 // Control routines for pageserver.
@@ -231,7 +231,9 @@ impl PageServerNode {
         let get_str = |key: &str| doc.get(key).and_then(|item| item.as_str());
         match get_str("branch_id") {
             Some(branch) => Ok(Some(
-                branch.parse().context("parse branch_id in pageserver.toml")?,
+                branch
+                    .parse()
+                    .context("parse branch_id in pageserver.toml")?,
             )),
             None => Ok(None),
         }
@@ -695,14 +697,8 @@ impl PageServerNode {
 
     /// Flush the branch's pages to YB, advancing `consistent_lsn`. With
     /// `wait_lsn`, the pageserver waits for ingest to reach that LSN first.
-    pub async fn flush(
-        &self,
-        branch_id: BranchId,
-        wait_lsn: Option<Lsn>,
-    ) -> anyhow::Result<()> {
-        self.http_client
-            .branch_flush(branch_id, wait_lsn)
-            .await?;
+    pub async fn flush(&self, branch_id: BranchId, wait_lsn: Option<Lsn>) -> anyhow::Result<()> {
+        self.http_client.branch_flush(branch_id, wait_lsn).await?;
         Ok(())
     }
 }

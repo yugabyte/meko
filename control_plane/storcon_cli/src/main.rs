@@ -7,8 +7,8 @@ use clap::{Parser, Subcommand};
 use pageserver_api::controller_api::{
     BranchCreateRequest, BranchDescribeResponse, BranchMigrateRequest, BranchMigrateResponse,
     BranchPolicyRequest, MigrationConfig, NodeAvailabilityWrapper, NodeConfigureRequest,
-    NodeDescribeResponse, NodeRegisterRequest, NodeShardResponse,
-    PlacementPolicy, ShardSchedulingPolicy,
+    NodeDescribeResponse, NodeRegisterRequest, NodeShardResponse, PlacementPolicy,
+    ShardSchedulingPolicy,
 };
 use pageserver_api::models::{BranchConfig, BranchConfigPatchRequest, BranchConfigRequest};
 use pageserver_client::mgmt_api::{self};
@@ -348,9 +348,7 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
         }
         Command::BranchDelete { branch_id } => {
-            let status = vps_client
-                .branch_delete(branch_id)
-                .await?;
+            let status = vps_client.branch_delete(branch_id).await?;
             tracing::info!("Delete status: {}", status);
         }
         Command::Nodes {} => {
@@ -533,10 +531,7 @@ async fn main() -> anyhow::Result<()> {
         Command::BranchWatch { branch_id } => {
             watch_branch(storcon_client, branch_id, None).await?;
         }
-        Command::BranchMigrateSecondary {
-            branch_id,
-            node,
-        } => {
+        Command::BranchMigrateSecondary { branch_id, node } => {
             let req = BranchMigrateRequest {
                 node_id: node,
                 origin_node_id: None,
@@ -695,7 +690,10 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
             println!("Delete started for {node_id}");
         }
-        Command::NodeCancelDelete { node_id, timeout: _ } => {
+        Command::NodeCancelDelete {
+            node_id,
+            timeout: _,
+        } => {
             storcon_client
                 .dispatch::<(), ()>(
                     Method::DELETE,
@@ -741,9 +739,7 @@ async fn main() -> anyhow::Result<()> {
             branch_id,
             concurrency,
         } => {
-            let mut path = format!(
-                "v1/branch/{branch_id}/download_heatmap_layers",
-            );
+            let mut path = format!("v1/branch/{branch_id}/download_heatmap_layers",);
 
             if let Some(c) = concurrency {
                 path = format!("{path}?concurrency={c}");
@@ -766,9 +762,7 @@ async fn watch_branch(
     until_migrated_to: Option<NodeId>,
 ) -> anyhow::Result<()> {
     if let Some(until_migrated_to) = until_migrated_to {
-        println!(
-            "Waiting for branch {branch_id} to be migrated to node {until_migrated_to}"
-        );
+        println!("Waiting for branch {branch_id} to be migrated to node {until_migrated_to}");
     }
 
     loop {

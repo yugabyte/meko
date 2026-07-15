@@ -208,7 +208,9 @@ impl SafekeeperPostgresHandler {
             if let Some(tli) = tli {
                 let info = tli.get_safekeeper_info(&self.conf).await;
                 handle_end_fut
-                    .instrument(info_span!("", flush_lsn=%info.flush_lsn, commit_lsn=%info.commit_lsn))
+                    .instrument(
+                        info_span!("", flush_lsn=%info.flush_lsn, commit_lsn=%info.commit_lsn),
+                    )
                     .await;
             } else {
                 handle_end_fut.await;

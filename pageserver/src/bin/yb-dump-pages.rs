@@ -111,7 +111,8 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
     } else {
         String::new()
     };
-    let lsn = "to_hex((lsn>>32)::int8) || '/' || lpad(to_hex((lsn & x'ffffffff'::bigint)::int8),8,'0')";
+    let lsn =
+        "to_hex((lsn>>32)::int8) || '/' || lpad(to_hex((lsn & x'ffffffff'::bigint)::int8),8,'0')";
     let payload = if a.no_payload {
         String::new()
     } else {
@@ -124,7 +125,10 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
          FROM pageserver.pages WHERE {w} \
          ORDER BY blknum ASC, lsn DESC, is_image ASC {lim}"
     );
-    let rows = client.query(&sql, &[]).await.context("query pageserver.pages")?;
+    let rows = client
+        .query(&sql, &[])
+        .await
+        .context("query pageserver.pages")?;
     let mut headers = vec!["blknum", "lsn", "fork", "is_image", "will_init"];
     if !a.no_payload {
         headers.push("bytes");
@@ -152,7 +156,10 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
             .collect::<Vec<_>>()
             .join("  ")
     };
-    println!("{}", fmt(&headers.iter().map(|h| h.to_string()).collect::<Vec<_>>()));
+    println!(
+        "{}",
+        fmt(&headers.iter().map(|h| h.to_string()).collect::<Vec<_>>())
+    );
     for row in &cells {
         println!("{}", fmt(row));
     }
@@ -199,8 +206,8 @@ fn decode_record(rec: &[u8]) -> Option<(u8, u8, Vec<u8>)> {
             maindata = rec[tot - ln..tot].to_vec();
             break;
         } else if blkid == 254 {
-            let ln =
-                u32::from_le_bytes([rec[pos + 1], rec[pos + 2], rec[pos + 3], rec[pos + 4]]) as usize;
+            let ln = u32::from_le_bytes([rec[pos + 1], rec[pos + 2], rec[pos + 3], rec[pos + 4]])
+                as usize;
             maindata = rec[tot - ln..tot].to_vec();
             break;
         } else if blkid == 253 {
@@ -269,9 +276,18 @@ async fn decode(a: &Args, client: &YsqlClient) -> Result<()> {
         "SELECT to_hex(lsn), is_image::int::text, will_init::int::text, encode(payload,'hex') \
          FROM pageserver.pages WHERE {w} ORDER BY lsn, is_image DESC"
     );
-    let rows = client.query(&sql, &[]).await.context("query pageserver.pages")?;
-    let lo = a.lsn_from.map(|l| format!(" from {}", fmt_lsn(l.0))).unwrap_or_default();
-    let hi = a.lsn_to.map(|l| format!(" to {}", fmt_lsn(l.0))).unwrap_or_default();
+    let rows = client
+        .query(&sql, &[])
+        .await
+        .context("query pageserver.pages")?;
+    let lo = a
+        .lsn_from
+        .map(|l| format!(" from {}", fmt_lsn(l.0)))
+        .unwrap_or_default();
+    let hi = a
+        .lsn_to
+        .map(|l| format!(" to {}", fmt_lsn(l.0)))
+        .unwrap_or_default();
     println!("{} rows for rel={} blk={blk}{lo}{hi}\n", rows.len(), a.rel);
 
     let mut running_max: usize = 0;
@@ -284,19 +300,30 @@ async fn decode(a: &Args, client: &YsqlClient) -> Result<()> {
         if is_image {
             let (max_off, counts) = lp_state(&payload);
             running_max = running_max.max(max_off);
-            println!("IMAGE  {}  will_init={will_init}  max_off={max_off}  {counts:?}", fmt_lsn(lsn));
+            println!(
+                "IMAGE  {}  will_init={will_init}  max_off={max_off}  {counts:?}",
+                fmt_lsn(lsn)
+            );
             continue;
         }
         // Delta: 13-byte BE-bincode header (variant u32 + will_init u8 +
         // len u64) then the raw XLogRecord.
         if payload.len() < 13 {
-            println!("DELTA  {}  !! short payload ({}B)", fmt_lsn(lsn), payload.len());
+            println!(
+                "DELTA  {}  !! short payload ({}B)",
+                fmt_lsn(lsn),
+                payload.len()
+            );
             continue;
         }
         let declared = u64::from_be_bytes(payload[5..13].try_into().unwrap()) as usize;
         let rec = &payload[13..];
         if rec.len() != declared {
-            println!("DELTA  {}  !! framing: len={} declared={declared}", fmt_lsn(lsn), rec.len());
+            println!(
+                "DELTA  {}  !! framing: len={} declared={declared}",
+                fmt_lsn(lsn),
+                rec.len()
+            );
             continue;
         }
         let (rmname, op, off) = match decode_record(rec) {
@@ -310,7 +337,8 @@ async fn decode(a: &Args, client: &YsqlClient) -> Result<()> {
         let mut flag = String::new();
         if let Some(o) = off {
             let o = o as usize;
-            if op.starts_with("INSERT") || op.starts_with("UPDATE") || op.starts_with("HOT_UPDATE") {
+            if op.starts_with("INSERT") || op.starts_with("UPDATE") || op.starts_with("HOT_UPDATE")
+            {
                 if o > running_max + 1 {
                     flag = format!(
                         "   <-- GAP: offnum {o} > running_max+1 ({}); chain/base inconsistent",
@@ -327,7 +355,9 @@ async fn decode(a: &Args, client: &YsqlClient) -> Result<()> {
 
     println!();
     if gaps > 0 {
-        println!("** {gaps} GAP(s) — this chain does not fold cleanly (walredo would PANIC). See #22.");
+        println!(
+            "** {gaps} GAP(s) — this chain does not fold cleanly (walredo would PANIC). See #22."
+        );
     } else {
         println!("no offnum gaps — chain line-pointers are contiguous");
     }

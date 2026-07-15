@@ -438,8 +438,7 @@ const PAGES_COLUMNS: &str =
 /// forknum, blknum, lsn, is_image, will_init, payload.
 const PAGES_PER_ROW: usize = 9;
 
-const SLRU_COLUMNS: &str =
-    "branch_id, kind, segno, blknum, is_image, lsn, will_init, payload";
+const SLRU_COLUMNS: &str = "branch_id, kind, segno, blknum, is_image, lsn, will_init, payload";
 /// Per-row bound columns for `slru_pages`: kind, segno, blknum,
 /// is_image, lsn, will_init, payload.
 const SLRU_PER_ROW: usize = 7;
@@ -1096,10 +1095,7 @@ impl PageStore {
     }
 
     pub async fn delete_all_pages(&self, branch_id: BranchId) -> Result<()> {
-        let sql = format!(
-            "DELETE FROM \"{}\".pages WHERE branch_id = $1",
-            self.schema
-        );
+        let sql = format!("DELETE FROM \"{}\".pages WHERE branch_id = $1", self.schema);
         self.ysql_client
             .execute(&sql, &[&branch_id.to_string()])
             .await
@@ -1164,12 +1160,9 @@ impl PageStore {
                     params.push(&will_init[i]);
                     params.push(&payloads[i]);
                 }
-                ysql_client
-                    .execute(&sql, &params)
-                    .await
-                    .with_context(|| {
-                        format!("put_slru_pages branch={branch_id} chunk_rows={chunk_rows}")
-                    })?;
+                ysql_client.execute(&sql, &params).await.with_context(|| {
+                    format!("put_slru_pages branch={branch_id} chunk_rows={chunk_rows}")
+                })?;
                 Ok(())
             }));
         }
@@ -1472,10 +1465,7 @@ impl PageStore {
     }
 
     pub async fn delete_all_meta(&self, branch_id: BranchId) -> Result<()> {
-        let sql = format!(
-            "DELETE FROM \"{}\".meta WHERE branch_id = $1",
-            self.schema
-        );
+        let sql = format!("DELETE FROM \"{}\".meta WHERE branch_id = $1", self.schema);
         self.ysql_client
             .execute(&sql, &[&branch_id.to_string()])
             .await
@@ -1554,10 +1544,7 @@ impl PageStore {
             // its chain-head LSN, which can be below the ancestor's
             // head at the cap, and the ancestor deltas in
             // (anchor_lsn, cap] must still be layered on top.
-            if chain
-                .iter()
-                .any(|r| r.will_init && r.lsn >= seg.cap_lsn)
-            {
+            if chain.iter().any(|r| r.will_init && r.lsn >= seg.cap_lsn) {
                 break;
             }
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
@@ -1590,8 +1577,13 @@ impl PageStore {
         range: Range<Key>,
         target_lsn: Lsn,
     ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
-        self.scan_lineage("scan_range_lineage", lineage, target_lsn, LineageScanTarget::Range(range))
-            .await
+        self.scan_lineage(
+            "scan_range_lineage",
+            lineage,
+            target_lsn,
+            LineageScanTarget::Range(range),
+        )
+        .await
     }
 
     /// Lineage-aware [`Self::scan_scattered_set`]. Mirrors `scan_range_lineage`
@@ -1603,8 +1595,13 @@ impl PageStore {
         keys: &[Key],
         target_lsn: Lsn,
     ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
-        self.scan_lineage("scan_scattered_set_lineage", lineage, target_lsn, LineageScanTarget::Set(keys))
-            .await
+        self.scan_lineage(
+            "scan_scattered_set_lineage",
+            lineage,
+            target_lsn,
+            LineageScanTarget::Set(keys),
+        )
+        .await
     }
 
     /// Resolve one lineage segment's chains — a contiguous range or a scattered
@@ -1641,14 +1638,20 @@ impl PageStore {
             bail!("{label}: empty lineage");
         };
         let mut out = self
-            .scan_lineage_segment(&target, first.branch_id, std::cmp::min(target_lsn, first.cap_lsn))
+            .scan_lineage_segment(
+                &target,
+                first.branch_id,
+                std::cmp::min(target_lsn, first.cap_lsn),
+            )
             .await?;
         if rest.is_empty() {
             return Ok(out);
         }
         for seg in rest {
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
-            let anc = self.scan_lineage_segment(&target, seg.branch_id, eff).await?;
+            let anc = self
+                .scan_lineage_segment(&target, seg.branch_id, eff)
+                .await?;
             for (key, rows) in anc {
                 out.entry(key).or_default().extend(rows);
             }
@@ -1681,10 +1684,7 @@ impl PageStore {
         for seg in lineage {
             // See read_chain_lineage: an anchor below this segment's
             // cap doesn't cover the segment's rows above it.
-            if chain
-                .iter()
-                .any(|r| r.will_init && r.lsn >= seg.cap_lsn)
-            {
+            if chain.iter().any(|r| r.will_init && r.lsn >= seg.cap_lsn) {
                 break;
             }
             let eff = std::cmp::min(target_lsn, seg.cap_lsn);
@@ -2295,7 +2295,10 @@ fn assert_chain_step(chain: &[(Lsn, bool, bool /* will_init */)], where_: &str) 
     let (plsn, pis_image, _) = chain[n - 2];
     let (lsn, is_image, _) = chain[n - 1];
     if lsn > plsn {
-        panic!("{where_}: chain row {} lsn {lsn} > prev lsn {plsn} (must be DESC)", n - 1);
+        panic!(
+            "{where_}: chain row {} lsn {lsn} > prev lsn {plsn} (must be DESC)",
+            n - 1
+        );
     }
     if lsn == plsn && !pis_image && is_image {
         panic!(
@@ -2379,7 +2382,10 @@ mod chain_order_tests {
     /// rule (only image-AFTER-delta at the same LSN is forbidden).
     #[test]
     fn image_image_at_same_lsn_is_accepted() {
-        check(&[row(100, true, true), row(100, true, true)], "test_image_image_tie");
+        check(
+            &[row(100, true, true), row(100, true, true)],
+            "test_image_image_tie",
+        );
     }
 
     /// Single-row and empty chains never reach a predecessor, so the
@@ -2398,7 +2404,10 @@ mod chain_order_tests {
     /// strictly-descending chain stays accepted.
     #[test]
     fn long_descending_chain_is_accepted() {
-        let rows: Vec<_> = (0..10_000u64).rev().map(|l| row(l + 1, false, false)).collect();
+        let rows: Vec<_> = (0..10_000u64)
+            .rev()
+            .map(|l| row(l + 1, false, false))
+            .collect();
         check(&rows, "test_long_desc");
     }
 
@@ -2408,7 +2417,10 @@ mod chain_order_tests {
     #[test]
     #[should_panic(expected = "must be DESC")]
     fn lsn_ascending_panics() {
-        check(&[row(100, false, false), row(200, false, false)], "test_lsn_asc");
+        check(
+            &[row(100, false, false), row(200, false, false)],
+            "test_lsn_asc",
+        );
     }
 
     /// Image AFTER a delta at the same LSN is the pre-fix bug: the chain
@@ -2431,7 +2443,10 @@ mod chain_order_tests {
     /// `>=`). Two same-LSN deltas don't trip the DESC or image checks.
     #[test]
     fn equal_lsn_does_not_trigger_desc_panic() {
-        check(&[row(100, false, false), row(100, false, false)], "test_equal_lsn_deltas");
+        check(
+            &[row(100, false, false), row(100, false, false)],
+            "test_equal_lsn_deltas",
+        );
     }
 }
 
@@ -2631,7 +2646,14 @@ mod tests {
         let id = format!("'{branch}'");
 
         // pages: 9 per-row params; 2 rows → $1..$18, id baked per row.
-        let pages = build_insert_sql("pageserver", "pages", PAGES_COLUMNS, branch, PAGES_PER_ROW, 2);
+        let pages = build_insert_sql(
+            "pageserver",
+            "pages",
+            PAGES_COLUMNS,
+            branch,
+            PAGES_PER_ROW,
+            2,
+        );
         let expected_pages = format!(
             "INSERT INTO \"pageserver\".pages ({PAGES_COLUMNS}) VALUES \
              ({id},$1,$2,$3,$4,$5,$6,$7,$8,$9),\
@@ -2640,8 +2662,14 @@ mod tests {
         assert_eq!(pages, expected_pages);
 
         // slru: 7 per-row params; 1 row → $1..$7.
-        let slru =
-            build_insert_sql("pageserver", "slru_pages", SLRU_COLUMNS, branch, SLRU_PER_ROW, 1);
+        let slru = build_insert_sql(
+            "pageserver",
+            "slru_pages",
+            SLRU_COLUMNS,
+            branch,
+            SLRU_PER_ROW,
+            1,
+        );
         let expected_slru = format!(
             "INSERT INTO \"pageserver\".slru_pages ({SLRU_COLUMNS}) VALUES \
              ({id},$1,$2,$3,$4,$5,$6,$7)"
@@ -2682,7 +2710,11 @@ mod tests {
     fn dedup_keeps_image_on_collision_and_flags_dropped_delta() {
         let k = page_key(1663, 5, 16384, 0, 7);
         let label = ["chain_dedup_dropped_delta"];
-        let count = || crate::metrics::CORRECTNESS_ERRORS.with_label_values(&label).get();
+        let count = || {
+            crate::metrics::CORRECTNESS_ERRORS
+                .with_label_values(&label)
+                .get()
+        };
 
         // Legit same-LSN collision: a materialised image stamped at the LSN
         // of the delta it folded. Pre-sorted descending, image-first on ties
@@ -2698,7 +2730,11 @@ mod tests {
         dedup_page_chain_by_lsn(&mut chain);
         let shape: Vec<(u64, bool)> = chain.iter().map(|r| (r.lsn.0, r.is_image)).collect();
         assert_eq!(shape, vec![(0x30, false), (0x20, true), (0x10, false)]);
-        assert_eq!(count(), before, "image/delta collision is legitimate; must not trip");
+        assert_eq!(
+            count(),
+            before,
+            "image/delta collision is legitimate; must not trip"
+        );
 
         // Benign same-LSN duplicate: the SAME delta in both cache and YB
         // (byte-identical). Dropping it is lossless — must NOT trip.
@@ -2710,7 +2746,11 @@ mod tests {
         ];
         dedup_page_chain_by_lsn(&mut dup);
         assert_eq!(dup.len(), 2, "dedup collapses the identical duplicate");
-        assert_eq!(count(), before, "an identical cache/YB duplicate must not trip");
+        assert_eq!(
+            count(),
+            before,
+            "an identical cache/YB duplicate must not trip"
+        );
 
         // Dangerous same-LSN collision: two distinct deltas (different
         // payloads) on one LSN, no image. The survivor is a delta, so a real
@@ -2724,7 +2764,11 @@ mod tests {
         ];
         dedup_page_chain_by_lsn(&mut bad);
         assert_eq!(bad.len(), 2, "dedup still collapses the equal-LSN run");
-        assert_eq!(count(), before + 1, "dropping a DISTINCT non-superseded delta must trip");
+        assert_eq!(
+            count(),
+            before + 1,
+            "dropping a DISTINCT non-superseded delta must trip"
+        );
     }
 
     #[tokio::test]
@@ -2745,10 +2789,7 @@ mod tests {
             .await
             .unwrap();
 
-        let got = store
-            .read_chain(branch, &k, Lsn(100))
-            .await
-            .unwrap();
+        let got = store.read_chain(branch, &k, Lsn(100)).await.unwrap();
         assert_eq!(got.len(), 3);
         assert_eq!(got[0].lsn, Lsn(30));
         assert_eq!(got[2].lsn, Lsn(10));
@@ -2801,27 +2842,18 @@ mod tests {
         }
         store.put_pages(branch, &rows).await.unwrap();
 
-        let got = store
-            .read_chain(branch, &k, Lsn(10_000))
-            .await
-            .unwrap();
+        let got = store.read_chain(branch, &k, Lsn(10_000)).await.unwrap();
         assert_eq!(got.len(), 13);
         assert_eq!(got.first().unwrap().lsn, Lsn(130));
         assert_eq!(got.last().unwrap().lsn, Lsn(10));
         assert!(got.last().unwrap().is_image);
 
-        let got = store
-            .read_chain(branch, &k, Lsn(50))
-            .await
-            .unwrap();
+        let got = store.read_chain(branch, &k, Lsn(50)).await.unwrap();
         assert_eq!(got.len(), 5);
         assert_eq!(got.first().unwrap().lsn, Lsn(50));
         assert_eq!(got.last().unwrap().lsn, Lsn(10));
 
-        let got = store
-            .read_chain(branch, &k, Lsn(5))
-            .await
-            .unwrap();
+        let got = store.read_chain(branch, &k, Lsn(5)).await.unwrap();
         assert!(got.is_empty());
         drop_schema(&store, &schema).await;
     }
@@ -2870,10 +2902,7 @@ mod tests {
             .await
             .unwrap();
 
-        let got = store
-            .read_chain(branch, &k, Lsn(300))
-            .await
-            .unwrap();
+        let got = store.read_chain(branch, &k, Lsn(300)).await.unwrap();
 
         // Expected: [delta@200, image@100]. Length 2 — NOT 3
         // (length 3 would mean the same-LSN delta slipped past the
@@ -2917,10 +2946,7 @@ mod tests {
             page_row(k.clone(), 40, false, false, b"d40"),
         ];
         store.put_pages(branch, &rows).await.unwrap();
-        let got = store
-            .read_chain(branch, &k, Lsn(100))
-            .await
-            .unwrap();
+        let got = store.read_chain(branch, &k, Lsn(100)).await.unwrap();
         assert_eq!(got.len(), 4);
         let lsns: Vec<u64> = got.iter().map(|r| r.lsn.0).collect();
         assert_eq!(lsns, vec![40, 30, 20, 10]);
@@ -2962,10 +2988,7 @@ mod tests {
             .await
             .unwrap();
 
-        let got = store
-            .read_chain(branch, &k, Lsn(30))
-            .await
-            .unwrap();
+        let got = store.read_chain(branch, &k, Lsn(30)).await.unwrap();
         let lsns: Vec<u64> = got.iter().map(|r| r.lsn.0).collect();
         assert_eq!(
             lsns,
@@ -3005,10 +3028,7 @@ mod tests {
         // Scan blocks 1..4 of (rel=16384, fork=0).
         let range = Key::from_slice(&page_key(1663, 5, 16384, 0, 1))
             ..Key::from_slice(&page_key(1663, 5, 16384, 0, 4));
-        let got = store
-            .scan_range(branch, range, Lsn(100))
-            .await
-            .unwrap();
+        let got = store.scan_range(branch, range, Lsn(100)).await.unwrap();
         // 3 keys (blknum 1, 2, 3); each with 2 rows.
         assert_eq!(got.len(), 3);
         for chain in got.values() {
@@ -3041,10 +3061,7 @@ mod tests {
             .unwrap();
 
         let range = k..k.next();
-        let got = store
-            .scan_range(branch, range, Lsn(100))
-            .await
-            .unwrap();
+        let got = store.scan_range(branch, range, Lsn(100)).await.unwrap();
         assert_eq!(got.len(), 1);
         let chain = &got[&Key::from_slice(&k_bytes)];
         let lsns: Vec<u64> = chain.iter().map(|r| r.lsn.0).collect();
@@ -3052,10 +3069,7 @@ mod tests {
         assert!(chain.last().unwrap().is_image);
 
         // Same target via read_chain — must match.
-        let direct = store
-            .read_chain(branch, &k_bytes, Lsn(100))
-            .await
-            .unwrap();
+        let direct = store.read_chain(branch, &k_bytes, Lsn(100)).await.unwrap();
         assert_eq!(chain.as_slice(), direct.as_slice());
         drop_schema(&store, &schema).await;
     }
@@ -3117,10 +3131,7 @@ mod tests {
         store.put_pages(branch, &rows).await.unwrap();
 
         let range = Key::from_slice(&k0)..Key::from_slice(&page_key(1663, 5, 16384, 0, 4));
-        let got = store
-            .scan_range(branch, range, Lsn(100))
-            .await
-            .unwrap();
+        let got = store.scan_range(branch, range, Lsn(100)).await.unwrap();
         assert_eq!(got.len(), 4);
 
         // k0: image at 50 + deltas 60, 70 => LSNs 70, 60, 50.
@@ -3174,10 +3185,7 @@ mod tests {
         // Range spans both rels.
         let range = Key::from_slice(&page_key(1663, 5, 16384, 0, 0))
             ..Key::from_slice(&page_key(1663, 5, 16386, 0, 0));
-        let got = store
-            .scan_range(branch, range, Lsn(100))
-            .await
-            .unwrap();
+        let got = store.scan_range(branch, range, Lsn(100)).await.unwrap();
         // 6 distinct keys (3 blocks × 2 rels).
         assert_eq!(got.len(), 6);
         drop_schema(&store, &schema).await;
@@ -3193,10 +3201,7 @@ mod tests {
         let mut e = [0u8; KEY_SIZE];
         e[0] = 0x61;
         let range = Key::from_slice(&s)..Key::from_slice(&e);
-        let err = store
-            .scan_range(branch, range, Lsn(100))
-            .await
-            .unwrap_err();
+        let err = store.scan_range(branch, range, Lsn(100)).await.unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("relation-page namespace") || msg.contains("non-page"),
@@ -3252,10 +3257,7 @@ mod tests {
         let k = page_key(1663, 5, 16384, 0, 0xff);
         let high = 0x7fff_ffff_ffff_fff0u64;
         store
-            .put_pages(
-                branch,
-                &[page_row(k.clone(), high, true, true, b"x")],
-            )
+            .put_pages(branch, &[page_row(k.clone(), high, true, true, b"x")])
             .await
             .unwrap();
         let got = store
@@ -3385,12 +3387,7 @@ mod tests {
 
         // Matching generation → Updated, persisted value advances.
         let res = store
-            .advance_consistent_lsn(
-                branch,
-                Generation::new(5),
-                Lsn(0x2000),
-                Some(Lsn(0x1F00)),
-            )
+            .advance_consistent_lsn(branch, Generation::new(5), Lsn(0x2000), Some(Lsn(0x1F00)))
             .await
             .unwrap();
         assert_eq!(res, AdvanceConsistentLsnOutcome::Updated);
@@ -3400,12 +3397,7 @@ mod tests {
 
         // Stale generation → StaleGeneration { live = 5 }, value unchanged.
         let res = store
-            .advance_consistent_lsn(
-                branch,
-                Generation::new(4),
-                Lsn(0x3000),
-                Some(Lsn(0x2F00)),
-            )
+            .advance_consistent_lsn(branch, Generation::new(4), Lsn(0x3000), Some(Lsn(0x2F00)))
             .await
             .unwrap();
         assert_eq!(
@@ -3476,10 +3468,7 @@ mod tests {
         // Spot-check: first, middle, last row each read back.
         for blk in [0u32, n / 2, n - 1] {
             let k = page_key(1663, 5, 16384, 0, blk);
-            let chain = store
-                .read_chain(branch, &k, Lsn(100))
-                .await
-                .unwrap();
+            let chain = store.read_chain(branch, &k, Lsn(100)).await.unwrap();
             assert_eq!(chain.len(), 1, "blk {blk}");
             assert_eq!(chain[0].payload.as_ref(), payload.as_slice());
         }
@@ -3604,10 +3593,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .put_pages(
-                child,
-                &[page_row(k.clone(), 40, false, false, b"child")],
-            )
+            .put_pages(child, &[page_row(k.clone(), 40, false, false, b"child")])
             .await
             .unwrap();
 
@@ -3777,7 +3763,10 @@ mod tests {
             "ancestor-only key must be discovered"
         );
         assert_eq!(
-            out[&Key::from_slice(&k_shared)].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            out[&Key::from_slice(&k_shared)]
+                .iter()
+                .map(|r| r.lsn.0)
+                .collect::<Vec<_>>(),
             vec![30, 10],
             "shared key blends child delta over ancestor image"
         );
@@ -3830,15 +3819,26 @@ mod tests {
                 .map(|r| (r.lsn.0, r.is_image, r.will_init, r.payload.clone()))
                 .collect::<Vec<_>>()
         };
-        for k in [Key::from_slice(&k1), Key::from_slice(&k4), Key::from_slice(&k9)] {
+        for k in [
+            Key::from_slice(&k1),
+            Key::from_slice(&k4),
+            Key::from_slice(&k9),
+        ] {
             let one = store.scan_range(br, k..k.next(), target).await.unwrap();
             let expect = one.get(&k).cloned().unwrap_or_default();
             let got = set.get(&k).cloned().unwrap_or_default();
-            assert_eq!(shape(&got), shape(&expect), "scattered chain must match per-key read for {k}");
+            assert_eq!(
+                shape(&got),
+                shape(&expect),
+                "scattered chain must match per-key read for {k}"
+            );
         }
         // Absent block: no rows → key missing from the result (not an error,
         // not an empty-chain entry).
-        assert!(!set.contains_key(&k_absent), "absent block must not appear in the result");
+        assert!(
+            !set.contains_key(&k_absent),
+            "absent block must not appear in the result"
+        );
 
         // Repeated key is de-duplicated: same result as the unique set.
         let dup = store
@@ -3857,7 +3857,10 @@ mod tests {
             Key::from_slice(&page_key(1663, 5, 16384, 1, 1)),
         ];
         assert!(
-            store.scan_scattered_set(br, &cross_fork, target).await.is_err(),
+            store
+                .scan_scattered_set(br, &cross_fork, target)
+                .await
+                .is_err(),
             "keys spanning forks must error"
         );
         drop_schema(&store, &schema).await;
@@ -3902,12 +3905,18 @@ mod tests {
             .unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(
-            out[&Key::from_slice(&k_anc_only)].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            out[&Key::from_slice(&k_anc_only)]
+                .iter()
+                .map(|r| r.lsn.0)
+                .collect::<Vec<_>>(),
             vec![10],
             "ancestor-only scattered key must be discovered"
         );
         assert_eq!(
-            out[&Key::from_slice(&k_shared)].iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            out[&Key::from_slice(&k_shared)]
+                .iter()
+                .map(|r| r.lsn.0)
+                .collect::<Vec<_>>(),
             vec![30, 10],
             "shared key blends child delta over ancestor image"
         );
@@ -4145,7 +4154,10 @@ mod tests {
         let mut parent_row = sample_timeline_row(parent);
         parent_row.ancestor_branch_id = Some(grandparent);
         parent_row.ancestor_lsn = Some(Lsn(50));
-        store.insert_timeline_at_creation(&parent_row).await.unwrap();
+        store
+            .insert_timeline_at_creation(&parent_row)
+            .await
+            .unwrap();
         let mut child_row = sample_timeline_row(child);
         child_row.ancestor_branch_id = Some(parent);
         child_row.ancestor_lsn = Some(Lsn(70));
@@ -4175,10 +4187,7 @@ mod tests {
         assert_eq!(root_lineage, LineageSegment::single(grandparent));
 
         // Missing row → error, not an empty lineage.
-        let err = store
-            .load_lineage(rand_branch())
-            .await
-            .unwrap_err();
+        let err = store.load_lineage(rand_branch()).await.unwrap_err();
         assert!(err.to_string().contains("no timeline_state row"), "{err}");
 
         drop_schema(&store, &schema).await;

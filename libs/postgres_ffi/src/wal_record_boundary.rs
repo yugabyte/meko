@@ -24,9 +24,7 @@ use utils::lsn::Lsn;
 use crate::v18::bindings::XLOG_PAGE_MAGIC;
 use crate::v18::xlog_utils::XLP_FIRST_IS_CONTRECORD;
 use crate::waldecoder::WalStreamDecoder;
-use crate::{
-    PgMajorVersion, XLOG_BLCKSZ, XLOG_SIZE_OF_XLOG_LONG_PHD, XLOG_SIZE_OF_XLOG_SHORT_PHD,
-};
+use crate::{PgMajorVersion, XLOG_BLCKSZ, XLOG_SIZE_OF_XLOG_LONG_PHD, XLOG_SIZE_OF_XLOG_SHORT_PHD};
 
 /// How far below `target` we are willing to scan, page by page, looking
 /// for a WAL page that begins a fresh record (no continuation). One real
@@ -108,11 +106,7 @@ pub fn page_header_size(lsn: Lsn, seg: u64) -> usize {
 /// hole, and abort the whole end-of-WAL scan — leaving the safekeeper's
 /// `write_lsn` short of the post-switch segment boundary, which wedges the
 /// catch-up reader (#181).
-pub async fn find_anchor<S: WalSource>(
-    reader: &S,
-    target: Lsn,
-    floor: Lsn,
-) -> anyhow::Result<Lsn> {
+pub async fn find_anchor<S: WalSource>(reader: &S, target: Lsn, floor: Lsn) -> anyhow::Result<Lsn> {
     let blk = XLOG_BLCKSZ as u64;
     let floor_page = Lsn(floor.0 - floor.0 % blk);
     let mut page = Lsn(target.0 - target.0 % blk);
@@ -263,7 +257,11 @@ mod tests {
         async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
             let end = self.start.0 + self.buf.len() as u64;
             if lsn.0 < self.start.0 || lsn.0 >= end {
-                bail!("WAL hole at {lsn} (mem buffer is [{}, {}))", self.start, Lsn(end));
+                bail!(
+                    "WAL hole at {lsn} (mem buffer is [{}, {}))",
+                    self.start,
+                    Lsn(end)
+                );
             }
             Ok((self.start, self.buf.clone()))
         }
@@ -348,7 +346,10 @@ mod tests {
         assert!(real_end > 0, "test needs multi-page WAL");
         let mut padded = buf[..real_end].to_vec();
         padded.resize(real_end + 3 * XLOG_BLCKSZ, 0);
-        let src = MemWal { start: START, buf: padded };
+        let src = MemWal {
+            start: START,
+            buf: padded,
+        };
 
         // Target lands inside the zeroed padding — exactly the persisted
         // "max byte offset" an XLOG_SWITCH produces.
@@ -369,8 +370,7 @@ mod tests {
         let magic = u16::from_le_bytes([hdr[0], hdr[1]]);
         let info = u16::from_le_bytes([hdr[2], hdr[3]]);
         assert_eq!(
-            magic,
-            XLOG_PAGE_MAGIC as u16,
+            magic, XLOG_PAGE_MAGIC as u16,
             "anchor must land on a real WAL page, not zeroed padding"
         );
         assert_eq!(

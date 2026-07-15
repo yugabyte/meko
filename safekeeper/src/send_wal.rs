@@ -446,8 +446,8 @@ impl SafekeeperPostgresHandler {
             let info = tli.get_safekeeper_info(&self.conf).await;
             // Log the result and probably send it to the client, closing the stream.
             pgb.handle_copy_stream_end(end)
-            .instrument(info_span!("", flush_lsn=%info.flush_lsn, commit_lsn=%info.commit_lsn))
-            .await;
+                .instrument(info_span!("", flush_lsn=%info.flush_lsn, commit_lsn=%info.commit_lsn))
+                .await;
         }
         Ok(())
     }
@@ -573,9 +573,8 @@ impl SafekeeperPostgresHandler {
                         MAX_SEND_SIZE,
                     );
 
-                    let reader = InterpretedWalReader::new(
-                        wal_reader, start_pos, tx, pg_version, None,
-                    );
+                    let reader =
+                        InterpretedWalReader::new(wal_reader, start_pos, tx, pg_version, None);
 
                     let sender = InterpretedWalSender {
                         format,

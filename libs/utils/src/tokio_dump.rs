@@ -73,9 +73,7 @@ pub fn spawn_sigusr2_dumper(handles: Vec<(String, Handle)>) {
                 ) {
                     Ok(s) => s,
                     Err(e) => {
-                        tracing::warn!(
-                            "tokio-task-dumper: failed to install SIGUSR2 handler: {e}"
-                        );
+                        tracing::warn!("tokio-task-dumper: failed to install SIGUSR2 handler: {e}");
                         return;
                     }
                 };

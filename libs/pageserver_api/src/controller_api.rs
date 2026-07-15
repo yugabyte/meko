@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
-use crate::models::{PageserverUtilization, BranchConfig, TimelineInfo};
+use crate::models::{BranchConfig, PageserverUtilization, TimelineInfo};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]

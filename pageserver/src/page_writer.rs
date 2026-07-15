@@ -496,12 +496,7 @@ impl PageWriter {
         let prev = self.take_prev_at_or_below(lsn).map(|(_, p)| p);
         match self
             .fpu_page_store
-            .advance_consistent_lsn(
-                self.branch_id,
-                self.generation,
-                lsn,
-                prev,
-            )
+            .advance_consistent_lsn(self.branch_id, self.generation, lsn, prev)
             .await?
         {
             crate::page_store::AdvanceConsistentLsnOutcome::Updated => {
@@ -1046,9 +1041,9 @@ impl PageWriter {
             .await?;
         let t_yb = t0.elapsed();
         let t_lock_start = Instant::now();
-        let cached: std::collections::HashMap<Key, Vec<Arc<PageRow>>> = self
-            .pages
-            .lookup_range(&range.start, &range.end, target_lsn);
+        let cached: std::collections::HashMap<Key, Vec<Arc<PageRow>>> =
+            self.pages
+                .lookup_range(&range.start, &range.end, target_lsn);
         let t_cache = t_lock_start.elapsed();
         let persisted_rows: usize = persisted.values().map(|v| v.len()).sum();
         let cached_rows: usize = cached.values().map(|v| v.len()).sum();
@@ -1064,7 +1059,14 @@ impl PageWriter {
         self.finalize_blended_chains(&mut out, target_lsn);
         let t_merge = t_merge_start.elapsed();
         self.log_scan_perf(
-            "scan_range", t0, t_yb, t_cache, t_merge, persisted_rows, cached_rows, out.len(),
+            "scan_range",
+            t0,
+            t_yb,
+            t_cache,
+            t_merge,
+            persisted_rows,
+            cached_rows,
+            out.len(),
         );
         Ok(out)
     }
@@ -1144,7 +1146,14 @@ impl PageWriter {
         self.finalize_blended_chains(&mut out, target_lsn);
         let t_merge = t_merge_start.elapsed();
         self.log_scan_perf(
-            "scan_scattered_set", t0, t_yb, t_cache, t_merge, persisted_rows, cached_rows, out.len(),
+            "scan_scattered_set",
+            t0,
+            t_yb,
+            t_cache,
+            t_merge,
+            persisted_rows,
+            cached_rows,
+            out.len(),
         );
         Ok(out)
     }
@@ -1311,11 +1320,7 @@ impl PageWriter {
     /// sources (post-flush cache + PageStore). Pre-flush rows are
     /// EXCLUDED. The image materialiser uses this so its image is
     /// built only from data that survives a process crash.
-    pub async fn read_chain_durable(
-        &self,
-        key: Key,
-        target_lsn: Lsn,
-    ) -> Result<Vec<Arc<PageRow>>> {
+    pub async fn read_chain_durable(&self, key: Key, target_lsn: Lsn) -> Result<Vec<Arc<PageRow>>> {
         // `target_lsn` is the caller's contract: it must be ≤
         // `flush_horizon_lsn` so a YB read above the horizon can't
         // surface a mid-flush partial-chunk view. The post-flush
@@ -1466,8 +1471,7 @@ impl PageWriter {
         // separate `Arc<PageEntry>` snapshot stays alive so the
         // subsequent `mark_flushed` can flip durable on the exact
         // entries we wrote.
-        let rel_rows: Vec<Arc<PageRow>> =
-            rel_snapshot.iter().map(|e| e.row_arc()).collect();
+        let rel_rows: Vec<Arc<PageRow>> = rel_snapshot.iter().map(|e| e.row_arc()).collect();
         for row in &rel_rows {
             pageserver_api::write_trace::trace_stage("snapshot", &row.key, row.lsn);
         }
@@ -1727,7 +1731,8 @@ impl PageWriter {
                     {
                         Ok(crate::page_store::AdvanceConsistentLsnOutcome::Updated) => {
                             self.consistent_lsn_watermark.store(new_lsn, Relaxed);
-                            *self.last_consistent_lsn_upsert_at.lock().unwrap() = Some(Instant::now());
+                            *self.last_consistent_lsn_upsert_at.lock().unwrap() =
+                                Some(Instant::now());
                             // Publish the just-advanced LSN as the
                             // safekeeper-truncation bound. The walreceiver
                             // loop forwards this slot to the safekeeper
@@ -2014,13 +2019,7 @@ impl PageWriter {
         };
         let persisted = self
             .compute_page_store
-            .read_slru_chain_lineage(
-                &self.lineage,
-                kind,
-                segno,
-                blknum,
-                target_lsn,
-            )
+            .read_slru_chain_lineage(&self.lineage, kind, segno, blknum, target_lsn)
             .await?;
         buffered.extend(persisted);
         buffered.sort_by(|a, b| b.lsn.cmp(&a.lsn));
@@ -2041,13 +2040,7 @@ impl PageWriter {
     ) -> Result<std::collections::HashMap<u32, Vec<SlruPageRow>>> {
         let persisted = self
             .compute_page_store
-            .scan_slru_range_lineage(
-                &self.lineage,
-                kind,
-                segno,
-                blknum_range.clone(),
-                target_lsn,
-            )
+            .scan_slru_range_lineage(&self.lineage, kind, segno, blknum_range.clone(), target_lsn)
             .await?;
         let buffered: Vec<SlruPageRow> = {
             let aux = self.aux.lock();
@@ -2175,7 +2168,12 @@ fn slru_resets_chain(value: &Value) -> bool {
 }
 
 /// (rel rows, slru rows, meta rows, slru materialiser tuples).
-type BuiltRows = (Vec<PageRow>, Vec<SlruPageRow>, Vec<MetaRow>, Vec<(Key, Lsn, bool)>);
+type BuiltRows = (
+    Vec<PageRow>,
+    Vec<SlruPageRow>,
+    Vec<MetaRow>,
+    Vec<(Key, Lsn, bool)>,
+);
 
 /// Deserialize values and build page rows for the given `metas` (a subset
 /// of `batch.metadata`). Pure CPU and self-contained, so it is safe to run
@@ -2428,13 +2426,7 @@ fn try_dispatch_read_side(
     if !inserted {
         return false;
     }
-    if tx
-        .try_send(MaterializeJob {
-            key,
-            target_lsn,
-        })
-        .is_err()
-    {
+    if tx.try_send(MaterializeJob { key, target_lsn }).is_err() {
         in_flight.lock().unwrap().remove(&key);
         return false;
     }
@@ -3795,8 +3787,7 @@ mod tests {
     #[tokio::test]
     async fn limit_zero_disables_dispatch() {
         let (store, schema) = make_store("mat_disabled").await;
-        let (w, _t, mut rx, _) =
-            writer_with_materializer(store.clone(), FlushPolicy::default(), 0);
+        let (w, _t, mut rx, _) = writer_with_materializer(store.clone(), FlushPolicy::default(), 0);
 
         for i in 0..50 {
             w.put(&[(k(1), Lsn(10 + i), delta_non_init())])
@@ -4362,7 +4353,11 @@ mod tests {
             .scan_meta_range(mk(1)..mk(1).next(), Lsn(100))
             .await
             .unwrap();
-        assert_eq!(w.stats().await.meta_cache_hits, hits_before + 1, "should be a cache hit");
+        assert_eq!(
+            w.stats().await.meta_cache_hits,
+            hits_before + 1,
+            "should be a cache hit"
+        );
         let row = result.into_values().next().expect("row present");
         assert_eq!(row.payload, payload);
         drop_schema(&store, &schema).await;
@@ -4413,7 +4408,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            w.stats().await.meta_cache_hits, hits_before,
+            w.stats().await.meta_cache_hits,
+            hits_before,
             "cache must not be used when cached.lsn > target_lsn"
         );
         assert!(result.is_empty(), "no row at LSN ≤ 50");
@@ -4448,7 +4444,11 @@ mod tests {
             .scan_meta_range(mk(4)..mk(4).next(), Lsn(100))
             .await
             .unwrap();
-        assert_eq!(w.stats().await.meta_cache_hits, hits_before, "mk(4) evicted — no cache hit");
+        assert_eq!(
+            w.stats().await.meta_cache_hits,
+            hits_before,
+            "mk(4) evicted — no cache hit"
+        );
         assert_eq!(
             r4.into_values().next().map(|r| r.payload),
             Some(Bytes::from_static(b"key4")),
@@ -4461,7 +4461,11 @@ mod tests {
             .scan_meta_range(mk(5)..mk(5).next(), Lsn(100))
             .await
             .unwrap();
-        assert_eq!(w.stats().await.meta_cache_hits, hits_before + 1, "mk(5) must hit cache");
+        assert_eq!(
+            w.stats().await.meta_cache_hits,
+            hits_before + 1,
+            "mk(5) must hit cache"
+        );
         assert_eq!(
             r5.into_values().next().map(|r| r.payload),
             Some(Bytes::from_static(b"key5"))
@@ -4478,9 +4482,13 @@ mod tests {
         let (w, _t) = writer(store.clone(), FlushPolicy::default());
 
         assert_eq!(w.meta_cache_len(), None, "cache must be None when disabled");
-        w.put(&[(mk(6), Lsn(10), Value::Image(Bytes::from_static(b"no-cache")))])
-            .await
-            .unwrap();
+        w.put(&[(
+            mk(6),
+            Lsn(10),
+            Value::Image(Bytes::from_static(b"no-cache")),
+        )])
+        .await
+        .unwrap();
         w.flush().await.unwrap();
 
         let result = w
@@ -4608,8 +4616,15 @@ mod tests {
         let mut descending = lsns.clone();
         descending.sort_unstable_by(|a, b| b.cmp(a));
         assert_eq!(lsns, descending, "chain not in descending LSN order");
-        assert_eq!(*lsns.last().unwrap(), 100, "oldest entry must be the anchor LSN");
-        assert!(chain.last().unwrap().1, "oldest entry must be the image anchor");
+        assert_eq!(
+            *lsns.last().unwrap(),
+            100,
+            "oldest entry must be the anchor LSN"
+        );
+        assert!(
+            chain.last().unwrap().1,
+            "oldest entry must be the image anchor"
+        );
 
         drop_schema(&store, &schema).await;
     }

@@ -20,13 +20,13 @@ mod assert_u64_eq_usize;
 pub mod aux_file;
 pub mod image_materializer;
 pub mod metrics;
+pub mod page_server;
 pub mod page_service;
 pub mod page_store;
 pub mod page_writer;
 pub mod pgdatadir_mapping;
 pub mod span;
 pub mod task_mgr;
-pub mod page_server;
 pub mod unified_pages;
 pub mod utilization;
 pub mod virtual_file;
@@ -34,8 +34,8 @@ pub mod walingest;
 pub mod walredo;
 
 use camino::Utf8Path;
-use postgres_ffi::PgMajorVersion;
 use page_server::mgr::{BackgroundPurges, TenantManager};
+use postgres_ffi::PgMajorVersion;
 use tracing::{info, info_span};
 
 /// Current storage format version

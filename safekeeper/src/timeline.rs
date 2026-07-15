@@ -141,9 +141,7 @@ impl StateSK {
 
     /// Watch receiver that fires as WAL becomes durable in YugabyteDB
     /// (see [`wal_storage::Storage::yb_durable_watch`]). `None` otherwise.
-    pub fn yb_durable_watch(
-        &self,
-    ) -> Option<watch::Receiver<crate::yb_wal_storage::DurableState>> {
+    pub fn yb_durable_watch(&self) -> Option<watch::Receiver<crate::yb_wal_storage::DurableState>> {
         match self {
             StateSK::Loaded(sk) => sk.wal_store.yb_durable_watch(),
             StateSK::Empty => None,
@@ -230,7 +228,8 @@ impl SharedState {
             .cloned()
             .context("control-file restore requires yb_storage_conn")?;
         let control_store =
-            control_file::ControlFileStorage::restore_new(yb_wal.system_client.clone(), branch_id).await?;
+            control_file::ControlFileStorage::restore_new(yb_wal.system_client.clone(), branch_id)
+                .await?;
         if control_store.server.wal_seg_size == 0 {
             bail!(TimelineError::UninitializedWalSegSize(*branch_id));
         }
@@ -666,7 +665,11 @@ impl Timeline {
         }
         let resp = {
             let mut shared_state = self.write_shared_state().await;
-            let mut resp = shared_state.sk.safekeeper().yb_emit_append_response().await?;
+            let mut resp = shared_state
+                .sk
+                .safekeeper()
+                .yb_emit_append_response()
+                .await?;
             resp.hs_feedback = self.walsenders.get_hotstandby().hs_feedback;
             resp
         };
@@ -919,10 +922,7 @@ impl WalResidentTimeline {
     }
 
     // Check if disk usage by WAL segment files for this timeline exceeds the configured limit.
-    fn check_disk_usage(
-        &self,
-        shared_state_locked: &mut WriteGuardSharedState<'_>,
-    ) -> Result<()> {
+    fn check_disk_usage(&self, shared_state_locked: &mut WriteGuardSharedState<'_>) -> Result<()> {
         // The disk usage is calculated based on the number of segments between `last_removed_segno`
         // and the current flush LSN segment number. `last_removed_segno` is advanced after
         // unneeded WAL files are physically removed from disk (see `update_wal_removal_end()`

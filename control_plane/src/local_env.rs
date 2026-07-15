@@ -224,7 +224,6 @@ pub struct YbLightStorageControllerConf {
     #[serde(with = "humantime_serde")]
     pub max_warming_up: Duration,
 
-
     /// YugabyteDB connection for the storage controller's persistence
     /// layer — the same `[*.yb]` block the pageserver / safekeeper /
     /// endpoint_storage consume (host_ports, user, dbname, sslmode?,
@@ -1309,7 +1308,10 @@ mod tests {
         assert_eq!(found[0].data_dir, endpoints.join("main").join("pageserver"));
 
         assert_eq!(found[1].id, NodeId(2));
-        assert_eq!(found[1].data_dir, endpoints.join("ep_b1").join("pageserver"));
+        assert_eq!(
+            found[1].data_dir,
+            endpoints.join("ep_b1").join("pageserver")
+        );
     }
 
     #[test]

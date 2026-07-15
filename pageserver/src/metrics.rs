@@ -29,10 +29,10 @@ use utils::id::BranchId;
 
 use crate::config;
 use crate::config::PageServerConf;
-use crate::pgdatadir_mapping::DatadirModificationStats;
-use crate::task_mgr::TaskKind;
 use crate::page_server::tasks::BackgroundLoopKind;
 use crate::page_server::throttle::ThrottleResult;
+use crate::pgdatadir_mapping::DatadirModificationStats;
+use crate::task_mgr::TaskKind;
 
 /// Prometheus histogram buckets (in seconds) for operations in the critical
 /// path. In other words, operations that directly affect that latency of user
@@ -1011,11 +1011,7 @@ impl EvictionsWithLowResidenceDuration {
     }
 
     #[allow(dead_code)]
-    pub fn change_threshold(
-        &mut self,
-        branch_id: &str,
-        new_threshold: Duration,
-    ) {
+    pub fn change_threshold(&mut self, branch_id: &str, new_threshold: Duration) {
         if new_threshold == self.threshold {
             return;
         }
@@ -1101,16 +1097,10 @@ pub(crate) struct StorageIoSizeMetrics {
 impl StorageIoSizeMetrics {
     pub(crate) fn new(branch_id: &str) -> Self {
         let read = STORAGE_IO_SIZE
-            .get_metric_with_label_values(&[
-                StorageIoSizeOperation::Read.as_str(),
-                branch_id,
-            ])
+            .get_metric_with_label_values(&[StorageIoSizeOperation::Read.as_str(), branch_id])
             .unwrap();
         let write = STORAGE_IO_SIZE
-            .get_metric_with_label_values(&[
-                StorageIoSizeOperation::Write.as_str(),
-                branch_id,
-            ])
+            .get_metric_with_label_values(&[StorageIoSizeOperation::Write.as_str(), branch_id])
             .unwrap();
         Self { read, write }
     }
@@ -1591,10 +1581,8 @@ impl GetPageBatchBreakReasonTimelineMetrics {
         GetPageBatchBreakReasonTimelineMetrics {
             map: EnumMap::from_array(std::array::from_fn(|reason_idx| {
                 let reason = GetPageBatchBreakReason::from_usize(reason_idx);
-                PAGE_SERVICE_BATCH_BREAK_REASON_PER_TENANT_TIMELINE.with_label_values(&[
-                    branch_id,
-                    reason.into(),
-                ])
+                PAGE_SERVICE_BATCH_BREAK_REASON_PER_TENANT_TIMELINE
+                    .with_label_values(&[branch_id, reason.into()])
             })),
         }
     }
@@ -1722,16 +1710,10 @@ impl SmgrQueryTimePerTimeline {
         });
 
         let per_timeline_getpage_started = SMGR_QUERY_STARTED_PER_TENANT_TIMELINE
-            .get_metric_with_label_values(&[
-                SmgrQueryType::GetPageAtLsn.into(),
-                &branch_id,
-            ])
+            .get_metric_with_label_values(&[SmgrQueryType::GetPageAtLsn.into(), &branch_id])
             .unwrap();
         let per_timeline_getpage_latency = SMGR_QUERY_TIME_PER_TENANT_TIMELINE
-            .get_metric_with_label_values(&[
-                SmgrQueryType::GetPageAtLsn.into(),
-                &branch_id,
-            ])
+            .get_metric_with_label_values(&[SmgrQueryType::GetPageAtLsn.into(), &branch_id])
             .unwrap();
 
         let global_batch_size = PAGE_SERVICE_BATCH_SIZE_GLOBAL.clone();
@@ -1943,7 +1925,6 @@ static REMOTE_TIMELINE_CLIENT_CALLS: Lazy<IntCounterPairVec> = Lazy::new(|| {
     )
     .unwrap()
 });
-
 
 pub(crate) static NODE_UTILIZATION_SCORE: Lazy<UIntGauge> = Lazy::new(|| {
     register_uint_gauge!(
@@ -2595,10 +2576,8 @@ impl TimelineMetrics {
         let branch_id = branch_id_raw.to_string();
         let logical_size_histo =
             StorageTimeMetrics::new(StorageTimeOperation::LogicalSize, &branch_id);
-        let find_gc_cutoffs_histo = StorageTimeMetrics::new(
-            StorageTimeOperation::FindGcCutoffs,
-            &branch_id,
-        );
+        let find_gc_cutoffs_histo =
+            StorageTimeMetrics::new(StorageTimeOperation::FindGcCutoffs, &branch_id);
         let last_record_lsn_gauge = LAST_RECORD_LSN
             .get_metric_with_label_values(&[&branch_id])
             .unwrap();
@@ -2741,14 +2720,9 @@ impl TimelineMetrics {
         // outlive an individual smgr connection, but not the timeline.
 
         for op in StorageTimeOperation::VARIANTS {
-            let _ =
-                STORAGE_TIME_SUM_PER_TIMELINE.remove_label_values(&[op, branch_id]);
-            let _ =
-                STORAGE_TIME_COUNT_PER_TIMELINE.remove_label_values(&[op, branch_id]);
-            let _ = STORAGE_ACTIVE_COUNT_PER_TIMELINE.remove_label_values(&[
-                op,
-                branch_id,
-            ]);
+            let _ = STORAGE_TIME_SUM_PER_TIMELINE.remove_label_values(&[op, branch_id]);
+            let _ = STORAGE_TIME_COUNT_PER_TIMELINE.remove_label_values(&[op, branch_id]);
+            let _ = STORAGE_ACTIVE_COUNT_PER_TIMELINE.remove_label_values(&[op, branch_id]);
         }
 
         for op in StorageIoSizeOperation::VARIANTS {
@@ -2759,31 +2733,21 @@ impl TimelineMetrics {
 
         {
             let mut res = [Ok(()), Ok(())];
-            WAIT_LSN_START_FINISH_COUNTERPAIR
-                .remove_label_values(&mut res, &[branch_id]);
+            WAIT_LSN_START_FINISH_COUNTERPAIR.remove_label_values(&mut res, &[branch_id]);
         }
 
-        let _ = SMGR_QUERY_STARTED_PER_TENANT_TIMELINE.remove_label_values(&[
-            SmgrQueryType::GetPageAtLsn.into(),
-            branch_id,
-        ]);
-        let _ = SMGR_QUERY_TIME_PER_TENANT_TIMELINE.remove_label_values(&[
-            SmgrQueryType::GetPageAtLsn.into(),
-            branch_id,
-        ]);
-        let _ = PAGE_SERVICE_BATCH_SIZE_PER_TENANT_TIMELINE
-            .remove_label_values(&[branch_id]);
-        let _ =
-            PAGESERVER_TIMELINE_WAL_RECORDS_RECEIVED.remove_label_values(&[branch_id]);
-        let _ = PAGE_SERVICE_SMGR_FLUSH_INPROGRESS_MICROS
-            .remove_label_values(&[branch_id]);
+        let _ = SMGR_QUERY_STARTED_PER_TENANT_TIMELINE
+            .remove_label_values(&[SmgrQueryType::GetPageAtLsn.into(), branch_id]);
+        let _ = SMGR_QUERY_TIME_PER_TENANT_TIMELINE
+            .remove_label_values(&[SmgrQueryType::GetPageAtLsn.into(), branch_id]);
+        let _ = PAGE_SERVICE_BATCH_SIZE_PER_TENANT_TIMELINE.remove_label_values(&[branch_id]);
+        let _ = PAGESERVER_TIMELINE_WAL_RECORDS_RECEIVED.remove_label_values(&[branch_id]);
+        let _ = PAGE_SERVICE_SMGR_FLUSH_INPROGRESS_MICROS.remove_label_values(&[branch_id]);
         let _ = PAGE_SERVICE_SMGR_BATCH_WAIT_TIME.remove_label_values(&[branch_id]);
 
         for reason in GetPageBatchBreakReason::iter() {
-            let _ = PAGE_SERVICE_BATCH_BREAK_REASON_PER_TENANT_TIMELINE.remove_label_values(&[
-                branch_id,
-                reason.into(),
-            ]);
+            let _ = PAGE_SERVICE_BATCH_BREAK_REASON_PER_TENANT_TIMELINE
+                .remove_label_values(&[branch_id, reason.into()]);
         }
     }
 }
@@ -2924,8 +2888,7 @@ impl Drop for RemoteTimelineClientMetrics {
         } = self;
         for ((a, b), _) in calls.get_mut().unwrap().drain() {
             let mut res = [Ok(()), Ok(())];
-            REMOTE_TIMELINE_CLIENT_CALLS
-                .remove_label_values(&mut res, &[branch_id, a, b]);
+            REMOTE_TIMELINE_CLIENT_CALLS.remove_label_values(&mut res, &[branch_id, a, b]);
             // don't care about results
         }
         {

@@ -20,14 +20,14 @@ use utils::generation::Generation;
 use utils::id::BranchId;
 
 use super::TenantSharedResources;
+use crate::TEMP_FILE_SUFFIX;
 use crate::config::PageServerConf;
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::TENANT;
-use crate::task_mgr::{BACKGROUND_RUNTIME, TaskKind};
 use crate::page_server::timeline::ShutdownMode;
 use crate::page_server::{AttachedTenantConf, GcError, GcResult, PageServer};
+use crate::task_mgr::{BACKGROUND_RUNTIME, TaskKind};
 use crate::virtual_file::MaybeFatalIo;
-use crate::TEMP_FILE_SUFFIX;
 
 /// Precursor to deletion of a tenant dir: we do a fast rename to a tmp path, and then
 /// the slower actual deletion in the background.

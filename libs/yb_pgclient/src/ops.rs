@@ -8,8 +8,8 @@ use crate::error::YbError;
 use crate::partition::{encode_hash_partition_key, pgsql_hash_code};
 use crate::pb::yb::{
     PgsqlColRefPb, PgsqlColumnValuePb, PgsqlConditionPb, PgsqlExpressionPb, PgsqlReadRequestPb,
-    PgsqlWriteRequestPb, QlClient, QlOperator, QlValuePb, pgsql_expression_pb, ql_value_pb,
-    pgsql_write_request_pb::PgsqlStmtType,
+    PgsqlWriteRequestPb, QlClient, QlOperator, QlValuePb, pgsql_expression_pb,
+    pgsql_write_request_pb::PgsqlStmtType, ql_value_pb,
 };
 use crate::rows::ValueType;
 use crate::table::{ColumnKind, TableHandle};
@@ -192,7 +192,11 @@ impl RangeRead {
             read.limit = Some(self.limit);
         }
         if !self.hash_values.is_empty() {
-            let values: Vec<QlValuePb> = self.hash_values.iter().map(BindValue::to_ql_value).collect();
+            let values: Vec<QlValuePb> = self
+                .hash_values
+                .iter()
+                .map(BindValue::to_ql_value)
+                .collect();
             let hash = pgsql_hash_code(&values)?;
             read.hash_code = Some(hash.into());
             read.partition_key = Some(encode_hash_partition_key(hash));
@@ -477,11 +481,7 @@ mod tests {
     fn read_rejects_wrong_hash_count() {
         let table = test_table(); // one hash column
         assert!(
-            RangeRead::new(
-                &table,
-                vec![BindValue::Text("a".into()), BindValue::I64(2)],
-            )
-            .is_err()
+            RangeRead::new(&table, vec![BindValue::Text("a".into()), BindValue::I64(2)],).is_err()
         );
     }
 }

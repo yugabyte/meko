@@ -382,12 +382,8 @@ impl PostgresRedoManager {
                     ),
                 };
                 let proc = Arc::new(Process {
-                    process: process::WalRedoProcess::launch(
-                        self.conf,
-                        self.branch_id,
-                        pg_version,
-                    )
-                    .context("launch walredo process")?,
+                    process: process::WalRedoProcess::launch(self.conf, self.branch_id, pg_version)
+                        .context("launch walredo process")?,
                     _launched_processes_guard,
                 });
                 let duration = start.elapsed();

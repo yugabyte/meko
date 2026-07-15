@@ -72,7 +72,10 @@ async fn main() -> anyhow::Result<()> {
         read.cond(&pages, "blknum", CondOp::Ge, BindValue::I64(blk))?
             .cond(&pages, "blknum", CondOp::Lt, BindValue::I64(hi))?
             .cond(&pages, "lsn", CondOp::Le, BindValue::I64(target))?
-            .targets(&pages, &["blknum", "lsn", "is_image", "will_init", "payload"])?
+            .targets(
+                &pages,
+                &["blknum", "lsn", "is_image", "will_init", "payload"],
+            )?
             .limit(limit)
     } else {
         read.cond(&pages, "blknum", CondOp::Eq, BindValue::I64(blk))?
@@ -83,7 +86,11 @@ async fn main() -> anyhow::Result<()> {
 
     eprintln!(
         "issuing {} (blk_lo={blk} scan_hi={scan_hi:?} target_lsn={target} limit={limit})…",
-        if scan_hi.is_some() { "SCAN" } else { "chain read" }
+        if scan_hi.is_some() {
+            "SCAN"
+        } else {
+            "chain read"
+        }
     );
     let mut pinned = false;
     let overall = Instant::now();
@@ -95,9 +102,11 @@ async fn main() -> anyhow::Result<()> {
         let t0 = Instant::now();
         // Bound each page ourselves so a genuine hang is visible as a
         // probe-level timeout rather than an infinite wait.
-        let res =
-            tokio::time::timeout(Duration::from_secs(45), client.read_page(&pages, &read, paging.take()))
-                .await;
+        let res = tokio::time::timeout(
+            Duration::from_secs(45),
+            client.read_page(&pages, &read, paging.take()),
+        )
+        .await;
         let page = match res {
             Err(_) => {
                 eprintln!(
@@ -132,7 +141,10 @@ async fn main() -> anyhow::Result<()> {
             None => break,
         }
     }
-    eprintln!("DONE: {rows_total} rows over {page_no} page(s) in {:?}", overall.elapsed());
+    eprintln!(
+        "DONE: {rows_total} rows over {page_no} page(s) in {:?}",
+        overall.elapsed()
+    );
     Ok(())
 }
 

@@ -731,7 +731,13 @@ impl YsqlClient {
                 let config = config.clone();
                 let tls = tls.clone();
                 async move {
-                    open_tls(&config, &tls, set_fast_path_upsert, disable_transactional_writes).await
+                    open_tls(
+                        &config,
+                        &tls,
+                        set_fast_path_upsert,
+                        disable_transactional_writes,
+                    )
+                    .await
                 }
                 .boxed()
             })

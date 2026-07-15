@@ -49,20 +49,16 @@ pub(crate) enum TimelineImportFinalizeError {
 }
 
 pub(crate) enum TimelineImportUpdateError {
-    ImportNotFound {
-        branch_id: BranchId,
-    },
+    ImportNotFound { branch_id: BranchId },
     UnexpectedUpdate,
 }
 
 impl From<TimelineImportUpdateError> for ApiError {
     fn from(err: TimelineImportUpdateError) -> ApiError {
         match err {
-            TimelineImportUpdateError::ImportNotFound {
-                branch_id,
-            } => ApiError::NotFound(
-                anyhow::anyhow!("Import for {branch_id} not found").into(),
-            ),
+            TimelineImportUpdateError::ImportNotFound { branch_id } => {
+                ApiError::NotFound(anyhow::anyhow!("Import for {branch_id} not found").into())
+            }
             TimelineImportUpdateError::UnexpectedUpdate => {
                 ApiError::InternalServerError(anyhow::anyhow!("Update request is unexpected"))
             }

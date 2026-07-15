@@ -18,9 +18,9 @@ use nix::sys::socket::{setsockopt, sockopt};
 use pageserver::basebackup_cache::BasebackupCache;
 use pageserver::config::{PageServerConf, PageserverIdentity, ignored_fields};
 use pageserver::metrics::{STARTUP_DURATION, STARTUP_IS_LOADING};
+use pageserver::page_server::{TenantSharedResources, mgr};
 use pageserver::page_service::GrpcPageServiceHandler;
 use pageserver::task_mgr::{BACKGROUND_RUNTIME, COMPUTE_REQUEST_RUNTIME, MGMT_REQUEST_RUNTIME};
-use pageserver::page_server::{TenantSharedResources, mgr};
 use pageserver::{
     CancellableTask, HttpEndpointListener, HttpsEndpointListener, MetricsCollectionTask, http,
     page_service, task_mgr, virtual_file,
@@ -407,7 +407,8 @@ fn start_pageserver(
     let http_auth;
     let pg_auth;
     let grpc_auth;
-    if [conf.http_auth_type, conf.pg_auth_type, conf.grpc_auth_type].contains(&AuthType::YbLightJWT) {
+    if [conf.http_auth_type, conf.pg_auth_type, conf.grpc_auth_type].contains(&AuthType::YbLightJWT)
+    {
         // unwrap is ok because check is performed when creating config, so path is set and exists
         let key_path = conf.auth_validation_public_key_path.as_ref().unwrap();
         info!("Loading public key(s) for verifying JWT tokens from {key_path:?}");

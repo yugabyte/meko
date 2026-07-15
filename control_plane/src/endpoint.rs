@@ -56,8 +56,8 @@ use compute_api::responses::{
     TlsConfig,
 };
 use compute_api::spec::{
-    Cluster, ComputeAudit, ComputeFeature, ComputeMode, ComputeSpec, Database, PageserverProtocol,
-    PageserverConnectionItem, PgIdent, RemoteExtSpec, Role,
+    Cluster, ComputeAudit, ComputeFeature, ComputeMode, ComputeSpec, Database,
+    PageserverConnectionItem, PageserverProtocol, PgIdent, RemoteExtSpec, Role,
 };
 
 // re-export these, because they're used in the reconfigure() function
@@ -82,8 +82,8 @@ use pageserver_api::config::DEFAULT_GRPC_LISTEN_PORT as DEFAULT_PAGESERVER_GRPC_
 use pageserver_api::controller_api::ComputeEndpoint;
 use postgres_connection::parse_host_port;
 
-use crate::local_env::LocalEnv;
 use crate::endpoint_storage::EndpointStorage;
+use crate::local_env::LocalEnv;
 use crate::pageserver::PageServerNode;
 use crate::postgresql_conf::PostgresConf;
 use crate::safekeeper::SafekeeperNode;
@@ -292,9 +292,7 @@ impl ComputeControlPlane {
             // creating another primary, both reading the state before checking it here,
             // but it's better than nothing.
             let mut duplicates = self.endpoints.iter().filter(|(_k, v)| {
-                v.branch_id == branch_id
-                    && v.mode == mode
-                    && v.status() != EndpointStatus::Stopped
+                v.branch_id == branch_id && v.mode == mode && v.status() != EndpointStatus::Stopped
             });
 
             if let Some((key, _)) = duplicates.next() {
@@ -1240,14 +1238,16 @@ impl Endpoint {
         {
             let storage = EndpointStorage::from_conf(&self.env, es_conf);
             if let Err(e) = storage.stop(true) {
-                eprintln!("endpoint_storage for endpoint {} stop failed: {e:#}", self.endpoint_id);
+                eprintln!(
+                    "endpoint_storage for endpoint {} stop failed: {e:#}",
+                    self.endpoint_id
+                );
             }
         }
 
         if !owned_sk_ids.is_empty() || owns_endpoint_storage {
             let mut env = self.env.clone();
-            env.safekeepers
-                .retain(|sk| !owned_sk_ids.contains(&sk.id));
+            env.safekeepers.retain(|sk| !owned_sk_ids.contains(&sk.id));
             env.endpoint_storages
                 .retain(|es| es.endpoint_id != self.endpoint_id);
             env.persist_config()

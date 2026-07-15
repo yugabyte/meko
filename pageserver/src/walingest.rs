@@ -48,9 +48,9 @@ use wal_decoder::models::*;
 use crate::ZERO_PAGE;
 use crate::context::RequestContext;
 use crate::metrics::WAL_INGEST;
+use crate::page_server::{PageReconstructError, Timeline};
 use crate::pgdatadir_mapping::{DatadirModification, Version};
 use crate::span::debug_assert_current_span_has_branch_id;
-use crate::page_server::{PageReconstructError, Timeline};
 
 enum_pgversion! {CheckPoint, pgv::CheckPoint}
 
@@ -356,9 +356,7 @@ impl WalIngest {
             }
         }
 
-        modification
-            .ingest_batch(interpreted.batch, ctx)
-            .await?;
+        modification.ingest_batch(interpreted.batch, ctx).await?;
 
         // If checkpoint data was updated, store the new version in the repository
         if self.checkpoint_modified {

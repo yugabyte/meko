@@ -78,8 +78,7 @@ pub(crate) fn encode_call(
 
     let header_len = header.encoded_len();
     let body_len = request.encoded_len();
-    let total =
-        varint_len(header_len as u64) + header_len + varint_len(body_len as u64) + body_len;
+    let total = varint_len(header_len as u64) + header_len + varint_len(body_len as u64) + body_len;
 
     let mut buf = BytesMut::with_capacity(4 + total);
     buf.put_u32(

@@ -8,7 +8,8 @@ use utils::lsn::Lsn;
 
 use crate::receive_wal::WalAcceptor;
 use crate::safekeeper::{
-    AcceptorProposerMessage, AppendRequest, AppendRequestHeader, ProposerAcceptorMessage, SafeKeeper,
+    AcceptorProposerMessage, AppendRequest, AppendRequestHeader, ProposerAcceptorMessage,
+    SafeKeeper,
 };
 use crate::send_wal::EndWatch;
 use crate::timeline::{SharedState, StateSK, Timeline, get_timeline_dir};

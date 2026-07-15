@@ -217,7 +217,9 @@ impl SessionCore {
 /// session closed early.
 fn now_millis() -> u64 {
     static BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    BASE.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+    BASE.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
 }
 
 /// The installed session set, spread ACROSS all tserver endpoints so both

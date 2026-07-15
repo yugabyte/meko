@@ -201,13 +201,15 @@ impl SerializedValueBatch {
 
             let val_ser_size = batch.raw.len() - relative_off as usize;
 
-            batch.metadata.push(ValueMeta::Serialized(SerializedValueMeta {
-                key: key.to_compact(),
-                lsn: next_record_lsn,
-                batch_offset: relative_off,
-                len: val_ser_size,
-                will_init: val.will_init(),
-            }));
+            batch
+                .metadata
+                .push(ValueMeta::Serialized(SerializedValueMeta {
+                    key: key.to_compact(),
+                    lsn: next_record_lsn,
+                    batch_offset: relative_off,
+                    len: val_ser_size,
+                    will_init: val.will_init(),
+                }));
             batch.max_lsn = std::cmp::max(batch.max_lsn, next_record_lsn);
             batch.len += 1;
             pageserver_api::write_trace::trace_stage("decode", &key, next_record_lsn);

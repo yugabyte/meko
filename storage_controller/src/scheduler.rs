@@ -4,8 +4,8 @@ use http_utils::error::ApiError;
 use serde::Serialize;
 use utils::id::NodeId;
 
-use crate::node::Node;
 use crate::branch::Branch;
+use crate::node::Node;
 
 /// Scenarios in which we cannot find a suitable location for a tenant shard
 #[derive(thiserror::Error, Debug)]
@@ -320,7 +320,6 @@ impl Scheduler {
     pub(crate) fn get_node_attached_branch_count(&self, node_id: NodeId) -> usize {
         self.nodes.get(&node_id).unwrap().attached_branch_count
     }
-
 }
 
 #[cfg(test)]
@@ -387,8 +386,8 @@ mod tests {
         assert_eq!(scheduler.get_node_branch_count(NodeId(2)), 1);
         assert_eq!(scheduler.get_node_attached_branch_count(NodeId(2)), 1);
 
-        let scheduled = scheduler
-            .schedule_shard::<AttachedShardTag>(&t1_intent.all_pageservers(), &context)?;
+        let scheduled =
+            scheduler.schedule_shard::<AttachedShardTag>(&t1_intent.all_pageservers(), &context)?;
         t1_intent.push_secondary(&mut scheduler, scheduled);
 
         assert_eq!(scheduler.get_node_branch_count(NodeId(1)), 1);

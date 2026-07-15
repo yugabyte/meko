@@ -96,7 +96,14 @@ async fn table_oids(ysql: &YsqlClient, table: &str) -> (u32, u32) {
     let db_oid = rows[0].get::<_, i64>(0) as u32;
     let rel_oid = rows[0].get::<_, i64>(1) as u32;
     let relfilenode = rows[0].get::<_, i64>(2) as u32;
-    (db_oid, if relfilenode != 0 { relfilenode } else { rel_oid })
+    (
+        db_oid,
+        if relfilenode != 0 {
+            relfilenode
+        } else {
+            rel_oid
+        },
+    )
 }
 
 async fn connect() -> Arc<PgClient> {
@@ -142,12 +149,7 @@ async fn read_branch_one_page(
 
 fn rows_to_lsn_payload(rows: &[yb_pgclient::Row]) -> Vec<(i64, Bytes)> {
     rows.iter()
-        .map(|r| {
-            (
-                r[0].as_i64().unwrap(),
-                r[1].as_bytes().unwrap().clone(),
-            )
-        })
+        .map(|r| (r[0].as_i64().unwrap(), r[1].as_bytes().unwrap().clone()))
         .collect()
 }
 
@@ -176,7 +178,13 @@ async fn bulk_upsert_and_paged_descending_read_cross_check() {
                 1 => vec![lsn as u8, 0x00, 0xff, 0x10],
                 _ => format!("{branch}-{lsn}-\u{00e9}\u{4e16}").into_bytes(),
             };
-            rows.push(upsert_row(&table, branch, lsn, (lsn % 100) as i16, &payload));
+            rows.push(upsert_row(
+                &table,
+                branch,
+                lsn,
+                (lsn % 100) as i16,
+                &payload,
+            ));
         }
     }
     // Batches of 128 keep frames modest; each batch is one Perform.
@@ -229,7 +237,10 @@ async fn bulk_upsert_and_paged_descending_read_cross_check() {
 
     // Reverse scan = ascending LSN; cross-check the other direction too.
     let read_asc = read.clone().descending();
-    let got_asc = client.read_all(&table, &read_asc).await.expect("read_all asc");
+    let got_asc = client
+        .read_all(&table, &read_asc)
+        .await
+        .expect("read_all asc");
     let expected_asc = ysql
         .query(
             &format!(
@@ -266,7 +277,9 @@ async fn bulk_upsert_and_paged_descending_read_cross_check() {
     assert_eq!(via_ysql[0].get::<_, i16>(0), 99);
     assert_eq!(via_ysql[0].get::<_, &[u8]>(1), b"v2");
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -322,7 +335,9 @@ async fn multiplexed_concurrent_performs() {
 
     // A healthy multiplexed run never needed a session recovery.
     assert_eq!(client.session_id(), session_before);
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -389,7 +404,9 @@ async fn pooled_write_sessions_fan_out_and_recover() {
     let got = read_branch_one_page(&client, &table, "pool-r").await;
     assert_eq!(got.len(), 1);
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -458,7 +475,10 @@ async fn reads_and_writes_spread_across_tservers() {
     // The pool physically spans all three tservers.
     let peers = client.connected_peers();
     let distinct_peers: std::collections::BTreeSet<&String> = peers.iter().collect();
-    println!("spread: pool peers {peers:?} ({} distinct)", distinct_peers.len());
+    println!(
+        "spread: pool peers {peers:?} ({} distinct)",
+        distinct_peers.len()
+    );
     let (read_ep, write_ep) = client.endpoint_spread();
     assert_eq!(read_ep, 3, "one read session per endpoint");
     assert_eq!(write_ep, 3, "write sessions cover all three endpoints");
@@ -477,7 +497,10 @@ async fn reads_and_writes_spread_across_tservers() {
         let rows: Vec<UpsertRow> = (0..20i64)
             .map(|lsn| upsert_row(&table, branch, lsn, 0, format!("{branch}:{lsn}").as_bytes()))
             .collect();
-        client.upsert_batch(&table, &rows).await.expect("seed upsert");
+        client
+            .upsert_batch(&table, &rows)
+            .await
+            .expect("seed upsert");
     }
     // ~600 single-page reads + interleaved writes. Reads target the
     // seeded branches (stable count 20); the interleaved writes go to a
@@ -532,10 +555,15 @@ async fn reads_and_writes_spread_across_tservers() {
         }
     }
     assert_eq!(n, DEEP as usize, "deep pinned scan read every row");
-    assert!(pages > 50, "expected a long paging chain, got {pages} pages");
+    assert!(
+        pages > 50,
+        "expected a long paging chain, got {pages} pages"
+    );
     println!("spread: deep scan {n} rows over {pages} pinned continuations");
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -568,7 +596,11 @@ async fn session_expiry_recovery() {
         .expect("upsert across session recovery");
 
     let recovered_session = client.session_id();
-    assert_ne!(recovered_session, u64::MAX - 1, "session was re-established");
+    assert_ne!(
+        recovered_session,
+        u64::MAX - 1,
+        "session was re-established"
+    );
     assert_ne!(
         recovered_session, healthy_session,
         "recovery must open a fresh session"
@@ -585,7 +617,9 @@ async fn session_expiry_recovery() {
         .await
         .expect("post-recovery upsert");
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -621,7 +655,9 @@ async fn endpoint_failover_skips_dead_tserver() {
     let got = read_branch_one_page(&client, &table, "f").await;
     assert_eq!(got.len(), 1);
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -708,7 +744,9 @@ async fn one_perform_two_ops_share_a_snapshot() {
 
     stop.store(true, Ordering::Relaxed);
     writer.await.expect("writer");
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -846,7 +884,9 @@ async fn paged_read_pinning_under_concurrent_writes() {
     let unpinned = client.read_all(&table, &read).await.unwrap();
     assert_eq!(unpinned.len(), before_burst.len() + 50);
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -1018,9 +1058,15 @@ async fn single_endpoint_reads_cover_remote_leader_tablets() {
             .unwrap()
         })
         .collect();
-    client.upsert_batch(&table, &rows).await.expect("upsert to remote-leader tablets");
+    client
+        .upsert_batch(&table, &rows)
+        .await
+        .expect("upsert to remote-leader tablets");
     let count: i64 = ysql
-        .query(&format!("SELECT count(*) FROM {TABLE} WHERE blknum = 999"), &[])
+        .query(
+            &format!("SELECT count(*) FROM {TABLE} WHERE blknum = 999"),
+            &[],
+        )
         .await
         .unwrap()[0]
         .get(0);
@@ -1089,9 +1135,9 @@ async fn single_endpoint_reads_cover_remote_leader_tablets() {
                 Ok(Err(e)) => Err(format!("{label}: PAGED SCAN ERROR {e}")),
                 // 6 + 114 rows blk<500 (blk=999 excluded by the bound).
                 Ok(Ok((n, pages))) if n == 120 && pages >= 7 => Ok(()),
-                Ok(Ok((n, pages))) => {
-                    Err(format!("{label}: got {n} rows in {pages} pages, want 120 in >=7"))
-                }
+                Ok(Ok((n, pages))) => Err(format!(
+                    "{label}: got {n} rows in {pages} pages, want 120 in >=7"
+                )),
             }
         }));
     }
@@ -1101,14 +1147,14 @@ async fn single_endpoint_reads_cover_remote_leader_tablets() {
             failures.push(f);
         }
     }
-    println!(
-        "single-endpoint paged scans: {}/40 ok",
-        40 - failures.len()
-    );
+    println!("single-endpoint paged scans: {}/40 ok", 40 - failures.len());
     for f in &failures {
         println!("  {f}");
     }
-    assert!(failures.is_empty(), "paged scans must complete: {failures:#?}");
+    assert!(
+        failures.is_empty(),
+        "paged scans must complete: {failures:#?}"
+    );
 
     // ---- Multi-op Perform (read_pages): all 40 scans in ONE Perform —
     // the ops fan out to tablets whose leaders live on all three
@@ -1162,7 +1208,9 @@ async fn single_endpoint_reads_cover_remote_leader_tablets() {
         assert_eq!(n, 120);
     }
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -1233,7 +1281,10 @@ async fn reads_progress_under_sustained_writes() {
                     &[("payload", BindValue::Bytes(Bytes::from_static(b"w")))],
                 )
                 .unwrap();
-                client.upsert_batch(&table, &[row]).await.expect("writer upsert");
+                client
+                    .upsert_batch(&table, &[row])
+                    .await
+                    .expect("writer upsert");
                 lsn += 1;
             }
             lsn
@@ -1326,7 +1377,9 @@ async fn reads_progress_under_sustained_writes() {
         all_failures.len()
     );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -1443,7 +1496,10 @@ async fn large_payload_page_chains_complete() {
                         .unwrap()
                     })
                     .collect();
-                client.upsert_batch(&table, &rows).await.expect("writer upsert");
+                client
+                    .upsert_batch(&table, &rows)
+                    .await
+                    .expect("writer upsert");
                 lsn += 8;
             }
         })
@@ -1579,7 +1635,9 @@ async fn large_payload_page_chains_complete() {
         failures.first().map(String::as_str).unwrap_or("")
     );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -1683,7 +1741,10 @@ async fn hot_block_chain_reads_complete_under_writes() {
                         .unwrap()
                     })
                     .collect();
-                client.upsert_batch(&table, &rows).await.expect("writer upsert");
+                client
+                    .upsert_batch(&table, &rows)
+                    .await
+                    .expect("writer upsert");
                 lsn += 16;
             }
         })
@@ -1764,7 +1825,9 @@ async fn hot_block_chain_reads_complete_under_writes() {
         "hot-block chain reads must complete under sustained writes: {failures:#?}"
     );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -1815,7 +1878,9 @@ async fn single_tablet_batch_atomicity() {
         observed.iter().max().unwrap_or(&0)
     );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -1907,7 +1972,9 @@ async fn idle_close_then_reopen_without_opentable() {
         "unexpected continuation error: {err}"
     );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -1937,9 +2004,14 @@ async fn idle_timeout_none_never_closes() {
     let total = client.connected_peers().len();
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let warm = client.sweep_idle_for_test().await;
-    assert_eq!(warm, total, "idle_timeout=None must keep every session warm");
+    assert_eq!(
+        warm, total,
+        "idle_timeout=None must keep every session warm"
+    );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -1958,17 +2030,27 @@ async fn empty_branch_read_returns_no_rows() {
     let table = client.open_table(db_oid, table_oid).await.expect("open");
 
     // Never-written branch: clean, empty, no error.
-    assert!(read_branch_one_page(&client, &table, "ghost").await.is_empty());
+    assert!(
+        read_branch_one_page(&client, &table, "ghost")
+            .await
+            .is_empty()
+    );
 
     // A write to a different branch must not make "ghost" non-empty.
     client
         .upsert_batch(&table, &[upsert_row(&table, "real", 1, 1, b"v")])
         .await
         .expect("upsert");
-    assert!(read_branch_one_page(&client, &table, "ghost").await.is_empty());
+    assert!(
+        read_branch_one_page(&client, &table, "ghost")
+            .await
+            .is_empty()
+    );
     assert_eq!(read_branch_one_page(&client, &table, "real").await.len(), 1);
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -1985,10 +2067,19 @@ async fn empty_upsert_batch_is_noop() {
     let client = connect().await;
     let table = client.open_table(db_oid, table_oid).await.expect("open");
 
-    client.upsert_batch(&table, &[]).await.expect("empty batch is ok");
-    assert!(read_branch_one_page(&client, &table, "any").await.is_empty());
+    client
+        .upsert_batch(&table, &[])
+        .await
+        .expect("empty batch is ok");
+    assert!(
+        read_branch_one_page(&client, &table, "any")
+            .await
+            .is_empty()
+    );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -2031,7 +2122,9 @@ async fn batch_with_duplicate_key_overwrites_and_keeps_others() {
     assert_eq!(rows[0], (1, Bytes::from_static(b"overwritten")));
     assert_eq!(rows[1], (2, Bytes::from_static(b"fresh")));
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------
@@ -2093,5 +2186,7 @@ async fn randomized_upsert_cross_check() {
         .collect();
     assert_eq!(got, model, "final model mismatch (seed {seed})");
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[]).await.unwrap();
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
 }

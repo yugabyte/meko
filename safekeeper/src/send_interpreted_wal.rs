@@ -422,13 +422,12 @@ impl InterpretedWalReader {
         // Bounded: revisiting one record needs only a few batches, and we must
         // not hang the (already-failing) reader.
         for _ in 0..16 {
-            let wal = match tokio::time::timeout(Duration::from_secs(10), self.wal_stream.next())
-                .await
-            {
-                Ok(Some(WalOrReset::Wal(Ok(wb)))) => wb.wal,
-                // Reset / stream end / read error / timeout — can't decide.
-                _ => break,
-            };
+            let wal =
+                match tokio::time::timeout(Duration::from_secs(10), self.wal_stream.next()).await {
+                    Ok(Some(WalOrReset::Wal(Ok(wb)))) => wb.wal,
+                    // Reset / stream end / read error / timeout — can't decide.
+                    _ => break,
+                };
             redec.feed_bytes(&wal);
             loop {
                 match redec.poll_decode() {
@@ -678,10 +677,8 @@ impl InterpretedWalReaderHandle {
         sender: tokio::sync::mpsc::Sender<Batch>,
         start_pos: Lsn,
     ) -> Result<(), SendError<AttachSenderNotification>> {
-        self.sender_notification_tx.send(AttachSenderNotification {
-            sender,
-            start_pos,
-        })
+        self.sender_notification_tx
+            .send(AttachSenderNotification { sender, start_pos })
     }
 
     /// Get the current WAL position of the reader

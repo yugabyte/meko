@@ -612,11 +612,7 @@ struct GrpcClient {
 }
 
 impl GrpcClient {
-    async fn new(
-        connstring: &str,
-        branch_id: BranchId,
-        compression: bool,
-    ) -> anyhow::Result<Self> {
+    async fn new(connstring: &str, branch_id: BranchId, compression: bool) -> anyhow::Result<Self> {
         let mut client = page_api::Client::connect(
             connstring.to_string(),
             branch_id,
@@ -683,11 +679,7 @@ struct RichGrpcClient {
 }
 
 impl RichGrpcClient {
-    async fn new(
-        connstring: &str,
-        branch_id: BranchId,
-        compression: bool,
-    ) -> anyhow::Result<Self> {
+    async fn new(connstring: &str, branch_id: BranchId, compression: bool) -> anyhow::Result<Self> {
         let inner = Arc::new(client_grpc::PageserverClient::new(
             branch_id,
             connstring.to_string(),

@@ -109,7 +109,7 @@ use yb_tokio_postgres::types::ToSql;
 use crate::metrics::WalStorageMetrics;
 use crate::state::TimelinePersistentState;
 use crate::wal_cache::WalCache;
-use crate::wal_storage::{WalBookkeeping, Storage};
+use crate::wal_storage::{Storage, WalBookkeeping};
 
 // Re-export the auto-reconnecting Postgres client wrapper shared with
 // the pageserver's `YbStore`. See `ysql_client::YsqlClient` for the
@@ -571,8 +571,7 @@ impl YbWalStorage {
         // Seed the DELETE lower bound from YB so post-restart removals
         // don't scan/tombstone the empty range below the first surviving
         // segno. Cheap: one tablet lookup keyed on branch.
-        let min_segno =
-            Self::load_min_segno(&system_client, &table_name, &branch_id_str).await?;
+        let min_segno = Self::load_min_segno(&system_client, &table_name, &branch_id_str).await?;
 
         let me = YbWalStorage {
             inner,
@@ -1589,8 +1588,7 @@ impl YbSegmentReader {
         let cache = self.cache.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let res = fetch_chunks_from_yb(&client, &table, &branch_id, segno, pos)
-            .await;
+            let res = fetch_chunks_from_yb(&client, &table, &branch_id, segno, pos).await;
             let covering = match res {
                 Ok(fetched) => {
                     // Warm the cache with what we just read — but ONLY chunks
@@ -1770,12 +1768,10 @@ impl AsyncRead for YbSegmentReader {
                 }
                 Poll::Ready(Ok(Err(e))) => {
                     me.fetch = None;
-                    return Poll::Ready(Err(std::io::Error::other(
-                        format!(
-                            "YB WAL fetch failed for segno {} offset {}: {e}",
-                            me.segno, me.pos
-                        ),
-                    )));
+                    return Poll::Ready(Err(std::io::Error::other(format!(
+                        "YB WAL fetch failed for segno {} offset {}: {e}",
+                        me.segno, me.pos
+                    ))));
                 }
                 Poll::Ready(Err(_recv_err)) => {
                     // Spawned fetch task dropped its sender without
@@ -2160,7 +2156,9 @@ mod tests {
             read_client: client.clone(),
             system_client: client,
             table: table.to_string(),
-            cache: Some(Arc::new(std::sync::Mutex::new(WalCache::new(64 * 1024 * 1024)))),
+            cache: Some(Arc::new(std::sync::Mutex::new(WalCache::new(
+                64 * 1024 * 1024,
+            )))),
         });
         let storage = YbWalStorage::new(&branch_id, &state, yb_wal)
             .await
@@ -2402,15 +2400,10 @@ mod tests {
 
         // Read via system_client — the lane that does the real
         // load_write_lsn at SK startup.
-        let lsn = YbWalStorage::load_write_lsn(
-            &system,
-            &table,
-            &branch_s,
-            SEG_SIZE as usize,
-            Lsn(0),
-        )
-        .await
-        .expect("load_write_lsn via system_client");
+        let lsn =
+            YbWalStorage::load_write_lsn(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(0))
+                .await
+                .expect("load_write_lsn via system_client");
         let expected = 8192u64 + 256u64;
         assert_eq!(
             lsn,
@@ -2465,7 +2458,11 @@ mod tests {
             YbWalStorage::load_write_lsn(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(0))
                 .await
                 .expect("load_write_lsn");
-        assert_eq!(lsn, Lsn(10000), "end of WAL must equal the truncation point");
+        assert_eq!(
+            lsn,
+            Lsn(10000),
+            "end of WAL must equal the truncation point"
+        );
 
         // The chunk past the cut is gone; only two rows remain.
         let count: i64 = system
@@ -2544,14 +2541,7 @@ mod tests {
                      VALUES ($1, 0, $2, $3, $4, $5, $6)",
                     quote_relation(&table)
                 ),
-                &[
-                    &branch_s,
-                    &segno_i,
-                    &offset_i,
-                    &size_i,
-                    &data,
-                    &now_us,
-                ],
+                &[&branch_s, &segno_i, &offset_i, &size_i, &data, &now_us],
             )
             .await
             .expect("INSERT chunk");
@@ -2699,12 +2689,9 @@ mod tests {
         for (off, bytes) in [(0i64, &committed), (1024i64, &tail_old)] {
             let size = bytes.len() as i32;
             let slice = bytes.as_slice();
-            fpu.execute(
-                &insert_sql,
-                &[&branch_s, &seg, &off, &size, &slice],
-            )
-            .await
-            .expect("INSERT chunk");
+            fpu.execute(&insert_sql, &[&branch_s, &seg, &off, &size, &slice])
+                .await
+                .expect("INSERT chunk");
         }
 
         // Shared cache, as in production (one per YbWalConn).
@@ -2719,13 +2706,22 @@ mod tests {
 
         // flush = 1024: [0,1024) committed, [1024,4096) not yet.
         let flush = Arc::new(AtomicU64::new(1024));
-        let mut reader =
-            YbSegmentReader::new(yb_wal.clone(), &branch_id, 0, SEG_SIZE as usize, 0, flush.clone());
+        let mut reader = YbSegmentReader::new(
+            yb_wal.clone(),
+            &branch_id,
+            0,
+            SEG_SIZE as usize,
+            0,
+            flush.clone(),
+        );
 
         // 2. Read the committed range. The fetch sees both chunks, but only the
         //    committed one is cacheable.
         let mut head = vec![0u8; 1024];
-        reader.read_exact(&mut head).await.expect("read committed head");
+        reader
+            .read_exact(&mut head)
+            .await
+            .expect("read committed head");
         assert_eq!(head, committed, "committed range must read back");
 
         {
@@ -2758,7 +2754,10 @@ mod tests {
 
         // 4. The now-committed tail MUST come back as the rewrite.
         let mut tail = vec![0u8; 3072];
-        reader.read_exact(&mut tail).await.expect("read rewritten tail");
+        reader
+            .read_exact(&mut tail)
+            .await
+            .expect("read rewritten tail");
         assert_eq!(
             tail, tail_new,
             "reader served a stale cached tail after a term rewrite (#139)"
@@ -2801,9 +2800,12 @@ mod tests {
         );
         let head_slice = head_bytes.as_slice();
         let head_size = head_bytes.len() as i32;
-        fpu.execute(&insert_sql, &[&branch_s, &seg, &0i64, &head_size, &head_slice])
-            .await
-            .expect("INSERT head chunk");
+        fpu.execute(
+            &insert_sql,
+            &[&branch_s, &seg, &0i64, &head_size, &head_slice],
+        )
+        .await
+        .expect("INSERT head chunk");
 
         let yb_wal = Arc::new(YbWalConn {
             fpu_client: fpu.clone(),
@@ -2909,12 +2911,9 @@ mod tests {
 
         // 1. Stage the chunk as written by the old term.
         let old_slice = old.as_slice();
-        fpu.execute(
-            &insert_sql,
-            &[&branch_s, &seg, &off, &size, &old_slice],
-        )
-        .await
-        .expect("INSERT old chunk");
+        fpu.execute(&insert_sql, &[&branch_s, &seg, &off, &size, &old_slice])
+            .await
+            .expect("INSERT old chunk");
 
         let yb_wal = Arc::new(YbWalConn {
             fpu_client: fpu.clone(),
@@ -2926,13 +2925,22 @@ mod tests {
 
         // Live flush frontier, as the streaming reader would publish it.
         let flush = Arc::new(AtomicU64::new(1024));
-        let mut reader =
-            YbSegmentReader::new(yb_wal.clone(), &branch_id, 0, SEG_SIZE as usize, 0, flush.clone());
+        let mut reader = YbSegmentReader::new(
+            yb_wal.clone(),
+            &branch_id,
+            0,
+            SEG_SIZE as usize,
+            0,
+            flush.clone(),
+        );
 
         // 2. Read everything committed so far ([0,1024)). The reader fetches
         //    the whole covering chunk [0,4096) but must trust it only to 1024.
         let mut head = vec![0u8; 1024];
-        reader.read_exact(&mut head).await.expect("read committed head");
+        reader
+            .read_exact(&mut head)
+            .await
+            .expect("read committed head");
         assert_eq!(head, old[..1024], "committed prefix must read back");
 
         // 3. A new term rewrites the once-uncommitted tail; flush then advances
@@ -2941,18 +2949,18 @@ mod tests {
             .await
             .expect("DELETE old chunk");
         let new_slice = new.as_slice();
-        fpu.execute(
-            &insert_sql,
-            &[&branch_s, &seg, &off, &size, &new_slice],
-        )
-        .await
-        .expect("INSERT rewritten chunk");
+        fpu.execute(&insert_sql, &[&branch_s, &seg, &off, &size, &new_slice])
+            .await
+            .expect("INSERT rewritten chunk");
         flush.store(4096, Ordering::Release);
 
         // 4. The now-committed [1024,4096) MUST come back as the rewrite, not
         //    the pre-rewrite bytes the reader fetched (and may still hold).
         let mut tail = vec![0u8; 3072];
-        reader.read_exact(&mut tail).await.expect("read rewritten tail");
+        reader
+            .read_exact(&mut tail)
+            .await
+            .expect("read rewritten tail");
         assert_eq!(
             tail,
             new[1024..],
@@ -3006,12 +3014,9 @@ mod tests {
         );
 
         let old_slice = old.as_slice();
-        fpu.execute(
-            &insert_sql,
-            &[&branch_s, &seg, &off, &size, &old_slice],
-        )
-        .await
-        .expect("INSERT old chunk");
+        fpu.execute(&insert_sql, &[&branch_s, &seg, &off, &size, &old_slice])
+            .await
+            .expect("INSERT old chunk");
 
         let yb_wal = Arc::new(YbWalConn {
             fpu_client: fpu.clone(),
@@ -3023,27 +3028,36 @@ mod tests {
 
         // Flush frontier is ABSOLUTE: committed up to offset 1024 in segment 1.
         let flush = Arc::new(AtomicU64::new(seg_base + 1024));
-        let mut reader =
-            YbSegmentReader::new(yb_wal.clone(), &branch_id, 1, SEG_SIZE as usize, 0, flush.clone());
+        let mut reader = YbSegmentReader::new(
+            yb_wal.clone(),
+            &branch_id,
+            1,
+            SEG_SIZE as usize,
+            0,
+            flush.clone(),
+        );
 
         let mut head = vec![0u8; 1024];
-        reader.read_exact(&mut head).await.expect("read committed head");
+        reader
+            .read_exact(&mut head)
+            .await
+            .expect("read committed head");
         assert_eq!(head, old[..1024], "committed prefix must read back");
 
         fpu.execute(&delete_sql, &[&branch_s, &seg, &off])
             .await
             .expect("DELETE old chunk");
         let new_slice = new.as_slice();
-        fpu.execute(
-            &insert_sql,
-            &[&branch_s, &seg, &off, &size, &new_slice],
-        )
-        .await
-        .expect("INSERT rewritten chunk");
+        fpu.execute(&insert_sql, &[&branch_s, &seg, &off, &size, &new_slice])
+            .await
+            .expect("INSERT rewritten chunk");
         flush.store(seg_base + 4096, Ordering::Release);
 
         let mut tail = vec![0u8; 3072];
-        reader.read_exact(&mut tail).await.expect("read rewritten tail");
+        reader
+            .read_exact(&mut tail)
+            .await
+            .expect("read rewritten tail");
         assert_eq!(
             tail,
             new[1024..],
@@ -3134,7 +3148,11 @@ mod tests {
             let off: i64 = row.get("chunk_offset");
             let size: i32 = row.get("chunk_size");
             let data: Vec<u8> = row.get("data");
-            assert_eq!(data.len(), size as usize, "chunk_size must equal length(data)");
+            assert_eq!(
+                data.len(),
+                size as usize,
+                "chunk_size must equal length(data)"
+            );
             let abs = segno as u64 * SEG_SIZE + off as u64;
             assert_eq!(
                 abs,
@@ -3299,9 +3317,10 @@ mod tests {
                 .expect("insert adversarial row");
         }
 
-        let got = YbWalStorage::load_write_lsn(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(0))
-            .await
-            .expect("load_write_lsn");
+        let got =
+            YbWalStorage::load_write_lsn(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(0))
+                .await
+                .expect("load_write_lsn");
         assert_eq!(
             got,
             Lsn(5 * SEG_SIZE + 8192 + 128),
@@ -3315,7 +3334,11 @@ mod tests {
             YbWalStorage::load_write_lsn(&system, &table, &other, SEG_SIZE as usize, Lsn(4242))
                 .await
                 .expect("load_write_lsn (empty branch)");
-        assert_eq!(fallback, Lsn(4242), "empty branch must fall back to commit_lsn");
+        assert_eq!(
+            fallback,
+            Lsn(4242),
+            "empty branch must fall back to commit_lsn"
+        );
 
         drop_wals_table(&fpu, &table).await;
     }

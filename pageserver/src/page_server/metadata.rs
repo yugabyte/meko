@@ -332,11 +332,7 @@ pub struct Lineage {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     reparenting_history: Vec<utils::id::BranchId>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    original_ancestor: Option<(
-        utils::id::BranchId,
-        utils::lsn::Lsn,
-        chrono::NaiveDateTime,
-    )>,
+    original_ancestor: Option<(utils::id::BranchId, utils::lsn::Lsn, chrono::NaiveDateTime)>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -431,7 +427,11 @@ pub(crate) mod modern_serde {
         )
         .to_bytes()
         .unwrap();
-        assert_eq!(bytes.len(), METADATA_MAX_SIZE, "to_bytes pads to the max size");
+        assert_eq!(
+            bytes.len(),
+            METADATA_MAX_SIZE,
+            "to_bytes pads to the max size"
+        );
 
         // Legacy form: TimelineMetadata serialized as a `Vec<u8>` (visit_seq).
         let as_seq = serde_json::to_string(&bytes).unwrap();

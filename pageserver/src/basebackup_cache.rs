@@ -9,10 +9,7 @@ use tokio::{
     sync::mpsc::{Receiver, Sender, error::TrySendError},
 };
 use tokio_util::sync::CancellationToken;
-use utils::{
-    id::BranchId,
-    lsn::Lsn,
-};
+use utils::{id::BranchId, lsn::Lsn};
 
 use crate::{
     basebackup::send_basebackup_tarball,
@@ -21,8 +18,8 @@ use crate::{
         BASEBACKUP_CACHE_ENTRIES, BASEBACKUP_CACHE_PREPARE, BASEBACKUP_CACHE_PREPARE_QUEUE_SIZE,
         BASEBACKUP_CACHE_READ, BASEBACKUP_CACHE_SIZE,
     },
-    task_mgr::TaskKind,
     page_server::{Timeline, mgr::TenantManager},
+    task_mgr::TaskKind,
 };
 
 pub struct BasebackupPrepareRequest {
@@ -134,10 +131,7 @@ impl BasebackupCache {
     /// The basebackup will be prepared asynchronously, it does not block the caller.
     /// The request will be skipped if any cache limits are exceeded.
     pub fn send_prepare(&self, branch_id: BranchId, lsn: Lsn) {
-        let req = BasebackupPrepareRequest {
-            branch_id,
-            lsn,
-        };
+        let req = BasebackupPrepareRequest { branch_id, lsn };
 
         BASEBACKUP_CACHE_PREPARE_QUEUE_SIZE.inc();
         let res = self.prepare_sender.try_send(req);
@@ -170,11 +164,7 @@ impl BasebackupCache {
     /// If the entry is found, opens a file with the basebackup archive and returns it.
     /// The open file descriptor will prevent the file system from deleting the file
     /// even if the entry is removed from the cache in the background.
-    pub async fn get(
-        &self,
-        branch_id: BranchId,
-        lsn: Lsn,
-    ) -> Option<tokio::fs::File> {
+    pub async fn get(&self, branch_id: BranchId, lsn: Lsn) -> Option<tokio::fs::File> {
         if !self.is_enabled() {
             return None;
         }
@@ -226,8 +216,7 @@ impl BasebackupCache {
     }
 
     fn entry_path(&self, branch_id: BranchId, lsn: Lsn) -> Utf8PathBuf {
-        self.data_dir
-            .join(Self::entry_filename(branch_id, lsn))
+        self.data_dir.join(Self::entry_filename(branch_id, lsn))
     }
 }
 
@@ -266,11 +255,7 @@ impl BackgroundTask {
         self.c.data_dir.join("tmp")
     }
 
-    fn entry_tmp_path(
-        &self,
-        branch_id: BranchId,
-        lsn: Lsn,
-    ) -> Utf8PathBuf {
+    fn entry_tmp_path(&self, branch_id: BranchId, lsn: Lsn) -> Utf8PathBuf {
         self.tmp_dir()
             .join(BasebackupCache::entry_filename(branch_id, lsn))
     }
@@ -449,11 +434,7 @@ impl BackgroundTask {
     /// Ignores the filesystem errors as not-so-important, but the size counters
     /// are not decremented in this case, so the file will continue to be counted
     /// towards the size limits.
-    async fn try_remove_entry(
-        &mut self,
-        branch_id: BranchId,
-        entry: &CacheEntry,
-    ) {
+    async fn try_remove_entry(&mut self, branch_id: BranchId, entry: &CacheEntry) {
         let entry_path = self.c.entry_path(branch_id, entry.lsn);
 
         match tokio::fs::remove_file(&entry_path).await {
@@ -480,18 +461,20 @@ impl BackgroundTask {
     /// Insert the cache entry into in-memory state and update the size counters.
     /// Assumes that the file for the entry already exists on disk.
     /// If the entry already exists with previous LSN, it will be removed.
-    async fn upsert_entry(
-        &mut self,
-        branch_id: BranchId,
-        entry: CacheEntry,
-    ) {
+    async fn upsert_entry(&mut self, branch_id: BranchId, entry: CacheEntry) {
         self.entry_count += 1;
         BASEBACKUP_CACHE_ENTRIES.set(self.entry_count as u64);
 
         self.total_size_bytes += entry.size_bytes;
         BASEBACKUP_CACHE_SIZE.set(self.total_size_bytes);
 
-        let old_entry = self.c.entries.lock().unwrap().replace((branch_id, entry)).map(|(_, e)| e);
+        let old_entry = self
+            .c
+            .entries
+            .lock()
+            .unwrap()
+            .replace((branch_id, entry))
+            .map(|(_, e)| e);
 
         if let Some(old_entry) = old_entry {
             self.try_remove_entry(branch_id, &old_entry).await;
@@ -554,9 +537,7 @@ impl BackgroundTask {
             }
         }
 
-        let ps = self
-            .tenant_manager
-            .get_attached_tenant_shard(branch_id)?;
+        let ps = self.tenant_manager.get_attached_tenant_shard(branch_id)?;
 
         let timeline = ps.get_timeline(branch_id, true)?;
 

@@ -799,8 +799,6 @@ pub mod defaults {
 
     pub const DEFAULT_LOG_FORMAT: &str = "plain";
 
-
-
     pub const DEFAULT_SYNTHETIC_SIZE_CALCULATION_INTERVAL: &str = "10 min";
     pub const DEFAULT_BACKGROUND_TASK_MAXIMUM_DELAY: &str = "10s";
 

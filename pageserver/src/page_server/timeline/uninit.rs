@@ -10,8 +10,8 @@ use utils::id::BranchId;
 use utils::sync::gate::GateGuard;
 
 use super::Timeline;
-use crate::span::debug_assert_current_span_has_branch_id;
 use crate::page_server::{CreateTimelineError, CreateTimelineIdempotency, PageServer};
+use crate::span::debug_assert_current_span_has_branch_id;
 
 /// A timeline with some of its files on disk, being initialized.
 /// This struct ensures the atomicity of the timeline init: it's either properly created and inserted into pageserver's memory, or
@@ -163,9 +163,7 @@ impl<'t> UninitializedTimeline<'t> {
             //
             // We do not call Self::abort here.  Because we don't cleanly shut down our Timeline, [`Self::drop`] should
             // skip trying to delete the timeline directory too.
-            anyhow::bail!(
-                "Found freshly initialized timeline {branch_id} in the tenant slot"
-            )
+            anyhow::bail!("Found freshly initialized timeline {branch_id} in the tenant slot")
         }
 
         new_timeline.maybe_spawn_flush_loop();
@@ -177,12 +175,7 @@ impl<'t> UninitializedTimeline<'t> {
         Ok(&self
             .raw_timeline
             .as_ref()
-            .with_context(|| {
-                format!(
-                    "No raw timeline {} found",
-                    self.branch_id
-                )
-            })?
+            .with_context(|| format!("No raw timeline {} found", self.branch_id))?
             .0)
     }
 }
@@ -190,7 +183,8 @@ impl<'t> UninitializedTimeline<'t> {
 impl Drop for UninitializedTimeline<'_> {
     fn drop(&mut self) {
         if let Some((timeline, create_guard)) = self.raw_timeline.take() {
-            let _entered = info_span!("drop_uninitialized_timeline", branch_id = %self.branch_id).entered();
+            let _entered =
+                info_span!("drop_uninitialized_timeline", branch_id = %self.branch_id).entered();
             if self.needs_shutdown && !timeline.gate.close_complete() {
                 // This should not happen: caller should call [`Self::abort`] on failures
                 tracing::warn!(

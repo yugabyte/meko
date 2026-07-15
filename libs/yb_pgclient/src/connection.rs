@@ -186,11 +186,7 @@ impl Connection {
 
 /// Reads and dispatches frames until the transport fails; returns the
 /// close reason.
-async fn read_loop(
-    mut read_half: OwnedReadHalf,
-    pending: &Mutex<Pending>,
-    peer: &str,
-) -> String {
+async fn read_loop(mut read_half: OwnedReadHalf, pending: &Mutex<Pending>, peer: &str) -> String {
     loop {
         let total = match read_half.read_u32().await {
             Ok(n) => n as usize,
@@ -288,8 +284,8 @@ mod tests {
             // Recover the call id from the request header.
             let mut rest = bytes::Bytes::from(call);
             let header_len = prost::encoding::decode_varint(&mut rest).unwrap() as usize;
-            let header = crate::pb::yb::rpc::RequestHeader::decode(rest.split_to(header_len))
-                .unwrap();
+            let header =
+                crate::pb::yb::rpc::RequestHeader::decode(rest.split_to(header_len)).unwrap();
             let call_id = header.call_id.unwrap();
 
             // Keepalive FIRST: a bare zero length prefix.
@@ -318,7 +314,9 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(5)).await;
         });
 
-        let conn = Connection::connect(&addr, Duration::from_secs(5)).await.unwrap();
+        let conn = Connection::connect(&addr, Duration::from_secs(5))
+            .await
+            .unwrap();
         let req = crate::pb::yb::tserver::PgHeartbeatRequestPb::default();
         let resp = conn
             .call(

@@ -325,7 +325,10 @@ mod tests {
     #[test]
     fn text_preserves_interior_nul() {
         let rows = vec![vec![Value::Text(Bytes::from_static(b"a\0b"))]];
-        assert_eq!(decode_rows(&encode(&rows), &[ValueType::Text]).unwrap(), rows);
+        assert_eq!(
+            decode_rows(&encode(&rows), &[ValueType::Text]).unwrap(),
+            rows
+        );
     }
 
     #[test]

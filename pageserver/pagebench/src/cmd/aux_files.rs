@@ -78,9 +78,7 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
             })
             .collect::<HashMap<_, _>>();
         let file_cnt = items.len();
-        mgmt_api_client
-            .ingest_aux_files(branch_id, items)
-            .await?;
+        mgmt_api_client.ingest_aux_files(branch_id, items).await?;
         println!("ingested {file_cnt} files");
     }
 

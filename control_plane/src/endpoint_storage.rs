@@ -31,10 +31,8 @@ impl EndpointStorage {
     pub fn from_conf(env: &LocalEnv, conf: &EndpointStorageConf) -> EndpointStorage {
         EndpointStorage {
             bin: Utf8PathBuf::from_path_buf(env.endpoint_storage_bin()).unwrap(),
-            data_dir: Utf8PathBuf::from_path_buf(
-                env.endpoint_storage_data_dir(&conf.endpoint_id),
-            )
-            .unwrap(),
+            data_dir: Utf8PathBuf::from_path_buf(env.endpoint_storage_data_dir(&conf.endpoint_id))
+                .unwrap(),
             pemfile: Utf8PathBuf::from_path_buf(env.get_public_key_path()).unwrap(),
             addr: conf.listen_addr,
             remote_storage_json: conf.remote_storage_json.clone(),

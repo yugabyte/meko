@@ -139,10 +139,7 @@ impl Client {
         &self,
         branch_id: BranchId,
     ) -> Result<pageserver_api::models::partitioning::Partitioning> {
-        let uri = format!(
-            "{}/v1/branch/{branch_id}/keyspace",
-            self.mgmt_api_endpoint
-        );
+        let uri = format!("{}/v1/branch/{branch_id}/keyspace", self.mgmt_api_endpoint);
         self.get(&uri)
             .await?
             .json()
@@ -267,15 +264,10 @@ impl Client {
         Ok(())
     }
 
-    pub async fn branch_describe(
-        &self,
-        branch_id: &BranchId,
-    ) -> Result<TimelineInfo> {
-        let mut path = reqwest::Url::parse(&format!(
-            "{}/v1/branch/{branch_id}",
-            self.mgmt_api_endpoint
-        ))
-        .expect("Cannot build URL");
+    pub async fn branch_describe(&self, branch_id: &BranchId) -> Result<TimelineInfo> {
+        let mut path =
+            reqwest::Url::parse(&format!("{}/v1/branch/{branch_id}", self.mgmt_api_endpoint))
+                .expect("Cannot build URL");
         path.query_pairs_mut()
             .append_pair("include-image-consistent-lsn", "true");
 
@@ -331,10 +323,7 @@ impl Client {
         Ok((status, progress))
     }
 
-    pub async fn branch_secondary_status(
-        &self,
-        branch_id: BranchId,
-    ) -> Result<SecondaryProgress> {
+    pub async fn branch_secondary_status(&self, branch_id: BranchId) -> Result<SecondaryProgress> {
         let path = reqwest::Url::parse(&format!(
             "{}/v1/branch/{}/secondary/status",
             self.mgmt_api_endpoint, branch_id
@@ -397,14 +386,8 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn get_location_config(
-        &self,
-        branch_id: BranchId,
-    ) -> Result<Option<LocationConfig>> {
-        let path = format!(
-            "{}/v1/location_config/{branch_id}",
-            self.mgmt_api_endpoint
-        );
+    pub async fn get_location_config(&self, branch_id: BranchId) -> Result<Option<LocationConfig>> {
+        let path = format!("{}/v1/location_config/{branch_id}", self.mgmt_api_endpoint);
         self.request(Method::GET, &path, ())
             .await?
             .json()
@@ -412,10 +395,7 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn branch_create(
-        &self,
-        req: &TimelineCreateRequest,
-    ) -> Result<TimelineInfo> {
+    pub async fn branch_create(&self, req: &TimelineCreateRequest) -> Result<TimelineInfo> {
         let uri = format!("{}/v1/branch", self.mgmt_api_endpoint);
         self.request(Method::POST, &uri, req)
             .await?
@@ -424,14 +404,8 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn branch_detail(
-        &self,
-        branch_id: BranchId,
-    ) -> Result<TimelineInfo> {
-        let uri = format!(
-            "{}/v1/branch/{branch_id}",
-            self.mgmt_api_endpoint
-        );
+    pub async fn branch_detail(&self, branch_id: BranchId) -> Result<TimelineInfo> {
+        let uri = format!("{}/v1/branch/{branch_id}", self.mgmt_api_endpoint);
 
         self.request(Method::GET, &uri, ())
             .await?
@@ -486,10 +460,7 @@ impl Client {
         branch_id: BranchId,
         dir: BlockUnblock,
     ) -> Result<()> {
-        let uri = format!(
-            "{}/v1/branch/{branch_id}/{dir}_gc",
-            self.mgmt_api_endpoint,
-        );
+        let uri = format!("{}/v1/branch/{branch_id}/{dir}_gc", self.mgmt_api_endpoint,);
 
         self.request(Method::POST, &uri, ()).await.map(|_| ())
     }
@@ -499,11 +470,7 @@ impl Client {
     /// ingest to reach that LSN so the post-flush `consistent_lsn` covers it —
     /// used to flush an ancestor at branch time so the branch's durability
     /// barrier clears without waiting for the periodic flush.
-    pub async fn branch_flush(
-        &self,
-        branch_id: BranchId,
-        wait_lsn: Option<Lsn>,
-    ) -> Result<()> {
+    pub async fn branch_flush(&self, branch_id: BranchId, wait_lsn: Option<Lsn>) -> Result<()> {
         let mut url = reqwest::Url::parse(&format!(
             "{}/v1/branch/{branch_id}/flush",
             self.mgmt_api_endpoint,
@@ -539,10 +506,7 @@ impl Client {
     }
 
     pub async fn branch_reset(&self, branch_id: BranchId) -> Result<()> {
-        let uri = format!(
-            "{}/v1/branch/{}/reset",
-            self.mgmt_api_endpoint, branch_id
-        );
+        let uri = format!("{}/v1/branch/{}/reset", self.mgmt_api_endpoint, branch_id);
         self.request(Method::POST, &uri, ())
             .await?
             .json()
@@ -550,10 +514,7 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn branch_synthetic_size(
-        &self,
-        branch_id: BranchId,
-    ) -> Result<BranchHistorySize> {
+    pub async fn branch_synthetic_size(&self, branch_id: BranchId) -> Result<BranchHistorySize> {
         let uri = format!(
             "{}/v1/branch/{}/synthetic_size",
             self.mgmt_api_endpoint, branch_id
@@ -574,10 +535,7 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn top_branches(
-        &self,
-        request: TopBranchesRequest,
-    ) -> Result<TopBranchesResponse> {
+    pub async fn top_branches(&self, request: TopBranchesRequest) -> Result<TopBranchesResponse> {
         let uri = format!("{}/v1/top_branches", self.mgmt_api_endpoint);
         self.request(Method::POST, uri, request)
             .await?
@@ -686,15 +644,8 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn branch_init_lsn_lease(
-        &self,
-        branch_id: BranchId,
-        lsn: Lsn,
-    ) -> Result<LsnLease> {
-        let uri = format!(
-            "{}/v1/branch/{branch_id}/lsn_lease",
-            self.mgmt_api_endpoint,
-        );
+    pub async fn branch_init_lsn_lease(&self, branch_id: BranchId, lsn: Lsn) -> Result<LsnLease> {
+        let uri = format!("{}/v1/branch/{branch_id}/lsn_lease", self.mgmt_api_endpoint,);
 
         self.request(Method::POST, &uri, LsnLeaseRequest { lsn })
             .await?
@@ -703,14 +654,8 @@ impl Client {
             .map_err(Error::ReceiveBody)
     }
 
-    pub async fn wait_lsn(
-        &self,
-        request: BranchWaitLsnRequest,
-    ) -> Result<StatusCode> {
-        let uri = format!(
-            "{}/v1/branch/wait_lsn",
-            self.mgmt_api_endpoint,
-        );
+    pub async fn wait_lsn(&self, request: BranchWaitLsnRequest) -> Result<StatusCode> {
+        let uri = format!("{}/v1/branch/wait_lsn", self.mgmt_api_endpoint,);
 
         self.request_noerror(Method::POST, uri, request)
             .await

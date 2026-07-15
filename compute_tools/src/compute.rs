@@ -41,9 +41,9 @@ use utils::lsn::Lsn;
 use utils::measured_stream::MeasuredReader;
 use utils::pid_file;
 
+use crate::compute_metrics::COMPUTE_ATTACHED;
 use crate::configurator::launch_configurator;
 use crate::disk_quota::set_disk_quota;
-use crate::compute_metrics::COMPUTE_ATTACHED;
 use crate::installed_extensions::get_installed_extensions;
 use crate::logger::{self, startup_context_from_env};
 use crate::lsn_lease::launch_lsn_lease_bg_task_for_static;
@@ -310,8 +310,9 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
         let mut pageserver_conninfo = spec.pageserver_connection_info.clone();
         if pageserver_conninfo.is_none() {
             if let Some(pageserver_connstr_field) = &spec.pageserver_connstring {
-                pageserver_conninfo =
-                    Some(PageserverConnectionInfo::from_connstr(pageserver_connstr_field)?);
+                pageserver_conninfo = Some(PageserverConnectionInfo::from_connstr(
+                    pageserver_connstr_field,
+                )?);
             }
         }
         if pageserver_conninfo.is_none() {
@@ -1781,11 +1782,7 @@ impl ComputeNode {
         // (see `start_postgres`), so SIGKILL the whole group to reap any such
         // straggler before we let compute_ctl exit. ESRCH (group already empty)
         // is the normal case and is ignored.
-        kill(
-            Pid::from_raw(-(postmaster_pid as i32)),
-            Signal::SIGKILL,
-        )
-        .ok();
+        kill(Pid::from_raw(-(postmaster_pid as i32)), Signal::SIGKILL).ok();
 
         // Process has exited. Wait for the log collecting task to finish.
         let _ = tokio::runtime::Handle::current()
@@ -2059,20 +2056,24 @@ impl ComputeNode {
             // Temporarily reset max_cluster_size in config
             // to avoid the possibility of hitting the limit, while we are reconfiguring:
             // creating new extensions, roles, etc.
-            config::with_compute_ctl_tmp_override(pgdata_path, "yb_amp.max_cluster_size=-1", || {
-                self.pg_reload_conf()?;
+            config::with_compute_ctl_tmp_override(
+                pgdata_path,
+                "yb_amp.max_cluster_size=-1",
+                || {
+                    self.pg_reload_conf()?;
 
-                if spec.mode == ComputeMode::Primary {
-                    let conf = self.get_tokio_conn_conf(Some("compute_ctl:reconfigure"));
-                    let conf = Arc::new(conf);
+                    if spec.mode == ComputeMode::Primary {
+                        let conf = self.get_tokio_conn_conf(Some("compute_ctl:reconfigure"));
+                        let conf = Arc::new(conf);
 
-                    let spec = Arc::new(spec.clone());
+                        let spec = Arc::new(spec.clone());
 
-                    self.apply_spec_sql(spec, conf, max_concurrent_connections)?;
-                }
+                        self.apply_spec_sql(spec, conf, max_concurrent_connections)?;
+                    }
 
-                Ok(())
-            })?;
+                    Ok(())
+                },
+            )?;
             self.pg_reload_conf()?;
         }
 
@@ -2096,13 +2097,17 @@ impl ComputeNode {
             // temporarily reset max_cluster_size in config
             // to avoid the possibility of hitting the limit, while we are applying config:
             // creating new extensions, roles, etc...
-            config::with_compute_ctl_tmp_override(pgdata_path, "yb_amp.max_cluster_size=-1", || {
-                self.pg_reload_conf()?;
+            config::with_compute_ctl_tmp_override(
+                pgdata_path,
+                "yb_amp.max_cluster_size=-1",
+                || {
+                    self.pg_reload_conf()?;
 
-                self.apply_config(compute_state)?;
+                    self.apply_config(compute_state)?;
 
-                Ok(())
-            })?;
+                    Ok(())
+                },
+            )?;
 
             let postgresql_conf_path = pgdata_path.join("postgresql.conf");
             if config::line_in_file(

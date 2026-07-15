@@ -205,7 +205,8 @@ impl WalReaderStreamState {
         // it fetched at or below this, and re-fetch anything above — so a held
         // chunk can't shadow a reconnect truncate's rewrite of once-uncommitted
         // bytes.
-        self.flush_lsn.store(self.wal_reader.end.0, Ordering::Release);
+        self.flush_lsn
+            .store(self.wal_reader.end.0, Ordering::Release);
 
         // Calculate chunk size
         let mut chunk_end_pos = self.wal_reader.start + self.buffer_size as u64;
@@ -285,13 +286,8 @@ mod tests {
 
         tracing::info!("Doing first round of reads ...");
 
-        let mut streaming_wal_reader = StreamingWalReader::new(
-            resident_tli,
-            start_lsn,
-            end_pos,
-            end_watch,
-            MAX_SEND_SIZE,
-        );
+        let mut streaming_wal_reader =
+            StreamingWalReader::new(resident_tli, start_lsn, end_pos, end_watch, MAX_SEND_SIZE);
 
         let mut before_reset = Vec::new();
         while let Some(wor) = streaming_wal_reader.next().await {

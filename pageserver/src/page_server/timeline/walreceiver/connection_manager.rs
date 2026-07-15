@@ -18,8 +18,8 @@ use super::walreceiver_connection::{WalConnectionStatus, WalReceiverError};
 use super::{TaskEvent, TaskHandle, TaskStateUpdate, WalReceiverConf};
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::{WALRECEIVER_ACTIVE_MANAGERS, WALRECEIVER_SWITCHES};
-use crate::task_mgr::TaskKind;
 use crate::page_server::{Timeline, debug_assert_current_span_has_branch_id};
+use crate::task_mgr::TaskKind;
 
 pub(crate) struct Cancelled;
 

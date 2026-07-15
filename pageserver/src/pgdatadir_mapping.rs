@@ -48,8 +48,8 @@ use crate::metrics::{
     RELSIZE_LATEST_CACHE_MISSES, RELSIZE_SNAPSHOT_CACHE_ENTRIES, RELSIZE_SNAPSHOT_CACHE_HITS,
     RELSIZE_SNAPSHOT_CACHE_MISSES,
 };
-use crate::span::debug_assert_current_span_has_branch_id;
 use crate::page_server::timeline::{GetVectoredError, VersionedKeySpaceQuery};
+use crate::span::debug_assert_current_span_has_branch_id;
 
 /// Max delta records appended to the AUX_FILES_KEY (for aux v1). The write path will write a full image once this threshold is reached.
 pub const MAX_AUX_FILE_DELTAS: usize = 1024;
@@ -3184,21 +3184,47 @@ mod tests {
         let reader = false;
         let ingest = true;
         // The #240 shape: replay-seeded entry, external read at the horizon.
-        assert!(!latest_rel_size_cache_hit(horizon, mid_replay, horizon, reader));
+        assert!(!latest_rel_size_cache_hit(
+            horizon, mid_replay, horizon, reader
+        ));
         // Same entry can't serve external mid-replay reads either.
-        assert!(!latest_rel_size_cache_hit(mid_replay, mid_replay, horizon, reader));
+        assert!(!latest_rel_size_cache_hit(
+            mid_replay, mid_replay, horizon, reader
+        ));
         // Ingest replaying at its own frontier keeps the fast path (#22
         // replay semantics track the cache).
-        assert!(latest_rel_size_cache_hit(mid_replay, mid_replay, horizon, ingest));
+        assert!(latest_rel_size_cache_hit(
+            mid_replay, mid_replay, horizon, ingest
+        ));
         // Entry stamped exactly at the horizon serves reads at/after it.
         assert!(latest_rel_size_cache_hit(horizon, horizon, horizon, reader));
-        assert!(latest_rel_size_cache_hit(Lsn(0x6BA5000), horizon, horizon, reader));
+        assert!(latest_rel_size_cache_hit(
+            Lsn(0x6BA5000),
+            horizon,
+            horizon,
+            reader
+        ));
         // Post-catch-up ingest entry: normal fast-path behavior.
-        assert!(latest_rel_size_cache_hit(Lsn(0x7000000), Lsn(0x6BB0000), horizon, reader));
+        assert!(latest_rel_size_cache_hit(
+            Lsn(0x7000000),
+            Lsn(0x6BB0000),
+            horizon,
+            reader
+        ));
         // Request below the entry is always a miss (pre-existing rule),
         // for ingest too.
-        assert!(!latest_rel_size_cache_hit(Lsn(0x6BB0000), Lsn(0x7000000), horizon, reader));
-        assert!(!latest_rel_size_cache_hit(Lsn(0x6BB0000), Lsn(0x7000000), horizon, ingest));
+        assert!(!latest_rel_size_cache_hit(
+            Lsn(0x6BB0000),
+            Lsn(0x7000000),
+            horizon,
+            reader
+        ));
+        assert!(!latest_rel_size_cache_hit(
+            Lsn(0x6BB0000),
+            Lsn(0x7000000),
+            horizon,
+            ingest
+        ));
         // Bootstrap timeline (horizon 0): unchanged semantics.
         assert!(latest_rel_size_cache_hit(Lsn(100), Lsn(50), Lsn(0), reader));
     }

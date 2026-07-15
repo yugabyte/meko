@@ -186,7 +186,9 @@ mod tests {
             branch_id: Some(BranchId::generate()),
             listen_pg: "127.0.0.1:5474".to_string(),
             listen_http: "127.0.0.1:7686".to_string(),
-            yb_storage_conn: Some("{ host_ports = '127.0.0.1:5433', dbname = 'yb_storage' }".to_string()),
+            yb_storage_conn: Some(
+                "{ host_ports = '127.0.0.1:5433', dbname = 'yb_storage' }".to_string(),
+            ),
             wal_cache_size_mib: Some(128),
             availability_zone: Some("sk-7".to_string()),
             ..Default::default()
@@ -199,10 +201,8 @@ mod tests {
     #[test]
     fn partial_toml_fills_defaults() {
         // A minimal file: missing keys take their defaults.
-        let cfg = SafekeeperConfigToml::from_toml_str(
-            "id = 3\nlisten_pg = '127.0.0.1:5474'\n",
-        )
-        .unwrap();
+        let cfg =
+            SafekeeperConfigToml::from_toml_str("id = 3\nlisten_pg = '127.0.0.1:5474'\n").unwrap();
         assert_eq!(cfg.id, NodeId(3));
         assert_eq!(cfg.listen_pg, "127.0.0.1:5474");
         assert_eq!(cfg.heartbeat_timeout, Duration::from_millis(5000));

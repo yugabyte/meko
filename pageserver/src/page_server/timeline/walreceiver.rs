@@ -23,11 +23,11 @@ use utils::postgres_client::PostgresClientProtocol;
 use self::connection_manager::ConnectionManagerStatus;
 use super::Timeline;
 use crate::context::{DownloadBehavior, RequestContext};
-use crate::task_mgr::{TaskKind, WALRECEIVER_RUNTIME};
 use crate::page_server::debug_assert_current_span_has_branch_id;
 use crate::page_server::timeline::walreceiver::connection_manager::{
     ConnectionManagerState, connection_manager_loop_step,
 };
+use crate::task_mgr::{TaskKind, WALRECEIVER_RUNTIME};
 
 #[derive(Clone)]
 pub struct WalReceiverConf {

@@ -59,9 +59,8 @@ async fn main_impl(args: Args) -> anyhow::Result<()> {
     // Set up the initial client.
     let endpoint = Endpoint::from_shared(args.server.clone())?;
 
-    let connect = async || {
-        pageserver_page_api::Client::new(endpoint.connect().await?, branch_id, None, None)
-    };
+    let connect =
+        async || pageserver_page_api::Client::new(endpoint.connect().await?, branch_id, None, None);
 
     let mut client = connect().await?;
     let mut streams = Vec::with_capacity(args.count);

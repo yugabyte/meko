@@ -433,7 +433,11 @@ impl Manager {
     /// periodic persist; it goes through a monotonic single-column
     /// UPDATE that is safe to land concurrently with the full-row
     /// consensus persists (see [`AdvisoryPersist`]).
-    fn update_control_file_save(&mut self, state: &StateSnapshot, next_event: &mut Option<Instant>) {
+    fn update_control_file_save(
+        &mut self,
+        state: &StateSnapshot,
+        next_event: &mut Option<Instant>,
+    ) {
         if !state.inmem_flush_pending || self.cfile_save_task.is_some() {
             return;
         }

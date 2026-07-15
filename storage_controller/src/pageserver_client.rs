@@ -106,10 +106,7 @@ impl PageserverClient {
         )
     }
 
-    pub(crate) async fn branch_describe(
-        &self,
-        branch_id: &BranchId,
-    ) -> Result<TimelineInfo> {
+    pub(crate) async fn branch_describe(&self, branch_id: &BranchId) -> Result<TimelineInfo> {
         measured_request!(
             "branch_describe",
             crate::metrics::Method::Get,
@@ -130,26 +127,17 @@ impl PageserverClient {
         )
     }
 
-    pub(crate) async fn branch_lease_lsn(
-        &self,
-        branch_id: BranchId,
-        lsn: Lsn,
-    ) -> Result<LsnLease> {
+    pub(crate) async fn branch_lease_lsn(&self, branch_id: BranchId, lsn: Lsn) -> Result<LsnLease> {
         measured_request!(
             "branch_lease_lsn",
             crate::metrics::Method::Post,
             &self.node_id_label,
-            self.inner
-                .branch_init_lsn_lease(branch_id, lsn)
-                .await
+            self.inner.branch_init_lsn_lease(branch_id, lsn).await
         )
     }
 
     #[allow(unused)]
-    pub(crate) async fn branch_detail(
-        &self,
-        branch_id: BranchId,
-    ) -> Result<TimelineInfo> {
+    pub(crate) async fn branch_detail(&self, branch_id: BranchId) -> Result<TimelineInfo> {
         measured_request!(
             "branch_detail",
             crate::metrics::Method::Get,
@@ -167,9 +155,7 @@ impl PageserverClient {
             "branch_archival_config",
             crate::metrics::Method::Put,
             &self.node_id_label,
-            self.inner
-                .branch_archival_config(branch_id, req)
-                .await
+            self.inner.branch_archival_config(branch_id, req).await
         )
     }
 
@@ -182,9 +168,7 @@ impl PageserverClient {
             "branch_detach_ancestor",
             crate::metrics::Method::Put,
             &self.node_id_label,
-            self.inner
-                .branch_detach_ancestor(branch_id, behavior)
-                .await
+            self.inner.branch_detach_ancestor(branch_id, behavior).await
         )
     }
 
@@ -199,9 +183,7 @@ impl PageserverClient {
             "branch_block_unblock_gc",
             crate::metrics::Method::Post,
             &self.node_id_label,
-            self.inner
-                .branch_block_unblock_gc(branch_id, dir)
-                .await
+            self.inner.branch_block_unblock_gc(branch_id, dir).await
         )
     }
 

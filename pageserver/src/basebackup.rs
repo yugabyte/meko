@@ -22,8 +22,7 @@ use pageserver_api::key::{Key, rel_block_to_key};
 use pageserver_api::reltag::{RelTag, SlruKind};
 use postgres_ffi::pg_constants::{PG_HBA, PGDATA_SPECIAL_FILES};
 use postgres_ffi::{
-    BLCKSZ, PG_TLI, RELSEG_SIZE, WAL_SEGMENT_SIZE, XLogFileName,
-    dispatch_pgversion, pg_constants,
+    BLCKSZ, PG_TLI, RELSEG_SIZE, WAL_SEGMENT_SIZE, XLogFileName, dispatch_pgversion, pg_constants,
 };
 use postgres_ffi_types::constants::{DEFAULTTABLESPACE_OID, GLOBALTABLESPACE_OID};
 use postgres_ffi_types::forknum::{INIT_FORKNUM, MAIN_FORKNUM};
@@ -33,9 +32,9 @@ use tracing::*;
 use utils::lsn::Lsn;
 
 use crate::context::RequestContext;
-use crate::pgdatadir_mapping::Version;
 use crate::page_server::timeline::{GetVectoredError, VersionedKeySpaceQuery};
 use crate::page_server::{PageReconstructError, Timeline};
+use crate::pgdatadir_mapping::Version;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BasebackupError {

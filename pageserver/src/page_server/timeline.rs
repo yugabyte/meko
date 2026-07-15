@@ -51,16 +51,16 @@ use crate::config::PageServerConf;
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::keyspace::KeySpace;
 use crate::metrics::{DELTAS_PER_READ_GLOBAL, ScanLatencyOngoingRecording, TimelineMetrics};
-use crate::page_service::TenantManagerTypes;
-use crate::pgdatadir_mapping::{
-    CalculateLogicalSizeError, DirectoryKind, LsnForTimestamp, MetricsUpdate,
-};
-use crate::task_mgr::TaskKind;
 use crate::page_server::gc_result::GcResult;
 use crate::page_server::metadata::TimelineMetadata;
 use crate::page_server::storage_layer::ValueReconstructState;
 use crate::page_server::tasks::BackgroundLoopKind;
 use crate::page_server::timeline::logical_size::CurrentLogicalSize;
+use crate::page_service::TenantManagerTypes;
+use crate::pgdatadir_mapping::{
+    CalculateLogicalSizeError, DirectoryKind, LsnForTimestamp, MetricsUpdate,
+};
+use crate::task_mgr::TaskKind;
 use crate::walingest::WalLagCooldown;
 use crate::walredo::RedoAttemptType;
 use crate::{task_mgr, walredo};
@@ -282,7 +282,6 @@ pub struct Timeline {
     /// Basebackup will collect the count and store it here. Used for reldirv2 rollout.
     pub(crate) db_rel_count: ArcSwapOption<(usize, usize)>,
 }
-
 
 pub struct WalReceiverInfo {
     pub wal_source_connconf: PgConnectionConfig,
@@ -1020,7 +1019,9 @@ impl Timeline {
                     .scan_scattered_set(&keys, target_lsn)
                     .await
                     .map_err(|e| {
-                        GetVectoredError::Other(anyhow!("PageStore scan_scattered_set failed: {e:#}"))
+                        GetVectoredError::Other(anyhow!(
+                            "PageStore scan_scattered_set failed: {e:#}"
+                        ))
                     })?;
                 for (key, chain) in scan {
                     chains_by_key.entry(key).or_default().extend(chain);
@@ -1849,9 +1850,7 @@ impl Timeline {
 
     /// Try to get a basebackup from the on-disk cache.
     pub(crate) async fn get_cached_basebackup(&self, lsn: Lsn) -> Option<tokio::fs::File> {
-        self.basebackup_cache
-            .get(self.branch_id, lsn)
-            .await
+        self.basebackup_cache.get(self.branch_id, lsn).await
     }
 
     /// Convenience method to attempt fetching a basebackup for the timeline if enabled and safe for
@@ -1894,8 +1893,7 @@ impl Timeline {
             return;
         }
 
-        self.basebackup_cache
-            .send_prepare(self.branch_id, lsn);
+        self.basebackup_cache.send_prepare(self.branch_id, lsn);
     }
 }
 
@@ -2185,7 +2183,6 @@ impl Timeline {
 
                 state,
 
-
                 cancel,
                 gate: Gate::default(),
 
@@ -2252,10 +2249,7 @@ impl Timeline {
     /// This function is expected to be called at most once per Timeline's lifecycle
     /// when the timeline is activated.
     fn launch_wal_receiver(self: &Arc<Self>, ctx: &RequestContext) {
-        info!(
-            "launching WAL receiver for branch {}",
-            self.branch_id
-        );
+        info!("launching WAL receiver for branch {}", self.branch_id);
 
         let tenant_conf = self.tenant_conf.load();
         let wal_connect_timeout = tenant_conf
@@ -2420,7 +2414,9 @@ impl Timeline {
                     .await;
                 Ok(())
             }
-            .instrument(info_span!(parent: None, "initial_size_calculation", branch_id=%self.branch_id)),
+            .instrument(
+                info_span!(parent: None, "initial_size_calculation", branch_id=%self.branch_id),
+            ),
         );
     }
 
@@ -2894,10 +2890,7 @@ impl Drop for Timeline {
                 }
             }
         }
-        info!(
-            "Timeline {} is being dropped",
-            self.branch_id
-        );
+        info!("Timeline {} is being dropped", self.branch_id);
     }
 }
 

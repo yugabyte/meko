@@ -139,7 +139,15 @@ pub async fn get_page(
     not_modified_since: Lsn,
     req_id: u64,
 ) -> anyhow::Result<Vec<u8>> {
-    let mut pages = get_pages(client, rel, &[block], request_lsn, not_modified_since, req_id).await?;
+    let mut pages = get_pages(
+        client,
+        rel,
+        &[block],
+        request_lsn,
+        not_modified_since,
+        req_id,
+    )
+    .await?;
     Ok(pages.pop().expect("one page"))
 }
 
@@ -196,10 +204,13 @@ pub fn restore_ps(c: &Cluster, original: &str) -> anyhow::Result<()> {
         .join("endpoints/main/pageserver/pageserver.toml");
     std::fs::write(&toml, original).context("restore pageserver.toml")?;
     if let Err(e) = c.yb_logged(&["pageserver", "restart"]) {
-        crate::tee_println!("  (restart after config restore failed, retrying as stop+start: {e:#})");
+        crate::tee_println!(
+            "  (restart after config restore failed, retrying as stop+start: {e:#})"
+        );
         c.yb_quiet(&["pageserver", "stop", "-m", "immediate"]);
-        c.yb_logged(&["pageserver", "start"])
-            .context("pageserver would not come back after config restore (restart, then stop+start)")?;
+        c.yb_logged(&["pageserver", "start"]).context(
+            "pageserver would not come back after config restore (restart, then stop+start)",
+        )?;
     }
     Ok(())
 }
@@ -209,7 +220,11 @@ pub fn restore_ps(c: &Cluster, original: &str) -> anyhow::Result<()> {
 /// the PS RAM cache and actually hit YB), then restart the pageserver.
 /// Always rebuilds from the caller-provided pristine `original`, so repeated
 /// calls don't accumulate config. Pair with [`restore_ps`].
-pub fn restart_with_pipeline_depth(c: &Cluster, original: &str, depth: usize) -> anyhow::Result<()> {
+pub fn restart_with_pipeline_depth(
+    c: &Cluster,
+    original: &str,
+    depth: usize,
+) -> anyhow::Result<()> {
     let toml = c
         .repo_dir()
         .join("endpoints/main/pageserver/pageserver.toml");

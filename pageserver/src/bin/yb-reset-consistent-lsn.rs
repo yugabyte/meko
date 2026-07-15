@@ -30,8 +30,8 @@ use postgres_ffi::wal_record_boundary::{WalSource, decode_forward, find_anchor};
 use postgres_ffi::{PgMajorVersion, WAL_SEGMENT_SIZE};
 use utils::id::BranchId;
 use utils::lsn::Lsn;
-use ysql_client::tokio_postgres::types::ToSql;
 use ysql_client::YsqlClient;
+use ysql_client::tokio_postgres::types::ToSql;
 
 #[derive(Parser)]
 #[command(
@@ -133,7 +133,9 @@ async fn main() -> anyhow::Result<()> {
     let idx = boundaries
         .iter()
         .rposition(|b| *b <= args.target_lsn)
-        .context("no WAL record boundary found at or below target (anchor scan/decoder produced none)")?;
+        .context(
+            "no WAL record boundary found at or below target (anchor scan/decoder produced none)",
+        )?;
     let consistent = boundaries[idx];
     let prev = idx.checked_sub(1).map(|i| boundaries[i]);
 
@@ -196,10 +198,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn read_timeline_state(
-    client: &YsqlClient,
-    branch: &str,
-) -> anyhow::Result<TimelineState> {
+async fn read_timeline_state(client: &YsqlClient, branch: &str) -> anyhow::Result<TimelineState> {
     let sql = "SELECT consistent_lsn, prev_record_lsn, applied_gc_cutoff_lsn, pg_version, \
                current_generation \
                FROM pageserver.timeline_state WHERE branch_id = $1";
@@ -235,14 +234,19 @@ async fn write_timeline_state(
     if let Some(generation) = expect_generation {
         let sql = "UPDATE pageserver.timeline_state SET consistent_lsn = $2, prev_record_lsn = $3 \
                    WHERE branch_id = $1 AND current_generation = $4";
-        let params: [&(dyn ToSql + Sync); 4] =
-            [&branch, &consistent_i, &prev_i, &generation];
-        client.execute(sql, &params).await.context("UPDATE timeline_state")
+        let params: [&(dyn ToSql + Sync); 4] = [&branch, &consistent_i, &prev_i, &generation];
+        client
+            .execute(sql, &params)
+            .await
+            .context("UPDATE timeline_state")
     } else {
         let sql = "UPDATE pageserver.timeline_state SET consistent_lsn = $2, prev_record_lsn = $3 \
                    WHERE branch_id = $1";
         let params: [&(dyn ToSql + Sync); 3] = [&branch, &consistent_i, &prev_i];
-        client.execute(sql, &params).await.context("UPDATE timeline_state")
+        client
+            .execute(sql, &params)
+            .await
+            .context("UPDATE timeline_state")
     }
 }
 
@@ -293,7 +297,6 @@ impl WalSource for WalReader<'_> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,7 +318,11 @@ mod tests {
         async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
             let end = self.start.0 + self.buf.len() as u64;
             if lsn.0 < self.start.0 || lsn.0 >= end {
-                bail!("WAL hole at {lsn} (mem buffer is [{}, {}))", self.start, Lsn(end));
+                bail!(
+                    "WAL hole at {lsn} (mem buffer is [{}, {}))",
+                    self.start,
+                    Lsn(end)
+                );
             }
             Ok((self.start, self.buf.clone()))
         }
@@ -385,7 +392,10 @@ mod tests {
         let k = 2500;
         let target = starts[k];
         let anchor = find_anchor(&src, target, Lsn(0)).await.unwrap();
-        assert!(anchor <= target, "anchor {anchor} must be <= target {target}");
+        assert!(
+            anchor <= target,
+            "anchor {anchor} must be <= target {target}"
+        );
         let (boundaries, _) = decode_forward(&src, anchor, target, PgMajorVersion::PG18)
             .await
             .unwrap();
@@ -400,7 +410,10 @@ mod tests {
         // Target a few bytes PAST a boundary (mid-record) -> rounds down to
         // that boundary, never above it.
         let mid = Lsn(starts[k].0 + 8);
-        assert!(mid < starts[k + 1], "test setup: 8 bytes stays within record k");
+        assert!(
+            mid < starts[k + 1],
+            "test setup: 8 bytes stays within record k"
+        );
         let anchor = find_anchor(&src, mid, Lsn(0)).await.unwrap();
         let (boundaries, _) = decode_forward(&src, anchor, mid, PgMajorVersion::PG18)
             .await

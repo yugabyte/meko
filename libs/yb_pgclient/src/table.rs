@@ -79,12 +79,9 @@ impl TableHandle {
     }
 
     pub fn col(&self, name: &str) -> Result<&ColumnMeta, YbError> {
-        self.columns
-            .iter()
-            .find(|c| c.name == name)
-            .ok_or_else(|| {
-                YbError::invalid(format!("table {} has no column {name:?}", self.table_id))
-            })
+        self.columns.iter().find(|c| c.name == name).ok_or_else(|| {
+            YbError::invalid(format!("table {} has no column {name:?}", self.table_id))
+        })
     }
 
     pub fn num_hash_columns(&self) -> usize {
@@ -102,7 +99,10 @@ impl TableHandle {
     }
 }
 
-pub(crate) fn value_type_for(data_type: PersistentDataType, column: &str) -> Result<ValueType, YbError> {
+pub(crate) fn value_type_for(
+    data_type: PersistentDataType,
+    column: &str,
+) -> Result<ValueType, YbError> {
     match data_type {
         PersistentDataType::Int8 | PersistentDataType::Int16 => Ok(ValueType::I16),
         PersistentDataType::Int32 => Ok(ValueType::I32),
@@ -123,9 +123,8 @@ pub(crate) fn columns_from_schema(columns: &[ColumnSchemaPb]) -> Result<Vec<Colu
     columns
         .iter()
         .map(|c| {
-            let id = c
-                .id
-                .ok_or_else(|| YbError::other(format!("column {:?} has no id", c.name)))?;
+            let id =
+                c.id.ok_or_else(|| YbError::other(format!("column {:?} has no id", c.name)))?;
             let id = i32::try_from(id)
                 .map_err(|_| YbError::other(format!("column {:?} id {id} overflows", c.name)))?;
             let kind = if c.is_hash_key() {
@@ -167,8 +166,8 @@ mod tests {
 
     #[test]
     fn column_kinds_and_types() {
-        let make = |name: &str, id: u32, hash: bool, key: bool, ty: PersistentDataType| {
-            ColumnSchemaPb {
+        let make =
+            |name: &str, id: u32, hash: bool, key: bool, ty: PersistentDataType| ColumnSchemaPb {
                 id: Some(id),
                 name: name.to_string(),
                 r#type: crate::pb::yb::QlTypePb {
@@ -178,8 +177,7 @@ mod tests {
                 is_key: Some(key),
                 is_hash_key: Some(hash),
                 ..Default::default()
-            }
-        };
+            };
         let cols = columns_from_schema(&[
             make("h", 0, true, true, PersistentDataType::String),
             make("r", 1, false, true, PersistentDataType::Int64),
@@ -234,9 +232,14 @@ mod tests {
 
     #[test]
     fn int8_maps_to_i16() {
-        let cols =
-            columns_from_schema(&[schema_col("s", Some(0), false, true, Some(PersistentDataType::Int8))])
-                .unwrap();
+        let cols = columns_from_schema(&[schema_col(
+            "s",
+            Some(0),
+            false,
+            true,
+            Some(PersistentDataType::Int8),
+        )])
+        .unwrap();
         assert_eq!(cols[0].value_type, ValueType::I16);
         assert_eq!(cols[0].kind, ColumnKind::Range); // is_key && !is_hash_key
     }

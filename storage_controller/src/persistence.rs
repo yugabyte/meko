@@ -420,10 +420,7 @@ impl Persistence {
                     .values(endpoint)
                     .on_conflict(endpoint_id)
                     .do_update()
-                    .set((
-                        branch_id.eq(&endpoint.branch_id),
-                        spec.eq(&endpoint.spec),
-                    ))
+                    .set((branch_id.eq(&endpoint.branch_id), spec.eq(&endpoint.spec)))
                     .execute(conn)
                     .await?;
                 Ok(())
@@ -467,10 +464,7 @@ impl Persistence {
     /// Delete every compute endpoint record belonging to a single branch.
     /// Used by `branch drop` to tear down all of a branch's endpoints at
     /// once. Returns the number of rows removed. Idempotent.
-    pub(crate) async fn delete_endpoints_for_branch(
-        &self,
-        bid: &str,
-    ) -> DatabaseResult<usize> {
+    pub(crate) async fn delete_endpoints_for_branch(&self, bid: &str) -> DatabaseResult<usize> {
         use crate::schema::endpoints::dsl::*;
 
         self.with_measured_conn(DatabaseOperation::DeleteEndpoint, move |conn| {
@@ -610,9 +604,7 @@ impl Persistence {
     ///
     /// We exclude shards configured to be detached.  During startup, if we see any attached locations
     /// for such shards, they will automatically be detached as 'orphans'.
-    pub(crate) async fn load_active_branches(
-        &self,
-    ) -> DatabaseResult<Vec<BranchPersistence>> {
+    pub(crate) async fn load_active_branches(&self) -> DatabaseResult<Vec<BranchPersistence>> {
         use crate::schema::branches::dsl::*;
         self.with_measured_conn(DatabaseOperation::ListBranches, move |conn| {
             Box::pin(async move {
@@ -766,9 +758,7 @@ impl Persistence {
         Ok(rows
             .into_iter()
             .map(|p| BranchGenerationState {
-                branch_id: p
-                    .get_branch_id()
-                    .expect("Corrupt branch id in database"),
+                branch_id: p.get_branch_id().expect("Corrupt branch id in database"),
                 generation: p.generation.map(|g| Generation::new(g as u32)),
                 generation_pageserver: p.generation_pageserver.map(|n| NodeId(n as u64)),
             })
@@ -793,9 +783,7 @@ impl Persistence {
             let chunk_ids = branch_ids.by_ref().take(32);
 
             // Compose a comma separated list of branch ids to match on.
-            let in_clause = chunk_ids
-                .map(|bid| format!("'{bid}'"))
-                .join(",");
+            let in_clause = chunk_ids.map(|bid| format!("'{bid}'")).join(",");
 
             // We are done when our iterator gives us nothing to filter on
             if in_clause.is_empty() {
@@ -806,9 +794,12 @@ impl Persistence {
             let chunk_rows = self
                 .with_measured_conn(DatabaseOperation::BranchGenerations, move |conn| {
                     Box::pin(async move {
-                        let result : Vec<BranchPersistence> = diesel::sql_query(
-                            format!("SELECT * from branches where branch_id in ({in_clause});").as_str()
-                        ).load(conn).await?;
+                        let result: Vec<BranchPersistence> = diesel::sql_query(
+                            format!("SELECT * from branches where branch_id in ({in_clause});")
+                                .as_str(),
+                        )
+                        .load(conn)
+                        .await?;
 
                         Ok(result)
                     })
@@ -821,8 +812,7 @@ impl Persistence {
             .into_iter()
             .map(|tsp| {
                 (
-                    tsp.get_branch_id()
-                        .expect("Bad branch ID in database"),
+                    tsp.get_branch_id().expect("Bad branch ID in database"),
                     tsp.generation.map(|g| Generation::new(g as u32)),
                 )
             })
@@ -1075,10 +1065,7 @@ impl Persistence {
     }
 
     /// Set `delete_at` for the given timeline
-    pub(crate) async fn timeline_set_deleted_at(
-        &self,
-        branch_id: BranchId,
-    ) -> DatabaseResult<()> {
+    pub(crate) async fn timeline_set_deleted_at(&self, branch_id: BranchId) -> DatabaseResult<()> {
         use crate::schema::timelines;
 
         let deletion_time = chrono::Local::now().to_utc();
@@ -1137,9 +1124,7 @@ impl Persistence {
     }
 
     /// List every timeline with a non-NULL `branch_name`, as `(branch_id, branch_name)`.
-    pub(crate) async fn list_timeline_branch_names(
-        &self,
-    ) -> DatabaseResult<Vec<(String, String)>> {
+    pub(crate) async fn list_timeline_branch_names(&self) -> DatabaseResult<Vec<(String, String)>> {
         use crate::schema::timelines::dsl;
 
         self.with_measured_conn(DatabaseOperation::GetTimeline, move |conn| {
@@ -1298,10 +1283,7 @@ impl Persistence {
             .map_err(|err| DatabaseError::Logical(format!("failed to deserialize import: {err}")))
     }
 
-    pub(crate) async fn delete_timeline_import(
-        &self,
-        branch_id: BranchId,
-    ) -> DatabaseResult<()> {
+    pub(crate) async fn delete_timeline_import(&self, branch_id: BranchId) -> DatabaseResult<()> {
         use crate::schema::timeline_imports::dsl;
 
         self.with_measured_conn(DatabaseOperation::DeleteTimelineImport, move |conn| {
@@ -1387,10 +1369,7 @@ impl Persistence {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn is_branch_importing(
-        &self,
-        branch_id: BranchId,
-    ) -> DatabaseResult<bool> {
+    pub(crate) async fn is_branch_importing(&self, branch_id: BranchId) -> DatabaseResult<bool> {
         use crate::schema::timeline_imports::dsl;
         self.with_measured_conn(DatabaseOperation::IsBranchImporting, move |conn| {
             Box::pin(async move {

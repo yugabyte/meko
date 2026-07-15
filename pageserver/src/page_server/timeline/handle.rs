@@ -199,8 +199,8 @@ use std::sync::Weak;
 use tracing::{instrument, trace};
 use utils::id::BranchId;
 
-use crate::page_service::GetActiveTimelineError;
 use crate::page_server::GetTimelineError;
+use crate::page_service::GetActiveTimelineError;
 
 pub(crate) trait Types: Sized {
     type TenantManager: TenantManager<Self> + Sized;
@@ -275,10 +275,7 @@ impl<T: Types> Default for PerTimelineState<T> {
 /// Abstract view of [`crate::page_server::mgr`], for testability.
 pub(crate) trait TenantManager<T: Types> {
     /// Invoked by [`Cache::get`] to resolve a [`BranchId`] to a [`Types::Timeline`].
-    async fn resolve(
-        &self,
-        branch_id: BranchId,
-    ) -> Result<T::Timeline, GetActiveTimelineError>;
+    async fn resolve(&self, branch_id: BranchId) -> Result<T::Timeline, GetActiveTimelineError>;
 }
 
 /// Abstract view of an [`Arc<Timeline>`], for testability.

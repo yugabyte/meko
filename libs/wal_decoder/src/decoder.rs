@@ -1,7 +1,6 @@
 //! This module contains logic for decoding and interpreting
 //! raw bytes which represent a raw Postgres WAL record.
 
-
 use bytes::{Buf, Bytes};
 use pageserver_api::reltag::{RelTag, SlruKind};
 use postgres_ffi::walrecord::*;

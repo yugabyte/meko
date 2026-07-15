@@ -17,18 +17,18 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use compute_api::requests::ComputeClaimsScope;
 use compute_api::spec::{ComputeMode, PageserverProtocol};
-use control_plane::endpoint::{ComputeControlPlane, EndpointTerminateMode};
 use control_plane::endpoint::local_pageserver_conf_to_conn_info;
+use control_plane::endpoint::{ComputeControlPlane, EndpointTerminateMode};
 use control_plane::endpoint_storage::{ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointStorage};
 use control_plane::local_env;
 use control_plane::local_env::{
-    EndpointStorageConf, InitForceMode, LocalEnv, PageServerConf, YbLightLocalInitConf,
-    YbLightLocalInitPageserverConf, YbLightStorageControllerConf, SafekeeperConf,
+    EndpointStorageConf, InitForceMode, LocalEnv, PageServerConf, SafekeeperConf,
+    YbLightLocalInitConf, YbLightLocalInitPageserverConf, YbLightStorageControllerConf,
 };
 use control_plane::pageserver::PageServerNode;
 use control_plane::safekeeper::SafekeeperNode;
 use control_plane::storage_controller::{
-    YbLightStorageControllerStartArgs, YbLightStorageControllerStopArgs, StorageController,
+    StorageController, YbLightStorageControllerStartArgs, YbLightStorageControllerStopArgs,
 };
 use nix::fcntl::{Flock, FlockArg};
 use pageserver_api::config::{
@@ -1037,9 +1037,15 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
     } else {
         // User (likely interactive) did not provide a description of the environment, give them the default
         let yb_target = YbStoreTarget {
-            host: args.yb_host.clone().unwrap_or_else(|| DEFAULT_YB_HOST.to_string()),
+            host: args
+                .yb_host
+                .clone()
+                .unwrap_or_else(|| DEFAULT_YB_HOST.to_string()),
             port: args.yb_port.unwrap_or(DEFAULT_YB_PORT),
-            dbname: args.yb_dbname.clone().unwrap_or_else(|| DEFAULT_YB_DBNAME.to_string()),
+            dbname: args
+                .yb_dbname
+                .clone()
+                .unwrap_or_else(|| DEFAULT_YB_DBNAME.to_string()),
         };
         // Port layout. With `--port-base B` the whole cluster moves into a
         // free block — one 100-port lane per service family — so it can run
@@ -1268,10 +1274,7 @@ fn allocate_endpoint_storage_conf(env: &LocalEnv, endpoint_id: &str) -> Endpoint
 /// safekeeper. This is the authoritative "everything committed so far"
 /// position; the ancestor pageserver's `last_record_lsn` only reflects
 /// what its walreceiver has ingested and may lag this by seconds.
-async fn ancestor_durable_lsn(
-    env: &LocalEnv,
-    branch_id: BranchId,
-) -> anyhow::Result<Lsn> {
+async fn ancestor_durable_lsn(env: &LocalEnv, branch_id: BranchId) -> anyhow::Result<Lsn> {
     let sk_conf = env
         .safekeepers_for_timeline(branch_id)
         .into_iter()
@@ -1293,9 +1296,10 @@ async fn ancestor_durable_lsn(
 /// node, which serves the main branch. Child branches get
 /// their own pageservers, resolved via `pageserver_conf_for_timeline`.
 fn get_default_pageserver(env: &local_env::LocalEnv) -> anyhow::Result<PageServerNode> {
-    let ps_conf = env.pageservers.first().context(
-        "no pageserver provisioned yet — create an endpoint (`endpoint create`) first",
-    )?;
+    let ps_conf = env
+        .pageservers
+        .first()
+        .context("no pageserver provisioned yet — create an endpoint (`endpoint create`) first")?;
     Ok(PageServerNode::from_env(env, ps_conf))
 }
 
@@ -1325,7 +1329,9 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
 
             let attached_pageserver_id = shard_zero.node_id;
 
-            println!("Imported branch {branch_id}, attached to pageserver {attached_pageserver_id}");
+            println!(
+                "Imported branch {branch_id}, attached to pageserver {attached_pageserver_id}"
+            );
 
             env.register_branch_mapping("main".to_string(), branch_id)
                 .await?;
@@ -1457,11 +1463,9 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             // recently-committed transaction out of the branch.
             let start_lsn = match args.ancestor_start_lsn {
                 Some(lsn) => lsn,
-                None => {
-                    ancestor_durable_lsn(env, ancestor_branch_id)
-                        .await
-                        .context("fetch ancestor durable WAL end from safekeeper")?
-                }
+                None => ancestor_durable_lsn(env, ancestor_branch_id)
+                    .await
+                    .context("fetch ancestor durable WAL end from safekeeper")?,
             };
 
             // The branch-name mapping is registered with the storage
@@ -1628,14 +1632,8 @@ async fn provision_timeline_for_endpoint(
     match pending.ancestor_branch_id {
         // No ancestor => Bootstrap (the initial branch).
         None => {
-            provision_bootstrap(
-                env,
-                endpoint_id,
-                branch_id,
-                pending.pg_version,
-                branch_name,
-            )
-            .await?;
+            provision_bootstrap(env, endpoint_id, branch_id, pending.pg_version, branch_name)
+                .await?;
         }
         Some(ancestor_branch_id) => {
             provision_branch(
@@ -1795,9 +1793,7 @@ async fn provision_branch(
     let timer = PhaseTimer::new("branch");
     let ancestor_ps_conf = env
         .pageserver_conf_for_timeline(ancestor_branch_id)
-        .with_context(|| {
-            format!("no pageserver serves ancestor branch {ancestor_branch_id}")
-        })?
+        .with_context(|| format!("no pageserver serves ancestor branch {ancestor_branch_id}"))?
         .clone();
     let ancestor_ps = PageServerNode::from_env(env, &ancestor_ps_conf);
 
@@ -1859,10 +1855,7 @@ async fn provision_branch(
     // instead of waiting up to one ancestor flush interval (~5s). The
     // branch-PS startup retry remains the correctness guarantee, so a
     // failed/partial flush only costs latency, never safety.
-    if let Err(e) = ancestor_ps
-        .flush(ancestor_branch_id, Some(start_lsn))
-        .await
-    {
+    if let Err(e) = ancestor_ps.flush(ancestor_branch_id, Some(start_lsn)).await {
         println!("branch: best-effort ancestor flush failed (relying on startup retry): {e:#}");
     }
     timer.tick("ancestor flush");
@@ -2147,23 +2140,24 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             }
             timer.tick("provision pair ‖ endpoint_storage");
 
-            cplane.new_endpoint(
-                &endpoint_id,
-                branch_id,
-                args.pg_port,
-                args.external_http_port,
-                args.internal_http_port,
-                args.pg_version,
-                mode,
-                args.grpc,
-                !args.update_catalog,
-                false,
-                args.privileged_role_name.clone(),
-                args.shared_buffers.clone(),
-                args.lfc_size.clone(),
-                args.pg_settings.clone(),
-            )
-            .await?;
+            cplane
+                .new_endpoint(
+                    &endpoint_id,
+                    branch_id,
+                    args.pg_port,
+                    args.external_http_port,
+                    args.internal_http_port,
+                    args.pg_version,
+                    mode,
+                    args.grpc,
+                    !args.update_catalog,
+                    false,
+                    args.privileged_role_name.clone(),
+                    args.shared_buffers.clone(),
+                    args.lfc_size.clone(),
+                    args.pg_settings.clone(),
+                )
+                .await?;
             timer.tick("new_endpoint (record + endpoint_create)");
         }
         EndpointCmd::Start(args) => {
@@ -2189,10 +2183,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             };
 
             if !args.allow_multiple {
-                cplane.check_conflicting_endpoints(
-                    endpoint.mode,
-                    endpoint.branch_id,
-                )?;
+                cplane.check_conflicting_endpoints(endpoint.mode, endpoint.branch_id)?;
             }
 
             let prefer_protocol = if endpoint.grpc {
@@ -2206,9 +2197,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             // the identity in its pageserver.toml.
             let conf = env
                 .pageserver_conf_for_timeline(endpoint.branch_id)
-                .with_context(|| {
-                    format!("no pageserver serves branch {}", endpoint.branch_id)
-                })?;
+                .with_context(|| format!("no pageserver serves branch {}", endpoint.branch_id))?;
 
             // Initialize an LSN lease for static computes.
             if let ComputeMode::Static(lsn) = endpoint.mode {
@@ -2284,9 +2273,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             };
             let conf = env
                 .pageserver_conf_for_timeline(endpoint.branch_id)
-                .with_context(|| {
-                    format!("no pageserver serves branch {}", endpoint.branch_id)
-                })?;
+                .with_context(|| format!("no pageserver serves branch {}", endpoint.branch_id))?;
             let mut pageserver_conninfo =
                 local_pageserver_conf_to_conn_info(conf, env.use_local_tls)?;
             pageserver_conninfo.prefer_protocol = prefer_protocol;

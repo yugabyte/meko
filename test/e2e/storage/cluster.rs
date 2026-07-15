@@ -66,8 +66,7 @@ pub const MARKERS: &str = "MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specifi
 /// timeout. The safekeeper's interpreted-WAL-reader decode panic
 /// (`critical_timeline!`) is the prime case: it aborts the WAL sender, the
 /// PS then loops forever in `wait_lsn` and the test silently stalls (#61).
-pub const FATAL_MARKERS: &str =
-    r"interpreted wal reader: failed to decode|invalid xlog page header|panicked at|thread '[^']*' panicked";
+pub const FATAL_MARKERS: &str = r"interpreted wal reader: failed to decode|invalid xlog page header|panicked at|thread '[^']*' panicked";
 
 /// Print a step banner to stdout and the run log.
 pub fn step(msg: &str) {
@@ -176,7 +175,9 @@ impl Cluster {
         gc_old_runs(&test_dir);
 
         let run_id = run_id();
-        let yb_light_repo_dir_env = std::env::var("YB_LIGHT_REPO_DIR").ok().filter(|v| !v.is_empty());
+        let yb_light_repo_dir_env = std::env::var("YB_LIGHT_REPO_DIR")
+            .ok()
+            .filter(|v| !v.is_empty());
         let repo_dir = match &yb_light_repo_dir_env {
             Some(d) => PathBuf::from(d),
             None => test_dir.join(format!("run_{run_id}")),
@@ -285,7 +286,10 @@ impl Cluster {
         // clean leftover state, then init + start the stack.
         self.clean()?;
 
-        step(&format!("yb_light_local init + start (db={})", self.db_name));
+        step(&format!(
+            "yb_light_local init + start (db={})",
+            self.db_name
+        ));
         let yb_port = self.yb_port.to_string();
         let port_base = self.port_base.to_string();
         self.yb(&[
@@ -316,8 +320,17 @@ impl Cluster {
         let branch = self.branch.clone();
         let pg_port = self.compute_port.to_string();
         self.yb(&[
-            "endpoint", "create", "main", "--branch-id", &branch, "--branch-name", "main",
-            "--pg-version", "18", "--pg-port", &pg_port,
+            "endpoint",
+            "create",
+            "main",
+            "--branch-id",
+            &branch,
+            "--branch-name",
+            "main",
+            "--pg-version",
+            "18",
+            "--pg-port",
+            &pg_port,
         ])?;
         self.yb(&["endpoint", "start", "main"])?;
         Ok(())
@@ -385,7 +398,11 @@ impl Cluster {
             tee_line(&format!("  | {line}"));
         }
         if !out.status.success() {
-            bail!("yb_light_local {} exited with {}", args.join(" "), out.status);
+            bail!(
+                "yb_light_local {} exited with {}",
+                args.join(" "),
+                out.status
+            );
         }
         Ok(())
     }
@@ -479,7 +496,11 @@ impl Cluster {
     /// `(success, stdout, stderr)`. For tools whose *success* depends on
     /// cluster data (e.g. WAL coverage) but whose *connection* is still
     /// worth asserting.
-    pub fn run_tool_capture(&self, bin: &str, extra: &[&str]) -> anyhow::Result<(bool, String, String)> {
+    pub fn run_tool_capture(
+        &self,
+        bin: &str,
+        extra: &[&str],
+    ) -> anyhow::Result<(bool, String, String)> {
         let path = self
             .yb_light
             .parent()
@@ -529,9 +550,8 @@ impl Cluster {
         // that scenario for merely being long (#71) even though it was
         // making steady, corruption-free progress; capping *quiet time*
         // still trips a real wedge (no step/output) within `budget`.
-        let budget = Duration::from_secs(
-            env_or(&["E2E_TEST_TIMEOUT"], "180").parse().unwrap_or(180),
-        );
+        let budget =
+            Duration::from_secs(env_or(&["E2E_TEST_TIMEOUT"], "180").parse().unwrap_or(180));
         mark_progress();
         tokio::select! {
             r = fut => r?,
@@ -665,7 +685,9 @@ impl Cluster {
             .and_then(|t| t.get("branch_id"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| anyhow::anyhow!("no branch in pageserver listing for branch {}", self.branch))
+            .ok_or_else(|| {
+                anyhow::anyhow!("no branch in pageserver listing for branch {}", self.branch)
+            })
     }
 
     /// Before recycling, drive the pageserver to ingest + flush every WAL

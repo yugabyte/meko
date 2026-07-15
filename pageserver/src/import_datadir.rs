@@ -22,8 +22,8 @@ use walkdir::WalkDir;
 
 use crate::context::RequestContext;
 use crate::metrics::WAL_INGEST;
-use crate::pgdatadir_mapping::*;
 use crate::page_server::Timeline;
+use crate::pgdatadir_mapping::*;
 use crate::walingest::{WalIngest, WalIngestErrorKind};
 
 // Returns checkpoint LSN from controlfile
@@ -304,8 +304,7 @@ async fn import_wal(
         let mut modification = tline.begin_modification_for_import(last_lsn);
         while last_lsn <= endpoint {
             if let Some((lsn, recdata)) = waldecoder.poll_decode()? {
-                let interpreted =
-                    InterpretedWalRecord::from_bytes(recdata, lsn, tline.pg_version)?;
+                let interpreted = InterpretedWalRecord::from_bytes(recdata, lsn, tline.pg_version)?;
 
                 walingest
                     .ingest_record(interpreted, &mut modification, ctx)

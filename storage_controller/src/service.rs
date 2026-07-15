@@ -17,17 +17,15 @@ use futures::stream::FuturesUnordered;
 use http_utils::error::ApiError;
 use itertools::Itertools;
 use pageserver_api::controller_api::{
-    ComputeEndpoint, MetadataHealthRecord, MetadataHealthUpdateRequest, NodeAvailability,
-    NodeRegisterRequest, NodeShard, NodeShardResponse, PlacementPolicy,
-    PendingTimelineInit, PendingTimelineInitRequest,
-    ShardSchedulingPolicy,
-    BranchCreateRequest, BranchCreateResponse, BranchCreateResponseShard,
-    BranchDescribeResponse, BranchDescribeResponseShard, BranchLocateResponse, BranchPolicyRequest, BranchTimelineDescribeResponse,
-    TimelineBranchName,
+    BranchCreateRequest, BranchCreateResponse, BranchCreateResponseShard, BranchDescribeResponse,
+    BranchDescribeResponseShard, BranchLocateResponse, BranchPolicyRequest,
+    BranchTimelineDescribeResponse, ComputeEndpoint, MetadataHealthRecord,
+    MetadataHealthUpdateRequest, NodeAvailability, NodeRegisterRequest, NodeShard,
+    NodeShardResponse, PendingTimelineInit, PendingTimelineInitRequest, PlacementPolicy,
+    ShardSchedulingPolicy, TimelineBranchName,
 };
 use pageserver_api::models::{
-    self, DetachBehavior, LsnLease,
-    PageserverUtilization, BranchImportStatus, BranchConfig,
+    self, BranchConfig, BranchImportStatus, DetachBehavior, LsnLease, PageserverUtilization,
     TimelineArchivalConfigRequest, TimelineCreateRequest, TimelineCreateResponseStorcon,
     TimelineInfo,
 };
@@ -44,6 +42,7 @@ use utils::lsn::Lsn;
 use utils::sync::gate::Gate;
 use utils::{failpoint_support, pausable_failpoint};
 
+use crate::branch::{Branch, IntentState};
 use crate::heartbeater::{Heartbeater, PageserverState};
 use crate::id_lock_map::{
     IdLockMap, TracingExclusiveGuard, trace_exclusive_lock, trace_shared_lock,
@@ -53,11 +52,10 @@ use crate::node::{AvailabilityTransition, Node};
 use crate::pageserver_client::PageserverClient;
 use crate::persistence::split_state::SplitState;
 use crate::persistence::{
-    DatabaseError, MetadataHealthPersistence, PendingTimelineInitPersistence, Persistence,
-    BranchGenerationState, BranchFilter, BranchPersistence,
+    BranchFilter, BranchGenerationState, BranchPersistence, DatabaseError,
+    MetadataHealthPersistence, PendingTimelineInitPersistence, Persistence,
 };
 use crate::scheduler::{ScheduleContext, ScheduleError, Scheduler};
-use crate::branch::{Branch, IntentState};
 use crate::timeline_import::{
     FinalizingImport, ImportResult, ShardImportStatuses, TimelineImport,
     TimelineImportFinalizeError, TimelineImportState, UpcallClient,
@@ -713,9 +711,7 @@ impl Service {
 
         let this = Arc::new(Self {
             inner: Arc::new(std::sync::RwLock::new(ServiceState::new(
-                nodes,
-                branches,
-                scheduler,
+                nodes, branches, scheduler,
             ))),
             config: config.clone(),
             persistence,
@@ -790,10 +786,7 @@ impl Service {
         // the pageserver API (not via this service), we will auto-create any missing branch
         // with default state.
         let insert = {
-            match self
-                .maybe_load_branch(branch_id, &_branch_lock)
-                .await
-            {
+            match self.maybe_load_branch(branch_id, &_branch_lock).await {
                 Ok(_) => false,
                 Err(ApiError::NotFound(_)) => true,
                 Err(e) => return Err(e.into()),
@@ -818,20 +811,14 @@ impl Service {
                         DatabaseErrorKind::UniqueViolation,
                         _,
                     )) => {
-                        tracing::info!(
-                            "Raced with another request to insert branch {}",
-                            branch_id
-                        )
+                        tracing::info!("Raced with another request to insert branch {}", branch_id)
                     }
                     _ => return Err(e.into()),
                 },
                 Ok(()) => {
                     tracing::info!("Inserted branch {} in database", branch_id);
 
-                    let mut branch = Branch::new(
-                        branch_id,
-                        PlacementPolicy::Attached(0),
-                    );
+                    let mut branch = Branch::new(branch_id, PlacementPolicy::Attached(0));
                     branch.config = config;
 
                     let mut locked = self.inner.write().unwrap();
@@ -844,10 +831,7 @@ impl Service {
         let new_generation = if let Some(req_node_id) = attach_req.node_id {
             let maybe_branch_conf = {
                 let locked = self.inner.write().unwrap();
-                locked
-                    .branches
-                    .get(&branch_id)
-                    .map(|t| t.config.clone())
+                locked.branches.get(&branch_id).map(|t| t.config.clone())
             };
 
             match maybe_branch_conf {
@@ -915,9 +899,7 @@ impl Service {
             branch_id = %branch_id,
             "no-op: branch already has no pageserver");
         }
-        branch
-            .intent
-            .set_attached(scheduler, attach_req.node_id);
+        branch.intent.set_attached(scheduler, attach_req.node_id);
 
         tracing::info!(
             "attach_hook: branch {} set generation {:?}, pageserver {}, config {:?}",
@@ -1034,11 +1016,7 @@ impl Service {
             })
             .collect();
 
-        match self
-            .persistence
-            .insert_branches(persist_branches)
-            .await
-        {
+        match self.persistence.insert_branches(persist_branches).await {
             Ok(_) => {}
             Err(DatabaseError::Query(diesel::result::Error::DatabaseError(
                 DatabaseErrorKind::UniqueViolation,
@@ -1132,10 +1110,7 @@ impl Service {
                 }
             }
             Entry::Vacant(entry) => {
-                let state = entry.insert(Branch::new(
-                    branch_id,
-                    placement_policy,
-                ));
+                let state = entry.insert(Branch::new(branch_id, placement_policy));
 
                 state.generation = initial_generation;
                 state.config = config;
@@ -1176,10 +1151,7 @@ impl Service {
         // if we will load it.
         {
             let locked = self.inner.read().unwrap();
-            let existing = locked
-                .branches
-                .range(branch_id..=branch_id)
-                .next();
+            let existing = locked.branches.range(branch_id..=branch_id).next();
 
             if existing.is_some() {
                 // We already have this branch in memory
@@ -1201,11 +1173,7 @@ impl Service {
         }
 
         let mut locked = self.inner.write().unwrap();
-        tracing::info!(
-            "Loaded {} entries for branch {}",
-            branches.len(),
-            branch_id
-        );
+        tracing::info!("Loaded {} entries for branch {}", branches.len(), branch_id);
 
         locked.branches.extend(branches.into_iter().map(|p| {
             let intent = IntentState::new();
@@ -1483,9 +1451,7 @@ impl Service {
         const OBSERVE_TIMEOUT: Duration = Duration::from_secs(180);
         const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-        tracing::info!(
-            "Waiting for branch {branch_id} to become active on its pageserver",
-        );
+        tracing::info!("Waiting for branch {branch_id} to become active on its pageserver",);
 
         self.tenant_remote_mutation(branch_id, move |mut targets| async move {
             if targets.0.is_empty() {
@@ -1494,8 +1460,10 @@ impl Service {
                 ));
             };
 
-            let (shard_zero_bid, shard_zero_locations) =
-                targets.0.pop_first().expect("Must have at least one branch");
+            let (shard_zero_bid, shard_zero_locations) = targets
+                .0
+                .pop_first()
+                .expect("Must have at least one branch");
 
             let node = shard_zero_locations.latest.node;
             let client = PageserverClient::new(
@@ -1649,19 +1617,10 @@ impl Service {
             }
         }
 
-        let maybe_import = self
-            .persistence
-            .get_timeline_import(req.branch_id)
-            .await?;
+        let maybe_import = self.persistence.get_timeline_import(req.branch_id).await?;
 
         let import = maybe_import.ok_or_else(|| {
-            ApiError::NotFound(
-                format!(
-                    "import for {} not found",
-                    req.branch_id
-                )
-                .into(),
-            )
+            ApiError::NotFound(format!("import for {} not found", req.branch_id).into())
         })?;
 
         Ok(import.shard_statuses.0.clone())
@@ -1735,14 +1694,13 @@ impl Service {
     ) -> Result<BranchGenerationValidity, ApiError> {
         {
             let locked = self.inner.read().unwrap();
-            let branch =
-                locked
-                    .branches
-                    .get(&branch_id)
-                    .ok_or(ApiError::InternalServerError(anyhow::anyhow!(
-                        "{} branch not found",
-                        branch_id
-                    )))?;
+            let branch = locked
+                .branches
+                .get(&branch_id)
+                .ok_or(ApiError::InternalServerError(anyhow::anyhow!(
+                    "{} branch not found",
+                    branch_id
+                )))?;
 
             if branch.generation != Some(generation) {
                 return Ok(BranchGenerationValidity::Mismatched {
@@ -1872,11 +1830,8 @@ impl Service {
                     // Any finalize error apart from shut down is permanent and requires us to notify
                     // cplane such that it can clean up.
                     tracing::error!("Import finalize failed with permanent error: {err}");
-                    self.notify_cplane_and_delete_import(
-                        branch_id,
-                        Err(err.to_string()),
-                    )
-                    .await?;
+                    self.notify_cplane_and_delete_import(branch_id, Err(err.to_string()))
+                        .await?;
                     Err(err)
                 }
             },
@@ -1897,11 +1852,7 @@ impl Service {
             .await
             .map_err(|_err| TimelineImportFinalizeError::ShuttingDown)?;
 
-        if let Err(err) = self
-            .persistence
-            .delete_timeline_import(branch_id)
-            .await
-        {
+        if let Err(err) = self.persistence.delete_timeline_import(branch_id).await {
             tracing::warn!("Failed to delete timeline import entry from database: {err}");
         }
 
@@ -1954,10 +1905,7 @@ impl Service {
                     targets,
                     |branch_id, client| async move {
                         client
-                            .activate_post_import(
-                                branch_id,
-                                TIMELINE_ACTIVATE_TIMEOUT,
-                            )
+                            .activate_post_import(branch_id, TIMELINE_ACTIVATE_TIMEOUT)
                             .await
                     },
                     1,
@@ -2027,9 +1975,7 @@ impl Service {
             return Ok(());
         }
 
-        self.persistence
-            .delete_timeline_import(branch_id)
-            .await?;
+        self.persistence.delete_timeline_import(branch_id).await?;
 
         let maybe_finalizing = {
             let mut locked = self.inner.write().unwrap();
@@ -2078,7 +2024,12 @@ impl Service {
                     "Setting archival config of branch {branch_id}, attached to node {node}",
                 );
 
-                let client = PageserverClient::new(node.get_id(),  http_client, node.base_url(), jwt.as_deref());
+                let client = PageserverClient::new(
+                    node.get_id(),
+                    http_client,
+                    node.base_url(),
+                    jwt.as_deref(),
+                );
 
                 client
                     .branch_archival_config(branch_id, &req)
@@ -2093,7 +2044,11 @@ impl Service {
 
             // no shard needs to go first/last; the operation should be idempotent
             // TODO: it would be great to ensure that all shards return the same error
-            let locations = targets.0.iter().map(|t| (*t.0, t.1.latest.node.clone())).collect();
+            let locations = targets
+                .0
+                .iter()
+                .map(|t| (*t.0, t.1.latest.node.clone()))
+                .collect();
             let results = self
                 .tenant_for_shards(locations, |branch_id, node| {
                     futures::FutureExt::boxed(config_one(
@@ -2108,7 +2063,8 @@ impl Service {
             assert!(!results.is_empty(), "must have at least one result");
 
             Ok(())
-        }).await?
+        })
+        .await?
     }
 
     pub(crate) async fn tenant_timeline_detach_ancestor(
@@ -2621,7 +2577,10 @@ impl Service {
                 ));
             }
 
-            let (shard_zero_bid, shard_zero_locations) = targets.0.pop_first().expect("Must have at least one branch");
+            let (shard_zero_bid, shard_zero_locations) = targets
+                .0
+                .pop_first()
+                .expect("Must have at least one branch");
 
             async fn delete_one(
                 branch_id: BranchId,
@@ -2629,33 +2588,42 @@ impl Service {
                 http_client: reqwest::Client,
                 jwt: Option<String>,
             ) -> Result<StatusCode, ApiError> {
-                tracing::info!(
-                    "Deleting branch {branch_id}, attached to node {node}",
-                );
+                tracing::info!("Deleting branch {branch_id}, attached to node {node}",);
 
-                let client = PageserverClient::new(node.get_id(), http_client, node.base_url(), jwt.as_deref());
-                let res = client
-                    .branch_delete(branch_id)
-                    .await;
+                let client = PageserverClient::new(
+                    node.get_id(),
+                    http_client,
+                    node.base_url(),
+                    jwt.as_deref(),
+                );
+                let res = client.branch_delete(branch_id).await;
 
                 match res {
                     Ok(ok) => Ok(ok),
-                    Err(mgmt_api::Error::ApiError(StatusCode::CONFLICT, _)) => Ok(StatusCode::CONFLICT),
-                    Err(mgmt_api::Error::ApiError(StatusCode::PRECONDITION_FAILED, msg)) if msg.contains("Requested branch is missing") => {
-                        Err(ApiError::ResourceUnavailable("Branch migration in progress".into()))
-                    },
-                    Err(mgmt_api::Error::ApiError(StatusCode::SERVICE_UNAVAILABLE, msg)) => Err(ApiError::ResourceUnavailable(msg.into())),
-                    Err(e) => {
-                        Err(
-                            ApiError::InternalServerError(anyhow::anyhow!(
-                                "Error deleting branch {branch_id} on node {node}: {e}",
-                            ))
-                        )
+                    Err(mgmt_api::Error::ApiError(StatusCode::CONFLICT, _)) => {
+                        Ok(StatusCode::CONFLICT)
                     }
+                    Err(mgmt_api::Error::ApiError(StatusCode::PRECONDITION_FAILED, msg))
+                        if msg.contains("Requested branch is missing") =>
+                    {
+                        Err(ApiError::ResourceUnavailable(
+                            "Branch migration in progress".into(),
+                        ))
+                    }
+                    Err(mgmt_api::Error::ApiError(StatusCode::SERVICE_UNAVAILABLE, msg)) => {
+                        Err(ApiError::ResourceUnavailable(msg.into()))
+                    }
+                    Err(e) => Err(ApiError::InternalServerError(anyhow::anyhow!(
+                        "Error deleting branch {branch_id} on node {node}: {e}",
+                    ))),
                 }
             }
 
-            let locations = targets.0.iter().map(|t| (*t.0, t.1.latest.node.clone())).collect();
+            let locations = targets
+                .0
+                .iter()
+                .map(|t| (*t.0, t.1.latest.node.clone()))
+                .collect();
             let statuses = self
                 .tenant_for_shards(locations, |branch_id: BranchId, node: Node| {
                     Box::pin(delete_one(
@@ -2700,10 +2668,7 @@ impl Service {
     ) -> Result<(Node, BranchId), ApiError> {
         let branch_id = {
             let locked = self.inner.read().unwrap();
-            let Some((branch_id, _branch)) = locked
-                .branches
-                .range(branch_id..=branch_id)
-                .next()
+            let Some((branch_id, _branch)) = locked.branches.range(branch_id..=branch_id).next()
             else {
                 return Err(ApiError::NotFound(
                     anyhow::anyhow!("Branch {branch_id} not found").into(),
@@ -2722,10 +2687,7 @@ impl Service {
     /// function looks up and returns node. If the branch isn't found, returns Err(ApiError::NotFound)
     ///
     /// Returns the intent node and whether it is consistent with the observed state.
-    pub(crate) async fn tenant_node(
-        &self,
-        branch_id: BranchId,
-    ) -> Result<Node, ApiError> {
+    pub(crate) async fn tenant_node(&self, branch_id: BranchId) -> Result<Node, ApiError> {
         // Look up in-memory state and maybe use the node from there.
         {
             let locked = self.inner.read().unwrap();
@@ -2874,11 +2836,7 @@ impl Service {
                     async move {
                         let result = node
                             .with_client_retries(
-                                |client| async move {
-                                    client
-                                        .branch_describe(&branch_id)
-                                        .await
-                                },
+                                |client| async move { client.branch_describe(&branch_id).await },
                                 &self.http_client,
                                 &self.config.pageserver_jwt_token,
                                 3,
@@ -2993,10 +2951,7 @@ impl Service {
     pub(crate) async fn list_pending_timeline_inits(
         &self,
     ) -> Result<Vec<PendingTimelineInit>, ApiError> {
-        let rows = self
-            .persistence
-            .list_all_pending_timeline_inits()
-            .await?;
+        let rows = self.persistence.list_all_pending_timeline_inits().await?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
             let pg_version = PgMajorVersion::ALL
@@ -3273,10 +3228,7 @@ impl Service {
             for (branch_id, persistent_tsp) in &persistent_branches {
                 match expect_branches.get(branch_id) {
                     None => {
-                        tracing::error!(
-                            "Branch {} found in database but not in memory",
-                            branch_id
-                        );
+                        tracing::error!("Branch {} found in database but not in memory", branch_id);
                     }
                     Some(expect_tsp) => {
                         if expect_tsp != persistent_tsp {
@@ -3403,19 +3355,14 @@ impl Service {
     /// data + the `timelines` row itself are left for a later GC pass. Compute
     /// processes are stopped by `yb_light_local` before it calls this; the
     /// durable cleanup here is idempotent and order-independent.
-    pub(crate) async fn timeline_drop(
-        &self,
-        branch_id: BranchId,
-    ) -> Result<(), ApiError> {
+    pub(crate) async fn timeline_drop(&self, branch_id: BranchId) -> Result<(), ApiError> {
         self.persistence
             .delete_endpoints_for_branch(&branch_id.to_string())
             .await?;
         self.persistence
             .delete_pending_timeline_init(branch_id)
             .await?;
-        self.persistence
-            .timeline_set_deleted_at(branch_id)
-            .await?;
+        self.persistence.timeline_set_deleted_at(branch_id).await?;
         Ok(())
     }
 
@@ -3681,10 +3628,7 @@ impl Service {
                 );
             }
             RegistrationStatus::NeedUpdate => {
-                tracing::info!(
-                    "Re-registered and updated node {}",
-                    register_req.node_id,
-                );
+                tracing::info!("Re-registered and updated node {}", register_req.node_id,);
             }
             _ => unreachable!("Other statuses have been processed earlier"),
         }
@@ -3912,5 +3856,4 @@ impl Service {
             .collect();
         Ok(result)
     }
-
 }

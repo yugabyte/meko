@@ -398,12 +398,8 @@ pub fn make_router(
             request_span(r, filesystem_usage_handler)
         })
         // Will be used in the future instead of implicit timeline creation
-        .post("/v1/branch", |r| {
-            request_span(r, timeline_create_handler)
-        })
-        .get("/v1/branch", |r| {
-            request_span(r, timeline_list_handler)
-        })
+        .post("/v1/branch", |r| request_span(r, timeline_create_handler))
+        .get("/v1/branch", |r| request_span(r, timeline_list_handler))
         .get("/v1/branch/:branch_id", |r| {
             request_span(r, timeline_status_handler)
         })

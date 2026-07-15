@@ -128,7 +128,11 @@ fn parse_pg_version(human_version: &str) -> PgMajorVersion {
         .unwrap()
         .captures(human_version)
     {
-        Some(captures) if captures.len() == 2 => if &captures["major"] == "18" { return PG18 },
+        Some(captures) if captures.len() == 2 => {
+            if &captures["major"] == "18" {
+                return PG18;
+            }
+        }
         _ => {}
     }
     panic!("Unsuported postgres version {human_version}");
