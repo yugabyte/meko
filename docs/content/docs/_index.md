@@ -54,8 +54,8 @@ Meko integrates easily with any agentic framework through MCP servers. It is ser
   {{< card
     href="quick-start/"
     title="Quick start"
-    desc="Request access, connect your AI client, and start using Meko in minutes."
-    cta="Request access &rarr;"
+    desc="Sign up, connect your AI client, and start using Meko in minutes."
+    cta="Get started &rarr;"
   >}}
   {{< card
     href="architecture/core-concepts/"

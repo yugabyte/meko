@@ -14,7 +14,7 @@ Meko has three levels of integration. Each gives you more control over how your 
 | 2. [Your AI client](#connect-your-ai-client) | Cursor, Claude Code, Claude Desktop, Codex, VS Code | Daily driver. Use your own coding tools against your datapacks. |
 | 3. [Your AI app](#connect-your-ai-app) | Your own agent or framework | Full control. Build Meko into the apps you ship. _Under development._ |
 
-Before you start, [request access](https://info.yugabyte.com/meko-request-access) and sign in to the [Meko portal](https://cloud.mekodata.ai/). You land on the **Welcome to Meko** page with a default datapack already created for you.
+Before you start, [sign up or sign in](https://cloud.mekodata.ai/) to the Meko portal. You land on the **Welcome to Meko** page with a default datapack already created for you.
 
 New accounts start on the **Free** tier. See [Meko pricing](https://mekodata.ai/pricing/) for plan details and limits.
 

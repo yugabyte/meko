@@ -6,8 +6,8 @@
   post = "</span>"
 
 [[main]]
-  name = "Request Access"
+  name = "Sign In / Sign Up"
   weight = 15
-  url = "https://info.yugabyte.com/meko-request-access"
+  url = "https://cloud.mekodata.ai"
   pre = '<span class="btn">'
   post = "</span>"
