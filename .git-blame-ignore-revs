@@ -1,1 +1,4 @@
 4c2bb43775947775401cbb9d774823c5723a91f8
+
+# style: add workspace rustfmt.toml and format Rust code
+62b4c0beff9fe76d647ba60ab90334c8bb4ca68e
