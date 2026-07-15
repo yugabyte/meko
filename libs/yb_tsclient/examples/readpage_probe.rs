@@ -1,10 +1,10 @@
-//! Field-repro probe: replicate the pageserver's `read_chain_pgclient`
+//! Field-repro probe: replicate the pageserver's `read_chain_tsclient`
 //! getpage against a real cluster, with wire tracing, to see whether/
 //! where `read_page` stalls. NOT shipped — a diagnostic.
 //!
 //! Run (RUST_LOG shows the transport steps):
-//!   RUST_LOG=yb_pgclient=trace,yb_pgclient::wire=trace \
-//!   cargo run -p yb_pgclient --example readpage_probe -- \
+//!   RUST_LOG=yb_tsclient=trace,yb_tsclient::wire=trace \
+//!   cargo run -p yb_tsclient --example readpage_probe -- \
 //!     <tserver_addr> <db_oid> <table_oid> <branch_id> \
 //!     <spc> <db> <rel> <fork> <blk> <target_lsn>
 
@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use yb_pgclient::{BindValue, CondOp, PgClient, PgClientConfig, RangeRead};
+use yb_tsclient::{BindValue, CondOp, TsClient, TsClientConfig, RangeRead};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let limit: u64 = a.get(10).and_then(|s| s.parse().ok()).unwrap_or(32);
 
     eprintln!("connecting to {tserver} (rpc_timeout stays default 10s)…");
-    let client = PgClient::connect(PgClientConfig {
+    let client = TsClient::connect(TsClientConfig {
         tserver_addrs: vec![tserver.clone()],
         ..Default::default()
     })
@@ -148,8 +148,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn int_bind(t: &Arc<yb_pgclient::TableHandle>, col: &str, v: i64) -> anyhow::Result<BindValue> {
-    use yb_pgclient::ValueType;
+fn int_bind(t: &Arc<yb_tsclient::TableHandle>, col: &str, v: i64) -> anyhow::Result<BindValue> {
+    use yb_tsclient::ValueType;
     Ok(match t.col(col)?.value_type {
         ValueType::I16 => BindValue::I16(v as i16),
         ValueType::I32 => BindValue::I32(v as i32),

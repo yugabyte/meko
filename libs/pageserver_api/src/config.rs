@@ -973,7 +973,7 @@ pub struct BranchConfigToml {
     /// millions of txns) grows clog/multixact to hundreds of thousands
     /// of pages — eagerly packing all of them into every basebackup
     /// made compute startup read the entire SLRU one page per RPC,
-    /// overrunning the 180s Init timeout (acute on the serial pgclient
+    /// overrunning the 180s Init timeout (acute on the serial tsclient
     /// read lane). Lazy download keeps basebackup small regardless of
     /// SLRU size.
     pub lazy_slru_download: bool,

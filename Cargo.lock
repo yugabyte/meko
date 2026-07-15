@@ -7207,7 +7207,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "yb_pgclient"
+name = "yb_tsclient"
 version = "0.1.0"
 dependencies = [
  "anyhow",

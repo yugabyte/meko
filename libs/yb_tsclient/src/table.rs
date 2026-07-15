@@ -36,7 +36,7 @@ pub fn pgsql_table_id(database_oid: u32, table_oid: u32) -> String {
 ///
 /// Purely client-side metadata — Perform ops carry the `table_id` and
 /// `schema_version` themselves; there is no server-side handle to close.
-/// The owning [`crate::PgClient`] caches handles in a weak registry.
+/// The owning [`crate::TsClient`] caches handles in a weak registry.
 ///
 /// The hot tables (`pages`, `slru_pages`, `meta`, `wals`) are provisioned
 /// once by the migration and never altered, so `schema_version` is

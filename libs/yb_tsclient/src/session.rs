@@ -57,7 +57,7 @@ fn is_local_addr(addr: &str) -> bool {
 ///
 /// `serial_no` is *per-session* bookkeeping: the server queues Perform
 /// requests by strictly increasing serial number
-/// (`PgClientSession::RegisterForProcessing`, "Too old request" on
+/// (`TsClientSession::RegisterForProcessing`, "Too old request" on
 /// reuse), so a fresh session restarts it at 0. `epoch` increases with
 /// each recovery so concurrent failures can tell "this session was
 /// already replaced" from "recovery still needed".
@@ -232,7 +232,7 @@ fn now_millis() -> u64 {
 ///   their snapshot (server read-point history is per-session), so the
 ///   client pins a scan to one read session via [`Self::by_session_id`]
 ///   after page 1 — the round-robin only picks the FIRST page's session.
-/// - `write_sessions`: [`PgClientConfig::write_sessions`] dedicated
+/// - `write_sessions`: [`TsClientConfig::write_sessions`] dedicated
 ///   write-only sessions, distributed round-robin across the endpoints
 ///   at establish time; `write()` round-robins over them so bulk write
 ///   Performs both parallelize and land on different nodes. Empty when

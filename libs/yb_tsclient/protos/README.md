@@ -1,6 +1,6 @@
 # Vendored YugabyteDB protobuf definitions
 
-These are the YB `.proto` files `yb_pgclient` compiles (via `build.rs`) to
+These are the YB `.proto` files `yb_tsclient` compiles (via `build.rs`) to
 talk to the tserver's `PgClientService`. They are vendored — checked in — so
 the crate builds hermetically, with no YB source tree, toolchain, or network.
 

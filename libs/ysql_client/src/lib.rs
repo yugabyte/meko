@@ -164,17 +164,17 @@ pub struct YbConnConfig {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disable_transactional_writes: bool,
     /// Which transport the hot paths (pageserver page reads/writes,
-    /// safekeeper WAL reads/writes) use. `"pgclient"` (default): the
-    /// pure-Rust `yb_pgclient` crate speaking the pggate RPC protocol
+    /// safekeeper WAL reads/writes) use. `"tsclient"` (default): the
+    /// pure-Rust `yb_tsclient` crate speaking the pggate RPC protocol
     /// to a tserver's RPC port (no native library; routing stays
     /// server-side). `"ysql"`: Postgres wire via this crate only. The
-    /// pgclient path keeps per-op fallback to YSQL at runtime; cold paths
+    /// tsclient path keeps per-op fallback to YSQL at runtime; cold paths
     /// (DDL, GC, rehydration, control file) always use YSQL. NOTE: an
     /// old binary reading a config that sets this fails to parse
     /// (`deny_unknown_fields`) — intentional, not silently ignored.
     #[serde(default, skip_serializing_if = "HotPath::is_default")]
     pub hot_path: HotPath,
-    /// yb-tserver RPC endpoints for the `pgclient` hot path, CSV. When unset,
+    /// yb-tserver RPC endpoints for the `tsclient` hot path, CSV. When unset,
     /// the `host_ports` hosts on port 9100; set explicitly to reach every
     /// tserver when `host_ports` is only a subset (e.g. a single YSQL VIP).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -186,15 +186,15 @@ pub struct YbConnConfig {
 #[serde(rename_all = "lowercase")]
 pub enum HotPath {
     Ysql,
-    /// Pure-Rust thin RPC client (`yb_pgclient`) against the tserver
-    /// RPC port; serde wire form `"pgclient"`.
+    /// Pure-Rust thin RPC client (`yb_tsclient`) against the tserver
+    /// RPC port; serde wire form `"tsclient"`.
     #[default]
-    PgClient,
+    TsClient,
 }
 
 impl HotPath {
     fn is_default(&self) -> bool {
-        *self == HotPath::PgClient
+        *self == HotPath::TsClient
     }
 }
 
@@ -288,7 +288,7 @@ impl YbConnConfig {
             parts.push("disable_transactional_writes = true".to_string());
         }
         match self.hot_path {
-            HotPath::PgClient => {} // default → omitted
+            HotPath::TsClient => {} // default → omitted
             HotPath::Ysql => parts.push("hot_path = \"ysql\"".to_string()),
         }
         if let Some(t) = &self.tserver_rpc_addrs {
@@ -298,9 +298,9 @@ impl YbConnConfig {
     }
 }
 
-/// One-time catalog lookup for the `pgclient` hot path: the database OID
+/// One-time catalog lookup for the `tsclient` hot path: the database OID
 /// plus the pg_class OID of each named table in `schema`. The
-/// `yb_pgclient` crate derives DocDB table ids from these. Errors if any
+/// `yb_tsclient` crate derives DocDB table ids from these. Errors if any
 /// requested table is missing — callers fail hard at startup rather than
 /// run with a partially-enabled direct path.
 pub async fn lookup_table_oids(
@@ -572,7 +572,7 @@ mod database_url_tests {
 
     #[test]
     fn hot_path_round_trips_and_defaults_off_the_wire() {
-        // Default (pgclient) → omitted from the wire form.
+        // Default (tsclient) → omitted from the wire form.
         let t = cfg("127.0.0.1:5433").to_inline_toml();
         assert!(!t.contains("hot_path"));
 
@@ -588,13 +588,13 @@ mod database_url_tests {
     }
 
     #[test]
-    fn hot_path_pgclient_round_trips() {
-        // pgclient is the default transport, so it is OMITTED from the
+    fn hot_path_tsclient_round_trips() {
+        // tsclient is the default transport, so it is OMITTED from the
         // wire form and round-trips through `#[serde(default)]` back to
-        // `PgClient` — both with and without the tserver_rpc_addrs
+        // `TsClient` — both with and without the tserver_rpc_addrs
         // override.
         let mut c = cfg("h1:5433,h2:5433");
-        c.hot_path = super::HotPath::PgClient;
+        c.hot_path = super::HotPath::TsClient;
         let t = c.to_inline_toml();
         assert!(!t.contains("hot_path"));
         assert!(!t.contains("tserver_rpc_addrs"));
@@ -602,7 +602,7 @@ mod database_url_tests {
             .map(|v: std::collections::HashMap<String, YbConnConfig>| v["v"].clone())
             .unwrap();
         assert_eq!(back, c);
-        assert_eq!(back.hot_path, super::HotPath::PgClient);
+        assert_eq!(back.hot_path, super::HotPath::TsClient);
 
         c.tserver_rpc_addrs = Some("t1:9100,t2:9101".parse().unwrap());
         let t = c.to_inline_toml();

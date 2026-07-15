@@ -1,6 +1,6 @@
 //! Throwaway field-scale probe (not for CI): big pages-shaped partitions
 //! flushed to SSTs, chain reads incl. anchorless blocks, under writes.
-//! Run: YB_LIVE_TSERVERS=... cargo test -p yb_pgclient --test scale_probe -- --ignored --nocapture
+//! Run: YB_LIVE_TSERVERS=... cargo test -p yb_tsclient --test scale_probe -- --ignored --nocapture
 //!
 //! TODO: this shells out to an external `yb-admin` binary at a hardcoded
 //! dev-server path (`YB_ADMIN` override) to flush tablets to SSTs. Drop
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
-use yb_pgclient::{BindValue, CondOp, PgClient, PgClientConfig, RangeRead, UpsertRow};
+use yb_tsclient::{BindValue, CondOp, TsClient, TsClientConfig, RangeRead, UpsertRow};
 use ysql_client::{HostPorts, YbConnConfig, YsqlClient};
 
 fn env_or(name: &str, default: &str) -> String {
@@ -32,7 +32,7 @@ async fn ysql() -> YsqlClient {
         hot_path: ysql_client::HotPath::Ysql,
         tserver_rpc_addrs: None,
     };
-    YsqlClient::from_yb_config(&conf, "yb_pgclient_scale_probe", false)
+    YsqlClient::from_yb_config(&conf, "yb_tsclient_scale_probe", false)
         .await
         .expect("ysql connect")
 }
@@ -47,7 +47,7 @@ async fn ysql() -> YsqlClient {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "manual field-scale probe"]
 async fn field_exact_hot_anchorless_chains() {
-    const TABLE: &str = "pgclient_field_pages";
+    const TABLE: &str = "tsclient_field_pages";
     const BLOCKS: i64 = 6;
     const CHAIN: i64 = 4500;
     const REL: i64 = 16384;
@@ -120,7 +120,7 @@ async fn field_exact_hot_anchorless_chains() {
         .split(',')
         .map(str::to_string)
         .collect();
-    let client = PgClient::connect(PgClientConfig {
+    let client = TsClient::connect(TsClientConfig {
         tserver_addrs: tservers,
         write_sessions: 2,
         ..Default::default()
@@ -167,11 +167,11 @@ async fn field_exact_hot_anchorless_chains() {
     };
 
     // One full-chain paged read of a hot block, the exact
-    // read_chain_pgclient loop. target above everything, incl. the
+    // read_chain_tsclient loop. target above everything, incl. the
     // writer's fresh deltas (the field target is current WAL end).
     async fn chain_read(
-        client: &PgClient,
-        table: &Arc<yb_pgclient::TableHandle>,
+        client: &TsClient,
+        table: &Arc<yb_tsclient::TableHandle>,
         blk: i64,
         pass: &str,
     ) -> Result<(usize, u64), String> {
@@ -296,7 +296,7 @@ async fn field_exact_hot_anchorless_chains() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "manual field-scale probe"]
 async fn field_scale_chain_reads() {
-    const TABLE: &str = "pgclient_scale_pages";
+    const TABLE: &str = "tsclient_scale_pages";
     const RELS: i64 = 2;
     const BLOCKS: i64 = 60;
     // 200 x 8KB = 1.6MB per block chain: every chain read needs ~7
@@ -402,7 +402,7 @@ async fn field_scale_chain_reads() {
         .split(',')
         .map(str::to_string)
         .collect();
-    let client = PgClient::connect(PgClientConfig {
+    let client = TsClient::connect(TsClientConfig {
         tserver_addrs: tservers,
         write_sessions: 2,
         ..Default::default()
@@ -448,7 +448,7 @@ async fn field_scale_chain_reads() {
         })
     };
 
-    // Chain-read every block of every rel, verbatim read_chain_pgclient.
+    // Chain-read every block of every rel, verbatim read_chain_tsclient.
     let target = 40_000_000i64; // excludes the writer's fresh deltas
     let mut failures = Vec::new();
     let mut worst = std::time::Duration::ZERO;

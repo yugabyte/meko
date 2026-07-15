@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Re-vendor the YugabyteDB protobuf definitions that libs/yb_pgclient needs.
+"""Re-vendor the YugabyteDB protobuf definitions that libs/yb_tsclient needs.
 
-yb_pgclient talks to the tserver's PgClientService over YB's native RPC. It
+yb_tsclient talks to the tserver's PgClientService over YB's native RPC. It
 compiles a small set of YB `.proto` files with prost-build (see build.rs).
-Those protos are VENDORED (checked in under libs/yb_pgclient/protos/) so the
+Those protos are VENDORED (checked in under libs/yb_tsclient/protos/) so the
 build stays hermetic — no YB source tree, toolchain, or network needed to
 build the crate. The cost is re-syncing on a YB version bump; this script
 makes that one reviewable command instead of a hand copy.
@@ -22,7 +22,7 @@ Usage:
                   sha is recorded automatically.
     <version>     release label (e.g. 2025.2.3.0) recorded in version.txt.
 
-Then: cargo build -p yb_pgclient   # protoc validates the fresh set
+Then: cargo build -p yb_tsclient   # protoc validates the fresh set
       git diff                      # review
       git commit
 """
@@ -33,7 +33,7 @@ import shutil
 import subprocess
 import sys
 
-# Roots compiled by build.rs. Keep in sync with libs/yb_pgclient/build.rs.
+# Roots compiled by build.rs. Keep in sync with libs/yb_tsclient/build.rs.
 ROOTS = ["yb/tserver/pg_client.proto", "yb/rpc/rpc_header.proto"]
 
 # prost-build does not emit variants for `allow_alias` enum aliases, so a
@@ -76,7 +76,7 @@ def main() -> None:
     except (subprocess.CalledProcessError, FileNotFoundError):
         die(f"could not read git HEAD of {yb_src} — need a git checkout to record the sha")
 
-    dest = pathlib.Path(__file__).resolve().parent.parent / "libs/yb_pgclient/protos"
+    dest = pathlib.Path(__file__).resolve().parent.parent / "libs/yb_tsclient/protos"
 
     # Transitive closure over `import "..."`, yb/ files only.
     import_re = re.compile(r'^\s*import\s+"([^"]+)"', re.M)
@@ -128,7 +128,7 @@ def main() -> None:
         print(f"  - {r}")
     if not added and not removed:
         print("  (no set change vs current vendored tree)")
-    print("next: cargo build -p yb_pgclient && git diff && git commit")
+    print("next: cargo build -p yb_tsclient && git diff && git commit")
 
 
 if __name__ == "__main__":

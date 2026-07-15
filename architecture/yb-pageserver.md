@@ -202,7 +202,7 @@ basebackup eagerly packs the entire SLRU into the tarball, which under
 a heavy workload (a 4000-warehouse TPC-C run bloats clog/multixact to
 hundreds of thousands of pages) made compute startup read the whole
 SLRU one page per RPC and overrun the 180s Init timeout — acute on the
-serial `pgclient` read lane, but wasteful on every lane.
+serial `tsclient` read lane, but wasteful on every lane.
 
 ## Schema
 

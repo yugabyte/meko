@@ -1,7 +1,7 @@
 //! Pure-Rust direct-to-tserver YugabyteDB client for the yb-amp hot
 //! paths, speaking the pggate RPC protocol
 //! (`yb.tserver.PgClientService`): connect config, Arc'd
-//! [`TableHandle`], [`PgClient::upsert_batch`], [`RangeRead`] builder,
+//! [`TableHandle`], [`TsClient::upsert_batch`], [`RangeRead`] builder,
 //! the `ysql_client`-style error taxonomy — with no native library
 //! dependency.
 //!
@@ -105,7 +105,7 @@ pub mod pb {
     }
 }
 
-pub use client::{ClientObserver, PgClient, PgClientConfig, ReadPage};
+pub use client::{ClientObserver, TsClient, TsClientConfig, ReadPage};
 pub use error::{ErrorClass, YbError};
 pub use ops::{BindValue, CondOp, RangeRead, UpsertRow};
 pub use table::{ColumnKind, ColumnMeta, TableHandle, pgsql_table_id};

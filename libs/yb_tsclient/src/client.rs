@@ -14,7 +14,7 @@
 //!
 //! The client holds a pool of sessions spread ACROSS all tserver
 //! endpoints (see [`SessionPool`]): one read session per endpoint, plus
-//! [`PgClientConfig::write_sessions`] dedicated write sessions
+//! [`TsClientConfig::write_sessions`] dedicated write sessions
 //! distributed round-robin over the endpoints, each its own TCP
 //! connection + server session. Reads, table opens, and the first page
 //! of a scan round-robin the read sessions so single-page reads (the
@@ -60,7 +60,7 @@
 //!   `used_in_txn_limit_ht` is transaction-only. `ReadPage::
 //!   used_read_time_ht` is therefore 0 unless the read was explicitly
 //!   pinned. To put several reads on ONE snapshot, issue them as ops of
-//!   one Perform ([`PgClient::read_pages`]); to pin to a known hybrid
+//!   one Perform ([`TsClient::read_pages`]); to pin to a known hybrid
 //!   time (e.g. derived from a server clock), use
 //!   [`RangeRead::read_time_ht`], which sets `options.read_time`
 //!   explicitly.
@@ -123,7 +123,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 pub const READ_SERIAL_HISTORY_WINDOW: u64 = 65_536;
 
 #[derive(Debug, Clone)]
-pub struct PgClientConfig {
+pub struct TsClientConfig {
     /// tserver RPC endpoints, `host:port` (default tserver RPC port 9100).
     pub tserver_addrs: Vec<String>,
     /// Endpoint to prefer as the pool's lead (e.g. the co-located
@@ -137,7 +137,7 @@ pub struct PgClientConfig {
     pub rpc_timeout: Duration,
     /// Dedicated write sessions (each its own TCP connection + server
     /// session), distributed round-robin across the endpoints, that
-    /// [`PgClient::upsert_batch`] round-robins over — on top of the
+    /// [`TsClient::upsert_batch`] round-robins over — on top of the
     /// one-read-session-per-endpoint that serves everything else. 0 (the
     /// default) routes writes over the read sessions instead (still one
     /// per endpoint, so still spread across nodes).
@@ -169,9 +169,9 @@ pub struct PgClientConfig {
     pub idle_timeout: Option<Duration>,
 }
 
-impl Default for PgClientConfig {
+impl Default for TsClientConfig {
     fn default() -> Self {
-        PgClientConfig {
+        TsClientConfig {
             tserver_addrs: Vec::new(),
             preferred_addr: None,
             rpc_timeout: Duration::from_secs(10),
@@ -198,7 +198,7 @@ pub trait ClientObserver: Send + Sync + 'static {
     /// fault.
     fn on_session_recovery(&self) {}
     /// One call attempt gave up waiting for its response
-    /// ([`PgClientConfig::rpc_timeout`]); the transport was healthy.
+    /// ([`TsClientConfig::rpc_timeout`]); the transport was healthy.
     fn on_call_timeout(&self) {}
 }
 
@@ -213,7 +213,7 @@ pub struct ReadPage {
     /// server picked the read time — which it keeps to itself on this
     /// RPC path (see the module docs): continuations still stay on the
     /// snapshot via the read serial in `paging_state`, and reads needing
-    /// a *shared* snapshot go through [`PgClient::read_pages`].
+    /// a *shared* snapshot go through [`TsClient::read_pages`].
     pub used_read_time_ht: u64,
 }
 
@@ -222,15 +222,15 @@ pub struct ReadPage {
 /// The session pool spans every tserver endpoint; reads round-robin the
 /// per-endpoint read sessions (paged-scan continuations re-pin to their
 /// scan's session) and `upsert_batch` round-robins the write sessions
-/// ([`PgClientConfig::write_sessions`]), so both reads and writes spread
+/// ([`TsClientConfig::write_sessions`]), so both reads and writes spread
 /// across nodes and bulk write chunks truly overlap.
-pub struct PgClient {
+pub struct TsClient {
     rpc_timeout: Duration,
     endpoints: Endpoints,
-    /// See [`PgClientConfig::write_sessions`]; recovery re-creates the
+    /// See [`TsClientConfig::write_sessions`]; recovery re-creates the
     /// pool at this size.
     write_sessions: usize,
-    /// See [`PgClientConfig::idle_timeout`]; `None` = never idle-close.
+    /// See [`TsClientConfig::idle_timeout`]; `None` = never idle-close.
     idle_timeout: Option<Duration>,
     /// Current session pool; replaced wholesale by recovery.
     state: std::sync::RwLock<Arc<SessionPool>>,
@@ -272,7 +272,7 @@ enum SessionSel {
     Write,
 }
 
-impl Drop for PgClient {
+impl Drop for TsClient {
     fn drop(&mut self) {
         if let Some(task) = self.heartbeat_task.lock().expect("heartbeat lock").take() {
             task.abort();
@@ -280,11 +280,11 @@ impl Drop for PgClient {
     }
 }
 
-impl PgClient {
-    pub async fn connect(config: PgClientConfig) -> Result<Arc<PgClient>, YbError> {
+impl TsClient {
+    pub async fn connect(config: TsClientConfig) -> Result<Arc<TsClient>, YbError> {
         let endpoints = Endpoints::new(config.tserver_addrs, config.preferred_addr.as_deref())?;
         let pool = establish_pool(&endpoints, config.rpc_timeout, 0, config.write_sessions).await?;
-        let client = Arc::new(PgClient {
+        let client = Arc::new(TsClient {
             rpc_timeout: config.rpc_timeout,
             endpoints,
             write_sessions: config.write_sessions,
@@ -729,7 +729,7 @@ impl PgClient {
         drop(guard);
         self.observe(ClientObserver::on_session_recovery);
         tracing::info!(
-            "yb_pgclient: reopened idle session on {} (new session id {}, no OpenTable)",
+            "yb_tsclient: reopened idle session on {} (new session id {}, no OpenTable)",
             session.peer(),
             established.session_id,
         );
@@ -756,7 +756,7 @@ impl PgClient {
             *guard = ConnState::Cold; // drops the Connection (aborts its tasks)
             drop(guard);
             tracing::info!(
-                "yb_pgclient: closing idle session on {} (was session id {session_id})",
+                "yb_tsclient: closing idle session on {} (was session id {session_id})",
                 session.peer(),
             );
             return Ok(());
@@ -1018,21 +1018,21 @@ impl PgClient {
                         // burned the whole retry budget must not vanish
                         // with it.
                         tracing::warn!(
-                            "yb_pgclient {what} attempt {attempt}/{max_attempts} failed \
+                            "yb_tsclient {what} attempt {attempt}/{max_attempts} failed \
                              ({:?}), giving up: {e}",
                             e.class()
                         );
                         return Err(e);
                     }
                     tracing::warn!(
-                        "yb_pgclient {what} attempt {attempt}/{max_attempts} failed \
+                        "yb_tsclient {what} attempt {attempt}/{max_attempts} failed \
                          ({:?}), retrying in {backoff:?}: {e}",
                         e.class()
                     );
                     if e.class() == ErrorClass::Network
                         && let Err(re) = self.recover(failed_epoch).await
                     {
-                        tracing::warn!("yb_pgclient session recovery failed: {re}");
+                        tracing::warn!("yb_tsclient session recovery failed: {re}");
                     }
                     tokio::time::sleep(jittered(backoff)).await;
                     backoff = (backoff * 2).min(BACKOFF_CAP);
@@ -1091,7 +1091,7 @@ impl PgClient {
         *self.state.write().expect("state lock") = Arc::new(pool);
         self.observe(ClientObserver::on_session_recovery);
         tracing::info!(
-            "yb_pgclient: session pool recovered: first read session id {new_id}, \
+            "yb_tsclient: session pool recovered: first read session id {new_id}, \
              {sessions} session(s) across {endpoints} endpoint(s) {peers:?} \
              (epoch {})",
             current_epoch + 1
@@ -1183,7 +1183,7 @@ async fn establish_session_conn(
             }
             Err(e) => {
                 tracing::warn!(
-                    "yb_pgclient: session open on {} (endpoint {idx}) failed, \
+                    "yb_tsclient: session open on {} (endpoint {idx}) failed, \
                      trying next endpoint: {e}",
                     addrs[idx]
                 );
@@ -1305,7 +1305,7 @@ impl ScanPosition {
     }
 }
 
-/// The opaque continuation token [`PgClient::read_page`] hands out: the
+/// The opaque continuation token [`TsClient::read_page`] hands out: the
 /// server's paging state wrapped with this client's scan bookkeeping —
 /// the scan's `read_time_serial_no` (server-side snapshot pinning), the
 /// explicit pin, if any, and the server session the scan started on.
@@ -1416,7 +1416,7 @@ fn page_from_response(
 /// Each tick, for every session:
 /// - **Cold** (already idle-closed): skip — nothing to keep alive, and a
 ///   user will reopen it on demand.
-/// - **Warm but idle past [`PgClientConfig::idle_timeout`]**: transition
+/// - **Warm but idle past [`TsClientConfig::idle_timeout`]**: transition
 ///   Warm → Cold, dropping the `Connection` (its reader/writer abort, the
 ///   socket closes, and the server-side session lapses on its own expiry)
 ///   instead of heartbeating. Under the session's connection lock and
@@ -1428,7 +1428,7 @@ fn page_from_response(
 ///
 /// With `idle_timeout = None` no session is ever closed, so this reduces
 /// to the previous always-warm keep-alive.
-fn spawn_heartbeat(client: &Arc<PgClient>) -> tokio::task::JoinHandle<()> {
+fn spawn_heartbeat(client: &Arc<TsClient>) -> tokio::task::JoinHandle<()> {
     let weak = Arc::downgrade(client);
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(HEARTBEAT_INTERVAL);
@@ -1446,11 +1446,11 @@ fn spawn_heartbeat(client: &Arc<PgClient>) -> tokio::task::JoinHandle<()> {
                 match client.heartbeat_or_close_idle(session).await {
                     Ok(()) => {}
                     Err(e) => {
-                        tracing::warn!("yb_pgclient: heartbeat failed: {e}");
+                        tracing::warn!("yb_tsclient: heartbeat failed: {e}");
                         if e.class() == ErrorClass::Network {
                             if let Err(re) = client.recover(pool.epoch()).await {
                                 tracing::warn!(
-                                    "yb_pgclient: heartbeat-triggered recovery failed: {re}"
+                                    "yb_tsclient: heartbeat-triggered recovery failed: {re}"
                                 );
                             }
                             break;
@@ -1517,7 +1517,7 @@ mod tests {
     // ------------------------------------------------------------------
     // Live-transport tests against a scripted in-process "tserver" that
     // speaks just enough of the YB RPC protocol (preamble + framing +
-    // Heartbeat) to let a real PgClient connect. Each test scripts the
+    // Heartbeat) to let a real TsClient connect. Each test scripts the
     // Perform behavior it needs.
     // ------------------------------------------------------------------
 
@@ -1797,8 +1797,8 @@ mod tests {
         }
     }
 
-    async fn connect_test_client(addr: &str, rpc_timeout: Duration) -> Arc<PgClient> {
-        PgClient::connect(PgClientConfig {
+    async fn connect_test_client(addr: &str, rpc_timeout: Duration) -> Arc<TsClient> {
+        TsClient::connect(TsClientConfig {
             tserver_addrs: vec![addr.to_string()],
             rpc_timeout,
             ..Default::default()
@@ -1811,8 +1811,8 @@ mod tests {
         addr: &str,
         rpc_timeout: Duration,
         idle_timeout: Option<Duration>,
-    ) -> Arc<PgClient> {
-        PgClient::connect(PgClientConfig {
+    ) -> Arc<TsClient> {
+        TsClient::connect(TsClientConfig {
             tserver_addrs: vec![addr.to_string()],
             rpc_timeout,
             idle_timeout,

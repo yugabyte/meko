@@ -1,10 +1,10 @@
-# `yb_pgclient` design: pure-Rust client for `yb.tserver.PgClientService`
+# `yb_tsclient` design: pure-Rust client for `yb.tserver.PgClientService`
 
 A direct-to-tserver YugabyteDB client speaking the pggate RPC protocol,
 with no native-library dependency: connect config, Arc'd `TableHandle`,
 `upsert_batch`, `RangeRead` builder, and the `ysql_client`-style error
 taxonomy. It is the default non-YSQL hot-path transport
-(`hot_path = "pgclient"`) for the safekeeper and pageserver.
+(`hot_path = "tsclient"`) for the safekeeper and pageserver.
 
 Everything below was verified empirically against a live YB 2025.2.3.0
 dev cluster and/or read from the authoritative server code (file
@@ -93,7 +93,7 @@ all the traffic:
 - **one read session per endpoint.** Reads, `OpenTable`, and the first
   page of every scan pick a read session round-robin, so single-page
   reads — the getpage hot path — fan out over all nodes.
-- **`PgClientConfig::write_sessions` write sessions** (default 0),
+- **`TsClientConfig::write_sessions` write sessions** (default 0),
   distributed round-robin across the endpoints at establish time, each
   its own TCP connection + server session; `upsert_batch` round-robins
   over them (falling back to the read sessions when 0). Writes are
@@ -144,7 +144,7 @@ connection is **re-establishable**: it lives behind a per-session
 `Cold`, and the client tracks each session's `last_used` timestamp
 (refreshed on every Perform and every keep-alive).
 
-- **Config knob**: `PgClientConfig::idle_timeout: Option<Duration>`,
+- **Config knob**: `TsClientConfig::idle_timeout: Option<Duration>`,
   default `Some(60s)`. `None` = never close = the previous always-warm
   behavior.
 - **Idle sweep**: the heartbeat task, each tick, per session — if `Cold`,
@@ -321,7 +321,7 @@ The client therefore issues:
   Explicit read time and the manipulation are mutually exclusive on the
   wire.
 - **Shared snapshots across reads**: several read ops in ONE Perform
-  (`PgClient::read_pages`) — one setup, one read point, every op and
+  (`TsClient::read_pages`) — one setup, one read point, every op and
   every continuation shares it (a single snapshot by construction).
 - **Writes**: fresh `read_time_serial_no` (forces a clean read-point
   reset, no entanglement with scans), no manipulation, no read time.
@@ -378,7 +378,7 @@ repo contract: reads are snapshots, writes are idempotent upserts.
 Retries are never silent: every failed attempt — including the last,
 whose error the caller may absorb into a fallback lane — is WARNed with
 its error class. Two health events are additionally surfaced through
-[`ClientObserver`] (`PgClient::set_observer`), which the pageserver and
+[`ClientObserver`] (`TsClient::set_observer`), which the pageserver and
 safekeeper wire to `*_session_recoveries_total` /
 `*_call_timeouts_total` counters next to their lane-fallback metrics:
 session recoveries, and per-attempt call timeouts

@@ -40,9 +40,9 @@ pub enum ErrorClass {
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum YbError {
     /// No endpoint of the cluster is reachable.
-    #[error("yb pgclient unavailable: {0}")]
+    #[error("yb tsclient unavailable: {0}")]
     Unavailable(String),
-    #[error("yb pgclient error ({class:?}): {message}")]
+    #[error("yb tsclient error ({class:?}): {message}")]
     Call { class: ErrorClass, message: String },
     #[error("yb row decode error: {0}")]
     Decode(String),

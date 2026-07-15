@@ -84,7 +84,7 @@ impl Connection {
                     close_all(&writer_pending, format!("write to {writer_peer}: {e}"));
                     return;
                 }
-                tracing::trace!(target: "yb_pgclient::wire", peer = %writer_peer, bytes = n, "frame written to socket");
+                tracing::trace!(target: "yb_tsclient::wire", peer = %writer_peer, bytes = n, "frame written to socket");
             }
             // Connection dropped; nothing to fail — Drop aborts us anyway.
         });
@@ -142,7 +142,7 @@ impl Connection {
                 self.peer
             )));
         }
-        tracing::trace!(target: "yb_pgclient::wire", peer = %self.peer, call_id, method, "call queued to writer");
+        tracing::trace!(target: "yb_tsclient::wire", peer = %self.peer, call_id, method, "call queued to writer");
         Ok(rx)
     }
 
@@ -199,13 +199,13 @@ async fn read_loop(mut read_half: OwnedReadHalf, pending: &Mutex<Pending>, peer:
         // sends one every timeout/3). Skip it — treating it as
         // corruption dropped the connection on every idle heartbeat.
         if total == 0 {
-            tracing::trace!(target: "yb_pgclient::wire", %peer, "skipped zero-length keepalive frame");
+            tracing::trace!(target: "yb_tsclient::wire", %peer, "skipped zero-length keepalive frame");
             continue;
         }
         if total > MAX_FRAME_LEN {
             return format!("implausible frame length {total} from {peer}");
         }
-        tracing::trace!(target: "yb_pgclient::wire", %peer, bytes = total, "reading response frame body");
+        tracing::trace!(target: "yb_tsclient::wire", %peer, bytes = total, "reading response frame body");
         let mut frame = vec![0u8; total];
         if let Err(e) = read_half.read_exact(&mut frame).await {
             return format!("read frame from {peer}: {e}");
@@ -217,12 +217,12 @@ async fn read_loop(mut read_half: OwnedReadHalf, pending: &Mutex<Pending>, peer:
                     .expect("pending lock poisoned")
                     .waiters
                     .remove(&decoded.call_id);
-                tracing::trace!(target: "yb_pgclient::wire", %peer, call_id = decoded.call_id, matched = waiter.is_some(), "response frame decoded");
+                tracing::trace!(target: "yb_tsclient::wire", %peer, call_id = decoded.call_id, matched = waiter.is_some(), "response frame decoded");
                 match waiter {
                     // Send failure: the caller gave up (timeout); drop.
                     Some(tx) => drop(tx.send(decoded.result)),
                     None => tracing::debug!(
-                        "yb_pgclient: dropping response for unknown call_id {} from {peer} \
+                        "yb_tsclient: dropping response for unknown call_id {} from {peer} \
                          (caller timed out?)",
                         decoded.call_id
                     ),
@@ -246,7 +246,7 @@ fn close_all(pending: &Mutex<Pending>, reason: String) {
     };
     if !waiters.is_empty() {
         tracing::warn!(
-            "yb_pgclient: connection closed ({reason}); failing {} in-flight calls",
+            "yb_tsclient: connection closed ({reason}); failing {} in-flight calls",
             waiters.len()
         );
     }

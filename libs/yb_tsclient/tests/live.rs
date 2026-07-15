@@ -3,7 +3,7 @@
 //! Ignored by default; run with a cluster up:
 //!
 //! ```sh
-//! cargo test -p yb_pgclient --test live -- --ignored
+//! cargo test -p yb_tsclient --test live -- --ignored
 //! ```
 //!
 //! Env overrides: `YB_LIVE_TSERVERS` (default `127.0.0.1:9100`,
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
-use yb_pgclient::{BindValue, CondOp, PgClient, PgClientConfig, RangeRead, TableHandle, UpsertRow};
+use yb_tsclient::{BindValue, CondOp, TsClient, TsClientConfig, RangeRead, TableHandle, UpsertRow};
 use ysql_client::{HostPorts, YbConnConfig, YsqlClient};
 
 fn env_or(name: &str, default: &str) -> String {
@@ -53,7 +53,7 @@ async fn ysql() -> YsqlClient {
         hot_path: ysql_client::HotPath::Ysql,
         tserver_rpc_addrs: None,
     };
-    YsqlClient::from_yb_config(&conf, "yb_pgclient_live_test", false)
+    YsqlClient::from_yb_config(&conf, "yb_tsclient_live_test", false)
         .await
         .expect("ysql connect")
 }
@@ -106,13 +106,13 @@ async fn table_oids(ysql: &YsqlClient, table: &str) -> (u32, u32) {
     )
 }
 
-async fn connect() -> Arc<PgClient> {
-    PgClient::connect(PgClientConfig {
+async fn connect() -> Arc<TsClient> {
+    TsClient::connect(TsClientConfig {
         tserver_addrs: tserver_addrs(),
         ..Default::default()
     })
     .await
-    .expect("pgclient connect")
+    .expect("tsclient connect")
 }
 
 fn upsert_row(table: &TableHandle, branch: &str, lsn: i64, seq: i16, payload: &[u8]) -> UpsertRow {
@@ -130,7 +130,7 @@ fn upsert_row(table: &TableHandle, branch: &str, lsn: i64, seq: i16, payload: &[
 /// Reads every (lsn, payload) of a branch in one Perform page. Panics if
 /// the result doesn't fit one page (callers size their data to fit).
 async fn read_branch_one_page(
-    client: &PgClient,
+    client: &TsClient,
     table: &Arc<TableHandle>,
     branch: &str,
 ) -> Vec<(i64, Bytes)> {
@@ -147,7 +147,7 @@ async fn read_branch_one_page(
     rows_to_lsn_payload(&page.rows)
 }
 
-fn rows_to_lsn_payload(rows: &[yb_pgclient::Row]) -> Vec<(i64, Bytes)> {
+fn rows_to_lsn_payload(rows: &[yb_tsclient::Row]) -> Vec<(i64, Bytes)> {
     rows.iter()
         .map(|r| (r[0].as_i64().unwrap(), r[1].as_bytes().unwrap().clone()))
         .collect()
@@ -160,7 +160,7 @@ fn rows_to_lsn_payload(rows: &[yb_pgclient::Row]) -> Vec<(i64, Bytes)> {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn bulk_upsert_and_paged_descending_read_cross_check() {
-    const TABLE: &str = "pgclient_live_bulk";
+    const TABLE: &str = "tsclient_live_bulk";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
@@ -289,7 +289,7 @@ async fn bulk_upsert_and_paged_descending_read_cross_check() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn multiplexed_concurrent_performs() {
-    const TABLE: &str = "pgclient_live_mux";
+    const TABLE: &str = "tsclient_live_mux";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
@@ -349,17 +349,17 @@ async fn multiplexed_concurrent_performs() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn pooled_write_sessions_fan_out_and_recover() {
-    const TABLE: &str = "pgclient_live_pool";
+    const TABLE: &str = "tsclient_live_pool";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
-    let client = PgClient::connect(PgClientConfig {
+    let client = TsClient::connect(TsClientConfig {
         tserver_addrs: tserver_addrs(),
         write_sessions: 4,
         ..Default::default()
     })
     .await
-    .expect("pgclient connect (pooled)");
+    .expect("tsclient connect (pooled)");
     let table = client.open_table(db_oid, table_oid).await.expect("open");
     let session_before = client.session_id();
 
@@ -426,7 +426,7 @@ async fn pooled_write_sessions_fan_out_and_recover() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live 3-endpoint YugabyteDB cluster"]
 async fn reads_and_writes_spread_across_tservers() {
-    const TABLE: &str = "pgclient_live_spread";
+    const TABLE: &str = "tsclient_live_spread";
     let endpoints = tserver_addrs();
     let distinct: std::collections::BTreeSet<&String> = endpoints.iter().collect();
     if distinct.len() < 3 {
@@ -463,13 +463,13 @@ async fn reads_and_writes_spread_across_tservers() {
 
     // 4 write sessions over 3 endpoints: read sessions cover all 3, write
     // sessions round-robin (endpoints 0,1,2,0).
-    let client = PgClient::connect(PgClientConfig {
+    let client = TsClient::connect(TsClientConfig {
         tserver_addrs: endpoints.clone(),
         write_sessions: 4,
         ..Default::default()
     })
     .await
-    .expect("pgclient connect (spread)");
+    .expect("tsclient connect (spread)");
     let table = client.open_table(db_oid, table_oid).await.expect("open");
 
     // The pool physically spans all three tservers.
@@ -574,7 +574,7 @@ async fn reads_and_writes_spread_across_tservers() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn session_expiry_recovery() {
-    const TABLE: &str = "pgclient_live_sess";
+    const TABLE: &str = "tsclient_live_sess";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
@@ -629,7 +629,7 @@ async fn session_expiry_recovery() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn endpoint_failover_skips_dead_tserver() {
-    const TABLE: &str = "pgclient_live_failover";
+    const TABLE: &str = "tsclient_live_failover";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
@@ -637,7 +637,7 @@ async fn endpoint_failover_skips_dead_tserver() {
     let dead = "127.0.0.1:1".to_string();
     let mut addrs = vec![dead.clone()];
     addrs.extend(tserver_addrs());
-    let client = PgClient::connect(PgClientConfig {
+    let client = TsClient::connect(TsClientConfig {
         tserver_addrs: addrs,
         preferred_addr: Some(dead.clone()),
         ..Default::default()
@@ -667,7 +667,7 @@ async fn endpoint_failover_skips_dead_tserver() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn one_perform_two_ops_share_a_snapshot() {
-    const TABLE: &str = "pgclient_live_snap";
+    const TABLE: &str = "tsclient_live_snap";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
@@ -758,7 +758,7 @@ async fn one_perform_two_ops_share_a_snapshot() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn paged_read_pinning_under_concurrent_writes() {
-    const TABLE: &str = "pgclient_live_pin";
+    const TABLE: &str = "tsclient_live_pin";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
@@ -798,7 +798,7 @@ async fn paged_read_pinning_under_concurrent_writes() {
     // keeps committing. No torn read: the writer's rows in the snapshot
     // must form a contiguous LSN prefix 1000..=k (each batch is one
     // commit in ascending-LSN order) and every seed row must be present.
-    let follow = |first: yb_pgclient::ReadPage| {
+    let follow = |first: yb_tsclient::ReadPage| {
         let client = &client;
         let table = &table;
         let read = &read;
@@ -844,7 +844,7 @@ async fn paged_read_pinning_under_concurrent_writes() {
         .read_pages(&table, &[read.clone(), read.clone()])
         .await
         .expect("shared-snapshot perform");
-    let [pa, pb]: [yb_pgclient::ReadPage; 2] = pages.try_into().ok().expect("two pages");
+    let [pa, pb]: [yb_tsclient::ReadPage; 2] = pages.try_into().ok().expect("two pages");
     let mut a = follow(pa).await;
     let mut b = follow(pb).await;
     assert_untorn(&a);
@@ -899,13 +899,13 @@ async fn paged_read_pinning_under_concurrent_writes() {
 //     local case and still passes.
 //
 //     This reproduces the field incident where basebackup reads via
-//     PgClient::read_page never completed on a 3-node cluster while
+//     TsClient::read_page never completed on a 3-node cluster while
 //     everything passed on single-node dev.
 // ---------------------------------------------------------------------
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn single_endpoint_reads_cover_remote_leader_tablets() {
-    const TABLE: &str = "pgclient_live_multinode";
+    const TABLE: &str = "tsclient_live_multinode";
     let ysql = ysql().await;
     ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
@@ -963,13 +963,13 @@ async fn single_endpoint_reads_cover_remote_leader_tablets() {
     // Pin the client to the FIRST endpoint only: no failover can hide a
     // routing failure. Short rpc_timeout so a hang classifies quickly.
     let one_endpoint = vec![tserver_addrs().remove(0)];
-    let client = PgClient::connect(PgClientConfig {
+    let client = TsClient::connect(TsClientConfig {
         tserver_addrs: one_endpoint.clone(),
         rpc_timeout: std::time::Duration::from_secs(3),
         ..Default::default()
     })
     .await
-    .expect("pgclient connect");
+    .expect("tsclient connect");
     let table = client.open_table(db_oid, table_oid).await.expect("open");
 
     let mut tasks = Vec::new();
@@ -1126,7 +1126,7 @@ async fn single_endpoint_reads_cover_remote_leader_tablets() {
                     pages += 1;
                     match page.paging_state {
                         Some(next) => paging = Some(next),
-                        None => return Ok::<_, yb_pgclient::YbError>((n, pages)),
+                        None => return Ok::<_, yb_tsclient::YbError>((n, pages)),
                     }
                 }
             };
@@ -1224,9 +1224,9 @@ async fn single_endpoint_reads_cover_remote_leader_tablets() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn reads_progress_under_sustained_writes() {
-    const TABLE: &str = "pgclient_live_rw";
+    const TABLE: &str = "tsclient_live_rw";
     let _ = tracing_subscriber::fmt()
-        .with_env_filter("yb_pgclient=debug")
+        .with_env_filter("yb_tsclient=debug")
         .try_init();
     let ysql = ysql().await;
     ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
@@ -1250,13 +1250,13 @@ async fn reads_progress_under_sustained_writes() {
     let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
 
     let one_endpoint = vec![tserver_addrs().remove(0)];
-    let client = PgClient::connect(PgClientConfig {
+    let client = TsClient::connect(TsClientConfig {
         tserver_addrs: one_endpoint.clone(),
         write_sessions: 4,
         ..Default::default()
     })
     .await
-    .expect("pgclient connect");
+    .expect("tsclient connect");
     let table = client.open_table(db_oid, table_oid).await.expect("open");
 
     // 12 keys spanning the tablets (hash spreads (branch, relnode)).
@@ -1387,12 +1387,12 @@ async fn reads_progress_under_sustained_writes() {
 //     10–30 rows of 8KB bytea per block. A single fetched page here is
 //     a multi-hundred-KB response — the server truncates such pages by
 //     SIZE (not row limit), a behavior small-row tests never trigger.
-//     Mirrors `pageserver/src/page_store.rs::read_chain_pgclient`'s
+//     Mirrors `pageserver/src/page_store.rs::read_chain_tsclient`'s
 //     RangeRead verbatim (hash-eq on the 5 partition cols, blknum eq,
 //     lsn <= target, targets incl. payload, limit 32) and its
 //     anchor-stop paging loop, over several hundred blocks.
 //
-//     This reproduces the field incident where `PgClient::read_page`
+//     This reproduces the field incident where `TsClient::read_page`
 //     on TPC-C-sized `pageserver.pages` chains never completed while
 //     `read_meta` / `scan_slru_range` (small rows) on the SAME session
 //     were fine.
@@ -1400,7 +1400,7 @@ async fn reads_progress_under_sustained_writes() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn large_payload_page_chains_complete() {
-    const TABLE: &str = "pgclient_live_pages8k";
+    const TABLE: &str = "tsclient_live_pages8k";
     /// Hash keys (relnodes), spread over the 9 tablets.
     const RELS: i64 = 12;
     /// Blocks per relation.
@@ -1505,8 +1505,8 @@ async fn large_payload_page_chains_complete() {
         })
     };
 
-    // Per-block chain read, verbatim `read_chain_pgclient` + its
-    // `fetch_chain_rows_pgclient` anchor-stop paging loop.
+    // Per-block chain read, verbatim `read_chain_tsclient` + its
+    // `fetch_chain_rows_tsclient` anchor-stop paging loop.
     let target = i64::MAX / 2;
     let mut latencies = Vec::with_capacity((RELS * BLOCKS) as usize);
     let mut calls = 0u64;
@@ -1534,7 +1534,7 @@ async fn large_payload_page_chains_complete() {
             .limit(CHAIN_PAGE_ROWS);
 
             let started = std::time::Instant::now();
-            let mut rows: Vec<yb_pgclient::Row> = Vec::new();
+            let mut rows: Vec<yb_tsclient::Row> = Vec::new();
             let mut paging = None;
             let mut pages = 0u64;
             let outcome = loop {
@@ -1657,7 +1657,7 @@ async fn large_payload_page_chains_complete() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn hot_block_chain_reads_complete_under_writes() {
-    const TABLE: &str = "pgclient_live_hot_chains";
+    const TABLE: &str = "tsclient_live_hot_chains";
     const BLOCKS: i64 = 4;
     /// Pre-existing chain depth: ~94 paged continuations at limit 32,
     /// all `will_init=false` (the #217 shape: no anchor, the read pages
@@ -1750,7 +1750,7 @@ async fn hot_block_chain_reads_complete_under_writes() {
         })
     };
 
-    // Concurrent full-chain reads, verbatim `read_chain_pgclient` +
+    // Concurrent full-chain reads, verbatim `read_chain_tsclient` +
     // anchor-stop loop; lsn bound ABOVE everything (incl. the writer),
     // like a getpage at the current WAL end.
     let mut tasks = Vec::new();
@@ -1838,7 +1838,7 @@ async fn hot_block_chain_reads_complete_under_writes() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn single_tablet_batch_atomicity() {
-    const TABLE: &str = "pgclient_live_atomic";
+    const TABLE: &str = "tsclient_live_atomic";
     const BATCH: usize = 10;
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
@@ -1894,18 +1894,18 @@ async fn single_tablet_batch_atomicity() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn idle_close_then_reopen_without_opentable() {
-    const TABLE: &str = "pgclient_live_idle";
+    const TABLE: &str = "tsclient_live_idle";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
     // Short idle timeout so the sweep closes the session immediately.
-    let client = PgClient::connect(PgClientConfig {
+    let client = TsClient::connect(TsClientConfig {
         tserver_addrs: tserver_addrs(),
         idle_timeout: Some(std::time::Duration::from_millis(1)),
         ..Default::default()
     })
     .await
-    .expect("pgclient connect");
+    .expect("tsclient connect");
     let table = client.open_table(db_oid, table_oid).await.expect("open");
 
     // Warm the pool with a write + read.
@@ -1984,17 +1984,17 @@ async fn idle_close_then_reopen_without_opentable() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn idle_timeout_none_never_closes() {
-    const TABLE: &str = "pgclient_live_neverclose";
+    const TABLE: &str = "tsclient_live_neverclose";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
-    let client = PgClient::connect(PgClientConfig {
+    let client = TsClient::connect(TsClientConfig {
         tserver_addrs: tserver_addrs(),
         idle_timeout: None,
         ..Default::default()
     })
     .await
-    .expect("pgclient connect");
+    .expect("tsclient connect");
     let table = client.open_table(db_oid, table_oid).await.expect("open");
     client
         .upsert_batch(&table, &[upsert_row(&table, "warm", 1, 1, b"v")])
@@ -2022,7 +2022,7 @@ async fn idle_timeout_none_never_closes() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn empty_branch_read_returns_no_rows() {
-    const TABLE: &str = "pgclient_live_empty";
+    const TABLE: &str = "tsclient_live_empty";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
@@ -2060,7 +2060,7 @@ async fn empty_branch_read_returns_no_rows() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn empty_upsert_batch_is_noop() {
-    const TABLE: &str = "pgclient_live_emptybatch";
+    const TABLE: &str = "tsclient_live_emptybatch";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
@@ -2091,7 +2091,7 @@ async fn empty_upsert_batch_is_noop() {
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn batch_with_duplicate_key_overwrites_and_keeps_others() {
-    const TABLE: &str = "pgclient_live_dup";
+    const TABLE: &str = "tsclient_live_dup";
     let ysql = ysql().await;
     let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
 
@@ -2139,7 +2139,7 @@ async fn batch_with_duplicate_key_overwrites_and_keeps_others() {
 #[ignore = "requires a live YugabyteDB cluster"]
 async fn randomized_upsert_cross_check() {
     use std::collections::HashMap;
-    const TABLE: &str = "pgclient_live_random";
+    const TABLE: &str = "tsclient_live_random";
     const BRANCH: &str = "rnd";
     const KEYSPACE: u64 = 64;
     const ITERS: usize = 2000;
