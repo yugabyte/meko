@@ -182,13 +182,41 @@ Update a runbook when your change makes one of those wrong:
 - A startup precondition / failure mode the runbook diagnoses changed (esp. for
   `startup-failures.md`).
 
-## Step 3 — clippy must be clean
+## Step 3 — clippy clean and rustfmt clean
 
-If the commit touches Rust (`*.rs`, `Cargo.toml`, build scripts), run
-clippy and resolve every warning **before** you commit — a warning-clean
-tree is part of "landing complete", same as the companions above. A
-warning that lands is one the next person has to wade past to see whether
-*their* change added anything.
+If the commit touches Rust (`*.rs`, `Cargo.toml`, build scripts), it lands
+both **clippy-clean** and **rustfmt-clean** — same as the companions
+above, this is part of "landing complete". Nothing runs formatting for you:
+`cargo build` only compiles, and the `pre-commit.py` hook (`cargo fmt`) is
+opt-in (`make setup-pre-commit-hook`) and CI does not check formatting — so
+if you skip this, unformatted code ships.
+
+### Formatting
+
+Run rustfmt against the workspace `rustfmt.toml` and re-stage anything it
+touched **before** you commit:
+
+```
+cargo fmt --all -- --check    # is anything mis-formatted?
+```
+
+If that reports diffs, format in place and re-stage:
+
+```
+cargo fmt --all
+git add -u
+```
+
+Format only the code you're landing — if `cargo fmt --all` reformats files
+unrelated to your change (e.g. because someone landed before the repo was
+fully formatted), don't sweep those into this commit; restrict to your
+staged files (`cargo fmt -p <crate>`, or `git add` only your paths) and
+leave the rest.
+
+### Clippy
+
+Run clippy and resolve every warning — a warning that lands is one the next
+person has to wade past to see whether *their* change added anything.
 
 ```
 cargo clippy --workspace --all-targets 2>&1 | grep -E "^warning: " | grep -v generated
@@ -207,8 +235,8 @@ Must print nothing. If it doesn't:
   confirm the fixes compile.
 
 Skip this step only when nothing staged is Rust (pure docs/runbook/config
-commits). It is **not** optional just because the warnings are
-pre-existing: a Rust commit lands clippy-clean.
+commits). It is **not** optional just because the warnings/formatting are
+pre-existing: a Rust commit lands clippy-clean and rustfmt-clean.
 
 ## Step 4 — update in the same commit
 
