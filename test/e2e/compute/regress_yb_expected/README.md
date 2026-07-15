@@ -32,8 +32,8 @@ submodule bump, or the tablespace error text changes), regenerate the
 affected file from a run's results:
 
 ```
-test/e2e/storage/pg_regress.sh            # run; note the ">>> results under: <OUTDIR>"
-cp <OUTDIR>/results/<test>.out test/e2e/storage/regress_yb_expected/<test>_<N>.out
+test/e2e/compute/pg_regress.sh            # run; note the ">>> results under: <OUTDIR>"
+cp <OUTDIR>/results/<test>.out test/e2e/compute/regress_yb_expected/<test>_<N>.out
 ```
 
 Before blessing, confirm the only diff vs the upstream golden is the

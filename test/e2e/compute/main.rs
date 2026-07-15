@@ -12,7 +12,7 @@
 //! This is intentionally a binary, not a `cargo test` target: the
 //! shared-cluster, fixed-order, gate-after-each, fast-then-slow-on-one-
 //! cluster model can't be expressed with the parallel/unordered default
-//! test harness. `test/e2e/storage/run.sh` wraps it.
+//! test harness. `test/e2e/compute/run.sh` wraps it.
 //!
 //! Usage:
 //!   e2e_tests                  # fast suite

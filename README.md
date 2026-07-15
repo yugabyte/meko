@@ -395,23 +395,23 @@ CARGO_BUILD_FLAGS="--features=testing" make
 DEFAULT_PG_VERSION=17 BUILD_TYPE=release ./scripts/pytest
 ```
 
-The end-to-end suite under [`test/e2e/storage/`](test/e2e/storage/) is a Rust harness
+The end-to-end suite under [`test/e2e/compute/`](test/e2e/compute/) is a Rust harness
 that brings up a real `yb_light_local` cluster + YB and exercises full
 boot, write, branch, restart, and WAL-replay-catch-up paths, scanning
 `pageserver.log` for corruption markers after every test
-(see [`test/e2e/storage/README.md`](test/e2e/storage/README.md)):
+(see [`test/e2e/compute/README.md`](test/e2e/compute/README.md)):
 
 ```sh
-test/e2e/storage/run.sh                 # fast suite
-test/e2e/storage/run.sh all             # fast then slow
-test/e2e/storage/run.sh smoke           # one test by name (substring matches)
-test/e2e/storage/run.sh -n 20 <name>    # repeat N times, cumulative pass/fail
-test/e2e/storage/run.sh --release all   # release build
+test/e2e/compute/run.sh                 # fast suite
+test/e2e/compute/run.sh all             # fast then slow
+test/e2e/compute/run.sh smoke           # one test by name (substring matches)
+test/e2e/compute/run.sh -n 20 <name>    # repeat N times, cumulative pass/fail
+test/e2e/compute/run.sh --release all   # release build
 ```
 
-Scenario tests live in `test/e2e/storage/{fast,slow}/` (typed
+Scenario tests live in `test/e2e/compute/{fast,slow}/` (typed
 `tokio-postgres`/`reqwest` assertions); golden `.sql` workloads live in
-`test/e2e/storage/{fast,slow}/` and diff against checked-in `.out` captures.
+`test/e2e/compute/{fast,slow}/` and diff against checked-in `.out` captures.
 Both are auto-discovered — adding a test is just dropping a file. Run
 the suite before claiming any corruption-class fix.
 

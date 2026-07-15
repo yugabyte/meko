@@ -4,7 +4,7 @@
 # (`e2e_tests` crate). The harness brings up one yb_light_local cluster
 # against an ephemeral YB database and runs every scenario in each
 # requested category, scanning the pageserver log for corruption
-# markers after each. See test/e2e/storage/main.rs.
+# markers after each. See test/e2e/compute/main.rs.
 #
 # All scenarios share a single cluster + tenant + `main` endpoint; the
 # tenant + timeline persist across scenarios, so scenarios use unique
@@ -19,7 +19,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: test/e2e/storage/run.sh [options] [selection]
+Usage: test/e2e/compute/run.sh [options] [selection]
 
 Selection (default: fast):
   fast            the fast suite
@@ -54,11 +54,11 @@ E2E_SKIP=going_away,restart_wal_replay_yb to skip some); the skipped names
 are printed, never silently dropped.
 
 Examples:
-  test/e2e/storage/run.sh                       # fast suite, debug
-  test/e2e/storage/run.sh all                   # fast then slow
-  test/e2e/storage/run.sh smoke                 # one golden workload
-  test/e2e/storage/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, count
-  test/e2e/storage/run.sh --release all         # full suite, release build
+  test/e2e/compute/run.sh                       # fast suite, debug
+  test/e2e/compute/run.sh all                   # fast then slow
+  test/e2e/compute/run.sh smoke                 # one golden workload
+  test/e2e/compute/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, count
+  test/e2e/compute/run.sh --release all         # full suite, release build
 EOF
 }
 
@@ -218,7 +218,7 @@ flock -n "$RUN_LOCK_FD" \
 # BEFORE we build and bring up — that is exactly when the box is most
 # starved. Scoped to dead runs; a live concurrent run holds its lock and is
 # skipped. Best-effort: never let a reap hiccup fail the run.
-bash "$REPO/test/e2e/storage/reap.sh" "$REPO/.e2e-tests" "$YB_LIGHT_REPO_DIR" || true
+bash "$REPO/test/e2e/compute/reap.sh" "$REPO/.e2e-tests" "$YB_LIGHT_REPO_DIR" || true
 
 # Backstop teardown for ABNORMAL termination only. A normal exit (success
 # or failure — including --no-fail-clean's deliberate keep-alive) is handled
@@ -231,7 +231,7 @@ cleanup() {
     echo "run.sh: signalled — tearing down this run's e2e cluster (db=$YB_DBNAME)" >&2
     if [ -n "${HARNESS_PID:-}" ]; then kill "$HARNESS_PID" 2>/dev/null || true; fi
     YB_HOST="${YB_HOST:-127.0.0.1}" YB_PORT="${YB_PORT:-5433}" \
-        bash "$REPO/test/e2e/storage/clean.sh" >/dev/null 2>&1 || true
+        bash "$REPO/test/e2e/compute/clean.sh" >/dev/null 2>&1 || true
     exit 130
 }
 trap cleanup INT TERM HUP

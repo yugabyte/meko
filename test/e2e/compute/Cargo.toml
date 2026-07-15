@@ -2,7 +2,7 @@
 # the suite shares one cluster across all scenarios and must run them in
 # a fixed order with a corruption-marker gate after each, which the
 # default test harness (parallel, unordered) can't express. Invoked as
-# `cargo run -p e2e_tests -- fast|slow|all`, or via `test/e2e/storage/run.sh`.
+# `cargo run -p e2e_tests -- fast|slow|all`, or via `test/e2e/compute/run.sh`.
 [package]
 name = "e2e_tests"
 version = "0.1.0"

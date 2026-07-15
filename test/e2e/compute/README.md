@@ -13,14 +13,14 @@ markers after every test. This is the verification gate the
 ## Running
 
 ```sh
-test/e2e/storage/run.sh                 # fast suite (default)
-test/e2e/storage/run.sh fast            # explicit
-test/e2e/storage/run.sh slow            # slow suite only
-test/e2e/storage/run.sh all             # fast then slow (one shared cluster)
-test/e2e/storage/run.sh smoke           # one test by name (substring also matches)
-test/e2e/storage/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, cumulative pass/fail
-test/e2e/storage/run.sh --release all   # build + run in release mode
-test/e2e/storage/run.sh -h              # full help
+test/e2e/compute/run.sh                 # fast suite (default)
+test/e2e/compute/run.sh fast            # explicit
+test/e2e/compute/run.sh slow            # slow suite only
+test/e2e/compute/run.sh all             # fast then slow (one shared cluster)
+test/e2e/compute/run.sh smoke           # one test by name (substring also matches)
+test/e2e/compute/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, cumulative pass/fail
+test/e2e/compute/run.sh --release all   # build + run in release mode
+test/e2e/compute/run.sh -h              # full help
 ```
 
 `run.sh` is a thin wrapper: it `cargo build`s the harness +
@@ -117,7 +117,7 @@ Nothing central to edit — tests are auto-discovered.
   yb-light's own Postgres (`pg_install/v18/bin/psql`), not whatever is on
   `PATH` — its meta-commands (e.g. `\d`) must match the compute's major
   version. Generate/refresh the golden with
-  `E2E_REGEN_EXPECTED=1 test/e2e/storage/run.sh <name>` and review the diff
+  `E2E_REGEN_EXPECTED=1 test/e2e/compute/run.sh <name>` and review the diff
   before committing. `.sql` workloads are discovered at runtime — no
   recompile needed to add one.
 - **Disabling a workload**: rename both files to `<name>.sql.disabled`
@@ -135,11 +135,11 @@ compute, use `pg_regress.sh` — a separate driver that bypasses the Rust
 harness entirely:
 
 ```sh
-test/e2e/storage/pg_regress.sh            # full suite, release build (default)
-test/e2e/storage/pg_regress.sh --debug    # debug build (slower)
-test/e2e/storage/pg_regress.sh -j 16      # more pg_regress connections
-test/e2e/storage/pg_regress.sh --keep     # leave the cluster up for postmortem
-test/e2e/storage/pg_regress.sh -h         # full help
+test/e2e/compute/pg_regress.sh            # full suite, release build (default)
+test/e2e/compute/pg_regress.sh --debug    # debug build (slower)
+test/e2e/compute/pg_regress.sh -j 16      # more pg_regress connections
+test/e2e/compute/pg_regress.sh --keep     # leave the cluster up for postmortem
+test/e2e/compute/pg_regress.sh -h         # full help
 ```
 
 It drives the ~200-test suite straight from the vendored Postgres source

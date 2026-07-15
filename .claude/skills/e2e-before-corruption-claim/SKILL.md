@@ -4,7 +4,7 @@ description: >-
   Before declaring a corruption / WAL-loss / data-loss / page-write /
   flush / generation-fence fix complete (in a commit message, PR
   description, conversation reply, or task closeout), run the e2e
-  suite locally — at minimum `test/e2e/storage/run.sh fast`, and `slow` for
+  suite locally — at minimum `test/e2e/compute/run.sh fast`, and `slow` for
   changes that touch sustained-write or restart paths. Unit tests
   and `cargo build` are not sufficient evidence. If you can't run
   e2e for any reason, say so explicitly rather than claiming the
@@ -62,7 +62,7 @@ The bar is: a full yb_light_local cluster came up, executed a workload
 that crossed the seams the fix is meant to harden, and reported
 zero corruption markers on shutdown.
 
-The repo's entry point is `test/e2e/storage/run.sh`. It already does:
+The repo's entry point is `test/e2e/compute/run.sh`. It already does:
 
 - Brings up a single yb_light_local cluster against an ephemeral YB.
 - Iterates the requested category (`fast` / `slow` / `all`).
@@ -73,16 +73,16 @@ Use it. Don't roll your own.
 
 ```
 # minimum bar for any fix in the bug class above
-test/e2e/storage/run.sh fast
+test/e2e/compute/run.sh fast
 
 # required for changes touching sustained-write, restart, or
 # replay paths
-test/e2e/storage/run.sh all
+test/e2e/compute/run.sh all
 ```
 
 If the change is specifically about a behavior covered by one of
-the scenarios in the Rust harness (`test/e2e/storage/`) or a
-`.sql` workload under `test/e2e/storage/{fast,slow}/`, that one scenario may
+the scenarios in the Rust harness (`test/e2e/compute/`) or a
+`.sql` workload under `test/e2e/compute/{fast,slow}/`, that one scenario may
 be sufficient — but run the whole suite anyway unless turnaround time
 is genuinely prohibitive. The whole point is to catch the bug you
 didn't anticipate.
@@ -95,7 +95,7 @@ enough." This skill is the operational form of that memory.
 ## How to wire it into a turn
 
 1. Identify whether the fix is in the trigger set above. If yes:
-2. Run `test/e2e/storage/run.sh fast` (or `all` if appropriate). Capture
+2. Run `test/e2e/compute/run.sh fast` (or `all` if appropriate). Capture
    exit code and the last ~30 lines of output.
 3. **If it passes**: include a one-line evidence note in the
    commit body / PR description / reply: "e2e fast passes (no

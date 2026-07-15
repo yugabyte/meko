@@ -279,7 +279,7 @@ YB universe). Pod contract unchanged (still just `GENERATION`/`NODE_ID` env).
   re-attach).
 - **Testing.** Extend `internal/storagecontroller/integration_test.go` (fake SC)
   for the new client methods; run the amp-on-Docker e2e (`#105`) and, if touched,
-  `test/e2e/storage`.
+  `test/e2e/compute`.
 
 ## Suggested sequencing
 

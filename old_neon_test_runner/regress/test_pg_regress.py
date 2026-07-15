@@ -291,7 +291,7 @@ def test_isolation(
 
 
 # The Neon-specific sql_regress tests (old_neon_test_runner/sql_regress) were migrated
-# into the yb-light e2e golden suite (test/e2e/storage/fast); the old
+# into the yb-light e2e golden suite (test/e2e/compute/fast); the old
 # pg_regress-driven `test_sql_regress` and its directory were removed.
 
 

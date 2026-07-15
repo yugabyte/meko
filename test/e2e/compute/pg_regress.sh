@@ -30,7 +30,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: test/e2e/storage/pg_regress.sh [options]
+Usage: test/e2e/compute/pg_regress.sh [options]
 
 Options:
   --debug             build/run the cluster binaries in debug (default: release)
@@ -75,7 +75,7 @@ REG="$REPO/vendor/postgres-v18/src/test/regress"
 PGINST="$REPO/pg_install/v18"
 # yb-light expected-output variants for the by-design CREATE TABLESPACE
 # diffs; overlaid into the vendored expected/ at run time (see below).
-YBEXP="$REPO/test/e2e/storage/regress_yb_expected"
+YBEXP="$REPO/test/e2e/compute/regress_yb_expected"
 OVERLAID=()   # variant files copied into expected/, removed by finish()
 
 # 1) Vendored Postgres source carries the suite (sql/expected/schedule).
@@ -161,7 +161,7 @@ BASE=$(pick_base)
 COMPUTE=$((BASE + 700))
 export COMPUTE_PORT="$COMPUTE"
 
-clean() { bash "$REPO/test/e2e/storage/clean.sh" >/dev/null 2>&1 || true; }
+clean() { bash "$REPO/test/e2e/compute/clean.sh" >/dev/null 2>&1 || true; }
 # Tear down on ANY exit (success, set -e failure, or signal) unless --keep,
 # so a failed bring-up never leaks a half-up cluster. clean.sh is scoped to
 # this run's db + dir.
@@ -174,7 +174,7 @@ finish() {
     [[ ${#OVERLAID[@]} -gt 0 ]] && rm -f "${OVERLAID[@]}"
     if [[ $KEEP == 1 ]]; then
         echo ">>> --keep: cluster left up (compute 127.0.0.1:${COMPUTE:-?}, db=$YB_DBNAME); results in ${OUTDIR:-n/a}"
-        echo "    tear down: YB_DBNAME=$YB_DBNAME YB_LIGHT_REPO_DIR=$YB_LIGHT_REPO_DIR COMPUTE_PORT=${COMPUTE:-} bash test/e2e/storage/clean.sh"
+        echo "    tear down: YB_DBNAME=$YB_DBNAME YB_LIGHT_REPO_DIR=$YB_LIGHT_REPO_DIR COMPUTE_PORT=${COMPUTE:-} bash test/e2e/compute/clean.sh"
     else
         echo ">>> tearing down"; clean
     fi

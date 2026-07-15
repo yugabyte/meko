@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 /// The Postgres install built from yb-light's own vendored Postgres
-/// (`pg_install/v18`), relative to this crate (`<repo>/test/e2e/storage`).
+/// (`pg_install/v18`), relative to this crate (`<repo>/test/e2e/compute`).
 fn pg_install() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../pg_install/v18")
 }

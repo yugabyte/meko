@@ -47,7 +47,7 @@ SUBMODULE = "vendor/postgres-v18"
 PG_VERSION = "v18"
 PG_INSTALL = ROOT / "pg_install" / PG_VERSION
 BUILD_DIR = ROOT / "build"
-# Stamp test/e2e/storage/run.sh touches after building the compute extensions;
+# Stamp test/e2e/compute/run.sh touches after building the compute extensions;
 # removed here on a PG rebuild so run.sh's guard recompiles them against the new
 # headers (see --pg-only).
 EXT_STAMP = BUILD_DIR / ".yb_amp_ext.stamp"
@@ -111,7 +111,7 @@ def git_out(*args):
 # only way to notice that a header/source change (e.g. an FMGR_ABI_EXTRA bump)
 # invalidated the cached PG + every extension linked against it, since the
 # gitlink and the checked-out working tree can match while the *install* is
-# stale. Shared with test/e2e/storage/run.sh, which reads/writes the same file.
+# stale. Shared with test/e2e/compute/run.sh, which reads/writes the same file.
 PG_COMMIT_STAMP = PG_INSTALL / ".pg_commit"
 
 

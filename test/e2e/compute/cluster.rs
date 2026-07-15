@@ -649,7 +649,7 @@ impl Cluster {
     /// repo dir + ephemeral db name in the env.
     fn clean(&self) -> anyhow::Result<()> {
         let status = Command::new("bash")
-            .arg(self.repo.join("test/e2e/storage/clean.sh"))
+            .arg(self.repo.join("test/e2e/compute/clean.sh"))
             .current_dir(&self.repo)
             .env("YB_LIGHT_REPO_DIR", &self.repo_dir)
             .env("YB_DBNAME", &self.db_name)
@@ -669,7 +669,7 @@ impl Cluster {
     /// 7 days.
     fn teardown(&self) {
         let _ = Command::new("bash")
-            .arg(self.repo.join("test/e2e/storage/clean.sh"))
+            .arg(self.repo.join("test/e2e/compute/clean.sh"))
             .current_dir(&self.repo)
             .env("YB_LIGHT_REPO_DIR", &self.repo_dir)
             .env("YB_DBNAME", &self.db_name)
@@ -996,7 +996,7 @@ impl Drop for Cluster {
             eprintln!("  logs/dir: {}", self.repo_dir.display());
             eprintln!("  YB db:    {}", self.db_name);
             eprintln!(
-                "  tear down manually with: YB_LIGHT_REPO_DIR={} YB_DBNAME={} test/e2e/storage/clean.sh",
+                "  tear down manually with: YB_LIGHT_REPO_DIR={} YB_DBNAME={} test/e2e/compute/clean.sh",
                 self.repo_dir.display(),
                 self.db_name
             );
