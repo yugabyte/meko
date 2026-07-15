@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/labstack/echo/v4"
 	echoSwagger "github.com/swaggo/echo-swagger"
@@ -289,8 +290,12 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		}
 	} else {
 		slog.Warn("cognito config not set, auth disabled – using dev account for all requests")
-		datapackGroup = v1.Group("", auth.DevAuth(reg.accountRepo))
+		devAuth := auth.DevAuth(reg.accountRepo)
+		datapackGroup = v1.Group("", devAuth)
 		dpDirect = datapackGroup
+		// Register the minimal /auth surface the SPA needs so it can bootstrap
+		// (and complete onboarding) without Cognito. See registerNoAuthRoutes.
+		registerNoAuthRoutes(v1, devAuth, reg)
 	}
 
 	e.GET("/success", handlers.SuccessHandler(successCfg))
@@ -485,6 +490,35 @@ func registerAuthRoutes(
 		cognitoClient: cognitoClient,
 		authService:   authSvc,
 	}, nil
+}
+
+// registerNoAuthRoutes wires the minimal /auth surface the SPA needs when
+// Cognito is disabled (auth off). The web UI bootstraps by probing
+// GET /auth/me; without it the SPA treats the session as expired and hard-gates
+// to the login screen. These routes are all backed by the DevAuth single-user
+// account and only read the account from context / the account repo / the usage
+// service — never Cognito — so a nil Cognito provider is safe here. The
+// Cognito-only routes (signup, login, forgot-password, social, change-password)
+// are intentionally absent: DevAuth authenticates every request, so there is
+// nothing to log into.
+func registerNoAuthRoutes(v1 *echo.Group, devAuth echo.MiddlewareFunc, reg *serviceRegistry) {
+	authSvc := service.NewAuthService(nil, reg.accountRepo)
+	authH := handlers.NewAuthHandler(authSvc, reg.accountUsageSvc)
+
+	g := v1.Group("/auth", devAuth)
+	g.GET("/me", authH.Me)
+	g.PATCH("/me", authH.UpdateOnboardingStatus)
+	g.PATCH("/me/profile", authH.UpdateProfile)
+	g.GET("/me/usage", authH.GetUsage)
+	// No real session exists in no-auth mode (DevAuth needs no token), so logout
+	// just acknowledges; the SPA re-bootstraps straight back in via DevAuth.
+	logout := func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"message": "logged out"})
+	}
+	g.POST("/logout", logout)
+	g.GET("/logout", logout)
+
+	slog.Info("auth disabled: registered dev /auth/me routes (no Cognito)")
 }
 
 // buildProvisioner builds the provisioner used after signup. In the

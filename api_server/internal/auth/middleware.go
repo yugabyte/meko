@@ -610,6 +610,23 @@ func DevAuth(accounts AccountLookup) echo.MiddlewareFunc {
 				slog.Error("dev auth: failed to ensure dev account", "error", err)
 				return authError(c, "dev account setup failed")
 			}
+			// With Cognito off there is no email to verify, and the SPA's
+			// onboarding step blocks on an unverified email (an OTP flow that
+			// only Cognito can service). Treat the single dev account as
+			// verified-at-creation so the UI is usable end to end. In-memory
+			// only: the /auth/me handler reads email_verified from the context
+			// account, and DevAuth runs on every request.
+			if account.EmailVerifiedAt == nil {
+				account.EmailVerifiedAt = &account.CreatedAt
+			}
+			// Likewise give the dev account a name so the SPA's name-completion
+			// modal (also part of onboarding) doesn't block the page.
+			if account.FirstName == "" {
+				account.FirstName = "Dev"
+			}
+			if account.LastName == "" {
+				account.LastName = "User"
+			}
 			c.Set(ContextKeyAccount, account)
 			c.Set(ContextKeyCognitoSub, devSub)
 			c.Set(ContextKeyAuthMethod, AuthMethodCognito)
