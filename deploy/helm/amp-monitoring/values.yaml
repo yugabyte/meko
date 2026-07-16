@@ -1,0 +1,75 @@
+# amp-monitoring — VictoriaMetrics + Grafana for the amp metrics pipeline.
+#
+# The collect step lives elsewhere: the OpenTelemetryCollector CRs in the
+# yb-amp-controller chart (otel.enabled) scrape amp and remote-write into the
+# VictoriaMetrics deployed here; Grafana reads it back. See DESIGN.md.
+#
+# Namespace: install this into the same namespace as amp (e.g. amp-dev) so the
+# short Service DNS (victoria-metrics-server) and the Grafana dashboard-sidecar
+# search resolve without cross-namespace config.
+
+# VictoriaMetrics single-node store (Prometheus-compatible, remote-write in,
+# PromQL out). fullnameOverride pins the Service name to victoria-metrics-server
+# so it matches the collectors' default otel.remoteWriteEndpoint.
+victoriametrics:
+  enabled: true
+  fullnameOverride: victoria-metrics
+  server:
+    # Pin the server Service name explicitly (independent of release name) so it
+    # matches the Grafana datasource URL and the collectors' remoteWriteEndpoint.
+    fullnameOverride: victoria-metrics-server
+    # -- Retention in months.
+    retentionPeriod: "1"
+    persistentVolume:
+      enabled: true
+      # EKS/meko has no default StorageClass; gp2-csi is the EBS CSI class.
+      storageClassName: gp2-csi
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      # Cap memory so a cardinality/query spike can't OOM neighbours on a shared
+      # node. No CPU limit — avoid throttling the TSDB (k8s best practice).
+      limits:
+        memory: 1Gi
+
+# Grafana with the VictoriaMetrics datasource + the amp dashboards (loaded from
+# the ConfigMaps this chart renders, via the dashboard sidecar).
+grafana:
+  enabled: true
+  # Dashboards come from ConfigMaps + the datasource is provisioned, so the pod
+  # is effectively stateless — no PVC.
+  persistence:
+    enabled: false
+  # Exposed on the tailnet via the Tailscale operator (same pattern as the amp
+  # control plane). The operator does L4 forwarding on port 80 → reach Grafana at
+  # http://<hostname>.<tailnet>.ts.net (HTTP, not HTTPS). Override/remove these
+  # annotations for a different exposure (e.g. an internal LoadBalancer).
+  service:
+    type: ClusterIP
+    annotations:
+      tailscale.com/expose: "true"
+      tailscale.com/hostname: "grafana-amp"
+      tailscale.com/tags: "tag:k8s-meko"
+  # admin password: left to the chart to generate into the Secret
+  # (kubectl get secret <release>-grafana -o jsonpath='{.data.admin-password}' | base64 -d).
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: VictoriaMetrics
+          type: prometheus
+          uid: victoriametrics
+          access: proxy
+          # Same-namespace short DNS; matches victoriametrics.fullnameOverride.
+          url: http://victoria-metrics-server:8428
+          isDefault: true
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      folder: /tmp/dashboards
+      provider:
+        foldersFromFilesStructure: false

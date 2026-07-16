@@ -1,0 +1,24 @@
+{{- /*
+One ConfigMap per dashboard under dashboards/, labeled so the Grafana
+dashboard-sidecar (grafana.sidecar.dashboards) auto-loads it. Rendered only when
+Grafana is enabled.
+*/}}
+{{- if .Values.grafana.enabled }}
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+{{- $name := base $path | trimSuffix ".json" }}
+{{- /* Sanitize to a DNS-1123 name (lowercase, hyphens) while keeping the
+       original filename as the data key. */}}
+{{- $cmName := $name | replace "_" "-" | lower }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "amp-monitoring.fullname" $ }}-dash-{{ $cmName }}
+  labels:
+    grafana_dashboard: "1"
+    {{- include "amp-monitoring.labels" $ | nindent 4 }}
+data:
+  {{ $name }}.json: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}
