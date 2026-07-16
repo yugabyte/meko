@@ -121,6 +121,65 @@ export async function fetchUsageMetrics(
   return data;
 }
 
+/* ---- data plane (YBA universe, proxied from api_server) ---- */
+
+export type DataPlaneInfo = {
+  configured: boolean; // false when no YBA token is set on api_server
+  available: boolean; // false when YBA is configured but the universe can't be read
+  universe_name: string;
+  provider: string;
+  software_version: string;
+  nodes: number; // logical node count (userIntent.numNodes)
+  live_nodes: number;
+  total_nodes: number; // node/pod entries in nodeDetailsSet (for the health pill)
+  replication_factor: number;
+  instance_type: string; // cloud providers; empty for kubernetes
+  tserver_cores: number; // per-process specs (kubernetes); 0 for cloud VMs
+  tserver_memory_gib: number;
+  master_cores: number;
+  master_memory_gib: number;
+  region: string;
+  volume_size_gb: number;
+  num_volumes: number;
+  cpu_percent?: number;
+  memory_percent?: number;
+  disk_percent?: number;
+};
+
+/** Live YugabyteDB Anywhere universe configuration + best-effort utilization. */
+export async function fetchDataPlane(): Promise<DataPlaneInfo> {
+  const { data } = await http.get<DataPlaneInfo>("/usage/dataplane");
+  return data;
+}
+
+/* ---- executive dashboard (proxied from api_server) ---- */
+
+export type ExecUserSavings = {
+  user_id: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  request_count: number;
+  tokens_saved: number;
+};
+
+export type ExecutiveSummary = {
+  total_users: number;
+  total_datapacks: number;
+  total_conversations: number;
+  langfuse_enabled: boolean;
+  total_requests: number;
+  total_tokens_saved: number;
+  top_users: ExecUserSavings[];
+};
+
+/** Executive dashboard rollup: headcount totals, account-wide contextual-search
+ *  token savings, and the top datapack owners by tokens saved. */
+export async function fetchExecutiveSummary(): Promise<ExecutiveSummary> {
+  const { data } = await http.get<ExecutiveSummary>("/usage/token-savings");
+  return data;
+}
+
 /** Override a single user's tier (Free <-> Pro). */
 export async function updateUserTier(
   userId: string,

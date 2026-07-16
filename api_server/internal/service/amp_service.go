@@ -48,10 +48,28 @@ func (s *AMPService) client(ctx context.Context) (*AMPClient, error) {
 
 // CreateDatabaseInput is the request to create an AMP database in a datapack.
 type CreateDatabaseInput struct {
-	DatapackID string
-	UserID     string // Meko user id (also the AMP user id)
-	Name       string
-	PgVersion  *int // optional; AMP defaults to 17
+	DatapackID   string
+	DatapackName string // human-readable datapack name; used to name the AMP pool
+	UserID       string // Meko user id (also the AMP user id)
+	Name         string
+	PgVersion    *int // optional; AMP defaults to 17
+}
+
+// ampPoolName is the name given to a datapack's AMP shared pool. storage_pool.name
+// is UNIQUE in the controller and datapack names are only unique per user, so a
+// short slice of the (globally unique) datapack id is appended to keep the pool
+// name unique while staying recognizable in the AMP console (e.g.
+// "meko:basketball-test-e1dd8f55"). Falls back to the full id when the datapack
+// name is empty.
+func ampPoolName(datapackName, datapackID string) string {
+	if n := strings.TrimSpace(datapackName); n != "" {
+		short := datapackID
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		return "meko:" + n + "-" + short
+	}
+	return "meko-" + datapackID
 }
 
 // CreateDatabase ensures the datapack's AMP shared pool exists (first-time,
@@ -71,7 +89,7 @@ func (s *AMPService) CreateDatabase(ctx context.Context, in CreateDatabaseInput)
 	if err := c.EnsureUser(ctx, in.UserID); err != nil {
 		return AMPProject{}, fmt.Errorf("ensure amp user: %w", err)
 	}
-	pool, err := c.EnsurePool(ctx, in.DatapackID, in.UserID, in.DatapackID)
+	pool, err := c.EnsurePool(ctx, in.DatapackID, in.UserID, ampPoolName(in.DatapackName, in.DatapackID))
 	if err != nil {
 		_ = s.repo.Upsert(ctx, in.DatapackID, in.DatapackID, in.UserID, "failed")
 		return AMPProject{}, fmt.Errorf("ensure amp pool: %w", err)

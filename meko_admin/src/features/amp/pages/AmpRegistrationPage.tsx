@@ -166,7 +166,7 @@ export function AmpRegistrationPage() {
                   <Input
                     id="amp-password"
                     type="password"
-                    placeholder={current ? "•••••• (unchanged)" : ""}
+                    placeholder={current ? "••••••" : ""}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                   />

@@ -10,6 +10,9 @@ type MetricCardProps = {
   description?: string;
   isLoading?: boolean;
   className?: string;
+  // Tailwind text-color class (e.g. "text-orange-400") applied to the big
+  // value and the icon so the grid reads as a tasteful multi-color set.
+  accentClassName?: string;
 };
 
 function formatNumber(n: number): string {
@@ -25,6 +28,7 @@ export function MetricCard({
   description,
   isLoading,
   className,
+  accentClassName,
 }: MetricCardProps) {
   return (
     <Card className={cn("", className)}>
@@ -32,13 +36,13 @@ export function MetricCard({
         <CardTitle className="text-sm font-medium text-muted-foreground">
           {title}
         </CardTitle>
-        <Icon className="h-4 w-4 text-muted-foreground" />
+        <Icon className={cn("h-4 w-4", accentClassName ?? "text-muted-foreground")} />
       </CardHeader>
       <CardContent>
         {isLoading ? (
           <Skeleton className="h-8 w-24" />
         ) : (
-          <p className="text-2xl font-bold">
+          <p className={cn("text-2xl font-bold", accentClassName)}>
             {value !== undefined ? formatNumber(value) : "—"}
           </p>
         )}

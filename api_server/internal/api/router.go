@@ -17,6 +17,7 @@ import (
 	adminrepo "meko/api_server/internal/repository/admin"
 	"meko/api_server/internal/service"
 	adminsvc "meko/api_server/internal/service/admin"
+	"meko/api_server/internal/yba"
 )
 
 // serviceRegistry holds every repository and service the router needs,
@@ -51,6 +52,7 @@ type serviceRegistry struct {
 	billingRepo        *repository.BillingRepo
 	billingSvc         *service.BillingService
 	adminMetricsSvc    *adminsvc.AdminMetricsService
+	adminDataPlaneSvc  *adminsvc.AdminDataPlaneService
 	artifactRepo       *repository.ArtifactRepo
 	artifactSvc        *service.ArtifactService
 	tokenSavingsRepo   *repository.TokenSavingsRepo
@@ -60,6 +62,10 @@ type serviceRegistry struct {
 	// controller endpoint is resolved at request time from the registration row,
 	// not a flag.
 	ampSvc *service.AMPService
+	// ampRegistrationRepo backs the admin AMP-registration endpoints (managed
+	// by meko_admin). Always present — registration is what enables AMP, so it
+	// must be manageable independent of the --show-pg-amp datapack routes.
+	ampRegistrationRepo *repository.AMPRegistrationRepo
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -169,13 +175,27 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	adminRepo := adminrepo.NewAdminRepo(cfg.SystemDB, cfg.DB, cfg.LangfuseDB)
 	adminMetricsSvc := adminsvc.NewAdminMetricsService(adminRepo)
 
+	// Data Plane tab: reads live universe config/metrics from YBA. The YBA
+	// client is nil when no token is set, in which case the endpoint reports
+	// the data plane as not configured (no 503).
+	ybaClient := yba.NewClient(cfg.YBAAPIToken)
+	if ybaClient == nil {
+		slog.Warn("admin dataplane: YBA integration disabled (set --yba-api-token to enable)")
+	}
+	adminDataPlaneSvc := adminsvc.NewAdminDataPlaneService(adminRepo, ybaClient)
+
+	// AMP controller registration (singleton). Managed by meko_admin via the
+	// admin API and always available — it's what enables AMP, so it can't be
+	// gated behind --show-pg-amp.
+	ampRegistrationRepo := repository.NewAMPRegistrationRepo(cfg.SystemDB)
+
 	// AMP (Postgres databases) integration. Enabled only when the feature flag
 	// is on; the controller endpoint is resolved from the database at runtime.
 	var ampSvc *service.AMPService
 	if cfg.ShowPGAMP {
 		ampSvc = service.NewAMPService(
 			repository.NewAMPRepo(cfg.SystemDB),
-			repository.NewAMPRegistrationRepo(cfg.SystemDB),
+			ampRegistrationRepo,
 		)
 		slog.Info("amp routes enabled (controller endpoint resolved from amp_registration)")
 	} else {
@@ -190,35 +210,37 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 
 	slog.Info("service registry initialized")
 	return &serviceRegistry{
-		accountRepo:        accountRepo,
-		ybaRepo:            ybaRepo,
-		ybaSvc:             ybaSvc,
-		dpRepo:             dpRepo,
-		dpSvc:              dpSvc,
-		kbRepo:             kbRepo,
-		freeTierRepo:       freeTierRepo,
-		accountUsageSvc:    accountUsageSvc,
-		langfuseSvc:        langfuseSvc,
-		agentSvc:           agentSvc,
-		kbSvc:              kbSvc,
-		ragSvc:             ragSvc,
-		memoriesSvc:        memoriesSvc,
-		promoteMemoriesSvc: promoteMemoriesSvc,
-		s3Svc:              s3Svc,
-		sharingRepo:        sharingRepo,
-		sharingSvc:         sharingSvc,
-		feedbackRepo:       feedbackRepo,
-		mcpPATRepo:         mcpPATRepo,
-		mcpPATAuditRepo:    mcpPATAuditRepo,
-		mcpPATSvc:          mcpPATSvc,
-		billingRepo:        billingRepo,
-		billingSvc:         billingSvc,
-		adminMetricsSvc:    adminMetricsSvc,
-		artifactRepo:       artifactRepo,
-		artifactSvc:        artifactSvc,
-		tokenSavingsRepo:   tokenSavingsRepo,
-		tokenSavingsSvc:    tokenSavingsSvc,
-		ampSvc:             ampSvc,
+		accountRepo:         accountRepo,
+		ybaRepo:             ybaRepo,
+		ybaSvc:              ybaSvc,
+		dpRepo:              dpRepo,
+		dpSvc:               dpSvc,
+		kbRepo:              kbRepo,
+		freeTierRepo:        freeTierRepo,
+		accountUsageSvc:     accountUsageSvc,
+		langfuseSvc:         langfuseSvc,
+		agentSvc:            agentSvc,
+		kbSvc:               kbSvc,
+		ragSvc:              ragSvc,
+		memoriesSvc:         memoriesSvc,
+		promoteMemoriesSvc:  promoteMemoriesSvc,
+		s3Svc:               s3Svc,
+		sharingRepo:         sharingRepo,
+		sharingSvc:          sharingSvc,
+		feedbackRepo:        feedbackRepo,
+		mcpPATRepo:          mcpPATRepo,
+		mcpPATAuditRepo:     mcpPATAuditRepo,
+		mcpPATSvc:           mcpPATSvc,
+		billingRepo:         billingRepo,
+		billingSvc:          billingSvc,
+		adminMetricsSvc:     adminMetricsSvc,
+		adminDataPlaneSvc:   adminDataPlaneSvc,
+		artifactRepo:        artifactRepo,
+		artifactSvc:         artifactSvc,
+		tokenSavingsRepo:    tokenSavingsRepo,
+		tokenSavingsSvc:     tokenSavingsSvc,
+		ampSvc:              ampSvc,
+		ampRegistrationRepo: ampRegistrationRepo,
 	}
 }
 
@@ -259,10 +281,20 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	// Admin metrics routes consumed by meko_admin. Gated by the admin
 	// shared secret (X-Meko-Admin-Secret); 503 when the secret is unset.
 	adminGroup := v1.Group("/admin", auth.RequireAdminSecret(cfg.AdminAPIKey))
-	adminH := handlers.NewAdminHandler(reg.adminMetricsSvc)
+	adminH := handlers.NewAdminHandler(reg.adminMetricsSvc, reg.adminDataPlaneSvc)
 	adminGroup.GET("/users", adminH.Users)
 	adminGroup.GET("/metrics", adminH.Metrics)
+	adminGroup.GET("/token-savings", adminH.Executive)
+	adminGroup.GET("/dataplane", adminH.DataPlane)
 	adminGroup.PATCH("/users/:id/tier", adminH.UpdateUserTier)
+
+	// AMP controller registration, managed by meko_admin through api_server so
+	// the write path shares api_server's system-DB connection.
+	ampRegH := handlers.NewAMPRegistrationHandler(reg.ampRegistrationRepo)
+	adminGroup.GET("/amp-registration", ampRegH.Get)
+	adminGroup.POST("/amp-registration", ampRegH.Register)
+	adminGroup.PATCH("/amp-registration", ampRegH.Patch)
+	adminGroup.DELETE("/amp-registration", ampRegH.Delete)
 
 	authEnabled := cfg.CognitoRegion != "" &&
 		cfg.CognitoPoolID != "" &&

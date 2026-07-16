@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format, subDays } from "date-fns";
 import {
@@ -8,25 +8,22 @@ import {
   Sparkles,
   FileText,
   Cpu,
-  Users,
   MessageSquare,
   Flame,
 } from "lucide-react";
-import { fetchAdminMetrics, fetchAdminUsers, fetchUsageMetrics } from "@/lib/adminApi";
-import { MetricCard } from "../components/MetricCard";
-import { DailyLoginsChart } from "../components/DailyLoginsChart";
-import { UnloggedUsersTable } from "../components/UnloggedUsersTable";
-import { UserGrowthChart } from "../components/UserGrowthChart";
-import { TierSplitChart } from "../components/TierSplitChart";
-import { ConversationsByAgentChart } from "../components/ConversationsByAgentChart";
-import { UserScopeSelect, ALL_USERS } from "../components/UserScopeSelect";
-import { SingleDatePicker } from "../components/SingleDatePicker";
+import { fetchAdminUsers, fetchUsageMetrics } from "@/lib/adminApi";
+import { MetricCard } from "@/features/dashboard/components/MetricCard";
+import { ConversationsByAgentChart } from "@/features/dashboard/components/ConversationsByAgentChart";
+import { UserScopeSelect } from "@/features/dashboard/components/UserScopeSelect";
+import { SingleDatePicker } from "@/features/dashboard/components/SingleDatePicker";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-export function DashboardPage() {
-  const [scope, setScope] = useState<string>(ALL_USERS);
-  const isAll = scope === ALL_USERS;
+export function MetricsPage() {
+  // Metrics are strictly per-user: aggregating across ~1000 users is too
+  // expensive, so we always scope to a single selected user (defaulting to the
+  // first one once the user list loads).
+  const [scope, setScope] = useState<string>("");
 
   // Default window: last 30 days (inclusive). Separate Start/End pickers.
   const [startDate, setStartDate] = useState<Date | undefined>(subDays(new Date(), 29));
@@ -40,30 +37,31 @@ export function DashboardPage() {
     staleTime: 60_000,
   });
 
+  // Default to the first user once the list arrives (and only while nothing is
+  // selected yet, so a manual pick is never clobbered by a background refetch).
+  useEffect(() => {
+    if (!scope && usersQuery.data && usersQuery.data.length > 0) {
+      setScope(usersQuery.data[0].id);
+    }
+  }, [scope, usersQuery.data]);
+
   const usage = useQuery({
     queryKey: ["admin-usage", scope, start, end],
     queryFn: () => fetchUsageMetrics(scope, start, end),
     staleTime: 60_000,
-  });
-
-  // Cognito/CloudWatch login charts are org-wide only; fetched for "all" scope.
-  const login = useQuery({
-    queryKey: ["admin-metrics"],
-    queryFn: fetchAdminMetrics,
-    staleTime: 60_000,
-    enabled: isAll,
+    enabled: !!scope,
   });
 
   const u = usage.data;
-  const loading = usage.isLoading;
+  const loading = usage.isLoading || (!scope && usersQuery.isLoading);
 
   return (
     <div className="flex flex-col gap-4 p-6 overflow-auto">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold">Dashboard</h1>
+          <h1 className="text-xl font-semibold">Metrics</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {isAll ? "Platform-wide usage overview" : "Usage for the selected user"}
+            Usage & system metrics · selected user
             {start && end ? ` · activity ${start} → ${end}` : ""}
           </p>
         </div>
@@ -106,28 +104,21 @@ export function DashboardPage() {
 
         <TabsContent value="usage" className="flex flex-col gap-4 mt-4">
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            {isAll && (
-              <MetricCard
-                title="Total Users"
-                value={u?.total_users}
-                icon={Users}
-                description="All-time"
-                isLoading={loading}
-              />
-            )}
             <MetricCard
               title="Datapacks"
               value={u?.datapacks}
               icon={Layers}
-              description={isAll ? "All-time · all users" : "All-time · owned by user"}
+              description="All-time · owned by user"
               isLoading={loading}
+              accentClassName="text-orange-400"
             />
             <MetricCard
               title="Shares"
               value={u?.shared_datapacks}
               icon={Share2}
-              description={isAll ? "Across all users" : "Shares by user in range"}
+              description="Shares by user in range"
               isLoading={loading}
+              accentClassName="text-violet-400"
             />
             <MetricCard
               title="Private Memories"
@@ -135,6 +126,7 @@ export function DashboardPage() {
               icon={Brain}
               description=""
               isLoading={loading}
+              accentClassName="text-emerald-400"
             />
             <MetricCard
               title="Collective Memories"
@@ -142,6 +134,7 @@ export function DashboardPage() {
               icon={Sparkles}
               description="Promoted learnings"
               isLoading={loading}
+              accentClassName="text-pink-400"
             />
             <MetricCard
               title="Conversations"
@@ -149,6 +142,7 @@ export function DashboardPage() {
               icon={MessageSquare}
               description="Chat sessions"
               isLoading={loading}
+              accentClassName="text-cyan-400"
             />
             <MetricCard
               title="Token Burn"
@@ -156,6 +150,7 @@ export function DashboardPage() {
               icon={Flame}
               description="Total tokens"
               isLoading={loading}
+              accentClassName="text-amber-400"
             />
           </div>
 
@@ -164,29 +159,6 @@ export function DashboardPage() {
             enabled={u?.langfuse_enabled}
             isLoading={loading}
           />
-
-          {isAll && (
-            <>
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <TierSplitChart free={u?.free_users} pro={u?.pro_users} isLoading={loading} />
-                <DailyLoginsChart
-                  data={login.data?.usage.dailyLogins}
-                  isLoading={login.isLoading}
-                />
-              </div>
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <UserGrowthChart
-                  data={login.data?.usage.userRegistrations}
-                  totalUsers={u?.total_users}
-                  isLoading={login.isLoading}
-                />
-                <UnloggedUsersTable
-                  users={login.data?.usage.neverLoggedInUsers}
-                  isLoading={login.isLoading}
-                />
-              </div>
-            </>
-          )}
         </TabsContent>
 
         <TabsContent value="system" className="flex flex-col gap-4 mt-4">
@@ -197,6 +169,7 @@ export function DashboardPage() {
               icon={FileText}
               description="Completed RAG documents"
               isLoading={loading}
+              accentClassName="text-sky-400"
             />
             <MetricCard
               title="Total Chunks Processed"
@@ -204,6 +177,7 @@ export function DashboardPage() {
               icon={Cpu}
               description="Chunks persisted to vector store"
               isLoading={loading}
+              accentClassName="text-teal-400"
             />
           </div>
         </TabsContent>

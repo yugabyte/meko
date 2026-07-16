@@ -33,12 +33,31 @@ func parseDateParam(raw string) (*time.Time, error) {
 
 // AdminHandler serves the admin metrics endpoints.
 type AdminHandler struct {
-	svc *adminsvc.AdminMetricsService
+	svc   *adminsvc.AdminMetricsService
+	dpSvc *adminsvc.AdminDataPlaneService
 }
 
 // NewAdminHandler constructs an AdminHandler.
-func NewAdminHandler(svc *adminsvc.AdminMetricsService) *AdminHandler {
-	return &AdminHandler{svc: svc}
+func NewAdminHandler(svc *adminsvc.AdminMetricsService, dpSvc *adminsvc.AdminDataPlaneService) *AdminHandler {
+	return &AdminHandler{svc: svc, dpSvc: dpSvc}
+}
+
+// DataPlane handles GET /api/v1/admin/dataplane — live universe configuration
+// and utilization from YBA for the meko_admin Data Plane tab.
+//
+//	@Summary	Data plane status (admin)
+//	@Description	Live YugabyteDB Anywhere universe configuration (nodes, instance type, storage, region, version) plus best-effort CPU/memory/disk utilization. `configured` is false when no YBA token is set; `available` is false when the universe can't be read.
+//	@Tags		admin
+//	@Produce	json
+//	@Success	200	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/dataplane [get]
+func (h *AdminHandler) DataPlane(c echo.Context) error {
+	info, err := h.dpSvc.DataPlane(c.Request().Context())
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, info)
 }
 
 // Users handles GET /api/v1/admin/users.
@@ -88,6 +107,25 @@ func (h *AdminHandler) Metrics(c echo.Context) error {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
 	return ok(c, http.StatusOK, metrics)
+}
+
+// Executive handles GET /api/v1/admin/token-savings — the executive
+// dashboard payload: headcount totals, account-wide contextual-search token
+// savings, and the top datapack owners by tokens saved.
+//
+//	@Summary	Executive dashboard summary (admin)
+//	@Description	Account-wide adoption + token-savings rollup: total users/datapacks/conversations, total contextual-search requests and tokens saved, and a top-10 leaderboard of datapack owners by tokens saved (min 20 requests). Backed by the maintained token_savings_summary counters, attributed by datapack owner.
+//	@Tags		admin
+//	@Produce	json
+//	@Success	200	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/token-savings [get]
+func (h *AdminHandler) Executive(c echo.Context) error {
+	summary, err := h.svc.Executive(c.Request().Context())
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, summary)
 }
 
 // UpdateUserTier handles PATCH /api/v1/admin/users/:id/tier. Body is

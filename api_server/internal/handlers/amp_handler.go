@@ -43,12 +43,20 @@ func (h *AMPHandler) CreateDatabase(c echo.Context) error {
 	if err != nil || account == nil {
 		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing account context")
 	}
+	// The ownership middleware resolves the datapack into context; use its name
+	// so the AMP pool is named after the datapack (best-effort — a missing name
+	// falls back to the id in ampPoolName).
+	var datapackName string
+	if dp, dpErr := auth.GetDatapack(c); dpErr == nil && dp != nil {
+		datapackName = dp.Name
+	}
 
 	project, err := h.svc.CreateDatabase(c.Request().Context(), service.CreateDatabaseInput{
-		DatapackID: datapackID,
-		UserID:     account.ID,
-		Name:       req.Name,
-		PgVersion:  req.PgVersion,
+		DatapackID:   datapackID,
+		DatapackName: datapackName,
+		UserID:       account.ID,
+		Name:         req.Name,
+		PgVersion:    req.PgVersion,
 	})
 	if err != nil {
 		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())

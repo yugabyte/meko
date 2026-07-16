@@ -115,6 +115,10 @@ func run() error {
 		os.Getenv("ADMIN_API_KEY"),
 		"Shared secret gating the /admin/* metrics endpoints (X-Meko-Admin-Secret). Empty disables them (503).")
 
+	ybaAPIToken := flag.String("yba-api-token",
+		os.Getenv("YBA_API_TOKEN"),
+		"YugabyteDB Anywhere API token (X-AUTH-YW-API-TOKEN) for the admin Data Plane tab. Empty reports the data plane as not configured.")
+
 	mcpInternalSecret := flag.String("mcp-internal-secret",
 		os.Getenv("MCP_INTERNAL_SECRET"),
 		"shared secret for /internal/meko-tokens/validate (MCP server -> api_server). Empty disables the endpoint.")
@@ -339,6 +343,7 @@ func run() error {
 		DeployEnv:                repository.ParseDeployEnv(*deployEnv),
 		MCPInternalSecret:        *mcpInternalSecret,
 		AdminAPIKey:              *adminAPIKey,
+		YBAAPIToken:              *ybaAPIToken,
 		MCPPATFlushInterval:      *mcpPATFlushInterval,
 		PATRateLimitPerMin:       *patRateLimitPerMin,
 		PATRateLimitBurst:        *patRateLimitBurst,

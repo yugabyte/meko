@@ -1,6 +1,7 @@
 import {
   BarChart,
   Bar,
+  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -16,6 +17,19 @@ type Props = {
   enabled: boolean | undefined;
   isLoading: boolean;
 };
+
+// Cycled per-bar palette so the chart reads as multi-color, echoing the metric
+// tile accents (blue/orange/violet/emerald/pink/cyan/amber/sky).
+const BAR_COLORS = [
+  "hsl(217 91% 60%)",
+  "hsl(25 95% 53%)",
+  "hsl(258 90% 66%)",
+  "hsl(160 84% 39%)",
+  "hsl(330 81% 60%)",
+  "hsl(189 94% 43%)",
+  "hsl(43 96% 56%)",
+  "hsl(199 89% 48%)",
+];
 
 // Conversations grouped by agent (Langfuse). Horizontal bars so agent names
 // stay readable regardless of count.
@@ -60,7 +74,11 @@ export function ConversationsByAgentChart({ data, enabled, isLoading }: Props) {
                 }}
                 cursor={{ fill: "hsl(var(--accent))" }}
               />
-              <Bar dataKey="conversations" name="Conversations" fill="hsl(217 91% 60%)" radius={[0, 3, 3, 0]} />
+              <Bar dataKey="conversations" name="Conversations" radius={[0, 3, 3, 0]}>
+                {rows.map((_, i) => (
+                  <Cell key={i} fill={BAR_COLORS[i % BAR_COLORS.length]} />
+                ))}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         )}

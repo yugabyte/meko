@@ -67,6 +67,13 @@ type ServerConfig struct {
 	// endpoints return 503.
 	AdminAPIKey string
 
+	// YBAAPIToken authenticates read-only calls to YugabyteDB Anywhere
+	// (X-AUTH-YW-API-TOKEN) for the admin Data Plane tab. When empty, the
+	// /admin/dataplane endpoint reports the data plane as not configured.
+	// The universe's management URL + UUID come from meko_system.yb_universes,
+	// so the token is the only YBA config passed at runtime.
+	YBAAPIToken string
+
 	// SES configuration for invite / share notification emails.
 	// When SESFromAddress is empty, email sending is disabled.
 	SESRegion      string

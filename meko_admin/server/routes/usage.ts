@@ -40,6 +40,27 @@ router.get("/", async (req, res, next) => {
   }
 });
 
+/** GET /api/admin/usage/token-savings — executive dashboard summary
+ *  (headcount totals + account-wide token savings + top-owner leaderboard). */
+router.get("/token-savings", async (_req, res, next) => {
+  try {
+    const data = await apiServerGet<Record<string, unknown>>("/token-savings");
+    res.json(data);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** GET /api/admin/usage/dataplane — live YBA universe config + utilization. */
+router.get("/dataplane", async (_req, res, next) => {
+  try {
+    const data = await apiServerGet<Record<string, unknown>>("/dataplane");
+    res.json(data);
+  } catch (e) {
+    next(e);
+  }
+});
+
 /** PATCH /api/admin/usage/users/:id/tier — override a user's tier. */
 router.patch("/users/:id/tier", async (req, res, next) => {
   try {

@@ -45,5 +45,30 @@ func (r *AMPRegistrationRepo) Get(ctx context.Context) (*AMPRegistration, error)
 	return &reg, nil
 }
 
-// Writes (register / update / delete) are owned by meko_admin, which writes
-// meko_system.amp_registration directly; api_server only reads it (above).
+// Upsert registers (or replaces) the singleton AMP controller row. Called by
+// the admin API on behalf of meko_admin, so the write goes through the same
+// system-DB connection api_server uses everywhere else.
+func (r *AMPRegistrationRepo) Upsert(ctx context.Context, reg AMPRegistration) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO meko_system.amp_registration (singleton, name, base_url, username, password)
+		 VALUES (TRUE, $1, $2, $3, $4)
+		 ON CONFLICT (singleton) DO UPDATE
+		   SET name = EXCLUDED.name, base_url = EXCLUDED.base_url,
+		       username = EXCLUDED.username, password = EXCLUDED.password, updated_at = now()`,
+		reg.Name, reg.BaseURL, reg.Username, reg.Password,
+	)
+	if err != nil {
+		return fmt.Errorf("amp_registration: upsert: %w", err)
+	}
+	return nil
+}
+
+// Delete removes the singleton registration (unregister AMP). Idempotent.
+func (r *AMPRegistrationRepo) Delete(ctx context.Context) error {
+	if _, err := r.db.ExecContext(ctx,
+		`DELETE FROM meko_system.amp_registration WHERE singleton = TRUE`,
+	); err != nil {
+		return fmt.Errorf("amp_registration: delete: %w", err)
+	}
+	return nil
+}

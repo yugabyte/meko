@@ -35,7 +35,7 @@ export function LoginPage() {
         setSession(result.session);
         setStep("new_password");
       } else {
-        navigate(ROUTES.dashboard, { replace: true });
+        navigate(ROUTES.metrics, { replace: true });
       }
     } catch (err: unknown) {
       setError((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Login failed. Please try again.");
@@ -58,7 +58,7 @@ export function LoginPage() {
     setIsSubmitting(true);
     try {
       await completeNewPassword(email, newPassword, session, givenName, familyName);
-      navigate(ROUTES.dashboard, { replace: true });
+      navigate(ROUTES.metrics, { replace: true });
     } catch (err: unknown) {
       setError((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Failed to set password. Please try again.");
     } finally {

@@ -1,18 +1,21 @@
-"use client"
-
-import { useTheme } from "next-themes"
 import { Toaster as Sonner } from "sonner"
+import { useTheme } from "@/lib/theme"
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
 
 const Toaster = ({ ...props }: ToasterProps) => {
-  const { theme = "system" } = useTheme()
+  const [theme] = useTheme()
 
   return (
     <Sonner
       theme={theme as ToasterProps["theme"]}
-      position="top-center"
       className="toaster group"
+      // Match meko's toast behaviour: top-center, green/red richColors, a
+      // close button, and a longer dwell so the message isn't easy to miss.
+      position="top-center"
+      richColors
+      closeButton
+      duration={5000}
       toastOptions={{
         classNames: {
           toast:

@@ -1,6 +1,8 @@
 export const ROUTES = {
-  dashboard: "/",
-  users: "/users",
-  ampRegistration: "/amp",
   login: "/login",
+  dataPlane: "/data-plane",
+  users: "/users",
+  metrics: "/metrics",
+  executive: "/executive",
+  ampRegistration: "/amp",
 } as const;

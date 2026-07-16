@@ -19,7 +19,12 @@ const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm ring-offset-background data-[placeholder]:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
+      // `border-border` + `bg-input` (not the shadcn default `border-input` +
+      // transparent): in dark mode `--input` equals the page background, so an
+      // `--input`-colored border is invisible. `border-border` keeps the trigger
+      // bounded on any surface; `bg-input` keeps it inset against cards rather
+      // than blending with `bg-card` — see the `--input` note in index.css.
+      "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-border bg-input px-3 py-2 text-sm shadow-sm ring-offset-background data-[placeholder]:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
       className
     )}
     {...props}
@@ -67,10 +72,32 @@ const SelectScrollDownButton = React.forwardRef<
 SelectScrollDownButton.displayName =
   SelectPrimitive.ScrollDownButton.displayName
 
+/**
+ * Props for `SelectContent`. Extends the underlying Radix
+ * `Select.Content` props with our optional `useScrollbar` toggle —
+ * everything else passes through unchanged.
+ */
+type SelectContentProps = React.ComponentPropsWithoutRef<
+  typeof SelectPrimitive.Content
+> & {
+  /**
+   * When `true`, suppresses Radix's stock up/down scroll-button
+   * affordances. The popover then falls back to whatever scrolling
+   * behaviour the OS provides on `overflow-y-auto` — note that
+   * macOS hides native scrollbars by default, so a caller opting in
+   * here is expected to pair this with their own `::-webkit-scrollbar`
+   * styling via `className` to keep the affordance visible. Defaults
+   * to `false` so every existing call site keeps the arrow-on-hover
+   * pattern (matches the native macOS `<select>` popup, which is the
+   * Radix default).
+   */
+  useScrollbar?: boolean;
+};
+
 const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
->(({ className, children, position = "popper", ...props }, ref) => (
+  SelectContentProps
+>(({ className, children, position = "popper", useScrollbar = false, ...props }, ref) => (
   <SelectPrimitive.Portal>
     <SelectPrimitive.Content
       ref={ref}
@@ -83,7 +110,15 @@ const SelectContent = React.forwardRef<
       position={position}
       {...props}
     >
-      <SelectScrollUpButton />
+      {/*
+        Drop the arrow buttons entirely in `useScrollbar` mode rather
+        than hiding them with CSS — Radix wires keyboard / hover
+        handlers to them, and an invisible-but-mounted button can
+        still steal focus. The outer Content already has
+        `overflow-y-auto`, so removing the buttons is enough for the
+        browser to render a normal scrollbar when items overflow.
+      */}
+      {!useScrollbar && <SelectScrollUpButton />}
       <SelectPrimitive.Viewport
         className={cn(
           "p-1",
@@ -93,7 +128,7 @@ const SelectContent = React.forwardRef<
       >
         {children}
       </SelectPrimitive.Viewport>
-      <SelectScrollDownButton />
+      {!useScrollbar && <SelectScrollDownButton />}
     </SelectPrimitive.Content>
   </SelectPrimitive.Portal>
 ))

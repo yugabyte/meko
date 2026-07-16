@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import axios from "axios";
+import { queryClient } from "@/lib/queryClient";
 
 export type AuthUser = { sub: string; email: string };
 
@@ -30,6 +31,10 @@ export const authHttp = axios.create({ baseURL: "/api/admin/auth" });
 export const adminHttp = axios.create({ baseURL: "/api/admin" });
 
 function setToken(token: string) {
+  // Start every authenticated session with a clean cache. Query keys aren't
+  // scoped per user, so without this the next admin to log in (same tab) could
+  // briefly see the previous admin's cached data. Mirrors meko_ui's login flow.
+  queryClient.clear();
   sessionStorage.setItem(TOKEN_KEY, token);
   adminHttp.defaults.headers.common["Authorization"] = `Bearer ${token}`;
 }
@@ -93,6 +98,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     clearToken();
     setUser(null);
+    // Drop all cached queries so the next admin in this tab can't see the
+    // previous admin's data (query keys aren't scoped per user).
+    queryClient.clear();
   }, []);
 
   return (

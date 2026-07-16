@@ -28,6 +28,31 @@
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
 
+  /* --- AMP brand + app-shell surfaces ---------------------------------
+   * `brand` is the fixed Yugabyte/AMP orange accent (logo mark, primary
+   * CTAs, active emphasis) — identical in both modes. `sidebar*` is the
+   * left-nav surface family: it reads a shade deeper than the page in
+   * dark mode and as a clean white panel in light mode. Consume these
+   * via Tailwind utilities (`bg-brand`, `bg-sidebar`, `border-sidebar-border`,
+   * `bg-sidebar-accent`) — never hard-code the hex. */
+  --color-brand: hsl(var(--brand));
+  --color-brand-foreground: hsl(var(--brand-foreground));
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+
+  /*
+   * Palette stops exposed as Tailwind utilities (`bg-meko-navy-700`,
+   * `to-meko-navy-950`, etc.). Use these SPARINGLY — they bypass the
+   * semantic layer, so they don't respond to a theme switch. Reserve
+   * for:
+   *   - scrollbar styling (`meko-navy-600/700` — no semantic equivalent)
+   *   - gradient endpoints where the semantic token is ambiguous
+   *   - brand-fixed visuals that must look the same in any mode
+   * For everything else, prefer the semantic tokens above.
+   */
   --color-meko-navy-50:  hsl(var(--meko-navy-50));
   --color-meko-navy-100: hsl(var(--meko-navy-100));
   --color-meko-navy-200: hsl(var(--meko-navy-200));
@@ -39,15 +64,57 @@
 }
 
 :root {
-  --meko-navy-50:  222 32% 97%;
-  --meko-navy-100: 220 19% 93%;
-  --meko-navy-200: 220 13% 81%;
-  --meko-navy-600: 224 31% 33%;
-  --meko-navy-700: 224 30% 24%;
-  --meko-navy-800: 222 29% 15%;
-  --meko-navy-900: 222 45% 10%;
-  --meko-navy-950: 223 47% 7%;
+  /* =====================================================================
+   * MEKO PALETTE — fixed brand colours, the single source of truth for
+   * every shade in the app. Components NEVER reference these directly;
+   * they consume the semantic tokens below, which in turn resolve to a
+   * palette stop. Light and dark mode share this palette — only the
+   * semantic mappings change between modes (see Phase 5).
+   *
+   * Family naming follows `<family>-<scale>` so the relationship between
+   * stops is obvious at a glance. The scale mirrors Tailwind's
+   * well-known 50–950 ramp: lower = lighter, higher = denser/darker.
+   * Numbering is identical across modes because the palette IS the
+   * constant.
+   *
+   * `meko-navy-*`: the blue-grey surface family used throughout the app
+   * (cards, panels, inputs, app shell). Brand accents (purple/emerald/
+   * blue for share/owner/info chips) stay on Tailwind's stock palette
+   * — no point reinventing those.
+   * ===================================================================== */
 
+  /* Light end — light-mode surfaces (consumed in Phase 5). */
+  --meko-navy-50:  222 32% 97%;   /* #F6F8FC */
+  --meko-navy-100: 220 19% 93%;   /* #E8ECF2 */
+  --meko-navy-200: 220 13% 81%;   /* #C5CCD8 */
+
+  /* Mid scrollbar tones (theme-independent today). */
+  --meko-navy-600: 240 5% 30%;    /* scrollbar thumb hover */
+  --meko-navy-700: 240 5% 22%;    /* scrollbar thumb */
+
+  /* Dark end — drives the dark theme. Neutral near-black (Console V6 look):
+   * low-saturation charcoal, not the old blue-navy. */
+  --meko-navy-800: 240 5% 13%;    /* raised surfaces (cards, popovers) */
+  --meko-navy-900: 240 6% 9%;     /* base surfaces (page bg, inputs)   */
+  --meko-navy-950: 240 7% 6%;     /* deepest, app shell                */
+
+  /* =====================================================================
+   * SEMANTIC TOKENS — what components consume. `:root` carries the
+   * LIGHT theme; `.dark { … }` overrides everything for dark theme. The
+   * `useTheme` hook (`src/lib/theme.ts`) toggles the `.dark` class on
+   * `<html>` based on a localStorage preference, with `prefers-color-
+   * scheme` as the fallback on first visit.
+   *
+   * `--input` is deliberately pointed at the base (light: `navy-100`;
+   * dark: `navy-900`) and NOT the raised tone (`navy-200` / `navy-800`),
+   * so inputs read as inset against the cards they sit on. The previous
+   * setup conflated `--card` and `--input` at the same value, which is
+   * why so many components had to override with raw `bg-[#0E1525]` to
+   * get the inset look. After Phase 2's refactor those overrides are
+   * gone and inputs theme correctly.
+   * ===================================================================== */
+
+  /* --- LIGHT THEME (default) --- */
   --background: var(--meko-navy-50);
   --foreground: 222 47% 11%;
   --card: 0 0% 100%;
@@ -59,6 +126,11 @@
   --secondary: var(--meko-navy-100);
   --secondary-foreground: 222 47% 11%;
   --muted: var(--meko-navy-100);
+  /* Sat the lightness down a few stops vs. shadcn defaults (which sit
+   * at ~46%, Tailwind gray-500) — at 47% the muted text reads as
+   * "barely there" on the very-light app surfaces. 35% is roughly
+   * Tailwind gray-600/700, still distinguishably "muted" against
+   * `--foreground` (gray-900-ish) but legible at nav-text size. */
   --muted-foreground: 215 16% 35%;
   --accent: var(--meko-navy-100);
   --accent-foreground: 222 47% 11%;
@@ -68,8 +140,18 @@
   --input: var(--meko-navy-100);
   --ring: 222 47% 11%;
   --radius: 0.5rem;
+
+  /* AMP brand + sidebar — light mode */
+  --brand: 16 100% 62%;
+  --brand-foreground: 0 0% 100%;
+  --sidebar: 0 0% 100%;
+  --sidebar-foreground: 222 47% 11%;
+  --sidebar-border: var(--meko-navy-200);
+  --sidebar-accent: var(--meko-navy-100);
+  --sidebar-accent-foreground: 222 47% 11%;
 }
 
+/* --- DARK THEME --- */
 .dark {
   --background: var(--meko-navy-900);
   --foreground: 206 60% 97%;
@@ -77,19 +159,35 @@
   --card-foreground: 206 60% 97%;
   --popover: var(--meko-navy-800);
   --popover-foreground: 206 60% 97%;
-  --primary: 206 60% 97%;
-  --primary-foreground: var(--meko-navy-900);
-  --secondary: 224 23% 22%;
+  /* Primary CTAs are the brand orange in dark mode (Console V6 look);
+   * secondary/outline/ghost stay neutral. */
+  --primary: 16 100% 62%;
+  /* Dark charcoal, not white, on the orange primary: white is only ~2.74:1
+   * (fails WCAG AA); navy-950 is ~6.9:1. */
+  --primary-foreground: var(--meko-navy-950);
+  --secondary: 240 4% 20%;
   --secondary-foreground: 206 60% 97%;
   --muted: var(--meko-navy-800);
   --muted-foreground: 212 11% 58%;
-  --accent: 224 23% 22%;
+  --accent: 240 4% 20%;
   --accent-foreground: 206 60% 97%;
   --destructive: 0 84% 60%;
   --destructive-foreground: 206 60% 97%;
-  --border: 224 23% 22%;
+  --border: 240 4% 20%;
   --input: var(--meko-navy-900);
   --ring: 206 60% 97%;
+
+  /* AMP brand + sidebar — dark mode. Sidebar reads a shade deeper than
+   * the page (navy-950) so the nav rail separates from the content. */
+  --brand: 16 100% 62%;
+  /* Dark charcoal on the orange brand fill (dark:bg-brand) — white is only
+   * ~2.74:1 (fails WCAG AA); navy-950 is ~6.9:1. */
+  --brand-foreground: var(--meko-navy-950);
+  --sidebar: var(--meko-navy-950);
+  --sidebar-foreground: 206 60% 97%;
+  --sidebar-border: 240 4% 20%;
+  --sidebar-accent: 240 4% 20%;
+  --sidebar-accent-foreground: 206 60% 97%;
 }
 
 @layer base {

@@ -1,13 +1,7 @@
+// Metrics scope picker: pick a single user by email. Thin wrapper mapping
+// AdminUser[] onto the reusable searchable Combobox.
 import { type AdminUser } from "@/lib/adminApi";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-
-const ALL = "all";
+import { Combobox } from "@/components/ui/combobox";
 
 type Props = {
   users: AdminUser[];
@@ -16,23 +10,17 @@ type Props = {
   disabled?: boolean;
 };
 
-// Dashboard scope picker: "All users" (default) or a specific user by email.
 export function UserScopeSelect({ users, value, onChange, disabled }: Props) {
+  const options = users.map((u) => ({ value: u.id, label: u.email }));
   return (
-    <Select value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger className="w-64 border-border">
-        <SelectValue placeholder="All users" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ALL}>All users</SelectItem>
-        {users.map((u) => (
-          <SelectItem key={u.id} value={u.id}>
-            {u.email}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <Combobox
+      options={options}
+      value={value}
+      onChange={onChange}
+      disabled={disabled}
+      placeholder="Select user…"
+      searchPlaceholder="Search users…"
+      emptyText="No users found."
+    />
   );
 }
-
-export const ALL_USERS = ALL;

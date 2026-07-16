@@ -4,7 +4,10 @@ import { Toaster } from "@/components/ui/sonner";
 import { queryClient } from "@/lib/queryClient";
 import { AuthProvider, useAuth } from "@/lib/authContext";
 import { AdminSidebar } from "@/features/layout/AdminSidebar";
-import { DashboardPage } from "@/features/dashboard/pages/DashboardPage";
+import { AdminHeader } from "@/features/layout/AdminHeader";
+import { DataPlanePage } from "@/features/dataplane/pages/DataPlanePage";
+import { MetricsPage } from "@/features/metrics/pages/MetricsPage";
+import { ExecutiveDashboardPage } from "@/features/exec/pages/ExecutiveDashboardPage";
 import { UsersPage } from "@/features/users/pages/UsersPage";
 import { AmpRegistrationPage } from "@/features/amp/pages/AmpRegistrationPage";
 import { LoginPage } from "@/features/auth/LoginPage";
@@ -30,16 +33,21 @@ function AppShell() {
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
       <AdminSidebar />
-      <main className="flex flex-1 flex-col overflow-hidden">
-        <Routes>
-          <Route path={ROUTES.dashboard} element={<DashboardPage />} />
-          <Route path={ROUTES.users} element={<UsersPage />} />
-          {isAmpAdminEnabled() && (
-            <Route path={ROUTES.ampRegistration} element={<AmpRegistrationPage />} />
-          )}
-          <Route path="*" element={<Navigate to={ROUTES.dashboard} replace />} />
-        </Routes>
-      </main>
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <AdminHeader />
+        <main className="flex flex-1 flex-col overflow-hidden">
+          <Routes>
+            <Route path={ROUTES.dataPlane} element={<DataPlanePage />} />
+            <Route path={ROUTES.users} element={<UsersPage />} />
+            <Route path={ROUTES.metrics} element={<MetricsPage />} />
+            <Route path={ROUTES.executive} element={<ExecutiveDashboardPage />} />
+            {isAmpAdminEnabled() && (
+              <Route path={ROUTES.ampRegistration} element={<AmpRegistrationPage />} />
+            )}
+            <Route path="*" element={<Navigate to={ROUTES.metrics} replace />} />
+          </Routes>
+        </main>
+      </div>
     </div>
   );
 }
