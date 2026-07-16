@@ -123,7 +123,7 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
     let sql = format!(
         "SELECT blknum::text, {lsn}, {fork}, is_image::text, will_init::text{payload} \
          FROM pageserver.pages WHERE {w} \
-         ORDER BY blknum ASC, lsn DESC, is_image ASC {lim}"
+         ORDER BY blknum ASC, lsn DESC, is_image DESC {lim}"
     );
     let rows = client
         .query(&sql, &[])

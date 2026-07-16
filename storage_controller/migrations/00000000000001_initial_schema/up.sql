@@ -138,9 +138,9 @@ CREATE TABLE public.blobs (
 -- (field1 == 0x00, field4 != 0, field6 != 0xffffffff). Hash partition
 -- on (branch, spcnode, dbnode, relnode, forknum) keeps a
 -- relation's whole block-set on one tablet; range scans within a
--- relfork are tablet-local. `is_image` sits between `blknum` and
--- `lsn` so an anchor lookup
--- (`AND is_image=TRUE ORDER BY lsn DESC LIMIT 1`) is a single seek.
+-- relfork are tablet-local. The trailing `is_image` breaks `lsn`
+-- ties; it is DESC so the stored order matches the read-path
+-- `ORDER BY lsn DESC, is_image DESC` (image before delta at a tie).
 CREATE TABLE pageserver.pages (
     branch_id    TEXT     NOT NULL,
     spcnode      BIGINT   NOT NULL,
@@ -153,7 +153,7 @@ CREATE TABLE pageserver.pages (
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-                 blknum, lsn DESC, is_image)
+                 blknum, lsn DESC, is_image DESC)
 );
 
 -- SLRU pages — pg_xact, pg_multixact_offsets, pg_multixact_members.
@@ -170,7 +170,7 @@ CREATE TABLE pageserver.slru_pages (
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     PRIMARY KEY ((branch_id, kind, segno) HASH,
-                 blknum, lsn DESC, is_image)
+                 blknum, lsn DESC, is_image DESC)
 );
 
 -- Metadata blobs — everything that isn't a relation page or SLRU

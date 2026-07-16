@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
-use yb_tsclient::{BindValue, CondOp, TsClient, TsClientConfig, RangeRead, UpsertRow};
+use yb_tsclient::{BindValue, CondOp, RangeRead, TsClient, TsClientConfig, UpsertRow};
 use ysql_client::{HostPorts, YbConnConfig, YsqlClient};
 
 fn env_or(name: &str, default: &str) -> String {
@@ -69,7 +69,7 @@ async fn field_exact_hot_anchorless_chains() {
                  will_init    BOOLEAN  NOT NULL,
                  payload      BYTEA    NOT NULL,
                  PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-                              blknum, lsn DESC, is_image)
+                              blknum, lsn DESC, is_image DESC)
              ) SPLIT INTO 9 TABLETS"
         ),
         &[],
@@ -321,7 +321,7 @@ async fn field_scale_chain_reads() {
                  will_init    BOOLEAN  NOT NULL,
                  payload      BYTEA    NOT NULL,
                  PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-                              blknum, lsn DESC, is_image)
+                              blknum, lsn DESC, is_image DESC)
              ) SPLIT INTO 9 TABLETS"
         ),
         &[],

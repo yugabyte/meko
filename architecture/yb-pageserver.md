@@ -220,9 +220,10 @@ DDL is owned by the diesel migration at
 
 One row per (Key, LSN). The PK partitions by the **(spcnode, dbnode,
 relnode, forknum)** fork identity (each fork's whole block-set lives on
-one tablet), then clusters by `(blknum, lsn DESC, is_image)` so a
-per-block, per-LSN scan walks rows in LSN-descending order and an
-anchor lookup at a given LSN is a single seek, not a scan.
+one tablet), then clusters by `(blknum, lsn DESC, is_image DESC)` so a
+per-block, per-LSN scan walks rows in LSN-descending order; `is_image`
+is DESC so the stored order matches the chain-read
+`ORDER BY lsn DESC, is_image DESC` (image before delta at a tie).
 
 ```sql
 CREATE TABLE pageserver.pages (
@@ -237,7 +238,7 @@ CREATE TABLE pageserver.pages (
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-                 blknum, lsn DESC, is_image)
+                 blknum, lsn DESC, is_image DESC)
 );
 ```
 

@@ -222,8 +222,10 @@ One row per `(block, LSN)`. Holds **relation pages only** —
 aux files, repl origins, rel-size sentinels) continue through
 `public.blobs`. Hash partition by `(branch_id, spcnode, dbnode,
 relnode, forknum)` so each fork's whole block-set lives on one tablet.
-Clustering by `(blknum, lsn DESC, is_image)` means a per-block image
-lookup is a single seek, not a scan.
+Clustering by `(blknum, lsn DESC, is_image DESC)` walks a block's rows
+newest-first; `is_image` is DESC so the stored order matches the
+chain-read `ORDER BY lsn DESC, is_image DESC` (image before delta at
+a tie).
 
 ```sql
 CREATE TABLE pageserver.pages (
@@ -238,7 +240,7 @@ CREATE TABLE pageserver.pages (
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
     PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-                 blknum, lsn DESC, is_image)
+                 blknum, lsn DESC, is_image DESC)
 );
 ```
 
@@ -487,7 +489,7 @@ by hand.
 |---|---|---|
 | `public` | `blob_namespace` ENUM | `pageserver` / `safekeeper` discriminator on `blobs`. |
 | `public` | `blobs` | Chunked blob store (pageserver yb_storage_conn); PK `((branch_id, key) HASH, namespace, chunk_idx)`. |
-| `pageserver` | `pages` | Relation pages, one row per (block, LSN); PK `((branch_id, spc, db, rel, fork) HASH, blknum, lsn DESC, is_image)`. |
+| `pageserver` | `pages` | Relation pages, one row per (block, LSN); PK `((branch_id, spc, db, rel, fork) HASH, blknum, lsn DESC, is_image DESC)`. |
 | `pageserver` | `slru_pages` | SLRU blocks (pg_xact, pg_multixact_*); same shape as `pages`, keyed by `(branch_id, kind, segno)`. |
 | `pageserver` | `meta` | Metadata blobs (relsize sentinels, dir listings, aux, two-phase, repl origins); full-overwrite semantics; PK `((branch_id, key) HASH, lsn DESC)`. |
 | `pageserver` | `timeline_state` | Per-branch state (replaces `metadata` + `index_part.json` + `tenant-manifest.json`); generation-fenced via `current_generation`; PK `((branch_id) HASH)`. |

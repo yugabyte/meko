@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
-use yb_tsclient::{BindValue, CondOp, TsClient, TsClientConfig, RangeRead, TableHandle, UpsertRow};
+use yb_tsclient::{BindValue, CondOp, RangeRead, TableHandle, TsClient, TsClientConfig, UpsertRow};
 use ysql_client::{HostPorts, YbConnConfig, YsqlClient};
 
 fn env_or(name: &str, default: &str) -> String {
@@ -1432,7 +1432,7 @@ async fn large_payload_page_chains_complete() {
                  will_init    BOOLEAN  NOT NULL,
                  payload      BYTEA    NOT NULL,
                  PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-                              blknum, lsn DESC, is_image)
+                              blknum, lsn DESC, is_image DESC)
              ) SPLIT INTO 9 TABLETS"
         ),
         &[],
@@ -1684,7 +1684,7 @@ async fn hot_block_chain_reads_complete_under_writes() {
                  will_init    BOOLEAN  NOT NULL,
                  payload      BYTEA    NOT NULL,
                  PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-                              blknum, lsn DESC, is_image)
+                              blknum, lsn DESC, is_image DESC)
              ) SPLIT INTO 3 TABLETS"
         ),
         &[],

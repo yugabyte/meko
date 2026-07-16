@@ -22,7 +22,7 @@
 //!     will_init   BOOLEAN  NOT NULL,
 //!     payload     BYTEA    NOT NULL,
 //!     PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-//!                  blknum, lsn DESC, is_image)
+//!                  blknum, lsn DESC, is_image DESC)
 //! );
 //! ```
 //!
@@ -31,13 +31,15 @@
 //! reads are one tablet hash lookup; per-fork range scans (basebackup,
 //! image-layer materialisation) are one tablet's range scan.
 //!
-//! `is_image` sits in the clustering key between `blknum` and `lsn` so
-//! the "most recent image at or before target_lsn" lookup is a single
-//! seek (`AND is_image=TRUE ORDER BY lsn DESC LIMIT 1`). Reads anchor
-//! the chain on that image and return the deltas above it. Chain length
-//! is no longer a write-time invariant — a background image materialiser
-//! creates fresh images for hot keys to keep chains short. Reads remain
-//! correct without it, just potentially slower.
+//! The trailing `is_image` breaks `lsn` ties; it is DESC so the stored
+//! order matches the read-path `ORDER BY lsn DESC, is_image DESC`
+//! (image before delta at a tie — see [`assert_chain_step`]). Reads
+//! anchor the chain on the newest image at-or-below target_lsn
+//! (`AND is_image=TRUE ORDER BY lsn DESC LIMIT 1`) and return the
+//! deltas above it. Chain length is not a write-time invariant — the
+//! background image materialiser creates fresh images for hot keys to
+//! keep chains short. Reads remain correct without it, just
+//! potentially slower.
 
 use std::collections::HashMap;
 use std::ops::Range;
