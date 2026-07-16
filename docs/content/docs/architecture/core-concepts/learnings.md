@@ -34,6 +34,8 @@ A reviewer promotes a learning into one or both of the institutional destination
 
 Both destinations sit inside the same datapack, so promoted content is bounded by the datapack's tenancy. A learning is never shared across datapacks.
 
+Typically, reviewers manually promote learnings via the **Learnings** tab, but an agent with owner or maintainer access can also promote memories directly using the [memory_promote](../../../reference/mcp-server/#memory-tools) MCP tool. This is useful when the reviewing agent already knows which memories are worth sharing.
+
 ## Per-agent versus institutional
 
 | Zone | Stages | Who can read it |
