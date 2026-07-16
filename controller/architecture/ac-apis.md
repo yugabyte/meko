@@ -106,7 +106,7 @@ local checks stay synchronous: `400` (malformed body / bad parameter), `404`
 | `GET …/projects/{projectId}/branches` | listBranches | Paginated; the project's branches (default branch + forks). `404` if the pool/project is unknown. |
 | `GET …/branches/{branchId}` | getBranch | One branch. `404` if the pool/project/branch is unknown. |
 | `DELETE …/branches/{branchId}` | deleteBranch | **Async cascade** → `202` + `Task` + `Location`. Plans a `delete_branch` task that retires the branch's endpoints, then drops the branch row. Cheap pre-checks: `404` if the pool/project/branch is unknown; `409` if the branch has child branches (the parent FK is `RESTRICT`, so the delete would be doomed). |
-| `POST …/branches/{branchId}/endpoints` | createEndpoint | **Async** → `202` + `Task` + `Location`. Plans a task that records the endpoint, deploys it, and records its `address`. Poll `getTask`, then `listEndpoints`/`getEndpoint` to read the id + `address`. Optional `disk_type` (`network` default = the configured storage class; `local` not yet supported → `400`). `501` if `--deploy` is off; `404` if the pool/project/branch is unknown. A second `read_write` endpoint (single-writer) surfaces as a `failed` task, not a `409`. |
+| `POST …/branches/{branchId}/endpoints` | createEndpoint | **Async** → `202` + `Task` + `Location`. Plans a task that records the endpoint, deploys it, and records its `address`. Poll `getTask`, then `listEndpoints`/`getEndpoint` to read the id + `address`. Optional `disk_type` (`network` default = the configured storage class; `local` not yet supported → `400`). Optional `resources` (`cpu`/`memory` k8s quantities, default 2 cores / 4Gi) applied as request == limit → Guaranteed QoS. `501` if `--deploy` is off; `404` if the pool/project/branch is unknown. A second `read_write` endpoint (single-writer) surfaces as a `failed` task, not a `409`. |
 | `GET …/branches/{branchId}/endpoints` | listEndpoints | Paginated; the branch's endpoints. `404` if the pool/project/branch is unknown. |
 | `GET …/endpoints/{endpointId}` | getEndpoint | One endpoint (its `address` is set once deployed). |
 | `DELETE …/endpoints/{endpointId}` | deleteEndpoint | **Async** → `202` + `Task` + `Location`. Plans a `delete_endpoint` task that retires the running instance and drops the row. `501` if `--deploy` is off; `404` if the endpoint is unknown. |
@@ -229,8 +229,13 @@ pool, project, or branch that doesn't exist is a `404`.
 
 `createEndpoint` resolves the branch within the project via
 `core.Backend.GetBranch` (`(poolId, projectId, branchId)`: a missing link is
-`404`), validates the role and `disk_type`, then plans a `create_endpoint` task
+`404`), validates the role and `disk_type`, resolves the pod's CPU + memory
+reservation (the optional `resources: { cpu, memory }` block, defaulting to **2
+cores / 4Gi**), then plans a `create_endpoint` task
 (`task.Service.CreateEndpoint`) and returns `202` + `Task` + `Location`. The
+`cpu`/`memory` are Kubernetes resource quantities the chart renders as **both a
+request and a limit** on the endpoint container, so the pod is scheduled with the
+**Guaranteed** QoS class. The
 worker's `create_endpoint` step records the `endpoint` row first (so the
 single-writer rule is enforced before a deploy is spent), deploys it via the
 runtime-agnostic [`deploy.Deployer`](../internal/deploy/) (Docker today,

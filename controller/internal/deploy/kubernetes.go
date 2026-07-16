@@ -22,6 +22,15 @@ import (
 // own default is the same). yb-light is Postgres v18 only.
 const defaultPgVersion = 18
 
+// defaultEndpointCPU / defaultEndpointMemory back an endpoint whose spec omits a
+// resource reservation. They mirror the chart's own values.yaml default so a
+// controller-driven deploy and a standalone chart install reserve the same
+// compute (2 cores / 4Gi) — applied as request == limit for Guaranteed QoS.
+const (
+	defaultEndpointCPU    = "2"
+	defaultEndpointMemory = "4Gi"
+)
+
 // serviceTypeLoadBalancer is the endpoint Service type that gets an external IP;
 // the deployer then reports that IP as the endpoint's client address.
 const serviceTypeLoadBalancer = "LoadBalancer"
@@ -468,6 +477,17 @@ type endpointValues struct {
 	// the ancestor at AncestorLsn instead of running initdb.
 	AncestorBranchId string `json:"ancestorBranchId,omitempty"`
 	AncestorLsn      string `json:"ancestorLsn,omitempty"`
+	// Resources is the pod's CPU + memory reservation. The chart renders each
+	// value as both a request and a limit, so the pod gets Guaranteed QoS.
+	Resources resourceValues `json:"resources"`
+}
+
+// resourceValues is the endpoint container's compute reservation. cpu and memory
+// are Kubernetes resource quantities that the chart applies as BOTH requests and
+// limits (Guaranteed QoS).
+type resourceValues struct {
+	CPU    string `json:"cpu"`
+	Memory string `json:"memory"`
 }
 
 // values builds the per-endpoint Helm values. With spec.StorageControllerURL set
@@ -479,6 +499,16 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 	pgVersion := spec.PgVersion
 	if pgVersion <= 0 {
 		pgVersion = defaultPgVersion
+	}
+	// Reserve 2 cores / 4Gi unless the spec asks for something else. request ==
+	// limit (rendered by the chart) is what gives the pod Guaranteed QoS.
+	cpu := spec.CPU
+	if cpu == "" {
+		cpu = defaultEndpointCPU
+	}
+	memory := spec.Memory
+	if memory == "" {
+		memory = defaultEndpointMemory
 	}
 	v := chartValues{
 		FullnameOverride: release,
@@ -498,6 +528,7 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Bootstrap:        spec.Bootstrap,
 			AncestorBranchId: spec.AncestorBranchID,
 			AncestorLsn:      spec.AncestorLSN,
+			Resources:        resourceValues{CPU: cpu, Memory: memory},
 		},
 		StorageController: storageControllerValues{URL: spec.StorageControllerURL},
 		Service:           serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},

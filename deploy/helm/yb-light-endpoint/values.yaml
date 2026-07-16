@@ -61,6 +61,14 @@ endpoint:
   # a root (main) branch. ancestorLsn is the storage layer's "X/Y" LSN form.
   ancestorBranchId: ""
   ancestorLsn: ""
+  # -- Compute reserved for the endpoint container. Each value is a Kubernetes
+  # resource quantity and is rendered as BOTH a request and a limit, so the pod
+  # is scheduled with the Guaranteed QoS class. Defaults to 2 cores / 4Gi.
+  resources:
+    # -- CPU cores (request == limit). e.g. "2", "1500m".
+    cpu: "2"
+    # -- Memory (request == limit). e.g. "4Gi", "512Mi".
+    memory: "4Gi"
 
 # Storage-controller coordination. Empty url => the endpoint runs
 # storage-controller-free with a pinned generation. Set => the endpoint
@@ -119,8 +127,6 @@ persistence:
 runDir:
   # -- emptyDir size limit for the scratch volume.
   sizeLimit: 10Gi
-
-resources: {}
 
 # Liveness/readiness probes hit the compute_ctl HTTP status endpoint.
 livenessProbe:

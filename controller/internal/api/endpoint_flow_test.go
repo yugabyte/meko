@@ -223,6 +223,75 @@ func TestEndpointDiskType(t *testing.T) {
 	}
 }
 
+// TestEndpointResources: an omitted resources block reserves the 2-core / 4Gi
+// default, and an explicit block threads through the handler → task → deployer
+// spec verbatim (where the chart renders it as request == limit for Guaranteed
+// QoS).
+func TestEndpointResources(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
+	ctx := context.Background()
+
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "res-pool")
+	projectID := uuid.New()
+	branchID := uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+
+	rw := api.CreateEndpointRequestRoleReadWrite
+
+	// (1) omitted resources -> the 2-core / 4Gi default reaches the deployer.
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(default resources): %v", err)
+	}
+	if created.StatusCode() != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body = %s", created.StatusCode(), created.Body)
+	}
+	drainTasks(t, store, backend, prov)
+	if len(dep.created) != 1 {
+		t.Fatalf("deploy calls = %d, want 1", len(dep.created))
+	}
+	if dep.created[0].CPU != "2" || dep.created[0].Memory != "4Gi" {
+		t.Errorf("default deploy spec resources = (%q, %q), want (2, 4Gi)", dep.created[0].CPU, dep.created[0].Memory)
+	}
+
+	// (2) explicit resources -> threaded through verbatim (on a second branch, so
+	// the single-writer rule isn't tripped).
+	branch2 := uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branch2, Name: "b2", PgVersion: 18})
+	cpu, mem := "8", "16Gi"
+	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branch2, api.CreateEndpointRequest{
+		Role:      &rw,
+		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &mem},
+	})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(explicit resources): %v", err)
+	}
+	if ok.StatusCode() != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body = %s", ok.StatusCode(), ok.Body)
+	}
+	drainTasks(t, store, backend, prov)
+	last := dep.created[len(dep.created)-1]
+	if last.CPU != cpu || last.Memory != mem {
+		t.Errorf("explicit deploy spec resources = (%q, %q), want (%q, %q)", last.CPU, last.Memory, cpu, mem)
+	}
+
+	// (3) a malformed quantity is rejected synchronously with 400, rather than
+	// being accepted and only failing later in the worker's helm run.
+	badCPU, badMem := "2x", "4Gii"
+	for _, res := range []*api.EndpointResources{{Cpu: &badCPU}, {Memory: &badMem}} {
+		resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branch2, api.CreateEndpointRequest{Role: &rw, Resources: res})
+		if err != nil {
+			t.Fatalf("CreateEndpoint(invalid resources): %v", err)
+		}
+		if resp.StatusCode() != http.StatusBadRequest {
+			t.Errorf("invalid resources %+v: status = %d, want 400; body = %s", res, resp.StatusCode(), resp.Body)
+		}
+	}
+}
+
 // TestEndpointDeployDisabled: with the provisioner off, endpoint create/retire
 // refuse with 501 rather than committing a row + planning a task no worker can
 // run.

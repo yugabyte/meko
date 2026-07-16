@@ -198,6 +198,14 @@ controller-test:
 controller-vet:
 	go -C controller vet ./...
 
+# Chart tests for the compute (yb-light-endpoint) chart: the helm-unittest
+# suites plus the Guaranteed-QoS guardrail, which asserts every container in the
+# compute pod sets resources.requests == resources.limits (needs helm + yq).
+.PHONY: endpoint-chart-test
+endpoint-chart-test:  ## helm-unittest + Guaranteed-QoS guardrail for yb-light-endpoint
+	helm unittest deploy/helm/yb-light-endpoint
+	bash deploy/helm/yb-light-endpoint/tests/guaranteed-qos.sh
+
 # Regenerate the API code (models, echo server, Go client) from the OpenAPI
 # spec (controller/internal/api/openapi_spec.yaml). Run after editing the spec; the
 # generated api.gen.go is checked in. Uses the oapi-codegen tool pinned in

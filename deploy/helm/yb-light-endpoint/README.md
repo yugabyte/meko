@@ -48,6 +48,7 @@ The chart renders:
 | `endpoint.branchId` | _(empty)_ | serve an existing branch; empty ⇒ bootstrap |
 | `endpoint.sharedPreloadLibraries` | `yb_amp` | compute `shared_preload_libraries` |
 | `endpoint.extraSettings` | `{}` | extra Postgres GUCs (`name: value`) |
+| `endpoint.resources.cpu` / `endpoint.resources.memory` | `2` / `4Gi` | compute reserved for the pod; rendered as request == limit ⇒ Guaranteed QoS |
 | `service.type` | `ClusterIP` | Service type |
 | `service.exposeInternalHttp` | `false` | also publish pageserver/safekeeper/endpoint_storage HTTP |
 | `persistence.storageClass` | _(empty)_ | back `/data` with a PVC of this class (EBS/PD); empty ⇒ `emptyDir` |
@@ -68,3 +69,19 @@ helm unittest deploy/helm/yb-light-endpoint
 ```
 
 Suites live in [`tests/`](tests) (`*_test.yaml`), one per template.
+
+### Guaranteed-QoS guardrail
+
+[`tests/guaranteed-qos.sh`](tests/guaranteed-qos.sh) renders the chart and
+asserts that **every** container in the compute pod sets
+`resources.requests == resources.limits` for cpu and memory, so the pod gets
+Kubernetes Guaranteed QoS. Unlike the per-container helm-unittest assertions,
+this catches a *newly added* container (e.g. a sidecar) that forgets its
+request==limit block — QoS is pod-level, so one such container drops the whole
+pod to Burstable. Needs `helm` + [`yq`](https://github.com/mikefarah/yq).
+
+```sh
+make endpoint-chart-test          # helm unittest + the guardrail
+# or just the guardrail:
+bash deploy/helm/yb-light-endpoint/tests/guaranteed-qos.sh
+```

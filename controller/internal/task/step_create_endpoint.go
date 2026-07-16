@@ -27,6 +27,12 @@ type CreateEndpointArgs struct {
 	PgVersion        int        `json:"pg_version"`
 	AncestorBranchID *uuid.UUID `json:"ancestor_branch_id,omitempty"`
 	AncestorLSN      string     `json:"ancestor_lsn,omitempty"`
+	// CPU and Memory are the pod's compute reservation (Kubernetes quantities,
+	// e.g. "2" / "4Gi"), applied as request == limit for Guaranteed QoS. Carried
+	// in the args so a reclaim/replay deploys the same size. Empty falls back to
+	// the deployer/chart default (2 cores / 4Gi).
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
 }
 
 // createEndpointStep records the endpoint, provisions the compute, records the
@@ -95,6 +101,8 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		PgVersion:            s.PgVersion,
 		YB:                   s.yb,
 		StorageControllerURL: s.scURL,
+		CPU:                  s.CPU,
+		Memory:               s.Memory,
 		// A fork clones from its ancestor; only a default branch initdb's.
 		Bootstrap: s.bootstrap && s.AncestorBranchID == nil,
 	}
@@ -135,6 +143,8 @@ func endpointConfig(args CreateEndpointArgs) ([]byte, error) {
 		"branch_id":  args.BranchID,
 		"role":       args.Role,
 		"pg_version": args.PgVersion,
+		"cpu":        args.CPU,
+		"memory":     args.Memory,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode endpoint config: %w", err)

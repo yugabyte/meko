@@ -180,7 +180,14 @@ no local-disk path yet).
   `DockerDeployer` implementations + the `EndpointSpec` the handler hands them.
   The Kubernetes deployer maps an endpoint to chart values, looks up the client
   address via the in-cluster service account (`k8sAPIGet`), and sets the Service
-  type/annotations.
+  type/annotations. `EndpointSpec.CPU`/`Memory` (defaulted to 2 cores / 4Gi) map
+  to `endpoint.resources.{cpu,memory}`, which the chart renders as **both**
+  `requests` and `limits` on the endpoint container so the pod gets the
+  **Guaranteed** QoS class. NB: Guaranteed is a *pod*-level property — every
+  container in the pod must set request == limit. If a future change adds a
+  sidecar (e.g. the planned `postgres_exporter` metrics sidecar, #254), that
+  container must also carry a request == limit block (a small fixed reservation
+  is fine) or the pod silently drops to Burstable.
 
 Wired in `cmd/controller/main.go` (`buildProvisioning`): with `--deploy`, a
 `KubernetesDeployer` or `DockerDeployer` is built per `--deploy-driver` and passed

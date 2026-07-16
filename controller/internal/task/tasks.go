@@ -169,6 +169,11 @@ type CreateEndpointInput struct {
 	PgVersion        int        `json:"pg_version"`
 	AncestorBranchID *uuid.UUID `json:"ancestor_branch_id,omitempty"`
 	AncestorLSN      string     `json:"ancestor_lsn,omitempty"`
+	// CPU and Memory are the pod's compute reservation (Kubernetes quantities),
+	// applied as request == limit for Guaranteed QoS. Empty falls back to the
+	// deployer/chart default (2 cores / 4Gi).
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
 }
 
 // CreateEndpoint records a create_endpoint task: a single create_endpoint step on
@@ -188,6 +193,8 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 			PgVersion:        in.PgVersion,
 			AncestorBranchID: in.AncestorBranchID,
 			AncestorLSN:      in.AncestorLSN,
+			CPU:              in.CPU,
+			Memory:           in.Memory,
 		}),
 	}
 	return s.create(ctx, KindCreateEndpoint, in, in.ProjectID, endpointID.String(), steps)

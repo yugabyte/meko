@@ -47,6 +47,10 @@ import type {
   Endpoint,
   EndpointRole,
 } from "@/lib/api/types";
+import {
+  DEFAULT_ENDPOINT_CPU,
+  DEFAULT_ENDPOINT_MEMORY,
+} from "@/lib/api/types";
 import { formatDateTime, shortId } from "@/lib/format";
 
 export default function MultitenancyPage() {
@@ -336,11 +340,22 @@ function EndpointsSection({
   loading: boolean;
 }) {
   const [role, setRole] = useState<EndpointRole>("read_write");
+  // CPU + memory reserved for the compute pod, pre-filled with the controller's
+  // 2-core / 4Gi default. Sent as request == limit → Guaranteed QoS.
+  const [cpu, setCpu] = useState(DEFAULT_ENDPOINT_CPU);
+  const [memory, setMemory] = useState(DEFAULT_ENDPOINT_MEMORY);
   const createEndpoint = useCreateEndpoint();
 
   function provision() {
     createEndpoint.mutate(
-      { poolId, projectId, branchId, role },
+      {
+        poolId,
+        projectId,
+        branchId,
+        role,
+        cpu: cpu.trim() || DEFAULT_ENDPOINT_CPU,
+        memory: memory.trim() || DEFAULT_ENDPOINT_MEMORY,
+      },
       {
         onSuccess: (ep) =>
           toast.success(`Compute provisioned (${ep.role.replace("_", "-")})`),
@@ -372,7 +387,7 @@ function EndpointsSection({
         <p className="text-sm text-muted-foreground">No compute instances yet.</p>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-end gap-2">
         <Select value={role} onValueChange={(v) => setRole(v as EndpointRole)}>
           <SelectTrigger className="h-8 w-36">
             <SelectValue />
@@ -382,6 +397,30 @@ function EndpointsSection({
             <SelectItem value="read_only">read-only</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="ep-cpu" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            CPU
+          </Label>
+          <Input
+            id="ep-cpu"
+            value={cpu}
+            onChange={(e) => setCpu(e.target.value)}
+            placeholder={DEFAULT_ENDPOINT_CPU}
+            className="h-8 w-20 font-mono text-xs"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="ep-memory" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Memory
+          </Label>
+          <Input
+            id="ep-memory"
+            value={memory}
+            onChange={(e) => setMemory(e.target.value)}
+            placeholder={DEFAULT_ENDPOINT_MEMORY}
+            className="h-8 w-24 font-mono text-xs"
+          />
+        </div>
         <Button
           variant="outline"
           size="sm"

@@ -39,9 +39,16 @@ export function useCreateEndpoint() {
       projectId: string;
       branchId: string;
       role: EndpointRole;
+      cpu?: string;
+      memory?: string;
     }): Promise<Endpoint> =>
       createEndpoint(input.poolId, input.projectId, input.branchId, {
         role: input.role,
+        // Only send a resources block when the caller specified something; an
+        // omitted block lets the controller apply its 2-core / 4Gi default.
+        ...(input.cpu || input.memory
+          ? { resources: { cpu: input.cpu, memory: input.memory } }
+          : {}),
       }),
     onSuccess: (_data, input) => {
       qc.invalidateQueries({

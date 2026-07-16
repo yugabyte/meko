@@ -138,16 +138,20 @@ def create_endpoint(
     branch_id: str,
     role: Optional[str] = None,
     disk_type: Optional[str] = None,
+    cpu: Optional[str] = None,
+    memory: Optional[str] = None,
 ) -> dict[str, Any]:
     """Create and deploy an endpoint (compute) on a branch. ASYNCHRONOUS.
 
     `role` is `read_write` (default) or `read_only`; a branch admits at most one
-    `read_write` endpoint. `disk_type` defaults to `network`. Returns a Task;
-    poll `get_task(task_id=<id>)` until `status` is `succeeded` or `failed`,
-    then call `get_endpoint` to read its `address`.
+    `read_write` endpoint. `disk_type` defaults to `network`. `cpu` (e.g. "2",
+    "1500m") and `memory` (e.g. "4Gi") are the pod's compute reservation, applied
+    as request == limit (Guaranteed QoS); both default to 2 cores / 4Gi. Returns
+    a Task; poll `get_task(task_id=<id>)` until `status` is `succeeded` or
+    `failed`, then call `get_endpoint` to read its `address`.
     """
     return controller_client.create_endpoint(
-        pool_id, project_id, branch_id, role, disk_type
+        pool_id, project_id, branch_id, role, disk_type, cpu, memory
     )
 
 

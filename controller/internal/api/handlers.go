@@ -585,6 +585,29 @@ func (c *Controllers) parentWriterEndpoint(ctx context.Context, poolID uuid.UUID
 
 // --- Endpoints (deployed by a task, #108/#113) -----------------------------
 
+// defaultEndpointCPU / defaultEndpointMemory back a create-endpoint request that
+// omits a resource reservation. They mirror the deployer's and the chart's own
+// defaults; the handler resolves the concrete value up front so the task's params
+// carry it (and a reclaim/replay deploys the same size). request == limit at the
+// chart gives the pod Guaranteed QoS.
+const (
+	defaultEndpointCPU    = "2"
+	defaultEndpointMemory = "4Gi"
+)
+
+// Validation for caller-supplied Kubernetes resource quantities, so a malformed
+// value is rejected synchronously with 400 rather than accepted, planned as a
+// task, and only failing later in the worker's helm run.
+var (
+	// CPU: an integer/decimal number of cores, optionally with the milli suffix
+	// (e.g. "2", "1.5", "500m").
+	cpuQuantityRE = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?m?$`)
+	// Memory: a number with an optional binary (Ki/Mi/Gi/Ti/Pi/Ei) or decimal-SI
+	// (k/M/G/T/P/E) suffix, the milli suffix, or a decimal exponent
+	// (e.g. "4Gi", "512Mi", "1500M", "1e9").
+	memoryQuantityRE = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?((Ki|Mi|Gi|Ti|Pi|Ei)|[kKMGTPE]|m|[eE][0-9]+)?$`)
+)
+
 func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpointRequestObject) (CreateEndpointResponseObject, error) {
 	if c.prov.Deployer == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
@@ -595,6 +618,31 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	}
 	if !core.ValidRole(role) {
 		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "role must be read_write or read_only"))}, nil
+	}
+
+	// Resolve the pod's CPU + memory reservation, defaulting to 2 cores / 4Gi.
+	// The values are Kubernetes resource quantities passed through to the chart,
+	// which renders each as both a request and a limit (Guaranteed QoS). An empty
+	// (whitespace-only) override falls back to the default rather than emitting an
+	// invalid empty quantity.
+	cpu, memory := defaultEndpointCPU, defaultEndpointMemory
+	if request.Body != nil && request.Body.Resources != nil {
+		if request.Body.Resources.Cpu != nil {
+			if v := strings.TrimSpace(*request.Body.Resources.Cpu); v != "" {
+				if !cpuQuantityRE.MatchString(v) {
+					return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", `resources.cpu must be a valid Kubernetes CPU quantity (e.g. "2", "500m")`))}, nil
+				}
+				cpu = v
+			}
+		}
+		if request.Body.Resources.Memory != nil {
+			if v := strings.TrimSpace(*request.Body.Resources.Memory); v != "" {
+				if !memoryQuantityRE.MatchString(v) {
+					return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", `resources.memory must be a valid Kubernetes memory quantity (e.g. "4Gi", "512Mi")`))}, nil
+				}
+				memory = v
+			}
+		}
 	}
 
 	// Disk type defaults to network (the configured storage class). A local
@@ -631,6 +679,8 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		PgVersion:        br.PgVersion,
 		AncestorBranchID: br.ParentBranchID,
 		AncestorLSN:      br.ForkLSN,
+		CPU:              cpu,
+		Memory:           memory,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create endpoint task: %w", err)
@@ -640,7 +690,9 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		slog.String(applog.KeyProjectID, br.ProjectID.String()),
 		slog.String(applog.KeyBranchID, request.BranchId.String()),
 		slog.String(applog.KeyTaskID, t.ID.String()),
-		slog.String("role", role))
+		slog.String("role", role),
+		slog.String("cpu", cpu),
+		slog.String("memory", memory))
 
 	return CreateEndpoint202JSONResponse{AcceptedJSONResponse{
 		Body:    taskToAPI(t),

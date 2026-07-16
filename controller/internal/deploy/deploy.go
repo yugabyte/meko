@@ -45,6 +45,12 @@ type EndpointSpec struct {
 	// is 32 lowercase hex digits; AncestorLSN is the storage layer's "X/Y" form.
 	AncestorBranchID string
 	AncestorLSN      string
+	// CPU and Memory are the compute reserved for the endpoint pod, as Kubernetes
+	// resource quantities (e.g. "2", "4Gi"). Each is applied as BOTH the request
+	// and the limit on the endpoint container, so the pod gets Guaranteed QoS.
+	// Empty defaults to 2 cores / 4Gi at the deployer (matching the chart default).
+	CPU    string
+	Memory string
 }
 
 // Endpoint is a running compute: an id (for teardown) and the address a client

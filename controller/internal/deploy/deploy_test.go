@@ -137,6 +137,35 @@ func TestKubernetesValuesNoPullSecret(t *testing.T) {
 	}
 }
 
+func TestKubernetesValuesResourcesDefault(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+
+	// A spec that omits CPU/Memory reserves the 2-core / 4Gi default, matching
+	// the chart's own values.yaml default.
+	v := k.values(testEndpointSpec(), "yb-ep-rel")
+	if v.Endpoint.Resources.CPU != "2" {
+		t.Errorf("Endpoint.Resources.CPU = %q, want default %q", v.Endpoint.Resources.CPU, "2")
+	}
+	if v.Endpoint.Resources.Memory != "4Gi" {
+		t.Errorf("Endpoint.Resources.Memory = %q, want default %q", v.Endpoint.Resources.Memory, "4Gi")
+	}
+}
+
+func TestKubernetesValuesResourcesOverride(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+
+	spec := testEndpointSpec()
+	spec.CPU = "8"
+	spec.Memory = "16Gi"
+	v := k.values(spec, spec.Name)
+	if v.Endpoint.Resources.CPU != "8" {
+		t.Errorf("Endpoint.Resources.CPU = %q, want %q", v.Endpoint.Resources.CPU, "8")
+	}
+	if v.Endpoint.Resources.Memory != "16Gi" {
+		t.Errorf("Endpoint.Resources.Memory = %q, want %q", v.Endpoint.Resources.Memory, "16Gi")
+	}
+}
+
 func TestKubernetesValuesServiceType(t *testing.T) {
 	cfg := testKubernetesConfig()
 	cfg.ServiceType = "NodePort"

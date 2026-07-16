@@ -166,3 +166,47 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.tcpSocket.port
           value: pg-compute
+
+  - it: reserves 2 cores / 4Gi with request == limit (Guaranteed QoS) by default
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: "2"
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: "4Gi"
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: "2"
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: "4Gi"
+
+  - it: honours an explicit resources override, keeping request == limit
+    template: templates/deployment.yaml
+    set:
+      endpoint.resources.cpu: "8"
+      endpoint.resources.memory: 16Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: "8"
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: "8"
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: "16Gi"
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: "16Gi"
+
+  - it: omits resources entirely when cpu/memory are cleared
+    template: templates/deployment.yaml
+    set:
+      endpoint.resources.cpu: ""
+      endpoint.resources.memory: ""
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].resources

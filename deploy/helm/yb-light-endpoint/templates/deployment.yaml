@@ -103,9 +103,20 @@ spec:
             periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
             failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
           {{- end }}
-          {{- with .Values.resources }}
+          {{- with .Values.endpoint.resources }}
+          {{- if and .cpu .memory }}
+          # request == limit for both cpu and memory => the pod is scheduled with
+          # the Guaranteed QoS class (kubelet never evicts it under node pressure
+          # and it can't burst past its reservation). NB: every OTHER container in
+          # this pod must ALSO set request == limit or the pod drops to Burstable.
           resources:
-            {{- toYaml . | nindent 12 }}
+            requests:
+              cpu: {{ .cpu | quote }}
+              memory: {{ .memory | quote }}
+            limits:
+              cpu: {{ .cpu | quote }}
+              memory: {{ .memory | quote }}
+          {{- end }}
           {{- end }}
           volumeMounts:
             - name: run

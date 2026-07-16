@@ -105,11 +105,27 @@ export type TaskList = { tasks: Task[]; count: number; total: number };
 export type CreateUserInput = { is_admin: boolean };
 export type CreateStoragePoolInput = { name: string; owner_user_id: string };
 export type CreateProjectInput = { name: string };
-/** disk_type defaults to "network"; "local" is rejected by the controller. */
+/** CPU + memory reserved for the endpoint pod. Each value is a Kubernetes
+ *  resource quantity applied as both the request and the limit (Guaranteed QoS).
+ *  Omit either field to take its default (2 cores / 4Gi). */
+export type EndpointResources = {
+  /** CPU cores, e.g. "2" or "1500m". Defaults to "2". */
+  cpu?: string;
+  /** Memory, e.g. "4Gi" or "512Mi". Defaults to "4Gi". */
+  memory?: string;
+};
+
+/** disk_type defaults to "network"; "local" is rejected by the controller.
+ *  resources default to 2 cores / 4Gi when omitted. */
 export type CreateEndpointInput = {
   role?: EndpointRole;
   disk_type?: "network" | "local";
+  resources?: EndpointResources;
 };
+
+/** UI defaults, mirroring the controller's own 2-core / 4Gi default. */
+export const DEFAULT_ENDPOINT_CPU = "2";
+export const DEFAULT_ENDPOINT_MEMORY = "4Gi";
 export type CreateBranchInput = {
   name: string;
   /** Branch to fork from. Omit to use the project's default branch. */

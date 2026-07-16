@@ -237,12 +237,21 @@ class ControllerClient:
         branch_id: str,
         role: Optional[str] = None,
         disk_type: Optional[str] = None,
+        cpu: Optional[str] = None,
+        memory: Optional[str] = None,
     ) -> dict:
         body: dict[str, Any] = {}
         if role is not None:
             body["role"] = role
         if disk_type is not None:
             body["disk_type"] = disk_type
+        resources: dict[str, Any] = {}
+        if cpu is not None:
+            resources["cpu"] = cpu
+        if memory is not None:
+            resources["memory"] = memory
+        if resources:
+            body["resources"] = resources
         return self._request(
             "POST",
             f"/storage-pools/{pool_id}/projects/{project_id}/branches/{branch_id}/endpoints",

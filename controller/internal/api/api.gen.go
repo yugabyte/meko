@@ -108,6 +108,13 @@ type CreateEndpointRequest struct {
 	// supported and is rejected with 400.
 	DiskType *CreateEndpointRequestDiskType `json:"disk_type,omitempty"`
 
+	// Resources CPU + memory reserved for the endpoint's compute pod. Each value is a
+	// Kubernetes resource quantity and is applied as BOTH the request and the
+	// limit on the endpoint container, so the pod is scheduled with the
+	// **Guaranteed** QoS class. Omit the object (or either field) to take the
+	// defaults of 2 CPU cores and 4Gi of memory.
+	Resources *EndpointResources `json:"resources,omitempty"`
+
 	// Role The endpoint's role. A branch admits at most one read_write endpoint.
 	Role *CreateEndpointRequestRole `json:"role,omitempty"`
 }
@@ -181,6 +188,23 @@ type EndpointList struct {
 
 	// Total The number of items matching the request across all pages (ignores limit/offset).
 	Total TotalCount `json:"total"`
+}
+
+// EndpointResources CPU + memory reserved for the endpoint's compute pod. Each value is a
+// Kubernetes resource quantity and is applied as BOTH the request and the
+// limit on the endpoint container, so the pod is scheduled with the
+// **Guaranteed** QoS class. Omit the object (or either field) to take the
+// defaults of 2 CPU cores and 4Gi of memory.
+type EndpointResources struct {
+	// Cpu CPU reservation as a Kubernetes quantity (e.g. "2", "1500m",
+	// "500m"). Applied as both the request and the limit. Defaults to "2"
+	// (2 cores) when omitted.
+	Cpu *string `json:"cpu,omitempty"`
+
+	// Memory Memory reservation as a Kubernetes quantity (e.g. "4Gi", "512Mi").
+	// Applied as both the request and the limit. Defaults to "4Gi" when
+	// omitted.
+	Memory *string `json:"memory,omitempty"`
 }
 
 // Error defines model for Error.
