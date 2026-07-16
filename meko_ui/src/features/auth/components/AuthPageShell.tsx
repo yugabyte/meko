@@ -51,6 +51,13 @@ const BACKGROUNDS_DARK: Record<AuthShellVariant, CSSProperties["background"]> = 
   aurora: AURORA_DARK_BACKGROUND,
 };
 
+// Legal links rendered in the footer, in display order. Kept as data so the
+// separators aren't hand-repeated between each anchor.
+const LEGAL_LINKS: ReadonlyArray<{ href: string; label: string }> = [
+  { href: "https://www.yugabyte.com/privacy-policy/", label: "Privacy Policy" },
+  { href: "https://www.yugabyte.com/terms-of-service/", label: "Terms of Service" },
+];
+
 /**
  * Wraps an auth page card with the project's full-viewport backdrop,
  * a Meko logo pinned top-left, and a copyright + privacy footer at the
@@ -93,16 +100,8 @@ export function AuthPageShell({ children, variant = "aurora" }: Props) {
         {/* `h-8` on mobile, `h-14` from `sm:` (640px) up so the brand
             has real presence on desktop while staying tight on phones
             where vertical space is precious. */}
-        <img
-          src="/Meko_Logo_Blk.svg"
-          alt="Meko"
-          className="h-8 w-auto sm:h-14 block dark:hidden"
-        />
-        <img
-          src="/meko-logo.svg"
-          alt="Meko"
-          className="h-8 w-auto sm:h-14 hidden dark:block"
-        />
+        <img src="/Meko_Logo_Blk.svg" alt="Meko" className="h-8 w-auto sm:h-14 block dark:hidden" />
+        <img src="/meko-logo.svg" alt="Meko" className="h-8 w-auto sm:h-14 hidden dark:block" />
       </header>
 
       {/* The card sits in a flex-1 container so it stays vertically
@@ -117,15 +116,19 @@ export function AuthPageShell({ children, variant = "aurora" }: Props) {
       */}
       <footer className="relative z-10 px-6 pb-5 pt-3 text-center text-xs text-muted-foreground sm:px-8">
         © {new Date().getFullYear()} Yugabyte, Inc. All rights reserved.
-        {" · "}
-        <a
-          href="https://mekodata.ai/early-access-terms-of-service/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline underline-offset-2 hover:text-foreground"
-        >
-          Early Access Terms
-        </a>
+        {LEGAL_LINKS.map((link) => (
+          <span key={link.href}>
+            {" · "}
+            <a
+              href={link.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              {link.label}
+            </a>
+          </span>
+        ))}
       </footer>
     </div>
   );
