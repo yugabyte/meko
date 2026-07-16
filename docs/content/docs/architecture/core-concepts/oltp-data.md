@@ -16,13 +16,7 @@ Each datapack provides a PostgreSQL connection string:
 postgresql://db_my-datapack:password@host:5433/account_id_my-datapack
 ```
 
-You can connect with any PostgreSQL client:
-
-```bash
-meko datapack connect --name my-datapack
-```
-
-Or use the connection string directly with `psql`, pgAdmin, or your application's database driver.
+Use the connection string directly with `psql`, pgAdmin, or your application's database driver.
 
 ## What's available
 
@@ -30,9 +24,9 @@ Your datapack database includes:
 
 - **Standard PostgreSQL tables**. Create and query any relational schema.
 - **pgvector extension**. Vector columns and similarity search operators are pre-enabled.
-- **Conversation history**. Raw message logs stored by the MCP server.
-- **Memory tables**. The underlying storage for mem0 memory items.
 - **Knowledge base indexes**. Vector indexes created by pg_dist_rag.
+
+Conversation history and memory are managed internally by Meko and are not exposed as user-facing tables in this database. Access them through the [`conversation_*`](../../../reference/mcp-server/#conversation-tools) and [`memory_*`](../../../reference/mcp-server/#memory-tools) MCP tools, or the Meko portal.
 
 ## YugabyteDB benefits
 

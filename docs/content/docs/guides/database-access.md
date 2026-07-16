@@ -10,14 +10,6 @@ Every datapack includes a dedicated YugabyteDB (YSQL) database that you can acce
 
 ## Connect
 
-### Via CLI
-
-```bash
-meko datapack connect --name my-datapack
-```
-
-This opens an interactive database shell connected to your datapack.
-
 ### Via connection string
 
 Each datapack provides a PostgreSQL connection string when created:
@@ -32,15 +24,15 @@ Use this with any PostgreSQL client: `psql`, pgAdmin, DBeaver, or your applicati
 
 ### Read-only queries
 
-Query your datapack's data directly:
+Query your datapack's data directly. For example, to list the tables in your database:
 
 ```sql
--- View conversation history
-SELECT * FROM conversations ORDER BY created_at DESC LIMIT 10;
-
--- Search memory entries
-SELECT * FROM memories WHERE user_id = 'my-user';
+SELECT * FROM information_schema.tables WHERE table_schema = 'public';
 ```
+
+> [!NOTE]
+>
+> Conversation history and memory are managed internally by Meko and are not exposed as user-facing tables in this database. Use the [`conversation_*`](../../reference/mcp-server/#conversation-tools) and [`memory_*`](../../reference/mcp-server/#memory-tools) MCP tools, or the Meko portal, to access those.
 
 ### Write queries
 

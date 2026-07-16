@@ -116,7 +116,7 @@ For example, if you use Meko in Cursor and invite someone else to the same datap
     calls for new features.
     ```
 
-    The agent stores these as memories in the shared datapack. The lead, as owner, can promote memories to shared knowledge so the team can retrieve them through the usual flows. For details on memories, see [Work with memory](../../guides/working-with-memory/).
+    The agent stores these as memories in the shared datapack. The lead, as the datapack's owner (the person who created it — distinct from the shareable roles below), can promote memories to shared knowledge so the team can retrieve them through the usual flows. For details on memories, see [Work with memory](../../guides/working-with-memory/).
 
 1. Team members connect to the shared datapack.
 
@@ -131,15 +131,16 @@ For example, if you use Meko in Cursor and invite someone else to the same datap
 
     When you add a member, you assign them a role:
 
-    | Role | View | Add | Promote |
-    | ---- | ---- | --- | ------- |
-    | Viewer | Yes | No | No |
-    | Contributor | Yes | Yes | No |
-    | Maintainer | Yes | Yes | Yes |
+    | Role | View | Add memories | Add/edit knowledge base | Promote |
+    | ---- | ---- | ------------- | ------------------------ | ------- |
+    | Viewer | Yes | No | No | No |
+    | Contributor | Yes | Yes | No | No |
+    | Maintainer | Yes | Yes | Yes | Yes |
 
     - *View*: read knowledge-base material, memories, and conversations your deployment exposes for that datapack.
-    - *Add*: create new memories.
-    - *Promote*: elevate content into shared knowledge (often after review), per your product's flows.
+    - *Add memories*: create new memories. Contributors can do this, but cannot write to the knowledge base directly.
+    - *Add/edit knowledge base*: upload or modify knowledge-base content. Requires Maintainer.
+    - *Promote*: elevate memories into shared knowledge (often after review), per your product's flows. Requires Maintainer (or the datapack owner).
 
 1. Team members contribute knowledge as they work.
 
