@@ -167,6 +167,79 @@ tests:
           path: spec.template.spec.containers[0].livenessProbe.tcpSocket.port
           value: pg-compute
 
+  - it: runs the postgres_exporter sidecar by default
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: postgres-exporter
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+      - contains:
+          path: spec.template.spec.containers[1].ports
+          content:
+            name: pg-metrics
+            containerPort: 9187
+            protocol: TCP
+      # Disables the database collector, matching the VM-image exporter.
+      - contains:
+          path: spec.template.spec.containers[1].args
+          content: --no-collector.database
+      # Connects over loopback to the compute port as cloud_admin (trust auth).
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DATA_SOURCE_NAME
+            value: "host=localhost port=55433 user=cloud_admin dbname=postgres sslmode=disable application_name=postgres-exporter options='-c pgaudit.log=none'"
+      # Runs non-root with privileges dropped.
+      - equal:
+          path: spec.template.spec.containers[1].securityContext.runAsNonRoot
+          value: true
+
+  - it: annotates the pod for Prometheus scraping when the exporter is on
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["prometheus.io/scrape"]
+          value: "true"
+      - equal:
+          path: spec.template.metadata.annotations["prometheus.io/port"]
+          value: "9187"
+
+  - it: tracks the compute port in the exporter connection string
+    template: templates/deployment.yaml
+    set:
+      endpoint.computePort: 5599
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DATA_SOURCE_NAME
+            value: "host=localhost port=5599 user=cloud_admin dbname=postgres sslmode=disable application_name=postgres-exporter options='-c pgaudit.log=none'"
+
+  - it: appends extra exporter args (e.g. the stat_statements collector)
+    template: templates/deployment.yaml
+    set:
+      metrics.postgresExporter.extraArgs:
+        - --collector.stat_statements
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].args
+          content: --collector.stat_statements
+
+  - it: omits the sidecar and scrape annotations when disabled
+    template: templates/deployment.yaml
+    set:
+      metrics.postgresExporter.enabled: false
+    asserts:
+      # Only the endpoint container remains.
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+      - notExists:
+          path: spec.template.metadata.annotations["prometheus.io/scrape"]
+
   - it: reserves 2 cores / 4Gi with request == limit (Guaranteed QoS) by default
     template: templates/deployment.yaml
     asserts:

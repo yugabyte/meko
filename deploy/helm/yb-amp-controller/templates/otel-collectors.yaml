@@ -1,0 +1,196 @@
+{{- if .Values.otel.enabled }}
+{{- /*
+OpenTelemetry Collector CRs (reconciled by the OpenTelemetry Operator) that
+implement the amp metrics pipeline's collect-and-export step
+(controller/architecture/ac-metrics.md). Two deployment-mode collectors ship
+with the control plane:
+  - controller: scrapes the amp controller (:8080) and its in-pod storage
+    controller (:50051).
+  - compute:    scrapes every endpoint pod's Prometheus sources — the
+    postgres_exporter sidecar (:9187), pageserver (:9898), safekeeper (:7676),
+    compute_ctl (:3080) — plus per-pod cAdvisor resource metrics.
+Both remote-write to a Prometheus-compatible store (VictoriaMetrics by default).
+Requires the OpenTelemetry Operator (opentelemetry.io CRDs) in the cluster.
+*/}}
+{{- $fullName := include "yb-amp-controller.fullname" . }}
+{{- $saName := printf "%s-otel" $fullName }}
+{{- $ns := .Release.Namespace }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $saName }}
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullName }}-otel
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+rules:
+  # Prometheus kubernetes_sd_configs (pod/node discovery) + cAdvisor scraping.
+  - apiGroups: [""]
+    resources: [pods, services, endpoints, nodes, nodes/proxy, nodes/metrics, namespaces]
+    verbs: [get, list, watch]
+  - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullName }}-otel
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullName }}-otel
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ $ns }}
+{{- if .Values.otel.collectors.controller.enabled }}
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: {{ $fullName }}-controller
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+spec:
+  mode: deployment
+  serviceAccount: {{ $saName }}
+  {{- with .Values.otel.image }}
+  image: {{ . }}
+  {{- end }}
+  config:
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    receivers:
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: amp-controller
+              scrape_interval: 15s
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component], action: keep, regex: controller}
+                - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ .Values.controller.ports.api }}", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+            - job_name: storage-controller
+              scrape_interval: 15s
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component], action: keep, regex: controller}
+                - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ .Values.controller.ports.sc }}", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+    processors:
+      batch: {}
+    exporters:
+      prometheus_remote_write:
+        endpoint: {{ .Values.otel.remoteWriteEndpoint | quote }}
+        tls:
+          # Plaintext for in-cluster http:// stores; TLS for an https:// endpoint.
+          insecure: {{ if hasPrefix "https://" .Values.otel.remoteWriteEndpoint }}false{{ else }}true{{ end }}
+        resource_to_telemetry_conversion:
+          enabled: true
+    service:
+      extensions: [health_check]
+      pipelines:
+        metrics:
+          receivers: [prometheus]
+          processors: [batch]
+          exporters: [prometheus_remote_write]
+{{- end }}
+{{- if .Values.otel.collectors.compute.enabled }}
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: {{ $fullName }}-compute
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+spec:
+  mode: deployment
+  serviceAccount: {{ $saName }}
+  {{- with .Values.otel.image }}
+  image: {{ . }}
+  {{- end }}
+  config:
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    receivers:
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: amp-endpoint-pg
+              scrape_interval: 15s
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape], action: keep, regex: "true"}
+                - {source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path], action: replace, target_label: __metrics_path__, regex: (.+)}
+                - {source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port], action: replace, regex: (.+);(.+), replacement: "$1:$2", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
+            - job_name: amp-pageserver
+              scrape_interval: 30s
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-light-endpoint}
+                - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "pageserver" 9898 .Values.otel }}", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+            - job_name: amp-safekeeper
+              scrape_interval: 30s
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-light-endpoint}
+                - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "safekeeper" 7676 .Values.otel }}", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+            - job_name: amp-compute-ctl
+              scrape_interval: 30s
+              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-light-endpoint}
+                - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "computeCtl" 3080 .Values.otel }}", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+            {{- if .Values.otel.podMetrics }}
+            - job_name: kubelet-cadvisor
+              scrape_interval: 30s
+              scheme: https
+              metrics_path: /metrics/cadvisor
+              authorization:
+                credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              tls_config:
+                insecure_skip_verify: true
+              kubernetes_sd_configs: [{role: node}]
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_node_address_InternalIP], action: replace, regex: (.+), replacement: "$1:10250", target_label: __address__}
+                - {source_labels: [__meta_kubernetes_node_name], target_label: node}
+              metric_relabel_configs:
+                - {source_labels: [pod], action: keep, regex: "({{ .Values.otel.podMetricsSelector | default "yb-ep-.*" }})"}
+            {{- end }}
+    processors:
+      batch: {}
+    exporters:
+      prometheus_remote_write:
+        endpoint: {{ .Values.otel.remoteWriteEndpoint | quote }}
+        tls:
+          # Plaintext for in-cluster http:// stores; TLS for an https:// endpoint.
+          insecure: {{ if hasPrefix "https://" .Values.otel.remoteWriteEndpoint }}false{{ else }}true{{ end }}
+        resource_to_telemetry_conversion:
+          enabled: true
+    service:
+      extensions: [health_check]
+      pipelines:
+        metrics:
+          receivers: [prometheus]
+          processors: [batch]
+          exporters: [prometheus_remote_write]
+{{- end }}
+{{- end }}

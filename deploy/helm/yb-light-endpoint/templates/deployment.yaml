@@ -23,6 +23,14 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.metrics.postgresExporter.enabled }}
+        # Let a Prometheus/OTel Collector with pod service-discovery scrape the
+        # postgres_exporter sidecar. Kept off the Service so metrics aren't
+        # published on a (possibly LoadBalancer/tailnet-exposed) endpoint Service.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.postgresExporter.port | quote }}
+        prometheus.io/path: "/metrics"
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -121,6 +129,37 @@ spec:
           volumeMounts:
             - name: run
               mountPath: /data
+        {{- if .Values.metrics.postgresExporter.enabled }}
+        # postgres_exporter sidecar: scrapes the compute's Postgres over the pod's
+        # shared loopback and exposes Prometheus metrics for the amp metrics
+        # pipeline (controller/architecture/ac-metrics.md). Mirrors the VM-image
+        # exporter: cloud_admin via trust auth (no password), database collector
+        # off (it errors against the storage layer).
+        - name: postgres-exporter
+          image: "{{ .Values.metrics.postgresExporter.image.repository }}:{{ .Values.metrics.postgresExporter.image.tag }}"
+          imagePullPolicy: {{ .Values.metrics.postgresExporter.image.pullPolicy }}
+          {{- with .Values.metrics.postgresExporter.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          args:
+            - --web.listen-address=:{{ .Values.metrics.postgresExporter.port }}
+            - --no-collector.database
+            {{- range .Values.metrics.postgresExporter.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: DATA_SOURCE_NAME
+              value: "host=localhost port={{ .Values.endpoint.computePort }} user={{ .Values.metrics.postgresExporter.user }} dbname={{ .Values.metrics.postgresExporter.dbname }} sslmode=disable application_name=postgres-exporter options='-c pgaudit.log=none'"
+          ports:
+            - name: pg-metrics
+              containerPort: {{ .Values.metrics.postgresExporter.port }}
+              protocol: TCP
+          {{- with .Values.metrics.postgresExporter.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
       volumes:
         - name: run
         {{- if .Values.persistence.storageClass }}

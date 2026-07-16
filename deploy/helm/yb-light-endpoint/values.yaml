@@ -101,6 +101,55 @@ supervisor:
   # -- Sliding window (seconds) over which maxRestarts is counted.
   restartWindowSeconds: 60
 
+# Metrics: expose the compute's Postgres stats for the amp metrics pipeline
+# (controller/architecture/ac-metrics.md). The Neon-derived services in this pod
+# (pageserver/safekeeper/endpoint_storage/compute_ctl) already serve Prometheus
+# on their HTTP ports; this adds the one missing source — Postgres itself.
+metrics:
+  # postgres_exporter runs as a sidecar, connecting to the compute's Postgres
+  # over the pod's shared loopback (same trust-auth path the VM-image exporter
+  # uses) and serving Prometheus on :port. The Collector scrapes it via the pod
+  # scrape annotations added when this is enabled.
+  postgresExporter:
+    # -- Run the postgres_exporter sidecar.
+    enabled: true
+    image:
+      # -- postgres_exporter image repository.
+      repository: quay.io/prometheuscommunity/postgres-exporter
+      # -- Image tag (matches the exporter baked into the compute VM image).
+      tag: v0.17.1
+      pullPolicy: IfNotPresent
+    # -- Port the exporter serves /metrics on (also the pod scrape-annotation port).
+    port: 9187
+    # -- Postgres role the exporter connects as over loopback. cloud_admin is a
+    # superuser, so it sees every stats view; loopback uses trust auth (no password).
+    user: cloud_admin
+    # -- Database the exporter connects to.
+    dbname: postgres
+    # -- Extra postgres_exporter flags. Enable query-level metrics with
+    # "--collector.stat_statements" once pg_stat_statements is preloaded
+    # (endpoint.sharedPreloadLibraries) and the extension is created; the
+    # database collector is disabled by default (it errors on the storage layer).
+    extraArgs: []
+    # -- Sidecar resources. Set request == limit (cpu + memory) so the sidecar
+    # is Guaranteed-QoS like the endpoint container; otherwise the whole pod
+    # drops to Burstable (enforced by tests/guaranteed-qos.sh).
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "100m"
+        memory: "128Mi"
+    # -- Sidecar security context. The image already runs as nobody; keep it
+    # non-root and drop privileges.
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+
 service:
   # -- Service type: ClusterIP (default), NodePort, or LoadBalancer.
   type: ClusterIP

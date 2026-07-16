@@ -17,7 +17,7 @@ import (
 // server root, as HTML, and that the page drives the documented API base path.
 func TestServesUI(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := api.NewServer(&config.Config{ListenAddr: ":0"}, core.NewMemBackend(), newFakeTaskService(), api.Provisioning{}, logger)
+	srv := api.NewServer(&config.Config{ListenAddr: ":0"}, core.NewMemBackend(), newFakeTaskService(), api.Provisioning{}, nil, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 

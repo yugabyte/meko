@@ -24,25 +24,49 @@ const maxClaimBackoff = 30 * time.Second
 // cfg.MaxConcurrent running at once. The loop acquires an execution slot *before*
 // it claims, so it never holds a lease on a task it can't immediately run.
 // Structured for the HA reclaim described in §8.2.
+// MetricsRecorder receives task-lifecycle events for metrics. It is deliberately
+// small and lives here (not an import of internal/metrics) so the task package
+// stays free of that dependency and a worker can run uninstrumented in tests. A
+// worker with no recorder skips instrumentation entirely.
+type MetricsRecorder interface {
+	// TaskStarted marks a task entering execution (inflight++).
+	TaskStarted()
+	// TaskFinished marks a task leaving execution (inflight--) with its outcome:
+	// status is one of "succeeded", "failed", or "interrupted"; dur is the
+	// execution wall-clock time.
+	TaskFinished(kind, status string, dur time.Duration)
+}
+
 type Worker struct {
 	store    Store
 	registry *Registry
 	cfg      config.TaskConfig
 	logger   *slog.Logger
 	owner    string
+	metrics  MetricsRecorder
 }
+
+// Option configures an optional Worker collaborator.
+type Option func(*Worker)
+
+// WithMetrics attaches a metrics recorder to the worker.
+func WithMetrics(r MetricsRecorder) Option { return func(w *Worker) { w.metrics = r } }
 
 // NewWorker builds a worker. registry rebuilds each persisted step fully wired
 // with its deps (it carries them). owner identifies this instance for lease
-// claims.
-func NewWorker(store Store, registry *Registry, cfg config.TaskConfig, logger *slog.Logger) *Worker {
-	return &Worker{
+// claims. Optional collaborators (e.g. metrics) are supplied via Options.
+func NewWorker(store Store, registry *Registry, cfg config.TaskConfig, logger *slog.Logger, opts ...Option) *Worker {
+	w := &Worker{
 		store:    store,
 		registry: registry,
 		cfg:      cfg,
 		logger:   logger,
 		owner:    ownerID(),
 	}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w
 }
 
 func ownerID() string {
@@ -168,12 +192,33 @@ func (w *Worker) backoff(ctx context.Context, attempt int) {
 func (w *Worker) runTask(ctx context.Context, t *Task) {
 	logger := w.logger.With(applog.KeyTaskID, t.ID.String(), "kind", t.Kind)
 	logger.Debug("task claimed")
+
+	if w.metrics != nil {
+		w.metrics.TaskStarted()
+	}
+	start := time.Now()
+	// status is the outcome reported to metrics; the interrupted case is not a
+	// terminal failure (the task stays reclaimable, §8.2), so it is tracked
+	// distinctly rather than as a failure. Default to failed so a panic that
+	// unwinds past the switch isn't miscounted as a success.
+	status := string(StatusFailed)
+	// Record via defer so tasksInflight is always decremented and the outcome
+	// recorded even if execute panics (a store call outside runStep's recover).
+	defer func() {
+		if w.metrics != nil {
+			w.metrics.TaskFinished(t.Kind, status, time.Since(start))
+		}
+	}()
+
 	switch err := w.execute(ctx, logger, t); {
 	case err == nil:
+		status = string(StatusSucceeded)
 		logger.Debug("task succeeded")
 	case ctx.Err() != nil:
+		status = "interrupted"
 		logger.Info("task interrupted by shutdown; left reclaimable", "error", err)
 	default:
+		status = string(StatusFailed)
 		logger.Error("task failed", "error", err)
 	}
 }

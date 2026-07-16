@@ -10,13 +10,16 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/yugabyte/yb-amp/controller/internal/config"
 	"github.com/yugabyte/yb-amp/controller/internal/core"
 	applog "github.com/yugabyte/yb-amp/controller/internal/log"
+	"github.com/yugabyte/yb-amp/controller/internal/metrics"
 	"github.com/yugabyte/yb-amp/controller/internal/task"
 )
 
@@ -32,15 +35,27 @@ type Server struct {
 
 // NewServer wires middleware, the spec/explorer routes, and the generated,
 // spec-driven API onto an echo server.
-func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, prov Provisioning, logger *slog.Logger) *Server {
+func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, prov Provisioning, m *metrics.Metrics, logger *slog.Logger) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
 	e.HTTPErrorHandler = errorHandler(logger)
 
+	// metricsMiddleware is the outermost middleware so it records every response,
+	// including the 500 that Recover writes for a panicking handler (Recover, and
+	// slogLogger's HandleError for ordinary errors, both commit the mapped status
+	// via the error handler before metricsMiddleware reads it on the way out).
+	e.Use(metricsMiddleware(m))
 	e.Use(middleware.Recover())
 	e.Use(middleware.RequestID())
 	e.Use(slogLogger(logger))
+
+	// Prometheus scrape target. Like the probes below, it sits outside the
+	// versioned API and the OpenAPI spec; the OTel Collector scrapes it in-cluster
+	// (architecture/ac-metrics.md). No-op registry handler when metrics are off.
+	if m != nil {
+		e.GET("/metrics", echo.WrapHandler(promhttp.HandlerFor(m.Registry(), promhttp.HandlerOpts{})))
+	}
 
 	// Liveness/readiness sit outside the versioned API and the spec.
 	e.GET("/healthz", func(c echo.Context) error {
@@ -82,9 +97,44 @@ func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, pr
 	return &Server{echo: e, addr: cfg.ListenAddr, logger: logger}
 }
 
+// metricsMiddleware records request count and latency for every handled
+// request. It labels by the matched route *template* (c.Path(), e.g.
+// /api/v1/pools/:poolId) rather than the raw URI, so per-id paths collapse to a
+// bounded set of label values. The scrape endpoint itself is skipped so the
+// collector's polling doesn't inflate the series. A nil recorder disables it.
+func metricsMiddleware(m *metrics.Metrics) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if m == nil || c.Request().URL.Path == "/metrics" {
+				return next(c)
+			}
+			start := time.Now()
+			err := next(c)
+
+			// The inner slogLogger runs the error handler (HandleError: true) on a
+			// failed request, so by here the response carries the mapped status
+			// (including for wrapped/non-HTTPError errors, which the custom
+			// HTTPErrorHandler resolves). Just read it — no need to touch the error.
+			status := c.Response().Status
+			// c.Path() is the matched route template; empty for an unmatched path
+			// (404) — bucket those together rather than leaving the label blank.
+			route := c.Path()
+			if route == "" {
+				route = "unmatched"
+			}
+			m.ObserveHTTP(c.Request().Method, route, status, time.Since(start))
+			return err
+		}
+	}
+}
+
 // slogLogger emits one structured access-log record per request.
 func slogLogger(logger *slog.Logger) echo.MiddlewareFunc {
 	return middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		// Invoke the error handler for a failed request so the logged status (and
+		// the status metricsMiddleware reads) is the one the client actually gets,
+		// not 200.
+		HandleError:  true,
 		LogStatus:    true,
 		LogMethod:    true,
 		LogURI:       true,

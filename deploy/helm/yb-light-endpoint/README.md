@@ -20,7 +20,8 @@ The chart renders:
   service ports. Consumed by the pod via `envFrom`.
 - **Secret** — the YB password (only when `yugabyte.password` is set and no
   `yugabyte.existingSecret` is given). Injected as the `YB_PASSWORD` env var.
-- **Deployment** — one container running the supervisor + 5 services. PGDATA is
+- **Deployment** — one container running the supervisor + 5 services, plus (by
+  default) a `postgres_exporter` sidecar for Postgres metrics. PGDATA is
   ephemeral and durable state lives in YugabyteDB, so `/data` is an `emptyDir`
   scratch volume by default; when `persistence.storageClass` is set it is a
   PersistentVolumeClaim instead and the Deployment uses the `Recreate` strategy
@@ -31,7 +32,24 @@ The chart renders:
   `ReadWriteOnce` claim of that class (EBS/PD) backing `/data`. Part of the
   release, so `helm uninstall` frees it.
 - **Service** — exposes the compute Postgres port (and, optionally, the
-  internal HTTP APIs when `service.exposeInternalHttp=true`).
+  internal HTTP APIs when `service.exposeInternalHttp=true`). The
+  `postgres_exporter` metrics port is deliberately *not* published here — the
+  pod is annotated for Prometheus pod-discovery instead (see below).
+
+### Metrics
+
+When `metrics.postgresExporter.enabled` (default), the pod runs a
+`postgres_exporter` sidecar that connects to the compute's Postgres over
+loopback (as `cloud_admin`, trust auth — the same path the compute VM-image
+exporter uses) and serves Prometheus on `:9187`. The pod carries
+`prometheus.io/scrape` + `prometheus.io/port` annotations so a collector with
+pod service-discovery scrapes it directly; the port stays off the Service so
+metrics aren't published on a LoadBalancer/tailnet-exposed endpoint. Built-in
+collectors cover `pg_stat_database`, bgwriter, connections, locks, and
+replication. For query-level metrics, enable the `stat_statements` collector
+(`metrics.postgresExporter.extraArgs: ["--collector.stat_statements"]`) once
+`pg_stat_statements` is preloaded and the extension is created. See
+[`controller/architecture/ac-metrics.md`](../../../controller/architecture/ac-metrics.md).
 
 ## Key values
 
@@ -51,6 +69,9 @@ The chart renders:
 | `endpoint.resources.cpu` / `endpoint.resources.memory` | `2` / `4Gi` | compute reserved for the pod; rendered as request == limit ⇒ Guaranteed QoS |
 | `service.type` | `ClusterIP` | Service type |
 | `service.exposeInternalHttp` | `false` | also publish pageserver/safekeeper/endpoint_storage HTTP |
+| `metrics.postgresExporter.enabled` | `true` | run the `postgres_exporter` sidecar (`:9187`) |
+| `metrics.postgresExporter.image.tag` | `v0.17.1` | exporter image tag |
+| `metrics.postgresExporter.extraArgs` | `[]` | extra exporter flags (e.g. `--collector.stat_statements`) |
 | `persistence.storageClass` | _(empty)_ | back `/data` with a PVC of this class (EBS/PD); empty ⇒ `emptyDir` |
 | `persistence.size` | `10Gi` | PVC size when `persistence.storageClass` is set |
 | `podSecurityContext.fsGroup` | `1000` | pod fsGroup (the image's run-as gid) so a provisioned PVC is writable |

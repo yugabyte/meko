@@ -23,6 +23,7 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/db"
 	"github.com/yugabyte/yb-amp/controller/internal/deploy"
 	applog "github.com/yugabyte/yb-amp/controller/internal/log"
+	"github.com/yugabyte/yb-amp/controller/internal/metrics"
 	"github.com/yugabyte/yb-amp/controller/internal/node"
 	"github.com/yugabyte/yb-amp/controller/internal/process"
 	"github.com/yugabyte/yb-amp/controller/internal/storagecontroller"
@@ -255,11 +256,23 @@ func runServe(args []string) error {
 	if prov.SC != nil {
 		deps.Recipes = scRecipeStore{sc: prov.SC}
 	}
-	worker := task.NewWorker(store, task.ProductionRegistry(deps), cfg.Task, logger)
+	// Prometheus instrumentation: one registry, shared by the worker (task
+	// metrics) and the HTTP server (request + runtime metrics, and the /metrics
+	// scrape endpoint). Step 1 of the amp metrics pipeline
+	// (architecture/ac-metrics.md). Nil when --metrics=false, which every consumer
+	// treats as a no-op (the scrape endpoint is simply not mounted).
+	var metricsReg *metrics.Metrics
+	if cfg.Metrics {
+		metricsReg = metrics.New()
+	} else {
+		logger.Info("metrics disabled (--metrics=false); /metrics not served")
+	}
+
+	worker := task.NewWorker(store, task.ProductionRegistry(deps), cfg.Task, logger, task.WithMetrics(metricsReg))
 
 	// The API creates tasks and reads their status through the task service (which
 	// wraps the same store the worker drains).
-	srv := api.NewServer(cfg, backend, task.NewService(store), prov, logger)
+	srv := api.NewServer(cfg, backend, task.NewService(store), prov, metricsReg, logger)
 
 	// Managed services the controller owns as subprocesses (§11). The storage
 	// controller is the first; the manager is a no-op until one is enabled.

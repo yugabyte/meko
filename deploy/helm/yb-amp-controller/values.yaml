@@ -215,3 +215,40 @@ podLabels: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# OpenTelemetry metrics collectors (controller/architecture/ac-metrics.md).
+# Deployed as OpenTelemetryCollector CRs reconciled by the OpenTelemetry
+# Operator — so this REQUIRES the operator (opentelemetry.io CRDs) in the
+# cluster. Two deployment-mode collectors scrape the amp components' Prometheus
+# endpoints and remote-write to a Prometheus-compatible store.
+otel:
+  # -- Deploy the OTel collector CRs. Off by default; needs the OTel Operator.
+  enabled: false
+  # -- Collector image. Empty => the operator's configured default (must be a
+  # distro with the prometheus receiver + prometheusremotewrite exporter, i.e.
+  # opentelemetry-collector-contrib).
+  image: ""
+  # -- Prometheus remote-write endpoint of the metrics store (VictoriaMetrics,
+  # Prometheus, Thanos receive, …).
+  remoteWriteEndpoint: "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write"
+  # -- Also scrape per-pod cAdvisor resource metrics (CPU/mem/net) for the
+  # endpoint pods, via each node's kubelet.
+  podMetrics: true
+  # -- Pod-name regex the compute collector keeps for cAdvisor metrics. Defaults
+  # to the controller's endpoint naming (yb-ep-*); widen it (e.g.
+  # ".*yb-light-endpoint.*") for manually-installed endpoint releases.
+  podMetricsSelector: "yb-ep-.*"
+  # Scrape ports for the Neon services on each endpoint pod. Keep these in sync
+  # with the yb-light-endpoint chart's ports.{pageserverHttp,safekeeperHttp,computeCtlHttp}
+  # if you override them there.
+  scrapePorts:
+    pageserver: 9898
+    safekeeper: 7676
+    computeCtl: 3080
+  collectors:
+    # Scrapes the amp controller (:8080) + in-pod storage controller (:50051).
+    controller:
+      enabled: true
+    # Scrapes every endpoint pod: postgres_exporter/pageserver/safekeeper/compute_ctl.
+    compute:
+      enabled: true

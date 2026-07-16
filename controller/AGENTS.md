@@ -27,6 +27,11 @@ with the design docs in [`architecture/`](architecture/):
   ([`mcp/`](mcp/)): a thin FastMCP wrapper exposing the REST API as 18 MCP tools
   for AI agents, its transports (stdio/http), config, and deployment as its own
   pod in the `yb-amp-controller` chart.
+- [`architecture/ac-metrics.md`](architecture/ac-metrics.md) — the metrics
+  pipeline (scrape Prometheus → OTel Collector → store): the controller's
+  `/metrics` endpoint and the `amp_controller_*` series it exposes
+  ([`internal/metrics`](internal/metrics/metrics.go)), plus the Collector and
+  compute `postgres_exporter` follow-on steps.
 
 This guide is scoped to `controller/`. The repo-wide guide is the top-level
 [`AGENTS.md`](../AGENTS.md); where they overlap, the rules here win for code

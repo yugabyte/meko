@@ -132,6 +132,7 @@ const (
 type Config struct {
 	ListenAddr        string
 	SigningKeyPath    string // optional; controller generates an ephemeral key if unset
+	Metrics           bool   // expose Prometheus /metrics and record instrumentation
 	Log               LogConfig
 	DB                DBConfig
 	Task              TaskConfig
@@ -156,6 +157,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&c.Log.Level, "log-level", env("AMP_LOG_LEVEL", "info"), "log level: debug|info|warn|error")
 	fs.StringVar(&c.Log.Format, "log-format", env("AMP_LOG_FORMAT", "json"), "log format: json|text")
 	fs.StringVar(&c.SigningKeyPath, "signing-key", env("AMP_SIGNING_KEY_PATH", ""), "path to the control-plane signing key (optional)")
+	fs.BoolVar(&c.Metrics, "metrics", envBool("AMP_METRICS", true), "expose the Prometheus /metrics scrape endpoint and record instrumentation")
 	fs.DurationVar(&c.Task.PollInterval, "task-poll-interval", envDuration("AMP_TASK_POLL_INTERVAL", 2*time.Second), "task worker poll interval")
 	fs.DurationVar(&c.Task.LeaseTTL, "task-lease-ttl", envDuration("AMP_TASK_LEASE_TTL", 30*time.Second), "task ownership lease TTL")
 	fs.IntVar(&c.Task.MaxConcurrent, "task-max-concurrent", envInt("AMP_TASK_MAX_CONCURRENT", 50), "max tasks the worker executes concurrently")

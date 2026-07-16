@@ -184,7 +184,7 @@ func newTestServerBackend(t *testing.T, backend core.Backend, prov api.Provision
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.Config{ListenAddr: ":0"}
 	cfg.Deploy.Enabled = prov.Deployer != nil
-	srv := api.NewServer(cfg, backend, task.NewService(tasks), prov, logger)
+	srv := api.NewServer(cfg, backend, task.NewService(tasks), prov, nil, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	client, err := api.NewClientWithResponses(ts.URL + "/api/v1")
