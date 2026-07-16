@@ -33,12 +33,12 @@ const buttonVariants = cva(
         // @replit no hover, transparent border
         ghost: "border border-transparent",
         link: "text-primary underline-offset-4 hover:underline",
-        // AMP brand CTA (orange). Light mode is deliberately quiet — a soft
-        // orange tint with brand-coloured text and no glow. Dark mode stays a
-        // vivid solid fill with a brand glow. Single source for every orange CTA.
+        // AMP brand CTA (orange). Light mode is a soft orange tint with
+        // brand-coloured text; dark mode is a flat solid orange fill — no glow
+        // (matches the Console V6 look). Single source for every orange CTA.
         brand:
           "border border-brand/20 bg-brand/10 text-brand shadow-none hover:bg-brand/20 " +
-          "dark:border-transparent dark:bg-brand dark:text-brand-foreground dark:shadow-lg dark:shadow-brand/30 dark:hover:bg-brand/90",
+          "dark:border-transparent dark:bg-brand dark:text-brand-foreground dark:shadow-none dark:hover:bg-brand/90",
       },
       size: {
         // @replit changed sizes

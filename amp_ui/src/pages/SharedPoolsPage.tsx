@@ -40,7 +40,12 @@ export default function SharedPoolsPage() {
 
   const myPools = useMemo(() => {
     if (!pools.data || !currentUser.data) return [];
-    return pools.data.filter((p) => p.owner_user_id === currentUser.data.id);
+    // ADMIN "all pools" view (temporary): show every pool, not just the current
+    // user's, so meko-provisioned pools (owned by the meko user) are visible.
+    // TODO: replace with a proper admin/all-pools toggle rather than dropping
+    // the owner filter outright.
+    // return pools.data.filter((p) => p.owner_user_id === currentUser.data.id);
+    return pools.data;
   }, [pools.data, currentUser.data]);
 
   // Database (project) counts per pool — reuse the fleet fan-out.

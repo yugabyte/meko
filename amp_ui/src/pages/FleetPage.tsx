@@ -7,8 +7,8 @@ import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Database, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
 import {
   Dialog,
   DialogContent,
@@ -55,7 +55,12 @@ export default function FleetPage() {
 
   const myPools = useMemo(() => {
     if (!pools.data || !currentUser.data) return [];
-    return pools.data.filter((p) => p.owner_user_id === currentUser.data.id);
+    // ADMIN "all pools" view (temporary): show every pool, not just the current
+    // user's, so meko-provisioned databases are visible in the fleet.
+    // TODO: replace with a proper admin/all-pools toggle rather than dropping
+    // the owner filter outright.
+    // return pools.data.filter((p) => p.owner_user_id === currentUser.data.id);
+    return pools.data;
   }, [pools.data, currentUser.data]);
 
   const fleet = useFleet(myPools);
@@ -118,20 +123,22 @@ export default function FleetPage() {
             <StatCard label="Shared pools" value={myPools.length} />
           </div>
 
-          {/* Filter tabs — "All" + one per shared pool, reflected in the URL. */}
-          <div className="mb-4 flex flex-wrap gap-2">
-            <FleetTab active={!activePool} onClick={() => selectTab("")}>
-              All
-            </FleetTab>
-            {myPools.map((p) => (
-              <FleetTab
-                key={p.id}
-                active={activePool === p.name}
-                onClick={() => selectTab(p.name)}
-              >
-                {p.name}
-              </FleetTab>
-            ))}
+          {/* Filter by shared pool — a searchable combobox (defaults to All),
+              reflected in the URL. Type to filter; the list is height-capped and
+              scrolls, so it scales to many pools without crowding the page. */}
+          <div className="mb-4 flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Shared pool</span>
+            <Combobox
+              options={[
+                { value: "", label: "All shared pools" },
+                ...myPools.map((p) => ({ value: p.name, label: p.name })),
+              ]}
+              value={activePool}
+              onChange={selectTab}
+              className="w-72"
+              searchPlaceholder="Search pools…"
+              emptyText="No pools found."
+            />
           </div>
 
           <div className="rounded-xl border bg-card text-card-foreground shadow">
@@ -215,31 +222,6 @@ export default function FleetPage() {
         pools={myPools}
       />
     </PageContainer>
-  );
-}
-
-function FleetTab({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
-        active
-          ? "border-brand/40 bg-brand/10 text-brand"
-          : "border-border text-muted-foreground hover:border-brand/30 hover:text-foreground",
-      )}
-    >
-      {children}
-    </button>
   );
 }
 

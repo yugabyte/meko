@@ -89,13 +89,14 @@
   --meko-navy-200: 220 13% 81%;   /* #C5CCD8 */
 
   /* Mid scrollbar tones (theme-independent today). */
-  --meko-navy-600: 224 31% 33%;   /* #3A4A70 — scrollbar thumb hover    */
-  --meko-navy-700: 224 30% 24%;   /* #2B3550 — scrollbar thumb          */
+  --meko-navy-600: 240 5% 30%;    /* scrollbar thumb hover */
+  --meko-navy-700: 240 5% 22%;    /* scrollbar thumb */
 
-  /* Dark end — drives the current dark theme. */
-  --meko-navy-800: 222 29% 15%;   /* #1C2333 — raised surfaces (cards, popovers) */
-  --meko-navy-900: 222 45% 10%;   /* #0E1525 — base surfaces (page bg, inputs)   */
-  --meko-navy-950: 223 47% 7%;    /* #0A0F1C — deepest, app shell                 */
+  /* Dark end — drives the dark theme. Neutral near-black (Console V6 look):
+   * low-saturation charcoal, not the old blue-navy. */
+  --meko-navy-800: 240 5% 13%;    /* raised surfaces (cards, popovers) */
+  --meko-navy-900: 240 6% 9%;     /* base surfaces (page bg, inputs)   */
+  --meko-navy-950: 240 7% 6%;     /* deepest, app shell                */
 
   /* =====================================================================
    * SEMANTIC TOKENS — what components consume. `:root` carries the
@@ -158,28 +159,34 @@
   --card-foreground: 206 60% 97%;
   --popover: var(--meko-navy-800);
   --popover-foreground: 206 60% 97%;
-  --primary: 206 60% 97%;
-  --primary-foreground: var(--meko-navy-900);
-  --secondary: 224 23% 22%;
+  /* Primary CTAs are the brand orange in dark mode (Console V6 look);
+   * secondary/outline/ghost stay neutral. */
+  --primary: 16 100% 62%;
+  /* Dark charcoal, not white, on the orange primary: white is only ~2.74:1
+   * (fails WCAG AA); navy-950 is ~6.9:1. */
+  --primary-foreground: var(--meko-navy-950);
+  --secondary: 240 4% 20%;
   --secondary-foreground: 206 60% 97%;
   --muted: var(--meko-navy-800);
   --muted-foreground: 212 11% 58%;
-  --accent: 224 23% 22%;
+  --accent: 240 4% 20%;
   --accent-foreground: 206 60% 97%;
   --destructive: 0 84% 60%;
   --destructive-foreground: 206 60% 97%;
-  --border: 224 23% 22%;
+  --border: 240 4% 20%;
   --input: var(--meko-navy-900);
   --ring: 206 60% 97%;
 
   /* AMP brand + sidebar — dark mode. Sidebar reads a shade deeper than
    * the page (navy-950) so the nav rail separates from the content. */
   --brand: 16 100% 62%;
-  --brand-foreground: 0 0% 100%;
+  /* Dark charcoal on the orange brand fill (dark:bg-brand) — white is only
+   * ~2.74:1 (fails WCAG AA); navy-950 is ~6.9:1. */
+  --brand-foreground: var(--meko-navy-950);
   --sidebar: var(--meko-navy-950);
   --sidebar-foreground: 206 60% 97%;
-  --sidebar-border: 224 23% 22%;
-  --sidebar-accent: 224 23% 22%;
+  --sidebar-border: 240 4% 20%;
+  --sidebar-accent: 240 4% 20%;
   --sidebar-accent-foreground: 206 60% 97%;
 }
 
