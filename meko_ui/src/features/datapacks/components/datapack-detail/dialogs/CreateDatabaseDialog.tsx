@@ -14,6 +14,11 @@ import { createDatabase } from "@/lib/api/ampApi";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { toast } from "@/hooks/use-toast";
 
+// Dev stopgap: AMP's storage controller only supports PG 17, while the amp
+// controller defaults new projects to 18. Pin 17 (matching the dialog copy)
+// until AMP aligns the two versions, then drop this.
+const AMP_PG_VERSION = 17;
+
 export type CreateDatabaseDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -47,11 +52,13 @@ export function CreateDatabaseDialog({
 
   const handleCreate = async () => {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    // Guard against double-submit (e.g. repeated Enter) while a request is in
+    // flight — belt-and-suspenders with the disabled submit button.
+    if (!trimmed || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
-      const db = await createDatabase(datapackId, { name: trimmed });
+      const db = await createDatabase(datapackId, { name: trimmed, pg_version: AMP_PG_VERSION });
       toast({ title: `Database "${db.name}" created` });
       onCreated();
       onOpenChange(false);
@@ -64,7 +71,7 @@ export function CreateDatabaseDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md bg-card border-border text-foreground">
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md max-h-[85vh] overflow-y-auto bg-card border-border text-foreground">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -91,9 +98,12 @@ export function CreateDatabaseDialog({
           </div>
 
           {error ? (
-            <p className="text-sm text-red-700 dark:text-red-300" role="alert">
+            <div
+              role="alert"
+              className="mb-4 max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300"
+            >
               {error}
-            </p>
+            </div>
           ) : null}
 
           <DialogFooter className="gap-2 sm:gap-0">
