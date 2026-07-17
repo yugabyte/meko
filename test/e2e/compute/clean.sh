@@ -16,7 +16,8 @@
 #   `endpoint start`).
 # - Terminate sessions on the YugabyteDB `$YB_DBNAME` database
 #   (defaults to `yb_storage`) and drop it.
-# - Remove the on-disk `YB_LIGHT_REPO_DIR` so init can start fresh.
+# - Remove the on-disk `YB_LIGHT_REPO_DIR` so init can start fresh — or,
+#   when `E2E_KEEP_LOGS=1` (failed-run teardown), keep only its `*.log` files.
 #
 # Idempotent — re-running on an already-clean tree is a no-op.
 #
@@ -63,7 +64,19 @@ step "Drop $YB_DBNAME"
 PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \
     -c "DROP DATABASE IF EXISTS \"$YB_DBNAME\" WITH (FORCE)" >/dev/null
 
-step "Remove $YB_LIGHT_REPO_DIR"
-rm -rf "$YB_LIGHT_REPO_DIR"
+# On a failed run the harness sets E2E_KEEP_LOGS=1: the cluster is stopped
+# and the db dropped above, but this run's *.log files (harness +
+# compute/pageserver/safekeeper/storage_controller/endpoint_storage) are
+# preserved for postmortem and CI artifact upload — everything else (pgdata,
+# sockets, config, ...) is dropped. Otherwise remove the whole run dir so the
+# next init starts fresh.
+if [ "${E2E_KEEP_LOGS:-}" = 1 ]; then
+    step "Keep *.log under $YB_LIGHT_REPO_DIR; remove the rest"
+    find "$YB_LIGHT_REPO_DIR" -type f ! -name '*.log' -delete 2>/dev/null || true
+    find "$YB_LIGHT_REPO_DIR" -depth -type d -empty -delete 2>/dev/null || true
+else
+    step "Remove $YB_LIGHT_REPO_DIR"
+    rm -rf "$YB_LIGHT_REPO_DIR"
+fi
 
 echo "clean."

@@ -1,8 +1,9 @@
 //! The shared-cluster fixture. Owns the suite lifecycle: ephemeral-db
 //! setup, `init`/`start`, one shared `main` branch + endpoint, the
-//! per-scenario cluster recycle, the corruption-marker log gate, and a
-//! teardown that runs `clean.sh` but keeps the run's `*.log` files
-//! (`--no-fail-clean` instead leaves a failed cluster up for postmortem).
+//! per-scenario cluster recycle, the corruption-marker log gate, and
+//! teardown: a passing run is fully removed; a failed run stops the cluster
+//! but keeps its `*.log` files (`--no-fail-stop` instead leaves the failed
+//! cluster running for postmortem).
 
 use std::future::Future;
 use std::io::Write;
@@ -104,13 +105,14 @@ pub struct Cluster {
     /// during a test so a wedge fails fast).
     fatal_markers: Regex,
     /// Set by [`Cluster::mark_success`] at the end of a fully-passing
-    /// run. Drives the final-verdict messaging; teardown keeps logs
-    /// either way (see `no_fail_clean` for the failure postmortem opt-in).
+    /// run. On success teardown removes the whole run dir; on failure it
+    /// stops the cluster but keeps the run's `*.log` files (see
+    /// `no_fail_stop` for the postmortem opt-in).
     success: bool,
-    /// `--no-fail-clean` (env `E2E_NO_FAIL_CLEAN`): on failure, leave the
-    /// cluster + db up for postmortem instead of the default
-    /// tear-down-but-keep-logs.
-    no_fail_clean: bool,
+    /// `--no-fail-stop` (env `E2E_NO_FAIL_STOP`): on failure, leave the
+    /// cluster + db running for postmortem instead of the default
+    /// stop-the-cluster-but-keep-logs.
+    no_fail_stop: bool,
 }
 
 impl Cluster {
@@ -252,7 +254,7 @@ impl Cluster {
             markers: Regex::new(MARKERS).expect("static marker regex"),
             fatal_markers: Regex::new(FATAL_MARKERS).expect("static fatal-marker regex"),
             success: false,
-            no_fail_clean: std::env::var("E2E_NO_FAIL_CLEAN").is_ok_and(|v| !v.is_empty()),
+            no_fail_stop: std::env::var("E2E_NO_FAIL_STOP").is_ok_and(|v| !v.is_empty()),
         };
 
         // Bring the stack up in a free, below-ephemeral port block. The
@@ -667,7 +669,10 @@ impl Cluster {
     /// Tear down the cluster + db.
     /// Best-effort — this is teardown. gc_old_runs reaps the run dir at
     /// 7 days.
-    fn teardown(&self) {
+    /// Stop the cluster and drop the ephemeral db via `clean.sh`. With
+    /// `keep_logs`, clean.sh preserves this run's `*.log` files (and removes
+    /// the rest); otherwise it removes the whole run dir.
+    fn teardown(&self, keep_logs: bool) {
         let _ = Command::new("bash")
             .arg(self.repo.join("test/e2e/compute/clean.sh"))
             .current_dir(&self.repo)
@@ -676,6 +681,7 @@ impl Cluster {
             .env("YB_HOST", &self.yb_host)
             .env("YB_PORT", self.yb_port.to_string())
             .env("COMPUTE_PORT", self.compute_port.to_string())
+            .env("E2E_KEEP_LOGS", if keep_logs { "1" } else { "" })
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
@@ -989,8 +995,11 @@ impl Cluster {
 
 impl Drop for Cluster {
     fn drop(&mut self) {
-        if !self.success && self.no_fail_clean {
-            // --no-fail-clean: leave the cluster + db up for postmortem.
+        if self.success {
+            // Passing run: full teardown — drop the cluster + db + run dir.
+            self.teardown(false);
+        } else if self.no_fail_stop {
+            // --no-fail-stop: leave the cluster + db running for postmortem.
             eprintln!();
             eprintln!("run FAILED — leaving cluster up for inspection:");
             eprintln!("  logs/dir: {}", self.repo_dir.display());
@@ -1001,17 +1010,15 @@ impl Drop for Cluster {
                 self.db_name
             );
         } else {
-            // Default teardown for both a passing and a failing run: drop
-            // the cluster + db but keep this run's `*.log` files.
-            if !self.success {
-                eprintln!();
-                eprintln!(
-                    "run FAILED — cluster torn down; logs kept at {}",
-                    self.repo_dir.display()
-                );
-                eprintln!("  (re-run with --no-fail-clean to leave the cluster up for postmortem)");
-            }
-            self.teardown();
+            // Default on failure: stop the cluster + drop the db, but keep
+            // this run's `*.log` files for postmortem / CI artifact upload.
+            eprintln!();
+            eprintln!(
+                "run FAILED — cluster stopped; logs kept at {}",
+                self.repo_dir.display()
+            );
+            eprintln!("  (re-run with --no-fail-stop to leave the cluster up for postmortem)");
+            self.teardown(true);
         }
     }
 }

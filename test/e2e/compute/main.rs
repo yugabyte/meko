@@ -178,7 +178,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     // multiple iterations for churn. `-n` normally disables fail_fast
     // (run-all + tally); this env flips it back so the failing
     // iteration's cluster state is preserved uncontaminated (pair with
-    // --no-fail-clean to keep the cluster live for forensics).
+    // --no-fail-stop to keep the cluster live for forensics).
     if std::env::var("E2E_STOP_ON_FAIL").is_ok() {
         fail_fast = true;
     }

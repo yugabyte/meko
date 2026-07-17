@@ -79,7 +79,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // (default 3, env-overridable for deeper hunts), recycling the compute
     // between iterations exactly as the suite runner does between
     // scenarios. Stop at the first failed mode: one losing mode condemns
-    // the build, and `--no-fail-clean` leaves the cluster at that point for
+    // the build, and `--no-fail-stop` leaves the cluster at that point for
     // forensics.
     let iterations: u32 = std::env::var("TORN_ITERATIONS")
         .ok()

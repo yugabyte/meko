@@ -1,0 +1,18 @@
+# Keep the GitHub Actions we pin (by major tag, e.g. `@v6`) current via
+# reviewed, CI-tested PRs — so we don't hand-bump them and don't have to
+# point at a moving `@main`. Dependabot opens a grouped PR when any action
+# used in `.github/workflows/` has an update (including majors), with the
+# changelog; the PR runs through CI before merge.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    groups:
+      # One PR per cycle for all action bumps, instead of one per action.
+      github-actions:
+        patterns:
+          - "*"

@@ -64,7 +64,7 @@ jobs:
       # push events it diffs locally and needs the repo checked out. On a
       # push to main it detects changes against the commit before the push.
       - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -117,7 +117,7 @@ jobs:
       # alone from the yb-agentk-dev GitHub App (see the NOTE at the top).
       - name: Mint amp-postgres read token
         id: amp-postgres-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
           app-id: "3784852"
           private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
@@ -164,7 +164,7 @@ jobs:
         run: echo "rev=$(git rev-parse HEAD:vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
 
       - name: Cache PostgreSQL install
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: pg_install
           key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
@@ -225,7 +225,7 @@ jobs:
       # alone from the yb-agentk-dev GitHub App (see the NOTE at the top).
       - name: Mint amp-postgres read token
         id: amp-postgres-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
           app-id: "3784852"
           private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
@@ -283,7 +283,7 @@ jobs:
         run: echo "rev=$(git rev-parse HEAD:vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
 
       - name: Cache PostgreSQL install
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: pg_install
           key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
@@ -299,16 +299,25 @@ jobs:
           exit 1
 
       # PRs run run.sh's default (live-DB unit tests + fast suite); pushes
-      # to main run everything (unit, fast, slow).
+      # to main run everything (unit, fast, slow). On failure the harness
+      # stops the cluster but keeps the run's *.log files (see clean.sh's
+      # E2E_KEEP_LOGS mode), which the Upload step below collects.
       - name: End-to-end tests (live-DB unit + scenarios)
         run: test/e2e/compute/run.sh ${{ github.event_name == 'push' && 'all' || '' }}
 
       - name: Upload run logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-logs-${{ github.run_id }}
-          path: .e2e-tests/
+          # The failed run's *.log files (harness + compute/pageserver/
+          # safekeeper/storage_controller/endpoint_storage), kept by the
+          # harness's E2E_KEEP_LOGS teardown. Glob to *.log so any stray
+          # non-log leftovers can't break artifact zip creation.
+          path: .e2e-tests/**/*.log
+          # `.e2e-tests` is a dot-dir; upload-artifact skips hidden paths
+          # by default, so without this the artifact is empty.
+          include-hidden-files: true
           if-no-files-found: ignore
 
   controller:
@@ -362,7 +371,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm

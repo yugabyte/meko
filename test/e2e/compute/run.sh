@@ -39,9 +39,9 @@ Options:
                   tallied, not fatal). Useful for flakiness hunting.
   --release       build + run in release mode (default: debug, which is
                   what the dev/e2e loop normally wants)
-  --no-fail-clean on failure, leave the cluster + DB up for postmortem
-                  (default: a failed run is torn down like a passing one,
-                  keeping only its logs under .e2e-tests/run_<id>/)
+  --no-fail-stop  on failure, leave the cluster + DB running for postmortem
+                  (default: a failed run stops the cluster + drops the DB but
+                  keeps its *.log files under .e2e-tests/run_<id>/)
   -h, --help      show this help
 
 Honoured env vars (passed through): E2E_REGEN_EXPECTED, TEST_DIR,
@@ -77,7 +77,7 @@ for arg in "$@"; do
     case "$arg" in
         -h|--help) usage; exit 0 ;;
         --release) PROFILE=release ;;
-        --no-fail-clean) export E2E_NO_FAIL_CLEAN=1 ;;
+        --no-fail-stop) export E2E_NO_FAIL_STOP=1 ;;
         *) ARGS+=("$arg") ;;  # forwarded to the harness (selection, -n, …)
     esac
 done
@@ -227,7 +227,7 @@ flock -n "$RUN_LOCK_FD" \
 bash "$REPO/test/e2e/compute/reap.sh" "$REPO/.e2e-tests" "$YB_LIGHT_REPO_DIR" || true
 
 # Backstop teardown for ABNORMAL termination only. A normal exit (success
-# or failure — including --no-fail-clean's deliberate keep-alive) is handled
+# or failure — including --no-fail-stop's deliberate keep-alive) is handled
 # by the harness's own Drop, so we do NOT trap EXIT; only the signals that
 # bypass Drop (Ctrl-C, kill, hangup). clean.sh is scoped to this run via the
 # env above, so it never touches a concurrent run or a dev .yb_light cluster.
