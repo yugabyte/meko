@@ -10,7 +10,7 @@ mandates (amp-controller.md principles 2–3): runtime-specific "create a pod
 vs. a VM" logic lives behind `deploy.Deployer` (`CreateEndpoint`/`DeleteEndpoint`),
 not in the core, so other runtimes slot in behind the same interface. The driver
 is chosen by `--deploy-driver`: **`docker`** (default — one container per
-endpoint, for single-host e2e) or **`kubernetes`** (this doc, the
+endpoint, for single-host integration) or **`kubernetes`** (this doc, the
 `KubernetesDeployer`). On Kubernetes the deploy mechanism is **Helm**
 (amp-controller.md §11): the controller shells out to the `helm` CLI rather
 than embedding a Helm SDK — the same "shell out to a managed binary" posture used

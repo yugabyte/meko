@@ -35,4 +35,4 @@
 # deploy/controller packages the prebuilt bundle from `make controller-bundle`.
 !target/controller-bundle/
 # cargo must read every workspace member's manifest to load the workspace.
-!test/e2e/
+!test/integration/

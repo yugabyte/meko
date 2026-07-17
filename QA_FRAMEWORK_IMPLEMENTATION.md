@@ -617,7 +617,7 @@ registry env.
 - `check`: Checker interface; first oracles — data checksum/rowcount vs
   workloadgen's expected state; branch COW divergence check; read-after-restart.
 - **Always-on invariants** (run for every test, every category): component-log
-  corruption/FATAL scan (reuse the marker list from `test/e2e/storage`), leaked
+  corruption/FATAL scan (reuse the marker list from `test/integration/compute`), leaked
   k8s objects / projects / endpoints check, env health at teardown.
 - Chaos allowed only when `EnvSpec.Sharing == Exclusive` — enforced by the
   framework, not by convention.

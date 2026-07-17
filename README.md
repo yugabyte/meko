@@ -393,7 +393,7 @@ Several live-DB tests (`pageserver::page_store::tests`, `pageserver::page_writer
 `libs/yb_tsclient/tests/live.rs`) assert against a live YB with the
 production schema migrated. They default to a developer-managed cluster on
 `5433`/`yb_storage` (override with `YB_TEST_HOST/PORT/USER/DB`); without one,
-`test/e2e/compute/run.sh unit` runs them against an isolated ephemeral cluster.
+`test/integration/compute/run.sh unit` runs them against an isolated ephemeral cluster.
 
 Integration tests (require a YB cluster reachable from the test runner):
 
@@ -402,24 +402,24 @@ CARGO_BUILD_FLAGS="--features=testing" make
 DEFAULT_PG_VERSION=17 BUILD_TYPE=release ./scripts/pytest
 ```
 
-The end-to-end suite under [`test/e2e/compute/`](test/e2e/compute/) is a Rust harness
+The integration suite under [`test/integration/compute/`](test/integration/compute/) is a Rust harness
 that brings up a real `yb_light_local` cluster + YB and exercises full
 boot, write, branch, restart, and WAL-replay-catch-up paths, scanning
 `pageserver.log` for corruption markers after every test
-(see [`test/e2e/compute/README.md`](test/e2e/compute/README.md)):
+(see [`test/integration/compute/README.md`](test/integration/compute/README.md)):
 
 ```sh
-test/e2e/compute/run.sh                 # unit then fast (default)
-test/e2e/compute/run.sh all             # unit, fast, then slow
-test/e2e/compute/run.sh unit            # live-DB cargo-test modules only
-test/e2e/compute/run.sh smoke           # one test by name (substring matches)
-test/e2e/compute/run.sh -n 20 <name>    # repeat N times, cumulative pass/fail
-test/e2e/compute/run.sh --release all   # release build
+test/integration/compute/run.sh                 # unit then fast (default)
+test/integration/compute/run.sh all             # unit, fast, then slow
+test/integration/compute/run.sh unit            # live-DB cargo-test modules only
+test/integration/compute/run.sh smoke           # one test by name (substring matches)
+test/integration/compute/run.sh -n 20 <name>    # repeat N times, cumulative pass/fail
+test/integration/compute/run.sh --release all   # release build
 ```
 
-Scenario tests live in `test/e2e/compute/{fast,slow}/` (typed
+Scenario tests live in `test/integration/compute/{fast,slow}/` (typed
 `tokio-postgres`/`reqwest` assertions); golden `.sql` workloads live in
-`test/e2e/compute/{fast,slow}/` and diff against checked-in `.out` captures.
+`test/integration/compute/{fast,slow}/` and diff against checked-in `.out` captures.
 Both are auto-discovered — adding a test is just dropping a file. Run
 the suite before claiming any corruption-class fix.
 

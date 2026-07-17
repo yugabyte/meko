@@ -15,7 +15,7 @@
 # real-controller ladder test (tests/test_integration.py::test_real_controller_
 # resource_ladder) against the controller. Everything is torn down on exit.
 #
-# This is the controller-MCP analogue of test/e2e/control_plane/run-controller.sh.
+# This is the controller-MCP analogue of test/integration/control_plane/run-controller.sh.
 #
 # Prereqs: docker, uv, go, curl. No YugabyteDB, psql, or Rust toolchain needed.
 #

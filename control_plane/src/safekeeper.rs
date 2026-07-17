@@ -176,7 +176,7 @@ impl SafekeeperNode {
         };
 
         // Test-only override of the periodic control-file save cadence
-        // (humantime format, e.g. "1s"). The e2e cfile-stall scenario
+        // (humantime format, e.g. "1s"). The integration cfile-stall scenario
         // shrinks it so the save path fires within the test budget.
         let control_file_save_interval = match std::env::var("YB_SK_CONTROL_FILE_SAVE_INTERVAL") {
             Ok(s) => humantime::parse_duration(&s)

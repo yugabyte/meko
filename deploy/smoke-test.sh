@@ -4,8 +4,8 @@
 # stands up). Drives the controller's REST API through the full async-task
 # lifecycle and validates that a created endpoint is a real, writable Postgres.
 #
-# It is the deployment-side companion to the controller-on-Docker e2e in
-# test/e2e/control_plane: that suite proves the control plane on Docker; this one
+# It is the deployment-side companion to the controller-on-Docker integration in
+# test/integration/control_plane: that suite proves the control plane on Docker; this one
 # proves an actual Kubernetes deployment, including the write-ahead task contract
 # (#113) and real data I/O through the compute -> safekeeper -> pageserver -> YB
 # storage path.

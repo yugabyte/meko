@@ -213,7 +213,7 @@ return                              │
   — and the unbiased select could put an `AppendResponse` on the wire
   before the `AcceptorGreeting`, which the walproposer treats as fatal
   during the handshake. That race produced a permanent reconnect storm
-  (commits frozen); regression-guarded by the `sk_split_churn` slow e2e
+  (commits frozen); regression-guarded by the `sk_split_churn` slow integration
   scenario.
 - **`chunk_offset`** (the row's byte offset within its segment) is the
   in-segment identity — the writer never produces overlapping rows

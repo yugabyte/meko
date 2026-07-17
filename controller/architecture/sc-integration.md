@@ -126,7 +126,7 @@ handlers vestigial).
 
 Each Set B endpoint also has a parallel caller in the **Rust `control_plane` dev
 harness** (`yb_light_local` + its `StorageController`/`PageServer` wrappers) and
-the **`test_runner` e2e fixtures**. All are **out-of-process** clients; none live
+the **`test_runner` integration fixtures**. All are **out-of-process** clients; none live
 in the daemon crates (`pageserver/src`, `safekeeper/src`, `compute_tools/src` —
 verified empty).
 
@@ -140,7 +140,7 @@ Implications: (1) `supervisor.py` and the `control_plane` Rust launcher are two
 parallel implementations of the same register→attach→register-branch sequence;
 (2) there is **zero in-process Rust coupling** — Set B is purely an external
 client/server contract; (3) at least three client classes must keep working (pod
-supervisor, `yb_light_local`, e2e fixtures), with `attach-hook` the most heavily
+supervisor, `yb_light_local`, integration fixtures), with `attach-hook` the most heavily
 exercised.
 
 ## Set B handler trace (what logic each route runs)
@@ -167,7 +167,7 @@ Not the same way — the *caller* differs. Set A collapses to in-process calls
 because **amp is the caller**. For Set B the caller is the endpoint pod's
 `supervisor.py`, a **separate container on another host**; you can't make a
 remote process's call in-process, so the pod→SC hop stays a network API. And
-Set B isn't pod-only: `yb_light_local` and the `test_runner` e2e suite call the
+Set B isn't pod-only: `yb_light_local` and the `test_runner` integration suite call the
 same routes over HTTP, so the routes can't be deleted without migrating them too.
 
 The real version of the idea is **invert ownership**: have amp perform the
@@ -189,7 +189,7 @@ it sets `SC_REACHABLE_HOST` + the published ports — and can compute `NODE_ID`)
 Net: (1) pod→SC stays a network surface regardless; (2) ownership inversion can
 shrink what the pod calls, with `node_register`/`attach-hook` carrying ordering
 constraints and `branch register` the holdout; (3) the HTTP routes survive for
-`yb_light_local` + e2e tests either way; (4) "in-process" still presumes the
+`yb_light_local` + integration tests either way; (4) "in-process" still presumes the
 logic is reimplemented in Go (or the Rust `Service` is embedded) — today it is
 bound to the Rust in-memory `Service` state + diesel persistence, which is the
 actual work. Because the SC has been hollowed to registry + generation-increment

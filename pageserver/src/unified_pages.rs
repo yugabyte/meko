@@ -781,7 +781,7 @@ impl UnifiedPages {
                     }
                 },
             };
-            // Diagnostics only — debug builds (e2e). Zero release cost;
+            // Diagnostics only — debug builds (integration). Zero release cost;
             // the functional skip above is identical in both profiles.
             if cfg!(debug_assertions)
                 && let Some(why) = anomaly

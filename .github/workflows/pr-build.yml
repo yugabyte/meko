@@ -5,11 +5,11 @@ name: CI
 #                compute extensions: `./build.sh` (debug), clippy with
 #                `-D warnings` via ./run_clippy.sh, then the unit tests
 #                via cargo-nextest (the three live-DB test modules
-#                are excluded here and run in the e2e job instead, where a
+#                are excluded here and run in the integration job instead, where a
 #                migrated cluster exists). PostgreSQL itself is built from
 #                the vendor/postgres-v18 submodule and cached keyed on the
 #                submodule commit, so warm runs skip it.
-#   e2e        — `test/e2e/compute/run.sh` against a YugabyteDB container:
+#   integration        — `test/integration/compute/run.sh` against a YugabyteDB container:
 #                live-DB unit tests + the fast scenario suite on PRs
 #                (run.sh's default), `all` (unit, fast, slow) on main.
 #   controller — Go controller: `go build`, `go vet`, `go test`.
@@ -21,7 +21,7 @@ name: CI
 #
 # NOTE: vendor/postgres-v18 resolves to yugabyte/amp-postgres (internal),
 # which the repo-scoped default GITHUB_TOKEN cannot read. The compute and
-# e2e jobs mint a short-lived, read-only installation token for that repo
+# integration jobs mint a short-lived, read-only installation token for that repo
 # alone from the yb-agentk-dev GitHub App (App ID 3784852; private key in
 # the AGENTK_PRIVATE_KEY secret) and apply it only to the submodule via a
 # git insteadOf rewrite (the main-repo checkout keeps the default token).
@@ -79,7 +79,7 @@ jobs:
               - '.config/nextest.toml'
               - 'libs/**'
               - 'pgxn/**'
-              - 'test/e2e/compute/**'
+              - 'test/integration/compute/**'
               - 'vendor/postgres-v18'
               - 'Makefile'
               - 'postgres.mk'
@@ -181,9 +181,9 @@ jobs:
           tool: cargo-nextest
 
       # Unit tests. The three live-DB modules assert against
-      # a real YB with the migrated production schema; they run in the e2e
+      # a real YB with the migrated production schema; they run in the integration
       # job (run.sh's `unit` selection) where that cluster exists. Keep
-      # this filter in sync with test/e2e/compute/main.rs::unit_tests.
+      # this filter in sync with test/integration/compute/main.rs::unit_tests.
       # NB: nextest does not run doctests; add `cargo test --doc` here if
       # the workspace ever grows some.
       - name: Unit tests
@@ -202,8 +202,8 @@ jobs:
           # per-test PR check instead.
           use-actions-summary: false
 
-  e2e:
-    name: Compute — end-to-end tests
+  integration:
+    name: Compute — integration tests
     needs: changes
     if: needs.changes.outputs.compute == 'true'
     runs-on: ubuntu-latest
@@ -254,7 +254,7 @@ jobs:
       # cluster bring-up fails ("could not find a server to connect to"). This
       # mirrors the developer setup. Host networking also exposes YSQL (5433)
       # and the tserver RPC (9100, for the yb_tsclient live tests) directly.
-      # The harness defaults to 127.0.0.1:5433 (see test/e2e/compute/
+      # The harness defaults to 127.0.0.1:5433 (see test/integration/compute/
       # cluster.rs) and creates its own ephemeral database per run.
       - name: Start YugabyteDB
         run: |
@@ -301,21 +301,21 @@ jobs:
       # PRs run run.sh's default (live-DB unit tests + fast suite); pushes
       # to main run everything (unit, fast, slow). On failure the harness
       # stops the cluster but keeps the run's *.log files (see clean.sh's
-      # E2E_KEEP_LOGS mode), which the Upload step below collects.
-      - name: End-to-end tests (live-DB unit + scenarios)
-        run: test/e2e/compute/run.sh ${{ github.event_name == 'push' && 'all' || '' }}
+      # INTEGRATION_KEEP_LOGS mode), which the Upload step below collects.
+      - name: Integration tests (live-DB unit + scenarios)
+        run: test/integration/compute/run.sh ${{ github.event_name == 'push' && 'all' || '' }}
 
       - name: Upload run logs
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-logs-${{ github.run_id }}
+          name: integration-logs-${{ github.run_id }}
           # The failed run's *.log files (harness + compute/pageserver/
           # safekeeper/storage_controller/endpoint_storage), kept by the
-          # harness's E2E_KEEP_LOGS teardown. Glob to *.log so any stray
+          # harness's INTEGRATION_KEEP_LOGS teardown. Glob to *.log so any stray
           # non-log leftovers can't break artifact zip creation.
-          path: .e2e-tests/**/*.log
-          # `.e2e-tests` is a dot-dir; upload-artifact skips hidden paths
+          path: .integration-tests/**/*.log
+          # `.integration-tests` is a dot-dir; upload-artifact skips hidden paths
           # by default, so without this the artifact is empty.
           include-hidden-files: true
           if-no-files-found: ignore

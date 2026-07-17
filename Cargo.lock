@@ -1335,53 +1335,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "e2e_common"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "tokio",
- "tokio-postgres",
- "workspace_hack",
-]
-
-[[package]]
-name = "e2e_control_plane"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "e2e_common",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "workspace_hack",
-]
-
-[[package]]
-name = "e2e_tests"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "e2e_common",
- "futures",
- "nix 0.30.1",
- "pageserver_api",
- "pageserver_client_grpc",
- "pageserver_page_api",
- "postgres",
- "postgres-protocol 0.6.6",
- "regex",
- "reqwest",
- "serde_json",
- "tokio",
- "tokio-postgres",
- "utils",
- "wal_craft",
- "workspace_hack",
-]
-
-[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2534,6 +2487,53 @@ name = "integer-encoding"
 version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
+
+[[package]]
+name = "integration_common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tokio",
+ "tokio-postgres",
+ "workspace_hack",
+]
+
+[[package]]
+name = "integration_control_plane"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "integration_common",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "workspace_hack",
+]
+
+[[package]]
+name = "integration_tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "futures",
+ "integration_common",
+ "nix 0.30.1",
+ "pageserver_api",
+ "pageserver_client_grpc",
+ "pageserver_page_api",
+ "postgres",
+ "postgres-protocol 0.6.6",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "utils",
+ "wal_craft",
+ "workspace_hack",
+]
 
 [[package]]
 name = "io-uring"

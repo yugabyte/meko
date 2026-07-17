@@ -273,7 +273,7 @@ const defaultBranchName = "main"
 // create marshals the originating request as params, stamps the task's target
 // project (project_id, exposed by the task API for monitoring; a nil project is
 // left unstamped) and the resource the task acts on (targetRef — the branch or
-// endpoint id, so the UI/e2e harness can pre-select it once the task succeeds; an
+// endpoint id, so the UI/integration harness can pre-select it once the task succeeds; an
 // empty targetRef is left unstamped), and persists the task + its steps via the
 // Store. projectID is taken by value and the address of a copy is stored, so
 // callers can pass a field directly.

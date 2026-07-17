@@ -40,7 +40,7 @@ operations on `core.PgBackend`:
 | `task.go` | The `Task` (carries `StepIDs`, its steps in order) / `StepRecord` (a step row, keyed by its own id) types; the `StepSpec` / `TaskSpec` plan-time descriptions; the `Step` interface (`Kind()` + `Execute(ctx) StepResult`); and `StepResult` (`Ok` / `Fail`). |
 | `tasks.go` | The `Service` — the dependency anything that initiates a task takes (it holds the `Store`, so callers don't thread it through). One `CreateX(ctx, in)` method per kind builds the step `StepSpec`s and hands them to `Store.Create`; `Get` reads a task's status back. |
 | `store.go` | The `Store` interface and `PgStore` — `Create` write-ahead-records the task + its steps; the claim/step-transition methods drive the write-ahead log. The `Service` wraps it for callers; the worker uses it directly. |
-| `mem.go` | `MemStore` — an in-memory `Store` (real type, not a test fake) mirroring `core.MemBackend`, with a `Seed` helper for preloading states `Create` can't produce. The task and API unit tests run against it; the real SQL is the e2e suite's job. |
+| `mem.go` | `MemStore` — an in-memory `Store` (real type, not a test fake) mirroring `core.MemBackend`, with a `Seed` helper for preloading states `Create` can't produce. The task and API unit tests run against it; the real SQL is the integration suite's job. |
 | `worker.go` | The `Worker`: a claim loop that runs up to `MaxConcurrent` tasks at once, each in its own goroutine, driving it through the resume-safe step loop (the registry hands it steps already wired with their deps). |
 | `registry.go` | The `Registry` (kind → `Builder`, which decodes a persisted step's args and binds the registry's `Deps` into a typed `Step`), `DefaultRegistry` (noop only), and `ProductionRegistry(deps)` (the full catalog, deps-wired). |
 | `deps.go` | The dependency *ports* the steps use: `StateStore`, `RecipeStore`, and the `Deps` bundle the registry binds into each step. |
@@ -289,6 +289,6 @@ against it too rather than carrying their own task-store fake. The tests cover
 What is **not** unit-tested here is `PgStore`'s SQL (the claim/lease query, the
 transactional `Create` writes, the `step_ids`-ordered `Steps` query) and
 `PgBackend`'s `Ensure*` SQL — there is no DB-backed Go harness in the repo today
-(the same gap as the rest of `PgBackend`). That SQL is exercised by the e2e suite;
+(the same gap as the rest of `PgBackend`). That SQL is exercised by the integration suite;
 the `0002` schema + the new `uuid[]` / `array_position` queries were validated by
 applying the migrations against YugabyteDB directly.

@@ -93,8 +93,9 @@ environments instead of provisioning cloud VMs over SSH.
   met by adding an app or a task, not by reworking the core.
 
 ### Non-goals (for now)
-- Not replacing Rust unit tests (`cargo test`), the Rust storage e2e framework
-  (`test/e2e/storage`), or the Go controller tests (`controller/…_test.go`).
+- Not replacing Rust unit tests (`cargo test`), the Rust compute integration
+  framework (`test/integration/compute`), or the Go controller tests
+  (`controller/…_test.go`).
   Those stay where they are and keep running in CI. This framework is the
   **system-level** tier above them (functional-against-a-real-stack, stress,
   perf) and the **single reporting destination** they can all publish into.
@@ -114,7 +115,7 @@ The pyramid, top to bottom:
 | Layer | Status | Covers |
 |---|---|---|
 | **System tier** (Go framework, against real stacks) | **this framework** | functional · stress/chaos · perf |
-| **Integration** | already exists | Rust e2e (`test/e2e/*`), controller Go integration, pg_regress |
+| **Integration** | already exists | Rust integration suite (`test/integration/*`), controller Go integration, pg_regress |
 | **Unit** | already exists | `cargo test` (Rust) · `go test` (Go) |
 
 All tiers publish results into **one report portal**.
@@ -290,7 +291,7 @@ rest of the repo, evolves at its own pace, and can be lifted into its own repo
 at any point.
 
 Tests and framework in one tree = the "one place devs work" requirement. The
-existing `test/e2e/` (Rust) and `controller/…_test.go` are untouched neighbors.
+existing `test/integration/` (Rust) and `controller/…_test.go` are untouched neighbors.
 
 ### 4.2 Core abstractions (conceptual)
 - **Test** — the atomic unit. Declares: its **category** (functional/stress/perf),
@@ -711,7 +712,7 @@ the *components*, not VMs. The chaos engine (only on `EXCLUSIVE` environments, s
 one test's fault never disturbs another) offers actions such as:
 - **Component kill/restart** — delete/restart pageserver, safekeeper, compute,
   or controller pods; assert recovery + no data loss (WAL replay, GetPage
-  correctness after restart — the Rust e2e framework already scans
+  correctness after restart — the Rust integration framework already scans
   `pageserver.log` for corruption markers; we reuse that idea as an assertion).
 - **Network partition / slowdown** — sever or delay compute↔pageserver,
   pageserver↔YB, safekeeper↔YB links.
@@ -751,7 +752,7 @@ Workload drivers (pluggable):
   candidates to fold in as drivers.)
 - **pg_regress** — run the stock Postgres regression suite against a live
   endpoint for correctness (the repo already does this locally via
-  `test/e2e/storage/pg_regress.sh`).
+  `test/integration/compute/pg_regress.sh`).
 - **Stress sample apps** — the existing yb-stress-sample-apps fleet
   (`SqlDataLoad`, `CassandraKeyValue`, `SqlInserts`, and the other proven
   workloads from the stress framework), wrapped in a client-pod image and a
@@ -1175,7 +1176,7 @@ tab's whole reason to exist.
   `scripts/db/*.sql`).
 - **Env-creation & control-plane API:** yb-amp `controller/` (OpenAPI spec +
   oapi-codegen client), `deploy/up.sh` + Helm charts, `deploy/smoke-test.sh`,
-  `control_plane/` `yb_light_local`, `test/e2e/`.
+  `control_plane/` `yb_light_local`, `test/integration/`.
 - **Perf/benchbase:** yb-amp `benchmark/scripts/` (`tpcc-run.sh`, `_env.sh`,
   `_metrics.sh`), `pageserver/pagebench`.
 - **Test taxonomy & quality dimensions:** YugabyteDB `coverage_process`.

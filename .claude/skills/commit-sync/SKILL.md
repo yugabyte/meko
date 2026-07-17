@@ -120,7 +120,7 @@ Where tests live in this repo:
 |---|---|
 | Unit | `#[cfg(test)]` modules inside the crate (e.g. `libs/ysql_client/src/lib.rs`) |
 | Integration (Rust) | `<crate>/tests/` (e.g. `compute_tools/tests/`, `safekeeper/tests/`) |
-| End-to-end (cluster) | `test/e2e/compute/fast/` and `test/e2e/compute/slow/` (`*.sh` / `*.sql`, driven by `test/e2e/compute/run.sh`) |
+| End-to-end (cluster) | `test/integration/compute/fast/` and `test/integration/compute/slow/` (`*.sh` / `*.sql`, driven by `test/integration/compute/run.sh`) |
 | Python harness | `old_neon_test_runner/` |
 
 Triggers that usually mean "add/extend a test":
@@ -132,9 +132,9 @@ Triggers that usually mean "add/extend a test":
   the new behavior, not the old).
 
 Don't add ceremonial tests for pure refactors that existing coverage already
-exercises, or for changes that only an end-to-end run can meaningfully cover —
-in that case lean on `test/e2e/compute/` and **say so** (run it, cite the result; see
-the `e2e-before-corruption-claim` skill for the corruption-class rule). If a
+exercises, or for changes that only an integration run can meaningfully cover —
+in that case lean on `test/integration/compute/` and **say so** (run it, cite the result; see
+the `integration-before-corruption-claim` skill for the corruption-class rule). If a
 change genuinely can't be unit-tested, note why rather than forcing a hollow
 test.
 
@@ -287,7 +287,7 @@ Examples:
 [#34] compute: walreceiver: fix torn WAL write on kill -9
 [#33] compute: pageserver: skip zero-page writes to YB
 compute: materialiser: pace background image compaction
-compute: e2e: add E2E_STOP_ON_FAIL to halt at the first failing iteration
+compute: integration: add INTEGRATION_STOP_ON_FAIL to halt at the first failing iteration
 control_plane: yb_light_local: retry HTTP bind on EADDRINUSE during recycle
 pm: migrate task tracker to GitHub issues
 docs: clarify the YB idempotency contract
@@ -341,7 +341,7 @@ minor." If you can't categorize the skip, default to checking.
   true); comment/typo/whitespace; dependency bump that doesn't change documented
   behavior; build/CI plumbing that doesn't change deployed architecture.
 - **Tests:** pure refactor with unchanged behavior already under test;
-  comment/formatting/dep-bump; a change only an e2e run can cover (then run e2e
+  comment/formatting/dep-bump; a change only an integration run can cover (then run integration
   instead and cite it).
 - **Tools:** the change doesn't alter any schema, on-disk layout, key encoding,
   wire format, or CLI surface a tool reads.

@@ -4141,7 +4141,7 @@ mod tests {
     /// `RelationAlreadyExists` on the first CREATE in (X', X];
     /// `put_rel_creation` returns early when the rel is already in
     /// the keyspace to keep replay safe over this window. See the
-    /// e2e `restart_wal_replay` after `restart_wal_replay_yb`
+    /// integration `restart_wal_replay` after `restart_wal_replay_yb`
     /// in `run.sh all` for the end-to-end repro.
     #[tokio::test]
     async fn consistent_lsn_lag_under_throttle_is_expected() {

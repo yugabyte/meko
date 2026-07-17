@@ -461,10 +461,10 @@ impl Manager {
             let branch_id = self.tli.branch_id;
             self.cfile_save_task = Some(tokio::spawn(
                 async move {
-                    // Simulates the YB write stalling under load (e2e
+                    // Simulates the YB write stalling under load (integration
                     // sk_cfile_stall); configure with return(<millis>).
                     utils::failpoint_support::sleep_millis_async!("sk-cfile-save");
-                    // Simulates the save FAILING (e2e sk_cfile_save_retry_storm),
+                    // Simulates the save FAILING (integration sk_cfile_save_retry_storm),
                     // to exercise the failure-retry gate without a real YB
                     // outage; configure with `return`.
                     fail::fail_point!("sk-cfile-save-fail", |_| {

@@ -155,7 +155,7 @@ fn bucket_in_list() -> String {
 ///   true`. Carries the hot-path WAL chunk INSERTs and the
 ///   `control_file::create_new` INSERT (the latter needs the GUC so
 ///   the YsqlClient retry loop replays cleanly under
-///   transient/connection-drop errors; without it, the e2e
+///   transient/connection-drop errors; without it, the integration
 ///   `restart_wal_replay` scenario regresses with a PS-side "relation
 ///   already exists" panic at WAL ingest).
 /// - [`Self::read_client`] — hot-path chunk SELECTs for the WAL sender
@@ -248,7 +248,7 @@ impl YbWalConn {
         //   YsqlClient retry-on-transient/connection-drop loop can't
         //   prove the in-flight write didn't already commit, and a
         //   blind replay fails with duplicate-key — empirically this
-        //   breaks the `restart_wal_replay` e2e scenario with a
+        //   breaks the `restart_wal_replay` integration scenario with a
         //   downstream pageserver "relation already exists" panic.
         // - Read lane (no GUC): exclusively the segment reader.
         // - System lane (no GUC): startup SELECTs (`load_write_lsn` /

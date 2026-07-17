@@ -20,7 +20,7 @@ type DockerConfig struct {
 	// pageserver/safekeeper by container name (DNS) — no published-port juggling.
 	Network string
 	// ExternalHost is the host a *client* uses to reach a published port (the
-	// compute). For a host-run e2e this is 127.0.0.1.
+	// compute). For a host-run integration this is 127.0.0.1.
 	ExternalHost string
 	// SupervisorPath, when set, bind-mounts a host supervisor.py over the
 	// endpoint image's bundled one. Dev-only affordance for when the image

@@ -15,7 +15,7 @@ import (
 // lease (a task that is pending, or running with an expired lease, is claimable),
 // and the step/task status transitions the worker drives. It lets the framework
 // (and any package that creates tasks) be tested without a database; the real
-// PgStore SQL is exercised by the e2e suite. It mirrors core.MemBackend, the
+// PgStore SQL is exercised by the integration suite. It mirrors core.MemBackend, the
 // in-memory core.Backend the API tests use. Safe for concurrent use.
 type MemStore struct {
 	mu        sync.Mutex

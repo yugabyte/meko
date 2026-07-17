@@ -275,7 +275,7 @@ controller-bundle-build: postgres-headers-install-v18 cargo-target-dir
 # controller-only bundle: just the Go controller, no storage_controller. Needs no Rust
 # toolchain, no Postgres headers, and no vendor/postgres-v18 submodule — so it
 # builds in environments where the full bundle can't. Pair it with the deploy/controller
-# image run with AMP_STORAGE_CONTROLLER=false. Used by the docker e2e (controller/tasks).
+# image run with AMP_STORAGE_CONTROLLER=false. Used by the docker integration (controller/tasks).
 .PHONY: controller-bundle-only
 controller-bundle-only:
 	+@echo "Bundling controller (Go only, no storage controller) -> $(CONTROLLER_BUNDLE_DIR)"

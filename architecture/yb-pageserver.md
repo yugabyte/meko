@@ -477,7 +477,7 @@ corruption: `put_rel_extend` no-opped, the rel-size cache pinned at
 the replay-start size, and the gap-fill zero-filled
 `[pinned_size, blkno)` on every record, stamping all-zero page images
 over live tail blocks. The regression test is
-`test/e2e/compute/slow/restart_relsize_zero_shadow.rs` (SIGKILL
+`test/integration/compute/slow/restart_relsize_zero_shadow.rs` (SIGKILL
 + replay + branch-wide zero-image shadowing assertions).
 
 **Replay windows are quarantined (#240).** Whenever a walreceiver
@@ -540,7 +540,7 @@ the first size write. `get_rel_size_in_reldir` therefore treats a
 walreceiver on `could not find data for key`. MAIN-fork size reads still
 error on a missing key. FSM/VM are advisory (VACUUM-rebuilt), so an
 imprecise post-recovery size is harmless. Exercised by the
-`torn_wal_write` e2e scenario (#36).
+`torn_wal_write` integration scenario (#36).
 
 Default knobs (configurable via `pageserver.toml` under the
 `yb_page_writer` block):
@@ -557,7 +557,7 @@ Default knobs (configurable via `pageserver.toml` under the
 | `materialize_queue_capacity` | 2000 | Bounded mpsc depth; the write-side dispatch uses **blocking** send (backpressures walreceiver); the read-side dispatch uses `try_send` (drops on overflow — the next read of the same key re-evaluates) |
 | `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes`. Whole cold keys are evicted in LRU order when crossed; keys with unflushed (pre-flush) rows are pinned regardless |
 | `ingest_parallelism` | 4 | Workers used to apply a batch (`PageWriter::put_serialized`): when `>1`, entries are partitioned by page key and each worker deserializes/builds/pushes its keys concurrently. `1` = serial. Same key always lands on one worker (chain order + materialiser tally race-free); `applied_lsn` advances once after the barrier, so a partially-applied batch is never reader-visible |
-| `ingest_parallelism_min_batch` | 256 | Minimum batch size (entries) before `ingest_parallelism > 1` engages; smaller batches apply serially (the `spawn_blocking` hand-off isn't worth it). Set to `1` to force the parallel path on every batch (used by tests / e2e) |
+| `ingest_parallelism_min_batch` | 256 | Minimum batch size (entries) before `ingest_parallelism > 1` engages; smaller batches apply serially (the `spawn_blocking` hand-off isn't worth it). Set to `1` to force the parallel path on every batch (used by tests / integration) |
 
 ## Backpressure
 
@@ -622,7 +622,7 @@ unflushed row is strictly above it, and a present key's top row is never
 selectively removed, so a present key's chain is exactly the complete
 suffix `[min_cached, head]`. Note this *permits* a safe historical-LSN
 install (when the suffix above it is fully cached), preserving the cache
-speedup for static/branch readers. The `direct_getpage` e2e scenario
+speedup for static/branch readers. The `direct_getpage` integration scenario
 reproduces the original lost-update deterministically under tiny
 cache/chain limits.
 
@@ -791,15 +791,15 @@ Per-phase task records live under [`../tasks/`](../tasks/). See
 > `read_chain_durable` cache-miss path, the basebackup-cache
 > invalidation on LSN advance, and the generation-fence shutdown.
 > Backfill is tracked alongside the relevant task files. The
-> end-to-end suite (`test/e2e/compute/`, a Rust harness — see
-> [`test/e2e/compute/README.md`](../test/e2e/compute/README.md)) is the cross-seam
+> integration suite (`test/integration/compute/`, a Rust harness — see
+> [`test/integration/compute/README.md`](../test/integration/compute/README.md)) is the cross-seam
 > backstop: it runs scenario tests + golden `.sql` workloads against a
 > real `yb_light_local` + YB and scans the pageserver log for corruption
 > markers after every test. The `.sql` workloads diff their result sets
 > against checked-in `.out` goldens (#19), so silently-wrong reads
 > no longer pass as long as no statement errors out. Run it with
-> `test/e2e/compute/run.sh fast|slow|all` before claiming a corruption-class fix
-> (the `e2e-before-corruption-claim` skill enforces this).
+> `test/integration/compute/run.sh fast|slow|all` before claiming a corruption-class fix
+> (the `integration-before-corruption-claim` skill enforces this).
 
 ## Code anchors
 

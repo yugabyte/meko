@@ -150,7 +150,7 @@ struct InitCmdArgs {
     /// config: the shared `[*.yb]` block consumed by the storage controller
     /// (`--yb-config`), pageserver (`yb_storage_conn`), safekeeper
     /// (`yb_storage_conn`) and endpoint_storage all point at it. Defaults to
-    /// `yb_storage`. Lets callers (e.g. the e2e harness)
+    /// `yb_storage`. Lets callers (e.g. the integration harness)
     /// target an ephemeral per-run database without templating a base TOML.
     /// Ignored when `--config` is given.
     #[clap(long)]
@@ -1389,7 +1389,7 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
             )
             .await?;
 
-            // NB: the e2e harness extracts the branch id from this exact line
+            // NB: the integration harness extracts the branch id from this exact line
             // (it finds the line containing "successfully created" and takes
             // the 2nd whitespace-separated token as the branch id). The
             // pageserver that serves it comes up at `endpoint create`.
@@ -1553,7 +1553,7 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
 }
 
 /// Handle the `branch` subcommands, the branch_id-native command surface the
-/// e2e harness drives. These reshape onto the existing root-create / fork /
+/// integration harness drives. These reshape onto the existing root-create / fork /
 /// drop logic:
 ///
 /// * `branch create` with no `--ancestor-branch-name` creates a ROOT branch

@@ -2,7 +2,7 @@
 #
 # yb-local.sh — start/stop a local single-node YugabyteDB for amp development.
 #
-# amp's e2e harness (test/e2e/compute/run.sh) and the default dev cluster expect
+# amp's integration harness (test/integration/compute/run.sh) and the default dev cluster expect
 # a YugabyteDB reachable at 127.0.0.1:5433 / db `yb_storage`. This runs the same
 # pinned image CI uses (see .github/workflows/pr-build.yml), so local and CI
 # exercise the identical YB build — one command, no manual tarball install.

@@ -278,8 +278,8 @@ YB universe). Pod contract unchanged (still just `GENERATION`/`NODE_ID` env).
   env is fixed from the last deploy; a pod self-restart reuses it (idempotent
   re-attach).
 - **Testing.** Extend `internal/storagecontroller/integration_test.go` (fake SC)
-  for the new client methods; run the amp-on-Docker e2e (`#105`) and, if touched,
-  `test/e2e/compute`.
+  for the new client methods; run the amp-on-Docker integration (`#105`) and, if touched,
+  `test/integration/compute`.
 
 ## Suggested sequencing
 
@@ -289,7 +289,7 @@ YB universe). Pod contract unchanged (still just `GENERATION`/`NODE_ID` env).
    injection; decouple `branch register` behind its own flag.
 4. Strip `sc_register_and_attach` from `supervisor.py`.
 5. (If needed) the SC debug_assert softening.
-6. e2e on Docker; then k8s.
+6. integration on Docker; then k8s.
 7. Later, Step 2: collapse to in-process.
 
 ## Data-plane constraints for pre-warm (investigated 2026-07-02)

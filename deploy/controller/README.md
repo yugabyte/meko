@@ -172,7 +172,7 @@ docker run -d --name controller --hostname controller --network ybamp \
 ```
 
 `--user root` is the dev-simple way to give controller access to the mounted socket; the
-end-to-end driver `test/e2e/control_plane/run-controller.sh` wires all of this up. The Kubernetes
+integration driver `test/integration/control_plane/run-controller.sh` wires all of this up. The Kubernetes
 driver (`AMP_DEPLOY_DRIVER=kubernetes`) uses Helm + the cluster API instead and
 needs neither the socket nor this CLI.
 
@@ -194,7 +194,7 @@ the storage-controller knobs the image cares about:
 | `AMP_DEPLOY_NETWORK` | _(empty)_ | docker: shared network for controller + the endpoints it launches |
 | `AMP_DEPLOY_ENDPOINT_IMAGE` | `yb-light/neon-endpoint:dev` | docker: endpoint image to launch |
 | `AMP_DEPLOY_EXTERNAL_HOST` | `127.0.0.1` | docker: host a client uses to reach a published compute port |
-| `AMP_DEPLOY_BOOTSTRAP` | _(unset → false)_ | docker: dev/e2e — initdb the recorded tenant/timeline on deploy (no create-database flow yet) |
+| `AMP_DEPLOY_BOOTSTRAP` | _(unset → false)_ | docker: dev/integration — initdb the recorded tenant/timeline on deploy (no create-database flow yet) |
 | `AMP_DEPLOY_YB_HOST_PORTS` | _(required if `AMP_DEPLOY`)_ | how an endpoint reaches the backing YB storage universe |
 | `AMP_DEPLOY_YB_DBNAME` | `yb_storage` | the storage database the endpoints use |
 | `AMP_DEPLOY_STORAGE_CLASS` | _(empty)_ | k8s: storage class for the endpoint `/data` PVC (EBS/PD); empty ⇒ ephemeral `emptyDir` |

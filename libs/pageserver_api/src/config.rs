@@ -474,7 +474,7 @@ pub struct YbPageWriterConfig {
     /// fans the apply across workers. Below this the spawn_blocking hand-off
     /// costs more than the parallel apply saves, so the batch is applied
     /// serially. Not scaled by `scale_factor`. Default 256. (Set to 1 to
-    /// force the parallel path on every batch — used by tests / e2e.)
+    /// force the parallel path on every batch — used by tests / integration.)
     pub ingest_parallelism_min_batch: usize,
 }
 

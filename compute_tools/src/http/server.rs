@@ -176,7 +176,7 @@ impl Server {
     async fn listener(&self) -> Result<TcpListener> {
         let addr = SocketAddr::new(self.ip(), self.port());
         // Retry the bind for a bounded window instead of failing on the
-        // first `EADDRINUSE`. During a fast compute recycle (e.g. the e2e
+        // first `EADDRINUSE`. During a fast compute recycle (e.g. the integration
         // harness's `endpoint stop`/`endpoint start`, or a `start` retry),
         // a predecessor compute_ctl may still be releasing this port when we
         // come up; without the retry we panic and the whole startup aborts,

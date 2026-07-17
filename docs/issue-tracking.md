@@ -30,7 +30,7 @@ Inspect the live set with `gh label list` and
 
 | Label | Commit `<area>` token | Covers |
 |---|---|---|
-| `compute` | `compute` | The amp compute: Postgres, extensions including the `yb_amp` extension, and `compute_ctl`; pageserver / safekeeper (the compute's storage connector to YugabyteDB — YB is the durable storage layer); the page store, WAL durability, read/write paths, page-service wire protocol, e2e harness. |
+| `compute` | `compute` | The amp compute: Postgres, extensions including the `yb_amp` extension, and `compute_ctl`; pageserver / safekeeper (the compute's storage connector to YugabyteDB — YB is the durable storage layer); the page store, WAL durability, read/write paths, page-service wire protocol, integration harness. |
 | `control plane` | `control_plane` | `storage_controller` orchestration, `yb_light_local` (local-dev orchestrator, CLI, child-process management), endpoint/branch lifecycle. |
 
 A cross-cutting issue may carry both labels. The repo's stock labels

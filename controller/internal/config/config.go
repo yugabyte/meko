@@ -201,7 +201,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.Network, "deploy-network", env("AMP_DEPLOY_NETWORK", ""), "docker: shared network for the controller + its endpoints (so they reach each other by name)")
 	fs.StringVar(&d.ExternalHost, "deploy-external-host", env("AMP_DEPLOY_EXTERNAL_HOST", "127.0.0.1"), "docker: host a client uses to reach a published compute port")
 	fs.StringVar(&d.SupervisorPath, "deploy-supervisor-path", env("AMP_DEPLOY_SUPERVISOR_PATH", ""), "docker: dev-only host path to supervisor.py to bind-mount into endpoints (empty = bundled)")
-	fs.BoolVar(&d.Bootstrap, "deploy-bootstrap", envBool("AMP_DEPLOY_BOOTSTRAP", false), "dev/e2e — initdb the recorded tenant/timeline on endpoint deploy instead of attaching an existing one (the recipe model; no separate create-database flow yet); honored by both drivers")
+	fs.BoolVar(&d.Bootstrap, "deploy-bootstrap", envBool("AMP_DEPLOY_BOOTSTRAP", false), "dev/integration — initdb the recorded tenant/timeline on endpoint deploy instead of attaching an existing one (the recipe model; no separate create-database flow yet); honored by both drivers")
 	fs.StringVar(&d.StorageControllerURL, "deploy-storage-controller-url", env("AMP_DEPLOY_STORAGE_CONTROLLER_URL", ""), "URL deployed endpoints use to reach the managed storage controller; empty = endpoint runs storage-controller-free (Kubernetes: typically the controller's in-cluster Service URL, e.g. http://amp-controller.<ns>.svc.cluster.local:50051)")
 
 	if err := fs.Parse(args); err != nil {

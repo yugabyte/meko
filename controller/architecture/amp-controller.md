@@ -61,7 +61,7 @@ instances; amp-controller creates, configures, tracks, and retires them.
 3. **Multi-runtime behind a provisioning interface.** Runtime-specific endpoint
    provisioning lives behind the `deploy.Deployer` interface (§5.6), never in the
    core. The first *implemented* runtime is **Docker** (one container per endpoint —
-   used by local/dev and the e2e); **Kubernetes** (one pod per endpoint) is the
+   used by local/dev and the integration); **Kubernetes** (one pod per endpoint) is the
    production target and the next implementation. The abstractions (deployer
    interface, endpoint spec, task framework) are designed so a new runtime — VMs,
    another cloud — is a new `Deployer`, not a change to the model.
@@ -379,7 +379,7 @@ this interface, not a change to the workflow.
   a juggled host port. Only the compute's Postgres port is published to the host, and
   the controller returns that `host:port` as the endpoint's address; endpoints reach
   the YBDB universe via the host gateway. This is the runtime exercised by the
-  controller-on-Docker e2e (`test/e2e/control_plane/run-controller.sh`).
+  controller-on-Docker integration (`test/integration/control_plane/run-controller.sh`).
 - **Kubernetes (next).** A `K8sDeployer` implements the same interface against the
   cluster API — a pod per endpoint, a Service for the address — reusing the
   `deploy/helm/yb-light-endpoint` chart. VMs (via ybops) follow the same shape.
