@@ -27,6 +27,13 @@ name: CI
 # git insteadOf rewrite (the main-repo checkout keeps the default token).
 # Using a GitHub App rather than a personal PAT keeps CI working regardless
 # of any individual's org membership.
+#
+# NOTE: GitHub withholds Actions secrets (incl. AGENTK_PRIVATE_KEY) from
+# Dependabot-triggered pull_request runs, so the App-token / submodule fetch
+# can't work there. The compute + integration jobs therefore skip for
+# Dependabot PRs (`github.actor != 'dependabot[bot]'`) — those bumps only
+# touch workflow/config, don't need a private-submodule compute build, and
+# the actions get exercised by the compute jobs on the next regular PR.
 
 # The push trigger exists to populate the shared cache scope: caches written
 # by PR runs are only visible to that PR, while caches written on main are
@@ -63,7 +70,7 @@ jobs:
       # paths-filter uses the GitHub API for pull_request events, but for
       # push events it diffs locally and needs the repo checked out. On a
       # push to main it detects changes against the commit before the push.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -96,7 +103,7 @@ jobs:
   compute:
     name: Compute — build, lint & unit tests
     needs: changes
-    if: needs.changes.outputs.compute == 'true'
+    if: needs.changes.outputs.compute == 'true' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -111,7 +118,7 @@ jobs:
             /usr/local/.ghcup /usr/local/share/boost
           df -h /
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Mint a short-lived, read-only installation token for amp-postgres
       # alone from the yb-agentk-dev GitHub App (see the NOTE at the top).
@@ -205,7 +212,7 @@ jobs:
   integration:
     name: Compute — integration tests
     needs: changes
-    if: needs.changes.outputs.compute == 'true'
+    if: needs.changes.outputs.compute == 'true' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -219,7 +226,7 @@ jobs:
             /usr/local/.ghcup /usr/local/share/boost
           df -h /
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Mint a short-lived, read-only installation token for amp-postgres
       # alone from the yb-agentk-dev GitHub App (see the NOTE at the top).
@@ -333,9 +340,9 @@ jobs:
       run:
         working-directory: controller
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: controller/go.mod
           cache-dependency-path: controller/go.sum
@@ -369,9 +376,9 @@ jobs:
       run:
         working-directory: amp_ui
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
