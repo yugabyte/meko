@@ -142,22 +142,29 @@ data:
 `, name, namespace, ManagedByLabel, ManagedByValue, dockerConfigB64)
 }
 
+// registryAuth is one registry's credentials in a .dockerconfigjson.
+type registryAuth struct {
+	User     string
+	Password string
+}
+
 // dockerConfigJSONB64 builds the base64 .dockerconfigjson body a docker-registry
-// Secret carries, from an ECR registry host and a login token (the
-// `aws ecr get-login-password` output). Mirrors what
-// `kubectl create secret docker-registry` writes (deploy/ecr-creds.sh).
-func dockerConfigJSONB64(registry, token string) string {
-	auth := base64.StdEncoding.EncodeToString([]byte("AWS:" + token))
-	cfg := map[string]any{
-		"auths": map[string]any{
-			registry: map[string]any{
-				"username": "AWS",
-				"password": token,
-				"auth":     auth,
-			},
-		},
+// Secret carries, from per-registry credentials (ECR: user "AWS" + the
+// `aws ecr get-login-password` output; quay: a robot account user+token).
+// Mirrors what `kubectl create secret docker-registry` writes
+// (deploy/ecr-creds.sh) but supports several registries in one secret, so an
+// env pulling the controller from quay and other images from ECR needs only
+// the one imagePullSecrets entry the chart already references.
+func dockerConfigJSONB64(auths map[string]registryAuth) string {
+	entries := map[string]any{}
+	for registry, a := range auths {
+		entries[registry] = map[string]any{
+			"username": a.User,
+			"password": a.Password,
+			"auth":     base64.StdEncoding.EncodeToString([]byte(a.User + ":" + a.Password)),
+		}
 	}
-	b, _ := json.Marshal(cfg)
+	b, _ := json.Marshal(map[string]any{"auths": entries})
 	return base64.StdEncoding.EncodeToString(b)
 }
 

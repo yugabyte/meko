@@ -66,9 +66,26 @@ const (
 	DefaultHelmRelease         = "yb-amp-controller"
 	DefaultDBName              = "yb_storage"
 	DefaultECRRegistry         = "454529406029.dkr.ecr.us-west-2.amazonaws.com"
-	DefaultRegion              = "us-west-2"
-	DefaultControllerImage     = "amp/controller:tailnet-mig0010"
-	DefaultEndpointImage       = "amp/endpoint:phase1-20260703-154251"
+	// Registry flavors for env.ampstack.registry — where bare image refs
+	// resolve and which auth lands in the pull secret. Quay is the default:
+	// release and custom builds publish to quay.io/yugabyte/amp-*.
+	RegistryQuay = "quay"
+	RegistryECR  = "ecr"
+	RegistryGHCR = "ghcr"
+	// Flat amp repos under the quay/ghcr org namespaces.
+	QuayNamespace = "quay.io/yugabyte"
+	GHCRRegistry  = "ghcr.io"
+	GHCRNamespace = "ghcr.io/yugabyte"
+	// QuayRegistry is the quay host the amp release/custom images live under
+	// (quay.io/yugabyte/amp-{controller,pg,endpoint}).
+	QuayRegistry           = "quay.io"
+	DefaultRegion          = "us-west-2"
+	DefaultControllerImage = "amp/controller:tailnet-mig0010"
+	DefaultEndpointImage   = "amp/endpoint:phase1-20260703-154251"
+	// Default pins for the flat-named registries (quay/ghcr). Bumped as new
+	// builds are published; custom-4f1ca53 is the first verified quay build.
+	DefaultQuayControllerImage = "amp-controller:custom-4f1ca53"
+	DefaultQuayEndpointImage   = "amp-endpoint:custom-4f1ca53"
 	DefaultEndpointServiceType = "ClusterIP"
 	DefaultControllerExpose    = "none"
 	DefaultBackingUser         = "yugabyte"
@@ -170,12 +187,28 @@ type Config struct {
 	MCPEnabled        bool
 	UIEnabled         bool
 
-	ECRRegistry    string // registry host for the pull secret; "" → DefaultECRRegistry
+	// Registry picks where bare image refs resolve and which auth the pull
+	// secret carries: RegistryQuay (default), RegistryECR or RegistryGHCR.
+	Registry string
+
+	ECRRegistry    string // ECR host (used when Registry is "ecr" or a ref points there); "" → DefaultECRRegistry
 	Region         string
 	PullSecretName string
 	// PullSecretDockerConfigB64, when set, is used as the pull secret's
 	// .dockerconfigjson verbatim (skips the aws ecr get-login-password path).
 	PullSecretDockerConfigB64 string
+	// GHCRUser/GHCRToken are GHCR pull credentials. GHCRToken empty falls
+	// back to the local `gh auth token` (the gh CLI's stored login) when a
+	// ghcr image needs pulling; GHCRUser defaults to "oauth" (ghcr accepts
+	// any username with a valid token).
+	GHCRUser  string
+	GHCRToken string
+
+	// QuayUser/QuayToken are quay.io robot credentials, added to the pull
+	// secret alongside the minted ECR entry so envs can pull the
+	// quay.io/yugabyte/amp-* images (custom/release builds). Empty = no quay auth.
+	QuayUser  string
+	QuayToken string
 
 	ControllerService   string
 	ControllerContainer string
@@ -230,6 +263,7 @@ type App struct {
 
 	// Injected in tests / by composition; defaults wired in New.
 	ecrToken  func(ctx context.Context, registry, region string) (string, error)
+	ghcrToken func(ctx context.Context) (string, error)
 	newClient func(url string) *controller.Client
 	waitReady func(ctx context.Context, cl *controller.Client, timeout time.Duration) error
 	ensureDB  func(ctx context.Context, ci pg.ConnInfo, dbName string) error // external-backing yb_storage create
@@ -259,11 +293,17 @@ func FromConfig(get Getter) Config {
 		}
 		return get.GetString("env.ampstack."+imageKey, def)
 	}
+	registry := get.GetString("env.ampstack.registry", RegistryQuay)
+	defController, defEndpoint := DefaultQuayControllerImage, DefaultQuayEndpointImage
+	if registry == RegistryECR {
+		defController, defEndpoint = DefaultControllerImage, DefaultEndpointImage
+	}
 	return Config{
 		Context:         get.GetString("env.ampstack.context", ""),
 		Namespace:       get.GetString("env.ampstack.namespace", ""),
-		ControllerImage: image("controller", "controller_image", DefaultControllerImage),
-		EndpointImage:   image("endpoint", "endpoint_image", DefaultEndpointImage),
+		Registry:        registry,
+		ControllerImage: image("controller", "controller_image", defController),
+		EndpointImage:   image("endpoint", "endpoint_image", defEndpoint),
 		MCPImage:        image("mcp", "mcp_image", ""),
 		UIImage:         image("ui", "ui_image", ""),
 		ControllerChart: get.GetString("env.ampstack.controller_chart", ""),
@@ -288,6 +328,10 @@ func FromConfig(get Getter) Config {
 		Region:                    get.GetString("env.ampstack.region", DefaultRegion),
 		PullSecretName:            get.GetString("env.ampstack.pull_secret_name", DefaultPullSecretName),
 		PullSecretDockerConfigB64: get.GetString("env.ampstack.pull_secret_b64", ""),
+		QuayUser:                  get.GetString("env.ampstack.quay_user", ""),
+		QuayToken:                 get.GetString("env.ampstack.quay_token", ""),
+		GHCRUser:                  get.GetString("env.ampstack.ghcr_user", ""),
+		GHCRToken:                 get.GetString("env.ampstack.ghcr_token", ""),
 		ControllerService:         get.GetString("env.ampstack.controller_service", DefaultControllerService),
 		ControllerContainer:       get.GetString("env.ampstack.controller_container", DefaultControllerContainer),
 		ControllerName:            get.GetString("env.ampstack.controller_name", DefaultControllerName),
@@ -321,6 +365,7 @@ func New(cfg Config) *App {
 		helmRun:   k8s.OSRun,
 		logf:      log.Printf,
 		ecrToken:  defaultECRToken,
+		ghcrToken: defaultGHCRToken,
 		newClient: func(url string) *controller.Client { return controller.New(url) },
 		ensureDB:  defaultEnsureExternalDB,
 	}
@@ -407,6 +452,12 @@ func (a *App) Kube() *k8s.Kubectl { return a.kube }
 // WithHelmRunner overrides the runner used for `helm template`.
 func (a *App) WithHelmRunner(r k8s.Runner) *App { a.helmRun = r; return a }
 
+// WithGHCRToken overrides the ghcr token resolver (default: `gh auth token`).
+func (a *App) WithGHCRToken(f func(ctx context.Context) (string, error)) *App {
+	a.ghcrToken = f
+	return a
+}
+
 // WithECRToken overrides the ECR login-token resolver.
 func (a *App) WithECRToken(f func(ctx context.Context, registry, region string) (string, error)) *App {
 	a.ecrToken = f
@@ -444,22 +495,59 @@ func (a *App) log(format string, args ...any) {
 // Namespace is the stack's namespace.
 func (a *App) Namespace() string { return a.cfg.Namespace }
 
+// registryPrefix is where bare image refs resolve, per the Registry knob.
+func (c Config) registryPrefix() string {
+	switch c.Registry {
+	case RegistryECR:
+		return c.ECRRegistry
+	case RegistryGHCR:
+		return GHCRNamespace
+	default:
+		return QuayNamespace
+	}
+}
+
 // Images returns the resolved image refs the stack uses.
 func (a *App) images() map[string]string {
+	prefix := a.cfg.registryPrefix()
 	m := map[string]string{
-		"controller": withRegistry(a.cfg.ControllerImage, a.cfg.ECRRegistry),
-		"endpoint":   withRegistry(a.cfg.EndpointImage, a.cfg.ECRRegistry),
+		"controller": withRegistry(a.cfg.ControllerImage, prefix),
+		"endpoint":   withRegistry(a.cfg.EndpointImage, prefix),
 	}
 	if !a.externalBacking() {
 		m["yugabyted"] = a.cfg.YBImage
 	}
 	if a.cfg.MCPEnabled && a.cfg.MCPImage != "" {
-		m["mcp"] = withRegistry(a.cfg.MCPImage, a.cfg.ECRRegistry)
+		m["mcp"] = withRegistry(a.cfg.MCPImage, prefix)
 	}
 	if a.cfg.UIEnabled && a.cfg.UIImage != "" {
-		m["ui"] = withRegistry(a.cfg.UIImage, a.cfg.ECRRegistry)
+		m["ui"] = withRegistry(a.cfg.UIImage, prefix)
 	}
 	return m
+}
+
+// needsECR reports whether any resolved image the stack deploys lives in the
+// configured ECR registry. An empty ref means the chart default, whose
+// registry is unknown here — counted against the SELECTED registry.
+func (a *App) needsECR() bool {
+	return a.needsRegistry(a.cfg.ECRRegistry+"/", a.cfg.Registry == RegistryECR)
+}
+
+// needsGHCR reports whether any deployed image lives on ghcr.
+func (a *App) needsGHCR() bool {
+	return a.needsRegistry(GHCRRegistry+"/", a.cfg.Registry == RegistryGHCR)
+}
+
+func (a *App) needsRegistry(prefix string, selected bool) bool {
+	for _, img := range a.images() {
+		if img == "" && selected {
+			return true
+		}
+		if img != "" && strings.HasPrefix(img, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // Deploy stands the whole stack up idempotently (mirrors deploy/up.sh,
@@ -629,14 +717,41 @@ func (a *App) portForwardCmd() string {
 func (a *App) ensurePullSecret(ctx context.Context) error {
 	b64 := a.cfg.PullSecretDockerConfigB64
 	if b64 == "" {
-		if a.cfg.ECRRegistry == "" {
+		auths := map[string]registryAuth{}
+		// quay robot creds (quay.io/yugabyte/amp-{controller,pg,endpoint} —
+		// where custom/release builds land) sit alongside the minted ECR
+		// entry in the same secret.
+		if a.cfg.QuayUser != "" && a.cfg.QuayToken != "" {
+			auths[QuayRegistry] = registryAuth{User: a.cfg.QuayUser, Password: a.cfg.QuayToken}
+		}
+		if a.needsGHCR() {
+			token := a.cfg.GHCRToken
+			if token == "" {
+				t, err := a.ghcrToken(ctx)
+				if err != nil {
+					return fmt.Errorf("resolve ghcr token: set env.ampstack.ghcr_token or log in with `gh auth login`: %w", err)
+				}
+				token = t
+			}
+			user := a.cfg.GHCRUser
+			if user == "" {
+				user = "oauth"
+			}
+			auths[GHCRRegistry] = registryAuth{User: user, Password: token}
+		}
+		// ECR is only touched when a deployed image actually lives there: a
+		// pure-quay (or public-image) run needs no AWS identity at all.
+		if a.cfg.ECRRegistry != "" && a.needsECR() {
+			token, err := a.ecrToken(ctx, a.cfg.ECRRegistry, a.cfg.Region)
+			if err != nil {
+				return fmt.Errorf("resolve ECR token: %w", err)
+			}
+			auths[a.cfg.ECRRegistry] = registryAuth{User: "AWS", Password: token}
+		}
+		if len(auths) == 0 {
 			return nil
 		}
-		token, err := a.ecrToken(ctx, a.cfg.ECRRegistry, a.cfg.Region)
-		if err != nil {
-			return fmt.Errorf("resolve ECR token: %w", err)
-		}
-		b64 = dockerConfigJSONB64(a.cfg.ECRRegistry, token)
+		b64 = dockerConfigJSONB64(auths)
 	}
 	if err := a.kube.Apply(ctx, pullSecretManifest(a.cfg.Namespace, a.cfg.PullSecretName, b64)); err != nil {
 		return fmt.Errorf("apply pull secret: %w", err)
@@ -652,8 +767,8 @@ func (a *App) ensurePullSecret(ctx context.Context) error {
 // it re-pulls immediately instead of waiting out ImagePullBackOff. A public-image
 // env (no ecr_registry, no pull_secret_b64) has nothing to refresh and errors.
 func (a *App) RefreshPullSecret(ctx context.Context, roll bool) error {
-	if a.cfg.ECRRegistry == "" && a.cfg.PullSecretDockerConfigB64 == "" {
-		return fmt.Errorf("nothing to refresh: no ecr_registry or pull_secret_b64 configured (amp images are public)")
+	if a.cfg.ECRRegistry == "" && a.cfg.PullSecretDockerConfigB64 == "" && (a.cfg.QuayUser == "" || a.cfg.QuayToken == "") && !a.needsGHCR() {
+		return fmt.Errorf("nothing to refresh: no ecr_registry, quay creds, ghcr, or pull_secret_b64 configured (amp images are public)")
 	}
 	label, err := a.kube.Get(ctx, "namespace", a.cfg.Namespace, "{.metadata.labels."+labelPath(ManagedByLabel)+"}")
 	if err != nil {
@@ -739,8 +854,9 @@ func (a *App) helmTemplate(ctx context.Context) (string, error) {
 // deploy/controller/redeploy.sh uses (namespace-scoped: controller Service
 // stays ClusterIP-only via controller.service.type=none).
 func (a *App) helmTemplateArgs() []string {
-	ctrlRepo, ctrlTag := splitImageRef(withRegistry(a.cfg.ControllerImage, a.cfg.ECRRegistry))
-	epRepo, epTag := splitImageRef(withRegistry(a.cfg.EndpointImage, a.cfg.ECRRegistry))
+	prefix := a.cfg.registryPrefix()
+	ctrlRepo, ctrlTag := splitImageRef(withRegistry(a.cfg.ControllerImage, prefix))
+	epRepo, epTag := splitImageRef(withRegistry(a.cfg.EndpointImage, prefix))
 
 	sets := map[string]string{
 		"imagePullSecrets[0].name":             a.cfg.PullSecretName,
@@ -758,12 +874,12 @@ func (a *App) helmTemplateArgs() []string {
 		"ui.enabled":                           boolStr(a.cfg.UIEnabled),
 	}
 	if a.cfg.MCPEnabled && a.cfg.MCPImage != "" {
-		r, t := splitImageRef(withRegistry(a.cfg.MCPImage, a.cfg.ECRRegistry))
+		r, t := splitImageRef(withRegistry(a.cfg.MCPImage, prefix))
 		sets["mcp.image.repository"] = r
 		sets["mcp.image.tag"] = t
 	}
 	if a.cfg.UIEnabled && a.cfg.UIImage != "" {
-		r, t := splitImageRef(withRegistry(a.cfg.UIImage, a.cfg.ECRRegistry))
+		r, t := splitImageRef(withRegistry(a.cfg.UIImage, prefix))
 		sets["ui.image.repository"] = r
 		sets["ui.image.tag"] = t
 	}
@@ -1262,6 +1378,17 @@ func defaultEnsureExternalDB(ctx context.Context, ci pg.ConnInfo, dbName string)
 
 // defaultECRToken shells `aws ecr get-login-password` for the pull-secret token,
 // mirroring deploy/ecr-creds.sh's ambient-cred resolution.
+// defaultGHCRToken asks the local gh CLI for its stored token — the default
+// auth for ghcr images when no explicit ghcr_token is configured.
+func defaultGHCRToken(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "gh", "auth", "token")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("gh auth token: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func defaultECRToken(ctx context.Context, _ /*registry*/, region string) (string, error) {
 	cmd := exec.CommandContext(ctx, "aws", "ecr", "get-login-password", "--region", region)
 	out, err := cmd.Output()

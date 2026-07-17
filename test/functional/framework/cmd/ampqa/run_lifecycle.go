@@ -16,7 +16,10 @@ import (
 const (
 	envModeBuild  = "build"  // provision, run, tear down (default, today's behaviour)
 	envModeAttach = "attach" // attach to --env <id>, run, leave it standing
-	envModeKeep   = "keep"   // provision, run, RECORD the built env, skip teardown
+	// keep-failed: tear down on a fully green run, keep+record the env (like
+	// keep) when anything failed — post-mortem access without leaking green envs.
+	envModeKeepFailed = "keep-failed"
+	envModeKeep       = "keep" // provision, run, RECORD the built env, skip teardown
 )
 
 // standingProvider is the optional seam a provider implements to expose the
@@ -39,9 +42,9 @@ func resolveEnvMode(mode string, setupOnly bool, envID string, modeSet bool) (st
 		mode = envModeBuild
 	}
 	switch mode {
-	case envModeBuild, envModeAttach, envModeKeep:
+	case envModeBuild, envModeAttach, envModeKeep, envModeKeepFailed:
 	default:
-		return "", fmt.Errorf("invalid --env-mode %q (want build|attach|keep)", mode)
+		return "", fmt.Errorf("invalid --env-mode %q (want build|attach|keep|keep-failed)", mode)
 	}
 	if setupOnly {
 		if modeSet && mode != envModeKeep {

@@ -12,6 +12,7 @@ import (
 	"github.com/yugabyte/yb-amp/test/functional/framework/report/html"
 	"github.com/yugabyte/yb-amp/test/functional/framework/report/jsonfile"
 	"github.com/yugabyte/yb-amp/test/functional/framework/report/junit"
+	"github.com/yugabyte/yb-amp/test/functional/framework/report/portal"
 	"github.com/yugabyte/yb-amp/test/functional/framework/report/stdout"
 	"github.com/yugabyte/yb-amp/test/functional/framework/sched"
 )
@@ -33,6 +34,8 @@ func newRunCmd() *cobra.Command {
 		outDir      string
 		junitPath   string
 		htmlPath    string
+		portalURL   string
+		reportName  string
 		envProvider string
 		envID       string
 		regPath     string
@@ -140,6 +143,12 @@ available), distinct from a genuine all-pass.`,
 			if !c.Flags().Changed("junit") {
 				junitPath = cfg.GetString("report.junit_path", junitPath)
 			}
+			if !c.Flags().Changed("portal") {
+				portalURL = cfg.GetString("report.portal.url", portalURL)
+			}
+			if !c.Flags().Changed("report") {
+				reportName = cfg.GetString("report.portal.report", reportName)
+			}
 			if !c.Flags().Changed("html") {
 				htmlPath = cfg.GetString("report.html_path", htmlPath)
 			}
@@ -230,6 +239,21 @@ available), distinct from a genuine all-pass.`,
 			if !jsonOutput {
 				progress = stdout.New()
 			}
+			// The portal sink streams the run live to the amp report portal. It
+			// is non-critical by design: the portal being down must never fail
+			// or slow a run.
+			var liveSinks []core.Sink
+			if portalURL != "" {
+				liveSinks = append(liveSinks, portal.New(portalURL, portal.Meta{
+					RunID:       cfg.GetString("report.portal.run_id", ""),
+					Report:      reportName,
+					Branch:      cfg.GetString("report.portal.branch", ""),
+					CommitSHA:   cfg.GetString("report.portal.commit", ""),
+					BuildTag:    cfg.GetString("report.portal.build_tag", ""),
+					TriggerType: cfg.GetString("report.portal.trigger_type", ""),
+					TriggeredBy: cfg.GetString("report.portal.triggered_by", ""),
+				}))
+			}
 			var resultSinks []core.Sink
 			if outDir != "" {
 				resultSinks = append(resultSinks, jsonfile.New(outDir))
@@ -244,8 +268,8 @@ available), distinct from a genuine all-pass.`,
 				resultSinks = append(resultSinks, html.New(htmlPath))
 			}
 			var reporter *report.Reporter
-			if progress != nil || len(resultSinks) > 0 {
-				reporter = buildReporter(report.DefaultQueueSize, progress, resultSinks...)
+			if progress != nil || len(liveSinks) > 0 || len(resultSinks) > 0 {
+				reporter = buildReporterWithLive(report.DefaultQueueSize, progress, liveSinks, resultSinks...)
 				opts.Sink = reporter
 			}
 
@@ -257,7 +281,9 @@ available), distinct from a genuine all-pass.`,
 			// owned control plane down; attach only frees the local forward, leaving
 			// the standing env intact). keep RECORDS the built control plane and
 			// SKIPS teardown so a later `run --env <id>` attaches to it.
-			if mode == envModeKeep {
+			keepNow := mode == envModeKeep ||
+				(mode == envModeKeepFailed && summaryHasFailures(summary))
+			if keepNow {
 				if err := keepAndRecord(c, opts.Provider, cfg, regPath, envName, envTTL, c.Flags().Changed("ttl")); err != nil {
 					return &exitError{code: 1, err: err}
 				}
@@ -298,13 +324,15 @@ available), distinct from a genuine all-pass.`,
 	_ = cmd.Flags().MarkDeprecated("dry-run", "use --fake-env instead")
 	cmd.Flags().StringVar(&envProvider, "env-provider", "auto", "environment provider: fake|docker|sharedk8s|exclusivek8s|universe|auto")
 	cmd.Flags().StringVar(&envID, "env", "", "attach to a standing environment from the registry by id (forces the matching provider; conflicts with --fake-env/--env-provider)")
-	cmd.Flags().StringVar(&envMode, "env-mode", "build", "environment lifecycle: build (provision, run, tear down) | keep (provision, run, RECORD the env, skip teardown) | attach (attach to --env, run, skip teardown)")
+	cmd.Flags().StringVar(&envMode, "env-mode", "build", "environment lifecycle: build (provision, run, tear down) | keep (provision, run, RECORD the env, skip teardown) | keep-failed (tear down when green, keep+record when anything failed) | attach (attach to --env, run, skip teardown)")
 	cmd.Flags().BoolVar(&setupOnly, "setup-only", false, "stand each selected test's environment up and skip its body, leaving it recorded and running (forces keep); folds the deprecated `ampqa setup`")
 	cmd.Flags().StringVar(&envName, "env-name", "", "label for an env recorded by --env-mode keep / --setup-only (default: the provider's own)")
 	cmd.Flags().DurationVar(&envTTL, "ttl", 0, "auto-reap a kept/setup-only env after this long (default 0: never — reap explicitly with env rm)")
 	cmd.Flags().StringVar(&regPath, "registry", "", "registry file path for --env / kept envs (default ~/.ampqa/envs.json)")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "write per-result JSON files under <out-dir>/<runid> (e.g. ./ampqa-out); default from report.out_dir")
 	cmd.Flags().StringVar(&junitPath, "junit", "", "write a JUnit XML report to this path; default from report.junit_path")
+	cmd.Flags().StringVar(&portalURL, "portal", "", "amp report portal base URL — stream the run to it live as it executes; default from report.portal.url")
+	cmd.Flags().StringVar(&reportName, "report", "", "portal report bucket to file the run under; default from report.portal.report")
 	cmd.Flags().StringVar(&htmlPath, "html", "", "write a self-contained HTML report to this path when the run finishes; default from report.html_path")
 	cmd.Flags().BoolVar(&noDefaults, "no-default-config", false, "skip the embedded configs/default.yaml base layer (debugging only)")
 	return cmd
@@ -363,10 +391,31 @@ func runExitCode(s core.RunSummary) int {
 // junit) are marked CRITICAL so a test's pass/fail record is never dropped under
 // backpressure; progress (stdout) is non-critical and may drop cosmetic live
 // events, which the caller surfaces via Reporter.Dropped().
+// summaryHasFailures reports whether any test ended in a non-green state
+// (anything but passed/skipped) — the keep-failed teardown decision.
+func summaryHasFailures(sum core.RunSummary) bool {
+	for st, n := range sum.Counts {
+		if n > 0 && st != core.StatusPassed && st != core.StatusSkipped {
+			return true
+		}
+	}
+	return false
+}
+
 func buildReporter(queueSize int, progress core.Sink, resultSinks ...core.Sink) *report.Reporter {
-	opts := make([]report.SinkOption, 0, 1+len(resultSinks))
+	return buildReporterWithLive(queueSize, progress, nil, resultSinks...)
+}
+
+// buildReporterWithLive also attaches non-critical live sinks (portal): like
+// the stdout progress sink they may drop under backpressure but never block a
+// test, while result sinks (jsonfile, junit, html) stay critical.
+func buildReporterWithLive(queueSize int, progress core.Sink, live []core.Sink, resultSinks ...core.Sink) *report.Reporter {
+	opts := make([]report.SinkOption, 0, 1+len(live)+len(resultSinks))
 	if progress != nil {
 		opts = append(opts, report.SinkOption{Sink: progress})
+	}
+	for _, s := range live {
+		opts = append(opts, report.SinkOption{Sink: s})
 	}
 	for _, s := range resultSinks {
 		opts = append(opts, report.SinkOption{Sink: s, Critical: true})

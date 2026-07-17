@@ -473,8 +473,13 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 		return fail(fmt.Errorf("endpoint postgres never became ready: %w", err))
 	}
 
+	// Product version: the controller's own build identity is the authority
+	// (GET /api/v1/version, amp CalVer); the compute-side probe and the
+	// configured static value are fallbacks for controllers predating it.
 	product, productLive := p.cfg.Product, false
-	if v := p.detectProduct(ctx, ci); v != "" {
+	if vi, err := cl.Version(ctx); err == nil && vi.Version != "" {
+		product, productLive = vi.Version, true
+	} else if v := p.detectProduct(ctx, ci); v != "" {
 		product, productLive = v, true
 	}
 	yb := p.detectYB(ctx, ci)

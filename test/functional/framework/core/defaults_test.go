@@ -148,11 +148,11 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 
 	// --- env.ampstack ---
 	acfg := ampstack.FromConfig(cfg)
-	if acfg.ControllerImage != ampstack.DefaultControllerImage {
-		t.Errorf("ampstack ControllerImage = %q, want %q", acfg.ControllerImage, ampstack.DefaultControllerImage)
+	if acfg.ControllerImage != ampstack.DefaultQuayControllerImage {
+		t.Errorf("ampstack ControllerImage = %q, want %q", acfg.ControllerImage, ampstack.DefaultQuayControllerImage)
 	}
-	if acfg.EndpointImage != ampstack.DefaultEndpointImage {
-		t.Errorf("ampstack EndpointImage = %q, want %q", acfg.EndpointImage, ampstack.DefaultEndpointImage)
+	if acfg.EndpointImage != ampstack.DefaultQuayEndpointImage {
+		t.Errorf("ampstack EndpointImage = %q, want %q", acfg.EndpointImage, ampstack.DefaultQuayEndpointImage)
 	}
 	if acfg.YBImage != ampstack.DefaultYBImage {
 		t.Errorf("ampstack YBImage = %q, want %q", acfg.YBImage, ampstack.DefaultYBImage)

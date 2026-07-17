@@ -173,6 +173,12 @@ func testApp(cfg Config, rec *recorder) *App {
 	if cfg.ECRRegistry == "" && cfg.PullSecretDockerConfigB64 == "" {
 		cfg.ECRRegistry = DefaultECRRegistry // exercise the mint path by default
 	}
+	if cfg.Registry == "" {
+		// The pre-registry-knob tests in this file exercise the ECR pipeline
+		// (bare refs resolving into ECR, minted pull secret). Registry-aware
+		// tests set the knob explicitly.
+		cfg.Registry = RegistryECR
+	}
 	if cfg.ControllerReach == "" {
 		// Every pre-existing test in this file predates ControllerReach and
 		// exercises the port-forward pipeline specifically; pin it here so the

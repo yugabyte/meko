@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yugabyte/yb-amp/test/functional/framework/core"
 	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
 )
 
@@ -82,5 +83,23 @@ func TestKeepRecordAttachRoundTrip(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("overrides missing %q; got %v", want, overrides)
 		}
+	}
+}
+
+func TestResolveEnvModeKeepFailed(t *testing.T) {
+	got, err := resolveEnvMode("keep-failed", false, "", true)
+	if err != nil || got != envModeKeepFailed {
+		t.Fatalf("resolveEnvMode(keep-failed) = %q, %v", got, err)
+	}
+}
+
+func TestSummaryHasFailures(t *testing.T) {
+	green := core.RunSummary{Counts: map[core.Status]int{core.StatusPassed: 3, core.StatusSkipped: 1}}
+	if summaryHasFailures(green) {
+		t.Error("green run reported failures")
+	}
+	red := core.RunSummary{Counts: map[core.Status]int{core.StatusPassed: 2, core.StatusEnvFailed: 1}}
+	if !summaryHasFailures(red) {
+		t.Error("env_failed run reported green")
 	}
 }

@@ -91,16 +91,31 @@ env:
   # apps/ampstack: the amp control-plane App, driven by the deploy/status/
   # teardown-amp tasks and composed by exclusivek8s.
   # namespace: no default (Deploy requires it). context: empty → current
-  # kube-context. controller_chart: no default (required for a helm deploy).
-  # storage_class empty → endpoint /data is an emptyDir. pull_secret_b64 empty →
-  # mint the pull secret from `aws ecr get-login-password` against ecr_registry.
+  # kube-context. storage_class empty → endpoint /data is an emptyDir.
+  # pull_secret_b64 empty → auth is assembled per the registry knob below.
   ampstack:
-    # Pinned to known-good tags: the registry's :latest is stale (June 18) and
-    # predates the nested storage-pools/{id}/projects route, so create_project
-    # 404s against it (breaks amp_on_yb_k8s + the amp-feature tests). Bump these
-    # when the amp team refreshes :latest, or override per-run in an overlay.
-    controller_image: "amp/controller:tailnet-mig0010"
-    endpoint_image: "amp/endpoint:phase1-20260703-154251"
+    # The controller helm chart ships in this repo; the default resolves from
+    # the module dir (test/functional) where ampqa runs. Override for
+    # out-of-tree charts, or set controller_manifest for a pre-rendered deploy.
+    controller_chart: "../../deploy/helm/yb-amp-controller"
+    # Where bare image refs resolve and which auth the pull secret carries:
+    # quay (default; quay.io/yugabyte/amp-*), ecr (the minted ECR login), or
+    # ghcr (ghcr.io/yugabyte/amp-*; token from ghcr_token or the local
+    # `gh auth token`). Fully-qualified refs always win over this knob.
+    registry: "quay"
+    # Pinned to known-good tags; bump as new builds publish. custom-4f1ca53 is
+    # the first verified quay build. The ecr flavor's equivalents are
+    # amp/controller:tailnet-mig0010 / amp/endpoint:phase1-20260703-154251.
+    controller_image: "amp-controller:custom-4f1ca53"
+    endpoint_image: "amp-endpoint:custom-4f1ca53"
+    # quay.io robot credentials for the pull secret (custom/release builds
+    # pushed by the amp build pipeline live there). Empty -> no quay auth.
+    quay_user: ""
+    quay_token: ""
+    # ghcr credentials; token empty falls back to the local `gh auth token`
+    # when a ghcr image needs pulling. User empty -> "oauth".
+    ghcr_user: ""
+    ghcr_token: ""
     yb_image: "yugabytedb/yugabyte:latest"
     yb_storage: "20Gi"
     db_name: "yb_storage"
@@ -754,6 +769,23 @@ report:
   # Self-contained HTML report path, rendered when the run finishes (same output
   # as `ampqa report --from`). Empty → sink not attached.
   html_path: ""
+  # Live streaming to the amp report portal (--portal / --report override).
+  # url empty → sink not attached. The sink is non-critical: a portal outage
+  # never fails or slows a run.
+  portal:
+    # Portal base URL, e.g. http://10.150.1.93
+    url: ""
+    # Report bucket the run files under on the portal (e.g. regression).
+    report: ""
+    # Adopt an existing portal run (created at trigger time) instead of
+    # opening a new one — CI passes the trigger's run id here.
+    run_id: ""
+    # Run-identity stamps, all optional (CI sets them; empty ones are omitted).
+    branch: ""
+    commit: ""
+    build_tag: ""
+    trigger_type: ""
+    triggered_by: ""
   # Per-test caps on how many steps/metrics a single Result retains in memory.
   # The live sink already got every event; these only bound the snapshot so a
   # 24h soak emitting per-cycle events can't balloon RAM. Beyond the cap the

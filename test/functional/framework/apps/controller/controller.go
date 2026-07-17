@@ -225,6 +225,22 @@ func (e *APIError) Error() string {
 // --- health ---
 
 // Healthz reports liveness (GET /healthz).
+// VersionInfo is GET /api/v1/version — the controller's own build identity
+// (amp hybrid CalVer; "dev" on un-stamped local builds).
+type VersionInfo struct {
+	Version   string `json:"version"`
+	GitCommit string `json:"git_commit"`
+	BuildDate string `json:"build_date"`
+}
+
+// Version fetches the controller's build identity. Controllers predating the
+// version endpoint return an error (callers treat that as "unknown").
+func (c *Client) Version(ctx context.Context) (VersionInfo, error) {
+	var out VersionInfo
+	_, _, err := c.doJSON(ctx, http.MethodGet, c.apiURL+"/version", nil, &out)
+	return out, err
+}
+
 func (c *Client) Healthz(ctx context.Context) error { return c.health(ctx, "/healthz") }
 
 // Readyz reports readiness (GET /readyz).
