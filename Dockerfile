@@ -1,4 +1,4 @@
-### Creates a storage Docker image with postgres, pageserver, safekeeper and proxy binaries.
+### Creates a storage Docker image with postgres, yb-pageserver and yb-safekeeper binaries.
 ### The image itself is mainly used as a container for the binaries and for starting e2e tests with custom parameters.
 ### By default, the binaries inside the image have some mock parameters and can start, but are not intended to be used
 ### inside this image in the real deployments.
@@ -45,9 +45,7 @@ ARG BASE_IMAGE_SHA=${BASE_IMAGE_SHA/debian:bullseye-slim/debian@$BULLSEYE_SLIM_S
 FROM $REPOSITORY/$IMAGE:$TAG AS pg-build
 WORKDIR /home/nonroot
 
-COPY --chown=nonroot compute/vendor/postgres-v14 compute/vendor/postgres-v14
-COPY --chown=nonroot compute/vendor/postgres-v15 compute/vendor/postgres-v15
-COPY --chown=nonroot compute/vendor/postgres-v16 compute/vendor/postgres-v16
+# amp ships only the v18 postgres submodule (POSTGRES_VERSIONS = v18).
 COPY --chown=nonroot compute/vendor/postgres-v18 compute/vendor/postgres-v18
 COPY --chown=nonroot Makefile Makefile
 COPY --chown=nonroot postgres.mk postgres.mk
@@ -63,13 +61,7 @@ WORKDIR /home/nonroot
 
 COPY --chown=nonroot . .
 
-RUN --mount=type=secret,uid=1000,id=SUBZERO_ACCESS_TOKEN \
-    set -e \
-    && if [ -s /run/secrets/SUBZERO_ACCESS_TOKEN ]; then \
-        export CARGO_NET_GIT_FETCH_WITH_CLI=true && \
-        git config --global url."https://$(cat /run/secrets/SUBZERO_ACCESS_TOKEN)@github.com/neondatabase/subzero".insteadOf "https://github.com/neondatabase/subzero" && \
-        cargo add -p proxy subzero-core --git https://github.com/neondatabase/subzero --rev 396264617e78e8be428682f87469bb25429af88a; \
-    fi \
+RUN set -e \
     && cargo chef prepare --recipe-path recipe.json
 
 # Main build image
@@ -84,26 +76,16 @@ ENV CARGO_FEATURES="default"
 # 3. Build cargo dependencies. Note that this step doesn't depend on anything else than
 # `recipe.json`, so the layer can be reused as long as none of the dependencies change.
 COPY --from=plan     /home/nonroot/recipe.json                              recipe.json
-RUN --mount=type=secret,uid=1000,id=SUBZERO_ACCESS_TOKEN \
-    set -e \
-    && if [ -s /run/secrets/SUBZERO_ACCESS_TOKEN ]; then \
-        export CARGO_NET_GIT_FETCH_WITH_CLI=true && \
-        git config --global url."https://$(cat /run/secrets/SUBZERO_ACCESS_TOKEN)@github.com/neondatabase/subzero".insteadOf "https://github.com/neondatabase/subzero"; \
-    fi \
+RUN set -e \
     && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes --cfg tokio_unstable --cfg tokio_taskdump ${ADDITIONAL_RUSTFLAGS}" cargo chef cook --locked --release --recipe-path recipe.json
 
 # Perform the main build. We reuse the Postgres build artifacts from the intermediate 'pg-build'
 # layer, and the cargo dependencies built in the previous step.
 COPY --chown=nonroot --from=pg-build /home/nonroot/pg_install/ pg_install
 COPY --chown=nonroot . .
-COPY --chown=nonroot --from=plan     /home/nonroot/proxy/Cargo.toml         proxy/Cargo.toml
 COPY --chown=nonroot --from=plan     /home/nonroot/Cargo.lock               Cargo.lock
 
-RUN  --mount=type=secret,uid=1000,id=SUBZERO_ACCESS_TOKEN \
-    set -e \
-    && if [ -s /run/secrets/SUBZERO_ACCESS_TOKEN ]; then \
-        export CARGO_FEATURES="${CARGO_FEATURES},rest_broker"; \
-    fi \
+RUN  set -e \
     && if [ "$IO_ALIGNMENT" = "4k" ]; then \
         export CARGO_FEATURES="${CARGO_FEATURES},io-align-4k"; \
     elif [ "$IO_ALIGNMENT" = "512" ]; then \
@@ -111,16 +93,11 @@ RUN  --mount=type=secret,uid=1000,id=SUBZERO_ACCESS_TOKEN \
     fi \
     && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes --cfg tokio_unstable --cfg tokio_taskdump ${ADDITIONAL_RUSTFLAGS}" cargo auditable build \
       --features $CARGO_FEATURES \
-      --bin pg_sni_router  \
-      --bin pageserver  \
-      --bin pagectl  \
+      --bin yb-pageserver  \
       --bin yb-safekeeper  \
-      --bin storage_broker  \
       --bin storage_controller  \
-      --bin proxy  \
       --bin yb-endpoint-storage \
       --bin yb_light_local \
-      --bin storage_scrubber \
       --locked --release \
     && mold -run make -j $(nproc) -s neon-pg-ext
 
@@ -151,28 +128,20 @@ RUN set -e \
     && rm -rf aws awscliv2.zip \
     && rm -f /etc/apt/apt.conf.d/80-retries \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
-    && useradd -d /data neon \
-    && chown -R neon:neon /data
+    && useradd -d /data yb_amp \
+    && chown -R yb_amp:yb_amp /data
 
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/pg_sni_router       /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/pageserver          /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/pagectl             /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/yb-safekeeper          /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/storage_broker      /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/storage_controller  /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/proxy               /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/yb-endpoint-storage    /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/yb_light_local          /usr/local/bin
-COPY --from=build --chown=neon:neon /home/nonroot/target/release/storage_scrubber    /usr/local/bin
-COPY --from=build /home/nonroot/pg_install/v14 /usr/local/v14/
-COPY --from=build /home/nonroot/pg_install/v15 /usr/local/v15/
-COPY --from=build /home/nonroot/pg_install/v16 /usr/local/v16/
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-pageserver       /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-safekeeper       /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/storage_controller  /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-endpoint-storage /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb_light_local      /usr/local/bin
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
 # Deprecated: Old deployment scripts use this tarball which contains all the Postgres binaries.
 # That's obsolete, since all the same files are also present under /usr/local/v*. But to keep the
 # old scripts working for now, create the tarball.
-RUN tar -C /usr/local -cvzf /data/postgres_install.tar.gz v14 v15 v16 v18
+RUN tar -C /usr/local -cvzf /data/postgres_install.tar.gz v18
 
 # By default, pageserver uses `.yb_light/` working directory in WORKDIR, so create one and fill it with the dummy config.
 # Now, when `docker run ... pageserver` is run, it can start without errors, yet will have some default dummy values.
@@ -184,11 +153,11 @@ RUN mkdir -p /data/.yb_light/ && \
        "listen_http_addr='0.0.0.0:9898'\n" \
        "availability_zone='local'\n" \
   > /data/.yb_light/pageserver.toml && \
-  chown -R neon:neon /data/.yb_light
+  chown -R yb_amp:yb_amp /data/.yb_light
 
 VOLUME ["/data"]
-USER neon
+USER yb_amp
 EXPOSE 6400
 EXPOSE 9898
 
-CMD ["/usr/local/bin/pageserver", "-D", "/data/.yb_light"]
+CMD ["/usr/local/bin/yb-pageserver", "-D", "/data/.yb_light"]

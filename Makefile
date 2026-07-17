@@ -269,7 +269,7 @@ controller-bundle-build: postgres-headers-install-v18 cargo-target-dir
 	# Stamp the bundled storage_controller with the same release version: its
 	# project_build_tag!/project_git_version! macros read BUILD_TAG/GIT_VERSION at
 	# compile time, so the whole bundle self-reports one version (v<VERSION>).
-	BUILD_TAG="v$(AMP_VERSION)" GIT_VERSION="$(AMP_GIT_COMMIT)" $(CARGO_CMD_PREFIX) cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE) --bin storage_controller
+	$(CARGO_CMD_PREFIX) BUILD_TAG="v$(AMP_VERSION)" GIT_VERSION="$(AMP_GIT_COMMIT)" cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE) --bin storage_controller
 	cp "$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)/storage_controller" "$(CONTROLLER_BUNDLE_DIR)/storage_controller"
 
 # controller-only bundle: just the Go controller, no storage_controller. Needs no Rust
