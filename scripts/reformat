@@ -6,5 +6,5 @@ set -euox pipefail
 echo 'Reformatting Rust code'
 cargo fmt
 echo 'Reformatting Python code'
-poetry run ruff check --fix old_neon_test_runner scripts
-poetry run ruff format old_neon_test_runner scripts
+poetry run ruff check --fix controller scripts
+poetry run ruff format controller scripts

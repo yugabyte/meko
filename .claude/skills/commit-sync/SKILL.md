@@ -121,7 +121,6 @@ Where tests live in this repo:
 | Unit | `#[cfg(test)]` modules inside the crate (e.g. `compute/libs/ysql_client/src/lib.rs`) |
 | Integration (Rust) | `<crate>/tests/` (e.g. `compute/compute_tools/tests/`, `compute/safekeeper/tests/`) |
 | End-to-end (cluster) | `test/integration/compute/fast/` and `test/integration/compute/slow/` (`*.sh` / `*.sql`, driven by `test/integration/compute/run.sh`) |
-| Python harness | `old_neon_test_runner/` |
 
 Triggers that usually mean "add/extend a test":
 - A new public function, API route, or CLI subcommand.
@@ -146,8 +145,8 @@ Inspection / diagnostic tooling has to keep working against what you changed:
 
 - `tools/` — `yb-dump-pages`, `yb-dump-wals`, `cluster-ui` (they read the
   YB-backed page store / WAL / control-plane state directly).
-- `scripts/` — operational helpers (e.g. `download_basebackup.py`,
-  `force_layer_download.py`, `sk_cleanup_tenants`). The top-level `build.sh`
+- `scripts/` — operational helpers (e.g. `yb-local.sh`,
+  `vendor-yb-protos.py`). The top-level `build.sh`
   (build wrapper / release tarball) is in the same family.
 
 Check a tool when your change touches **what it reads or renders**:

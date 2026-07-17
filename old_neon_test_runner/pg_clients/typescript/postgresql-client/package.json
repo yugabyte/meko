@@ -1,6 +1,0 @@
-{
-  "type": "module",
-  "dependencies": {
-    "postgresql-client": "2.11.0"
-  }
-}

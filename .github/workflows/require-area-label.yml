@@ -1,6 +1,6 @@
 name: Require area label
 
-# Every issue must carry an area label (`storage` and/or `control plane`)
+# Every issue must carry an area label (`compute` and/or `control plane`)
 # — see docs/issue-tracking.md. GitHub can't block label-less creation, so
 # this enforces it post-hoc: it auto-applies the area label from the issue
 # form's "Area" dropdown, and flags anything still uncovered with
@@ -21,7 +21,7 @@ jobs:
       - uses: actions/github-script@v9
         with:
           script: |
-            const AREA_LABELS = ["storage", "control plane"];
+            const AREA_LABELS = ["compute", "control plane"];
             const NEEDS = "needs-area-label";
             const repo = { owner: context.repo.owner, repo: context.repo.repo };
             const number = context.payload.issue.number;
@@ -36,7 +36,7 @@ jobs:
               const add = [];
               if (m) {
                 const v = m[1].toLowerCase();
-                if (v.includes("storage")) add.push("storage");
+                if (v.includes("compute")) add.push("compute");
                 if (v.includes("control")) add.push("control plane");
               }
               if (add.length) {
@@ -52,7 +52,7 @@ jobs:
               await github.rest.issues.createComment({
                 ...repo,
                 issue_number: number,
-                body: "⚠️ This issue has no **area label**. Every issue needs `storage` and/or `control plane` (and a milestone) — see [`docs/issue-tracking.md`](../blob/main/docs/issue-tracking.md). Add one and this `needs-area-label` flag clears automatically.",
+                body: "⚠️ This issue has no **area label**. Every issue needs `compute` and/or `control plane` (and a milestone) — see [`docs/issue-tracking.md`](../blob/main/docs/issue-tracking.md). Add one and this `needs-area-label` flag clears automatically.",
               });
             } else if (hasArea && labels.includes(NEEDS)) {
               await github.rest.issues.removeLabel({ ...repo, issue_number: number, name: NEEDS }).catch(() => {});
