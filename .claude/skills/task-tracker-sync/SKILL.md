@@ -12,7 +12,7 @@ description: >-
 
 # task-tracker-sync
 
-This repo's tracker is **GitHub issues** on `yugabyte/yb-light`, driven
+This repo's tracker is **GitHub issues** in this repository, driven
 via the `gh` CLI. (The old `tasks/*.md` files were migrated to issues
 and deleted; `tasks/README.md` is now just a pointer.) The contract is
 simple but easy to violate by accident:
