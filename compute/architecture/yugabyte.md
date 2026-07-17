@@ -323,7 +323,7 @@ SET search_path = storage_controller, public;
 \dt
 ```
 
-Tables documented in [`storage-controller.md`](storage-controller.md).
+Tables documented in [`storage-controller.md`](../../storage_controller/architecture/storage-controller.md).
 
 ## YB-side configuration that matters
 
@@ -394,7 +394,7 @@ yb_storage_conn = { host_ports = "...", hot_path = "tsclient", tserver_rpc_addrs
   directly to a tserver's RPC port (9100), skipping the PG backend (wire
   framing, parse/plan, pggate); `"ysql"` is the Postgres-wire escape hatch.
   The safekeeper honors it for the WAL write/read path on `safekeeper.wals`
-  (see `architecture/safekeeper.md` §"Direct-to-tserver hot path"). The
+  (see `compute/architecture/safekeeper.md` §"Direct-to-tserver hot path"). The
   pageserver page path uses YSQL. Cold paths
   (DDL, GC, rehydration, control file, `timeline_state`) always use YSQL.
   Old binaries fail to parse a config that sets these keys
@@ -477,7 +477,7 @@ the signal that something is wrong upstream of the client.
 ## Provisioning DDL — full reference
 
 The authoritative provisioning DDL is a single Diesel migration:
-[`storage_controller/migrations/00000000000001_initial_schema/up.sql`](../storage_controller/migrations/00000000000001_initial_schema/up.sql).
+[`storage_controller/migrations/00000000000001_initial_schema/up.sql`](../../storage_controller/migrations/00000000000001_initial_schema/up.sql).
 `yb_light_local` only `CREATE DATABASE`s `yb_storage` (see
 `control_plane/src/storage_controller.rs::ensure_external_database`);
 the controller binary applies the migration on first start, which

@@ -63,7 +63,7 @@ Compute backend  --(cache miss)-->  shared_buffers  --(miss)-->  LFC  --(miss)--
 
 If the pageserver has been restarted with an empty layer cache, the first read
 of each layer is a YB SELECT of multiple chunks; subsequent reads hit local
-disk. See [`pageserver.md`](pageserver.md) for details.
+disk. See [`yb-pageserver.md`](yb-pageserver.md) for details.
 
 ## What's durable where
 

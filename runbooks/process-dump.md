@@ -103,4 +103,4 @@ that names the cycle.
 
 - `utils::tokio_dump` — the SIGUSR2 dumper wired into every daemon's `main`.
 - `runbooks/throughput-troubleshooting.md`, `runbooks/perf-investigation.md`.
-- `architecture/yb-pageserver.md` — flush / materializer / backpressure model.
+- `compute/architecture/yb-pageserver.md` — flush / materializer / backpressure model.

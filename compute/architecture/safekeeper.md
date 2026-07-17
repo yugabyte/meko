@@ -586,7 +586,7 @@ YB on next start. Logs and pidfile are recreated.
 ## Direct-to-tserver hot path (optional)
 
 With `hot_path = "tsclient"` in `yb_storage_conn` (see
-`architecture/yugabyte.md` §"Direct-to-tserver hot path"), `YbWalConn`
+`compute/architecture/yugabyte.md` §"Direct-to-tserver hot path"), `YbWalConn`
 additionally opens a pure-Rust thin-RPC client (`YbWalConn::yb_tsclient`,
 `compute/libs/yb_tsclient` — pggate RPC to a tserver's RPC port) to
 `safekeeper.wals` at startup (fail-fast health check). The consumer's

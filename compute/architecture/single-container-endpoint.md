@@ -6,9 +6,9 @@ cluster-level storage_controller). The single-container endpoint packages the
 per-endpoint subset of those into **one container image** so an endpoint can be
 deployed as a single Kubernetes pod, backed by an external YugabyteDB.
 
-This is the deployment artifact under [`deploy/`](../deploy); the image is built
-from [`deploy/endpoint/Dockerfile`](../deploy/endpoint/Dockerfile) and driven by
-the [`yb-light-endpoint`](../deploy/helm/yb-light-endpoint) Helm chart.
+This is the deployment artifact under [`deploy/`](../../deploy); the image is built
+from [`deploy/endpoint/Dockerfile`](../../deploy/endpoint/Dockerfile) and driven by
+the [`yb-light-endpoint`](../../deploy/helm/yb-light-endpoint) Helm chart.
 
 ## What runs in the pod
 
@@ -93,5 +93,5 @@ removed `storage_broker`). The Postgres-family binaries link
 `pg_install/v18/lib` (`libpq.so.5`), so `LD_LIBRARY_PATH` is set image-wide; the
 `yb_amp` extension additionally needs `libcurl4` at runtime.
 
-See [`deploy/README.md`](../deploy/README.md) for the build/run/config details
+See [`deploy/README.md`](../../deploy/README.md) for the build/run/config details
 and the Helm chart.

@@ -203,7 +203,7 @@ pub struct YbWalConn {
     pub yb_tsclient: Option<Arc<YbTsClient>>,
 }
 
-/// See [`YbWalConn::yb_tsclient`] and `architecture/safekeeper.md`.
+/// See [`YbWalConn::yb_tsclient`] and `compute/architecture/safekeeper.md`.
 pub struct YbTsClient {
     pub client: Arc<yb_tsclient::TsClient>,
     pub wals: Arc<yb_tsclient::TableHandle>,

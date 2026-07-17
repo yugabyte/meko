@@ -70,7 +70,7 @@ These return `400 Bad Request` ("compiled without testing APIs") when the
 All paths are under `/v1/branch/:branch_id/...`; `:branch_id`
 is parsed as an ID and authorized against the token's branch scope. In yb-light
 the process serves exactly one `branch_id` for its lifetime (see
-`architecture/yb-pageserver.md`), so in practice only that single id resolves;
+`compute/architecture/yb-pageserver.md`), so in practice only that single id resolves;
 other IDs return `404`/`NotFound`.
 
 | Method | Path | Purpose |

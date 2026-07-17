@@ -355,7 +355,7 @@ verifies the token compute_ctl presents when fetching. The exact endpoint shape 
 push-vs-pull choice per runtime are deferred to the controller's API design doc; what is
 fixed here is that the spec is one artifact the controller owns and can deliver by any of
 these routes without reshaping it. See
-[`compute_ctl.md`](../architecture/compute_ctl.md) for the compute-side mechanics.
+[`compute_ctl.md`](../../compute/architecture/compute_ctl.md) for the compute-side mechanics.
 
 ### 5.6 Provisioning endpoints: the `deploy.Deployer` interface
 

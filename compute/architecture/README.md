@@ -19,19 +19,23 @@ upstream Neon can skim) and **changes in yb-light**.
 | [`compute_ctl.md`](compute_ctl.md) | The per-endpoint supervisor: spec, lifecycle, control API |
 | [`safekeeper.md`](safekeeper.md) | Single-SK WAL durability, control file, WAL storage |
 | [`safekeeper-lsns.md`](safekeeper-lsns.md) | SK-side LSN inventory + flows |
-| [`pageserver.md`](pageserver.md) | Inherited Neon pageserver design |
-| [`yb-pageserver.md`](yb-pageserver.md) | yb-light pageserver fork: page-store, materialiser, write path |
+| [`yb-pageserver.md`](yb-pageserver.md) | The pageserver: row-per-page store, materialiser, write path, and the upstream-inherited concepts |
 | [`pageserver-lsns.md`](pageserver-lsns.md) | PS-side LSN inventory + flows |
-| [`storage-controller.md`](storage-controller.md) | Cluster control plane (relational state) |
 | [`remote-storage.md`](remote-storage.md) | The `RemoteStorage` abstraction + `YbStore` |
 | [`yugabyte.md`](yugabyte.md) | What lives in YB: databases, schemas, tables |
 | [`single-container-endpoint.md`](single-container-endpoint.md) | Packaging an endpoint as one pod (`deploy/`): the supervisor, SC-free bootstrap |
 
-> **amp controller.** The standalone Go control plane being built for YB Light
-> (`amp-controller` / `ac`) is documented separately under
-> [`../controller/architecture/`](../controller/architecture/), with its own subproject guide
-> in [`../controller/AGENTS.md`](../controller/AGENTS.md). It deploys to Kubernetes via the
-> `yb-amp-controller` Helm chart (`deploy/`), which also ships its MCP-server pod.
+> **Control plane docs live outside `compute/`.** These pages cover the
+> storage/compute engine only. The two control-plane components are documented
+> under their own trees:
+> - **Storage controller** (the Neon-derived Rust cluster control plane):
+>   [`../../storage_controller/architecture/`](../../storage_controller/architecture/)
+>   — `storage-controller.md`, `storage-controller-apis.md`, `storage-controller-metrics.md`.
+> - **amp controller** (the standalone Go control plane, `amp-controller` / `ac`):
+>   [`../../controller/architecture/`](../../controller/architecture/), with its own
+>   subproject guide in [`../../controller/AGENTS.md`](../../controller/AGENTS.md). It deploys
+>   to Kubernetes via the `yb-amp-controller` Helm chart (`deploy/`), which also ships its
+>   MCP-server pod.
 
 ### HTTP APIs & metrics (per service)
 
@@ -39,7 +43,6 @@ upstream Neon can skim) and **changes in yb-light**.
 |---|---|---|
 | Pageserver | [`yb-pageserver-apis.md`](yb-pageserver-apis.md) | [`yb-pageserver-metrics.md`](yb-pageserver-metrics.md) |
 | Safekeeper | [`safekeeper-apis.md`](safekeeper-apis.md) | [`safekeeper-metrics.md`](safekeeper-metrics.md) |
-| Storage controller | [`storage-controller-apis.md`](storage-controller-apis.md) | [`storage-controller-metrics.md`](storage-controller-metrics.md) |
 | compute_ctl | [`compute_ctl-apis.md`](compute_ctl-apis.md) | [`compute_ctl-metrics.md`](compute_ctl-metrics.md) |
 | Endpoint storage | [`endpoint-storage-apis.md`](endpoint-storage-apis.md) | [`endpoint-storage-metrics.md`](endpoint-storage-metrics.md) |
 

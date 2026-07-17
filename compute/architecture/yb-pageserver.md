@@ -9,10 +9,10 @@ head-to-head; the upstream source has since been removed (lane H,
 name to make the storage backend obvious in `ps`, logs, and
 deployments.
 
-This document is the design and roadmap. The corresponding upstream
-component is documented in [`pageserver.md`](pageserver.md); read that
-first for the parts that are inherited unchanged (Key encoding, walredo,
-WAL ingest, getpage RPC).
+This document is the design and roadmap. Some concepts are inherited
+unchanged from upstream Neon (Key encoding, walredo, WAL ingest, getpage
+RPC); the standalone upstream-design doc has been removed along with the
+source, so refer to upstream Neon's `pageserver/` for those internals.
 
 ## Single-branch process model
 
@@ -83,7 +83,7 @@ identity and rejected as misrouted on mismatch.
 
 Consequences elsewhere:
 - storage_ctl's pageserver reconciler/migration machinery is deleted
-  wholesale (see [`storage-controller.md`](storage-controller.md)):
+  wholesale (see [`storage-controller.md`](../../storage_controller/architecture/storage-controller.md)):
   there is no location_config to converge — attachment is decided at
   spawn time.
 - storage_ctl's branch-create no longer POSTs to the pageserver; it
@@ -780,7 +780,7 @@ storm those accumulate until the accept loop dies with
 
 ## Implementation status
 
-Per-phase task records live under [`../tasks/`](../tasks/). See
+Per-phase task records live under [`../../tasks/`](../../tasks/). See
 `tasks/README.md` for the index (id, title, status, severity, area).
 
 > ⚠️ **Test debt** — many phases below landed without per-phase
@@ -792,7 +792,7 @@ Per-phase task records live under [`../tasks/`](../tasks/). See
 > invalidation on LSN advance, and the generation-fence shutdown.
 > Backfill is tracked alongside the relevant task files. The
 > integration suite (`test/integration/compute/`, a Rust harness — see
-> [`test/integration/compute/README.md`](../test/integration/compute/README.md)) is the cross-seam
+> [`test/integration/compute/README.md`](../../test/integration/compute/README.md)) is the cross-seam
 > backstop: it runs scenario tests + golden `.sql` workloads against a
 > real `yb_light_local` + YB and scans the pageserver log for corruption
 > markers after every test. The `.sql` workloads diff their result sets
@@ -817,6 +817,6 @@ Per-phase task records live under [`../tasks/`](../tasks/). See
   rest of `yb_storage` (#2). Replaces the earlier
   `control_plane/src/storage_controller.rs::ensure_yb_storage_schema`
   bootstrap, which has been removed.
-- `architecture/yugabyte.md` — full DDL reference for
+- `compute/architecture/yugabyte.md` — full DDL reference for
   `pageserver.pages`, `pageserver.slru_pages`, `pageserver.meta`,
   and `pageserver.timeline_state`.

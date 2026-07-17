@@ -3,7 +3,7 @@
 This is **yb-amp**: a
 serverless Postgres-compatible storage system that runs PostgreSQL
 computes over **YugabyteDB** as the durable backing store. If 
-you're new to the codebase, read `architecture/high-level.md` first,
+you're new to the codebase, read `compute/architecture/high-level.md` first,
 then the subsystem doc that matches whatever you're touching.
 
 ## Meko datapack
@@ -19,37 +19,36 @@ Use it when storing repo-scoped memories.
 
 Read in this order:
 
-1. `architecture/high-level.md` — component diagram, what lives where, the
+1. `compute/architecture/high-level.md` — component diagram, what lives where, the
    topology of a dev cluster.
-2. `architecture/yugabyte.md` — the single YB database (`yb_storage`)
+2. `compute/architecture/yugabyte.md` — the single YB database (`yb_storage`)
    and its schemas (`public`, `pageserver`, `safekeeper`,
    `storage_controller`), the `blobs` and `wals` tables, the
    `blob_namespace` ENUM, the `rpc_max_message_size` chunking story.
-3. `architecture/remote-storage.md` — `YbStore` design, `parse_key` /
+3. `compute/architecture/remote-storage.md` — `YbStore` design, `parse_key` /
    `reconstruct_key`, the round-trip-lossless path mapping.
-4. `architecture/pageserver.md` — original upstream design: layer-file
-   lifecycle, LSN MVCC, image vs delta, compaction, the page-7 worked
-   example. The upstream source is gone (lane H, 2026-06-01); this doc
-   stays because the inherited concepts (Key encoding, walredo, getpage
-   RPC, generation handshake) are still load-bearing. (Sharding was
-   removed entirely — yb-amp is single-shard; see `pageserver.md`
-   §"No sharding".)
-5. `architecture/yb-pageserver.md` — the row-per-page YugabyteDB
-   storage design that REPLACES the layer-file path: image-anchored
-   reads, background image materialiser, what's gone vs upstream,
-   implementation phases.
-6. `architecture/safekeeper.md` — `ControlFileStorage::Yb`,
+4. `compute/architecture/yb-pageserver.md` — the row-per-page YugabyteDB
+   storage design that REPLACES upstream Neon's layer-file path:
+   image-anchored reads, background image materialiser, what's gone vs
+   upstream, implementation phases. The upstream source is gone (lane H,
+   2026-06-01) and its standalone design doc with it; the inherited
+   concepts (Key encoding, walredo, getpage RPC, generation handshake)
+   trace back to upstream Neon's `pageserver/`. Sharding was removed
+   entirely — yb-amp is single-shard.
+5. `compute/architecture/safekeeper.md` — `ControlFileStorage::Yb`,
    `YbWalStorage`, the `WalReader` fallback chain, the single-safekeeper
    constraint in YB-WAL mode.
-7. `architecture/storage-controller.md` — the `[storage_controller.yb]`
+6. `storage_controller/architecture/storage-controller.md` — the `[storage_controller.yb]`
    connection block → diesel URL flow (`--yb-config`), the
    auto-provisioning of the `yb_storage` DB (and its `storage_controller`
-   schema) on first start.
+   schema) on first start. (The storage controller is the cluster control
+   plane, so its docs live under `storage_controller/`, not `compute/`.)
 
-For per-service HTTP API and Prometheus metrics, see the
-`architecture/<service>-apis.md` / `<service>-metrics.md` references
-(pageserver, safekeeper, storage_controller, compute_ctl, endpoint_storage),
-indexed in `architecture/README.md`.
+For per-service HTTP API and Prometheus metrics, see the per-service
+`-apis.md` / `-metrics.md` references: the compute-engine services
+(pageserver, safekeeper, compute_ctl, endpoint_storage) are under
+`compute/architecture/` (indexed in `compute/architecture/README.md`);
+the storage controller's are under `storage_controller/architecture/`.
 
 Code anchors:
 
@@ -87,8 +86,10 @@ Code anchors:
 - **No comments unless the *why* is non-obvious.** Identifiers should
   carry meaning. Don't reference the task/PR/issue in code comments —
   rot.
-- **Architecture changes go in `architecture/*.md`.** Code change without
-  doc change usually means the doc is stale.
+- **Architecture changes go in the matching `*/architecture/*.md` docs**
+  (`compute/architecture/` for the storage/compute engine,
+  `storage_controller/architecture/` and `controller/architecture/` for the
+  control planes). Code change without doc change usually means the doc is stale.
 - **Work is tracked as GitHub issues**, not files. See
   [`docs/issue-tracking.md`](docs/issue-tracking.md) for the area
   labels, milestones, the create/close contract, and the commit-subject
@@ -109,7 +110,7 @@ Code anchors:
   CONFLICT` (or `yb_enable_upsert_mode`), absolute `UPDATE`s (no `SET
   col = col + 1`), generation-fenced `UPDATE`s, or `WHERE`-keyed
   `DELETE`s. See
-  [`architecture/yugabyte.md`](architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent).
+  [`compute/architecture/yugabyte.md`](compute/architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent).
 
 ## Build notes
 
@@ -162,7 +163,7 @@ handoff doc.)
 - Topology spawns from `yb_light_local init --config <file>` then
   `yb_light_local start`. All durable state goes to YB; local FS only holds
   logs, pidfiles, and the compute's ephemeral `pgdata`.
-- See [`architecture/high-level.md`](architecture/high-level.md) §
+- See [`compute/architecture/high-level.md`](compute/architecture/high-level.md) §
   "Topology in our current dev cluster" for ports / commands.
 
 ## Kubernetes deploy (ECR images + pull secret)

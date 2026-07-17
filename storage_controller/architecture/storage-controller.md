@@ -40,7 +40,7 @@ in the same `yb_storage` DB.
   (yb_light_local today) bumps it through the attach-hook API on every
   pageserver spawn and bakes the value into that pageserver's
   `pageserver.toml` — see "Single-timeline process model" in
-  [`yb-pageserver.md`](yb-pageserver.md). The controller no longer
+  [`yb-pageserver.md`](../../compute/architecture/yb-pageserver.md). The controller no longer
   pushes attachments to pageservers.
 - **Branch observation**: on branch create it polls the attached
   pageserver's `timeline_detail` until the branch (created by the
@@ -188,7 +188,7 @@ credentials and provisions the one DB yb-light needs:
   timeline_state), the `safekeeper.*` tables (timeline_state + the
   live-WAL `wals` mirror), and the `public.*` blob-store
   (`blob_namespace` ENUM + `blobs`). See
-  [`yugabyte.md`](yugabyte.md) for the blob/WAL schemas.
+  [`yugabyte.md`](../../compute/architecture/yugabyte.md) for the blob/WAL schemas.
 
 The step is idempotent. A fresh YB cluster needs no operator DDL beyond
 `CREATE DATABASE yb_storage`, which yb_light_local issues.

@@ -404,7 +404,7 @@ pub struct SafekeeperConf {
     /// table (table hardcoded). Value is the shared `[*.yb]` connection block
     /// as a TOML inline string that the safekeeper accepts as
     /// `yb_storage_conn`. Single-safekeeper constraint applies (see
-    /// architecture/safekeeper.md §5).
+    /// compute/architecture/safekeeper.md §5).
     pub yb_storage_conn: Option<String>,
     /// Capacity (MiB) of the in-memory cache of recent WAL chunks used in
     /// YB-WAL mode. Maps to `--wal-cache-size-mib`. Ignored without

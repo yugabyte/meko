@@ -115,7 +115,7 @@ A ybAmp install is:
 > unknown. Use `INSERT ... ON CONFLICT` (or upsert mode), absolute
 > updates, and generation-fenced writes — never bare INSERTs or
 > relative `SET col = col + 1`. See
-> [`architecture/yugabyte.md`](architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent)
+> [`compute/architecture/yugabyte.md`](compute/architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent)
 > for the full contract.
 
 ## AMP topology and deployment
@@ -530,39 +530,43 @@ rm -rf .yb_light    # local dev cluster state (destroys local data)
 
 Start here:
 
-- [`architecture/README.md`](architecture/README.md) — index page for
-  the whole architecture section; one-line summary of every component
+- [`compute/architecture/README.md`](compute/architecture/README.md) — index page for
+  the storage/compute engine architecture section; one-line summary of every component
   doc below.
-- [`architecture/high-level.md`](architecture/high-level.md) —
+- [`compute/architecture/high-level.md`](compute/architecture/high-level.md) —
   components, processes, ports, what-talks-to-what at a single page.
 
 Per-component deep dives:
 
-- [`architecture/compute.md`](architecture/compute.md) — the patched
+- [`compute/architecture/compute.md`](compute/architecture/compute.md) — the patched
   Postgres compute (unchanged in yb-amp); how the `yb_amp` smgr
   extension wires page reads and WAL writes through the gateway.
-- [`architecture/yb-pageserver.md`](architecture/yb-pageserver.md) —
+- [`compute/architecture/yb-pageserver.md`](compute/architecture/yb-pageserver.md) —
   the row-store gateway design: schema, chain reconstruction,
   `UnifiedPages` buffer, image materialiser semantics, and write batching.
-- [`architecture/safekeeper.md`](architecture/safekeeper.md) — the WAL-in-YB
+- [`compute/architecture/safekeeper.md`](compute/architecture/safekeeper.md) — the WAL-in-YB
   reduction in ybAmp is described inline in `yugabyte.md` and in
   the safekeeper module docs.
-- [`architecture/storage-controller.md`](architecture/storage-controller.md)
-  — tenant placement, generation fencing, and live-migrate semantics.
-- [`architecture/remote-storage.md`](architecture/remote-storage.md)
+- [`storage_controller/architecture/storage-controller.md`](storage_controller/architecture/storage-controller.md)
+  — the cluster control plane: tenant placement, generation fencing, and
+  live-migrate semantics. (Control plane, so it lives under `storage_controller/`,
+  not `compute/`.)
+- [`compute/architecture/remote-storage.md`](compute/architecture/remote-storage.md)
   — the `RemoteStorage` abstraction and the `YbStore` backend that
   replaced S3/GCS/Azure (blob/basebackup tar/initdb layer).
-- [`architecture/yugabyte.md`](architecture/yugabyte.md) — what the
+- [`compute/architecture/yugabyte.md`](compute/architecture/yugabyte.md) — what the
   YB cluster looks like from ybAmp's perspective: databases,
   tables, prefixes, idempotency contract, and the DDL the operator
   must provision.
 
 Per-service HTTP API + Prometheus metrics reference (one `-apis.md` and
-one `-metrics.md` per service; indexed in `architecture/README.md`):
-pageserver, safekeeper, storage_controller, compute_ctl, and
-endpoint_storage — e.g.
-[`architecture/yb-pageserver-apis.md`](architecture/yb-pageserver-apis.md),
-[`architecture/safekeeper-metrics.md`](architecture/safekeeper-metrics.md).
+one `-metrics.md` per service): the compute-engine services (pageserver,
+safekeeper, compute_ctl, endpoint_storage) are indexed in
+[`compute/architecture/README.md`](compute/architecture/README.md) — e.g.
+[`compute/architecture/yb-pageserver-apis.md`](compute/architecture/yb-pageserver-apis.md),
+[`compute/architecture/safekeeper-metrics.md`](compute/architecture/safekeeper-metrics.md);
+the storage controller's are under
+[`storage_controller/architecture/`](storage_controller/architecture/).
 
 `cargo doc --no-deps --open` for rustdoc.
 

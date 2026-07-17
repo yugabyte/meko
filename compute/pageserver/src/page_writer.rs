@@ -1754,7 +1754,7 @@ impl PageWriter {
                             // either redundant (live PS will overwrite)
                             // or actively wrong (stale dc_lsn would
                             // shrink the safekeeper truncation
-                            // horizon). See architecture/
+                            // horizon). See compute/architecture/
                             // yb-pageserver.md "Generation fencing".
                             crate::task_mgr::shutdown_for_stale_generation(
                                 self.branch_id,

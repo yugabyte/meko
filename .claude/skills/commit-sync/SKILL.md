@@ -3,7 +3,7 @@ name: commit-sync
 description: >-
   Before staging files for a git commit (or finalizing one) in this repo,
   check whether the change needs companion updates that must travel in the
-  **same** commit: (1) `architecture/*.md` docs, (2) tests covering the
+  **same** commit: (1) `*/architecture/*.md` docs, (2) tests covering the
   new/changed behavior, (3) inspection/diagnostic tooling under `tools/` and
   `scripts/`, and (4) operational `runbooks/*.md`. For each, decide whether the
   change makes it wrong or missing, and update it in the same commit. Also, on
@@ -49,7 +49,7 @@ moment.
 git diff --cached --name-only
 ```
 
-If the only staged files are themselves under `architecture/`, `docs/`,
+If the only staged files are themselves under `*/architecture/`, `docs/`,
 `runbooks/`, or top-level READMEs, you can skip the doc/runbook arms —
 but still ask whether the change needed a test that isn't staged.
 
@@ -60,25 +60,28 @@ commit.** A single change can hit several — do all that apply.
 
 ---
 
-### Companion 1 — Architecture docs (`architecture/*.md`)
+### Companion 1 — Architecture docs (`*/architecture/*.md`)
 
-`architecture/*.md` is the canonical description of how the system is wired
-today. Map staged files to docs with this table; a staged path matching the left
-column means you must read the doc on the right and decide if it needs updating.
+The `*/architecture/*.md` docs are the canonical description of how the system is
+wired today. The storage/compute engine docs live under `compute/architecture/`;
+the storage controller (cluster control plane) docs live under
+`storage_controller/architecture/`. Map staged files to docs with this table; a
+staged path matching the left column means you must read the doc on the right and
+decide if it needs updating.
 
 | Code area (staged path matches) | Arch doc(s) to recheck |
 |---|---|
-| `compute/safekeeper/**`, `compute/libs/safekeeper_api/**`, `compute/libs/walproposer/**` | `architecture/safekeeper.md`, `architecture/safekeeper-lsns.md` |
-| `compute/pageserver/**` (excluding `compute/pageserver/pagebench/**`) | `architecture/pageserver.md`, `architecture/pageserver-lsns.md`, `architecture/yb-pageserver.md` |
-| `storage_controller/**` | `architecture/storage-controller.md` |
-| `compute/endpoint_storage/**` | `architecture/remote-storage.md` (YbStore backend) |
-| `compute/libs/remote_storage/**` | `architecture/remote-storage.md` |
-| `compute/pgxn/**`, `compute/compute_tools/**`, `compute/image/**` | `architecture/compute.md`, `architecture/compute_ctl.md` |
-| Schema files: `storage_controller/migrations/**/*.sql`, anything creating/altering tables in `yb_storage` or `storage_controller` databases | `architecture/yugabyte.md` + the per-subsystem doc that owns the table |
+| `compute/safekeeper/**`, `compute/libs/safekeeper_api/**`, `compute/libs/walproposer/**` | `compute/architecture/safekeeper.md`, `compute/architecture/safekeeper-lsns.md` |
+| `compute/pageserver/**` (excluding `compute/pageserver/pagebench/**`) | `compute/architecture/pageserver.md`, `compute/architecture/pageserver-lsns.md`, `compute/architecture/yb-pageserver.md` |
+| `storage_controller/**` | `storage_controller/architecture/storage-controller.md` |
+| `compute/endpoint_storage/**` | `compute/architecture/remote-storage.md` (YbStore backend) |
+| `compute/libs/remote_storage/**` | `compute/architecture/remote-storage.md` |
+| `compute/pgxn/**`, `compute/compute_tools/**`, `compute/image/**` | `compute/architecture/compute.md`, `compute/architecture/compute_ctl.md` |
+| Schema files: `storage_controller/migrations/**/*.sql`, anything creating/altering tables in `yb_storage` or `storage_controller` databases | `compute/architecture/yugabyte.md` + the per-subsystem doc that owns the table |
 | Anything that changes a binary's CLI surface (clap `Args` structs in `*/src/bin/*.rs`) | The "Run / configure" block in the matching subsystem doc |
-| **HTTP router** (`compute/pageserver/src/http/routes.rs`, `compute/safekeeper/src/http/routes.rs`, `storage_controller/src/http.rs`, `compute/compute_tools/src/http/**`, `compute/endpoint_storage/src/app.rs`) — a route added/removed/renamed, a method/path/auth/body change | The matching `architecture/<service>-apis.md` (`yb-pageserver-apis.md` / `safekeeper-apis.md` / `storage-controller-apis.md` / `compute_ctl-apis.md` / `endpoint-storage-apis.md`) |
-| **Metrics module** (`*/src/metrics.rs`, `compute/compute_tools/src/compute_metrics.rs`) — a metric added/removed/renamed, or a label/type change | The matching `architecture/<service>-metrics.md` (`yb-pageserver-metrics.md` / `safekeeper-metrics.md` / `storage-controller-metrics.md` / `compute_ctl-metrics.md` / `endpoint-storage-metrics.md`) |
-| Top-level topology (new binary, new wire link, removed component) | `architecture/high-level.md` + `architecture/README.md` |
+| **HTTP router** (`compute/pageserver/src/http/routes.rs`, `compute/safekeeper/src/http/routes.rs`, `storage_controller/src/http.rs`, `compute/compute_tools/src/http/**`, `compute/endpoint_storage/src/app.rs`) — a route added/removed/renamed, a method/path/auth/body change | The matching `-apis.md` (`compute/architecture/yb-pageserver-apis.md` / `compute/architecture/safekeeper-apis.md` / `storage_controller/architecture/storage-controller-apis.md` / `compute/architecture/compute_ctl-apis.md` / `compute/architecture/endpoint-storage-apis.md`) |
+| **Metrics module** (`*/src/metrics.rs`, `compute/compute_tools/src/compute_metrics.rs`) — a metric added/removed/renamed, or a label/type change | The matching `-metrics.md` (`compute/architecture/yb-pageserver-metrics.md` / `compute/architecture/safekeeper-metrics.md` / `storage_controller/architecture/storage-controller-metrics.md` / `compute/architecture/compute_ctl-metrics.md` / `compute/architecture/endpoint-storage-metrics.md`) |
+| Top-level topology (new binary, new wire link, removed component) | `compute/architecture/high-level.md` + `compute/architecture/README.md` |
 
 The doc needs an update if the change invalidates **any** of these:
 
@@ -247,7 +250,7 @@ model.
 Re-stage and commit everything together:
 
 ```
-git add <code files> <architecture/*.md, tests, tools/scripts, runbooks/*.md you edited>
+git add <code files> <*/architecture/*.md, tests, tools/scripts, runbooks/*.md you edited>
 git commit -m "..."
 ```
 
@@ -364,7 +367,7 @@ minor." If you can't categorize the skip, default to checking.
 
 ## Failure mode this prevents
 
-Real example from this repo: §1 of `architecture/safekeeper.md` described the
+Real example from this repo: §1 of `compute/architecture/safekeeper.md` described the
 control file as a 388B bincode blob stored at `yb_storage.blobs` under
 `safekeeper-control/<tenant>/<timeline>`, keyed by a
 `ControlFileStorage::{File, Yb}` dispatch enum, selected by

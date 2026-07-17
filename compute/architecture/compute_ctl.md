@@ -9,7 +9,7 @@ grants), and then supervises the running compute while exposing an HTTP control 
 It is the **single point of contact inside an endpoint** that the control plane talks
 to — the control plane (today `yb_light_local`; tomorrow `amp-controller`) never
 manages the Postgres / safekeeper / pageserver processes directly. See
-[`amp-controller.md`](../controller/architecture/amp-controller.md) §5.2
+[`amp-controller.md`](../../controller/architecture/amp-controller.md) §5.2
 ("Per-endpoint services"), where `compute_ctl` is exactly this contact point.
 
 > **Scope note.** [`compute.md`](compute.md) covers the *compute itself* — Postgres
@@ -130,7 +130,7 @@ body of `POST /configure`. So the spec data is identical whether it arrives as a
 pull from the spec endpoint, or a push to `/configure` — the differences are delivery and
 trust (a file read with no auth vs. an authenticated, retried HTTP fetch carrying the
 `Empty`/`Attached` handshake), not content. See
-[amp-controller §5.5](../controller/architecture/amp-controller.md) for how the control
+[amp-controller §5.5](../../controller/architecture/amp-controller.md) for how the control
 plane picks among the three.
 
 At load, the raw spec is wrapped in a `ParsedSpec` (`compute.rs`) that extracts and
@@ -258,7 +258,7 @@ HTTP gateway, not a cloud-storage backend.
 
 ## How it fits amp-controller
 
-The [amp-controller design](../controller/architecture/amp-controller.md) leans on
+The [amp-controller design](../../controller/architecture/amp-controller.md) leans on
 `compute_ctl` in a few concrete places:
 
 - **Single point of contact (§5.2).** `amp-controller` will drive endpoints purely

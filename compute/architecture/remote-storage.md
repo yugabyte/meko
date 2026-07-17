@@ -296,7 +296,7 @@ calls (`control_plane/src/storage_controller.rs:320-350`).
 `remote_storage::lib.rs:23`) is the shared constructor; the
 storage_controller wrapper in `control_plane` reuses it for its own
 one-shot `CREATE DATABASE` / DDL connections (see
-[`storage-controller.md`](storage-controller.md)). The rustls path was
+[`storage-controller.md`](../../storage_controller/architecture/storage-controller.md)). The rustls path was
 introduced in commit `7a424639e`.
 
 ### Sample TOML

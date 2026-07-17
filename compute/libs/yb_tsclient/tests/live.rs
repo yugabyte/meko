@@ -1417,7 +1417,7 @@ async fn large_payload_page_chains_complete() {
     ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
-    // The real pageserver.pages schema (architecture/yugabyte.md).
+    // The real pageserver.pages schema (compute/architecture/yugabyte.md).
     ysql.execute(
         &format!(
             "CREATE TABLE {TABLE} (

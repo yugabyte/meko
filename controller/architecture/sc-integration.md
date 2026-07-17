@@ -13,7 +13,7 @@ path, and `[#113]` moved amp's mutating APIs onto the write-ahead task framework
 Everything below reflects the branch model.
 
 Source of truth for the SC API is
-[`../../architecture/storage-controller-apis.md`](../../architecture/storage-controller-apis.md)
+[`storage-controller-apis.md`](../../storage_controller/architecture/storage-controller-apis.md)
 (router in `storage_controller/src/http.rs`). Work items are tracked in
 [`sc-integration-worklist.md`](sc-integration-worklist.md).
 

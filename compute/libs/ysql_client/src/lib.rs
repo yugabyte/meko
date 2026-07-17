@@ -1253,7 +1253,7 @@ async fn sleep_with_jitter(base: Duration) {
 /// confirmed it fails the TLS handshake against YB tservers under
 /// both dynamic-openssl-1.1 and static-vendored-openssl-3.6.2,
 /// while this rustls path connects fine to the same target. See
-/// `architecture/yugabyte.md` (and the linked YB-team report) for
+/// `compute/architecture/yugabyte.md` (and the linked YB-team report) for
 /// the diagnosis.
 pub fn build_yb_rustls_connector(
     sslrootcert: Option<&str>,
