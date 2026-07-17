@@ -60,29 +60,29 @@ Surviving background work:
 
 ### Code layout
 
-- `safekeeper/src/control_file.rs` — control-file `Storage` trait + impls.
-- `safekeeper/src/wal_storage.rs` — WAL `Storage` trait + `WalBookkeeping` impl + `WalReader`.
-- `safekeeper/src/yb_wal_storage.rs` — YB mirror (`safekeeper.wals`),
+- `compute/safekeeper/src/control_file.rs` — control-file `Storage` trait + impls.
+- `compute/safekeeper/src/wal_storage.rs` — WAL `Storage` trait + `WalBookkeeping` impl + `WalReader`.
+- `compute/safekeeper/src/yb_wal_storage.rs` — YB mirror (`safekeeper.wals`),
   producer/consumer writer, `load_write_lsn` restart rehydrate.
-- `safekeeper/src/timeline.rs` — `SharedState`, `Timeline::load_timeline`.
-- `safekeeper/src/timelines_global_map.rs` — `GlobalTimelines`. One process
+- `compute/safekeeper/src/timeline.rs` — `SharedState`, `Timeline::load_timeline`.
+- `compute/safekeeper/src/timelines_global_map.rs` — `GlobalTimelines`. One process
   serves one branch (see §5), so the registry is a single `Option<(branch_id,
   slot)>` plus one branch-tombstone slot, not `HashMap`s;
   `init()` loads only the baked branch, never the whole shared table. The
   external API (`get`, `get_all` → `Vec`, `timelines_count`, …) is unchanged.
-- `safekeeper/src/safekeeper.rs` — the acceptor: greeting handshake, WAL
+- `compute/safekeeper/src/safekeeper.rs` — the acceptor: greeting handshake, WAL
   truncate-on-elected, and append/flush handling (consensus/membership removed, §5).
-- `safekeeper/src/bin/yb-safekeeper.rs` — entry point; reads
+- `compute/safekeeper/src/bin/yb-safekeeper.rs` — entry point; reads
   `<datadir>/safekeeper.toml` into `SafeKeeperConf` (only `-D`/`--init`/
   `--dump-control-file` are CLI flags).
-- `libs/safekeeper_api/src/config.rs` — `SafekeeperConfigToml`, the on-disk
+- `compute/libs/safekeeper_api/src/config.rs` — `SafekeeperConfigToml`, the on-disk
   `safekeeper.toml` schema shared by the binary and yb_light_local.
 
 ## Changes in yb-light
 
 ### 1. Control file → YB columns (commits `c4c7c1350`, `840e56aae`)
 
-`YbControlFileStorage` is the sole `Storage` impl (`safekeeper/src/control_file.rs`).
+`YbControlFileStorage` is the sole `Storage` impl (`compute/safekeeper/src/control_file.rs`).
 The local-FS `FileStorage` path, the `ControlFileStorage` dispatch enum,
 the bincode + crc32c blob framing, and `control_file_upgrade.rs` (V1..V9
 legacy upgrade paths, 778 LOC) were all deleted in `840e56aae` once the
@@ -276,10 +276,10 @@ session. (Found by query (C) of `cell_db<table>` during the TPC-C run:
 the bytes were correct *in* `safekeeper.wals` but stale *in the
 in-memory segment buffer*.)
 
-Replaced with two pieces, both in `safekeeper/src/yb_wal_storage.rs` +
-`safekeeper/src/wal_cache.rs`:
+Replaced with two pieces, both in `compute/safekeeper/src/yb_wal_storage.rs` +
+`compute/safekeeper/src/wal_cache.rs`:
 
-1. **`WalCache`** (`safekeeper/src/wal_cache.rs`) — bounded in-memory
+1. **`WalCache`** (`compute/safekeeper/src/wal_cache.rs`) — bounded in-memory
    FIFO cache of recently-written WAL chunks, keyed by `(segno,
    chunk_offset)`. Populated by `YbWalStorage::upsert_writes` *before*
    the chunk is pushed onto the consumer channel, so a read-after-write
@@ -296,7 +296,7 @@ Replaced with two pieces, both in `safekeeper/src/yb_wal_storage.rs` +
    entries they touch never overlap, and the lock is held only for
    metadata ops (no I/O).
 
-2. **`YbSegmentReader`** (`safekeeper/src/yb_wal_storage.rs`) replaces
+2. **`YbSegmentReader`** (`compute/safekeeper/src/yb_wal_storage.rs`) replaces
    `VecAsyncRead`. Its `poll_read` walks forward through the segment
    one chunk at a time:
 
@@ -418,8 +418,8 @@ yb-amp therefore runs **exactly one safekeeper per branch** and the
 inherited Neon consensus (terms, voting, term-history reconciliation) and
 membership (`mconf` / generation / `require_single_safekeeper`) have been
 **removed entirely** from both ends of the proposer↔acceptor wire protocol
-— the C walproposer (`pgxn/yb_amp/`) and the Rust safekeeper
-(`safekeeper/src/safekeeper.rs`). That protocol is used only between those
+— the C walproposer (`compute/pgxn/yb_amp/`) and the Rust safekeeper
+(`compute/safekeeper/src/safekeeper.rs`). That protocol is used only between those
 two (hardcoded v3, no external consumers), so the removal is a clean
 lock-step change. What survives is the WAL **truncate-on-(re)connect**
 handshake:
@@ -507,7 +507,7 @@ Durability in yb-light is the `safekeeper.wals` mirror written
 synchronously by `flush_wal()` — there is no S3 offload tier.
 Consequently:
 
-- `safekeeper/src/wal_backup.rs` and `wal_backup_partial.rs` are
+- `compute/safekeeper/src/wal_backup.rs` and `wal_backup_partial.rs` are
   deleted (`1a32d69b4` slimmed `wal_backup.rs` 921 → 197 LOC keeping
   only the YB-WAL plumbing + `delete_timeline`; later commits dropped
   the file entirely once `WalBackup` no longer existed). The
@@ -528,7 +528,7 @@ underlying TCP socket dies — YB tserver crash, network blip, YBA rolling
 restart — `tokio_postgres`'s background connection task ends but the
 `Arc<Client>` stays, and every subsequent `execute()` lands on a corpse.
 
-`remote_storage::YsqlClient` (in `libs/remote_storage/src/ysql_client.rs`)
+`remote_storage::YsqlClient` (in `compute/libs/remote_storage/src/ysql_client.rs`)
 wraps `tokio_postgres::Client` with a stored connection config + reconnect
 closure. On every `execute` / `query` / `query_opt` it:
 
@@ -588,7 +588,7 @@ YB on next start. Logs and pidfile are recreated.
 With `hot_path = "tsclient"` in `yb_storage_conn` (see
 `architecture/yugabyte.md` §"Direct-to-tserver hot path"), `YbWalConn`
 additionally opens a pure-Rust thin-RPC client (`YbWalConn::yb_tsclient`,
-`libs/yb_tsclient` — pggate RPC to a tserver's RPC port) to
+`compute/libs/yb_tsclient` — pggate RPC to a tserver's RPC port) to
 `safekeeper.wals` at startup (fail-fast health check). The consumer's
 WAL write batch (`flush_batch`)
 then runs as ONE Perform per coalesced batch (typically one run); the

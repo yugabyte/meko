@@ -1,11 +1,11 @@
 # yb-pageserver HTTP management API
 
-Source: `pageserver/src/http/routes.rs` (router in `make_router`), wired up in
-`pageserver/src/bin/yb-pageserver.rs` (`start_pageserver` → `http::make_router`).
+Source: `compute/pageserver/src/http/routes.rs` (router in `make_router`), wired up in
+`compute/pageserver/src/bin/yb-pageserver.rs` (`start_pageserver` → `http::make_router`).
 
 The `yb-pageserver` binary serves this management API on a hyper listener bound
 to `listen_http_addr` (default `127.0.0.1:9898`, see
-`libs/pageserver_api/src/config.rs` `DEFAULT_HTTP_LISTEN_ADDR`). If
+`compute/libs/pageserver_api/src/config.rs` `DEFAULT_HTTP_LISTEN_ADDR`). If
 `listen_https_addr` is set, the same router is also served over TLS on that
 address. This is distinct from the compute-facing libpq port (`listen_pg_addr`,
 default `127.0.0.1:64000`) and the optional gRPC port (`listen_grpc_addr`).
@@ -19,7 +19,7 @@ cancellation by running it on a spawned task with a `CancellationToken`.
 
 Auth is controlled by `http_auth_type` in config. With `AuthType::Trust` no token
 is required; with `AuthType::YbLightJWT` an EdDSA-signed JWT is required via the
-`auth_middleware`. The accepted scopes (`pageserver/src/auth.rs`
+`auth_middleware`. The accepted scopes (`compute/pageserver/src/auth.rs`
 `check_permission`) are:
 
 - `PageServerApi` — blanket access to all routes (branch-scoped and instance-wide).

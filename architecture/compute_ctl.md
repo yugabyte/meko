@@ -1,6 +1,6 @@
 # compute_ctl
 
-`compute_ctl` (the `compute_tools/` crate) is the **per-endpoint supervisor**. One
+`compute_ctl` (the `compute/compute_tools/` crate) is the **per-endpoint supervisor**. One
 `compute_ctl` process runs alongside every compute: it acquires the endpoint's spec,
 generates `postgresql.conf`, syncs the safekeeper, pulls a basebackup from the
 pageserver, starts Postgres, applies the spec (roles / databases / extensions /
@@ -19,7 +19,7 @@ manages the Postgres / safekeeper / pageserver processes directly. See
 
 ## Inherited from Neon
 
-`compute_tools/` is upstream Neon, essentially unmodified (see "Changes in yb-light").
+`compute/compute_tools/` is upstream Neon, essentially unmodified (see "Changes in yb-light").
 Everything in this section is Neon behavior that yb-light relies on as-is.
 
 ### What it supervises
@@ -41,7 +41,7 @@ it merely *connects to* (their connstrings arrive in the spec — see below).
 ### Lifecycle & status state machine
 
 The live status is a `ComputeStatus`
-(`libs/compute_api/src/responses.rs`), surfaced over `GET /status` and used by the
+(`compute/libs/compute_api/src/responses.rs`), surfaced over `GET /status` and used by the
 control plane to drive an endpoint:
 
 | Status | Meaning |
@@ -108,7 +108,7 @@ a second postgres binding the client port and racing the next compute on shutdow
 
 ### The compute spec
 
-The spec is `ComputeSpec` (`libs/compute_api/src/spec.rs`) — the complete description of
+The spec is `ComputeSpec` (`compute/libs/compute_api/src/spec.rs`) — the complete description of
 what the compute should be: mode, pageserver/safekeeper connection info, the catalog
 (`cluster.roles`, `cluster.databases`), GUCs (`cluster.settings`), extensions, feature
 flags, audit level, LFC/prewarm knobs, pgbouncer/local_proxy config, and the
@@ -122,7 +122,7 @@ flags, audit level, LFC/prewarm knobs, pgbouncer/local_proxy config, and the
   flags are mutually exclusive.
 
 **One schema, three transports.** Both flags resolve to the same `ComputeConfig`
-(`libs/compute_api/src/responses.rs`) — `{ spec: Option<ComputeSpec>, compute_ctl_config }`.
+(`compute/libs/compute_api/src/responses.rs`) — `{ spec: Option<ComputeSpec>, compute_ctl_config }`.
 The `--config` file is deserialized into it directly; the control-plane GET returns a
 `ControlPlaneConfigResponse` (the *same* fields plus an `Empty | Attached` status
 discriminator) and `.into()`s to it, dropping `status`. That same struct is also the
@@ -153,7 +153,7 @@ ordered, partly per-database-parallel set of phases, each idempotent:
 
 ### Compute modes
 
-`ComputeMode` (`libs/compute_api/src/spec.rs`) selects behavior:
+`ComputeMode` (`compute/libs/compute_api/src/spec.rs`) selects behavior:
 
 | Mode | Role | `compute_ctl` behavior |
 |---|---|---|
@@ -246,7 +246,7 @@ touched the crate are fork-wide mechanical refactors, not behavior changes:
   `ShardCount` / … types and `TenantShardId` are gone — yb-light is single-shard);
 - the collapse of `(tenant_id, timeline_id)` into a single `branch_id` (the
   `TenantId` / `TenantTimelineId` types are gone; `TimelineId` became `BranchId`);
-- the strip of S3/Azure/GCS backends from `libs/remote_storage`.
+- the strip of S3/Azure/GCS backends from `compute/libs/remote_storage`.
 
 `compute_ctl` does not know YugabyteDB exists, by design (mirroring
 [`compute.md`](compute.md)). It speaks the same getpage-RPC / libpq / replication wire
@@ -301,16 +301,16 @@ mode, conflicts with `--config`), `--installed-extensions-collection-interval`,
 
 ## Where the code lives
 
-- `compute_tools/src/bin/compute_ctl.rs` — binary entry, CLI, `main()`.
-- `compute_tools/src/compute.rs` — `ComputeNode` / `ComputeState`, startup, basebackup,
+- `compute/compute_tools/src/bin/compute_ctl.rs` — binary entry, CLI, `main()`.
+- `compute/compute_tools/src/compute.rs` — `ComputeNode` / `ComputeState`, startup, basebackup,
   reconfigure, shutdown.
-- `compute_tools/src/spec.rs`, `spec_apply.rs` — spec acquisition and the ordered apply
+- `compute/compute_tools/src/spec.rs`, `spec_apply.rs` — spec acquisition and the ordered apply
   phases.
-- `compute_tools/src/http/` — the two Axum servers, routes, JWT middleware.
-- `compute_tools/src/{monitor,configurator}.rs` — the background loops.
-- `compute_tools/src/{compute_prewarm,compute_promote,sync_sk,lsn_lease}.rs` — feature
+- `compute/compute_tools/src/http/` — the two Axum servers, routes, JWT middleware.
+- `compute/compute_tools/src/{monitor,configurator}.rs` — the background loops.
+- `compute/compute_tools/src/{compute_prewarm,compute_promote,sync_sk,lsn_lease}.rs` — feature
   subsystems.
-- `libs/compute_api/src/{spec,responses}.rs` — `ComputeSpec` / `ComputeMode` /
+- `compute/libs/compute_api/src/{spec,responses}.rs` — `ComputeSpec` / `ComputeMode` /
   `ComputeStatus`, shared with the control plane.
 - `control_plane/src/endpoint.rs` — the `yb_light_local` wrapper that writes
   `config.json` and launches the binary.

@@ -5,7 +5,7 @@
 #
 # Unlike run.sh (the Rust integration harness with checked-in golden workloads),
 # this drives the FULL upstream suite straight from the vendored Postgres
-# source (vendor/postgres-v18/src/test/regress) via the stock pg_regress
+# source (compute/vendor/postgres-v18/src/test/regress) via the stock pg_regress
 # binary. It brings up a throwaway yb_light_local cluster (compute ->
 # yb-pageserver/safekeeper -> YugabyteDB), creates the `regression`
 # database, runs the parallel schedule, and tears the cluster down.
@@ -71,7 +71,7 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-REG="$REPO/vendor/postgres-v18/src/test/regress"
+REG="$REPO/compute/vendor/postgres-v18/src/test/regress"
 PGINST="$REPO/pg_install/v18"
 # yb-light expected-output variants for the by-design CREATE TABLESPACE
 # diffs; overlaid into the vendored expected/ at run time (see below).
@@ -80,8 +80,8 @@ OVERLAID=()   # variant files copied into expected/, removed by finish()
 
 # 1) Vendored Postgres source carries the suite (sql/expected/schedule).
 if [[ ! -f "$REG/parallel_schedule" ]]; then
-    echo ">>> populating vendor/postgres-v18 submodule (one-time)..."
-    git submodule update --init vendor/postgres-v18
+    echo ">>> populating compute/vendor/postgres-v18 submodule (one-time)..."
+    git submodule update --init compute/vendor/postgres-v18
 fi
 [[ "$SCHEDULE" = /* ]] || SCHEDULE="$REG/$SCHEDULE"
 [[ -f "$SCHEDULE" ]] || { echo "schedule not found: $SCHEDULE" >&2; exit 1; }
@@ -115,8 +115,8 @@ PKGLIB="$(readlink -f "$PGINST/lib/postgresql")"
 echo ">>> building regression support modules (regress, refint, autoinc) -> $PKGLIB"
 tmod="$(mktemp -d)"
 cp "$REG/regress.c" \
-   "$REPO/vendor/postgres-v18/contrib/spi/refint.c" \
-   "$REPO/vendor/postgres-v18/contrib/spi/autoinc.c" "$tmod/"
+   "$REPO/compute/vendor/postgres-v18/contrib/spi/refint.c" \
+   "$REPO/compute/vendor/postgres-v18/contrib/spi/autoinc.c" "$tmod/"
 # -DREFINT_VERBOSE matches contrib/spi/Makefile: without it refint's
 # check_foreign_key skips the cascade NOTICEs the `triggers` test expects
 # (the cascade still runs correctly — only the NOTICE text is gated).

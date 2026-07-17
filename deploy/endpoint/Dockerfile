@@ -19,7 +19,7 @@
 # Build (from the repo root):
 #   docker build -t yb-light/neon-endpoint:dev -f deploy/endpoint/Dockerfile .
 #
-# yb-light is Postgres v18 only (vendor/postgres-v18, POSTGRES_VERSIONS=v18).
+# yb-light is Postgres v18 only (compute/vendor/postgres-v18, POSTGRES_VERSIONS=v18).
 
 ARG REPOSITORY=ghcr.io/neondatabase
 ARG IMAGE=build-tools
@@ -30,7 +30,7 @@ ARG DEBIAN_FLAVOR=${DEBIAN_VERSION}-slim
 # 1. Build patched Postgres v18 -> pg_install/v18.
 FROM $REPOSITORY/$IMAGE:$TAG AS pg-build
 WORKDIR /home/nonroot
-COPY --chown=nonroot vendor/postgres-v18 vendor/postgres-v18
+COPY --chown=nonroot compute/vendor/postgres-v18 compute/vendor/postgres-v18
 COPY --chown=nonroot Makefile Makefile
 COPY --chown=nonroot postgres.mk postgres.mk
 COPY --chown=nonroot scripts/ninstall.sh scripts/ninstall.sh

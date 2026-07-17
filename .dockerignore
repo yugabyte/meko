@@ -12,20 +12,15 @@
 # Directories
 !.cargo/
 !.config/
+# compute/ now holds pageserver, safekeeper, endpoint_storage, compute_tools,
+# pgxn (the yb_amp extension), and libs — the whole storage/compute engine.
 !compute/
-!compute_tools/
 !control_plane/
 !docker-compose/ext-src
-!libs/
-!pageserver/
-!pgxn/
 !proxy/
-!endpoint_storage/
 !storage_scrubber/
-!safekeeper/
 !storage_broker/
 !storage_controller/
-!vendor/postgres-*/
 !workspace_hack/
 !build-tools/patches
 !deploy/endpoint/

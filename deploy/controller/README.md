@@ -50,7 +50,7 @@ build toolchain itself. Build the bundle first, then the image, from the **repo
 root**:
 
 ```sh
-git submodule update --init vendor/postgres-v18   # one-time: source for the PG v18 headers
+git submodule update --init compute/compute/vendor/postgres-v18   # one-time: source for the PG v18 headers
 make controller-bundle BUILD_TYPE=release                # -> target/controller-bundle/{controller,storage_controller}
 docker build -t yb-light/controller:dev -f deploy/controller/Dockerfile .
 ```
@@ -64,7 +64,7 @@ repo's normal toolchain, not the build-tools container:
 - the Rust toolchain pinned in [`rust-toolchain.toml`](../../rust-toolchain.toml);
 - a C toolchain (`gcc`/`make`/`bison`/`flex`) **plus `clang`/`libclang`** (bindgen
   generates the `postgres_ffi` bindings), and the PG `configure` dev libraries;
-- the `vendor/postgres-v18` submodule initialized (the command above).
+- the `compute/compute/vendor/postgres-v18` submodule initialized (the command above).
 
 Install the toolchain bits your distro is missing, e.g.:
 

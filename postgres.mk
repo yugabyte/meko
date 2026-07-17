@@ -6,7 +6,7 @@
 # properties for caching:
 #
 # - Compiling the targets in this file only builds the PostgreSQL sources
-#   under the vendor/ subdirectory, nothing else from the repository.
+#   under the compute/vendor/ subdirectory, nothing else from the repository.
 # - All outputs go to POSTGRES_INSTALL_DIR (by default 'pg_install',
 #   see parent Makefile)
 # - intermediate build artifacts go to BUILD_DIR
@@ -80,16 +80,16 @@ $(BUILD_DIR)/%/config.status:
 	test -e $(BUILD_DIR)/CACHEDIR.TAG || echo "$(CACHEDIR_TAG_CONTENTS)" > $(BUILD_DIR)/CACHEDIR.TAG
 
 	+@echo "Configuring Postgres $* build"
-	@test -s $(ROOT_PROJECT_DIR)/vendor/postgres-$*/configure || { \
-		echo "\nPostgres submodule not found in $(ROOT_PROJECT_DIR)/vendor/postgres-$*/, execute "; \
+	@test -s $(ROOT_PROJECT_DIR)/compute/vendor/postgres-$*/configure || { \
+		echo "\nPostgres submodule not found in $(ROOT_PROJECT_DIR)/compute/vendor/postgres-$*/, execute "; \
 		echo "'git submodule update --init --recursive --depth 2 --progress .' in project root.\n"; \
 		exit 1; }
 	mkdir -p $(BUILD_DIR)/$*
 
 	VERSION=$*; \
-	EXTRA_VERSION=$$(cd $(ROOT_PROJECT_DIR)/vendor/postgres-$$VERSION && git rev-parse HEAD); \
+	EXTRA_VERSION=$$(cd $(ROOT_PROJECT_DIR)/compute/vendor/postgres-$$VERSION && git rev-parse HEAD); \
 	(cd $(BUILD_DIR)/$$VERSION && \
-	env PATH="$(EXTRA_PATH_OVERRIDES):$$PATH" $(ROOT_PROJECT_DIR)/vendor/postgres-$$VERSION/configure \
+	env PATH="$(EXTRA_PATH_OVERRIDES):$$PATH" $(ROOT_PROJECT_DIR)/compute/vendor/postgres-$$VERSION/configure \
 		CFLAGS='$(PG_CFLAGS)' LDFLAGS='$(PG_LDFLAGS)' \
 		$(PG_CONFIGURE_OPTS) --with-extra-version=" ($$EXTRA_VERSION)" \
 		--prefix=$(abspath $(POSTGRES_INSTALL_DIR))/$$VERSION > configure.log)

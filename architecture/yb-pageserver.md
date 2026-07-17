@@ -5,7 +5,7 @@ instead of building delta/image layer files. It started as a fork of
 upstream Neon's `pageserver/` so the two could be benchmarked
 head-to-head; the upstream source has since been removed (lane H,
 2026-06-01) and the row-per-page implementation is now the canonical
-`pageserver/` crate. The shipped binary keeps the `yb-pageserver`
+`compute/pageserver/` crate. The shipped binary keeps the `yb-pageserver`
 name to make the storage backend obvious in `ps`, logs, and
 deployments.
 
@@ -195,7 +195,7 @@ The binary name is `yb-pageserver`. Builds with
 The `getpage` gRPC, basebackup, walreceiver, walingest, walredo, and the
 storage-controller handshake are unchanged, with one default change:
 **`lazy_slru_download` defaults to `true`** (`default_tenant_conf`,
-`libs/pageserver_api/src/config.rs`). Basebackup therefore ships no
+`compute/libs/pageserver_api/src/config.rs`). Basebackup therefore ships no
 SLRU (clog/multixact) pages — the compute faults them in on demand via
 `communicator_read_slru_segment`. With the upstream default (`false`)
 basebackup eagerly packs the entire SLRU into the tarball, which under
@@ -755,7 +755,7 @@ name + every delete is gen-checked" machinery into one column.
 ## Compute ↔ pageserver timeouts
 
 The compute opens libpq connections to the pageserver per backend
-(`pgxn/yb_amp/libpagestore.c`). The relevant timers, with yb-light defaults
+(`compute/pgxn/yb_amp/libpagestore.c`). The relevant timers, with yb-light defaults
 where they differ from upstream:
 
 | Stage | GUC / location | Default | Notes |
@@ -803,12 +803,12 @@ Per-phase task records live under [`../tasks/`](../tasks/). See
 
 ## Code anchors
 
-- `pageserver/src/page_store.rs` — `PageStore` row store; the
+- `compute/pageserver/src/page_store.rs` — `PageStore` row store; the
   image-anchored `read_chain` CTE + `scan_range`.
-- `pageserver/src/page_writer.rs` — `PageWriter` buffered write path;
+- `compute/pageserver/src/page_writer.rs` — `PageWriter` buffered write path;
   pure passthrough (no walredo at write time); `read_chain` /
   `scan_range` blend in-RAM buffer + PageStore.
-- `pageserver/src/page_server/timeline.rs` — `get_vectored_via_page_writer`
+- `compute/pageserver/src/page_server/timeline.rs` — `get_vectored_via_page_writer`
   drives the row-store read path; `chain_to_value_reconstruct_state`
   converts a chain into walredo inputs.
 - `storage_controller/migrations/00000000000001_initial_schema/up.sql`

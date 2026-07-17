@@ -1178,5 +1178,5 @@ tab's whole reason to exist.
   oapi-codegen client), `deploy/up.sh` + Helm charts, `deploy/smoke-test.sh`,
   `control_plane/` `yb_light_local`, `test/integration/`.
 - **Perf/benchbase:** yb-amp `benchmark/scripts/` (`tpcc-run.sh`, `_env.sh`,
-  `_metrics.sh`), `pageserver/pagebench`.
+  `_metrics.sh`), `compute/pageserver/pagebench`.
 - **Test taxonomy & quality dimensions:** YugabyteDB `coverage_process`.

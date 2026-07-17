@@ -254,7 +254,7 @@ across the cluster. Table names are not configurable: each component
 hardcodes the table(s) it owns. Smart-driver
 load-balancing (`yb_servers()`-based fanout) is currently disabled
 pending an upstream `yb-tokio-postgres` fix; see the comment in
-`libs/ysql_client/src/lib.rs::build_pg_config` for the state of that
+`compute/libs/ysql_client/src/lib.rs::build_pg_config` for the state of that
 workaround.
 
 Once running, connect with any Postgres client:
@@ -344,7 +344,7 @@ fresh clone and for every build after:
 It does everything the build needs, so there's no manual `git submodule
 update` or `make` to remember. Specifically it:
 
-- Checks out the vendored **PostgreSQL v18** tree (`vendor/postgres-v18`)
+- Checks out the vendored **PostgreSQL v18** tree (`compute/vendor/postgres-v18`)
   on a fresh clone, and re-syncs + rebuilds PostgreSQL whenever the
   submodule gitlink has moved; otherwise it reuses the cached
   `pg_install/v18`.
@@ -390,7 +390,7 @@ cargo test --workspace
 
 Several live-DB tests (`pageserver::page_store::tests`, `pageserver::page_writer::tests`,
 `safekeeper::yb_wal_storage::tests`, and the `yb_tsclient` live suite in
-`libs/yb_tsclient/tests/live.rs`) assert against a live YB with the
+`compute/libs/yb_tsclient/tests/live.rs`) assert against a live YB with the
 production schema migrated. They default to a developer-managed cluster on
 `5433`/`yb_storage` (override with `YB_TEST_HOST/PORT/USER/DB`); without one,
 `test/integration/compute/run.sh unit` runs them against an isolated ephemeral cluster.
@@ -427,13 +427,13 @@ the suite before claiming any corruption-class fix.
 
 Three compiled `pageserver` bins (`cargo build -p pageserver`) that read
 the row-store tables and render them in a human-readable form. They share
-one connection-args struct ([`ysql_client::YbConnArgs`](libs/ysql_client/src/lib.rs)),
+one connection-args struct ([`ysql_client::YbConnArgs`](compute/libs/ysql_client/src/lib.rs)),
 so the flags are identical across all three and can't drift — and all work
 against both a local no-TLS cluster (default) and a TLS-required one
 (`--sslmode require`). `build.sh --release-tar` stages them into
 `${BUNDLE}/tools/` so they ship to deploy hosts alongside the daemons.
 
-- [`yb-dump-pages`](pageserver/src/bin/yb-dump-pages.rs) — dump or decode
+- [`yb-dump-pages`](compute/pageserver/src/bin/yb-dump-pages.rs) — dump or decode
   `pageserver.pages` rows for one (rel, fork) tuple. Renders the LSN as
   `H/L` hex and forknum as `main`/`fsm`/`vm`/`init`. Required hash columns:
   `--tenant --timeline --spc --db --rel --fork`. Range filters: `--blknum`
@@ -445,7 +445,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   `offnum`, and flags a GAP when a delta's `offnum` exceeds the running
   max+1 — the signature of a chain walredo can't fold and of a base image
   too small for the deltas above it (see issue #22).
-- [`yb-dump-wals`](pageserver/src/bin/yb-dump-wals.rs) — dump `safekeeper.wals`
+- [`yb-dump-wals`](compute/pageserver/src/bin/yb-dump-wals.rs) — dump `safekeeper.wals`
   rows (the safekeeper's WAL-in-YB chunks). Required hash columns:
   `--tenant --timeline`. Range filters: `--segno` (or
   `--segno-from/--segno-to`), `--chunk-offset` (or its `-from/-to`
@@ -454,7 +454,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   `--summary` swaps the row dump for a per-segno health view
   (`min/max LSN, total_bytes, gap_bytes`) — the fastest way to spot a WAL
   hole during an incident.
-- [`yb-reset-consistent-lsn`](pageserver/src/bin/yb-reset-consistent-lsn.rs)
+- [`yb-reset-consistent-lsn`](compute/pageserver/src/bin/yb-reset-consistent-lsn.rs)
   — find (and optionally rewind) `pageserver.timeline_state.consistent_lsn`
   to a real WAL record boundary. Given `--tenant --timeline --target-lsn
   X/Y` it anchors on a fresh-record WAL page, replays the real WAL decoder

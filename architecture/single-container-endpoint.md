@@ -85,7 +85,7 @@ one (no `initdb`).
 ## Image notes
 
 yb-light is Postgres v18 only (`POSTGRES_VERSIONS = v18`,
-`vendor/postgres-v18`). The endpoint image has its own multi-stage Dockerfile
+`compute/vendor/postgres-v18`). The endpoint image has its own multi-stage Dockerfile
 rather than reusing the repo-root `Dockerfile`, which is unmaintained upstream
 cruft for this fork (it references absent `postgres-v14..v16` submodules, a
 `pageserver` binary that no longer exists — it is `yb-pageserver` — and the

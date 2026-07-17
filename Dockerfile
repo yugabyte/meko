@@ -38,17 +38,17 @@ ARG BASE_IMAGE_SHA=${BASE_IMAGE_SHA/debian:bullseye-slim/debian@$BULLSEYE_SLIM_S
 #
 # But to enable docker to cache intermediate layers, we perform a few preparatory steps:
 #
-# - Build all postgres versions, depending on just the contents of vendor/
+# - Build all postgres versions, depending on just the contents of compute/vendor/
 # - Use cargo chef to build all rust dependencies
 
 # 1. Build all postgres versions
 FROM $REPOSITORY/$IMAGE:$TAG AS pg-build
 WORKDIR /home/nonroot
 
-COPY --chown=nonroot vendor/postgres-v14 vendor/postgres-v14
-COPY --chown=nonroot vendor/postgres-v15 vendor/postgres-v15
-COPY --chown=nonroot vendor/postgres-v16 vendor/postgres-v16
-COPY --chown=nonroot vendor/postgres-v18 vendor/postgres-v18
+COPY --chown=nonroot compute/vendor/postgres-v14 compute/vendor/postgres-v14
+COPY --chown=nonroot compute/vendor/postgres-v15 compute/vendor/postgres-v15
+COPY --chown=nonroot compute/vendor/postgres-v16 compute/vendor/postgres-v16
+COPY --chown=nonroot compute/vendor/postgres-v18 compute/vendor/postgres-v18
 COPY --chown=nonroot Makefile Makefile
 COPY --chown=nonroot postgres.mk postgres.mk
 COPY --chown=nonroot scripts/ninstall.sh scripts/ninstall.sh

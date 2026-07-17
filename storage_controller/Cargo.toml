@@ -69,9 +69,9 @@ diesel-async = { version = "0.5.2", features = ["postgres", "bb8", "async-connec
 diesel_migrations = { version = "2.2.0" }
 scoped-futures = "0.1.4"
 
-http-utils = { path = "../libs/http-utils/" }
-utils = { path = "../libs/utils/" }
-ysql_client = { path = "../libs/ysql_client" }
-metrics = { path = "../libs/metrics/" }
+http-utils = { path = "../compute/libs/http-utils/" }
+utils = { path = "../compute/libs/utils/" }
+ysql_client = { path = "../compute/libs/ysql_client" }
+metrics = { path = "../compute/libs/metrics/" }
 control_plane = { path = "../control_plane" }
 workspace_hack = { version = "0.1", path = "../workspace_hack" }

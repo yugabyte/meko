@@ -3,7 +3,7 @@
 Updated: 2026-06-08
 
 Inventory of every LSN the safekeeper uses, derived from the Rust sources
-only (`safekeeper/`, `libs/utils`, `libs/safekeeper_api`). Do not treat
+only (`compute/safekeeper/`, `compute/libs/utils`, `compute/libs/safekeeper_api`). Do not treat
 other architecture docs as authoritative — upstream Neon described local
 segment files, `backup_lsn`, multi-SK quorum `commit_lsn`, and S3
 offload paths that are gone or collapsed in yb-light.
@@ -62,7 +62,7 @@ Persisted in YB (`control_file::YbControlFileStorage`). Loaded at timeline
 attach; updated via `TimelineState::finish_change` / `flush`.
 
 Authoritative current column list is `COLUMNS` in
-`safekeeper/src/control_file.rs`.
+`compute/safekeeper/src/control_file.rs`.
 
 | Column | Meaning |
 |--------|---------|
@@ -340,20 +340,20 @@ interval), SK retains extra WAL — safe, not data loss.
 
 ## Code anchors
 
-- `safekeeper/src/state.rs` — `TimelinePersistentState`,
+- `compute/safekeeper/src/state.rs` — `TimelinePersistentState`,
   `TimelineMemState`, `start_change` / `finish_change`.
-- `safekeeper/src/control_file.rs` — YB row read/write.
-- `safekeeper/src/safekeeper.rs` — consensus, `flush_lsn()`,
+- `compute/safekeeper/src/control_file.rs` — YB row read/write.
+- `compute/safekeeper/src/safekeeper.rs` — consensus, `flush_lsn()`,
   `handle_elected`, `handle_append_request`.
-- `safekeeper/src/wal_storage.rs` — `WalBookkeeping` watermarks,
+- `compute/safekeeper/src/wal_storage.rs` — `WalBookkeeping` watermarks,
   `Storage` trait.
-- `safekeeper/src/yb_wal_storage.rs` — YB mirror, `load_write_lsn`,
+- `compute/safekeeper/src/yb_wal_storage.rs` — YB mirror, `load_write_lsn`,
   `flush_wal` durability.
-- `safekeeper/src/send_wal.rs` — `START_REPLICATION`, pageserver
+- `compute/safekeeper/src/send_wal.rs` — `START_REPLICATION`, pageserver
   feedback handling.
-- `safekeeper/src/send_interpreted_wal.rs` — interpreted batch LSNs.
-- `safekeeper/src/wal_reader_stream.rs` — `WalBytes.available_wal_end_lsn`.
-- `safekeeper/src/remove_wal.rs` — `calc_horizon_lsn`.
-- `safekeeper/src/timeline_manager.rs` — control-file flush, WAL removal,
+- `compute/safekeeper/src/send_interpreted_wal.rs` — interpreted batch LSNs.
+- `compute/safekeeper/src/wal_reader_stream.rs` — `WalBytes.available_wal_end_lsn`.
+- `compute/safekeeper/src/remove_wal.rs` — `calc_horizon_lsn`.
+- `compute/safekeeper/src/timeline_manager.rs` — control-file flush, WAL removal,
   broker `is_active`.
-- `libs/utils/src/pageserver_feedback.rs` — feedback wire format.
+- `compute/libs/utils/src/pageserver_feedback.rs` — feedback wire format.

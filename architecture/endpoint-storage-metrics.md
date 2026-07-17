@@ -1,9 +1,9 @@
 # `endpoint_storage` Prometheus metrics
 
-Source: `endpoint_storage/src/app.rs:28,41-46` (the `/metrics` route and
-handler), `endpoint_storage/src/main.rs:43-49` (`logging::init`),
-`libs/utils/src/logging.rs:84-119` (the only metrics forced into the
-registry at startup), `libs/remote_storage/src/metrics.rs` (confirms the
+Source: `compute/endpoint_storage/src/app.rs:28,41-46` (the `/metrics` route and
+handler), `compute/endpoint_storage/src/main.rs:43-49` (`logging::init`),
+`compute/libs/utils/src/logging.rs:84-119` (the only metrics forced into the
+registry at startup), `compute/libs/remote_storage/src/metrics.rs` (confirms the
 backend registers none).
 
 ## Summary: no service-specific metrics
@@ -15,7 +15,7 @@ backend it writes to also registers no metrics: the S3-era bucket-request
 metrics were removed when YB became the sole backend, and
 `remote_storage::metrics` now contains only the `RequestKind` enum used to
 pick a concurrency semaphore — no metric types
-(`libs/remote_storage/src/metrics.rs:1-14`).
+(`compute/libs/remote_storage/src/metrics.rs:1-14`).
 
 ## The `/metrics` endpoint
 
@@ -42,7 +42,7 @@ is limited to the logging counters set up by `utils::logging::init(...)`
 There are **no** process/runtime collectors (no
 `process_cpu_seconds_total`, `process_resident_memory_bytes`, Go-style
 runtime metrics, etc.) — no process collector is registered anywhere in the
-dependency chain (`libs/utils/src/` has no `ProcessCollector` /
+dependency chain (`compute/libs/utils/src/` has no `ProcessCollector` /
 `process_collector` registration).
 
 ## Operational notes

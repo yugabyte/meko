@@ -34,6 +34,6 @@ postgres-protocol.workspace = true
 futures.workspace = true
 # Crafting tricky WAL-end shapes (crafted_wal_end scenario); the wal_craft
 # Crafter API takes the sync `postgres` client.
-wal_craft = { path = "../../../libs/postgres_ffi/wal_craft" }
+wal_craft = { path = "../../../compute/libs/postgres_ffi/wal_craft" }
 postgres.workspace = true
 workspace_hack.workspace = true

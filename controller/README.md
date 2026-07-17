@@ -68,7 +68,7 @@ The controller module is **pure Go**: `make controller-test` needs no Postgres h
 toolchain, and no build-tools image — the storage-controller integration test
 runs against a fake binary, so supervision/restart are covered locally. Building
 the real bundle (`make controller-bundle`, which compiles `storage_controller`) is the
-only part that needs the wider toolchain — the `vendor/postgres-v18` submodule
+only part that needs the wider toolchain — the `compute/vendor/postgres-v18` submodule
 plus Rust + C + `clang`/`libclang`; it installs the PG v18 headers itself. See
 [`deploy/controller`](../deploy/controller/README.md) for the bundle/container details.
 

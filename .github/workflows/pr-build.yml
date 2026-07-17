@@ -7,7 +7,7 @@ name: CI
 #                via cargo-nextest (the three live-DB test modules
 #                are excluded here and run in the integration job instead, where a
 #                migrated cluster exists). PostgreSQL itself is built from
-#                the vendor/postgres-v18 submodule and cached keyed on the
+#                the compute/vendor/postgres-v18 submodule and cached keyed on the
 #                submodule commit, so warm runs skip it.
 #   integration        — `test/integration/compute/run.sh` against a YugabyteDB container:
 #                live-DB unit tests + the fast scenario suite on PRs
@@ -19,7 +19,7 @@ name: CI
 # the JUnit XML that nextest/gotestsum emit, so failures show up as a
 # per-test pass/fail report instead of a wall of log.
 #
-# NOTE: vendor/postgres-v18 resolves to yugabyte/amp-postgres (internal),
+# NOTE: compute/vendor/postgres-v18 resolves to yugabyte/amp-postgres (internal),
 # which the repo-scoped default GITHUB_TOKEN cannot read. The compute and
 # integration jobs mint a short-lived, read-only installation token for that repo
 # alone from the yb-agentk-dev GitHub App (App ID 3784852; private key in
@@ -77,10 +77,10 @@ jobs:
               - '.yb-light_clippy_args'
               - 'run_clippy.sh'
               - '.config/nextest.toml'
-              - 'libs/**'
-              - 'pgxn/**'
+              - 'compute/libs/**'
+              - 'compute/pgxn/**'
               - 'test/integration/compute/**'
-              - 'vendor/postgres-v18'
+              - 'compute/vendor/postgres-v18'
               - 'Makefile'
               - 'postgres.mk'
               - 'build.sh'
@@ -161,7 +161,7 @@ jobs:
       # gitlink plus the build plumbing that shapes the install.
       - name: Compute PostgreSQL cache key
         id: pgrev
-        run: echo "rev=$(git rev-parse HEAD:vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+        run: echo "rev=$(git rev-parse HEAD:compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
 
       - name: Cache PostgreSQL install
         uses: actions/cache@v6
@@ -280,7 +280,7 @@ jobs:
 
       - name: Compute PostgreSQL cache key
         id: pgrev
-        run: echo "rev=$(git rev-parse HEAD:vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+        run: echo "rev=$(git rev-parse HEAD:compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
 
       - name: Cache PostgreSQL install
         uses: actions/cache@v6

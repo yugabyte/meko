@@ -3,7 +3,7 @@
 Updated: 2026-06-07
 
 Inventory of every LSN the pageserver uses, derived from the Rust sources
-only (`pageserver/`, `safekeeper/`, `libs/utils`, `libs/pageserver_api`).
+only (`compute/pageserver/`, `compute/safekeeper/`, `compute/libs/utils`, `compute/libs/pageserver_api`).
 Do not treat other architecture docs as authoritative for this topic —
 several of them describe upstream paths that no longer exist.
 
@@ -52,7 +52,7 @@ flowchart LR
 ### `applied_lsn` — eager, in-memory
 
 **Where:** `Timeline.applied_lsn: AtomicLsn`
-(`pageserver/src/page_server/timeline.rs`).
+(`compute/pageserver/src/page_server/timeline.rs`).
 
 **Meaning:** End of the last WAL record the walreceiver has put into the
 `PageWriter` buffer — i.e., the in-RAM ingest frontier. NOT a durability
@@ -82,7 +82,7 @@ state — all must read `consistent_lsn` instead.
 ### `last_record_lsn` — eager, in-memory (with `prev` pairing)
 
 **Where:** `Timeline.last_record_lsn: SeqWait<RecordLsn, Lsn>`
-(`pageserver/src/page_server/timeline.rs`).
+(`compute/pageserver/src/page_server/timeline.rs`).
 
 **Meaning:** End of the last fully ingested WAL record (`RecordLsn.last`).
 `RecordLsn.prev` is the end of the record before that. Same eagerness
@@ -147,7 +147,7 @@ beyond which the pageserver would never advertise progress to the
 safekeeper.
 
 **Advances:** Only inside `PageWriter::flush`'s success branch
-(`pageserver/src/page_writer.rs`):
+(`compute/pageserver/src/page_writer.rs`):
 1. `try_write_rows` lands the buffer in YB.
 2. The throttled, gen-fenced `PageStore::advance_consistent_lsn` UPSERT
    updates `timeline_state.consistent_lsn`.
@@ -440,22 +440,22 @@ persisted timeline_state.consistent_lsn  ≤  consistent_lsn_observed
 
 ## Code anchors
 
-- `pageserver/src/page_server/timeline.rs` — `last_record_lsn`, `applied_lsn`,
+- `compute/pageserver/src/page_server/timeline.rs` — `last_record_lsn`, `applied_lsn`,
   `get_consistent_lsn`, `applied_gc_cutoff_lsn`, `finish_write`,
   `get_vectored_via_page_writer`.
-- `pageserver/src/page_server/timeline/remote_state.rs` — `consistent_lsn`
+- `compute/pageserver/src/page_server/timeline/remote_state.rs` — `consistent_lsn`
   slot owned by `TimelineRemoteState`.
-- `pageserver/src/page_writer.rs` — flush, `consistent_lsn_observed` /
+- `compute/pageserver/src/page_writer.rs` — flush, `consistent_lsn_observed` /
   `consistent_lsn_watermark`, `publish_consistent_lsn`,
   `force_upsert_consistent_lsn_if_advanced`, `record_lsn_history`.
-- `pageserver/src/page_store.rs` — `advance_consistent_lsn`,
+- `compute/pageserver/src/page_store.rs` — `advance_consistent_lsn`,
   `insert_timeline_at_creation`, `update_timeline_state` (unused).
-- `pageserver/src/page_server/timeline/walreceiver/walreceiver_connection.rs` —
+- `compute/pageserver/src/page_server/timeline/walreceiver/walreceiver_connection.rs` —
   ingest, feedback, resume startpoint (both read `get_consistent_lsn`).
-- `pageserver/src/pgdatadir_mapping.rs` — `DatadirModification::commit`.
-- `safekeeper/src/send_wal.rs` — `update_remote_consistent_lsn` (truncation).
+- `compute/pageserver/src/pgdatadir_mapping.rs` — `DatadirModification::commit`.
+- `compute/safekeeper/src/send_wal.rs` — `update_remote_consistent_lsn` (truncation).
 - [`safekeeper-lsns.md`](safekeeper-lsns.md) — SK-side LSN inventory; the
   pair to this doc.
-- `libs/utils/src/pageserver_feedback.rs` — feedback wire format.
+- `compute/libs/utils/src/pageserver_feedback.rs` — feedback wire format.
 - `storage_controller/migrations/00000000000001_initial_schema/up.sql` —
   `pageserver.timeline_state.consistent_lsn` column.

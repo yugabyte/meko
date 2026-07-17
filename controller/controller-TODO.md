@@ -84,11 +84,11 @@ fleet manager** → this is an **epic**, expect multiple tickets.
 
 **Key investigations:**
 - **Config delivery:** static spec/config file + restart **vs.** compute_ctl's config-URI
-  fetch (`compute_tools/src/bin/yb-compute-ctl.rs` `control_plane_uri` /
+  fetch (`compute/compute_tools/src/bin/yb-compute-ctl.rs` `control_plane_uri` /
   `get_config_from_control_plane`). Today config is baked into a ConfigMap at startup
   (deploy-time, not reconfigure-time).
 - **Forcing a refresh:** compute_ctl already has a reconfigure route
-  (`compute_tools/src/http/routes/configure.rs`, `ConfigurationRequest`). Work out how to
+  (`compute/compute_tools/src/http/routes/configure.rs`, `ConfigurationRequest`). Work out how to
   drive a warm pod unconfigured → serving a branch, ideally without a process restart.
 
 Sub-tickets to split out: fleet manager · warm-pod spec · reconfigure path · controller

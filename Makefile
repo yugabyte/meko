@@ -143,10 +143,10 @@ neon-pg-ext-%: postgres-install-% cargo-target-dir
 		CARGO_BUILD_FLAGS="$(CARGO_BUILD_FLAGS)" \
 		CARGO_PROFILE="$(CARGO_PROFILE)" \
 		-C $(BUILD_DIR)/pgxn-$*\
-		-f $(ROOT_PROJECT_DIR)/pgxn/Makefile  install
+		-f $(ROOT_PROJECT_DIR)/compute/pgxn/Makefile  install
 
 # Build walproposer as a static library. walproposer source code is located
-# in the pgxn/yb_amp directory.
+# in the compute/pgxn/yb_amp directory.
 #
 # We also need to include libpgport.a and libpgcommon.a, because walproposer
 # uses some functions from those libraries.
@@ -160,7 +160,7 @@ walproposer-lib: neon-pg-ext-v18
 	mkdir -p $(BUILD_DIR)/walproposer-lib
 	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/v18/bin/pg_config COPT='$(COPT)' \
 		-C $(BUILD_DIR)/walproposer-lib \
-		-f $(ROOT_PROJECT_DIR)/pgxn/yb_amp/Makefile walproposer-lib
+		-f $(ROOT_PROJECT_DIR)/compute/pgxn/yb_amp/Makefile walproposer-lib
 	cp $(POSTGRES_INSTALL_DIR)/v18/lib/libpgport.a $(BUILD_DIR)/walproposer-lib
 	cp $(POSTGRES_INSTALL_DIR)/v18/lib/libpgcommon.a $(BUILD_DIR)/walproposer-lib
 	$(AR) d $(BUILD_DIR)/walproposer-lib/libpgport.a \
@@ -222,14 +222,14 @@ controller-generate:
 # transitive postgres_ffi dependency), so this installs them first via
 # postgres-headers-install-v18 — headers only, no Postgres server built, and no
 # build-tools image: just the repo's normal toolchain (rust-toolchain.toml +
-# clang/libclang for bindgen). controller-bundle initializes the vendor/postgres-v18
+# clang/libclang for bindgen). controller-bundle initializes the compute/vendor/postgres-v18
 # submodule itself (the postgres_ffi headers need it), so a fresh checkout builds
 # without a separate `git submodule update` step.
 # The Rust build follows BUILD_TYPE like the rest of the workspace; the deploy/controller
 # container packages the same layout. Output: $(CONTROLLER_BUNDLE_DIR)/{controller,storage_controller}.
 CONTROLLER_BUNDLE_DIR ?= $(ROOT_PROJECT_DIR)/target/controller-bundle
 
-# Initialize submodules (currently just vendor/postgres-v18). Idempotent: a no-op
+# Initialize submodules (currently just compute/vendor/postgres-v18). Idempotent: a no-op
 # when they are already present and at the recorded commit, so it is safe to run
 # on every build.
 .PHONY: submodules
@@ -237,7 +237,7 @@ submodules:
 	git submodule update --init --recursive --depth 2 --progress .
 
 # controller-bundle initializes the submodule before building so the postgres-headers
-# step finds vendor/postgres-v18. The sub-make keeps that ordered ahead of the
+# step finds compute/vendor/postgres-v18. The sub-make keeps that ordered ahead of the
 # headers build even under parallel make (-j), where listing it as a sibling
 # prerequisite would race the postgres configure check.
 # --- versioning targets (thin wrappers over scripts/version.sh) ---
@@ -273,7 +273,7 @@ controller-bundle-build: postgres-headers-install-v18 cargo-target-dir
 	cp "$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)/storage_controller" "$(CONTROLLER_BUNDLE_DIR)/storage_controller"
 
 # controller-only bundle: just the Go controller, no storage_controller. Needs no Rust
-# toolchain, no Postgres headers, and no vendor/postgres-v18 submodule — so it
+# toolchain, no Postgres headers, and no compute/vendor/postgres-v18 submodule — so it
 # builds in environments where the full bundle can't. Pair it with the deploy/controller
 # image run with AMP_STORAGE_CONTROLLER=false. Used by the docker integration (controller/tasks).
 .PHONY: controller-bundle-only
@@ -301,7 +301,7 @@ postgres-%-pg-bsd-indent: postgres-%
 # buildfarm one to cover platform specific stuff.
 # https://wiki.postgresql.org/wiki/Running_pgindent_on_non-core_code_or_development_code
 postgres-%-typedefs.list: postgres-%
-	$(ROOT_PROJECT_DIR)/vendor/postgres-$*/src/tools/find_typedef $(POSTGRES_INSTALL_DIR)/$*/bin > $@
+	$(ROOT_PROJECT_DIR)/compute/vendor/postgres-$*/src/tools/find_typedef $(POSTGRES_INSTALL_DIR)/$*/bin > $@
 
 # Indent postgres. See src/tools/pgindent/README for details.
 .PHONY: postgres-%-pgindent
@@ -311,24 +311,24 @@ postgres-%-pgindent: postgres-%-pg-bsd-indent postgres-%-typedefs.list
 		REL_16_STABLE list misses PGSemaphoreData
 	# wget -q -O - "http://www.pgbuildfarm.org/cgi-bin/typedefs.pl?branch=REL_16_STABLE" |\
 	# cat - postgres-$*-typedefs.list | sort | uniq > postgres-$*-typedefs-full.list
-	cat $(ROOT_PROJECT_DIR)/vendor/postgres-$*/src/tools/pgindent/typedefs.list |\
+	cat $(ROOT_PROJECT_DIR)/compute/vendor/postgres-$*/src/tools/pgindent/typedefs.list |\
 		cat - postgres-$*-typedefs.list | sort | uniq > postgres-$*-typedefs-full.list
 	+@echo note: you might want to run it on selected files/dirs instead.
 	INDENT=$(BUILD_DIR)/$*/src/tools/pg_bsd_indent/pg_bsd_indent \
-		$(ROOT_PROJECT_DIR)/vendor/postgres-$*/src/tools/pgindent/pgindent --typedefs postgres-$*-typedefs-full.list \
-		$(ROOT_PROJECT_DIR)/vendor/postgres-$*/src/ \
-		--excludes $(ROOT_PROJECT_DIR)/vendor/postgres-$*/src/tools/pgindent/exclude_file_patterns
+		$(ROOT_PROJECT_DIR)/compute/vendor/postgres-$*/src/tools/pgindent/pgindent --typedefs postgres-$*-typedefs-full.list \
+		$(ROOT_PROJECT_DIR)/compute/vendor/postgres-$*/src/ \
+		--excludes $(ROOT_PROJECT_DIR)/compute/vendor/postgres-$*/src/tools/pgindent/exclude_file_patterns
 	$(RM) pg*.BAK
 
 # Indent pxgn/neon.
 .PHONY: neon-pgindent
 neon-pgindent: postgres-v18-pg-bsd-indent neon-pg-ext-v18
 	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/v18/bin/pg_config COPT='$(COPT)' \
-		FIND_TYPEDEF=$(ROOT_PROJECT_DIR)/vendor/postgres-v18/src/tools/find_typedef \
+		FIND_TYPEDEF=$(ROOT_PROJECT_DIR)/compute/vendor/postgres-v18/src/tools/find_typedef \
 		INDENT=$(BUILD_DIR)/v18/src/tools/pg_bsd_indent/pg_bsd_indent \
-		PGINDENT_SCRIPT=$(ROOT_PROJECT_DIR)/vendor/postgres-v18/src/tools/pgindent/pgindent \
+		PGINDENT_SCRIPT=$(ROOT_PROJECT_DIR)/compute/vendor/postgres-v18/src/tools/pgindent/pgindent \
 		-C $(BUILD_DIR)/pgxn-v18/yb_amp \
-		-f $(ROOT_PROJECT_DIR)/pgxn/yb_amp/Makefile pgindent
+		-f $(ROOT_PROJECT_DIR)/compute/pgxn/yb_amp/Makefile pgindent
 
 
 .PHONY: setup-pre-commit-hook

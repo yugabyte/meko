@@ -11,8 +11,8 @@ page server. We currently use the same binary for both, with --wal-redo runtime 
 the WAL redo mode. Some PostgreSQL changes are needed in the compute node, while others are just for
 the WAL redo process.
 
-In addition to core PostgreSQL changes, there is a Neon extension in the pgxn/neon directory that
-hooks into the smgr interface, and rmgr extension in pgxn/neon_rmgr. The extensions are loaded into
+In addition to core PostgreSQL changes, there is a Neon extension in the compute/pgxn/yb_amp directory that
+hooks into the smgr interface, and rmgr extension in compute/pgxn/yb_amp_rmgr. The extensions are loaded into
 the Postgres processes with shared_preload_libraries. Most of the Neon-specific code is in the
 extensions, and for any new features, that is preferred over modifying core PostgreSQL code.
 

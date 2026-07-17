@@ -1,7 +1,7 @@
 # compute_ctl Prometheus metrics
 
-Source: `compute_tools/src/metrics.rs` (core metrics) and
-`compute_tools/src/compute_metrics.rs` (Postgres-derived `pg_cctl_*` metrics). See also
+Source: `compute/compute_tools/src/metrics.rs` (core metrics) and
+`compute/compute_tools/src/compute_metrics.rs` (Postgres-derived `pg_cctl_*` metrics). See also
 [`compute_ctl-apis.md`](compute_ctl-apis.md) and [`compute_ctl.md`](compute_ctl.md).
 
 All metrics are exposed as Prometheus text at **`GET /metrics`** on the external HTTP

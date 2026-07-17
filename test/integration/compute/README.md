@@ -158,7 +158,7 @@ test/integration/compute/pg_regress.sh -h         # full help
 ```
 
 It drives the ~200-test suite straight from the vendored Postgres source
-(`vendor/postgres-v18/src/test/regress`) via the stock `pg_regress`
+(`compute/vendor/postgres-v18/src/test/regress`) via the stock `pg_regress`
 binary: it builds + installs the suite's C support modules (regress,
 refint, autoinc), brings up a throwaway `yb_light_local` cluster, creates
 the `regression` database, runs the parallel schedule, and tears down on

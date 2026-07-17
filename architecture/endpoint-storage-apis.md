@@ -1,10 +1,10 @@
 # `endpoint_storage` HTTP API
 
-Source: `endpoint_storage/src/app.rs` (router + handlers),
-`endpoint_storage/src/lib.rs` (auth, path/claim extraction),
-`endpoint_storage/src/main.rs` (binary, config, listen addr),
-`endpoint_storage/src/claims.rs` (JWT claim shapes),
-`endpoint_storage/src/openapi_spec.yml` (hand-maintained OpenAPI).
+Source: `compute/endpoint_storage/src/app.rs` (router + handlers),
+`compute/endpoint_storage/src/lib.rs` (auth, path/claim extraction),
+`compute/endpoint_storage/src/main.rs` (binary, config, listen addr),
+`compute/endpoint_storage/src/claims.rs` (JWT claim shapes),
+`compute/endpoint_storage/src/openapi_spec.yml` (hand-maintained OpenAPI).
 
 `endpoint_storage` is a small axum service that stores per-endpoint blobs
 (LFC prewarm caches, etc.) as objects in the YB-backed object store. It is
@@ -31,7 +31,7 @@ The service builds its backend with
 `GenericRemoteStorage::from_storage_kind(yb_storage_conn)`
 (`main.rs:71-72`). `TypedRemoteStorageKind` has only one variant, `YbStore`,
 carrying a `ysql_client::YbConnConfig` connection block
-(`libs/remote_storage/src/config.rs:82-89`). The `blobs` table name is
+(`compute/libs/remote_storage/src/config.rs:82-89`). The `blobs` table name is
 hardcoded in `yb_store` — the config carries connection info only. See
 [`remote-storage.md`](remote-storage.md) for the `YbStore` backend and the
 `public.blobs` schema.
@@ -134,7 +134,7 @@ and `MAX_RETRIES = 10` (`app.rs:38-39`), bailing on cancellation
 ## yb-light specifics
 
 - The only storage backend is `YbStore`; objects are rows in the
-  `public.blobs` YB table (`libs/remote_storage/src/yb_store.rs`,
+  `public.blobs` YB table (`compute/libs/remote_storage/src/yb_store.rs`,
   [`remote-storage.md`](remote-storage.md)). There is no S3/Azure/GCS/LocalFs
   path.
 - One instance per endpoint, co-located with the endpoint, addressed via the

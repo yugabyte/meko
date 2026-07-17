@@ -91,7 +91,7 @@ key the pageserver/safekeeper use. In YB the path is split across the
 These subsystems run unmodified upstream Neon code in yb-light:
 
 - The Postgres compute itself (`pg_install/v18/bin/postgres` with Neon smgr
-  patches from `vendor/postgres-v18`).
+  patches from `compute/vendor/postgres-v18`).
 - `compute_ctl` and the compute spec. (The endpoint *registry* — what
   `yb_light_local` persists per endpoint — moved out of `endpoint.json` folders
   into the `storage_controller.endpoints` table; `compute_ctl` itself is
@@ -146,7 +146,7 @@ yb-light binaries (target/debug/)
   storage_controller --yb-config "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage' }" --listen 127.0.0.1:<port>
   yb-pageserver   (config from on-disk pageserver.toml; yb_light_local defaults :64100 pg, :9988 http, :51151 grpc — base ports 64000/9898/51051 + i offset)
   yb-safekeeper --id 1   (config from on-disk safekeeper.toml: yb_storage_conn; yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
-  yb-endpoint-storage   (config from endpoints/<name>/endpoint_storage/endpoint_storage.json; one per endpoint, base port 9993 + 2*k)
+  yb-endpoint-storage   (config from endpoints/<name>/compute/endpoint_storage/endpoint_storage.json; one per endpoint, base port 9993 + 2*k)
   yb-compute-ctl --pgdata .yb_light/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
     +-- postgres (18.2 + Neon/yb_amp patches)  :55440
 ```

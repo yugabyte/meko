@@ -12,7 +12,7 @@ it now talks to YB directly via `YsqlClient` (see below).
 
 ## The trait (inherited from Neon)
 
-`libs/remote_storage/src/lib.rs:333`:
+`compute/libs/remote_storage/src/lib.rs:333`:
 
 ```rust
 pub trait RemoteStorage: Send + Sync + 'static {
@@ -48,7 +48,7 @@ now effectively a unit choice — its only non-test variant is
 
 ## YbStore: design (new in yb-light)
 
-Source: `libs/remote_storage/src/yb_store.rs`. Implements every `RemoteStorage`
+Source: `compute/libs/remote_storage/src/yb_store.rs`. Implements every `RemoteStorage`
 method against a YugabyteDB table reached via `tokio_postgres`.
 
 ### Schema (operator-provisioned)
@@ -215,7 +215,7 @@ These match the posture of `LocalFs`.
 
 ## Config
 
-The shared `YbConnConfig` struct (`libs/ysql_client/src/lib.rs`,
+The shared `YbConnConfig` struct (`compute/libs/ysql_client/src/lib.rs`,
 re-exported as `remote_storage::YbConnConfig`):
 
 ```rust
@@ -240,7 +240,7 @@ variants' field sets).
 
 ### Connection handling — `YsqlClient`
 
-`libs/ysql_client/src/lib.rs` defines `YsqlClient`, the auto-reconnecting
+`compute/libs/ysql_client/src/lib.rs` defines `YsqlClient`, the auto-reconnecting
 wrapper around `tokio_postgres::Client` used by every yb-light component
 that talks to YB over the Postgres wire (this crate's `YbStore`, the
 safekeeper's `YbWalStorage`, the pageserver's `PageStore`). It was
@@ -279,7 +279,7 @@ calls (`control_plane/src/storage_controller.rs:320-350`).
   sslmode/sslrootcert dispatch in one place. `YbStore::new` uses it;
   the safekeeper's `YbWalStorage::new` constructs three pooled
   `YsqlClient`s (FPU / read / system lanes) via the same factory
-  (`safekeeper/src/yb_wal_storage.rs:199-209`).
+  (`compute/safekeeper/src/yb_wal_storage.rs:199-209`).
 
 ### TLS
 
@@ -292,7 +292,7 @@ calls (`control_plane/src/storage_controller.rs:320-350`).
   rustls verifying against the supplied PEM-encoded CA bundle.
 
 `build_yb_rustls_connector(sslrootcert: Option<&str>)` (in
-`libs/ysql_client/src/lib.rs:679`, re-exported from
+`compute/libs/ysql_client/src/lib.rs:679`, re-exported from
 `remote_storage::lib.rs:23`) is the shared constructor; the
 storage_controller wrapper in `control_plane` reuses it for its own
 one-shot `CREATE DATABASE` / DDL connections (see
@@ -327,7 +327,7 @@ With TLS against a YBA-managed universe:
 
 ## Smoke test
 
-`libs/remote_storage/examples/yb_smoke.rs` is a small binary that exercises
+`compute/libs/remote_storage/examples/yb_smoke.rs` is a small binary that exercises
 upload → head → download → list (delimiter + no-delimiter) → copy → range
 download → delete → delete_objects against a live YB instance. Run:
 

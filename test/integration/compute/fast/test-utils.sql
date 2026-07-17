@@ -1,4 +1,4 @@
--- Test the test utils in pgxn/yb_amp_test_utils. We don't test that
+-- Test the test utils in compute/pgxn/yb_amp_test_utils. We don't test that
 -- these actually consume resources like they should - that would be
 -- tricky - but at least we check that they don't crash.
 --

@@ -1,9 +1,9 @@
 # Compute
 
-The compute is a vanilla Postgres 18.2 backend (built from `vendor/postgres-v18`)
+The compute is a vanilla Postgres 18.2 backend (built from `compute/vendor/postgres-v18`)
 with Neon's smgr / extension patches applied. The Postgres source tree itself
 is unmodified; `compute_ctl` is upstream Neon. The `yb_amp` extension at
-`pgxn/yb_amp/` lives in this repo and has had a small number of wire-protocol
+`compute/pgxn/yb_amp/` lives in this repo and has had a small number of wire-protocol
 edits (see "Changes in yb-light" below).
 
 ## Inherited from Neon
@@ -31,7 +31,7 @@ reconstructs them on demand.
 Neon's WAL push side. Replaces `pg_basebackup`/`walsender` for getting WAL out
 of the compute: pushes each WAL batch to the configured safekeepers, waits for
 a quorum ACK before unblocking the commit. yb-light is hard-wired single-SK;
-walproposer's multi-SK code paths in `pgxn/yb_amp/walproposer.c`
+walproposer's multi-SK code paths in `compute/pgxn/yb_amp/walproposer.c`
 (`n_safekeepers`, `MAX_SAFEKEEPERS`, etc.) are vestigial and unexercised.
 
 ### LFC (Local File Cache)
@@ -66,7 +66,7 @@ on `destroy`. The endpoint's `pgdata` directory holds:
 - `postgresql.conf`, `pg_hba.conf`, `pg_ident.conf` — generated from spec.
 - `PG_VERSION`, `global/pg_control`, system catalog files — pulled from
   pageserver via basebackup over gRPC (default for new endpoints) or libpq
-  (legacy connstrings). `compute_tools/src/compute.rs` picks the path based
+  (legacy connstrings). `compute/compute_tools/src/compute.rs` picks the path based
   on the connection string scheme.
 - `pg_wal/` — WAL segments produced *here* before they're shipped to the
   safekeeper. Ephemeral by design — destroyed when the endpoint is dropped.
@@ -77,13 +77,13 @@ on `destroy`. The endpoint's `pgdata` directory holds:
 
 ## Changes in yb-light
 
-The Postgres source (`vendor/postgres-v18/`) and `compute_tools/` are
-untouched. The `yb_amp` extension at `pgxn/yb_amp/` has a small number of
+The Postgres source (`compute/vendor/postgres-v18/`) and `compute/compute_tools/` are
+untouched. The `yb_amp` extension at `compute/pgxn/yb_amp/` has a small number of
 yb-light-specific edits:
 
-- `pgxn/yb_amp/walproposer.c` / `walproposer.h` — v2 wire protocol stripped
+- `compute/pgxn/yb_amp/walproposer.c` / `walproposer.h` — v2 wire protocol stripped
   (commit `045fce42d`). Only v3 remains on the wire.
-- `pgxn/yb_amp/libpagestore.c` — `pageserver_response_disconnect_timeout`
+- `compute/pgxn/yb_amp/libpagestore.c` — `pageserver_response_disconnect_timeout`
   lowered 150 s → 30 s (`e296d43df`).
 - Small unrelated touches: `databricks_metrics_shared` NULL-check
   (`bc2a2e8e7`), walredo seccomp filter (`7a85e8aff`).
@@ -108,9 +108,9 @@ deployment using a local-FS or S3 backend.
 
 ## Where the code lives
 
-- Postgres source: `vendor/postgres-v18/` (git submodule, Neon's patched fork).
-- `compute_ctl`: `compute_tools/` — the per-endpoint supervisor. Its lifecycle,
+- Postgres source: `compute/vendor/postgres-v18/` (git submodule, Neon's patched fork).
+- `compute_ctl`: `compute/compute_tools/` — the per-endpoint supervisor. Its lifecycle,
   spec, and HTTP control API have their own page: [`compute_ctl.md`](compute_ctl.md).
-- Neon's PG extension (`yb_amp.so`, smgr hooks, walproposer): `pgxn/yb_amp/`
+- Neon's PG extension (`yb_amp.so`, smgr hooks, walproposer): `compute/pgxn/yb_amp/`
   (top-level in this repo, NOT in the vendored postgres tree).
 - Endpoint creation in the dev wrapper: `control_plane/src/endpoint.rs`.

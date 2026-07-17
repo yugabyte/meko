@@ -127,7 +127,7 @@ handlers vestigial).
 Each Set B endpoint also has a parallel caller in the **Rust `control_plane` dev
 harness** (`yb_light_local` + its `StorageController`/`PageServer` wrappers) and
 the **`test_runner` integration fixtures**. All are **out-of-process** clients; none live
-in the daemon crates (`pageserver/src`, `safekeeper/src`, `compute_tools/src` —
+in the daemon crates (`compute/pageserver/src`, `compute/safekeeper/src`, `compute/compute_tools/src` —
 verified empty).
 
 | Endpoint | Pod (`supervisor.py`) | Dev harness (`control_plane/`) | Tests |

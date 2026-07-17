@@ -1,11 +1,11 @@
 # compute_ctl HTTP API
 
-Source: `compute_tools/src/http/server.rs` (router), `compute_tools/src/http/routes/*`
-(handlers), `compute_tools/src/http/middleware/authorize.rs` (auth),
-`compute_tools/src/bin/compute_ctl.rs` (ports). See also
+Source: `compute/compute_tools/src/http/server.rs` (router), `compute/compute_tools/src/http/routes/*`
+(handlers), `compute/compute_tools/src/http/middleware/authorize.rs` (auth),
+`compute/compute_tools/src/bin/compute_ctl.rs` (ports). See also
 [`compute_ctl.md`](compute_ctl.md).
 
-`compute_ctl` (the `compute_tools/` binary) is the per-endpoint supervisor for a
+`compute_ctl` (the `compute/compute_tools/` binary) is the per-endpoint supervisor for a
 Postgres compute. It exposes its control API over **two Axum HTTP servers**, built from
 the same `Server` enum and router builder in `http/server.rs`:
 
@@ -29,7 +29,7 @@ External (non-metrics) routes are wrapped by `AsyncRequireAuthorizationLayer` �
   `compute_ctl_config`**. Algorithm is **EdDSA** by default, switching to **RS256** if
   any JWK declares `RS256`. Expiry (`exp`) is checked; `nbf`/`aud` validation is off in
   the library validator (audience checked manually for admin scope only).
-- Scope model (`ComputeClaimsScope`, `libs/compute_api/src/requests.rs`):
+- Scope model (`ComputeClaimsScope`, `compute/libs/compute_api/src/requests.rs`):
   - **`compute_ctl:admin`** → must carry the `compute` audience (`COMPUTE_AUDIENCE`);
     `compute_id` is not checked.
   - any other / no scope → the token's `compute_id` claim must equal this process's
@@ -97,7 +97,7 @@ Called by local processes (the `yb_amp` extension, `local_proxy`); no auth layer
 
 ## yb-light specifics
 
-`compute_tools/` is upstream Neon, essentially unmodified — the API surface above is
+`compute/compute_tools/` is upstream Neon, essentially unmodified — the API surface above is
 inherited as-is. yb-light's only relevant differences are operational: a single
 safekeeper means `/terminate` no longer runs a `sync-safekeepers` walproposer pass, and
 `/promote` / `/configure` / `/terminate` are the contact points the (future)

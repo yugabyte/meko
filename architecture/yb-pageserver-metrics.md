@@ -1,7 +1,7 @@
 # yb-pageserver Prometheus metrics
 
-Source: `pageserver/src/metrics.rs` (metric definitions), exposed via the
-`GET /metrics` route in `pageserver/src/http/routes.rs`.
+Source: `compute/pageserver/src/metrics.rs` (metric definitions), exposed via the
+`GET /metrics` route in `compute/pageserver/src/http/routes.rs`.
 
 Metrics are served as Prometheus text exposition on the HTTP management port
 (default `127.0.0.1:9898`). By default a background task collects them on an

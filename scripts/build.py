@@ -22,7 +22,7 @@ so a cached debug PG is detected and rebuilt in release regardless of mode.
 
 PostgreSQL submodule handling (every mode):
     ybAmp builds against a patched PostgreSQL tree vendored as the
-    `vendor/postgres-v18` git submodule. This script checks it out if it is
+    `compute/vendor/postgres-v18` git submodule. This script checks it out if it is
     missing, and when the gitlink recorded in HEAD differs from the commit in
     the working tree (e.g. a rebase/pull bumped it) it re-syncs and rebuilds
     PostgreSQL from source. When the submodule already matches and
@@ -43,7 +43,7 @@ from pathlib import Path
 # Repo root = parent of this script's scripts/ dir, so the build works no
 # matter where it's invoked from.
 ROOT = Path(__file__).resolve().parent.parent
-SUBMODULE = "vendor/postgres-v18"
+SUBMODULE = "compute/vendor/postgres-v18"
 PG_VERSION = "v18"
 PG_INSTALL = ROOT / "pg_install" / PG_VERSION
 BUILD_DIR = ROOT / "build"
@@ -128,7 +128,7 @@ def record_pg_commit():
 
 
 def sync_submodule_if_needed():
-    """Check out / re-sync vendor/postgres-v18. Return True if PG needs a rebuild.
+    """Check out / re-sync compute/vendor/postgres-v18. Return True if PG needs a rebuild.
 
     PG must be rebuilt when the working tree doesn't match the gitlink (a bump,
     or a fresh/absent checkout), when pg_install/v18 was never built, or when
@@ -376,7 +376,7 @@ def main():
     # walproposer-lib (which rolls every commit), so recompile them every run.
     # They follow the selected build type. PG is already built (release) above,
     # so PG_INSTALL_CACHED=1 keeps this step from touching it.
-    say(f"Building compute extensions (pgxn/yb_amp/*.so for {PG_VERSION}, {build_type})...")
+    say(f"Building compute extensions (compute/pgxn/yb_amp/*.so for {PG_VERSION}, {build_type})...")
     run(
         ["make", f"BUILD_TYPE={build_type}", ext_target],
         env=make_env(cached=True),

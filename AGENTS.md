@@ -53,13 +53,13 @@ indexed in `architecture/README.md`.
 
 Code anchors:
 
-- `libs/remote_storage/src/yb_store.rs` — the YbStore impl, chunked
+- `compute/libs/remote_storage/src/yb_store.rs` — the YbStore impl, chunked
   uploads, streaming downloads, parse/reconstruct key.
-- `libs/remote_storage/src/config.rs` — `YbStoreConfig` (host, port,
+- `compute/libs/remote_storage/src/config.rs` — `YbStoreConfig` (host, port,
   user, `password_env`, `sslmode`, etc.).
-- `safekeeper/src/control_file.rs` — `ControlFileStorage` enum.
-- `safekeeper/src/yb_wal_storage.rs` — `YbWalStorage`, the YB WAL mirror.
-- `safekeeper/src/wal_storage.rs::WalBookkeeping` — in-memory WAL
+- `compute/safekeeper/src/control_file.rs` — `ControlFileStorage` enum.
+- `compute/safekeeper/src/yb_wal_storage.rs` — `YbWalStorage`, the YB WAL mirror.
+- `compute/safekeeper/src/wal_storage.rs::WalBookkeeping` — in-memory WAL
   LSN/record-boundary bookkeeping.
 - `storage_controller/src/persistence.rs` — `establish_connection_rustls`,
   AcceptAll TLS verifier.
@@ -71,10 +71,10 @@ Code anchors:
   every service takes the same `yb_storage_conn` connection block).
 - `control_plane/src/safekeeper.rs` / `pageserver.rs` / `endpoint.rs` —
   per-service CLI assembly + per-component config.
-- `pageserver/src/page_store.rs` — `PageStore` row store for the
+- `compute/pageserver/src/page_store.rs` — `PageStore` row store for the
   fork's row-per-page YB layout (`pageserver.pages` +
   `pageserver.timelines`).
-- `pageserver/src/image_rule.rs` — 10-delta image rule that bounds
+- `compute/pageserver/src/image_rule.rs` — 10-delta image rule that bounds
   the read-chain length.
 
 ## Project conventions
@@ -116,7 +116,7 @@ Code anchors:
 - `./build.sh` is the single build entry point: no flag = debug, `--release`
   = release, `--release-tar` = release + shippable tarball, `--headers` =
   install just the PG headers (for `cargo check` / IDE). It checks out the
-  `vendor/postgres-v18` submodule and rebuilds PostgreSQL (and the compute
+  `compute/vendor/postgres-v18` submodule and rebuilds PostgreSQL (and the compute
   extensions) whenever the installed PG no longer matches the checked-out
   submodule commit, so prefer it over a bare `make`/`cargo build`. The logic
   lives in [`scripts/build.py`](scripts/build.py); `build.sh` is a thin shim
@@ -134,7 +134,7 @@ Code anchors:
 - Unit/workspace tests: `cargo test`. Several live-DB tests
   (`pageserver::page_store::tests`, `pageserver::page_writer::tests`,
   `safekeeper::yb_wal_storage::tests`, and the `yb_tsclient` live suite
-  `libs/yb_tsclient/tests/live.rs`) need a live YB with the production
+  `compute/libs/yb_tsclient/tests/live.rs`) need a live YB with the production
   schema migrated — they default to a developer cluster on
   `5433`/`yb_storage`; without one, run them via
   `test/integration/compute/run.sh unit`, which points them at an isolated

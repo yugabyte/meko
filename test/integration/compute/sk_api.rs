@@ -4,7 +4,7 @@
 //!
 //! yb-light's safekeeper only serves the **Interpreted** WAL protocol
 //! (decoded records framed as protobuf), not vanilla `XLogData` — see
-//! `safekeeper/src/handler.rs` (`protocol()` defaults to Interpreted). So a
+//! `compute/safekeeper/src/handler.rs` (`protocol()` defaults to Interpreted). So a
 //! replication client receives `ReplicationMessage::RawInterpretedWalRecords`
 //! batches, whose framing/batching is timing-dependent. We therefore read
 //! by **LSN reached**, not by byte-identical content: catch up to a target

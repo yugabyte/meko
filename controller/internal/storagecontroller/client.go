@@ -48,7 +48,7 @@ func (c *Client) Ready(ctx context.Context) error {
 // not yet materialized: the storage controller stores it until an endpoint's
 // pageserver attaches and bootstraps the branch (controller/architecture/
 // controller-project-create.md). It mirrors the storage controller's
-// PendingTimelineInitRequest serde shape (libs/pageserver_api controller_api).
+// PendingTimelineInitRequest serde shape (compute/libs/pageserver_api controller_api).
 // AncestorBranchID is null for a root (Bootstrap) branch; set, with start_lsn,
 // for a branch off another. branch_name is a non-unique human-readable label.
 // start_lsn is the controller's Lsn string form ("hi/lo" uppercase hex, e.g.

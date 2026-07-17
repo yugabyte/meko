@@ -152,7 +152,7 @@ RUN set -e \
 
 # sql_exporter
 
-# Keep the version the same as in compute/compute-node.Dockerfile and
+# Keep the version the same as in compute/image/compute-node.Dockerfile and
 # old_neon_test_runner/regress/test_compute_metrics.py.
 ENV SQL_EXPORTER_VERSION=0.17.3
 RUN curl -fsSL \
@@ -164,7 +164,7 @@ RUN curl -fsSL \
     && rm sql_exporter.tar.gz
 
 # protobuf-compiler (protoc)
-# Keep the version the same as in compute/compute-node.Dockerfile
+# Keep the version the same as in compute/image/compute-node.Dockerfile
 ENV PROTOC_VERSION=25.1
 RUN curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-$(uname -m | sed 's/aarch64/aarch_64/g').zip" -o "protoc.zip" \
     && unzip -q protoc.zip -d protoc \

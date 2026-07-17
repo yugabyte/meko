@@ -390,7 +390,7 @@ yb_storage_conn = { host_ports = "...", hot_path = "tsclient", tserver_rpc_addrs
 ```
 
 - `hot_path` — `"tsclient"` (default) runs the hot paths over a pure-Rust
-  thin RPC client (`libs/yb_tsclient`) speaking the pggate RPC protocol
+  thin RPC client (`compute/libs/yb_tsclient`) speaking the pggate RPC protocol
   directly to a tserver's RPC port (9100), skipping the PG backend (wire
   framing, parse/plan, pggate); `"ysql"` is the Postgres-wire escape hatch.
   The safekeeper honors it for the WAL write/read path on `safekeeper.wals`

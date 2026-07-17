@@ -68,23 +68,23 @@ column means you must read the doc on the right and decide if it needs updating.
 
 | Code area (staged path matches) | Arch doc(s) to recheck |
 |---|---|
-| `safekeeper/**`, `libs/safekeeper_api/**`, `libs/walproposer/**` | `architecture/safekeeper.md`, `architecture/safekeeper-lsns.md` |
-| `pageserver/**` (excluding `pageserver/pagebench/**`) | `architecture/pageserver.md`, `architecture/pageserver-lsns.md`, `architecture/yb-pageserver.md` |
+| `compute/safekeeper/**`, `compute/libs/safekeeper_api/**`, `compute/libs/walproposer/**` | `architecture/safekeeper.md`, `architecture/safekeeper-lsns.md` |
+| `compute/pageserver/**` (excluding `compute/pageserver/pagebench/**`) | `architecture/pageserver.md`, `architecture/pageserver-lsns.md`, `architecture/yb-pageserver.md` |
 | `storage_controller/**` | `architecture/storage-controller.md` |
-| `endpoint_storage/**` | `architecture/remote-storage.md` (YbStore backend) |
-| `libs/remote_storage/**` | `architecture/remote-storage.md` |
-| `pgxn/**`, `compute_tools/**`, `compute/**` | `architecture/compute.md`, `architecture/compute_ctl.md` |
+| `compute/endpoint_storage/**` | `architecture/remote-storage.md` (YbStore backend) |
+| `compute/libs/remote_storage/**` | `architecture/remote-storage.md` |
+| `compute/pgxn/**`, `compute/compute_tools/**`, `compute/image/**` | `architecture/compute.md`, `architecture/compute_ctl.md` |
 | Schema files: `storage_controller/migrations/**/*.sql`, anything creating/altering tables in `yb_storage` or `storage_controller` databases | `architecture/yugabyte.md` + the per-subsystem doc that owns the table |
 | Anything that changes a binary's CLI surface (clap `Args` structs in `*/src/bin/*.rs`) | The "Run / configure" block in the matching subsystem doc |
-| **HTTP router** (`pageserver/src/http/routes.rs`, `safekeeper/src/http/routes.rs`, `storage_controller/src/http.rs`, `compute_tools/src/http/**`, `endpoint_storage/src/app.rs`) — a route added/removed/renamed, a method/path/auth/body change | The matching `architecture/<service>-apis.md` (`yb-pageserver-apis.md` / `safekeeper-apis.md` / `storage-controller-apis.md` / `compute_ctl-apis.md` / `endpoint-storage-apis.md`) |
-| **Metrics module** (`*/src/metrics.rs`, `compute_tools/src/compute_metrics.rs`) — a metric added/removed/renamed, or a label/type change | The matching `architecture/<service>-metrics.md` (`yb-pageserver-metrics.md` / `safekeeper-metrics.md` / `storage-controller-metrics.md` / `compute_ctl-metrics.md` / `endpoint-storage-metrics.md`) |
+| **HTTP router** (`compute/pageserver/src/http/routes.rs`, `compute/safekeeper/src/http/routes.rs`, `storage_controller/src/http.rs`, `compute/compute_tools/src/http/**`, `compute/endpoint_storage/src/app.rs`) — a route added/removed/renamed, a method/path/auth/body change | The matching `architecture/<service>-apis.md` (`yb-pageserver-apis.md` / `safekeeper-apis.md` / `storage-controller-apis.md` / `compute_ctl-apis.md` / `endpoint-storage-apis.md`) |
+| **Metrics module** (`*/src/metrics.rs`, `compute/compute_tools/src/compute_metrics.rs`) — a metric added/removed/renamed, or a label/type change | The matching `architecture/<service>-metrics.md` (`yb-pageserver-metrics.md` / `safekeeper-metrics.md` / `storage-controller-metrics.md` / `compute_ctl-metrics.md` / `endpoint-storage-metrics.md`) |
 | Top-level topology (new binary, new wire link, removed component) | `architecture/high-level.md` + `architecture/README.md` |
 
 The doc needs an update if the change invalidates **any** of these:
 
 - A section heading or "Changes in yb-light" entry (e.g. you deleted the module
   §N describes, or removed a thing the doc presents as still-present).
-- A code-layout list (`safekeeper/src/foo.rs` — purpose). Module
+- A code-layout list (`compute/safekeeper/src/foo.rs` — purpose). Module
   deleted/added/renamed → list is wrong.
 - A CLI / config example (Run / configure block, TOML snippet, flag list). A
   flag added/removed/renamed makes the example a lie.
@@ -118,8 +118,8 @@ Where tests live in this repo:
 
 | Kind | Location |
 |---|---|
-| Unit | `#[cfg(test)]` modules inside the crate (e.g. `libs/ysql_client/src/lib.rs`) |
-| Integration (Rust) | `<crate>/tests/` (e.g. `compute_tools/tests/`, `safekeeper/tests/`) |
+| Unit | `#[cfg(test)]` modules inside the crate (e.g. `compute/libs/ysql_client/src/lib.rs`) |
+| Integration (Rust) | `<crate>/tests/` (e.g. `compute/compute_tools/tests/`, `compute/safekeeper/tests/`) |
 | End-to-end (cluster) | `test/integration/compute/fast/` and `test/integration/compute/slow/` (`*.sh` / `*.sql`, driven by `test/integration/compute/run.sh`) |
 | Python harness | `old_neon_test_runner/` |
 

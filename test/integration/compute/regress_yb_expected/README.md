@@ -41,5 +41,5 @@ tablespace limitation (and its deterministic cascades) — not a real
 regression:
 
 ```
-diff vendor/postgres-v18/src/test/regress/expected/<test>.out <OUTDIR>/results/<test>.out
+diff compute/vendor/postgres-v18/src/test/regress/expected/<test>.out <OUTDIR>/results/<test>.out
 ```

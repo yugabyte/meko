@@ -100,7 +100,7 @@ for pg_version in ${TEST_VERSION_ONLY-14 15 16 17}; do
           docker compose cp "${CURRENT_TMPDIR}/file_fdw/data" "${compute}":/postgres/contrib/file_fdw/data
         done
         # Apply patches
-        docker compose exec -T neon-test-extensions bash -c "(cd /postgres && patch -p1)" <"../compute/patches/contrib_pg${pg_version}.patch"
+        docker compose exec -T neon-test-extensions bash -c "(cd /postgres && patch -p1)" <"../compute/image/patches/contrib_pg${pg_version}.patch"
         # We are running tests now
         rm -f testout.txt testout_contrib.txt
         # We want to run the longest tests first to better utilize parallelization and reduce overall test time.

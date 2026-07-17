@@ -1,8 +1,8 @@
 # Safekeeper HTTP API
 
-Source: `safekeeper/src/http/routes.rs` (router + handlers),
-`safekeeper/src/bin/yb-safekeeper.rs` (listener wiring),
-`libs/safekeeper_api/src/lib.rs` (port default).
+Source: `compute/safekeeper/src/http/routes.rs` (router + handlers),
+`compute/safekeeper/src/bin/yb-safekeeper.rs` (listener wiring),
+`compute/libs/safekeeper_api/src/lib.rs` (port default).
 
 The safekeeper exposes a small JSON/HTTP control-and-observability surface.
 This is **separate** from the libpq replication protocol the safekeeper also
@@ -11,12 +11,12 @@ below.
 
 ## Binary, listen address, auth
 
-- **Binary**: `yb-safekeeper` (`safekeeper/src/bin/yb-safekeeper.rs`). The HTTP
+- **Binary**: `yb-safekeeper` (`compute/safekeeper/src/bin/yb-safekeeper.rs`). The HTTP
   router is built by `make_router()` and served on the listener bound to
   `conf.listen_http_addr`.
 - **Listen address**: `--listen-http`, default `127.0.0.1:7676`
   (`DEFAULT_HTTP_LISTEN_ADDR` / `DEFAULT_HTTP_LISTEN_PORT = 7676` in
-  `libs/safekeeper_api/src/lib.rs`). An optional HTTPS listener is bound when
+  `compute/libs/safekeeper_api/src/lib.rs`). An optional HTTPS listener is bound when
   `--listen-https` is set.
 - **Auth**: JWT (`SwappableJwtAuth`) is applied via `auth_middleware` only
   when `conf.http_auth` is configured. When enabled, every route requires a
@@ -83,7 +83,7 @@ below.
 
 The WAL data plane is **not** HTTP. Computes (walproposer) and pageservers
 connect over a libpq-style replication protocol on the `--listen-pg` port,
-handled in `safekeeper/src/handler.rs` (`parse_cmd`). Recognized commands:
+handled in `compute/safekeeper/src/handler.rs` (`parse_cmd`). Recognized commands:
 
 - `START_WAL_PUSH` — walproposer pushes WAL into the SK.
 - `START_REPLICATION [SLOT ..] [PHYSICAL] <lsn>` — consumer
