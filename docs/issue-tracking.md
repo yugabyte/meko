@@ -6,7 +6,7 @@ project tracker. Cross-session work is tracked as **GitHub issues** on
 old file-based `tasks/` tracker has been retired and migrated to issues.
 
 Other docs (top-level `README.md`, `AGENTS.md`, `tasks/README.md`, and
-the `commit-sync` / `task-tracker-sync` skills) point here instead of
+the `commit` / `create-issue` skills) point here instead of
 restating the lists, so this file is the single place to edit when the
 taxonomy changes.
 
@@ -66,6 +66,6 @@ planning), `docs`, `ci`, `build`, `tools`. The meta tokens are
 commit-subject-only; they are not issue labels. `[#<issue>]` and
 `<sub-component>` are optional.
 
-See the `commit-sync` skill's "Subject format" for the full spec and
+See the `commit` skill's "Subject format" for the full spec and
 examples. Close issues with `Closes #<num>` / `Fixes #<num>` when the
 work ships.

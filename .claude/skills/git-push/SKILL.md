@@ -26,31 +26,36 @@ git log --oneline origin/main..HEAD   # the commits this branch adds
 ```
 
 If there are uncommitted changes that belong in this push, commit them first
-(follow the `commit-sync` skill). Don't push a half-finished tree.
+(follow the `commit` skill). Don't push a half-finished tree.
 
 ## Step 2 — verify no commit is agent-attributed (hard gate)
 
-Commits are authored by the user alone — that means both the **author/committer
-identity** and the **message** must be free of any agent/assistant attribution
-(a `Co-Authored-By:` naming Claude or Cursor, a `Claude-Session:` / session-link
+Commits are authored by the user alone — both the **author/committer identity**
+and the **message** must be free of any agent/assistant attribution (a
+`Co-Authored-By:` naming Claude or Cursor, a `Claude-Session:` / session-link
 trailer, an `_automated · …` signature, a `🤖 Generated with/by …` line, or an
-anthropic/cursor `noreply@` address). Before anything leaves the machine, run
-both scans over the outgoing commits. Each falls back to `main..HEAD` when
-`origin/main` isn't fetched (fresh clone), so the check never silently passes on
-missing input:
+anthropic/cursor `noreply@` address). The `commit` skill is where this is
+supposed to be gotten right, per-commit, at commit time — but push is the last
+line of defense, and it has to catch commits that never went through that skill:
+cherry-picks, rebases, amends, and anything other tools or harness defaults
+authored. So re-scan **all** outgoing commits here before anything leaves the
+machine. Each scan falls back to `main..HEAD` when `origin/main` isn't fetched
+(fresh clone), so the check never silently passes on missing input:
 
 ```
 # 1. Author + committer identity must be the user — never Claude or Cursor.
+#    Word boundaries so "precursor" / "claudette" don't false-positive, and
+#    only anthropic/cursor bot noreply@ addresses (not GitHub's user noreply).
 (git log origin/main..HEAD --format='%an <%ae>%n%cn <%ce>' 2>/dev/null \
   || git log main..HEAD --format='%an <%ae>%n%cn <%ce>') | \
-  grep -iE 'claude|cursor|anthropic|noreply@' \
+  grep -iE '\b(claude|cursor|anthropic)\b|noreply@(anthropic|cursor)\b' \
   && echo "FOUND agent author/committer — reset authorship before pushing" \
   || echo "author clean"
 
 # 2. Commit messages must carry no agent trailer/signature.
 (git log origin/main..HEAD --format='%H%n%B' 2>/dev/null \
   || git log main..HEAD --format='%H%n%B') | \
-  grep -iEn 'co-authored-by:.*(claude|cursor|anthropic)|claude-session|generated (with|by)|_automated|noreply@anthropic\.com|noreply@cursor' \
+  grep -iEn 'co-authored-by:.*\b(claude|cursor|anthropic)\b|claude-session|generated (with|by) (claude|cursor)|_automated|noreply@(anthropic|cursor)\b' \
   && echo "FOUND agent attribution — scrub before pushing" \
   || echo "message clean"
 ```
@@ -69,7 +74,8 @@ it first:
 
 Re-run both scans until each prints `clean`, then push. This gate is not optional
 just because a harness default set the author or added the trailer — a pushed
-commit carries the attribution permanently into history.
+commit carries the attribution permanently into history. (Cheapest to avoid
+entirely by getting authorship right at commit time — see the `commit` skill.)
 
 ## Step 3 — push
 

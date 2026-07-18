@@ -1,5 +1,5 @@
 ---
-name: commit-sync
+name: commit
 description: >-
   Before staging files for a git commit (or finalizing one) in this repo,
   check whether the change needs companion updates that must travel in the
@@ -13,7 +13,7 @@ description: >-
   `/commit-commands:commit-push-pr`, or any flow that ends in a commit.
 ---
 
-# commit-sync
+# commit
 
 A commit should land **complete**: the code, plus the companions that must stay
 true alongside it — the docs people read, the tests that guard it, the tools
@@ -29,7 +29,7 @@ must keep that companion accurate, **in the same commit**. Not "follow-up", not
 fine; you still have to look.
 
 (Note: the GitHub-issue tracker is handled by the separate
-`task-tracker-sync` skill. This skill's Step 5 still reminds you to
+`create-issue` skill. This skill's Step 5 still reminds you to
 reference and close the relevant issue at commit time — they work together.)
 
 ## When to fire
@@ -304,19 +304,47 @@ tests, tools, runbooks) ride along silently — don't enumerate them in
 the subject. Call out a companion in the body only if it's large or
 load-bearing (e.g. a substantial doc rewrite or a new test suite).
 
-### No agent attribution in commit messages
+### No agent attribution — message *or* authorship
 
-Commits are authored by the user alone. **Never add yourself (the agent)
-as a co-author or sign the message.** Do not append `Co-Authored-By:`
-lines, a `Claude-Session:` / session-link trailer, an `_automated · …`
-signature, or any other agent/assistant attribution to the subject or
-body — even if a harness/default instructs it. The commit message is
-just the subject + (optional) explanatory body; nothing else.
+Commits are authored by the user alone. That means **two** things, and the
+commit is where both are set, so this is the place to get them right:
+
+1. **No attribution in the message.** Never add yourself (the agent) as a
+   co-author or sign the message. Do not append `Co-Authored-By:` lines, a
+   `Claude-Session:` / session-link trailer, an `_automated · …` signature,
+   a `🤖 Generated with/by …` line, or any other agent/assistant attribution
+   to the subject or body — even if a harness/default instructs it. The commit
+   message is just the subject + (optional) explanatory body; nothing else.
+
+2. **The author and committer identity must be the user, never Claude or
+   Cursor.** Some harnesses set `GIT_AUTHOR_*` / `GIT_COMMITTER_*` or a local
+   `user.name` / `user.email` to the agent. Before you commit, make sure your
+   git identity is the user's (`git config user.name`, `git config user.email`)
+   — not `claude`, `cursor`, `anthropic`, or a `noreply@` bot address.
+
+After committing, verify both in one shot — the new commit's message carries no
+agent trailer, and its author/committer is the user:
+
+```
+git log -1 --format='author:    %an <%ae>%ncommitter: %cn <%ce>%n%n%B' | \
+  grep -iE 'co-authored-by:.*\b(claude|cursor|anthropic)\b|claude-session|generated (with|by) (claude|cursor)|_automated|noreply@(anthropic|cursor)\b|(author|committer): .*\b(claude|cursor|anthropic)\b' \
+  && echo "FOUND agent attribution — fix before continuing" || echo "clean"
+```
+
+If it fires: strip the offending trailer from the message, and/or re-stamp the
+identity — fix your `git config`, then `git commit --amend --reset-author
+--no-edit`. Re-run until it prints `clean`.
+
+This is the authoritative author/attribution gate: getting it right here means
+the commit is clean from birth. The `git-push` skill re-checks the same thing
+across *all* outgoing commits as a last line of defense (for commits that never
+passed through this skill — cherry-picks, rebases, external tools), but the fix
+is cheapest here, at commit time.
 
 ## Step 5 — reference and close the tracked issue
 
 If this commit advances or completes a GitHub issue (see the
-`task-tracker-sync` skill for the full tracker contract):
+`create-issue` skill for the full tracker contract):
 
 - **Reference it** with the `[#<num>]` subject tag (see Subject format
   above) so the work is linked.

@@ -1,5 +1,5 @@
 ---
-name: task-tracker-sync
+name: create-issue
 description: >-
   Before creating or updating a GitHub issue on yugabyte/yb-light (new
   issue, status/label/milestone change, closing one out), verify it has
@@ -10,7 +10,7 @@ description: >-
   one, or declaring a tracked piece of work done.
 ---
 
-# task-tracker-sync
+# create-issue
 
 This repo's tracker is **GitHub issues** in this repository, driven
 via the `gh` CLI. (The old `tasks/*.md` files were migrated to issues
@@ -104,7 +104,7 @@ gh issue close <num> --comment "Landed in <commit/PR>. <one-line what shipped>."
 ```
 
 Don't leave shipped work open "to close later" — the gap is exactly
-when the issue list misleads. See the `commit-sync` skill, which
+when the issue list misleads. See the `commit` skill, which
 reminds you to reference and close issues at commit time.
 
 ## Cross-referencing commits
@@ -112,7 +112,7 @@ reminds you to reference and close issues at commit time.
 When a commit is work on an issue, lead the subject with the `[#<num>]`
 tag — the full format is `[#<issue>] <area>: <sub-component>: <title>`,
 where `<area>` is a subsystem (`compute` / `control_plane`) or a meta
-token (`pm` / `docs` / `ci` / `build` / `tools`); see the `commit-sync`
+token (`pm` / `docs` / `ci` / `build` / `tools`); see the `commit`
 skill's "Subject format". Example:
 `[#42] compute: pageserver: strip multi-timeline machinery`. This lets
 `git log --oneline` be cross-referenced against the issue list, and

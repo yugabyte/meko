@@ -28,7 +28,7 @@ gh pr view --json number,url 2>/dev/null   # does a PR already exist?
   instead; it pushes and refreshes the existing PR's title/summary. Don't open a
   duplicate.
 
-Make sure the branch is committed and pushed (follow `git-push` / `commit-sync`).
+Make sure the branch is committed and pushed (follow `git-push` / `commit`).
 `gh pr create` needs the branch on the remote:
 
 ```
@@ -37,7 +37,7 @@ git push -u origin HEAD
 
 ## Step 2 — write the title
 
-Mirror the commit subject convention (see the `commit-sync` skill):
+Mirror the commit subject convention (see the `commit` skill):
 
 ```
 [#<issue>] <area>: <sub-component>: <title>
