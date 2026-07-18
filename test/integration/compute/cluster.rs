@@ -540,7 +540,12 @@ impl Cluster {
     /// don't execute until awaited), so `prep` still runs before the
     /// scenario body even though the future is constructed at the call
     /// site.
-    pub async fn run_scenario<Fut>(&self, label: &str, fut: Fut) -> anyhow::Result<()>
+    pub async fn run_scenario<Fut>(
+        &self,
+        label: &str,
+        pos: (usize, usize),
+        fut: Fut,
+    ) -> anyhow::Result<()>
     where
         Fut: Future<Output = anyhow::Result<()>>,
     {
@@ -587,7 +592,11 @@ impl Cluster {
         }
         self.corruption_gate(label, before)?;
         self.wals_overlap_gate(label).await?;
-        tee_println!("PASS — {label}  ({}s)", t0.elapsed().as_secs());
+        let (idx, total) = pos;
+        tee_println!(
+            "PASS [{:>8.3}s] ({idx}/{total}) {label}",
+            t0.elapsed().as_secs_f64()
+        );
         Ok(())
     }
 
@@ -633,7 +642,12 @@ impl Cluster {
     /// normalize its stdout, and diff against the checked-in `.out`
     /// golden (regenerate with `INTEGRATION_REGEN_EXPECTED=1`). Also runs the
     /// corruption gate.
-    pub async fn run_sql(&self, label: &str, sql: &Path) -> anyhow::Result<()> {
+    pub async fn run_sql(
+        &self,
+        label: &str,
+        pos: (usize, usize),
+        sql: &Path,
+    ) -> anyhow::Result<()> {
         self.prep_for_next_test().await?;
         step(&format!("workload: {label}"));
         let before = self.ps_log_lines();
@@ -641,7 +655,11 @@ impl Cluster {
         crate::workload::run_sql_workload(self, label, sql)?;
         self.corruption_gate(label, before)?;
         self.wals_overlap_gate(label).await?;
-        tee_println!("PASS — {label}  ({}s)", t0.elapsed().as_secs());
+        let (idx, total) = pos;
+        tee_println!(
+            "PASS [{:>8.3}s] ({idx}/{total}) {label}",
+            t0.elapsed().as_secs_f64()
+        );
         Ok(())
     }
 

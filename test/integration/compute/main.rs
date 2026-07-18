@@ -192,10 +192,12 @@ async fn run(args: Args) -> anyhow::Result<()> {
         // Rebuild the item list each iteration: scenario futures are
         // one-shot, so they can't be reused across repeats.
         let items = collect_items(&cluster, &mode)?;
-        for (name, item) in items {
+        let total = items.len();
+        for (i, (name, item)) in items.into_iter().enumerate() {
+            let pos = (i + 1, total);
             let res = match item {
-                Item::Scenario(fut) => cluster.run_scenario(&name, fut).await,
-                Item::Sql(path) => cluster.run_sql(&name, &path).await,
+                Item::Scenario(fut) => cluster.run_scenario(&name, pos, fut).await,
+                Item::Sql(path) => cluster.run_sql(&name, pos, &path).await,
             };
             match res {
                 Ok(()) => tally.passed += 1,

@@ -2276,7 +2276,6 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 dev: args.dev,
             };
 
-            println!("Starting existing endpoint {endpoint_id}...");
             endpoint.start(args).await?;
         }
         EndpointCmd::Reconfigure(args) => {

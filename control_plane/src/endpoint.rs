@@ -886,11 +886,6 @@ impl Endpoint {
 
         // Launch compute_ctl
         let conn_str = self.connstr("cloud_admin", "postgres");
-        println!("Starting postgres node at '{conn_str}'");
-        if args.create_test_user {
-            let conn_str = self.connstr("test", "ybampdb");
-            println!("Also at '{conn_str}'");
-        }
         let mut cmd = Command::new(self.env.yb_light_distrib_dir.join("yb-compute-ctl"));
         cmd.args([
             "--external-http-port",
