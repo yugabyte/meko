@@ -49,46 +49,44 @@ gh pr view <number> --json mergeable,mergeStateStatus,reviewDecision
 (rebase on `main`, get the approval) before merging. **Never bypass a failing or
 pending gate** (no admin override) to force a merge.
 
-## Step 3 — merge
+## Step 3 — detach, then merge
 
-Once CI is green and the PR is mergeable, merge it. Match the repo's merge style
-(check recent history / branch-protection settings if unsure; `--squash` is a
-common default):
+Get **off** the PR branch before merging, then merge with `--delete-branch`.
+With the branch unchecked-out, `--delete-branch` removes the remote *and* local
+branch in one shot — nothing left to clean up:
 
 ```
+git checkout --detach                          # leave the branch (no-op if already detached)
 gh pr merge <number> --squash --delete-branch
 ```
 
-- `--delete-branch` deletes the **remote** branch and, when you're on it locally,
-  the local one too.
+Why detach first: git won't delete a branch that's checked out, and `gh`'s
+fallback — switching your worktree to `main` — **fails** when `main` is already
+checked out in another worktree (the normal multi-worktree setup), which is what
+leaves the local branch behind and forces a manual mop-up. Detaching sidesteps
+both. (`--squash` is the common default; match the repo's merge style.)
 
 Do not add any agent/assistant signature to the merge commit message.
 
-## Step 4 — delete the local branch
+## Step 4 — land on the updated default
 
-After a successful merge, get off the merged branch and delete it locally so it
-doesn't linger as a stale pointer:
+Point the worktree at the freshly-merged default — one command:
 
 ```
-git checkout main && git pull --ff-only origin main
-git branch -d <headRefName> 2>/dev/null || true
+git fetch origin main -q && git checkout --detach origin/main
 ```
 
-The `2>/dev/null || true` keeps the step idempotent: `--delete-branch` in Step 3
-usually already removed the local branch, and a plain `git branch -d` on a
-missing branch exits non-zero and would abort a script.
-
-- `git branch -d` (safe delete) refuses if the branch isn't merged — if it
-  refuses after a squash-merge (squash leaves no merge ancestry) rather than
-  because it's already gone, verify the PR really did merge, then
-  `git branch -D <headRefName>` to force-delete the now-merged branch.
-- Confirm it's gone either way — `git branch --list <headRefName>` prints
-  nothing.
+Use `--detach origin/main`, **not** `git checkout main`: the detach form always
+works, including when `main` is checked out in another worktree (git refuses the
+same branch in two worktrees). Step 3 already deleted the branch; the one-liner
+`git branch -D <headRefName>` clears it only in the rare case it survived.
+That's the whole cleanup.
 
 ## Step 5 — report
 
 Confirm: PR merged (with the merge commit / squash SHA), any linked issue closed,
-and the local branch deleted. State the branch you're now on (`main`).
+and the local branch deleted. Note where the worktree now sits (detached at the
+merged `main` tip).
 
 ## Anti-patterns
 
