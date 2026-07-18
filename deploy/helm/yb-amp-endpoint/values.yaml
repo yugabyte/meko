@@ -99,7 +99,7 @@ supervisor:
   # -- Max restarts per service within the window before the pod exits (k8s then restarts it).
   maxRestarts: 5
   # -- Sliding window (seconds) over which maxRestarts is counted.
-  restartWindowSeconds: 60
+  restartWindowSeconds: 180
 
 # Metrics: expose the compute's Postgres stats for the amp metrics pipeline
 # (controller/architecture/ac-metrics.md). The Neon-derived services in this pod
