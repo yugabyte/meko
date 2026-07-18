@@ -4,7 +4,7 @@
 #   - yb-pageserver        (page service, backed by YugabyteDB)
 #   - safekeeper           (WAL, backed by YugabyteDB)
 #   - endpoint_storage     (LFC scratch blobs, backed by YugabyteDB)
-#   - compute_ctl + postgres v18 + the `neon` extension (the compute)
+#   - compute_ctl + postgres v18 + the `yb_amp` extension (the compute)
 # plus a small Python supervisor (PID 1 under tini) that renders each
 # service's config from environment variables, brings the stack up in
 # order, and monitors/restarts the children.
@@ -17,7 +17,7 @@
 # bundled yb_light_local + storage_controller binaries.
 #
 # Build (from the repo root):
-#   docker build -t yb-light/neon-endpoint:dev -f deploy/endpoint/Dockerfile .
+#   docker build -t yb-amp/yb-amp-endpoint:dev -f deploy/endpoint/Dockerfile .
 #
 # yb-light is Postgres v18 only (compute/vendor/postgres-v18, POSTGRES_VERSIONS=v18).
 
@@ -38,7 +38,7 @@ ENV BUILD_TYPE=release
 RUN set -e \
     && mold -run make -j "$(nproc)" -s postgres
 
-# 2. Build the Rust binaries + the `neon` Postgres extension.
+# 2. Build the Rust binaries + the `yb_amp` Postgres extension.
 FROM $REPOSITORY/$IMAGE:$TAG AS build
 WORKDIR /home/nonroot
 ARG GIT_VERSION=local
@@ -77,7 +77,7 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
           target/release/storage_controller \
           target/release/yb_light_local \
           /home/nonroot/out/ \
-    && mold -run make -j "$(nproc)" -s neon-pg-ext
+    && mold -run make -j "$(nproc)" -s yb-amp-pg-ext
 
 # 3. Assemble the runtime image.
 FROM debian:${DEBIAN_FLAVOR} AS endpoint
@@ -115,7 +115,7 @@ COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-compute-ctl    
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/storage_controller  /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb_light_local      /usr/local/bin/
 
-# Postgres v18 install (binaries + the `neon` extension installed by neon-pg-ext).
+# Postgres v18 install (binaries + the `yb_amp` extension installed by yb-amp-pg-ext).
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
 # Schema migrations, for the optional DEV_PROVISION_SCHEMA path.

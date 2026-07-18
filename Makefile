@@ -118,13 +118,13 @@ CACHEDIR_TAG_CONTENTS := "Signature: 8a477f597d28d172789f06886806bc55"
 # Top level Makefile to build ybLight and PostgreSQL
 #
 .PHONY: all
-all: neon postgres-install neon-pg-ext
+all: yb-amp postgres-install yb-amp-pg-ext
 
 ### ybLight Rust bits
 #
 # The 'postgres_ffi' crate depends on the Postgres headers.
-.PHONY: neon
-neon: postgres-headers-install walproposer-lib cargo-target-dir
+.PHONY: yb-amp
+yb-amp: postgres-headers-install walproposer-lib cargo-target-dir
 	+@echo "Compiling ybLight"
 	$(CARGO_CMD_PREFIX) cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE)
 
@@ -134,9 +134,9 @@ cargo-target-dir:
 	mkdir -p target
 	test -e target/CACHEDIR.TAG || echo "$(CACHEDIR_TAG_CONTENTS)" > target/CACHEDIR.TAG
 
-.PHONY: neon-pg-ext-%
-neon-pg-ext-%: postgres-install-% cargo-target-dir
-	+@echo "Compiling neon-specific Postgres extensions for $*"
+.PHONY: yb-amp-pg-ext-%
+yb-amp-pg-ext-%: postgres-install-% cargo-target-dir
+	+@echo "Compiling yb_amp Postgres extensions for $*"
 	mkdir -p $(BUILD_DIR)/pgxn-$*
 	$(MAKE) PG_CONFIG="$(POSTGRES_INSTALL_DIR)/$*/bin/pg_config" COPT='$(COPT)' \
 		YBAMP_CARGO_ARTIFACT_TARGET_DIR="$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)" \
@@ -155,7 +155,7 @@ neon-pg-ext-%: postgres-install-% cargo-target-dir
 # they depend on openssl and other libraries that are not included in our
 # Rust build.
 .PHONY: walproposer-lib
-walproposer-lib: neon-pg-ext-v18
+walproposer-lib: yb-amp-pg-ext-v18
 	+@echo "Compiling walproposer-lib"
 	mkdir -p $(BUILD_DIR)/walproposer-lib
 	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/v18/bin/pg_config COPT='$(COPT)' \
@@ -177,9 +177,9 @@ ifeq ($(UNAME_S),Linux)
 		pg_crc32c.o
 endif
 
-# Shorthand to call neon-pg-ext-% target for all Postgres versions
-.PHONY: neon-pg-ext
-neon-pg-ext: $(foreach pg_version,$(POSTGRES_VERSIONS),neon-pg-ext-$(pg_version))
+# Shorthand to call yb-amp-pg-ext-% target for all Postgres versions
+.PHONY: yb-amp-pg-ext
+yb-amp-pg-ext: $(foreach pg_version,$(POSTGRES_VERSIONS),yb-amp-pg-ext-$(pg_version))
 
 ### amp controller (Go control plane)
 #
@@ -320,9 +320,9 @@ postgres-%-pgindent: postgres-%-pg-bsd-indent postgres-%-typedefs.list
 		--excludes $(ROOT_PROJECT_DIR)/compute/vendor/postgres-$*/src/tools/pgindent/exclude_file_patterns
 	$(RM) pg*.BAK
 
-# Indent pxgn/neon.
-.PHONY: neon-pgindent
-neon-pgindent: postgres-v18-pg-bsd-indent neon-pg-ext-v18
+# Indent pgxn/yb_amp.
+.PHONY: yb-amp-pgindent
+yb-amp-pgindent: postgres-v18-pg-bsd-indent yb-amp-pg-ext-v18
 	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/v18/bin/pg_config COPT='$(COPT)' \
 		FIND_TYPEDEF=$(ROOT_PROJECT_DIR)/compute/vendor/postgres-v18/src/tools/find_typedef \
 		INDENT=$(BUILD_DIR)/v18/src/tools/pg_bsd_indent/pg_bsd_indent \

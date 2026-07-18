@@ -34,7 +34,7 @@ runtime without rebuilding, so a missing one silently runs a stale binary.
 Default builds are debug; `--release` builds and runs the release binaries.
 
 `run.sh` also rebuilds the **`yb_amp` Postgres extension**
-(`make neon-pg-ext-v18`) when its C sources changed — `cargo` does not build
+(`make yb-amp-pg-ext-v18`) when its C sources changed — `cargo` does not build
 it, and the compute loads `pg_install/v18/lib/postgresql/yb_amp.so` at runtime,
 so a stale `.so` runs an old walproposer/compute against fresh cluster binaries
 (a wire/ABI skew that looks like a hang or segfault). Staleness is tracked via

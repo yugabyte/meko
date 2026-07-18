@@ -33,7 +33,7 @@ ARG BASE_IMAGE_SHA=${BASE_IMAGE_SHA/debian:bullseye-slim/debian@$BULLSEYE_SLIM_S
 # Naive way:
 #
 # 1. COPY . .
-# 1. make neon-pg-ext
+# 1. make yb-amp-pg-ext
 # 2. cargo build <storage binaries>
 #
 # But to enable docker to cache intermediate layers, we perform a few preparatory steps:
@@ -99,7 +99,7 @@ RUN  set -e \
       --bin yb-endpoint-storage \
       --bin yb_light_local \
       --locked --release \
-    && mold -run make -j $(nproc) -s neon-pg-ext
+    && mold -run make -j $(nproc) -s yb-amp-pg-ext
 
 # Assemble the final image
 FROM $BASE_IMAGE_SHA

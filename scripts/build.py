@@ -226,9 +226,9 @@ def stage_and_package(target_dir):
     for lib in RUNTIME_LIBS:
         shutil.copy2(f"/usr/lib64/{lib}", bundle / "lib" / lib)
 
-    # pg_install/v18/ — postgres binaries the compute spawns + the neon .so
+    # pg_install/v18/ — postgres binaries the compute spawns + the yb_amp .so
     # extensions. Without a matching tree the compute loads a wire-incompatible
-    # neon.so. copytree(symlinks=True) preserves the tree's symlinks.
+    # yb_amp.so. copytree(symlinks=True) preserves the tree's symlinks.
     say(f"Staging pg_install/v18/ ({_du(PG_INSTALL)})...")
     (bundle / "pg_install").mkdir()
     shutil.copytree(PG_INSTALL, bundle / "pg_install" / "v18", symlinks=True)
@@ -313,7 +313,7 @@ def main():
 
     pg_target = f"postgres-install-{PG_VERSION}"
     headers_target = f"postgres-headers-install-{PG_VERSION}"
-    ext_target = f"neon-pg-ext-{PG_VERSION}"
+    ext_target = f"yb-amp-pg-ext-{PG_VERSION}"
 
     if mode == "headers":
         # postgres-headers-install-% installs into pg_install/v18/include so a
@@ -371,7 +371,7 @@ def main():
         cargo += ["-p", crate]
     run(cargo)
 
-    # `neon.so` + walredo/utils extensions are loaded by the compute postgres;
+    # `yb_amp.so` + walredo/utils extensions are loaded by the compute postgres;
     # their wire protocol must match these binaries, and they link the Rust
     # walproposer-lib (which rolls every commit), so recompile them every run.
     # They follow the selected build type. PG is already built (release) above,

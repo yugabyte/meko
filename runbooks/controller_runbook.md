@@ -185,7 +185,7 @@ before redeploying.
 
 > Note on rebuilds: changing `supervisor.py` busts the Dockerfile's `COPY . .` layer, which re-triggers
 > the Rust build stage. On a *warm* BuildKit cache that incremental Rust build can fail to regenerate
-> `communicator/communicator_bindings.h` (a cbindgen build-script output) → `neon-pg-ext` then can't
+> `communicator/communicator_bindings.h` (a cbindgen build-script output) → `yb-amp-pg-ext` then can't
 > find it. A clean build (`--no-cache`, or fresh cache) is unaffected. To iterate quickly without a
 > cold rebuild, layer the supervisor fix onto the last good image
 > (`FROM <good-image>` + `COPY … supervisor.py` + `chmod +x`) — `supervisor.py` is the final COPY in
