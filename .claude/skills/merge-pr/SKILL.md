@@ -1,11 +1,12 @@
 ---
 name: merge-pr
 description: >-
-  Merge a pull request in this repo — but only after confirming its CI checks
-  have **passed** (not pending, not failing). After a successful merge, switch
-  off the merged branch and delete the local branch. Use for "merge the PR",
-  "merge this", `gh pr merge`, or any flow that ends in merging a PR. Never
-  merge with red or still-pending CI.
+  Merge a pull request in this repo — but only with the user's **explicit
+  approval** and after confirming its CI checks have **passed** (not pending,
+  not failing). After a successful merge, switch off the merged branch and
+  delete the local branch. Use for "merge the PR", "merge this", `gh pr merge`,
+  or any flow that ends in merging a PR. Never merge on your own initiative,
+  and never with red or still-pending CI.
 ---
 
 # merge-pr
@@ -50,6 +51,11 @@ gh pr view <number> --json mergeable,mergeStateStatus,reviewDecision
 pending gate** (no admin override) to force a merge.
 
 ## Step 3 — merge (stay on the branch)
+
+**First, confirm the user explicitly approved this merge.** Merging is never
+proactive — not to "validate" a change, not because CI just went green. If the
+user hasn't said to merge, stop here and ask; report the PR is green and ready
+and wait for their go-ahead.
 
 Merge from the PR's branch — where you already are. **Do not detach first**:
 `gh pr merge` reads the current branch and errors (`could not determine current
