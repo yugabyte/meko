@@ -141,6 +141,6 @@ and `MAX_RETRIES = 10` (`app.rs:38-39`), bailing on cancellation
   control_plane-stamped per-endpoint listen address rather than a single
   shared service.
 - In `control_plane`, when `endpoint_storage.remote_storage_json` is unset,
-  the `yb_storage_conn` block is derived from `storage_controller.yb` (the
+  the `yb_storage_conn` block is derived from `controller.yb` (the
   same `[*.yb]` connection the pageserver/safekeeper use), with a `type:
   "YbStore"` discriminator injected (`endpoint_storage.rs:53-99`).

@@ -4,8 +4,7 @@ OpenTelemetry Collector CRs (reconciled by the OpenTelemetry Operator) that
 implement the amp metrics pipeline's collect-and-export step
 (controller/architecture/ac-metrics.md). Two deployment-mode collectors ship
 with the control plane:
-  - controller: scrapes the amp controller (:8080) and its in-pod storage
-    controller (:50051).
+  - controller: scrapes the amp controller (:8080).
   - compute:    scrapes every endpoint pod's Prometheus sources — the
     postgres_exporter sidecar (:9187), pageserver (:9898), safekeeper (:7676),
     compute_ctl (:3080) — plus per-pod cAdvisor resource metrics.
@@ -78,13 +77,6 @@ spec:
               relabel_configs:
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component], action: keep, regex: controller}
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ .Values.controller.ports.api }}", target_label: __address__}
-                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
-            - job_name: storage-controller
-              scrape_interval: 15s
-              kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
-              relabel_configs:
-                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component], action: keep, regex: controller}
-                - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ .Values.controller.ports.sc }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
     processors:
       batch: {}

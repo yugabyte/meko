@@ -1,7 +1,7 @@
 # Runbook: Troubleshooting throughput issues (yb-light)
 
 Diagnoses low throughput (TPC-C load or execute, or any OLTP workload) on the **yb-light** stack:
-a Postgres compute, a yb-pageserver, a safekeeper, a storage_controller, and a YugabyteDB backing
+a Postgres compute, a yb-pageserver, a safekeeper, a controller, and a YugabyteDB backing
 store. The components may be co-located on one box or spread across boxes — this runbook does not
 assume a particular topology. Substitute the conventions below for your deployment.
 
@@ -22,7 +22,7 @@ export PGPASSWORD=...          # compute password
 export PS_HOST=...             # pageserver host
 export PS_HTTP_PORT=...        # pageserver HTTP/metrics port
 
-# --- storage_controller ---
+# --- controller ---
 export SC_BASE=http://<sc-host>:<sc-port>
 
 # --- YugabyteDB backing store ---

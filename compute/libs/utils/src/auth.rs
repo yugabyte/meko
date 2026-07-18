@@ -38,20 +38,20 @@ pub enum Scope {
     /// Should only be used e.g. for status check.
     /// Currently also used for connection from any pageserver to any safekeeper.
     SafekeeperData,
-    /// The scope used by pageservers in upcalls to storage controller and cloud control plane
+    /// The scope used by pageservers in upcalls to controller and cloud control plane
     #[serde(rename = "generations_api")]
     GenerationsApi,
-    /// Allows access to control plane managment API and all storage controller endpoints.
+    /// Allows access to control plane managment API and all controller endpoints.
     Admin,
 
-    /// Allows access to control plane & storage controller endpoints used in infrastructure automation (e.g. node registration)
+    /// Allows access to control plane & controller endpoints used in infrastructure automation (e.g. node registration)
     Infra,
 
-    /// Allows access to storage controller APIs used by the scrubber, to interrogate the state
+    /// Allows access to controller APIs used by the scrubber, to interrogate the state
     /// of a tenant & post scrub results.
     Scrubber,
 
-    /// This scope is used for communication with other storage controller instances.
+    /// This scope is used for communication with other controller instances.
     /// At the time of writing, this is only used for the step down request.
     #[serde(rename = "controller_peer")]
     ControllerPeer,

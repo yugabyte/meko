@@ -8,7 +8,7 @@
 #      pull amp/controller + amp/endpoint)
 #   3. a single-node YugabyteDB (yugabyted) StatefulSet + headless Service
 #   4. the yb_storage database (the controller connects to it at startup)
-#   5. the amp controller (controller + managed storage_controller, Helm endpoint
+#   5. the amp controller (controller (Helm endpoint
 #      driver) plus its MCP server and UI, via deploy/controller/redeploy.sh
 #
 # then prints the URLs for the controller UI/API and the amp_ui SPA.

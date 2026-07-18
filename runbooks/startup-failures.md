@@ -2,13 +2,13 @@
 
 A component won't start, won't register, or the compute can't serve queries. This runbook covers the
 yb-light bring-up failure modes by **symptom → cause → fix**. It is topology-agnostic: the compute,
-pageserver, safekeeper, and storage_controller may be co-located or on separate boxes. Substitute
+pageserver, safekeeper, and controller may be co-located or on separate boxes. Substitute
 the conventions below.
 
 ## Conventions (fill these in for your deployment)
 ```bash
 export PS_HOST=...        export PS_HTTP_PORT=...      # yb-pageserver
-export SC_BASE=http://<sc-host>:<sc-port>             # storage_controller
+export SC_BASE=http://<sc-host>:<sc-port>             # controller
 export SK_HOST=...        export SK_PG_PORT=...        # safekeeper PG listen
 export COMPUTE_HOST=...   export COMPUTE_PORT=...      # yb-light compute
 export YB_HOST=...  export YB_PORT=...  export YB_DB=...   # YugabyteDB backing store
@@ -26,7 +26,7 @@ holds that endpoint's `pageserver/`, `safekeeper/`, and `endpoint_storage/`).
 Start bottom-up so each component's dependency is already listening. **Verify at each checkpoint**
 before moving on — a silent half-failure here surfaces as a confusing error three steps later.
 
-1. **storage_controller** → checkpoint: `curl $SC_BASE/control/v1/node` returns (even if `[]`).
+1. **controller** → checkpoint: `curl $SC_BASE/control/v1/node` returns (even if `[]`).
 2. **safekeeper** → checkpoint: its HTTP `/v1/status` (or process up + port listening).
 3. **endpoint_storage** (if used) → checkpoint: process up, no TLS errors in its log.
 4. **pageserver** — *single-branch model (#16)*: the process refuses to start unless
@@ -78,7 +78,7 @@ by adding the missing/retyped key:
 - Missing top-level keys it requires: `default_branch_id`, `generate_local_ssl_certs`,
   `control_plane_api`. A panic at `local_env.rs:…` on init usually means `control_plane_api` is absent.
 - `[endpoint_storage]` stanza must be present.
-- endpoint_storage `YbStore` derivation needs the `[storage_controller.yb]` block (the shared
+- endpoint_storage `YbStore` derivation needs the `[controller.yb]` block (the shared
   `host_ports`/`user`/`dbname` connection block) to be present.
 
 Fix by adding each missing key and re-running init. After a successful init, the generated
@@ -86,14 +86,14 @@ Fix by adding each missing key and re-running init. After a successful init, the
 that's expected, not a failure.
 
 ## B. SC migration: "no schema has been selected to create in"
-A freshly created backing DB has no `storage_controller` schema, and the SC's `search_path` points
+A freshly created backing DB has no `registry` schema, and the SC's `search_path` points
 at it. Create it before starting the SC:
 ```bash
 PGPASSWORD="$YB_STORAGE_PASSWORD" $PSQL \
   "host=$YB_HOST port=$YB_PORT user=yugabyte dbname=$YB_DB sslmode=require" \
-  -c "CREATE SCHEMA IF NOT EXISTS storage_controller;"
+  -c "CREATE SCHEMA IF NOT EXISTS controller;"
 ```
-(The SC's `--database-url` typically pins `options=-csearch_path%3Dstorage_controller`.) Same idea
+(The SC's `--database-url` typically pins `options=-csearch_path%3Dcontroller`.) Same idea
 if a `pageserver` schema is expected and missing.
 
 ## C. Safekeeper: "unexpected argument '--<flag>'"
@@ -171,7 +171,7 @@ advertised PG address. There is no `broker_endpoint` in these builds.
 
 ## K. A process refuses to start on a bad config item
 Config is **fail-fast across every process** (pageserver, safekeeper, endpoint_storage,
-storage_controller, and the `yb_light_local` on-disk config): a config item that is wrong is
+controller, and the `yb_light_local` on-disk config): a config item that is wrong is
 refused at startup rather than logged and ignored. The classes that abort start-up:
 
 - **Unknown / misspelled / stale key** — e.g. `unknown configuration item(s) in pageserver.toml:
@@ -203,7 +203,7 @@ sed -i "s|^pg_distrib_dir = .*|pg_distrib_dir = \"$BUILD/pg_install\"|" "$CFG"
 The companion `yb_light_distrib_dir = "$BUILD"` should already be correct.
 
 ## M. SC: `password missing` / `building database URL from --yb-config`
-`yb_light_local init` writes the YB connection blocks (`[storage_controller.yb]` and the per-template
+`yb_light_local init` writes the YB connection blocks (`[controller.yb]` and the per-template
 `yb_storage_conn = '{…}'` inline tables) with `password_env: None` and `sslmode: None`
 (`yb_light_local.rs`) — only `host_ports/user/dbname`. SC then can't authenticate, and YB rejects
 non-TLS connections anyway (see **D**).
@@ -211,8 +211,8 @@ non-TLS connections anyway (see **D**).
 Fix: edit the generated `$YB_LIGHT_REPO_DIR/config` and add both keys to every YB block:
 ```bash
 CFG=$YB_LIGHT_REPO_DIR/config
-# [storage_controller.yb] block (TOML section)
-sed -i '/^\[storage_controller\.yb\]/,/^\[/ {
+# [controller.yb] block (TOML section)
+sed -i '/^\[controller\.yb\]/,/^\[/ {
   /^dbname = /a\
 password_env = "YB_STORAGE_PASSWORD"\
 sslmode = "require"

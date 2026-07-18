@@ -2,13 +2,13 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 
@@ -17,66 +17,41 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/api"
 	"github.com/yugabyte/yb-amp/controller/internal/core"
 	"github.com/yugabyte/yb-amp/controller/internal/node"
-	"github.com/yugabyte/yb-amp/controller/internal/storagecontroller"
 	"github.com/yugabyte/yb-amp/controller/internal/task"
 )
 
-// fakeSCServer is an httptest stand-in for the managed storage controller's
-// pending-init endpoints. It records the calls the project/branch handlers make
-// through a real storagecontroller.Client, so the create-project recipe path is
-// exercised end-to-end without a real controller. The storage layer is flat: the
-// recipe is keyed by a single branch_id (the controller passes the branch's
-// branch_id verbatim at this boundary). failRecord, when set, makes the record
-// (POST) return 500 so the handler's error path can be tested.
-type fakeSCServer struct {
+// fakeRecipeStore is an in-memory task.RecipeStore that records the calls the
+// project/branch handlers make, so the create-project recipe path is exercised
+// end-to-end without a database. The storage layer is flat: the recipe is keyed
+// by a single branch_id (the controller passes the branch's branch_id verbatim at
+// this boundary). failRecord, when set, makes RecordBranchRecipe fail so the
+// handler's error path can be tested.
+type fakeRecipeStore struct {
 	mu             sync.Mutex
 	recordHit      bool
 	recordedBranch string
-	recordedReq    storagecontroller.PendingTimelineInit
+	recordedReq    task.BranchRecipe
 	deleteHit      bool
 	failRecord     bool
 }
 
-// start stands up the httptest server and returns a storagecontroller.Client
-// pointed at it. It serves the pending-init recipe endpoints
-// (POST/DELETE /control/v1/branch/{branch_id}/pending_init).
-// The default branch fork point is no longer read from the controller — it comes
-// from the parent's own safekeeper (see fakeSafekeeper, #133).
-func (f *fakeSCServer) start(t *testing.T) *storagecontroller.Client {
-	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/control/v1/branch/", func(w http.ResponseWriter, r *http.Request) {
-		// /control/v1/branch/{branch_id}/pending_init
-		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/control/v1/branch/"), "/")
-		f.mu.Lock()
-		defer f.mu.Unlock()
+func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, branchID string, r task.BranchRecipe) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failRecord {
+		return fmt.Errorf("record recipe failed")
+	}
+	f.recordHit = true
+	f.recordedBranch = branchID
+	f.recordedReq = r
+	return nil
+}
 
-		if !strings.HasSuffix(r.URL.Path, "/pending_init") {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-
-		branch := parts[0]
-		switch r.Method {
-		case http.MethodPost:
-			if f.failRecord {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			f.recordHit = true
-			f.recordedBranch = branch
-			_ = json.NewDecoder(r.Body).Decode(&f.recordedReq)
-			w.WriteHeader(http.StatusOK)
-		case http.MethodDelete:
-			f.deleteHit = true
-			w.WriteHeader(http.StatusOK)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
-	return storagecontroller.NewClient(ts.Listener.Addr().String())
+func (f *fakeRecipeStore) ClearBranchRecipe(_ context.Context, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleteHit = true
+	return nil
 }
 
 // newProjectControllersProv builds the controllers for the direct-call tests over
@@ -173,14 +148,14 @@ func acceptedProjectTask(t *testing.T, resp api.CreateProjectResponseObject) (ta
 	return body.Id, *body.ProjectId
 }
 
-// TestCreateProjectRecordsPendingInit: with a storage controller wired,
+// TestCreateProjectRecordsPendingInit: with a controller wired,
 // create-project plans a task that, once driven, records the pending-init recipe
 // for the default branch (no ancestor, start LSN 0/0, pg_version 17) keyed by the
 // 32-hex branch id, and does NOT delete it (deletion is deferred to
 // create-endpoint). The recipe is now recorded by the record_branch_recipe step.
 func TestCreateProjectRecordsPendingInit(t *testing.T) {
-	sc := &fakeSCServer{}
-	prov := api.Provisioning{SC: sc.start(t)}
+	recipes := &fakeRecipeStore{}
+	prov := api.Provisioning{Recipes: recipes}
 	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 
@@ -202,32 +177,32 @@ func TestCreateProjectRecordsPendingInit(t *testing.T) {
 	// The default branch's id is needed to assert the recipe key — read it back.
 	def := getDefaultBranch(t, c, poolID, projectID)
 
-	if !sc.recordHit {
+	if !recipes.recordHit {
 		t.Fatal("RecordPendingTimelineInit was not called")
 	}
-	if want := hex.EncodeToString(def.BranchId[:]); sc.recordedBranch != want {
-		t.Errorf("recorded branch = %q, want %q", sc.recordedBranch, want)
+	if want := hex.EncodeToString(def.BranchId[:]); recipes.recordedBranch != want {
+		t.Errorf("recorded branch = %q, want %q", recipes.recordedBranch, want)
 	}
-	if sc.recordedReq.BranchName != "main" {
-		t.Errorf("branch_name = %q, want main", sc.recordedReq.BranchName)
+	if recipes.recordedReq.BranchName != "main" {
+		t.Errorf("branch_name = %q, want main", recipes.recordedReq.BranchName)
 	}
-	if sc.recordedReq.PgVersion != 18 {
-		t.Errorf("pg_version = %d, want 18", sc.recordedReq.PgVersion)
+	if recipes.recordedReq.PgVersion != 18 {
+		t.Errorf("pg_version = %d, want 18", recipes.recordedReq.PgVersion)
 	}
-	if sc.recordedReq.AncestorBranchID != nil {
-		t.Errorf("ancestor_branch_id = %v, want nil (default branch)", *sc.recordedReq.AncestorBranchID)
+	if recipes.recordedReq.AncestorBranchID != "" {
+		t.Errorf("ancestor_branch_id = %v, want nil (default branch)", recipes.recordedReq.AncestorBranchID)
 	}
-	if sc.recordedReq.StartLSN != "0/0" {
-		t.Errorf("start_lsn = %q, want 0/0", sc.recordedReq.StartLSN)
+	if recipes.recordedReq.StartLSN != "0/0" {
+		t.Errorf("start_lsn = %q, want 0/0", recipes.recordedReq.StartLSN)
 	}
-	if sc.deleteHit {
+	if recipes.deleteHit {
 		t.Error("DeletePendingTimelineInit was called during create-project; it belongs to create-endpoint")
 	}
 }
 
-// TestCreateProjectNoStorageController: without a storage controller, the task
+// TestCreateProjectNoController: without a controller, the task
 // still succeeds (it records the control-plane rows only, no recipe) — no panic.
-func TestCreateProjectNoStorageController(t *testing.T) {
+func TestCreateProjectNoController(t *testing.T) {
 	prov := api.Provisioning{}
 	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
@@ -246,12 +221,12 @@ func TestCreateProjectNoStorageController(t *testing.T) {
 	}
 }
 
-// TestCreateProjectStorageError: a storage-controller failure recording the
+// TestCreateProjectRecipeError: a recipe-store failure recording the
 // recipe now fails the create_project TASK (the record_branch_recipe step
 // returns the error), not the synchronous handler — which returns 202.
-func TestCreateProjectStorageError(t *testing.T) {
-	sc := &fakeSCServer{failRecord: true}
-	prov := api.Provisioning{SC: sc.start(t)}
+func TestCreateProjectRecipeError(t *testing.T) {
+	recipes := &fakeRecipeStore{failRecord: true}
+	prov := api.Provisioning{Recipes: recipes}
 	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 
@@ -266,7 +241,7 @@ func TestCreateProjectStorageError(t *testing.T) {
 	drainTasks(t, store, backend, prov)
 	got := soleTask(t, store)
 	if got.Status != task.StatusFailed || got.Error == nil {
-		t.Fatalf("create_project task = {status:%q err:%v}, want failed (storage controller error)", got.Status, got.Error)
+		t.Fatalf("create_project task = {status:%q err:%v}, want failed (controller error)", got.Status, got.Error)
 	}
 }
 
@@ -355,10 +330,10 @@ func mustCreateProjectC(t *testing.T, c *api.Controllers, store *task.MemStore, 
 // branch recipe whose ancestor + start_lsn are set (keyed by the branch's 32-hex
 // id).
 func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
-	sc := &fakeSCServer{}
+	recipes := &fakeRecipeStore{}
 	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
-	prov := api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()}
+	prov := api.Provisioning{Recipes: recipes, Deployer: dep, Node: node.NewClient()}
 	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
@@ -410,33 +385,33 @@ func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
 		t.Errorf("branch pg_version = %d, want inherited %d", br.PgVersion, def.PgVersion)
 	}
 
-	if !sc.recordHit {
+	if !recipes.recordHit {
 		t.Fatal("RecordPendingTimelineInit was not called for the branch")
 	}
-	if want := hex.EncodeToString(br.BranchId[:]); sc.recordedBranch != want {
-		t.Errorf("recorded branch = %q, want the branch %q", sc.recordedBranch, want)
+	if want := hex.EncodeToString(br.BranchId[:]); recipes.recordedBranch != want {
+		t.Errorf("recorded branch = %q, want the branch %q", recipes.recordedBranch, want)
 	}
-	if sc.recordedReq.AncestorBranchID == nil {
+	if recipes.recordedReq.AncestorBranchID == "" {
 		t.Fatal("recipe ancestor_branch_id = nil, want the parent")
 	}
-	if want := hex.EncodeToString(def.BranchId[:]); *sc.recordedReq.AncestorBranchID != want {
-		t.Errorf("recipe ancestor = %q, want the default branch %q", *sc.recordedReq.AncestorBranchID, want)
+	if want := hex.EncodeToString(def.BranchId[:]); recipes.recordedReq.AncestorBranchID != want {
+		t.Errorf("recipe ancestor = %q, want the default branch %q", recipes.recordedReq.AncestorBranchID, want)
 	}
-	if sc.recordedReq.StartLSN != "0/16ABCD0" {
-		t.Errorf("recipe start_lsn = %q, want 0/16ABCD0", sc.recordedReq.StartLSN)
+	if recipes.recordedReq.StartLSN != "0/16ABCD0" {
+		t.Errorf("recipe start_lsn = %q, want 0/16ABCD0", recipes.recordedReq.StartLSN)
 	}
-	if sc.recordedReq.BranchName != "feature" {
-		t.Errorf("recipe branch_name = %q, want feature", sc.recordedReq.BranchName)
+	if recipes.recordedReq.BranchName != "feature" {
+		t.Errorf("recipe branch_name = %q, want feature", recipes.recordedReq.BranchName)
 	}
 }
 
 // TestCreateBranchExplicitForkLSN: an explicit fork_point_lsn is used verbatim
 // and no node is consulted for a default (so it works without a deployer).
 func TestCreateBranchExplicitForkLSN(t *testing.T) {
-	sc := &fakeSCServer{}
+	recipes := &fakeRecipeStore{}
 	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
-	prov := api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()}
+	prov := api.Provisioning{Recipes: recipes, Deployer: dep, Node: node.NewClient()}
 	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
@@ -464,19 +439,19 @@ func TestCreateBranchExplicitForkLSN(t *testing.T) {
 	if got := branchByName(t, c, poolID, project.Id, "feature").ForkLsn; got == nil || *got != lsn {
 		t.Errorf("fork_lsn = %v, want %q", got, lsn)
 	}
-	if sc.recordedReq.StartLSN != lsn {
-		t.Errorf("recipe start_lsn = %q, want %q", sc.recordedReq.StartLSN, lsn)
+	if recipes.recordedReq.StartLSN != lsn {
+		t.Errorf("recipe start_lsn = %q, want %q", recipes.recordedReq.StartLSN, lsn)
 	}
-	if want := hex.EncodeToString(project.DefaultBranch.BranchId[:]); sc.recordedReq.AncestorBranchID == nil || *sc.recordedReq.AncestorBranchID != want {
-		t.Errorf("recipe ancestor = %v, want the default branch %q", sc.recordedReq.AncestorBranchID, want)
+	if want := hex.EncodeToString(project.DefaultBranch.BranchId[:]); recipes.recordedReq.AncestorBranchID == "" || recipes.recordedReq.AncestorBranchID != want {
+		t.Errorf("recipe ancestor = %v, want the default branch %q", recipes.recordedReq.AncestorBranchID, want)
 	}
 }
 
 // TestCreateBranchInvalidForkLSN: a malformed fork_point_lsn 400s before any
 // task is planned (cheap pre-validation).
 func TestCreateBranchInvalidForkLSN(t *testing.T) {
-	sc := &fakeSCServer{}
-	prov := api.Provisioning{SC: sc.start(t)}
+	recipes := &fakeRecipeStore{}
+	prov := api.Provisioning{Recipes: recipes}
 	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
@@ -502,10 +477,10 @@ func TestCreateBranchInvalidForkLSN(t *testing.T) {
 // resolves first (a cheap pre-check), so the parent still needs a read_write
 // endpoint + safekeeper.
 func TestCreateBranchDuplicateName(t *testing.T) {
-	sc := &fakeSCServer{}
+	recipes := &fakeRecipeStore{}
 	sk := &fakeSafekeeper{flushLSN: "0/10"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
-	prov := api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()}
+	prov := api.Provisioning{Recipes: recipes, Deployer: dep, Node: node.NewClient()}
 	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
@@ -606,11 +581,11 @@ func TestCreateEndpointOnDefaultHasNoAncestor(t *testing.T) {
 	}
 }
 
-// TestCreateBranchNoStorageController: without a controller there is no way to
+// TestCreateBranchNoController: without a controller there is no way to
 // resolve a default fork point (and no recipe to materialize the branch), so a
 // branch with no fork_point_lsn is rejected (400) rather than silently forking
 // at 0/0; an explicit fork_point_lsn still works and is recorded on the row.
-func TestCreateBranchNoStorageController(t *testing.T) {
+func TestCreateBranchNoController(t *testing.T) {
 	prov := api.Provisioning{}
 	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
@@ -656,10 +631,10 @@ func TestCreateBranchNoStorageController(t *testing.T) {
 // a parent that has no read_write endpoint (not yet materialized) is rejected
 // with a clear 400 rather than a wrong fork — there is no safekeeper to read.
 func TestCreateBranchDefaultForkNoEndpoint(t *testing.T) {
-	sc := &fakeSCServer{}
+	recipes := &fakeRecipeStore{}
 	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
-	prov := api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()}
+	prov := api.Provisioning{Recipes: recipes, Deployer: dep, Node: node.NewClient()}
 	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
@@ -686,10 +661,10 @@ func TestCreateBranchDefaultForkNoEndpoint(t *testing.T) {
 // yet there), a default branch is rejected with a clear 400 rather than a wrong
 // fork.
 func TestCreateBranchDefaultForkSafekeeperUnavailable(t *testing.T) {
-	sc := &fakeSCServer{}
+	recipes := &fakeRecipeStore{}
 	sk := &fakeSafekeeper{flushLSN: ""} // 404: the safekeeper does not serve the timeline
 	dep := &fakeDeployer{skURL: sk.start(t)}
-	prov := api.Provisioning{SC: sc.start(t), Deployer: dep, Node: node.NewClient()}
+	prov := api.Provisioning{Recipes: recipes, Deployer: dep, Node: node.NewClient()}
 	c, backend, store := newProjectControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")

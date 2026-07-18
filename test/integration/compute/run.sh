@@ -90,9 +90,9 @@ done
 # from target/<profile>/ at runtime — it does not build them — so they
 # must be compiled here too. Omitting one silently runs a STALE binary
 # from a previous build, which surfaces as baffling runtime mismatches
-# (e.g. a fresh launcher sending a request shape an old storage_controller
+# (e.g. a fresh launcher sending a request shape an old controller
 # can't parse). Keep this list in sync with the binaries `yb_light_local`
-# spawns: storage_controller, yb-pageserver, safekeeper, endpoint_storage,
+# spawns: controller, yb-pageserver, safekeeper, endpoint_storage,
 # compute_ctl.
 #
 # The diagnostic tools are compiled bins too; the `tools` scenario shells
@@ -104,7 +104,6 @@ done
 # `pkg/feature` form scopes it to the pageserver crate only; untriggered
 # failpoints cost a single atomic load per site.
 CLUSTER_BINS=(
-    --bin storage_controller
     --bin yb-pageserver
     --bin yb-safekeeper
     --bin yb-endpoint-storage
@@ -148,12 +147,19 @@ if [[ $PROFILE == release ]]; then
         "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
     export YB_LIGHT=${YB_LIGHT:-$REPO/target/release/yb_light_local}
     BIN=$REPO/target/release/integration_tests
+    _PROFILE_DIR=release
 else
     cargo build --features pageserver/testing,safekeeper/testing \
         --bin integration_tests --bin yb_light_local \
         "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
     BIN=$REPO/target/debug/integration_tests
+    _PROFILE_DIR=debug
 fi
+
+# The controller is a Go binary (not a cargo target). yb_light_local spawns it
+# from beside itself (target/<profile>/controller), so build it into the same
+# directory the cargo binaries land in.
+( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller )
 
 # Rebuild the yb_amp Postgres extension when its C sources changed. cargo does
 # NOT build it — the launcher spawns a compute whose postgres loads

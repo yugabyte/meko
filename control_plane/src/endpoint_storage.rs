@@ -15,13 +15,13 @@ pub struct EndpointStorage {
     pub pemfile: Utf8PathBuf,
     pub addr: SocketAddr,
     /// Verbatim JSON object for the `storage_kind` block. None → fall
-    /// back to a YbStore default derived from `storage_controller.yb`
+    /// back to a YbStore default derived from `controller.yb`
     /// (colocates with the `blobs` table that the pageserver uses).
     pub remote_storage_json: Option<String>,
     /// Fallback connection info used when `remote_storage_json` is `None`:
-    /// the `storage_controller.yb` block from the outer LocalEnv, from
+    /// the `controller.yb` block from the outer LocalEnv, from
     /// which we derive the default YbStore JSON.
-    pub storage_controller_yb: Option<ysql_client::YbConnConfig>,
+    pub controller_yb: Option<ysql_client::YbConnConfig>,
 }
 
 impl EndpointStorage {
@@ -36,7 +36,7 @@ impl EndpointStorage {
             pemfile: Utf8PathBuf::from_path_buf(env.get_public_key_path()).unwrap(),
             addr: conf.listen_addr,
             remote_storage_json: conf.remote_storage_json.clone(),
-            storage_controller_yb: env.storage_controller.yb.clone(),
+            controller_yb: env.controller.yb.clone(),
         }
     }
 
@@ -48,21 +48,21 @@ impl EndpointStorage {
         format!("{}:{}", self.addr.ip(), self.addr.port()).into()
     }
 
-    /// Build the default YbStore JSON from `storage_controller.yb`.
+    /// Build the default YbStore JSON from `controller.yb`.
     /// Mirrors what the pageserver/safekeeper get for their YB connection:
     /// the same `[*.yb]` block (the `blobs` table is hardcoded in the
-    /// endpoint_storage service). Requires `storage_controller.yb` to be
+    /// endpoint_storage service). Requires `controller.yb` to be
     /// configured — without it we have no host/port/user to point at, and
     /// there's no other backend to fall back to.
     fn default_yb_store_json(&self) -> Result<String> {
-        let yb = self.storage_controller_yb.as_ref().context(
-            "endpoint_storage.remote_storage_json is unset and storage_controller.yb \
+        let yb = self.controller_yb.as_ref().context(
+            "endpoint_storage.remote_storage_json is unset and controller.yb \
              is also unset; cannot derive a default YbStore config. Set one of the two.",
         )?;
         // Serialize the shared connection config and add the `type`
         // discriminator that `TypedRemoteStorageKind` deserializes by.
         let mut value = serde_json::to_value(yb)
-            .context("serializing storage_controller.yb for endpoint_storage default")?;
+            .context("serializing controller.yb for endpoint_storage default")?;
         value
             .as_object_mut()
             .expect("YbConnConfig serializes to a JSON object")
@@ -77,7 +77,7 @@ impl EndpointStorage {
         // nested `yb_storage_conn` block (a `TypedRemoteStorageKind`), the
         // same key the pageserver and safekeeper use. Nest the JSON object
         // the user supplied (or the default YbStore block we derive from
-        // storage_controller.yb) under that key.
+        // controller.yb) under that key.
         let storage_kind = match &self.remote_storage_json {
             Some(json) => json.clone(),
             None => self.default_yb_store_json()?,

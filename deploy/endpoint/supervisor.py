@@ -11,9 +11,9 @@ Services (in start order):
   3. yb-pageserver      - page service                 (YugabyteDB-backed)
   4. compute_ctl        - supervises Postgres v18 + the `yb_amp` extension
 
-The storage_controller is NOT here: it is a shared, cluster-level control
+No control plane runs here: it is a shared, cluster-level service
 plane that lives in the controller layer. This container assumes the `yb_storage`
-schema already exists (the controller/SC provisions it via diesel migrations). For
+schema already exists (the controller provisions it on startup). For
 standalone testing set DEV_PROVISION_SCHEMA=true to have the supervisor
 create the database + apply the migrations itself.
 
@@ -90,14 +90,14 @@ LISTEN_HOST = "127.0.0.1"
 
 def _derive_node_id(branch_id):
     """Each endpoint pod runs its own pageserver + safekeeper. When many
-    endpoints register with one shared storage controller, a fixed id collides:
+    endpoints register with one shared controller, a fixed id collides:
     the controller rejects re-registering node 1 at a new address with 409, so
     every endpoint after the first crash-loops. Derive a stable id from the
     branch id (one endpoint per branch) — a 31-bit hash of its first 8 hex
     digits, so distinct per branch with overwhelming probability — so the
     controller tracks each endpoint's PS/SK as distinct nodes. Masked positive,
     comfortably within the controller's NodeId (i64) and any i32 column. An
-    explicit NODE_ID env (e.g. an allocator) overrides; SC-free pods keep 1.
+    explicit NODE_ID env (e.g. an allocator) overrides; controller-free pods keep 1.
     Falls back to 1 for a missing or non-hex id (ids are 32-hex in practice)."""
     if not branch_id:
         return 1
@@ -108,28 +108,28 @@ def _derive_node_id(branch_id):
 
 
 # one pageserver + one safekeeper per endpoint pod; unique per endpoint so a
-# shared storage controller can tell co-located endpoints apart (see above).
+# shared controller can tell co-located endpoints apart (see above).
 NODE_ID = env_int("NODE_ID", _derive_node_id(BRANCH_ID))
 
 # The pageserver requires `control_plane_api` to be set ("pageservers cannot
 # run in isolation"), but this fork's pageserver no longer calls back to it at
 # runtime (controller_upcall_client was removed), so a placeholder is fine in
-# the SC-free pod. Point it at the controller's storage_controller if you have one.
+# the controller-free pod. Point it at the controller's surface if you have one.
 CONTROL_PLANE_API = env("CONTROL_PLANE_API", "http://localhost:6666")
 
-# Storage-controller coordination (opt-in). When STORAGE_CONTROLLER_URL is set,
+# Controller coordination (opt-in). When CONTROLLER_URL is set,
 # this endpoint registers its pageserver node + safekeeper with that controller
 # and takes its pageserver generation from the controller's attach-hook (instead
 # of the standalone GENERATION default) — the faithful controller topology, where the
 # controller is the tenant/node registry + generation-fencing authority. The
 # controller heartbeats and reconciles the nodes it knows about, so it must be
-# able to reach them: SC_REACHABLE_HOST + the *PUB ports are the host:port the
+# able to reach them: CONTROLLER_REACHABLE_HOST + the *PUB ports are the host:port the
 # controller uses (e.g. a Docker published port via the host gateway), and the
 # pageserver/safekeeper bind 0.0.0.0 so those published ports reach them. Left
-# unset, the endpoint stays SC-free and self-manages (the default).
-STORAGE_CONTROLLER_URL = env("STORAGE_CONTROLLER_URL")
-USE_STORAGE_CONTROLLER = STORAGE_CONTROLLER_URL is not None
-SC_REACHABLE_HOST = env("SC_REACHABLE_HOST", "host.docker.internal")
+# unset, the endpoint stays controller-free and self-manages (the default).
+CONTROLLER_URL = env("CONTROLLER_URL")
+USE_CONTROLLER = CONTROLLER_URL is not None
+CONTROLLER_REACHABLE_HOST = env("CONTROLLER_REACHABLE_HOST", "host.docker.internal")
 # How the controller reaches this endpoint's pageserver (default to the
 # in-container ports, i.e. the single-host case where no port remapping happens).
 # Used for node registration + the attach-hook. The safekeeper's published port
@@ -141,7 +141,7 @@ PAGESERVER_PG_PUB_PORT = env_int("PAGESERVER_PG_PUB_PORT", PAGESERVER_PG_PORT)
 # coordination (so published host ports route in), loopback otherwise. Internal
 # callers (compute, the supervisor's own probes) keep using 127.0.0.1, which a
 # 0.0.0.0 listener also accepts.
-BIND_HOST = "0.0.0.0" if USE_STORAGE_CONTROLLER else LISTEN_HOST
+BIND_HOST = "0.0.0.0" if USE_CONTROLLER else LISTEN_HOST
 
 # Supervisor behaviour.
 RESTART_BACKOFF = env_int("SUPERVISOR_RESTART_BACKOFF_SECONDS", 2)
@@ -272,7 +272,7 @@ def write_pageserver_config(datadir, bootstrap, ancestor_branch_id=None, ancesto
         # The local safekeeper this pageserver streams WAL from is always reached
         # over loopback inside the pod, regardless of the public bind address.
         f"safekeeper_pg_addr='{LISTEN_HOST}:{SAFEKEEPER_PG_PORT}'",
-        f"control_plane_api='{STORAGE_CONTROLLER_URL or CONTROL_PLANE_API}'",
+        f"control_plane_api='{CONTROLLER_URL or CONTROL_PLANE_API}'",
         f"yb_storage_conn={yb_conn_inline_toml()}",
         f"branch_id='{BRANCH_ID}'",
         f"generation={GENERATION}",
@@ -504,30 +504,32 @@ def provision_schema():
     if check.returncode == 0 and "1 row" in (check.stdout or ""):
         log("schema already present; skipping migrations")
         return
-    for mig in sorted(MIGRATIONS_DIR.glob("*/up.sql")):
-        log(f"applying migration {mig.parent.name}")
+    # The pageserver/safekeeper/public schemas the daemons bind are provisioned
+    # by the single schema-qualified provisioning migration.
+    for mig in sorted(MIGRATIONS_DIR.glob("*_provision_yb_storage.up.sql")):
+        log(f"applying migration {mig.name}")
         psql(YB_DBNAME, file=mig)
 
 
-def sc_register_and_attach():
-    """Register this endpoint's pageserver node with the storage controller and
+def register_and_attach():
+    """Register this endpoint's pageserver node with the controller and
     take the pageserver generation from its attach-hook. Mirrors control_plane's
     register_and_attach (control_plane/src/pageserver.rs); returns the granted
-    generation. The controller reaches the node at SC_REACHABLE_HOST + the *PUB
+    generation. The controller reaches the node at CONTROLLER_REACHABLE_HOST + the *PUB
     ports, so they must be published and bound on 0.0.0.0 (see BIND_HOST).
 
-    The storage controller no longer tracks safekeepers (#171): in the co-located
+    The controller no longer tracks safekeepers (#171): in the co-located
     topology each endpoint owns its single safekeeper and creates the branch on it
     directly, so there is nothing to register."""
-    base = STORAGE_CONTROLLER_URL.rstrip("/")
+    base = CONTROLLER_URL.rstrip("/")
 
     # Pageserver node registration is required: the controller assigns the
     # pageserver's generation against this node via the attach-hook.
     http_request("POST", f"{base}/control/v1/node", body={
         "node_id": NODE_ID,
-        "listen_pg_addr": SC_REACHABLE_HOST,
+        "listen_pg_addr": CONTROLLER_REACHABLE_HOST,
         "listen_pg_port": PAGESERVER_PG_PUB_PORT,
-        "listen_http_addr": SC_REACHABLE_HOST,
+        "listen_http_addr": CONTROLLER_REACHABLE_HOST,
         "listen_http_port": PAGESERVER_HTTP_PUB_PORT,
     })
     _, resp = http_request("POST", f"{base}/debug/v1/attach-hook",
@@ -535,7 +537,7 @@ def sc_register_and_attach():
     gen = (resp or {}).get("gen")
     if gen is None:
         raise RuntimeError(f"attach-hook did not return a generation: {resp}")
-    log(f"storage controller granted pageserver generation {gen} "
+    log(f"controller granted pageserver generation {gen} "
         f"for branch {BRANCH_ID} on node {NODE_ID}")
     return gen
 
@@ -581,8 +583,8 @@ def main():
     # generation from the controller *before* writing the pageserver config (it
     # bakes the generation in). The controller becomes the tenant/generation
     # authority; the pageserver still materializes the timeline itself (below).
-    if USE_STORAGE_CONTROLLER:
-        GENERATION = sc_register_and_attach()
+    if USE_CONTROLLER:
+        GENERATION = register_and_attach()
 
     es_dir = RUN_DIR / "endpoint_storage"
     sk_dir = RUN_DIR / "safekeeper"
@@ -656,34 +658,34 @@ def main():
         if e.code not in (409,):
             log(f"safekeeper create_branch returned {e.code}: {e.read()[:200]}")
 
-    # Under controller coordination, record the branch in the storage controller
+    # Under controller coordination, record the branch in the controller
     # for cluster bookkeeping (its start LSN + branch name). Mirrors control_plane's
-    # timeline_register (control_plane/src/storage_controller.rs). Since #171 the
+    # timeline_register (control_plane/src/controller.rs). Since #171 the
     # controller no longer tracks safekeeper placement — it just persists the branch
     # row. Reuse the exact start LSN already given to the safekeeper create above;
     # the pageserver API returns it as the controller's `Lsn` "hi/lo" string, so pass
     # it through (only convert if we somehow hold it as an integer).
-    if USE_STORAGE_CONTROLLER:
+    if USE_CONTROLLER:
         sc_start_lsn = start_lsn
         if isinstance(sc_start_lsn, int):
             sc_start_lsn = f"{sc_start_lsn >> 32:X}/{sc_start_lsn & 0xFFFFFFFF:X}"
-        base = STORAGE_CONTROLLER_URL.rstrip("/")
+        base = CONTROLLER_URL.rstrip("/")
         try:
             http_request(
                 "POST",
                 f"{base}/control/v1/branch/{BRANCH_ID}/register",
                 body={"start_lsn": sc_start_lsn},
             )
-            log("registered branch with storage controller")
+            log("registered branch with controller")
         except urllib.error.HTTPError as e:
             # 409/already-registered is fine on restart.
             if e.code not in (409,):
-                log(f"storage controller branch register returned {e.code}: {e.read()[:200]}")
+                log(f"controller branch register returned {e.code}: {e.read()[:200]}")
         except Exception as e:  # noqa: BLE001 - registry update is best-effort, never fatal
             # The safekeeper already has the branch (created above) and serves the
             # compute; registering it with the controller is bookkeeping, so a
             # transient connection error must not crash the pod.
-            log(f"WARNING: storage controller branch register failed (continuing): {e}")
+            log(f"WARNING: controller branch register failed (continuing): {e}")
 
     # 4. compute_ctl + postgres
     spec = render_compute_spec(RUN_DIR / "compute_spec.json")

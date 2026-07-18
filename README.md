@@ -49,7 +49,7 @@ flowchart LR
         mat["image materialiser"]
     end
 
-    subgraph sc["Storage controller (stateless)"]
+    subgraph sc["Controller (stateless)"]
         sct["tenant placement<br/>generation fencing"]
     end
 
@@ -59,7 +59,7 @@ flowchart LR
         tblConf[("pageserver.tenant_config<br/>pageserver.timeline_state")]
         tblWal[("safekeeper.wals<br/>safekeeper WAL rows")]
         tblBlob[("blobs<br/>basebackup tar, initdb")]
-        tblSc[("storage_controller schema")]
+        tblSc[("registry schema")]
     end
 
     app -- "SQL: SELECT / INSERT / UPDATE" --> pg
@@ -100,13 +100,13 @@ A ybAmp install is:
   election. Run one for low-load deployments, run several behind a
   load balancer for connection-spread on heavy workloads — but every
   instance is independent and interchangeable. HA comes from YB.
-- **Storage controller**: tenant/timeline placement & generation
+- **Controller**: tenant/timeline placement & generation
   management. Backs its own state in YB too — its schema lives
   alongside the pageserver tables in the same YB database.
 - **YugabyteDB cluster**: holds `pageserver.pages`, `pageserver.slru_pages`,
   `pageserver.meta`, `pageserver.tenant_config`,
   `pageserver.timeline_state`, the safekeeper WAL rows
-  (`safekeeper.wals`), the storage_controller schema, and the blob
+  (`safekeeper.wals`), the registry schema, and the blob
   table. This is the durable storage tier.
 
 > **YB query contract**: every SQL statement issued through
@@ -280,7 +280,7 @@ Default HTTP endpoints for a `yb_light_local` dev cluster (all bind
 
 | Service | HTTP API | Other ports |
 |---|---|---|
-| Storage controller | `http://127.0.0.1:1234` | — |
+| Controller | `http://127.0.0.1:1234` | — |
 | Pageserver | `http://127.0.0.1:9898` | gRPC `51051`, libpq `64000` |
 | Safekeeper | `http://127.0.0.1:7676` | libpq `5454` |
 | Endpoint storage | `http://127.0.0.1:9993` | — |
@@ -289,7 +289,7 @@ Notes:
 
 - Pageserver ports increment per node (node *i* → HTTP `9898+i`, libpq
   `64000+i`, gRPC `51051+i`).
-- The storage controller shares its port with the control-plane upcall
+- The controller shares its port with the control-plane upcall
   API (`/upcall/v1/`); its REST API lives at `/control/v1` and `/v1` on
   the same port.
 - `compute_ctl` exposes a per-endpoint HTTP control port assigned at
@@ -368,7 +368,7 @@ laid out as:
 yb-pageserver            # the binary yb_light_local launches
 yb_light_local
 yb-safekeeper
-storage_controller
+controller
 yb-compute-ctl
 yb-endpoint-storage
 tools/                   # yb-dump-pages, yb-dump-wals, yb-reset-consistent-lsn
@@ -500,7 +500,7 @@ shape is familiar, then jump straight to the relevant one during an
 incident.
 
 - [`runbooks/startup-failures.md`](runbooks/startup-failures.md) —
-  a component (PS / SK / compute / storage_controller) won't start,
+  a component (PS / SK / compute / controller) won't start,
   won't register, or the compute can't serve queries.
 - [`runbooks/throughput-troubleshooting.md`](runbooks/throughput-troubleshooting.md)
   — low throughput on TPC-C load / execute or any OLTP workload;
@@ -547,10 +547,9 @@ Per-component deep dives:
 - [`compute/architecture/safekeeper.md`](compute/architecture/safekeeper.md) — the WAL-in-YB
   reduction in ybAmp is described inline in `yugabyte.md` and in
   the safekeeper module docs.
-- [`storage_controller/architecture/storage-controller.md`](storage_controller/architecture/storage-controller.md)
-  — the cluster control plane: tenant placement, generation fencing, and
-  live-migrate semantics. (Control plane, so it lives under `storage_controller/`,
-  not `compute/`.)
+- [`controller/architecture/sc-integration.md`](controller/architecture/sc-integration.md)
+  — cluster control in the Go controller: generation authority (attach-hook), the
+  node/branch/endpoint registries, and `yb_storage` provisioning.
 - [`compute/architecture/remote-storage.md`](compute/architecture/remote-storage.md)
   — the `RemoteStorage` abstraction and the `YbStore` backend that
   replaced S3/GCS/Azure (blob/basebackup tar/initdb layer).
@@ -565,8 +564,8 @@ safekeeper, compute_ctl, endpoint_storage) are indexed in
 [`compute/architecture/README.md`](compute/architecture/README.md) — e.g.
 [`compute/architecture/yb-pageserver-apis.md`](compute/architecture/yb-pageserver-apis.md),
 [`compute/architecture/safekeeper-metrics.md`](compute/architecture/safekeeper-metrics.md);
-the storage controller's are under
-[`storage_controller/architecture/`](storage_controller/architecture/).
+the controller's are under
+[`controller/architecture/`](controller/architecture/).
 
 `cargo doc --no-deps --open` for rustdoc.
 

@@ -770,14 +770,14 @@ impl Cluster {
     /// compute state.
     pub async fn prep_for_next_test(&self) -> anyhow::Result<()> {
         let r = &self.repo_dir;
-        let sc = r.join("storage_controller_1/storage_controller.pid");
+        let sc = r.join("controller_1/controller.pid");
         let ps = r.join("endpoints/main/pageserver/pageserver.pid");
         let sk = r.join("endpoints/main/safekeeper/safekeeper.pid");
         let es = r.join("endpoints/main/endpoint_storage/endpoint_storage.pid");
 
         if !is_running(&sc) {
-            step("restart storage_controller (prior test left it down)");
-            self.yb(&["storage-controller", "start"])?;
+            step("restart controller (prior test left it down)");
+            self.yb(&["controller", "start"])?;
         }
         if !is_running(&ps) {
             step("restart pageserver (prior test left it down)");
@@ -1062,14 +1062,14 @@ fn env_or(keys: &[&str], default: &str) -> String {
 /// Is the component that owns `pidfile` still running?
 ///
 /// Each component (pageserver, safekeeper, endpoint_storage,
-/// storage_controller) holds an exclusive advisory `flock` on its pidfile
+/// controller) holds an exclusive advisory `flock` on its pidfile
 /// for its entire lifetime (see `utils::pid_file` / `utils::lock_file`).
 /// So liveness == "the lock is still held": we probe by trying to take it
 /// non-blocking. If we get it, nobody holds it → not running; if it's
 /// contended, a live process holds it → running.
 ///
 /// This deliberately does NOT look at the pidfile's *content*: `pid_file`
-/// documents the content as racy, and the storage controller in particular
+/// documents the content as racy, and the controller in particular
 /// is observed to leave its content empty while running fine — a
 /// PID/`/proc` check (the previous implementation) both mis-fired on that
 /// and didn't work off Linux at all.

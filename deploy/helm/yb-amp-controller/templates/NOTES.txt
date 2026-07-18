@@ -5,9 +5,9 @@ YugabyteDB at:
 
     {{ .Values.controller.databaseUrl }}
 
-Endpoints the controller deploys reach its storage controller at:
+Endpoints the controller deploys reach its controller at:
 
-    {{ include "yb-amp-controller.storageControllerUrl" . }}
+    {{ include "yb-amp-controller.endpointControllerUrl" . }}
 
 Controller exposure: {{ .Values.controller.service.type }}
 {{- if eq .Values.controller.service.type "nodeport" }}

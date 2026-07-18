@@ -3567,7 +3567,7 @@ mod tests {
     }
 
     /// All tests run against the production `pageserver.*` schema
-    /// (created by storage_controller's diesel migration on a
+    /// (created by the controller's migration on a
     /// real `yb_light_local`-style cluster). Per-test isolation comes
     /// from `rand_branch()` — every test writes
     /// to a distinct `branch_id` namespace, so

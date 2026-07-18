@@ -11,7 +11,7 @@ import (
 // constructed with. A nil recipes is left as a nil Deps.Recipes (the no-storage-
 // controller case), not a typed-nil interface.
 func endpointDeps(state *fakeStateStore, recipes *fakeRecipeStore, dep *fakeDeployer, bootstrap bool) Deps {
-	d := Deps{State: state, Deployer: dep, SCEndpointURL: "http://sc:50051", Bootstrap: bootstrap}
+	d := Deps{State: state, Deployer: dep, ControllerURL: "http://sc:50051", Bootstrap: bootstrap}
 	if recipes != nil {
 		d.Recipes = recipes
 	}

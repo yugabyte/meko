@@ -22,7 +22,7 @@
 #   scripts/version.sh                 # release version from VERSION (e.g. 0.260714.0)
 #   scripts/version.sh binary-version  # -ldflags version, e.g. 0.260714.0-dev.abc1234-dirty
 #   scripts/version.sh image-tag       # image tag, e.g. v0.260714.0-dev.abc1234-dirty (v0.260714.0 with RELEASE=1)
-#   scripts/version.sh sync            # stamp Chart.yaml + storage_controller Cargo.toml/Cargo.lock from VERSION
+#   scripts/version.sh sync            # stamp Chart.yaml from VERSION
 #   scripts/version.sh bump <part>     # bump date|patch|major in VERSION, then sync
 #   RELEASE=1 scripts/version.sh image-tag   # clean release tag
 set -euo pipefail
@@ -30,8 +30,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION_FILE="${ROOT}/VERSION"
 CHART="${ROOT}/deploy/helm/yb-amp-controller/Chart.yaml"
-STORCON_CARGO="${ROOT}/storage_controller/Cargo.toml"
-CARGO_LOCK="${ROOT}/Cargo.lock"
 
 read_version() {
   local v
@@ -52,31 +50,6 @@ sync_chart() {
     { print }
   ' "${CHART}" > "${tmp}" && mv "${tmp}" "${CHART}"
   echo ">> Chart.yaml version/appVersion set to ${v}"
-
-  # storage_controller Cargo package version: stamp only the first `version =`
-  # line (the [package] version), so `storage_controller --version` reports the
-  # same semver. The bundled binary is also build-tagged v<VERSION> (Makefile).
-  if [ -f "${STORCON_CARGO}" ]; then
-    tmp="$(mktemp)"
-    awk -v v="${v}" '
-      !done && /^version[[:space:]]*=/ { print "version = \"" v "\""; done=1; next }
-      { print }
-    ' "${STORCON_CARGO}" > "${tmp}" && mv "${tmp}" "${STORCON_CARGO}"
-    echo ">> storage_controller/Cargo.toml version set to ${v}"
-  fi
-
-  # Keep Cargo.lock's storage_controller entry in lockstep with its Cargo.toml
-  # so a `--locked` build doesn't reject the bumped package version. Stamp only
-  # the `version =` line inside the storage_controller [[package]] stanza.
-  if [ -f "${CARGO_LOCK}" ]; then
-    tmp="$(mktemp)"
-    awk -v v="${v}" '
-      /^name = "storage_controller"$/ { in_stc=1 }
-      in_stc && /^version[[:space:]]*=/ { print "version = \"" v "\""; in_stc=0; next }
-      { print }
-    ' "${CARGO_LOCK}" > "${tmp}" && mv "${tmp}" "${CARGO_LOCK}"
-    echo ">> Cargo.lock storage_controller version set to ${v}"
-  fi
 }
 
 bump() {

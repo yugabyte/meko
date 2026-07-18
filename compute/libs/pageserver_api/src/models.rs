@@ -361,7 +361,7 @@ impl BranchImportStatus {
     }
 }
 
-/// Storage controller specific extensions to [`TimelineInfo`].
+/// Controller specific extensions to [`TimelineInfo`].
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TimelineCreateResponseStorcon {
     #[serde(flatten)]
@@ -882,7 +882,7 @@ mod throttle_config_tests {
 ///
 /// `tenant_conf` is intentionally *not* on the wire — the
 /// authoritative copy lives in `pageserver.tenant_config`
-/// (#8). storage_controller writes the row before sending
+/// (#8). controller writes the row before sending
 /// this PUT; the pageserver re-reads from YB on receipt.
 #[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct LocationConfig {

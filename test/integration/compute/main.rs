@@ -319,7 +319,7 @@ fn push_category<'a>(c: &'a Cluster, cat: Category, items: &mut Vec<(String, Ite
 
 /// Run the live-DB unit tests against this run's cluster. Two suites, both
 /// needing a real YB (which CI otherwise lacks) — the ephemeral database this
-/// cluster's storage_controller just migrated is that YB, isolated per run:
+/// cluster's controller just migrated is that YB, isolated per run:
 ///
 /// 1. The pageserver/safekeeper module tests (`page_store::tests`,
 ///    `page_writer::tests`, `yb_wal_storage::tests`) — assert against the

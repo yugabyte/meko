@@ -45,7 +45,7 @@ below must stay consistent with it. Every issue MUST carry:
   - `compute` — Postgres, extensions including the `yb_amp` extension, `compute_ctl`,
     pageserver, safekeeper,
     read/write paths, page-service wire protocol.
-  - `control plane` — `storage_controller` orchestration,
+  - `control plane` — `controller` orchestration,
     `yb_light_local`, endpoint/branch lifecycle.
   Stock labels (`bug`, `enhancement`, …) are optional extras, not a
   substitute for the area label.

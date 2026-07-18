@@ -23,7 +23,7 @@ Desktop, an agent runtime) can drive that surface with tool calls instead of
 hand-rolling HTTP. It is deliberately small:
 
 - **It is a client, not a peer of the controller.** No DB, no task framework, no
-  storage-controller coordination — it makes HTTP requests and shapes the
+  controller coordination — it makes HTTP requests and shapes the
   results. If the controller is down, every tool fails with a transport error.
 - **It does not re-implement business rules.** Validation, the single-writer
   rule, name uniqueness, async planning — all of that stays in the controller.

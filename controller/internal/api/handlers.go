@@ -18,22 +18,20 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/deploy"
 	applog "github.com/yugabyte/yb-amp/controller/internal/log"
 	"github.com/yugabyte/yb-amp/controller/internal/node"
-	"github.com/yugabyte/yb-amp/controller/internal/storagecontroller"
 	"github.com/yugabyte/yb-amp/controller/internal/task"
 	"github.com/yugabyte/yb-amp/controller/internal/version"
 )
 
 // Provisioning holds the collaborators the create-project / create-endpoint
-// workflows use beyond the state store: the storage controller (to record the
+// workflows use beyond the state store: the controller (to record the
 // pending-init recipe and, once an endpoint materializes the branch, drop it)
 // and the endpoint deployer (to provision the compute). Both are optional —
 // with no deployer the endpoint mutation routes refuse with 501, and with no SC
-// create-project records the control-plane rows only. SCEndpointURL is the
+// create-project records the control-plane rows only. ControllerURL is the
 // controller URL as a *launched endpoint* reaches it (e.g. over the shared
-// network); empty means the endpoint runs SC-free. Bootstrap forces initdb of
+// network); empty means the endpoint runs controller-free. Bootstrap forces initdb of
 // the recorded branch on the first endpoint's deploy.
 type Provisioning struct {
-	SC       *storagecontroller.Client
 	Deployer deploy.Deployer
 	// Node reads LSNs from an endpoint's co-located safekeeper to resolve a
 	// branch's default fork point (#133). Paired with the Deployer (which yields
@@ -41,8 +39,11 @@ type Provisioning struct {
 	// resolved and branching requires an explicit fork_point_lsn.
 	Node          *node.Client
 	EndpointYB    deploy.YBConn
-	SCEndpointURL string
+	ControllerURL string
 	Bootstrap     bool
+	// Recipes records/clears a branch's pending-init recipe (the task framework's
+	// RecipeStore port). Production wires the in-process store; tests inject a fake.
+	Recipes task.RecipeStore
 }
 
 // Controllers implements the generated StrictServerInterface: the controller's
@@ -50,7 +51,7 @@ type Provisioning struct {
 // and from persistence (which the core.Backend owns). Project, branch, and
 // endpoint mutations (create + delete) plan write-ahead tasks and return 202 +
 // the Task + a Location header; the worker performs the work — recording the
-// control rows plus the storage controller's pending-init recipe and deploying
+// control rows plus the controller's pending-init recipe and deploying
 // compute (#108, #130, #113).
 type Controllers struct {
 	backend core.Backend
@@ -76,12 +77,7 @@ var _ StrictServerInterface = (*Controllers)(nil)
 // binary at build time (see internal/version).
 func (c *Controllers) GetVersion(_ context.Context, _ GetVersionRequestObject) (GetVersionResponseObject, error) {
 	v := version.Get()
-	resp := GetVersion200JSONResponse{Version: v.Version, GitCommit: v.Commit, BuildDate: v.BuildDate}
-	if v.StorageController != "" {
-		sc := v.StorageController
-		resp.StorageController = &sc
-	}
-	return resp, nil
+	return GetVersion200JSONResponse{Version: v.Version, GitCommit: v.Commit, BuildDate: v.BuildDate}, nil
 }
 
 // --- Users -----------------------------------------------------------------
@@ -205,7 +201,7 @@ func (c *Controllers) GetStoragePool(ctx context.Context, request GetStoragePool
 // --- Projects --------------------------------------------------------------
 // Create and delete are async: each runs a cheap synchronous pre-check, then
 // plans a task (create_project / delete_project) and returns 202 + the Task.
-// The project + default branch rows and the storage controller's pending-init
+// The project + default branch rows and the controller's pending-init
 // recipe are written by the create_project worker; the branch is materialized
 // later by the first endpoint deployed on it. Delete cascades to the project's
 // branches and endpoints in the worker.
@@ -510,7 +506,7 @@ func (c *Controllers) DeleteBranch(ctx context.Context, request DeleteBranchRequ
 // is a 32-bit value, so it is capped at 8 hex digits: a longer group is not a
 // valid pg_lsn and would otherwise pass this gate only to fail (500) at the
 // `$5::pg_lsn` cast. Branch fork points are validated against it before they
-// reach the cast or the storage controller.
+// reach the cast or the controller.
 var lsnRE = regexp.MustCompile(`^[0-9a-fA-F]{1,8}/[0-9a-fA-F]{1,8}$`)
 
 // resolveForkLSN determines the LSN a branch forks at, or a 400 response to
@@ -518,7 +514,7 @@ var lsnRE = regexp.MustCompile(`^[0-9a-fA-F]{1,8}/[0-9a-fA-F]{1,8}$`)
 // defaults to the parent's durable WAL end — the safekeeper's flush_lsn — read
 // from the parent branch's own read_write endpoint, whose co-located safekeeper
 // is the WAL authority for the parent timeline. Reading the ancestor's own node
-// (rather than the storage controller's per-tenant describe) is routing-correct
+// (rather than the controller's per-tenant describe) is routing-correct
 // in the co-located topology, where each endpoint has its own pageserver +
 // safekeeper but the SC tracks one attachment per tenant — so describe routes to
 // whichever pageserver attached last and misses the parent timeline once the

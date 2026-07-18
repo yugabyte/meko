@@ -1,7 +1,7 @@
 # yb-amp-controller Helm chart
 
-Deploys the [amp controller](../../../controller/README.md) (the cAmp control
-plane + its managed storage controller), its MCP server, **and** the
+Deploys the [amp controller](../../../controller/README.md) (the amp control
+plane), its MCP server, **and** the
 [`amp_ui`](../../../amp_ui/README.md) web UI, together, backed by an external
 YugabyteDB. Replaces the raw `kubectl apply` manifests that used to live inline
 in [`deploy/controller/redeploy.sh`](../../controller/redeploy.sh).
@@ -29,12 +29,12 @@ image pull secret — those are prerequisites.
   `ClusterRole`+`ClusterRoleBinding` `amp-controller-namespaces` (cluster-scoped
   namespaces get/list/create + nodes get/list). The controller drives endpoint
   workloads via the Kubernetes/Helm driver, so it needs this.
-- **Controller Deployment** `amp-controller` — one pod, container ports `api`
-  (8080: REST API + UI + `/healthz`/`/readyz`) and `sc` (50051: managed storage
-  controller). Carries the full `AMP_*` env block; readiness `/readyz` and
-  liveness `/healthz` on the api port.
-- **Controller Service** `amp-controller` — always-on ClusterIP exposing `api` +
-  `sc`. This is the DNS endpoints register against and the SC URL handed to them.
+- **Controller Deployment** `amp-controller` — one pod, container port `api`
+  (8080: REST API + UI + `/healthz`/`/readyz` + the storage-layer control surface
+  `/control/v1`+`/debug/v1`). Carries the full `AMP_*` env block; readiness
+  `/readyz` and liveness `/healthz` on the api port.
+- **Controller Service** `amp-controller` — always-on ClusterIP exposing `api`.
+  This is the DNS endpoints register against (the control-surface URL handed to them).
 - **Controller external Service** — per `controller.service.type`: a NodePort
   (`amp-controller-np`), an internal LoadBalancer (`amp-controller-lb`, carrying
   `controller.service.annotations`), a public LoadBalancer (`amp-controller-lb`),
@@ -86,8 +86,7 @@ a 200 confirms the MCP app is actually serving, not just that the port is bound.
 | `controller.databaseUrl` | `postgres://yugabyte@yb-tserver:5433/yb_storage?sslmode=disable` | `AMP_DATABASE_URL` |
 | `controller.dbSchema` | `controller` | `AMP_DB_SCHEMA` |
 | `controller.logFormat` | `text` | `AMP_LOG_FORMAT` |
-| `controller.ports.api` / `.sc` | `8080` / `50051` | controller API / storage-controller ports |
-| `controller.storageController.dev` | `true` | `AMP_STORAGE_CONTROLLER_DEV` |
+| `controller.ports.api` | `8080` | controller API + storage-layer control surface port |
 | `controller.service.type` | `internal-lb` | `nodeport` \| `internal-lb` \| `external-lb` \| `none`; drives the external Service for **both** the controller and the MCP server |
 | `controller.service.nodePortValue` | _(empty)_ | fixed nodePort when `service.type=nodeport` (empty ⇒ auto-assign) |
 | `controller.service.annotations` | GKE internal-LB annotations | list of `"k=v"` strings for the LB Service when `service.type=internal-lb` |

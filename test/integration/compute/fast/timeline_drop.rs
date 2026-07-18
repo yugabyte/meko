@@ -1,7 +1,7 @@
 //! `branch drop`: tear down a branch and all of its endpoints. Branches off
 //! `main`, brings up an endpoint on the branch, then drops the branch and
 //! verifies the durable cleanup: the endpoint's compute is gone (local dir
-//! removed), its record is deleted from the storage controller, and the
+//! removed), its record is deleted from the controller, and the
 //! branch is marked dropped (`deleted_at` set) so it no longer counts as a
 //! live branch and isn't brought back on restart. The underlying branch
 //! data is intentionally left for a later GC pass (see #36).
@@ -14,7 +14,7 @@ use crate::db;
 const ENDPOINT_ID: &str = "ep_drop";
 const BRANCH_NAME: &str = "drop_me";
 // Explicit, known branch id so we can address the branch in `branch drop`
-// and query its storage-controller row directly.
+// and query its registry row directly.
 const BRANCH_ID: &str = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0";
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
@@ -86,7 +86,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let dropped = db::query_i64(
         &yb,
         &format!(
-            "SELECT count(*) FROM storage_controller.timelines \
+            "SELECT count(*) FROM registry.timelines \
              WHERE branch_id = '{BRANCH_ID}' AND deleted_at IS NOT NULL"
         ),
     )
@@ -109,7 +109,7 @@ async fn live_branch_rows(yb: &str) -> anyhow::Result<i64> {
     db::query_i64(
         yb,
         &format!(
-            "SELECT count(*) FROM storage_controller.timelines \
+            "SELECT count(*) FROM registry.timelines \
              WHERE branch_id = '{BRANCH_ID}' AND deleted_at IS NULL"
         ),
     )
@@ -121,7 +121,7 @@ async fn endpoint_rows(yb: &str) -> anyhow::Result<i64> {
     db::query_i64(
         yb,
         &format!(
-            "SELECT count(*) FROM storage_controller.endpoints WHERE branch_id = '{BRANCH_ID}'"
+            "SELECT count(*) FROM registry.endpoints WHERE branch_id = '{BRANCH_ID}'"
         ),
     )
     .await

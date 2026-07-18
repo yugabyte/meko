@@ -116,26 +116,17 @@ deploy self-sufficiency).
 
 ---
 
-## 7. Integrate the storage controller in-process — [#202](https://github.com/yugabyte/yb-amp/issues/202)
+## 7. Integrate the controller in-process — [#202](https://github.com/yugabyte/yb-amp/issues/202) — DONE
 
-amp-controller runs the storage controller (the `storage_controller/` crate) as a
-**managed subprocess** today (`amp-controller.md` §11.1, #94): a generic supervisor
-(`controller/internal/process`) spawns the binary, streams its logs, restarts it with
-backoff, and stops it on shutdown, with the SC specifics (`--listen` / `--database-url` /
-`--dev`, `/ready` probe) and a thin loopback HTTP client in
-`controller/internal/storagecontroller`; wired in `controller/cmd/controller/main.go`
-(~L259-266) behind `--storage-controller`. The controller is its **only** caller.
-
-That subprocess carries standing cost — a second binary to bundle (`make controller-bundle`,
-`deploy/controller` under `/opt/yb-light-amp`), a supervisor to babysit, an extra HTTP hop
-per branch op, a listen address to allocate, and an "is it up?" failure surface — for
-isolation we don't use. **Goal: run it in-process, one binary/one process.**
-
-**Open design question:** the controller is Go, the SC is Rust, and §11.1 deliberately
-**reuses the crate rather than rewriting it** (principle 7 — don't touch the proven
-fencing/generation logic). So integration means link-the-crate (cgo/FFI), embed-as-in-process-server,
-or port-the-used-subset-to-Go (§11.2) — pick what drops the process cost without
-re-implementing fencing. Supersedes the subprocess posture in §11.1 / #94.
+The `storage_controller/` crate is removed. The controller now owns the
+storage-layer control functions in Go: generation authority (attach-hook), the
+node/branch/endpoint registries, and provisioning of `yb_storage` (all schemas)
+via its golang-migrate migrations. It serves the pod-facing surface
+(`/control/v1/...`, `/debug/v1/attach-hook`, `/ready`) on its API listener —
+`controller/internal/registry/` — and the task framework's recipe store is an
+in-process call over the same tables (`controller/architecture/sc-integration.md`).
+`yb_light_local` and the integration harness launch the `controller` binary in
+place of the old `storage_controller`. One binary, one process, one migration system.
 
 ---
 

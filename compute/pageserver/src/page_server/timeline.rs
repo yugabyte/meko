@@ -1217,7 +1217,7 @@ impl Timeline {
             ancestor_lsn,
             // Generation::into() returns None for `Generation::None`; in
             // attached state we always have a Valid generation from the
-            // storage controller's most recent attach.
+            // controller's most recent attach.
             current_generation: self.generation.into().unwrap_or(0) as i32,
             pg_version: self.pg_version.major_version_num(),
             // index_part.json-derived state — all default at creation

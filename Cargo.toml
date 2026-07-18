@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "compute/compute_tools",
     "control_plane",
-    "control_plane/storcon_cli",
     "compute/pageserver",
     "compute/pageserver/client",
     "compute/pageserver/client_grpc",
@@ -11,8 +10,6 @@ members = [
     "compute/pageserver/pagebench",
     "compute/safekeeper",
     "compute/safekeeper/client",
-    "storage_controller",
-    "storage_controller/client",
     "workspace_hack",
     "compute/libs/compute_api",
     "compute/libs/http-utils",
@@ -278,7 +275,6 @@ pq_proto = { version = "0.1", path = "./compute/libs/pq_proto/" }
 remote_storage = { version = "0.1", path = "./compute/libs/remote_storage/" }
 safekeeper_api = { version = "0.1", path = "./compute/libs/safekeeper_api" }
 safekeeper_client = { path = "./compute/safekeeper/client" }
-storage_controller_client = { path = "./storage_controller/client" }
 tenant_size_model = { version = "0.1", path = "./compute/libs/tenant_size_model/" }
 tracing-utils = { version = "0.1", path = "./compute/libs/tracing-utils/" }
 utils = { version = "0.1", path = "./compute/libs/utils/" }

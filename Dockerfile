@@ -95,7 +95,6 @@ RUN  set -e \
       --features $CARGO_FEATURES \
       --bin yb-pageserver  \
       --bin yb-safekeeper  \
-      --bin storage_controller  \
       --bin yb-endpoint-storage \
       --bin yb_light_local \
       --locked --release \
@@ -133,7 +132,6 @@ RUN set -e \
 
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-pageserver       /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-safekeeper       /usr/local/bin
-COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/storage_controller  /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-endpoint-storage /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb_light_local      /usr/local/bin
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/

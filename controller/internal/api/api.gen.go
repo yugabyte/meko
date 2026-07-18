@@ -323,9 +323,6 @@ type Version struct {
 	// GitCommit Short git commit the binary was built from.
 	GitCommit string `json:"git_commit"`
 
-	// StorageController Version reported by the bundled storage_controller (a sibling release stamped from the same VERSION file); omitted when no managed storage_controller is running.
-	StorageController *string `json:"storage_controller,omitempty"`
-
 	// Version Hybrid CalVer version from the repo-root VERSION file (MAJOR.YYMMDD.PATCH, e.g. "0.260714.0"); "dev" for an un-stamped build.
 	Version string `json:"version"`
 }

@@ -5,7 +5,7 @@
 # Brings the whole thing up from nothing and drives it end to end:
 #   1. a single-node YugabyteDB in a container (the controller's durable store);
 #   2. the amp controller (Go binary, built here) wired to that YB — REST API only,
-#      no endpoint deployer and no storage controller (kept minimal so the test
+#      no endpoint deployer and no controller (kept minimal so the test
 #      needs neither the endpoint image nor the Rust toolchain);
 #   3. the MCP server as its OWN container, built from controller/mcp/Dockerfile,
 #      pointed at the controller (the same shape it runs in on Kubernetes).
@@ -55,7 +55,7 @@ for bin in docker uv go curl; do
   command -v "$bin" >/dev/null 2>&1 || die "$bin not found on PATH"
 done
 
-say "build the controller binary (pure Go, no storage_controller)"
+say "build the controller binary (pure Go, no controller)"
 go -C "$REPO/controller" build -o "$CONTROLLER_BIN" ./cmd/controller
 
 say "build the MCP server image ($MCP_IMAGE)"

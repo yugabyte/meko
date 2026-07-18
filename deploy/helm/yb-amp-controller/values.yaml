@@ -21,7 +21,7 @@ rbac:
 
 controller:
   # -- Number of controller pods. The controller holds in-pod state (its managed
-  # storage controller subprocess), so keep this at 1.
+  # controller subprocess), so keep this at 1.
   replicaCount: 1
 
   image:
@@ -40,15 +40,9 @@ controller:
 
   # Container ports.
   ports:
-    # -- REST API + UI port (AMP serves /api/v1, /healthz, /readyz here).
+    # -- REST API + UI + storage-layer control surface port (AMP serves /api/v1,
+    # /healthz, /readyz, and /control/v1 + /debug/v1 here).
     api: 8080
-    # -- Managed storage controller listen port (AMP_STORAGE_CONTROLLER_LISTEN).
-    sc: 50051
-
-  # Managed storage controller (in-pod subprocess).
-  storageController:
-    # -- Dev mode (no auth) for the in-pod storage controller (AMP_STORAGE_CONTROLLER_DEV).
-    dev: true
 
   # External exposure of the controller UI/API. The in-cluster ClusterIP Service
   # (api + sc) is always created; this `service` block selects an EXTRA external
@@ -246,7 +240,7 @@ otel:
     safekeeper: 7676
     computeCtl: 3080
   collectors:
-    # Scrapes the amp controller (:8080) + in-pod storage controller (:50051).
+    # Scrapes the amp controller (:8080) + in-pod controller (:50051).
     controller:
       enabled: true
     # Scrapes every endpoint pod: postgres_exporter/pageserver/safekeeper/compute_ctl.

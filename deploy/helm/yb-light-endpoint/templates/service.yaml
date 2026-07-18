@@ -17,7 +17,7 @@ spec:
       port: {{ .Values.endpoint.computePort }}
       targetPort: pg-compute
       protocol: TCP
-    {{- if or .Values.service.exposeInternalHttp .Values.storageController.url }}
+    {{- if or .Values.service.exposeInternalHttp .Values.controller.url }}
     - name: ps-http
       port: {{ .Values.ports.pageserverHttp }}
       targetPort: ps-http

@@ -195,7 +195,7 @@ variants add `branch_id`.
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `pageserver_live_connections_started` / `pageserver_live_connections_finished` | IntCounterPair | `pageserver_connection_kind` | Network connections started/finished. |
-| `pageserver_utilization_score` | UIntGauge | — | Utilization score reported to storage controller (0 empty, 1000000 full). |
+| `pageserver_utilization_score` | UIntGauge | — | Utilization score reported to controller (0 empty, 1000000 full). |
 | `pageserver_tokio_executor_thread_configured_count` | UIntGauge | `setup` | Configured tokio executor threads. |
 | `pageserver_config_ignored_items` | UIntGauge | `item` | Unknown on-disk config items (1 = ignored; `""` always 0). |
 | `pageserver_jemalloc_allocated_bytes` / `_active_bytes` / `_resident_bytes` / `_mapped_bytes` / `_retained_bytes` / `_metadata_bytes` | UIntGauge | — | jemalloc stats (collector refreshes epoch per scrape). |

@@ -18,7 +18,7 @@ import (
 // health endpoints answer.
 func TestServesSpecAndExplorer(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := api.NewServer(&config.Config{ListenAddr: ":0"}, core.NewMemBackend(), newFakeTaskService(), api.Provisioning{}, nil, logger)
+	srv := api.NewServer(&config.Config{ListenAddr: ":0"}, core.NewMemBackend(), newFakeTaskService(), api.Provisioning{}, nil, nil, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 

@@ -270,7 +270,7 @@ func TestKubernetesAddress(t *testing.T) {
 }
 
 // EndpointSafekeeperURL addresses the endpoint's safekeeper at the same stable
-// host the storage controller dials (SC_REACHABLE_HOST): the Service DNS in k8s,
+// host the controller dials (CONTROLLER_REACHABLE_HOST): the Service DNS in k8s,
 // the container name on Docker — both at the fixed safekeeper HTTP port.
 func TestEndpointSafekeeperURL(t *testing.T) {
 	id := "yb-ep-92331eedafb2a0ef3b2d724d649bee78"

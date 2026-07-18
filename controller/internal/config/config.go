@@ -5,7 +5,6 @@ package config
 import (
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,21 +38,6 @@ type TaskConfig struct {
 	// are left to be reclaimed (their leases expire), so a misbehaving step can't
 	// wedge process exit.
 	ShutdownGrace time.Duration
-}
-
-// StorageControllerConfig configures the storage controller that the controller
-// runs as a managed subprocess (amp-controller.md §11.1). The
-// storage controller is a managed service: the controller spawns it, supervises
-// it (restart on crash, clean stop on shutdown), and is its only caller.
-type StorageControllerConfig struct {
-	Enabled      bool          // run the storage controller as a managed subprocess
-	BinPath      string        // path to the storage_controller binary
-	ListenAddr   string        // host:port the storage controller serves HTTP on
-	DatabaseURL  string        // universe connection for the storage controller; defaults to DB.URL
-	Dev          bool          // pass --dev (run without auth); dev/local only
-	ExtraArgs    []string      // extra raw args appended to the invocation (programmatic extension point; not flag-wired)
-	StartTimeout time.Duration // how long to wait for the first readiness probe to pass
-	StopTimeout  time.Duration // grace period after SIGTERM before SIGKILL
 }
 
 // DeployConfig configures how the controller provisions compute endpoints
@@ -92,13 +76,13 @@ type DeployConfig struct {
 	ExternalHost   string // host a client uses to reach a published compute port
 	SupervisorPath string // dev-only: bind-mount a host supervisor.py into endpoints (empty = bundled)
 
-	// StorageControllerURL is the URL deployed endpoints use to reach the
-	// controller-managed storage controller (e.g. http://host.docker.internal:50051).
+	// ControllerURL is the URL deployed endpoints use to reach the
+	// controller-managed controller (e.g. http://host.docker.internal:50051).
 	// When set, the endpoint registers its pageserver + safekeeper, takes its
 	// generation from the attach-hook, and registers the timeline — the
-	// storage-controller-coordinated path (controller-project-create.md). Empty = the
-	// endpoint runs storage-controller-free with a pinned generation.
-	StorageControllerURL string
+	// controller-coordinated path (controller-project-create.md). Empty = the
+	// endpoint runs controller-free with a pinned generation.
+	ControllerURL string
 
 	// Bootstrap initdb's the (already-recorded) tenant/timeline when an endpoint
 	// is deployed (the recipe model), instead of attaching an existing one. The
@@ -133,10 +117,10 @@ type Config struct {
 	ListenAddr        string
 	SigningKeyPath    string // optional; controller generates an ephemeral key if unset
 	Metrics           bool   // expose Prometheus /metrics and record instrumentation
+	Dev               bool   // serve the storage-layer control surface (attach-hook + registries), unauthenticated
 	Log               LogConfig
 	DB                DBConfig
 	Task              TaskConfig
-	StorageController StorageControllerConfig
 	Deploy            DeployConfig
 }
 
@@ -158,19 +142,11 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&c.Log.Format, "log-format", env("AMP_LOG_FORMAT", "json"), "log format: json|text")
 	fs.StringVar(&c.SigningKeyPath, "signing-key", env("AMP_SIGNING_KEY_PATH", ""), "path to the control-plane signing key (optional)")
 	fs.BoolVar(&c.Metrics, "metrics", envBool("AMP_METRICS", true), "expose the Prometheus /metrics scrape endpoint and record instrumentation")
+	fs.BoolVar(&c.Dev, "dev", envBool("AMP_DEV", false), "serve the storage-layer control surface (attach-hook, node/branch/endpoint registries) unauthenticated; for yb_light_local and the integration harness")
 	fs.DurationVar(&c.Task.PollInterval, "task-poll-interval", envDuration("AMP_TASK_POLL_INTERVAL", 2*time.Second), "task worker poll interval")
 	fs.DurationVar(&c.Task.LeaseTTL, "task-lease-ttl", envDuration("AMP_TASK_LEASE_TTL", 30*time.Second), "task ownership lease TTL")
 	fs.IntVar(&c.Task.MaxConcurrent, "task-max-concurrent", envInt("AMP_TASK_MAX_CONCURRENT", 50), "max tasks the worker executes concurrently")
 	fs.DurationVar(&c.Task.ShutdownGrace, "task-shutdown-grace", envDuration("AMP_TASK_SHUTDOWN_GRACE", 10*time.Second), "max time to wait for in-flight tasks to finish on shutdown")
-
-	sc := &c.StorageController
-	fs.BoolVar(&sc.Enabled, "storage-controller", envBool("AMP_STORAGE_CONTROLLER", false), "run the storage controller as a managed subprocess (§11.1)")
-	fs.StringVar(&sc.BinPath, "storage-controller-bin", env("AMP_STORAGE_CONTROLLER_BIN", "storage_controller"), "storage_controller binary: a bare name is resolved next to the controller binary (the bundle), then PATH; a path is used verbatim")
-	fs.StringVar(&sc.ListenAddr, "storage-controller-listen", env("AMP_STORAGE_CONTROLLER_LISTEN", "127.0.0.1:50051"), "host:port the managed storage controller serves on")
-	fs.StringVar(&sc.DatabaseURL, "storage-controller-database-url", env("AMP_STORAGE_CONTROLLER_DATABASE_URL", ""), "universe connection for the storage controller (defaults to --database-url)")
-	fs.BoolVar(&sc.Dev, "storage-controller-dev", envBool("AMP_STORAGE_CONTROLLER_DEV", false), "run the storage controller in --dev mode (no auth; dev/local only)")
-	fs.DurationVar(&sc.StartTimeout, "storage-controller-start-timeout", envDuration("AMP_STORAGE_CONTROLLER_START_TIMEOUT", 30*time.Second), "how long to wait for the storage controller to become ready")
-	fs.DurationVar(&sc.StopTimeout, "storage-controller-stop-timeout", envDuration("AMP_STORAGE_CONTROLLER_STOP_TIMEOUT", 10*time.Second), "grace period after SIGTERM before the storage controller is killed")
 
 	d := &c.Deploy
 	fs.BoolVar(&d.Enabled, "deploy", envBool("AMP_DEPLOY", false), "enable the endpoint deployer (§11, #108)")
@@ -202,7 +178,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.ExternalHost, "deploy-external-host", env("AMP_DEPLOY_EXTERNAL_HOST", "127.0.0.1"), "docker: host a client uses to reach a published compute port")
 	fs.StringVar(&d.SupervisorPath, "deploy-supervisor-path", env("AMP_DEPLOY_SUPERVISOR_PATH", ""), "docker: dev-only host path to supervisor.py to bind-mount into endpoints (empty = bundled)")
 	fs.BoolVar(&d.Bootstrap, "deploy-bootstrap", envBool("AMP_DEPLOY_BOOTSTRAP", false), "dev/integration — initdb the recorded tenant/timeline on endpoint deploy instead of attaching an existing one (the recipe model; no separate create-database flow yet); honored by both drivers")
-	fs.StringVar(&d.StorageControllerURL, "deploy-storage-controller-url", env("AMP_DEPLOY_STORAGE_CONTROLLER_URL", ""), "URL deployed endpoints use to reach the managed storage controller; empty = endpoint runs storage-controller-free (Kubernetes: typically the controller's in-cluster Service URL, e.g. http://amp-controller.<ns>.svc.cluster.local:50051)")
+	fs.StringVar(&d.ControllerURL, "deploy-controller-url", env("AMP_DEPLOY_CONTROLLER_URL", ""), "URL deployed endpoints use to reach the controller; empty = endpoint runs controller-free (Kubernetes: typically the controller's in-cluster Service URL, e.g. http://amp-controller.<ns>.svc.cluster.local:8080)")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -228,9 +204,6 @@ func Load(args []string) (*Config, error) {
 	}
 	if c.Task.ShutdownGrace <= 0 {
 		return nil, fmt.Errorf("task shutdown grace must be positive")
-	}
-	if err := validateStorageController(sc, c.DB.URL); err != nil {
-		return nil, err
 	}
 	if err := validateDeploy(d); err != nil {
 		return nil, err
@@ -328,29 +301,6 @@ func validateDeployKubernetes(d *DeployConfig) error {
 	// class the data volume is an ephemeral emptyDir and the size is unused.
 	if d.StorageClass != "" && d.DiskSize == "" {
 		return fmt.Errorf("deploy disk size is required when --deploy-storage-class is set")
-	}
-	return nil
-}
-
-// validateStorageController fills defaults and validates the managed
-// storage-controller config. It is a no-op unless the service is enabled.
-func validateStorageController(sc *StorageControllerConfig, universeURL string) error {
-	if !sc.Enabled {
-		return nil
-	}
-	if sc.DatabaseURL == "" {
-		// Both persist to the same universe over YSQL (§11); reuse the
-		// controller's connection unless one is given explicitly.
-		sc.DatabaseURL = universeURL
-	}
-	if sc.BinPath == "" {
-		return fmt.Errorf("storage controller binary path is required when --storage-controller is set")
-	}
-	if _, _, err := net.SplitHostPort(sc.ListenAddr); err != nil {
-		return fmt.Errorf("invalid storage controller listen address %q: %w", sc.ListenAddr, err)
-	}
-	if sc.StartTimeout <= 0 || sc.StopTimeout <= 0 {
-		return fmt.Errorf("storage controller start/stop timeouts must be positive")
 	}
 	return nil
 }

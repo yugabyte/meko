@@ -60,7 +60,7 @@ metrics land and how humans look at them.
 |---|---|---|
 | amp — Postgres | `amp-postgres` | `pg_up`, connections, txn/s, tuples/s, cache-hit, block I/O, deadlocks |
 | amp — Controller | `amp-controller` | request rate/latency (p50/95/99), task throughput & duration, in-flight |
-| amp — Storage layer | `amp-storage` | storage_controller (branches, nodes, HTTP, DB latency), safekeeper (timelines, WAL, disk), pageserver ops, compute_ctl |
+| amp — Storage layer | `amp-storage` | controller (branches, nodes, HTTP, DB latency), safekeeper (timelines, WAL, disk), pageserver ops, compute_ctl |
 | amp — Pod resources | `amp-pods` | per-pod CPU / memory / network (from cAdvisor) |
 
 ## Label conventions (must match the collectors)

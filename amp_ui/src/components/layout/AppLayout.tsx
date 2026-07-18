@@ -29,7 +29,7 @@ export function AppLayout() {
 
 // Small persistent footer showing the running controller version (GET /version).
 // The concise line shows amp vX.Y.Z · <commit>; the tooltip carries the full
-// build identity, including the bundled storage_controller's version.
+// build identity.
 function AppFooter() {
   const { data } = useVersion();
   const commit =
@@ -40,9 +40,6 @@ function AppFooter() {
         commit ? `commit ${commit}` : "",
         data.build_date && data.build_date !== "unknown"
           ? `built ${data.build_date}`
-          : "",
-        data.storage_controller
-          ? `storage_controller ${data.storage_controller}`
           : "",
       ]
         .filter(Boolean)

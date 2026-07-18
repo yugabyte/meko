@@ -17,25 +17,14 @@ var (
 	BuildDate = "unknown"
 )
 
-// storageController is the bundled storage_controller's self-reported version,
-// captured at startup via `storage_controller --version` (see SetStorageController).
-// Empty when no managed storage_controller is running (e.g. the Docker driver).
-// It is a sibling release stamped from the same VERSION file (Makefile BUILD_TAG).
-var storageController string
-
-// SetStorageController records the bundled storage_controller's version string.
-// Called once at startup; safe to leave unset.
-func SetStorageController(v string) { storageController = v }
-
 // Info is the build identity as served by GET /api/v1/version and logged at startup.
 type Info struct {
-	Version           string `json:"version"`
-	Commit            string `json:"git_commit"`
-	BuildDate         string `json:"build_date"`
-	StorageController string `json:"storage_controller,omitempty"`
+	Version   string `json:"version"`
+	Commit    string `json:"git_commit"`
+	BuildDate string `json:"build_date"`
 }
 
 // Get returns the stamped build identity.
 func Get() Info {
-	return Info{Version: Version, Commit: Commit, BuildDate: BuildDate, StorageController: storageController}
+	return Info{Version: Version, Commit: Commit, BuildDate: BuildDate}
 }

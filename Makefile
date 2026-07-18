@@ -214,19 +214,14 @@ endpoint-chart-test:  ## helm-unittest + Guaranteed-QoS guardrail for yb-light-e
 controller-generate:
 	go -C controller generate ./...
 
-# Bundle the amp controller and the storage controller it manages, side by side
-# in one directory, so controller resolves and runs the storage controller from its own
+# Bundle the amp controller and the controller it manages, side by side
+# in one directory, so controller resolves and runs the controller from its own
 # location with no extra configuration (#94).
 #
-# storage_controller compiles against the Postgres v18 server headers (its
-# transitive postgres_ffi dependency), so this installs them first via
-# postgres-headers-install-v18 — headers only, no Postgres server built, and no
-# build-tools image: just the repo's normal toolchain (rust-toolchain.toml +
-# clang/libclang for bindgen). controller-bundle initializes the compute/vendor/postgres-v18
-# submodule itself (the postgres_ffi headers need it), so a fresh checkout builds
-# without a separate `git submodule update` step.
-# The Rust build follows BUILD_TYPE like the rest of the workspace; the deploy/controller
-# container packages the same layout. Output: $(CONTROLLER_BUNDLE_DIR)/{controller,storage_controller}.
+# The controller is a pure-Go binary (CGO off), so this needs only the Go
+# toolchain — no Rust, no Postgres headers, no compute/vendor/postgres-v18
+# submodule. The deploy/controller container packages the same layout.
+# Output: $(CONTROLLER_BUNDLE_DIR)/controller.
 CONTROLLER_BUNDLE_DIR ?= $(ROOT_PROJECT_DIR)/target/controller-bundle
 
 # Initialize submodules (currently just compute/vendor/postgres-v18). Idempotent: a no-op
@@ -261,24 +256,18 @@ controller-bundle:
 	+$(MAKE) controller-bundle-build
 
 .PHONY: controller-bundle-build
-controller-bundle-build: postgres-headers-install-v18 cargo-target-dir
-	+@echo "Bundling controller + storage_controller -> $(CONTROLLER_BUNDLE_DIR)"
+controller-bundle-build:
+	+@echo "Bundling controller -> $(CONTROLLER_BUNDLE_DIR)"
 	mkdir -p "$(CONTROLLER_BUNDLE_DIR)"
 	# controller is built static (CGO off) so it runs unchanged in a slim runtime image.
 	CGO_ENABLED=0 go -C controller build -trimpath -ldflags "$(CONTROLLER_LDFLAGS)" -o "$(CONTROLLER_BUNDLE_DIR)/controller" ./cmd/controller
-	# Stamp the bundled storage_controller with the same release version: its
-	# project_build_tag!/project_git_version! macros read BUILD_TAG/GIT_VERSION at
-	# compile time, so the whole bundle self-reports one version (v<VERSION>).
-	$(CARGO_CMD_PREFIX) BUILD_TAG="v$(AMP_VERSION)" GIT_VERSION="$(AMP_GIT_COMMIT)" cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE) --bin storage_controller
-	cp "$(YBAMP_CARGO_ARTIFACT_TARGET_DIR)/storage_controller" "$(CONTROLLER_BUNDLE_DIR)/storage_controller"
 
-# controller-only bundle: just the Go controller, no storage_controller. Needs no Rust
+# controller-only bundle: just the Go controller, no controller. Needs no Rust
 # toolchain, no Postgres headers, and no compute/vendor/postgres-v18 submodule — so it
-# builds in environments where the full bundle can't. Pair it with the deploy/controller
-# image run with AMP_STORAGE_CONTROLLER=false. Used by the docker integration (controller/tasks).
+# builds in environments without the Rust toolchain. Used by the docker integration (controller/tasks).
 .PHONY: controller-bundle-only
 controller-bundle-only:
-	+@echo "Bundling controller (Go only, no storage controller) -> $(CONTROLLER_BUNDLE_DIR)"
+	+@echo "Bundling controller (Go only, no controller) -> $(CONTROLLER_BUNDLE_DIR)"
 	$(RM) -r "$(CONTROLLER_BUNDLE_DIR)"
 	mkdir -p "$(CONTROLLER_BUNDLE_DIR)"
 	CGO_ENABLED=0 go -C controller build -trimpath -ldflags "$(CONTROLLER_LDFLAGS)" -o "$(CONTROLLER_BUNDLE_DIR)/controller" ./cmd/controller

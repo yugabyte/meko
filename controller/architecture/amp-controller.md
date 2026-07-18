@@ -77,8 +77,8 @@ instances; amp-controller creates, configures, tracks, and retires them.
    exists (in k8s, YBA, and the endpoints themselves) detects drift — and repairs it
    by triggering tasks (§8), never through a separate mutation path.
 7. **Leverage, don't reimplement.** YBA manages YBDB. ybops handles VM provisioning.
-   compute_ctl manages services inside an endpoint. The existing storage controller
-   keeps handling storage-layer fencing and registry duties (§11). amp-controller
+   compute_ctl manages services inside an endpoint. The pageserver's proven
+   fencing/registry protocol is reused as-is; the controller owns the storage-layer registry in-process (§11). amp-controller
    orchestrates these — it does not duplicate them.
 
 ## 4. Resource model
@@ -203,7 +203,7 @@ Every process in a running placement group belongs to exactly one of two tiers:
 Placement group
 ├── Global services (one of each, §5.1)
 │   ├── amp-controller    — the control plane (this doc)
-│   ├── storage controller    — storage-layer registry + generation fencing (§11.1)
+│   ├── controller    — storage-layer registry + generation fencing (§11.1)
 │   └── endpoint_storage      — endpoint-scoped scratch store (§11.5)
 └── Endpoints (0+)            — one self-contained blob each (§5.4)
     └── per endpoint (§5.2):
@@ -227,27 +227,20 @@ Exactly one of each runs per placement group (§1):
 - **amp-controller** — the control plane this document describes. The deployment
   boundary is one placement group, one controller (§1); it owns the lifecycle of
   everything below it and exposes the API (§3) that an agent layer (§12) will consume.
-- **storage controller** — the existing `storage_controller/` crate, reused as an
-  internal storage-layer registry and the generation-fencing authority for the
+- **storage-layer registry** — the generation-fencing authority for the
   pageserver (it issues generations via the attach-hook the launcher calls; the
-  safekeeper is endpoint-owned and not registered with it). It runs *under* amp-controller as a
-  managed service (§11.1): never amp-controller's state store, never exposed to
-  users.
-  *(Direction: this managed-subprocess split is being collapsed — the SC's
-  registry + generation authority move in-process into amp-controller, and
-  endpoint registration + generation shift to a **create-then-configure** model
-  where amp mints `branch_id` + `generation` and pushes a configure to the pod
-  (the data plane only enforces the generation; `start_lsn` is its lone output).
-  See [`sc-integration.md`](sc-integration.md) and
-  [`sc-integration-migration.md`](sc-integration-migration.md).)*
+  safekeeper is endpoint-owned and not registered with it) plus the node/branch/
+  endpoint registries. amp-controller owns this **in-process** (§11.1) in a dedicated
+  `registry` schema — never amp-controller's product state store, never exposed to
+  users. See [`sc-integration.md`](sc-integration.md).
 - **endpoint_storage** — YB Light's small standalone store for endpoint-scoped scratch
   data (LFC prewarm/offload state today). Also a managed service (§11.5); its contents
   are performance state, not correctness state.
 
 All three persist to the placement group's universe over YSQL, so the global tier adds
-no external dependency beyond the universe itself (principle 2). The storage controller
+no external dependency beyond the universe itself (principle 2). The controller
 and endpoint_storage are *managed* by amp-controller — it deploys, supervises, and
-fronts them; §11 covers what that posture means, what of the storage controller is
+fronts them; §11 covers what that posture means, what of the controller is
 reused versus left inert, and the open questions.
 
 ### 5.2 Per-endpoint services
@@ -374,7 +367,7 @@ this interface, not a change to the workflow.
 
 - **Docker (implemented).** `DockerDeployer` runs the single-container endpoint image
   as one container, over the Docker daemon socket. The controller and the endpoints it
-  launches share a **user-defined Docker network**, so the storage controller (§11.1)
+  launches share a **user-defined Docker network**, so the controller (§11.1)
   reaches an endpoint's pageserver/safekeeper **by container name** (Docker DNS) — not
   a juggled host port. Only the compute's Postgres port is published to the host, and
   the controller returns that `host:port` as the endpoint's address; endpoints reach
@@ -386,7 +379,7 @@ this interface, not a change to the workflow.
 
 The endpoint spec carried in `EndpointSpec` (the branch binding rendered as the
 endpoint image's flat `BRANCH_ID` env var (#168), plus PG version, the YBDB
-connection, the storage-controller URL, bootstrap flag) is delivered to the endpoint as
+connection, the controller URL, bootstrap flag) is delivered to the endpoint as
 environment today; §5.5's `compute_ctl` transports are the longer-term refinement.
 
 ## 6. Core workflows
@@ -414,7 +407,7 @@ creation through YBA) follow the same pattern but are not user-facing.
 **Implemented today (the mutation workflows are tasks).** The world-changing
 operations run **through the write-ahead task framework** (principle 5, §8), not
 inline. `POST .../projects` plans a `create_project` task that creates the project
-+ default branch (state store) and records the storage-controller pending-init
++ default branch (state store) and records the controller pending-init
 recipe — keyed by the storage-layer `branch_id` (§11.1); branching, adding an
 endpoint (provisioned through the deployer, §5.6), and the cascade deletes
 (remove an endpoint, a branch, or a project) are likewise tasks. The API
@@ -616,7 +609,7 @@ storage pools.
 ### 9.4 Control-plane signing key
 
 amp-controller is the sole issuer of the machine-plane tokens: the JWTs verified
-by compute_ctl, endpoint_storage (§11.5), and the storage controller (§11.1),
+by compute_ctl, endpoint_storage (§11.5), and the controller (§11.1),
 and the data-plane tokens where pageserver/safekeeper auth is enabled. The
 private signing key is **deployment configuration, provided as a file path** —
 the same shape on every runtime: a file on a VM's disk, a mounted Secret on
@@ -730,63 +723,51 @@ in API-layer validation (full DDL lives with the code and its migrations):
    children is a constraint violation; teardown happens top-down through tasks,
    never via `ON DELETE CASCADE` surprises.
 
-## 11. Managed services: the storage controller and endpoint_storage
+## 11. Storage-layer control + endpoint_storage
 
-amp-controller is not the only control-plane process in a placement group: two
-existing yb-light services ride along — the **storage controller** and
-**endpoint_storage**, the other two global services (§5.1). Both run *under*
-amp-controller as **managed services**:
-amp-controller deploys them (one of each per placement group), supervises their
-lifecycle — start, health, upgrade, through tasks like every other mutation —
-and fronts them completely. Their APIs are internal; endpoints and
-amp-controller itself are their only callers, and API-first (§3) applies to
-amp-controller's surface, not theirs. Because they ship inside the controller's
-own deployment, they add no new external dependency (principle 2): like
-amp-controller, they persist to the universe over YSQL.
+Cluster control for the storage layer — generation authority, the node / branch
+/ endpoint registries, and provisioning of the `yb_storage` schemas — is owned by
+amp-controller **in-process** (§11.1). The one service that still rides along is
+**endpoint_storage** (§11.5), the other global service (§5.1): a standalone app
+amp-controller fronts, persisting to the universe over YSQL, so it adds no new
+external dependency (principle 2).
 
-### 11.1 The storage controller
+### 11.1 The storage-layer control surface
 
-yb-light already ships a storage controller (the `storage_controller/` crate): an
-HTTP service persisting to the universe over YSQL, speaking a protocol the
-pageserver and safekeeper binaries already implement. Today it is driven by
-`yb_light_local`. amp-controller takes the same posture, with a tighter scope.
+The storage-layer control functions live directly in amp-controller (Go), not in
+a separate binary: generation authority (the attach-hook fencing counter), the
+pageserver-node / branch / endpoint / pending-init registries, and provisioning
+of the whole `yb_storage` DB (its `public`, `pageserver`, `safekeeper`, and
+`registry` schemas) via the controller's golang-migrate migrations.
 
-**Decision: reuse it as an internal storage-layer registry — never as
-amp-controller's state store, and never exposed to users.** This is principle 7
-applied: the hard, proven part is the pageserver's fencing/registry protocol,
-and we do not rewrite it.
+**Decision: own the storage-layer registry in-process — never
+amp-controller's product state store, and never exposed to users.** The registry
+state lives in a dedicated `registry` schema, separate from the product model in
+the `controller` schema (§10).
 
-**How the controller runs it ([#94](https://github.com/yugabyte/yb-light/issues/94)).**
-amp-controller owns the storage controller as a child process it fully
-manages. A generic process supervisor (`controller/internal/process`) starts the
-binary, streams its stdout/stderr into the controller's structured log,
-restarts it with capped exponential backoff if it exits on its own, and stops
-it cleanly on shutdown — SIGTERM first, escalating to SIGKILL after a grace
-period. The supervisor's `Manager` runs any number of managed processes; the
-storage controller is the first. The storage-controller specifics — the binary
-path, the `--listen` / `--database-url` / `--dev` arguments, and the `/ready`
-readiness probe — live in `controller/internal/storagecontroller`, which also holds
-the thin internal HTTP client amp-controller uses to drive branch
-management (create/delete/describe over the storage controller's flat
-`/v1/branch/{branch_id}` surface). The manager runs alongside the API
-server and the task worker in the `serve` loop, gated on `--storage-controller`;
-when disabled (the default for the base skeleton, so the controller still runs
-without the binary present) the controller serves without it. Driving the
-lifecycle *through tasks* (§8) — start and upgrade as durable, idempotent
-operations rather than a process spawned at boot — is the next step; #94 lays
-the supervision foundation it builds on.
+**How it is served.** amp-controller serves the pod-facing surface —
+`/control/v1/...` (node/branch/endpoint registries, pending-init recipes),
+`/debug/v1/attach-hook` + `/debug/v1/inspect` (generation authority), and
+`/ready` — on its API listener, alongside the versioned `/api/v1` product API.
+The implementation is `controller/internal/registry` (the store over the
+`registry` schema + the HTTP handlers). Endpoint pods and the `yb_light_local`
+dev harness drive it; the controller's own task framework records pending-init
+recipes through the same in-process store, not over HTTP. There is no separate
+control-plane binary and no subprocess supervision.
 
-**Packaging.** Because amp-controller owns the storage controller's
-lifecycle, the two ship together: `make controller-bundle` lays the `controller` and
-`storage_controller` binaries side by side in one directory, and the
-`deploy/controller` container does the same under `/opt/yb-light-amp`. amp-controller
-resolves a bare storage-controller binary name against its *own* directory
-first, so the bundled binary is found with no path configuration (falling back
-to `PATH`); an explicit path is honored verbatim. This keeps "one deployment, no
-new external dependency" (§11) literally true — the managed service travels
-inside the controller's own image.
+### 11.2 What is implemented, what is not
 
-### 11.2 What is reused, what is not
+The controller implements only the storage-layer functions amp needs; the rest of
+the upstream multi-tenant machinery is dropped.
+
+| API surface | What it does | amp posture |
+|---|---|---|
+| Node registry (`/control/v1/node*`) | Register/describe pageservers (bookkeeping/observability; nothing gates on it) | **Kept** |
+| ~~Safekeeper registry~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly | **Removed** |
+| Branch bookkeeping (`/control/v1/branch/*`) | Branch register/drop, branch-name mappings, pending-init recipes | **Kept** |
+| Generation authority (`/debug/v1/attach-hook`, `/inspect`) | Issue/inspect the per-branch fencing generation | **Kept** |
+| Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows for `yb_light_local` | **Kept** (for the launcher) |
+| ~~Heartbeat/availability, scheduler, tenant placement/sharding, time travel, pageserver passthrough, timeline imports, metadata health~~ | Upstream multi-tenant machinery | **Dropped** — dead weight in the per-branch topology |
 
 | API surface | What it does | Used by yb-light today | amp-controller posture |
 |---|---|---|---|
@@ -798,37 +779,32 @@ inside the controller's own image.
 | Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows | Yes — built as a shim for `yb_light_local` | **Not reused** — superseded by amp-controller's endpoint records (§10.1); an opaque spec cannot carry the schema-enforced invariants of §10.2 |
 | Tenant placement/sharding, policies, time travel, pageserver passthrough | Upstream multi-tenant placement machinery | Dormant | **Not used** — dead weight in the per-branch topology |
 
-### 11.3 Constraints that make reuse safe
+### 11.3 Invariants
 
 - **Passive registry, not a second reconciler.** Per principles 5 and 6,
-  amp-controller is the only mutation driver and the only reconciler. The storage
-  controller's autonomous behaviors (heartbeat-driven state transitions,
-  scheduling/placement) must be audited and disabled or rendered inert.
-- **amp-controller's records never live in it.** Tenancy, PG clusters, endpoints,
-  and tasks live in amp-controller's own schema (§10). The storage controller keeps
-  only storage-layer bookkeeping: generations, node rows, branch rows.
-- **Replaceable by construction.** Nothing in amp-controller may grow roots into it
-  beyond the upcall/registry contract, so folding the live slice into
-  amp-controller later stays a contained change.
+  amp-controller is the only mutation driver and the only reconciler. The
+  registry is bookkeeping: there is no heartbeat-driven state machine and no
+  scheduler/placement loop (both dropped).
+- **Product records stay in the `controller` schema.** Tenancy, PG clusters,
+  endpoints, and tasks live in amp-controller's own `controller` schema (§10). The
+  `registry` schema holds only storage-layer bookkeeping: generations, node rows,
+  branch rows.
 
 Generations remain load-bearing in our topology: replacement is the recovery
 primitive (§5.3), so an old and a new pageserver for the same branch can
 briefly coexist during a replace — generation fencing is what keeps the stale
 one from corrupting storage state.
 
-### 11.4 Open questions (for the storage-controller design doc in `designs/`)
+### 11.4 Notes
 
-- **Who serves the upcall API.** Generation fencing no longer rides the upcall
-  API — the launcher fences via the attach-hook, and the `re-attach`/`validate`
-  upcalls were removed. The only remaining `/upcall/v1/*` surface is
-  timeline-import status reporting, used by import flows rather than every
-  pageserver boot. If amp-controller absorbs that small surface, the separate
-  storage-controller service can be retired; this is no longer boot-critical, so
-  it is a simplification rather than a hard dependency to cost.
+- **No upcall API.** Generation fencing does not ride an upcall API — the launcher
+  fences via the attach-hook, and the `re-attach`/`validate` upcalls were removed.
+  The pageserver wants `control_plane_api` set but makes no runtime callbacks, so a
+  placeholder URL is fine.
 - **Scale shape.** One pageserver per branch means node count tracks endpoint
   count, with register/deregister churn at create/destroy and scale-to-zero —
   inverted from upstream's assumption of a small fleet of long-lived
-  pageservers. Heartbeating load and registry growth need validation.
+  pageservers. Registry growth needs validation.
 
 ### 11.5 endpoint_storage
 

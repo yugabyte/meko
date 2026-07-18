@@ -60,7 +60,6 @@ DAEMON_BINS = [
     "yb-pageserver",
     "yb_light_local",
     "yb-safekeeper",
-    "storage_controller",
     "yb-compute-ctl",
     "yb-endpoint-storage",
 ]
@@ -72,7 +71,6 @@ BUILD_CRATES = [
     "pageserver",
     "control_plane",
     "safekeeper",
-    "storage_controller",
     "compute_tools",
     "endpoint_storage",
 ]

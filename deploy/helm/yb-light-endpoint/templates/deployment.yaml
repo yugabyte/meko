@@ -60,7 +60,7 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "yb-light-endpoint.fullname" . }}
-          {{- if or (include "yb-light-endpoint.hasPassword" .) .Values.storageController.url }}
+          {{- if or (include "yb-light-endpoint.hasPassword" .) .Values.controller.url }}
           env:
           {{- if include "yb-light-endpoint.hasPassword" . }}
             - name: YB_PASSWORD
@@ -69,14 +69,14 @@ spec:
                   name: {{ include "yb-light-endpoint.secretName" . }}
                   key: {{ include "yb-light-endpoint.secretKey" . }}
           {{- end }}
-          {{- if .Values.storageController.url }}
-            # The address the storage controller dials back to reach this
+          {{- if .Values.controller.url }}
+            # The address the controller dials back to reach this
             # endpoint's pageserver/safekeeper. Use the endpoint's own Service DNS
             # (stable) rather than the pod IP: a rescheduled pod (new IP) then
             # re-registers the SAME address, so the controller's node-register
             # stays UpToDate instead of returning 409 (#121). kube-proxy routes
             # the Service to whichever pod currently backs it.
-            - name: SC_REACHABLE_HOST
+            - name: CONTROLLER_REACHABLE_HOST
               value: {{ include "yb-light-endpoint.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
           {{- end }}
           {{- end }}
@@ -84,7 +84,7 @@ spec:
             - name: pg-compute
               containerPort: {{ .Values.endpoint.computePort }}
               protocol: TCP
-            {{- if or .Values.service.exposeInternalHttp .Values.storageController.url }}
+            {{- if or .Values.service.exposeInternalHttp .Values.controller.url }}
             - name: ps-http
               containerPort: {{ .Values.ports.pageserverHttp }}
               protocol: TCP

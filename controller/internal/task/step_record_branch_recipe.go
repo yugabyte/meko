@@ -14,7 +14,7 @@ import (
 const StepRecordBranchRecipe = "record_branch_recipe"
 
 // RecordBranchRecipeArgs are the inputs to the record_branch_recipe step: the
-// recipe the storage controller holds until an endpoint materializes the branch.
+// recipe the controller holds until an endpoint materializes the branch.
 // AncestorBranchID is nil for a project's default branch, set for a branch off
 // another (with StartLSN = the fork point).
 type RecordBranchRecipeArgs struct {
@@ -26,8 +26,8 @@ type RecordBranchRecipeArgs struct {
 	StartLSN         string     `json:"start_lsn"`
 }
 
-// recordBranchRecipeStep records the storage controller's pending-init recipe.
-// With no storage controller (recipes nil) it no-ops with a warning; the recipe
+// recordBranchRecipeStep records the controller's pending-init recipe.
+// With no controller (recipes nil) it no-ops with a warning; the recipe
 // then lives only in the control DB's branch row. Only the embedded args are
 // serialized; recipes is bound at construction.
 type recordBranchRecipeStep struct {
@@ -53,7 +53,7 @@ func (*recordBranchRecipeStep) Kind() string { return StepRecordBranchRecipe }
 
 func (s *recordBranchRecipeStep) Execute(ctx context.Context) StepResult {
 	if s.recipes == nil {
-		applog.FromContext(ctx).Warn("storage controller not available; branch recipe recorded in the control DB only",
+		applog.FromContext(ctx).Warn("controller not available; branch recipe recorded in the control DB only",
 			applog.KeyProjectID, s.ProjectID.String(), applog.KeyBranchID, s.BranchID.String())
 		return Ok(mustResult(map[string]bool{"recorded": false}))
 	}

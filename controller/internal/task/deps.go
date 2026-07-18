@@ -12,17 +12,17 @@ import (
 // This file defines the *ports* the step catalog (the step_*.go files) depends
 // on: narrow interfaces over the controller's collaborators, so steps are unit
 // testable against in-memory fakes and the framework stays decoupled from the
-// concrete state store, storage controller, and deployer. The real adapters that
+// concrete state store, controller, and deployer. The real adapters that
 // satisfy these ports are bundled into Deps and carried by the Registry, which
 // binds them into each step at construction (registry.go) — so a built step keeps
 // only the specific ports it uses and Execute needs only a context. The id-keyed
 // state operations live on *core.PgBackend (core/provision.go) and the recipe
-// operations bridge to the storage-controller client.
+// operations bridge to the in-process registry store.
 //
 // Naming: the controller's user-facing ladder is storage pool -> project ->
 // branch -> endpoint. The storage layer is flat: a branch's branch_id IS the
 // storage-layer BranchId (no enclosing tenant), so the controller carries it
-// verbatim, rendering it to 32-hex at the storage seam (the storage-controller
+// verbatim, rendering it to 32-hex at the storage seam (the pending-init
 // recipe) via hex32. A project no longer maps to a storage tenant.
 
 // StateStore is the set of *idempotent, id-keyed* project/branch operations the
@@ -95,7 +95,7 @@ type StateStore interface {
 
 // BranchRecipe is the pending-init recipe a freshly-declared branch carries until
 // an endpoint materializes it (controller/architecture/controller-project-create.md).
-// It mirrors the storage controller's PendingTimelineInit without coupling the
+// It mirrors the controller's PendingTimelineInit without coupling the
 // task package to that client type; the adapter in ProductionRegistry bridges the
 // two. AncestorBranchID is "" for a project's default branch, set (with StartLSN)
 // for a branch off another; the ids it bridges are 32 lowercase hex digits.
@@ -106,11 +106,11 @@ type BranchRecipe struct {
 	StartLSN         string
 }
 
-// RecipeStore records and clears the storage controller's pending-init recipes
+// RecipeStore records and clears the controller's pending-init recipes
 // (controller-project-create.md). branchID is 32 lowercase hex digits (the
 // storage-layer BranchId the controller maps to — the storage layer is flat, so
 // the recipe is keyed by branch_id alone). It may be unavailable (no managed
-// storage controller), in which case the steps no-op with a warning — the
+// controller), in which case the steps no-op with a warning — the
 // recipe then lives only in the control DB's branch row.
 type RecipeStore interface {
 	RecordBranchRecipe(ctx context.Context, branchID string, r BranchRecipe) error
@@ -130,7 +130,7 @@ type Deps struct {
 	Recipes       RecipeStore
 	Deployer      deploy.Deployer
 	EndpointYB    deploy.YBConn
-	SCEndpointURL string // controller URL a launched endpoint uses to reach the storage controller
+	ControllerURL string // controller URL a launched endpoint uses to reach the controller
 	Bootstrap     bool   // initdb the recorded branch on a (non-fork) endpoint's first deploy
 }
 

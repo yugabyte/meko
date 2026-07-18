@@ -19,12 +19,6 @@ tests:
             name: api
             port: 8080
             targetPort: api
-      - contains:
-          path: spec.ports
-          content:
-            name: sc
-            port: 50051
-            targetPort: sc
 
   - it: adds a NodePort Service when expose=nodeport
     set:

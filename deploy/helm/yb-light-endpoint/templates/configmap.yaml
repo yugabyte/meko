@@ -30,17 +30,17 @@ data:
   ANCESTOR_BRANCH_ID: {{ .Values.endpoint.ancestorBranchId | quote }}
   ANCESTOR_LSN: {{ .Values.endpoint.ancestorLsn | quote }}
 
-  {{- if .Values.storageController.url }}
-  # --- Storage-controller coordination ---
+  {{- if .Values.controller.url }}
+  # --- Controller coordination ---
   # The endpoint registers its pageserver + safekeeper with this controller,
   # takes its generation from the attach-hook, and registers the timeline.
-  # SC_REACHABLE_HOST (the stable Service DNS the controller dials back, so a
+  # CONTROLLER_REACHABLE_HOST (the stable Service DNS the controller dials back, so a
   # rescheduled pod re-registers the same address — #121) is set in the
   # Deployment; the *_PUB ports default to the internal ports. The controller
   # dials the pageserver/safekeeper HTTP ports, which the Service publishes when
   # SC-coordinated (the PG ports stay pod-local, reached by the compute over
   # loopback).
-  STORAGE_CONTROLLER_URL: {{ .Values.storageController.url | quote }}
+  CONTROLLER_URL: {{ .Values.controller.url | quote }}
   {{- end }}
 
   # --- Internal service ports ---

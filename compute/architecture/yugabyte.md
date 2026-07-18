@@ -13,21 +13,21 @@ All three subsystems share **one** database, `yb_storage`. Within it:
 | `public` | `blobs`, `blob_namespace` ENUM | yugabyte | controller migrations |
 | `pageserver` | `pages`, `slru_pages`, `meta`, `timeline_state` | yugabyte | controller migrations |
 | `safekeeper` | `timeline_state`, `wals` | yugabyte | controller migrations |
-| `storage_controller` | 8 Diesel-managed tables (`branches`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `pending_timeline_inits`, `timeline_imports`, `endpoints`) | yugabyte | controller migrations |
+| `controller` | 8 Diesel-managed tables (`branches`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `pending_timeline_inits`, `timeline_imports`, `endpoints`) | yugabyte | controller migrations |
 
 `yb_light_local` only `CREATE DATABASE`s `yb_storage`
-(`control_plane/src/storage_controller.rs::ensure_external_database`);
+(`control_plane/src/controller.rs::ensure_external_database`);
 every schema, ENUM, and table — across `public`, `pageserver`,
-`safekeeper`, and `storage_controller` — is created by the storage
+`safekeeper`, and `controller` — is created by the storage
 controller binary's Diesel migrations on first start. The single
 authoritative migration is
-`storage_controller/migrations/00000000000001_initial_schema/up.sql`,
-which `CREATE SCHEMA IF NOT EXISTS`'s the `storage_controller`,
+`controller/migrations/0005_provision_yb_storage.up.sql`,
+which `CREATE SCHEMA IF NOT EXISTS`'s the `controller`,
 `pageserver`, and `safekeeper` schemas (`public` is built-in) and
 creates every table referenced below. The controller's connections use
-`search_path = storage_controller,public` (`add_search_path_to_url`), so
+`search_path = controller,public` (`add_search_path_to_url`), so
 unqualified DDL — and Diesel's `__diesel_schema_migrations` bookkeeping —
-resolve to `storage_controller`; cross-schema objects are written
+resolve to `controller`; cross-schema objects are written
 schema-qualified.
 
 The migration SQL is **not** itself idempotent (plain `CREATE TABLE`); it
@@ -35,10 +35,10 @@ is Diesel's applied-migration tracking that makes each migration run
 exactly once and be skipped on restart. For that tracking to be reliable
 the bookkeeping table must always live in the same schema, so
 `Persistence::migration_run` runs `CREATE SCHEMA IF NOT EXISTS
-storage_controller` *before* applying migrations. Without that, on the
+controller` *before* applying migrations. Without that, on the
 very first start the schema doesn't exist yet, so the unqualified
 `__diesel_schema_migrations` lands in `public`; on later starts it
-resolves to `storage_controller` — a different, empty table — and Diesel
+resolves to `controller` — a different, empty table — and Diesel
 re-runs every migration against already-existing objects (which then
 fails). No operator DDL is required on a fresh YB cluster.
 
@@ -304,26 +304,26 @@ CREATE TABLE pageserver.timeline_state (
 See [`yb-pageserver.md`](yb-pageserver.md) for the design, the
 image-anchored read path, and the implementation roadmap.
 
-## `storage_controller` schema
+## `registry` schema
 
 Diesel-managed schema living inside `yb_storage`; do **not** edit by
-hand. Live migrations are at `storage_controller/migrations/`. The
+hand. Live migrations are at `controller/migrations/`. The
 controller binary amends its connection URL with
-`options=-c search_path=storage_controller,public` so unqualified DDL
+`options=-c search_path=controller,public` so unqualified DDL
 in the migrations lands in this schema rather than `public`. A
 bootstrap step (`Persistence::migration_run`) issues
-`CREATE SCHEMA IF NOT EXISTS storage_controller` on a raw connection
+`CREATE SCHEMA IF NOT EXISTS controller` on a raw connection
 before applying migrations, so the very first migration has a target.
 
 Inspect with:
 
 ```sql
 \c yb_storage
-SET search_path = storage_controller, public;
+SET search_path = controller, public;
 \dt
 ```
 
-Tables documented in [`storage-controller.md`](../../storage_controller/architecture/storage-controller.md).
+Tables documented in [`controller.md`](../../controller/architecture/sc-integration.md).
 
 ## YB-side configuration that matters
 
@@ -364,7 +364,7 @@ comes from the higher-level LSN scheme, not YB transaction semantics.
 
 **Off by default.** It is gated by a config field on the TOML connection
 block — `disable_transactional_writes` in the `yb_storage_conn` /
-`[storage_controller.yb]` inline table
+`[controller.yb]` inline table
 ([`YbConnConfig::disable_transactional_writes`]). Omit it (or set
 `false`) and the GUC is never sent; set `disable_transactional_writes =
 true` to re-enable it.
@@ -410,7 +410,7 @@ yb_storage_conn = { host_ports = "...", hot_path = "tsclient", tserver_rpc_addrs
 
 `YsqlClient::run_with_retries` (the wrapper every component goes
 through — `PageStore`, `YbStore`, safekeeper WAL backup,
-storage_controller metadata schema) retries three classes of failure
+controller metadata schema) retries three classes of failure
 internally before surfacing anything to the caller:
 
 - **Connection drops**: TCP socket closed mid-statement (YB tserver
@@ -479,9 +479,9 @@ the signal that something is wrong upstream of the client.
 ## Provisioning DDL — full reference
 
 The authoritative provisioning DDL is a single Diesel migration:
-[`storage_controller/migrations/00000000000001_initial_schema/up.sql`](../../storage_controller/migrations/00000000000001_initial_schema/up.sql).
+[`controller/migrations/0005_provision_yb_storage.up.sql`](../../controller/migrations/0005_provision_yb_storage.up.sql).
 `yb_light_local` only `CREATE DATABASE`s `yb_storage` (see
-`control_plane/src/storage_controller.rs::ensure_external_database`);
+`control_plane/src/controller.rs::ensure_external_database`);
 the controller binary applies the migration on first start, which
 creates every schema, ENUM, and table in one shot. Listed here for
 reference / disaster-recovery; you do **not** need to run any of it
@@ -497,7 +497,7 @@ by hand.
 | `pageserver` | `timeline_state` | Per-branch state (replaces `metadata` + `index_part.json` + `tenant-manifest.json`); generation-fenced via `current_generation`; PK `((branch_id) HASH)`. |
 | `safekeeper` | `timeline_state` | Per-branch safekeeper control file (replaces upstream's local-FS `safekeeper.control` blob); PK `((branch_id) HASH)`. |
 | `safekeeper` | `wals` | Live-WAL rows (coalesced consumer batches); PK `((branch_id, bucket_id) HASH, segno, chunk_offset)`, 10 per-batch placement buckets across 10 tablets. |
-| `storage_controller` | 8 tables | `branches`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `pending_timeline_inits`, `timeline_imports`, `endpoints`. |
+| `controller` | 8 tables | `branches`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `pending_timeline_inits`, `timeline_imports`, `endpoints`. |
 
 See `up.sql` for the exact column lists, PK ordering, and FK
 relationships.
@@ -510,7 +510,7 @@ relationships.
 - **YB unavailable on safekeeper write_wal** (yb-only mode): `write_wal()`
   returns an error. The walproposer doesn't ACK to the compute → compute's
   commit blocks. Once YB recovers, retries succeed.
-- **YB unavailable on storage controller**: the controller's HTTP API
+- **YB unavailable on controller**: the controller's HTTP API
   returns 5xx; pageserver / safekeeper / compute keep operating until they
   need a fresh cluster decision.
 - **YB unavailable for WalReader read**: only matters when the local WAL

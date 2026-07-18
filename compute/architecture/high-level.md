@@ -8,9 +8,9 @@
 | `compute_ctl` | Supervisor for the compute: applies config, starts/stops PG, runs catalog migrations. | `target/debug/yb-compute-ctl` |
 | Safekeeper | Raft acceptor for WAL. Receives WAL from compute, durably stores it, streams to pageserver. **Limited to one instance per cluster in YB WAL mode** — YB's own Raft already provides quorum durability. | `target/debug/yb-safekeeper` |
 | Pageserver | Materializes pages from WAL and serves them to compute on demand. Holds the only durable copy of relfiles (via `remote_storage`). | `target/debug/yb-pageserver` |
-| Storage controller | Tracks cluster topology: which branches are on which pageservers, which safekeepers hold which branches, generations, etc. | `target/debug/storage_controller` |
+| Controller | Tracks cluster topology: which branches are on which pageservers, which safekeepers hold which branches, generations, etc. | `target/debug/controller` |
 | Endpoint storage | Small auxiliary service for endpoint-scoped scratch data (LFC pre-warm hints, etc.). One instance **per endpoint**, co-located under `endpoints/<name>/endpoint_storage`. | `target/debug/yb-endpoint-storage` |
-| YugabyteDB | Durable storage backend for everything yb-light-internal. Replaces S3/Azure/GCS *and* the storage controller's local Postgres. | external (`yugabyted`) |
+| YugabyteDB | Durable storage backend for everything yb-light-internal. Replaces S3/Azure/GCS *and* the controller's local Postgres. | external (`yugabyted`) |
 
 ## Write path (one INSERT from a client)
 
@@ -80,8 +80,8 @@ key the pageserver/safekeeper use. In YB the path is split across the
 | Pageserver branch manifest | YB `yb_storage.blobs` | `pageserver-yb/branches/<branch_id>/tenant-manifest-<gen>.json` |
 | Safekeeper control file | YB `safekeeper.timeline_state` schema | one row per branch, typed columns |
 | Safekeeper live WAL | YB `safekeeper.wals` | `((branch_id, bucket_id) HASH, segno, chunk_offset)` |
-| Storage controller relational state | YB `yb_storage` DB, `storage_controller` schema | 8 Diesel-managed tables (alongside pageserver/safekeeper/public schemas) |
-| Compute endpoint registry | YB `yb_storage` DB, `storage_controller.endpoints` | one row per endpoint: endpoint_id, branch_id + opaque `EndpointConf` JSON (`spec`). Replaces the old per-endpoint `endpoint.json` folder |
+| Controller relational state | YB `yb_storage` DB, `registry` schema | 8 Diesel-managed tables (alongside pageserver/safekeeper/public schemas) |
+| Compute endpoint registry | YB `yb_storage` DB, `registry.endpoints` | one row per endpoint: endpoint_id, branch_id + opaque `EndpointConf` JSON (`spec`). Replaces the old per-endpoint `endpoint.json` folder |
 | Pageserver local FS | local FS | `.yb_light/endpoints/<endpoint>/pageserver/` — `pageserver.toml`, `identity.toml`, `metadata.json`, log + pidfile (no layer files; pages live in YB) |
 | Safekeeper local FS | local FS | `.yb_light/endpoints/<endpoint>/safekeeper/` — only logs + pidfile (no WAL, no control file, no id) |
 | Compute `pgdata` + runtime | local FS | `.yb_light/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`), plus the branch's co-located `pageserver/` + `safekeeper/`; created on `endpoint create`, removed on destroy |
@@ -94,7 +94,7 @@ These subsystems run unmodified upstream Neon code in yb-light:
   patches from `compute/vendor/postgres-v18`).
 - `compute_ctl` and the compute spec. (The endpoint *registry* — what
   `yb_light_local` persists per endpoint — moved out of `endpoint.json` folders
-  into the `storage_controller.endpoints` table; `compute_ctl` itself is
+  into the `registry.endpoints` table; `compute_ctl` itself is
   unchanged.)
 - The pageserver's `RemoteStorage` *trait* — we added `YbStore` as the
   primary backend (with `Unreliable` retained for tests); the upstream
@@ -104,7 +104,7 @@ These subsystems run unmodified upstream Neon code in yb-light:
   GC, and branch attach logic.
 - The safekeeper's Raft acceptor logic, WAL stream decoder, walproposer wire
   protocol.
-- The storage controller's Rust code: nearly untouched when we pointed it
+- The controller's Rust code: nearly untouched when we pointed it
   at YB. The only addition is a `--yb-config` flag that takes the shared
   `YbConnConfig` block and builds the DB connection URL internally via
   `YbConnConfig::to_database_url()`; everything else (diesel, migrations,
@@ -136,14 +136,14 @@ yugabyted                       :7100 (master), :5433 (ysql)
         |                              key column holds the bare filename — the
         |                              branches/ literal + the branch id value are
         |                              not stored, they live in their own columns
-        +-- schema `storage_controller`  Diesel-managed; 7 tables
+        +-- schema `controller`  Diesel-managed; 7 tables
         +-- schema `pageserver`
         +-- schema `safekeeper`          `timeline_state` (typed control-file rows)
                                          + `wals` (per-write WAL chunks,
                                          PK ((branch_id) HASH, segno, chunk_offset))
 
 yb-light binaries (target/debug/)
-  storage_controller --yb-config "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage' }" --listen 127.0.0.1:<port>
+  controller --yb-config "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage' }" --listen 127.0.0.1:<port>
   yb-pageserver   (config from on-disk pageserver.toml; yb_light_local defaults :64100 pg, :9988 http, :51151 grpc — base ports 64000/9898/51051 + i offset)
   yb-safekeeper --id 1   (config from on-disk safekeeper.toml: yb_storage_conn; yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
   yb-endpoint-storage   (config from endpoints/<name>/compute/endpoint_storage/endpoint_storage.json; one per endpoint, base port 9993 + 2*k)

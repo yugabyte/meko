@@ -231,7 +231,7 @@ pub struct YbConnConfig {
 
 This is the single connection block shared by all four storage
 components (pageserver `yb_storage_conn`, safekeeper `yb_storage_conn`,
-endpoint_storage, storage_controller `--yb-config`). It carries no
+endpoint_storage, controller `--yb-config`). It carries no
 `table_name` (each component hardcodes its own table) and no `prefix` or
 `concurrency_limit`. Selected via the existing `RemoteStorageKind` enum
 (untagged TOML), which picks `YbStore` automatically from the
@@ -248,7 +248,7 @@ extracted from `remote_storage` into its own crate in commit `f399c049e`
 and is re-exported from `remote_storage::lib.rs:23` for compatibility.
 yb_light_local's `ensure_external_database` does **not** go through
 `YsqlClient` — it issues raw one-shot `tokio_postgres::Config::connect`
-calls (`control_plane/src/storage_controller.rs:320-350`).
+calls (`control_plane/src/controller.rs:320-350`).
 
 - Owns the `tokio_postgres::Config` plus a reconnect closure baked at
   construction time (`connect_no_tls` or `connect_rustls`).
@@ -294,9 +294,9 @@ calls (`control_plane/src/storage_controller.rs:320-350`).
 `build_yb_rustls_connector(sslrootcert: Option<&str>)` (in
 `compute/libs/ysql_client/src/lib.rs:679`, re-exported from
 `remote_storage::lib.rs:23`) is the shared constructor; the
-storage_controller wrapper in `control_plane` reuses it for its own
+controller wrapper in `control_plane` reuses it for its own
 one-shot `CREATE DATABASE` / DDL connections (see
-[`storage-controller.md`](../../storage_controller/architecture/storage-controller.md)). The rustls path was
+[`controller.md`](../../controller/architecture/sc-integration.md)). The rustls path was
 introduced in commit `7a424639e`.
 
 ### Sample TOML

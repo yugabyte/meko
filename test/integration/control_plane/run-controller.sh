@@ -9,10 +9,9 @@
 # controller's REST API and runs Postgres against those addresses; it validates
 # copy-on-write branch isolation (see test/integration/control_plane/README.md).
 #
-# This drives the SC-free self-bootstrap path: controller runs the endpoint with
-# --deploy-bootstrap, so it provisions the storage schema and initdb's the
-# recorded tenant/timeline on first start (there is no create-database flow yet).
-# Storage-controller-coordinated deploy is future work.
+# The controller provisions the shared DB's schema (dataplane + registry) on
+# startup, then deploys each endpoint with BOOTSTRAP=true so the endpoint initdb's
+# the recorded tenant/timeline on first start (there is no create-database flow yet).
 #
 # Prereqs: Docker, and a YugabyteDB on the host at :5433 (yugabyte/yugabyte).
 # Builds yb-light/controller:dev locally; requires the endpoint image
@@ -60,8 +59,12 @@ yb() { docker exec "$YB_CONTAINER" ysqlsh -h "$YB_IP" -p 5433 -U yugabyte -d yug
 RUN_ID="$$_$(date +%s)"
 NET="ybamp-integration-${RUN_ID}"
 AMP_NAME="yb-amp-integration-${RUN_ID}"
-CTL_DB="amp_ctl_integration_${RUN_ID}"
-STORE_DB="amp_store_integration_${RUN_ID}"
+# One database, as in production: helm points both the controller's
+# AMP_DATABASE_URL and the endpoints' AMP_DEPLOY_YB_DBNAME at the same
+# `yb_storage`. The controller provisions the dataplane (public/pageserver/
+# safekeeper) + registry schemas into its own DB, and the endpoints read the
+# dataplane from that same DB.
+DB="amp_integration_${RUN_ID}"
 # A free host port for controller's REST API (no pipeline, to avoid SIGPIPE under pipefail).
 AMP_HOST_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 
@@ -71,10 +74,8 @@ cleanup() {
     docker ps -aq --filter "network=${NET}" 2>/dev/null | xargs -r docker rm -f >/dev/null 2>&1 || true
     docker rm -f "$AMP_NAME" >/dev/null 2>&1 || true
     docker network rm "$NET" >/dev/null 2>&1 || true
-    for db in "$STORE_DB" "$CTL_DB"; do
-        yb -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$db'" >/dev/null 2>&1 || true
-        yb -c "DROP DATABASE IF EXISTS \"$db\"" >/dev/null 2>&1 || true
-    done
+    yb -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$DB'" >/dev/null 2>&1 || true
+    yb -c "DROP DATABASE IF EXISTS \"$DB\"" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -92,19 +93,15 @@ fi
 echo "==> Building the integration harness"
 cargo build --bin integration_control_plane
 
-echo "==> Creating network $NET + databases ($CTL_DB, $STORE_DB)"
+echo "==> Creating network $NET + database ($DB)"
 docker network create "$NET" >/dev/null
-yb -c "CREATE DATABASE \"$CTL_DB\"" >/dev/null
-yb -c "CREATE DATABASE \"$STORE_DB\"" >/dev/null
+yb -c "CREATE DATABASE \"$DB\"" >/dev/null
 
 echo "==> Starting controller ($AMP_NAME) on port $AMP_HOST_PORT (docker runtime)"
 # --user root + the mounted socket let controller's Docker provisioner launch endpoints;
-# the endpoints join $NET so controller and the client can reach them.
-# AMP_STORAGE_CONTROLLER=false selects the SC-free self-bootstrap path: the
-# controller-only image (make controller-bundle-only) ships no storage_controller
-# binary, but the image defaults AMP_STORAGE_CONTROLLER=true — left on, the
-# controller would loop trying to spawn a missing binary and /readyz never goes
-# green. The fork point + ancestor still flow to the endpoint from the control DB.
+# the endpoints join $NET so controller and the client can reach them. The controller
+# owns cluster control in-process (generation authority + registries, served on :8080)
+# and provisions its own DB's schemas on startup — no separate controller.
 # AMP_DEPLOY_SUPERVISOR_PATH bind-mounts the repo's current supervisor.py into
 # each endpoint (the controller passes it to `docker run -v`, resolved by the
 # host daemon). The pre-built endpoint image is only rebuilt by hand, so its
@@ -115,9 +112,8 @@ docker run -d --name "$AMP_NAME" --hostname "$AMP_NAME" --network "$NET" \
     -p "${AMP_HOST_PORT}:8080" \
     --add-host host.docker.internal:host-gateway \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -e "AMP_DATABASE_URL=postgres://yugabyte@host.docker.internal:5433/${CTL_DB}" \
+    -e "AMP_DATABASE_URL=postgres://yugabyte@host.docker.internal:5433/${DB}" \
     -e AMP_LOG_FORMAT=text \
-    -e AMP_STORAGE_CONTROLLER=false \
     -e AMP_DEPLOY=true \
     -e AMP_DEPLOY_DRIVER=docker \
     -e AMP_DEPLOY_NETWORK="$NET" \
@@ -125,7 +121,7 @@ docker run -d --name "$AMP_NAME" --hostname "$AMP_NAME" --network "$NET" \
     -e AMP_DEPLOY_EXTERNAL_HOST=127.0.0.1 \
     -e AMP_DEPLOY_BOOTSTRAP=true \
     -e AMP_DEPLOY_YB_HOST_PORTS=host.docker.internal:5433 \
-    -e AMP_DEPLOY_YB_DBNAME="$STORE_DB" \
+    -e AMP_DEPLOY_YB_DBNAME="$DB" \
     -e AMP_DEPLOY_SUPERVISOR_PATH="$REPO/deploy/endpoint/supervisor.py" \
     "$AMP_IMAGE" >/dev/null
 

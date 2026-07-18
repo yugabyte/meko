@@ -49,7 +49,7 @@ const lbAddressPollTimeout = 2 * time.Minute
 // KubernetesConfig is the static configuration of the Helm-backed deployer: the
 // cluster/chart/image coordinates that are the same for every endpoint. The
 // per-endpoint identity (branch id/pg version, the backing YB connection,
-// the storage-controller URL, bootstrap) arrives in the EndpointSpec.
+// the controller URL, bootstrap) arrives in the EndpointSpec.
 type KubernetesConfig struct {
 	Namespace      string // namespace endpoints are deployed into
 	ChartPath      string // path to the yb-light-endpoint Helm chart
@@ -134,7 +134,7 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	// a NodePort's "<nodeIP>:<nodePort>", or (ClusterIP) the pod IP — a demo
 	// convenience. All fall back to the stable Service DNS. NB: this is only the
 	// *client* address — the controller reaches the endpoint's pageserver/
-	// safekeeper by the stable Service DNS (SC_REACHABLE_HOST set in the chart),
+	// safekeeper by the stable Service DNS (CONTROLLER_REACHABLE_HOST set in the chart),
 	// so a pod reschedule re-registers the same address (no 409, #121).
 	addr := k.address(release)
 	switch k.cfg.ServiceType {
@@ -413,7 +413,7 @@ func (k *KubernetesDeployer) address(release string) string {
 
 // EndpointSafekeeperURL: the endpoint's safekeeper HTTP API is published on its
 // Service (ports.safekeeperHttp), reachable at the same stable Service DNS the
-// storage controller dials (SC_REACHABLE_HOST). id is the release name.
+// controller dials (CONTROLLER_REACHABLE_HOST). id is the release name.
 func (k *KubernetesDeployer) EndpointSafekeeperURL(id string) string {
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", id, k.cfg.Namespace, safekeeperHTTPPort)
 }
@@ -427,7 +427,7 @@ type chartValues struct {
 	ImagePullSecrets  []map[string]string     `json:"imagePullSecrets,omitempty"`
 	Yugabyte          yugabyteValues          `json:"yugabyte"`
 	Endpoint          endpointValues          `json:"endpoint"`
-	StorageController storageControllerValues `json:"storageController"`
+	Controller controllerValues `json:"controller"`
 	Service           serviceValues           `json:"service"`
 	// Persistence is nil (omitted) for the chart's emptyDir default; set to
 	// provision the endpoint's data volume as a PVC of a storage class.
@@ -449,8 +449,8 @@ type serviceValues struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-type storageControllerValues struct {
-	// URL the endpoint uses to reach the storage controller; empty = SC-free.
+type controllerValues struct {
+	// URL the endpoint uses to reach the controller; empty = controller-free.
 	URL string `json:"url,omitempty"`
 }
 
@@ -490,7 +490,7 @@ type resourceValues struct {
 	Memory string `json:"memory"`
 }
 
-// values builds the per-endpoint Helm values. With spec.StorageControllerURL set
+// values builds the per-endpoint Helm values. With spec.ControllerURL set
 // (and spec.Bootstrap=true), the endpoint registers its pageserver+safekeeper
 // with the controller, attaches the branch (generation via the attach-hook),
 // runs initdb for the supplied branch, and registers it.
@@ -530,7 +530,7 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			AncestorLsn:      spec.AncestorLSN,
 			Resources:        resourceValues{CPU: cpu, Memory: memory},
 		},
-		StorageController: storageControllerValues{URL: spec.StorageControllerURL},
+		Controller: controllerValues{URL: spec.ControllerURL},
 		Service:           serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},
 	}
 	// Prefer a pre-existing Secret (keeps the plaintext password off the

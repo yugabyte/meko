@@ -312,7 +312,7 @@ impl From<TimelineError> for ApiError {
 }
 
 // Convert to PG query error. NotFound / Deleted route to
-// `QueryError::NotFound`, which logs at info!; the storage_controller
+// `QueryError::NotFound`, which logs at info!; the controller
 // races PS-attach (which starts the walreceiver and IDENTIFY_SYSTEMs us)
 // against `POST /v1/tenant/timeline` (which loads the timeline here),
 // and the walreceiver retries cheaply once the timeline appears.

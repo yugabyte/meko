@@ -10,7 +10,7 @@
 //! [`YbWalStorage`] wraps a [`WalBookkeeping`] — an in-memory tracker of the
 //! WAL LSN watermarks and record boundaries, with no filesystem interaction.
 //!
-//! The table (`safekeeper.wals`, defined in the storage_controller
+//! The table (`safekeeper.wals`, defined in the controller
 //! migration) holds one row per coalesced run of a consumer batch:
 //! contiguous chunks of a segment are concatenated into a single row
 //! before the INSERT, so the typical batch is ONE row; runs break at

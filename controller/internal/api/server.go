@@ -20,6 +20,7 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/core"
 	applog "github.com/yugabyte/yb-amp/controller/internal/log"
 	"github.com/yugabyte/yb-amp/controller/internal/metrics"
+	"github.com/yugabyte/yb-amp/controller/internal/registry"
 	"github.com/yugabyte/yb-amp/controller/internal/task"
 )
 
@@ -35,7 +36,7 @@ type Server struct {
 
 // NewServer wires middleware, the spec/explorer routes, and the generated,
 // spec-driven API onto an echo server.
-func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, prov Provisioning, m *metrics.Metrics, logger *slog.Logger) *Server {
+func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, prov Provisioning, regStore *registry.Store, m *metrics.Metrics, logger *slog.Logger) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -62,20 +63,18 @@ func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, pr
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 	e.GET("/readyz", func(c echo.Context) error {
-		ctx := c.Request().Context()
-		if err := backend.Healthy(ctx); err != nil {
+		if err := backend.Healthy(c.Request().Context()); err != nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "database unavailable")
-		}
-		// When controller manages a storage controller, it is not ready to serve the
-		// provisioning workflow until that controller is serving too — gate on
-		// it so callers (and run-controller.sh) don't race a still-starting controller.
-		if prov.SC != nil {
-			if err := prov.SC.Ready(ctx); err != nil {
-				return echo.NewHTTPError(http.StatusServiceUnavailable, "storage controller unavailable")
-			}
 		}
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
 	})
+
+	// The storage-layer control surface (attach-hook + node/branch/endpoint
+	// registries) that endpoint pods, yb_light_local, and the integration harness
+	// drive. Mounted outside the versioned API and the spec.
+	if regStore != nil {
+		registry.Register(e, regStore)
+	}
 
 	// The OpenAPI document and the interactive explorer.
 	registerDocs(e)

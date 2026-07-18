@@ -2,7 +2,7 @@
 
 A **yb-light endpoint** is normally a set of co-located processes started by
 `yb_light_local` (pageserver, safekeeper, endpoint_storage, the compute, and a
-cluster-level storage_controller). The single-container endpoint packages the
+cluster-level controller). The single-container endpoint packages the
 per-endpoint subset of those into **one container image** so an endpoint can be
 deployed as a single Kubernetes pod, backed by an external YugabyteDB.
 
@@ -28,11 +28,11 @@ All durable state is in YugabyteDB; the pod's local disk holds only logs,
 pidfiles and the compute's ephemeral `pgdata`, so the pod is stateless (a
 `Deployment` with an `emptyDir`, not a `StatefulSet`).
 
-## Why the storage_controller is not in the pod
+## Why the controller is not in the pod
 
-The `storage_controller` is a **shared, cluster-level control plane**: it owns
+The `controller` is a **shared, cluster-level control plane**: it owns
 the pageserver node registry, generation/attach fencing, and the endpoint
-registry in YugabyteDB's `storage_controller` schema. Running one per endpoint
+registry in YugabyteDB's `registry` schema. Running one per endpoint
 pod would mean N uncoordinated controllers racing on that shared state
 (multi-controller leadership was removed from this fork). It therefore lives in
 the **AMP layer**, not in the endpoint pod — the pod talks only to YugabyteDB.
@@ -41,10 +41,10 @@ Two consequences follow.
 
 ### Schema provisioning is external
 
-Every yb-light schema (`storage_controller.*`, `pageserver.*`, `safekeeper.*`,
+Every yb-light schema (`controller.*`, `pageserver.*`, `safekeeper.*`,
 `public.blobs`, the `blob_namespace` ENUM) is created by the
-storage_controller's diesel migrations
-(`storage_controller/migrations/.../up.sql`). No service self-creates its
+controller's diesel migrations
+(`controller/migrations/0005_provision_yb_storage.up.sql`). No service self-creates its
 tables. So the `yb_storage` database + schema must already exist before the pod
 starts; in production AMP provisions it. For standalone testing the supervisor
 can do it itself (`DEV_PROVISION_SCHEMA=true` — creates the database and applies
@@ -53,7 +53,7 @@ the bundled migrations with `psql`).
 ### Bootstrap/attach happen without the controller
 
 `yb_light_local`'s `branch create` / `endpoint create` route through the
-storage_controller (it records a pending init, registers the node, grants a
+controller (it records a pending init, registers the node, grants a
 generation via the attach-hook, and registers the branch). The pod reproduces
 the **SC-free subset** of that flow:
 

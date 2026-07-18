@@ -14,10 +14,12 @@ controller's `deploy.Deployer` (the Docker driver; amp-controller.md §5.6),
 returning its address. The first endpoint deployed on a branch materializes it.
 The harness contains no orchestration; `main.rs` is the harness side.
 
-It runs the SC-free self-bootstrap path: controller deploys the endpoint with
-`--deploy-bootstrap`, so it provisions the storage schema and initdb's the
-recorded tenant/timeline on first start (there is no create-database flow
-yet). Storage-controller-coordinated deploy is future work.
+The controller provisions the shared database's schema (the dataplane
+`public`/`pageserver`/`safekeeper` tables plus its own `registry`) on startup,
+then deploys each endpoint with `BOOTSTRAP=true` so the endpoint initdb's the
+recorded tenant/timeline on first start (there is no create-database flow yet).
+As in production, the controller and the endpoints share a single database —
+helm points both `AMP_DATABASE_URL` and `AMP_DEPLOY_YB_DBNAME` at `yb_storage`.
 
 ## What it tests — `branch_lineage`
 
@@ -38,7 +40,7 @@ scenario, which is a full branching workout against the controller's API:
    `b1` forks `main`; `b2` forks the branch `b1` (branch-of-branch); `b3` forks
    `main` again (a second fork off the root). Each fork is pinned to the parent's
    current flush LSN — read from the parent's live endpoint
-   (`pg_current_wal_flush_lsn()`) and passed as `fork_point_lsn`. (The SC-free
+   (`pg_current_wal_flush_lsn()`) and passed as `fork_point_lsn`. (The controller-free
    deploy path doesn't publish the safekeeper port the controller's *default*
    fork-point resolution reads, so an explicit `fork_point_lsn` is required here;
    it's also more deterministic.)

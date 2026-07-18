@@ -1971,7 +1971,7 @@ static REMOTE_TIMELINE_CLIENT_CALLS: Lazy<IntCounterPairVec> = Lazy::new(|| {
 pub(crate) static NODE_UTILIZATION_SCORE: Lazy<UIntGauge> = Lazy::new(|| {
     register_uint_gauge!(
         "pageserver_utilization_score",
-        "The utilization score we report to the storage controller for scheduling, where 0 is empty, 1000000 is full, and anything above is considered overloaded",
+        "The utilization score we report to the controller for scheduling, where 0 is empty, 1000000 is full, and anything above is considered overloaded",
     )
     .expect("failed to define a metric")
 });
@@ -2214,7 +2214,7 @@ pub(crate) static WALRECEIVER_CANDIDATES_REMOVED: Lazy<IntCounter> =
 // A misrouted PageStream request is registered if the pageserver cannot find the tenant identified in the
 // request, or if the pageserver is not the "primary" serving the tenant shard. These error almost always identify
 // issues with compute configuration, caused by either the compute node itself being stuck in the wrong
-// configuration or Storage Controller reconciliation bugs. Misrouted requests are expected during tenant migration
+// configuration or Controller reconciliation bugs. Misrouted requests are expected during tenant migration
 // and/or during recovery following a pageserver failure, but persistently high rates of misrouted requests
 // are indicative of bugs (and unavailability).
 pub(crate) static MISROUTED_PAGESTREAM_REQUESTS: Lazy<IntCounter> = Lazy::new(|| {

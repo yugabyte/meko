@@ -108,7 +108,7 @@ pub struct TenantSharedResources {
 #[derive(Clone)]
 pub(super) struct AttachedTenantConf {
     tenant_conf: pageserver_api::models::BranchConfig,
-    /// storage_controller-assigned generation used to fence YB writes.
+    /// controller-assigned generation used to fence YB writes.
     pub(super) generation: Generation,
     /// The deadline before which we are blocked from GC so that
     /// leases have a chance to be renewed.
@@ -544,7 +544,7 @@ impl PageServer {
         }
 
         // Eager push of the controller-issued generation to YB. The
-        // storage controller bumps `tenants.generation` on
+        // controller bumps `tenants.generation` on
         // every attach (including re-attach to the same PS after a
         // restart) but doesn't propagate the new value to YB itself
         // — this is where it lands. The flush path's

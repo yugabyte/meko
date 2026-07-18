@@ -26,7 +26,7 @@ test/integration/compute/run.sh -h              # full help
 
 `run.sh` is a thin wrapper: it `cargo build`s the harness +
 `yb_light_local` + every cluster server binary `yb_light_local` spawns
-(`storage_controller`, `yb-pageserver`, `safekeeper`, `endpoint_storage`,
+(`controller`, `yb-pageserver`, `safekeeper`, `endpoint_storage`,
 `compute_ctl`) + the diagnostic tools (incremental — a no-op when nothing
 changed), then execs the harness. Building the server binaries here is
 essential: `yb_light_local` launches them from `target/<profile>/` at
@@ -61,7 +61,7 @@ isolated ephemeral database (this is how CI runs them — see
 - A passing run tears the cluster + DB + run dir down. A failing run stops
   the cluster + drops the DB but keeps its `*.log` files under
   `.integration-tests/run_<id>/` (harness + compute/pageserver/safekeeper/
-  storage_controller); the run dir is GC'd after 7 days. Pass
+  controller); the run dir is GC'd after 7 days. Pass
   `--no-fail-stop` to instead leave a *failed* run's cluster + DB running for
   postmortem (it prints how to tear it down).
 

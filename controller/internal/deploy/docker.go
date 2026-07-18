@@ -16,7 +16,7 @@ type DockerConfig struct {
 	// EndpointImage is the single-container endpoint image (deploy/endpoint).
 	EndpointImage string
 	// Network is a user-defined Docker network shared by the controller and the
-	// endpoints it launches, so the storage controller can reach an endpoint's
+	// endpoints it launches, so the controller can reach an endpoint's
 	// pageserver/safekeeper by container name (DNS) — no published-port juggling.
 	Network string
 	// ExternalHost is the host a *client* uses to reach a published port (the
@@ -51,7 +51,7 @@ var _ Deployer = (*DockerDeployer)(nil)
 
 const (
 	endpointComputePort = 55433
-	// Internal endpoint ports. With a shared network the storage controller
+	// Internal endpoint ports. With a shared network the controller
 	// reaches these by container name, so they need no host remapping. The
 	// safekeeper HTTP port is the package-shared safekeeperHTTPPort.
 	endpointPSHTTPPort = 9898
@@ -89,18 +89,18 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		env["ANCESTOR_BRANCH_ID"] = spec.AncestorBranchID
 		env["ANCESTOR_LSN"] = spec.AncestorLSN
 	}
-	if spec.StorageControllerURL != "" {
+	if spec.ControllerURL != "" {
 		// SC-coordinated: the controller reaches this endpoint's services by its
 		// container name on the shared network, at their internal ports.
-		env["STORAGE_CONTROLLER_URL"] = spec.StorageControllerURL
-		env["SC_REACHABLE_HOST"] = spec.Name
+		env["CONTROLLER_URL"] = spec.ControllerURL
+		env["CONTROLLER_REACHABLE_HOST"] = spec.Name
 		env["DEV_PROVISION_SCHEMA"] = "false" // the controller already provisioned it
 		env["PAGESERVER_HTTP_PUB_PORT"] = strconv.Itoa(endpointPSHTTPPort)
 		env["PAGESERVER_PG_PUB_PORT"] = strconv.Itoa(endpointPSPGPort)
 		env["SAFEKEEPER_HTTP_PUB_PORT"] = strconv.Itoa(safekeeperHTTPPort)
 		env["SAFEKEEPER_PG_PUB_PORT"] = strconv.Itoa(endpointSKPGPort)
 	} else {
-		env["DEV_PROVISION_SCHEMA"] = "true" // SC-free: the endpoint provisions the schema
+		env["DEV_PROVISION_SCHEMA"] = "true" // controller-free: the endpoint provisions the schema
 	}
 	for k, v := range env {
 		args = append(args, "-e", k+"="+v)
@@ -136,7 +136,7 @@ func (d *DockerDeployer) DeleteEndpoint(_ context.Context, id string) error {
 }
 
 // EndpointSafekeeperURL: with a shared network the endpoint's safekeeper is
-// reachable by the container name (= id, the SC_REACHABLE_HOST the endpoint
+// reachable by the container name (= id, the CONTROLLER_REACHABLE_HOST the endpoint
 // registered) at the fixed safekeeper HTTP port.
 func (d *DockerDeployer) EndpointSafekeeperURL(id string) string {
 	return fmt.Sprintf("http://%s:%d", id, safekeeperHTTPPort)

@@ -30,9 +30,9 @@ toml.workspace = true
 toml_edit.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
-# storage_controller.rs talks to YugabyteDB through the smart-driver
+# controller.rs talks to YugabyteDB through the smart-driver
 # fork. Other parts of control_plane keep using the Neon fork above
-# (e.g. for the storage_controller binary's metadata DB connection
+# (e.g. for the controller's metadata DB connection
 # parsing).
 yb-tokio-postgres.workspace = true
 tokio-util.workspace = true

@@ -67,8 +67,6 @@ export type Version = {
   version: string;
   git_commit: string;
   build_date: string;
-  /** Version of the bundled storage_controller, when one is running. */
-  storage_controller?: string;
 };
 
 export type TaskStatus = "pending" | "running" | "succeeded" | "failed";

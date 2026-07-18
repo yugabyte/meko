@@ -3,13 +3,13 @@
 # Standalone diagnostic UI for a local `yb_light_local` yb-light cluster.
 #
 # Serves a single web page that shows, at a glance:
-#   - service health (storage controller, pageservers, safekeepers,
+#   - service health (controller, pageservers, safekeepers,
 #     endpoint storage)
-#   - pageserver nodes the storage controller knows about
+#   - pageserver nodes the controller knows about
 #   - branches + their lineage (with the load-bearing LSNs:
 #     last_record_lsn, disk_consistent_lsn, remote_consistent_lsn, ...)
 #   - safekeepers + their branches (commit/flush LSNs)
-#   - compute endpoints (from the storage_controller.endpoints table) and
+#   - compute endpoints (from the registry.endpoints table) and
 #     whether their compute_ctl is responding
 #
 # The storage model is branch-centric: the former `(tenant_id, timeline_id)`
@@ -18,7 +18,7 @@
 # "tenant" used to be; its descendants are the branches taken off it.
 #
 # Topology (pageservers, safekeepers, endpoints, branch names) is read
-# from the storage_controller schema in yb_storage via psql, not from the
+# from the registry schema in yb_storage via psql, not from the
 # local repo layout; only the service URLs come from .yb_light/config.
 #
 # It runs its own tiny aggregating web server, so the browser only ever
@@ -49,14 +49,14 @@ from urllib.parse import urlparse
 
 HTTP_TIMEOUT = 2.0  # seconds; the cluster is local, keep the UI snappy
 
-# Where the storage controller's relational state lives: the
-# `storage_controller` schema of the `yb_storage` database (see
+# Where the controller's relational state lives: the
+# `registry` schema of the `yb_storage` database (see
 # architecture/high-level.md). Topology — pageservers, safekeepers,
 # compute endpoints, branch names — is read straight from here rather
 # than from the on-disk repo layout, so the tool keeps working as the
 # local folder layout evolves and even when run away from the repo.
 DEFAULT_DATABASE_URL = "postgresql://yugabyte@127.0.0.1:5433/yb_storage"
-SC_SCHEMA = "storage_controller"
+REGISTRY_SCHEMA = "registry"
 _DB_FIELD_SEP = "\x1f"  # ASCII unit separator — won't appear in our values
 
 
@@ -128,16 +128,16 @@ def _norm_id(v):
 
 
 def _database_url_from_config(cfg_text):
-    """Build a psql connection URL from the `[storage_controller.yb]` block.
+    """Build a psql connection URL from the `[controller.yb]` block.
 
-    The storage controller's connection lives in the repo config as the
+    The controller's connection lives in the repo config as the
     shared YB block (`host_ports = "host:port[,host:port,...]"`, `user`,
     `dbname`) — the same block the pageserver/safekeeper/endpoint_storage
     consume. We read the first host:port (enough for read-only queries) and
     assemble `postgresql://user@host:port/dbname`. Returns None when no
-    `[storage_controller.yb]` block is present.
+    `[controller.yb]` block is present.
     """
-    m = re.search(r'\[storage_controller\.yb\](.*?)(?:\n\[|\Z)', cfg_text, re.DOTALL)
+    m = re.search(r'\[controller\.yb\](.*?)(?:\n\[|\Z)', cfg_text, re.DOTALL)
     if not m:
         return None
     block = m.group(1)
@@ -156,11 +156,11 @@ def _database_url_from_config(cfg_text):
 def discover(repo_dir, database_url=None):
     """Build a topology dict.
 
-    Service *endpoints* (storage-controller HTTP, endpoint-storage HTTP, the
+    Service *endpoints* (controller HTTP, endpoint-storage HTTP, the
     database URL) come from the repo `config` when it's available, else from
     the dev-cluster defaults. The cluster *topology* — pageservers,
     safekeepers, compute endpoints, branch names — is read from the
-    `storage_controller` schema in `yb_storage`, not from the on-disk repo
+    `registry` schema in `yb_storage`, not from the on-disk repo
     layout, so it survives layout changes and works away from the repo.
     """
     cfg_text = ""
@@ -171,13 +171,13 @@ def discover(repo_dir, database_url=None):
         except OSError:
             pass
 
-    # Storage controller URL is the host:port of control_plane_api.
-    sc_url = "http://127.0.0.1:1234"
+    # Controller URL is the host:port of control_plane_api.
+    ctrl_url = "http://127.0.0.1:1234"
     m = re.search(r'control_plane_api\s*=\s*"([^"]+)"', cfg_text)
     if m:
         u = urlparse(m.group(1))
         if u.scheme and u.netloc:
-            sc_url = f"{u.scheme}://{u.netloc}"
+            ctrl_url = f"{u.scheme}://{u.netloc}"
 
     # Endpoint storage listen_addr.
     es_url = "http://127.0.0.1:9993"
@@ -187,7 +187,7 @@ def discover(repo_dir, database_url=None):
         es_url = f"http://{em.group(1)}"
 
     # Database URL: explicit flag wins, else build it from the controller's
-    # shared YB connection block (`[storage_controller.yb]`: host_ports /
+    # shared YB connection block (`[controller.yb]`: host_ports /
     # user / dbname), else the dev default.
     if not database_url:
         database_url = _database_url_from_config(cfg_text) or DEFAULT_DATABASE_URL
@@ -201,13 +201,13 @@ def discover(repo_dir, database_url=None):
             db_error = err
         return rows or []
 
-    # Pageservers: the nodes registered with the storage controller. The
+    # Pageservers: the nodes registered with the controller. The
     # controller serves its live node list from /control/v1/node and does
-    # not persist it to the storage_controller.nodes table (that table stays
+    # not persist it to the registry.nodes table (that table stays
     # empty), so the API is the source of truth. Fall back to the table only
     # if the API is unreachable.
     pageservers = []
-    api_nodes, _ = http_get_json(f"{sc_url}/control/v1/node")
+    api_nodes, _ = http_get_json(f"{ctrl_url}/control/v1/node")
     for n in api_nodes or []:
         host = n.get("listen_http_addr")
         port = n.get("listen_http_port")
@@ -215,13 +215,13 @@ def discover(repo_dir, database_url=None):
             pageservers.append({"id": int(n["id"]), "http": f"http://{host}:{port}"})
     if not pageservers:
         for r in _query(f"SELECT node_id, listen_http_addr, listen_http_port "
-                        f"FROM {SC_SCHEMA}.nodes ORDER BY node_id"):
+                        f"FROM {REGISTRY_SCHEMA}.nodes ORDER BY node_id"):
             if len(r) >= 3:
                 pageservers.append({"id": int(r[0]), "http": f"http://{r[1]}:{r[2]}"})
 
     # Safekeepers.
     safekeepers = []
-    for r in _query(f"SELECT id, host, http_port FROM {SC_SCHEMA}.safekeepers "
+    for r in _query(f"SELECT id, host, http_port FROM {REGISTRY_SCHEMA}.safekeepers "
                     f"ORDER BY id"):
         if len(r) >= 3:
             safekeepers.append({"id": int(r[0]), "http": f"http://{r[1]}:{r[2]}"})
@@ -230,7 +230,7 @@ def discover(repo_dir, database_url=None):
     # Each spec carries its own `branch_id`, `endpoint_id`, `pg_port`, `mode`,
     # and `external_http_port`.
     endpoints = []
-    for r in _query(f"SELECT spec FROM {SC_SCHEMA}.endpoints"):
+    for r in _query(f"SELECT spec FROM {REGISTRY_SCHEMA}.endpoints"):
         try:
             endpoints.append(json.loads(r[0]))
         except (json.JSONDecodeError, IndexError):
@@ -258,11 +258,11 @@ def discover(repo_dir, database_url=None):
             except (OSError, json.JSONDecodeError):
                 continue
 
-    # Branch names from materialized branches (storage_controller.timelines is
+    # Branch names from materialized branches (registry.timelines is
     # keyed by branch_id now and carries the human alias in branch_name).
     branch_names = {}
     for r in _query(f"SELECT branch_id, branch_name "
-                    f"FROM {SC_SCHEMA}.timelines "
+                    f"FROM {REGISTRY_SCHEMA}.timelines "
                     f"WHERE branch_name IS NOT NULL AND deleted_at IS NULL"):
         if len(r) >= 2 and r[1]:
             branch_names[_norm_id(r[0])] = r[1]
@@ -273,7 +273,7 @@ def discover(repo_dir, database_url=None):
     # entries so the UI shows them immediately after `branch create`.
     db_branches: dict = {}  # branch_id_norm -> {branch_name, ancestor_branch_id}
     for r in _query(f"SELECT branch_id, branch_name, ancestor_branch_id "
-                    f"FROM {SC_SCHEMA}.pending_timeline_inits"):
+                    f"FROM {REGISTRY_SCHEMA}.pending_timeline_inits"):
         if len(r) < 1 or not r[0]:
             continue
         bnorm = _norm_id(r[0])
@@ -299,7 +299,7 @@ def discover(repo_dir, database_url=None):
     branch_sk_urls = {}
     for r in _query(
             f"SELECT branch_id, unnest(sk_set) "
-            f"FROM {SC_SCHEMA}.timelines "
+            f"FROM {REGISTRY_SCHEMA}.timelines "
             f"WHERE deleted_at IS NULL"):
         if len(r) >= 2 and r[1]:
             key = _norm_id(r[0])
@@ -315,7 +315,7 @@ def discover(repo_dir, database_url=None):
         "repo_dir": os.path.abspath(repo_dir) if repo_dir else None,
         "database_url": database_url,
         "db_error": db_error,
-        "storage_controller": sc_url,
+        "controller": ctrl_url,
         "pageservers": pageservers,
         "safekeepers": safekeepers,
         "endpoint_storage": es_url,
@@ -335,18 +335,18 @@ def collect(repo_dir, database_url=None):
     topo = discover(repo_dir, database_url)
     services = []
 
-    # Storage controller.
-    sc = topo["storage_controller"]
-    sc_status, sc_err = http_get_json(f"{sc}/status")
-    services.append({"name": "storage-controller", "kind": "storage_controller",
-                     "url": sc, "up": sc_err is None, "detail": sc_err})
+    # Controller.
+    ctrl = topo["controller"]
+    ctrl_status, ctrl_err = http_get_json(f"{ctrl}/status")
+    services.append({"name": "controller", "kind": "controller",
+                     "url": ctrl, "up": ctrl_err is None, "detail": ctrl_err})
 
-    nodes, nodes_err = http_get_json(f"{sc}/control/v1/node")
-    sc_sks, _ = http_get_json(f"{sc}/control/v1/safekeeper")
-    sc_branches, _ = http_get_json(f"{sc}/control/v1/branch")
+    nodes, nodes_err = http_get_json(f"{ctrl}/control/v1/node")
+    ctrl_sks, _ = http_get_json(f"{ctrl}/control/v1/safekeeper")
+    sc_branches, _ = http_get_json(f"{ctrl}/control/v1/branch")
 
     # Pageservers: check status. The pageserver has no branch listing
-    # endpoint; branch discovery comes from the storage controller above.
+    # endpoint; branch discovery comes from the controller above.
     ps_alive = {}
     for ps in topo["pageservers"]:
         st, err = http_get_json(f"{ps['http']}/v1/status")
@@ -355,7 +355,7 @@ def collect(repo_dir, database_url=None):
                          "info": st})
         ps_alive[ps["id"]] = err is None
 
-    # Branches: discover them from the storage controller, then query every
+    # Branches: discover them from the controller, then query every
     # live pageserver for each branch's timeline detail (the LSNs and the
     # ancestor_branch_id that wires up the lineage tree). A branch is attached
     # to one node, but querying all live nodes keeps discovery robust if the
@@ -464,7 +464,7 @@ def collect(repo_dir, database_url=None):
         "services": services,
         "nodes": nodes or [],
         "nodes_error": nodes_err,
-        "sc_safekeepers": sc_sks or [],
+        "sc_safekeepers": ctrl_sks or [],
         "branches": branches,
         "safekeepers": safekeepers,
         "endpoints": endpoints,
@@ -968,7 +968,7 @@ def create_branch_with_endpoint(repo_dir, ancestor_branch):
     """Branch off `ancestor_branch`, then create and start an endpoint on the
     new branch. The new branch and its endpoint share one friendly name.
 
-    Branch names live in the storage controller now, so `--ancestor-branch-name`
+    Branch names live in the controller now, so `--ancestor-branch-name`
     resolves directly against durable state — no local mapping pre-step needed.
     Shells out to the repo's `target/debug/yb_light_local` (args passed as a
     list, never via a shell). Returns
@@ -1087,7 +1087,7 @@ def create_tenant_with_endpoint(repo_dir):
 def drop_branch(repo_dir, branch_id):
     """Drop a branch and all its endpoints via `yb_light_local branch drop`:
     stops the branch's endpoint compute(s), deletes their records, and marks
-    the branch dropped in the storage controller (the underlying PS/SK data
+    the branch dropped in the controller (the underlying PS/SK data
     is left for a later GC pass). Shells out to the repo's
     `target/debug/yb_light_local` (args passed as a list, never via a shell).
     Returns {ok, steps:[{cmd, ok, output}]} or {ok: False, error}.
@@ -1178,8 +1178,8 @@ def main():
                          "(optional — topology is read from the database)")
     ap.add_argument("--database-url",
                     default=os.environ.get("YB_STORAGE_DATABASE_URL"),
-                    help="storage_controller database (default: derived from the "
-                         "repo config's [storage_controller.yb] block, else "
+                    help="controller database (default: derived from the "
+                         "repo config's [controller.yb] block, else "
                          f"{DEFAULT_DATABASE_URL})")
     ap.add_argument("--host", default="127.0.0.1")
     # 9099 by default: 9000 is YugabyteDB's tserver web UI, 7000 the master UI.

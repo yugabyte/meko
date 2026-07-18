@@ -20,8 +20,8 @@ expressed in cAmp's resource model. **Precondition:** the storage pool already e
 - An **endpoint** is a single-container pod (or Docker container) — compute plus
   its *own* pageserver and safekeeper — deployed by cAmp's provisioner
   (`internal/deploy`).
-- The **storage controller** — which cAmp runs as a managed subprocess; client in
-  `internal/storagecontroller` — is the branch/node registry and the
+- The **controller** — which cAmp runs as a managed subprocess; client in
+  `internal/registry` — is the branch/node registry and the
   generation-fencing authority. cAmp drives it over the flat
   `/v1/branch/{branch_id}` surface.
 
@@ -29,7 +29,7 @@ expressed in cAmp's resource model. **Precondition:** the storage pool already e
 
 cAmp records a new branch as a **recipe** and builds its storage layer lazily,
 when the first endpoint for that branch is deployed. The endpoint's own
-pageserver bootstraps the branch (`initdb`); the storage controller **records**
+pageserver bootstraps the branch (`initdb`); the controller **records**
 the result — it does not run `initdb` itself.
 
 ## Step 1 — `create-project`
@@ -43,13 +43,13 @@ the result — it does not run `initdb` itself.
    `parent_branch_id = NULL` for the default branch). The default branch is always
    named `main`, independent of the project name; forks off it choose their own
    names (unique within the project).
-3. Records the same recipe in the storage controller, keyed by the storage-layer
+3. Records the same recipe in the controller, keyed by the storage-layer
    `branch_id` (`POST /control/v1/branch/{branch_id}/pending_init` with
    `{ branch_name, pg_version, ancestor_branch_id = NULL, start_lsn = 0 }`).
 4. Returns the project, with its embedded `default_branch`.
 
 Nothing is materialized, no `initdb` runs, and no compute is started. The recipe
-now lives in **both** cAmp's database (`branch`) and the storage controller (its
+now lives in **both** cAmp's database (`branch`) and the controller (its
 `pending_timeline_inits` table, listed flat via
 `GET /control/v1/pending_timeline_inits`).
 
@@ -62,18 +62,18 @@ endpoint materializes the branch, and cAmp finalizes.
 - Records the `endpoint` row.
 - Deploys the endpoint (Helm pod or Docker container) with the endpoint image's
   env-var contract — the flat `BRANCH_ID` (#168) — plus `pg_version`,
-  `STORAGE_CONTROLLER_URL` (the cAmp-managed storage controller), and
+  `CONTROLLER_URL` (the cAmp-managed controller), and
   `BOOTSTRAP=true`.
 
 **The endpoint materializes** (its supervisor, during bring-up):
-1. Registers its pageserver node with the storage controller and runs the
-   attach-hook; the storage controller attaches the branch to this pageserver
+1. Registers its pageserver node with the controller and runs the
+   attach-hook; the controller attaches the branch to this pageserver
    and grants its **generation**. (The safekeeper is not registered with the
    controller — the endpoint owns it; see #171.)
 2. Runs **`initdb`** (`BOOTSTRAP=true`) — the pageserver bootstraps the branch.
 3. Once the branch is `Active`, reads its `start_lsn`, creates the branch on
    its safekeeper (single-member membership, generation 1), and **registers it
-   with the storage controller** (`POST /control/v1/branch/{branch_id}/register`:
+   with the controller** (`POST /control/v1/branch/{branch_id}/register`:
    `start_lsn`, optional `branch_name` — the controller just records the branch
    row).
 4. Starts compute (Postgres).
@@ -81,7 +81,7 @@ endpoint materializes the branch, and cAmp finalizes.
 **cAmp finalizes**, once the endpoint is ready:
 - Reads the endpoint's address from the provisioner, records it on the
   `endpoint` row, and returns it to the caller.
-- Clears the recipe: deletes the storage controller's pending init
+- Clears the recipe: deletes the controller's pending init
   (`DELETE /control/v1/branch/{branch_id}/pending_init`) and marks the branch
   materialized.
 
@@ -111,7 +111,7 @@ flow, forking an existing branch instead of bootstrapping a fresh one:
    `deploy.Deployer.EndpointSafekeeperURL`) — or an explicit `fork_point_lsn`.
    Reading the ancestor's **own** node is routing-correct in the co-located
    topology, where each endpoint has its own pageserver + safekeeper but the
-   storage controller tracks one attachment per branch; its per-branch
+   controller tracks one attachment per branch; its per-branch
    `describe` routes to whichever pageserver attached last and misses the parent
    branch once the branch has more than one endpoint (#133). `flush_lsn` also
    never lags durable WAL the way a pageserver's `last_record_lsn` can (#130).
@@ -132,7 +132,7 @@ writes are synchronous today and move onto the task framework under #113.
 
 | `yb_light_local` | Amp Controller (cAmp) |
 |---|---|
-| `record_pending_timeline_init` (per branch) | `create-project` → `project` + default `branch` (cAmp DB) **and** the storage controller's pending init, keyed by `branch_id` (`POST /control/v1/branch/{branch_id}/pending_init`). There is no separate tenant-create step anymore — a root branch is just a pending `Bootstrap` init. |
+| `record_pending_timeline_init` (per branch) | `create-project` → `project` + default `branch` (cAmp DB) **and** the controller's pending init, keyed by `branch_id` (`POST /control/v1/branch/{branch_id}/pending_init`). There is no separate tenant-create step anymore — a root branch is just a pending `Bootstrap` init. |
 | control plane starts SK | the **endpoint** starts its safekeeper (not registered with the controller — see #171) |
 | control plane inits PS + `register_and_attach` | the **endpoint** registers its pageserver + runs the attach-hook (generation) |
 | PS `Bootstrap` runs `initdb` | the **endpoint** runs `initdb` (`BOOTSTRAP=true`) |
@@ -147,9 +147,9 @@ writes are synchronous today and move onto the task framework under #113.
   branch `register` call. cAmp records the recipe, deploys the endpoint, records the
   address, and clears the recipe — it never reaches into the endpoint's
   pageserver/safekeeper directly.
-- **Generation** is granted by the storage controller's attach-hook when the
+- **Generation** is granted by the controller's attach-hook when the
   endpoint attaches; it is never pinned.
-- **Storage-controller calls used:** record / delete pending init, keyed by
+- **Controller calls used:** record / delete pending init, keyed by
   `branch_id` (`POST`/`DELETE /control/v1/branch/{branch_id}/pending_init`, by
   cAmp); pageserver-node register, attach-hook, and the
   branch `register` route (`POST /control/v1/branch/{branch_id}/register`, by the
@@ -161,6 +161,6 @@ writes are synchronous today and move onto the task framework under #113.
   and pushes a `configure` to the pod; node-register + attach-hook move into amp's
   deploy code; the pod's branch `register` folds into the configure response
   (`start_lsn` is the pod's lone output). See
-  [`sc-integration-migration.md`](sc-integration-migration.md).
+  [`sc-integration.md`](sc-integration.md).
 - **Durability.** These steps run synchronously today; #113 tracks moving them
   onto cAmp's write-ahead task framework as durable, resumable steps.

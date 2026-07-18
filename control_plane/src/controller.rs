@@ -8,9 +8,9 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::background_process;
-use crate::local_env::{LocalEnv, YbLightStorageControllerConf};
+use crate::local_env::{LocalEnv, YbLightControllerConf};
 
-// The storage controller's metadata DB lives in YB; talk to it
+// The controller's metadata DB lives in YB; talk to it
 // through the YB smart-driver fork so `build_yb_rustls_connector`
 // (which returns a `yb_postgres_openssl::MakeTlsConnector`) lines up
 // with the Config / Client / Error types this file uses below. The
@@ -38,37 +38,36 @@ use utils::id::{BranchId, NodeId};
 use whoami::username;
 use yb_tokio_postgres as tokio_postgres;
 
-pub struct StorageController {
+pub struct Controller {
     env: LocalEnv,
     private_key: Option<Pem>,
-    public_key: Option<Pem>,
     client: reqwest::Client,
-    config: YbLightStorageControllerConf,
+    config: YbLightControllerConf,
 
-    // The listen port is learned when starting the storage controller,
+    // The listen port is learned when starting the controller,
     // hence the use of OnceLock to init it at the right time.
     listen_port: OnceLock<u16>,
 }
 
-const COMMAND: &str = "storage_controller";
+const COMMAND: &str = "controller";
 
-const STORAGE_CONTROLLER_POSTGRES_VERSION: PgMajorVersion = PgMajorVersion::PG18;
+const CONTROLLER_POSTGRES_VERSION: PgMajorVersion = PgMajorVersion::PG18;
 
-// All three subsystems (storage_controller, pageserver YbStore for blobs,
+// All three subsystems (controller, pageserver YbStore for blobs,
 // safekeeper for wals) share `yb_storage` on the YB cluster by default.
-// The controller's tables live in a dedicated `storage_controller` schema
-// inside this DB (see `storage_controller::persistence::SC_SCHEMA`); blobs
-// sit in `public`, and the safekeeper's wals in its `safekeeper` schema —
+// The controller's own tables live in a dedicated `registry` schema
+// inside this DB; blobs sit in `public`, and the safekeeper's wals in
+// its `safekeeper` schema —
 // all in the same DB.
 const DB_NAME: &str = "yb_storage";
 
-pub struct YbLightStorageControllerStartArgs {
+pub struct YbLightControllerStartArgs {
     pub instance_id: u8,
     pub base_port: Option<u16>,
     pub start_timeout: humantime::Duration,
 }
 
-impl YbLightStorageControllerStartArgs {
+impl YbLightControllerStartArgs {
     pub fn with_default_instance_id(start_timeout: humantime::Duration) -> Self {
         Self {
             instance_id: 1,
@@ -78,12 +77,12 @@ impl YbLightStorageControllerStartArgs {
     }
 }
 
-pub struct YbLightStorageControllerStopArgs {
+pub struct YbLightControllerStopArgs {
     pub instance_id: u8,
     pub immediate: bool,
 }
 
-impl YbLightStorageControllerStopArgs {
+impl YbLightControllerStopArgs {
     pub fn with_default_instance_id(immediate: bool) -> Self {
         Self {
             instance_id: 1,
@@ -116,7 +115,7 @@ pub struct InspectResponse {
     pub attachment: Option<(u32, NodeId)>,
 }
 
-impl StorageController {
+impl Controller {
     pub fn from_env(env: &LocalEnv) -> Self {
         // Assume all pageservers have symmetric auth configuration: this service
         // expects to use one JWT token to talk to all of them. On a fresh repo
@@ -128,77 +127,47 @@ impl StorageController {
             .map(|p| p.http_auth_type)
             .or_else(|| env.pageserver_templates.first().map(|t| t.http_auth_type))
             .unwrap_or(AuthType::Trust);
-        let (private_key, public_key) = match http_auth_type {
-            AuthType::Trust => (None, None),
+        let private_key = match http_auth_type {
+            AuthType::Trust => None,
             AuthType::YbLightJWT => {
                 let private_key_path = env.get_private_key_path();
                 let private_key =
                     pem::parse(fs::read(private_key_path).expect("failed to read private key"))
                         .expect("failed to parse PEM file");
-
-                // If pageserver auth is enabled, this implicitly enables auth for this service,
-                // using the same credentials.
-                let public_key_path =
-                    camino::Utf8PathBuf::try_from(env.base_data_dir.join("auth_public_key.pem"))
-                        .unwrap();
-
-                // This service takes keys as a string rather than as a path to a file/dir: read the key into memory.
-                let public_key = if std::fs::metadata(&public_key_path)
-                    .expect("Can't stat public key")
-                    .is_dir()
-                {
-                    // Our config may specify a directory: this is for the pageserver's ability to handle multiple
-                    // keys.  We only use one key at a time, so, arbitrarily load the first one in the directory.
-                    let mut dir =
-                        std::fs::read_dir(&public_key_path).expect("Can't readdir public key path");
-                    let dent = dir
-                        .next()
-                        .expect("Empty key dir")
-                        .expect("Error reading key dir");
-
-                    pem::parse(std::fs::read_to_string(dent.path()).expect("Can't read public key"))
-                        .expect("Failed to parse PEM file")
-                } else {
-                    pem::parse(
-                        std::fs::read_to_string(&public_key_path).expect("Can't read public key"),
-                    )
-                    .expect("Failed to parse PEM file")
-                };
-                (Some(private_key), Some(public_key))
+                Some(private_key)
             }
         };
 
         Self {
             env: env.clone(),
             private_key,
-            public_key,
             client: env.create_http_client(),
-            config: env.storage_controller.clone(),
+            config: env.controller.clone(),
             listen_port: OnceLock::default(),
         }
     }
 
-    fn storage_controller_instance_dir(&self, instance_id: u8) -> PathBuf {
+    fn controller_instance_dir(&self, instance_id: u8) -> PathBuf {
         self.env
             .base_data_dir
-            .join(format!("storage_controller_{instance_id}"))
+            .join(format!("controller_{instance_id}"))
     }
 
     fn pid_file(&self, instance_id: u8) -> Utf8PathBuf {
         Utf8PathBuf::from_path_buf(
-            self.storage_controller_instance_dir(instance_id)
-                .join("storage_controller.pid"),
+            self.controller_instance_dir(instance_id)
+                .join("controller.pid"),
         )
         .expect("non-Unicode path")
     }
 
     /// Find the directory containing postgres subdirectories, such `bin` and `lib`
     ///
-    /// This usually uses STORAGE_CONTROLLER_POSTGRES_VERSION of postgres, but will fall back
+    /// This usually uses CONTROLLER_POSTGRES_VERSION of postgres, but will fall back
     /// to other versions if that one isn't found.  Some automated tests create circumstances
     /// where only one version is available in pg_distrib_dir, such as `test_remote_extensions`.
     async fn get_pg_dir(&self, dir_name: &str) -> anyhow::Result<Utf8PathBuf> {
-        const PREFER_VERSIONS: [PgMajorVersion; 1] = [STORAGE_CONTROLLER_POSTGRES_VERSION];
+        const PREFER_VERSIONS: [PgMajorVersion; 1] = [CONTROLLER_POSTGRES_VERSION];
 
         for v in PREFER_VERSIONS {
             let path = Utf8PathBuf::from_path_buf(self.env.pg_dir(v, dir_name)?).unwrap();
@@ -302,8 +271,8 @@ impl StorageController {
     }
 
     /// Provision the external (YugabyteDB) cluster before the rest of
-    /// yb_light_local starts: ensure both the `storage_controller` database
-    /// (Diesel migrations populate the tables) and the `yb_storage`
+    /// yb_light_local starts: ensure the `yb_storage` database
+    /// (the controller migrations populate the tables), its `blob_namespace`
     /// database with its `blob_namespace` type + `blobs` / `wals` tables
     /// (operator schema that pageserver+safekeeper `YbStore` writes to)
     /// exist. All steps are idempotent.
@@ -314,24 +283,24 @@ impl StorageController {
     async fn ensure_external_database(&self, yb: &ysql_client::YbConnConfig) -> anyhow::Result<()> {
         let url = yb
             .to_database_url()
-            .context("building database URL from storage_controller.yb")?;
+            .context("building database URL from controller.yb")?;
         let target = tokio_postgres::Config::from_str(&url)
-            .context("parsing storage_controller.yb database URL")?;
+            .context("parsing controller.yb database URL")?;
         let controller_db = yb.dbname.clone();
 
-        // The controller's tables live in the `storage_controller`
+        // The controller's tables live in the `registry`
         // schema inside `yb_storage`; `blobs`/`wals` and the
         // `pageserver.*` page-store tables share the same DB. We log
         // if the operator pointed the URL elsewhere — that still
         // works, but they lose the colocation invariant.
         //
         // The schema itself (every table + ENUM + index) is created
-        // by storage_controller's diesel migrations once the binary
+        // by the controller's migrations once the binary
         // is up; here we only ensure the database container exists
         // so the controller can connect to it.
         if controller_db != "yb_storage" {
             tracing::warn!(
-                "storage_controller.yb names db {controller_db:?} \
+                "controller.yb names db {controller_db:?} \
                  (not the default `yb_storage`); blobs/wals colocation \
                  assumes yb_storage — override deliberately or update the config"
             );
@@ -351,7 +320,7 @@ impl StorageController {
     /// When the URL has `sslmode=disable` (or no sslmode) we use `NoTls`;
     /// any non-`Disable` mode uses the rustls connector from
     /// `remote_storage` with the AcceptAll verifier — same TLS posture
-    /// the storage_controller binary itself uses.
+    /// the controller binary itself uses.
     async fn connect_external(
         config: &tokio_postgres::Config,
         what: &str,
@@ -364,7 +333,7 @@ impl StorageController {
         if use_tls {
             // No sslrootcert is exposed via the URL parse, so use AcceptAll.
             let tls = remote_storage::build_yb_rustls_connector(None)
-                .context("building rustls connector for storage controller DB URL")?;
+                .context("building rustls connector for controller DB URL")?;
             let (client, conn) = config
                 .connect(tls)
                 .await
@@ -464,7 +433,7 @@ impl StorageController {
     /// has the pageserver/safekeeper schema in place. Callers must run
     /// this **before** spawning pageserver / safekeeper / endpoint_storage
     /// since those bind to `yb_storage` immediately on start. Without
-    /// this barrier, a fresh `yb_light_local start` races storage_controller's
+    /// this barrier, a fresh `yb_light_local start` races controller's
     /// own database provisioning against the pageserver's first connect
     /// and the pageserver crashes with `database "yb_storage" does not
     /// exist`. See #49.
@@ -475,8 +444,8 @@ impl StorageController {
         Ok(())
     }
 
-    pub async fn start(&self, start_args: YbLightStorageControllerStartArgs) -> anyhow::Result<()> {
-        let instance_dir = self.storage_controller_instance_dir(start_args.instance_id);
+    pub async fn start(&self, start_args: YbLightControllerStartArgs) -> anyhow::Result<()> {
+        let instance_dir = self.controller_instance_dir(start_args.instance_id);
         if let Err(err) = tokio::fs::create_dir(&instance_dir).await {
             if err.kind() != std::io::ErrorKind::AlreadyExists {
                 panic!("Failed to create instance dir {instance_dir:?}");
@@ -495,7 +464,7 @@ impl StorageController {
         let scheme = listen_url.scheme();
         let host = listen_url.host_str().unwrap();
 
-        // If `yb` is set in YbLightStorageControllerConf, the operator
+        // If `yb` is set in YbLightControllerConf, the operator
         // is pointing the controller at an externally-managed Postgres (in
         // yb-light: a YugabyteDB cluster). In that case we skip the local-PG
         // bootstrap entirely.
@@ -512,7 +481,7 @@ impl StorageController {
                 (base_port, port)
             }
             (Some(_), None) => {
-                anyhow::bail!("--base-port requires YbLightStorageControllerConf::yb");
+                anyhow::bail!("--base-port requires YbLightControllerConf::yb");
             }
             (None, _) => {
                 let port = listen_url.port().unwrap();
@@ -522,15 +491,15 @@ impl StorageController {
 
         self.listen_port
             .set(listen_port)
-            .expect("StorageController::listen_port is only set here");
+            .expect("Controller::listen_port is only set here");
 
-        // Needed below to set LD_LIBRARY_PATH for the storage_controller
+        // Needed below to set LD_LIBRARY_PATH for the controller
         // process itself (it links against libpq).
         let pg_lib_dir = self.get_pg_lib_dir().await?;
 
         // Against an external database (e.g. YugabyteDB), make sure the
         // target database itself exists before pointing the controller at
-        // it. The controller's Diesel migrations create the schema inside
+        // it. The controller's migrations create the schema inside
         // the DB, but they don't create the DB container.
         if let Some(yb) = &external_yb {
             self.ensure_external_database(yb).await?;
@@ -544,10 +513,10 @@ impl StorageController {
         };
 
         if !pg_started {
-            // Start a vanilla Postgres process used by the storage controller for persistence.
+            // Start a vanilla Postgres process used by the controller for persistence.
             let pg_data_path = Utf8PathBuf::from_path_buf(self.env.base_data_dir.clone())
                 .unwrap()
-                .join("storage_controller_db");
+                .join("controller_db");
             let pg_bin_dir = self.get_pg_bin_dir().await?;
             let pg_log_path = pg_data_path.join("postgres.log");
 
@@ -561,7 +530,7 @@ impl StorageController {
                     "--no-instructions",
                 ];
                 tracing::info!(
-                    "Initializing storage controller database with args: {:?}",
+                    "Initializing controller database with args: {:?}",
                     initdb_args
                 );
 
@@ -584,7 +553,7 @@ impl StorageController {
             // Write a minimal config file:
             // - Specify the port, since this is chosen dynamically
             // - Switch off fsync, since we're running on lightweight test environments and when e.g. scale testing
-            //   the storage controller we don't want a slow local disk to interfere with that.
+            //   the controller we don't want a slow local disk to interfere with that.
             //
             // NB: it's important that we rewrite this file on each start command so we propagate changes
             // from `LocalEnv`'s config file (`.yb_light/config`).
@@ -594,7 +563,7 @@ impl StorageController {
             )
             .await?;
 
-            println!("Starting storage controller database...");
+            println!("Starting controller database...");
             let db_start_args = [
                 "-w",
                 "-D",
@@ -606,7 +575,7 @@ impl StorageController {
                 "start",
             ];
             tracing::info!(
-                "Starting storage controller database with args: {:?}",
+                "Starting controller database with args: {:?}",
                 db_start_args
             );
 
@@ -627,7 +596,7 @@ impl StorageController {
 
                 match self.pg_isready(&pg_bin_dir, postgres_port).await {
                     Ok(true) => {
-                        tracing::info!("storage controller postgres is now ready");
+                        tracing::info!("controller postgres is now ready");
                         break;
                     }
                     Ok(false) => {
@@ -642,19 +611,19 @@ impl StorageController {
             self.setup_database(postgres_port).await?;
         }
 
-        // The connection is passed to the storage_controller binary as either
+        // The connection is passed to the controller binary as either
         // the structured `--yb-config` block (external YB; the binary builds
         // its diesel URL from it) or a `--database-url` URL (local-PG
         // bootstrap). Built just before the arg vector below.
         let local_database_url = format!("postgresql://localhost:{postgres_port}/{DB_NAME}");
 
-        // We support running a startup SQL script to fiddle with the database before we launch storcon.
+        // We support running a startup SQL script to fiddle with the database before we launch controller.
         // This is used by the test suite — only meaningful against the local-PG bootstrap path.
         if external_yb.is_none() {
             let startup_script_path = self
                 .env
                 .base_data_dir
-                .join("storage_controller_db.startup.sql");
+                .join("controller_db.startup.sql");
             let startup_script = match tokio::fs::read_to_string(&startup_script_path).await {
                 Ok(script) => {
                     tokio::fs::remove_file(startup_script_path).await?;
@@ -680,108 +649,33 @@ impl StorageController {
         }
 
         let addr = format!("{host}:{listen_port}");
-        // External YB → pass the shared `[*.yb]` block as `--yb-config`;
-        // local-PG bootstrap → pass the diesel URL as `--database-url`.
-        let (db_flag, db_value) = match &external_yb {
-            Some(yb) => ("--yb-config", yb.to_inline_toml()),
-            None => ("--database-url", local_database_url),
+        // Both connection paths collapse to a single --database-url: external YB
+        // renders one from the shared [*.yb] block; local-PG uses the bootstrap URL.
+        let database_url = match &external_yb {
+            Some(yb) => yb
+                .to_database_url()
+                .context("building database URL from controller.yb")?,
+            None => local_database_url,
         };
-        let mut args = vec![
-            "--dev",
-            db_flag,
-            &db_value,
-            "--max-offline-interval",
-            &humantime::Duration::from(self.config.max_offline).to_string(),
-            "--max-warming-up-interval",
-            &humantime::Duration::from(self.config.max_warming_up).to_string(),
-            "--heartbeat-interval",
-            &humantime::Duration::from(self.config.heartbeat_interval).to_string(),
-        ]
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>();
-
-        match scheme {
-            "http" => args.extend(["--listen".to_string(), addr]),
-            "https" => args.extend(["--listen-https".to_string(), addr]),
-            _ => {
-                panic!("Unexpected url scheme in control_plane_api: {scheme}");
-            }
-        }
-
-        if self.config.use_https_pageserver_api {
-            args.push("--use-https-pageserver-api".to_string());
-        }
-
-        if self.config.use_https_safekeeper_api {
-            args.push("--use-https-safekeeper-api".to_string());
-        }
-
-        if let Some(ssl_ca_file) = self.env.ssl_ca_cert_path() {
-            args.push(format!("--ssl-ca-file={}", ssl_ca_file.to_str().unwrap()));
-        }
-
-        if let Some(private_key) = &self.private_key {
-            let claims = Claims::new(None, Scope::PageServerApi);
-            let jwt_token =
-                encode_from_key_file(&claims, private_key).expect("failed to generate jwt token");
-            args.push(format!("--jwt-token={jwt_token}"));
-
-            let claims = Claims::new(None, Scope::SafekeeperData);
-            let jwt_token =
-                encode_from_key_file(&claims, private_key).expect("failed to generate jwt token");
-            args.push(format!("--safekeeper-jwt-token={jwt_token}"));
-        }
-
-        if let Some(public_key) = &self.public_key {
-            args.push(format!("--public-key=\"{public_key}\""));
-        }
-
-        if let Some(control_plane_hooks_api) = &self.env.control_plane_hooks_api {
-            args.push(format!("--control-plane-url={control_plane_hooks_api}"));
-        }
-
-        // Safekeepers aren't provisioned until `endpoint create`, so on a
-        // fresh repo `env.safekeepers` is empty; fall back to the init
-        // templates for the auth check and the per-timeline count.
-        let auth_enabled = self
-            .env
-            .safekeepers
-            .iter()
-            .chain(self.env.safekeeper_templates.iter())
-            .any(|sk| sk.auth_enabled);
-        if auth_enabled && self.private_key.is_none() {
-            anyhow::bail!("Safekeeper set up for auth but no private key specified");
-        }
-
-        if self.config.timelines_onto_safekeepers {
-            args.push("--timelines-onto-safekeepers".to_string());
-        }
-
-        // Per-timeline safekeeper count: how many safekeepers each new
-        // timeline is placed on. In yb-light this is the size of the init
-        // safekeeper template set (one safekeeper per timeline), not the
-        // running total across all provisioned timelines.
-        let timeline_sk_count = self
-            .config
-            .timeline_safekeeper_count
-            .unwrap_or(self.env.safekeeper_templates.len());
-        // yb_light_local is used in test environments where we often have less than 3 safekeepers.
-        if self.config.timeline_safekeeper_count.is_some() || timeline_sk_count < 3 {
-            args.push(format!("--timeline-safekeeper-count={timeline_sk_count}"));
-        }
+        let args = vec![
+            "--dev".to_string(),
+            "--database-url".to_string(),
+            database_url,
+            "--listen".to_string(),
+            addr,
+        ];
 
         let envs = vec![
             ("LD_LIBRARY_PATH".to_owned(), pg_lib_dir.to_string()),
             ("DYLD_LIBRARY_PATH".to_owned(), pg_lib_dir.to_string()),
         ];
 
-        println!("Starting storage controller at {scheme}://{host}:{listen_port}");
+        println!("Starting controller at {scheme}://{host}:{listen_port}");
 
         background_process::start_process(
             COMMAND,
             &instance_dir,
-            &self.env.storage_controller_bin(),
+            &self.env.controller_bin(),
             args,
             envs,
             background_process::InitialPidFile::Create(self.pid_file(start_args.instance_id)),
@@ -798,31 +692,31 @@ impl StorageController {
         Ok(())
     }
 
-    pub async fn stop(&self, stop_args: YbLightStorageControllerStopArgs) -> anyhow::Result<()> {
+    pub async fn stop(&self, stop_args: YbLightControllerStopArgs) -> anyhow::Result<()> {
         background_process::stop_process(
             stop_args.immediate,
             COMMAND,
             &self.pid_file(stop_args.instance_id),
         )?;
 
-        let storcon_instances = self.env.storage_controller_instances().await?;
-        for (instance_id, instanced_dir_path) in storcon_instances {
+        let controller_instances = self.env.controller_instances().await?;
+        for (instance_id, instanced_dir_path) in controller_instances {
             if instance_id == stop_args.instance_id {
                 continue;
             }
 
-            let pid_file = instanced_dir_path.join("storage_controller.pid");
+            let pid_file = instanced_dir_path.join("controller.pid");
             let pid = tokio::fs::read_to_string(&pid_file)
                 .await
                 .map_err(|err| {
-                    anyhow::anyhow!("Failed to read storcon pid file at {pid_file:?}: {err}")
+                    anyhow::anyhow!("Failed to read controller pid file at {pid_file:?}: {err}")
                 })?
                 .parse::<i32>()
                 .expect("pid is valid i32");
 
             let other_proc_alive = !background_process::process_has_stopped(Pid::from_raw(pid))?;
             if other_proc_alive {
-                // There is another storage controller instance running, so we return
+                // There is another controller instance running, so we return
                 // and leave the database running.
                 return Ok(());
             }
@@ -834,22 +728,22 @@ impl StorageController {
             return Ok(());
         }
 
-        let pg_data_path = self.env.base_data_dir.join("storage_controller_db");
+        let pg_data_path = self.env.base_data_dir.join("controller_db");
 
-        println!("Stopping storage controller database...");
+        println!("Stopping controller database...");
         let pg_stop_args = ["-D", &pg_data_path.to_string_lossy(), "stop"];
         let stop_status = self.pg_ctl(pg_stop_args).await;
         if !stop_status.success() {
             match self.is_postgres_running().await {
                 Ok(false) => {
-                    println!("Storage controller database is already stopped");
+                    println!("Controller database is already stopped");
                     return Ok(());
                 }
                 Ok(true) => {
-                    anyhow::bail!("Failed to stop storage controller database");
+                    anyhow::bail!("Failed to stop controller database");
                 }
                 Err(err) => {
-                    anyhow::bail!("Failed to stop storage controller database: {err}");
+                    anyhow::bail!("Failed to stop controller database: {err}");
                 }
             }
         }
@@ -858,7 +752,7 @@ impl StorageController {
     }
 
     async fn is_postgres_running(&self) -> anyhow::Result<bool> {
-        let pg_data_path = self.env.base_data_dir.join("storage_controller_db");
+        let pg_data_path = self.env.base_data_dir.join("controller_db");
 
         let pg_status_args = ["-D", &pg_data_path.to_string_lossy(), "status"];
         let status_exitcode = self.pg_ctl(pg_status_args).await;
@@ -894,7 +788,7 @@ impl StorageController {
         }
     }
 
-    /// Simple HTTP request wrapper for calling into storage controller
+    /// Simple HTTP request wrapper for calling into controller
     async fn dispatch<RQ, RS>(
         &self,
         method: reqwest::Method,
@@ -912,7 +806,7 @@ impl StorageController {
             .map_err(pageserver_client::mgmt_api::Error::ReceiveBody)?)
     }
 
-    /// Simple HTTP request wrapper for calling into storage controller
+    /// Simple HTTP request wrapper for calling into controller
     async fn dispatch_inner<RQ>(
         &self,
         method: reqwest::Method,
@@ -922,12 +816,12 @@ impl StorageController {
     where
         RQ: Serialize + Sized,
     {
-        // In the special case of the `storage_controller start` subcommand, we wish
-        // to use the API endpoint of the newly started storage controller in order
+        // In the special case of the `controller start` subcommand, we wish
+        // to use the API endpoint of the newly started controller in order
         // to pass the readiness check. In this scenario [`Self::listen_port`] will
         // be set (see [`Self::start`]).
         //
-        // Otherwise, we infer the storage controller api endpoint from the configured
+        // Otherwise, we infer the controller api endpoint from the configured
         // control plane API.
         let port = if let Some(port) = self.listen_port.get() {
             *port

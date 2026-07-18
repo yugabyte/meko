@@ -98,11 +98,12 @@ Image references; tags fall back to the chart appVersion.
 {{- end }}
 
 {{/*
-In-cluster URL of the controller's managed storage controller (SC) port, handed
-to deployed endpoints (AMP_DEPLOY_STORAGE_CONTROLLER_URL).
+In-cluster URL deployed endpoints use to reach the controller's storage-layer
+control surface (AMP_DEPLOY_CONTROLLER_URL). The surface is served on the
+controller's API port.
 */}}
-{{- define "yb-amp-controller.storageControllerUrl" -}}
-{{- printf "http://%s.%s.svc.cluster.local:%v" (include "yb-amp-controller.controllerName" .) .Release.Namespace .Values.controller.ports.sc -}}
+{{- define "yb-amp-controller.endpointControllerUrl" -}}
+{{- printf "http://%s.%s.svc.cluster.local:%v" (include "yb-amp-controller.controllerName" .) .Release.Namespace .Values.controller.ports.api -}}
 {{- end }}
 
 {{/*

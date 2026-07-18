@@ -17,7 +17,7 @@ start_server_cpu_sampler() {
        echo "--- $(date +%T) ---"
        top -bn2 -d 1 -w 512 2>/dev/null \
          | awk "BEGIN{it=0} /^top - / {it++} it==2 && /Cpu\\(s\\)/ {print; next} \
-                it==2 && /^[[:space:]]*[0-9]+ / && \$NF ~ /pageserver|safekeeper|storage_broker|storage_controller|endpoint_storage|postgres|compute_ctl/ \
+                it==2 && /^[[:space:]]*[0-9]+ / && \$NF ~ /pageserver|safekeeper|storage_broker|controller|endpoint_storage|postgres|compute_ctl/ \
                   {printf \"  pid=%-6s cpu=%5s%%  res=%-6s  %s\\n\", \$1, \$9, \$6, \$NF}"
        sleep 3
      done' >"$outfile" 2>&1 &

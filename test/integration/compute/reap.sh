@@ -22,7 +22,7 @@
 #   - Processes are killed only by matching the dead run's dir in their
 #     argv (`pkill -f <dir>`), so the YugabyteDB cluster and a developer's
 #     `.yb_light` cluster — which carry no run dir in argv — are never hit.
-#   - The one exception is the `storage_controller`: it keeps no local data
+#   - The one exception is the `controller`: it keeps no local data
 #     dir (all state is in YB), so its argv carries the run's ephemeral DB
 #     name but NO run-dir path, and the dir match above misses it. It (and
 #     any process from a dir-GC'd run) is reaped in the DB loop below by
@@ -133,7 +133,7 @@ if command -v psql >/dev/null 2>&1; then
             [ $(( now - created )) -ge "$CROSS_REAP_GRACE_SECS" ] || continue
         fi
         # Kill any orphan process still bound to this dead run's DB before we
-        # drop it. The dir-based pass above misses the storage_controller
+        # drop it. The dir-based pass above misses the controller
         # (no run-dir in its argv) and every process of a dir-GC'd run; the
         # run-unique DB name catches them. Gated by the same dead-run rules as
         # the DROP, and the DB name embeds <epoch>_<pid>, so it can't

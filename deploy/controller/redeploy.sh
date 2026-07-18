@@ -14,7 +14,7 @@
 # Assumes these already exist in the namespace (NOT created here):
 #   - the namespace
 #   - the backing YugabyteDB (the controller + endpoints connect to it; the controller
-#     and storage_controller schemas live there and persist across re-deploys)
+#     and registry schemas live there and persist across re-deploys)
 #
 # It DOES (re)mint the ECR image pull secret each run (the ~12h token would otherwise
 # go stale), resolving AWS creds via deploy/ecr-creds.sh (env keys > AWS_BOT_JSON >

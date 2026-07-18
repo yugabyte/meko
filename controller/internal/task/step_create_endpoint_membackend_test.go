@@ -34,7 +34,7 @@ func TestCreateEndpointStepReplayConvergesAgainstMemBackend(t *testing.T) {
 	epID := uuid.New()
 	dep := &memReplayDeployer{}
 	// *core.MemBackend structurally satisfies task.StateStore.
-	deps := task.Deps{State: be, Deployer: dep, SCEndpointURL: "http://sc:50051"}
+	deps := task.Deps{State: be, Deployer: dep, ControllerURL: "http://sc:50051"}
 	args := task.CreateEndpointArgs{EndpointID: epID, ProjectID: projectID, BranchID: branchID, Role: core.RoleReadWrite, PgVersion: 18}
 
 	if res := task.NewCreateEndpointStep(args, deps).Execute(t.Context()); res.Failed() {

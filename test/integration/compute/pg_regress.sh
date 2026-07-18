@@ -88,16 +88,20 @@ fi
 
 # 2) Build the binaries yb_light_local spawns at runtime (it does not build
 #    them itself — a stale one surfaces as baffling runtime mismatches).
-CLUSTER_BINS=(--bin yb_light_local --bin storage_controller --bin yb-pageserver
+CLUSTER_BINS=(--bin yb_light_local --bin yb-pageserver
               --bin yb-safekeeper --bin yb-endpoint-storage --bin yb-compute-ctl)
 echo ">>> building cluster binaries ($PROFILE)..."
 if [[ $PROFILE == release ]]; then
     cargo build --release "${CLUSTER_BINS[@]}"
     YB_LIGHT="$REPO/target/release/yb_light_local"
+    _PROFILE_DIR=release
 else
     cargo build "${CLUSTER_BINS[@]}"
     YB_LIGHT="$REPO/target/debug/yb_light_local"
+    _PROFILE_DIR=debug
 fi
+# The controller is a Go binary yb_light_local spawns from beside itself.
+( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller )
 
 # 2b) Build + install the regression suite's C support modules. The core
 #     tests load helper functions/types from regress.so, and the trigger

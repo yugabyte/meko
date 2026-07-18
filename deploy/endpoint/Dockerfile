@@ -9,12 +9,11 @@
 # service's config from environment variables, brings the stack up in
 # order, and monitors/restarts the children.
 #
-# The storage_controller is NOT in this image: it is a shared,
-# cluster-level control plane that lives in the AMP layer. The endpoint
-# assumes the `yb_storage` schema already exists (AMP/SC provisions it
-# via diesel migrations). For standalone testing, the supervisor can
-# provision the schema itself (DEV_PROVISION_SCHEMA=true) using the
-# bundled yb_light_local + storage_controller binaries.
+# No control plane runs in this image: it is a shared, cluster-level service
+# that lives in the AMP layer. The endpoint assumes the `yb_storage` schema
+# already exists (the controller provisions it on startup). For standalone
+# testing, the supervisor can provision the schema itself
+# (DEV_PROVISION_SCHEMA=true) by applying the bundled provisioning migration.
 #
 # Build (from the repo root):
 #   docker build -t yb-amp/yb-amp-endpoint:dev -f deploy/endpoint/Dockerfile .
@@ -67,14 +66,12 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
          --bin yb-safekeeper \
          --bin yb-endpoint-storage \
          --bin yb-compute-ctl \
-         --bin storage_controller \
          --bin yb_light_local \
     && mkdir -p /home/nonroot/out \
     && cp target/release/yb-pageserver \
           target/release/yb-safekeeper \
           target/release/yb-endpoint-storage \
           target/release/yb-compute-ctl \
-          target/release/storage_controller \
           target/release/yb_light_local \
           /home/nonroot/out/ \
     && mold -run make -j "$(nproc)" -s yb-amp-pg-ext
@@ -112,14 +109,13 @@ COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-pageserver     
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-safekeeper          /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-endpoint-storage    /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-compute-ctl         /usr/local/bin/
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/storage_controller  /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb_light_local      /usr/local/bin/
 
 # Postgres v18 install (binaries + the `yb_amp` extension installed by yb-amp-pg-ext).
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
 # Schema migrations, for the optional DEV_PROVISION_SCHEMA path.
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/storage_controller/migrations /usr/local/share/yb-light/migrations
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/controller/migrations /usr/local/share/yb-light/migrations
 
 # The supervisor.
 COPY --chown=yugabyte:yugabyte deploy/endpoint/supervisor.py /usr/local/bin/yb-endpoint-supervisor

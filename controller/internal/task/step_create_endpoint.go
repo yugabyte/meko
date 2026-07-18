@@ -61,7 +61,7 @@ func NewCreateEndpointStep(args CreateEndpointArgs, deps Deps) Step {
 		recipes:            deps.Recipes,
 		deployer:           deps.Deployer,
 		yb:                 deps.EndpointYB,
-		scURL:              deps.SCEndpointURL,
+		scURL:              deps.ControllerURL,
 		bootstrap:          deps.Bootstrap,
 	}
 }
@@ -100,7 +100,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		BranchID:             hex32(s.BranchID),
 		PgVersion:            s.PgVersion,
 		YB:                   s.yb,
-		StorageControllerURL: s.scURL,
+		ControllerURL: s.scURL,
 		CPU:                  s.CPU,
 		Memory:               s.Memory,
 		// A fork clones from its ancestor; only a default branch initdb's.

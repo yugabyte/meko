@@ -23,7 +23,7 @@ Read in this order:
    topology of a dev cluster.
 2. `compute/architecture/yugabyte.md` — the single YB database (`yb_storage`)
    and its schemas (`public`, `pageserver`, `safekeeper`,
-   `storage_controller`), the `blobs` and `wals` tables, the
+   `registry`), the `blobs` and `wals` tables, the
    `blob_namespace` ENUM, the `rpc_max_message_size` chunking story.
 3. `compute/architecture/remote-storage.md` — `YbStore` design, `parse_key` /
    `reconstruct_key`, the round-trip-lossless path mapping.
@@ -38,17 +38,17 @@ Read in this order:
 5. `compute/architecture/safekeeper.md` — `ControlFileStorage::Yb`,
    `YbWalStorage`, the `WalReader` fallback chain, the single-safekeeper
    constraint in YB-WAL mode.
-6. `storage_controller/architecture/storage-controller.md` — the `[storage_controller.yb]`
-   connection block → diesel URL flow (`--yb-config`), the
-   auto-provisioning of the `yb_storage` DB (and its `storage_controller`
-   schema) on first start. (The storage controller is the cluster control
-   plane, so its docs live under `storage_controller/`, not `compute/`.)
+6. `controller/architecture/sc-integration.md` — cluster control: generation
+   authority (attach-hook), the node/branch/endpoint registries, and the
+   provisioning of the `yb_storage` DB (all its schemas) on controller startup.
+   These live in the Go `controller/`; the compute daemons bind the schemas the
+   controller provisions.
 
 For per-service HTTP API and Prometheus metrics, see the per-service
 `-apis.md` / `-metrics.md` references: the compute-engine services
 (pageserver, safekeeper, compute_ctl, endpoint_storage) are under
-`compute/architecture/` (indexed in `compute/architecture/README.md`);
-the storage controller's are under `storage_controller/architecture/`.
+`compute/architecture/` (indexed in `compute/architecture/README.md`); the
+controller's are under `controller/architecture/`.
 
 Code anchors:
 
@@ -64,13 +64,13 @@ Code anchors:
 - `compute/safekeeper/src/yb_wal_storage.rs` — `YbWalStorage`, the YB WAL mirror.
 - `compute/safekeeper/src/wal_storage.rs::WalBookkeeping` — in-memory WAL
   LSN/record-boundary bookkeeping.
-- `storage_controller/src/persistence.rs` — `establish_connection_rustls`,
+- `controller/src/persistence.rs` — `establish_connection_rustls`,
   AcceptAll TLS verifier.
-- `control_plane/src/storage_controller.rs` — yb_light_local wrapper:
+- `control_plane/src/controller.rs` — yb_light_local wrapper:
   external-DB path, `ensure_external_database`, YB schema
   auto-provisioning.
 - `control_plane/src/local_env.rs` — TOML config types
-  (`YbLightStorageControllerConf::yb`, `SafekeeperConf::yb_storage_conn`;
+  (`YbLightControllerConf::yb`, `SafekeeperConf::yb_storage_conn`;
   every service takes the same `yb_storage_conn` connection block).
 - `control_plane/src/safekeeper.rs` / `pageserver.rs` / `endpoint.rs` —
   per-service CLI assembly + per-component config.
@@ -92,8 +92,8 @@ Code anchors:
   rot.
 - **Architecture changes go in the matching `*/architecture/*.md` docs**
   (`compute/architecture/` for the storage/compute engine,
-  `storage_controller/architecture/` and `controller/architecture/` for the
-  control planes). Code change without doc change usually means the doc is stale.
+  `controller/architecture/` for the control plane). Code change without doc
+  change usually means the doc is stale.
 - **Work is tracked as GitHub issues**, not files. See
   [`docs/issue-tracking.md`](docs/issue-tracking.md) for the area
   labels, milestones, the create/close contract, and the commit-subject
@@ -200,7 +200,7 @@ bring-up — `up.sh`" + "ECR access & the pull secret"). In short:
 - `yb_light_local start` spawns SC + SK + PS via `JoinSet` with no ordering
   guarantee — SK can race SC and try to open `yb_storage` before SC
   creates it. Workaround: pre-provision YB once by hand; structural fix
-  is to make `StorageController::provision_external_database()` a
+  is to make `Controller::provision_external_database()` a
   synchronous pre-step before the `JoinSet` block.
 - `endpoint create --pg-setting NAME=VALUE` is the escape hatch for
   arbitrary GUCs. Dedicated `--shared-buffers` and `--lfc-size` flags

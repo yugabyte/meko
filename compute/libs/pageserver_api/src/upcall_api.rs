@@ -1,4 +1,4 @@
-//! Types for the pageserver's upward-facing API calls to the storage controller
+//! Types for the pageserver's upward-facing API calls to the controller
 //! (the timeline-import status upcalls).
 
 use serde::{Deserialize, Serialize};

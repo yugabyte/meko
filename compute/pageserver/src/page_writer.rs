@@ -206,7 +206,7 @@ pub struct PageWriter {
     /// is shared (see [`Self::set_lineage`]); defaults to the trivial
     /// single-segment lineage.
     lineage: Vec<LineageSegment>,
-    /// Storage-controller-assigned generation for this attach. Carried
+    /// Controller-assigned generation for this attach. Carried
     /// through to `advance_consistent_lsn` so the persisting UPDATE
     /// can fail-fast if a higher generation has taken over.
     generation: utils::generation::Generation,

@@ -318,7 +318,7 @@ jobs:
         with:
           name: integration-logs-${{ github.run_id }}
           # The failed run's *.log files (harness + compute/pageserver/
-          # safekeeper/storage_controller/endpoint_storage), kept by the
+          # safekeeper/endpoint_storage), kept by the
           # harness's INTEGRATION_KEEP_LOGS teardown. Glob to *.log so any stray
           # non-log leftovers can't break artifact zip creation.
           path: .integration-tests/**/*.log

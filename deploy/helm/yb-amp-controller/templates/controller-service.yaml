@@ -1,5 +1,5 @@
-# In-cluster Service: the API + the SC port endpoints register against. Always
-# created.
+# In-cluster Service: the controller's API + storage-layer control surface (both
+# on the API port; endpoints register against it). Always created.
 apiVersion: v1
 kind: Service
 metadata:
@@ -14,9 +14,6 @@ spec:
     - name: api
       port: {{ .Values.controller.ports.api }}
       targetPort: api
-    - name: sc
-      port: {{ .Values.controller.ports.sc }}
-      targetPort: sc
 {{- if eq .Values.controller.service.type "nodeport" }}
 ---
 # NodePort for the UI/API — reachable at any node IP (VPC-internal), no cloud LB.

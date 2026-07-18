@@ -51,7 +51,7 @@ impl PageServerNode {
             parse_host_port(&conf.listen_pg_addr).expect("Unable to parse listen_pg_addr");
         let port = port.unwrap_or(5432);
 
-        let endpoint = if env.storage_controller.use_https_pageserver_api {
+        let endpoint = if env.controller.use_https_pageserver_api {
             format!(
                 "https://{}",
                 conf.listen_https_addr.as_ref().expect(
@@ -122,7 +122,7 @@ impl PageServerNode {
             self.env.control_plane_api.as_str()
         ));
 
-        // Storage controller uses the same auth as pageserver: if JWT is enabled
+        // Controller uses the same auth as pageserver: if JWT is enabled
         // for us, we will also need it to talk to them.
         if matches!(conf.http_auth_type, AuthType::YbLightJWT) {
             let jwt_token = self
@@ -242,7 +242,7 @@ impl PageServerNode {
     /// Bake the single-branch identity into `pageserver.toml`
     /// (read-modify-write; overwrites any previous identity).
     /// `generation` is just a placeholder here — [`Self::start`] bumps
-    /// it via the storage controller on every spawn.
+    /// it via the controller on every spawn.
     pub fn set_timeline_identity(
         &self,
         branch_id: BranchId,
@@ -389,7 +389,7 @@ impl PageServerNode {
     }
 
     /// If an identity is baked into `pageserver.toml`: register this
-    /// node with the storage controller (idempotent), bump the
+    /// node with the controller (idempotent), bump the
     /// branch's generation against this node via the attach-hook API,
     /// and persist the fresh generation back into the toml so the
     /// next process spawn picks it up. No-op without an identity.
@@ -400,12 +400,12 @@ impl PageServerNode {
         let Some(branch_id) = self.read_timeline_identity()? else {
             return Ok(None);
         };
-        let storage_controller = crate::storage_controller::StorageController::from_env(&self.env);
-        storage_controller
+        let controller = crate::controller::Controller::from_env(&self.env);
+        controller
             .node_register(self.node_register_request())
             .await
-            .context("register pageserver node with storage controller")?;
-        let generation = storage_controller
+            .context("register pageserver node with controller")?;
+        let generation = controller
             .attach_hook(branch_id, self.conf.id)
             .await?
             .context("attach_hook did not return a generation")?;
@@ -470,7 +470,7 @@ impl PageServerNode {
         // TODO: invoke a TBD config-check command to validate that pageserver will start with the written config
 
         // Write metadata file, used by pageserver on startup to register itself with
-        // the storage controller
+        // the controller
         let metadata_path = datadir.join("metadata.json");
 
         let http_host = "localhost".to_string();

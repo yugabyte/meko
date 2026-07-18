@@ -1,21 +1,14 @@
-# yb-light controller-layer container: the amp controller bundled with the storage
-# controller it manages (issue #94).
+# yb-light controller-layer container: the amp controller (issue #94).
 #
-# controller (the amp-controller, a Go service) supervises storage_controller as a
-# child process — it spawns it, streams its logs, restarts it on exit, and stops
-# it cleanly on shutdown (amp-controller.md §11.1). The two binaries are
-# bundled side by side under /opt/yb-light-amp, so controller resolves the storage
-# controller from its own directory with no path configuration.
+# controller (the amp-controller, a Go service) is the cluster control plane the
+# endpoint image (deploy/endpoint) deliberately leaves out — it owns generation
+# authority, the storage-layer registries, and `yb_storage` provisioning.
 #
-# This image packages PREBUILT binaries — it does not compile anything, so it
-# needs no build toolchain. Build the bundle first (in the build-tools image or
-# CI, so the binaries link against a compatible glibc), then build this image:
+# This image packages a PREBUILT binary — it does not compile anything, so it
+# needs no build toolchain. Build the bundle first, then build this image:
 #
-#   make controller-bundle BUILD_TYPE=release          # -> target/controller-bundle/{controller,storage_controller}
+#   make controller-bundle BUILD_TYPE=release          # -> target/controller-bundle/controller
 #   docker build -t yb-light/controller:dev -f deploy/controller/Dockerfile .
-#
-# The storage_controller is the shared, cluster-level control plane the endpoint
-# image (deploy/endpoint) deliberately leaves out — it belongs to this controller layer.
 
 ARG DEBIAN_VERSION=bookworm
 ARG DEBIAN_FLAVOR=${DEBIAN_VERSION}-slim
@@ -49,13 +42,8 @@ RUN set -e \
     && chmod +x /usr/local/bin/docker \
     && rm -rf /tmp/docker /tmp/docker.tgz
 
-# The bundle: controller (and, in the full bundle, storage_controller) side by side.
-# controller resolves the storage controller from its own directory (#94), so no bin
-# path needs configuring. We copy the whole bundle directory so the same image
-# works for both layouts: `make controller-bundle` (controller + storage_controller) and
-# `make controller-bundle-only` (controller alone — run with AMP_STORAGE_CONTROLLER=false).
-# The controller binary is static (CGO_ENABLED=0); the storage controller, when present,
-# is dynamically linked against glibc, hence the build-it-on-a-compatible-base note.
+# The bundle: the controller binary. We copy the whole bundle directory. The
+# controller binary is static (CGO_ENABLED=0), so it runs on a slim base.
 ARG BUNDLE_DIR
 COPY --chown=yugabyte:yugabyte ${BUNDLE_DIR}/ /opt/yb-light-amp/
 
@@ -74,8 +62,6 @@ COPY --chown=yugabyte:yugabyte deploy/helm/yb-light-endpoint /opt/yb-light-amp/c
 
 ENV PATH=/opt/yb-light-amp:$PATH \
     AMP_LISTEN=:8080 \
-    AMP_STORAGE_CONTROLLER=true \
-    AMP_STORAGE_CONTROLLER_LISTEN=127.0.0.1:50051 \
     AMP_DEPLOY_CHART=/opt/yb-light-amp/chart
 
 USER yugabyte

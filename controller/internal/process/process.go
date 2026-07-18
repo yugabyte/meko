@@ -18,7 +18,7 @@ import (
 // Spec describes a child process to supervise. The zero value is not usable;
 // at least Name and Path must be set.
 type Spec struct {
-	// Name labels the process in logs (e.g. "storage_controller").
+	// Name labels the process in logs (e.g. "controller").
 	Name string
 	// Path is the executable to run. It is resolved against PATH when it has
 	// no slash, matching os/exec.Command.

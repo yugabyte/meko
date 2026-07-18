@@ -56,7 +56,7 @@ None of this changes between upstream Neon and yb-light.
 ### Endpoint lifecycle
 
 Endpoints are managed via `yb_light_local endpoint create|start|stop|reconfigure`.
-The durable registry of endpoints lives in the storage controller's `endpoints`
+The durable registry of endpoints lives in the controller's `endpoints`
 table (column `spec` holds the serialized `EndpointConf`), not on local disk;
 `yb_light_local` drives it through the `/control/v1/endpoint` API. The local
 `.yb_light/endpoints/<id>/` directory is only runtime working state

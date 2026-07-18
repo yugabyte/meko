@@ -124,7 +124,7 @@ impl<'de> serde::Deserialize<'de> for HostPorts {
 
 /// The one canonical YugabyteDB connection config — the TOML
 /// `[*.yb]` block every yb-light daemon (pageserver, safekeeper,
-/// endpoint_storage, storage_controller) deserializes, and what the
+/// endpoint_storage, controller) deserializes, and what the
 /// diagnostic tools build from their CLI flags. Connection only: which
 /// YB to talk to, as whom, over what TLS. It deliberately carries NO
 /// table/schema — each component hardcodes the table(s) it owns
@@ -221,9 +221,9 @@ impl YbConnConfig {
     }
     /// Render this connection config as a libpq/diesel `postgresql://` URL.
     ///
-    /// The storage_controller's persistence layer (diesel-async) takes a
+    /// The controller's persistence layer takes a
     /// URL string rather than a parsed config, so it consumes the shared
-    /// `[storage_controller.yb]` block by building the URL here. All
+    /// `[controller.yb]` block by building the URL here. All
     /// `host:port` pairs are emitted as a libpq multi-host authority;
     /// `password_env` is resolved to the live password and percent-encoded.
     pub fn to_database_url(&self) -> anyhow::Result<String> {
@@ -262,7 +262,7 @@ impl YbConnConfig {
     }
 
     /// Render as a TOML inline table (`{ key = "val", ... }`) — the wire
-    /// form the safekeeper (`yb_storage_conn`) and storage_controller
+    /// form the safekeeper (`yb_storage_conn`) and controller
     /// (`--yb-config`) accept on the command line, and the block the
     /// pageserver `remote_storage` / endpoint_storage configs embed. The
     /// inverse of the `Deserialize` impl; identical across all consumers.
@@ -1296,7 +1296,7 @@ pub fn build_yb_rustls_connector(
         builder.with_root_certificates(roots).with_no_client_auth()
     } else {
         // AcceptAll: log validation failures and proceed. Mirrors the
-        // storage_controller's existing behaviour and matches the
+        // the controller's existing behaviour and matches the
         // openssl `SslVerifyMode::NONE` semantics we were running with.
         #[derive(Debug)]
         struct AcceptAll(Arc<WebPkiServerVerifier>);

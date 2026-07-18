@@ -33,8 +33,6 @@ spec:
           ports:
             - name: api
               containerPort: {{ .Values.controller.ports.api }}
-            - name: sc
-              containerPort: {{ .Values.controller.ports.sc }}
           env:
             - name: AMP_DATABASE_URL
               value: {{ .Values.controller.databaseUrl | quote }}
@@ -42,11 +40,6 @@ spec:
               value: {{ .Values.controller.dbSchema | quote }}
             - name: AMP_LOG_FORMAT
               value: {{ .Values.controller.logFormat | quote }}
-            # Managed storage controller (in-pod subprocess), dev mode (no auth).
-            - name: AMP_STORAGE_CONTROLLER_DEV
-              value: {{ .Values.controller.storageController.dev | quote }}
-            - name: AMP_STORAGE_CONTROLLER_LISTEN
-              value: "0.0.0.0:{{ .Values.controller.ports.sc }}"
             # Endpoint deployer. This chart only ever runs on Kubernetes, so the
             # driver is fixed to the Kubernetes/Helm driver (not a value).
             - name: AMP_DEPLOY
@@ -69,9 +62,9 @@ spec:
               value: {{ .Values.controller.endpoint.ybUser | quote }}
             - name: AMP_DEPLOY_YB_DBNAME
               value: {{ .Values.controller.endpoint.ybDbname | quote }}
-            # The in-cluster URL endpoints use to reach this controller's SC.
-            - name: AMP_DEPLOY_STORAGE_CONTROLLER_URL
-              value: {{ include "yb-amp-controller.storageControllerUrl" . | quote }}
+            # The in-cluster URL endpoints use to reach this controller's storage-layer surface.
+            - name: AMP_DEPLOY_CONTROLLER_URL
+              value: {{ include "yb-amp-controller.endpointControllerUrl" . | quote }}
             - name: AMP_DEPLOY_BOOTSTRAP
               value: {{ .Values.controller.endpoint.bootstrap | quote }}
             # Endpoint Service exposure. ClusterIP (default) avoids a per-endpoint

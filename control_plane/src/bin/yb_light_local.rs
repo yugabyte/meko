@@ -23,12 +23,12 @@ use control_plane::endpoint_storage::{ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointSto
 use control_plane::local_env;
 use control_plane::local_env::{
     EndpointStorageConf, InitForceMode, LocalEnv, PageServerConf, SafekeeperConf,
-    YbLightLocalInitConf, YbLightLocalInitPageserverConf, YbLightStorageControllerConf,
+    YbLightLocalInitConf, YbLightLocalInitPageserverConf, YbLightControllerConf,
 };
 use control_plane::pageserver::PageServerNode;
 use control_plane::safekeeper::SafekeeperNode;
-use control_plane::storage_controller::{
-    StorageController, YbLightStorageControllerStartArgs, YbLightStorageControllerStopArgs,
+use control_plane::controller::{
+    Controller, YbLightControllerStartArgs, YbLightControllerStopArgs,
 };
 use nix::fcntl::{Flock, FlockArg};
 use pageserver_api::config::{
@@ -68,7 +68,7 @@ const DEFAULT_YB_DBNAME: &str = "yb_storage";
 
 /// The shared `[*.yb]` connection config for the dev cluster's YB. The
 /// pageserver (`yb_storage_conn`), safekeeper (`yb_storage_conn`),
-/// endpoint_storage and storage_controller (`--yb-config`) all consume this
+/// endpoint_storage and controller (`--yb-config`) all consume this
 /// same block — each hardcodes the table(s) it owns, so it carries none.
 fn default_yb_conn_config(target: &YbStoreTarget) -> ysql_client::YbConnConfig {
     let YbStoreTarget {
@@ -121,8 +121,7 @@ enum YbLightLocalCmd {
     #[command(subcommand)]
     Pageserver(PageserverCmd),
     #[command(subcommand)]
-    #[clap(alias = "storage_controller")]
-    StorageController(StorageControllerCmd),
+    Controller(ControllerCmd),
     #[command(subcommand)]
     Safekeeper(SafekeeperCmd),
     #[command(subcommand)]
@@ -147,7 +146,7 @@ struct InitCmdArgs {
     config: Option<PathBuf>,
 
     /// YugabyteDB database name baked into the default (no `--config`)
-    /// config: the shared `[*.yb]` block consumed by the storage controller
+    /// config: the shared `[*.yb]` block consumed by the controller
     /// (`--yb-config`), pageserver (`yb_storage_conn`), safekeeper
     /// (`yb_storage_conn`) and endpoint_storage all point at it. Defaults to
     /// `yb_storage`. Lets callers (e.g. the integration harness)
@@ -195,10 +194,10 @@ struct InitCmdArgs {
 #[derive(clap::Args)]
 struct StartCmdArgs {
     // 120s default: on a freshly-created YB-backed `yb_storage` DB,
-    // storage_controller's diesel migrations + our own schema bootstrap
+    // controller's diesel migrations + our own schema bootstrap
     // take ~60-90s end-to-end. The previous 10s default fired before
     // migrations finished and the pageserver's first call to
-    // storage_ctl saw "relation storage_controller.timelines does not
+    // storage_ctl saw "relation controller.timelines does not
     // exist". See #49
     #[clap(long = "start-timeout", default_value = "120s")]
     timeout: humantime::Duration,
@@ -303,7 +302,7 @@ struct TimelineListCmdArgs {
 
 /// Drop a branch and all of its endpoints: stop the endpoints' compute
 /// processes, delete their records, and mark the branch dropped in the
-/// storage controller. The underlying pageserver/safekeeper data is left for a
+/// controller. The underlying pageserver/safekeeper data is left for a
 /// later GC pass.
 #[derive(clap::Args)]
 struct TimelineDropCmdArgs {
@@ -421,7 +420,7 @@ struct BranchCreateCmdArgs {
 
 /// Drop a branch and all of its endpoints: stop the endpoints' compute
 /// processes, delete their records, and mark the branch dropped in the
-/// storage controller. The underlying pageserver/safekeeper data is left for a
+/// controller. The underlying pageserver/safekeeper data is left for a
 /// later GC pass.
 #[derive(clap::Args)]
 struct BranchDropCmdArgs {
@@ -483,38 +482,38 @@ struct PageserverRestartCmdArgs {
     start_timeout: humantime::Duration,
 }
 
-/// Manage storage controller.
+/// Manage controller.
 #[derive(clap::Subcommand)]
-enum StorageControllerCmd {
-    Start(StorageControllerStartCmdArgs),
-    Stop(StorageControllerStopCmdArgs),
+enum ControllerCmd {
+    Start(ControllerStartCmdArgs),
+    Stop(ControllerStopCmdArgs),
 }
 
-/// Start storage controller.
+/// Start controller.
 #[derive(clap::Args)]
-struct StorageControllerStartCmdArgs {
+struct ControllerStartCmdArgs {
     /// Timeout until we fail the command.
     #[clap(short = 't', long)]
     #[arg(default_value = "10s")]
     start_timeout: humantime::Duration,
-    /// Identifier used to distinguish storage controller instances.
+    /// Identifier used to distinguish controller instances.
     #[clap(long)]
     #[arg(default_value_t = 1)]
     instance_id: u8,
-    /// Base port for the storage controller instance identified by instance-id (defaults to
+    /// Base port for the controller instance identified by instance-id (defaults to
     /// pageserver cplane api).
     #[clap(long)]
     base_port: Option<u16>,
 }
 
-/// Stop storage controller.
+/// Stop controller.
 #[derive(clap::Args)]
-struct StorageControllerStopCmdArgs {
+struct ControllerStopCmdArgs {
     /// If 'immediate', don't flush repository data at shutdown
     #[clap(short = 'm')]
     #[arg(value_enum, default_value = "fast")]
     stop_mode: StopMode,
-    /// Identifier used to distinguish storage controller instances.
+    /// Identifier used to distinguish controller instances.
     #[clap(long)]
     #[arg(default_value_t = 1)]
     instance_id: u8,
@@ -872,8 +871,8 @@ fn main() -> Result<()> {
             YbLightLocalCmd::Timeline(subcmd) => rt.block_on(handle_timeline(&subcmd, env)),
             YbLightLocalCmd::Branch(subcmd) => rt.block_on(handle_branch(&subcmd, env)),
             YbLightLocalCmd::Pageserver(subcmd) => rt.block_on(handle_pageserver(&subcmd, env)),
-            YbLightLocalCmd::StorageController(subcmd) => {
-                rt.block_on(handle_storage_controller(&subcmd, env))
+            YbLightLocalCmd::Controller(subcmd) => {
+                rt.block_on(handle_controller(&subcmd, env))
             }
             YbLightLocalCmd::Safekeeper(subcmd) => rt.block_on(handle_safekeeper(&subcmd, env)),
             YbLightLocalCmd::EndpointStorage(subcmd) => {
@@ -1134,8 +1133,8 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
             pg_distrib_dir: None,
             yb_light_distrib_dir: None,
             default_branch_id: BranchId::from_array(std::array::from_fn(|_| 0)),
-            storage_controller: Some(YbLightStorageControllerConf {
-                // Provision the storage_controller + storage DBs in YB.
+            controller: Some(YbLightControllerConf {
+                // Provision the controller + storage DBs in YB.
                 yb: Some(yb_conn.clone()),
                 ..Default::default()
             }),
@@ -1339,8 +1338,8 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
         TenantCmd::Import(args) => {
             let branch_id = args.branch_id;
 
-            let storage_controller = StorageController::from_env(env);
-            let create_response = storage_controller.branch_import(branch_id).await?;
+            let controller = Controller::from_env(env);
+            let create_response = controller.branch_import(branch_id).await?;
 
             let shard_zero = create_response
                 .shards
@@ -1371,13 +1370,13 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
             // Co-located topology: the branch's PS+SK pair is provisioned
             // under the first endpoint created for this branch, not here.
             // `tenant create` just allocates the id and records the pending
-            // Bootstrap recipe in the storage controller (durable cluster
+            // Bootstrap recipe in the controller (durable cluster
             // state in YB) so `endpoint create` knows to run initdb + import.
             // The `main` branch mapping is registered with the controller
             // only after the branch exists (during provisioning) — the
             // controller rejects a branch name for a branch it doesn't
             // know yet, so until then the pending row carries the name.
-            let sc = StorageController::from_env(env);
+            let sc = Controller::from_env(env);
             sc.record_pending_timeline_init(
                 branch_id,
                 pageserver_api::controller_api::PendingTimelineInitRequest {
@@ -1418,7 +1417,7 @@ async fn handle_tenant(subcmd: &TenantCmd, env: &mut local_env::LocalEnv) -> any
 async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Result<()> {
     match cmd {
         TimelineCmd::List(args) => {
-            // TODO(sharding): this command shouldn't have to specify a shard ID: we should ask the storage controller
+            // TODO(sharding): this command shouldn't have to specify a shard ID: we should ask the controller
             // where shard 0 is attached, and query there.
             let pageserver = get_default_pageserver(env)?;
             let _branch_id = get_tenant_id(args.branch_id, env)?;
@@ -1492,7 +1491,7 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             // controller only after the branch exists (during
             // provisioning); until then the pending row carries the branch
             // name so `endpoint create` can resolve it.
-            let sc = StorageController::from_env(env);
+            let sc = Controller::from_env(env);
             sc.record_pending_timeline_init(
                 new_branch_id,
                 pageserver_api::controller_api::PendingTimelineInitRequest {
@@ -1517,7 +1516,7 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             // `destroy`, `stop` halts the compute process, deprovisions the
             // co-located pageserver/safekeeper/endpoint_storage, removes the
             // local endpoint dir, and deletes the endpoint's record from the
-            // storage controller.
+            // controller.
             let cplane = ComputeControlPlane::load(env.clone()).await?;
             let to_drop: Vec<_> = cplane
                 .endpoints
@@ -1533,11 +1532,11 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
                     .with_context(|| format!("stopping endpoint {endpoint_id}"))?;
             }
 
-            // Durable cleanup in the storage controller: delete any endpoint
+            // Durable cleanup in the controller: delete any endpoint
             // records still present, discard an un-materialized init recipe,
             // and mark the branch dropped so it no longer surfaces as a live
             // branch and isn't brought back on restart. Idempotent.
-            StorageController::from_env(env)
+            Controller::from_env(env)
                 .timeline_drop(branch_id)
                 .await?;
 
@@ -1628,11 +1627,11 @@ async fn provision_timeline_for_endpoint(
     if env.pageserver_conf_for_timeline(branch_id).is_some() {
         return Ok(());
     }
-    // Read the recipe from the storage controller (durable cluster state in
+    // Read the recipe from the controller (durable cluster state in
     // YB). Scoped so the borrow of `env` ends before the `&mut env`
     // provisioning calls below.
     let pending = {
-        let sc = StorageController::from_env(env);
+        let sc = Controller::from_env(env);
         sc.list_pending_timeline_inits()
             .await?
             .into_iter()
@@ -1670,7 +1669,7 @@ async fn provision_timeline_for_endpoint(
     }
 
     // The pair is materialized; drop the pending recipe from YB.
-    StorageController::from_env(env)
+    Controller::from_env(env)
         .delete_pending_timeline_init(branch_id)
         .await?;
     Ok(())
@@ -1678,7 +1677,7 @@ async fn provision_timeline_for_endpoint(
 
 /// Bring up the main branch's pair: start the safekeeper, then start the
 /// pageserver (which runs initdb + import to bootstrap the branch), then
-/// have the storage controller create the timeline on the safekeeper.
+/// have the controller create the timeline on the safekeeper.
 async fn provision_bootstrap(
     env: &mut LocalEnv,
     endpoint_id: &str,
@@ -1704,7 +1703,7 @@ async fn provision_bootstrap(
         .start(&[], &std::time::Duration::from_secs(30))
         .await
         .context("start main safekeeper")?;
-    let storage_controller = StorageController::from_env(env);
+    let controller = Controller::from_env(env);
 
     // Pageserver: bake the Bootstrap identity, start it (runs initdb +
     // import). Mirrors the body of the old `tenant create`.
@@ -1726,7 +1725,7 @@ async fn provision_bootstrap(
     pageserver
         .register_and_attach()
         .await
-        .context("register branch with storage controller")?;
+        .context("register branch with controller")?;
     pageserver
         .start(&std::time::Duration::from_secs(60))
         .await
@@ -1763,7 +1762,7 @@ async fn provision_bootstrap(
 
     // Create the timeline on its co-located safekeeper with an explicit
     // single-member configuration, pinning placement to this pair. The
-    // storage controller's global safekeeper scheduler would otherwise
+    // controller's global safekeeper scheduler would otherwise
     // pick any registered safekeeper — wrong in the co-located topology
     // once more than one pair exists (the compute talks to its own
     // safekeeper). Mirrors `provision_branch`.
@@ -1779,10 +1778,10 @@ async fn provision_bootstrap(
         .await
         .context("create bootstrap timeline on safekeeper")?;
 
-    // Record the launcher-created branch in the storage controller (the
+    // Record the launcher-created branch in the controller (the
     // branch's single co-located safekeeper is owned by the launcher; the
     // controller just tracks the branch row).
-    storage_controller
+    controller
         .timeline_register(
             branch_id,
             pageserver_api::controller_api::TimelineRegisterRequest {
@@ -1791,7 +1790,7 @@ async fn provision_bootstrap(
             },
         )
         .await
-        .context("register bootstrap branch with storage controller")?;
+        .context("register bootstrap branch with controller")?;
 
     env.pageservers.push(ps_conf);
     Ok(())
@@ -1799,7 +1798,7 @@ async fn provision_bootstrap(
 
 /// Bring up a branch's pair: create the safekeeper at the branch LSN, then
 /// start the pageserver cloned from the ancestor's config with a Branch
-/// identity, then register the branch timeline with the storage controller.
+/// identity, then register the branch timeline with the controller.
 #[allow(clippy::too_many_arguments)]
 async fn provision_branch(
     env: &mut LocalEnv,
@@ -1915,10 +1914,10 @@ async fn provision_branch(
     }
 
     timer.tick("branch Active");
-    // Record the launcher-created branch in the storage controller's
+    // Record the launcher-created branch in the controller's
     // bookkeeping (branch names + deletion flows hang off the branch row).
-    let storage_controller = StorageController::from_env(env);
-    storage_controller
+    let controller = Controller::from_env(env);
+    controller
         .timeline_register(
             branch_id,
             pageserver_api::controller_api::TimelineRegisterRequest {
@@ -1927,7 +1926,7 @@ async fn provision_branch(
             },
         )
         .await
-        .context("register branch with storage controller")?;
+        .context("register branch with controller")?;
 
     env.pageservers.push(ps_conf);
     Ok(())
@@ -1980,7 +1979,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
 
     match subcmd {
         EndpointCmd::List(args) => {
-            // TODO(sharding): this command shouldn't have to specify a shard ID: we should ask the storage controller
+            // TODO(sharding): this command shouldn't have to specify a shard ID: we should ask the controller
             // where shard 0 is attached, and query there.
             let branch_id = get_tenant_id(args.branch_id, env)?;
 
@@ -2053,7 +2052,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
                 Some(id) => id,
                 None => match env.get_branch_timeline_id(&branch_name).await? {
                     Some(tid) => tid,
-                    None => StorageController::from_env(env)
+                    None => Controller::from_env(env)
                         .list_pending_timeline_inits()
                         .await?
                         .into_iter()
@@ -2427,14 +2426,14 @@ async fn handle_pageserver(subcmd: &PageserverCmd, env: &local_env::LocalEnv) ->
     Ok(())
 }
 
-async fn handle_storage_controller(
-    subcmd: &StorageControllerCmd,
+async fn handle_controller(
+    subcmd: &ControllerCmd,
     env: &local_env::LocalEnv,
 ) -> Result<()> {
-    let svc = StorageController::from_env(env);
+    let svc = Controller::from_env(env);
     match subcmd {
-        StorageControllerCmd::Start(args) => {
-            let start_args = YbLightStorageControllerStartArgs {
+        ControllerCmd::Start(args) => {
+            let start_args = YbLightControllerStartArgs {
                 instance_id: args.instance_id,
                 base_port: args.base_port,
                 start_timeout: args.start_timeout,
@@ -2446,8 +2445,8 @@ async fn handle_storage_controller(
             }
         }
 
-        StorageControllerCmd::Stop(args) => {
-            let stop_args = YbLightStorageControllerStopArgs {
+        ControllerCmd::Stop(args) => {
+            let stop_args = YbLightControllerStopArgs {
                 instance_id: args.instance_id,
                 immediate: match args.stop_mode {
                     StopMode::Fast => false,
@@ -2596,28 +2595,28 @@ async fn handle_start_all_impl(
 
     // Phase 1 — provision the external `yb_storage` database
     // synchronously. Just CREATE DATABASE; the schema itself is
-    // created by storage_controller's diesel migrations in phase 2.
-    if let Err(e) = StorageController::from_env(env)
+    // created by controller's diesel migrations in phase 2.
+    if let Err(e) = Controller::from_env(env)
         .prepare_database_if_external()
         .await
     {
         return Err(vec![
-            e.context("prepare external storage controller database"),
+            e.context("prepare external controller database"),
         ]);
     }
 
-    // Phase 2 — storage_controller. The controller runs diesel
+    // Phase 2 — controller. The controller runs diesel
     // migrations on startup, and pageserver / safekeeper /
     // endpoint_storage all need those tables in place before they
     // can connect to yb_storage, so this phase has to complete
     // before the next one starts.
-    if let Err(e) = StorageController::from_env(env)
-        .start(YbLightStorageControllerStartArgs::with_default_instance_id(
+    if let Err(e) = Controller::from_env(env)
+        .start(YbLightControllerStartArgs::with_default_instance_id(
             retry_timeout,
         ))
         .await
     {
-        return Err(vec![e.context("start storage_controller")]);
+        return Err(vec![e.context("start controller")]);
     }
 
     // Phase 3 — pageserver(s), safekeeper(s), endpoint_storage in
@@ -2704,7 +2703,7 @@ async fn yb_light_start_status_check(
     const RETRY_INTERVAL: Duration = Duration::from_millis(100);
     const NOTICE_AFTER_RETRIES: Duration = Duration::from_secs(5);
 
-    let storcon = StorageController::from_env(env);
+    let controller = Controller::from_env(env);
 
     let retries = retry_timeout.as_millis() / RETRY_INTERVAL.as_millis();
     let notice_after_retries = retry_timeout.as_millis() / NOTICE_AFTER_RETRIES.as_millis();
@@ -2717,7 +2716,7 @@ async fn yb_light_start_status_check(
         }
 
         let mut passed = true;
-        let mut nodes = storcon.node_list().await?;
+        let mut nodes = controller.node_list().await?;
         // Only pageservers with a timeline identity were started (a
         // fresh repo's pageserver starts later, at `tenant create`).
         let mut pageservers = env
@@ -2825,21 +2824,21 @@ async fn try_stop_all(env: &local_env::LocalEnv, immediate: bool) {
         }
     }
 
-    // Stop all storage controller instances. In the most common case there's only one,
+    // Stop all controller instances. In the most common case there's only one,
     // but iterate though the base data directory in order to discover the instances.
-    let storcon_instances = env
-        .storage_controller_instances()
+    let controller_instances = env
+        .controller_instances()
         .await
         .expect("Must inspect data dir");
-    for (instance_id, _instance_dir_path) in storcon_instances {
-        let storage_controller = StorageController::from_env(env);
-        let stop_args = YbLightStorageControllerStopArgs {
+    for (instance_id, _instance_dir_path) in controller_instances {
+        let controller = Controller::from_env(env);
+        let stop_args = YbLightControllerStopArgs {
             instance_id,
             immediate,
         };
 
-        if let Err(e) = storage_controller.stop(stop_args).await {
-            eprintln!("Storage controller instance {instance_id} stop failed: {e:#}");
+        if let Err(e) = controller.stop(stop_args).await {
+            eprintln!("Controller instance {instance_id} stop failed: {e:#}");
         }
     }
 }
@@ -2885,7 +2884,7 @@ mod tests {
             default_branch_id: None,
             private_key_path: PathBuf::from("k"),
             public_key_path: PathBuf::from("k.pub"),
-            storage_controller: YbLightStorageControllerConf::default(),
+            controller: YbLightControllerConf::default(),
             pageservers: Vec::new(),
             safekeepers: Vec::new(),
             pageserver_templates: vec![ps_template()],

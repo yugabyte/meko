@@ -26,16 +26,13 @@ upstream Neon can skim) and **changes in yb-light**.
 | [`single-container-endpoint.md`](single-container-endpoint.md) | Packaging an endpoint as one pod (`deploy/`): the supervisor, SC-free bootstrap |
 
 > **Control plane docs live outside `compute/`.** These pages cover the
-> storage/compute engine only. The two control-plane components are documented
-> under their own trees:
-> - **Storage controller** (the Neon-derived Rust cluster control plane):
->   [`../../storage_controller/architecture/`](../../storage_controller/architecture/)
->   — `storage-controller.md`, `storage-controller-apis.md`, `storage-controller-metrics.md`.
-> - **amp controller** (the standalone Go control plane, `amp-controller` / `ac`):
->   [`../../controller/architecture/`](../../controller/architecture/), with its own
->   subproject guide in [`../../controller/AGENTS.md`](../../controller/AGENTS.md). It deploys
->   to Kubernetes via the `yb-amp-controller` Helm chart (`deploy/`), which also ships its
->   MCP-server pod.
+> storage/compute engine only. The **amp controller** (the Go control plane,
+> `amp-controller` / `ac`) — which owns cluster control: generation authority,
+> the node/branch/endpoint registries, and endpoint provisioning — is documented
+> under [`../../controller/architecture/`](../../controller/architecture/), with its
+> own subproject guide in [`../../controller/AGENTS.md`](../../controller/AGENTS.md). It
+> deploys to Kubernetes via the `yb-amp-controller` Helm chart (`deploy/`), which
+> also ships its MCP-server pod.
 
 ### HTTP APIs & metrics (per service)
 
@@ -67,7 +64,7 @@ upstream Neon can skim) and **changes in yb-light**.
                             v             v
               +-----------------------------------------+
               |          YugabyteDB (db: yb_storage)    |
-              |   schema  storage_controller (7 tables) |
+              |   schema  registry (5 tables)  |
               |   schema  pageserver (5 tables)         |
               |   schema  safekeeper (timeline_state, wals) |
               |   schema  public (blobs)                |
@@ -77,4 +74,4 @@ upstream Neon can skim) and **changes in yb-light**.
 What's on local FS in yb-light: the pageserver's layer-file cache, the
 compute's `pgdata`, and operational files (logs, pidfiles). Everything
 that has to *survive a wipe of that disk* lives in YB. Authoritative
-schema is `storage_controller/migrations/00000000000001_initial_schema/up.sql`.
+schema is `controller/migrations/0005_provision_yb_storage.up.sql`.

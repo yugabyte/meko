@@ -14,12 +14,12 @@ endpoint, for single-host integration) or **`kubernetes`** (this doc, the
 `KubernetesDeployer`). On Kubernetes the deploy mechanism is **Helm**
 (amp-controller.md §11): the controller shells out to the `helm` CLI rather
 than embedding a Helm SDK — the same "shell out to a managed binary" posture used
-for the storage controller (§11.1).
+for the controller (§11.1).
 
 ## Deploying the controller
 
 The controller is a **single bundled container** — `controller` (the control-plane API
-+ task worker) plus the **storage controller** it runs as a managed subprocess
++ task worker) plus the **controller** it runs as a managed subprocess
 (deploy/controller, [#94](https://github.com/yugabyte/yb-light/issues/94)) — with the
 `helm` CLI and the `yb-light-endpoint` chart baked into the image.
 
@@ -36,7 +36,7 @@ interface onto chart values) and lays down:
 - the **Deployment**, wired for the Kubernetes driver (`AMP_DEPLOY_DRIVER=kubernetes`)
   and internal-LoadBalancer endpoints;
 - an in-cluster **Service** (`amp-controller`, ClusterIP) exposing the API (`8080`)
-  and the storage-controller port (`50051`) that endpoints register against; and
+  and the controller port (`50051`) that endpoints register against; and
 - an **internal LoadBalancer** Service (`amp-controller-lb`) for the UI/API on a
   private VPC IP (the SC port stays on the ClusterIP only);
 - the **MCP server** as its own pod (`amp-controller-mcp` Deployment + Service) —
@@ -65,7 +65,7 @@ POST …/storage-pools/{pool}/projects/{proj}/branches/{br}/endpoints
    ├─ core.Backend.CreateEndpoint              → inserts the endpoint row (address empty)
    ├─ deploy.KubernetesDeployer.CreateEndpoint → helm upgrade --install --wait
    ├─ core.Backend.SetEndpointAddress(<LB IP / pod IP / Service DNS>:<port>)
-   └─ storagecontroller.DeletePendingTimelineInit(...)  (consume the recipe)   → 201 {endpoint}
+   └─ registry.DeletePendingInit(...)  (consume the recipe)   → 201 {endpoint}
 ```
 
 The deploy is **synchronous**: `helm upgrade --install --wait` blocks until the
@@ -91,7 +91,7 @@ Project/branch creation and endpoint creation are **separate** steps, joined by 
 - **create-endpoint** deploys the endpoint with `BOOTSTRAP=true`. On first
   materialization the pod's supervisor runs `initdb` for the recipe's
   `branch_id`, registers +
-  attaches to the storage controller (below), and registers the branch; the
+  attaches to the controller (below), and registers the branch; the
   controller then **consumes** the recipe (`DeletePendingTimelineInit`). There is
   no separate create-database call — the first endpoint is what turns the declared
   branch into real storage.
@@ -101,9 +101,9 @@ control plane stores the same 16 bytes (the `branch_id`) as a SQL `uuid` and
 converts with `hex.EncodeToString(id[:])` when rendering chart values. (The endpoint
 image receives it as the flat `BRANCH_ID` env var, #168.)
 
-## Storage-controller coordination + addressing
+## Controller coordination + addressing
 
-With `storageController.url` set (the controller path), the endpoint pod registers its
+With `controller.url` set (the controller path), the endpoint pod registers its
 co-located pageserver with the controller, takes its pageserver
 **generation from the controller's attach-hook** (not a pinned constant), and
 registers the branch. (The safekeeper is endpoint-owned and not registered with
@@ -115,12 +115,12 @@ the controller.)
 > pre-warm** model: pods are created unassigned and bound to a branch on demand via
 > a push `configure` (amp mints `branch_id` + `generation`; the pod returns
 > `start_lsn`). See
-> [`sc-integration-migration.md`](sc-integration-migration.md).
+> [`sc-integration.md`](sc-integration.md).
 
 Two distinct network paths:
 
 - **controller → endpoint** (heartbeats, branch ops): the controller dials the
-  endpoint's **own stable Service DNS** — `SC_REACHABLE_HOST =
+  endpoint's **own stable Service DNS** — `CONTROLLER_REACHABLE_HOST =
   <release>.<ns>.svc.cluster.local` — and the SC-needed HTTP port
   (pageserver) is published on that Service. Because the address is
   the Service, not the pod IP, a **rescheduled pod (new IP) re-registers the same
@@ -214,7 +214,7 @@ The `--deploy*` block (env `AMP_DEPLOY*`), validated only when `--deploy` is set
 
 Common to both drivers: `--deploy`, `--deploy-driver`, `--deploy-yb-host-ports` /
 `-yb-user` / `-yb-dbname` / `-yb-password` (or `--deploy-yb-existing-secret`),
-`--deploy-bootstrap`, `--deploy-storage-controller-url`, `--deploy-timeout`.
+`--deploy-bootstrap`, `--deploy-controller-url`, `--deploy-timeout`.
 
 Kubernetes driver:
 
@@ -240,8 +240,8 @@ Docker driver: `--deploy-endpoint-image`, `--deploy-network`,
 The deploy is **demo-grade**. What it currently takes for granted:
 
 - **External, pre-existing YugabyteDB.** controller does not run or create YB; the
-  controller, the storage controller, and every endpoint connect to an existing
-  universe (`yb_storage`, schemas `controller` / `storage_controller` / `pageserver` /
+  controller, the controller, and every endpoint connect to an existing
+  universe (`yb_storage`, schemas `controller` / `controller` / `pageserver` /
   `safekeeper`). State **persists across re-deploys** — `redeploy.sh` re-attaches
   to it (migrations are idempotent); deleting the controller does not lose data.
 - **Pre-existing namespace; the pull secret is (re)minted.** The namespace must exist
@@ -252,7 +252,7 @@ The deploy is **demo-grade**. What it currently takes for granted:
   stale/missing secret is the usual cause of `ImagePullBackOff`. Images come from
   `amp/controller` + `amp/endpoint` at `454529406029.dkr.ecr.us-west-2.amazonaws.com`.
   Everything lives in a **single namespace** (no cross-namespace deploys).
-- **No authentication.** The storage controller runs `--dev` (no auth) and the
+- **No authentication.** The controller runs `--dev` (no auth) and the
   control-plane API + UI are unauthenticated. Mitigated only by **internal
   LoadBalancers** (private VPC IPs, GKE `…/load-balancer-type: Internal`) — not by
   any authn/authz. Do not expose publicly.

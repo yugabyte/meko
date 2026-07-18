@@ -3,7 +3,7 @@
 Use this whenever a yb-light process **stops making progress but isn't
 crashing, CPU-bound, or blocked on YB/network** — i.e. an async deadlock or a
 lost wakeup. Applies to every daemon: pageserver, safekeeper,
-endpoint_storage, storage_controller, compute_ctl.
+endpoint_storage, controller, compute_ctl.
 
 ## Why you need a task dump (OS backtraces aren't enough)
 

@@ -202,7 +202,7 @@ before redeploying.
   `hostname resolving error: lookup yb-tserver.$NS.svc.cluster.local … no such host`. Pass the real
   `DB_URL`/`YB_HOST_PORTS`, or just re-run `up.sh` (which sets them). Confirm with:
   `kubectl -n "$NS" get pod <pod> -o jsonpath='{..env[?(@.name=="AMP_DATABASE_URL")].value}'`.
-- **Rolling updates briefly run two controllers (two managed storage_controllers) on one DB.** With
+- **Rolling updates briefly run two controllers (two managed controllers) on one DB.** With
   `replicas: 1` + the default RollingUpdate (`maxSurge` makes 2 pods during the swap). If that ever
   causes trouble, `kubectl -n "$NS" delete deploy amp-controller` then redeploy for a clean single pod.
 - **`ImagePullBackOff` → refresh the `pull-secret`.** It's built from an ECR login

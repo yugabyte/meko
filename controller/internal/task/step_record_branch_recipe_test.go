@@ -50,8 +50,8 @@ func TestRecordBranchRecipeStepFork(t *testing.T) {
 	}
 }
 
-func TestRecordBranchRecipeStepNoStorageController(t *testing.T) {
-	// With no storage controller (recipes nil) the step no-ops with a warning
+func TestRecordBranchRecipeStepNoController(t *testing.T) {
+	// With no controller (recipes nil) the step no-ops with a warning
 	// rather than failing — mirroring the synchronous handler.
 	step := NewRecordBranchRecipeStep(RecordBranchRecipeArgs{ProjectID: uuid.New(), BranchID: uuid.New(), StartLSN: "0/0"}, Deps{})
 	res := step.Execute(t.Context())

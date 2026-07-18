@@ -21,7 +21,7 @@ info:
     - **Projects** — a project (a "database") in a pool. Create and delete are
       **asynchronous** (`202` + a `Task` + a `Location: /api/v1/tasks/{id}`
       header): the worker creates the project **and its default branch** (and the
-      storage controller's pending-init recipe), or cascades the delete to the
+      controller's pending-init recipe), or cascades the delete to the
       project's branches and endpoints. The default branch id is the storage-layer
       branch id verbatim (the storage layer is flat — a project maps to no storage
       object). Poll the task, then read the project to see its `default_branch`.
@@ -697,9 +697,6 @@ components:
         build_date:
           type: string
           description: UTC RFC-3339 build timestamp.
-        storage_controller:
-          type: string
-          description: Version reported by the bundled storage_controller (a sibling release stamped from the same VERSION file); omitted when no managed storage_controller is running.
     User:
       type: object
       required: [id, is_admin, created_at]

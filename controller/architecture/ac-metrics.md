@@ -3,7 +3,7 @@
 **Status:** Draft
 **Last updated:** 2026-07-14
 
-How amp emits metrics for its compute instances, the storage controller, and
+How amp emits metrics for its compute instances, the controller, and
 the amp controller, and how they reach a metrics store. The guiding finding:
 **most of the stack already emits Prometheus-shaped metrics** (the Neon-derived
 Rust services), so this is largely a *collect-and-export* problem, not a
@@ -18,7 +18,7 @@ sidecar); the collector (step 2) is the remaining deployment step.
  sources (expose Prometheus /metrics)        collect            store          visualize
  ┌───────────────────────────────┐
  │ amp controller        :8080    │─┐
- │ storage_controller    (http)   │ │        ┌──────────────┐   ┌──────────────┐   ┌─────────┐
+ │ controller    (http)   │ │        ┌──────────────┐   ┌──────────────┐   ┌─────────┐
  │ compute pod                    │ ├──scrape┤ OTel         ├──►│ VictoriaMetrics├──►│ Grafana │
  │   pageserver        :9898      │ │        │ Collector    │   │ (remote-write) │   │         │
  │   safekeeper        :7676      │ │        │ (Operator)   │   └──────────────┘   └─────────┘
@@ -74,9 +74,19 @@ All under the `amp_controller_` namespace, following the Prometheus
 | `amp_controller_tasks_total` | counter | `kind`, `status` | Tasks the worker finished, by outcome (`succeeded`, `failed`, `interrupted`). |
 | `amp_controller_task_duration_seconds` | histogram | `kind` | Task execution time (terminal outcomes only; an interrupted task did partial work and stays reclaimable, so its partial time is not observed). |
 | `amp_controller_tasks_inflight` | gauge | — | Tasks currently executing. |
+| `amp_controller_registry_branches` | gauge | — | Branches currently recorded in the registry. |
+| `amp_controller_registry_nodes` | gauge | — | Pageserver nodes currently registered. |
 | `amp_controller_build_info` | gauge | `version`, `commit`, `build_date` | Constant 1; carries the build identity (from [`internal/version`](../internal/version), see `ac-versioning.md`) for joining onto other series. |
 
 Plus the standard Go runtime (`go_*`) and process (`process_*`) collectors.
+
+The two `registry_*` gauges are **collected at scrape time**: a
+`prometheus.Collector` ([`internal/metrics/registry_stats.go`](../internal/metrics/registry_stats.go))
+runs `count(*)` over `registry.branches` / `registry.nodes` when `/metrics` is
+scraped, so there is no cached value to go stale and no background poller. If the
+count query fails it logs and emits nothing for that scrape rather than a wrong
+value. Everything else is recorded inline by the HTTP middleware and the task
+worker.
 
 ## Step 2 — OTel Collector (implemented)
 
@@ -87,7 +97,7 @@ Operator**) ship with the control-plane chart
 deployment`, remote-writing to a Prometheus-compatible store:
 
 - **`<release>-controller`** — scrapes the amp controller (`:8080`) and its in-pod
-  storage controller (`:50051`).
+  controller (`:50051`).
 - **`<release>-compute`** — scrapes every endpoint pod: the postgres_exporter
   sidecar (`:9187`), pageserver (`:9898`), safekeeper (`:7676`), compute_ctl
   (`:3080`), and (with `otel.podMetrics`) per-pod cAdvisor resource metrics from
@@ -116,7 +126,7 @@ Note on the endpoint pod's internal services: **pageserver (`:9898`), safekeeper
 them, the Collector's pod service-discovery must target those ports (the
 `postgres_exporter` `prometheus.io/*` annotations cover only `:9187`); a
 multi-port scrape config or per-port annotations is the step-2 work. The
-`storage_controller` and the amp `controller` (`:8080`) are scraped directly.
+`controller` and the amp `controller` (`:8080`) are scraped directly.
 
 ## Step 3 — compute Postgres metrics (implemented)
 

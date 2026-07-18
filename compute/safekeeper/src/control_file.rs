@@ -127,7 +127,7 @@ impl YbControlFileStorage {
     /// Enumerate every `branch_id` persisted in
     /// `safekeeper.timeline_state`. Used by SK startup in YB-WAL mode
     /// to re-discover branches after a restart — there's no on-disk
-    /// directory to scan and the storage_controller doesn't re-issue
+    /// directory to scan and the controller doesn't re-issue
     /// `POST /v1/branch` for existing branches.
     pub async fn list_all_branch_ids(client: &YsqlClient) -> Result<Vec<BranchId>> {
         let rows = client

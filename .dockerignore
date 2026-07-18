@@ -16,11 +16,17 @@
 # pgxn (the yb_amp extension), and libs — the whole storage/compute engine.
 !compute/
 !control_plane/
+# The endpoint image bakes the controller's DB migrations (the optional
+# DEV_PROVISION_SCHEMA path). Only migrations/ is needed, so keep the rest of the
+# Go controller out of the build context — unrelated controller changes then
+# don't bust the Rust build stage's `COPY . .` cache.
+!controller/
+controller/*
+!controller/migrations/
 !docker-compose/ext-src
 !proxy/
 !storage_scrubber/
 !storage_broker/
-!storage_controller/
 !workspace_hack/
 !build-tools/patches
 !deploy/endpoint/

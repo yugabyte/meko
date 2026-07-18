@@ -47,7 +47,7 @@ controller/
   internal/core/      domain layer: Backend interface + YBDB and in-memory impls
   internal/task/      write-ahead task framework (types, store, registry, worker)
   internal/process/   subprocess supervision (spawn, restart with backoff, clean stop)
-  internal/storagecontroller/  managed storage controller: subprocess spec + timeline client
+  internal/registry/          the storage-layer control surface (generation authority + registries)
   internal/helm/      one-shot helm CLI wrapper (upgrade --install / uninstall)
   internal/deploy/    endpoint provisioner: Kubernetes/Helm or Docker (synchronous deploy/retire)
   migrations/         embedded raw-SQL migrations (golang-migrate)
@@ -65,9 +65,9 @@ go -C controller test ./...
 ```
 
 The controller module is **pure Go**: `make controller-test` needs no Postgres headers, no Rust
-toolchain, and no build-tools image — the storage-controller integration test
+toolchain, and no build-tools image — the controller integration test
 runs against a fake binary, so supervision/restart are covered locally. Building
-the real bundle (`make controller-bundle`, which compiles `storage_controller`) is the
+the real bundle (`make controller-bundle`, which compiles `controller`) is the
 only part that needs the wider toolchain — the `compute/vendor/postgres-v18` submodule
 plus Rust + C + `clang`/`libclang`; it installs the PG v18 headers itself. See
 [`deploy/controller`](../deploy/controller/README.md) for the bundle/container details.
@@ -104,41 +104,20 @@ listen address, e.g. `http://localhost:8080/`): a static page to manage users
 and, per user, their storage pools, projects, branches, and endpoints. See
 [`architecture/ac-apis.md`](architecture/ac-apis.md) for the full design.
 
-## Managed services
+## Storage-layer control surface
 
-The controller runs the **storage controller** (`amp-controller.md` §11.1) as
-a subprocess it fully owns: it spawns the binary, streams its logs, restarts it
-with backoff if it exits, and stops it cleanly on shutdown. This is off by
-default (the base skeleton runs without the binary present); enable it with
-`--storage-controller`:
+The controller owns cluster control for the storage layer: **generation authority**
+(the attach-hook fencing counter), the pageserver-node / branch / endpoint
+**registries**, and **provisioning** of the shared `yb_storage` database (all its
+schemas) on startup. It serves these as an HTTP surface (`/control/v1/...`,
+`/debug/v1/attach-hook`, `/ready`) on the same listener as the versioned `/api/v1`
+product API; the endpoint pods and the `yb_light_local` dev harness drive it. State
+lives in the `registry` schema of `yb_storage`. See
+[`architecture/sc-integration.md`](architecture/sc-integration.md) for the design.
 
-```sh
-controller serve --database-url postgres://yugabyte@127.0.0.1:5433/amp_controller \
-          --storage-controller \
-          --storage-controller-bin /path/to/storage_controller \
-          --storage-controller-listen 127.0.0.1:50051 \
-          --storage-controller-dev
-```
-
-| flag | env | default | meaning |
-|---|---|---|---|
-| `--storage-controller` | `AMP_STORAGE_CONTROLLER` | `false` | run the storage controller as a managed subprocess |
-| `--storage-controller-bin` | `AMP_STORAGE_CONTROLLER_BIN` | `storage_controller` | path to the binary |
-| `--storage-controller-listen` | `AMP_STORAGE_CONTROLLER_LISTEN` | `127.0.0.1:50051` | host:port it serves on |
-| `--storage-controller-database-url` | `AMP_STORAGE_CONTROLLER_DATABASE_URL` | `--database-url` | universe connection (defaults to the controller's) |
-| `--storage-controller-dev` | `AMP_STORAGE_CONTROLLER_DEV` | `false` | run it in `--dev` mode (no auth; dev/local only) |
-| `--storage-controller-start-timeout` | `AMP_STORAGE_CONTROLLER_START_TIMEOUT` | `30s` | how long to wait for `/ready` |
-| `--storage-controller-stop-timeout` | `AMP_STORAGE_CONTROLLER_STOP_TIMEOUT` | `10s` | grace after SIGTERM before SIGKILL |
-
-The controller is the storage controller's only caller; it drives timeline
-management (create/delete/describe) through the internal client in
-`internal/storagecontroller`.
-
-A bare `--storage-controller-bin` (the default, `storage_controller`) is
-resolved next to the `controller` binary first — the **bundle** layout — then `PATH`;
-an explicit path is used verbatim. `make controller-bundle` produces that layout in
-`target/controller-bundle/`, and the [`deploy/controller`](../deploy/controller/README.md) container
-ships controller + storage controller together, so controller finds it with no configuration.
+`make controller-bundle` builds the (Go-only) `controller` binary into
+`target/controller-bundle/`, which the [`deploy/controller`](../deploy/controller/README.md)
+container ships.
 
 ## MCP server
 

@@ -18,7 +18,7 @@ type YBConn struct {
 	HostPorts string // host:port[,host:port] as the endpoint sees YB
 	User      string
 	Password  string
-	DBName    string // the storage database (shared with the storage controller)
+	DBName    string // the storage database (shared with the controller)
 }
 
 // EndpointSpec is what the controller wants an endpoint to be: a compute bound to
@@ -32,10 +32,10 @@ type EndpointSpec struct {
 	BranchID  string
 	PgVersion int
 	YB        YBConn
-	// StorageControllerURL, when non-empty, makes the endpoint register its
+	// ControllerURL, when non-empty, makes the endpoint register its
 	// pageserver + safekeeper with that controller and take its generation from
-	// the controller's attach-hook. Empty => SC-free self-bootstrap.
-	StorageControllerURL string
+	// the controller's attach-hook. Empty => controller-free self-bootstrap.
+	ControllerURL string
 	// Bootstrap forces initdb of the (supplied) branch on first start. Ignored
 	// for a branch fork (AncestorBranchID set): a fork clones from its ancestor.
 	Bootstrap bool
@@ -72,7 +72,7 @@ type Deployer interface {
 	// EndpointSafekeeperURL returns the base URL of the co-located safekeeper's
 	// HTTP API for the endpoint identified by id (the Endpoint.ID CreateEndpoint
 	// returned — the deploy/release name). The controller reaches it over the same
-	// network/DNS the storage controller dials (SC_REACHABLE_HOST), at the fixed
+	// network/DNS the controller dials (CONTROLLER_REACHABLE_HOST), at the fixed
 	// safekeeper HTTP port, to resolve a branch's default fork point from the
 	// ancestor's own safekeeper (#133). It is a pure function of id and the
 	// deployer's static config; it does not check that the endpoint is live.

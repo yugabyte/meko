@@ -2,7 +2,7 @@
 
 **Status:** draft for discussion · **Scope:** a developer-owned, extensible Go test
 framework + report portal for **yb-amp / yb-light** (Yugabyte's Neon fork:
-serverless Postgres — pageserver, safekeeper, compute, storage_controller,
+serverless Postgres — pageserver, safekeeper, compute, controller,
 controller — backed by YugabyteDB).
 
 This document describes *how the system is structured and how it runs*. No code.
@@ -217,7 +217,7 @@ The flow, top to bottom:
    - **Chaos engine** — pod kill, partition, store degrade.
    - **Reporter** — streams steps/logs/metrics to the portal.
 4. **The framework talks to three things** (and does nothing heavy itself):
-   - **yb-light stack(s)** — controller + storage_controller + pageserver/safekeeper
+   - **yb-light stack(s)** — controller + controller + pageserver/safekeeper
      + compute endpoints, backed by YugabyteDB — over REST (controller API) + libpq.
      *(the product under test)*
    - **Client pod(s)** — the workload runners — over kubectl/docker.
@@ -621,7 +621,7 @@ encodes; sharing is opt-in per test, never assumed.
 
 For tests that don't need isolation (most **functional**, and perf that only
 measures the SQL/API path without needing a clean box). A long-lived control
-plane (controller + storage_controller + one YugabyteDB) is deployed once (via
+plane (controller + controller + one YugabyteDB) is deployed once (via
 `deploy/up.sh` / the `yb-amp-controller` Helm chart) and **reused across many
 tests** in the run. Each co-tenant test still gets **its own project** for data
 isolation, created/dropped through the controller REST API: `createProject` (auto

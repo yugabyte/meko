@@ -62,7 +62,7 @@ calls the storage_ctl `/upcall/v1/re-attach` API (the
 `controller_upcall_client` module is deleted). Instead, every
 `PageServerNode::start` in yb_light_local: registers the node with
 storage_ctl (idempotent), calls the attach-hook API (which increments
-`storage_controller.branches.generation` against this node and returns
+`registry.branches.generation` against this node and returns
 it), rewrites `generation` in `pageserver.toml`, and only then spawns
 the process. The YB-side CAS (`cas_bump_generation_on_attach`)
 enforces the fence at open regardless of how the number arrived.
@@ -83,7 +83,7 @@ identity and rejected as misrouted on mismatch.
 
 Consequences elsewhere:
 - storage_ctl's pageserver reconciler/migration machinery is deleted
-  wholesale (see [`storage-controller.md`](../../storage_controller/architecture/storage-controller.md)):
+  wholesale (see [`controller.md`](../../controller/architecture/sc-integration.md)):
   there is no location_config to converge — attachment is decided at
   spawn time.
 - storage_ctl's branch-create no longer POSTs to the pageserver; it
@@ -193,7 +193,7 @@ The binary name is `yb-pageserver`. Builds with
 | Disk eviction + heatmap downloader | None |
 
 The `getpage` gRPC, basebackup, walreceiver, walingest, walredo, and the
-storage-controller handshake are unchanged, with one default change:
+controller handshake are unchanged, with one default change:
 **`lazy_slru_download` defaults to `true`** (`default_tenant_conf`,
 `compute/libs/pageserver_api/src/config.rs`). Basebackup therefore ships no
 SLRU (clog/multixact) pages — the compute faults them in on demand via
@@ -213,7 +213,7 @@ two-phase commit, repl origins), and `timeline_state` (per-branch
 state row). Per-branch config is NOT in YB: the effective config is
 the `[tenant_config]` section of `pageserver.toml`.
 DDL is owned by the diesel migration at
-`storage_controller/migrations/00000000000001_initial_schema/up.sql`
+`controller/migrations/0005_provision_yb_storage.up.sql`
 (lines 163-250). See [`yugabyte.md`](yugabyte.md) for the full DDL.
 
 ### `pageserver.pages`
@@ -302,7 +302,7 @@ CREATE TABLE pageserver.timeline_state (
   in-memory value re-derives within seconds.
 - `applied_gc_cutoff_lsn` — same meaning as upstream; reads below this
   LSN aren't supported.
-- `current_generation` — bumped by the storage controller on every
+- `current_generation` — bumped by the controller on every
   attach. A stale pageserver's generation-checked write hits a row with
   a newer generation and aborts (see "Generation fencing" below).
 
@@ -694,7 +694,7 @@ on disk grows monotonically.
 `current_generation` on the `pageserver.timeline_state` row (keyed by
 `branch_id`) is the gate. Sequence:
 
-1. Storage controller's attach decision bumps the generation. yb-pageserver
+1. Controller's attach decision bumps the generation. yb-pageserver
    learns the new gen from the attach payload.
 2. yb-pageserver opens the branch: reads the current state row, asserts
    `row.current_generation == attach_gen`.
@@ -811,11 +811,11 @@ Per-phase task records live under [`../../tasks/`](../../tasks/). See
 - `compute/pageserver/src/page_server/timeline.rs` — `get_vectored_via_page_writer`
   drives the row-store read path; `chain_to_value_reconstruct_state`
   converts a chain into walredo inputs.
-- `storage_controller/migrations/00000000000001_initial_schema/up.sql`
+- `controller/migrations/0005_provision_yb_storage.up.sql`
   — diesel-managed DDL for the `pageserver` schema (`pages`,
   `slru_pages`, `meta`, `timeline_state`) and the
   rest of `yb_storage` (#2). Replaces the earlier
-  `control_plane/src/storage_controller.rs::ensure_yb_storage_schema`
+  `control_plane/src/controller.rs::ensure_yb_storage_schema`
   bootstrap, which has been removed.
 - `compute/architecture/yugabyte.md` — full DDL reference for
   `pageserver.pages`, `pageserver.slru_pages`, `pageserver.meta`,

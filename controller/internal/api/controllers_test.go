@@ -22,33 +22,8 @@ import (
 	"github.com/yugabyte/yb-amp/controller/internal/config"
 	"github.com/yugabyte/yb-amp/controller/internal/core"
 	"github.com/yugabyte/yb-amp/controller/internal/deploy"
-	"github.com/yugabyte/yb-amp/controller/internal/storagecontroller"
 	"github.com/yugabyte/yb-amp/controller/internal/task"
 )
-
-// scRecipeStore adapts a storagecontroller.Client to the task framework's
-// task.RecipeStore port — the same bridge cmd/controller wires into the worker's
-// Deps, replicated here so drainTasks runs the real record_branch_recipe step
-// against the test's fakeSCServer. A nil client is left as a nil RecipeStore, so
-// the step degrades exactly as in production (no managed controller).
-type scRecipeStore struct{ sc *storagecontroller.Client }
-
-func (a scRecipeStore) RecordBranchRecipe(ctx context.Context, branchID string, r task.BranchRecipe) error {
-	var ancestor *string
-	if r.AncestorBranchID != "" {
-		ancestor = &r.AncestorBranchID
-	}
-	return a.sc.RecordPendingTimelineInit(ctx, branchID, storagecontroller.PendingTimelineInit{
-		BranchName:       r.BranchName,
-		PgVersion:        r.PgVersion,
-		AncestorBranchID: ancestor,
-		StartLSN:         r.StartLSN,
-	})
-}
-
-func (a scRecipeStore) ClearBranchRecipe(ctx context.Context, branchID string) error {
-	return a.sc.DeletePendingTimelineInit(ctx, branchID)
-}
 
 // drainTasks runs a real task.Worker over the same store + backend the server
 // uses, until every task has reached a terminal status (succeeded/failed). The
@@ -69,11 +44,9 @@ func drainTasks(t *testing.T, store *task.MemStore, backend core.Backend, prov a
 		State:         state,
 		Deployer:      prov.Deployer,
 		EndpointYB:    prov.EndpointYB,
-		SCEndpointURL: prov.SCEndpointURL,
+		ControllerURL: prov.ControllerURL,
 		Bootstrap:     prov.Bootstrap,
-	}
-	if prov.SC != nil {
-		deps.Recipes = scRecipeStore{sc: prov.SC}
+		Recipes:       prov.Recipes,
 	}
 	cfg := config.TaskConfig{
 		PollInterval:  time.Millisecond,
@@ -184,7 +157,7 @@ func newTestServerBackend(t *testing.T, backend core.Backend, prov api.Provision
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := &config.Config{ListenAddr: ":0"}
 	cfg.Deploy.Enabled = prov.Deployer != nil
-	srv := api.NewServer(cfg, backend, task.NewService(tasks), prov, nil, logger)
+	srv := api.NewServer(cfg, backend, task.NewService(tasks), prov, nil, nil, logger)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	client, err := api.NewClientWithResponses(ts.URL + "/api/v1")
@@ -731,7 +704,7 @@ func TestCreateProjectReturnsTask(t *testing.T) {
 }
 
 func TestCreateBranchReturnsTask(t *testing.T) {
-	// An explicit fork point lets a branch be planned without a storage controller
+	// An explicit fork point lets a branch be planned without a controller
 	// or a deployed parent endpoint (the cheap fork-point resolution succeeds).
 	client, backend := newTestServerWithProv(t, api.Provisioning{Deployer: &fakeDeployer{}})
 	ctx := context.Background()

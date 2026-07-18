@@ -1,7 +1,7 @@
 apiVersion: v2
 name: yb-amp-controller
 description: >-
-  The amp controller (cAmp control plane + its managed storage controller) and
+  The amp controller (cAmp control plane + its managed controller) and
   its MCP server, deployed together. The controller drives endpoint workloads
   via the Kubernetes/Helm driver and exposes a REST API; the MCP server is a
   thin, stateless wrapper of that API for AI agents. Backed by an external

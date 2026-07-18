@@ -1,12 +1,12 @@
 //! Code to manage compute endpoints
 //!
 //! The durable registry of compute endpoints lives in the
-//! `storage_controller.endpoints` table, not on the local filesystem. Each
+//! `controller.endpoints` table, not on the local filesystem. Each
 //! endpoint's config (the [`EndpointConf`] struct) is serialized to JSON and
 //! stored as the `spec` column of one row, keyed by endpoint id.
 //! `yb_light_local` creates / lists / deletes endpoints by calling the storage
 //! controller's `/control/v1/endpoint` API (see
-//! [`crate::storage_controller::StorageController::endpoint_create`] and
+//! [`crate::controller::Controller::endpoint_create`] and
 //! friends); the controller is the single source of truth.
 //!
 //! The endpoint is managed by the `compute_ctl` binary. When an endpoint is
@@ -87,7 +87,7 @@ use crate::local_env::LocalEnv;
 use crate::pageserver::PageServerNode;
 use crate::postgresql_conf::PostgresConf;
 use crate::safekeeper::SafekeeperNode;
-use crate::storage_controller::StorageController;
+use crate::controller::Controller;
 
 // contents of a endpoint.json file
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
@@ -128,14 +128,14 @@ pub struct ComputeControlPlane {
 }
 
 impl ComputeControlPlane {
-    /// Load the current set of endpoints from the storage controller's
+    /// Load the current set of endpoints from the controller's
     /// `endpoints` table (via its HTTP API). Replaces the previous scan of the
     /// `.yb_light/endpoints/` directory.
     pub async fn load(env: LocalEnv) -> Result<ComputeControlPlane> {
-        let records = StorageController::from_env(&env)
+        let records = Controller::from_env(&env)
             .endpoint_list()
             .await
-            .context("listing endpoints from storage controller")?;
+            .context("listing endpoints from controller")?;
 
         let mut endpoints = BTreeMap::default();
         for record in records {
@@ -263,17 +263,17 @@ impl ComputeControlPlane {
             pg_settings,
         };
 
-        // Persist the endpoint in the storage controller's `endpoints` table.
+        // Persist the endpoint in the controller's `endpoints` table.
         // The whole `EndpointConf` rides along as an opaque JSONB `spec`.
         let spec = serde_json::to_value(&conf).context("serializing endpoint config")?;
-        StorageController::from_env(&self.env)
+        Controller::from_env(&self.env)
             .endpoint_create(ComputeEndpoint {
                 endpoint_id: endpoint_id.to_string(),
                 branch_id: branch_id.to_string(),
                 spec,
             })
             .await
-            .context("creating endpoint in storage controller")?;
+            .context("creating endpoint in controller")?;
 
         let ep = Arc::new(Endpoint::from_conf(conf, &self.env));
         self.endpoints
@@ -417,7 +417,7 @@ pub struct EndpointStartArgs {
 
 impl Endpoint {
     /// Build an in-memory [`Endpoint`] from its persisted [`EndpointConf`]
-    /// (loaded from the storage controller's `endpoints` table). Pure: derives
+    /// (loaded from the controller's `endpoints` table). Pure: derives
     /// the listen addresses from the persisted ports and touches no files.
     fn from_conf(conf: EndpointConf, env: &LocalEnv) -> Endpoint {
         debug!("deserialized endpoint conf: {:?}", conf);
@@ -734,7 +734,7 @@ impl Endpoint {
             anyhow::bail!("The endpoint is already running");
         }
 
-        // The endpoint registry lives in the storage controller's table, so the
+        // The endpoint registry lives in the controller's table, so the
         // local working directory is no longer created at create time — make
         // sure it exists before we write config.json / logs / the pidfile.
         self.create_endpoint_dir()?;
@@ -1172,11 +1172,11 @@ impl Endpoint {
             if self.endpoint_path().exists() {
                 std::fs::remove_dir_all(self.endpoint_path())?;
             }
-            // Drop the endpoint from the storage controller's `endpoints` table.
-            StorageController::from_env(&self.env)
+            // Drop the endpoint from the controller's `endpoints` table.
+            Controller::from_env(&self.env)
                 .endpoint_delete(&self.endpoint_id)
                 .await
-                .context("deleting endpoint from storage controller")?;
+                .context("deleting endpoint from controller")?;
         }
         Ok(response)
     }
@@ -1264,7 +1264,7 @@ impl Endpoint {
 }
 
 /// If caller is telling us what pageserver to use, this is not a tenant which is
-/// fully managed by storage controller, therefore not sharded.
+/// fully managed by controller, therefore not sharded.
 pub fn local_pageserver_conf_to_conn_info(
     conf: &crate::local_env::PageServerConf,
     use_tls: bool,

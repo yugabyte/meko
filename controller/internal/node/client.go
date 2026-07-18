@@ -2,7 +2,7 @@
 // pageserver / safekeeper) over their internal HTTP APIs. The controller uses it
 // to resolve a branch's default fork point from the *ancestor's own* safekeeper,
 // which is routing-correct in the co-located topology where every endpoint has
-// its own node — unlike the storage controller's per-tenant describe, which
+// its own node — unlike the controller's per-tenant describe, which
 // routes to whichever pageserver attached the tenant last and so misses the
 // parent timeline once the tenant has more than one endpoint (#133).
 package node
@@ -20,7 +20,7 @@ import (
 
 // Client reads LSNs from an endpoint's co-located nodes over plain HTTP. The
 // controller reaches those nodes over the same network/DNS the storage
-// controller dials (SC_REACHABLE_HOST), so no auth is involved. The zero value
+// controller dials (CONTROLLER_REACHABLE_HOST), so no auth is involved. The zero value
 // is not usable — build one with NewClient.
 type Client struct {
 	http *http.Client

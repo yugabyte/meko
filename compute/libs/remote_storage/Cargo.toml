@@ -32,7 +32,7 @@ itertools.workspace = true
 sync_wrapper = { workspace = true, features = ["futures"] }
 md5.workspace = true
 # YsqlClient + TLS connector. Lives in its own crate so the
-# pageserver/safekeeper/storage_controller can depend on the YSQL
+# pageserver/safekeeper/controller can depend on the YSQL
 # layer without pulling the whole remote_storage shell.
 ysql_client.workspace = true
 # YB smart-driver fork of tokio-postgres. yb_store talks directly

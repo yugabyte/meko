@@ -56,7 +56,7 @@ func TestProductionRegistryHasFullCatalog(t *testing.T) {
 		EndpointYB: deploy.YBConn{
 			HostPorts: "yb:5433", User: "yugabyte", DBName: "yb_storage",
 		},
-		SCEndpointURL: "http://sc:50051",
+		ControllerURL: "http://sc:50051",
 		Bootstrap:     true,
 	}
 	r := ProductionRegistry(deps)

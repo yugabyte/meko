@@ -33,7 +33,7 @@ pub const DEFAULT_PG_VERSION: u32 = 18;
 //
 /// Process-local memoized `reqwest::Client`, built once and cloned cheaply
 /// (the client is `Arc`-internal). Building a client parses the rustls root
-/// store, which is ~100ms in debug builds — and `StorageController::from_env`
+/// store, which is ~100ms in debug builds — and `Controller::from_env`
 /// builds one per controller call (~7 per `endpoint create`), so memoizing it
 /// here takes that repeated cost off every `yb_light_local` controller path.
 /// Not logical config state: excluded from `LocalEnv` equality.
@@ -74,8 +74,8 @@ pub struct LocalEnv {
     /// Path to environment's public key
     pub public_key_path: PathBuf,
 
-    // Configuration for the storage controller (1 per yb_light_local environment)
-    pub storage_controller: YbLightStorageControllerConf,
+    // Configuration for the controller (1 per yb_light_local environment)
+    pub controller: YbLightControllerConf,
 
     /// The *provisioned* pageservers, discovered by [`Self::load_config`]
     /// from the `pageserver.toml` under each `endpoints/<name>/pageserver/`.
@@ -112,12 +112,12 @@ pub struct LocalEnv {
     /// repo; populated as endpoints are created.
     pub endpoint_storages: Vec<EndpointStorageConf>,
 
-    // Control plane upcall API for pageserver: if None, we will not run storage_controller  If set, this will
+    // Control plane upcall API for pageserver: if None, we will not run controller  If set, this will
     // be propagated into each pageserver's configuration.
     pub control_plane_api: Url,
 
-    // Control plane upcall APIs for storage controller.  If set, this will be propagated into the
-    // storage controller's configuration.
+    // Control plane upcall APIs for controller.  If set, this will be propagated into the
+    // controller's configuration.
     pub control_plane_hooks_api: Option<Url>,
 
     /// Flag to generate SSL certificates for components that need it.
@@ -139,7 +139,7 @@ pub struct OnDiskConfig {
     pub default_branch_id: Option<BranchId>,
     pub private_key_path: PathBuf,
     pub public_key_path: PathBuf,
-    pub storage_controller: YbLightStorageControllerConf,
+    pub controller: YbLightControllerConf,
     #[serde(
         skip_serializing,
         deserialize_with = "fail_if_pageservers_field_specified"
@@ -154,7 +154,7 @@ pub struct OnDiskConfig {
     pub control_plane_api: Option<Url>,
     pub control_plane_hooks_api: Option<Url>,
     pub control_plane_compute_hook_api: Option<Url>,
-    // Note: skip serializing because in compat tests old storage controller fails
+    // Note: skip serializing because in compat tests old controller fails
     // to load new config file. May be removed after this field is in release branch.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub use_local_tls: bool,
@@ -179,7 +179,7 @@ pub struct YbLightLocalInitConf {
     // TODO: do we need this? Seems unused
     pub yb_light_distrib_dir: Option<PathBuf>,
     pub default_branch_id: BranchId,
-    pub storage_controller: Option<YbLightStorageControllerConf>,
+    pub controller: Option<YbLightControllerConf>,
     pub pageservers: Vec<YbLightLocalInitPageserverConf>,
     pub safekeepers: Vec<SafekeeperConf>,
     pub endpoint_storage: EndpointStorageConf,
@@ -195,7 +195,7 @@ pub struct EndpointStorageConf {
     pub listen_addr: SocketAddr,
     /// If `Some`, written verbatim as the `storage_kind` block of
     /// `endpoint_storage.json`. Otherwise yb_light_local derives a default
-    /// `YbStore` config from `storage_controller.yb`,
+    /// `YbStore` config from `controller.yb`,
     /// colocating endpoint_storage with the pageserver in the same
     /// `yb_storage.public.blobs` table. Value must be a JSON object
     /// including the `type` discriminator, e.g.
@@ -213,10 +213,10 @@ pub struct EndpointStorageConf {
     pub endpoint_id: String,
 }
 
-/// A part of storage controller's config the yb_light_local knows about.
+/// A part of controller's config the yb_light_local knows about.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 #[serde(default)]
-pub struct YbLightStorageControllerConf {
+pub struct YbLightControllerConf {
     /// Heartbeat timeout before marking a node offline
     #[serde(with = "humantime_serde")]
     pub max_offline: Duration,
@@ -224,13 +224,13 @@ pub struct YbLightStorageControllerConf {
     #[serde(with = "humantime_serde")]
     pub max_warming_up: Duration,
 
-    /// YugabyteDB connection for the storage controller's persistence
+    /// YugabyteDB connection for the controller's persistence
     /// layer — the same `[*.yb]` block the pageserver / safekeeper /
     /// endpoint_storage consume (host_ports, user, dbname, sslmode?,
     /// password_env?). When `Some`, yb_light_local skips the local Postgres
     /// bootstrap (initdb / pg_ctl / createdb / startup-script tx) and passes
-    /// this config straight through to the storage controller as
-    /// `--yb-config`, which builds its diesel URL from it internally. This
+    /// this config straight through to the controller as
+    /// `--yb-config`, which builds its connection URL from it internally. This
     /// is how yb-light points the controller at YugabyteDB; it's also useful
     /// for running multiple controller instances against a shared DB.
     pub yb: Option<ysql_client::YbConnConfig>,
@@ -249,7 +249,7 @@ pub struct YbLightStorageControllerConf {
     pub timeline_safekeeper_count: Option<usize>,
 }
 
-impl YbLightStorageControllerConf {
+impl YbLightControllerConf {
     // Use a shorter pageserver unavailability interval than the default to speed up tests.
     const DEFAULT_MAX_OFFLINE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -259,7 +259,7 @@ impl YbLightStorageControllerConf {
     const DEFAULT_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
 }
 
-impl Default for YbLightStorageControllerConf {
+impl Default for YbLightControllerConf {
     fn default() -> Self {
         Self {
             max_offline: Self::DEFAULT_MAX_OFFLINE_INTERVAL,
@@ -538,12 +538,12 @@ impl LocalEnv {
         self.yb_light_distrib_dir.join("yb-pageserver")
     }
 
-    pub fn storage_controller_bin(&self) -> PathBuf {
-        // Irrespective of configuration, storage controller binary is always
-        // run from the same location as yb_light_local.  This means that for compatibility
-        // tests that run old pageserver/safekeeper, they still run latest storage controller.
+    pub fn controller_bin(&self) -> PathBuf {
+        // The controller binary is always run from the same location as
+        // yb_light_local, so compatibility tests that run an older
+        // pageserver/safekeeper still get the latest controller.
         let yb_light_local_bin_dir = env::current_exe().unwrap().parent().unwrap().to_owned();
-        yb_light_local_bin_dir.join("storage_controller")
+        yb_light_local_bin_dir.join("controller")
     }
 
     pub fn safekeeper_bin(&self) -> PathBuf {
@@ -649,8 +649,8 @@ impl LocalEnv {
     }
 
     /// Inspect the base data directory and extract the instance id and instance directory path
-    /// for all storage controller instances
-    pub async fn storage_controller_instances(&self) -> std::io::Result<Vec<(u8, PathBuf)>> {
+    /// for all controller instances
+    pub async fn controller_instances(&self) -> std::io::Result<Vec<(u8, PathBuf)>> {
         let mut instances = Vec::default();
 
         let dir = std::fs::read_dir(self.base_data_dir.clone())?;
@@ -658,7 +658,7 @@ impl LocalEnv {
             let dentry = dentry?;
             let is_dir = dentry.metadata()?.is_dir();
             let filename = dentry.file_name().into_string().unwrap();
-            let parsed_instance_id = match filename.strip_prefix("storage_controller_") {
+            let parsed_instance_id = match filename.strip_prefix("controller_") {
                 Some(suffix) => suffix.parse::<u8>().ok(),
                 None => None,
             };
@@ -678,15 +678,15 @@ impl LocalEnv {
         Ok(instances)
     }
 
-    /// Persist a branch alias for the given branch by calling into the storage controller.
+    /// Persist a branch alias for the given branch by calling into the controller.
     /// Idempotent if the alias already points at the same branch; rejects re-pointing.
     pub async fn register_branch_mapping(
         &self,
         branch_name: String,
         branch_id: BranchId,
     ) -> anyhow::Result<()> {
-        let sc = crate::storage_controller::StorageController::from_env(self);
-        let existing = sc.list_timeline_branch_names().await?;
+        let controller = crate::controller::Controller::from_env(self);
+        let existing = controller.list_timeline_branch_names().await?;
         if let Some(entry) = existing.iter().find(|e| e.branch_name == branch_name) {
             if entry.branch_id == branch_id {
                 return Ok(());
@@ -696,7 +696,7 @@ impl LocalEnv {
                 entry.branch_id
             );
         }
-        sc.set_timeline_branch_name(branch_id, Some(branch_name))
+        controller.set_timeline_branch_name(branch_id, Some(branch_name))
             .await
     }
 
@@ -704,8 +704,8 @@ impl LocalEnv {
         &self,
         branch_name: &str,
     ) -> anyhow::Result<Option<BranchId>> {
-        let sc = crate::storage_controller::StorageController::from_env(self);
-        let entries = sc.list_timeline_branch_names().await?;
+        let controller = crate::controller::Controller::from_env(self);
+        let entries = controller.list_timeline_branch_names().await?;
         let matches: Vec<BranchId> = entries
             .into_iter()
             .filter(|e| e.branch_name == branch_name)
@@ -727,8 +727,8 @@ impl LocalEnv {
     }
 
     pub async fn timeline_name_mappings(&self) -> anyhow::Result<HashMap<BranchId, String>> {
-        let sc = crate::storage_controller::StorageController::from_env(self);
-        let entries = sc.list_timeline_branch_names().await?;
+        let controller = crate::controller::Controller::from_env(self);
+        let entries = controller.list_timeline_branch_names().await?;
         Ok(entries
             .into_iter()
             .map(|e| (e.branch_id, e.branch_name))
@@ -756,7 +756,7 @@ impl LocalEnv {
                 default_branch_id,
                 private_key_path,
                 public_key_path,
-                storage_controller,
+                controller,
                 pageservers,
                 safekeepers,
                 pageserver_templates,
@@ -776,7 +776,7 @@ impl LocalEnv {
                 default_branch_id,
                 private_key_path,
                 public_key_path,
-                storage_controller,
+                controller,
                 pageservers,
                 safekeepers,
                 pageserver_templates,
@@ -894,7 +894,7 @@ impl LocalEnv {
                 default_branch_id: self.default_branch_id,
                 private_key_path: self.private_key_path.clone(),
                 public_key_path: self.public_key_path.clone(),
-                storage_controller: self.storage_controller.clone(),
+                controller: self.controller.clone(),
                 pageservers: vec![], // it's skip_serializing anyway
                 safekeepers: self.safekeepers.clone(),
                 pageserver_templates: self.pageserver_templates.clone(),
@@ -1004,7 +1004,7 @@ impl LocalEnv {
             pg_distrib_dir,
             yb_light_distrib_dir,
             default_branch_id,
-            storage_controller,
+            controller,
             pageservers,
             safekeepers,
             control_plane_api,
@@ -1059,7 +1059,7 @@ impl LocalEnv {
             default_branch_id: Some(default_branch_id),
             private_key_path,
             public_key_path,
-            storage_controller: storage_controller.unwrap_or_default(),
+            controller: controller.unwrap_or_default(),
             pageservers: Vec::new(),
             safekeepers: Vec::new(),
             pageserver_templates: pageservers,
@@ -1239,7 +1239,7 @@ mod tests {
             default_branch_id: None,
             private_key_path: PathBuf::from("auth_private_key.pem"),
             public_key_path: PathBuf::from("auth_public_key.pem"),
-            storage_controller: YbLightStorageControllerConf::default(),
+            controller: YbLightControllerConf::default(),
             pageservers: Vec::new(),
             safekeepers: Vec::new(),
             pageserver_templates: Vec::new(),

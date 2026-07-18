@@ -25,8 +25,8 @@ renewal during a long step, which is [#90](https://github.com/yugabyte/yb-light/
 → branch → endpoint** ([#147](https://github.com/yugabyte/yb-light/issues/147)).
 A project is a purely control-plane grouping (it maps to no storage object); a
 branch's `branch_id` **is** the storage layer's flat `BranchId`. The controller
-carries that `branch_id` verbatim to the storage seam — the storage-controller
-recipe and client, via `hex32` — and the storage controller is keyed by the flat
+carries that `branch_id` verbatim to the storage seam — the controller
+recipe and client, via `hex32` — and the controller is keyed by the flat
 `branch_id`. `deploy.EndpointSpec` likewise renders the flat `branch_id` as the
 endpoint image's `BRANCH_ID` env var (#168).
 
@@ -141,7 +141,7 @@ double-apply or error.
 |---|---|---|---|
 | `create_project` | pool, project, branch ids, name, pg_version | Create the project + its default branch. | `EnsureProject`: `INSERT … ON CONFLICT (pk) DO NOTHING` on both rows — same ids re-run is a no-op. A *name* collision (different ids) is a real error. |
 | `create_branch` | parent, project, branch ids, name, fork LSN, pg_version | Fork a branch into a new branch (records ancestry). | `EnsureBranch`: same `ON CONFLICT (pk) DO NOTHING`; a missing parent or name collision is a real error. |
-| `record_branch_recipe` | project, branch ids, branch name, pg_version, ancestor (opt), start LSN | Record the storage controller's pending-init recipe (materialized later by the first endpoint). | The storage controller upserts the recipe; with no storage controller the step no-ops with a warning (the recipe then lives only in the `branch` row). |
+| `record_branch_recipe` | project, branch ids, branch name, pg_version, ancestor (opt), start LSN | Record the controller's pending-init recipe (materialized later by the first endpoint). | The controller upserts the recipe; with no controller the step no-ops with a warning (the recipe then lives only in the `branch` row). |
 | `create_endpoint` | endpoint, project, branch ids, role, pg_version, cpu, memory, ancestor (opt) | Ensure the endpoint record, deploy the compute (with its CPU/memory reservation), record the address, clear the branch recipe. **The shared step** create-project, branch, and scale-up all reuse (§8). | Record insert is id-keyed `ON CONFLICT (id) DO NOTHING` (so the single-writer index is not re-violated on replay); deploy is keyed by the endpoint's stable name (deployer idempotency); address is an absolute `UPDATE`; recipe clear tolerates an already-absent recipe. `cpu`/`memory` are resolved (defaulted to 2 cores / 4Gi) by the API handler and carried in the args, so a reclaim/replay redeploys the same size. |
 | `delete_endpoint` | endpoint id | Retire the running instance, then delete the record. | Both effects tolerate an already-absent target. Order matters: retire the instance *before* deleting the record, so a crash between them leaves a record whose instance can still be retired on replay (never an orphaned instance with no record). |
 | `delete_branch` | project, branch ids | Cascade-delete a branch: enumerate the branch's endpoints, retire each (instance + record), then delete the branch row. | Self-contained — it **enumerates children at Execute time** (`EndpointIDsForBranch`), so an endpoint added between planning and execution is still retired on replay. Cascade order is **endpoints → branch**: the FKs are `RESTRICT`, so children go first; every effect tolerates an already-absent target, so a re-run mid-cascade converges. A still-referencing child fork makes `DeleteBranch` a real error (correct). |
@@ -173,7 +173,7 @@ A few invariants worth calling out:
   and register the node itself — moving that work out of the pod — and evolve
   toward a create-then-configure model (create an unassigned pod, then push a
   `configure` binding it to a branch). See
-  [`sc-integration-migration.md`](sc-integration-migration.md).
+  [`sc-integration.md`](sc-integration.md).
 
 ## 4. The task service
 
@@ -240,11 +240,11 @@ context):
   the interface structurally; these are deliberately *not* on the `core.Backend`
   interface, so the synchronous API read/pre-check path keeps using the
   id-generating create methods.
-- **`RecipeStore`** — record/clear the storage controller's pending-init recipe,
+- **`RecipeStore`** — record/clear the controller's pending-init recipe,
   keyed by the 32-hex flat `branch_id` the controller maps a branch to. A
-  `BranchRecipe` decouples the task package from the storage-controller client
+  `BranchRecipe` decouples the task package from the controller client
   type; `cmd/controller` bridges the two (`scRecipeStore`, mapping `BranchRecipe →
-  PendingTimelineInit`). May be nil (no managed storage controller) — the steps
+  PendingTimelineInit`). May be nil (no managed controller) — the steps
   degrade with a warning.
 - **`deploy.Deployer`** — the existing runtime-agnostic endpoint deployer, reused
   as-is (its `EndpointSpec` renders the flat `branch_id` as the endpoint image's

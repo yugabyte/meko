@@ -78,7 +78,7 @@ func (s *Supervisor) Ready() <-chan struct{} { return s.readyCh }
 // StopTimeout) and returns once it has exited.
 func (s *Supervisor) Run(ctx context.Context) {
 	// Log the path and an arg count, never the args themselves: a managed
-	// process's args can carry secrets (e.g. the storage controller's
+	// process's args can carry secrets (e.g. the controller's
 	// --database-url), and the controller never logs the universe connection
 	// string elsewhere.
 	s.logger.Info("supervising managed process", "path", s.spec.Path, "arg_count", len(s.spec.Args))

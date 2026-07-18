@@ -6,7 +6,7 @@
     Simplifications:
     - The ones inherited from ProposerAcceptorStatic.
     - We don't model transient state of the configuration change driver process
-      (storage controller in the implementation). Its actions StartChange and FinishChange
+      (controller in the implementation). Its actions StartChange and FinishChange
       are taken based on the persistent state of safekeepers and conf store. The
       justification for that is the following: once new configuration n is
       created (e.g with StartChange or FinishChange), any old configuration

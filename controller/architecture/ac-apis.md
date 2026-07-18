@@ -98,11 +98,11 @@ local checks stay synchronous: `400` (malformed body / bad parameter), `404`
 | `POST /storage-pools` | createStoragePool | Top-level; the owner is named in the body (`owner_user_id`). |
 | `GET /storage-pools` | listStoragePools | Paginated; lists **every** pool (no owner filter yet). |
 | `GET /storage-pools/{poolId}` | getStoragePool | By id; not owner-scoped. |
-| `POST /storage-pools/{poolId}/projects` | createProject | **Async** → `202` + `Task` + `Location: /api/v1/tasks/{id}`. Plans a task that creates a project + its default branch and records the storage-controller pending-init recipe (keyed by the flat `branch_id`). Does **not** deploy an endpoint. Poll `getTask`, then `getProject`/`listProjects` to read the ids/`default_branch`. Cheap validation is still synchronous: `400` (bad body / unsupported `pg_version`) / `404` (unknown pool). A duplicate project name no longer `409`s — it surfaces as a `failed` task. |
+| `POST /storage-pools/{poolId}/projects` | createProject | **Async** → `202` + `Task` + `Location: /api/v1/tasks/{id}`. Plans a task that creates a project + its default branch and records the controller pending-init recipe (keyed by the flat `branch_id`). Does **not** deploy an endpoint. Poll `getTask`, then `getProject`/`listProjects` to read the ids/`default_branch`. Cheap validation is still synchronous: `400` (bad body / unsupported `pg_version`) / `404` (unknown pool). A duplicate project name no longer `409`s — it surfaces as a `failed` task. |
 | `GET /storage-pools/{poolId}/projects` | listProjects | Paginated; the pool's projects, each with its `default_branch`. `404` if the pool is unknown. |
 | `GET …/projects/{projectId}` | getProject | One project (with its `default_branch`). `404` if the pool/project is unknown. |
 | `DELETE …/projects/{projectId}` | deleteProject | **Async cascade** → `202` + `Task` + `Location`. Plans a `delete_project` task that retires every endpoint in the project, then drops its branches and the project row. Cheap pre-check: `404` if the pool/project is unknown. |
-| `POST …/projects/{projectId}/branches` | createBranch | **Async** → `202` + `Task` + `Location`. Plans a task that forks a parent branch (default: the project's default branch; override with `parent_branch_id` to branch off another branch) into a new branch under the same project, recording the storage-controller recipe with the ancestor + fork LSN set (default: the parent's latest LSN; override with `fork_point_lsn`). Does **not** deploy an endpoint. Poll `getTask`, then `listBranches`/`getBranch` to read the branch. Cheap validation is synchronous: `400` (bad body / bad or unresolvable `fork_point_lsn`) / `404` (unknown pool/project/parent). A duplicate branch name surfaces as a `failed` task, not a `409`. |
+| `POST …/projects/{projectId}/branches` | createBranch | **Async** → `202` + `Task` + `Location`. Plans a task that forks a parent branch (default: the project's default branch; override with `parent_branch_id` to branch off another branch) into a new branch under the same project, recording the controller recipe with the ancestor + fork LSN set (default: the parent's latest LSN; override with `fork_point_lsn`). Does **not** deploy an endpoint. Poll `getTask`, then `listBranches`/`getBranch` to read the branch. Cheap validation is synchronous: `400` (bad body / bad or unresolvable `fork_point_lsn`) / `404` (unknown pool/project/parent). A duplicate branch name surfaces as a `failed` task, not a `409`. |
 | `GET …/projects/{projectId}/branches` | listBranches | Paginated; the project's branches (default branch + forks). `404` if the pool/project is unknown. |
 | `GET …/branches/{branchId}` | getBranch | One branch. `404` if the pool/project/branch is unknown. |
 | `DELETE …/branches/{branchId}` | deleteBranch | **Async cascade** → `202` + `Task` + `Location`. Plans a `delete_branch` task that retires the branch's endpoints, then drops the branch row. Cheap pre-checks: `404` if the pool/project/branch is unknown; `409` if the branch has child branches (the parent FK is `RESTRICT`, so the delete would be doomed). |
@@ -157,7 +157,7 @@ plans a `create_project` task (`task.Service.CreateProject`) and returns `202`
 with the `Task` and the `Location` header. The worker then, in idempotent steps:
 1. creates the project (a "database", unique name within the pool) together with
    its **default branch** (`branch`, `is_default`); and
-2. records the storage controller's **pending-init recipe** (keyed by the flat
+2. records the controller's **pending-init recipe** (keyed by the flat
    storage-layer `branch_id`) when a controller is configured — the branch is
    declared, not yet materialized.
 
@@ -166,7 +166,7 @@ synchronous `409`: it surfaces when the `create_project` step's name insert
 fails, ending the task `status == "failed"`. The client polls `getTask`, then
 reads the project (and its embedded `default_branch`, whose `branch_id` *is* the
 storage-layer flat `branch_id`) back with `getProject`/`listProjects`. The task
-does **not** eagerly materialize the branch on the storage controller or deploy
+does **not** eagerly materialize the branch on the controller or deploy
 an endpoint: compute is a separate resource (below), and the first endpoint
 deployed on the branch materializes it (the recipe is then dropped). See
 [`controller-project-create.md`](controller-project-create.md) and
@@ -188,13 +188,13 @@ The fork point defaults to the parent's durable WAL end — the `flush_lsn` of t
 safekeeper co-located with the parent's `read_write` endpoint, read directly from
 that node (`node.Client.TimelineFlushLSN`) **before** the task is planned; a
 caller can pin an earlier point with `fork_point_lsn`. The worker then forks the
-branch and records the storage controller's **pending-init recipe**, this time
+branch and records the controller's **pending-init recipe**, this time
 with the ancestor and `start_lsn` set, and the branch is materialized lazily by
 the first endpoint deployed on it (the pageserver clones from the ancestor at
 `fork_lsn` instead of running `initdb`). A **duplicate branch name** within the
 project surfaces as a `failed` task, not a `409`; the client polls `getTask`,
 then reads the branch with `listBranches`/`getBranch`. *(Reading the ancestor's
-own node is routing-correct where the storage controller's per-branch `describe`
+own node is routing-correct where the controller's per-branch `describe`
 is not — it routes to whichever pageserver attached the branch last and misses
 the parent branch once the branch has multiple endpoints, #133; `flush_lsn` also
 never lags durable WAL the way a pageserver's `last_record_lsn` can, #130. The
@@ -240,7 +240,7 @@ worker's `create_endpoint` step records the `endpoint` row first (so the
 single-writer rule is enforced before a deploy is spent), deploys it via the
 runtime-agnostic [`deploy.Deployer`](../internal/deploy/) (Docker today,
 Kubernetes via Helm), records the resolved `address`, and best-effort drops the
-storage controller's pending-init recipe (the endpoint has now materialized the
+controller's pending-init recipe (the endpoint has now materialized the
 branch). A branch admits at most one `read_write` endpoint — the schema's
 `one_writer_per_branch` partial unique index — so a second writer now surfaces as
 a **`failed` task** rather than a synchronous `409`. `deleteEndpoint` runs the

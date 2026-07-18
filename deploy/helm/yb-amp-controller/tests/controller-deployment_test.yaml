@@ -38,21 +38,16 @@ tests:
           content:
             name: api
             containerPort: 8080
-      - contains:
-          path: spec.template.spec.containers[0].ports
-          content:
-            name: sc
-            containerPort: 50051
 
-  - it: wires the storage controller URL helper to the controller Service DNS
+  - it: wires the endpoint control-surface URL helper to the controller Service DNS
     release:
       namespace: amp
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: AMP_DEPLOY_STORAGE_CONTROLLER_URL
-            value: http://amp-controller.amp.svc.cluster.local:50051
+            name: AMP_DEPLOY_CONTROLLER_URL
+            value: http://amp-controller.amp.svc.cluster.local:8080
 
   - it: carries the AMP_* deploy env block
     set:
@@ -80,11 +75,6 @@ tests:
           content:
             name: AMP_DEPLOY_NAMESPACE
             value: amp
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: AMP_STORAGE_CONTROLLER_LISTEN
-            value: "0.0.0.0:50051"
 
   - it: derives the endpoint pull secret from the first imagePullSecret
     set:

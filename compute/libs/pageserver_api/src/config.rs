@@ -55,7 +55,7 @@ pub fn scale_bytes(base: u64, scale_factor: f64) -> u64 {
 // Certain metadata (e.g. externally-addressable name, AZ) is delivered
 // as a separate structure.  This information is not needed by the pageserver
 // itself, it is only used for registering the pageserver with the control
-// plane and/or storage controller.
+// plane and/or controller.
 #[derive(PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NodeMetadata {
     #[serde(rename = "host")]
@@ -161,13 +161,13 @@ impl Display for NodeMetadata {
 pub struct ConfigToml {
     /// Single-branch identity: the one branch this pageserver
     /// process serves for its entire lifetime. Set by the launcher
-    /// (neon_local / storage_controller) before spawning the process.
+    /// (neon_local / the controller) before spawning the process.
     /// Both `branch_id` / `generation` must be
     /// present together (validated in `PageServerConf::parse_and_validate`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_id: Option<BranchId>,
     /// Generation number for this attachment. The launcher bumps the
-    /// generation in `storage_controller.tenants` on every spawn and
+    /// generation in `registry.branches` on every spawn and
     /// writes the fresh value here; the pageserver CAS-installs it on
     /// the `pageserver.timeline_state` row at startup
     /// (`cas_bump_generation_on_attach`), which fences out any stale

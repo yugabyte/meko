@@ -3,9 +3,9 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-/// Request/response types for the storage controller
+/// Request/response types for the controller
 /// API (`/control/v1` prefix).  Implemented by the server
-/// in [`storage_controller::http`]
+/// in the controller's storage-layer surface
 use postgres_versioninfo::PgMajorVersion;
 use serde::{Deserialize, Serialize};
 use utils::id::{BranchId, NodeId};
@@ -41,14 +41,14 @@ pub struct BranchCreateResponse {
     pub shards: Vec<BranchCreateResponseShard>,
 }
 
-/// A compute endpoint record persisted by the storage controller on behalf of
+/// A compute endpoint record persisted by the controller on behalf of
 /// `yb_light_local`. yb-light keeps no per-endpoint folder anymore: the durable
-/// registry of compute endpoints lives in the `storage_controller.endpoints`
+/// registry of compute endpoints lives in the `registry.endpoints`
 /// table, and `yb_light_local` drives it through the `/control/v1/endpoint` API.
 ///
 /// `spec` is an opaque JSON object (a serialized
 /// `control_plane::endpoint::EndpointConf`), stored in a JSONB column. The
-/// storage controller never parses it, so the endpoint config schema can
+/// controller never parses it, so the endpoint config schema can
 /// evolve without touching the controller.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ComputeEndpoint {
@@ -248,7 +248,7 @@ pub enum NodeAvailability {
     // Normal, happy state
     Active(PageserverUtilization),
     // Node is warming up, but we expect it to become available soon. Covers
-    // the time span between the re-attach response being composed on the storage controller
+    // the time span between the re-attach response being composed on the controller
     // and the first successful heartbeat after the processing of the re-attach response
     // finishes on the pageserver.
     WarmingUp(Instant),
@@ -481,7 +481,7 @@ pub struct SetTimelineBranchNameRequest {
     pub branch_name: Option<String>,
 }
 
-/// Register a launcher-created timeline in the storage controller's
+/// Register a launcher-created timeline in the controller's
 /// `timelines` table (per-endpoint topology: the launcher provisions
 /// the branch's pageserver + safekeeper itself and reports the result
 /// here for cluster bookkeeping — branch names, deletion flows).
@@ -505,7 +505,7 @@ pub struct TimelineBranchName {
 
 /// Recipe for a branch whose id + branch name are allocated (at
 /// `branch create`) but whose pageserver + safekeeper
-/// aren't provisioned yet. Persisted in the storage controller's
+/// aren't provisioned yet. Persisted in the controller's
 /// `pending_timeline_inits` table and read back by `endpoint create` to
 /// materialize the pair.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]

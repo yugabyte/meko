@@ -11,7 +11,7 @@ deploy/
     Dockerfile      # builds the single-container endpoint image
     supervisor.py   # PID-1 (under tini) process manager for the 5 services
   controller/
-    Dockerfile      # the controller layer: controller + storage_controller bundled (see deploy/controller/README.md, #94)
+    Dockerfile      # the controller layer: the Go controller (see deploy/controller/README.md, #94)
     redeploy.sh     # (re-)deploy the controller via the yb-amp-controller chart (assumes ns/YB/pull-secret exist)
   helm/
     yb-light-endpoint/     # Helm chart for an endpoint (Deployment + ConfigMap + Secret + Service)
@@ -72,8 +72,8 @@ To avoid the slow per-Service cloud LB provisioning, the defaults use no cloud L
 From outside the GCP VPC (e.g. a laptop or an AWS box), use `kubectl port-forward`
 for both. The UI/API is unauthenticated — do not expose it publicly.
 
-The **controller layer** — the `controller` plus the shared `storage_controller`
-this endpoint deliberately omits — has its own bundled image under
+The **controller layer** — the `controller`, the cluster control plane this
+endpoint deliberately omits — has its own bundled image under
 [`controller/`](controller/README.md) and is deployed via the
 [`yb-amp-controller`](helm/yb-amp-controller) Helm chart. That chart also
 ships the **MCP server** (a FastMCP wrapper that exposes the controller's REST
@@ -199,17 +199,17 @@ compute), creates the safekeeper timeline, then monitors the children and
 restarts them with backoff; if a service exceeds its restart budget the
 supervisor exits non-zero so the pod is recreated.
 
-### Why no storage_controller
+### Why no control plane
 
-The `storage_controller` is a **shared, cluster-level** control plane (it owns
-the pageserver node registry, generation/attach fencing, and the endpoint
-registry in YugabyteDB's `storage_controller` schema). It is **not** part of
-the endpoint pod — it lives in the controller layer. The pod talks only to YugabyteDB.
+Cluster control — the pageserver node registry, generation/attach fencing, and
+the endpoint registry (in YugabyteDB's `registry` schema) — is a
+**shared, cluster-level** concern owned by the `controller`. It is **not** part of
+the endpoint pod. The pod talks only to YugabyteDB.
 
-A consequence: the `yb_storage` schema (created by the storage_controller's
-diesel migrations) must already exist. In production, the controller provisions it. For
-standalone testing, set `DEV_PROVISION_SCHEMA=true` and the supervisor will
-create the database and apply the bundled migrations itself.
+A consequence: the `yb_storage` schema must already exist. In production, the
+controller provisions it (all schemas) on startup. For standalone testing, set
+`DEV_PROVISION_SCHEMA=true` and the supervisor will create the database and apply
+the bundled provisioning migration itself.
 
 ## Building the image
 
