@@ -820,3 +820,35 @@ Per-phase task records live under [`../../tasks/`](../../tasks/). See
 - `compute/architecture/yugabyte.md` — full DDL reference for
   `pageserver.pages`, `pageserver.slru_pages`, `pageserver.meta`,
   and `pageserver.timeline_state`.
+
+## Direct-to-tserver hot path (optional)
+
+With `hot_path = "tsclient"` in the shared connection block (see
+`architecture/yugabyte.md` §"Direct-to-tserver hot path"), `PageStore`
+opens pure-Rust thin-RPC client handles (`PageStore::tsclient`,
+`libs/yb_tsclient` — pggate RPC to a tserver's RPC port, no native
+library, routing stays server-side) to `pages`/`slru_pages`/`meta` at
+startup (fail-fast health check). The single-key readers — `read_chain`
+(the getpage hot path via `scan_range`'s single-key dispatch),
+`read_slru_chain`, and `read_meta` — then run on the tsclient lane
+(`pageserver_yb_store_op_seconds{op,path}`). `yb_tsclient` retries
+across tserver sessions on its own; a terminal error propagates to the
+caller (getpage/flush fails). The tsclient chain read replaces
+the SQL image-anchor subquery with a paged clustered scan from the
+target LSN downward that stops at the anchor client-side;
+`normalize_chain` re-orders equal-LSN image/delta ties into the SQL
+result order (the PK's trailing `is_image` clusters ASC, the SQL
+readers order it DESC) before the usual `assert_chain_step` walk and
+`will_init` trim. One-fork multi-block scans (`scan_range`,
+`scan_slru_range`) run as a single clustered range scan in PK order
+with per-block anchor-stop collection (`BlockChainCollector` skips each
+block's below-anchor history without buffering; the tsclient paging
+envelope carries the scan's read serial, so every continuation stays on
+the first page's snapshot by construction). Cross-fork `scan_range` and
+multi-key `scan_meta_range` stay on YSQL permanently — they scatter
+across hash buckets and aren't hot. The write side (`put_pages`,
+`put_slru_pages`) runs chunks as PGSQL_UPSERT batches with the same
+fan-out; the client verifies every op's per-row response status, so a
+dropped row surfaces as a batch error (propagated to the caller) rather
+than a short count. `put_meta` and DDL, GC, and timeline ops always stay
+on YSQL.

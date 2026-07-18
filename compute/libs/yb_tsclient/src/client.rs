@@ -75,15 +75,23 @@
 //!   failed attempt's serial would re-read at the exact read time that
 //!   just failed (read-restarts would then fail every retry
 //!   identically);
-//! - the envelope is bound to the server session that created it —
-//!   an unpinned continuation on a recovered session is rejected as
-//!   fatal rather than silently served at a fresh read time.
+//! - the envelope is bound to the server session that created it — an
+//!   unpinned continuation on a recovered session surfaces a read-restart
+//!   ([`YbError::is_read_restart`]) rather than being silently served at a
+//!   fresh read time.
+//!
+//! Either way — a `restart_read_time` on a continuation or a lost pin — a
+//! paged continuation can't heal in place (it must reuse its serial and
+//! would replay the same failing read point). [`TsClient::read_scan`]
+//! catches the read-restart and restarts the WHOLE scan on a fresh read
+//! point; the clamp keeps that point's window shut, so it converges.
 //!
 //! The session's read-point history is trimmed with
 //! `read_time_serial_no_history_min` to a sliding window of the most
 //! recent [`READ_SERIAL_HISTORY_WINDOW`] read serials; a scan paging
-//! across more than that many later reads would silently lose its pin,
-//! which our callers' bounded scans never approach.
+//! across more than that many later reads loses its pin and restarts via
+//! `read_scan` (seen under heavy concurrent load, not bounded scans at
+//! rest).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -109,6 +117,10 @@ use crate::table::{TableHandle, columns_from_schema, pgsql_table_id};
 const SERVICE: &str = "yb.tserver.PgClientService";
 
 const MAX_ATTEMPTS: usize = 10;
+/// Whole-scan restarts [`TsClient::read_scan`] makes on a read-restart
+/// before surfacing it. Each restart takes a fresh (clamped) read point,
+/// so this converges in one or two under normal write pressure.
+const MAX_SCAN_RESTARTS: usize = 5;
 const BACKOFF_INITIAL: Duration = Duration::from_millis(50);
 const BACKOFF_CAP: Duration = Duration::from_secs(1);
 
@@ -465,16 +477,74 @@ impl TsClient {
         table: &Arc<TableHandle>,
         read: &RangeRead,
     ) -> Result<Vec<Row>, YbError> {
-        let mut rows = Vec::new();
-        let mut paging = None;
-        loop {
-            let page = self.read_page(table, read, paging).await?;
-            rows.extend(page.rows);
-            match page.paging_state {
-                Some(p) => paging = Some(p),
-                None => return Ok(rows),
+        self.read_scan(table, read, Vec::new, |rows: &mut Vec<Row>, page| {
+            rows.extend(page);
+            Ok(false)
+        })
+        .await
+    }
+
+    /// Runs a paged scan, restarting the WHOLE scan on a read-restart.
+    /// Each attempt builds a fresh accumulator with `new_acc`, pages the
+    /// range feeding each page's rows to `on_page` (return `Ok(true)` to
+    /// stop early — e.g. once a chain's `will_init` anchor is reached),
+    /// and returns the accumulator when the scan stops early or the range
+    /// is exhausted.
+    ///
+    /// A read-restart (`restart_read_time`, or a mid-scan pin loss — both
+    /// [`YbError::is_read_restart`]) can't be healed on a continuation: it
+    /// must reuse its serial and would replay the same failing read point
+    /// forever. So the in-flight accumulator is dropped and the scan
+    /// restarts from the first page on a fresh read point; the clamp keeps
+    /// that point's uncertainty window shut, so it converges. Bounded to
+    /// [`MAX_SCAN_RESTARTS`], after which the read-restart is surfaced.
+    pub async fn read_scan<A, E>(
+        &self,
+        table: &Arc<TableHandle>,
+        read: &RangeRead,
+        mut new_acc: impl FnMut() -> A,
+        mut on_page: impl FnMut(&mut A, Vec<Row>) -> Result<bool, E>,
+    ) -> Result<A, E>
+    where
+        E: From<YbError>,
+    {
+        let mut backoff = BACKOFF_INITIAL;
+        let mut last: Option<YbError> = None;
+        for attempt in 1..=MAX_SCAN_RESTARTS {
+            let mut acc = new_acc();
+            let mut paging: Option<Bytes> = None;
+            loop {
+                match self.read_page(table, read, paging.take()).await {
+                    Ok(page) => {
+                        if on_page(&mut acc, page.rows)? {
+                            return Ok(acc);
+                        }
+                        match page.paging_state {
+                            Some(p) => paging = Some(p),
+                            None => return Ok(acc),
+                        }
+                    }
+                    // A first-page read-restart heals inside `read_page`
+                    // (fresh serial); this only fires for a continuation.
+                    Err(e) if e.is_read_restart() => {
+                        tracing::warn!(
+                            "yb_tsclient scan read-restart (attempt \
+                             {attempt}/{MAX_SCAN_RESTARTS}), restarting the scan: {e}"
+                        );
+                        last = Some(e);
+                        break;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            if attempt < MAX_SCAN_RESTARTS {
+                tokio::time::sleep(jittered(backoff)).await;
+                backoff = (backoff * 2).min(BACKOFF_CAP);
             }
         }
+        Err(last
+            .expect("MAX_SCAN_RESTARTS >= 1; the inner loop only breaks with a stored error")
+            .into())
     }
 
     /// Issues several reads as ops of ONE Perform call: the server
@@ -863,7 +933,7 @@ impl TsClient {
                 // session the server would silently serve them at a NEW
                 // read time (see [`PagingEnvelope`]). Fail them instead.
                 if pin_ht == 0 && envelope.session_id != session.meta.session_id() {
-                    return Err(YbError::other(format!(
+                    return Err(YbError::read_restart(format!(
                         "paging continuation is bound to server session {} but the \
                          client now holds session {} (recovered mid-scan); restart \
                          the scan",
@@ -999,7 +1069,7 @@ impl TsClient {
                 let SessionSel::PinnedRead(id) = sel else {
                     unreachable!("only PinnedRead can miss the pool");
                 };
-                return Err(YbError::other(format!(
+                return Err(YbError::read_restart(format!(
                     "paging continuation is bound to server session {id} which the \
                      client no longer holds (recovered mid-scan); restart the scan"
                 )));
@@ -1010,6 +1080,16 @@ impl TsClient {
                 Err(e) => {
                     if e.is_timeout() {
                         self.observe(ClientObserver::on_call_timeout);
+                    }
+                    // A read-restart on a paged continuation can't be healed
+                    // in place: the continuation must reuse its serial, so
+                    // every attempt restores the same failing read point.
+                    // Surface it immediately so the scan driver restarts the
+                    // whole scan on a fresh read point. A first page or a
+                    // single-Perform `read_pages` (SessionSel::Read) instead
+                    // retries here — a fresh serial per attempt heals it.
+                    if e.is_read_restart() && matches!(sel, SessionSel::PinnedRead(_)) {
+                        return Err(e);
                     }
                     if !e.is_retryable() || attempt == max_attempts {
                         // Every failed attempt is WARNed with its error
@@ -1552,6 +1632,12 @@ mod tests {
         /// continuation. Used by the idle-close/reopen tests where a read
         /// just needs to succeed.
         PlainOk,
+        /// Perform 1 (first page) → OK + a continuation; Perform 2 (its
+        /// continuation) → `RESTART_REQUIRED`; Perform 3+ (the restarted
+        /// scan's first page) → OK, no continuation. Drives
+        /// [`TsClient::read_scan`]'s whole-scan restart on a read-restart
+        /// that a paged continuation can't heal in place.
+        RestartContinuationThenSucceed,
         /// Send a valid (large) length prefix for the Perform response,
         /// then stall mid-body forever: the reader task blocks in
         /// `read_exact` on a frame that never completes. Models a
@@ -1721,6 +1807,28 @@ mod tests {
                             .iter()
                             .map(|_| op_response(RequestStatus::PgsqlStatusOk))
                             .collect(),
+                        PerformScript::RestartContinuationThenSucceed => {
+                            // counts.perform was incremented above, so this
+                            // is the 1-based index of the current Perform.
+                            let n = counts.perform.load(Ordering::Relaxed);
+                            req.ops
+                                .iter()
+                                .map(|_| match n {
+                                    1 => {
+                                        let mut r = op_response(RequestStatus::PgsqlStatusOk);
+                                        r.paging_state = Some(PagingPb {
+                                            next_partition_key: Some(vec![0x00, 0x01]),
+                                            ..Default::default()
+                                        });
+                                        r
+                                    }
+                                    2 => {
+                                        op_response(RequestStatus::PgsqlStatusRestartRequiredError)
+                                    }
+                                    _ => op_response(RequestStatus::PgsqlStatusOk),
+                                })
+                                .collect()
+                        }
                     };
                     let body = PgPerformResponsePb {
                         responses,
@@ -1937,11 +2045,12 @@ mod tests {
 
     /// Unpinned paging continuations are bound to the server session
     /// that created them (their snapshot lives in that session's
-    /// read-point history). After a session change they must fail loudly
-    /// — the server would otherwise serve them at a silently different
-    /// read time.
+    /// read-point history). After a session change they must NOT be
+    /// served silently at a different read time — instead they surface a
+    /// read-restart, so [`TsClient::read_scan`] restarts the whole scan
+    /// on a fresh read point.
     #[tokio::test(flavor = "multi_thread")]
-    async fn continuation_from_lost_session_fails_loudly() {
+    async fn continuation_from_lost_session_signals_scan_restart() {
         let server = FakeTserver::spawn(PerformScript::PageWithContinuation).await;
         let client = connect_test_client(&server.addr, Duration::from_secs(5)).await;
         let table = test_table();
@@ -1962,10 +2071,38 @@ mod tests {
             Ok(_) => panic!("continuation must not silently switch snapshots"),
             Err(e) => e,
         };
-        assert_eq!(err.class(), ErrorClass::Other, "fatal, not retried: {err}");
+        assert!(
+            err.is_read_restart(),
+            "must signal a scan restart, not silently switch or fail fatally: {err}"
+        );
         assert!(
             err.to_string().contains("session"),
             "unexpected error: {err}"
+        );
+    }
+
+    /// A read-restart on a paged continuation can't heal in place (the
+    /// continuation must reuse its serial and would replay the same failing
+    /// read point). `read_scan` must restart the whole scan on a fresh read
+    /// point and complete, rather than loop until the retry budget burns.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn read_scan_restarts_whole_scan_on_continuation_restart() {
+        let server = FakeTserver::spawn(PerformScript::RestartContinuationThenSucceed).await;
+        let client = connect_test_client(&server.addr, Duration::from_secs(5)).await;
+        let table = test_table();
+
+        client
+            .read_all(&table, &test_read(&table))
+            .await
+            .expect("scan completes after a whole-scan restart");
+
+        // Perform 1 (first page → continuation) + Perform 2 (continuation →
+        // read-restart) on the first attempt, then Perform 3 (the restarted
+        // scan's first page → done) = exactly one whole-scan restart.
+        assert_eq!(
+            server.counts.perform.load(Ordering::Relaxed),
+            3,
+            "read_scan should restart the whole scan exactly once"
         );
     }
 

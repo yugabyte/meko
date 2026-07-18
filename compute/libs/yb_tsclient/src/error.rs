@@ -31,6 +31,14 @@ pub enum ErrorClass {
     Network,
     /// Transient server condition (leader change, busy) — retried with backoff.
     TryAgain,
+    /// Read-restart (`TryAgainCode restart_read_time`): the read point is
+    /// ambiguous against a concurrently-committed row. Retrying a *first*
+    /// page (fresh serial → new read point) heals it, but a paged
+    /// continuation must reuse its serial and would replay the same
+    /// failing read point forever — so the whole scan has to restart. Kept
+    /// separate from `TryAgain` for exactly that reason (see
+    /// [`YbError::is_read_restart`] and the retry driver).
+    ReadRestart,
     /// Table schema version changed — caller re-opens the table and retries.
     SchemaMismatch,
     /// Anything else — surfaced as fatal.
@@ -61,7 +69,19 @@ impl YbError {
     /// session re-establishment) may succeed. Safe for every caller by
     /// contract: reads are snapshots and writes are idempotent upserts.
     pub fn is_retryable(&self) -> bool {
-        matches!(self.class(), ErrorClass::Network | ErrorClass::TryAgain)
+        matches!(
+            self.class(),
+            ErrorClass::Network | ErrorClass::TryAgain | ErrorClass::ReadRestart
+        )
+    }
+
+    /// A read-restart (`restart_read_time`). Retryable in place only for a
+    /// first page or a single-Perform `read_pages` (each attempt takes a
+    /// fresh read point); a paged continuation instead surfaces this so
+    /// the caller can restart the whole scan (see the retry driver and
+    /// [`TsClient::read_scan`]).
+    pub fn is_read_restart(&self) -> bool {
+        self.class() == ErrorClass::ReadRestart
     }
 
     /// True when this attempt gave up waiting for a response (per-call
@@ -109,6 +129,17 @@ impl YbError {
     pub(crate) fn other(message: impl Into<String>) -> Self {
         YbError::Call {
             class: ErrorClass::Other,
+            message: message.into(),
+        }
+    }
+
+    /// A mid-scan snapshot loss whose remedy is to restart the whole scan
+    /// (e.g. the pinned server session was recovered out from under a
+    /// paged continuation). Same class as a `restart_read_time` because
+    /// the fix is identical — see [`YbError::is_read_restart`].
+    pub(crate) fn read_restart(message: impl Into<String>) -> Self {
+        YbError::Call {
+            class: ErrorClass::ReadRestart,
             message: message.into(),
         }
     }
@@ -185,7 +216,7 @@ pub(crate) fn check_pgsql_response(r: &PgsqlResponsePb, what: &str) -> Result<()
             message: message(),
         }),
         RequestStatus::PgsqlStatusRestartRequiredError => Err(YbError::Call {
-            class: ErrorClass::TryAgain,
+            class: ErrorClass::ReadRestart,
             message: message(),
         }),
         _ => Err(YbError::other(message())),
@@ -306,7 +337,7 @@ mod tests {
             check_pgsql_response(&resp(RequestStatus::PgsqlStatusRestartRequiredError), "t")
                 .unwrap_err()
                 .class(),
-            ErrorClass::TryAgain
+            ErrorClass::ReadRestart
         );
         assert_eq!(
             check_pgsql_response(&resp(RequestStatus::PgsqlStatusRuntimeError), "t")

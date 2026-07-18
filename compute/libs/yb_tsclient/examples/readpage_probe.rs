@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use yb_tsclient::{BindValue, CondOp, TsClient, TsClientConfig, RangeRead};
+use yb_tsclient::{BindValue, CondOp, RangeRead, TsClient, TsClientConfig};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {

@@ -86,10 +86,6 @@ pub struct Cluster {
     db_name: String,
     yb_host: String,
     yb_port: u16,
-    /// `YB_HOT_PATH` — hot-path transport for the run (`ysql` | `tsclient`),
-    /// forwarded to `init --yb-hot-path` when set; unset runs the config
-    /// default (tsclient).
-    yb_hot_path: String,
     /// Free port-block base for this run (`init --port-base`), relocating
     /// the whole cluster off the defaults so concurrent runs (and a
     /// developer's local cluster) never collide. Auto-picked free, or
@@ -209,7 +205,6 @@ impl Cluster {
 
         let yb_host = env_or(&["YB_HOST"], "127.0.0.1");
         let yb_port: u16 = env_or(&["YB_PORT"], "5433").parse().context("YB_PORT")?;
-        let yb_hot_path = env_or(&["YB_HOT_PATH"], "");
 
         let db_name = match std::env::var("YB_DBNAME") {
             Ok(d) if !d.is_empty() => d,
@@ -247,7 +242,6 @@ impl Cluster {
             db_name,
             yb_host,
             yb_port,
-            yb_hot_path,
             port_base: 0,
             compute_port: 0,
             branch: String::new(),
@@ -300,7 +294,7 @@ impl Cluster {
         ));
         let yb_port = self.yb_port.to_string();
         let port_base = self.port_base.to_string();
-        let mut init_args = vec![
+        let init_args = [
             "init",
             "--yb-dbname",
             &self.db_name,
@@ -313,9 +307,6 @@ impl Cluster {
             "--port-base",
             &port_base,
         ];
-        if !self.yb_hot_path.is_empty() {
-            init_args.extend(["--yb-hot-path", &self.yb_hot_path]);
-        }
         self.yb(&init_args)?;
         self.yb(&["start"])?;
 

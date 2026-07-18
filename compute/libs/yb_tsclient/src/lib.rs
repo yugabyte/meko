@@ -105,7 +105,7 @@ pub mod pb {
     }
 }
 
-pub use client::{ClientObserver, TsClient, TsClientConfig, ReadPage};
+pub use client::{ClientObserver, ReadPage, TsClient, TsClientConfig};
 pub use error::{ErrorClass, YbError};
 pub use ops::{BindValue, CondOp, RangeRead, UpsertRow};
 pub use table::{ColumnKind, ColumnMeta, TableHandle, pgsql_table_id};

@@ -271,6 +271,48 @@ pub(crate) static PAGE_READS: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+/// Latency of every PageStore round trip to YB, by operation and
+/// transport. `path` = `ysql` (Postgres wire) or `tsclient` (pure-Rust
+/// pggate RPC, `hot_path = "tsclient"`); see `architecture/yugabyte.md`.
+/// NOT the same `path` label as `pageserver_yb_page_reads_total` (which
+/// means cache blend).
+pub(crate) static YB_STORE_OP_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "pageserver_yb_store_op_seconds",
+        "Latency of PageStore operations against YB, by op and transport path",
+        &["op", "path"],
+        metrics::exponential_buckets(0.0005, 2.0, 16)
+            .expect("pageserver_yb_store_op_seconds bucket spec"),
+    )
+    .expect("failed to define a metric")
+});
+
+/// Thin-RPC (`hot_path = "tsclient"`) lane: successful `yb_tsclient`
+/// session recoveries (reconnect + fresh server session + table
+/// re-validation). Occasional after tserver restarts; a sustained rate
+/// means the lane's endpoint is flapping.
+pub(crate) static YB_STORE_SESSION_RECOVERIES: Lazy<IntCounter> = Lazy::new(|| {
+    metrics::register_int_counter!(
+        "pageserver_yb_store_session_recoveries_total",
+        "yb_tsclient session recoveries on the pageserver's thin-RPC lane",
+    )
+    .expect("failed to define a metric")
+});
+
+/// Thin-RPC lane: per-attempt `yb_tsclient` calls that timed out waiting
+/// for a response (transport healthy, server never answered within
+/// `rpc_timeout`). The client retries these internally, so callers only
+/// see the terminal failure — this counter is the early signal of a
+/// server-side stall; a prior incident where reads stalled silently for
+/// hours motivated it.
+pub(crate) static YB_STORE_CALL_TIMEOUTS: Lazy<IntCounter> = Lazy::new(|| {
+    metrics::register_int_counter!(
+        "pageserver_yb_store_call_timeouts_total",
+        "yb_tsclient per-attempt call timeouts on the pageserver's thin-RPC lane",
+    )
+    .expect("failed to define a metric")
+});
+
 /// Count of correctness-fatal errors observed across the pageserver
 /// hot path, broken down by `kind`. **Any non-zero value is a
 /// corruption signal**; this metric exists specifically so paging

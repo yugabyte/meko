@@ -394,8 +394,10 @@ yb_storage_conn = { host_ports = "...", hot_path = "tsclient", tserver_rpc_addrs
   directly to a tserver's RPC port (9100), skipping the PG backend (wire
   framing, parse/plan, pggate); `"ysql"` is the Postgres-wire escape hatch.
   The safekeeper honors it for the WAL write/read path on `safekeeper.wals`
-  (see `compute/architecture/safekeeper.md` §"Direct-to-tserver hot path"). The
-  pageserver page path uses YSQL. Cold paths
+  (see `compute/architecture/safekeeper.md` §"Direct-to-tserver hot path")
+  and the pageserver for the page read/write hot path on
+  `pages`/`slru_pages`/`meta` (see `compute/architecture/yb-pageserver.md`
+  §"Direct-to-tserver hot path"). Cold paths
   (DDL, GC, rehydration, control file, `timeline_state`) always use YSQL.
   Old binaries fail to parse a config that sets these keys
   (`deny_unknown_fields`).

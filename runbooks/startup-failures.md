@@ -65,6 +65,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SC: `Postgres directory 'lib' not found in <dir>/pg_install` | init baked a `pg_distrib_dir` that doesn't exist on this box | **L** |
 | SC connects to YB and fails: `password missing` / `building database URL from --yb-config` | init omits `password_env`/`sslmode` from the YB conn blocks | **M** |
 | `pageserver.toml` top-level knob rejected at startup as `<section>.<key>` | a top-level key was placed **after** a `[section]` header | **N** |
+| PS/SK panics at startup: `OS can't spawn worker thread: Resource temporarily unavailable` | per-user process/thread limit (`ulimit -u` / cgroup `pids.max`) exhausted | **O** |
 
 ---
 
@@ -258,3 +259,22 @@ PGPASSWORD="$PGPASSWORD" $PSQL "host=$COMPUTE_HOST port=$COMPUTE_PORT user=cloud
 ```
 If `yb_amp.pageserver_connstring` doesn't point at the PS you expect, the compute is talking to the
 wrong pageserver — re-check branch placement (Step E/F) before anything else.
+
+## O. PS/SK panic at startup: `OS can't spawn worker thread: Resource temporarily unavailable`
+
+`pthread_create` returned EAGAIN — the box hit the per-user process/thread
+limit (`ulimit -u`, and/or the user slice's cgroup `pids.max`), so tokio (or
+the tsclient RPC reactors) couldn't spawn a worker. Seen when many endpoint
+PS+SK pairs run on one host: with `hot_path = "tsclient"` each daemon also
+opens pggate RPC connections to the tserver RPC port, adding worker/reactor
+threads per daemon (daemons sharing a process share one client).
+
+Check and raise:
+```sh
+ulimit -u                                   # per-user limit in this shell
+ps -eLf | grep -c $USER                     # live thread count for the user
+ps -eo pid,nlwp,comm --sort=-nlwp | head    # top per-process consumers
+```
+Raise via `/etc/security/limits.d/` (`<user> soft nproc 8192`) or the systemd
+user slice (`TasksMax=`). Rule of thumb per tsclient-mode endpoint pair:
+~90 threads (PS ~55, SK ~36) plus the compute's postgres processes.

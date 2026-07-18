@@ -113,7 +113,8 @@ rejects a mismatch loudly). So while the FIRST page round-robins, every
 continuation re-pins to that exact read session (looked up by session id
 in the pool). Single-page reads — no continuation — round-robin freely;
 that is the win. On a recovered pool the pinned session id is gone, so
-the continuation fails loudly and the caller restarts the scan.
+the continuation surfaces a read-restart (`YbError::is_read_restart`) and
+`read_scan` restarts the whole scan on a fresh read point (see below).
 
 Why spread writes at all (the earlier M4 bulk-ingest finding still
 holds): concurrent multi-megabyte write Performs on ONE connection
@@ -185,9 +186,10 @@ fault.
 session id, so the server's read-point history for the old session is
 gone. An *unpinned* paged continuation is bound to its originating
 session (its snapshot lives only in that session's history), so the
-client refuses to reopen a Cold session for such a continuation and fails
-loudly (`Other`, non-retryable) — the same failure a recovery produces —
-routing the caller to its YSQL fallback rather than silently serving a
+client refuses to reopen a Cold session for such a continuation and
+surfaces a read-restart (`ReadRestart`, `is_read_restart`) — the same
+signal a mid-scan `restart_read_time` produces — so `read_scan` restarts
+the whole scan on a fresh read point rather than silently serving a
 fresh (wrong) snapshot. This is safe in practice because scans issue
 pages back-to-back with no idle gap, so `idle_timeout` won't fire
 mid-scan; the guard is a correctness backstop, not a hot path. (An

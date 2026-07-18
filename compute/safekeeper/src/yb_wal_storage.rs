@@ -3989,12 +3989,30 @@ mod tests {
             pos = Lsn(pos.0 + len as u64);
             stream.extend_from_slice(&buf);
         }
+        // Baselines to prove each hot path actually ran on the tsclient
+        // lane: its path-labeled metric advances only on the lane's arm,
+        // so a dispatch bug routing to YSQL would leave these flat while
+        // the cross-checks below still passed.
+        let insert_before = crate::metrics::YB_WAL_INSERT_SECONDS
+            .with_label_values(&["tsclient"])
+            .get_sample_count();
+        let fetch_before = crate::metrics::WAL_CACHE_YB_FETCH_SECONDS
+            .with_label_values(&["tsclient"])
+            .get_sample_count();
+
         // Durability barrier: the consumer flushes through the tsclient
         // lane (one Perform per coalesced batch).
         storage
             .flush_wal()
             .await
             .expect("flush_wal (tsclient lane)");
+        assert!(
+            crate::metrics::YB_WAL_INSERT_SECONDS
+                .with_label_values(&["tsclient"])
+                .get_sample_count()
+                > insert_before,
+            "flush did not run on the tsclient lane"
+        );
 
         // Cross-transport visibility: plain-YSQL rehydration sees the
         // tsclient-written rows and lands exactly at the stream end.
@@ -4031,6 +4049,13 @@ mod tests {
         assert_eq!(
             got, stream,
             "tsclient fetch must round-trip the flushed bytes"
+        );
+        assert!(
+            crate::metrics::WAL_CACHE_YB_FETCH_SECONDS
+                .with_label_values(&["tsclient"])
+                .get_sample_count()
+                > fetch_before,
+            "fetch did not run on the tsclient lane"
         );
 
         drop_wals_table(&client, &table).await;

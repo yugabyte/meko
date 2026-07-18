@@ -180,3 +180,26 @@ same build or the same host. There is currently no version/capability
 handshake on that link beyond the `protocol=` format selector, so any
 leaner-but-version-sensitive framing (see #69) must be negotiated, with the
 portable protobuf encoding remaining the default/fallback.
+
+### The hot path needs direct tserver RPC access
+
+With `hot_path = "tsclient"` (the default), the safekeeper (WAL
+write/read on `safekeeper.wals`) and the pageserver (page read/write on
+`pages`/`slru_pages`/`meta`) speak YB's native pggate RPC **straight to
+the yb-tserver RPC port** (9100), not through the YSQL frontend (5433).
+The topology diagram above lists only `:7100`/`:5433` because that is
+what `yugabyted` advertises, but the tserver RPC port is just as
+load-bearing.
+
+**Deployment invariant** — every host running a safekeeper or pageserver
+must reach the RPC port of the tservers it targets: the endpoints in
+`tserver_rpc_addrs`, or the `host_ports` hosts on 9100 when that is
+unset. (Tablet routing is server-side, so the client needs only those
+configured endpoints, not every tserver.) A firewall / security group /
+network policy that opens only 5433 (YSQL) and 7100 (master) lets the
+control plane and cold paths keep working while breaking the hot path —
+it surfaces as `hot_path = "tsclient"` startup health-check failures
+(each daemon opens its table handles at boot) or terminal getpage/WAL
+errors. Keep 9100 (and any ports named in `tserver_rpc_addrs`) reachable
+from every SK/PS host. See [`yugabyte.md`](yugabyte.md)
+§"Direct-to-tserver hot path".

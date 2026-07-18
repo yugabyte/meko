@@ -54,6 +54,10 @@ Code anchors:
 
 - `compute/libs/remote_storage/src/yb_store.rs` — the YbStore impl, chunked
   uploads, streaming downloads, parse/reconstruct key.
+- `compute/libs/yb_tsclient` — pure-Rust direct-to-tserver client
+  (`hot_path = "tsclient"`, the default): speaks the pggate RPC protocol
+  to a tserver's RPC port, no native library; see
+  `compute/architecture/yugabyte.md` §"Direct-to-tserver hot path".
 - `compute/libs/remote_storage/src/config.rs` — `YbStoreConfig` (host, port,
   user, `password_env`, `sslmode`, etc.).
 - `compute/safekeeper/src/control_file.rs` — `ControlFileStorage` enum.
