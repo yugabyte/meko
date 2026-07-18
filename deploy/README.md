@@ -223,6 +223,10 @@ This compiles patched Postgres v18, the Rust services, and the `neon`
 extension, so the first build is slow. The `ghcr.io/neondatabase/build-tools`
 base image is required (same as the repo-root Dockerfile).
 
+On an **Apple Silicon Mac** the default qemu emulation crashes the Rust compile;
+see [`building-images-apple-silicon.md`](building-images-apple-silicon.md) to build
+locally via Rosetta.
+
 ## Configuration contract
 
 The supervisor reads these environment variables (the Helm chart sets them via
