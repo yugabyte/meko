@@ -4,13 +4,52 @@
 
 # YugabyteDB AMP
 
-**YugabyteDB AMP** — **A**gentic **M**ultitenant **P**ostgres — is a
-serverless Postgres-compatible storage system that runs PostgreSQL
-computes over **YugabyteDB** as the durable backing store.
-Compute nodes are stateless and the storage tier is row-per-page tables
-in YB — so the system inherits YugabyteDB's highly available,
-geo-distributed, multi-region, multi-cloud, infinitely-scalable
-replication model directly underneath every byte of every page.
+**AMP** (Agentic Multitenant Postgres) is Yugabyte's next-generation
+data-platform service that lets you run **PostgreSQL-compatible, multi-model
+databases** (Postgres, pgvector, Apache AGE, Timeseries, Babelfish SQL Server,
+HexaBridge Oracle, DocumentDB Mongo, …) as **managed data planes** inside the
+user's own VPC or on-prem Kubernetes clusters, while a cloud-hosted **control
+plane** handles lifecycle, security, metering and billing.
+
+Under the hood, compute nodes are stateless PostgreSQL computes and the storage
+tier is row-per-page tables in **YugabyteDB** — so the system inherits
+YugabyteDB's highly available, geo-distributed, multi-region, multi-cloud,
+infinitely-scalable replication model directly underneath every byte of every
+page.
+
+## Core concepts
+
+| Concept | What it is | Why it matters |
+|---------|------------|----------------|
+| **Control plane** | SaaS service (`ctl.amp.yugabyte.cloud`) that provisions, upgrades, and monitors data planes via MCP + REST API + UI. | Centralized ops, SOC 2-compliant, tiered tenancy (shared vs dedicated). |
+| **Data plane** | The actual database workloads, deployed in the customer's VPC/on-prem K8s. One data plane per BU or geography for regulatory isolation. | Data never leaves the customer network; outbound-only mTLS to control plane. |
+| **Foundation** | Shared storage + topology (cloud/geo-bound, compute-storage separation). | Provides elastic, high-performance storage for all databases. |
+| **Shared pool** | Logical multitenancy boundary (team/BU) with PITR, quota, burst policy. | Enables safe, cost-controlled sharing of resources. |
+| **Agents** (Architect, Voyager, Perf Advisor, Nexus) | Built-in AI-driven helpers that plan, migrate, tune, and integrate databases. | Reduce operational overhead and accelerate time-to-value. |
+| **Meko** | Governance layer that records context & decision traces for every agent action. | Auditable, reproducible operations. |
+| **Metering & billing** | 4 core meters: data-plane compute (vCPU + branches), IOPS, data stored, and data-plane usage. Branches are **metered on logical size + IOPS** (not CoW delta). Backup storage, network egress, and S3/NFS live in the customer VPC and are **pass-through costs**, not AMP meters. Marketplace billing is available on all major clouds. | Transparent, usage-based pricing. |
+
+## Key benefits
+
+- **Fast, agent-augmented operations** — agents automate provisioning, migration, and performance tuning.
+- **Regulatory compliance** — data planes run inside your VPC/on-prem, with BYOK and outbound-only control-plane connections.
+- **Scalable performance** — Local File Cache (LFC) gives strong read performance; benchmarks show AMP matches or exceeds Aurora on read-heavy workloads and stays within 25% on write-heavy ones.
+- **Flexible deployment** — deploy via Terraform provider, Helm chart, or the Kubernetes Operator.
+- **Managed vs self-managed** — choose a shared control plane (lower tier) or a dedicated one (higher tier) with SOC 2 compliance.
+
+## Repository layout
+
+This repo holds AMP's three main components, each with its own README and
+architecture docs:
+
+- [`compute/`](compute/) — the storage / compute engine (the data plane): the
+  patched PostgreSQL compute, pageserver, safekeeper, the `yb_amp` Postgres
+  extension, and supporting Rust libraries.
+- [`controller/`](controller/) — the control plane for a placement group:
+  owns the lifecycle of storage pools, projects, PG clusters/branches, and
+  endpoints, exposed through a REST API.
+- [`amp_ui/`](amp_ui/) — the web UI: a React 19 + Vite + Tailwind SPA over
+  the controller REST API.
 
 
 ## AI assistants
@@ -121,13 +160,24 @@ flowchart TB
     pgc --> ybdb
 ```
 
-## Quick start
+## Quick Local Start
 
-ybAmp is **not** a hosted service. To run it you bring your own
-YugabyteDB cluster (any deployment — local single-node, YBA-managed
-multi-region, YBM) and point a pageserver + safekeeper at it.
+AMP is a hosted service. For local development you run just the compute
+yourself: a YugabyteDB cluster as the durable backing store, plus a
+compute pointed at it. You can point at any YB deployment
+(local single-node, YBA-managed multi-region, YBM); the bundled workflow
+below assumes a local single-node cluster.
 
-The bundled developer workflow uses `yb_amp_local`:
+Start a local YugabyteDB first — `./scripts/yb-local.sh` runs the same
+pinned image CI uses, reachable at `127.0.0.1:5433` / db `yb_storage`:
+
+```sh
+./scripts/yb-local.sh start         # run (first pull ~1GB) + wait until ready
+./scripts/yb-local.sh status        # is it up and accepting connections?
+./scripts/yb-local.sh stop          # stop and remove the container
+```
+
+Then bring up the AMP stack with the bundled `yb_amp_local` workflow:
 
 ```sh
 ./build.sh                        # build patched PG + Rust binaries (see "Building from source")
@@ -150,7 +200,7 @@ binary directly — handy for fast, repeated invocations:
 Both pass all arguments straight through and resolve the repo root
 from their own location, so they work from any working directory.
 
-The pageserver expects to find a YB cluster reachable from the host;
+The compute expects to find a YB cluster reachable from the host;
 configure host_ports/user/dbname/sslmode in `config.toml` under the
 `yb_storage_conn` section. `host_ports` is a single
 CSV key of the form `host:port[,host:port,...]` (default port 5433);
@@ -158,11 +208,7 @@ a bare host with no `:port` defaults to 5433 and a comma-separated list
 of YB tservers (`"10.0.0.1:5433,10.0.0.2:5433,10.0.0.3:5433"`) — the
 client tries them in order on connect, giving libpq-style failover
 across the cluster. Table names are not configurable: each component
-hardcodes the table(s) it owns. Smart-driver
-load-balancing (`yb_servers()`-based fanout) is currently disabled
-pending an upstream `yb-tokio-postgres` fix; see the comment in
-`compute/libs/ysql_client/src/lib.rs::build_pg_config` for the state of that
-workaround.
+hardcodes the table(s) it owns.
 
 Once running, connect with any Postgres client:
 
@@ -295,12 +341,11 @@ Rust unit tests:
 cargo test --workspace
 ```
 
-Several live-DB tests (`pageserver::page_store::tests`, `pageserver::page_writer::tests`,
-`safekeeper::yb_wal_storage::tests`, and the `yb_tsclient` live suite in
-`compute/libs/yb_tsclient/tests/live.rs`) assert against a live YB with the
-production schema migrated. They default to a developer-managed cluster on
-`5433`/`yb_storage` (override with `YB_TEST_HOST/PORT/USER/DB`); without one,
-`test/integration/compute/run.sh unit` runs them against an isolated ephemeral cluster.
+Several live-DB tests assert against a live YB with the production schema
+migrated. They default to a developer-managed cluster on `5433`/`yb_storage`
+(override with `YB_TEST_HOST/PORT/USER/DB`); without one,
+`test/integration/compute/run.sh unit` runs them against an isolated ephemeral
+cluster.
 
 Integration tests (require a YB cluster reachable from the test runner):
 
@@ -330,100 +375,27 @@ Scenario tests live in `test/integration/compute/{fast,slow}/` (typed
 Both are auto-discovered — adding a test is just dropping a file. Run
 the suite before claiming any corruption-class fix.
 
+Functional (end-to-end system) tests live under
+[`test/functional/`](test/functional/) — `ampqa`, a standalone Go framework
+that stands up a full AMP deployment on k8s / GCE / AWS, drives real workloads
+and chaos through it, and reports what happened. See
+[`test/functional/framework/README.md`](test/functional/framework/README.md).
+
 ## Operator tools
 
-Three compiled `pageserver` bins (`cargo build -p pageserver`) that read
-the row-store tables and render them in a human-readable form. They share
-one connection-args struct ([`ysql_client::YbConnArgs`](compute/libs/ysql_client/src/lib.rs)),
-so the flags are identical across all three and can't drift — and all work
-against both a local no-TLS cluster (default) and a TLS-required one
-(`--sslmode require`). `build.sh --release-tar` stages them into
-`${BUNDLE}/tools/` so they ship to deploy hosts alongside the daemons.
-
-- [`yb-dump-pages`](compute/pageserver/src/bin/yb-dump-pages.rs) — dump or decode
-  `pageserver.pages` rows for one (rel, fork) tuple. Renders the LSN as
-  `H/L` hex and forknum as `main`/`fsm`/`vm`/`init`. Required hash columns:
-  `--tenant --timeline --spc --db --rel --fork`. Range filters: `--blknum`
-  (or `--blknum-from/--blknum-to`), `--lsn-from`/`--lsn-to` (PG `X/Y` hex).
-  `--no-payload` drops the byte preview, `--limit 0` is unbounded.
-  `--decode` switches to a single-block chain decoder: it walks the chain
-  LSN-ascending (the order walredo applies it), prints each image's
-  line-pointer `max_off` and each delta's WAL resource-manager + op + target
-  `offnum`, and flags a GAP when a delta's `offnum` exceeds the running
-  max+1 — the signature of a chain walredo can't fold and of a base image
-  too small for the deltas above it (see issue #22).
-- [`yb-dump-wals`](compute/pageserver/src/bin/yb-dump-wals.rs) — dump `safekeeper.wals`
-  rows (the safekeeper's WAL-in-YB chunks). Required hash columns:
-  `--tenant --timeline`. Range filters: `--segno` (or
-  `--segno-from/--segno-to`), `--chunk-offset` (or its `-from/-to`
-  variants), `--lsn-from`/`--lsn-to` (mapped to segno+offset via
-  `--wal-seg-size`, default 16 MiB). `--no-data` drops the byte preview.
-  `--summary` swaps the row dump for a per-segno health view
-  (`min/max LSN, total_bytes, gap_bytes`) — the fastest way to spot a WAL
-  hole during an incident.
-- [`yb-reset-consistent-lsn`](compute/pageserver/src/bin/yb-reset-consistent-lsn.rs)
-  — find (and optionally rewind) `pageserver.timeline_state.consistent_lsn`
-  to a real WAL record boundary. Given `--tenant --timeline --target-lsn
-  X/Y` it anchors on a fresh-record WAL page, replays the real WAL decoder
-  over `safekeeper.wals`, and reports the largest record boundary `<= target`
-  plus its matching `prev_record_lsn`. Defaults to a dry run; `--set`
-  writes the pair back (`--expect-generation N` to generation-fence the
-  write, `--null-prev` to let the walreceiver re-derive prev). Use it to
-  rewind past a bad replay point — picking an arbitrary segment/page-aligned
-  LSN instead makes PS loop forever on `YB WAL hole` or `invalid xlog page
-  header: xlp_rem_len`.
-
-Sample invocations (use the bundle's `tools/` copy on a deploy host, or
-`cargo run --bin <tool> --` locally):
-
-```sh
-yb-dump-wals  --tenant <hex> --timeline <hex> --summary
-yb-dump-wals  --tenant <hex> --timeline <hex> \
-              --lsn-from 0/1545000 --lsn-to 0/15A0000 --limit 5
-yb-dump-pages --tenant <hex> --timeline <hex> \
-              --spc 1663 --db 5 --rel 16384 --fork 0 --blknum 0 --limit 3
-# decode one block's chain and check it folds (offnum gaps = landmine)
-yb-dump-pages --decode --tenant <hex> --timeline <hex> \
-              --spc 1663 --db 16384 --rel 16414 --fork 0 --blknum 1456384
-# dry run: print the max valid consistent_lsn <= target, then rewind to it
-yb-reset-consistent-lsn --tenant <hex> --timeline <hex> --target-lsn 22/63000000
-yb-reset-consistent-lsn --tenant <hex> --timeline <hex> --target-lsn 22/63000000 --set
-# remote TLS cluster (e.g. AWS): add --sslmode (and --sslrootcert to verify)
-yb-dump-wals  --host-ports <host:port> --sslmode require --password-env PGPASSWORD \
-              --tenant <hex> --timeline <hex> --summary
-```
-
-All three default to a local `yb_amp_local` cluster (`127.0.0.1:5433`,
-`yugabyte`/`yb_storage`, no TLS) and accept the shared
-`--host-ports`/`--user`/`--db-name`/`--password-env`/`--sslmode`/`--sslrootcert`
-overrides for remote clusters.
+`cargo build -p pageserver` builds three row-store inspection binaries —
+`yb-dump-pages`, `yb-dump-wals`, and `yb-reset-consistent-lsn` — for reading
+and repairing the YB tables during an incident. `build.sh --release-tar` ships
+them under `${BUNDLE}/tools/`. See
+[`compute/README.md`](compute/README.md#operator-tools) for the per-tool flags
+and sample invocations.
 
 ## Operational runbooks
 
-[`runbooks/`](runbooks/) — incident-time playbooks for common failure
-modes on a running ybAmp deployment. Each runbook is structured as
-"symptom → quick diagnosis → fix"; read them in advance once so the
-shape is familiar, then jump straight to the relevant one during an
-incident.
-
-- [`runbooks/startup-failures.md`](runbooks/startup-failures.md) —
-  a component (PS / SK / compute / controller) won't start,
-  won't register, or the compute can't serve queries.
-- [`runbooks/throughput-troubleshooting.md`](runbooks/throughput-troubleshooting.md)
-  — low throughput on TPC-C load / execute or any OLTP workload;
-  isolating compute vs. PS vs. SK vs. YB as the bottleneck.
-- [`runbooks/perf-investigation.md`](runbooks/perf-investigation.md) —
-  broader performance investigation: memory growth, pageserver
-  internals, WAL backlog, materialiser pacing.
-
-## Flamegraphs
-
-[`flamegraph-rs`](https://github.com/flamegraph-rs/flamegraph) works
-out of the box.
-
-> [!IMPORTANT]
-> If you're linking with `lld` or `mold`, pass `--no-rosegment` —
-> general Rust+alt-linker thing, not specific to this repo.
+[`runbooks/`](runbooks/) holds incident-time playbooks ("symptom → quick
+diagnosis → fix") for a running AMP deployment — component startup failures,
+throughput troubleshooting, and broader performance investigation. See
+[`compute/README.md`](compute/README.md#operational-runbooks) for the index.
 
 ## Cleanup
 
@@ -432,49 +404,6 @@ make clean      # remove build artefacts
 make distclean  # everything from build + configure
 rm -rf .yb_amp    # local dev cluster state (destroys local data)
 ```
-
-## Documentation
-
-Start here:
-
-- [`compute/architecture/README.md`](compute/architecture/README.md) — index page for
-  the storage/compute engine architecture section; one-line summary of every component
-  doc below.
-- [`compute/architecture/high-level.md`](compute/architecture/high-level.md) —
-  components, processes, ports, what-talks-to-what at a single page.
-
-Per-component deep dives:
-
-- [`compute/architecture/compute.md`](compute/architecture/compute.md) — the patched
-  Postgres compute (unchanged in yb-amp); how the `yb_amp` smgr
-  extension wires page reads and WAL writes through the gateway.
-- [`compute/architecture/yb-pageserver.md`](compute/architecture/yb-pageserver.md) —
-  the row-store gateway design: schema, chain reconstruction,
-  `UnifiedPages` buffer, image materialiser semantics, and write batching.
-- [`compute/architecture/safekeeper.md`](compute/architecture/safekeeper.md) — the WAL-in-YB
-  reduction in ybAmp is described inline in `yugabyte.md` and in
-  the safekeeper module docs.
-- [`controller/architecture/sc-integration.md`](controller/architecture/sc-integration.md)
-  — cluster control in the Go controller: generation authority (attach-hook), the
-  node/branch/endpoint registries, and `yb_storage` provisioning.
-- [`compute/architecture/remote-storage.md`](compute/architecture/remote-storage.md)
-  — the `RemoteStorage` abstraction and the `YbStore` backend that
-  replaced S3/GCS/Azure (blob/basebackup tar/initdb layer).
-- [`compute/architecture/yugabyte.md`](compute/architecture/yugabyte.md) — what the
-  YB cluster looks like from ybAmp's perspective: databases,
-  tables, prefixes, idempotency contract, and the DDL the operator
-  must provision.
-
-Per-service HTTP API + Prometheus metrics reference (one `-apis.md` and
-one `-metrics.md` per service): the compute-engine services (pageserver,
-safekeeper, compute_ctl, endpoint_storage) are indexed in
-[`compute/architecture/README.md`](compute/architecture/README.md) — e.g.
-[`compute/architecture/yb-pageserver-apis.md`](compute/architecture/yb-pageserver-apis.md),
-[`compute/architecture/safekeeper-metrics.md`](compute/architecture/safekeeper-metrics.md);
-the controller's are under
-[`controller/architecture/`](controller/architecture/).
-
-`cargo doc --no-deps --open` for rustdoc.
 
 ## Issue tracking
 
@@ -486,16 +415,3 @@ subjects reference issues.
 ## Contributing
 
 - Read [`AGENTS.md`](AGENTS.md) — applies to humans too.
-
-## What's left of Neon, what's new
-
-ybAmp started as a fork of [neondatabase/neon](https://github.com/neondatabase/neon)
-but is no longer one in any meaningful sense. The layer-file storage
-engine, the disk-backed page cache, the S3 / GCS / Azure remote-storage machinery,
-and sharding logic, have all been removed. What
-remains is the patched Postgres compute, and WAL redo handling,  wrapped around an
-entirely different storage substrate. The "pageserver" is now a thin row-store
-gateway between the Postgres compute and YugabyteDB. It is no longer multi-tenant,
-and only supports a single endpoint. The safekeeper does not use any paxos logic,
-since the underlying yb storage provides the necessary consistency and durability
-guarantees.

@@ -163,7 +163,9 @@ Code anchors:
 `/home/yugabyte/yb-amp-bundle/` instance on the AWS box has a separate
 handoff doc.)
 
-- The dev YB lives at `127.0.0.1:5433`.
+- AMP is a hosted service; for local work you run the whole stack yourself.
+  Start a local single-node YB with `./scripts/yb-local.sh start` (same
+  CI-pinned image), reachable at `127.0.0.1:5433` / db `yb_storage`.
 - Topology spawns from `yb_amp_local init --config <file>` then
   `yb_amp_local start`. All durable state goes to YB; local FS only holds
   logs, pidfiles, and the compute's ephemeral `pgdata`.
