@@ -14,6 +14,9 @@ name: CI
 #                (run.sh's default), `all` (unit, fast, slow) on main.
 #   controller — Go controller: `go build`, `go vet`, `go test`.
 #   ui         — amp_ui: `npm ci`, `tsc --noEmit` (npm run check), vite build.
+#   deploy     — Helm charts + endpoint supervisor: `helm lint` and
+#                `helm unittest` on both charts, the Guaranteed-QoS guardrail,
+#                and `ruff` on deploy/ Python. Renders/validates without a cluster.
 #
 # Unit-test results are published as PR checks (dorny/test-reporter) from
 # the JUnit XML that nextest/gotestsum emit, so failures show up as a
@@ -66,6 +69,7 @@ jobs:
       compute: ${{ steps.filter.outputs.compute }}
       controller: ${{ steps.filter.outputs.controller }}
       ui: ${{ steps.filter.outputs.ui }}
+      deploy: ${{ steps.filter.outputs.deploy }}
     steps:
       # paths-filter uses the GitHub API for pull_request events, but for
       # push events it diffs locally and needs the repo checked out. On a
@@ -98,6 +102,9 @@ jobs:
               - '.github/workflows/pr-build.yml'
             ui:
               - 'amp_ui/**'
+              - '.github/workflows/pr-build.yml'
+            deploy:
+              - 'deploy/**'
               - '.github/workflows/pr-build.yml'
 
   compute:
@@ -392,3 +399,39 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  deploy:
+    name: Deploy — helm charts & supervisor lint
+    needs: changes
+    if: needs.changes.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install helm + helm-unittest plugin
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.18.6
+      - run: helm plugin install https://github.com/helm-unittest/helm-unittest.git
+
+      # helm lint + helm-unittest render templates and assert output; nothing here
+      # deploys — this validates the charts without a cluster. yq (v4, mikefarah)
+      # for the Guaranteed-QoS guardrail is preinstalled on ubuntu runners.
+      - name: helm lint
+        run: |
+          helm lint deploy/helm/yb-amp-endpoint
+          helm lint deploy/helm/yb-amp-controller
+
+      - name: helm unittest + Guaranteed-QoS guardrail (endpoint chart)
+        run: make endpoint-chart-test
+
+      - name: helm unittest (controller chart)
+        run: helm unittest deploy/helm/yb-amp-controller
+
+      # The endpoint supervisor is the only Python in deploy/; lint it with the
+      # repo's ruff config (scripts/reformat only covers controller + scripts).
+      - name: Lint deploy Python (ruff)
+        run: |
+          pipx install ruff==0.11.2
+          ruff check deploy/

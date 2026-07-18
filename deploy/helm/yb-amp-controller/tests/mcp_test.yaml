@@ -2,6 +2,10 @@ suite: mcp
 templates:
   - templates/mcp-deployment.yaml
   - templates/mcp-service.yaml
+# Pin appVersion so the image-tag assertion is deterministic — the real
+# appVersion is stamped from the repo-root VERSION file (scripts/version.sh).
+chart:
+  appVersion: "1.2.3"
 tests:
   - it: renders the MCP Deployment pointing AMP_CONTROLLER_URL at the controller Service
     template: templates/mcp-deployment.yaml
@@ -50,7 +54,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: amp/mcp:0.1.0
+          value: amp/mcp:1.2.3
 
   - it: exposes the mcp container port and HTTP /healthz probes
     template: templates/mcp-deployment.yaml

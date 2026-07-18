@@ -1,6 +1,10 @@
 suite: rbac
 templates:
   - templates/rbac.yaml
+# The ClusterRole/ClusterRoleBinding are gated behind rbac.clusterScoped
+# (off by default); enable it so all five RBAC documents render.
+set:
+  rbac.clusterScoped: true
 tests:
   - it: renders the ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding
     release:

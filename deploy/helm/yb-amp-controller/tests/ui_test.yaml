@@ -2,6 +2,10 @@ suite: ui
 templates:
   - templates/ui-deployment.yaml
   - templates/ui-service.yaml
+# Pin appVersion so the image-tag assertion is deterministic — the real
+# appVersion is stamped from the repo-root VERSION file (scripts/version.sh).
+chart:
+  appVersion: "1.2.3"
 tests:
   - it: renders the UI Deployment pointing CONTROLLER_URL at the controller Service
     template: templates/ui-deployment.yaml
@@ -40,7 +44,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: amp/controller-ui:0.1.0
+          value: amp/controller-ui:1.2.3
 
   - it: exposes the http container port and HTTP /healthz probes
     template: templates/ui-deployment.yaml

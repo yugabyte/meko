@@ -1,6 +1,10 @@
 suite: controller-deployment
 templates:
   - templates/controller-deployment.yaml
+# Pin appVersion so the image-tag assertion is deterministic — the real
+# appVersion is stamped from the repo-root VERSION file (scripts/version.sh).
+chart:
+  appVersion: "1.2.3"
 tests:
   - it: renders the controller Deployment with its ServiceAccount
     asserts:
@@ -20,7 +24,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: amp/controller:0.1.0
+          value: amp/controller:1.2.3
 
   - it: honours controller image repository and tag overrides
     set:
