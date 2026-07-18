@@ -476,7 +476,7 @@ impl SafekeeperPostgresHandler {
             )),
         };
 
-        // yb-light: commit_lsn ≡ flush_lsn (single-SK), so the walsender
+        // yb-amp: commit_lsn ≡ flush_lsn (single-SK), so the walsender
         // always streams up to the committed frontier.
         let end_watch = EndWatch::new(tli.get_commit_lsn_watch_rx());
         let end_pos = end_watch.get();
@@ -640,7 +640,7 @@ impl SafekeeperPostgresHandler {
     }
 }
 
-/// Walsender streams up to the commit_lsn frontier. In yb-light
+/// Walsender streams up to the commit_lsn frontier. In yb-amp
 /// commit_lsn ≡ flush_lsn (single-SK), so this is also the flush frontier.
 #[derive(Clone)]
 pub(crate) struct EndWatch(Receiver<Lsn>);

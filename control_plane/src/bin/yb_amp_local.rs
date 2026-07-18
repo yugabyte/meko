@@ -1,9 +1,9 @@
 //!
-//! `yb_light_local` is an executable that can be used to create a local
-//! ybLight environment, for testing purposes. The local environment is
+//! `yb_amp_local` is an executable that can be used to create a local
+//! ybAmp environment, for testing purposes. The local environment is
 //! quite different from the cloud environment with Kubernetes, but it
 //! easier to work with locally. The python tests in `old_neon_test_runner`
-//! rely on `yb_light_local` to set up the environment for each test.
+//! rely on `yb_amp_local` to set up the environment for each test.
 //!
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
@@ -17,19 +17,17 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use compute_api::requests::ComputeClaimsScope;
 use compute_api::spec::{ComputeMode, PageserverProtocol};
+use control_plane::controller::{Controller, YbAmpControllerStartArgs, YbAmpControllerStopArgs};
 use control_plane::endpoint::local_pageserver_conf_to_conn_info;
 use control_plane::endpoint::{ComputeControlPlane, EndpointTerminateMode};
 use control_plane::endpoint_storage::{ENDPOINT_STORAGE_DEFAULT_ADDR, EndpointStorage};
 use control_plane::local_env;
 use control_plane::local_env::{
     EndpointStorageConf, InitForceMode, LocalEnv, PageServerConf, SafekeeperConf,
-    YbLightLocalInitConf, YbLightLocalInitPageserverConf, YbLightControllerConf,
+    YbAmpControllerConf, YbAmpLocalInitConf, YbAmpLocalInitPageserverConf,
 };
 use control_plane::pageserver::PageServerNode;
 use control_plane::safekeeper::SafekeeperNode;
-use control_plane::controller::{
-    Controller, YbLightControllerStartArgs, YbLightControllerStopArgs,
-};
 use nix::fcntl::{Flock, FlockArg};
 use pageserver_api::config::{
     DEFAULT_GRPC_LISTEN_PORT as DEFAULT_PAGESERVER_GRPC_PORT,
@@ -100,16 +98,16 @@ struct YbStoreTarget {
     hot_path: ysql_client::HotPath,
 }
 
-/// ybLight CLI.
+/// ybAmp CLI.
 #[derive(clap::Parser)]
-#[command(version = GIT_VERSION, name = "ybLight CLI")]
+#[command(version = GIT_VERSION, name = "ybAmp CLI")]
 struct Cli {
     #[command(subcommand)]
-    command: YbLightLocalCmd,
+    command: YbAmpLocalCmd,
 }
 
 #[derive(clap::Subcommand)]
-enum YbLightLocalCmd {
+enum YbAmpLocalCmd {
     Init(InitCmdArgs),
 
     #[command(subcommand)]
@@ -135,7 +133,7 @@ enum YbLightLocalCmd {
     Stop(StopCmdArgs),
 }
 
-/// Initialize a new ybLight repository, preparing configs for services to start with.
+/// Initialize a new ybAmp repository, preparing configs for services to start with.
 #[derive(clap::Args)]
 struct InitCmdArgs {
     /// How many pageservers to create (default 1).
@@ -785,7 +783,7 @@ struct EndpointGenerateJwtCmdArgs {
     scope: Option<ComputeClaimsScope>,
 }
 
-/// Manage yb_light_local branch name mappings.
+/// Manage yb_amp_local branch name mappings.
 #[derive(clap::Subcommand)]
 enum MappingsCmd {
     Map(MappingsMapCmdArgs),
@@ -808,13 +806,13 @@ struct MappingsMapCmdArgs {
 struct TimelineTreeEl {
     /// `TimelineInfo` received from the `pageserver` via the `timeline_list` http API call.
     pub info: TimelineInfo,
-    /// Name, recovered from ybLight config mappings
+    /// Name, recovered from ybAmp config mappings
     pub name: Option<String>,
     /// Holds all direct children of this branch referenced using `branch_id`.
     pub children: BTreeSet<BranchId>,
 }
 
-/// A flock-based guard over the yb_light_local repository directory
+/// A flock-based guard over the yb_amp_local repository directory
 struct RepoLock {
     _file: Flock<File>,
 }
@@ -824,7 +822,7 @@ impl RepoLock {
         let path = local_env::base_path();
         let repo_dir = File::open(&path).with_context(|| {
             format!(
-                "no yb_light_local repo at {} \u{2014} run `yb_light_local init` first",
+                "no yb_amp_local repo at {} \u{2014} run `yb_amp_local init` first",
                 path.display()
             )
         })?;
@@ -835,9 +833,9 @@ impl RepoLock {
     }
 }
 
-// Main entry point for the 'yb_light_local' CLI utility
+// Main entry point for the 'yb_amp_local' CLI utility
 //
-// This utility helps to manage ybLight installation. That includes following:
+// This utility helps to manage ybAmp installation. That includes following:
 //   * Management of local postgres installations running on top of the
 //     pageserver.
 //   * Providing CLI api to the pageserver
@@ -845,8 +843,8 @@ impl RepoLock {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Check for 'ybLight init' command first.
-    let (subcommand_result, _lock) = if let YbLightLocalCmd::Init(args) = cli.command {
+    // Check for 'ybAmp init' command first.
+    let (subcommand_result, _lock) = if let YbAmpLocalCmd::Init(args) = cli.command {
         (handle_init(&args).map(|env| Some(Cow::Owned(env))), None)
     } else {
         // This tool uses a collection of simple files to store its state, and consequently
@@ -864,22 +862,20 @@ fn main() -> Result<()> {
             .unwrap();
 
         let subcommand_result = match cli.command {
-            YbLightLocalCmd::Init(_) => unreachable!("init was handled earlier already"),
-            YbLightLocalCmd::Start(args) => rt.block_on(handle_start_all(&args, env)),
-            YbLightLocalCmd::Stop(args) => rt.block_on(handle_stop_all(&args, env)),
-            YbLightLocalCmd::Tenant(subcmd) => rt.block_on(handle_tenant(&subcmd, env)),
-            YbLightLocalCmd::Timeline(subcmd) => rt.block_on(handle_timeline(&subcmd, env)),
-            YbLightLocalCmd::Branch(subcmd) => rt.block_on(handle_branch(&subcmd, env)),
-            YbLightLocalCmd::Pageserver(subcmd) => rt.block_on(handle_pageserver(&subcmd, env)),
-            YbLightLocalCmd::Controller(subcmd) => {
-                rt.block_on(handle_controller(&subcmd, env))
-            }
-            YbLightLocalCmd::Safekeeper(subcmd) => rt.block_on(handle_safekeeper(&subcmd, env)),
-            YbLightLocalCmd::EndpointStorage(subcmd) => {
+            YbAmpLocalCmd::Init(_) => unreachable!("init was handled earlier already"),
+            YbAmpLocalCmd::Start(args) => rt.block_on(handle_start_all(&args, env)),
+            YbAmpLocalCmd::Stop(args) => rt.block_on(handle_stop_all(&args, env)),
+            YbAmpLocalCmd::Tenant(subcmd) => rt.block_on(handle_tenant(&subcmd, env)),
+            YbAmpLocalCmd::Timeline(subcmd) => rt.block_on(handle_timeline(&subcmd, env)),
+            YbAmpLocalCmd::Branch(subcmd) => rt.block_on(handle_branch(&subcmd, env)),
+            YbAmpLocalCmd::Pageserver(subcmd) => rt.block_on(handle_pageserver(&subcmd, env)),
+            YbAmpLocalCmd::Controller(subcmd) => rt.block_on(handle_controller(&subcmd, env)),
+            YbAmpLocalCmd::Safekeeper(subcmd) => rt.block_on(handle_safekeeper(&subcmd, env)),
+            YbAmpLocalCmd::EndpointStorage(subcmd) => {
                 rt.block_on(handle_endpoint_storage(&subcmd, env))
             }
-            YbLightLocalCmd::Endpoint(subcmd) => rt.block_on(handle_endpoint(&subcmd, env)),
-            YbLightLocalCmd::Mappings(subcmd) => rt.block_on(handle_mappings(&subcmd, env)),
+            YbAmpLocalCmd::Endpoint(subcmd) => rt.block_on(handle_endpoint(&subcmd, env)),
+            YbAmpLocalCmd::Mappings(subcmd) => rt.block_on(handle_mappings(&subcmd, env)),
         };
 
         let subcommand_result = if &original_env != env {
@@ -1031,7 +1027,7 @@ fn get_tenant_id(
 
 fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
     // Create the in-memory `LocalEnv` that we'd normally load from disk in `load_config`.
-    let init_conf: YbLightLocalInitConf = if let Some(config_path) = &args.config {
+    let init_conf: YbAmpLocalInitConf = if let Some(config_path) = &args.config {
         // User (likely the Python test suite) provided a description of the environment.
         if args.num_pageservers.is_some() {
             bail!(
@@ -1086,7 +1082,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
         // One shared YB connection block, emitted identically for every
         // component (the table each owns is hardcoded, not in the config).
         let yb_conn = default_yb_conn_config(&yb_target);
-        YbLightLocalInitConf {
+        YbAmpLocalInitConf {
             control_plane_api: Some(control_plane_api),
             safekeepers: vec![SafekeeperConf {
                 id: DEFAULT_SAFEKEEPER_ID,
@@ -1102,7 +1098,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                     let pg_port = ps_pg_port + i;
                     let http_port = ps_http_port + i;
                     let grpc_port = ps_grpc_port + i;
-                    YbLightLocalInitPageserverConf {
+                    YbAmpLocalInitPageserverConf {
                         id: pageserver_id,
                         listen_pg_addr: format!("127.0.0.1:{pg_port}"),
                         listen_http_addr: format!("127.0.0.1:{http_port}"),
@@ -1131,9 +1127,9 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
                 endpoint_id: String::new(),
             },
             pg_distrib_dir: None,
-            yb_light_distrib_dir: None,
+            yb_amp_distrib_dir: None,
             default_branch_id: BranchId::from_array(std::array::from_fn(|_| 0)),
-            controller: Some(YbLightControllerConf {
+            controller: Some(YbAmpControllerConf {
                 // Provision the controller + storage DBs in YB.
                 yb: Some(yb_conn.clone()),
                 ..Default::default()
@@ -1144,7 +1140,7 @@ fn handle_init(args: &InitCmdArgs) -> anyhow::Result<LocalEnv> {
     };
 
     LocalEnv::init(init_conf, &args.force)
-        .context("materialize initial yb_light_local environment on disk")?;
+        .context("materialize initial yb_amp_local environment on disk")?;
     Ok(LocalEnv::load_config(&local_env::base_path())
         .expect("freshly written config should be loadable"))
 }
@@ -1200,7 +1196,7 @@ fn allocate_pageserver_conf(env: &LocalEnv, endpoint_id: &str) -> anyhow::Result
     })
 }
 
-/// Build the full `YbLightLocalInitPageserverConf` (carrying
+/// Build the full `YbAmpLocalInitPageserverConf` (carrying
 /// `yb_storage_conn` + other passthrough keys) for the first/main
 /// pageserver, by cloning the lowest-id template and stamping in the
 /// allocated id/ports/auth. Used to write the bootstrap pageserver.toml;
@@ -1208,13 +1204,13 @@ fn allocate_pageserver_conf(env: &LocalEnv, endpoint_id: &str) -> anyhow::Result
 fn pageserver_init_conf_for(
     env: &LocalEnv,
     allocated: &PageServerConf,
-) -> anyhow::Result<YbLightLocalInitPageserverConf> {
+) -> anyhow::Result<YbAmpLocalInitPageserverConf> {
     let template = env
         .pageserver_templates
         .iter()
         .min_by_key(|p| p.id.0)
         .context("no pageserver template configured")?;
-    Ok(YbLightLocalInitPageserverConf {
+    Ok(YbAmpLocalInitPageserverConf {
         id: allocated.id,
         listen_pg_addr: allocated.listen_pg_addr.clone(),
         listen_http_addr: allocated.listen_http_addr.clone(),
@@ -1536,9 +1532,7 @@ async fn handle_timeline(cmd: &TimelineCmd, env: &mut local_env::LocalEnv) -> Re
             // records still present, discard an un-materialized init recipe,
             // and mark the branch dropped so it no longer surfaces as a live
             // branch and isn't brought back on restart. Idempotent.
-            Controller::from_env(env)
-                .timeline_drop(branch_id)
-                .await?;
+            Controller::from_env(env).timeline_drop(branch_id).await?;
 
             println!(
                 "Dropped branch (branch {branch_id}) and {} endpoint(s); the branch is \
@@ -2232,7 +2226,7 @@ async fn handle_endpoint(subcmd: &EndpointCmd, env: &mut local_env::LocalEnv) ->
             pageserver_conninfo.prefer_protocol = prefer_protocol;
 
             let ps_conf = env.get_pageserver_conf(DEFAULT_PAGESERVER_ID)?;
-            let auth_token = if matches!(ps_conf.pg_auth_type, AuthType::YbLightJWT) {
+            let auth_token = if matches!(ps_conf.pg_auth_type, AuthType::YbAmpJWT) {
                 let claims = Claims::new(Some(endpoint.branch_id), Scope::Tenant);
 
                 Some(env.generate_auth_token(&claims)?)
@@ -2426,14 +2420,11 @@ async fn handle_pageserver(subcmd: &PageserverCmd, env: &local_env::LocalEnv) ->
     Ok(())
 }
 
-async fn handle_controller(
-    subcmd: &ControllerCmd,
-    env: &local_env::LocalEnv,
-) -> Result<()> {
+async fn handle_controller(subcmd: &ControllerCmd, env: &local_env::LocalEnv) -> Result<()> {
     let svc = Controller::from_env(env);
     match subcmd {
         ControllerCmd::Start(args) => {
-            let start_args = YbLightControllerStartArgs {
+            let start_args = YbAmpControllerStartArgs {
                 instance_id: args.instance_id,
                 base_port: args.base_port,
                 start_timeout: args.start_timeout,
@@ -2446,7 +2437,7 @@ async fn handle_controller(
         }
 
         ControllerCmd::Stop(args) => {
-            let stop_args = YbLightControllerStopArgs {
+            let stop_args = YbAmpControllerStopArgs {
                 instance_id: args.instance_id,
                 immediate: match args.stop_mode {
                     StopMode::Fast => false,
@@ -2526,7 +2517,7 @@ async fn handle_endpoint_storage(
             for es_conf in &env.endpoint_storages {
                 let storage = EndpointStorage::from_conf(env, es_conf);
                 // In tests like test_forward_compatibility or
-                // test_graceful_cluster_restart old ybLight binaries
+                // test_graceful_cluster_restart old ybAmp binaries
                 // (without endpoint_storage) are present.
                 if !storage.bin.exists() {
                     eprintln!(
@@ -2564,7 +2555,7 @@ async fn handle_start_all(
 ) -> anyhow::Result<()> {
     // FIXME: this was called "retry_timeout", is it right?
     let Err(errors) = handle_start_all_impl(env, args.timeout).await else {
-        yb_light_start_status_check(env, args.timeout.as_ref())
+        yb_amp_start_status_check(env, args.timeout.as_ref())
             .await
             .context("status check after successful startup of all services")?;
         return Ok(());
@@ -2600,9 +2591,7 @@ async fn handle_start_all_impl(
         .prepare_database_if_external()
         .await
     {
-        return Err(vec![
-            e.context("prepare external controller database"),
-        ]);
+        return Err(vec![e.context("prepare external controller database")]);
     }
 
     // Phase 2 — controller. The controller runs diesel
@@ -2611,7 +2600,7 @@ async fn handle_start_all_impl(
     // can connect to yb_storage, so this phase has to complete
     // before the next one starts.
     if let Err(e) = Controller::from_env(env)
-        .start(YbLightControllerStartArgs::with_default_instance_id(
+        .start(YbAmpControllerStartArgs::with_default_instance_id(
             retry_timeout,
         ))
         .await
@@ -2696,7 +2685,7 @@ async fn handle_start_all_impl(
     Ok(())
 }
 
-async fn yb_light_start_status_check(
+async fn yb_amp_start_status_check(
     env: &local_env::LocalEnv,
     retry_timeout: &Duration,
 ) -> anyhow::Result<()> {
@@ -2708,11 +2697,11 @@ async fn yb_light_start_status_check(
     let retries = retry_timeout.as_millis() / RETRY_INTERVAL.as_millis();
     let notice_after_retries = retry_timeout.as_millis() / NOTICE_AFTER_RETRIES.as_millis();
 
-    println!("\nRunning ybLight status check");
+    println!("\nRunning ybAmp status check");
 
     for retry in 0..retries {
         if retry == notice_after_retries {
-            println!("\nybLight status check has not passed yet, continuing to wait")
+            println!("\nybAmp status check has not passed yet, continuing to wait")
         }
 
         let mut passed = true;
@@ -2759,14 +2748,14 @@ async fn yb_light_start_status_check(
         }
 
         if passed {
-            println!("\nybLight started and passed status check");
+            println!("\nybAmp started and passed status check");
             return Ok(());
         }
 
         tokio::time::sleep(RETRY_INTERVAL).await;
     }
 
-    anyhow::bail!("\nybLight passed status check")
+    anyhow::bail!("\nybAmp passed status check")
 }
 
 async fn handle_stop_all(args: &StopCmdArgs, env: &local_env::LocalEnv) -> Result<()> {
@@ -2832,7 +2821,7 @@ async fn try_stop_all(env: &local_env::LocalEnv, immediate: bool) {
         .expect("Must inspect data dir");
     for (instance_id, _instance_dir_path) in controller_instances {
         let controller = Controller::from_env(env);
-        let stop_args = YbLightControllerStopArgs {
+        let stop_args = YbAmpControllerStopArgs {
             instance_id,
             immediate,
         };
@@ -2849,8 +2838,8 @@ mod tests {
 
     use super::*;
 
-    fn ps_template() -> YbLightLocalInitPageserverConf {
-        YbLightLocalInitPageserverConf {
+    fn ps_template() -> YbAmpLocalInitPageserverConf {
+        YbAmpLocalInitPageserverConf {
             id: NodeId(1),
             listen_pg_addr: "127.0.0.1:64000".to_string(),
             listen_http_addr: "127.0.0.1:9898".to_string(),
@@ -2880,11 +2869,11 @@ mod tests {
             base_data_dir: PathBuf::from("/tmp/repo"),
             http_client: local_env::HttpClientCache::default(),
             pg_distrib_dir: PathBuf::from("/pg"),
-            yb_light_distrib_dir: PathBuf::from("/yb_light"),
+            yb_amp_distrib_dir: PathBuf::from("/yb_amp"),
             default_branch_id: None,
             private_key_path: PathBuf::from("k"),
             public_key_path: PathBuf::from("k.pub"),
-            controller: YbLightControllerConf::default(),
+            controller: YbAmpControllerConf::default(),
             pageservers: Vec::new(),
             safekeepers: Vec::new(),
             pageserver_templates: vec![ps_template()],
@@ -3002,7 +2991,7 @@ mod tests {
     #[test]
     fn branch_drop_parses_branch_id() {
         let cli = Cli::try_parse_from([
-            "yb_light_local",
+            "yb_amp_local",
             "branch",
             "drop",
             "--branch-id",
@@ -3010,7 +2999,7 @@ mod tests {
         ])
         .expect("`branch drop` with a branch id should parse");
 
-        let YbLightLocalCmd::Branch(BranchCmd::Drop(args)) = cli.command else {
+        let YbAmpLocalCmd::Branch(BranchCmd::Drop(args)) = cli.command else {
             panic!("expected `branch drop` to parse into Branch(Drop)");
         };
         let want_branch: BranchId = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0".parse().unwrap();
@@ -3021,7 +3010,7 @@ mod tests {
     fn branch_drop_requires_branch_id() {
         // `--branch-id` is mandatory: dropping a branch must name the
         // exact branch, never fall back to a default.
-        let res = Cli::try_parse_from(["yb_light_local", "branch", "drop"]);
+        let res = Cli::try_parse_from(["yb_amp_local", "branch", "drop"]);
         assert!(
             res.is_err(),
             "`branch drop` without --branch-id should fail to parse"
@@ -3031,10 +3020,10 @@ mod tests {
     #[test]
     fn branch_create_root_has_no_ancestor() {
         // `branch create --pg-version 18` with no ancestor is a ROOT branch.
-        let cli = Cli::try_parse_from(["yb_light_local", "branch", "create", "--pg-version", "18"])
+        let cli = Cli::try_parse_from(["yb_amp_local", "branch", "create", "--pg-version", "18"])
             .expect("`branch create --pg-version 18` should parse");
 
-        let YbLightLocalCmd::Branch(BranchCmd::Create(args)) = cli.command else {
+        let YbAmpLocalCmd::Branch(BranchCmd::Create(args)) = cli.command else {
             panic!("expected `branch create` to parse into Branch(Create)");
         };
         assert!(
@@ -3048,7 +3037,7 @@ mod tests {
         // `branch create --branch-name <n> --ancestor-branch-name main
         // --branch-id <id>` is a FORK off the named ancestor.
         let cli = Cli::try_parse_from([
-            "yb_light_local",
+            "yb_amp_local",
             "branch",
             "create",
             "--branch-name",
@@ -3060,7 +3049,7 @@ mod tests {
         ])
         .expect("`branch create` fork form should parse");
 
-        let YbLightLocalCmd::Branch(BranchCmd::Create(args)) = cli.command else {
+        let YbAmpLocalCmd::Branch(BranchCmd::Create(args)) = cli.command else {
             panic!("expected `branch create` to parse into Branch(Create)");
         };
         assert_eq!(args.ancestor_branch_name.as_deref(), Some("main"));

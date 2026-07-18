@@ -24,9 +24,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps"
-	"github.com/yugabyte/yb-amp/test/functional/framework/artifact"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/apps"
+	"github.com/yugabyte/amp/test/functional/framework/artifact"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // Workload is the value passed to the jar's --workload flag. The jar exposes

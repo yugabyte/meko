@@ -30,7 +30,7 @@ pub struct SparseKeySpace(pub KeySpace);
 
 /// A contiguous half-open range of the keyspace, with helpers to chunk it
 /// by size. (Was `ShardedRange` upstream, where it masked keys by shard;
-/// yb-light is single-shard, so every key is present and the methods are
+/// yb-amp is single-shard, so every key is present and the methods are
 /// purely size-based.)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyspaceRange {

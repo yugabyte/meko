@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/controller/internal/helm"
+	"github.com/yugabyte/amp/controller/internal/helm"
 )
 
 // defaultPgVersion backs an endpoint whose spec omits a version (the chart's
-// own default is the same). yb-light is Postgres v18 only.
+// own default is the same). yb-amp is Postgres v18 only.
 const defaultPgVersion = 18
 
 // defaultEndpointCPU / defaultEndpointMemory back an endpoint whose spec omits a
@@ -52,7 +52,7 @@ const lbAddressPollTimeout = 2 * time.Minute
 // the controller URL, bootstrap) arrives in the EndpointSpec.
 type KubernetesConfig struct {
 	Namespace      string // namespace endpoints are deployed into
-	ChartPath      string // path to the yb-light-endpoint Helm chart
+	ChartPath      string // path to the yb-amp-endpoint Helm chart
 	HelmBin        string // helm binary; bare name resolved via PATH, a path used verbatim
 	KubeconfigPath string // KUBECONFIG for helm; empty = default discovery (in-cluster or ~/.kube)
 
@@ -418,7 +418,7 @@ func (k *KubernetesDeployer) EndpointSafekeeperURL(id string) string {
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", id, k.cfg.Namespace, safekeeperHTTPPort)
 }
 
-// chartValues mirrors the subset of deploy/helm/yb-light-endpoint values.yaml
+// chartValues mirrors the subset of deploy/helm/yb-amp-endpoint values.yaml
 // the controller drives. JSON tags match the chart keys; helm reads the
 // marshaled document as a values file.
 type chartValues struct {

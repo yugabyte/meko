@@ -6,8 +6,8 @@
 How the amp controller's REST API is defined, generated, served, and tested.
 The guiding principle is amp-controller.md §3 (**API-first**, versioned in
 the URL path). The initial surface landed in
-[#92](https://github.com/yugabyte/yb-light/issues/92);
-[#109](https://github.com/yugabyte/yb-light/issues/109) then promoted storage
+[#92](https://github.com/yugabyte/amp/issues/92);
+[#109](https://github.com/yugabyte/amp/issues/109) then promoted storage
 pools to top-level resources and added paginated list endpoints, which is the
 shape described here.
 

@@ -2,7 +2,7 @@
 //! safekeeper over the libpq replication protocol.
 //!
 //! This is the safekeeper analog of `direct_getpage` — it bypasses the
-//! pageserver and reads WAL straight from the SK. yb-light's safekeeper
+//! pageserver and reads WAL straight from the SK. yb-amp's safekeeper
 //! serves only the **Interpreted** WAL protocol (decoded records, protobuf
 //! framed — see `compute/safekeeper/src/handler.rs`), the same `InterpretedWalReader`
 //! path whose decode failures surface as "invalid xlog page header" panics.

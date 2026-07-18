@@ -10,7 +10,7 @@ Source: `compute/endpoint_storage/src/app.rs` (router + handlers),
 (LFC prewarm caches, etc.) as objects in the YB-backed object store. It is
 used by compute (`compute_ctl`) and the control plane to upload/download
 LFC prewarm data; it deploys either standalone or baked into the compute
-image for large computes (`main.rs:1-4`). In yb-light one instance runs per
+image for large computes (`main.rs:1-4`). In yb-amp one instance runs per
 endpoint — `control_plane` co-locates an instance with each endpoint and
 stamps it a per-endpoint listen address (`control_plane/src/endpoint_storage.rs`).
 
@@ -42,11 +42,11 @@ Two different defaults exist, depending on launch path:
 
 - **The binary itself** defaults to `0.0.0.0:51243` when `listen` is omitted
   from the config (`main.rs:17-19`).
-- **`control_plane`** (`yb_light_local`) does not rely on that default. It
+- **`control_plane`** (`yb_amp_local`) does not rely on that default. It
   templates each instance off `ENDPOINT_STORAGE_DEFAULT_ADDR` =
   `127.0.0.1:9993` (`control_plane/src/endpoint_storage.rs:9-10`,
   `control_plane/src/local_env.rs:262`) and offsets the port per endpoint /
-  per port-base (`yb_light_local.rs:1045`, `:1091`), writing an explicit
+  per port-base (`yb_amp_local.rs:1045`, `:1091`), writing an explicit
   `listen` into each instance's `endpoint_storage.json`
   (`endpoint_storage.rs:90-94`).
 
@@ -131,7 +131,7 @@ and `MAX_RETRIES = 10` (`app.rs:38-39`), bailing on cancellation
 - **`DELETE` (prefix) / `delete_prefix`** (`app.rs:136-151`):
   `storage.delete_prefix(...)`. Returns `200`.
 
-## yb-light specifics
+## yb-amp specifics
 
 - The only storage backend is `YbStore`; objects are rows in the
   `public.blobs` YB table (`compute/libs/remote_storage/src/yb_store.rs`,

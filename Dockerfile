@@ -96,7 +96,7 @@ RUN  set -e \
       --bin yb-pageserver  \
       --bin yb-safekeeper  \
       --bin yb-endpoint-storage \
-      --bin yb_light_local \
+      --bin yb_amp_local \
       --locked --release \
     && mold -run make -j $(nproc) -s yb-amp-pg-ext
 
@@ -133,7 +133,7 @@ RUN set -e \
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-pageserver       /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-safekeeper       /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-endpoint-storage /usr/local/bin
-COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb_light_local      /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb_amp_local      /usr/local/bin
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
 # Deprecated: Old deployment scripts use this tarball which contains all the Postgres binaries.
@@ -141,21 +141,21 @@ COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 # old scripts working for now, create the tarball.
 RUN tar -C /usr/local -cvzf /data/postgres_install.tar.gz v18
 
-# By default, pageserver uses `.yb_light/` working directory in WORKDIR, so create one and fill it with the dummy config.
+# By default, pageserver uses `.yb_amp/` working directory in WORKDIR, so create one and fill it with the dummy config.
 # Now, when `docker run ... pageserver` is run, it can start without errors, yet will have some default dummy values.
-RUN mkdir -p /data/.yb_light/ && \
-  echo "id=1234" > "/data/.yb_light/identity.toml" && \
+RUN mkdir -p /data/.yb_amp/ && \
+  echo "id=1234" > "/data/.yb_amp/identity.toml" && \
   echo "broker_endpoint='http://storage_broker:50051'\n" \
        "pg_distrib_dir='/usr/local/'\n" \
        "listen_pg_addr='0.0.0.0:6400'\n" \
        "listen_http_addr='0.0.0.0:9898'\n" \
        "availability_zone='local'\n" \
-  > /data/.yb_light/pageserver.toml && \
-  chown -R yb_amp:yb_amp /data/.yb_light
+  > /data/.yb_amp/pageserver.toml && \
+  chown -R yb_amp:yb_amp /data/.yb_amp
 
 VOLUME ["/data"]
 USER yb_amp
 EXPOSE 6400
 EXPOSE 9898
 
-CMD ["/usr/local/bin/yb-pageserver", "-D", "/data/.yb_light"]
+CMD ["/usr/local/bin/yb-pageserver", "-D", "/data/.yb_amp"]

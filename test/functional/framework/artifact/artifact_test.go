@@ -3,8 +3,8 @@ package artifact_test
 import (
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/artifact"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/artifact"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // TestResolveDerivesBasePlaceholder locks the single-version → {name} (full) +

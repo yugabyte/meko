@@ -3,7 +3,7 @@
 The safekeeper is landing zone for the compute's WAL. The compute writes to it
 synchronously and the pageserver reads from asynchronously.
 
-In yb-light, **all of the safekeeper's durable state lives in YugabyteDB**.
+In yb-amp, **all of the safekeeper's durable state lives in YugabyteDB**.
 The local filesystem holds only a log file and a pidfile.
 
 
@@ -26,13 +26,13 @@ The local filesystem holds only a log file and a pidfile.
 - **Control file**: originally a 388 B binary blob holding consensus state
   (`term`, `vote`, peer set, `commit_lsn`, `backup_lsn`, …). In yb-amp the
   inherited Neon consensus (terms/voting) and membership were removed
-  entirely (see "Changes in yb-light" §1 and §5), so the surviving durable
+  entirely (see "Changes in yb-amp" §1 and §5), so the surviving durable
   per-branch state is just a handful of LSN scalars + server info.
 - **WAL segments**: vanilla Postgres XLog 16 MiB segment files named
   `XLogFileName(PG_TLI, segno, wal_seg_size)` → e.g.
   `000000010000000000000001`.
 
-In yb-light both are replaced — see "Changes in yb-light" §1
+In yb-amp both are replaced — see "Changes in yb-amp" §1
 (control file → typed columns in `safekeeper.timeline_state`) and §2
 (WAL chunks mirrored row-by-row into `safekeeper.wals`). The local FS holds
 nothing per-branch.
@@ -41,8 +41,8 @@ nothing per-branch.
 
 Upstream Neon also ran `wal_backup` (sealed-segment S3 offload via
 `GenericRemoteStorage`) and `wal_backup_partial` (in-flight last-segment
-upload). Both modules are deleted in yb-light — durability is the
-`safekeeper.wals` mirror, not S3 — see "Changes in yb-light" §8 below.
+upload). Both modules are deleted in yb-amp — durability is the
+`safekeeper.wals` mirror, not S3 — see "Changes in yb-amp" §8 below.
 
 Surviving background work:
 - Periodic control-file save every `control_file_save_interval`
@@ -76,9 +76,9 @@ Surviving background work:
   `<datadir>/safekeeper.toml` into `SafeKeeperConf` (only `-D`/`--init`/
   `--dump-control-file` are CLI flags).
 - `compute/libs/safekeeper_api/src/config.rs` — `SafekeeperConfigToml`, the on-disk
-  `safekeeper.toml` schema shared by the binary and yb_light_local.
+  `safekeeper.toml` schema shared by the binary and yb_amp_local.
 
-## Changes in yb-light
+## Changes in yb-amp
 
 ### 1. Control file → YB columns (commits `c4c7c1350`, `840e56aae`)
 
@@ -251,7 +251,7 @@ return                              │
 
 Config: the `yb_storage_conn` inline table in `safekeeper.toml` (the shared
 YB connection block — the same key the pageserver and endpoint_storage use).
-yb-light always configures it, so live WAL is always mirrored to
+yb-amp always configures it, so live WAL is always mirrored to
 `safekeeper.wals`.
 
 ### 3. WalReader reads from YB (commit `77553419b`, lazy/cached in `d7eef8275`+)
@@ -503,7 +503,7 @@ Result: flushes are driven by the 2 ms ticker, so multiple
 
 ### 8. `wal_backup*` and `backup_lsn` removed (commits `1a32d69b4`, `a8fe507cb`)
 
-Durability in yb-light is the `safekeeper.wals` mirror written
+Durability in yb-amp is the `safekeeper.wals` mirror written
 synchronously by `flush_wal()` — there is no S3 offload tier.
 Consequently:
 
@@ -543,7 +543,7 @@ next `current()` call after a failed stream picks up a fresh connection.
 
 `YsqlClient::from_yb_config(&YbConnConfig, application_name, ...)` is the
 shared factory used by `YbStore::new`, `WalBackup::new` (the live-WAL
-mirror), and any other YB-Postgres connection in yb-light. It handles
+mirror), and any other YB-Postgres connection in yb-amp. It handles
 `password_env` lookup and the sslmode / sslrootcert dispatch.
 
 ### 10. TLS support (commit `7a424639e`)
@@ -614,7 +614,7 @@ rehydration always stay on the YSQL lanes.
 ## Run / configure
 
 All configuration lives in `<datadir>/safekeeper.toml` — the safekeeper's
-analogue of `pageserver.toml`, written by yb_light_local
+analogue of `pageserver.toml`, written by yb_amp_local
 (`SafekeeperNode::start`) and read once at startup
 (`safekeeper_api::config::SafekeeperConfigToml`). Config is **fail-fast**:
 `SafekeeperConfigToml` is `deny_unknown_fields`, so a misspelled or stale key
@@ -648,7 +648,7 @@ via the same `YsqlClient`.
 
 `branch_id` bakes this process's single branch identity
 (required whenever `yb_storage_conn` is set) — the safekeeper's analogue of
-`pageserver.toml`'s identity key. yb_light_local stamps it at provision time
+`pageserver.toml`'s identity key. yb_amp_local stamps it at provision time
 (`allocate_safekeeper_conf`). It scopes the startup load to this one
 branch and gates connections to it (see §5).
 

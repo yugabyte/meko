@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/yugabyte/yb-amp/controller/internal/db"
+	"github.com/yugabyte/amp/controller/internal/db"
 )
 
 // Store persists tasks and their steps. Every method is written to be

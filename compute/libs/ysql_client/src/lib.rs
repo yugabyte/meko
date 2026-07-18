@@ -123,7 +123,7 @@ impl<'de> serde::Deserialize<'de> for HostPorts {
 }
 
 /// The one canonical YugabyteDB connection config — the TOML
-/// `[*.yb]` block every yb-light daemon (pageserver, safekeeper,
+/// `[*.yb]` block every yb-amp daemon (pageserver, safekeeper,
 /// endpoint_storage, controller) deserializes, and what the
 /// diagnostic tools build from their CLI flags. Connection only: which
 /// YB to talk to, as whom, over what TLS. It deliberately carries NO

@@ -116,7 +116,7 @@ See [`values.yaml`](values.yaml) for the full set.
 ## Unit tests
 
 Tests use [helm-unittest](https://github.com/helm-unittest/helm-unittest)
-(same approach as `yb-light-endpoint`):
+(same approach as `yb-amp-endpoint`):
 
 ```sh
 helm plugin install https://github.com/helm-unittest/helm-unittest.git   # once

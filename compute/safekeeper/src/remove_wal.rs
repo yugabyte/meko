@@ -4,14 +4,14 @@ use crate::timeline_manager::StateSnapshot;
 
 /// Oldest LSN we still need to keep.
 ///
-/// yb-light: WAL is durably mirrored into `safekeeper.wals` on every
+/// yb-amp: WAL is durably mirrored into `safekeeper.wals` on every
 /// `flush_wal()`, so the only horizon constraints are:
 ///   1. `remote_consistent_lsn` — pageserver hasn't ingested past this yet.
 ///   2. `flush_lsn` — local end-of-WAL; we can't trim past durability.
 ///   3. Optional caller-supplied `extra_horizon_lsn` (e.g. a stalled
 ///      walsender's position).
 ///
-/// The pre-yb-light "wait for S3 offload" branch (`backup_lsn`) is gone
+/// The pre-yb-amp "wait for S3 offload" branch (`backup_lsn`) is gone
 /// along with the offloader itself — including it would pin horizon at
 /// boot and the `wals` table would grow forever.
 pub(crate) fn calc_horizon_lsn(state: &StateSnapshot, extra_horizon_lsn: Option<Lsn>) -> Lsn {

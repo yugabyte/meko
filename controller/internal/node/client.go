@@ -37,7 +37,7 @@ func NewClient() *Client {
 // flush_lsn — from the safekeeper serving it
 // (GET {skBaseURL}/v1/branch/{branch_id}). This is the
 // authoritative "everything committed so far" position, the default branch fork
-// point yb_light_local also branches at; unlike a pageserver's last_record_lsn
+// point yb_amp_local also branches at; unlike a pageserver's last_record_lsn
 // (an ingest position) it never lags durable WAL. skBaseURL is the safekeeper's
 // HTTP base URL; branchID is 32 lowercase hex digits (the storage-layer
 // BranchId).

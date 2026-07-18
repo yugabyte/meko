@@ -60,7 +60,7 @@ impl VirtualFile {
 }
 
 /// No-op kept as the call site for any future re-introduction of
-/// pageserver-local disk artifacts. yb-light has nothing to wire up
+/// pageserver-local disk artifacts. yb-amp has nothing to wire up
 /// here — the FD pool is gone, the `io_engine` choice is recorded in
 /// `PageServerConf` for diagnostics only, and `crashsafe_overwrite`
 /// uses blocking `std::fs` directly.

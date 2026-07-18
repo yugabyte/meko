@@ -43,15 +43,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/clientpod"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ybbacking"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/yugabyted"
-	"github.com/yugabyte/yb-amp/test/functional/framework/artifact"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	execpkg "github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/apps"
+	"github.com/yugabyte/amp/test/functional/framework/apps/clientpod"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
+	"github.com/yugabyte/amp/test/functional/framework/apps/yugabyted"
+	"github.com/yugabyte/amp/test/functional/framework/artifact"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // Defaults (core/defaults_test.go asserts the embedded default.yaml agrees).

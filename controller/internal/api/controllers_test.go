@@ -18,11 +18,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yugabyte/yb-amp/controller/internal/api"
-	"github.com/yugabyte/yb-amp/controller/internal/config"
-	"github.com/yugabyte/yb-amp/controller/internal/core"
-	"github.com/yugabyte/yb-amp/controller/internal/deploy"
-	"github.com/yugabyte/yb-amp/controller/internal/task"
+	"github.com/yugabyte/amp/controller/internal/api"
+	"github.com/yugabyte/amp/controller/internal/config"
+	"github.com/yugabyte/amp/controller/internal/core"
+	"github.com/yugabyte/amp/controller/internal/deploy"
+	"github.com/yugabyte/amp/controller/internal/task"
 )
 
 // drainTasks runs a real task.Worker over the same store + backend the server
@@ -399,7 +399,7 @@ func TestCreateProject(t *testing.T) {
 		t.Fatalf("CreateProject(missing pool) status = %d, body = %s", missing.StatusCode(), missing.Body)
 	}
 
-	// Unsupported pg_version -> 400 (yb-light is v18 only; cheap validation).
+	// Unsupported pg_version -> 400 (yb-amp is v18 only; cheap validation).
 	badVer := 15
 	bv, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "pg15", PgVersion: &badVer})
 	if err != nil {

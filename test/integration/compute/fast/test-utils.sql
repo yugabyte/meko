@@ -2,7 +2,7 @@
 -- these actually consume resources like they should - that would be
 -- tricky - but at least we check that they don't crash.
 --
--- IF NOT EXISTS: unlike pg_regress's fresh `regression` db, the yb-light
+-- IF NOT EXISTS: unlike pg_regress's fresh `regression` db, the yb-amp
 -- compute ships with this extension already installed.
 CREATE EXTENSION IF NOT EXISTS yb_amp_test_utils;
 

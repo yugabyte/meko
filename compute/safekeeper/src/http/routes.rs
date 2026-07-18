@@ -131,7 +131,7 @@ async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body
         flush_lsn,
         timeline_start_lsn: state.timeline_start_lsn,
         local_start_lsn: state.local_start_lsn,
-        // yb-light: commit_lsn ≡ flush_lsn (single-SK).
+        // yb-amp: commit_lsn ≡ flush_lsn (single-SK).
         commit_lsn: flush_lsn,
         remote_consistent_lsn: inmem.remote_consistent_lsn,
         peers: tli.get_peers(conf).await,

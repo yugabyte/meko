@@ -2,7 +2,7 @@
 //! safekeeper over the libpq replication protocol. The analog of
 //! [`crate::page_api`] for the safekeeper's WAL read path.
 //!
-//! yb-light's safekeeper only serves the **Interpreted** WAL protocol
+//! yb-amp's safekeeper only serves the **Interpreted** WAL protocol
 //! (decoded records framed as protobuf), not vanilla `XLogData` — see
 //! `compute/safekeeper/src/handler.rs` (`protocol()` defaults to Interpreted). So a
 //! replication client receives `ReplicationMessage::RawInterpretedWalRecords`

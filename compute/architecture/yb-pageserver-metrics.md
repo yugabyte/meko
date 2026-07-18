@@ -18,7 +18,7 @@ Process-level metrics (`libmetrics_process_*`, `libmetrics_build_info`,
 
 ## Label cardinality
 
-Metrics labelled `branch_id` are per-branch. In yb-light a
+Metrics labelled `branch_id` are per-branch. In yb-amp a
 process serves exactly one `branch_id`, so these are effectively
 single-series per process (label values still present for cross-process
 aggregation). Per-branch series are removed on branch shutdown
@@ -92,7 +92,7 @@ variants add `branch_id`.
 | `pageserver_walreceiver_broker_updates_total` | IntCounter | — | Broker updates received. |
 | `pageserver_walreceiver_candidates_events_total` | IntCounter | `event` (`add`/`remove`) | walreceiver candidate add/remove events. |
 
-## Page store / YB write path (yb-light specific)
+## Page store / YB write path (yb-amp specific)
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
@@ -141,7 +141,7 @@ variants add `branch_id`.
 | --- | --- | --- | --- |
 | `pageserver_last_record_lsn` | IntGauge | `branch_id` | Last record (applied) LSN. |
 | `pageserver_current_logical_size` | UIntGauge | `branch_id` | Current logical size. |
-| `pageserver_resident_physical_size` | UIntGauge | `branch_id` | Resident layer-file bytes (attached). yb-light: ~0. |
+| `pageserver_resident_physical_size` | UIntGauge | `branch_id` | Resident layer-file bytes (attached). yb-amp: ~0. |
 | `pageserver_resident_physical_size_global` | UIntGauge | — | Global resident physical size. |
 | `pageserver_visible_physical_size` | UIntGauge | `branch_id` | Visible layer-file bytes. |
 | `pageserver_pitr_history_size` | UIntGauge | `branch_id` | Data written since PITR cutoff. |
@@ -203,9 +203,9 @@ variants add `branch_id`.
 | `pageserver_tokio_epoll_uring_systems_created` / `_systems_destroyed` | UIntGauge | — | tokio-epoll-uring systems created / destroyed. |
 | `pageserver_tokio_epoll_uring_pageserver_thread_local_launch_success_count` / `_failures_count` | IntCounter | — | thread-local system launch successes / failures. |
 
-## Defined but inactive in yb-light
+## Defined but inactive in yb-amp
 
-These metrics exist in `metrics.rs` but are dead code in yb-light (the remote
+These metrics exist in `metrics.rs` but are dead code in yb-amp (the remote
 timeline client / S3-style layer upload path is gone) and will not appear with
 non-zero values: `pageserver_remote_physical_size`,
 `pageserver_remote_physical_size_global`,

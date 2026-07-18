@@ -1,14 +1,14 @@
 # Single-container endpoint
 
-A **yb-light endpoint** is normally a set of co-located processes started by
-`yb_light_local` (pageserver, safekeeper, endpoint_storage, the compute, and a
+A **yb-amp endpoint** is normally a set of co-located processes started by
+`yb_amp_local` (pageserver, safekeeper, endpoint_storage, the compute, and a
 cluster-level controller). The single-container endpoint packages the
 per-endpoint subset of those into **one container image** so an endpoint can be
 deployed as a single Kubernetes pod, backed by an external YugabyteDB.
 
 This is the deployment artifact under [`deploy/`](../../deploy); the image is built
 from [`deploy/endpoint/Dockerfile`](../../deploy/endpoint/Dockerfile) and driven by
-the [`yb-light-endpoint`](../../deploy/helm/yb-light-endpoint) Helm chart.
+the [`yb-amp-endpoint`](../../deploy/helm/yb-amp-endpoint) Helm chart.
 
 ## What runs in the pod
 
@@ -41,7 +41,7 @@ Two consequences follow.
 
 ### Schema provisioning is external
 
-Every yb-light schema (`controller.*`, `pageserver.*`, `safekeeper.*`,
+Every yb-amp schema (`controller.*`, `pageserver.*`, `safekeeper.*`,
 `public.blobs`, the `blob_namespace` ENUM) is created by the
 controller's diesel migrations
 (`controller/migrations/0005_provision_yb_storage.up.sql`). No service self-creates its
@@ -52,7 +52,7 @@ the bundled migrations with `psql`).
 
 ### Bootstrap/attach happen without the controller
 
-`yb_light_local`'s `branch create` / `endpoint create` route through the
+`yb_amp_local`'s `branch create` / `endpoint create` route through the
 controller (it records a pending init, registers the node, grants a
 generation via the attach-hook, and registers the branch). The pod reproduces
 the **SC-free subset** of that flow:
@@ -84,7 +84,7 @@ one (no `initdb`).
 
 ## Image notes
 
-yb-light is Postgres v18 only (`POSTGRES_VERSIONS = v18`,
+yb-amp is Postgres v18 only (`POSTGRES_VERSIONS = v18`,
 `compute/vendor/postgres-v18`). The endpoint image has its own multi-stage Dockerfile
 rather than reusing the repo-root `Dockerfile`, which is unmaintained upstream
 cruft for this fork (it references absent `postgres-v14..v16` submodules, a

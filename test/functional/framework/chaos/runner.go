@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // Runner is the NemesisLoop: it drives a seed-derived, reproducible sequence of

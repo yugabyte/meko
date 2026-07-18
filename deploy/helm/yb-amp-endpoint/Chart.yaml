@@ -1,21 +1,21 @@
 apiVersion: v2
-name: yb-light-endpoint
+name: yb-amp-endpoint
 description: >-
-  A yb-light endpoint as a single pod: pageserver, safekeeper, endpoint_storage,
+  A yb-amp endpoint as a single pod: pageserver, safekeeper, endpoint_storage,
   and a Postgres compute (compute_ctl) supervised in one container, backed by an
   external YugabyteDB. Connection config is passed in via a ConfigMap.
 type: application
 # Chart version — bump on chart changes.
 version: 0.1.0
-# Tracks the yb-light app; the image tag defaults to this when not overridden.
+# Tracks the yb-amp app; the image tag defaults to this when not overridden.
 appVersion: "0.1.0"
 keywords:
-  - yb-light
+  - yb-amp
   - neon
   - yugabytedb
   - postgres
-home: https://github.com/yugabyte/yb-light
+home: https://github.com/yugabyte/amp
 sources:
-  - https://github.com/yugabyte/yb-light
+  - https://github.com/yugabyte/amp
 maintainers:
-  - name: yb-light
+  - name: yb-amp

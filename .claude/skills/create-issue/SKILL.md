@@ -1,7 +1,7 @@
 ---
 name: create-issue
 description: >-
-  Before creating or updating a GitHub issue on yugabyte/yb-light (new
+  Before creating or updating a GitHub issue on yugabyte/amp (new
   issue, status/label/milestone change, closing one out), verify it has
   an area label AND a milestone, that the title/body reflect the final
   landed state — not the planning state, not the "almost-done-with-leftovers"
@@ -46,7 +46,7 @@ below must stay consistent with it. Every issue MUST carry:
     pageserver, safekeeper,
     read/write paths, page-service wire protocol.
   - `control plane` — `controller` orchestration,
-    `yb_light_local`, endpoint/branch lifecycle.
+    `yb_amp_local`, endpoint/branch lifecycle.
   Stock labels (`bug`, `enhancement`, …) are optional extras, not a
   substitute for the area label.
 - **A milestone**, one of: `POC` · `Early Access` · `K8 Deploy`.

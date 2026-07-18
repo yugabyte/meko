@@ -12,11 +12,11 @@
 #   diffing the pageserver getpage counter (want ~0).
 #
 # TOPOLOGY (as of this benchmark)
-#   compute + safekeeper + control plane : ybLight4  172.151.23.96 (4 vCPU/31GB)
+#   compute + safekeeper + control plane : ybAmp4  172.151.23.96 (4 vCPU/31GB)
 #     shared_buffers=16GB, synchronous_commit=on, synchronous_standby_names=walproposer
 #   pageserver (off-box)                 : this harness host 172.151.20.28 (16 vCPU)
 #     HTTP metrics at :9988 ; YugabyteDB backing store shared.
-#   safekeeper HTTP metrics              : ybLight4:7676 (flush_lsn etc.)
+#   safekeeper HTTP metrics              : ybAmp4:7676 (flush_lsn etc.)
 #
 # THE WORKLOAD
 #   A single table `walstress(id int pk, v bigint, pad text)` sized to fit fully
@@ -45,11 +45,11 @@
 #   plus compute postgres CPU, safekeeper CPU, and pageserver CPU/RSS.
 #
 # USAGE
-#   ./wal-stress.sh ybLight4 create          # build + prewarm the table (once)
-#   ./wal-stress.sh ybLight4 run             # single run at $CONNS
-#   ./wal-stress.sh ybLight4 sweep           # concurrency sweep
-#   ./wal-stress.sh ybLight4 clean           # drop the table
-#   FPW=off ./wal-stress.sh ybLight4 sweep   # non-FPI variant
+#   ./wal-stress.sh ybAmp4 create          # build + prewarm the table (once)
+#   ./wal-stress.sh ybAmp4 run             # single run at $CONNS
+#   ./wal-stress.sh ybAmp4 sweep           # concurrency sweep
+#   ./wal-stress.sh ybAmp4 clean           # drop the table
+#   FPW=off ./wal-stress.sh ybAmp4 sweep   # non-FPI variant
 #
 # KNOBS (env)
 #   ROWS=16000000     table rows (~2.6 GB; must fit in shared_buffers)
@@ -69,7 +69,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 ybLight4 [create|run|sweep|clean]" >&2
+  echo "Usage: $0 ybAmp4 [create|run|sweep|clean]" >&2
   exit 1
 fi
 target="$1"; shift

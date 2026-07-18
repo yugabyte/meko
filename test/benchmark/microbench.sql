@@ -1,4 +1,4 @@
--- ybLight microbench
+-- ybAmp microbench
 -- INSERT/UPDATE/DELETE: single run (cold).
 -- SELECT: 3 runs each so we can pick the warm (median) number.
 \set N 100000

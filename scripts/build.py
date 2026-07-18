@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build yb-light binaries + compute extensions — the one build entry point.
+"""Build yb-amp binaries + compute extensions — the one build entry point.
 
 Replaces the manual `git submodule update` + `make` dance from the README.
 It handles a fresh checkout, the PostgreSQL-headers prerequisite, and the
@@ -9,7 +9,7 @@ Modes (pick one; default is debug):
     (no flag)        debug build   (cargo dev profile -> target/debug)
     --release        release build (-> target/release)
     --release-tar    release build + package a shippable tarball
-                     (/tmp/yb-light-bundle-<date>-<sha>.tar.gz)
+                     (/tmp/yb-amp-bundle-<date>-<sha>.tar.gz)
     --headers        only install the PostgreSQL server headers, so a bare
                      `cargo build` / `cargo check` / IDE can find them (the
                      postgres_ffi crate generates bindings from them).
@@ -55,10 +55,10 @@ EXT_STAMP = BUILD_DIR / ".yb_amp_ext.stamp"
 # compute extensions and the Rust amp stack follow the selected debug/release.
 PG_BUILD_TYPE = "release"
 
-# Binaries launched by yb_light_local (see control_plane local_env.rs).
+# Binaries launched by yb_amp_local (see control_plane local_env.rs).
 DAEMON_BINS = [
     "yb-pageserver",
-    "yb_light_local",
+    "yb_amp_local",
     "yb-safekeeper",
     "yb-compute-ctl",
     "yb-endpoint-storage",
@@ -204,9 +204,9 @@ def stage_and_package(target_dir):
     """Stage the release bundle and pack it into a versioned tarball."""
     sha = git_out("rev-parse", "--short", "HEAD")
     date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-    bundle = Path(os.environ.get("BUNDLE_DIR", "/tmp/yb-light-bundle"))
+    bundle = Path(os.environ.get("BUNDLE_DIR", "/tmp/yb-amp-bundle"))
     tarball = Path(
-        os.environ.get("TARBALL", f"/tmp/yb-light-bundle-{date}-{sha}.tar.gz")
+        os.environ.get("TARBALL", f"/tmp/yb-amp-bundle-{date}-{sha}.tar.gz")
     )
 
     say(f"Staging bundle at {bundle}")
@@ -243,7 +243,7 @@ def stage_and_package(target_dir):
         f"Commit:     {head}\n"
         f"Subject:    {subject}\n"
         f"PG commit:  {pg_commit}\n\n"
-        "yb_light_local launches yb-pageserver (see local_env.rs::pageserver_bin).\n"
+        "yb_amp_local launches yb-pageserver (see local_env.rs::pageserver_bin).\n"
     )
 
     say("Bundle staged:")
@@ -257,10 +257,10 @@ def stage_and_package(target_dir):
     run(["ls", "-lh", str(tarball)])
     print()
     say("Ship it to the deployment host, e.g.:")
-    print(f"    scp {tarball} <host>:~/yb-light/builds/")
-    print(f"    ssh <host> 'mkdir -p ~/yb-light/builds/{date}-{sha} \\")
-    print(f"        && tar -xzf ~/yb-light/builds/{tarball.name} \\")
-    print(f"             -C ~/yb-light/builds/{date}-{sha}'")
+    print(f"    scp {tarball} <host>:~/yb-amp/builds/")
+    print(f"    ssh <host> 'mkdir -p ~/yb-amp/builds/{date}-{sha} \\")
+    print(f"        && tar -xzf ~/yb-amp/builds/{tarball.name} \\")
+    print(f"             -C ~/yb-amp/builds/{date}-{sha}'")
 
 
 def _du(path):
@@ -270,7 +270,7 @@ def _du(path):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Build yb-light binaries + compute extensions.",
+        description="Build yb-amp binaries + compute extensions.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

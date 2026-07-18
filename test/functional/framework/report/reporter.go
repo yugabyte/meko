@@ -12,7 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // DefaultQueueSize is the per-sink buffer used by NewReporter.

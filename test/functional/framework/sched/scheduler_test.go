@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/fake"
-	"github.com/yugabyte/yb-amp/test/functional/framework/sched"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/fake"
+	"github.com/yugabyte/amp/test/functional/framework/sched"
 )
 
 func sharedTest(name string, run func(*core.T) error) core.Test {

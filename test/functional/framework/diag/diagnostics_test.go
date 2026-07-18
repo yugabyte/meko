@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // fakeKube is a scripted Kube double: it returns canned output per pod and can be

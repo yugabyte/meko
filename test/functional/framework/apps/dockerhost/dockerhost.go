@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // sortedKeys returns m's keys in deterministic order so generated commands are

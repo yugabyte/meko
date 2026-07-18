@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
-	"github.com/yugabyte/yb-amp/test/functional/framework/sched"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/registry"
+	"github.com/yugabyte/amp/test/functional/framework/sched"
 )
 
 // newSetupCmd builds `ampqa setup`: run ONLY a test's setup phase (provision +

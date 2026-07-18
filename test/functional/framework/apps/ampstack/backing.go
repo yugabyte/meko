@@ -1,6 +1,6 @@
 package ampstack
 
-import "github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
+import "github.com/yugabyte/amp/test/functional/framework/apps/pg"
 
 // BackingConnInfo exposes connection info for the stack's own YugabyteDB
 // backing store — the built-in single-node yugabyted or the external cluster,

@@ -133,7 +133,7 @@ multi-port scrape config or per-port annotations is the step-2 work. The
 For downstream performance tooling, the **`postgres_exporter`** sidecar now runs
 in the k8s endpoint pod (the exporter already ships in the compute VM image at
 `v0.17.1`, but the pod did not run it). Implemented in the endpoint Helm chart,
-[`deploy/helm/yb-light-endpoint`](../../deploy/helm/yb-light-endpoint):
+[`deploy/helm/yb-amp-endpoint`](../../deploy/helm/yb-amp-endpoint):
 
 - **Sidecar** (`deployment.yaml`, `metrics.postgresExporter` in `values.yaml`) —
   `quay.io/prometheuscommunity/postgres-exporter:v0.17.1`, serving `/metrics` on
@@ -177,7 +177,7 @@ All three steps are implemented:
 2. **OTel Collector** — ✅ (`OpenTelemetryCollector` CRs in the control-plane
    chart; requires the OTel Operator + a store, VictoriaMetrics by default).
 3. **Compute `postgres_exporter` sidecar** — ✅
-   (`deploy/helm/yb-light-endpoint`); `pg_stat_statements` is opt-in.
+   (`deploy/helm/yb-amp-endpoint`); `pg_stat_statements` is opt-in.
 
 Steps 1 and 3 are store-agnostic (they only expose `/metrics`); step 2 picks
 the store.

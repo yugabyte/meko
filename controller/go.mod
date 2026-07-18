@@ -1,4 +1,4 @@
-module github.com/yugabyte/yb-amp/controller
+module github.com/yugabyte/amp/controller
 
 go 1.25.0
 

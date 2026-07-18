@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	rhtml "github.com/yugabyte/yb-amp/test/functional/framework/report/html"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	rhtml "github.com/yugabyte/amp/test/functional/framework/report/html"
 )
 
 // newReportCmd builds `ampqa report`: generate a self-contained HTML report

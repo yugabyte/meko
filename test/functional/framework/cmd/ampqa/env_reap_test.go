@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud"
+	"github.com/yugabyte/amp/test/functional/framework/apps/cloud"
 )
 
 // reapRecorderVM is a cloud.VM double that records the reap calls `env reap`

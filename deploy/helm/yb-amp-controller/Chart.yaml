@@ -13,12 +13,12 @@ version: 0.260714.0
 appVersion: "0.260714.0"
 keywords:
   - amp
-  - yb-light
+  - yb-amp
   - controller
   - mcp
   - yugabytedb
-home: https://github.com/yugabyte/yb-light
+home: https://github.com/yugabyte/amp
 sources:
-  - https://github.com/yugabyte/yb-light
+  - https://github.com/yugabyte/amp
 maintainers:
-  - name: yb-light
+  - name: yb-amp

@@ -10,14 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/dockerhost"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/reap"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	sshx "github.com/yugabyte/yb-amp/test/functional/framework/exec/ssh"
-	"github.com/yugabyte/yb-amp/test/functional/framework/task"
+	"github.com/yugabyte/amp/test/functional/framework/apps/cloud"
+	"github.com/yugabyte/amp/test/functional/framework/apps/dockerhost"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/reap"
+	"github.com/yugabyte/amp/test/functional/framework/env/registry"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
+	sshx "github.com/yugabyte/amp/test/functional/framework/exec/ssh"
+	"github.com/yugabyte/amp/test/functional/framework/task"
 )
 
 func init() {

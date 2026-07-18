@@ -78,7 +78,7 @@ pub static WAL_READER_DECODE_ERRORS: Lazy<IntCounter> = Lazy::new(|| {
         "safekeeper_wal_reader_decode_errors_total",
         concat!(
             "WAL decode failures in the interpreted WAL reader (the WAL-sender path). ",
-            "Treated as recoverable in yb-light — the reader exits and the client ",
+            "Treated as recoverable in yb-amp — the reader exits and the client ",
             "reconnects + re-reads from YB. A sustained rate indicates genuine ",
             "WAL corruption rather than a transient torn read across a rewrite window."
         )
@@ -856,7 +856,7 @@ impl Collector for TimelineCollector {
 
             self.commit_lsn
                 .with_label_values(labels)
-                // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum).
+                // yb-amp: commit_lsn ≡ flush_lsn (single-SK quorum).
                 .set(tli.flush_lsn.into());
             self.flush_lsn
                 .with_label_values(labels)

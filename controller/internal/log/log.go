@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/yugabyte/yb-amp/controller/internal/config"
+	"github.com/yugabyte/amp/controller/internal/config"
 )
 
 // Canonical attribute keys, so resource logs stay queryable across components.

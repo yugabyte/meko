@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/baseline"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/universe"
+	"github.com/yugabyte/amp/test/functional/framework/baseline"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/universe"
 )
 
 // Cheap defaults: a small TPC-C is inexpensive but still yields a stable tps.

@@ -135,7 +135,7 @@ typedef struct
 static uint32 local_request_counter;
 #define GENERATE_REQUEST_ID() (((YbAmpRequestId)MyProcPid << 32) | ++local_request_counter)
 
-/* There is exactly one page server per endpoint in AMP / yb-light. */
+/* There is exactly one page server per endpoint in AMP / yb-amp. */
 static PageServer page_server;
 
 static void pageserver_disconnect(void);

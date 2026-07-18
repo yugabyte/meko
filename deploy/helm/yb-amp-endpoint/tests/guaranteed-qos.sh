@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Guardrail: EVERY container in the compute (yb-light-endpoint) pod must set
+# Guardrail: EVERY container in the compute (yb-amp-endpoint) pod must set
 # resources.requests == resources.limits for both cpu and memory, so the pod
 # gets Kubernetes "Guaranteed" QoS. QoS is a pod-level property — a single
 # container without a matching request==limit drops the whole pod to Burstable.
@@ -47,7 +47,7 @@ check() {
   return "$fail"
 }
 
-echo "Guaranteed-QoS guardrail — yb-light-endpoint pod containers:"
+echo "Guaranteed-QoS guardrail — yb-amp-endpoint pod containers:"
 rc=0
 # Default values, and an explicit override, so the invariant is checked for both
 # the built-in defaults and a caller-supplied resource spec.

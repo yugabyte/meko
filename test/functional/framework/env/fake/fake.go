@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // Provider is a fake EnvProvider.

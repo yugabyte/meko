@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/artifact"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	"github.com/yugabyte/yb-amp/test/functional/framework/task"
+	"github.com/yugabyte/amp/test/functional/framework/artifact"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/task"
 )
 
 var deployArtifactTask = task.Task{

@@ -4,7 +4,7 @@
 //! endpoint that owns it:
 //!
 //! ```text
-//!   .yb_light/endpoints/<endpoint_id>/safekeeper
+//!   .yb_amp/endpoints/<endpoint_id>/safekeeper
 //! ```
 use std::error::Error as _;
 use std::io::Write;
@@ -146,7 +146,7 @@ impl SafekeeperNode {
         // the process reads on start — the safekeeper's analogue of
         // `pageserver.toml`. Only `-D` (plus any test overrides) stays on the
         // CLI. `backup_threads` has no toml field: `wal_backup` is removed in
-        // yb-light, so it is always `None`.
+        // yb-amp, so it is always `None`.
         let auth_key = if self.conf.auth_enabled {
             Some(
                 self.env

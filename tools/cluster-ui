@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Standalone diagnostic UI for a local `yb_light_local` yb-light cluster.
+# Standalone diagnostic UI for a local `yb_amp_local` yb-amp cluster.
 #
 # Serves a single web page that shows, at a glance:
 #   - service health (controller, pageservers, safekeepers,
@@ -19,7 +19,7 @@
 #
 # Topology (pageservers, safekeepers, endpoints, branch names) is read
 # from the registry schema in yb_storage via psql, not from the
-# local repo layout; only the service URLs come from .yb_light/config.
+# local repo layout; only the service URLs come from .yb_amp/config.
 #
 # It runs its own tiny aggregating web server, so the browser only ever
 # talks to this one origin — no CORS headers are needed on the storage
@@ -27,9 +27,9 @@
 # and merges the results into /api/data (JSON), which the page polls.
 #
 # Usage:
-#   tools/cluster-ui                 # serve on 127.0.0.1:9099, repo .yb_light
+#   tools/cluster-ui                 # serve on 127.0.0.1:9099, repo .yb_amp
 #   tools/cluster-ui --port 9001
-#   tools/cluster-ui --repo-dir /path/to/.yb_light
+#   tools/cluster-ui --repo-dir /path/to/.yb_amp
 #   tools/cluster-ui --once          # print the aggregated JSON and exit
 #
 # Stdlib only; works on Python 3.8+. No build step, no dependencies.
@@ -444,7 +444,7 @@ def collect(repo_dir, database_url=None):
                      "url": es, "up": es_err is None, "detail": es_err})
 
     # Compute endpoints. compute_ctl's external HTTP /status requires a JWT,
-    # so a plain GET 400s; mirror yb_light_local's own status() and treat the
+    # so a plain GET 400s; mirror yb_amp_local's own status() and treat the
     # endpoint as up when its Postgres pg_port accepts a TCP connection.
     # /metrics on the external http port is unauthenticated, so use it as a
     # secondary "compute_ctl is alive" signal.
@@ -920,7 +920,7 @@ load(); tick();
 
 
 # --------------------------------------------------------------------------
-# Mutating action: branch + endpoint create/start via the yb_light_local CLI.
+# Mutating action: branch + endpoint create/start via the yb_amp_local CLI.
 # --------------------------------------------------------------------------
 
 # Friendly "adjective-noun" names (e.g. "brave-otter") for branches and
@@ -955,12 +955,12 @@ def english_name():
     return f"{random.choice(_ADJECTIVES)}-{random.choice(_NOUNS)}"
 
 
-def _yb_light_binary(repo_dir):
-    """Resolve the repo's yb_light_local binary, or (None, error)."""
+def _yb_amp_binary(repo_dir):
+    """Resolve the repo's yb_amp_local binary, or (None, error)."""
     repo_root = os.path.dirname(os.path.abspath(repo_dir)) if repo_dir else os.getcwd()
-    binary = os.path.join(repo_root, "target", "debug", "yb_light_local")
+    binary = os.path.join(repo_root, "target", "debug", "yb_amp_local")
     if not os.path.exists(binary):
-        return None, repo_root, f"yb_light_local binary not found at {binary}"
+        return None, repo_root, f"yb_amp_local binary not found at {binary}"
     return binary, repo_root, None
 
 
@@ -970,7 +970,7 @@ def create_branch_with_endpoint(repo_dir, ancestor_branch):
 
     Branch names live in the controller now, so `--ancestor-branch-name`
     resolves directly against durable state — no local mapping pre-step needed.
-    Shells out to the repo's `target/debug/yb_light_local` (args passed as a
+    Shells out to the repo's `target/debug/yb_amp_local` (args passed as a
     list, never via a shell). Returns
     {ok, branch, endpoint, branch_id, steps:[{cmd, ok, output}]} or
     {ok: False, error}.
@@ -978,7 +978,7 @@ def create_branch_with_endpoint(repo_dir, ancestor_branch):
     if not ancestor_branch or not re.fullmatch(r"[A-Za-z0-9_.\-]{1,64}", str(ancestor_branch)):
         return {"ok": False, "error": f"invalid ancestor branch {ancestor_branch!r}"}
 
-    binary, repo_root, err = _yb_light_binary(repo_dir)
+    binary, repo_root, err = _yb_amp_binary(repo_dir)
     if err:
         return {"ok": False, "error": err}
 
@@ -1035,12 +1035,12 @@ def create_tenant_with_endpoint(repo_dir):
     pending bootstrap recipe — the branch's PS+SK pair isn't provisioned until
     the first endpoint is created on it, so we do that here to mirror the
     branch flow's "leaves you with a running endpoint" behaviour. Shells out to
-    the repo's `target/debug/yb_light_local` (args passed as a list, never via
+    the repo's `target/debug/yb_amp_local` (args passed as a list, never via
     a shell). Returns
     {ok, branch_id, branch, endpoint, steps:[{cmd, ok, output}]} or
     {ok: False, error}.
     """
-    binary, repo_root, err = _yb_light_binary(repo_dir)
+    binary, repo_root, err = _yb_amp_binary(repo_dir)
     if err:
         return {"ok": False, "error": err}
 
@@ -1085,17 +1085,17 @@ def create_tenant_with_endpoint(repo_dir):
 
 
 def drop_branch(repo_dir, branch_id):
-    """Drop a branch and all its endpoints via `yb_light_local branch drop`:
+    """Drop a branch and all its endpoints via `yb_amp_local branch drop`:
     stops the branch's endpoint compute(s), deletes their records, and marks
     the branch dropped in the controller (the underlying PS/SK data
     is left for a later GC pass). Shells out to the repo's
-    `target/debug/yb_light_local` (args passed as a list, never via a shell).
+    `target/debug/yb_amp_local` (args passed as a list, never via a shell).
     Returns {ok, steps:[{cmd, ok, output}]} or {ok: False, error}.
     """
     if not branch_id or not re.fullmatch(r"[0-9a-fA-F]{32}", str(branch_id)):
         return {"ok": False, "error": f"invalid branch_id {branch_id!r}"}
 
-    binary, repo_root, err = _yb_light_binary(repo_dir)
+    binary, repo_root, err = _yb_amp_binary(repo_dir)
     if err:
         return {"ok": False, "error": err}
 
@@ -1112,7 +1112,7 @@ def drop_branch(repo_dir, branch_id):
 
 
 class Handler(BaseHTTPRequestHandler):
-    repo_dir = ".yb_light"
+    repo_dir = ".yb_amp"
     database_url = None
 
     def _send(self, code, body, ctype):
@@ -1172,9 +1172,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Standalone yb-light cluster UI")
-    ap.add_argument("--repo-dir", default=os.environ.get("YB_LIGHT_REPO_DIR", ".yb_light"),
-                    help="path to the .yb_light repo dir, for service URLs "
+    ap = argparse.ArgumentParser(description="Standalone yb-amp cluster UI")
+    ap.add_argument("--repo-dir", default=os.environ.get("YB_AMP_REPO_DIR", ".yb_amp"),
+                    help="path to the .yb_amp repo dir, for service URLs "
                          "(optional — topology is read from the database)")
     ap.add_argument("--database-url",
                     default=os.environ.get("YB_STORAGE_DATABASE_URL"),
@@ -1191,7 +1191,7 @@ def main():
     # The repo dir is optional now (topology comes from the database); only
     # warn if a non-default one was asked for but doesn't exist.
     repo_dir = args.repo_dir if os.path.isdir(args.repo_dir) else None
-    if repo_dir is None and args.repo_dir != ".yb_light":
+    if repo_dir is None and args.repo_dir != ".yb_amp":
         print(f"repo dir {args.repo_dir!r} not found; using defaults for "
               f"service URLs", file=sys.stderr)
 
@@ -1209,7 +1209,7 @@ def main():
               f"pick another with --port", file=sys.stderr)
         sys.exit(1)
     httpd.daemon_threads = True
-    print(f"yb-light cluster UI → http://{args.host}:{args.port}  (repo {os.path.abspath(args.repo_dir)})")
+    print(f"yb-amp cluster UI → http://{args.host}:{args.port}  (repo {os.path.abspath(args.repo_dir)})")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

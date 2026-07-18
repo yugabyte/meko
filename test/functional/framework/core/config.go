@@ -12,7 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/configs"
+	"github.com/yugabyte/amp/test/functional/framework/configs"
 )
 
 // Config is the merged, resolved configuration a run reads from. It is built by

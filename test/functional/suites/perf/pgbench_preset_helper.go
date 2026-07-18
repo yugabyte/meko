@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pgbench"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ybk8s"
-	"github.com/yugabyte/yb-amp/test/functional/framework/artifact"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/reap"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pgbench"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
+	"github.com/yugabyte/amp/test/functional/framework/artifact"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/reap"
 )
 
 // pgbenchClientShape is the standing-env shape StandUpPgbenchClient records.

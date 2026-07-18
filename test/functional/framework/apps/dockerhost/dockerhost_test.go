@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/dockerhost"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/apps/dockerhost"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // scriptExec is a scripted fake RemoteExecutor: it records every command and

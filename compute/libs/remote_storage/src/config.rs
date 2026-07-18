@@ -57,7 +57,7 @@ fn default_small_timeout() -> Duration {
 /// A kind of a remote storage to connect to, with its connection
 /// configuration. Cloud variants (S3/Azure/GCS) were removed in lane E
 /// and the LocalFs variant was dropped along with the dev fallback —
-/// yb-light writes only to YbStore.
+/// yb-amp writes only to YbStore.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum RemoteStorageKind {

@@ -95,10 +95,10 @@ Called by local processes (the `yb_amp` extension, `local_proxy`); no auth layer
 | POST | `/grants` | Add role grants. Body `SetRoleGrantsRequest` (`{ database, schema, privileges, role }`). Requires `Running`. Returns `SetRoleGrantsResponse` (201). |
 | POST | `/failpoints` | **`testing` feature builds only.** Body is a list of `FailpointConfig { name, actions }`. 412 if not compiled with failpoint support. |
 
-## yb-light specifics
+## yb-amp specifics
 
 `compute/compute_tools/` is upstream Neon, essentially unmodified — the API surface above is
-inherited as-is. yb-light's only relevant differences are operational: a single
+inherited as-is. yb-amp's only relevant differences are operational: a single
 safekeeper means `/terminate` no longer runs a `sync-safekeepers` walproposer pass, and
 `/promote` / `/configure` / `/terminate` are the contact points the (future)
 `amp-controller` uses to drive endpoints. The spec body (`ConfigurationRequest`)

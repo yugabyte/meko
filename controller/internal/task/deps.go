@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yugabyte/yb-amp/controller/internal/deploy"
+	"github.com/yugabyte/amp/controller/internal/deploy"
 )
 
 // This file defines the *ports* the step catalog (the step_*.go files) depends

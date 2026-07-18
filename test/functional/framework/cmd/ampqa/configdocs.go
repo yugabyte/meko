@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/configs"
+	"github.com/yugabyte/amp/test/functional/framework/configs"
 )
 
 // keyLineRE matches a YAML mapping key at the start of a line: leading spaces

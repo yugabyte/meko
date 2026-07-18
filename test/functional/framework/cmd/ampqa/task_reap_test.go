@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/task"
+	"github.com/yugabyte/amp/test/functional/framework/task"
 )
 
 // TestReapTaskReachableFromCLI guards that the registry-TTL reap task is wired

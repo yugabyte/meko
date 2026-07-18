@@ -34,7 +34,7 @@ The file `persistence.rs` contains all the code for accessing the database, and 
 
 The `diesel` crate is used for defining models & migrations.
 
-Running a local cluster with `cargo yb_light` automatically starts a vanilla postgress process to host the storage controller’s database.
+Running a local cluster with `cargo yb_amp` automatically starts a vanilla postgress process to host the storage controller’s database.
 
 ### Diesel tip: migrations
 
@@ -44,7 +44,7 @@ If you need to modify the database schema, here’s how to create a migration:
 - Use `diesel migration generate <name>` to create a new migration
 - Populate the SQL files in the `migrations/` subdirectory
 - Use `DATABASE_URL=... diesel migration run` to apply the migration you just wrote: this will update the `[schema.rs](http://schema.rs)` file automatically.
-  - This requires a running database: the easiest way to do that is to just run `cargo yb_light init ; cargo yb_light start`, which will leave a database available at `postgresql://localhost:1235/storage_controller`
+  - This requires a running database: the easiest way to do that is to just run `cargo yb_amp init ; cargo yb_amp start`, which will leave a database available at `postgresql://localhost:1235/storage_controller`
 - Commit the migration files and the changes to schema.rs
 - If you need to iterate, you can rewind migrations with `diesel migration revert -a` and then `diesel migration run` again.
 - The migrations are build into the storage controller binary, and automatically run at startup after it is deployed, so once you’ve committed a migration no further steps are needed.
@@ -61,7 +61,7 @@ only necessary for debug, but may also be used to manage nodes (e.g. marking a n
 This section is aimed at engineers deploying the storage controller outside of Neon's cloud platform, as
 part of a self-hosted system.
 
-_General note: since the default `yb_light_local` environment includes a storage controller, this is a useful
+_General note: since the default `yb_amp_local` environment includes a storage controller, this is a useful
 reference when figuring out deployment._
 
 ## Database
@@ -79,7 +79,7 @@ when it starts up.
 ## Configure pageservers to use the storage controller
 
 1. The pageserver `control_plane_api` and `control_plane_api_token` should be set in the `pageserver.toml` file. The API setting should
-   point to the "upcall" prefix, for example `http://127.0.0.1:1234/upcall/v1/` is used in yb_light_local clusters.
+   point to the "upcall" prefix, for example `http://127.0.0.1:1234/upcall/v1/` is used in yb_amp_local clusters.
 2. Create a `metadata.json` file in the same directory as `pageserver.toml`: this enables the pageserver to automatically register itself
    with the storage controller when it starts up. See the example below for the format of this file.
 
@@ -111,8 +111,8 @@ Currently, there is two hooks, each computed by appending the name to the provid
 If the hooks require JWT auth, the token may be provided with `--control-plane-jwt-token`.
 The hooks will be invoked with a `PUT` request.
 
-In the Neon cloud service, these hooks are implemented by Neon's internal cloud control plane. In `yb_light_local` systems,
-the storage controller integrates directly with yb_light_local to reconfigure local postgres processes instead of calling
+In the Neon cloud service, these hooks are implemented by Neon's internal cloud control plane. In `yb_amp_local` systems,
+the storage controller integrates directly with yb_amp_local to reconfigure local postgres processes instead of calling
 the compute hook.
 
 When implementing an on-premise Neon deployment, you must implement a service that handles the compute hooks. This is not complicated.

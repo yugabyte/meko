@@ -548,7 +548,7 @@ async fn timeline_gc_handler(
 // With `?lsn=<lsn>`, first wait for WAL ingest to reach that LSN, so the
 // post-flush `consistent_lsn` is `>= lsn` (used at branch time to clear the
 // ancestor's `create_branch_row` durability barrier without waiting for the
-// periodic flush). In yb-light "freeze" is a no-op (no in-memory layers) — this
+// periodic flush). In yb-amp "freeze" is a no-op (no in-memory layers) — this
 // is just a flush to YB; named accordingly.
 async fn timeline_flush_handler(
     request: Request<Body>,

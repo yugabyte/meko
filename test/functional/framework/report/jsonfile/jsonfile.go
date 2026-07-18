@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // Sink writes run artifacts under baseDir/<runid>.

@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // Type selects which fetcher resolves an artifact.

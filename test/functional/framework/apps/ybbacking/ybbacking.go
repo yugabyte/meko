@@ -15,11 +15,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ampstack"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/yba"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/yugabyte"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/yugabyted"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
+	"github.com/yugabyte/amp/test/functional/framework/apps/yugabyte"
+	"github.com/yugabyte/amp/test/functional/framework/apps/yugabyted"
 )
 
 // BackingStore is a resolved YugabyteDB backing store: a primary YSQL ConnInfo,

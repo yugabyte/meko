@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 )
 
 func TestDSNDefaults(t *testing.T) {

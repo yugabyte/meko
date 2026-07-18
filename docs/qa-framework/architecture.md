@@ -1,7 +1,7 @@
 # yb-amp QA Framework — Architecture Proposal
 
 **Status:** draft for discussion · **Scope:** a developer-owned, extensible Go test
-framework + report portal for **yb-amp / yb-light** (Yugabyte's Neon fork:
+framework + report portal for **yb-amp / yb-amp** (Yugabyte's Neon fork:
 serverless Postgres — pageserver, safekeeper, compute, controller,
 controller — backed by YugabyteDB).
 
@@ -70,7 +70,7 @@ environments instead of provisioning cloud VMs over SSH.
   including for the dev loop. (This is the single most important
   non-functional rule; it is what keeps a Jenkins agent from OOMing the way
   the stress agents historically did.)
-- **Use the product's own multi-tenancy.** A deployed yb-light control plane
+- **Use the product's own multi-tenancy.** A deployed yb-amp control plane
   hosts many projects / branches / endpoints. A "test environment" is usually
   *a project on a shared control plane*, not a freshly-provisioned cluster.
   This makes environments cheap and parallelism natural.
@@ -136,7 +136,7 @@ each mapping to environment shapes (§5) and executors (§8):
 
 | Category | What runs there | Environment shapes | Executor |
 |---|---|---|---|
-| **1. OneBox** — a single machine | Lots of fast, short tests: unit tests (unit = a file), integration tests of one full component, e2e tests of interactions between components. | single-container amp (§5.3), `yb_light_local` | GitHub Actions / Jenkins |
+| **1. OneBox** — a single machine | Lots of fast, short tests: unit tests (unit = a file), integration tests of one full component, e2e tests of interactions between components. | single-container amp (§5.3), `yb_amp_local` | GitHub Actions / Jenkins |
 | **2. Integration** — real k8s clusters | Fewer, slower tests that need many machines and external infra (e.g. an NLB): e2e on the full stack, perf, long-running (LRU-style), nemesis/chaos. | `SHARED` / `EXCLUSIVE` / `PERSISTENT` (§5.1, §5.2, §5.5) | Jenkins |
 | **3. Manual** — spec → standing system | Start the system with a given spec and hand it over to a human or agent — PoC and evaluation cases. On-demand, rare. | provision-only standing env (no scheduled checks, TTL/reaper) | local / Jenkins |
 
@@ -177,7 +177,7 @@ These are worth separating because the second one breaks the normal
 
   This is exactly the stress portal's **LRU (long-running-universe) monitoring**
   concept (`lru_setups` / `lru_actions` tables, periodic actions, a dedicated
-  monitoring view) — reused here for yb-light. It's the right tool for catching
+  monitoring view) — reused here for yb-amp. It's the right tool for catching
   slow leaks, unbounded growth, GC/compaction stalls, and durability drift that
   only appear after days of continuous load.
 
@@ -217,7 +217,7 @@ The flow, top to bottom:
    - **Chaos engine** — pod kill, partition, store degrade.
    - **Reporter** — streams steps/logs/metrics to the portal.
 4. **The framework talks to three things** (and does nothing heavy itself):
-   - **yb-light stack(s)** — controller + controller + pageserver/safekeeper
+   - **yb-amp stack(s)** — controller + controller + pageserver/safekeeper
      + compute endpoints, backed by YugabyteDB — over REST (controller API) + libpq.
      *(the product under test)*
    - **Client pod(s)** — the workload runners — over kubectl/docker.
@@ -259,12 +259,12 @@ with the API by construction. Building a Go framework introduces nothing foreign
   - `apps/` — the atomic primitives, everything that talks to the product or
     any external system, side by side, each usable anywhere: the controller
     REST wrapper, the **amp control-plane app** (`ampstack` — stands up the
-    whole yb-light stack), the **YBA app** (create/manage universes through
+    whole yb-amp stack), the **YBA app** (create/manage universes through
     YugabyteDB Anywhere — the stress `yugaware_app` equivalent), the
     **yugabyted app** (start/stop a yugabyted cluster over SSH/pods), pg
     client, pgbench, benchbase, sample apps, workload generator. Starting a
     YugabyteDB cluster — a YBA-managed universe or a yugabyted cluster — is an
-    app like any other, reusable both as the backing store for a yb-light stack
+    app like any other, reusable both as the backing store for a yb-amp stack
     and as a **test target in its own right** (§5)
   - `chaos/` — action interface, seed-driven nemesis loop, and the actions
     (pod kill, process kill, YB node kill, zone outage, netem) in one place
@@ -332,7 +332,7 @@ existing `test/integration/` (Rust) and `controller/…_test.go` are untouched n
   properties bag and attachments. Directly mirrors the stress framework's
   `Step` context manager and maps 1:1 to the portal's `step` rows. This is the
   unit of live progress the portal shows.
-- **Environment** — a handle to a running yb-light target: a controller URL, a
+- **Environment** — a handle to a running yb-amp target: a controller URL, a
   project/branch/endpoint set, connection strings, and the k8s/docker handles
   needed for chaos. Produced by an **Env Provider**. A `SHARED` environment may
   host **many** co-tenant tests over its lifetime (each in its own project for
@@ -432,7 +432,7 @@ The test count is **not** what limits us, and Go is never the bottleneck:
 - **Goroutines are ~2 KB and multiplex onto a few OS threads.** Holding 1,000 —
   or 100,000 — tests "in flight" as queued work items costs kilobytes. Parking
   980 waiting tests on a channel is free.
-- **The real ceiling is environments, not goroutines.** Running 1,000 yb-light
+- **The real ceiling is environments, not goroutines.** Running 1,000 yb-amp
   stacks is not feasible; actual concurrency is bounded by **cluster capacity, enforced
   by the lease manager**. 1,000 tests through a lease capacity of ~20 envs =
   at most 20 provisioned at once, the rest parked. So "1,000 tests in one
@@ -599,7 +599,7 @@ mechanics, copied from stress:
 
 ## 5. Environment provisioning for yb-amp
 
-The defining difference from the stress framework: yb-light is a control plane,
+The defining difference from the stress framework: yb-amp is a control plane,
 so most environments come from **calling the product's own API**. But the
 framework also **provisions raw infrastructure itself** when an environment
 needs it — the stress `SetupPortalTask` / `SetupK8SYugawareTask` pattern:
@@ -668,13 +668,13 @@ suites against real infrastructure. Mirrors the stress framework's
 "existing portal" path and `deploy/smoke-test.sh`'s remote-controller model, and
 the `remote_cluster` opt-in marker the legacy pytest runner already uses.
 
-> There is a `yb_light_local` "cluster-in-a-box" binary — it stays a
+> There is a `yb_amp_local` "cluster-in-a-box" binary — it stays a
 > product-developer tool for hand-driven loops. The framework itself never
 > hosts environments on the operator's machine: even its cheapest shape runs
 > on a remote docker host, and CI uses the shared/exclusive k8s environments.
 
 ### 5.4a Universe target — a YugabyteDB cluster as the environment (`Universe`)
-Not every target is a yb-light stack. A YugabyteDB cluster itself can be the
+Not every target is a yb-amp stack. A YugabyteDB cluster itself can be the
 environment under test — either a **YBA-managed universe** or a **yugabyted
 cluster** — driven by the YBA app and the yugabyted app (§4.1). Three modes,
 chosen by config, mirroring the attach/provision split used elsewhere:
@@ -688,7 +688,7 @@ chosen by config, mirroring the attach/provision split used elsewhere:
 The environment exposes a YSQL connection the same way the amp shapes expose
 their compute endpoint, so the pg and workloadgen apps and their tests run
 against a universe unchanged. This is what lets the framework **give a universe
-as a target** — the same atomic apps that provision yb-light's YB backing store
+as a target** — the same atomic apps that provision yb-amp's YB backing store
 also stand a universe up as a first-class target in its own right.
 
 ### 5.5 Persistent environment (`PERSISTENT`) — detached, health-checked on a schedule
@@ -717,7 +717,7 @@ one test's fault never disturbs another) offers actions such as:
 - **Network partition / slowdown** — sever or delay compute↔pageserver,
   pageserver↔YB, safekeeper↔YB links.
 - **Backing-store faults — the nemesis kills the underlying YugabyteDB nodes
-  too**, not only yb-light components: kill/restart/throttle tservers and
+  too**, not only yb-amp components: kill/restart/throttle tservers and
   masters under load, simulate a zone outage, and verify how the storage layer
   tolerates its backend's faults.
 - **LSN / lag injection, disk pressure, endpoint churn.**
@@ -1027,7 +1027,7 @@ tab's whole reason to exist.
   YugabyteDB cluster as the target) — behind one Env Provider interface.
 - YugabyteDB cluster provisioning as atomic apps: a **YBA app** (universe
   create/manage, the stress `yugaware_app` equivalent) and a **yugabyted app**
-  (cluster start/stop over SSH/pods), reusable as yb-light's backing store and
+  (cluster start/stop over SSH/pods), reusable as yb-amp's backing store and
   as a standalone universe target (§5.4a).
 - Named-secret system (§4.6a): token / file / env-var variants, set from config
   or `-o`, resolved by name, masked in logs — feeding artifact fetchers, cloud
@@ -1176,7 +1176,7 @@ tab's whole reason to exist.
   `scripts/db/*.sql`).
 - **Env-creation & control-plane API:** yb-amp `controller/` (OpenAPI spec +
   oapi-codegen client), `deploy/up.sh` + Helm charts, `deploy/smoke-test.sh`,
-  `control_plane/` `yb_light_local`, `test/integration/`.
+  `control_plane/` `yb_amp_local`, `test/integration/`.
 - **Perf/benchbase:** yb-amp `benchmark/scripts/` (`tpcc-run.sh`, `_env.sh`,
   `_metrics.sh`), `compute/pageserver/pagebench`.
 - **Test taxonomy & quality dimensions:** YugabyteDB `coverage_process`.

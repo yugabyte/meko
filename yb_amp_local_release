@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Convenience wrapper: run the release-profile yb_amp_local binary.
+#
+# Same as the sibling `yb_amp_local` script but targets
+# target/release/. For day-to-day dev iteration prefer the debug
+# wrapper; use this when you specifically need the optimized build.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN="$REPO/target/release/yb_amp_local"
+
+[[ -x "$BIN" ]] || {
+    echo "yb_amp_local release binary not found at $BIN" >&2
+    echo "build it first: cargo build --release --bin yb_amp_local" >&2
+    exit 1
+}
+
+exec "$BIN" "$@"

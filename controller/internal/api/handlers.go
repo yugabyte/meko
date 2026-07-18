@@ -14,12 +14,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
-	"github.com/yugabyte/yb-amp/controller/internal/core"
-	"github.com/yugabyte/yb-amp/controller/internal/deploy"
-	applog "github.com/yugabyte/yb-amp/controller/internal/log"
-	"github.com/yugabyte/yb-amp/controller/internal/node"
-	"github.com/yugabyte/yb-amp/controller/internal/task"
-	"github.com/yugabyte/yb-amp/controller/internal/version"
+	"github.com/yugabyte/amp/controller/internal/core"
+	"github.com/yugabyte/amp/controller/internal/deploy"
+	applog "github.com/yugabyte/amp/controller/internal/log"
+	"github.com/yugabyte/amp/controller/internal/node"
+	"github.com/yugabyte/amp/controller/internal/task"
+	"github.com/yugabyte/amp/controller/internal/version"
 )
 
 // Provisioning holds the collaborators the create-project / create-endpoint
@@ -207,7 +207,7 @@ func (c *Controllers) GetStoragePool(ctx context.Context, request GetStoragePool
 // branches and endpoints in the worker.
 
 // defaultPgVersion is used when a create-project request omits pg_version.
-// yb-light is Postgres v18 only.
+// yb-amp is Postgres v18 only.
 const defaultPgVersion = 18
 
 func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRequestObject) (CreateProjectResponseObject, error) {
@@ -222,7 +222,7 @@ func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRe
 	if request.Body.PgVersion != nil {
 		pgVersion = *request.Body.PgVersion
 	}
-	// yb-light is Postgres v18 only; reject anything else up front rather than
+	// yb-amp is Postgres v18 only; reject anything else up front rather than
 	// failing opaquely when the endpoint image (v18) can't honor it.
 	if pgVersion != defaultPgVersion {
 		return CreateProject400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",

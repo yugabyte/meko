@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/chaos"
-	execpkg "github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/chaos"
+	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // fakeExec is an exec.RemoteExecutor double: it records every command and

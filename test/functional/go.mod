@@ -1,4 +1,4 @@
-module github.com/yugabyte/yb-amp/test/functional
+module github.com/yugabyte/amp/test/functional
 
 go 1.25.0
 

@@ -50,7 +50,7 @@ pub async fn client(c: &Cluster) -> anyhow::Result<PageserverClient> {
 /// The compute connstring is the **libpq** page_service address
 /// (`postgres://user@host:PG?...`, optionally comma-separated shards). The
 /// gRPC page_service of the same pageserver sits at `PG + 200` under the
-/// yb_light port scheme (pageserver pg = base+300, grpc = base+500, and
+/// yb_amp port scheme (pageserver pg = base+300, grpc = base+500, and
 /// every per-instance bump shifts both equally), so we derive the gRPC URL
 /// from it.
 pub fn client_at_connstring(
@@ -244,7 +244,7 @@ pub fn restart_with_pipeline_depth(
         .context("write pipeline_depth pageserver.toml")?;
     // Immediate stop + start rather than a graceful `restart`: this is setup
     // (we just want the PS back on the new toml with a cold cache), and a
-    // graceful stop can exceed yb_light's timeout while draining a fresh WAL
+    // graceful stop can exceed yb_amp's timeout while draining a fresh WAL
     // backlog. Matches the suite convention (e.g. restart_wal_replay).
     c.yb_logged(&["pageserver", "stop", "-m", "immediate"])?;
     c.yb_logged(&["pageserver", "start"])?;

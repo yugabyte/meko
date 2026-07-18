@@ -22,7 +22,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	sshx "github.com/yugabyte/yb-amp/test/functional/framework/exec/ssh"
+	sshx "github.com/yugabyte/amp/test/functional/framework/exec/ssh"
 )
 
 // testServer is an in-process SSH server double: it authenticates the test's

@@ -154,7 +154,7 @@ impl InterpretedWalRecords {
                     Ok(())
                 }
             },
-            // Compression is unused in yb-light; fall back to the allocating path
+            // Compression is unused in yb-amp; fall back to the allocating path
             // for correctness rather than duplicating the zstd plumbing.
             Some(_) => {
                 let bytes = self.to_wire(format, compression).await?;

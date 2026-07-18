@@ -14,10 +14,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yugabyte/yb-amp/controller/internal/api"
-	"github.com/yugabyte/yb-amp/controller/internal/core"
-	"github.com/yugabyte/yb-amp/controller/internal/node"
-	"github.com/yugabyte/yb-amp/controller/internal/task"
+	"github.com/yugabyte/amp/controller/internal/api"
+	"github.com/yugabyte/amp/controller/internal/core"
+	"github.com/yugabyte/amp/controller/internal/node"
+	"github.com/yugabyte/amp/controller/internal/task"
 )
 
 // fakeRecipeStore is an in-memory task.RecipeStore that records the calls the

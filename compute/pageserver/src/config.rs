@@ -61,7 +61,7 @@ pub struct PageServerConf {
     // can safely distinguish different pageservers
     pub id: NodeId,
 
-    /// yb-light single-timeline identity. `None` only during the
+    /// yb-amp single-timeline identity. `None` only during the
     /// transition while the control plane still attaches tenants
     /// dynamically; once the single-timeline startup lands this is
     /// required and startup fails without it.
@@ -494,7 +494,7 @@ impl PageServerConf {
         // ------------------------------------------------------------
 
         if [conf.http_auth_type, conf.pg_auth_type, conf.grpc_auth_type]
-            .contains(&AuthType::YbLightJWT)
+            .contains(&AuthType::YbAmpJWT)
         {
             let auth_validation_public_key_path = conf
                 .auth_validation_public_key_path

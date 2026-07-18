@@ -131,7 +131,7 @@ spec:
               scrape_interval: 30s
               kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
               relabel_configs:
-                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-light-endpoint}
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-amp-endpoint}
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "pageserver" 9898 .Values.otel }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
@@ -139,7 +139,7 @@ spec:
               scrape_interval: 30s
               kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
               relabel_configs:
-                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-light-endpoint}
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-amp-endpoint}
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "safekeeper" 7676 .Values.otel }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
@@ -147,7 +147,7 @@ spec:
               scrape_interval: 30s
               kubernetes_sd_configs: [{role: pod, namespaces: {names: [{{ $ns }}]}}]
               relabel_configs:
-                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-light-endpoint}
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name], action: keep, regex: yb-amp-endpoint}
                 - {source_labels: [__meta_kubernetes_pod_ip], action: replace, regex: (.+), replacement: "$1:{{ dig "scrapePorts" "computeCtl" 3080 .Values.otel }}", target_label: __address__}
                 - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: endpoint}
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}

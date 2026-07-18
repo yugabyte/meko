@@ -2800,7 +2800,7 @@ pub(crate) fn remove_tenant_metrics(branch_id: &BranchId) {
 
 /// Maintain a per timeline gauge in addition to the global gauge.
 ///
-/// yb-light: the metric is always 0 (no layer files = no "remote
+/// yb-amp: the metric is always 0 (no layer files = no "remote
 /// physical size"). The struct survives because `RemoteTimelineClientMetrics`
 /// still keeps the field, but the setter / getter are gone and
 /// nothing ever advances `last_set` above zero. Drop is a no-op.

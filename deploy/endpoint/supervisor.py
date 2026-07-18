@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""yb-light single-container endpoint supervisor.
+"""yb-amp single-container endpoint supervisor.
 
-Brings up, in one container, the services that make up a yb-light endpoint
+Brings up, in one container, the services that make up a yb-amp endpoint
 and supervises them (basic monitor + restart-with-backoff). Runs as PID 1
 under tini.
 
@@ -149,7 +149,7 @@ MAX_RESTARTS = env_int("SUPERVISOR_MAX_RESTARTS", 5)
 RESTART_WINDOW = env_int("SUPERVISOR_RESTART_WINDOW_SECONDS", 60)
 
 DEV_PROVISION_SCHEMA = env("DEV_PROVISION_SCHEMA", "false").lower() in ("1", "true", "yes")
-MIGRATIONS_DIR = Path(env("YB_LIGHT_MIGRATIONS_DIR", "/usr/local/share/yb-light/migrations"))
+MIGRATIONS_DIR = Path(env("YB_AMP_MIGRATIONS_DIR", "/usr/local/share/yb-amp/migrations"))
 
 PG_BIN = Path(PG_DISTRIB_DIR) / f"v{PG_VERSION}" / "bin"
 PG_LIB = Path(PG_DISTRIB_DIR) / f"v{PG_VERSION}" / "lib"
@@ -257,7 +257,7 @@ def psql(dbname, sql=None, file=None, ignore_errors=False):
 # Config file rendering
 # ---------------------------------------------------------------------------
 # NOTE: pageserver.toml's `timeline_init` Bootstrap serialization and the
-# exact compute spec shape are verified against `yb_light_local`-generated
+# exact compute spec shape are verified against `yb_amp_local`-generated
 # configs during bring-up testing.
 
 def write_pageserver_config(datadir, bootstrap, ancestor_branch_id=None, ancestor_lsn=None):
@@ -362,8 +362,8 @@ def render_compute_spec(specfile):
         "operation_uuid": "00000000-0000-0000-0000-000000000000",
         "suspend_timeout_seconds": -1,
         "cluster": {
-            "cluster_id": "yb-light-endpoint",
-            "name": "yb-light-endpoint",
+            "cluster_id": "yb-amp-endpoint",
+            "name": "yb-amp-endpoint",
             "state": "running",
             "roles": [{
                 "name": "cloud_admin",
@@ -696,7 +696,7 @@ def main():
             "--pgdata", compute_pgdata,
             "-C", f"postgresql://cloud_admin@{LISTEN_HOST}:{COMPUTE_PORT}/postgres",
             "-b", PG_BIN / "postgres",
-            "--compute-id", "yb-light-endpoint",
+            "--compute-id", "yb-amp-endpoint",
             "--config", spec,
             "--external-http-port", str(COMPUTE_CTL_HTTP_PORT),
             "--internal-http-port", str(COMPUTE_CTL_HTTP_PORT + 1),

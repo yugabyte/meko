@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	execpkg "github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	sshx "github.com/yugabyte/yb-amp/test/functional/framework/exec/ssh"
+	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
+	sshx "github.com/yugabyte/amp/test/functional/framework/exec/ssh"
 )
 
 // recorder is a scripted fake gcloud runner: it records every argv and answers

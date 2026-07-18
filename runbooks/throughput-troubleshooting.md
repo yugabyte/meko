@@ -1,6 +1,6 @@
-# Runbook: Troubleshooting throughput issues (yb-light)
+# Runbook: Troubleshooting throughput issues (yb-amp)
 
-Diagnoses low throughput (TPC-C load or execute, or any OLTP workload) on the **yb-light** stack:
+Diagnoses low throughput (TPC-C load or execute, or any OLTP workload) on the **yb-amp** stack:
 a Postgres compute, a yb-pageserver, a safekeeper, a controller, and a YugabyteDB backing
 store. The components may be co-located on one box or spread across boxes — this runbook does not
 assume a particular topology. Substitute the conventions below for your deployment.
@@ -13,7 +13,7 @@ service configs (`pageserver.toml`, the safekeeper/SC start scripts, the compute
 ```bash
 # --- Postgres compute (the benchmark connects here) ---
 export COMPUTE_HOST=...        # e.g. the compute box IP/host
-export COMPUTE_PORT=...        # yb-light compute port
+export COMPUTE_PORT=...        # yb-amp compute port
 export COMPUTE_USER=cloud_admin
 export COMPUTE_DB=tpcc         # or whatever DB the workload uses
 export PGPASSWORD=...          # compute password
@@ -163,7 +163,7 @@ is ~1–2 ms (the gap is queue wait inside PS).
 scale_factor    = 6.0
 page_cache_size = 8192    # explicit override so it isn't scaled along with everything else
 ```
-Then `yb_light_local pageserver restart --id 1`. Verify:
+Then `yb_amp_local pageserver restart --id 1`. Verify:
 - `WARN ignoring unknown configuration item` lines for `scale_factor` are absent from the PS log.
 - The TCP-conn count in the `ss` command above multiplies (e.g. 9 → ~49 at `scale_factor=6.0`).
 

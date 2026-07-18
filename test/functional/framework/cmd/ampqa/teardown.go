@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/reap"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
+	"github.com/yugabyte/amp/test/functional/framework/apps/cloud"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/reap"
+	"github.com/yugabyte/amp/test/functional/framework/env/registry"
 )
 
 // teardownViaProvider reconstructs an environment from a serialized ref via the

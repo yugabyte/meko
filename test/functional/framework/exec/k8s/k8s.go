@@ -28,7 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	execpkg "github.com/yugabyte/yb-amp/test/functional/framework/exec"
+	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // MaxCapture bounds the stdout/stderr a single command buffers in memory.

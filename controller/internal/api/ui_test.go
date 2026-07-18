@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/controller/internal/api"
-	"github.com/yugabyte/yb-amp/controller/internal/config"
-	"github.com/yugabyte/yb-amp/controller/internal/core"
+	"github.com/yugabyte/amp/controller/internal/api"
+	"github.com/yugabyte/amp/controller/internal/config"
+	"github.com/yugabyte/amp/controller/internal/core"
 )
 
 // TestServesUI checks the controller serves the embedded admin console at the

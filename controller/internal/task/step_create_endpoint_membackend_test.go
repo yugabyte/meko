@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yugabyte/yb-amp/controller/internal/core"
-	"github.com/yugabyte/yb-amp/controller/internal/deploy"
-	"github.com/yugabyte/yb-amp/controller/internal/task"
+	"github.com/yugabyte/amp/controller/internal/core"
+	"github.com/yugabyte/amp/controller/internal/deploy"
+	"github.com/yugabyte/amp/controller/internal/task"
 )
 
 func TestCreateEndpointStepReplayConvergesAgainstMemBackend(t *testing.T) {

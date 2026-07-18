@@ -1,4 +1,4 @@
-# yb-light controller-layer container: the amp controller (issue #94).
+# yb-amp controller-layer container: the amp controller (issue #94).
 #
 # controller (the amp-controller, a Go service) is the cluster control plane the
 # endpoint image (deploy/endpoint) deliberately leaves out — it owns generation
@@ -8,7 +8,7 @@
 # needs no build toolchain. Build the bundle first, then build this image:
 #
 #   make controller-bundle BUILD_TYPE=release          # -> target/controller-bundle/controller
-#   docker build -t yb-light/controller:dev -f deploy/controller/Dockerfile .
+#   docker build -t yb-amp/controller:dev -f deploy/controller/Dockerfile .
 
 ARG DEBIAN_VERSION=bookworm
 ARG DEBIAN_FLAVOR=${DEBIAN_VERSION}-slim
@@ -45,7 +45,7 @@ RUN set -e \
 # The bundle: the controller binary. We copy the whole bundle directory. The
 # controller binary is static (CGO_ENABLED=0), so it runs on a slim base.
 ARG BUNDLE_DIR
-COPY --chown=yugabyte:yugabyte ${BUNDLE_DIR}/ /opt/yb-light-amp/
+COPY --chown=yugabyte:yugabyte ${BUNDLE_DIR}/ /opt/yb-amp-amp/
 
 # helm + the endpoint chart, for the Kubernetes deploy runtime: the k8s
 # provisioner shells out to `helm upgrade --install` (it is not a client-go
@@ -58,11 +58,11 @@ RUN set -e \
     && mv /tmp/linux-amd64/helm /usr/local/bin/helm \
     && chmod +x /usr/local/bin/helm \
     && rm -rf /tmp/helm.tgz /tmp/linux-amd64
-COPY --chown=yugabyte:yugabyte deploy/helm/yb-light-endpoint /opt/yb-light-amp/chart
+COPY --chown=yugabyte:yugabyte deploy/helm/yb-amp-endpoint /opt/yb-amp-amp/chart
 
-ENV PATH=/opt/yb-light-amp:$PATH \
+ENV PATH=/opt/yb-amp-amp:$PATH \
     AMP_LISTEN=:8080 \
-    AMP_DEPLOY_CHART=/opt/yb-light-amp/chart
+    AMP_DEPLOY_CHART=/opt/yb-amp-amp/chart
 
 USER yugabyte
 
@@ -72,4 +72,4 @@ EXPOSE 8080
 # controller serves the API + task worker and supervises the bundled storage
 # controller. AMP_DATABASE_URL must be provided at run time. tini is PID 1 so
 # signals reach controller and any orphaned grandchildren are reaped.
-ENTRYPOINT ["/usr/bin/tini", "--", "/opt/yb-light-amp/controller", "serve"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/yb-amp-amp/controller", "serve"]

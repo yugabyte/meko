@@ -151,8 +151,8 @@ flowchart TB
         gwcm["Gateway / Connection Manager"]
     end
 
-    cp["Yb Light Control plane<br/>(MCP)"]
-    ui["ybLight UI"]
+    cp["Yb Amp Control plane<br/>(MCP)"]
+    ui["ybAmp UI"]
     arch["Architect agent"]
     voy["Voyager Agent"]
     pa["PA Agent"]
@@ -203,7 +203,7 @@ flowchart TB
         end
     end
 
-    yba{"YBA/<br/>yb_light_local"}
+    yba{"YBA/<br/>yb_amp_local"}
     ybdb[/"YBDB Universe"/]
 
     gw --> pg
@@ -220,24 +220,24 @@ ybAmp is **not** a hosted service. To run it you bring your own
 YugabyteDB cluster (any deployment — local single-node, YBA-managed
 multi-region, YBM) and point a pageserver + safekeeper at it.
 
-The bundled developer workflow uses `yb_light_local`:
+The bundled developer workflow uses `yb_amp_local`:
 
 ```sh
 ./build.sh                        # build patched PG + Rust binaries (see "Building from source")
-cargo yb_light init               # writes .yb_light repo dir against config.toml
-cargo yb_light start              # storage_broker, safekeeper, pageserver
-cargo yb_light tenant create --set-default
-cargo yb_light endpoint create main
-cargo yb_light endpoint start main
+cargo yb_amp init               # writes .yb_amp repo dir against config.toml
+cargo yb_amp start              # storage_broker, safekeeper, pageserver
+cargo yb_amp tenant create --set-default
+cargo yb_amp endpoint create main
+cargo yb_amp endpoint start main
 ```
 
-`cargo yb_light` rebuilds-then-runs the debug binary. Once it's built,
+`cargo yb_amp` rebuilds-then-runs the debug binary. Once it's built,
 the repo-root wrapper scripts skip cargo's build check and exec the
 binary directly — handy for fast, repeated invocations:
 
 ```sh
-./yb_light_local init             # -> target/debug/yb_light_local
-./yb_light_local_release start    # -> target/release/yb_light_local
+./yb_amp_local init             # -> target/debug/yb_amp_local
+./yb_amp_local_release start    # -> target/release/yb_amp_local
 ```
 
 Both pass all arguments straight through and resolve the repo root
@@ -267,15 +267,15 @@ Branches are a cheap timeline forks at a given LSN, served out of
 the same YB rows:
 
 ```sh
-cargo yb_light timeline branch --branch-name migration_check
-cargo yb_light endpoint create migration_check --branch-name migration_check
-cargo yb_light endpoint start migration_check
+cargo yb_amp timeline branch --branch-name migration_check
+cargo yb_amp endpoint create migration_check --branch-name migration_check
+cargo yb_amp endpoint start migration_check
 ```
 
 
 ## Service endpoints
 
-Default HTTP endpoints for a `yb_light_local` dev cluster (all bind
+Default HTTP endpoints for a `yb_amp_local` dev cluster (all bind
 `127.0.0.1`).
 
 | Service | HTTP API | Other ports |
@@ -293,7 +293,7 @@ Notes:
   API (`/upcall/v1/`); its REST API lives at `/control/v1` and `/v1` on
   the same port.
 - `compute_ctl` exposes a per-endpoint HTTP control port assigned at
-  `endpoint create` time (see `cargo yb_light endpoint` output).
+  `endpoint create` time (see `cargo yb_amp endpoint` output).
 
 
 ## Building from source
@@ -361,12 +361,12 @@ same `make` targets directly if you prefer: `make -j$(nproc) -s` for debug,
 `BUILD_TYPE=release make -j$(nproc) -s` for release.)
 
 `--release-tar` packages a deploy as a single versioned tarball
-(`/tmp/yb-light-bundle-<date>-<sha>.tar.gz`) that unpacks into a deploy dir
+(`/tmp/yb-amp-bundle-<date>-<sha>.tar.gz`) that unpacks into a deploy dir
 laid out as:
 
 ```
-yb-pageserver            # the binary yb_light_local launches
-yb_light_local
+yb-pageserver            # the binary yb_amp_local launches
+yb_amp_local
 yb-safekeeper
 controller
 yb-compute-ctl
@@ -377,8 +377,8 @@ pg_install/v18/          # patched PG + extensions + the same runtime libs
 REVISION.txt             # build host / date / commit
 ```
 
-`yb_light_local` launches `yb-pageserver` from `yb_light_distrib_dir`
-(set in `~/.yb_light/config`).
+`yb_amp_local` launches `yb-pageserver` from `yb_amp_distrib_dir`
+(set in `~/.yb_amp/config`).
 
 ## Tests
 
@@ -403,7 +403,7 @@ DEFAULT_PG_VERSION=17 BUILD_TYPE=release ./scripts/pytest
 ```
 
 The integration suite under [`test/integration/compute/`](test/integration/compute/) is a Rust harness
-that brings up a real `yb_light_local` cluster + YB and exercises full
+that brings up a real `yb_amp_local` cluster + YB and exercises full
 boot, write, branch, restart, and WAL-replay-catch-up paths, scanning
 `pageserver.log` for corruption markers after every test
 (see [`test/integration/compute/README.md`](test/integration/compute/README.md)):
@@ -486,7 +486,7 @@ yb-dump-wals  --host-ports <host:port> --sslmode require --password-env PGPASSWO
               --tenant <hex> --timeline <hex> --summary
 ```
 
-All three default to a local `yb_light_local` cluster (`127.0.0.1:5433`,
+All three default to a local `yb_amp_local` cluster (`127.0.0.1:5433`,
 `yugabyte`/`yb_storage`, no TLS) and accept the shared
 `--host-ports`/`--user`/`--db-name`/`--password-env`/`--sslmode`/`--sslrootcert`
 overrides for remote clusters.
@@ -523,7 +523,7 @@ out of the box.
 ```sh
 make clean      # remove build artefacts
 make distclean  # everything from build + configure
-rm -rf .yb_light    # local dev cluster state (destroys local data)
+rm -rf .yb_amp    # local dev cluster state (destroys local data)
 ```
 
 ## Documentation

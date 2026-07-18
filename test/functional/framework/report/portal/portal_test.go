@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // fakePortal records every live-API call and hands out deterministic ids.

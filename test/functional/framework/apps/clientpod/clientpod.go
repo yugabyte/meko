@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/dockerhost"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/apps"
+	"github.com/yugabyte/amp/test/functional/framework/apps/dockerhost"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // Spec describes a client-pod workload to launch.

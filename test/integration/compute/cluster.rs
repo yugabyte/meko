@@ -76,11 +76,11 @@ pub fn step(msg: &str) {
 }
 
 pub struct Cluster {
-    /// Path to the `yb_light_local` binary.
-    yb_light: PathBuf,
+    /// Path to the `yb_amp_local` binary.
+    yb_amp: PathBuf,
     /// Repo root (`git rev-parse --show-toplevel`).
     repo: PathBuf,
-    /// `YB_LIGHT_REPO_DIR` — this run's on-disk cluster directory.
+    /// `YB_AMP_REPO_DIR` — this run's on-disk cluster directory.
     repo_dir: PathBuf,
     /// Ephemeral YugabyteDB database name for this run.
     db_name: String,
@@ -169,7 +169,10 @@ impl Cluster {
     /// endpoint.
     pub async fn setup() -> anyhow::Result<Cluster> {
         let repo = git_toplevel()?;
-        let test_dir = env_or(&["TEST_DIR"], &repo.join(".integration-tests").to_string_lossy());
+        let test_dir = env_or(
+            &["TEST_DIR"],
+            &repo.join(".integration-tests").to_string_lossy(),
+        );
         let test_dir = PathBuf::from(test_dir);
 
         // GC run dirs older than 7 days under .integration-tests: a passing run
@@ -177,10 +180,10 @@ impl Cluster {
         gc_old_runs(&test_dir);
 
         let run_id = run_id();
-        let yb_light_repo_dir_env = std::env::var("YB_LIGHT_REPO_DIR")
+        let yb_amp_repo_dir_env = std::env::var("YB_AMP_REPO_DIR")
             .ok()
             .filter(|v| !v.is_empty());
-        let repo_dir = match &yb_light_repo_dir_env {
+        let repo_dir = match &yb_amp_repo_dir_env {
             Some(d) => PathBuf::from(d),
             None => test_dir.join(format!("run_{run_id}")),
         };
@@ -191,7 +194,7 @@ impl Cluster {
         // named after the run dir, so a teardown/`clean.sh` that wipes the
         // run dir never deletes the log (a failed run keeps its log for
         // postmortem). Holds whether the run dir was auto-derived or pinned
-        // via YB_LIGHT_REPO_DIR (e.g. by run.sh, whose cleanup trap targets
+        // via YB_AMP_REPO_DIR (e.g. by run.sh, whose cleanup trap targets
         // this exact run).
         let run_dir_name = repo_dir
             .file_name()
@@ -218,25 +221,25 @@ impl Cluster {
             }
         };
 
-        // Every run synthesizes its own config (`yb_light_local init
+        // Every run synthesizes its own config (`yb_amp_local init
         // --yb-dbname <ephemeral> --port-base <free>`) and relocates the
         // whole cluster into a free port block, so runs are isolated by
         // construction and can execute concurrently. `main` lives in the
         // compute lane at base + COMPUTE_LANE. `INTEGRATION_PORT_BASE` pins the block;
         // otherwise a free one is auto-picked.
-        let yb_light = match std::env::var("YB_LIGHT") {
+        let yb_amp = match std::env::var("YB_AMP") {
             Ok(p) if !p.is_empty() => PathBuf::from(p),
-            _ => repo.join("target/debug/yb_light_local"),
+            _ => repo.join("target/debug/yb_amp_local"),
         };
-        if !yb_light.exists() {
+        if !yb_amp.exists() {
             bail!(
-                "yb_light_local binary not found at {}; run 'cargo build --bin yb_light_local'",
-                yb_light.display()
+                "yb_amp_local binary not found at {}; run 'cargo build --bin yb_amp_local'",
+                yb_amp.display()
             );
         }
 
         let mut cluster = Cluster {
-            yb_light,
+            yb_amp,
             repo,
             repo_dir,
             db_name,
@@ -288,10 +291,7 @@ impl Cluster {
         // clean leftover state, then init + start the stack.
         self.clean()?;
 
-        step(&format!(
-            "yb_light_local init + start (db={})",
-            self.db_name
-        ));
+        step(&format!("yb_amp_local init + start (db={})", self.db_name));
         let yb_port = self.yb_port.to_string();
         let port_base = self.port_base.to_string();
         let init_args = [
@@ -347,12 +347,12 @@ impl Cluster {
 
     // ---- subprocess helpers ----------------------------------------
 
-    /// Build a `yb_light_local` command with the env every subprocess
+    /// Build a `yb_amp_local` command with the env every subprocess
     /// needs: the repo dir and the WAL-roundtrip verifier flag.
     fn yb_command(&self) -> Command {
-        let mut cmd = Command::new(&self.yb_light);
+        let mut cmd = Command::new(&self.yb_amp);
         cmd.current_dir(&self.repo)
-            .env("YB_LIGHT_REPO_DIR", &self.repo_dir)
+            .env("YB_AMP_REPO_DIR", &self.repo_dir)
             .env(
                 "YB_PS_VERIFY_WAL_ROUNDTRIP",
                 env_or(&["YB_PS_VERIFY_WAL_ROUNDTRIP"], "1"),
@@ -360,7 +360,7 @@ impl Cluster {
         cmd
     }
 
-    /// Run a `yb_light_local` subcommand, inheriting stdio, and fail if
+    /// Run a `yb_amp_local` subcommand, inheriting stdio, and fail if
     /// it exits non-zero.
     pub fn yb(&self, args: &[&str]) -> anyhow::Result<()> {
         self.yb_env(args, &[])
@@ -375,14 +375,14 @@ impl Cluster {
             .args(args)
             .envs(envs.iter().map(|(k, v)| (*k, *v)))
             .status()
-            .with_context(|| format!("spawning yb_light_local {}", args.join(" ")))?;
+            .with_context(|| format!("spawning yb_amp_local {}", args.join(" ")))?;
         if !status.success() {
-            bail!("yb_light_local {} exited with {status}", args.join(" "));
+            bail!("yb_amp_local {} exited with {status}", args.join(" "));
         }
         Ok(())
     }
 
-    /// Run a `yb_light_local` subcommand, capturing its output and teeing
+    /// Run a `yb_amp_local` subcommand, capturing its output and teeing
     /// every line into the run log. [`Self::yb`]'s inherited stdio reaches
     /// the console but never the run log file, so when a cleanup restart
     /// failed post-hoc forensics had nothing to go on (#241). Capture
@@ -393,7 +393,7 @@ impl Cluster {
             .yb_command()
             .args(args)
             .output()
-            .with_context(|| format!("spawning yb_light_local {}", args.join(" ")))?;
+            .with_context(|| format!("spawning yb_amp_local {}", args.join(" ")))?;
         for line in String::from_utf8_lossy(&out.stdout)
             .lines()
             .chain(String::from_utf8_lossy(&out.stderr).lines())
@@ -401,16 +401,12 @@ impl Cluster {
             tee_line(&format!("  | {line}"));
         }
         if !out.status.success() {
-            bail!(
-                "yb_light_local {} exited with {}",
-                args.join(" "),
-                out.status
-            );
+            bail!("yb_amp_local {} exited with {}", args.join(" "), out.status);
         }
         Ok(())
     }
 
-    /// Run a `yb_light_local` subcommand, ignoring its exit status (for
+    /// Run a `yb_amp_local` subcommand, ignoring its exit status (for
     /// best-effort cleanup calls).
     pub fn yb_quiet(&self, args: &[&str]) {
         let _ = self
@@ -421,12 +417,12 @@ impl Cluster {
             .status();
     }
 
-    /// Run a `yb_light_local` subcommand with a wall-clock timeout.
+    /// Run a `yb_amp_local` subcommand with a wall-clock timeout.
     /// Returns whether it completed successfully within the deadline.
     pub async fn yb_timeout(&self, args: &[&str], dur: Duration) -> anyhow::Result<bool> {
-        let mut cmd = tokio::process::Command::new(&self.yb_light);
+        let mut cmd = tokio::process::Command::new(&self.yb_amp);
         cmd.current_dir(&self.repo)
-            .env("YB_LIGHT_REPO_DIR", &self.repo_dir)
+            .env("YB_AMP_REPO_DIR", &self.repo_dir)
             .env(
                 "YB_PS_VERIFY_WAL_ROUNDTRIP",
                 env_or(&["YB_PS_VERIFY_WAL_ROUNDTRIP"], "1"),
@@ -435,7 +431,7 @@ impl Cluster {
             .stdout(std::process::Stdio::null());
         let mut child = cmd
             .spawn()
-            .with_context(|| format!("spawning yb_light_local {}", args.join(" ")))?;
+            .with_context(|| format!("spawning yb_amp_local {}", args.join(" ")))?;
         match tokio::time::timeout(dur, child.wait()).await {
             Ok(status) => Ok(status?.success()),
             Err(_) => {
@@ -452,7 +448,7 @@ impl Cluster {
             .yb_command()
             .args(["branch", "create", "--pg-version", "18"])
             .output()
-            .context("spawning yb_light_local branch create")?;
+            .context("spawning yb_amp_local branch create")?;
         let text = format!(
             "{}{}",
             String::from_utf8_lossy(&out.stdout),
@@ -467,13 +463,13 @@ impl Cluster {
         Ok(branch)
     }
 
-    /// Run a diagnostic tool binary (built next to `yb_light_local` in
+    /// Run a diagnostic tool binary (built next to `yb_amp_local` in
     /// `target/<profile>/`) with this run's YB connection flags + `extra`.
     /// Returns stdout; fails on a non-zero exit. Exercises the shared
     /// `YbConnArgs` no-TLS connection path end-to-end.
     pub fn run_tool(&self, bin: &str, extra: &[&str]) -> anyhow::Result<String> {
         let path = self
-            .yb_light
+            .yb_amp
             .parent()
             .map(|d| d.join(bin))
             .unwrap_or_else(|| PathBuf::from(bin));
@@ -505,7 +501,7 @@ impl Cluster {
         extra: &[&str],
     ) -> anyhow::Result<(bool, String, String)> {
         let path = self
-            .yb_light
+            .yb_amp
             .parent()
             .map(|d| d.join(bin))
             .unwrap_or_else(|| PathBuf::from(bin));
@@ -558,8 +554,11 @@ impl Cluster {
         // that scenario for merely being long (#71) even though it was
         // making steady, corruption-free progress; capping *quiet time*
         // still trips a real wedge (no step/output) within `budget`.
-        let budget =
-            Duration::from_secs(env_or(&["INTEGRATION_TEST_TIMEOUT"], "180").parse().unwrap_or(180));
+        let budget = Duration::from_secs(
+            env_or(&["INTEGRATION_TEST_TIMEOUT"], "180")
+                .parse()
+                .unwrap_or(180),
+        );
         mark_progress();
         tokio::select! {
             r = fut => r?,
@@ -662,7 +661,7 @@ impl Cluster {
         let status = Command::new("bash")
             .arg(self.repo.join("test/integration/compute/clean.sh"))
             .current_dir(&self.repo)
-            .env("YB_LIGHT_REPO_DIR", &self.repo_dir)
+            .env("YB_AMP_REPO_DIR", &self.repo_dir)
             .env("YB_DBNAME", &self.db_name)
             .env("YB_HOST", &self.yb_host)
             .env("YB_PORT", self.yb_port.to_string())
@@ -685,7 +684,7 @@ impl Cluster {
         let _ = Command::new("bash")
             .arg(self.repo.join("test/integration/compute/clean.sh"))
             .current_dir(&self.repo)
-            .env("YB_LIGHT_REPO_DIR", &self.repo_dir)
+            .env("YB_AMP_REPO_DIR", &self.repo_dir)
             .env("YB_DBNAME", &self.db_name)
             .env("YB_HOST", &self.yb_host)
             .env("YB_PORT", self.yb_port.to_string())
@@ -1014,7 +1013,7 @@ impl Drop for Cluster {
             eprintln!("  logs/dir: {}", self.repo_dir.display());
             eprintln!("  YB db:    {}", self.db_name);
             eprintln!(
-                "  tear down manually with: YB_LIGHT_REPO_DIR={} YB_DBNAME={} test/integration/compute/clean.sh",
+                "  tear down manually with: YB_AMP_REPO_DIR={} YB_DBNAME={} test/integration/compute/clean.sh",
                 self.repo_dir.display(),
                 self.db_name
             );
@@ -1131,7 +1130,7 @@ fn gc_old_runs(test_dir: &Path) {
 
 /// Offset of the compute (`main`) lane from the cluster's port base. The
 /// storage stack occupies base+0..base+600 (one 100-port lane per family;
-/// see `yb_light_local init --port-base`); compute sits above it, and
+/// see `yb_amp_local init --port-base`); compute sits above it, and
 /// scenario branch endpoints live just above `main` at `compute_port + N`.
 const COMPUTE_LANE: u16 = 700;
 

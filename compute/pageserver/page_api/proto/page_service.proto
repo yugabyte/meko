@@ -7,14 +7,14 @@
 //
 // Request metadata headers:
 // - authorization: JWT token ("Bearer <token>"), if auth is enabled
-// - yb-light-branch-id: branch ID ("f08c4e9a2d5f76b1e3a7c2d8910f4b3e")
+// - yb-amp-branch-id: branch ID ("f08c4e9a2d5f76b1e3a7c2d8910f4b3e")
 //
 // The service can be accessed via e.g. grpcurl:
 //
 //    ```
 //    grpcurl \
 //      -plaintext \
-//      -H "yb-light-branch-id: f08c4e9a2d5f76b1e3a7c2d8910f4b3e" \
+//      -H "yb-amp-branch-id: f08c4e9a2d5f76b1e3a7c2d8910f4b3e" \
 //      -H "authorization: Bearer $JWT" \
 //      -d '{"read_lsn": {"request_lsn": 100000000, "not_modified_since_lsn": 1}, "db_oid": 1}' \
 //      localhost:51051 page_api.PageService/GetDbSize

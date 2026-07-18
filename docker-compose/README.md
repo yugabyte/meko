@@ -2,7 +2,7 @@
 
 The configuration in this directory is used for testing Neon docker images: it is
 not intended for deploying a usable system. To run a development environment where
-you can experiment with a miniature Neon system, use `cargo yb_light` rather than container images.
+you can experiment with a miniature Neon system, use `cargo yb_amp` rather than container images.
 
 This configuration does not start the controller, because the controller
 needs a way to reconfigure running computes, and no such thing exists in this setup.

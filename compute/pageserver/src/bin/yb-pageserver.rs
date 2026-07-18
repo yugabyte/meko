@@ -96,7 +96,7 @@ fn main() -> anyhow::Result<()> {
     let workdir = arg_matches
         .get_one::<String>("workdir")
         .map(Utf8Path::new)
-        .unwrap_or_else(|| Utf8Path::new(".yb_light"));
+        .unwrap_or_else(|| Utf8Path::new(".yb_amp"));
     let workdir = workdir
         .canonicalize_utf8()
         .with_context(|| format!("Error opening workdir '{workdir}'"))?;
@@ -154,7 +154,7 @@ fn main() -> anyhow::Result<()> {
     // and duplicate keys. (Upstream Neon only warns here — see the
     // pageserver_api::config::ConfigToml doc comment — because their
     // pageserver.toml has a separate lifecycle from the binary across a large
-    // fleet; yb-light's config is launcher-generated against the same build,
+    // fleet; yb-amp's config is launcher-generated against the same build,
     // so fail-fast is the right default.)
     {
         let ignored_fields::Paths { paths } = &ignored;
@@ -407,8 +407,7 @@ fn start_pageserver(
     let http_auth;
     let pg_auth;
     let grpc_auth;
-    if [conf.http_auth_type, conf.pg_auth_type, conf.grpc_auth_type].contains(&AuthType::YbLightJWT)
-    {
+    if [conf.http_auth_type, conf.pg_auth_type, conf.grpc_auth_type].contains(&AuthType::YbAmpJWT) {
         // unwrap is ok because check is performed when creating config, so path is set and exists
         let key_path = conf.auth_validation_public_key_path.as_ref().unwrap();
         info!("Loading public key(s) for verifying JWT tokens from {key_path:?}");
@@ -418,15 +417,15 @@ fn start_pageserver(
 
         http_auth = match conf.http_auth_type {
             AuthType::Trust => None,
-            AuthType::YbLightJWT => Some(auth.clone()),
+            AuthType::YbAmpJWT => Some(auth.clone()),
         };
         pg_auth = match conf.pg_auth_type {
             AuthType::Trust => None,
-            AuthType::YbLightJWT => Some(auth.clone()),
+            AuthType::YbAmpJWT => Some(auth.clone()),
         };
         grpc_auth = match conf.grpc_auth_type {
             AuthType::Trust => None,
-            AuthType::YbLightJWT => Some(auth),
+            AuthType::YbAmpJWT => Some(auth),
         };
     } else {
         http_auth = None;

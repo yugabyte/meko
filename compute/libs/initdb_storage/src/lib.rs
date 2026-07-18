@@ -1,7 +1,7 @@
 //! Upload and download the per-timeline `initdb.tar.zst` archive.
 //!
 //! Upstream Neon used remote storage as the durable home for all pageserver
-//! state. After the yb-light slim only the initdb tarball remains there:
+//! state. After the yb-amp slim only the initdb tarball remains there:
 //! the pageserver runs `initdb` once when a new timeline is created, ships the
 //! result here, and later branches reuse it via `download_initdb_tar_zst`
 //! instead of paying the `initdb` cost again. Everything else

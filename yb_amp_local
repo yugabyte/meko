@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Convenience wrapper: run the debug-profile yb_amp_local binary.
+#
+# Equivalent to `cargo yb_amp -- "$@"` but skips cargo's build check,
+# so it's a fast path once you've already built. For the release binary
+# use the sibling `yb_amp_local_release` script.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN="$REPO/target/debug/yb_amp_local"
+
+[[ -x "$BIN" ]] || {
+    echo "yb_amp_local debug binary not found at $BIN" >&2
+    echo "build it first: cargo build --bin yb_amp_local" >&2
+    exit 1
+}
+
+exec "$BIN" "$@"

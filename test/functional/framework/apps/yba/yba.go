@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 )
 
 // maxBody bounds a single response body read so a misbehaving server can't

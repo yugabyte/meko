@@ -1,6 +1,6 @@
 -- Ported from Neon's test_fsm_truncate (old_neon_test_runner/regress/test_fsm_truncate.py).
 -- Regression guard: truncating a relation must also truncate its FSM and VM
--- forks, with no page-reconstruction error on the yb-light storage path. The
+-- forks, with no page-reconstruction error on the yb-amp storage path. The
 -- integration corruption-marker + correctness-counter gates are the real assertion; the
 -- SELECTs below just confirm the relations stay usable after truncate.
 

@@ -1,7 +1,7 @@
 -- 0006: the `registry` schema — the controller's storage-layer bookkeeping:
 -- generation authority (the fencing counter) plus the node / branch / endpoint /
 -- pending-init registries behind the HTTP surface the controller serves to
--- yb_light_local and the integration harness.
+-- yb_amp_local and the integration harness.
 --
 -- Kept in its own `registry` schema so the flat-storage model (32-hex branch_id
 -- VARCHAR) stays separate from the controller product model (project/branch/
@@ -66,9 +66,9 @@ CREATE TABLE IF NOT EXISTS registry.pending_timeline_inits (
     PRIMARY KEY (branch_id)
 );
 
--- Durable registry of compute endpoints managed by yb_light_local, keyed by
+-- Durable registry of compute endpoints managed by yb_amp_local, keyed by
 -- endpoint id. `spec` holds the endpoint config as opaque JSONB; the controller
--- never interprets it (it round-trips through yb_light_local's serde model).
+-- never interprets it (it round-trips through yb_amp_local's serde model).
 CREATE TABLE IF NOT EXISTS registry.endpoints (
     endpoint_id  VARCHAR NOT NULL,
     branch_id    VARCHAR NOT NULL,

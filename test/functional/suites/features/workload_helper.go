@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/workloadgen"
+	"github.com/yugabyte/amp/test/functional/framework/apps/workloadgen"
 )
 
 // Querier is the DB surface the workload helpers use — the same structural

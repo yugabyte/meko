@@ -3,9 +3,9 @@ package features
 import (
 	"fmt"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/workloadgen"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/workloadgen"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 func init() {

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/controller/internal/deploy"
+	"github.com/yugabyte/amp/controller/internal/deploy"
 )
 
 // These tests cover the Registry (registry.go): the kind->builder reconstruction

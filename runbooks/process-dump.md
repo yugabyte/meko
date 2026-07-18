@@ -1,6 +1,6 @@
 # Diagnosing async hangs with a tokio task dump
 
-Use this whenever a yb-light process **stops making progress but isn't
+Use this whenever a yb-amp process **stops making progress but isn't
 crashing, CPU-bound, or blocked on YB/network** — i.e. an async deadlock or a
 lost wakeup. Applies to every daemon: pageserver, safekeeper,
 endpoint_storage, controller, compute_ctl.
@@ -93,7 +93,7 @@ Restart the wedged process; state resumes from the durable watermark
 (`consistent_lsn` for the pageserver):
 
 ```sh
-cargo yb_light <component> restart      # or: yb <component> restart
+cargo yb_amp <component> restart      # or: yb <component> restart
 ```
 
 Always capture the task dump **before** restarting — it is the only artifact

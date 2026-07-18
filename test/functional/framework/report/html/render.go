@@ -12,7 +12,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // RunData is everything Render needs about one run. Results is the only

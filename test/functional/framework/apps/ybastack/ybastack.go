@@ -44,9 +44,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/yba"
-	execpkg "github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
+	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // Defaults (core/defaults_test.go asserts the embedded default.yaml agrees).

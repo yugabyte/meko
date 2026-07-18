@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "yb-light-endpoint.fullname" . }}
+  name: {{ include "yb-amp-endpoint.fullname" . }}
   labels:
-    {{- include "yb-light-endpoint.labels" . | nindent 4 }}
+    {{- include "yb-amp-endpoint.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   {{- if .Values.persistence.storageClass }}
@@ -15,7 +15,7 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      {{- include "yb-light-endpoint.selectorLabels" . | nindent 6 }}
+      {{- include "yb-amp-endpoint.selectorLabels" . | nindent 6 }}
   # PGDATA is ephemeral (compute_ctl re-fetches a basebackup each start) and all
   # durable state lives in YugabyteDB; the /data volume (emptyDir or a PVC) is
   # local scratch + cache, so replacing the pod is safe.
@@ -35,7 +35,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "yb-light-endpoint.selectorLabels" . | nindent 8 }}
+        {{- include "yb-amp-endpoint.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -50,7 +50,7 @@ spec:
       {{- end }}
       containers:
         - name: endpoint
-          image: {{ include "yb-light-endpoint.image" . }}
+          image: {{ include "yb-amp-endpoint.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.securityContext }}
           securityContext:
@@ -59,15 +59,15 @@ spec:
           # The image ENTRYPOINT is `tini -- python3 .../supervisor.py`.
           envFrom:
             - configMapRef:
-                name: {{ include "yb-light-endpoint.fullname" . }}
-          {{- if or (include "yb-light-endpoint.hasPassword" .) .Values.controller.url }}
+                name: {{ include "yb-amp-endpoint.fullname" . }}
+          {{- if or (include "yb-amp-endpoint.hasPassword" .) .Values.controller.url }}
           env:
-          {{- if include "yb-light-endpoint.hasPassword" . }}
+          {{- if include "yb-amp-endpoint.hasPassword" . }}
             - name: YB_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "yb-light-endpoint.secretName" . }}
-                  key: {{ include "yb-light-endpoint.secretKey" . }}
+                  name: {{ include "yb-amp-endpoint.secretName" . }}
+                  key: {{ include "yb-amp-endpoint.secretKey" . }}
           {{- end }}
           {{- if .Values.controller.url }}
             # The address the controller dials back to reach this
@@ -77,7 +77,7 @@ spec:
             # stays UpToDate instead of returning 409 (#121). kube-proxy routes
             # the Service to whichever pod currently backs it.
             - name: CONTROLLER_REACHABLE_HOST
-              value: {{ include "yb-light-endpoint.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+              value: {{ include "yb-amp-endpoint.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
           {{- end }}
           {{- end }}
           ports:
@@ -164,7 +164,7 @@ spec:
         - name: run
         {{- if .Values.persistence.storageClass }}
           persistentVolumeClaim:
-            claimName: {{ include "yb-light-endpoint.fullname" . }}-data
+            claimName: {{ include "yb-amp-endpoint.fullname" . }}-data
         {{- else }}
           emptyDir:
             sizeLimit: {{ .Values.runDir.sizeLimit }}

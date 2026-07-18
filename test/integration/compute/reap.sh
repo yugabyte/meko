@@ -21,7 +21,7 @@
 #   - A LIVE concurrent run holds its lock, so its dir is skipped.
 #   - Processes are killed only by matching the dead run's dir in their
 #     argv (`pkill -f <dir>`), so the YugabyteDB cluster and a developer's
-#     `.yb_light` cluster — which carry no run dir in argv — are never hit.
+#     `.yb_amp` cluster — which carry no run dir in argv — are never hit.
 #   - The one exception is the `controller`: it keeps no local data
 #     dir (all state is in YB), so its argv carries the run's ephemeral DB
 #     name but NO run-dir path, and the dir match above misses it. It (and
@@ -43,7 +43,7 @@ set -uo pipefail
 
 REPO=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 TEST_DIR="${1:-$REPO/.integration-tests}"
-SKIP_DIR="${2:-${YB_LIGHT_REPO_DIR:-}}"
+SKIP_DIR="${2:-${YB_AMP_REPO_DIR:-}}"
 
 [ -d "$TEST_DIR" ] || exit 0
 

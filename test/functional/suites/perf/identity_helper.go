@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ampstack"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ybk8s"
-	"github.com/yugabyte/yb-amp/test/functional/framework/baseline"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
+	"github.com/yugabyte/amp/test/functional/framework/baseline"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // Result identity is what makes a perf number comparable. A throughput figure is

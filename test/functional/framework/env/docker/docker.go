@@ -15,11 +15,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/dockerhost"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	sshx "github.com/yugabyte/yb-amp/test/functional/framework/exec/ssh"
+	"github.com/yugabyte/amp/test/functional/framework/apps/dockerhost"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
+	sshx "github.com/yugabyte/amp/test/functional/framework/exec/ssh"
 )
 
 // Default ports and images.

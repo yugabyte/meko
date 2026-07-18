@@ -2,7 +2,7 @@
 
 **Source of truth** for the area labels and milestones used by the
 project tracker. Cross-session work is tracked as **GitHub issues** on
-[`yugabyte/yb-light`](https://github.com/yugabyte/yb-light/issues) — the
+[`yugabyte/amp`](https://github.com/yugabyte/amp/issues) — the
 old file-based `tasks/` tracker has been retired and migrated to issues.
 
 Other docs (top-level `README.md`, `AGENTS.md`, `tasks/README.md`, and
@@ -31,7 +31,7 @@ Inspect the live set with `gh label list` and
 | Label | Commit `<area>` token | Covers |
 |---|---|---|
 | `compute` | `compute` | The amp compute: Postgres, extensions including the `yb_amp` extension, and `compute_ctl`; pageserver / safekeeper (the compute's storage connector to YugabyteDB — YB is the durable storage layer); the page store, WAL durability, read/write paths, page-service wire protocol, integration harness. |
-| `control plane` | `control_plane` | `controller` orchestration, `yb_light_local` (local-dev orchestrator, CLI, child-process management), endpoint/branch lifecycle. |
+| `control plane` | `control_plane` | `controller` orchestration, `yb_amp_local` (local-dev orchestrator, CLI, child-process management), endpoint/branch lifecycle. |
 
 A cross-cutting issue may carry both labels. The repo's stock labels
 (`bug`, `enhancement`, …) are orthogonal and optional — they don't

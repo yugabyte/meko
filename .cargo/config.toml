@@ -37,4 +37,4 @@ rustflags = [
 
 [alias]
 build_testing = ["build", "--features", "testing"]
-yb_light = ["run", "--bin", "yb_light_local"]
+yb_amp = ["run", "--bin", "yb_amp_local"]

@@ -2,26 +2,26 @@
 
 ### Overview
 
-Neon supports multitenancy. One pageserver can serve multiple tenants at once. Tenants can be managed via yb_light_local CLI. During page server setup tenant can be created using ```yb_light_local init --create-tenant``` Also tenants can be added into the system on the fly without pageserver restart. This can be done using the following cli command: ```yb_light_local tenant create``` Tenants use random identifiers which can be represented as a 32 symbols hexadecimal string. So yb_light_local tenant create accepts desired tenant id as an optional argument. The concept of timelines/branches is working independently per tenant.
+Neon supports multitenancy. One pageserver can serve multiple tenants at once. Tenants can be managed via yb_amp_local CLI. During page server setup tenant can be created using ```yb_amp_local init --create-tenant``` Also tenants can be added into the system on the fly without pageserver restart. This can be done using the following cli command: ```yb_amp_local tenant create``` Tenants use random identifiers which can be represented as a 32 symbols hexadecimal string. So yb_amp_local tenant create accepts desired tenant id as an optional argument. The concept of timelines/branches is working independently per tenant.
 
 ### Tenants in other commands
 
-By default during `yb_light_local init` new tenant is created on the pageserver. Newly created tenant's id is saved to cli config, so other commands can use it automatically if no direct argument `--tenant_id=<tenant_id>` is provided. So generally tenant_id more frequently appears in internal pageserver interface. Its commands take tenant_id argument to distinguish to which tenant operation should be applied. CLI support creation of new tenants.
+By default during `yb_amp_local init` new tenant is created on the pageserver. Newly created tenant's id is saved to cli config, so other commands can use it automatically if no direct argument `--tenant_id=<tenant_id>` is provided. So generally tenant_id more frequently appears in internal pageserver interface. Its commands take tenant_id argument to distinguish to which tenant operation should be applied. CLI support creation of new tenants.
 
 Examples for cli:
 
 ```sh
-yb_light_local tenant list
+yb_amp_local tenant list
 
-yb_light_local tenant create // generates new id
+yb_amp_local tenant create // generates new id
 
-yb_light_local tenant create ee6016ec31116c1b7c33dfdfca38892f
+yb_amp_local tenant create ee6016ec31116c1b7c33dfdfca38892f
 
-yb_light_local pg create main // default tenant from neon init
+yb_amp_local pg create main // default tenant from neon init
 
-yb_light_local pg create main --tenant_id=ee6016ec31116c1b7c33dfdfca38892f
+yb_amp_local pg create main --tenant_id=ee6016ec31116c1b7c33dfdfca38892f
 
-yb_light_local branch --tenant_id=ee6016ec31116c1b7c33dfdfca38892f
+yb_amp_local branch --tenant_id=ee6016ec31116c1b7c33dfdfca38892f
 ```
 
 ### Data layout

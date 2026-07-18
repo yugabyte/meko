@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yugabyte/yb-amp/controller/internal/api"
+	"github.com/yugabyte/amp/controller/internal/api"
 )
 
 // TestStoragePoolFlow runs the storage-pool workflow over the *top-level* pool

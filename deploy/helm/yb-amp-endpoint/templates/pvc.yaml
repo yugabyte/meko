@@ -6,9 +6,9 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "yb-light-endpoint.fullname" . }}-data
+  name: {{ include "yb-amp-endpoint.fullname" . }}-data
   labels:
-    {{- include "yb-light-endpoint.labels" . | nindent 4 }}
+    {{- include "yb-amp-endpoint.labels" . | nindent 4 }}
 spec:
   accessModes:
     - ReadWriteOnce

@@ -1,10 +1,10 @@
 //! Safekeeper control-file storage.
 //!
-//! yb-light persists the per-timeline `TimelinePersistentState` as a
+//! yb-amp persists the per-timeline `TimelinePersistentState` as a
 //! row in the YB table `safekeeper.timeline_state`, one BIGINT/INT
 //! column per scalar field.
 //!
-//! Prior history: upstream Neon used a local-FS blob, then yb-light's
+//! Prior history: upstream Neon used a local-FS blob, then yb-amp's
 //! Phase 2 reduction stored the same bincode blob in
 //! `GenericRemoteStorage` (the `YbStore` backend) at the key
 //! `safekeeper-control/<branch_id>`. Both representations are

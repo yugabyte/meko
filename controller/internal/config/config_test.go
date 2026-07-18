@@ -143,8 +143,8 @@ func TestDeployDockerDriver(t *testing.T) {
 		"--database-url", "postgres://localhost/db",
 		"--deploy",
 		"--deploy-driver", "docker",
-		"--deploy-endpoint-image", "yb-light/neon-endpoint:dev",
-		"--deploy-network", "yb-light",
+		"--deploy-endpoint-image", "yb-amp/neon-endpoint:dev",
+		"--deploy-network", "yb-amp",
 		"--deploy-yb-host-ports", "host.docker.internal:5433",
 	})
 	if err != nil {
@@ -154,10 +154,10 @@ func TestDeployDockerDriver(t *testing.T) {
 	if d.Driver != DriverDocker {
 		t.Errorf("Driver = %q, want docker", d.Driver)
 	}
-	if d.EndpointImage != "yb-light/neon-endpoint:dev" {
+	if d.EndpointImage != "yb-amp/neon-endpoint:dev" {
 		t.Errorf("EndpointImage = %q", d.EndpointImage)
 	}
-	if d.Network != "yb-light" {
+	if d.Network != "yb-amp" {
 		t.Errorf("Network = %q", d.Network)
 	}
 	// Kubernetes-only fields (a chart dir, image repo) are not required for docker.

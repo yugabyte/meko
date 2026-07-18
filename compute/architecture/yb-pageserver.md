@@ -60,7 +60,7 @@ to the process.
 **Generation handoff is launcher-owned.** The pageserver no longer
 calls the storage_ctl `/upcall/v1/re-attach` API (the
 `controller_upcall_client` module is deleted). Instead, every
-`PageServerNode::start` in yb_light_local: registers the node with
+`PageServerNode::start` in yb_amp_local: registers the node with
 storage_ctl (idempotent), calls the attach-hook API (which increments
 `registry.branches.generation` against this node and returns
 it), rewrites `generation` in `pageserver.toml`, and only then spawns
@@ -90,7 +90,7 @@ Consequences elsewhere:
   **observes** (polls `timeline_detail` until `Active`, generous
   timeout for debug-build initdb), then runs the safekeeper leg with
   `last_record_lsn` from the observed `TimelineInfo`.
-- `yb_light_local start` skips a pageserver whose toml has no
+- `yb_amp_local start` skips a pageserver whose toml has no
   identity yet; `branch create` bakes the identity in and starts it.
 - `branch create` with an ancestor provisions a NEW pageserver + safekeeper pair for
   the branch: it allocates the next node ids/ports, clones the
@@ -157,7 +157,7 @@ bakes it into the read SQL, would silently break branch reads — keep the
 lineage walk and its per-segment binding intact.
 
 Note the `lineage` JSONB column on `timeline_state` is unrelated: it
-carries upstream detach-ancestor state (always `Default` in yb-light);
+carries upstream detach-ancestor state (always `Default` in yb-amp);
 the ancestry chain is derived from the `ancestor_branch_id` /
 `ancestor_lsn` columns.
 
@@ -744,7 +744,7 @@ name + every delete is gen-checked" machinery into one column.
   shape: a "recover to timestamp T" command resolves
   T → LSN via the existing `find_lsn_for_timestamp` helper (still
   intact), then creates a fresh branch branched at that LSN. Branch
-  creation is already wired in yb-light (`branch create` with an
+  creation is already wired in yb-amp (`branch create` with an
   ancestor provisions a
   pageserver+safekeeper pair; see the `ancestor_branch_id` /
   `ancestor_lsn` columns on `pageserver.timeline_state`). What's missing is the operator-facing
@@ -755,14 +755,14 @@ name + every delete is gen-checked" machinery into one column.
 ## Compute ↔ pageserver timeouts
 
 The compute opens libpq connections to the pageserver per backend
-(`compute/pgxn/yb_amp/libpagestore.c`). The relevant timers, with yb-light defaults
+(`compute/pgxn/yb_amp/libpagestore.c`). The relevant timers, with yb-amp defaults
 where they differ from upstream:
 
 | Stage | GUC / location | Default | Notes |
 |---|---|---|---|
 | TCP connect | libpq, no explicit cap in `control_plane/src/endpoint.rs::local_pageserver_conf_to_conn_info` | **Unset** → OS TCP SYN-retry (~127 s on Linux) | Currently no `connect_timeout=` parameter is appended to the constructed connstring. |
 | First WARN log on stalled response | `yb_amp.pageserver_response_log_timeout` (`libpagestore.c:87`) | **10 s** | Cosmetic; request keeps waiting. |
-| Disconnect + reconnect on stalled response | `yb_amp.pageserver_response_disconnect_timeout` (`libpagestore.c:95`) | **30 s** *(was 150 s upstream)* | Lowered in yb-light: yb-pageserver is a same-DC, low-latency hop, so a stuck request is far more likely a pageserver-side stall than transient packet loss — drop and reopen the socket fast, don't wait for TCP retry backoff. |
+| Disconnect + reconnect on stalled response | `yb_amp.pageserver_response_disconnect_timeout` (`libpagestore.c:95`) | **30 s** *(was 150 s upstream)* | Lowered in yb-amp: yb-pageserver is a same-DC, low-latency hop, so a stuck request is far more likely a pageserver-side stall than transient packet loss — drop and reopen the socket fast, don't wait for TCP retry backoff. |
 | Reconnect attempts before erroring back to compute | `max_reconnect_attempts` (`libpagestore.c:83`) | **60** (1 s backoff each) | Combined with the disconnect timeout, a hard-down pageserver surfaces to the compute query in ~30 s + 60 × 1 s ≈ ~90 s. |
 | Pageserver-side activation wait | none | — | The branch is opened synchronously before listeners start; until then, computes get ECONNREFUSED and retry via the reconnect loop above. |
 
@@ -794,7 +794,7 @@ Per-phase task records live under [`../../tasks/`](../../tasks/). See
 > integration suite (`test/integration/compute/`, a Rust harness — see
 > [`test/integration/compute/README.md`](../../test/integration/compute/README.md)) is the cross-seam
 > backstop: it runs scenario tests + golden `.sql` workloads against a
-> real `yb_light_local` + YB and scans the pageserver log for corruption
+> real `yb_amp_local` + YB and scans the pageserver log for corruption
 > markers after every test. The `.sql` workloads diff their result sets
 > against checked-in `.out` goldens (#19), so silently-wrong reads
 > no longer pass as long as no statement errors out. Run it with

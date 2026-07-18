@@ -17,12 +17,12 @@ testable. The API mutation handlers now **plan** these tasks: the six
 world-changing operations (`createProject`, `createBranch`, `createEndpoint`,
 `deleteProject`, `deleteBranch`, `deleteEndpoint`) validate cheaply, plan a task,
 and return `202` + the `Task` + a `Location` header for the client to poll
-([#113](https://github.com/yugabyte/yb-light/issues/113); the wire contract is in
+([#113](https://github.com/yugabyte/amp/issues/113); the wire contract is in
 [`ac-apis.md`](ac-apis.md)). What this doc does **not** cover is HA-safe lease
-renewal during a long step, which is [#90](https://github.com/yugabyte/yb-light/issues/90).
+renewal during a long step, which is [#90](https://github.com/yugabyte/amp/issues/90).
 
 **Terminology.** The controller's user-facing ladder is **storage pool → project
-→ branch → endpoint** ([#147](https://github.com/yugabyte/yb-light/issues/147)).
+→ branch → endpoint** ([#147](https://github.com/yugabyte/amp/issues/147)).
 A project is a purely control-plane grouping (it maps to no storage object); a
 branch's `branch_id` **is** the storage layer's flat `BranchId`. The controller
 carries that `branch_id` verbatim to the storage seam — the controller
@@ -89,7 +89,7 @@ wedge process exit (the unfinished tasks are simply reclaimed, §8.2). Tasks run
 independently with no ordering between them, so two tasks touching the same
 resource can interleave — the DB constraints and step idempotency keep that
 correct, but per-resource serialization is future work
-([#176](https://github.com/yugabyte/yb-light/issues/176)).
+([#176](https://github.com/yugabyte/amp/issues/176)).
 
 **Execution is a resume-safe loop** (`Worker.execute`, one per task goroutine):
 load the task's step records in execution order (`task.step_ids`), skip any already `succeeded`, and for each remaining step
@@ -120,7 +120,7 @@ step. Replaying the step that was in flight when the owner died is safe because
 > The lease does not yet auto-renew, so a step that runs longer than the lease TTL
 > can be reclaimed and run concurrently by a second instance. Idempotency keeps
 > that correct (it converges), but the redundant work is wasteful; renewal is
-> [#90](https://github.com/yugabyte/yb-light/issues/90).
+> [#90](https://github.com/yugabyte/amp/issues/90).
 
 ## 3. The step catalog
 

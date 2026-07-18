@@ -876,7 +876,7 @@ mod throttle_config_tests {
     }
 }
 
-/// Wire form of [`crate::tenant::LocationConf`]. yb-light has no
+/// Wire form of [`crate::tenant::LocationConf`]. yb-amp has no
 /// multi-mode attach state: `generation: Some(g)` requests attach in
 /// generation `g`; `generation: None` requests detach.
 ///
@@ -919,7 +919,7 @@ pub struct BranchLocation {
 #[serde(deny_unknown_fields)]
 pub struct BranchLocationConfigResponse {
     pub shards: Vec<BranchLocation>,
-    // Vestigial: yb-light is single-shard, so this is always None.
+    // Vestigial: yb-amp is single-shard, so this is always None.
     pub stripe_size: Option<u32>,
 }
 

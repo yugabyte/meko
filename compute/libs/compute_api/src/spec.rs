@@ -221,7 +221,7 @@ pub enum ComputeFeature {
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct PageserverConnectionInfo {
-    /// The pageserver(s) serving this timeline. yb-light is single-shard, so
+    /// The pageserver(s) serving this timeline. yb-amp is single-shard, so
     /// normally exactly one; two may briefly overlap during a migration.
     pub pageservers: Vec<PageserverConnectionItem>,
 

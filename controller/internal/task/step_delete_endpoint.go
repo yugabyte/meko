@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yugabyte/yb-amp/controller/internal/deploy"
+	"github.com/yugabyte/amp/controller/internal/deploy"
 )
 
 // StepDeleteEndpoint is the task_step.kind for the delete_endpoint step.

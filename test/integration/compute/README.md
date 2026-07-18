@@ -1,6 +1,6 @@
 # Compute integration suite
 
-A Rust harness (`integration_tests` crate) that brings up a real `yb_light_local`
+A Rust harness (`integration_tests` crate) that brings up a real `yb_amp_local`
 cluster against a real YugabyteDB and exercises it with scenario tests
 and golden `.sql` workloads, scanning the pageserver log for corruption
 markers after every test. This is the verification gate the
@@ -25,11 +25,11 @@ test/integration/compute/run.sh -h              # full help
 ```
 
 `run.sh` is a thin wrapper: it `cargo build`s the harness +
-`yb_light_local` + every cluster server binary `yb_light_local` spawns
+`yb_amp_local` + every cluster server binary `yb_amp_local` spawns
 (`controller`, `yb-pageserver`, `safekeeper`, `endpoint_storage`,
 `compute_ctl`) + the diagnostic tools (incremental — a no-op when nothing
 changed), then execs the harness. Building the server binaries here is
-essential: `yb_light_local` launches them from `target/<profile>/` at
+essential: `yb_amp_local` launches them from `target/<profile>/` at
 runtime without rebuilding, so a missing one silently runs a stale binary.
 Default builds are debug; `--release` builds and runs the release binaries.
 
@@ -76,7 +76,7 @@ isolated ephemeral database (this is how CI runs them — see
 
 ## How it works
 
-- **One shared cluster.** A single `yb_light_local` cluster + tenant +
+- **One shared cluster.** A single `yb_amp_local` cluster + tenant +
   `main` endpoint is set up once; all tests share it. Between tests the
   cluster is recycled — any component the prior test left down is
   restarted, a pageserver that is alive but not accepting connections is
@@ -129,7 +129,7 @@ Nothing central to edit — tests are auto-discovered.
   `.out` golden. A workload with *intentional* errors should `\set
   ON_ERROR_STOP 0` in its `.sql` (the runner otherwise aborts on the first
   error); see `fast/event-triggers.sql`. The `psql` used is the one built from
-  yb-light's own Postgres (`pg_install/v18/bin/psql`), not whatever is on
+  yb-amp's own Postgres (`pg_install/v18/bin/psql`), not whatever is on
   `PATH` — its meta-commands (e.g. `\d`) must match the compute's major
   version. Generate/refresh the golden with
   `INTEGRATION_REGEN_EXPECTED=1 test/integration/compute/run.sh <name>` and review the diff
@@ -145,7 +145,7 @@ Nothing central to edit — tests are auto-discovered.
 ## Full upstream pg_regress suite (`pg_regress.sh`)
 
 `run.sh` runs this crate's own checked-in golden workloads. To instead run
-the **full upstream PostgreSQL regression suite** against a yb-light
+the **full upstream PostgreSQL regression suite** against a yb-amp
 compute, use `pg_regress.sh` — a separate driver that bypasses the Rust
 harness entirely:
 
@@ -160,7 +160,7 @@ test/integration/compute/pg_regress.sh -h         # full help
 It drives the ~200-test suite straight from the vendored Postgres source
 (`compute/vendor/postgres-v18/src/test/regress`) via the stock `pg_regress`
 binary: it builds + installs the suite's C support modules (regress,
-refint, autoinc), brings up a throwaway `yb_light_local` cluster, creates
+refint, autoinc), brings up a throwaway `yb_amp_local` cluster, creates
 the `regression` database, runs the parallel schedule, and tears down on
 exit (unless `--keep`). The by-design `CREATE TABLESPACE`-unsupported
 diffs are blessed via the expected-output variants in
@@ -171,7 +171,7 @@ See the header of `pg_regress.sh` and issue #119 for details.
 
 > Defaults to a **release** build — a debug build of the full suite is
 > painfully slow. Honours `YB_HOST`/`YB_PORT`, `INTEGRATION_PORT_BASE`,
-> `YB_LIGHT_REPO_DIR`, `YB_DBNAME`.
+> `YB_AMP_REPO_DIR`, `YB_DBNAME`.
 
 ## Layout
 
@@ -180,7 +180,7 @@ test/integration/
   compute/                 this suite (the `integration_tests` crate)
     run.sh                 wrapper: build + run the harness (signal-trap cleanup)
     pg_regress.sh          driver for the FULL upstream pg_regress suite (see above)
-    regress_yb_expected/   yb-light expected-output variants for pg_regress.sh
+    regress_yb_expected/   yb-amp expected-output variants for pg_regress.sh
     clean.sh               teardown (kill procs, drop DB, wipe run dir)
     build.rs               auto-registers scenarios from fast/ and slow/
     Cargo.toml             the `integration_tests` crate
@@ -199,8 +199,8 @@ test/integration/
 
 `INTEGRATION_REGEN_EXPECTED=1` (regenerate goldens), `SOAK_SECS`,
 `PS_HTTP_TIMEOUT`, `ENDPOINT_START_TIMEOUT` (restart-scenario timing),
-`YB_HOST`/`YB_PORT`/`COMPUTE_PORT`, `YB_DBNAME`/`YB_LIGHT_REPO_DIR`/`TEST_DIR`
-(override the ephemeral DB / run dir), `YB_LIGHT` (path to the binary),
+`YB_HOST`/`YB_PORT`/`COMPUTE_PORT`, `YB_DBNAME`/`YB_AMP_REPO_DIR`/`TEST_DIR`
+(override the ephemeral DB / run dir), `YB_AMP` (path to the binary),
 `YB_PS_VERIFY_WAL_ROUNDTRIP` (defaults to 1), `INTEGRATION_SKIP=<substr>[,…]`
 (drop matching tests from the run — e.g. a known-flaky one — printing
 what was skipped).

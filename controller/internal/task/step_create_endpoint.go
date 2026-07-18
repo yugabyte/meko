@@ -7,8 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yugabyte/yb-amp/controller/internal/deploy"
-	applog "github.com/yugabyte/yb-amp/controller/internal/log"
+	"github.com/yugabyte/amp/controller/internal/deploy"
+	applog "github.com/yugabyte/amp/controller/internal/log"
 )
 
 // StepCreateEndpoint is the task_step.kind for the create_endpoint step.

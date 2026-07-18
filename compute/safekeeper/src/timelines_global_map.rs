@@ -135,7 +135,7 @@ impl GlobalTimelines {
     }
 
     /// Inject dependencies needed for the timeline constructors and load all timelines to memory.
-    /// yb-light's safekeeper persists state in `safekeeper.timeline_state`,
+    /// yb-amp's safekeeper persists state in `safekeeper.timeline_state`,
     /// not on the local filesystem, so the on-disk workdir is only used
     /// for logs and tmp dirs and has no tenant subdirs to scan.
     pub async fn init(&self) -> Result<()> {

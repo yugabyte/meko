@@ -4,7 +4,7 @@
 //! endpoint that owns it:
 //!
 //! ```text
-//!   .yb_light/endpoints/<endpoint_id>/pageserver
+//!   .yb_amp/endpoints/<endpoint_id>/pageserver
 //! ```
 //!
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ use utils::id::{BranchId, NodeId};
 use utils::lsn::Lsn;
 
 use crate::background_process;
-use crate::local_env::{LocalEnv, PageServerConf, YbLightLocalInitPageserverConf};
+use crate::local_env::{LocalEnv, PageServerConf, YbAmpLocalInitPageserverConf};
 
 //
 // Control routines for pageserver.
@@ -72,7 +72,7 @@ impl PageServerNode {
                 {
                     match conf.http_auth_type {
                         AuthType::Trust => None,
-                        AuthType::YbLightJWT => Some(
+                        AuthType::YbAmpJWT => Some(
                             env.generate_auth_token(&Claims::new(None, Scope::PageServerApi))
                                 .unwrap(),
                         ),
@@ -89,7 +89,7 @@ impl PageServerNode {
 
     fn pageserver_init_make_toml(
         &self,
-        conf: YbLightLocalInitPageserverConf,
+        conf: YbAmpLocalInitPageserverConf,
         safekeeper_pg_addr: &str,
     ) -> anyhow::Result<toml_edit::DocumentMut> {
         // `data_dir` is a runtime-only field (where the toml lives), not
@@ -98,7 +98,7 @@ impl PageServerNode {
         expected.data_dir = self.conf.data_dir.clone();
         assert_eq!(
             &expected, &self.conf,
-            "during yb_light_local init, we derive the runtime state of ps conf (self.conf) from the --config flag fully"
+            "during yb_amp_local init, we derive the runtime state of ps conf (self.conf) from the --config flag fully"
         );
 
         // TODO(christian): instead of what we do here, create a pageserver_api::config::ConfigToml (PR #7656)
@@ -124,7 +124,7 @@ impl PageServerNode {
 
         // Controller uses the same auth as pageserver: if JWT is enabled
         // for us, we will also need it to talk to them.
-        if matches!(conf.http_auth_type, AuthType::YbLightJWT) {
+        if matches!(conf.http_auth_type, AuthType::YbAmpJWT) {
             let jwt_token = self
                 .env
                 .generate_auth_token(&Claims::new(None, Scope::GenerationsApi))
@@ -143,12 +143,12 @@ impl PageServerNode {
         } else if !conf.other.contains_key("yb_storage_conn") {
             anyhow::bail!(
                 "pageserver yb_storage_conn must be configured (LocalFs was removed; \
-                 set YbLightLocalInitPageserverConf::yb_storage_conn to a YbStore inline table)"
+                 set YbAmpLocalInitPageserverConf::yb_storage_conn to a YbStore inline table)"
             );
         }
 
         if [conf.http_auth_type, conf.pg_auth_type, conf.grpc_auth_type]
-            .contains(&AuthType::YbLightJWT)
+            .contains(&AuthType::YbAmpJWT)
         {
             // Keys are generated in the toplevel repo dir, pageservers' workdirs
             // are one level below that, so refer to keys with ../
@@ -190,7 +190,7 @@ impl PageServerNode {
     /// pageserver's timeline, baked into `pageserver.toml` as the WAL source.
     pub fn initialize(
         &self,
-        conf: YbLightLocalInitPageserverConf,
+        conf: YbAmpLocalInitPageserverConf,
         safekeeper_pg_addr: &str,
     ) -> anyhow::Result<()> {
         self.pageserver_init(conf, safekeeper_pg_addr)
@@ -421,7 +421,7 @@ impl PageServerNode {
 
     fn pageserver_init(
         &self,
-        conf: YbLightLocalInitPageserverConf,
+        conf: YbAmpLocalInitPageserverConf,
         safekeeper_pg_addr: &str,
     ) -> anyhow::Result<()> {
         let datadir = self.repo_path();

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud"
+	"github.com/yugabyte/amp/test/functional/framework/apps/cloud"
 )
 
 // TestPlanJSONRoundTrip: a plan survives the registry-record round trip verbatim,

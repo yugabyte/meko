@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ampstack"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/reap"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/reap"
 )
 
 // Standing-environment shapes StandUp can produce, reusing the same

@@ -14,8 +14,8 @@ func testKubernetesConfig() KubernetesConfig {
 	return KubernetesConfig{
 		Namespace:         "endpoints",
 		HelmBin:           "helm",
-		ChartPath:         "/charts/yb-light-endpoint",
-		EndpointImageRepo: "registry.example.com/yb-light-endpoint",
+		ChartPath:         "/charts/yb-amp-endpoint",
+		EndpointImageRepo: "registry.example.com/yb-amp-endpoint",
 		EndpointImageTag:  "v1.2.3",
 		ComputePort:       55433,
 		Timeout:           10 * time.Minute,

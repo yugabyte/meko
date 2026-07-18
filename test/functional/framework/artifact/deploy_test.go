@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/artifact"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/artifact"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // scriptExec is a scripted fake exec.RemoteExecutor + Fetch: it records every

@@ -8,7 +8,7 @@ tests:
           of: ConfigMap
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-yb-light-endpoint
+          value: RELEASE-NAME-yb-amp-endpoint
 
   - it: carries the YugabyteDB connection block from values
     set:

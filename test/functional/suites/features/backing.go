@@ -10,15 +10,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ampstack"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/controller"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/workloadgen"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ybbacking"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/reap"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/universe"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/workloadgen"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/reap"
+	"github.com/yugabyte/amp/test/functional/framework/env/registry"
+	"github.com/yugabyte/amp/test/functional/framework/env/universe"
 )
 
 const pgReadyTimeout = 5 * time.Minute

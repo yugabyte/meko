@@ -3,7 +3,7 @@
 **Status:** Draft
 **Last updated:** 2026-06-29
 
-This is the guiding-principles document for amp-controller, the control plane for YB Light.
+This is the guiding-principles document for amp-controller, the control plane for YB Amp.
 It is intentionally not a feature design doc — individual features (task framework,
 API schemas, cert management, etc.) will get their own docs in `designs/` and should
 stay consistent with the principles laid out here.
@@ -22,7 +22,7 @@ fleets of placement groups) — that layer is explicitly outside amp-controller'
 amp-controller's API is what such an agent will consume, which is one more reason to be
 API-first (§3).
 
-amp-controller does **not** serve data-plane traffic. Endpoints are self-contained YB Light
+amp-controller does **not** serve data-plane traffic. Endpoints are self-contained YB Amp
 instances; amp-controller creates, configures, tracks, and retires them.
 
 ## 2. Why a standalone service (and not YBA)
@@ -66,7 +66,7 @@ instances; amp-controller creates, configures, tracks, and retires them.
    interface, endpoint spec, task framework) are designed so a new runtime — VMs,
    another cloud — is a new `Deployer`, not a change to the model.
 4. **The control plane enforces invariants; it doesn't just hope the data plane does.**
-   Even where YB Light enforces a rule internally (e.g. a single writer per branch),
+   Even where YB Amp enforces a rule internally (e.g. a single writer per branch),
    amp-controller independently enforces it at the API layer so users can never get into a bad
    position. Defense in depth, with amp-controller as the first line.
 5. **All mutations go through the task framework.** Any action that changes the world
@@ -136,7 +136,7 @@ These correspond to real data or real running processes, and amp-controller trac
   (§4.3). Each project has one **default** (root) cluster, created with the project; every
   other cluster under the project is a **branch**, produced by forking another cluster's
   branch (§4.3).
-- **Endpoint** — a self-contained YB Light instance serving a PG cluster; runs on a
+- **Endpoint** — a self-contained YB Amp instance serving a PG cluster; runs on a
   pod (or, later, a VM). Endpoints are what users actually connect to, so the API
   must return endpoint connection details (host, port, TLS state) to users.
   Endpoints are **stateless** (§5.3): "physical" here means they consume hardware,
@@ -170,7 +170,7 @@ branch ancestry is queryable.
 - **At most one endpoint per PG cluster may be a write endpoint.** All others are
   read-only. amp-controller enforces this at the API layer (per principle 4): a request that
   would create a second writer, or flip a reader to writer while a writer exists, is
-  rejected before anything touches the data plane — regardless of whether YB Light
+  rejected before anything touches the data plane — regardless of whether YB Amp
   would also have refused it.
 
 ### 4.5 Capacity headroom
@@ -195,7 +195,7 @@ Every process in a running placement group belongs to exactly one of two tiers:
   deployed once and shared by every endpoint: amp-controller itself, the storage
   controller, and endpoint_storage. This is the control-plane tier; none of it serves
   data-plane traffic.
-- **Per-endpoint services** (§5.2) — the YB Light stack that makes up a single
+- **Per-endpoint services** (§5.2) — the YB Amp stack that makes up a single
   endpoint, deployed once per endpoint: compute/pg, safekeeper, pageserver,
   compute_ctl, and an otel collector. This is the data-plane tier.
 
@@ -233,7 +233,7 @@ Exactly one of each runs per placement group (§1):
   endpoint registries. amp-controller owns this **in-process** (§11.1) in a dedicated
   `registry` schema — never amp-controller's product state store, never exposed to
   users. See [`sc-integration.md`](sc-integration.md).
-- **endpoint_storage** — YB Light's small standalone store for endpoint-scoped scratch
+- **endpoint_storage** — YB Amp's small standalone store for endpoint-scoped scratch
   data (LFC prewarm/offload state today). Also a managed service (§11.5); its contents
   are performance state, not correctness state.
 
@@ -245,7 +245,7 @@ reused versus left inert, and the open questions.
 
 ### 5.2 Per-endpoint services
 
-Each endpoint is a self-contained YB Light instance running a handful of services:
+Each endpoint is a self-contained YB Amp instance running a handful of services:
 
 1. **pg / compute** — the Postgres compute layer users connect to.
 2. **safekeeper** — WAL durability.
@@ -269,8 +269,8 @@ endpoint's node or pod is precious: if an endpoint goes away, creating a new one
 same spec — on a completely different node, pod, or even runtime — serves exactly the
 same data.
 
-Statelessness is a property of **YB Light's own design**, owned and guaranteed by
-YB Light, not something amp-controller provides or enforces — the control plane assumes
+Statelessness is a property of **YB Amp's own design**, owned and guaranteed by
+YB Amp, not something amp-controller provides or enforces — the control plane assumes
 it. (The safekeeper is actively being updated to fully deliver this guarantee.)
 
 This property does a lot of work, and the rest of the design leans on it:
@@ -323,7 +323,7 @@ config object: the spec plus the TLS material and the JWKS used to authenticate 
 API); they differ only in delivery and trust, not content:
 
 - **File** — write the spec to disk and point compute_ctl at it. This is what
-  `yb_light_local` does today; it has no auth and no live-update path, so it suits dev,
+  `yb_amp_local` does today; it has no auth and no live-update path, so it suits dev,
   not the controller.
 - **Push** — `POST /configure` on the endpoint's compute_ctl API. The controller drives;
   compute_ctl reacts.
@@ -375,7 +375,7 @@ this interface, not a change to the workflow.
   controller-on-Docker integration (`test/integration/control_plane/run-controller.sh`).
 - **Kubernetes (next).** A `K8sDeployer` implements the same interface against the
   cluster API — a pod per endpoint, a Service for the address — reusing the
-  `deploy/helm/yb-light-endpoint` chart. VMs (via ybops) follow the same shape.
+  `deploy/helm/yb-amp-endpoint` chart. VMs (via ybops) follow the same shape.
 
 The endpoint spec carried in `EndpointSpec` (the branch binding rendered as the
 endpoint image's flat `BRANCH_ID` env var (#168), plus PG version, the YBDB
@@ -750,7 +750,7 @@ the `controller` schema (§10).
 `/debug/v1/attach-hook` + `/debug/v1/inspect` (generation authority), and
 `/ready` — on its API listener, alongside the versioned `/api/v1` product API.
 The implementation is `controller/internal/registry` (the store over the
-`registry` schema + the HTTP handlers). Endpoint pods and the `yb_light_local`
+`registry` schema + the HTTP handlers). Endpoint pods and the `yb_amp_local`
 dev harness drive it; the controller's own task framework records pending-init
 recipes through the same in-process store, not over HTTP. There is no separate
 control-plane binary and no subprocess supervision.
@@ -766,17 +766,17 @@ the upstream multi-tenant machinery is dropped.
 | ~~Safekeeper registry~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly | **Removed** |
 | Branch bookkeeping (`/control/v1/branch/*`) | Branch register/drop, branch-name mappings, pending-init recipes | **Kept** |
 | Generation authority (`/debug/v1/attach-hook`, `/inspect`) | Issue/inspect the per-branch fencing generation | **Kept** |
-| Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows for `yb_light_local` | **Kept** (for the launcher) |
+| Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows for `yb_amp_local` | **Kept** (for the launcher) |
 | ~~Heartbeat/availability, scheduler, tenant placement/sharding, time travel, pageserver passthrough, timeline imports, metadata health~~ | Upstream multi-tenant machinery | **Dropped** — dead weight in the per-branch topology |
 
-| API surface | What it does | Used by yb-light today | amp-controller posture |
+| API surface | What it does | Used by yb-amp today | amp-controller posture |
 |---|---|---|---|
 | Upcalls (`/upcall/v1/*`) | Timeline-import status reporting only — the `re-attach`/`validate` generation-fencing upcalls were removed (the yb pageserver never called them; fencing is via the launcher's attach-hook) | Import flows only | **Reuse** (import only) |
 | Node registry (`/control/v1/node*`) | Register/describe/configure pageservers (config sets availability only; the node scheduling-policy machinery was removed) | Yes | **Reuse** |
 | ~~Safekeeper registry (`/control/v1/safekeeper*`)~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly, so the controller never contacts a safekeeper | No longer exists | **Removed** |
 | Branch bookkeeping | Branch create/register/delete, branch-name mappings | Yes | **Reuse** |
 | Generation debug ops (`attach-hook`, `inspect`) | Issue/inspect generations | Yes | **Reuse** (internal/ops only) |
-| Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows | Yes — built as a shim for `yb_light_local` | **Not reused** — superseded by amp-controller's endpoint records (§10.1); an opaque spec cannot carry the schema-enforced invariants of §10.2 |
+| Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows | Yes — built as a shim for `yb_amp_local` | **Not reused** — superseded by amp-controller's endpoint records (§10.1); an opaque spec cannot carry the schema-enforced invariants of §10.2 |
 | Tenant placement/sharding, policies, time travel, pageserver passthrough | Upstream multi-tenant placement machinery | Dormant | **Not used** — dead weight in the per-branch topology |
 
 ### 11.3 Invariants
@@ -808,7 +808,7 @@ one from corrupting storage state.
 
 ### 11.5 endpoint_storage
 
-The second managed service. endpoint_storage is yb-light's small standalone
+The second managed service. endpoint_storage is yb-amp's small standalone
 store for endpoint-scoped scratch data (today: LFC prewarm/offload state), and
 it stays a standalone app — one instance per placement group, persisting to the
 universe like everything else (by default colocated in the same blob storage

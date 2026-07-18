@@ -23,11 +23,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ampstack"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ybastack"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ybk8s"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/cloud"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybastack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // Namespace-reap kinds. Each maps to an app's own teardown (ybk8s/ybastack) or

@@ -15,7 +15,7 @@ schema it uses, and the HTTP surface it serves.
 - **Registries** — pageserver **nodes** (bookkeeping/observability; nothing gates
   on it), **branch** records + branch-name mappings, the **pending-init** recipe
   (a branch declared but not yet materialized), and the compute **endpoint**
-  registry (`yb_light_local`'s durable endpoint records).
+  registry (`yb_amp_local`'s durable endpoint records).
 - **Provisioning** — the whole `yb_storage` database. The controller's
   golang-migrate migrations create `public.blobs`+enum, all `pageserver.*` and
   `safekeeper.*` tables (the schemas the compute daemons bind at startup — they
@@ -57,7 +57,7 @@ DTOs in `control_plane/src/controller.rs`. In dev/local the surface is unauthent
 
 ## Callers
 
-- **`yb_light_local`** (the dev harness, `control_plane/`) launches the `controller`
+- **`yb_amp_local`** (the dev harness, `control_plane/`) launches the `controller`
   binary in place of the old subprocess and drives this surface over HTTP via its
   `Controller` client (`control_plane/src/controller.rs`) — node register + attach
   when starting a pageserver, branch register/drop, pending-init record/list/delete,

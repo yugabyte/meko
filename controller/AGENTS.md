@@ -1,6 +1,6 @@
 # Agent guide — amp controller
 
-`controller` is the YB Light control plane (the "amp controller" /
+`controller` is the YB Amp control plane (the "amp controller" /
 `amp-controller`): the control plane for a single placement group. Start
 with the design docs in [`architecture/`](architecture/):
 
@@ -21,7 +21,7 @@ with the design docs in [`architecture/`](architecture/):
   the `--deploy-driver` selector, the recipe/bootstrap model, internal-LoadBalancer
   endpoints, and the current deployment assumptions).
 - [`architecture/controller-project-create.md`](architecture/controller-project-create.md) —
-  creating a project, patterned on `yb_light_local`: declare a recipe at create,
+  creating a project, patterned on `yb_amp_local`: declare a recipe at create,
   materialize the storage layer at the first endpoint.
 - [`architecture/ac-mcp.md`](architecture/ac-mcp.md) — the MCP server
   ([`mcp/`](mcp/)): a thin FastMCP wrapper exposing the REST API as 18 MCP tools

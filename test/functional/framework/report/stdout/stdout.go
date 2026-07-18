@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // Sink writes live progress to an io.Writer.

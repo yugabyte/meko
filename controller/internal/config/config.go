@@ -52,7 +52,7 @@ type DeployConfig struct {
 	// --- Kubernetes (Helm) runtime ---
 	Namespace      string // namespace endpoints are deployed into
 	HelmBin        string // helm binary; bare name resolved via PATH, a path used verbatim
-	ChartPath      string // path to the yb-light-endpoint Helm chart
+	ChartPath      string // path to the yb-amp-endpoint Helm chart
 	KubeconfigPath string // KUBECONFIG for helm; empty = default discovery (in-cluster or ~/.kube)
 
 	EndpointImageRepo  string            // endpoint container image repository
@@ -142,7 +142,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&c.Log.Format, "log-format", env("AMP_LOG_FORMAT", "json"), "log format: json|text")
 	fs.StringVar(&c.SigningKeyPath, "signing-key", env("AMP_SIGNING_KEY_PATH", ""), "path to the control-plane signing key (optional)")
 	fs.BoolVar(&c.Metrics, "metrics", envBool("AMP_METRICS", true), "expose the Prometheus /metrics scrape endpoint and record instrumentation")
-	fs.BoolVar(&c.Dev, "dev", envBool("AMP_DEV", false), "serve the storage-layer control surface (attach-hook, node/branch/endpoint registries) unauthenticated; for yb_light_local and the integration harness")
+	fs.BoolVar(&c.Dev, "dev", envBool("AMP_DEV", false), "serve the storage-layer control surface (attach-hook, node/branch/endpoint registries) unauthenticated; for yb_amp_local and the integration harness")
 	fs.DurationVar(&c.Task.PollInterval, "task-poll-interval", envDuration("AMP_TASK_POLL_INTERVAL", 2*time.Second), "task worker poll interval")
 	fs.DurationVar(&c.Task.LeaseTTL, "task-lease-ttl", envDuration("AMP_TASK_LEASE_TTL", 30*time.Second), "task ownership lease TTL")
 	fs.IntVar(&c.Task.MaxConcurrent, "task-max-concurrent", envInt("AMP_TASK_MAX_CONCURRENT", 50), "max tasks the worker executes concurrently")
@@ -153,7 +153,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.Driver, "deploy-driver", env("AMP_DEPLOY_DRIVER", DriverDocker), "deployer driver: docker (default) or kubernetes (Helm)")
 	fs.StringVar(&d.Namespace, "deploy-namespace", env("AMP_DEPLOY_NAMESPACE", ""), "Kubernetes namespace endpoints are deployed into")
 	fs.StringVar(&d.HelmBin, "helm-bin", env("AMP_HELM_BIN", "helm"), "helm binary: a bare name is resolved on PATH, a path is used verbatim")
-	fs.StringVar(&d.ChartPath, "deploy-chart", env("AMP_DEPLOY_CHART", "deploy/helm/yb-light-endpoint"), "path to the yb-light-endpoint Helm chart")
+	fs.StringVar(&d.ChartPath, "deploy-chart", env("AMP_DEPLOY_CHART", "deploy/helm/yb-amp-endpoint"), "path to the yb-amp-endpoint Helm chart")
 	fs.StringVar(&d.KubeconfigPath, "kubeconfig", env("AMP_KUBECONFIG", ""), "KUBECONFIG for helm (empty = default discovery / in-cluster)")
 	fs.StringVar(&d.EndpointImageRepo, "endpoint-image-repo", env("AMP_ENDPOINT_IMAGE_REPO", ""), "endpoint container image repository")
 	fs.StringVar(&d.EndpointImageTag, "endpoint-image-tag", env("AMP_ENDPOINT_IMAGE_TAG", "latest"), "endpoint container image tag")
@@ -173,7 +173,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.BackingYBPassword, "deploy-yb-password", env("AMP_DEPLOY_YB_PASSWORD", ""), "backing YugabyteDB password, inline (dev/test; prefer --deploy-yb-existing-secret). Empty = passwordless/trust auth")
 	fs.DurationVar(&d.Timeout, "deploy-timeout", envDuration("AMP_DEPLOY_TIMEOUT", 10*time.Minute), "how long to wait for a deploy/retire to converge")
 	// Docker driver (--deploy-driver docker).
-	fs.StringVar(&d.EndpointImage, "deploy-endpoint-image", env("AMP_DEPLOY_ENDPOINT_IMAGE", "yb-light/neon-endpoint:dev"), "docker: single-container endpoint image to run")
+	fs.StringVar(&d.EndpointImage, "deploy-endpoint-image", env("AMP_DEPLOY_ENDPOINT_IMAGE", "yb-amp/neon-endpoint:dev"), "docker: single-container endpoint image to run")
 	fs.StringVar(&d.Network, "deploy-network", env("AMP_DEPLOY_NETWORK", ""), "docker: shared network for the controller + its endpoints (so they reach each other by name)")
 	fs.StringVar(&d.ExternalHost, "deploy-external-host", env("AMP_DEPLOY_EXTERNAL_HOST", "127.0.0.1"), "docker: host a client uses to reach a published compute port")
 	fs.StringVar(&d.SupervisorPath, "deploy-supervisor-path", env("AMP_DEPLOY_SUPERVISOR_PATH", ""), "docker: dev-only host path to supervisor.py to bind-mount into endpoints (empty = bundled)")

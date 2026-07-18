@@ -12,7 +12,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // Deps carries what a Task body needs. KISS: no environment by default — a

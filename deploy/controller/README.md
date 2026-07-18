@@ -1,8 +1,8 @@
-# yb-light controller layer
+# yb-amp controller layer
 
 This directory packages the **controller layer** — the `controller`
 (`amp-controller`) — as a single container. It implements
-[issue #94](https://github.com/yugabyte/yb-light/issues/94).
+[issue #94](https://github.com/yugabyte/amp/issues/94).
 
 ```
 deploy/
@@ -21,10 +21,10 @@ deploy/
 
 ### The bundle layout
 
-The `controller` binary is installed under `/opt/yb-light-amp`:
+The `controller` binary is installed under `/opt/yb-amp-amp`:
 
 ```
-/opt/yb-light-amp/
+/opt/yb-amp-amp/
   controller
 ```
 
@@ -38,7 +38,7 @@ first, then the image, from the **repo root**:
 
 ```sh
 make controller-bundle BUILD_TYPE=release                # -> target/controller-bundle/controller
-docker build -t yb-light/controller:dev -f deploy/controller/Dockerfile .
+docker build -t yb-amp/controller:dev -f deploy/controller/Dockerfile .
 ```
 
 `make controller-bundle` builds the `controller` Go binary (static,
@@ -55,7 +55,7 @@ point it at a YugabyteDB universe:
 ```sh
 docker run --rm --network host \
   -e AMP_DATABASE_URL=postgres://yugabyte@127.0.0.1:5433/yb_storage \
-  yb-light/controller:dev
+  yb-amp/controller:dev
 
 # controller's API:
 curl -s http://127.0.0.1:8080/healthz
@@ -125,7 +125,7 @@ docker run -d --name controller --hostname controller --network ybamp \
   -e AMP_DEPLOY=true -e AMP_DEPLOY_DRIVER=docker -e AMP_DEPLOY_NETWORK=ybamp \
   -e AMP_DEPLOY_BOOTSTRAP=true \
   -e AMP_DEPLOY_YB_HOST_PORTS=host.docker.internal:5433 -e AMP_DEPLOY_YB_DBNAME=yb_storage \
-  yb-light/controller:dev
+  yb-amp/controller:dev
 ```
 
 `--user root` is the dev-simple way to give controller access to the mounted socket; the
@@ -144,7 +144,7 @@ the knobs the image cares about:
 | `AMP_DEPLOY` | _(unset → false)_ | enable the endpoint deployer |
 | `AMP_DEPLOY_DRIVER` | `docker` | deployer driver: `docker` (default) or `kubernetes` (Helm) |
 | `AMP_DEPLOY_NETWORK` | _(empty)_ | docker: shared network for controller + the endpoints it launches |
-| `AMP_DEPLOY_ENDPOINT_IMAGE` | `yb-light/neon-endpoint:dev` | docker: endpoint image to launch |
+| `AMP_DEPLOY_ENDPOINT_IMAGE` | `yb-amp/neon-endpoint:dev` | docker: endpoint image to launch |
 | `AMP_DEPLOY_EXTERNAL_HOST` | `127.0.0.1` | docker: host a client uses to reach a published compute port |
 | `AMP_DEPLOY_BOOTSTRAP` | _(unset → false)_ | docker: dev/integration — initdb the recorded tenant/timeline on deploy (no create-database flow yet) |
 | `AMP_DEPLOY_YB_HOST_PORTS` | _(required if `AMP_DEPLOY`)_ | how an endpoint reaches the backing YB storage universe |
@@ -156,7 +156,7 @@ the knobs the image cares about:
 
 The controller is deployed via the
 [`yb-amp-controller`](../helm/yb-amp-controller) Helm chart (mirroring
-[`helm/yb-light-endpoint`](../helm/yb-light-endpoint)), which packages the
+[`helm/yb-amp-endpoint`](../helm/yb-amp-endpoint)), which packages the
 controller, the MCP server, and the web UI. [`redeploy.sh`](redeploy.sh) is now a
 `helm upgrade --install yb-amp-controller …` that maps its env interface onto
 chart values; Helm owns the RBAC, the Deployment, and the Service(s) (and prunes

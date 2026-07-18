@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-/// The Postgres install built from yb-light's own vendored Postgres
+/// The Postgres install built from yb-amp's own vendored Postgres
 /// (`pg_install/v18`), relative to this crate (`<repo>/test/integration/compute`).
 fn pg_install() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../pg_install/v18")
@@ -16,7 +16,7 @@ fn pg_install() -> PathBuf {
 /// Base `psql` command against a compute endpoint: trust auth (empty
 /// `PGPASSWORD`), `cloud_admin`, db `postgres`.
 ///
-/// Uses the `psql` built from yb-light's own Postgres — NOT whatever
+/// Uses the `psql` built from yb-amp's own Postgres — NOT whatever
 /// `psql` is on `PATH`. The golden `.sql` workloads use psql
 /// meta-commands (e.g. `\d`) whose generated catalog queries must match
 /// the compute's Postgres major version; a mismatched system `psql`
@@ -67,8 +67,11 @@ pub fn run_file(port: u16, sql: &Path) -> anyhow::Result<String> {
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "workload".to_string());
-    let sink_path =
-        std::env::temp_dir().join(format!("integration-psql-{}-{}.out", std::process::id(), stem));
+    let sink_path = std::env::temp_dir().join(format!(
+        "integration-psql-{}-{}.out",
+        std::process::id(),
+        stem
+    ));
     let sink = std::fs::File::create(&sink_path)?;
 
     let status = base(port)

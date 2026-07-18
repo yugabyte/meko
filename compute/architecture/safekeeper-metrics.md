@@ -16,7 +16,7 @@ which is auth-exempt. Two registration paths feed it:
 **Per-timeline label cardinality**: every metric in the *Per-timeline state*
 section carries a single `branch_id` label, so series count scales
 with the number of active branches. The collector `reset()`s these each
-scrape, so inactive branches drop out. In yb-light this is typically a single
+scrape, so inactive branches drop out. In yb-amp this is typically a single
 branch (single-SK), keeping cardinality low.
 
 ## WAL storage / write path (global)
@@ -37,7 +37,7 @@ branch (single-SK), keeping cardinality low.
 ## WAL cache / YB mirror (global)
 
 The WalCache fronts `safekeeper.wals`; misses fall through to YB. These are
-yb-light-specific.
+yb-amp-specific.
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
@@ -94,7 +94,7 @@ and reset each scrape.
 
 | Metric | Type | Meaning |
 | --- | --- | --- |
-| `safekeeper_commit_lsn` | GaugeVec | Current commit_lsn. **yb-light: ≡ `flush_lsn`** (single-SK quorum). |
+| `safekeeper_commit_lsn` | GaugeVec | Current commit_lsn. **yb-amp: ≡ `flush_lsn`** (single-SK quorum). |
 | `safekeeper_flush_lsn` | GaugeVec | Current flush_lsn. |
 | `safekeeper_remote_consistent_lsn` | GaugeVec | LSN persisted to remote storage in the pageserver. |
 | `safekeeper_ps_last_received_lsn` | GaugeVec | Last LSN received by the pageserver (per feedback). |

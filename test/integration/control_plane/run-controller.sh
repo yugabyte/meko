@@ -14,8 +14,8 @@
 # the recorded tenant/timeline on first start (there is no create-database flow yet).
 #
 # Prereqs: Docker, and a YugabyteDB on the host at :5433 (yugabyte/yugabyte).
-# Builds yb-light/controller:dev locally; requires the endpoint image
-# yb-light/neon-endpoint:dev to already exist.
+# Builds yb-amp/controller:dev locally; requires the endpoint image
+# yb-amp/neon-endpoint:dev to already exist.
 set -euo pipefail
 
 usage() {
@@ -28,7 +28,7 @@ copy-on-write branch isolation over Postgres).
 
   -n <count>    repeat the scenario <count> times, fresh project each (forwarded to the harness).
 
-Builds yb-light/controller:dev locally each run. Requires yb-light/neon-endpoint:dev and
+Builds yb-amp/controller:dev locally each run. Requires yb-amp/neon-endpoint:dev and
 a YugabyteDB on the host (:5433).
 EOF
 }
@@ -44,8 +44,8 @@ done
 REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
-AMP_IMAGE=yb-light/controller:dev
-ENDPOINT_IMAGE=yb-light/neon-endpoint:dev
+AMP_IMAGE=yb-amp/controller:dev
+ENDPOINT_IMAGE=yb-amp/neon-endpoint:dev
 
 # YB admin connection, for creating/dropping the per-run databases. We exec
 # ysqlsh inside the YB container (the host usually has no psql); yugabyted binds

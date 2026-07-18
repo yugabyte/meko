@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/yugabyte/yb-amp/controller/migrations"
+	"github.com/yugabyte/amp/controller/migrations"
 )
 
 // Migrate applies all embedded migrations to schema, creating the schema first

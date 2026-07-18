@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Block-size comparison battery for the split-topology ybLight stack.
+# Block-size comparison battery for the split-topology ybAmp stack.
 # Runs on the pageserver host (172.151.20.28); the PS is local here, the
 # compute is remote (172.151.29.184). SB=100MB, LFC disabled.
 #
@@ -12,7 +12,7 @@ set -uo pipefail
 
 LABEL="${1:?usage: blocksize-bench.sh <label>}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-source "$HERE/scripts/_env.sh" ybLight
+source "$HERE/scripts/_env.sh" ybAmp
 source "$HERE/scripts/_metrics.sh"
 
 export DBNAME=bigbench
@@ -27,7 +27,7 @@ PS_BIN=/home/ec2-user/yb-neon-bundle/bin/pageserver
 export YB_STORAGE_PASSWORD='Yugabyte!1'
 
 TS=$(date -u +%Y%m%d-%H%M)
-OUT="$HERE/results/${TS}-ybLight-BLK-${LABEL}"
+OUT="$HERE/results/${TS}-ybAmp-BLK-${LABEL}"
 mkdir -p "$OUT"
 SUMMARY="$OUT/SUMMARY.md"
 

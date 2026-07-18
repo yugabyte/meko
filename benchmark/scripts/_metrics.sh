@@ -2,15 +2,15 @@
 # Helpers for capturing CPU + DB metrics during a measurement run.
 # Source after sourcing _env.sh.
 
-# Start a server-side CPU sampler. Only meaningful for ybLight (we have ssh).
+# Start a server-side CPU sampler. Only meaningful for ybAmp (we have ssh).
 # Writes to $1 (output file path). Returns sampler PID.
 start_server_cpu_sampler() {
   local outfile="$1"
-  if [[ "$TARGET" != ybLight* ]]; then
-    echo "(server-cpu sampling only supported for ybLight target)" >"$outfile"
+  if [[ "$TARGET" != ybAmp* ]]; then
+    echo "(server-cpu sampling only supported for ybAmp target)" >"$outfile"
     return 0
   fi
-  # Sample the compute host (== PGHOST for ybLight targets) unless overridden.
+  # Sample the compute host (== PGHOST for ybAmp targets) unless overridden.
   ssh -o StrictHostKeyChecking=no -i ~/.ssh/yb-15-aws-portal-1-key.pem \
     ec2-user@"${CPU_SAMPLE_HOST:-$PGHOST}" \
     'while true; do
@@ -89,13 +89,13 @@ snapshot_ps_metrics() {
 }
 
 # Start a server-side disk IOPS/throughput sampler via iostat. Only meaningful
-# for ybLight (we have ssh). Samples the device backing /mnt/d0 (all neon-state:
+# for ybAmp (we have ssh). Samples the device backing /mnt/d0 (all neon-state:
 # pgdata, WAL, safekeeper, LFC file) every 3s. $1=outfile, $2=device (default
 # nvme1n1). Returns sampler PID. Each report block is prefixed with a timestamp.
 start_server_io_sampler() {
   local outfile="$1" dev="${2:-nvme1n1}"
-  if [[ "$TARGET" != ybLight* ]]; then
-    echo "(server-io sampling only supported for ybLight target)" >"$outfile"
+  if [[ "$TARGET" != ybAmp* ]]; then
+    echo "(server-io sampling only supported for ybAmp target)" >"$outfile"
     return 0
   fi
   ssh -o StrictHostKeyChecking=no -i ~/.ssh/yb-15-aws-portal-1-key.pem \

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # G-battery for the NEW yb-pageserver (8k-page direct, no layers/compaction),
-# CO-LOCATED with the compute on the 2-core box ybLight (172.151.29.184).
+# CO-LOCATED with the compute on the 2-core box ybAmp (172.151.29.184).
 # Client/orchestration runs on 172.151.20.28 (same as the prior off-box BLK
 # battery), so the pgbench client path is identical for a fair comparison.
 #
@@ -13,7 +13,7 @@ set -uo pipefail
 
 LABEL="${1:?usage: yb8k-bench.sh <label>}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-source "$HERE/scripts/_env.sh" ybLight
+source "$HERE/scripts/_env.sh" ybAmp
 source "$HERE/scripts/_metrics.sh"
 export PGPASSWORD='Yugabyte!1'
 
@@ -30,7 +30,7 @@ YB_PSQL=/home/ec2-user/yb-neon-bundle/pg_install/v18/bin/psql
 ybq() { PGPASSWORD='Yugabyte!1' $YB_PSQL -h 172.151.17.132 -p 5433 -U yugabyte -d yb_storage -tAc "$1" 2>/dev/null; }
 
 TS=$(date -u +%Y%m%d-%H%M)
-OUT="$HERE/results/${TS}-ybLight-YB8K-${LABEL}"
+OUT="$HERE/results/${TS}-ybAmp-YB8K-${LABEL}"
 mkdir -p "$OUT"
 SUMMARY="$OUT/SUMMARY.md"
 

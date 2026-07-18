@@ -9,7 +9,7 @@ several of them describe upstream paths that no longer exist.
 
 ## The two key watermarks
 
-yb-light splits the durability concept into two distinct atomics on
+yb-amp splits the durability concept into two distinct atomics on
 `Timeline`. Conflating them is what made restart-after-flush lose
 records before the eager/durable split was introduced:
 
@@ -171,7 +171,7 @@ branch-time flush endpoint use instead of plain `flush`), and by the
 - SK feedback fields: `disk_consistent_lsn` AND `remote_consistent_lsn`
   in `PageserverFeedback` both come from
   `Timeline::get_consistent_lsn()`. (Wire protocol carries both; in
-  yb-light they're semantically identical and one will be dropped in a
+  yb-amp they're semantically identical and one will be dropped in a
   future protocol bump.)
 - Walreceiver `START_REPLICATION` startpoint
   (`walreceiver_connection.rs`).
@@ -223,7 +223,7 @@ post-creation).
 **Where:** `Timeline.initdb_lsn` + `timeline_state.initdb_lsn`.
 
 **Meaning:** LSN at which initdb/import seeded the timeline. On load,
-falls back to `disk_consistent_lsn` if NULL. Low impact in yb-light.
+falls back to `disk_consistent_lsn` if NULL. Low impact in yb-amp.
 
 ---
 
@@ -242,7 +242,7 @@ falls back to `disk_consistent_lsn` if NULL. Low impact in yb-light.
 
 **Ancestor reads:** upstream's *in-process* ancestor recursion — a parent
 `ancestor: Arc<Timeline>` walked by `get_vectored_impl`, raising
-`GetReadyAncestorError` — is **gone**: a yb-light pageserver hosts only its
+`GetReadyAncestorError` — is **gone**: a yb-amp pageserver hosts only its
 own branch and never holds the ancestor in memory (`GetReadyAncestorError`
 survives as a never-constructed upstream remnant). Inherited
 (pre-branch-point) reads happen in the page store instead: `PageWriter`'s

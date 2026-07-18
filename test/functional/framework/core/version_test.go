@@ -3,7 +3,7 @@ package core_test
 import (
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 func TestVersionCompare(t *testing.T) {

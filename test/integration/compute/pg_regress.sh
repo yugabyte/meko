@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
 # Run the upstream PostgreSQL regression suite (pg_regress) against a
-# yb-light compute endpoint backed by YugabyteDB — see issue #119.
+# yb-amp compute endpoint backed by YugabyteDB — see issue #119.
 #
 # Unlike run.sh (the Rust integration harness with checked-in golden workloads),
 # this drives the FULL upstream suite straight from the vendored Postgres
 # source (compute/vendor/postgres-v18/src/test/regress) via the stock pg_regress
-# binary. It brings up a throwaway yb_light_local cluster (compute ->
+# binary. It brings up a throwaway yb_amp_local cluster (compute ->
 # yb-pageserver/safekeeper -> YugabyteDB), creates the `regression`
 # database, runs the parallel schedule, and tears the cluster down.
 #
@@ -21,11 +21,11 @@
 # Expected result (PG18, see #119): 0 failures. The only diffs the suite
 # produces are the one by-design limitation — `CREATE TABLESPACE`
 # unsupported — in 4 tests (`test_setup`, `tablespace`, `stats`,
-# `database`). Those are blessed via yb-light expected-output variants in
+# `database`). Those are blessed via yb-amp expected-output variants in
 # regress_yb_expected/ (overlaid onto pg_regress's expected/<test>_N.out
 # alternative-file mechanism, NOT by editing the upstream goldens), so a
 # clean tree is a genuine green. No page-reconstruction or WAL bugs
-# surface, and no genuine yb-light behavioral diffs remain.
+# surface, and no genuine yb-amp behavioral diffs remain.
 set -euo pipefail
 
 usage() {
@@ -44,7 +44,7 @@ Options:
 
 Honoured env vars: YB_HOST, YB_PORT (the backing YugabyteDB; default
 127.0.0.1:5433), INTEGRATION_PORT_BASE (pin the cluster's port block),
-YB_LIGHT_REPO_DIR, YB_DBNAME.
+YB_AMP_REPO_DIR, YB_DBNAME.
 
 Output (results + regression.diffs) is written under the run dir and
 printed at the end. Exit status is pg_regress's (non-zero while the known
@@ -73,7 +73,7 @@ done
 
 REG="$REPO/compute/vendor/postgres-v18/src/test/regress"
 PGINST="$REPO/pg_install/v18"
-# yb-light expected-output variants for the by-design CREATE TABLESPACE
+# yb-amp expected-output variants for the by-design CREATE TABLESPACE
 # diffs; overlaid into the vendored expected/ at run time (see below).
 YBEXP="$REPO/test/integration/compute/regress_yb_expected"
 OVERLAID=()   # variant files copied into expected/, removed by finish()
@@ -86,27 +86,27 @@ fi
 [[ "$SCHEDULE" = /* ]] || SCHEDULE="$REG/$SCHEDULE"
 [[ -f "$SCHEDULE" ]] || { echo "schedule not found: $SCHEDULE" >&2; exit 1; }
 
-# 2) Build the binaries yb_light_local spawns at runtime (it does not build
+# 2) Build the binaries yb_amp_local spawns at runtime (it does not build
 #    them itself — a stale one surfaces as baffling runtime mismatches).
-CLUSTER_BINS=(--bin yb_light_local --bin yb-pageserver
+CLUSTER_BINS=(--bin yb_amp_local --bin yb-pageserver
               --bin yb-safekeeper --bin yb-endpoint-storage --bin yb-compute-ctl)
 echo ">>> building cluster binaries ($PROFILE)..."
 if [[ $PROFILE == release ]]; then
     cargo build --release "${CLUSTER_BINS[@]}"
-    YB_LIGHT="$REPO/target/release/yb_light_local"
+    YB_AMP="$REPO/target/release/yb_amp_local"
     _PROFILE_DIR=release
 else
     cargo build "${CLUSTER_BINS[@]}"
-    YB_LIGHT="$REPO/target/debug/yb_light_local"
+    YB_AMP="$REPO/target/debug/yb_amp_local"
     _PROFILE_DIR=debug
 fi
-# The controller is a Go binary yb_light_local spawns from beside itself.
+# The controller is a Go binary yb_amp_local spawns from beside itself.
 ( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller )
 
 # 2b) Build + install the regression suite's C support modules. The core
 #     tests load helper functions/types from regress.so, and the trigger
 #     tests from contrib/spi (refint.so, autoinc.so); none of these ship in
-#     pg_install. yb-light's loader (dfmgr.c) only accepts libraries resident
+#     pg_install. yb-amp's loader (dfmgr.c) only accepts libraries resident
 #     in pkglib, so build them via PGXS and drop them there. pg_regress is
 #     pointed at pkglib via --dlpath below so the suite's @libdir@/<mod>
 #     references resolve.
@@ -142,7 +142,7 @@ RUN_ID="${EPOCHSECONDS:-$(date +%s)}_$$"
 export YB_HOST="${YB_HOST:-127.0.0.1}"
 export YB_PORT="${YB_PORT:-5433}"
 export YB_DBNAME="${YB_DBNAME:-yb_storage_pgregress_${RUN_ID}}"
-export YB_LIGHT_REPO_DIR="${YB_LIGHT_REPO_DIR:-$REPO/.integration-tests/pg_regress_${RUN_ID}}"
+export YB_AMP_REPO_DIR="${YB_AMP_REPO_DIR:-$REPO/.integration-tests/pg_regress_${RUN_ID}}"
 # The cluster needs to find the Postgres install at runtime; the compute
 # (and pg_regress's psql) need its libs.
 export POSTGRES_DISTRIB_DIR="$REPO/pg_install"
@@ -178,7 +178,7 @@ finish() {
     [[ ${#OVERLAID[@]} -gt 0 ]] && rm -f "${OVERLAID[@]}"
     if [[ $KEEP == 1 ]]; then
         echo ">>> --keep: cluster left up (compute 127.0.0.1:${COMPUTE:-?}, db=$YB_DBNAME); results in ${OUTDIR:-n/a}"
-        echo "    tear down: YB_DBNAME=$YB_DBNAME YB_LIGHT_REPO_DIR=$YB_LIGHT_REPO_DIR COMPUTE_PORT=${COMPUTE:-} bash test/integration/compute/clean.sh"
+        echo "    tear down: YB_DBNAME=$YB_DBNAME YB_AMP_REPO_DIR=$YB_AMP_REPO_DIR COMPUTE_PORT=${COMPUTE:-} bash test/integration/compute/clean.sh"
     else
         echo ">>> tearing down"; clean
     fi
@@ -187,14 +187,14 @@ finish() {
 trap finish EXIT INT TERM HUP
 clean   # clear any leftover state for this (db, dir) up front
 
-# Overlay the yb-light expected variants. pg_regress tries expected/<test>_N.out
+# Overlay the yb-amp expected variants. pg_regress tries expected/<test>_N.out
 # (N=0..9) and passes if any matches, so these bless the by-design CREATE
 # TABLESPACE diffs as known-good without editing the upstream goldens. Copied
 # in here and removed by finish(), so the vendored submodule stays clean.
 # Regenerate after an intended change: cp "$OUTDIR"/results/<test>.out to
 # $YBEXP/<test>_<N>.out (N = an index not already used upstream).
 if [[ -d $YBEXP ]]; then
-    echo ">>> overlaying yb-light expected variants: $(cd "$YBEXP" && echo *.out)"
+    echo ">>> overlaying yb-amp expected variants: $(cd "$YBEXP" && echo *.out)"
     for v in "$YBEXP"/*.out; do
         dst="$REG/expected/$(basename "$v")"
         [[ -e $dst ]] && { echo "refusing to clobber existing $dst" >&2; exit 1; }
@@ -202,8 +202,8 @@ if [[ -d $YBEXP ]]; then
     done
 fi
 
-echo ">>> bringing up yb-light cluster (db=$YB_DBNAME base=$BASE compute=$COMPUTE)"
-yb() { "$YB_LIGHT" "$@"; }
+echo ">>> bringing up yb-amp cluster (db=$YB_DBNAME base=$BASE compute=$COMPUTE)"
+yb() { "$YB_AMP" "$@"; }
 yb init --yb-dbname "$YB_DBNAME" --yb-host "$YB_HOST" --yb-port "$YB_PORT" --port-base "$BASE"
 yb start
 TID=$(yb tenant create --pg-version 18 | grep -oE '[0-9a-f]{32}' | head -1)
@@ -213,8 +213,8 @@ yb endpoint start main --start-timeout 600s
 
 echo ">>> running pg_regress (schedule=$(basename "$SCHEDULE") jobs=$JOBS) against 127.0.0.1:$COMPUTE"
 # Results live OUTSIDE the run dir so they survive teardown (clean.sh rm's
-# YB_LIGHT_REPO_DIR). Old result dirs are reaped by the same 7-day GC as runs.
-OUTDIR="${YB_LIGHT_REPO_DIR}_out"
+# YB_AMP_REPO_DIR). Old result dirs are reaped by the same 7-day GC as runs.
+OUTDIR="${YB_AMP_REPO_DIR}_out"
 rm -rf "$OUTDIR"; mkdir -p "$OUTDIR"
 status=0
 "$PGINST/lib/postgresql/pgxs/src/test/regress/pg_regress" \

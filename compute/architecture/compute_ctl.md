@@ -7,7 +7,7 @@ pageserver, starts Postgres, applies the spec (roles / databases / extensions /
 grants), and then supervises the running compute while exposing an HTTP control API.
 
 It is the **single point of contact inside an endpoint** that the control plane talks
-to — the control plane (today `yb_light_local`; tomorrow `amp-controller`) never
+to — the control plane (today `yb_amp_local`; tomorrow `amp-controller`) never
 manages the Postgres / safekeeper / pageserver processes directly. See
 [`amp-controller.md`](../../controller/architecture/amp-controller.md) §5.2
 ("Per-endpoint services"), where `compute_ctl` is exactly this contact point.
@@ -15,12 +15,12 @@ manages the Postgres / safekeeper / pageserver processes directly. See
 > **Scope note.** [`compute.md`](compute.md) covers the *compute itself* — Postgres
 > 17.8, the `neon` smgr hooks, LFC, walproposer. This doc covers the *supervisor* that
 > brings that compute up and keeps it configured. `compute_ctl` is upstream Neon code;
-> the YB-specific story is short and lives under "Changes in yb-light" below.
+> the YB-specific story is short and lives under "Changes in yb-amp" below.
 
 ## Inherited from Neon
 
-`compute/compute_tools/` is upstream Neon, essentially unmodified (see "Changes in yb-light").
-Everything in this section is Neon behavior that yb-light relies on as-is.
+`compute/compute_tools/` is upstream Neon, essentially unmodified (see "Changes in yb-amp").
+Everything in this section is Neon behavior that yb-amp relies on as-is.
 
 ### What it supervises
 
@@ -96,7 +96,7 @@ The basebackup path (gRPC vs. libpq) is chosen from the pageserver connection sc
 the spec (`compute.rs`); this is the same fork in the road described in
 [`compute.md`](compute.md).
 
-yb-light runs a single safekeeper, which reports `commit_lsn == flush_lsn` (a quorum of
+yb-amp runs a single safekeeper, which reports `commit_lsn == flush_lsn` (a quorum of
 one — every flush is durably committed). The startup LSN therefore comes straight from the
 `TIMELINE_STATUS` query in `check_safekeepers_synced()`; there is no multi-safekeeper
 consensus to drive, so compute_ctl never spawns `postgres --sync-safekeepers` at startup or
@@ -104,7 +104,7 @@ shutdown. (Upstream Neon ran a full `sync_safekeepers()` walproposer pass here; 
 a second postgres binding the client port and racing the next compute on shutdown — see
 [#58].) `cleanup_after_postgres_exit()` no longer reports a `terminate_flush_lsn`.
 
-[#58]: https://github.com/yugabyte/yb-light/issues/58
+[#58]: https://github.com/yugabyte/amp/issues/58
 
 ### The compute spec
 
@@ -114,7 +114,7 @@ what the compute should be: mode, pageserver/safekeeper connection info, the cat
 flags, audit level, LFC/prewarm knobs, pgbouncer/local_proxy config, and the
 `compute_ctl_config` (TLS + JWKS for API auth). It is acquired two ways:
 
-- **From a file** — `--config <path>` (a `config.json`). This is how `yb_light_local`
+- **From a file** — `--config <path>` (a `config.json`). This is how `yb_amp_local`
   drives it: `control_plane/src/endpoint.rs` writes `config.json` into the endpoint dir
   and passes `--config`.
 - **From the control plane** — `--control-plane-uri <base> --compute-id <id>`, which
@@ -235,15 +235,15 @@ installed-extensions gauge. Tracing is OpenTelemetry: `init_tracing_and_logging(
 sets up an OTLP provider and propagates trace context across HTTP requests and via
 `OTEL_*` env vars (`logger.rs`, `compute.rs`).
 
-## Changes in yb-light
+## Changes in yb-amp
 
-**There is no functional yb-light fork of `compute_tools`.** The only commits that have
+**There is no functional yb-amp fork of `compute_tools`.** The only commits that have
 touched the crate are fork-wide mechanical refactors, not behavior changes:
 
-- the `neon_local` → `yb_light_local` / `cargo neon` → `cargo yb_light` rename;
+- the `neon_local` → `yb_amp_local` / `cargo neon` → `cargo yb_amp` rename;
 - removal of the "Hadron" code;
 - the removal of sharding entirely (the `ShardIdentity` / `ShardIndex` /
-  `ShardCount` / … types and `TenantShardId` are gone — yb-light is single-shard);
+  `ShardCount` / … types and `TenantShardId` are gone — yb-amp is single-shard);
 - the collapse of `(tenant_id, timeline_id)` into a single `branch_id` (the
   `TenantId` / `TenantTimelineId` types are gone; `TimelineId` became `BranchId`);
 - the strip of S3/Azure/GCS backends from `compute/libs/remote_storage`.
@@ -280,7 +280,7 @@ The [amp-controller design](../../controller/architecture/amp-controller.md) lea
 
 ## Run / configure
 
-In the dev cluster, `yb_light_local` launches it (`control_plane/src/endpoint.rs`):
+In the dev cluster, `yb_amp_local` launches it (`control_plane/src/endpoint.rs`):
 
 ```
 compute_ctl \
@@ -294,7 +294,7 @@ compute_ctl \
     [--remote-ext-base-url <url>] [--dev] [--privileged-role-name <role>]
 ```
 
-`yb_light_local` then polls `GET /status` until the compute reports `running` (or times
+`yb_amp_local` then polls `GET /status` until the compute reports `running` (or times
 out in `init`). Other notable flags: `-p/--control-plane-uri` (real-control-plane spec
 mode, conflicts with `--config`), `--installed-extensions-collection-interval`,
 `--lakebase-mode`, `--pg-init-timeout`.
@@ -312,5 +312,5 @@ mode, conflicts with `--config`), `--installed-extensions-collection-interval`,
   subsystems.
 - `compute/libs/compute_api/src/{spec,responses}.rs` — `ComputeSpec` / `ComputeMode` /
   `ComputeStatus`, shared with the control plane.
-- `control_plane/src/endpoint.rs` — the `yb_light_local` wrapper that writes
+- `control_plane/src/endpoint.rs` — the `yb_amp_local` wrapper that writes
   `config.json` and launches the binary.

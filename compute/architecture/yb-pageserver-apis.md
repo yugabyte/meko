@@ -18,7 +18,7 @@ cancellation by running it on a spawned task with a `CancellationToken`.
 ## Auth model
 
 Auth is controlled by `http_auth_type` in config. With `AuthType::Trust` no token
-is required; with `AuthType::YbLightJWT` an EdDSA-signed JWT is required via the
+is required; with `AuthType::YbAmpJWT` an EdDSA-signed JWT is required via the
 `auth_middleware`. The accepted scopes (`compute/pageserver/src/auth.rs`
 `check_permission`) are:
 
@@ -68,7 +68,7 @@ These return `400 Bad Request` ("compiled without testing APIs") when the
 ### Branch (branch-scoped)
 
 All paths are under `/v1/branch/:branch_id/...`; `:branch_id`
-is parsed as an ID and authorized against the token's branch scope. In yb-light
+is parsed as an ID and authorized against the token's branch scope. In yb-amp
 the process serves exactly one `branch_id` for its lifetime (see
 `compute/architecture/yb-pageserver.md`), so in practice only that single id resolves;
 other IDs return `404`/`NotFound`.
@@ -107,7 +107,7 @@ other IDs return `404`/`NotFound`.
   durable `consistent_lsn` is `>= lsn`. This is **not** testing-gated: the
   launcher calls it on the ancestor at branch time so the branch's
   `create_branch_row` durability barrier clears without waiting for the periodic
-  flush. In yb-light "freeze" is a no-op (no in-memory layers); this is purely a
+  flush. In yb-amp "freeze" is a no-op (no in-memory layers); this is purely a
   flush-to-YB.
 
 ### Fallback
@@ -116,7 +116,7 @@ other IDs return `404`/`NotFound`.
 | --- | --- | --- |
 | ANY | (any unmatched) | `handler_404` → `404` with `{ "msg": "page not found" }`. |
 
-## yb-light specifics vs upstream Neon
+## yb-amp specifics vs upstream Neon
 
 The router is heavily trimmed from upstream `pageserver`. Notable removals /
 differences:
@@ -135,5 +135,5 @@ differences:
 - **`flush` replaces upstream's `checkpoint`/`compact` semantics** — it forces the
   durable `consistent_lsn` UPDATE through immediately, bypassing the periodic
   flush throttle.
-- Auth uses the `YbLightJWT` auth type with only `PageServerApi` / `Tenant`
+- Auth uses the `YbAmpJWT` auth type with only `PageServerApi` / `Tenant`
   scopes accepted.

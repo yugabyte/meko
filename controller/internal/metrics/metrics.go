@@ -19,7 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 
-	"github.com/yugabyte/yb-amp/controller/internal/version"
+	"github.com/yugabyte/amp/controller/internal/version"
 )
 
 // namespace prefixes every series this package defines.

@@ -25,17 +25,17 @@ use crate::endpoint_storage::ENDPOINT_STORAGE_DEFAULT_ADDR;
 pub const DEFAULT_PG_VERSION: u32 = 18;
 
 //
-// This data structures represents yb_light_local CLI config
+// This data structures represents yb_amp_local CLI config
 //
-// It is deserialized from the .yb_light/config file, or the config file passed
-// to 'yb_light_local init --config=<path>' option. See control_plane/simple.conf for
+// It is deserialized from the .yb_amp/config file, or the config file passed
+// to 'yb_amp_local init --config=<path>' option. See control_plane/simple.conf for
 // an example.
 //
 /// Process-local memoized `reqwest::Client`, built once and cloned cheaply
 /// (the client is `Arc`-internal). Building a client parses the rustls root
 /// store, which is ~100ms in debug builds — and `Controller::from_env`
 /// builds one per controller call (~7 per `endpoint create`), so memoizing it
-/// here takes that repeated cost off every `yb_light_local` controller path.
+/// here takes that repeated cost off every `yb_amp_local` controller path.
 /// Not logical config state: excluded from `LocalEnv` equality.
 #[derive(Clone, Debug, Default)]
 pub struct HttpClientCache(std::sync::OnceLock<reqwest::Client>);
@@ -52,8 +52,8 @@ pub struct LocalEnv {
     // compute endpoints).
     //
     // This is not stored in the config file. Rather, this is the path where the
-    // config file itself is. It is read from the YB_LIGHT_REPO_DIR env variable which
-    // must be an absolute path. If the env var is not set, $PWD/.yb_light is used.
+    // config file itself is. It is read from the YB_AMP_REPO_DIR env variable which
+    // must be an absolute path. If the env var is not set, $PWD/.yb_amp is used.
     pub base_data_dir: PathBuf,
 
     // Path to postgres distribution. It's expected that "bin", "include",
@@ -63,9 +63,9 @@ pub struct LocalEnv {
     pub pg_distrib_dir: PathBuf,
 
     // Path to pageserver binary.
-    pub yb_light_distrib_dir: PathBuf,
+    pub yb_amp_distrib_dir: PathBuf,
 
-    // Default branch ID to use with the 'yb_light_local' command line utility, when
+    // Default branch ID to use with the 'yb_amp_local' command line utility, when
     // --branch_id is not explicitly specified.
     pub default_branch_id: Option<BranchId>,
 
@@ -74,8 +74,8 @@ pub struct LocalEnv {
     /// Path to environment's public key
     pub public_key_path: PathBuf,
 
-    // Configuration for the controller (1 per yb_light_local environment)
-    pub controller: YbLightControllerConf,
+    // Configuration for the controller (1 per yb_amp_local environment)
+    pub controller: YbAmpControllerConf,
 
     /// The *provisioned* pageservers, discovered by [`Self::load_config`]
     /// from the `pageserver.toml` under each `endpoints/<name>/pageserver/`.
@@ -84,24 +84,24 @@ pub struct LocalEnv {
     /// [`Self::pageserver_templates`].
     pub pageservers: Vec<PageServerConf>,
 
-    /// The *provisioned* safekeepers, persisted in `.yb_light/config`.
+    /// The *provisioned* safekeepers, persisted in `.yb_amp/config`.
     /// Empty on a fresh repo; a safekeeper is provisioned (datadir,
     /// `endpoint_id`, `branch_id`) at `endpoint create`, allocated from
     /// [`Self::safekeeper_templates`].
     pub safekeepers: Vec<SafekeeperConf>,
 
-    /// Init-time pageserver conf(s) from the `yb_light_local init` TOML.
+    /// Init-time pageserver conf(s) from the `yb_amp_local init` TOML.
     /// Not a running node — the template (ports, `yb_storage_conn`, auth)
     /// that `endpoint create` clones for the first/main pageserver. The
     /// lowest-id template is the port base for all pageserver allocation.
-    pub pageserver_templates: Vec<YbLightLocalInitPageserverConf>,
+    pub pageserver_templates: Vec<YbAmpLocalInitPageserverConf>,
 
-    /// Init-time safekeeper conf(s) from the `yb_light_local init` TOML.
+    /// Init-time safekeeper conf(s) from the `yb_amp_local init` TOML.
     /// The template (ports, `yb_storage_conn`, auth) that `endpoint create`
     /// clones for the first/main safekeeper.
     pub safekeeper_templates: Vec<SafekeeperConf>,
 
-    /// Init-time endpoint_storage conf from the `yb_light_local init` TOML:
+    /// Init-time endpoint_storage conf from the `yb_amp_local init` TOML:
     /// the template (base `listen_addr`, `remote_storage_json`) that
     /// `endpoint create` clones for each endpoint's instance.
     pub endpoint_storage: EndpointStorageConf,
@@ -130,23 +130,23 @@ pub struct LocalEnv {
     pub http_client: HttpClientCache,
 }
 
-/// On-disk state stored in `.yb_light/config`.
+/// On-disk state stored in `.yb_amp/config`.
 #[derive(PartialEq, Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OnDiskConfig {
     pub pg_distrib_dir: PathBuf,
-    pub yb_light_distrib_dir: PathBuf,
+    pub yb_amp_distrib_dir: PathBuf,
     pub default_branch_id: Option<BranchId>,
     pub private_key_path: PathBuf,
     pub public_key_path: PathBuf,
-    pub controller: YbLightControllerConf,
+    pub controller: YbAmpControllerConf,
     #[serde(
         skip_serializing,
         deserialize_with = "fail_if_pageservers_field_specified"
     )]
     pub pageservers: Vec<PageServerConf>,
     pub safekeepers: Vec<SafekeeperConf>,
-    pub pageserver_templates: Vec<YbLightLocalInitPageserverConf>,
+    pub pageserver_templates: Vec<YbAmpLocalInitPageserverConf>,
     pub safekeeper_templates: Vec<SafekeeperConf>,
     pub endpoint_storage: EndpointStorageConf,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -166,21 +166,21 @@ where
 {
     Err(serde::de::Error::custom(
         "The 'pageservers' field is no longer used; pageserver.toml is now authoritative; \
-         Please remove the `pageservers` from your .yb_light/config.",
+         Please remove the `pageservers` from your .yb_amp/config.",
     ))
 }
 
-/// The description of the yb_light_local env to be initialized by `yb_light_local init --config`.
+/// The description of the yb_amp_local env to be initialized by `yb_amp_local init --config`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct YbLightLocalInitConf {
+pub struct YbAmpLocalInitConf {
     // TODO: do we need this? Seems unused
     pub pg_distrib_dir: Option<PathBuf>,
     // TODO: do we need this? Seems unused
-    pub yb_light_distrib_dir: Option<PathBuf>,
+    pub yb_amp_distrib_dir: Option<PathBuf>,
     pub default_branch_id: BranchId,
-    pub controller: Option<YbLightControllerConf>,
-    pub pageservers: Vec<YbLightLocalInitPageserverConf>,
+    pub controller: Option<YbAmpControllerConf>,
+    pub pageservers: Vec<YbAmpLocalInitPageserverConf>,
     pub safekeepers: Vec<SafekeeperConf>,
     pub endpoint_storage: EndpointStorageConf,
     pub control_plane_api: Option<Url>,
@@ -194,14 +194,14 @@ pub struct YbLightLocalInitConf {
 pub struct EndpointStorageConf {
     pub listen_addr: SocketAddr,
     /// If `Some`, written verbatim as the `storage_kind` block of
-    /// `endpoint_storage.json`. Otherwise yb_light_local derives a default
+    /// `endpoint_storage.json`. Otherwise yb_amp_local derives a default
     /// `YbStore` config from `controller.yb`,
     /// colocating endpoint_storage with the pageserver in the same
     /// `yb_storage.public.blobs` table. Value must be a JSON object
     /// including the `type` discriminator, e.g.
     /// `{"type": "YbStore", "host": "...", "user": "...", ...}`. Mirrors
-    /// the way [`YbLightLocalInitPageserverConf::yb_storage_conn`] feeds the
-    /// pageserver's TOML inline table — opaque to yb_light_local, parsed
+    /// the way [`YbAmpLocalInitPageserverConf::yb_storage_conn`] feeds the
+    /// pageserver's TOML inline table — opaque to yb_amp_local, parsed
     /// by `TypedRemoteStorageKind` in the target service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_storage_json: Option<String>,
@@ -213,10 +213,10 @@ pub struct EndpointStorageConf {
     pub endpoint_id: String,
 }
 
-/// A part of controller's config the yb_light_local knows about.
+/// A part of controller's config the yb_amp_local knows about.
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 #[serde(default)]
-pub struct YbLightControllerConf {
+pub struct YbAmpControllerConf {
     /// Heartbeat timeout before marking a node offline
     #[serde(with = "humantime_serde")]
     pub max_offline: Duration,
@@ -227,11 +227,11 @@ pub struct YbLightControllerConf {
     /// YugabyteDB connection for the controller's persistence
     /// layer — the same `[*.yb]` block the pageserver / safekeeper /
     /// endpoint_storage consume (host_ports, user, dbname, sslmode?,
-    /// password_env?). When `Some`, yb_light_local skips the local Postgres
+    /// password_env?). When `Some`, yb_amp_local skips the local Postgres
     /// bootstrap (initdb / pg_ctl / createdb / startup-script tx) and passes
     /// this config straight through to the controller as
     /// `--yb-config`, which builds its connection URL from it internally. This
-    /// is how yb-light points the controller at YugabyteDB; it's also useful
+    /// is how yb-amp points the controller at YugabyteDB; it's also useful
     /// for running multiple controller instances against a shared DB.
     pub yb: Option<ysql_client::YbConnConfig>,
 
@@ -249,7 +249,7 @@ pub struct YbLightControllerConf {
     pub timeline_safekeeper_count: Option<usize>,
 }
 
-impl YbLightControllerConf {
+impl YbAmpControllerConf {
     // Use a shorter pageserver unavailability interval than the default to speed up tests.
     const DEFAULT_MAX_OFFLINE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -259,7 +259,7 @@ impl YbLightControllerConf {
     const DEFAULT_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
 }
 
-impl Default for YbLightControllerConf {
+impl Default for YbAmpControllerConf {
     fn default() -> Self {
         Self {
             max_offline: Self::DEFAULT_MAX_OFFLINE_INTERVAL,
@@ -285,10 +285,10 @@ impl Default for EndpointStorageConf {
     }
 }
 
-// yb_light_local needs to know this subset of pageserver configuration.
-// For legacy reasons, this information is duplicated from `pageserver.toml` into `.yb_light/config`.
+// yb_amp_local needs to know this subset of pageserver configuration.
+// For legacy reasons, this information is duplicated from `pageserver.toml` into `.yb_amp/config`.
 // It can get stale if `pageserver.toml` is changed.
-// TODO(christian): don't store this at all in `.yb_light/config`, always load it from `pageserver.toml`
+// TODO(christian): don't store this at all in `.yb_amp/config`, always load it from `pageserver.toml`
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 #[serde(default, deny_unknown_fields)]
 pub struct PageServerConf {
@@ -331,11 +331,11 @@ impl Default for PageServerConf {
     }
 }
 
-/// The toml that can be passed to `yb_light_local init --config`.
+/// The toml that can be passed to `yb_amp_local init --config`.
 /// This is a subset of the `pageserver.toml` configuration.
 // TODO(christian): use pageserver_api::config::ConfigToml (PR #7656)
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct YbLightLocalInitPageserverConf {
+pub struct YbAmpLocalInitPageserverConf {
     pub id: NodeId,
     pub listen_pg_addr: String,
     pub listen_http_addr: String,
@@ -358,9 +358,9 @@ pub struct YbLightLocalInitPageserverConf {
     pub other: HashMap<String, toml::Value>,
 }
 
-impl From<&YbLightLocalInitPageserverConf> for PageServerConf {
-    fn from(conf: &YbLightLocalInitPageserverConf) -> Self {
-        let YbLightLocalInitPageserverConf {
+impl From<&YbAmpLocalInitPageserverConf> for PageServerConf {
+    fn from(conf: &YbAmpLocalInitPageserverConf) -> Self {
+        let YbAmpLocalInitPageserverConf {
             id,
             listen_pg_addr,
             listen_http_addr,
@@ -529,25 +529,25 @@ impl LocalEnv {
     }
 
     pub fn endpoint_storage_bin(&self) -> PathBuf {
-        self.yb_light_distrib_dir.join("yb-endpoint-storage")
+        self.yb_amp_distrib_dir.join("yb-endpoint-storage")
     }
 
     pub fn pageserver_bin(&self) -> PathBuf {
         // The pageserver binary is `yb-pageserver` (process names
         // carry the yb- prefix; folder + crate are bare `pageserver`).
-        self.yb_light_distrib_dir.join("yb-pageserver")
+        self.yb_amp_distrib_dir.join("yb-pageserver")
     }
 
     pub fn controller_bin(&self) -> PathBuf {
         // The controller binary is always run from the same location as
-        // yb_light_local, so compatibility tests that run an older
+        // yb_amp_local, so compatibility tests that run an older
         // pageserver/safekeeper still get the latest controller.
-        let yb_light_local_bin_dir = env::current_exe().unwrap().parent().unwrap().to_owned();
-        yb_light_local_bin_dir.join("controller")
+        let yb_amp_local_bin_dir = env::current_exe().unwrap().parent().unwrap().to_owned();
+        yb_amp_local_bin_dir.join("controller")
     }
 
     pub fn safekeeper_bin(&self) -> PathBuf {
-        self.yb_light_distrib_dir.join("yb-safekeeper")
+        self.yb_amp_distrib_dir.join("yb-safekeeper")
     }
 
     pub fn endpoints_path(&self) -> PathBuf {
@@ -696,7 +696,8 @@ impl LocalEnv {
                 entry.branch_id
             );
         }
-        controller.set_timeline_branch_name(branch_id, Some(branch_name))
+        controller
+            .set_timeline_branch_name(branch_id, Some(branch_name))
             .await
     }
 
@@ -739,12 +740,12 @@ impl LocalEnv {
     pub fn load_config(repopath: &Path) -> anyhow::Result<Self> {
         if !repopath.exists() {
             bail!(
-                "yb-light config is not found in {}. You need to run 'yb_light_local init' first",
+                "yb-amp config is not found in {}. You need to run 'yb_amp_local init' first",
                 repopath.to_str().unwrap()
             );
         }
 
-        // TODO: check that it looks like a yb-light repository
+        // TODO: check that it looks like a yb-amp repository
 
         // load and parse file
         let config_file_contents = fs::read_to_string(repopath.join("config"))?;
@@ -752,7 +753,7 @@ impl LocalEnv {
         let mut env = {
             let OnDiskConfig {
                 pg_distrib_dir,
-                yb_light_distrib_dir,
+                yb_amp_distrib_dir,
                 default_branch_id,
                 private_key_path,
                 public_key_path,
@@ -772,7 +773,7 @@ impl LocalEnv {
                 base_data_dir: repopath.to_owned(),
                 http_client: HttpClientCache::default(),
                 pg_distrib_dir,
-                yb_light_distrib_dir,
+                yb_amp_distrib_dir,
                 default_branch_id,
                 private_key_path,
                 public_key_path,
@@ -890,7 +891,7 @@ impl LocalEnv {
             &self.base_data_dir,
             &OnDiskConfig {
                 pg_distrib_dir: self.pg_distrib_dir.clone(),
-                yb_light_distrib_dir: self.yb_light_distrib_dir.clone(),
+                yb_amp_distrib_dir: self.yb_amp_distrib_dir.clone(),
                 default_branch_id: self.default_branch_id,
                 private_key_path: self.private_key_path.clone(),
                 public_key_path: self.public_key_path.clone(),
@@ -958,8 +959,8 @@ impl LocalEnv {
         Ok(pem)
     }
 
-    /// Materialize the [`YbLightLocalInitConf`] to disk. Called during [`yb_light_local init`].
-    pub fn init(conf: YbLightLocalInitConf, force: &InitForceMode) -> anyhow::Result<()> {
+    /// Materialize the [`YbAmpLocalInitConf`] to disk. Called during [`yb_amp_local init`].
+    pub fn init(conf: YbAmpLocalInitConf, force: &InitForceMode) -> anyhow::Result<()> {
         let base_path = base_path();
         assert_ne!(base_path, Path::new(""));
         let base_path = &base_path;
@@ -983,7 +984,7 @@ impl LocalEnv {
                     println!("removing all contents of '{}'", base_path.display());
                     // instead of directly calling `remove_dir_all`, we keep the original dir but removing
                     // all contents inside. This helps if the developer symbol links another directory (i.e.,
-                    // S3 local SSD) to the `.yb_light` base directory.
+                    // S3 local SSD) to the `.yb_amp` base directory.
                     for entry in std::fs::read_dir(base_path)? {
                         let entry = entry?;
                         let path = entry.path();
@@ -1000,9 +1001,9 @@ impl LocalEnv {
             fs::create_dir(base_path)?;
         }
 
-        let YbLightLocalInitConf {
+        let YbAmpLocalInitConf {
             pg_distrib_dir,
-            yb_light_distrib_dir,
+            yb_amp_distrib_dir,
             default_branch_id,
             controller,
             pageservers,
@@ -1026,8 +1027,8 @@ impl LocalEnv {
             }
         });
 
-        // Find yb-light binaries.
-        let yb_light_distrib_dir = yb_light_distrib_dir
+        // Find yb-amp binaries.
+        let yb_amp_distrib_dir = yb_amp_distrib_dir
             .unwrap_or_else(|| env::current_exe().unwrap().parent().unwrap().to_owned());
 
         // Generate keypair for JWT.
@@ -1055,7 +1056,7 @@ impl LocalEnv {
             base_data_dir: base_path.clone(),
             http_client: HttpClientCache::default(),
             pg_distrib_dir,
-            yb_light_distrib_dir,
+            yb_amp_distrib_dir,
             default_branch_id: Some(default_branch_id),
             private_key_path,
             public_key_path,
@@ -1088,12 +1089,12 @@ impl LocalEnv {
 }
 
 pub fn base_path() -> PathBuf {
-    let path = match std::env::var_os("YB_LIGHT_REPO_DIR") {
+    let path = match std::env::var_os("YB_AMP_REPO_DIR") {
         Some(val) => {
             let path = PathBuf::from(val);
             if !path.is_absolute() {
                 // repeat the env var in the error because our default is always absolute
-                panic!("YB_LIGHT_REPO_DIR must be an absolute path, got {path:?}");
+                panic!("YB_AMP_REPO_DIR must be an absolute path, got {path:?}");
             }
             path
         }
@@ -1102,7 +1103,7 @@ pub fn base_path() -> PathBuf {
                 // technically this can fail but it's quite unlikeley
                 .expect("determine current directory");
             let pwd_abs = pwd.canonicalize().expect("canonicalize current directory");
-            pwd_abs.join(".yb_light")
+            pwd_abs.join(".yb_amp")
         }
     };
     assert!(path.is_absolute());
@@ -1235,11 +1236,11 @@ mod tests {
             base_data_dir: base,
             http_client: HttpClientCache::default(),
             pg_distrib_dir: PathBuf::from("/pg"),
-            yb_light_distrib_dir: PathBuf::from("/yb-light"),
+            yb_amp_distrib_dir: PathBuf::from("/yb-amp"),
             default_branch_id: None,
             private_key_path: PathBuf::from("auth_private_key.pem"),
             public_key_path: PathBuf::from("auth_public_key.pem"),
-            controller: YbLightControllerConf::default(),
+            controller: YbAmpControllerConf::default(),
             pageservers: Vec::new(),
             safekeepers: Vec::new(),
             pageserver_templates: Vec::new(),

@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/dockerhost"
-	"github.com/yugabyte/yb-amp/test/functional/framework/task"
+	"github.com/yugabyte/amp/test/functional/framework/apps/dockerhost"
+	"github.com/yugabyte/amp/test/functional/framework/task"
 )
 
 // CollectLogs ssh's to host and writes `docker logs` for each container into

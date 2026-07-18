@@ -1,4 +1,4 @@
-# Default values for yb-light-endpoint.
+# Default values for yb-amp-endpoint.
 
 # -- Number of endpoint pods. Each pod is an independent endpoint with its own
 # tenant/timeline; durable state lives in the shared external YugabyteDB.
@@ -6,7 +6,7 @@ replicaCount: 1
 
 image:
   # -- Endpoint image repository (built from deploy/endpoint/Dockerfile).
-  repository: yb-light/neon-endpoint
+  repository: yb-amp/neon-endpoint
   # -- Image tag. Empty string defaults to the chart appVersion.
   tag: ""
   pullPolicy: IfNotPresent
@@ -17,13 +17,13 @@ fullnameOverride: ""
 
 # YugabyteDB connection — the external, durable backend every storage service
 # talks to. This block is rendered verbatim into the ConfigMap consumed by the
-# pod. yb-light does NOT run YugabyteDB itself; point this at your cluster.
+# pod. yb-amp does NOT run YugabyteDB itself; point this at your cluster.
 yugabyte:
   # -- CSV of YB tserver endpoints: "host:port[,host:port,...]" (default port 5433).
   hostPorts: "yb-tserver:5433"
   # -- YB role to connect as.
   user: "yugabyte"
-  # -- YB database that holds all yb-light schemas.
+  # -- YB database that holds all yb-amp schemas.
   dbname: "yb_storage"
   # -- TLS mode: "" or "disable" => no TLS; "require"/"verify-ca"/"verify-full" => TLS.
   sslmode: ""

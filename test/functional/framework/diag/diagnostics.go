@@ -9,8 +9,8 @@ package diag
 import (
 	"context"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/apps"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // logTailLines bounds how many trailing log lines are pulled per pod, so a chatty

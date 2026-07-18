@@ -5,11 +5,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/task"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/task"
 
 	// Blank-imported so their init() registers the built-in tasks.
-	_ "github.com/yugabyte/yb-amp/test/functional/framework/task/tasks"
+	_ "github.com/yugabyte/amp/test/functional/framework/task/tasks"
 )
 
 func newTaskCmd() *cobra.Command {

@@ -56,10 +56,10 @@ The `pg_cctl_*` family is force-initialized at startup via
 `compute_metrics::initialize_metrics()` so the counters appear (at 0) before the first
 event.
 
-## yb-light specifics
+## yb-amp specifics
 
 The metric set is upstream Neon's, inherited unchanged. The only fork-relevant note is in
-`pg_cctl_attached`'s labels: yb-light collapsed `(tenant_id, timeline_id)` into a single
+`pg_cctl_attached`'s labels: yb-amp collapsed `(tenant_id, timeline_id)` into a single
 `branch_id` (and removed sharding), so the branch is keyed by `branch_id` rather than a
 `TenantShardId` or an id pair. Otherwise these counters behave identically against the
 YB-backed pageserver/safekeeper tier.

@@ -1,6 +1,6 @@
 # `RemoteStorage` and the `YbStore` backend
 
-`RemoteStorage` is Neon's abstraction over object stores. In yb-light
+`RemoteStorage` is Neon's abstraction over object stores. In yb-amp
 it's the seam through which the pageserver writes durable bytes to
 "somewhere not the local disk". The cloud backends (S3, Azure Blob, GCS)
 were removed in lane E (commit `f26243aaa`) along with their SDK
@@ -46,7 +46,7 @@ which deserializes a TOML and picks the variant. `RemoteStorageKind` is
 now effectively a unit choice — its only non-test variant is
 `YbStore(ysql_client::YbConnConfig)` (`config.rs:74-77`).
 
-## YbStore: design (new in yb-light)
+## YbStore: design (new in yb-amp)
 
 Source: `compute/libs/remote_storage/src/yb_store.rs`. Implements every `RemoteStorage`
 method against a YugabyteDB table reached via `tokio_postgres`.
@@ -57,7 +57,7 @@ method against a YugabyteDB table reached via `tokio_postgres`.
 CREATE TYPE blob_namespace AS ENUM ('pageserver', 'safekeeper');
 
 CREATE TABLE public.blobs (
-    branch_id        TEXT                  NOT NULL,    -- yb-light branch id (32-hex), "" if not extractable
+    branch_id        TEXT                  NOT NULL,    -- yb-amp branch id (32-hex), "" if not extractable
     namespace        public.blob_namespace NOT NULL,    -- 'pageserver' or 'safekeeper'
     key              TEXT                  NOT NULL,    -- discriminating filename, generation suffix stripped
     generation       INT,                               -- pageserver attach gen; NULL for genless files
@@ -241,12 +241,12 @@ variants' field sets).
 ### Connection handling — `YsqlClient`
 
 `compute/libs/ysql_client/src/lib.rs` defines `YsqlClient`, the auto-reconnecting
-wrapper around `tokio_postgres::Client` used by every yb-light component
+wrapper around `tokio_postgres::Client` used by every yb-amp component
 that talks to YB over the Postgres wire (this crate's `YbStore`, the
 safekeeper's `YbWalStorage`, the pageserver's `PageStore`). It was
 extracted from `remote_storage` into its own crate in commit `f399c049e`
 and is re-exported from `remote_storage::lib.rs:23` for compatibility.
-yb_light_local's `ensure_external_database` does **not** go through
+yb_amp_local's `ensure_external_database` does **not** go through
 `YsqlClient` — it issues raw one-shot `tokio_postgres::Config::connect`
 calls (`control_plane/src/controller.rs:320-350`).
 

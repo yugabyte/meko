@@ -13,7 +13,7 @@ use utils::id::BranchId;
 #[derive(PartialEq, Eq, Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BranchMappings {
-    /// Default branch ID to use with the 'yb_light_local' command line utility, when
+    /// Default branch ID to use with the 'yb_amp_local' command line utility, when
     /// --branch_id is not explicitly specified. This comes from the branches.
     pub default_branch_id: Option<BranchId>,
 

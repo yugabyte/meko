@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // DB release management on the newer /ybdb_release API. A freshly-deployed YBA

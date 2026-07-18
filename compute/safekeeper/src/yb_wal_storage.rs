@@ -224,7 +224,7 @@ impl yb_tsclient::ClientObserver for TsClientLaneObserver {
 
 impl YbWalConn {
     /// Build from the SK config. Returns `None` when
-    /// `yb_storage_conn` isn't set (which yb-light shouldn't be
+    /// `yb_storage_conn` isn't set (which yb-amp shouldn't be
     /// running without — every persistence path needs this).
     pub async fn from_conf(conf: &crate::SafeKeeperConf) -> anyhow::Result<Option<Arc<YbWalConn>>> {
         use anyhow::Context;
@@ -678,7 +678,7 @@ impl YbWalStorage {
         // No post-crash row scrub: `load_write_lsn` already takes the
         // max chunk-end across the table, so any committed-but-unacked
         // rows from a crashed run are absorbed as durable rather than
-        // discarded. yb-light has no truncation-past-durable case that
+        // discarded. yb-amp has no truncation-past-durable case that
         // would justify a DELETE here.
         Ok(me)
     }
@@ -3319,7 +3319,7 @@ mod tests {
     /// Read-past-flush splice (the true root cause of #139). The YB fetch is
     /// blind to the commit/flush frontier: it pulls a whole covering chunk,
     /// including bytes that lie *above* flush and are therefore still
-    /// uncommitted. yb-light WAL is immutable only once committed — a later
+    /// uncommitted. yb-amp WAL is immutable only once committed — a later
     /// walproposer term truncates+rewrites the uncommitted tail. If the reader
     /// keeps serving the chunk it already holds as flush advances, it streams
     /// the pre-rewrite (now-stale) bytes for the `[old_flush, new_flush)`

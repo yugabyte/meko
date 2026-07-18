@@ -2,13 +2,13 @@
 
 ## The one-paragraph version
 
-**amp-controller (ac) is the control plane for YB Light.** It owns the full
+**amp-controller (ac) is the control plane for YB Amp.** It owns the full
 lifecycle of everything a customer cares about — projects, their databases (branches),
 the read/write compute "endpoints" that serve them, and the branching between them —
 and exposes all of it through a single REST API. It keeps its own state in YBDB
-it manages and reuses YB Light's existing storage components rather than 
+it manages and reuses YB Amp's existing storage components rather than 
 reimplementing them. YBLC will also be able to integrate with YBA if we want to 
-add the ability to scale the universe directly from YBLight Controller.
+add the ability to scale the universe directly from YBAmp Controller.
 
 ## 1. Parts of the Foundation
 
@@ -27,7 +27,7 @@ unit YBLC manages. It is built from a handful of parts:
 There is **one Controller per foundation**; the Controller lives *inside* the foundation
 it manages, and a deployment with N foundations has N independent controllers.
 Coordinating *across* foundations (managing a fleet) is the job of a future project and
-not currently in scope of YBLight Controller.
+not currently in scope of YBAmp Controller.
 
 These parts split into two planes — control and data — with the MCP server sitting in
 front of the control plane, and the rule for reaching each is different.

@@ -24,8 +24,8 @@ import (
 	"strings"
 	"time"
 
-	execpkg "github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	sshx "github.com/yugabyte/yb-amp/test/functional/framework/exec/ssh"
+	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
+	sshx "github.com/yugabyte/amp/test/functional/framework/exec/ssh"
 )
 
 // Canonical AWS test-instance settings (AWS_TEST_INSTANCES.md — the shared

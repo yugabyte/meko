@@ -4,7 +4,7 @@
 //! `controller.endpoints` table, not on the local filesystem. Each
 //! endpoint's config (the [`EndpointConf`] struct) is serialized to JSON and
 //! stored as the `spec` column of one row, keyed by endpoint id.
-//! `yb_light_local` creates / lists / deletes endpoints by calling the storage
+//! `yb_amp_local` creates / lists / deletes endpoints by calling the storage
 //! controller's `/control/v1/endpoint` API (see
 //! [`crate::controller::Controller::endpoint_create`] and
 //! friends); the controller is the single source of truth.
@@ -26,7 +26,7 @@
 //! Working-directory contents:
 //!
 //! ```text
-//! .yb_light/endpoints/main/
+//! .yb_amp/endpoints/main/
 //!     compute.log               - log output of `compute_ctl` and `postgres`
 //!     config.json               - passed to `compute_ctl`
 //!     compute_ctl.pid           - pid of the `compute_ctl` process
@@ -82,12 +82,12 @@ use pageserver_api::config::DEFAULT_GRPC_LISTEN_PORT as DEFAULT_PAGESERVER_GRPC_
 use pageserver_api::controller_api::ComputeEndpoint;
 use postgres_connection::parse_host_port;
 
+use crate::controller::Controller;
 use crate::endpoint_storage::EndpointStorage;
 use crate::local_env::LocalEnv;
 use crate::pageserver::PageServerNode;
 use crate::postgresql_conf::PostgresConf;
 use crate::safekeeper::SafekeeperNode;
-use crate::controller::Controller;
 
 // contents of a endpoint.json file
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
@@ -130,7 +130,7 @@ pub struct ComputeControlPlane {
 impl ComputeControlPlane {
     /// Load the current set of endpoints from the controller's
     /// `endpoints` table (via its HTTP API). Replaces the previous scan of the
-    /// `.yb_light/endpoints/` directory.
+    /// `.yb_amp/endpoints/` directory.
     pub async fn load(env: LocalEnv) -> Result<ComputeControlPlane> {
         let records = Controller::from_env(&env)
             .endpoint_list()
@@ -471,7 +471,7 @@ impl Endpoint {
         // room for Postgres to operate. Everything smaller might be not enough for Postgres
         // under load, and can cause errors like 'no unpinned buffers available', see
         // <https://github.com/neondatabase/neon/issues/9956>.
-        // Override via the `--shared-buffers` flag on `yb_light_local endpoint create` (or by
+        // Override via the `--shared-buffers` flag on `yb_amp_local endpoint create` (or by
         // editing endpoint.json) — e.g. `32GB` on benchmarking hosts.
         conf.append(
             "shared_buffers",
@@ -482,7 +482,7 @@ impl Endpoint {
         // individual tests do a lot of concurrent work on underpowered test machines
         conf.append("effective_io_concurrency", "2");
         conf.append("fsync", "off");
-        // yb-light durability lives in YB rows, not in fsync'd PG pages — torn
+        // yb-amp durability lives in YB rows, not in fsync'd PG pages — torn
         // pages can't survive recovery here, so disable full_page_writes to
         // shave the per-checkpoint WAL spike. Override via --pg-setting if a
         // workload genuinely needs it.
@@ -504,7 +504,7 @@ impl Endpoint {
         // When local TLS is off (the default), tell walproposer not to attempt a
         // TLS handshake against the safekeeper. The GUC is prepended verbatim to
         // the libpq conninfo walproposer builds per-safekeeper.
-        // Flip `use_local_tls = true` in .yb_light/config to re-enable.
+        // Flip `use_local_tls = true` in .yb_amp/config to re-enable.
         if !self.env.use_local_tls {
             conf.append("yb_amp.safekeeper_conninfo_options", "sslmode=disable");
         }
@@ -840,7 +840,7 @@ impl Endpoint {
                 endpoint_storage_token: Some(args.endpoint_storage_token),
                 autoprewarm: args.autoprewarm,
                 offload_lfc_interval_seconds: args.offload_lfc_interval_seconds,
-                suspend_timeout_seconds: -1, // Only used in yb_light_local.
+                suspend_timeout_seconds: -1, // Only used in yb_amp_local.
                 databricks_settings: None,
             };
 
@@ -886,7 +886,7 @@ impl Endpoint {
 
         // Launch compute_ctl
         let conn_str = self.connstr("cloud_admin", "postgres");
-        let mut cmd = Command::new(self.env.yb_light_distrib_dir.join("yb-compute-ctl"));
+        let mut cmd = Command::new(self.env.yb_amp_distrib_dir.join("yb-compute-ctl"));
         cmd.args([
             "--external-http-port",
             &self.external_http_address.port().to_string(),
@@ -998,7 +998,7 @@ impl Endpoint {
             tokio::time::sleep(ATTEMPT_INTERVAL).await;
         }
 
-        // disarm the scopeguard, let the child outlive this function (and yb_light_local invoction)
+        // disarm the scopeguard, let the child outlive this function (and yb_amp_local invoction)
         drop(scopeguard::ScopeGuard::into_inner(child));
 
         Ok(())

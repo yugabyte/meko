@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/docker"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/exclusivek8s"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/fake"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/sharedk8s"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/universe"
-	"github.com/yugabyte/yb-amp/test/functional/suites/canary"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/docker"
+	"github.com/yugabyte/amp/test/functional/framework/env/exclusivek8s"
+	"github.com/yugabyte/amp/test/functional/framework/env/fake"
+	"github.com/yugabyte/amp/test/functional/framework/env/sharedk8s"
+	"github.com/yugabyte/amp/test/functional/framework/env/universe"
+	"github.com/yugabyte/amp/test/functional/suites/canary"
 )
 
 // resolveProviderName maps the requested --env-provider (possibly "" / "auto")

@@ -1,4 +1,4 @@
-//! Integration test driver. Brings up one yb_light_local cluster against
+//! Integration test driver. Brings up one yb_amp_local cluster against
 //! an ephemeral YB database, then runs the requested tests in a fixed
 //! order, scanning the pageserver log for corruption markers after each.
 //!

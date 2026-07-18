@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/controller/internal/api"
-	"github.com/yugabyte/yb-amp/controller/internal/config"
-	"github.com/yugabyte/yb-amp/controller/internal/core"
-	"github.com/yugabyte/yb-amp/controller/internal/metrics"
+	"github.com/yugabyte/amp/controller/internal/api"
+	"github.com/yugabyte/amp/controller/internal/config"
+	"github.com/yugabyte/amp/controller/internal/core"
+	"github.com/yugabyte/amp/controller/internal/metrics"
 )
 
 // TestMetricsEndpoint checks that, with a registry wired in, the server exposes

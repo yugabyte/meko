@@ -4,7 +4,7 @@
 // env re-exports them so callers spell them env.Environment / env.EnvProvider.
 package env
 
-import "github.com/yugabyte/yb-amp/test/functional/framework/core"
+import "github.com/yugabyte/amp/test/functional/framework/core"
 
 type (
 	Environment      = core.Environment

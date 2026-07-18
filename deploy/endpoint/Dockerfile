@@ -1,6 +1,6 @@
-# yb-light single-container endpoint image.
+# yb-amp single-container endpoint image.
 #
-# Ships, in one image, every process that makes up a yb-light endpoint:
+# Ships, in one image, every process that makes up a yb-amp endpoint:
 #   - yb-pageserver        (page service, backed by YugabyteDB)
 #   - safekeeper           (WAL, backed by YugabyteDB)
 #   - endpoint_storage     (LFC scratch blobs, backed by YugabyteDB)
@@ -18,7 +18,7 @@
 # Build (from the repo root):
 #   docker build -t yb-amp/yb-amp-endpoint:dev -f deploy/endpoint/Dockerfile .
 #
-# yb-light is Postgres v18 only (compute/vendor/postgres-v18, POSTGRES_VERSIONS=v18).
+# yb-amp is Postgres v18 only (compute/vendor/postgres-v18, POSTGRES_VERSIONS=v18).
 
 ARG REPOSITORY=ghcr.io/neondatabase
 ARG IMAGE=build-tools
@@ -66,13 +66,13 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
          --bin yb-safekeeper \
          --bin yb-endpoint-storage \
          --bin yb-compute-ctl \
-         --bin yb_light_local \
+         --bin yb_amp_local \
     && mkdir -p /home/nonroot/out \
     && cp target/release/yb-pageserver \
           target/release/yb-safekeeper \
           target/release/yb-endpoint-storage \
           target/release/yb-compute-ctl \
-          target/release/yb_light_local \
+          target/release/yb_amp_local \
           /home/nonroot/out/ \
     && mold -run make -j "$(nproc)" -s yb-amp-pg-ext
 
@@ -109,20 +109,20 @@ COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-pageserver     
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-safekeeper          /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-endpoint-storage    /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-compute-ctl         /usr/local/bin/
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb_light_local      /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb_amp_local      /usr/local/bin/
 
 # Postgres v18 install (binaries + the `yb_amp` extension installed by yb-amp-pg-ext).
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
 # Schema migrations, for the optional DEV_PROVISION_SCHEMA path.
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/controller/migrations /usr/local/share/yb-light/migrations
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/controller/migrations /usr/local/share/yb-amp/migrations
 
 # The supervisor.
 COPY --chown=yugabyte:yugabyte deploy/endpoint/supervisor.py /usr/local/bin/yb-endpoint-supervisor
 RUN chmod +x /usr/local/bin/yb-endpoint-supervisor
 
 ENV PG_DISTRIB_DIR=/usr/local \
-    YB_LIGHT_MIGRATIONS_DIR=/usr/local/share/yb-light/migrations \
+    YB_AMP_MIGRATIONS_DIR=/usr/local/share/yb-amp/migrations \
     LD_LIBRARY_PATH=/usr/local/v18/lib \
     PATH=/usr/local/bin:/usr/local/v18/bin:$PATH
 

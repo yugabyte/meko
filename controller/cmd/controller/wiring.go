@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/yugabyte/yb-amp/controller/internal/core"
-	"github.com/yugabyte/yb-amp/controller/internal/task"
+	"github.com/yugabyte/amp/controller/internal/core"
+	"github.com/yugabyte/amp/controller/internal/task"
 )
 
 // Compile-time assertions that the concrete core backends satisfy the task

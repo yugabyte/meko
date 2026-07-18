@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/controller/internal/config"
+	"github.com/yugabyte/amp/controller/internal/config"
 )
 
 func TestParseLevel(t *testing.T) {

@@ -3,7 +3,7 @@ package perf
 import (
 	"fmt"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // Perf BISECT is the N-way variant comparison turned into a SEARCH: it reuses

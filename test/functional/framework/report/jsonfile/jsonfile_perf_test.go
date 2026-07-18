@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // TestJSONFileRecordsPerfDatapoints: the per-result JSON carries the Perf

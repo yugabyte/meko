@@ -193,7 +193,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> AsyncRead for MaybeTlsStream<IO> {
 pub enum AuthType {
     Trust,
     // This mimics postgres's AuthenticationCleartextPassword but instead of password expects JWT
-    YbLightJWT,
+    YbAmpJWT,
 }
 
 impl FromStr for AuthType {
@@ -202,7 +202,7 @@ impl FromStr for AuthType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "Trust" => Ok(Self::Trust),
-            "YbLightJWT" => Ok(Self::YbLightJWT),
+            "YbAmpJWT" => Ok(Self::YbAmpJWT),
             _ => anyhow::bail!("invalid value \"{s}\" for auth type"),
         }
     }
@@ -212,7 +212,7 @@ impl fmt::Display for AuthType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             AuthType::Trust => "Trust",
-            AuthType::YbLightJWT => "YbLightJWT",
+            AuthType::YbAmpJWT => "YbAmpJWT",
         })
     }
 }
@@ -613,7 +613,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> PostgresBackend<IO> {
         if self.state == ProtoState::Authentication {
             match self.framed.read_message().await? {
                 Some(FeMessage::PasswordMessage(m)) => {
-                    assert!(self.auth_type == AuthType::YbLightJWT);
+                    assert!(self.auth_type == AuthType::YbAmpJWT);
 
                     let (_, jwt_response) = m.split_last().context("protocol violation")?;
 
@@ -655,7 +655,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> PostgresBackend<IO> {
 
     /// Process startup packet:
     /// - transition to Established if auth type is trust
-    /// - transition to Authentication if auth type is YbLightJWT.
+    /// - transition to Authentication if auth type is YbAmpJWT.
     /// - or perform TLS handshake -- then need to call this again to receive
     ///   actual startup packet.
     async fn process_startup_message(
@@ -712,7 +712,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> PostgresBackend<IO> {
                             .await?;
                         self.state = ProtoState::Established;
                     }
-                    AuthType::YbLightJWT => {
+                    AuthType::YbAmpJWT => {
                         self.write_message(&BeMessage::AuthenticationCleartextPassword)
                             .await?;
                         self.state = ProtoState::Authentication;

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
-	execpkg "github.com/yugabyte/yb-amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/apps/cloud"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/registry"
+	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // fakeConn is a fake SSH connection to an instance.

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/registry"
 )
 
 func TestResolveEnvMode(t *testing.T) {

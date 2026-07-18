@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/yugabyte/yb-amp/controller/internal/db"
+	"github.com/yugabyte/amp/controller/internal/db"
 )
 
 // PgBackend is the YBDB-backed Backend. Inserts generate the row id in the

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/fake"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/fake"
+	"github.com/yugabyte/amp/test/functional/framework/env/registry"
 )
 
 // A fake-backing setup-capable test, registered only for these CLI tests: its

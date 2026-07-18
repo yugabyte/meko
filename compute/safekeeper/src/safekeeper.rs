@@ -20,7 +20,7 @@ use crate::state::TimelineState;
 use crate::{control_file, wal_storage};
 
 /// The compute ↔ safekeeper wire-protocol version supported by this
-/// safekeeper. yb-light dropped v2 support in Phase 9 Wave 2;
+/// safekeeper. yb-amp dropped v2 support in Phase 9 Wave 2;
 /// walproposer hardcodes v3 too. The constant is retained (rather
 /// than fully eliminated) because the handler still parses the
 /// `START_WAL_PUSH (proto_version 'N', ...)` libpq command and
@@ -136,7 +136,7 @@ impl ProposerAcceptorMessage {
         }
     }
 
-    /// Parse proposer message. yb-light only supports v3; v2 was
+    /// Parse proposer message. yb-amp only supports v3; v2 was
     /// dropped in Phase 9 Wave 2.
     pub fn parse(mut msg_bytes: Bytes, proto_version: u32) -> Result<ProposerAcceptorMessage> {
         if proto_version != SK_PROTO_VERSION_3 {
@@ -262,7 +262,7 @@ pub enum AcceptorProposerMessage {
 }
 
 impl AcceptorProposerMessage {
-    /// Serialize acceptor -> proposer message. yb-light only supports
+    /// Serialize acceptor -> proposer message. yb-amp only supports
     /// v3; v2 was dropped in Phase 9 Wave 2.
     pub fn serialize(&self, buf: &mut BytesMut, proto_version: u32) -> Result<()> {
         if proto_version != SK_PROTO_VERSION_3 {
@@ -467,7 +467,7 @@ where
         );
 
         // We are expected to never attempt to truncate committed data.
-        // yb-light: commit_lsn ≡ flush_lsn, so the invariant is identical to
+        // yb-amp: commit_lsn ≡ flush_lsn, so the invariant is identical to
         // "don't truncate before our durable end-of-WAL". The walproposer
         // derives `start_streaming_at` from the `flush_lsn` we reported in the
         // greeting, so in steady state this is exactly our end-of-WAL.

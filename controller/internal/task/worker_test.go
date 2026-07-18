@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yugabyte/yb-amp/controller/internal/config"
+	"github.com/yugabyte/amp/controller/internal/config"
 )
 
 // These tests cover the Worker (worker.go) against the in-memory MemStore and

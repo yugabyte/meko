@@ -4,7 +4,7 @@ The compute is a vanilla Postgres 18.2 backend (built from `compute/vendor/postg
 with Neon's smgr / extension patches applied. The Postgres source tree itself
 is unmodified; `compute_ctl` is upstream Neon. The `yb_amp` extension at
 `compute/pgxn/yb_amp/` lives in this repo and has had a small number of wire-protocol
-edits (see "Changes in yb-light" below).
+edits (see "Changes in yb-amp" below).
 
 ## Inherited from Neon
 
@@ -30,7 +30,7 @@ reconstructs them on demand.
 
 Neon's WAL push side. Replaces `pg_basebackup`/`walsender` for getting WAL out
 of the compute: pushes each WAL batch to the configured safekeepers, waits for
-a quorum ACK before unblocking the commit. yb-light is hard-wired single-SK;
+a quorum ACK before unblocking the commit. yb-amp is hard-wired single-SK;
 walproposer's multi-SK code paths in `compute/pgxn/yb_amp/walproposer.c`
 (`n_safekeepers`, `MAX_SAFEKEEPERS`, etc.) are vestigial and unexercised.
 
@@ -51,15 +51,15 @@ compute's buffer pool and the pageserver. Knobs:
 
 `compute_ctl` reads `endpoints/<id>/config.json`, generates `postgresql.conf`,
 starts Postgres, runs the post-start catalog migrations, and supervises it.
-None of this changes between upstream Neon and yb-light.
+None of this changes between upstream Neon and yb-amp.
 
 ### Endpoint lifecycle
 
-Endpoints are managed via `yb_light_local endpoint create|start|stop|reconfigure`.
+Endpoints are managed via `yb_amp_local endpoint create|start|stop|reconfigure`.
 The durable registry of endpoints lives in the controller's `endpoints`
 table (column `spec` holds the serialized `EndpointConf`), not on local disk;
-`yb_light_local` drives it through the `/control/v1/endpoint` API. The local
-`.yb_light/endpoints/<id>/` directory is only runtime working state
+`yb_amp_local` drives it through the `/control/v1/endpoint` API. The local
+`.yb_amp/endpoints/<id>/` directory is only runtime working state
 (`config.json`, logs, the pidfile, and `pgdata`), created on `start` and removed
 on `destroy`. The endpoint's `pgdata` directory holds:
 
@@ -75,11 +75,11 @@ on `destroy`. The endpoint's `pgdata` directory holds:
 - User-table heap and index files — mostly *not present*. Reads go through
   `NEON_SMGR` → pageserver.
 
-## Changes in yb-light
+## Changes in yb-amp
 
 The Postgres source (`compute/vendor/postgres-v18/`) and `compute/compute_tools/` are
 untouched. The `yb_amp` extension at `compute/pgxn/yb_amp/` has a small number of
-yb-light-specific edits:
+yb-amp-specific edits:
 
 - `compute/pgxn/yb_amp/walproposer.c` / `walproposer.h` — v2 wire protocol stripped
   (commit `045fce42d`). Only v3 remains on the wire.
@@ -91,7 +91,7 @@ yb-light-specific edits:
 The user-facing wire protocols (getpage RPC, libpq replication) are
 otherwise identical to upstream Neon.
 
-## Implications of yb-light for the compute
+## Implications of yb-amp for the compute
 
 The compute doesn't know YugabyteDB exists. The pageserver and safekeeper it
 talks to happen to be YB-backed underneath; the wire protocols

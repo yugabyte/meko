@@ -568,7 +568,7 @@ impl timeline::handle::TenantManager<TenantManagerTypes> for TenantManagerWrappe
 }
 
 /// Whether to hold the applied GC cutoff guard when processing GetPage requests.
-/// In yb-light this is always `Yes` (GC runs on YB rows, not on local layer
+/// In yb-amp this is always `Yes` (GC runs on YB rows, not on local layer
 /// files, so the original Neon escape valve doesn't apply). Kept as a
 /// single-variant enum so the parameter threading stays explicit.
 #[derive(Debug, Clone, Copy)]
@@ -3117,7 +3117,7 @@ where
         _pgb: &mut PostgresBackend<IO>,
         jwt_response: &[u8],
     ) -> Result<(), QueryError> {
-        // this unwrap is never triggered, because check_auth_jwt only called when auth_type is YbLightJWT
+        // this unwrap is never triggered, because check_auth_jwt only called when auth_type is YbAmpJWT
         // which requires auth to be present
         let data: TokenData<Claims> = self
             .auth
@@ -3372,7 +3372,7 @@ impl GrpcPageServiceHandler {
             // Run the page service.
             .service(
                 proto::PageServiceServer::new(page_service_handler)
-                    // yb-light co-locates the pageserver and compute, so
+                    // yb-amp co-locates the pageserver and compute, so
                     // compressing getpage responses only burns PS CPU for no
                     // bandwidth win. Don't `send_compressed`: responses go out
                     // uncompressed regardless of what the client advertises.
@@ -4046,7 +4046,7 @@ where
 /// gRPC interceptor that decodes branch metadata and stores it as a
 /// BranchId request extension.
 ///
-/// The branch id travels in the `yb-light-branch-id` gRPC metadata header
+/// The branch id travels in the `yb-amp-branch-id` gRPC metadata header
 /// (see `pageserver_page_api`'s client interceptor).
 #[derive(Clone)]
 struct BranchMetadataInterceptor;
@@ -4056,12 +4056,12 @@ impl tonic::service::Interceptor for BranchMetadataInterceptor {
         // Decode the branch ID from the metadata header.
         let branch_id = req
             .metadata()
-            .get("yb-light-branch-id")
-            .ok_or_else(|| tonic::Status::invalid_argument("missing yb-light-branch-id"))?
+            .get("yb-amp-branch-id")
+            .ok_or_else(|| tonic::Status::invalid_argument("missing yb-amp-branch-id"))?
             .to_str()
-            .map_err(|_| tonic::Status::invalid_argument("invalid yb-light-branch-id"))?;
+            .map_err(|_| tonic::Status::invalid_argument("invalid yb-amp-branch-id"))?;
         let branch_id = BranchId::from_str(branch_id)
-            .map_err(|_| tonic::Status::invalid_argument("invalid yb-light-branch-id"))?;
+            .map_err(|_| tonic::Status::invalid_argument("invalid yb-amp-branch-id"))?;
 
         // Stash it in the request.
         let extensions = req.extensions_mut();
@@ -4313,7 +4313,7 @@ mod tests {
                 lsn: Lsn::from_str("0/16ABCDE").unwrap(),
             })
         );
-        // yb-light: BranchId::split is gone.
+        // yb-amp: BranchId::split is gone.
         let cmd = PageServiceCmd::parse("set a = b").unwrap();
         assert_eq!(cmd, PageServiceCmd::Set);
         let cmd = PageServiceCmd::parse("SET foo").unwrap();

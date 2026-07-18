@@ -1,13 +1,13 @@
-# yb-light expected-output variants for pg_regress
+# yb-amp expected-output variants for pg_regress
 
 These are alternative expected-output files for the upstream PostgreSQL
 regression suite run by [`../pg_regress.sh`](../pg_regress.sh) (see issue
-#119), capturing the handful of places where yb-light legitimately diverges
+#119), capturing the handful of places where yb-amp legitimately diverges
 from stock PostgreSQL by design.
 
 ## Why they exist
 
-The suite produces exactly one class of diff against yb-light: **`CREATE
+The suite produces exactly one class of diff against yb-amp: **`CREATE
 TABLESPACE` is unsupported** (rejected in `yb_amp_ddl_handler.c`). That diff
 surfaces in four tests — `test_setup` (which creates `regress_tblspace` up
 front), `tablespace`, `stats`, and `database` — the latter three as direct
@@ -22,7 +22,7 @@ overlays these files into the vendored `expected/` dir at run time and
 removes them on exit, so the submodule stays pristine.
 
 File naming: `<test>_<N>.out`, where `N` is an index not already used by an
-upstream variant (`tablespace` ships `tablespace_1.out`, so the yb-light
+upstream variant (`tablespace` ships `tablespace_1.out`, so the yb-amp
 one is `tablespace_2.out`; the others have no upstream variant, so `_1`).
 
 ## Regenerating

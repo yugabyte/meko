@@ -63,7 +63,7 @@ below.
 | PUT | `/v1/failpoints` | Configure failpoints (testing). Global scope. |
 | GET | `/v1/debug_dump` | Stream a full debug dump of SK state as `application/octet-stream`. Query toggles: `dump_all`, `dump_control_file`, `dump_memory`, `dump_disk_content`, `dump_wal_last_modified`, plus an optional `branch_id` filter. Most toggles default to the value of `dump_all` (default false). |
 
-## yb-light specifics
+## yb-amp specifics
 
 - **Single safekeeper / single-SK quorum**: `commit_lsn` is reported as
   identical to `flush_lsn` in `timeline_status_handler` (no multi-SK quorum

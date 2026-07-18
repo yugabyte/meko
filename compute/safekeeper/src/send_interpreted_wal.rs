@@ -263,7 +263,7 @@ impl InterpretedWalReader {
                     .run_impl(start_pos)
                     .await
                     .inspect_err(|err| match err {
-                        // Recoverable in yb-light: a decode error is almost
+                        // Recoverable in yb-amp: a decode error is almost
                         // always a transient torn read across a WAL
                         // rewrite/truncation window, not durable corruption.
                         // Exit cleanly so the client reconnects and re-reads
@@ -339,7 +339,7 @@ impl InterpretedWalReader {
         let branch_id = self.wal_stream.branch_id;
         let cause = match self.run_impl(start_pos).await {
             Err(err @ InterpretedWalReaderError::Decode(_)) => {
-                // A WAL *decode* error here is, in yb-light, almost always a
+                // A WAL *decode* error here is, in yb-amp, almost always a
                 // TRANSIENT torn read rather than durable corruption: the WAL
                 // read path blends the in-memory `WalCache` with YB
                 // `safekeeper.wals` under concurrent writes, so a record can

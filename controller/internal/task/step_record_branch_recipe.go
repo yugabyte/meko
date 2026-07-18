@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	applog "github.com/yugabyte/yb-amp/controller/internal/log"
+	applog "github.com/yugabyte/amp/controller/internal/log"
 )
 
 // StepRecordBranchRecipe is the task_step.kind for the record_branch_recipe step.

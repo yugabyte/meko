@@ -1,7 +1,7 @@
 openapi: "3.0.2"
 info:
   title: Page Server API
-  description: yb-light Pageserver API
+  description: yb-amp Pageserver API
   version: "1.0"
   license:
     name: "Apache"

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/reap"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	"github.com/yugabyte/yb-amp/test/functional/framework/task"
+	"github.com/yugabyte/amp/test/functional/framework/env/reap"
+	"github.com/yugabyte/amp/test/functional/framework/env/registry"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/task"
 )
 
 // scriptExec is a scripted fake sshTransport: it records every command and

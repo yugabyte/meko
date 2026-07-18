@@ -678,7 +678,7 @@ record_pageserver_feedback(PageserverFeedback *ps_feedback)
 
 	// Begin Hadron: Record any corruption signal from the pageserver first.
 	// databricks_metrics_shared is only allocated when lakebase_mode=true;
-	// otherwise it's NULL and dereferencing it would SEGV. yb-light runs
+	// otherwise it's NULL and dereferencing it would SEGV. yb-amp runs
 	// without lakebase_mode, so skip the metric write when the shmem isn't
 	// initialised.
 	if (ps_feedback->corruption_detected && databricks_metrics_shared != NULL) {

@@ -1,8 +1,8 @@
-# yb-light endpoint: single-container image + Helm chart
+# yb-amp endpoint: single-container image + Helm chart
 
-This directory packages a **yb-light endpoint** as a single container and a
+This directory packages a **yb-amp endpoint** as a single container and a
 Helm chart to run it on Kubernetes. It implements
-[issue #83](https://github.com/yugabyte/yb-light/issues/83).
+[issue #83](https://github.com/yugabyte/amp/issues/83).
 
 ```
 deploy/
@@ -14,7 +14,7 @@ deploy/
     Dockerfile      # the controller layer: the Go controller (see deploy/controller/README.md, #94)
     redeploy.sh     # (re-)deploy the controller via the yb-amp-controller chart (assumes ns/YB/pull-secret exist)
   helm/
-    yb-light-endpoint/     # Helm chart for an endpoint (Deployment + ConfigMap + Secret + Service)
+    yb-amp-endpoint/     # Helm chart for an endpoint (Deployment + ConfigMap + Secret + Service)
     yb-amp-controller/   # Helm chart for the controller layer + the MCP server pod (mcp.enabled) + the amp_ui pod (ui.enabled)
 ```
 
@@ -213,10 +213,10 @@ the bundled provisioning migration itself.
 
 ## Building the image
 
-yb-light is Postgres v18 only. From the **repo root**:
+yb-amp is Postgres v18 only. From the **repo root**:
 
 ```sh
-docker build -t yb-light/neon-endpoint:dev -f deploy/endpoint/Dockerfile .
+docker build -t yb-amp/neon-endpoint:dev -f deploy/endpoint/Dockerfile .
 ```
 
 This compiles patched Postgres v18, the Rust services, and the `neon`
@@ -257,7 +257,7 @@ docker run --rm --name yb-endpoint \
   -e YB_HOST_PORTS=127.0.0.1:5433 \
   -e YB_USER=yugabyte -e YB_PASSWORD=yugabyte \
   -e DEV_PROVISION_SCHEMA=true \
-  yb-light/neon-endpoint:dev
+  yb-amp/neon-endpoint:dev
 
 # then, from the host:
 psql -h 127.0.0.1 -p 55433 -U cloud_admin -d postgres   # password: cloud_admin
@@ -268,17 +268,17 @@ and exposes the compute on the host's `55433`.)
 
 ## Helm chart
 
-See [`helm/yb-light-endpoint`](helm/yb-light-endpoint). It renders a
+See [`helm/yb-amp-endpoint`](helm/yb-amp-endpoint). It renders a
 Deployment (stateless — PGDATA is ephemeral, all durable state is in YB), a
 ConfigMap carrying the YB connection block + endpoint settings, an optional
 Secret for the YB password, and a Service exposing the compute port.
 
 ```sh
-helm install ep deploy/helm/yb-light-endpoint \
+helm install ep deploy/helm/yb-amp-endpoint \
   --set yugabyte.hostPorts=yb-tserver.default.svc:5433 \
   --set yugabyte.password=$YB_PASSWORD \
-  --set image.repository=yb-light/neon-endpoint --set image.tag=dev
+  --set image.repository=yb-amp/neon-endpoint --set image.tag=dev
 
 # unit tests (requires the helm-unittest plugin):
-helm unittest deploy/helm/yb-light-endpoint
+helm unittest deploy/helm/yb-amp-endpoint
 ```

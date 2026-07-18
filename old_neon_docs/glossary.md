@@ -21,7 +21,7 @@ NOTE:It has nothing to do with PostgreSQL pg_basebackup.
 
 ### Branch
 
-We can create branch at certain LSN using `yb_light_local timeline branch` command.
+We can create branch at certain LSN using `yb_amp_local timeline branch` command.
 Each Branch lives in a corresponding timeline[] and has an ancestor[].
 
 

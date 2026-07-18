@@ -61,7 +61,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let main = db::compute_conn(c.compute_port());
 
     step("Apply wal_craft's required postgres config (SIGHUP) + reload");
-    // shared_preload_libraries=yb_amp is already set on the yb-light compute.
+    // shared_preload_libraries=yb_amp is already set on the yb-amp compute.
     db::batch(&main, "ALTER SYSTEM SET wal_keep_size = '50MB'").await?;
     db::batch(&main, "ALTER SYSTEM SET wal_writer_delay = '10s'").await?;
     db::batch(&main, "ALTER SYSTEM SET autovacuum = off").await?;

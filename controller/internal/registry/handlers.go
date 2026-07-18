@@ -10,7 +10,7 @@ import (
 // Register mounts the storage-layer control API on e. The routes sit outside the
 // versioned `/api/v1` product API (and its OpenAPI spec), directly on the echo
 // instance — the same pattern as the health probes and /metrics. They are the
-// surface yb_light_local and the integration harness drive.
+// surface yb_amp_local and the integration harness drive.
 func Register(e *echo.Echo, store *Store) {
 	h := &handlers{store: store}
 

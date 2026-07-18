@@ -1,4 +1,4 @@
-# controller — the YB Light control plane
+# controller — the YB Amp control plane
 
 `controller` is the **amp controller** (the `amp-controller` / `ac`): the control
 plane for a single placement group. It owns the lifecycle of storage pools,
@@ -16,17 +16,17 @@ Design docs (read these first):
   Helm-backed Kubernetes deployer and its Docker sibling, the synchronous
   deploy/retire path, and the `--deploy-driver` selector.
 - [`controller-project-create.md`](architecture/controller-project-create.md) — creating a
-  project (patterned on `yb_light_local`): declare a recipe at create, materialize
+  project (patterned on `yb_amp_local`): declare a recipe at create, materialize
   the storage layer at the first endpoint.
 - [`ac-mcp.md`](architecture/ac-mcp.md) — the MCP server (`controller/mcp/`): a
   FastMCP wrapper that exposes the REST API as MCP tools for AI agents.
 
-It started as the **base framework** ([#84](https://github.com/yugabyte/yb-light/issues/84)):
+It started as the **base framework** ([#84](https://github.com/yugabyte/amp/issues/84)):
 a runnable skeleton — `slog` logging, the write-ahead task framework, and the
 YBDB connection + initial migrations. On top of it, the **initial APIs**
-([#92](https://github.com/yugabyte/yb-light/issues/92)) add the OpenAPI v3-driven
+([#92](https://github.com/yugabyte/amp/issues/92)) add the OpenAPI v3-driven
 REST surface (users, storage pools, projects, branches) below. The **Kubernetes endpoint
-deploy** ([#108](https://github.com/yugabyte/yb-light/issues/108)) adds endpoints
+deploy** ([#108](https://github.com/yugabyte/amp/issues/108)) adds endpoints
 as a resource: `createEndpoint` synchronously shells out to the configured driver
 — Docker by default, or Helm on Kubernetes via `--deploy-driver kubernetes` — to
 bring up one pod/container per endpoint (see
@@ -111,7 +111,7 @@ The controller owns cluster control for the storage layer: **generation authorit
 **registries**, and **provisioning** of the shared `yb_storage` database (all its
 schemas) on startup. It serves these as an HTTP surface (`/control/v1/...`,
 `/debug/v1/attach-hook`, `/ready`) on the same listener as the versioned `/api/v1`
-product API; the endpoint pods and the `yb_light_local` dev harness drive it. State
+product API; the endpoint pods and the `yb_amp_local` dev harness drive it. State
 lives in the `registry` schema of `yb_storage`. See
 [`architecture/sc-integration.md`](architecture/sc-integration.md) for the design.
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/task"
+	"github.com/yugabyte/amp/test/functional/framework/task"
 )
 
 func TestRegistryAddGetList(t *testing.T) {

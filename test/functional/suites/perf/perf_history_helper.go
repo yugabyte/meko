@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/suites/perf/history"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/suites/perf/history"
 )
 
 // Historical perf tracking. Each perf run APPENDS its aggregate to a run-history

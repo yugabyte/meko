@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 func writeFile(t *testing.T, dir, name, content string) string {

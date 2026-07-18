@@ -5,7 +5,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // A/B (N-way) variant comparison is the MEANINGFUL perf comparison: it runs the

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yugabyte/yb-amp/controller/internal/config"
-	applog "github.com/yugabyte/yb-amp/controller/internal/log"
+	"github.com/yugabyte/amp/controller/internal/config"
+	applog "github.com/yugabyte/amp/controller/internal/log"
 )
 
 // maxClaimBackoff caps the exponential backoff between failed claim attempts, so

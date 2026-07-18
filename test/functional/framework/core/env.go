@@ -3,7 +3,7 @@ package core
 import (
 	"context"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // EnvHandles are the concrete identifiers of a live environment, used for
@@ -20,7 +20,7 @@ type ArtifactSink interface {
 	Add(name, kind string, content []byte) error
 }
 
-// Environment is a handle to a running yb-light target. Produced by an
+// Environment is a handle to a running yb-amp target. Produced by an
 // EnvProvider.
 type Environment interface {
 	ControllerURL() string // "" for shapes without a controller

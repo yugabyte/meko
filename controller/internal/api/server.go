@@ -16,12 +16,12 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/yugabyte/yb-amp/controller/internal/config"
-	"github.com/yugabyte/yb-amp/controller/internal/core"
-	applog "github.com/yugabyte/yb-amp/controller/internal/log"
-	"github.com/yugabyte/yb-amp/controller/internal/metrics"
-	"github.com/yugabyte/yb-amp/controller/internal/registry"
-	"github.com/yugabyte/yb-amp/controller/internal/task"
+	"github.com/yugabyte/amp/controller/internal/config"
+	"github.com/yugabyte/amp/controller/internal/core"
+	applog "github.com/yugabyte/amp/controller/internal/log"
+	"github.com/yugabyte/amp/controller/internal/metrics"
+	"github.com/yugabyte/amp/controller/internal/registry"
+	"github.com/yugabyte/amp/controller/internal/task"
 )
 
 // apiBaseURL is where the generated routes are mounted (the spec's server URL).
@@ -70,7 +70,7 @@ func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, pr
 	})
 
 	// The storage-layer control surface (attach-hook + node/branch/endpoint
-	// registries) that endpoint pods, yb_light_local, and the integration harness
+	// registries) that endpoint pods, yb_amp_local, and the integration harness
 	// drive. Mounted outside the versioned API and the spec.
 	if regStore != nil {
 		registry.Register(e, regStore)

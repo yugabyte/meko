@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::background_process;
-use crate::local_env::{LocalEnv, YbLightControllerConf};
+use crate::local_env::{LocalEnv, YbAmpControllerConf};
 
 // The controller's metadata DB lives in YB; talk to it
 // through the YB smart-driver fork so `build_yb_rustls_connector`
@@ -42,7 +42,7 @@ pub struct Controller {
     env: LocalEnv,
     private_key: Option<Pem>,
     client: reqwest::Client,
-    config: YbLightControllerConf,
+    config: YbAmpControllerConf,
 
     // The listen port is learned when starting the controller,
     // hence the use of OnceLock to init it at the right time.
@@ -61,13 +61,13 @@ const CONTROLLER_POSTGRES_VERSION: PgMajorVersion = PgMajorVersion::PG18;
 // all in the same DB.
 const DB_NAME: &str = "yb_storage";
 
-pub struct YbLightControllerStartArgs {
+pub struct YbAmpControllerStartArgs {
     pub instance_id: u8,
     pub base_port: Option<u16>,
     pub start_timeout: humantime::Duration,
 }
 
-impl YbLightControllerStartArgs {
+impl YbAmpControllerStartArgs {
     pub fn with_default_instance_id(start_timeout: humantime::Duration) -> Self {
         Self {
             instance_id: 1,
@@ -77,12 +77,12 @@ impl YbLightControllerStartArgs {
     }
 }
 
-pub struct YbLightControllerStopArgs {
+pub struct YbAmpControllerStopArgs {
     pub instance_id: u8,
     pub immediate: bool,
 }
 
-impl YbLightControllerStopArgs {
+impl YbAmpControllerStopArgs {
     pub fn with_default_instance_id(immediate: bool) -> Self {
         Self {
             instance_id: 1,
@@ -129,7 +129,7 @@ impl Controller {
             .unwrap_or(AuthType::Trust);
         let private_key = match http_auth_type {
             AuthType::Trust => None,
-            AuthType::YbLightJWT => {
+            AuthType::YbAmpJWT => {
                 let private_key_path = env.get_private_key_path();
                 let private_key =
                     pem::parse(fs::read(private_key_path).expect("failed to read private key"))
@@ -224,7 +224,7 @@ impl Controller {
     ///
     /// This function is equivalent to the `diesel setup` command in the diesel CLI.  We implement
     /// the same steps by hand to avoid imposing a dependency on installing diesel-cli for developers
-    /// who just want to run `cargo yb_light_local` without knowing about diesel.
+    /// who just want to run `cargo yb_amp_local` without knowing about diesel.
     ///
     /// Returns the database url
     pub async fn setup_database(&self, postgres_port: u16) -> anyhow::Result<String> {
@@ -271,7 +271,7 @@ impl Controller {
     }
 
     /// Provision the external (YugabyteDB) cluster before the rest of
-    /// yb_light_local starts: ensure the `yb_storage` database
+    /// yb_amp_local starts: ensure the `yb_storage` database
     /// (the controller migrations populate the tables), its `blob_namespace`
     /// database with its `blob_namespace` type + `blobs` / `wals` tables
     /// (operator schema that pageserver+safekeeper `YbStore` writes to)
@@ -284,8 +284,8 @@ impl Controller {
         let url = yb
             .to_database_url()
             .context("building database URL from controller.yb")?;
-        let target = tokio_postgres::Config::from_str(&url)
-            .context("parsing controller.yb database URL")?;
+        let target =
+            tokio_postgres::Config::from_str(&url).context("parsing controller.yb database URL")?;
         let controller_db = yb.dbname.clone();
 
         // The controller's tables live in the `registry`
@@ -433,7 +433,7 @@ impl Controller {
     /// has the pageserver/safekeeper schema in place. Callers must run
     /// this **before** spawning pageserver / safekeeper / endpoint_storage
     /// since those bind to `yb_storage` immediately on start. Without
-    /// this barrier, a fresh `yb_light_local start` races controller's
+    /// this barrier, a fresh `yb_amp_local start` races controller's
     /// own database provisioning against the pageserver's first connect
     /// and the pageserver crashes with `database "yb_storage" does not
     /// exist`. See #49.
@@ -444,7 +444,7 @@ impl Controller {
         Ok(())
     }
 
-    pub async fn start(&self, start_args: YbLightControllerStartArgs) -> anyhow::Result<()> {
+    pub async fn start(&self, start_args: YbAmpControllerStartArgs) -> anyhow::Result<()> {
         let instance_dir = self.controller_instance_dir(start_args.instance_id);
         if let Err(err) = tokio::fs::create_dir(&instance_dir).await {
             if err.kind() != std::io::ErrorKind::AlreadyExists {
@@ -464,9 +464,9 @@ impl Controller {
         let scheme = listen_url.scheme();
         let host = listen_url.host_str().unwrap();
 
-        // If `yb` is set in YbLightControllerConf, the operator
+        // If `yb` is set in YbAmpControllerConf, the operator
         // is pointing the controller at an externally-managed Postgres (in
-        // yb-light: a YugabyteDB cluster). In that case we skip the local-PG
+        // yb-amp: a YugabyteDB cluster). In that case we skip the local-PG
         // bootstrap entirely.
         let external_yb = self.config.yb.clone();
 
@@ -481,7 +481,7 @@ impl Controller {
                 (base_port, port)
             }
             (Some(_), None) => {
-                anyhow::bail!("--base-port requires YbLightControllerConf::yb");
+                anyhow::bail!("--base-port requires YbAmpControllerConf::yb");
             }
             (None, _) => {
                 let port = listen_url.port().unwrap();
@@ -556,7 +556,7 @@ impl Controller {
             //   the controller we don't want a slow local disk to interfere with that.
             //
             // NB: it's important that we rewrite this file on each start command so we propagate changes
-            // from `LocalEnv`'s config file (`.yb_light/config`).
+            // from `LocalEnv`'s config file (`.yb_amp/config`).
             tokio::fs::write(
                 &pg_data_path.join("postgresql.conf"),
                 format!("port = {postgres_port}\nfsync=off\n"),
@@ -620,10 +620,7 @@ impl Controller {
         // We support running a startup SQL script to fiddle with the database before we launch controller.
         // This is used by the test suite — only meaningful against the local-PG bootstrap path.
         if external_yb.is_none() {
-            let startup_script_path = self
-                .env
-                .base_data_dir
-                .join("controller_db.startup.sql");
+            let startup_script_path = self.env.base_data_dir.join("controller_db.startup.sql");
             let startup_script = match tokio::fs::read_to_string(&startup_script_path).await {
                 Ok(script) => {
                     tokio::fs::remove_file(startup_script_path).await?;
@@ -692,7 +689,7 @@ impl Controller {
         Ok(())
     }
 
-    pub async fn stop(&self, stop_args: YbLightControllerStopArgs) -> anyhow::Result<()> {
+    pub async fn stop(&self, stop_args: YbAmpControllerStopArgs) -> anyhow::Result<()> {
         background_process::stop_process(
             stop_args.immediate,
             COMMAND,
@@ -722,7 +719,7 @@ impl Controller {
             }
         }
 
-        // When pointed at an external database (e.g. YugabyteDB), yb_light_local
+        // When pointed at an external database (e.g. YugabyteDB), yb_amp_local
         // never started a local Postgres, so there's nothing to stop here.
         if self.config.yb.is_some() {
             return Ok(());
@@ -1027,7 +1024,7 @@ impl Controller {
 
     /// Drop a branch: delete all of the branch's endpoint records, discard
     /// any un-materialized init recipe, and mark the branch dropped. The
-    /// caller (`yb_light_local timeline drop`) stops the compute processes
+    /// caller (`yb_amp_local timeline drop`) stops the compute processes
     /// first. Idempotent.
     pub async fn timeline_drop(&self, branch_id: BranchId) -> anyhow::Result<()> {
         self.dispatch::<(), ()>(

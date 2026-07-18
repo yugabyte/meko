@@ -1,4 +1,4 @@
-// Command controller is the YB Light control plane (the "amp controller" /
+// Command controller is the YB Amp control plane (the "amp controller" /
 // amp-controller). See controller/architecture/ac-highlvl.md and
 // controller/architecture/amp-controller.md.
 package main
@@ -17,17 +17,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yugabyte/yb-amp/controller/internal/api"
-	"github.com/yugabyte/yb-amp/controller/internal/config"
-	"github.com/yugabyte/yb-amp/controller/internal/core"
-	"github.com/yugabyte/yb-amp/controller/internal/db"
-	"github.com/yugabyte/yb-amp/controller/internal/deploy"
-	applog "github.com/yugabyte/yb-amp/controller/internal/log"
-	"github.com/yugabyte/yb-amp/controller/internal/metrics"
-	"github.com/yugabyte/yb-amp/controller/internal/node"
-	"github.com/yugabyte/yb-amp/controller/internal/registry"
-	"github.com/yugabyte/yb-amp/controller/internal/task"
-	"github.com/yugabyte/yb-amp/controller/internal/version"
+	"github.com/yugabyte/amp/controller/internal/api"
+	"github.com/yugabyte/amp/controller/internal/config"
+	"github.com/yugabyte/amp/controller/internal/core"
+	"github.com/yugabyte/amp/controller/internal/db"
+	"github.com/yugabyte/amp/controller/internal/deploy"
+	applog "github.com/yugabyte/amp/controller/internal/log"
+	"github.com/yugabyte/amp/controller/internal/metrics"
+	"github.com/yugabyte/amp/controller/internal/node"
+	"github.com/yugabyte/amp/controller/internal/registry"
+	"github.com/yugabyte/amp/controller/internal/task"
+	"github.com/yugabyte/amp/controller/internal/version"
 )
 
 func main() {

@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/workloadgen"
+	"github.com/yugabyte/amp/test/functional/framework/apps/workloadgen"
 )
 
 // --- fake Querier ---

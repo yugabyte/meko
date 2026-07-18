@@ -8,9 +8,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/dockerhost"
-	execpkg "github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/apps/dockerhost"
+	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // --- fakes shared by both shapes ---

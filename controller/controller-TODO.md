@@ -10,7 +10,7 @@ the bottom). They are the prerequisites for putting AMP in front of external use
 
 ---
 
-## 1. User authentication for the control plane — [#189](https://github.com/yugabyte/yb-amp/issues/189)
+## 1. User authentication for the control plane — [#189](https://github.com/yugabyte/amp/issues/189)
 
 The control plane has **no auth today**. `controller/internal/api/openapi_spec.yaml:11`
 says it outright: "there is no auth yet (the user/grant model is designed but
@@ -29,7 +29,7 @@ LDAP, data plane). #189 is auth *to the control plane* (API / UI / MCP).
 
 ---
 
-## 2. MCP server wrapper around the AMP API — [#114](https://github.com/yugabyte/yb-amp/issues/114) (already tracked)
+## 2. MCP server wrapper around the AMP API — [#114](https://github.com/yugabyte/amp/issues/114) (already tracked)
 
 The MCP server itself is tracked by **#114** (thin CRUD wrapper over storage pools,
 timelines, endpoints; modeled on the meko MCP server).
@@ -41,11 +41,11 @@ of the foundation installer (#193) and noted in a comment on #114. Auth for it i
 
 ---
 
-## 3. Idle CPU footprint of an endpoint pod — [#190](https://github.com/yugabyte/yb-amp/issues/190)
+## 3. Idle CPU footprint of an endpoint pod — [#190](https://github.com/yugabyte/amp/issues/190)
 
 To plan fleet density (how many extra / pre-warmed endpoints we can pack — feeds #192) we
 need the real idle cost of one endpoint pod. The chart currently sets **no requests /
-limits** (`resources: {}` in `deploy/helm/yb-light-endpoint/values.yaml`).
+limits** (`resources: {}` in `deploy/helm/yb-amp-endpoint/values.yaml`).
 
 One endpoint = one pod running the **full co-located stack** under
 `deploy/endpoint/supervisor.py` (pageserver, safekeeper, endpoint_storage, compute_ctl,
@@ -56,10 +56,10 @@ bind before CPU does — so plan "pods/node first, CPU second", but quantify bot
 
 ---
 
-## 4. Configurable endpoint connectivity — [#191](https://github.com/yugabyte/yb-amp/issues/191)
+## 4. Configurable endpoint connectivity — [#191](https://github.com/yugabyte/amp/issues/191)
 
 Today connectivity is per-endpoint only: each endpoint gets its own k8s `Service`
-(`deploy/helm/yb-light-endpoint/templates/service.yaml`), `ClusterIP` by default with
+(`deploy/helm/yb-amp-endpoint/templates/service.yaml`), `ClusterIP` by default with
 `NodePort` / `LoadBalancer` selectable. No external front door, no shared routing layer —
 a LoadBalancer-per-endpoint won't scale to a large fleet.
 
@@ -72,7 +72,7 @@ Two directions, make the mechanism **configurable** per deployment:
 
 ---
 
-## 5. Make endpoint creation appear instant — [#192](https://github.com/yugabyte/yb-amp/issues/192) (epic)
+## 5. Make endpoint creation appear instant — [#192](https://github.com/yugabyte/amp/issues/192) (epic)
 
 Customer "create endpoint" should feel instant. Today it provisions a fresh pod end-to-end
 (schedule + image pull + bring-up + bootstrap) via
@@ -96,7 +96,7 @@ create-endpoint rework · density input from #190.
 
 ---
 
-## 6. Foundation install workflow — [#193](https://github.com/yugabyte/yb-amp/issues/193)
+## 6. Foundation install workflow — [#193](https://github.com/yugabyte/amp/issues/193)
 
 A repeatable one-shot install of a whole AMP **foundation** onto a fresh k8s cluster
 (somewhat outside the controller proper — it's the bootstrap that creates the controller).
@@ -108,15 +108,15 @@ own pod) · UI (`amp_ui`, own pod) · namespace + RBAC + pull secret + networkin
 
 **Gap today:** the `deploy/helm/yb-amp-controller` chart now packages the controller, the
 MCP server, and the `amp_ui` UI as their own pods (RBAC + Deployments + Services), and the
-endpoint chart (`deploy/helm/yb-light-endpoint`) covers endpoints — but
+endpoint chart (`deploy/helm/yb-amp-endpoint`) covers endpoints — but
 `deploy/controller/redeploy.sh` still assumes the namespace, backing YB, and pull secret
 already exist. `deploy/up.sh` stands up a *single-node* YB + namespace + pull secret for dev;
-no single workflow provisions the productized RF3 foundation. Related: #81 (yb_light_local
+no single workflow provisions the productized RF3 foundation. Related: #81 (yb_amp_local
 deploy self-sufficiency).
 
 ---
 
-## 7. Integrate the controller in-process — [#202](https://github.com/yugabyte/yb-amp/issues/202) — DONE
+## 7. Integrate the controller in-process — [#202](https://github.com/yugabyte/amp/issues/202) — DONE
 
 The `storage_controller/` crate is removed. The controller now owns the
 storage-layer control functions in Go: generation authority (attach-hook), the
@@ -125,7 +125,7 @@ via its golang-migrate migrations. It serves the pod-facing surface
 (`/control/v1/...`, `/debug/v1/attach-hook`, `/ready`) on its API listener —
 `controller/internal/registry/` — and the task framework's recipe store is an
 in-process call over the same tables (`controller/architecture/sc-integration.md`).
-`yb_light_local` and the integration harness launch the `controller` binary in
+`yb_amp_local` and the integration harness launch the `controller` binary in
 place of the old `storage_controller`. One binary, one process, one migration system.
 
 ---

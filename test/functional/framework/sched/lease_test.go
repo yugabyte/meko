@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/sched"
+	"github.com/yugabyte/amp/test/functional/framework/sched"
 )
 
 func TestLeaseAcquireBlocksAndReleaseUnblocks(t *testing.T) {

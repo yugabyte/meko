@@ -4,7 +4,7 @@
 **Last updated:** 2026-06-18
 
 How the Amp Controller ("cAmp") creates a new project (and its default branch). It
-follows the `yb_light_local` workflow (`control_plane/src/bin/yb_light_local.rs`),
+follows the `yb_amp_local` workflow (`control_plane/src/bin/yb_amp_local.rs`),
 expressed in cAmp's resource model. **Precondition:** the storage pool already exists.
 
 ## Resource model
@@ -88,7 +88,7 @@ endpoint materializes the branch, and cAmp finalizes.
 ## What actually creates the branch's storage
 
 The **endpoint's pageserver** runs `initdb` (driven by `BOOTSTRAP=true`) — the
-same role `yb_light_local`'s pageserver `Bootstrap` identity plays. The storage
+same role `yb_amp_local`'s pageserver `Bootstrap` identity plays. The storage
 controller is **not** asked to create the branch (there is no branch-create
 call); it is *told* the branch exists, through the branch `register` route. A
 forked branch (`parent_branch_id` set, so the recipe's
@@ -128,9 +128,9 @@ Pre-fork data stays under the ancestor's `branch_id` and is served via
 lineage-aware reads; nothing is copied. As with create, the branch's recipe
 writes are synchronous today and move onto the task framework under #113.
 
-## `yb_light_local` → Amp Controller
+## `yb_amp_local` → Amp Controller
 
-| `yb_light_local` | Amp Controller (cAmp) |
+| `yb_amp_local` | Amp Controller (cAmp) |
 |---|---|
 | `record_pending_timeline_init` (per branch) | `create-project` → `project` + default `branch` (cAmp DB) **and** the controller's pending init, keyed by `branch_id` (`POST /control/v1/branch/{branch_id}/pending_init`). There is no separate tenant-create step anymore — a root branch is just a pending `Bootstrap` init. |
 | control plane starts SK | the **endpoint** starts its safekeeper (not registered with the controller — see #171) |

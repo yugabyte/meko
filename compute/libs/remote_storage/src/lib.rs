@@ -6,7 +6,7 @@
 //!     (the only production / dev backend for yb-pageserver)
 //!
 //! Cloud-storage backends (S3, Azure Blob, GCS) were removed in lane E
-//! along with their integration tests and SDK dependencies — yb-light
+//! along with their integration tests and SDK dependencies — yb-amp
 //! never reads or writes to a cloud object store. The dev-only LocalFs
 //! backend was dropped subsequently; everything writes through YbStore.
 //!
@@ -522,7 +522,7 @@ impl Debug for Download {
     }
 }
 
-/// Every storage backend that yb-light supports.
+/// Every storage backend that yb-amp supports.
 /// Serves as a simple way to pass around the [`RemoteStorage`] without
 /// dealing with generics. Post lane E + LocalFs removal, only YbStore
 /// (real backend) + Unreliable (test wrapper) survive — the cloud

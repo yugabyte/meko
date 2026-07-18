@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud"
-	awscloud "github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud/aws"
-	gcpcloud "github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud/gcp"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/apps/cloud"
+	awscloud "github.com/yugabyte/amp/test/functional/framework/apps/cloud/aws"
+	gcpcloud "github.com/yugabyte/amp/test/functional/framework/apps/cloud/gcp"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 func loadConfig(t *testing.T, overrides ...string) *core.Config {

@@ -13,9 +13,9 @@
 package presets
 
 import (
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/suites/features"
-	"github.com/yugabyte/yb-amp/test/functional/suites/perf"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/suites/features"
+	"github.com/yugabyte/amp/test/functional/suites/perf"
 )
 
 // preset registers one setup-only test: Setup stands up the given shape via the

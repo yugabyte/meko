@@ -40,7 +40,7 @@ pub struct TimelinePersistentState {
 }
 
 impl TimelinePersistentState {
-    /// yb-light: `commit_lsn` collapsed into `flush_lsn`, so creation only
+    /// yb-amp: `commit_lsn` collapsed into `flush_lsn`, so creation only
     /// needs `start_lsn`.
     pub fn new(
         branch_id: &BranchId,

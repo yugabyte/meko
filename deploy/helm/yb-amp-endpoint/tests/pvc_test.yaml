@@ -20,7 +20,7 @@ tests:
           of: PersistentVolumeClaim
       - equal:
           path: metadata.name
-          value: RELEASE-NAME-yb-light-endpoint-data
+          value: RELEASE-NAME-yb-amp-endpoint-data
       - equal:
           path: spec.storageClassName
           value: yb-standard

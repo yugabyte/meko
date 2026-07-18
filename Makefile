@@ -26,7 +26,7 @@ BUILD_DIR := $(ROOT_PROJECT_DIR)/build
 AMP_VERSION ?= $(shell $(ROOT_PROJECT_DIR)/scripts/version.sh binary-version)
 AMP_GIT_COMMIT ?= $(shell git -C $(ROOT_PROJECT_DIR) rev-parse --short HEAD 2>/dev/null || echo unknown)
 AMP_BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-CONTROLLER_VERSION_PKG := github.com/yugabyte/yb-amp/controller/internal/version
+CONTROLLER_VERSION_PKG := github.com/yugabyte/amp/controller/internal/version
 CONTROLLER_LDFLAGS := -X '$(CONTROLLER_VERSION_PKG).Version=$(AMP_VERSION)' -X '$(CONTROLLER_VERSION_PKG).Commit=$(AMP_GIT_COMMIT)' -X '$(CONTROLLER_VERSION_PKG).BuildDate=$(AMP_BUILD_DATE)'
 
 ICU_PREFIX_DIR := /usr/local/icu
@@ -115,17 +115,17 @@ CARGO_CMD_PREFIX += CARGO_TERM_PROGRESS_WHEN=never CI=1
 CACHEDIR_TAG_CONTENTS := "Signature: 8a477f597d28d172789f06886806bc55"
 
 #
-# Top level Makefile to build ybLight and PostgreSQL
+# Top level Makefile to build ybAmp and PostgreSQL
 #
 .PHONY: all
 all: yb-amp postgres-install yb-amp-pg-ext
 
-### ybLight Rust bits
+### ybAmp Rust bits
 #
 # The 'postgres_ffi' crate depends on the Postgres headers.
 .PHONY: yb-amp
 yb-amp: postgres-headers-install walproposer-lib cargo-target-dir
-	+@echo "Compiling ybLight"
+	+@echo "Compiling ybAmp"
 	$(CARGO_CMD_PREFIX) cargo build $(CARGO_BUILD_FLAGS) $(CARGO_PROFILE)
 
 .PHONY: cargo-target-dir
@@ -198,13 +198,13 @@ controller-test:
 controller-vet:
 	go -C controller vet ./...
 
-# Chart tests for the compute (yb-light-endpoint) chart: the helm-unittest
+# Chart tests for the compute (yb-amp-endpoint) chart: the helm-unittest
 # suites plus the Guaranteed-QoS guardrail, which asserts every container in the
 # compute pod sets resources.requests == resources.limits (needs helm + yq).
 .PHONY: endpoint-chart-test
-endpoint-chart-test:  ## helm-unittest + Guaranteed-QoS guardrail for yb-light-endpoint
-	helm unittest deploy/helm/yb-light-endpoint
-	bash deploy/helm/yb-light-endpoint/tests/guaranteed-qos.sh
+endpoint-chart-test:  ## helm-unittest + Guaranteed-QoS guardrail for yb-amp-endpoint
+	helm unittest deploy/helm/yb-amp-endpoint
+	bash deploy/helm/yb-amp-endpoint/tests/guaranteed-qos.sh
 
 # Regenerate the API code (models, echo server, Go client) from the OpenAPI
 # spec (controller/internal/api/openapi_spec.yaml). Run after editing the spec; the

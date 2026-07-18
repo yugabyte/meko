@@ -2478,7 +2478,7 @@ mod tests {
                 };
                 let store = PageStore::connect(cfg, "pw_test", true)
                     .await
-                    .expect("connect to local YB; run `yb_light_local init && start` first to migrate the schema");
+                    .expect("connect to local YB; run `yb_amp_local init && start` first to migrate the schema");
                 Arc::new(store)
             })
             .await

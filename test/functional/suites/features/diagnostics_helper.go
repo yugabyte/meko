@@ -3,8 +3,8 @@ package features
 import (
 	"context"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/diag"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/diag"
 )
 
 // attachSink records every collected blob on the result AND persists its bytes

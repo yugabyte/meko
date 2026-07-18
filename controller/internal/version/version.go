@@ -6,7 +6,7 @@
 // Version.
 package version
 
-// Stamped via -ldflags -X github.com/yugabyte/yb-amp/controller/internal/version.<var>=<value>.
+// Stamped via -ldflags -X github.com/yugabyte/amp/controller/internal/version.<var>=<value>.
 var (
 	// Version is the hybrid CalVer version from the repo-root VERSION file
 	// (MAJOR.YYMMDD.PATCH, e.g. "0.260714.0").

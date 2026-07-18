@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # TPC-C (W5, W6) — drives the existing tpcc-stage benchmark.
-# Usage: ./tpcc-run.sh ybLight|aurora W5|W6 [create|load|execute] ...
+# Usage: ./tpcc-run.sh ybAmp|aurora W5|W6 [create|load|execute] ...
 #   With no phase: runs create → load → execute
 #   With phase list: runs only those phases (idempotent reuse)
 #
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: $0 ybLight|aurora W5|W6 [create|load|execute] ..." >&2
+  echo "Usage: $0 ybAmp|aurora W5|W6 [create|load|execute] ..." >&2
   exit 1
 fi
 
@@ -32,7 +32,7 @@ label="${LABEL[$test_id]}"
 # Per-target XML — copy from a template, fix jdbcURL and warehouses.
 xml=~/tpcc-stage/tpcc/config/workload_${target}_${test_id}.xml
 case "$target" in
-  ybLight*)  jdbc="jdbc:postgresql://$PGHOST:$PGPORT/tpcc?sslmode=disable&reWriteBatchedInserts=true&tcpKeepAlive=true"; user="cloud_admin" ;;
+  ybAmp*)  jdbc="jdbc:postgresql://$PGHOST:$PGPORT/tpcc?sslmode=disable&reWriteBatchedInserts=true&tcpKeepAlive=true"; user="cloud_admin" ;;
   aurora*)  jdbc="jdbc:postgresql://$PGHOST:$PGPORT/tpcc?sslmode=require&reWriteBatchedInserts=true&tcpKeepAlive=true"; user="postgres" ;;
 esac
 
@@ -73,7 +73,7 @@ for phase in "${phases[@]}"; do
         2>&1 | tee "$outdir/create.log"
       ;;
     load)
-      # Cap loader threads to avoid OOM on the small ybLight box (PS RAM
+      # Cap loader threads to avoid OOM on the small ybAmp box (PS RAM
       # backpressure when compute writes outrun YB uploads at 2 vCPU).
       lthreads=${TPCC_LOADER_THREADS:-4}
       cpu_pid=$(start_server_cpu_sampler "$outdir/server-cpu-load.log")

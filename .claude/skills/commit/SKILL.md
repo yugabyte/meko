@@ -84,7 +84,7 @@ you must read the doc on the right and decide if it needs updating.
 
 The doc needs an update if the change invalidates **any** of these:
 
-- A section heading or "Changes in yb-light" entry (e.g. you deleted the module
+- A section heading or "Changes in yb-amp" entry (e.g. you deleted the module
   §N describes, or removed a thing the doc presents as still-present).
 - A code-layout list (`compute/safekeeper/src/foo.rs` — purpose). Module
   deleted/added/renamed → list is wrong.
@@ -175,7 +175,7 @@ metric names, and step-by-step troubleshooting flows.
 
 Update a runbook when your change makes one of those wrong:
 - Where state lives or how to inspect it changed (e.g. "scan
-  `.yb_light/endpoints/`" → "query `registry.endpoints`"). A runbook
+  `.yb_amp/endpoints/`" → "query `registry.endpoints`"). A runbook
   step that tells an operator to look in the wrong place is actively harmful
   during an incident.
 - A CLI command, flag, port, or env var the runbook hardcodes changed.
@@ -277,7 +277,7 @@ The commit subject follows:
   subsystem within the area: `pageserver`, `safekeeper`, `walredo`,
   `materialiser`, `walreceiver`, `page_service`, `compute_ctl`,
   `extension`, `postgres`, (under `compute`); `storage_ctl`,
-  `yb_light_local`, `cluster-ui` (under
+  `yb_amp_local`, `cluster-ui` (under
   `control_plane`); … Drop it when the area alone is precise enough.
 - **`<title>`** — *required*. Concise, imperative description of the
   change.
@@ -289,7 +289,7 @@ Examples:
 [#33] compute: pageserver: skip zero-page writes to YB
 compute: materialiser: pace background image compaction
 compute: integration: add INTEGRATION_STOP_ON_FAIL to halt at the first failing iteration
-control_plane: yb_light_local: retry HTTP bind on EADDRINUSE during recycle
+control_plane: yb_amp_local: retry HTTP bind on EADDRINUSE during recycle
 pm: migrate task tracker to GitHub issues
 docs: clarify the YB idempotency contract
 ci: pin protoc to 3.21
@@ -381,7 +381,7 @@ minor." If you can't categorize the skip, default to checking.
 
 - **"I'll update the doc/test/runbook in a follow-up."** No. The follow-up never
   happens, and the companion lies for the gap. Same commit.
-- **Cargo-culting.** Don't add a fresh "Changes in yb-light" §N entry, a
+- **Cargo-culting.** Don't add a fresh "Changes in yb-amp" §N entry, a
   ceremonial test, or a runbook paragraph for every commit. Many commits just
   edit an existing section / extend an existing test. Volume is not progress.
 - **Updating only the commit-hash anchor.** If you swap `c4c7c1350` for

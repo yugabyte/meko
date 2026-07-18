@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/controller"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // roleReadWrite is the endpoint role the feature tests create (the API's

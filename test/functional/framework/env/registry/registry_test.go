@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
+	"github.com/yugabyte/amp/test/functional/framework/env/registry"
 )
 
 func TestAddGetRoundTrip(t *testing.T) {

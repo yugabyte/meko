@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/reap"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
+	"github.com/yugabyte/amp/test/functional/framework/env/reap"
+	"github.com/yugabyte/amp/test/functional/framework/env/registry"
 )
 
 // TestAmpstackNSPlanFromRecordedNamespace: an ampstack standing env with no

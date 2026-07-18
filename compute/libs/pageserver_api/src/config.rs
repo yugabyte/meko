@@ -9,7 +9,7 @@ pub const DEFAULT_PG_LISTEN_PORT: u16 = 64000;
 pub const DEFAULT_PG_LISTEN_ADDR: &str = formatcp!("127.0.0.1:{DEFAULT_PG_LISTEN_PORT}");
 pub const DEFAULT_HTTP_LISTEN_PORT: u16 = 9898;
 pub const DEFAULT_HTTP_LISTEN_ADDR: &str = formatcp!("127.0.0.1:{DEFAULT_HTTP_LISTEN_PORT}");
-// TODO: gRPC is disabled by default for now, but the port is used in yb_light_local.
+// TODO: gRPC is disabled by default for now, but the port is used in yb_amp_local.
 pub const DEFAULT_GRPC_LISTEN_PORT: u16 = 51051; // storage-broker already uses 50051
 
 use std::collections::HashMap;
@@ -136,12 +136,12 @@ impl Display for NodeMetadata {
 /// This process is [documented internally](
 /// https://docs.neon.build/storage/pageserver_configuration.html).
 ///
-/// yb-light note: although `ConfigToml` itself still ignores unknown fields at
-/// the serde layer (this struct has no `deny_unknown_fields`), the yb-light
+/// yb-amp note: although `ConfigToml` itself still ignores unknown fields at
+/// the serde layer (this struct has no `deny_unknown_fields`), the yb-amp
 /// `yb-pageserver` binary treats any ignored field as fatal and refuses to
 /// start (see `bin/yb-pageserver.rs`, which diffs the on-disk TOML against the
 /// re-serialized config). The upstream rollout/rollback rationale above does
-/// not apply here: yb-light's `pageserver.toml` is launcher-generated against
+/// not apply here: yb-amp's `pageserver.toml` is launcher-generated against
 /// the same build, so a stray key is an operator mistake, not a fleet-skew
 /// feature flag. Consequence: do not add a field with a value-dependent
 /// `skip_serializing_if` anywhere reachable from `ConfigToml` — it would
@@ -967,7 +967,7 @@ pub struct BranchConfigToml {
     pub max_lsn_wal_lag: NonZeroU64,
     /// If true SLRU segments (pg_xact/clog, pg_multixact, ...) are
     /// downloaded on demand; if false they are included wholesale in
-    /// basebackup. yb-light defaults this to **true**: the compute
+    /// basebackup. yb-amp defaults this to **true**: the compute
     /// faults SLRU pages in via `communicator_read_slru_segment`, and a
     /// heavy workload (e.g. a 4000-warehouse TPC-C run, hundreds of
     /// millions of txns) grows clog/multixact to hundreds of thousands

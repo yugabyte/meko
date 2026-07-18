@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # G-battery for the NEW yb-pageserver (8k-page direct, no layers/compaction),
 # run OFF-BOX (isolated) on the 16-vCPU host 172.151.20.28, with the compute on
-# the 2-core box ybLight (172.151.29.184). This is the apples-to-apples peer of
+# the 2-core box ybAmp (172.151.29.184). This is the apples-to-apples peer of
 # the prior off-box BLK battery (same topology, dataset, micro-battery), and it
 # additionally measures the off-box pageserver's RSS + CPU.
 #
@@ -9,12 +9,12 @@
 #
 # Phases: (A) load 5M-row big_table + wall time, (B) checkpoint + YB page-store
 # delta, (C) buffer-cold full-scan probe, (D) warm micro-battery G1..G6 with
-# compute CPU (ybLight) + off-box PS RSS/CPU (this box) sampling, (E) summary.
+# compute CPU (ybAmp) + off-box PS RSS/CPU (this box) sampling, (E) summary.
 set -uo pipefail
 
 LABEL="${1:?usage: yb8k-offbox-bench.sh <label>}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-source "$HERE/scripts/_env.sh" ybLight
+source "$HERE/scripts/_env.sh" ybAmp
 source "$HERE/scripts/_metrics.sh"
 export PGPASSWORD='Yugabyte!1'
 
@@ -35,7 +35,7 @@ YB_PSQL=/home/ec2-user/yb-neon-bundle/pg_install/v18/bin/psql
 ybq() { PGPASSWORD='Yugabyte!1' $YB_PSQL "host=172.151.17.132 port=5433 user=yugabyte dbname=yb_storage sslmode=require" -tAc "$1" 2>/dev/null; }
 
 TS=$(date -u +%Y%m%d-%H%M)
-OUT="$HERE/results/${TS}-ybLight-YB8K-offbox-${LABEL}"
+OUT="$HERE/results/${TS}-ybAmp-YB8K-offbox-${LABEL}"
 mkdir -p "$OUT"
 SUMMARY="$OUT/SUMMARY.md"
 
@@ -149,7 +149,7 @@ log "E. writing $SUMMARY"
 {
   echo "# YB8K-OFFBOX battery — label=$LABEL (NEW yb-pageserver, 8k-direct, OFF-BOX)"
   echo
-  echo "- Topology: compute on ybLight 172.151.29.184 (2 vCPU, SB=100MB, LFC off); yb-pageserver OFF-BOX on 172.151.20.28 (16 vCPU)."
+  echo "- Topology: compute on ybAmp 172.151.29.184 (2 vCPU, SB=100MB, LFC off); yb-pageserver OFF-BOX on 172.151.20.28 (16 vCPU)."
   echo "- Apples-to-apples peer of the prior off-box BLK battery (same topology, 5M-row dataset, G1-G6 micro-battery)."
   echo "- Tenant $TENANT / timeline $TIMELINE."
   echo "- Dataset: $ROWCOUNT rows, total relation $HEAP."
@@ -176,7 +176,7 @@ log "E. writing $SUMMARY"
   done
   echo
   echo "## CPU + memory"
-  echo "- compute (postgres on ybLight) avg CPU during battery: ${CPU_POSTGRES}% (single-core %)."
+  echo "- compute (postgres on ybAmp) avg CPU during battery: ${CPU_POSTGRES}% (single-core %)."
   echo "- off-box PS avg CPU during battery: ${PS_CPU_BATT}% (single-core %)."
   echo "- off-box PS avg RSS during battery: ${PS_RSS_BATT}MB (peak ${PS_RSS_PEAK}MB)."
   echo "- off-box PS peak RSS during load:  ${PS_RSS_LOAD}MB."

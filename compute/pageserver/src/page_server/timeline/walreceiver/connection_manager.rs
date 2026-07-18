@@ -286,7 +286,7 @@ impl ConnectionManagerState {
 
     /// Build the resolved `PgConnectionConfig` for the configured
     /// safekeeper. `safekeeper_pg_addr` is the `host:port` form
-    /// published by yb_light_local's pageserver config / the safekeeper's
+    /// published by yb_amp_local's pageserver config / the safekeeper's
     /// own `listen_pg_addr`.
     pub(super) fn build_wal_source_connconf(
         timeline: &Timeline,

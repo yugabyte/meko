@@ -45,16 +45,16 @@ import (
 	"strings"
 	"time"
 
-	awscloud "github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud/aws"
-	gcpcloud "github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud/gcp"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/yba"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ybastack"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/yugabyted"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec/k8s"
-	sshx "github.com/yugabyte/yb-amp/test/functional/framework/exec/ssh"
+	awscloud "github.com/yugabyte/amp/test/functional/framework/apps/cloud/aws"
+	gcpcloud "github.com/yugabyte/amp/test/functional/framework/apps/cloud/gcp"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybastack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/yugabyted"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
+	sshx "github.com/yugabyte/amp/test/functional/framework/exec/ssh"
 )
 
 // Modes.

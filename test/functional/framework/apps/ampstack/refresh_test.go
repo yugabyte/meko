@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // TestRefreshPullSecretRemintsAndRolls: on an ampqa-managed namespace, refresh

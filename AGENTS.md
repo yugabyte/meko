@@ -66,11 +66,11 @@ Code anchors:
   LSN/record-boundary bookkeeping.
 - `controller/src/persistence.rs` — `establish_connection_rustls`,
   AcceptAll TLS verifier.
-- `control_plane/src/controller.rs` — yb_light_local wrapper:
+- `control_plane/src/controller.rs` — yb_amp_local wrapper:
   external-DB path, `ensure_external_database`, YB schema
   auto-provisioning.
 - `control_plane/src/local_env.rs` — TOML config types
-  (`YbLightControllerConf::yb`, `SafekeeperConf::yb_storage_conn`;
+  (`YbAmpControllerConf::yb`, `SafekeeperConf::yb_storage_conn`;
   every service takes the same `yb_storage_conn` connection block).
 - `control_plane/src/safekeeper.rs` / `pageserver.rs` / `endpoint.rs` —
   per-service CLI assembly + per-component config.
@@ -131,7 +131,7 @@ Code anchors:
   On `dev-server-hsunder` the system `protoc` is 3.5.0; release builds
   use `PROTOC=/opt/yb-build/thirdparty/.../installed/uninstrumented/bin/protoc`
   (3.21+). Debug builds tend to work via cached proto output.
-- `cargo build -p control_plane --bin yb_light_local` is the fastest "did I
+- `cargo build -p control_plane --bin yb_amp_local` is the fastest "did I
   break the wrapper" check.
 
 ## Testing
@@ -146,7 +146,7 @@ Code anchors:
   ephemeral cluster instead.
 - End-to-end: `test/integration/compute/run.sh [unit|fast|slow|all|<name>]`
   (default: unit then fast) — a Rust harness
-  (`integration_tests` crate) that brings up a real `yb_light_local` + YB, runs
+  (`integration_tests` crate) that brings up a real `yb_amp_local` + YB, runs
   scenario tests + golden `.sql` workloads, and scans the pageserver log
   for corruption markers after every test. `-n <count>` repeats for
   flakiness hunting; `--release` runs the release build. See
@@ -160,12 +160,12 @@ Code anchors:
 ## Live dev cluster cheat-sheet
 
 (For when you're running locally on `dev-server-hsunder`. The
-`/home/yugabyte/yb-light-bundle/` instance on the AWS box has a separate
+`/home/yugabyte/yb-amp-bundle/` instance on the AWS box has a separate
 handoff doc.)
 
 - The dev YB lives at `127.0.0.1:5433`.
-- Topology spawns from `yb_light_local init --config <file>` then
-  `yb_light_local start`. All durable state goes to YB; local FS only holds
+- Topology spawns from `yb_amp_local init --config <file>` then
+  `yb_amp_local start`. All durable state goes to YB; local FS only holds
   logs, pidfiles, and the compute's ephemeral `pgdata`.
 - See [`compute/architecture/high-level.md`](compute/architecture/high-level.md) §
   "Topology in our current dev cluster" for ports / commands.
@@ -197,7 +197,7 @@ bring-up — `up.sh`" + "ECR access & the pull secret"). In short:
 
 ## Outstanding work / known sharp edges
 
-- `yb_light_local start` spawns SC + SK + PS via `JoinSet` with no ordering
+- `yb_amp_local start` spawns SC + SK + PS via `JoinSet` with no ordering
   guarantee — SK can race SC and try to open `yb_storage` before SC
   creates it. Workaround: pre-provision YB once by hand; structural fix
   is to make `Controller::provision_external_database()` a

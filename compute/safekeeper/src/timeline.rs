@@ -96,7 +96,7 @@ impl DerefMut for WriteGuardSharedState<'_> {
 
 impl Drop for WriteGuardSharedState<'_> {
     fn drop(&mut self) {
-        // yb-light: commit_lsn = flush_lsn (single-SK, every flush is
+        // yb-amp: commit_lsn = flush_lsn (single-SK, every flush is
         // committed). The watcher subscribers (walsenders, yb_wal) see
         // updates every time flush_lsn advances.
         let commit_lsn = self.guard.sk.flush_lsn();
@@ -372,7 +372,7 @@ pub struct Timeline {
     /// behind `flush_lsn`. Drives `safekeeper_active_timelines` +
     /// the `safekeeper_timeline_active` gauge. Naming inherited from
     /// upstream Neon's "is this timeline in the broker active set"
-    /// flag — yb-light has no broker, but the activity-tracking
+    /// flag — yb-amp has no broker, but the activity-tracking
     /// semantics are still meaningful.
     pub(crate) broker_active: AtomicBool,
     pub(crate) last_removed_segno: AtomicU64,
@@ -388,7 +388,7 @@ impl Timeline {
         conf: Arc<SafeKeeperConf>,
         yb_wal: Option<Arc<YbWalConn>>,
     ) -> Arc<Self> {
-        // yb-light: commit_lsn ≡ flush_lsn (single-SK).
+        // yb-amp: commit_lsn ≡ flush_lsn (single-SK).
         let (commit_lsn_watch_tx, commit_lsn_watch_rx) =
             watch::channel(shared_state.sk.flush_lsn());
         let (shared_state_version_tx, shared_state_version_rx) = watch::channel(0);

@@ -3,7 +3,7 @@
 # sampling around it. Captures into a timestamped results dir.
 #   ./run-with-metrics.sh <target> <label> -- <command...>
 # Example:
-#   ./run-with-metrics.sh ybLight L -- bash ~/benchmark/scripts/big-load.sh ybLight
+#   ./run-with-metrics.sh ybAmp L -- bash ~/benchmark/scripts/big-load.sh ybAmp
 set -uo pipefail
 target="${1:?usage: $0 <target> <label> -- <cmd...>}"; shift
 label="${1:?need label}"; shift
@@ -15,7 +15,7 @@ source ~/benchmark/scripts/_metrics.sh
 ts=$(date -u +%Y%m%d-%H%M)
 outdir=~/benchmark/results/${ts}-${target}-8kcolo-${label}
 mkdir -p "$outdir"
-export CPU_SAMPLE_HOST=172.151.29.184   # ybLight (compute + PS + control plane)
+export CPU_SAMPLE_HOST=172.151.29.184   # ybAmp (compute + PS + control plane)
 
 echo "[run-with-metrics] label=$label outdir=$outdir"
 echo "[run-with-metrics] cmd: $*"

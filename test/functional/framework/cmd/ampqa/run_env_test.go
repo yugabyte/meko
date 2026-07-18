@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/registry"
+	"github.com/yugabyte/amp/test/functional/framework/env/registry"
 )
 
 // hasOverride reports whether overrides carries the given typed key=value entry.

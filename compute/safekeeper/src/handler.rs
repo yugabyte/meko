@@ -71,7 +71,7 @@ fn parse_cmd(cmd: &str) -> anyhow::Result<SafekeeperPostgresCommand> {
             .context(format!("failed to parse START_WAL_PUSH command {cmd}"))?;
         // capture () content
         let options = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-        // yb-light only speaks proto v3; v2 was dropped in Phase 9
+        // yb-amp only speaks proto v3; v2 was dropped in Phase 9
         // Wave 2. Default matches the walproposer hardcode so an
         // older client missing the option is still parsed cleanly.
         let mut proto_version = 3;
@@ -195,7 +195,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
         _pgb: &mut PostgresBackend<IO>,
         jwt_response: &[u8],
     ) -> Result<(), QueryError> {
-        // this unwrap is never triggered, because check_auth_jwt only called when auth_type is YbLightJWT
+        // this unwrap is never triggered, because check_auth_jwt only called when auth_type is YbAmpJWT
         // which requires auth to be present
         let (allowed_auth_scope, auth) = self
             .auth
@@ -313,7 +313,7 @@ impl SafekeeperPostgresHandler {
     }
 
     pub fn protocol(&self) -> PostgresClientProtocol {
-        // yb-light only supports the Interpreted protocol; default if
+        // yb-amp only supports the Interpreted protocol; default if
         // the client didn't specify one (older clients that used to
         // default to Vanilla now get Interpreted instead).
         self.protocol
@@ -360,7 +360,7 @@ impl SafekeeperPostgresHandler {
         // Write row if timeline exists
         if let Some(tli) = tli {
             let flush_lsn = tli.get_flush_lsn().await;
-            // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum).
+            // yb-amp: commit_lsn ≡ flush_lsn (single-SK quorum).
             pgb.write_message_noflush(&BeMessage::DataRow(&[
                 Some(flush_lsn.to_string().as_bytes()),
                 Some(flush_lsn.to_string().as_bytes()),
@@ -380,7 +380,7 @@ impl SafekeeperPostgresHandler {
     ) -> Result<(), QueryError> {
         let tli = self.global_timelines.get(self.branch_id)?;
 
-        // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum), so both
+        // yb-amp: commit_lsn ≡ flush_lsn (single-SK quorum), so both
         // branches return the same value.
         let lsn = tli.get_flush_lsn().await.to_string();
 

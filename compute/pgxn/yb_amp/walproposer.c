@@ -1371,7 +1371,7 @@ HandleSafekeeperResponse(WalProposer *wp, Safekeeper *fromsk)
 	}
 }
 
-/* Serialize proposer -> acceptor message into buf. yb-light only
+/* Serialize proposer -> acceptor message into buf. yb-amp only
  * supports v3; v2 was dropped in Phase 9 Wave 2 to match the
  * safekeeper. */
 static void

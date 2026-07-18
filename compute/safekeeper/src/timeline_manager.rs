@@ -398,7 +398,7 @@ impl Manager {
         num_computes: usize,
         state: &StateSnapshot,
     ) {
-        // yb-light: commit_lsn ≡ flush_lsn (single-SK quorum).
+        // yb-amp: commit_lsn ≡ flush_lsn (single-SK quorum).
         let is_active = is_wal_backup_required
             || num_computes > 0
             || state.remote_consistent_lsn < state.flush_lsn;
@@ -600,7 +600,7 @@ impl Manager {
                 self.access_service.drop_guard(guard_id);
             }
             Some(ManagerCtlMessage::BackupPartialReset(tx)) => {
-                // Partial-backup S3 upload is gone in yb-light; the
+                // Partial-backup S3 upload is gone in yb-amp; the
                 // reset operation is a no-op. Return an empty segment
                 // list so the HTTP route still returns a sensible 200.
                 let _ = tx.send(Ok(Vec::new()));

@@ -3,10 +3,10 @@ package features
 import (
 	"context"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/controller"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // ampControlPlane is the amp control-plane handle a scheduler-provided environment

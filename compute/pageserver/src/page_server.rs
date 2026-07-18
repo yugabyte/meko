@@ -5,7 +5,7 @@
 //! the correct layer for the get/put call, walking back the timeline branching
 //! history as needed.
 //!
-//! The files are stored in the .yb_light/branches/<branch_id>
+//! The files are stored in the .yb_amp/branches/<branch_id>
 //! directory. See docs/pageserver-storage.md for how the files are managed.
 //! In addition to the layer files, there is a metadata file in the same
 //! directory that contains information about the timeline, in particular its
@@ -81,7 +81,7 @@ pub(crate) use crate::span::debug_assert_current_span_has_branch_id;
 // re-export for use in walreceiver
 pub use crate::page_server::timeline::WalReceiverInfo;
 
-/// The "branches" segment of `.yb_light/branches/<branch_id>`.
+/// The "branches" segment of `.yb_amp/branches/<branch_id>`.
 pub const BRANCHES_SEGMENT_NAME: &str = "branches";
 
 /// References to shared objects that are passed into each tenant, such
@@ -153,7 +153,7 @@ pub(crate) struct TenantPreload {
 }
 
 /// Build a `TimelineMetadata` from a `pageserver.timeline_state` row.
-/// In yb-light the row *is* the timeline metadata; everything that
+/// In yb-amp the row *is* the timeline metadata; everything that
 /// used to ride on `index_part.json` either lives in the row or is
 /// dead weight.
 fn synth_timeline_metadata_from_row(
@@ -174,7 +174,7 @@ fn synth_timeline_metadata_from_row(
         row.applied_gc_cutoff_lsn,
         // initdb_lsn falls back to disk_consistent_lsn — only consulted
         // by the bootstrap-time image-layer optimisation (dead code in
-        // yb-light) and consumption metrics.
+        // yb-amp) and consumption metrics.
         row.initdb_lsn.unwrap_or(row.consistent_lsn),
         pg_major,
     ))
@@ -519,8 +519,8 @@ impl PageServer {
             ancestor.clone(),
             resources,
             idempotency.clone(),
-            None, // rel_size_v2_status — always None in yb-light
-            None, // rel_size_migrated_at — always None in yb-light
+            None, // rel_size_v2_status — always None in yb-amp
+            None, // rel_size_migrated_at — always None in yb-amp
             ctx,
         )?;
         let consistent_lsn_seed = timeline.get_applied_lsn();
@@ -535,7 +535,7 @@ impl PageServer {
             "applied_lsn is seeded from the persisted consistent_lsn at construction"
         );
 
-        // yb-light: no upload queue to init. The PageWriter takes the
+        // yb-amp: no upload queue to init. The PageWriter takes the
         // `remote_state.consistent_lsn` slot directly so flush success
         // advances the durable, gap-free watermark that feeds SK
         // feedback and restart-resume.
@@ -734,10 +734,10 @@ impl PageServer {
         if let Some((branch_id, preload)) = preload.timeline {
             // `preload.metadata` is synthesised from
             // `pageserver.timeline_state` in `Tenant::preload`, so it's
-            // always `Ok(_)` — no remote blob download path remains in yb-light.
+            // always `Ok(_)` — no remote blob download path remains in yb-amp.
             let metadata = preload
                 .metadata
-                .expect("yb-light preload always builds an Ok TimelineMetadata");
+                .expect("yb-amp preload always builds an Ok TimelineMetadata");
             timeline_ancestors = Some((branch_id, metadata));
         }
 
@@ -893,18 +893,18 @@ impl PageServer {
         // to track; cross-process ancestor pins are GC future work (#54).
         self.initialize_gc_info();
 
-        // Resume-deletion path is dead in yb-light: synth never produces
+        // Resume-deletion path is dead in yb-amp: synth never produces
         // `MaybeDeletedIndexPart::Deleted`, so there's nothing to
-        // restart here. If we want crash-safe deletion in yb-light,
+        // restart here. If we want crash-safe deletion in yb-amp,
         // surface `timeline_state.deleted_at` at preload time instead.
 
-        // yb-light is the only path; we never wrote layer files, never
+        // yb-amp is the only path; we never wrote layer files, never
         // created per-timeline dentries, nothing to reconcile. The
         // tenant manifest was a remote-storage blob that gated
         // offloaded-timeline tracking; offload isn't supported here
         // so there's nothing to write.
 
-        // gc_blocking lived on index_part.json; yb-light has no source for it
+        // gc_blocking lived on index_part.json; yb-amp has no source for it
         // yet, so initialise empty.
         self.gc_block.set_scanned(enumset::EnumSet::empty());
 
@@ -922,7 +922,7 @@ impl PageServer {
     ///
     /// This function relies on the index_part instead of listing the remote storage
     pub fn remote_size(&self) -> u64 {
-        // yb-light: no remote layer files; sum is always 0. The
+        // yb-amp: no remote layer files; sum is always 0. The
         // caller (storage_ctl heatmap) tolerates this; tenant-size
         // reporting happens via timeline-row LSN ranges, not blob
         // bytes.
@@ -1879,7 +1879,7 @@ impl PageServer {
     }
 
     /// How much local disk space the timeline wants (initdb tarballs and
-    /// basebackup cache only in yb-light — page data lives in YB).
+    /// basebackup cache only in yb-amp — page data lives in YB).
     pub(crate) fn local_storage_wanted(&self) -> u64 {
         self.timeline()
             .map(|t| t.metrics.visible_physical_size_gauge.get())

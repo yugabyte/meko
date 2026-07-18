@@ -27,7 +27,7 @@ pub enum Compression {
 /// physical replication that arrived as `XLogData` blocks and was
 /// decoded on the pageserver. That variant was disabled upstream
 /// ("Vanilla WAL receiver protocol is no longer supported for
-/// ingest") and removed entirely in lane N; yb-light always speaks
+/// ingest") and removed entirely in lane N; yb-amp always speaks
 /// `Interpreted`, where the safekeeper decodes records once and
 /// streams `(Key, Lsn, Value)` tuples directly. Kept as a
 /// single-variant enum so the on-the-wire `protocol={"type":"interpreted",...}`

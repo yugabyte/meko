@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // EnvFailSubstr is the seed-label marker the fake/dry-run provider matches to

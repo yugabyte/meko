@@ -1,6 +1,6 @@
 # ampqa — yb-amp QA framework
 
-`ampqa` is the system-test framework for **yb-amp / yb-light** — a Neon-style
+`ampqa` is the system-test framework for **yb-amp / yb-amp** — a Neon-style
 fork that separates compute from storage: a controller manages
 projects / branches / endpoints (stateless Postgres compute) over a real
 YugabyteDB cluster that holds the durable state. `ampqa` stands those systems

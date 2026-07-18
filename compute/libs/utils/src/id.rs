@@ -240,7 +240,7 @@ macro_rules! id_newtype {
     };
 }
 
-/// yb-light branch ID. Globally unique 128-bit identifier of a branch
+/// yb-amp branch ID. Globally unique 128-bit identifier of a branch
 /// (one branch == one history of a cluster). Formerly `TimelineId`;
 /// the storage model is now flat (one branch, no enclosing tenant),
 /// so this single id identifies a branch end to end.

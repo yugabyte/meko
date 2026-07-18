@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	rhtml "github.com/yugabyte/yb-amp/test/functional/framework/report/html"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	rhtml "github.com/yugabyte/amp/test/functional/framework/report/html"
 )
 
 // TestHTMLRendersPerfDatapoints: a result's perf datapoints render in a "Perf

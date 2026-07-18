@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Load 100 M rows into big_table on the target. Uses chunked INSERT to
-# avoid one giant transaction (which would blow up WAL/PS memory on ybLight).
-# Usage: ./big-load.sh ybLight|aurora [rows] [chunk]
+# avoid one giant transaction (which would blow up WAL/PS memory on ybAmp).
+# Usage: ./big-load.sh ybAmp|aurora [rows] [chunk]
 #   rows  : total rows to load (default 100000000)
 #   chunk : rows per INSERT statement (default 1000000)
 
 set -euo pipefail
-target="${1:?usage: $0 ybLight|aurora [rows] [chunk]}"; shift || true
+target="${1:?usage: $0 ybAmp|aurora [rows] [chunk]}"; shift || true
 rows="${1:-100000000}"; shift || true
 chunk="${1:-1000000}"; shift || true
 

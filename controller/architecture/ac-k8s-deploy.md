@@ -4,7 +4,7 @@
 **Last updated:** 2026-07-01
 
 How the **amp controller** runs on Kubernetes and deploys compute **endpoints**
-there ([#108](https://github.com/yugabyte/yb-light/issues/108)). The k8s deployer
+there ([#108](https://github.com/yugabyte/amp/issues/108)). The k8s deployer
 is one concrete implementation behind the **provisioning interface** the design
 mandates (amp-controller.md principles 2–3): runtime-specific "create a pod
 vs. a VM" logic lives behind `deploy.Deployer` (`CreateEndpoint`/`DeleteEndpoint`),
@@ -20,8 +20,8 @@ for the controller (§11.1).
 
 The controller is a **single bundled container** — `controller` (the control-plane API
 + task worker) plus the **controller** it runs as a managed subprocess
-(deploy/controller, [#94](https://github.com/yugabyte/yb-light/issues/94)) — with the
-`helm` CLI and the `yb-light-endpoint` chart baked into the image.
+(deploy/controller, [#94](https://github.com/yugabyte/amp/issues/94)) — with the
+`helm` CLI and the `yb-amp-endpoint` chart baked into the image.
 
 [`deploy/controller/redeploy.sh`](../../deploy/controller/redeploy.sh) is the canonical
 (re-)deploy. It is idempotent (`helm upgrade --install` of the
@@ -126,7 +126,7 @@ Two distinct network paths:
   the Service, not the pod IP, a **rescheduled pod (new IP) re-registers the same
   address** and the controller's node-register stays `UpToDate` instead of
   returning `409` — the fix for the reschedule crash-loop
-  ([#121](https://github.com/yugabyte/yb-light/issues/121)).
+  ([#121](https://github.com/yugabyte/amp/issues/121)).
 - **client → endpoint** (SQL): the address recorded on the endpoint row, resolved
   from the Kubernetes API once the release is ready, by `--deploy-service-type`:
   - `LoadBalancer` → the external **LB ingress IP** `<lbIP>:<computePort>` (the
@@ -269,9 +269,9 @@ The deploy is **demo-grade**. What it currently takes for granted:
   standalone create-project/branch flow yet.
 - **Synchronous, non-atomic provisioning.** create-project / create-endpoint run
   inline on the request (no executing write-ahead task framework —
-  [#84](https://github.com/yugabyte/yb-light/issues/84) /
-  [#113](https://github.com/yugabyte/yb-light/issues/113)); a crash mid-flow can
-  orphan committed state ([#106](https://github.com/yugabyte/yb-light/issues/106)).
+  [#84](https://github.com/yugabyte/amp/issues/84) /
+  [#113](https://github.com/yugabyte/amp/issues/113)); a crash mid-flow can
+  orphan committed state ([#106](https://github.com/yugabyte/amp/issues/106)).
 - **Client address is a point-in-time value.** The LB/pod IP recorded at create
   time is not refreshed; the stable Service DNS is the durable address. The
   LoadBalancer poll (~2 min) can time out for a slow internal LB and fall back.

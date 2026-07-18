@@ -238,7 +238,7 @@ fn slru_kind_from_i16(v: i16) -> Result<SlruKind> {
 ///
 /// The lineage is built once at startup by [`PageStore::load_lineage`]
 /// and is immutable for the process lifetime — ancestry never changes
-/// for a live timeline (detach-ancestor is unsupported in yb-light).
+/// for a live timeline (detach-ancestor is unsupported in yb-amp).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineageSegment {
     pub branch_id: BranchId,
@@ -298,7 +298,7 @@ pub struct TimelineRow {
     /// migration boundary.
     pub rel_size_migrated_at: Option<Lsn>,
     /// Ancestor-detach history. Kept as JSON for forward-compat;
-    /// always `Default` in yb-light today (detach_ancestor is
+    /// always `Default` in yb-amp today (detach_ancestor is
     /// unsupported) but the column is wired up for when the feature
     /// lands.
     pub lineage: Lineage,
@@ -3568,14 +3568,14 @@ mod tests {
 
     /// All tests run against the production `pageserver.*` schema
     /// (created by the controller's migration on a
-    /// real `yb_light_local`-style cluster). Per-test isolation comes
+    /// real `yb_amp_local`-style cluster). Per-test isolation comes
     /// from `rand_branch()` — every test writes
     /// to a distinct `branch_id` namespace, so
     /// concurrent tests don't observe each other's data and rows
     /// from prior runs are harmless.
     ///
     /// Requires the YB cluster to have the diesel migration applied
-    /// (e.g. `yb_light_local init && yb_light_local start` once). The tests
+    /// (e.g. `yb_amp_local init && yb_amp_local start` once). The tests
     /// don't create the schema themselves; that's the migration's
     /// job and there's only one source of truth for it.
     static SHARED_STORE: tokio::sync::OnceCell<PageStore> = tokio::sync::OnceCell::const_new();
@@ -3591,7 +3591,7 @@ mod tests {
                 };
                 PageStore::connect(cfg, "page_store_test", true)
                     .await
-                    .expect("connect to local YB; run `yb_light_local init && start` first to migrate the schema")
+                    .expect("connect to local YB; run `yb_amp_local init && start` first to migrate the schema")
             })
             .await
             .clone();

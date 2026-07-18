@@ -81,7 +81,7 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - 'clippy.toml'
-              - '.yb-light_clippy_args'
+              - '.yb-amp_clippy_args'
               - 'run_clippy.sh'
               - '.config/nextest.toml'
               - 'compute/libs/**'

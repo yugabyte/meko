@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	rhtml "github.com/yugabyte/yb-amp/test/functional/framework/report/html"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	rhtml "github.com/yugabyte/amp/test/functional/framework/report/html"
 )
 
 // TestHTMLRendersChartsSelfContained: a result's charts render in a "Charts"

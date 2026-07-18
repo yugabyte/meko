@@ -3,8 +3,8 @@ package features
 import (
 	"fmt"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/pg"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // This file adds regression-tagged functional tests that assert core amp

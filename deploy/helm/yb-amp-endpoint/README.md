@@ -1,13 +1,13 @@
-# yb-light-endpoint Helm chart
+# yb-amp-endpoint Helm chart
 
-Runs a [yb-light endpoint](../../README.md) as a single pod backed by an
+Runs a [yb-amp endpoint](../../README.md) as a single pod backed by an
 external YugabyteDB. Connection config is passed in via a ConfigMap.
 
 ## Install
 
 ```sh
-helm install ep deploy/helm/yb-light-endpoint \
-  --set image.repository=yb-light/neon-endpoint --set image.tag=dev \
+helm install ep deploy/helm/yb-amp-endpoint \
+  --set image.repository=yb-amp/neon-endpoint --set image.tag=dev \
   --set yugabyte.hostPorts=yb-tserver.default.svc:5433 \
   --set yugabyte.user=yugabyte \
   --set yugabyte.password=$YB_PASSWORD
@@ -55,7 +55,7 @@ replication. For query-level metrics, enable the `stat_statements` collector
 
 | Value | Default | Meaning |
 |---|---|---|
-| `image.repository` / `image.tag` | `yb-light/neon-endpoint` / chart appVersion | endpoint image |
+| `image.repository` / `image.tag` | `yb-amp/neon-endpoint` / chart appVersion | endpoint image |
 | `yugabyte.hostPorts` | `yb-tserver:5433` | CSV of YB tservers `host:port[,...]` |
 | `yugabyte.user` / `yugabyte.dbname` | `yugabyte` / `yb_storage` | YB role / database |
 | `yugabyte.sslmode` / `yugabyte.sslrootcert` | _(empty)_ | TLS mode / CA bundle path |
@@ -86,7 +86,7 @@ Tests use [helm-unittest](https://github.com/helm-unittest/helm-unittest)
 
 ```sh
 helm plugin install https://github.com/helm-unittest/helm-unittest.git   # once
-helm unittest deploy/helm/yb-light-endpoint
+helm unittest deploy/helm/yb-amp-endpoint
 ```
 
 Suites live in [`tests/`](tests) (`*_test.yaml`), one per template.
@@ -104,5 +104,5 @@ pod to Burstable. Needs `helm` + [`yq`](https://github.com/mikefarah/yq).
 ```sh
 make endpoint-chart-test          # helm unittest + the guardrail
 # or just the guardrail:
-bash deploy/helm/yb-light-endpoint/tests/guaranteed-qos.sh
+bash deploy/helm/yb-amp-endpoint/tests/guaranteed-qos.sh
 ```

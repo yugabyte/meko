@@ -42,9 +42,9 @@ pub struct BranchCreateResponse {
 }
 
 /// A compute endpoint record persisted by the controller on behalf of
-/// `yb_light_local`. yb-light keeps no per-endpoint folder anymore: the durable
+/// `yb_amp_local`. yb-amp keeps no per-endpoint folder anymore: the durable
 /// registry of compute endpoints lives in the `registry.endpoints`
-/// table, and `yb_light_local` drives it through the `/control/v1/endpoint` API.
+/// table, and `yb_amp_local` drives it through the `/control/v1/endpoint` API.
 ///
 /// `spec` is an opaque JSON object (a serialized
 /// `control_plane::endpoint::EndpointConf`), stored in a JSONB column. The

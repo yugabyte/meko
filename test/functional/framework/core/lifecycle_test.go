@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/fake"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/fake"
 )
 
 func runOne(t *testing.T, test core.Test, provider core.EnvProvider, detected core.DetectedVersions) *core.Result {

@@ -6,7 +6,7 @@ Inventory of every LSN the safekeeper uses, derived from the Rust sources
 only (`compute/safekeeper/`, `compute/libs/utils`, `compute/libs/safekeeper_api`). Do not treat
 other architecture docs as authoritative — upstream Neon described local
 segment files, `backup_lsn`, multi-SK quorum `commit_lsn`, and S3
-offload paths that are gone or collapsed in yb-light.
+offload paths that are gone or collapsed in yb-amp.
 
 See [`pageserver-lsns.md`](pageserver-lsns.md) for the pageserver side of
 the replication link (what LSN the pageserver sends in
@@ -27,7 +27,7 @@ flowchart LR
     COMP[Compute / walproposer] -->|AppendRequest + flush| SK_ING[SafeKeeper ingest]
     SK_ING -->|write_wal| YB_WAL[(safekeeper.wals)]
     SK_ING -->|flush_wal| FL[flush_lsn]
-    FL -->|yb-light: ≡ commit_lsn| COMM[commit_lsn watch]
+    FL -->|yb-amp: ≡ commit_lsn| COMM[commit_lsn watch]
     PS[Pageserver] -->|START_REPLICATION start_pos| WS[walsender]
     WS -->|read WAL| YB_WAL
     WS -->|InterpretedWalRecords| PS
@@ -38,10 +38,10 @@ flowchart LR
 
 ---
 
-## yb-light collapse: `commit_lsn ≡ flush_lsn`
+## yb-amp collapse: `commit_lsn ≡ flush_lsn`
 
 Upstream Neon maintained separate `commit_lsn` (quorum-committed) and
-`flush_lsn` (locally durable). In yb-light with a **single safekeeper**
+`flush_lsn` (locally durable). In yb-amp with a **single safekeeper**
 and YB-mirrored WAL, every successful `flush_wal()` is treated as
 committed:
 
@@ -82,7 +82,7 @@ Authoritative current column list is `COLUMNS` in
 `inmem.remote_consistent_lsn > pers.remote_consistent_lsn`.
 
 **Not persisted as separate columns** (gone or in-memory only):
-- `commit_lsn` — alias of `flush_lsn` in yb-light.
+- `commit_lsn` — alias of `flush_lsn` in yb-amp.
 - `backup_lsn`, `peer_horizon_lsn` — removed with S3 offloader.
 - `term` / `term_history` / `proposer_uuid` / `mconf` — removed with the
   consensus + membership layer (single safekeeper per branch; see
@@ -94,7 +94,7 @@ Authoritative current column list is `COLUMNS` in
 
 ### `WalBookkeeping` (in-memory bookkeeping)
 
-Used by `YbWalStorage`. No local pg_wal files in yb-light.
+Used by `YbWalStorage`. No local pg_wal files in yb-amp.
 
 | LSN | Meaning |
 |-----|---------|
@@ -143,7 +143,7 @@ is the resume point.
 
 | LSN | Storage | Role |
 |-----|---------|------|
-| `start_streaming_at` | Message only (`ProposerElected`) | Where the walproposer resumes appending; the SK truncates WAL here. Derived from the SK's `flush_lsn` (reported in the `AcceptorGreeting`), so in steady state it equals the SK's end-of-WAL. Must be `≥ flush_lsn` (yb-light: don't truncate durable tail). |
+| `start_streaming_at` | Message only (`ProposerElected`) | Where the walproposer resumes appending; the SK truncates WAL here. Derived from the SK's `flush_lsn` (reported in the `AcceptorGreeting`), so in steady state it equals the SK's end-of-WAL. Must be `≥ flush_lsn` (yb-amp: don't truncate durable tail). |
 
 ---
 
@@ -163,9 +163,9 @@ yet in YB — and a subsequent crash would lose them.
 Safekeeper accepts the requested LSN and streams forward:
 
 ```rust
-// send_wal.rs — single commit-frontier watch (yb-light)
+// send_wal.rs — single commit-frontier watch (yb-amp)
 let end_watch = EndWatch::new(tli.get_commit_lsn_watch_rx());
-// end_pos = commit_lsn = flush_lsn (yb-light)
+// end_pos = commit_lsn = flush_lsn (yb-amp)
 ```
 
 If `start_pos > end_pos`, streaming starts anyway (logged as info) —
@@ -191,7 +191,7 @@ connection status.
 |-------|----------------|
 | `remote_consistent_lsn` | **Yes** — `update_remote_consistent_lsn`, WAL GC horizon, broker activity. |
 | `last_received_lsn` | Metrics only (`safekeeper_ps_last_received_lsn`). |
-| `disk_consistent_lsn` | Metrics only — **not** used for truncation. yb-light pageserver populates this with the same value as `remote_consistent_lsn` (both come from `Timeline::get_consistent_lsn()`, the durable gap-free watermark); the two wire fields are semantically identical and one will be dropped in a future protocol bump. |
+| `disk_consistent_lsn` | Metrics only — **not** used for truncation. yb-amp pageserver populates this with the same value as `remote_consistent_lsn` (both come from `Timeline::get_consistent_lsn()`, the durable gap-free watermark); the two wire fields are semantically identical and one will be dropped in a future protocol bump. |
 
 ```rust
 // send_wal.rs
@@ -221,7 +221,7 @@ Walproposer receives `AppendResponse` with `flush_lsn` and `hs_feedback`
 | `StandbyReply.apply_lsn` | Per walsender | Fed into `get_safekeeper_info`; aggregated across senders. |
 | `HotStandbyFeedback.xmin` / `catalog_xmin` | `WalSenders.agg_standby_feedback` | Forwarded to compute in `AppendResponse.hs_feedback`. |
 
-Not persisted. Not used for WAL truncation in yb-light.
+Not persisted. Not used for WAL truncation in yb-amp.
 
 ---
 
@@ -246,7 +246,7 @@ the in-memory copy. A pageserver feedback bump that hasn't been flushed
 to YB yet does **not** immediately allow WAL deletion.
 
 Walsender laggard clamp prevents deleting bytes an active pageserver
-connection still reads — in yb-light there is no local-disk WAL fallback.
+connection still reads — in yb-amp there is no local-disk WAL fallback.
 
 ---
 
@@ -316,7 +316,7 @@ interval), SK retains extra WAL — safe, not data loss.
    now carry the same durable, gap-free value from
    `Timeline::get_consistent_lsn()`; the duplicate wire field is
    kept for SK protocol back-compat.
-4. **Consensus + membership are gone.** yb-light runs a single safekeeper
+4. **Consensus + membership are gone.** yb-amp runs a single safekeeper
    per branch, so terms/voting, term-history reconciliation, and membership
    were removed from both the walproposer and the safekeeper (see
    `safekeeper.md` §5). The surviving handshake just resumes streaming at the

@@ -1,8 +1,8 @@
 # YugabyteDB as the durable layer
 
-This page describes what the YB cluster looks like from yb-light's
+This page describes what the YB cluster looks like from yb-amp's
 perspective: databases, tables, prefixes, and the DDL the operator is
-expected to provision before pointing yb-light at YB.
+expected to provision before pointing yb-amp at YB.
 
 ## Databases
 
@@ -15,7 +15,7 @@ All three subsystems share **one** database, `yb_storage`. Within it:
 | `safekeeper` | `timeline_state`, `wals` | yugabyte | controller migrations |
 | `controller` | 8 Diesel-managed tables (`branches`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `pending_timeline_inits`, `timeline_imports`, `endpoints`) | yugabyte | controller migrations |
 
-`yb_light_local` only `CREATE DATABASE`s `yb_storage`
+`yb_amp_local` only `CREATE DATABASE`s `yb_storage`
 (`control_plane/src/controller.rs::ensure_external_database`);
 every schema, ENUM, and table — across `public`, `pageserver`,
 `safekeeper`, and `controller` — is created by the storage
@@ -118,7 +118,7 @@ prevents split-brain).
 
 Schema documented in detail in [`remote-storage.md`](remote-storage.md).
 
-### Typical content (yb-light dev cluster after light usage)
+### Typical content (yb-amp dev cluster after light usage)
 
 ```
 key prefix          | distinct objects | typical row count | bytes
@@ -211,7 +211,7 @@ ORDER BY segno;
 Holds the page store that replaces the upstream layer-file machinery
 with row-per-version storage; see
 [`yb-pageserver.md`](yb-pageserver.md) for the design. Provisioned
-alongside `public.blobs` / `safekeeper.wals` by `yb_light_local` on first
+alongside `public.blobs` / `safekeeper.wals` by `yb_amp_local` on first
 start.
 
 ### `pageserver.pages`
@@ -279,7 +279,7 @@ transactionally-updatable record. `current_generation` is the gate
 that fences a stale pageserver — every flush is wrapped in a
 transaction that conditionally updates this row. The `lineage` JSONB
 is a forward-looking slot for ancestor-detach state (always `Default`
-in yb-light today).
+in yb-amp today).
 
 ```sql
 CREATE TABLE pageserver.timeline_state (
@@ -341,7 +341,7 @@ than this. We work around it by:
 
 ### `yb_enable_upsert_mode`
 
-A per-session GUC we `SET` on every yb-light connection (centrally in
+A per-session GUC we `SET` on every yb-amp connection (centrally in
 `YsqlClient::from_yb_config` / `from_yb_config_pooled` — used by
 `YbStore::new`, `PageStore`, and `YbWalStorage::new`). When `true`,
 plain `INSERT` skips DocDB's
@@ -480,7 +480,7 @@ the signal that something is wrong upstream of the client.
 
 The authoritative provisioning DDL is a single Diesel migration:
 [`controller/migrations/0005_provision_yb_storage.up.sql`](../../controller/migrations/0005_provision_yb_storage.up.sql).
-`yb_light_local` only `CREATE DATABASE`s `yb_storage` (see
+`yb_amp_local` only `CREATE DATABASE`s `yb_storage` (see
 `control_plane/src/controller.rs::ensure_external_database`);
 the controller binary applies the migration on first start, which
 creates every schema, ENUM, and table in one shot. Listed here for
@@ -514,14 +514,14 @@ relationships.
   returns 5xx; pageserver / safekeeper / compute keep operating until they
   need a fresh cluster decision.
 - **YB unavailable for WalReader read**: only matters when the local WAL
-  cache is also missing for the requested segment. In normal yb-light
+  cache is also missing for the requested segment. In normal yb-amp
   operation the local cache exists; in the YB-only safekeeper mode this
   *is* fatal until YB recovers.
 
 ## Hosts / ports in the dev cluster
 
 - YB master RPC: `127.0.0.1:7100`
-- YB tserver YSQL: `127.0.0.1:5433` (the only port yb-light talks to)
+- YB tserver YSQL: `127.0.0.1:5433` (the only port yb-amp talks to)
 - YB tserver web UI: `127.0.0.1:9000`
 - `yugabyted-ui`: `127.0.0.1:15433`
 

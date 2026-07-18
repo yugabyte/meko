@@ -16,11 +16,11 @@ import (
 	"github.com/spf13/cobra"
 
 	// Blank-imported so their init() registers the built-in tests.
-	_ "github.com/yugabyte/yb-amp/test/functional/suites/canary"
-	_ "github.com/yugabyte/yb-amp/test/functional/suites/features"
-	_ "github.com/yugabyte/yb-amp/test/functional/suites/perf"
-	_ "github.com/yugabyte/yb-amp/test/functional/suites/presets"
-	_ "github.com/yugabyte/yb-amp/test/functional/suites/stress"
+	_ "github.com/yugabyte/amp/test/functional/suites/canary"
+	_ "github.com/yugabyte/amp/test/functional/suites/features"
+	_ "github.com/yugabyte/amp/test/functional/suites/perf"
+	_ "github.com/yugabyte/amp/test/functional/suites/presets"
+	_ "github.com/yugabyte/amp/test/functional/suites/stress"
 )
 
 const version = "0.0.0-m0"

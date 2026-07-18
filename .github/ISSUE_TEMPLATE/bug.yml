@@ -1,5 +1,5 @@
 name: Bug
-description: Report a bug in yb-light
+description: Report a bug in yb-amp
 labels: ["t/bug"]
 body:
   - type: markdown

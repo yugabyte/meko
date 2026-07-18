@@ -24,7 +24,7 @@ pub mod defaults {
     /// in YB-WAL mode. Set to 0 to disable the cache entirely.
     pub const DEFAULT_WAL_CACHE_SIZE_MIB: usize = 256;
 
-    /// Default per-timeline disk usage limit is 0 (disabled) — yb-light has
+    /// Default per-timeline disk usage limit is 0 (disabled) — yb-amp has
     /// no local-FS WAL anyway.
     pub const DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES: u64 = 0;
 

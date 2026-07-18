@@ -24,11 +24,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ampstack"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/yba"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/ybastack"
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/env/vm"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybastack"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/vm"
 )
 
 // Cheap defaults: a small run is inexpensive. Overridable under functional.*.

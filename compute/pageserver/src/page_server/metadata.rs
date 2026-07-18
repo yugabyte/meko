@@ -322,7 +322,7 @@ impl TimelineMetadata {
 /// A timeline can have more than 1 earlier ancestor, in the rare case that it was repeatedly
 /// reparented by having an later timeline be detached from it's ancestor.
 ///
-/// Persisted as a JSONB column on `pageserver.timeline_state`. In yb-light
+/// Persisted as a JSONB column on `pageserver.timeline_state`. In yb-amp
 /// reparenting and detach-ancestor are unsupported, so this is always
 /// `Default::default()`; the column is kept for forward-compat.
 #[derive(Debug, PartialEq, Eq, Clone, serde::Serialize, serde::Deserialize, Default)]

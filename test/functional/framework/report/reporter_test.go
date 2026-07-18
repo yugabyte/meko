@@ -4,8 +4,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/report"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/report"
 )
 
 type recordingSink struct {

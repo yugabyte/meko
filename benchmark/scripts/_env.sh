@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Per-target connection params. Source this from runner scripts:
-#   source ~/benchmark/scripts/_env.sh ybLight    # or aurora
+#   source ~/benchmark/scripts/_env.sh ybAmp    # or aurora
 
 set_target() {
   case "$1" in
-    ybLight)
-      export TARGET=ybLight
+    ybAmp)
+      export TARGET=ybAmp
       export PGHOST=172.151.29.184
       export PGPORT=55432
       export PGUSER=cloud_admin
@@ -13,9 +13,9 @@ set_target() {
       export PGSSLMODE=disable
       export PGDATABASE=postgres
       ;;
-    ybLight4)
+    ybAmp4)
       # 4-vCPU box (172.151.23.96); compute + control plane here, pageserver off-box.
-      export TARGET=ybLight4
+      export TARGET=ybAmp4
       export PGHOST=172.151.23.96
       export PGPORT=55432
       export PGUSER=cloud_admin
@@ -25,7 +25,7 @@ set_target() {
       ;;
     aurora)
       export TARGET=aurora
-      export PGHOST=yb-light-2core2.cluster-cbtcvpszcgdq.us-west-2.rds.amazonaws.com
+      export PGHOST=yb-amp-2core2.cluster-cbtcvpszcgdq.us-west-2.rds.amazonaws.com
       export PGPORT=5432
       export PGUSER=postgres
       export PGPASSWORD='Yugabyte!1'
@@ -33,9 +33,9 @@ set_target() {
       export PGDATABASE=postgres
       ;;
     aurora3)
-      # yb-light-2core3 instance (172.151.45.251) — Aurora target for the 750 run.
+      # yb-amp-2core3 instance (172.151.45.251) — Aurora target for the 750 run.
       export TARGET=aurora3
-      export PGHOST=yb-light-2core3-instance-1.cbtcvpszcgdq.us-west-2.rds.amazonaws.com
+      export PGHOST=yb-amp-2core3-instance-1.cbtcvpszcgdq.us-west-2.rds.amazonaws.com
       export PGPORT=5432
       export PGUSER=postgres
       export PGPASSWORD='Yugabyte!1'
@@ -43,7 +43,7 @@ set_target() {
       export PGDATABASE=postgres
       ;;
     *)
-      echo "Usage: set_target ybLight|ybLight4|aurora|aurora3" >&2
+      echo "Usage: set_target ybAmp|ybAmp4|aurora|aurora3" >&2
       return 1
       ;;
   esac

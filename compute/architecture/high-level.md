@@ -10,7 +10,7 @@
 | Pageserver | Materializes pages from WAL and serves them to compute on demand. Holds the only durable copy of relfiles (via `remote_storage`). | `target/debug/yb-pageserver` |
 | Controller | Tracks cluster topology: which branches are on which pageservers, which safekeepers hold which branches, generations, etc. | `target/debug/controller` |
 | Endpoint storage | Small auxiliary service for endpoint-scoped scratch data (LFC pre-warm hints, etc.). One instance **per endpoint**, co-located under `endpoints/<name>/endpoint_storage`. | `target/debug/yb-endpoint-storage` |
-| YugabyteDB | Durable storage backend for everything yb-light-internal. Replaces S3/Azure/GCS *and* the controller's local Postgres. | external (`yugabyted`) |
+| YugabyteDB | Durable storage backend for everything yb-amp-internal. Replaces S3/Azure/GCS *and* the controller's local Postgres. | external (`yugabyted`) |
 
 ## Write path (one INSERT from a client)
 
@@ -30,7 +30,7 @@ walproposer  ────────────►  single Safekeeper
 ```
 
 The compute's commit latency is bounded by the safekeeper's `flush_wal()`,
-which on yb-light's YB-backed safekeeper is a YB INSERT round-trip (~ms over
+which on yb-amp's YB-backed safekeeper is a YB INSERT round-trip (~ms over
 local YB; more on the network). This is the headline performance cost of
 moving WAL into YB.
 
@@ -72,7 +72,7 @@ key the pageserver/safekeeper use. In YB the path is split across the
 `namespace` / `branch_id` / `key` columns — see
 [`yugabyte.md`](yugabyte.md). The mapping is round-trip lossless.)
 
-| Subsystem state | yb-light backend | Path / key |
+| Subsystem state | yb-amp backend | Path / key |
 |---|---|---|
 | Pageserver layer files | YB `yb_storage.blobs` | `pageserver-yb/branches/<branch_id>/<layer>` (one BYTEA chunk per row, ≤ 100 MiB each); PK `((branch_id, key) HASH, namespace, chunk_idx)` |
 | Pageserver `index_part.json` | YB `yb_storage.blobs` | `pageserver-yb/branches/<branch_id>/index_part.json-<gen>` |
@@ -82,18 +82,18 @@ key the pageserver/safekeeper use. In YB the path is split across the
 | Safekeeper live WAL | YB `safekeeper.wals` | `((branch_id, bucket_id) HASH, segno, chunk_offset)` |
 | Controller relational state | YB `yb_storage` DB, `registry` schema | 8 Diesel-managed tables (alongside pageserver/safekeeper/public schemas) |
 | Compute endpoint registry | YB `yb_storage` DB, `registry.endpoints` | one row per endpoint: endpoint_id, branch_id + opaque `EndpointConf` JSON (`spec`). Replaces the old per-endpoint `endpoint.json` folder |
-| Pageserver local FS | local FS | `.yb_light/endpoints/<endpoint>/pageserver/` — `pageserver.toml`, `identity.toml`, `metadata.json`, log + pidfile (no layer files; pages live in YB) |
-| Safekeeper local FS | local FS | `.yb_light/endpoints/<endpoint>/safekeeper/` — only logs + pidfile (no WAL, no control file, no id) |
-| Compute `pgdata` + runtime | local FS | `.yb_light/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`), plus the branch's co-located `pageserver/` + `safekeeper/`; created on `endpoint create`, removed on destroy |
+| Pageserver local FS | local FS | `.yb_amp/endpoints/<endpoint>/pageserver/` — `pageserver.toml`, `identity.toml`, `metadata.json`, log + pidfile (no layer files; pages live in YB) |
+| Safekeeper local FS | local FS | `.yb_amp/endpoints/<endpoint>/safekeeper/` — only logs + pidfile (no WAL, no control file, no id) |
+| Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`), plus the branch's co-located `pageserver/` + `safekeeper/`; created on `endpoint create`, removed on destroy |
 
 ## What did *not* change from upstream Neon
 
-These subsystems run unmodified upstream Neon code in yb-light:
+These subsystems run unmodified upstream Neon code in yb-amp:
 
 - The Postgres compute itself (`pg_install/v18/bin/postgres` with Neon smgr
   patches from `compute/vendor/postgres-v18`).
 - `compute_ctl` and the compute spec. (The endpoint *registry* — what
-  `yb_light_local` persists per endpoint — moved out of `endpoint.json` folders
+  `yb_amp_local` persists per endpoint — moved out of `endpoint.json` folders
   into the `registry.endpoints` table; `compute_ctl` itself is
   unchanged.)
 - The pageserver's `RemoteStorage` *trait* — we added `YbStore` as the
@@ -142,17 +142,17 @@ yugabyted                       :7100 (master), :5433 (ysql)
                                          + `wals` (per-write WAL chunks,
                                          PK ((branch_id) HASH, segno, chunk_offset))
 
-yb-light binaries (target/debug/)
+yb-amp binaries (target/debug/)
   controller --yb-config "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage' }" --listen 127.0.0.1:<port>
-  yb-pageserver   (config from on-disk pageserver.toml; yb_light_local defaults :64100 pg, :9988 http, :51151 grpc — base ports 64000/9898/51051 + i offset)
-  yb-safekeeper --id 1   (config from on-disk safekeeper.toml: yb_storage_conn; yb_light_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
+  yb-pageserver   (config from on-disk pageserver.toml; yb_amp_local defaults :64100 pg, :9988 http, :51151 grpc — base ports 64000/9898/51051 + i offset)
+  yb-safekeeper --id 1   (config from on-disk safekeeper.toml: yb_storage_conn; yb_amp_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
   yb-endpoint-storage   (config from endpoints/<name>/compute/endpoint_storage/endpoint_storage.json; one per endpoint, base port 9993 + 2*k)
-  yb-compute-ctl --pgdata .yb_light/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
+  yb-compute-ctl --pgdata .yb_amp/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
     +-- postgres (18.2 + Neon/yb_amp patches)  :55440
 ```
 
 A production deployment would have M pageservers partitioned by branch
-(one branch per pageserver — yb-light has no sharding) and a YB cluster
+(one branch per pageserver — yb-amp has no sharding) and a YB cluster
 that's actually distributed. **The safekeeper count stays at 1**
 when `yb_storage_conn` is configured — YB already provides the quorum durability
 that a multi-safekeeper Raft would. Running two protocols (YB's Raft + the
@@ -170,7 +170,7 @@ is most visible with **read endpoints**: a read-only / hot-standby replica
 can be served by a *separate* pageserver — potentially on another node and a
 different build — that streams interpreted WAL from a safekeeper elsewhere.
 A given safekeeper may also fan its WAL out to more than one such
-pageserver. (The current `yb_light_local` launcher happens to point a read
+pageserver. (The current `yb_amp_local` launcher happens to point a read
 endpoint at the primary's pair via `127.0.0.1`, but nothing downstream may
 rely on that.)
 

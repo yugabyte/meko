@@ -1,7 +1,7 @@
-# Runbook: yb-light startup failures
+# Runbook: yb-amp startup failures
 
 A component won't start, won't register, or the compute can't serve queries. This runbook covers the
-yb-light bring-up failure modes by **symptom → cause → fix**. It is topology-agnostic: the compute,
+yb-amp bring-up failure modes by **symptom → cause → fix**. It is topology-agnostic: the compute,
 pageserver, safekeeper, and controller may be co-located or on separate boxes. Substitute
 the conventions below.
 
@@ -10,14 +10,14 @@ the conventions below.
 export PS_HOST=...        export PS_HTTP_PORT=...      # yb-pageserver
 export SC_BASE=http://<sc-host>:<sc-port>             # controller
 export SK_HOST=...        export SK_PG_PORT=...        # safekeeper PG listen
-export COMPUTE_HOST=...   export COMPUTE_PORT=...      # yb-light compute
+export COMPUTE_HOST=...   export COMPUTE_PORT=...      # yb-amp compute
 export YB_HOST=...  export YB_PORT=...  export YB_DB=...   # YugabyteDB backing store
 export YB_STORAGE_PASSWORD=...                            # YB password, used by PS/SK/endpoint-storage
 export PSQL=<path-to>/psql
 ```
 Component config locations vary by deployment but typically:
 `pageserver.toml` + `identity.toml` in the PS data dir; the safekeeper/SC/endpoint-storage start
-scripts; the yb_light_local repo dir (`.yb_light/config`, `.yb_light/endpoints/<ep>/` — which
+scripts; the yb_amp_local repo dir (`.yb_amp/config`, `.yb_amp/endpoints/<ep>/` — which
 holds that endpoint's `pageserver/`, `safekeeper/`, and `endpoint_storage/`).
 
 ---
@@ -31,14 +31,14 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 3. **endpoint_storage** (if used) → checkpoint: process up, no TLS errors in its log.
 4. **pageserver** — *single-branch model (#16)*: the process refuses to start unless
    `pageserver.toml` carries `branch_id`/`generation`. On a fresh repo this is
-   normal: `yb_light_local start` prints `Skipping pageserver …: no timeline identity yet` and
+   normal: `yb_amp_local start` prints `Skipping pageserver …: no timeline identity yet` and
    `branch create` bakes the identity in, bumps the generation via the SC attach-hook, and starts
    the pageserver itself. Manual deployments must write the identity (and `[timeline_init]` for a
    first boot) before spawning. Checkpoint once started:
    `curl http://$PS_HOST:$PS_HTTP_PORT/v1/status` returns OK.
 5. **Register SK with the SC** (see "Manual registration"). PS registration is launcher-driven
-   (`node_register` + attach-hook happen inside every `yb_light_local pageserver start`).
-6. **Create the branch** (via `yb_light_local branch create`; the pageserver bootstraps the branch from its
+   (`node_register` + attach-hook happen inside every `yb_amp_local pageserver start`).
+6. **Create the branch** (via `yb_amp_local branch create`; the pageserver bootstraps the branch from its
    `[timeline_init]` config — the SC only observes via `timeline_detail` and then creates the
    branch on the safekeeper).
 7. **Create + start the compute endpoint** → checkpoint: `psql … 'SELECT 1'`.
@@ -48,7 +48,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 ## Symptom index
 | Symptom / error text | Cause | Section |
 |---|---|---|
-| `yb_light_local init` panics / serde error on the config TOML | init config schema mismatch | **A** |
+| `yb_amp_local init` panics / serde error on the config TOML | init config schema mismatch | **A** |
 | SC: `Migration error: no schema has been selected to create in` | backing DB missing the schema | **B** |
 | SK: `unexpected argument '--<flag>'` | flag removed/renamed in this build | **C** |
 | endpoint_storage / PS: `no pg_hba.conf entry … no encryption` | client connected to YB without TLS | **D** |
@@ -58,7 +58,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SK exits at startup: `YB-WAL mode requires --branch-id (single-branch-per-process)` | single-branch identity missing from `safekeeper.toml` — the SK serves one branch and scopes its load to it. Provisioned SKs get `branch_id` written by `allocate_safekeeper_conf`; a hand-written `safekeeper.toml` must set it alongside `yb_storage_conn` | — |
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |
 | psql: `libreadline.so.7: cannot open shared object file` | bundle psql wants older readline | **G** |
-| Compute postmaster dies with `EADDRINUSE` on its own port | yb_light_local port collision | **H** |
+| Compute postmaster dies with `EADDRINUSE` on its own port | yb_amp_local port collision | **H** |
 | Fresh `cloud_admin` can't auth over socket / password rejected | role needs socket-trust password set | **I** |
 | PS can't find the safekeeper (broker-less builds) | missing `safekeeper_pg_addr` | **J** |
 | Any process exits at startup: `unknown configuration item(s) …` / `unknown field …` | misspelled, stale, or misplaced config key — rejected, not ignored | **K** |
@@ -69,8 +69,8 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 
 ---
 
-## A. `yb_light_local init` config schema / serde errors
-`yb_light_local init --config <file>` is strict about its TOML. Common cascade of failures, each fixed
+## A. `yb_amp_local init` config schema / serde errors
+`yb_amp_local init --config <file>` is strict about its TOML. Common cascade of failures, each fixed
 by adding the missing/retyped key:
 - `yb_storage_conn` under `[[pageservers]]` must be a **string-encoded inline table**, not a native
   TOML map — i.e. `yb_storage_conn='{ host_ports="…:5433", user="…", dbname="…" }'` (quoted string),
@@ -82,7 +82,7 @@ by adding the missing/retyped key:
   `host_ports`/`user`/`dbname` connection block) to be present.
 
 Fix by adding each missing key and re-running init. After a successful init, the generated
-`.yb_light/config` may **drop the `[[pageservers]]` stanza** when the PS is off-box / self-registering —
+`.yb_amp/config` may **drop the `[[pageservers]]` stanza** when the PS is off-box / self-registering —
 that's expected, not a failure.
 
 ## B. SC migration: "no schema has been selected to create in"
@@ -107,7 +107,7 @@ and `--control-file-backend`. Run `<build>/safekeeper --help` and diff against t
 ## D. "no pg_hba.conf entry … no encryption" (TLS to YB)
 A client opened a **non-TLS** connection to YugabyteDB, which requires TLS. Seen when the
 endpoint_storage `YbStore` config derived `sslmode:None`. Fix the relevant config to force TLS and
-supply the password env, e.g. in `.yb_light/endpoints/<ep>/endpoint_storage/endpoint_storage.json` add
+supply the password env, e.g. in `.yb_amp/endpoints/<ep>/endpoint_storage/endpoint_storage.json` add
 `"sslmode":"require"` and `"password_env":"YB_STORAGE_PASSWORD"`. Any component talking to YB
 (`pageserver.toml yb_storage_conn`, safekeeper `yb_storage_conn`, SC `--database-url`) must specify
 `sslmode=require`/`sslmode="require"`.
@@ -150,10 +150,10 @@ export LD_LIBRARY_PATH=/tmp/psqllibs:$LD_LIBRARY_PATH
 Do this on whichever box you run that psql from. Many bundles ship a psql that doesn't need it.
 
 ## H. Compute postmaster dies with phantom EADDRINUSE
-yb_light_local can set the endpoint's `internal_http_port` **equal to** its `pg_port`; `compute_ctl`
+yb_amp_local can set the endpoint's `internal_http_port` **equal to** its `pg_port`; `compute_ctl`
 then binds `*:pg_port` and the postmaster fails to bind the same port (looks like a phantom
 `EADDRINUSE`). Fix: ensure the endpoint's `internal_http_port` ≠ `pg_port` (edit the endpoint spec /
-`.yb_light` config), then restart the endpoint.
+`.yb_amp` config), then restart the endpoint.
 
 ## I. Fresh `cloud_admin` can't authenticate
 A newly created compute role may have no usable password for socket/`trust` auth. Set one so local
@@ -171,7 +171,7 @@ advertised PG address. There is no `broker_endpoint` in these builds.
 
 ## K. A process refuses to start on a bad config item
 Config is **fail-fast across every process** (pageserver, safekeeper, endpoint_storage,
-controller, and the `yb_light_local` on-disk config): a config item that is wrong is
+controller, and the `yb_amp_local` on-disk config): a config item that is wrong is
 refused at startup rather than logged and ignored. The classes that abort start-up:
 
 - **Unknown / misspelled / stale key** — e.g. `unknown configuration item(s) in pageserver.toml:
@@ -186,31 +186,31 @@ A silently-ignored key used to be the trap (the value you intended had no effect
 by the control plane on a separate lifecycle, so it still tolerates unknown fields for version skew.
 
 ## L. SC: `Postgres directory 'lib' not found in <dir>/pg_install`
-`yb_light_local init` bakes `pg_distrib_dir` into the generated repo config. The default is
+`yb_amp_local init` bakes `pg_distrib_dir` into the generated repo config. The default is
 `$POSTGRES_DISTRIB_DIR` if set, otherwise `<cwd-at-init-time>/pg_install` (`local_env.rs`). If you
 init from a directory that has no `pg_install` (e.g. `/home/ec2-user`), SC startup fails immediately
 because the Postgres install tree isn't there.
 
 Fix — point it at the build's pg_install, either before init or by patching the generated config:
 ```bash
-# Cleanest: set this before `yb_light_local init` so the config is written correctly
+# Cleanest: set this before `yb_amp_local init` so the config is written correctly
 export POSTGRES_DISTRIB_DIR=$BUILD/pg_install
 
 # Or patch the already-generated config:
-CFG=$YB_LIGHT_REPO_DIR/config
+CFG=$YB_AMP_REPO_DIR/config
 sed -i "s|^pg_distrib_dir = .*|pg_distrib_dir = \"$BUILD/pg_install\"|" "$CFG"
 ```
-The companion `yb_light_distrib_dir = "$BUILD"` should already be correct.
+The companion `yb_amp_distrib_dir = "$BUILD"` should already be correct.
 
 ## M. SC: `password missing` / `building database URL from --yb-config`
-`yb_light_local init` writes the YB connection blocks (`[controller.yb]` and the per-template
+`yb_amp_local init` writes the YB connection blocks (`[controller.yb]` and the per-template
 `yb_storage_conn = '{…}'` inline tables) with `password_env: None` and `sslmode: None`
-(`yb_light_local.rs`) — only `host_ports/user/dbname`. SC then can't authenticate, and YB rejects
+(`yb_amp_local.rs`) — only `host_ports/user/dbname`. SC then can't authenticate, and YB rejects
 non-TLS connections anyway (see **D**).
 
-Fix: edit the generated `$YB_LIGHT_REPO_DIR/config` and add both keys to every YB block:
+Fix: edit the generated `$YB_AMP_REPO_DIR/config` and add both keys to every YB block:
 ```bash
-CFG=$YB_LIGHT_REPO_DIR/config
+CFG=$YB_AMP_REPO_DIR/config
 # [controller.yb] block (TOML section)
 sed -i '/^\[controller\.yb\]/,/^\[/ {
   /^dbname = /a\
@@ -220,7 +220,7 @@ sslmode = "require"
 # Inline yb_storage_conn = '{ … }' on PS/SK templates
 sed -i 's|\(yb_storage_conn = .{ host_ports = "[^"]*", user = "[^"]*", dbname = "[^"]*"\) }\(.*\)|\1, password_env = "YB_STORAGE_PASSWORD", sslmode = "require" }\2|' "$CFG"
 ```
-Then restart everything (or just don't `yb_light_local start` until the patch is in).
+Then restart everything (or just don't `yb_amp_local start` until the patch is in).
 
 ## N. `pageserver.toml` top-level knob placed after a `[section]` header
 TOML sections are open-ended: once a `[section]` header appears, every subsequent key belongs to that
@@ -239,7 +239,7 @@ page_cache_size = 8192
 mode = "bootstrap"
 pg_version = 17
 ```
-Then `yb_light_local pageserver restart --id 1` and confirm the PS starts clean (no `unknown
+Then `yb_amp_local pageserver restart --id 1` and confirm the PS starts clean (no `unknown
 configuration item` rejection, no `ignoring unknown` warning). See throughput Step 3a for the
 `scale_factor` tuning this most often bites.
 

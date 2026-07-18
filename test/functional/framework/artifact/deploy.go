@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/artifact/fetch"
-	"github.com/yugabyte/yb-amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/artifact/fetch"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // DefaultCacheDir is ~/.ampqa/artifacts, used when Deployer.CacheDir is unset.

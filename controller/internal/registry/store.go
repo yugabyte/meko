@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/yugabyte/yb-amp/controller/internal/db"
+	"github.com/yugabyte/amp/controller/internal/db"
 )
 
 // Sentinel errors the handlers map onto HTTP status codes.

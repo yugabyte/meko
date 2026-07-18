@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/artifact/fetch"
+	"github.com/yugabyte/amp/test/functional/framework/artifact/fetch"
 )
 
 func TestHTTPDownloads(t *testing.T) {

@@ -207,7 +207,7 @@ pub static BACKGROUND_RUNTIME: Lazy<Runtime> = Lazy::new(|| {
 });
 
 #[cfg(test)]
-mod yb_light_tests {
+mod yb_amp_tests {
     #[test]
     fn yb_branch_id_requires_id() {
         use super::SafeKeeperConf;

@@ -25,9 +25,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud/aws"
-	"github.com/yugabyte/yb-amp/test/functional/framework/apps/cloud/gcp"
-	execpkg "github.com/yugabyte/yb-amp/test/functional/framework/exec"
+	"github.com/yugabyte/amp/test/functional/framework/apps/cloud/aws"
+	"github.com/yugabyte/amp/test/functional/framework/apps/cloud/gcp"
+	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // Instance is one cloud VM the framework manages. It is the cloud-neutral

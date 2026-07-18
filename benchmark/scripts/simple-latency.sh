@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Simple-latency micro-benchmark (L1..L9).
-# Usage: ./simple-latency.sh ybLight|aurora [test_id ...]
+# Usage: ./simple-latency.sh ybAmp|aurora [test_id ...]
 #   With no test_id: runs all L1..L9 in order.
-#   With test_id list: runs just those (e.g. ./simple-latency.sh ybLight L4 L5 L6).
+#   With test_id list: runs just those (e.g. ./simple-latency.sh ybAmp L4 L5 L6).
 #
 # For each test, runs:
 #   - 5 s warmup (discarded)
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 ybLight|aurora [L1 L2 ...]" >&2
+  echo "Usage: $0 ybAmp|aurora [L1 L2 ...]" >&2
   exit 1
 fi
 

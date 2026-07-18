@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use once_cell::sync::Lazy;
 /// Cadence of the tenant housekeeping loop. Originally
 /// `default_tenant_conf.compaction_period`; the compaction-period
-/// knob is gone in yb-light, so we use a hardcoded 20s mirror of
+/// knob is gone in yb-amp, so we use a hardcoded 20s mirror of
 /// upstream's default.
 const TENANT_HOUSEKEEPING_PERIOD: Duration = Duration::from_secs(20);
 use rand::Rng;
@@ -56,7 +56,7 @@ static CONCURRENT_BACKGROUND_TASKS: Lazy<Semaphore> = Lazy::new(|| {
 /// NB: not all of these acquire a CONCURRENT_BACKGROUND_TASKS semaphore permit, only the ones that
 /// do any significant IO or CPU work.
 ///
-/// yb-light only acquires `Gc`, `TenantHouseKeeping`, and
+/// yb-amp only acquires `Gc`, `TenantHouseKeeping`, and
 /// `InitialLogicalSizeCalculation`; the layer-stack-era variants
 /// (`L0Compaction`, `Compaction`, `Eviction`, `HeatmapUpload`,
 /// `SecondaryDownload`) and the upstream consumption-metrics workers
@@ -251,7 +251,7 @@ async fn tenant_housekeeping_loop(tenant: Arc<PageServer>, cancel: CancellationT
         }
 
         // Tenant housekeeping ticks at a constant cadence. Used to be
-        // tied to `compaction_period`; that knob is gone in yb-light.
+        // tied to `compaction_period`; that knob is gone in yb-amp.
         let period = TENANT_HOUSEKEEPING_PERIOD;
 
         let Ok(period) = sleep_jitter(period, period * 5 / 100, &cancel).await else {

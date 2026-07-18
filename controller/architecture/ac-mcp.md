@@ -239,9 +239,9 @@ The server is also containerized (a `uv`-based `Dockerfile`, defaulting to the
 `http` transport) so the chart can run it as the `amp-controller-mcp` pod:
 
 ```sh
-docker build -t yb-light/controller-mcp:dev controller/mcp
+docker build -t yb-amp/controller-mcp:dev controller/mcp
 docker run --rm -p 8000:8000 \
   -e AMP_CONTROLLER_URL=http://host.docker.internal:8080 \
   -e AMP_MCP_TRANSPORT=http \
-  yb-light/controller-mcp:dev
+  yb-amp/controller-mcp:dev
 ```

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # pgbench RO/RW (W1..W4).
-# Usage: ./pgbench-run.sh ybLight|aurora W1|W2|W3|W4 [...]
+# Usage: ./pgbench-run.sh ybAmp|aurora W1|W2|W3|W4 [...]
 #
 # W1: -S, scale=100  (RO, fits)
 # W2: default, scale=100 (RW, fits)
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: $0 ybLight|aurora W1|W2|W3|W4 [...]" >&2
+  echo "Usage: $0 ybAmp|aurora W1|W2|W3|W4 [...]" >&2
   exit 1
 fi
 

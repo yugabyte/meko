@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Integration test entry point. Thin wrapper over the Rust harness
-# (`integration_tests` crate). The harness brings up one yb_light_local cluster
+# (`integration_tests` crate). The harness brings up one yb_amp_local cluster
 # against an ephemeral YB database and runs every scenario in each
 # requested category, scanning the pageserver log for corruption
 # markers after each. See test/integration/compute/main.rs.
@@ -45,9 +45,9 @@ Options:
   -h, --help      show this help
 
 Honoured env vars (passed through): INTEGRATION_REGEN_EXPECTED, TEST_DIR,
-YB_LIGHT_REPO_DIR, YB_DBNAME, YB_HOST, YB_PORT, COMPUTE_PORT,
+YB_AMP_REPO_DIR, YB_DBNAME, YB_HOST, YB_PORT, COMPUTE_PORT,
 SOAK_SECS, PS_HTTP_TIMEOUT, ENDPOINT_START_TIMEOUT,
-YB_PS_VERIFY_WAL_ROUNDTRIP, YB_LIGHT, INTEGRATION_PORT_BASE.
+YB_PS_VERIFY_WAL_ROUNDTRIP, YB_AMP, INTEGRATION_PORT_BASE.
 
 Every run is isolated: it synthesizes its own config on a free port
 block (auto-picked in 20000..60000), uses an ephemeral db + run dir, and
@@ -86,12 +86,12 @@ done
 # project convention for the dev/integration loop); --release for release
 # verification.
 #
-# `yb_light_local` launches the cluster by spawning the server binaries
+# `yb_amp_local` launches the cluster by spawning the server binaries
 # from target/<profile>/ at runtime — it does not build them — so they
 # must be compiled here too. Omitting one silently runs a STALE binary
 # from a previous build, which surfaces as baffling runtime mismatches
 # (e.g. a fresh launcher sending a request shape an old controller
-# can't parse). Keep this list in sync with the binaries `yb_light_local`
+# can't parse). Keep this list in sync with the binaries `yb_amp_local`
 # spawns: controller, yb-pageserver, safekeeper, endpoint_storage,
 # compute_ctl.
 #
@@ -143,20 +143,20 @@ env -u PROFILE "$REPO/build.sh" --pg-only
 # behaves identically to the production build otherwise.
 if [[ $PROFILE == release ]]; then
     cargo build --release --features pageserver/testing,safekeeper/testing \
-        --bin integration_tests --bin yb_light_local \
+        --bin integration_tests --bin yb_amp_local \
         "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
-    export YB_LIGHT=${YB_LIGHT:-$REPO/target/release/yb_light_local}
+    export YB_AMP=${YB_AMP:-$REPO/target/release/yb_amp_local}
     BIN=$REPO/target/release/integration_tests
     _PROFILE_DIR=release
 else
     cargo build --features pageserver/testing,safekeeper/testing \
-        --bin integration_tests --bin yb_light_local \
+        --bin integration_tests --bin yb_amp_local \
         "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
     BIN=$REPO/target/debug/integration_tests
     _PROFILE_DIR=debug
 fi
 
-# The controller is a Go binary (not a cargo target). yb_light_local spawns it
+# The controller is a Go binary (not a cargo target). yb_amp_local spawns it
 # from beside itself (target/<profile>/controller), so build it into the same
 # directory the cargo binaries land in.
 ( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller )
@@ -204,7 +204,7 @@ fi
 # harness's own Drop-based teardown never runs. Honour caller-provided
 # values (e.g. a developer pinning a dir/db).
 RUN_ID="${EPOCHSECONDS:-$(date +%s)}_$$"
-export YB_LIGHT_REPO_DIR="${YB_LIGHT_REPO_DIR:-$REPO/.integration-tests/run_${RUN_ID}}"
+export YB_AMP_REPO_DIR="${YB_AMP_REPO_DIR:-$REPO/.integration-tests/run_${RUN_ID}}"
 export YB_DBNAME="${YB_DBNAME:-yb_storage_integration_${RUN_ID}}"
 
 # Liveness lock for THIS run. We hold an exclusive flock on the SIBLING
@@ -220,23 +220,23 @@ export YB_DBNAME="${YB_DBNAME:-yb_storage_integration_${RUN_ID}}"
 # in-dir lock file vanishing made reap.sh treat every live run as dead —
 # a concurrently starting run then killed its processes and dropped its
 # ephemeral DB mid-run.
-mkdir -p "$YB_LIGHT_REPO_DIR"
-exec {RUN_LOCK_FD}>"${YB_LIGHT_REPO_DIR}.lock"
+mkdir -p "$YB_AMP_REPO_DIR"
+exec {RUN_LOCK_FD}>"${YB_AMP_REPO_DIR}.lock"
 flock -n "$RUN_LOCK_FD" \
-    || { echo "run.sh: $YB_LIGHT_REPO_DIR is locked by another run; aborting" >&2; exit 1; }
+    || { echo "run.sh: $YB_AMP_REPO_DIR is locked by another run; aborting" >&2; exit 1; }
 
 # Reap orphans left by runs that are no longer alive (compute postgres that
 # outlived a hung `endpoint stop`, or anything from a SIGKILL'd/OOM'd run)
 # BEFORE we build and bring up — that is exactly when the box is most
 # starved. Scoped to dead runs; a live concurrent run holds its lock and is
 # skipped. Best-effort: never let a reap hiccup fail the run.
-bash "$REPO/test/integration/compute/reap.sh" "$REPO/.integration-tests" "$YB_LIGHT_REPO_DIR" || true
+bash "$REPO/test/integration/compute/reap.sh" "$REPO/.integration-tests" "$YB_AMP_REPO_DIR" || true
 
 # Backstop teardown for ABNORMAL termination only. A normal exit (success
 # or failure — including --no-fail-stop's deliberate keep-alive) is handled
 # by the harness's own Drop, so we do NOT trap EXIT; only the signals that
 # bypass Drop (Ctrl-C, kill, hangup). clean.sh is scoped to this run via the
-# env above, so it never touches a concurrent run or a dev .yb_light cluster.
+# env above, so it never touches a concurrent run or a dev .yb_amp cluster.
 cleanup() {
     trap - INT TERM HUP
     echo >&2

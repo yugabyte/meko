@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	rhtml "github.com/yugabyte/yb-amp/test/functional/framework/report/html"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	rhtml "github.com/yugabyte/amp/test/functional/framework/report/html"
 )
 
 func TestSinkWritesReportAtRunFinished(t *testing.T) {

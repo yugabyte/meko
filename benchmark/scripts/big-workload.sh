@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Run big-table workloads (B1..B5) against a target.
-# Usage: ./big-workload.sh ybLight|aurora [config_suffix] [test_id ...]
+# Usage: ./big-workload.sh ybAmp|aurora [config_suffix] [test_id ...]
 #   config_suffix : optional dir suffix (e.g. "noLfc", "ps1g")
 #   test_id list  : default B1 B2 B3 B4 B5
 
 set -euo pipefail
-target="${1:?usage: $0 ybLight|aurora [suffix] [B1...]}"; shift
+target="${1:?usage: $0 ybAmp|aurora [suffix] [B1...]}"; shift
 suffix="${1:-}"
 [[ "$suffix" =~ ^B[1-5]$ ]] && suffix="" || { [[ $# -gt 0 ]] && shift; :; }
 

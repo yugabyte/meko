@@ -7,14 +7,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
-	"github.com/yugabyte/yb-amp/test/functional/framework/report"
-	"github.com/yugabyte/yb-amp/test/functional/framework/report/html"
-	"github.com/yugabyte/yb-amp/test/functional/framework/report/jsonfile"
-	"github.com/yugabyte/yb-amp/test/functional/framework/report/junit"
-	"github.com/yugabyte/yb-amp/test/functional/framework/report/portal"
-	"github.com/yugabyte/yb-amp/test/functional/framework/report/stdout"
-	"github.com/yugabyte/yb-amp/test/functional/framework/sched"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/report"
+	"github.com/yugabyte/amp/test/functional/framework/report/html"
+	"github.com/yugabyte/amp/test/functional/framework/report/jsonfile"
+	"github.com/yugabyte/amp/test/functional/framework/report/junit"
+	"github.com/yugabyte/amp/test/functional/framework/report/portal"
+	"github.com/yugabyte/amp/test/functional/framework/report/stdout"
+	"github.com/yugabyte/amp/test/functional/framework/sched"
 )
 
 func newRunCmd() *cobra.Command {

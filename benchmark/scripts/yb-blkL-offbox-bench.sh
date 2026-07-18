@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # G-battery for the LAYERED pageserver, run OFF-BOX (isolated) on the 16-vCPU host
-# 172.151.20.28, with the compute on the 2-core box ybLight (172.151.29.184).
+# 172.151.20.28, with the compute on the 2-core box ybAmp (172.151.29.184).
 #
 # This is the apples-to-apples peer of the FIXED 8k-direct yb-pageserver off-box
 # run (same topology, dataset, micro-battery, RSS/CPU sampling), but with the
@@ -17,13 +17,13 @@
 #
 # Phases: (A) load 5M-row big_table + wall time, (B) upload-drain + manual
 # eviction + YB blob-store size + LOCAL resident-layer bytes, (C) buffer-cold
-# full-scan probe, (D) warm micro-battery G1..G6 with compute CPU (ybLight) +
+# full-scan probe, (D) warm micro-battery G1..G6 with compute CPU (ybAmp) +
 # off-box PS RSS/CPU (this box) sampling, (E) summary.
 set -uo pipefail
 
 LABEL="${1:?usage: yb-blkL-offbox-bench.sh <label>}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-source "$HERE/scripts/_env.sh" ybLight
+source "$HERE/scripts/_env.sh" ybAmp
 source "$HERE/scripts/_metrics.sh"
 export PGPASSWORD='Yugabyte!1'
 
@@ -46,7 +46,7 @@ YB_PSQL=/home/ec2-user/yb-neon-bundle/pg_install/v18/bin/psql
 ybq() { PGPASSWORD='Yugabyte!1' $YB_PSQL "host=172.151.17.132 port=5433 user=yugabyte dbname=yb_storage sslmode=require" -tAc "$1" 2>/dev/null; }
 
 TS=$(date -u +%Y%m%d-%H%M)
-OUT="$HERE/results/${TS}-ybLight-BLKL-offbox-${LABEL}"
+OUT="$HERE/results/${TS}-ybAmp-BLKL-offbox-${LABEL}"
 mkdir -p "$OUT"
 SUMMARY="$OUT/SUMMARY.md"
 
@@ -195,7 +195,7 @@ log "E. writing $SUMMARY"
 {
   echo "# BLKL-OFFBOX battery — label=$LABEL (LAYERED pageserver, OFF-BOX, remote-read forced)"
   echo
-  echo "- Topology: compute on ybLight 172.151.29.184 (2 vCPU, SB=100MB, LFC off); LAYERED pageserver OFF-BOX on 172.151.20.28 (16 vCPU), node id 2."
+  echo "- Topology: compute on ybAmp 172.151.29.184 (2 vCPU, SB=100MB, LFC off); LAYERED pageserver OFF-BOX on 172.151.20.28 (16 vCPU), node id 2."
   echo "- Apples-to-apples peer of the FIXED 8k-direct off-box run: same 5M-row dataset, G1-G6 micro-battery, 8GB RAM page cache."
   echo "- Small self-managed local cache: disk_usage_based_eviction min_avail_bytes caps LOCAL layers at ~1GiB (period 60s, LRU). The engine evicts cold layers itself, so the cold full-scan (5GB working set) must re-download layers from YB public.blobs, while the small warm micro-battery working set stays resident. No manual eviction (a continuous manual evictor death-spiralled against reads)."
   echo "- Tenant $TENANT / timeline $TIMELINE."
@@ -229,7 +229,7 @@ log "E. writing $SUMMARY"
   echo "- Total on-demand layer downloads during battery: ${BATT_DL}. If ~0, the 8GB RAM page_cache served reads (local-layer eviction had no effect on warm reads -> the RAM cache, not local layer files, is what makes warm reads fast)."
   echo
   echo "## CPU + memory"
-  echo "- compute (postgres on ybLight) avg CPU during battery: ${CPU_POSTGRES}% (single-core %)."
+  echo "- compute (postgres on ybAmp) avg CPU during battery: ${CPU_POSTGRES}% (single-core %)."
   echo "- off-box PS avg CPU during battery: ${PS_CPU_BATT}% (single-core %)."
   echo "- off-box PS avg RSS during battery: ${PS_RSS_BATT}MB (peak ${PS_RSS_PEAK}MB)."
   echo "- off-box PS peak RSS during load:  ${PS_RSS_LOAD}MB."

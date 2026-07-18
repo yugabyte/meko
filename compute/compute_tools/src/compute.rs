@@ -1509,7 +1509,7 @@ impl ComputeNode {
 
         let lsn = match spec.mode {
             ComputeMode::Primary => {
-                // yb-light: a single safekeeper reports commit_lsn == flush_lsn
+                // yb-amp: a single safekeeper reports commit_lsn == flush_lsn
                 // (quorum of one, every flush is committed), so the lightweight
                 // TIMELINE_STATUS check always yields the durable LSN. There is
                 // no multi-safekeeper consensus to drive, so we never run
@@ -2539,7 +2539,7 @@ LIMIT 100",
         }
         info!("parse shared_preload_libraries from provided postgresql.conf");
 
-        // that is used in yb_light_local and python tests
+        // that is used in yb_amp_local and python tests
         if let Some(conf) = &spec.cluster.postgresql_conf {
             let conf_lines = conf.split('\n').collect::<Vec<&str>>();
             let mut shared_preload_libraries_line = "";

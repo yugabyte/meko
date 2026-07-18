@@ -61,10 +61,10 @@ test/integration/control_plane/run-controller.sh -n 3      # repeat the scenario
 ```
 
 Prerequisites: Docker; a YugabyteDB on the host at `:5433`
-(yugabyte/yugabyte); the `yb-light/neon-endpoint:dev` image present (build
+(yugabyte/yugabyte); the `yb-amp/neon-endpoint:dev` image present (build
 it once with
-`docker build -t yb-light/neon-endpoint:dev -f deploy/endpoint/Dockerfile .`).
-`run-controller.sh` builds `yb-light/controller:dev` itself and tears everything down on
+`docker build -t yb-amp/neon-endpoint:dev -f deploy/endpoint/Dockerfile .`).
+`run-controller.sh` builds `yb-amp/controller:dev` itself and tears everything down on
 exit. `branch_lineage` brings up four endpoint containers (main + b1 + b2 + b3),
 so it needs enough headroom for four single-container computes at once.
 
@@ -74,7 +74,7 @@ into every endpoint (`AMP_DEPLOY_SUPERVISOR_PATH`), so the endpoint image's
 (pageserver/safekeeper/compute) are still whatever was baked in. If a test fails
 because an endpoint's pageserver/safekeeper lacks a feature the supervisor or
 controller now drives, rebuild the image:
-`docker build -t yb-light/neon-endpoint:dev -f deploy/endpoint/Dockerfile .`.
+`docker build -t yb-amp/neon-endpoint:dev -f deploy/endpoint/Dockerfile .`.
 
 ## Layout
 

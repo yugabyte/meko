@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Issue conventions (areas & milestones)
-    url: https://github.com/yugabyte/yb-light/blob/main/docs/issue-tracking.md
+    url: https://github.com/yugabyte/amp/blob/main/docs/issue-tracking.md
     about: "Every issue needs one area label (storage / control plane) and one milestone. The forms set the area; pick a milestone after filing."

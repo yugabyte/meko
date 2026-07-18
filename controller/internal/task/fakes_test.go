@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yugabyte/yb-amp/controller/internal/deploy"
+	"github.com/yugabyte/amp/controller/internal/deploy"
 )
 
 // Shared fakes for the task-package tests: the dependency *ports* (StateStore,

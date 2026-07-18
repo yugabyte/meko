@@ -34,7 +34,7 @@
 //! that no extra `tokio_postgres` features are required.
 //!
 //! `list_versions` and `time_travel_recover` are intentionally unsupported;
-//! yb-light has no need for them and any caller hitting these paths is a bug.
+//! yb-amp has no need for them and any caller hitting these paths is a bug.
 
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
@@ -54,7 +54,7 @@ use yb_tokio_postgres::types::ToSql;
 use ysql_client::YbConnConfig;
 
 /// The YB table the endpoint_storage blob store lives in. Hardcoded — the
-/// connection config carries no table name (every yb-light component owns
+/// connection config carries no table name (every yb-amp component owns
 /// a fixed table).
 const BLOBS_TABLE: &str = "blobs";
 use crate::error::{Cancelled, TimeoutOrCancel};

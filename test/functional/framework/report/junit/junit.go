@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/yugabyte/yb-amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
 // Sink accumulates results and writes the XML file at RunFinished.
