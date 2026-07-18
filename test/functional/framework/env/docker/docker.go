@@ -49,8 +49,37 @@ type Config struct {
 	YBImage         string
 	ComputePortBase int
 	YBPortBase      int
+	// YBMasterGflags / YBTserverGflags are CSV flag=value lists forwarded to
+	// yugabyted's --master_flags / --tserver_flags (env.docker.yb_gflags
+	// feeds both sides).
+	YBMasterGflags  string
+	YBTserverGflags string
 	YBShared        bool   // one YB across tests on the host, else fresh per test
 	NameToken       string // uniquifier so parallel runs on one host don't collide
+}
+
+// yugabytedCommand is the container start command, with optional extra
+// master/tserver gflags (CSV flag=value lists).
+func yugabytedCommand(masterGflags, tserverGflags string) []string {
+	cmd := []string{"bin/yugabyted", "start", "--background=false"}
+	if masterGflags != "" {
+		cmd = append(cmd, "--master_flags="+masterGflags)
+	}
+	if tserverGflags != "" {
+		cmd = append(cmd, "--tserver_flags="+tserverGflags)
+	}
+	return cmd
+}
+
+// joinGflags merges CSV flag=value lists, dropping empty parts.
+func joinGflags(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // FromConfig reads the env.docker.* namespace from a framework Config.
@@ -64,8 +93,12 @@ func FromConfig(c *core.Config) Config {
 		YBImage:         c.GetString("env.docker.yb_image", DefaultYBImage),
 		ComputePortBase: c.GetInt("env.docker.compute_port_base", DefaultComputePortBase),
 		YBPortBase:      c.GetInt("env.docker.yb_port_base", DefaultYBPortBase),
-		YBShared:        c.GetBool("env.docker.yb_shared", true),
-		NameToken:       c.GetString("env.docker.name_token", ""),
+		YBMasterGflags: joinGflags(c.GetString("env.docker.yb_gflags", ""),
+			c.GetString("env.docker.yb_master_gflags", "")),
+		YBTserverGflags: joinGflags(c.GetString("env.docker.yb_gflags", ""),
+			c.GetString("env.docker.yb_tserver_gflags", "")),
+		YBShared:  c.GetBool("env.docker.yb_shared", true),
+		NameToken: c.GetString("env.docker.name_token", ""),
 	}
 	return cfg
 }
@@ -272,7 +305,7 @@ func (p *Provider) ensureYB(ctx context.Context, host *dockerhost.Host, a alloca
 		Image:   p.cfg.YBImage,
 		Detach:  true,
 		Ports:   []dockerhost.PortMap{{Host: a.ybPort, Container: DefaultYBPortBase}},
-		Command: []string{"bin/yugabyted", "start", "--background=false"},
+		Command: yugabytedCommand(p.cfg.YBMasterGflags, p.cfg.YBTserverGflags),
 	}); err != nil {
 		return fmt.Errorf("start YugabyteDB %s: %w", a.ybName, err)
 	}

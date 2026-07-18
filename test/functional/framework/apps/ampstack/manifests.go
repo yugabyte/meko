@@ -27,13 +27,22 @@ const (
 
 // yugabytedManifest is a single-node yugabyted StatefulSet + headless Service,
 // mirroring deploy/up.sh step 3 (parameterized by namespace, image, storage
-// size, and — when non-empty — a storage class for the data PVC). The
-// `$(hostname -f)` expressions are evaluated by the container's bash at runtime
-// and must stay literal in the YAML.
-func yugabytedManifest(namespace, image, storage, storageClass string) string {
+// size, and — when non-empty — a storage class for the data PVC and extra
+// master/tserver gflags as CSV flag=value lists). The `$(hostname -f)`
+// expressions are evaluated by the container's bash at runtime and must stay
+// literal in the YAML.
+func yugabytedManifest(namespace, image, storage, storageClass, masterGflags, tserverGflags string) string {
 	sc := ""
 	if storageClass != "" {
 		sc = fmt.Sprintf("\n        storageClassName: %s", storageClass)
+	}
+	tflags := "ysql_enable_auth=false"
+	if tserverGflags != "" {
+		tflags += "," + tserverGflags
+	}
+	mflags := ""
+	if masterGflags != "" {
+		mflags = fmt.Sprintf(" --master_flags=%q", masterGflags)
 	}
 	return fmt.Sprintf(`apiVersion: v1
 kind: Service
@@ -76,7 +85,7 @@ spec:
           command: ["bash", "-c"]
           args:
             - |
-              exec bin/yugabyted start --background=false --base_dir=/data --advertise_address="$(hostname -f)" --tserver_flags=ysql_enable_auth=false
+              exec bin/yugabyted start --background=false --base_dir=/data --advertise_address="$(hostname -f)" --tserver_flags=%[5]q%[6]s
           ports:
             - { name: ysql, containerPort: 5433 }
             - { name: master-ui, containerPort: 7000 }
@@ -102,7 +111,18 @@ spec:
         resources:
           requests:
             storage: %[3]s
-`, namespace, image, storage, sc)
+`, namespace, image, storage, sc, tflags, mflags)
+}
+
+// joinGflags merges CSV flag=value lists, dropping empty parts.
+func joinGflags(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // createStorageDBScript is the sh -c body run inside yugabyted-0 to ensure the

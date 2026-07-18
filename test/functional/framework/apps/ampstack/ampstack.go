@@ -171,10 +171,16 @@ type Config struct {
 	// the `helm template` render (after the built-in flags, so they can override).
 	ExtraHelmSet []string
 
-	YBImage      string
-	YBStorage    string
-	StorageClass string // endpoint /data PVC class; "" → emptyDir
-	DBName       string
+	YBImage   string
+	YBStorage string
+	// YBMasterGflags / YBTserverGflags are CSV flag=value lists forwarded to
+	// the built-in yugabyted's --master_flags / --tserver_flags. Builtin
+	// backing only — external clusters own their flags. The
+	// env.ampstack.yb_gflags knob feeds both sides.
+	YBMasterGflags  string
+	YBTserverGflags string
+	StorageClass    string // endpoint /data PVC class; "" → emptyDir
+	DBName          string
 
 	// Backing selects the control-plane YugabyteDB. Zero value → the built-in
 	// single-node yugabyted (current behaviour); external mode wires the
@@ -309,8 +315,12 @@ func FromConfig(get Getter) Config {
 		ControllerChart: get.GetString("env.ampstack.controller_chart", ""),
 		YBImage:         get.GetString("env.ampstack.yb_image", DefaultYBImage),
 		YBStorage:       get.GetString("env.ampstack.yb_storage", DefaultYBStorage),
-		StorageClass:    get.GetString("env.ampstack.storage_class", ""),
-		DBName:          get.GetString("env.ampstack.db_name", DefaultDBName),
+		YBMasterGflags: joinGflags(get.GetString("env.ampstack.yb_gflags", ""),
+			get.GetString("env.ampstack.yb_master_gflags", "")),
+		YBTserverGflags: joinGflags(get.GetString("env.ampstack.yb_gflags", ""),
+			get.GetString("env.ampstack.yb_tserver_gflags", "")),
+		StorageClass: get.GetString("env.ampstack.storage_class", ""),
+		DBName:       get.GetString("env.ampstack.db_name", DefaultDBName),
 		Backing: Backing{
 			Mode:           BackingMode(get.GetString("env.ampstack.backing.mode", string(BackingBuiltinYugabyted))),
 			HostPorts:      get.GetString("env.ampstack.backing.host_ports", ""),
@@ -575,7 +585,7 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 			return StackInfo{}, err
 		}
 	} else {
-		if err := a.kube.Apply(ctx, yugabytedManifest(a.cfg.Namespace, a.cfg.YBImage, a.cfg.YBStorage, a.cfg.StorageClass)); err != nil {
+		if err := a.kube.Apply(ctx, yugabytedManifest(a.cfg.Namespace, a.cfg.YBImage, a.cfg.YBStorage, a.cfg.StorageClass, a.cfg.YBMasterGflags, a.cfg.YBTserverGflags)); err != nil {
 			return StackInfo{}, fmt.Errorf("apply yugabyted: %w", err)
 		}
 		if err := a.kube.WaitFor(ctx, "statefulset/"+yugabytedStatefulSet, "jsonpath={.status.readyReplicas}=1", a.cfg.YBReadyTimeout); err != nil {
