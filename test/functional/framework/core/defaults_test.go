@@ -1142,6 +1142,21 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		t.Errorf("perf.pgbench.duration = %s, want %s", got, perf.DefaultPgbenchDuration)
 	}
 
+	// --- perf/sysbench sub-tier (perf.sysbench.*) ---
+	if got := cfg.GetString("perf.sysbench.script", "__MISSING__"); got != perf.DefaultSysbenchScript {
+		t.Errorf("perf.sysbench.script = %q, want %q", got, perf.DefaultSysbenchScript)
+	}
+	sysbenchInts := map[string]int{
+		"perf.sysbench.tables":     perf.DefaultSysbenchTables,
+		"perf.sysbench.table_size": perf.DefaultSysbenchTableSize,
+		"perf.sysbench.threads":    perf.DefaultSysbenchThreads,
+	}
+	for key, want := range sysbenchInts {
+		if got := cfg.GetInt(key, -1); got != want {
+			t.Errorf("%s = %d, want %d", key, got, want)
+		}
+	}
+
 	// --- perf.history.* (the historical run-tracking store + trend chart) ---
 	if got := cfg.GetBool("perf.history.enabled", false); got != perf.DefaultHistoryEnabled {
 		t.Errorf("perf.history.enabled = %v, want %v", got, perf.DefaultHistoryEnabled)

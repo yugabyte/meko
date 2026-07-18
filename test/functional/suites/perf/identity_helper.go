@@ -37,18 +37,20 @@ type Identity struct {
 
 // LoadFields is the load configuration that MUST be identical for two results to
 // be comparable. Its deterministic hash is the LoadSignature. A workload fills
-// the fields its shape uses (tpcc: warehouses; pgbench: scale/clients/jobs) and
-// leaves the rest zero — the signature still differs whenever any tracked knob
-// changes.
+// the fields its shape uses (tpcc: warehouses; pgbench: scale/clients/jobs;
+// sysbench: script/tables + scale/clients) and leaves the rest zero — the
+// signature still differs whenever any tracked knob changes.
 type LoadFields struct {
-	Iterations    int   `json:"iterations"`
-	WarmupMS      int64 `json:"warmup_ms"`
-	MeasurementMS int64 `json:"measurement_ms"`
-	Scale         int   `json:"scale"`
-	Clients       int   `json:"clients"`
-	Jobs          int   `json:"jobs"`
-	RF            int   `json:"rf"`
-	Warehouses    int   `json:"warehouses"`
+	Iterations    int    `json:"iterations"`
+	WarmupMS      int64  `json:"warmup_ms"`
+	MeasurementMS int64  `json:"measurement_ms"`
+	Scale         int    `json:"scale"`
+	Clients       int    `json:"clients"`
+	Jobs          int    `json:"jobs"`
+	RF            int    `json:"rf"`
+	Warehouses    int    `json:"warehouses"`
+	Tables        int    `json:"tables"`
+	Script        string `json:"script"`
 }
 
 // LoadSignature is a deterministic short hash of the load config. Encoding a

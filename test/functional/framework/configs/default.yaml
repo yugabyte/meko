@@ -993,6 +993,21 @@ perf:
     # dev command. The perf/pgbench TEST times its measured iterations by
     # perf.bench.measurement_duration instead (the harness owns run length).
     duration: "90s"
+  # sysbench is the perf/sysbench load shape: sysbench's bundled oltp_* lua
+  # workloads over the pgsql driver. sysbench is a distro package — the test
+  # apt-installs it into the (Debian/Ubuntu-family) client pod at deploy, no
+  # artifact needed. Only the load shape lives here; the backing + gate knobs
+  # are the shared perf.* above, and run length is perf.bench.measurement_duration.
+  sysbench:
+    # script is the bundled lua workload to drive (oltp_read_write, oltp_read_only,
+    # oltp_write_only, oltp_point_select, oltp_update_index, ...).
+    script: "oltp_read_write"
+    # tables / table_size shape the dataset: the number of sbtest tables and the
+    # rows per table (sysbench --tables / --table-size, at prepare AND run).
+    tables: 4
+    table_size: 100000
+    # threads is sysbench --threads (concurrent client threads) for each run.
+    threads: 8
   # history is the HISTORICAL perf tracking store: distinct from the baseline
   # (which holds ONE reference value per test/metric to gate against), the
   # history APPENDS every run's aggregate so the report can render a TREND of
@@ -1011,8 +1026,8 @@ perf:
     max_runs: 20
   # compare turns a perf test into an A/B (N-way) VARIANT COMPARISON: instead of
   # gating one run against a (possibly stale) local baseline, it runs the SAME
-  # workload at the SAME load (perf.bench.* / perf.warehouses / perf.pgbench.*
-  # held constant) across labelled variants that differ ONLY in the overrides
+  # workload at the SAME load (perf.bench.* / perf.warehouses / perf.pgbench.* /
+  # perf.sysbench.* held constant) across labelled variants that differ ONLY in the overrides
   # below, then reports each variant's median + noise and the delta vs the FIRST
   # (reference) variant. This is the meaningful comparison: like-with-like, so a
   # delta is a real signal, not a config artifact. Empty variants → the test runs
