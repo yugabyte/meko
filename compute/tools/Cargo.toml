@@ -1,0 +1,30 @@
+[package]
+name = "tools"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+
+# Operator-side diagnostic tools that read the YB-backed page store / WAL
+# directly (see scripts/build.py DIAG_TOOLS). They depend only on shared libs
+# (utils / ysql_client / postgres_ffi), not on pageserver internals, so they
+# live in their own crate rather than as bins of the pageserver.
+[[bin]]
+name = "yb-dump-pages"
+path = "src/bin/yb-dump-pages.rs"
+
+[[bin]]
+name = "yb-dump-wals"
+path = "src/bin/yb-dump-wals.rs"
+
+[[bin]]
+name = "yb-reset-consistent-lsn"
+path = "src/bin/yb-reset-consistent-lsn.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["string"] }
+postgres_ffi.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync"] }
+utils.workspace = true
+ysql_client = { workspace = true, features = ["cli"] }
+workspace_hack.workspace = true

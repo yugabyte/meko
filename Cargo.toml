@@ -40,6 +40,7 @@ members = [
     "compute/libs/proxy/subzero_core",
     "compute/libs/proxy/tokio-postgres2",
     "compute/endpoint_storage",
+    "compute/tools",
     "compute/pgxn/yb_amp/communicator",
     "test/integration/compute",
     "test/integration/controller",

@@ -145,8 +145,8 @@ test.
 
 Inspection / diagnostic tooling has to keep working against what you changed:
 
-- `tools/` — `yb-dump-pages`, `yb-dump-wals`, `cluster-ui` (they read the
-  YB-backed page store / WAL / control-plane state directly).
+- `yb-dump-pages`, `yb-dump-wals`, `yb-reset-consistent-lsn` (the `tools`
+  crate, `compute/tools/src/bin/`) — read/repair the YB-backed page store / WAL directly.
 - `scripts/` — operational helpers (e.g. `yb-local.sh`,
   `vendor-yb-protos.py`). The top-level `build.sh`
   (build wrapper / release tarball) is in the same family.
@@ -277,7 +277,7 @@ The commit subject follows:
   subsystem within the area: `pageserver`, `safekeeper`, `walredo`,
   `materialiser`, `walreceiver`, `page_service`, `compute_ctl`,
   `extension`, `postgres`, (under `compute`); `storage_ctl`,
-  `yb_amp_local`, `cluster-ui` (under
+  `yb_amp_local` (under
   `control_plane`); … Drop it when the area alone is precise enough.
 - **`<title>`** — *required*. Concise, imperative description of the
   change.

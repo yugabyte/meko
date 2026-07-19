@@ -68,6 +68,15 @@ fn lsn_expr(seg: i64, off_expr: &str) -> String {
     )
 }
 
+/// Split an LSN into the `(segno, offset)` of the byte it addresses, for a given
+/// segment size: `segno * seg + offset == lsn` with `0 <= offset < seg`. The
+/// inverse of the stored `segno*seg + chunk_offset` LSN encoding (see
+/// [`lsn_expr`]); used to translate `--lsn-from` / `--lsn-to` into the stored
+/// (segno, chunk_offset) coordinates.
+fn lsn_to_seg_off(lsn: Lsn, seg: i64) -> (i64, i64) {
+    (lsn.0 as i64 / seg, lsn.0 as i64 % seg)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -101,11 +110,11 @@ async fn main() -> Result<()> {
     }
     // LSN bounds map to (segno, offset); a chunk covers [offset, offset+size).
     if let Some(l) = args.lsn_from {
-        let (s, o) = (l.0 as i64 / seg, l.0 as i64 % seg);
+        let (s, o) = lsn_to_seg_off(l, seg);
         w += &format!(" AND (segno > {s} OR (segno = {s} AND chunk_offset + chunk_size > {o}))");
     }
     if let Some(l) = args.lsn_to {
-        let (s, o) = (l.0 as i64 / seg, l.0 as i64 % seg);
+        let (s, o) = lsn_to_seg_off(l, seg);
         w += &format!(" AND (segno < {s} OR (segno = {s} AND chunk_offset <= {o}))");
     }
 
@@ -206,4 +215,59 @@ fn print_table(headers: &[&str], rows: &[ysql_client::tokio_postgres::Row]) {
         println!("{}", line(row));
     }
     println!("({} rows)", rows.len());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEG: i64 = 16 * 1024 * 1024; // default WAL segment size
+
+    #[test]
+    fn lsn_split_round_trips() {
+        // For any (segno, offset), encoding to an LSN and splitting it back
+        // must recover the same coordinates.
+        for (segno, off) in [
+            (0i64, 0i64),
+            (0, 1),
+            (0, SEG - 1),
+            (1, 0),
+            (5, 123),
+            (42, SEG - 1),
+        ] {
+            let lsn = Lsn((segno * SEG + off) as u64);
+            assert_eq!(lsn_to_seg_off(lsn, SEG), (segno, off), "lsn {lsn}");
+        }
+    }
+
+    #[test]
+    fn lsn_split_boundaries() {
+        // Exactly on a segment boundary rolls to offset 0 of the next segment.
+        assert_eq!(lsn_to_seg_off(Lsn(SEG as u64), SEG), (1, 0));
+        // One byte before the boundary is the last offset of segment 0.
+        assert_eq!(lsn_to_seg_off(Lsn((SEG - 1) as u64), SEG), (0, SEG - 1));
+        // The offset is always within a segment.
+        let (_, off) = lsn_to_seg_off(Lsn(u32::MAX as u64), SEG);
+        assert!((0..SEG).contains(&off));
+    }
+
+    #[test]
+    fn lsn_split_honors_segment_size() {
+        // A non-default segment size changes where the boundary falls.
+        let seg = 1024 * 1024; // 1 MiB
+        assert_eq!(lsn_to_seg_off(Lsn(seg as u64 + 7), seg), (1, 7));
+        assert_ne!(lsn_to_seg_off(Lsn(seg as u64 + 7), SEG), (1, 7));
+    }
+
+    #[test]
+    fn lsn_expr_renders_the_hex_lsn_encoding() {
+        // The forward encoding: (segno*seg + offset) split into H/XXXXXXXX hex.
+        let e = lsn_expr(SEG, "chunk_offset");
+        assert!(e.contains("16777216::bigint * segno + chunk_offset"), "{e}");
+        assert!(e.contains("to_hex"), "{e}");
+        assert!(e.contains("|| '/' ||"), "{e}");
+        assert!(e.contains("lpad"), "{e}");
+        // The offset expression is substituted, not hard-coded.
+        assert!(lsn_expr(SEG, "min(chunk_offset)").contains("min(chunk_offset)"));
+    }
 }

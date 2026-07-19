@@ -83,7 +83,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
 (`--sslmode require`). `build.sh --release-tar` stages them into
 `${BUNDLE}/tools/` so they ship to deploy hosts alongside the daemons.
 
-- [`yb-dump-pages`](pageserver/src/bin/yb-dump-pages.rs) — dump or decode
+- [`yb-dump-pages`](tools/src/bin/yb-dump-pages.rs) — dump or decode
   `pageserver.pages` rows for one (rel, fork) tuple. Renders the LSN as
   `H/L` hex and forknum as `main`/`fsm`/`vm`/`init`. Required hash columns:
   `--tenant --timeline --spc --db --rel --fork`. Range filters: `--blknum`
@@ -95,7 +95,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   `offnum`, and flags a GAP when a delta's `offnum` exceeds the running
   max+1 — the signature of a chain walredo can't fold and of a base image
   too small for the deltas above it (see issue #22).
-- [`yb-dump-wals`](pageserver/src/bin/yb-dump-wals.rs) — dump `safekeeper.wals`
+- [`yb-dump-wals`](tools/src/bin/yb-dump-wals.rs) — dump `safekeeper.wals`
   rows (the safekeeper's WAL-in-YB chunks). Required hash columns:
   `--tenant --timeline`. Range filters: `--segno` (or
   `--segno-from/--segno-to`), `--chunk-offset` (or its `-from/-to`
@@ -104,7 +104,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   `--summary` swaps the row dump for a per-segno health view
   (`min/max LSN, total_bytes, gap_bytes`) — the fastest way to spot a WAL
   hole during an incident.
-- [`yb-reset-consistent-lsn`](pageserver/src/bin/yb-reset-consistent-lsn.rs)
+- [`yb-reset-consistent-lsn`](tools/src/bin/yb-reset-consistent-lsn.rs)
   — find (and optionally rewind) `pageserver.timeline_state.consistent_lsn`
   to a real WAL record boundary. Given `--tenant --timeline --target-lsn
   X/Y` it anchors on a fresh-record WAL page, replays the real WAL decoder

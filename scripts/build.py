@@ -63,8 +63,8 @@ DAEMON_BINS = [
     "yb-compute-ctl",
     "yb-endpoint-storage",
 ]
-# Operator-side diagnostic tools (built by `-p pageserver`); they share the
-# YbConnArgs connection flags and work against no-TLS and TLS clusters.
+# Operator-side diagnostic tools (the `tools` crate, compute/tools/); they
+# share the YbConnArgs connection flags and work against no-TLS and TLS clusters.
 DIAG_TOOLS = ["yb-dump-pages", "yb-dump-wals", "yb-reset-consistent-lsn"]
 # Crates that produce the binaries above.
 BUILD_CRATES = [
@@ -72,6 +72,7 @@ BUILD_CRATES = [
     "safekeeper",
     "compute_tools",
     "endpoint_storage",
+    "tools",
 ]
 # Runtime libs not present on stock AlmaLinux/RHEL 9 (OpenSSL 1.1, ICU 60).
 # See memory/bundle-runtime-libs.md. Staged top-level for the daemons and into

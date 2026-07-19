@@ -66,11 +66,17 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
          --bin yb-safekeeper \
          --bin yb-endpoint-storage \
          --bin yb-compute-ctl \
+         --bin yb-dump-pages \
+         --bin yb-dump-wals \
+         --bin yb-reset-consistent-lsn \
     && mkdir -p /home/nonroot/out \
     && cp target/release/yb-pageserver \
           target/release/yb-safekeeper \
           target/release/yb-endpoint-storage \
           target/release/yb-compute-ctl \
+          target/release/yb-dump-pages \
+          target/release/yb-dump-wals \
+          target/release/yb-reset-consistent-lsn \
           /home/nonroot/out/ \
     && mold -run make -j "$(nproc)" -s yb-amp-pg-ext
 
@@ -107,6 +113,12 @@ COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-pageserver     
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-safekeeper          /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-endpoint-storage    /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-compute-ctl         /usr/local/bin/
+
+# Operator diagnostic tools (the tools crate): dump the YB-backed page store /
+# WAL, reset the consistent LSN. On PATH so an operator can `docker exec` and run them.
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-dump-pages          /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-dump-wals           /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-reset-consistent-lsn /usr/local/bin/
 
 # Postgres v18 install (binaries + the `yb_amp` extension installed by yb-amp-pg-ext).
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/

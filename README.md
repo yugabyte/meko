@@ -381,7 +381,7 @@ and chaos through it, and reports what happened. See
 
 ## Operator tools
 
-`cargo build -p pageserver` builds three row-store inspection binaries —
+`cargo build -p tools` builds three row-store inspection binaries —
 `yb-dump-pages`, `yb-dump-wals`, and `yb-reset-consistent-lsn` — for reading
 and repairing the YB tables during an incident. `build.sh --release-tar` ships
 them under `${BUNDLE}/tools/`. See

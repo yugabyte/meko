@@ -96,6 +96,9 @@ RUN  set -e \
       --bin yb-pageserver  \
       --bin yb-safekeeper  \
       --bin yb-endpoint-storage \
+      --bin yb-dump-pages \
+      --bin yb-dump-wals \
+      --bin yb-reset-consistent-lsn \
       --locked --release \
     && mold -run make -j $(nproc) -s yb-amp-pg-ext
 
@@ -132,6 +135,10 @@ RUN set -e \
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-pageserver       /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-safekeeper       /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-endpoint-storage /usr/local/bin
+# Operator diagnostic tools (the tools crate): dump the page store / WAL, reset the consistent LSN.
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-dump-pages          /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-dump-wals           /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-reset-consistent-lsn /usr/local/bin
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
 # Deprecated: Old deployment scripts use this tarball which contains all the Postgres binaries.
