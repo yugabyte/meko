@@ -1,0 +1,212 @@
+name: On-demand checks
+
+# Opt-in, heavy CI jobs that the regular per-component CI (pr-build.yml) does
+# NOT run on every PR, requested from the PR description with `/ci <suite>`
+# directive lines, e.g.
+#
+#   /ci integration_slow
+#   /ci integration_slow generate_image
+#
+# Recognized suites (one or more per line, space/comma separated) — the
+# human-facing list and "when to request each" live in docs/ci-directives.md:
+#   integration_slow  — the slow integration scenario suite (run.sh slow). The
+#                       unit + fast suites already run on every compute PR via
+#                       pr-build.yml, so this + that == full coverage.
+#   generate_image    — build the controller container image (deploy/controller)
+#
+# When it fires:
+#   * a new commit is pushed (`synchronize`) or the PR opens/reopens — every
+#     directive currently in the body applies, so a persisted `/ci` line
+#     re-runs its suite on each push;
+#   * the description is `edited` to ADD a directive — only the newly-added
+#     suites run. Editing the description WITHOUT changing the `/ci` lines
+#     runs nothing (the decide gate returns an empty set and every job is
+#     skipped). This is why the workflow also listens to `edited`, which
+#     pr-build.yml deliberately does not — keeping the `edited` blast radius
+#     to this on-demand workflow so a typo fix in the body never re-triggers the
+#     whole build matrix.
+#
+# SECURITY: the PR body is untrusted. It is parsed only inside the `decide`
+# job's github-script (which turns it into boolean/enum outputs against a fixed
+# allowlist of suite names) and is NEVER interpolated into a `run:` shell step.
+# Keep it that way — do not `echo "${{ github.event.pull_request.body }}"`.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, edited]
+
+concurrency:
+  # A new push (`synchronize`) supersedes any in-flight run for this PR — latest
+  # commit wins, same as pr-build.yml. But a description `edited` event does NOT
+  # cancel: concurrency is resolved before the decide gate reads the body, so a
+  # no-op edit (nothing changed in the /ci lines) would otherwise kill a running
+  # suite for nothing. Instead an edit's run queues behind the in-flight one and
+  # skips (or, if it added a directive, runs that suite once the current run
+  # finishes).
+  group: on-demand-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: ${{ github.event.action != 'edited' }}
+
+permissions:
+  contents: read
+
+jobs:
+  decide:
+    name: Decide which on-demand suites to run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      integration_slow: ${{ steps.p.outputs.integration_slow }}
+      generate_image: ${{ steps.p.outputs.generate_image }}
+    steps:
+      - uses: actions/github-script@v7
+        id: p
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const action = context.payload.action;
+
+            // Parse "/ci <suite> [suite...]" lines -> a Set of suite tokens.
+            const parse = (text) => {
+              const out = new Set();
+              for (const line of (text || '').split(/\r?\n/)) {
+                const m = line.match(/^\s*\/ci\s+(.+?)\s*$/i);
+                if (m) for (const s of m[1].split(/[\s,]+/)) if (s) out.add(s.toLowerCase());
+              }
+              return out;
+            };
+
+            const now = parse(pr.body);
+            let effective;
+            if (action === 'edited') {
+              // changes.body.from is the previous body; absent when this edit
+              // did not touch the body (e.g. a title-only edit). Only run the
+              // suites that were *added* by this edit.
+              const from = context.payload.changes?.body?.from;
+              const before = from === undefined ? now : parse(from);
+              effective = new Set([...now].filter((s) => !before.has(s)));
+            } else {
+              // opened / reopened / synchronize: everything currently in the body.
+              effective = now;
+            }
+
+            core.setOutput('integration_slow', String(effective.has('integration_slow')));
+            core.setOutput('generate_image', String(effective.has('generate_image')));
+
+            const picked = [...effective].sort().join(', ') || '(none)';
+            core.notice(`On-demand suites this run: ${picked}`);
+
+  integration:
+    name: On-demand — integration (slow)
+    needs: decide
+    if: needs.decide.outputs.integration_slow == 'true' && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      # Keep in sync with pr-build.yml's integration job and scripts/yb-local.sh.
+      YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+    steps:
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /usr/local/share/boost
+          df -h /
+
+      - uses: actions/checkout@v7
+
+      # Short-lived read-only token for the internal amp-postgres submodule
+      # (see the NOTE at the top of pr-build.yml).
+      - name: Mint amp-postgres read token
+        id: amp-postgres-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: "3784852"
+          private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
+          owner: yugabyte
+          repositories: amp-postgres
+
+      - name: Check out PostgreSQL submodule
+        env:
+          TOKEN: ${{ steps.amp-postgres-token.outputs.token }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${TOKEN}@github.com/yugabyte/amp-postgres".insteadOf \
+            "https://github.com/yugabyte/amp-postgres"
+          git submodule update --init --recursive
+
+      - name: Start YugabyteDB
+        run: |
+          docker run -d --name yb --network host "$YB_IMAGE" \
+            bin/yugabyted start --advertise_address=127.0.0.1 --background=false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool libreadline-dev zlib1g-dev flex bison \
+            libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
+            protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev \
+            postgresql-client
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Parallelize make
+        run: echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compute PostgreSQL cache key
+        id: pgrev
+        run: echo "rev=$(git rev-parse HEAD:compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache PostgreSQL install
+        uses: actions/cache@v6
+        with:
+          path: pg_install
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
+
+      - name: Wait for YugabyteDB
+        run: |
+          for i in $(seq 1 120); do
+            pg_isready -h 127.0.0.1 -p 5433 -q && exit 0
+            sleep 2
+          done
+          echo "YugabyteDB never became ready" >&2
+          docker logs yb
+          exit 1
+
+      - name: Integration tests (slow suite)
+        run: test/integration/compute/run.sh slow
+
+      - name: Upload run logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: on-demand-integration-logs-${{ github.run_id }}
+          path: .integration-tests/**/*.log
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  generate_image:
+    name: On-demand — controller image build
+    needs: decide
+    if: needs.decide.outputs.generate_image == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: controller/go.mod
+
+      # controller-bundle-only is Go-only: no Rust toolchain and no
+      # amp-postgres submodule, so this image build is self-contained.
+      - name: Bundle controller binary
+        run: make controller-bundle-only
+
+      - name: Build controller image
+        run: docker build -t yb-amp/controller:ci -f deploy/controller/Dockerfile .

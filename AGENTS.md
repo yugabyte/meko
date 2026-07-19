@@ -115,6 +115,8 @@ Code anchors:
   col = col + 1`), generation-fenced `UPDATE`s, or `WHERE`-keyed
   `DELETE`s. See
   [`compute/architecture/yugabyte.md`](compute/architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent).
+- **Reviewing a PR? Follow [`docs/pr-review.md`](docs/pr-review.md).** It is the
+  checklist for amp-specific review.
 
 ## Build notes
 

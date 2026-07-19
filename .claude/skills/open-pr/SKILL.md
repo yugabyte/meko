@@ -63,6 +63,12 @@ The body should let a reviewer understand the change without reading every line:
 - `Closes #<issue>` / `Fixes #<issue>` when the PR completes a tracked issue, so
   the merge auto-closes it.
 
+### On-demand CI directives — request the right suites
+
+Some CI suites are opt-in, requested with `/ci <suite>` lines in the PR body.
+Set the ones the change needs. The directive list, how the lines fire, and the
+criteria live in [`docs/ci-directives.md`](../../../docs/ci-directives.md).
+
 Write it to a file to avoid shell-quoting pain:
 
 ```
