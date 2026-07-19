@@ -13,6 +13,9 @@ name: CI
 #                live-DB unit tests + the fast scenario suite on PRs
 #                (run.sh's default), `all` (unit, fast, slow) on main.
 #   controller — Go controller: `go build`, `go vet`, `go test`.
+#   migrations — steps each controller migration up/down/up in turn against a
+#                throwaway YugabyteDB; catches a `.down.sql` that doesn't fully
+#                revert its `.up.sql`. Runs on migration / db-runner changes.
 #   ui         — amp_ui: `npm ci`, `tsc --noEmit` (npm run check), vite build.
 #   deploy     — Helm charts + endpoint supervisor: `helm lint` and
 #                `helm unittest` on both charts, the Guaranteed-QoS guardrail,
@@ -70,6 +73,9 @@ jobs:
       controller: ${{ steps.filter.outputs.controller }}
       ui: ${{ steps.filter.outputs.ui }}
       deploy: ${{ steps.filter.outputs.deploy }}
+      # the controller migrations or their Go runner changed — run the up/down
+      # round-trip test against YugabyteDB.
+      migrations: ${{ steps.filter.outputs.migrations }}
       # true iff at least one changed file is not a markdown doc (see the `code`
       # filter step) — the compute/controller build+test jobs gate on it so a
       # docs-only PR skips them.
@@ -115,6 +121,10 @@ jobs:
               - '.github/workflows/pr-build.yml'
             deploy:
               - 'deploy/**'
+              - '.github/workflows/pr-build.yml'
+            migrations:
+              - 'controller/migrations/**'
+              - 'controller/internal/db/**'
               - '.github/workflows/pr-build.yml'
 
       # A change counts as "code" if at least one changed file is not a markdown
@@ -459,3 +469,48 @@ jobs:
         run: |
           pipx install ruff==0.11.2
           ruff check deploy/
+
+  # Steps each controller migration up/down/up in turn against a real YugabyteDB
+  # (0002/0003 use YB-specific HASH / SPLIT DDL, so plain Postgres can't run
+  # them). The per-migration re-up catches a .down.sql that doesn't fully revert
+  # its .up.sql. Lightweight: Go + a YB container, no PG/compute build.
+  migrations:
+    name: Migrations — up/down round-trip
+    needs: changes
+    if: needs.changes.outputs.migrations == 'true' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: controller/go.mod
+          cache-dependency-path: controller/go.sum
+
+      # Bridge-networked YB with 5433 published to the host, so the Go test (pgx,
+      # pure Go) reaches it at 127.0.0.1:5433 — same topology as scripts/yb-local.sh.
+      - name: Start YugabyteDB
+        run: |
+          docker run -d --name yugabyte -p 5433:5433 "$YB_IMAGE" \
+            bin/yugabyted start --background=false
+
+      - name: Wait for YugabyteDB + create the throwaway test database
+        run: |
+          for _ in $(seq 1 120); do
+            if docker exec yugabyte sh -c 'bin/ysqlsh -h "$(hostname -i)" -p 5433 -U yugabyte -d yugabyte -tAc "select 1"' >/dev/null 2>&1; then
+              docker exec yugabyte sh -c 'bin/ysqlsh -h "$(hostname -i)" -p 5433 -U yugabyte -d yugabyte -c "CREATE DATABASE migration_roundtrip"'
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "YugabyteDB never became ready" >&2
+          docker logs yugabyte 2>&1 | tail -50
+          exit 1
+
+      - name: Migration up/down/up round-trip
+        env:
+          AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
+        run: go -C controller test ./internal/db/... -run TestMigrateRoundTrip -v
