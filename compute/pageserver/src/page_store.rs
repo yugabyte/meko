@@ -4291,11 +4291,27 @@ mod tests {
         store.insert_timeline_at_creation(&row).await.unwrap();
 
         // Bumped: stored gen=1, attach at gen=2 → succeeds, YB now 2.
+        //
+        // Accept AlreadyAtOurGen too: `cas_bump_generation_on_attach`
+        // runs through `YsqlClient`'s at-least-once retry, so if the
+        // UPDATE commits server-side but the connection drops before the
+        // ack (the "unknown session" class seen under CI load), the
+        // retried UPDATE matches 0 rows (already bumped) and the probe
+        // reports AlreadyAtOurGen for what was really a bump. Both leave
+        // YB at our generation and the caller
+        // (`bump_generation_on_attach`) treats them identically; only the
+        // resulting persisted value is load-bearing, so assert on that.
         let res = store
             .cas_bump_generation_on_attach(branch, Generation::new(2))
             .await
             .unwrap();
-        assert_eq!(res, CasBumpOutcome::Bumped);
+        assert!(
+            matches!(
+                res,
+                CasBumpOutcome::Bumped | CasBumpOutcome::AlreadyAtOurGen
+            ),
+            "expected Bumped (or AlreadyAtOurGen under a post-commit retry), got: {res:?}"
+        );
         let got = store.get_timeline(branch).await.unwrap().unwrap();
         assert_eq!(got.current_generation, 2);
 
@@ -4312,11 +4328,19 @@ mod tests {
         // (Mirrors the user's report: SC's tenants.generation
         // moved 1→2→3 over restarts; this is the third restart
         // arriving at the PS, which must heal the lagging YB column.)
+        // Accept AlreadyAtOurGen for the same post-commit-retry reason as
+        // the first bump above.
         let res = store
             .cas_bump_generation_on_attach(branch, Generation::new(5))
             .await
             .unwrap();
-        assert_eq!(res, CasBumpOutcome::Bumped);
+        assert!(
+            matches!(
+                res,
+                CasBumpOutcome::Bumped | CasBumpOutcome::AlreadyAtOurGen
+            ),
+            "expected Bumped (or AlreadyAtOurGen under a post-commit retry), got: {res:?}"
+        );
         let got = store.get_timeline(branch).await.unwrap().unwrap();
         assert_eq!(got.current_generation, 5);
 
