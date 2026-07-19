@@ -9,12 +9,15 @@ name: On-demand checks
 #
 # Recognized suites (one or more per line, space/comma separated) — the
 # human-facing list and "when to request each" live in docs/ci-directives.md:
-#   integration_slow  — the slow integration scenario suite (run.sh slow). The
-#                       unit + fast suites already run on every compute PR via
+#   integration_slow  — the slow integration scenario suite (run.sh slow). Also
+#                       runs daily on main via the `schedule` trigger below. The
+#                       unit + fast suites run on every compute PR/push via
 #                       pr-build.yml, so this + that == full coverage.
 #   generate_image    — build the controller container image (deploy/controller)
 #
 # When it fires:
+#   * the daily `schedule` fires — runs integration_slow + generate_image on
+#     main (default branch).
 #   * a new commit is pushed (`synchronize`) or the PR opens/reopens — every
 #     directive currently in the body applies, so a persisted `/ci` line
 #     re-runs its suite on each push;
@@ -35,6 +38,11 @@ on:
   pull_request:
     branches: [main]
     types: [opened, reopened, synchronize, edited]
+  schedule:
+    # Daily on main: the slow integration suite + the controller image build
+    # (scheduled runs only fire on the default branch). 07:17 UTC — off the top
+    # of the hour to dodge cron congestion.
+    - cron: '17 7 * * *'
 
 concurrency:
   # A new push (`synchronize`) supersedes any in-flight run for this PR — latest
@@ -44,7 +52,7 @@ concurrency:
   # suite for nothing. Instead an edit's run queues behind the in-flight one and
   # skips (or, if it added a directive, runs that suite once the current run
   # finishes).
-  group: on-demand-checks-${{ github.event.pull_request.number }}
+  group: on-demand-checks-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event.action != 'edited' }}
 
 permissions:
@@ -64,6 +72,15 @@ jobs:
         id: p
         with:
           script: |
+            // Scheduled daily run (main only): run the slow suite and build the
+            // controller image unconditionally.
+            if (context.eventName === 'schedule') {
+              core.setOutput('integration_slow', 'true');
+              core.setOutput('generate_image', 'true');
+              core.notice('Scheduled daily run: integration_slow, generate_image');
+              return;
+            }
+
             const pr = context.payload.pull_request;
             const action = context.payload.action;
 

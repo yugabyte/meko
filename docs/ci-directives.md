@@ -20,10 +20,13 @@ parses the body and runs the matching jobs.
 
 ## When a change is correctness-sensitive (`integration_slow`)
 
-Regular CI (`pr-build.yml`) runs only the **fast** integration suite on PRs;
-`integration_slow` adds the **slow** suite. Add `/ci integration_slow` whenever
-the diff touches the LSN / consistency, read-write, WAL, durability, or
-image-materialiser paths — concretely (non-exhaustive):
+Regular CI (`pr-build.yml`) runs only the **fast** integration suite on PRs and
+main pushes; `integration_slow` adds the **slow** suite. The slow suite also
+runs **daily on main** on a schedule, so a regression is caught within a day even
+if no one requested it. However, this is only a safety net, not a substitute: add
+`/ci integration_slow` to the PR description whenever the diff touches the LSN /
+consistency, read-write, WAL, durability, or image-materialiser paths, so it's
+caught *before* merge — concretely (non-exhaustive):
 
 - **LSNs & consistency** — `consistent_lsn`, `prev_record_lsn`, record-boundary
   math, `timeline_state`, flush/commit LSN tracking, generation fencing.

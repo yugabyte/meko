@@ -10,8 +10,9 @@ name: CI
 #                the compute/vendor/postgres-v18 submodule and cached keyed on the
 #                submodule commit, so warm runs skip it.
 #   integration        — `test/integration/compute/run.sh` against a YugabyteDB container:
-#                live-DB unit tests + the fast scenario suite on PRs
-#                (run.sh's default), `all` (unit, fast, slow) on main.
+#                live-DB unit tests + the fast scenario suite (run.sh's default)
+#                on PRs and main pushes. The slow suite runs daily on main and
+#                on-demand via `/ci integration_slow` (see on-demand-checks.yml).
 #   controller — Go controller: `go build`, `go vet`, `go test`.
 #   migrations — steps each controller migration up/down/up in turn against a
 #                throwaway YugabyteDB; catches a `.down.sql` that doesn't fully
@@ -295,12 +296,13 @@ jobs:
           docker logs yb
           exit 1
 
-      # PRs run run.sh's default (live-DB unit tests + fast suite); pushes
-      # to main run everything (unit, fast, slow). On failure the harness
-      # stops the cluster but keeps the run's *.log files (see clean.sh's
-      # INTEGRATION_KEEP_LOGS mode), which the Upload step below collects.
-      - name: Integration tests (live-DB unit + scenarios)
-        run: test/integration/compute/run.sh ${{ github.event_name == 'push' && 'all' || '' }}
+      # Both PRs and main pushes run run.sh's default (live-DB unit tests + fast
+      # suite). The slow suite is NOT run here — it runs daily on main and
+      # on-demand via `/ci integration_slow` (see on-demand-checks.yml). On
+      # failure the harness stops the cluster but keeps the run's *.log files
+      # (see clean.sh's INTEGRATION_KEEP_LOGS mode), collected by Upload below.
+      - name: Integration tests (live-DB unit + fast scenarios)
+        run: test/integration/compute/run.sh
 
       - name: Upload run logs
         if: failure()
