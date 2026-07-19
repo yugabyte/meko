@@ -115,25 +115,10 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      # Short-lived read-only token for the internal amp-postgres submodule
-      # (see the NOTE at the top of pr-build.yml).
-      - name: Mint amp-postgres read token
-        id: amp-postgres-token
-        uses: actions/create-github-app-token@v3
+      - name: Fetch the PostgreSQL submodule
+        uses: ./.github/actions/fetch-pg-submodule
         with:
-          app-id: "3784852"
           private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
-          owner: yugabyte
-          repositories: amp-postgres
-
-      - name: Check out PostgreSQL submodule
-        env:
-          TOKEN: ${{ steps.amp-postgres-token.outputs.token }}
-        run: |
-          git config --global \
-            url."https://x-access-token:${TOKEN}@github.com/yugabyte/amp-postgres".insteadOf \
-            "https://github.com/yugabyte/amp-postgres"
-          git submodule update --init --recursive
 
       - name: Start YugabyteDB
         run: |

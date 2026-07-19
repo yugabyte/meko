@@ -25,15 +25,6 @@ name: CI
 # the JUnit XML that nextest/gotestsum emit, so failures show up as a
 # per-test pass/fail report instead of a wall of log.
 #
-# NOTE: compute/vendor/postgres-v18 resolves to yugabyte/amp-postgres (internal),
-# which the repo-scoped default GITHUB_TOKEN cannot read. The compute and
-# integration jobs mint a short-lived, read-only installation token for that repo
-# alone from the yb-agentk-dev GitHub App (App ID 3784852; private key in
-# the AGENTK_PRIVATE_KEY secret) and apply it only to the submodule via a
-# git insteadOf rewrite (the main-repo checkout keeps the default token).
-# Using a GitHub App rather than a personal PAT keeps CI working regardless
-# of any individual's org membership.
-#
 # NOTE: GitHub withholds Actions secrets (incl. AGENTK_PRIVATE_KEY) from
 # Dependabot-triggered pull_request runs, so the App-token / submodule fetch
 # can't work there. The compute + integration jobs therefore skip for
@@ -161,31 +152,10 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      # Mint a short-lived, read-only installation token for amp-postgres
-      # alone from the yb-agentk-dev GitHub App (see the NOTE at the top).
-      - name: Mint amp-postgres read token
-        id: amp-postgres-token
-        uses: actions/create-github-app-token@v3
+      - name: Fetch the PostgreSQL submodule
+        uses: ./.github/actions/fetch-pg-submodule
         with:
-          app-id: "3784852"
           private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
-          owner: yugabyte
-          repositories: amp-postgres
-
-      # The submodule lives in yugabyte/amp-postgres (internal), which the
-      # repo-scoped GITHUB_TOKEN cannot read, and passing this token to
-      # actions/checkout would make it fetch the MAIN repo with it too —
-      # so keep the default token above and fetch just the submodule with
-      # the App token via an insteadOf rewrite. The global rule also covers
-      # build.py's own `git submodule update` re-syncs later in the job.
-      - name: Check out PostgreSQL submodule
-        env:
-          TOKEN: ${{ steps.amp-postgres-token.outputs.token }}
-        run: |
-          git config --global \
-            url."https://x-access-token:${TOKEN}@github.com/yugabyte/amp-postgres".insteadOf \
-            "https://github.com/yugabyte/amp-postgres"
-          git submodule update --init --recursive
 
       - name: Install build dependencies
         run: |
@@ -269,31 +239,10 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      # Mint a short-lived, read-only installation token for amp-postgres
-      # alone from the yb-agentk-dev GitHub App (see the NOTE at the top).
-      - name: Mint amp-postgres read token
-        id: amp-postgres-token
-        uses: actions/create-github-app-token@v3
+      - name: Fetch the PostgreSQL submodule
+        uses: ./.github/actions/fetch-pg-submodule
         with:
-          app-id: "3784852"
           private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
-          owner: yugabyte
-          repositories: amp-postgres
-
-      # The submodule lives in yugabyte/amp-postgres (internal), which the
-      # repo-scoped GITHUB_TOKEN cannot read, and passing this token to
-      # actions/checkout would make it fetch the MAIN repo with it too —
-      # so keep the default token above and fetch just the submodule with
-      # the App token via an insteadOf rewrite. The global rule also covers
-      # build.py's own `git submodule update` re-syncs later in the job.
-      - name: Check out PostgreSQL submodule
-        env:
-          TOKEN: ${{ steps.amp-postgres-token.outputs.token }}
-        run: |
-          git config --global \
-            url."https://x-access-token:${TOKEN}@github.com/yugabyte/amp-postgres".insteadOf \
-            "https://github.com/yugabyte/amp-postgres"
-          git submodule update --init --recursive
 
       # Start YB first so it initializes while the toolchain installs.
       # Use host networking + advertise 127.0.0.1 so YB advertises an address

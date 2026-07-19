@@ -1,0 +1,52 @@
+# compute/vendor/postgres-v18 resolves to yugabyte/amp-postgres (internal),
+# which the repo-scoped default GITHUB_TOKEN cannot read. This action mints a
+# short-lived, read-only installation token for that repo alone from the
+# yb-agentk-dev GitHub App (App ID 3784852; private key in the AGENTK_PRIVATE_KEY
+# secret) and applies it only to the submodule via a git insteadOf rewrite (the
+# main-repo checkout keeps the default token). Using a GitHub App rather than a
+# personal PAT keeps CI working regardless of any individual's org membership.
+name: Fetch amp-postgres submodule
+description: >-
+  Fetch the internal compute/vendor/postgres-v18 (yugabyte/amp-postgres)
+  submodule using a short-lived amp-postgres App token, retrying to ride out
+  token-propagation 404s. Requires the repo to be checked out first.
+
+inputs:
+  # Composite actions can't read the `secrets` context, so the key can't be
+  # hard-coded here — the caller must pass secrets.AGENTK_PRIVATE_KEY in.
+  private-key:
+    description: Private key of the yb-agentk-dev GitHub App (secrets.AGENTK_PRIVATE_KEY).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Mint amp-postgres read token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: "3784852"
+        private-key: ${{ inputs.private-key }}
+        owner: yugabyte
+        repositories: amp-postgres
+
+    - name: Fetch the PostgreSQL submodule
+      shell: bash
+      env:
+        TOKEN: ${{ steps.token.outputs.token }}
+      run: |
+        # Fetch only the submodule with the App token via an insteadOf rewrite.
+        # The global rule also covers build.py's own `git submodule update`
+        # re-syncs later in the job.
+        git config --global \
+          url."https://x-access-token:${TOKEN}@github.com/yugabyte/amp-postgres".insteadOf \
+          "https://github.com/yugabyte/amp-postgres"
+        # A freshly-minted App token can briefly 404 ("Repository not found")
+        # before it propagates — retry so slow propagation doesn't fail the job.
+        for attempt in 1 2 3 4 5; do
+          git submodule update --init --recursive && exit 0
+          echo "submodule fetch failed (attempt $attempt/5); retrying in 10s..." >&2
+          sleep 10
+        done
+        echo "submodule fetch failed after 5 attempts" >&2
+        exit 1
