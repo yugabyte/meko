@@ -91,6 +91,8 @@ jobs:
               - 'compute/libs/**'
               - 'compute/pgxn/**'
               - 'test/integration/compute/**'
+              # The compute integration suite runs the yb_amp_local launcher.
+              - 'controller/local/**'
               - 'compute/vendor/postgres-v18'
               - 'Makefile'
               - 'postgres.mk'

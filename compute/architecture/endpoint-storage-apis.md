@@ -11,8 +11,8 @@ Source: `compute/endpoint_storage/src/app.rs` (router + handlers),
 used by compute (`compute_ctl`) and the control plane to upload/download
 LFC prewarm data; it deploys either standalone or baked into the compute
 image for large computes (`main.rs:1-4`). In yb-amp one instance runs per
-endpoint — `control_plane` co-locates an instance with each endpoint and
-stamps it a per-endpoint listen address (`control_plane/src/endpoint_storage.rs`).
+endpoint — `yb_amp_local` co-locates an instance with each endpoint and
+stamps it a per-endpoint listen address (`controller/local/cfg`).
 
 ## Binary and configuration
 
@@ -42,13 +42,11 @@ Two different defaults exist, depending on launch path:
 
 - **The binary itself** defaults to `0.0.0.0:51243` when `listen` is omitted
   from the config (`main.rs:17-19`).
-- **`control_plane`** (`yb_amp_local`) does not rely on that default. It
-  templates each instance off `ENDPOINT_STORAGE_DEFAULT_ADDR` =
-  `127.0.0.1:9993` (`control_plane/src/endpoint_storage.rs:9-10`,
-  `control_plane/src/local_env.rs:262`) and offsets the port per endpoint /
-  per port-base (`yb_amp_local.rs:1045`, `:1091`), writing an explicit
-  `listen` into each instance's `endpoint_storage.json`
-  (`endpoint_storage.rs:90-94`).
+- **`yb_amp_local`** does not rely on that default. It templates each
+  instance off `ENDPOINT_STORAGE_DEFAULT_ADDR` = `127.0.0.1:9993` and
+  offsets the port per endpoint / per port-base (`controller/local/config`),
+  writing an explicit `listen` into each instance's `endpoint_storage.json`
+  (`controller/local/cfg`).
 
 ## Authentication
 
@@ -138,9 +136,9 @@ and `MAX_RETRIES = 10` (`app.rs:38-39`), bailing on cancellation
   [`remote-storage.md`](remote-storage.md)). There is no S3/Azure/GCS/LocalFs
   path.
 - One instance per endpoint, co-located with the endpoint, addressed via the
-  control_plane-stamped per-endpoint listen address rather than a single
+  `yb_amp_local`-stamped per-endpoint listen address rather than a single
   shared service.
-- In `control_plane`, when `endpoint_storage.remote_storage_json` is unset,
+- In `yb_amp_local`, when `endpoint_storage.remote_storage_json` is unset,
   the `yb_storage_conn` block is derived from `controller.yb` (the
   same `[*.yb]` connection the pageserver/safekeeper use), with a `type:
-  "YbStore"` discriminator injected (`endpoint_storage.rs:53-99`).
+  "YbStore"` discriminator injected (`controller/local/cfg`).

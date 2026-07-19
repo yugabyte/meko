@@ -24,11 +24,11 @@ test/integration/compute/run.sh --release all   # build + run in release mode
 test/integration/compute/run.sh -h              # full help
 ```
 
-`run.sh` is a thin wrapper: it `cargo build`s the harness +
-`yb_amp_local` + every cluster server binary `yb_amp_local` spawns
-(`controller`, `yb-pageserver`, `safekeeper`, `endpoint_storage`,
-`compute_ctl`) + the diagnostic tools (incremental — a no-op when nothing
-changed), then execs the harness. Building the server binaries here is
+`run.sh` is a thin wrapper: it `cargo build`s the harness + the Rust
+cluster server binaries `yb_amp_local` spawns (`yb-pageserver`,
+`safekeeper`, `endpoint_storage`, `compute_ctl`) + the diagnostic tools,
+and `go build`s the Go binaries (`yb_amp_local` and `controller`) —
+incremental, a no-op when nothing changed — then execs the harness. Building the server binaries here is
 essential: `yb_amp_local` launches them from `target/<profile>/` at
 runtime without rebuilding, so a missing one silently runs a stale binary.
 Default builds are debug; `--release` builds and runs the release binaries.

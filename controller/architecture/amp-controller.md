@@ -372,7 +372,7 @@ this interface, not a change to the workflow.
   a juggled host port. Only the compute's Postgres port is published to the host, and
   the controller returns that `host:port` as the endpoint's address; endpoints reach
   the YBDB universe via the host gateway. This is the runtime exercised by the
-  controller-on-Docker integration (`test/integration/control_plane/run-controller.sh`).
+  controller-on-Docker integration (`test/integration/controller/run-controller.sh`).
 - **Kubernetes (next).** A `K8sDeployer` implements the same interface against the
   cluster API — a pod per endpoint, a Service for the address — reusing the
   `deploy/helm/yb-amp-endpoint` chart. VMs (via ybops) follow the same shape.

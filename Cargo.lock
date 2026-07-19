@@ -627,18 +627,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 
 [[package]]
-name = "comfy-table"
-version = "7.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b34115915337defe99b2aff5c2ce6771e5fbc4079f4b506301f5cf394c8452f7"
-dependencies = [
- "crossterm",
- "strum",
- "strum_macros",
- "unicode-width",
-]
-
-[[package]]
 name = "communicator"
 version = "0.1.0"
 dependencies = [
@@ -791,56 +779,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "control_plane"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "camino",
- "camino-tempfile",
- "clap",
- "comfy-table",
- "compute_api",
- "endpoint_storage",
- "futures",
- "http-utils",
- "humantime",
- "humantime-serde",
- "hyper 0.14.30",
- "jsonwebtoken",
- "nix 0.30.1",
- "once_cell",
- "pageserver_api",
- "pageserver_client",
- "pem",
- "postgres_backend",
- "postgres_connection",
- "regex",
- "remote_storage",
- "reqwest",
- "safekeeper_api",
- "safekeeper_client",
- "scopeguard",
- "serde",
- "serde_json",
- "sha2 0.10.8",
- "spki",
- "thiserror 1.0.69",
- "tokio",
- "tokio-postgres",
- "tokio-util",
- "toml",
- "toml_edit",
- "tracing",
- "url",
- "utils",
- "whoami",
- "workspace_hack",
- "yb-tokio-postgres",
- "ysql_client",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -981,28 +919,6 @@ name = "crossbeam-utils"
 version = "0.8.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "248e3bacc7dc6baa3b21e405ee045c3047101a49145e7e9eca583ab4c2ca5345"
-
-[[package]]
-name = "crossterm"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f476fe445d41c9e991fd07515a6f463074b782242ccf4a5b7b1d1012e70824df"
-dependencies = [
- "bitflags 2.8.0",
- "crossterm_winapi",
- "libc",
- "parking_lot",
- "winapi",
-]
-
-[[package]]
-name = "crossterm_winapi"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acdd7c62a3665c7f6830a51635d9ac9b23ed385797f70a83bb8bafe9c572ab2b"
-dependencies = [
- "winapi",
-]
 
 [[package]]
 name = "crunchy"
@@ -2349,7 +2265,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "integration_control_plane"
+name = "integration_controller"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -6079,12 +5995,6 @@ checksum = "5033c97c4262335cded6d6fc3e5c18ab755e1a3dc96376350f3d8e9f009ad956"
 dependencies = [
  "tinyvec",
 ]
-
-[[package]]
-name = "unicode-width"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0edd1e5b14653f783770bce4a4dabb4a5108a5370a5f5d8cfe8710c361f6c8b"
 
 [[package]]
 name = "unicode-xid"

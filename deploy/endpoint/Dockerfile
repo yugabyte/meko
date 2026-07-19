@@ -66,13 +66,11 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
          --bin yb-safekeeper \
          --bin yb-endpoint-storage \
          --bin yb-compute-ctl \
-         --bin yb_amp_local \
     && mkdir -p /home/nonroot/out \
     && cp target/release/yb-pageserver \
           target/release/yb-safekeeper \
           target/release/yb-endpoint-storage \
           target/release/yb-compute-ctl \
-          target/release/yb_amp_local \
           /home/nonroot/out/ \
     && mold -run make -j "$(nproc)" -s yb-amp-pg-ext
 
@@ -109,7 +107,6 @@ COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-pageserver     
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-safekeeper          /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-endpoint-storage    /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-compute-ctl         /usr/local/bin/
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb_amp_local      /usr/local/bin/
 
 # Postgres v18 install (binaries + the `yb_amp` extension installed by yb-amp-pg-ext).
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/

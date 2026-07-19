@@ -151,7 +151,7 @@ can't be made long-lived, so keep re-minting it from the bot account.
 
 [`smoke-test.sh`](smoke-test.sh) validates a **deployed** stack end-to-end. It is
 the deployment-side companion to the controller-on-Docker integration in
-[`test/integration/control_plane`](../test/integration/control_plane): that suite proves the control
+[`test/integration/controller`](../test/integration/controller): that suite proves the control
 plane on Docker; this one proves an actual Kubernetes deployment, including the
 write-ahead task contract (#113) and **real data I/O** through a created endpoint.
 

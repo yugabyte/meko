@@ -1,0 +1,72 @@
+{
+  "spec": {
+    "format_version": 1.0,
+    "operation_uuid": null,
+    "features": [],
+    "swap_size_bytes": null,
+    "disk_quota_bytes": null,
+    "disable_lfc_resizing": null,
+    "cluster": {
+      "cluster_id": null,
+      "name": null,
+      "state": null,
+      "roles": [],
+      "databases": [],
+      "postgresql_conf": "max_wal_senders=10\nwal_log_hints=off\nmax_replication_slots=10\nhot_standby=on\nshared_buffers=1MB\neffective_io_concurrency=2\nfsync=off\nfull_page_writes=off\nmax_connections=100\nwal_level=logical\nwal_sender_timeout=5s\nlisten_addresses='127.0.0.1'\nport=55432\nwal_keep_size=0\nrestart_after_crash=off\nshared_preload_libraries='yb_amp'\nyb_amp.safekeeper_conninfo_options='sslmode=disable'\nmax_replication_write_lag=15MB\nmax_replication_flush_lag=10GB\nsynchronous_standby_names=walproposer\nyb_amp.safekeepers='localhost:30100'\n",
+      "settings": null
+    },
+    "delta_operations": null,
+    "skip_pg_catalog_updates": true,
+    "storage_branch_id": "9a57cdcafd663c91ab83654f21378725",
+    "pageserver_connection_info": {
+      "pageservers": [
+        {
+          "id": 1,
+          "libpq_url": "postgres://no_user@127.0.0.1:30300?sslmode=disable",
+          "grpc_url": "grpc://no_user@127.0.0.1:30500"
+        }
+      ],
+      "prefer_protocol": "libpq"
+    },
+    "pageserver_connstring": "postgres://no_user@127.0.0.1:30300?sslmode=disable",
+    "project_id": null,
+    "branch_id": null,
+    "endpoint_id": "ep-main",
+    "safekeeper_connstrings": [
+      "127.0.0.1:30100"
+    ],
+    "mode": "Primary",
+    "storage_auth_token": null,
+    "remote_extensions": null,
+    "pgbouncer_settings": null,
+    "local_proxy_config": null,
+    "reconfigure_concurrency": 1,
+    "drop_subscriptions_before_start": false,
+    "audit_log_level": "Disabled",
+    "logs_export_host": null,
+    "endpoint_storage_addr": "127.0.0.1:30600",
+    "endpoint_storage_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJFZERTQSJ9.eyJicmFuY2hfaWQiOiI5YTU3Y2RjYWZkNjYzYzkxYWI4MzY1NGYyMTM3ODcyNSIsImVuZHBvaW50X2lkIjoiZXAtbWFpbiIsImV4cCI6MTc4NDQ5MzM4N30.2egmXLC-m7sjgrfT8J3SzO3nr7Moiv0kwKPXxKCDd-cxczrbuQUYWyOz2bg6LY6gHIpTUfXshFxi6qsIA9CLDw",
+    "autoprewarm": false,
+    "offload_lfc_interval_seconds": null,
+    "suspend_timeout_seconds": -1,
+    "databricks_settings": null
+  },
+  "compute_ctl_config": {
+    "jwks": {
+      "keys": [
+        {
+          "use": "sig",
+          "key_ops": [
+            "verify"
+          ],
+          "alg": "EdDSA",
+          "kid": "4Hfz-b5rBeLmJG42XnwpiDRGQ3bSBxuWwqHF8B_j860",
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "hQi6_L0_IQY3NgAf0KAcI6XeDNoEJEifc3KuINUenGc"
+        }
+      ]
+    },
+    "tls": null
+  }
+}

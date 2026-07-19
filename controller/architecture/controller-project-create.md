@@ -4,7 +4,7 @@
 **Last updated:** 2026-06-18
 
 How the Amp Controller ("cAmp") creates a new project (and its default branch). It
-follows the `yb_amp_local` workflow (`control_plane/src/bin/yb_amp_local.rs`),
+follows the `yb_amp_local` workflow (`controller/local/cmd/yb_amp_local/main.go`),
 expressed in cAmp's resource model. **Precondition:** the storage pool already exists.
 
 ## Resource model

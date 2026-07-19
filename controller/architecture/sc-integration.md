@@ -52,14 +52,14 @@ versioned `/api/v1` product API, implemented in
 | `POST/GET /control/v1/endpoint`, `DELETE /control/v1/endpoint/{id}` | endpoint registry |
 
 The wire shapes match `pageserver_api::controller_api` and the launcher client
-DTOs in `control_plane/src/controller.rs`. In dev/local the surface is unauthenticated
+DTOs in `controller/local/client`. In dev/local the surface is unauthenticated
 (the whole controller is, today — auth is deferred, #189).
 
 ## Callers
 
-- **`yb_amp_local`** (the dev harness, `control_plane/`) launches the `controller`
+- **`yb_amp_local`** (the dev harness, `controller/local/`) launches the `controller`
   binary in place of the old subprocess and drives this surface over HTTP via its
-  `Controller` client (`control_plane/src/controller.rs`) — node register + attach
+  controller client (`controller/local/client`) — node register + attach
   when starting a pageserver, branch register/drop, pending-init record/list/delete,
   endpoint create/list/delete. The integration harness (`test/integration/compute/`)
   exercises the same path.

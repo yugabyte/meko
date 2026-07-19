@@ -1176,7 +1176,7 @@ tab's whole reason to exist.
   `scripts/db/*.sql`).
 - **Env-creation & control-plane API:** yb-amp `controller/` (OpenAPI spec +
   oapi-codegen client), `deploy/up.sh` + Helm charts, `deploy/smoke-test.sh`,
-  `control_plane/` `yb_amp_local`, `test/integration/`.
+  `controller/local/` `yb_amp_local`, `test/integration/`.
 - **Perf/benchbase:** yb-amp `benchmark/scripts/` (`tpcc-run.sh`, `_env.sh`,
   `_metrics.sh`), `compute/pageserver/pagebench`.
 - **Test taxonomy & quality dimensions:** YugabyteDB `coverage_process`.

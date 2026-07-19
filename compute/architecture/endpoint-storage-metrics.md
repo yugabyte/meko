@@ -47,9 +47,9 @@ dependency chain (`compute/libs/utils/src/` has no `ProcessCollector` /
 
 ## Operational notes
 
-- `control_plane` uses `GET /metrics` as the service liveness probe — a
-  `200` response means the service is up
-  (`control_plane/src/endpoint_storage.rs:106-112`). It does not parse any
+- `yb_amp_local` uses `GET /metrics` as the service liveness probe — a
+  `200` response means the service is up (the `endpoint_storage` start
+  path in `controller/local/launch`). It does not parse any
   metric values.
 - Because the only reliably-present series is
   `libmetrics_tracing_event_count`, `/metrics` is useful for log-volume /

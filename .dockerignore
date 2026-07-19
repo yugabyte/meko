@@ -23,6 +23,8 @@
 !controller/
 controller/*
 !controller/migrations/
+# The Go yb_amp_local launcher lives here; the endpoint/controller images build it.
+!controller/local/
 !docker-compose/ext-src
 !proxy/
 !storage_scrubber/

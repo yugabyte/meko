@@ -143,14 +143,14 @@ env -u PROFILE "$REPO/build.sh" --pg-only
 # behaves identically to the production build otherwise.
 if [[ $PROFILE == release ]]; then
     cargo build --release --features pageserver/testing,safekeeper/testing \
-        --bin integration_tests --bin yb_amp_local \
+        --bin integration_tests \
         "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
     export YB_AMP=${YB_AMP:-$REPO/target/release/yb_amp_local}
     BIN=$REPO/target/release/integration_tests
     _PROFILE_DIR=release
 else
     cargo build --features pageserver/testing,safekeeper/testing \
-        --bin integration_tests --bin yb_amp_local \
+        --bin integration_tests \
         "${CLUSTER_BINS[@]}" "${TOOL_BINS[@]}"
     BIN=$REPO/target/debug/integration_tests
     _PROFILE_DIR=debug
@@ -160,6 +160,12 @@ fi
 # from beside itself (target/<profile>/controller), so build it into the same
 # directory the cargo binaries land in.
 ( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller )
+
+# The yb_amp_local launcher is also a Go binary now (was the Rust control_plane
+# crate). Build it into the same target/<profile>/ dir the cargo binaries land in,
+# so the harness (YB_AMP / target/<profile>/yb_amp_local) and the launcher's own
+# next-to-itself controller lookup both resolve.
+( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/yb_amp_local" ./local/cmd/yb_amp_local )
 
 # Rebuild the yb_amp Postgres extension when its C sources changed. cargo does
 # NOT build it — the launcher spawns a compute whose postgres loads

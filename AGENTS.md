@@ -66,14 +66,15 @@ Code anchors:
   LSN/record-boundary bookkeeping.
 - `controller/src/persistence.rs` — `establish_connection_rustls`,
   AcceptAll TLS verifier.
-- `control_plane/src/controller.rs` — yb_amp_local wrapper:
-  external-DB path, `ensure_external_database`, YB schema
-  auto-provisioning.
-- `control_plane/src/local_env.rs` — TOML config types
-  (`YbAmpControllerConf::yb`, `SafekeeperConf::yb_storage_conn`;
+- `controller/local/launch` — the yb_amp_local launcher lifecycle:
+  external-YB DB path (`ensure_external_database` / YB schema
+  auto-provisioning) in `provision.go`, per-service start/stop in `nodes.go`.
+- `controller/local/config` — the `.yb_amp/config` TOML types
+  (`YbAmpControllerConf.Yb`, `SafekeeperConf.YbStorageConn`;
   every service takes the same `yb_storage_conn` connection block).
-- `control_plane/src/safekeeper.rs` / `pageserver.rs` / `endpoint.rs` —
-  per-service CLI assembly + per-component config.
+- `controller/local/cfg` — the per-component config-file writers
+  (pageserver.toml / safekeeper.toml / compute config.json);
+  `controller/local/cmd/yb_amp_local` — the CLI assembly.
 - `compute/pageserver/src/page_store.rs` — `PageStore` row store for the
   fork's row-per-page YB layout (`pageserver.pages` +
   `pageserver.timelines`).
@@ -133,8 +134,10 @@ Code anchors:
   On `dev-server-hsunder` the system `protoc` is 3.5.0; release builds
   use `PROTOC=/opt/yb-build/thirdparty/.../installed/uninstrumented/bin/protoc`
   (3.21+). Debug builds tend to work via cached proto output.
-- `cargo build -p control_plane --bin yb_amp_local` is the fastest "did I
-  break the wrapper" check.
+- `go build -C controller ./local/...` is the fastest "did I break the wrapper"
+  check — `yb_amp_local` is a Go binary under `controller/local/` (built with
+  `go build -C controller -o target/debug/yb_amp_local ./local/cmd/yb_amp_local`),
+  not a cargo crate.
 
 ## Testing
 

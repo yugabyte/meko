@@ -76,7 +76,7 @@ by adding the missing/retyped key:
   TOML map — i.e. `yb_storage_conn='{ host_ports="…:5433", user="…", dbname="…" }'` (quoted string),
   not `yb_storage_conn={…}`. It carries no `table_name` (each component hardcodes its tables).
 - Missing top-level keys it requires: `default_branch_id`, `generate_local_ssl_certs`,
-  `control_plane_api`. A panic at `local_env.rs:…` on init usually means `control_plane_api` is absent.
+  `control_plane_api`. A config-load failure in `controller/local/config` on init usually means `control_plane_api` is absent.
 - `[endpoint_storage]` stanza must be present.
 - endpoint_storage `YbStore` derivation needs the `[controller.yb]` block (the shared
   `host_ports`/`user`/`dbname` connection block) to be present.
@@ -205,7 +205,7 @@ The companion `yb_amp_distrib_dir = "$BUILD"` should already be correct.
 ## M. SC: `password missing` / `building database URL from --yb-config`
 `yb_amp_local init` writes the YB connection blocks (`[controller.yb]` and the per-template
 `yb_storage_conn = '{…}'` inline tables) with `password_env: None` and `sslmode: None`
-(`yb_amp_local.rs`) — only `host_ports/user/dbname`. SC then can't authenticate, and YB rejects
+(`controller/local/launch`, the `init` command) — only `host_ports/user/dbname`. SC then can't authenticate, and YB rejects
 non-TLS connections anyway (see **D**).
 
 Fix: edit the generated `$YB_AMP_REPO_DIR/config` and add both keys to every YB block:

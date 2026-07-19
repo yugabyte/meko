@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "compute/compute_tools",
-    "control_plane",
     "compute/pageserver",
     "compute/pageserver/client",
     "compute/pageserver/client_grpc",
@@ -43,7 +42,7 @@ members = [
     "compute/endpoint_storage",
     "compute/pgxn/yb_amp/communicator",
     "test/integration/compute",
-    "test/integration/control_plane",
+    "test/integration/controller",
     "test/integration/libs/integration_common",
 ]
 

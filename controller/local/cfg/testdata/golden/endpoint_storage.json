@@ -1,0 +1,1 @@
+{"listen":"127.0.0.1:30600","pemfile":"/tmp/claude-2206/-net-dev-server-hsunder-share-code-amp/bca88cc9-be37-4760-9c1f-bbfa36b6fbac/scratchpad/goldenrepo/.yb_amp/auth_public_key.pem","yb_storage_conn":{"dbname":"amp_golden","host_ports":"127.0.0.1:5433","type":"YbStore","user":"yugabyte"}}

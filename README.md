@@ -177,28 +177,26 @@ pinned image CI uses, reachable at `127.0.0.1:5433` / db `yb_storage`:
 ./scripts/yb-local.sh stop          # stop and remove the container
 ```
 
-Then bring up the AMP stack with the bundled `yb_amp_local` workflow:
+Then bring up the AMP stack with the bundled `yb_amp_local` workflow.
+
+`yb_amp_local` is a Go binary under `controller/local/`; build it once:
 
 ```sh
-./build.sh                        # build patched PG + Rust binaries (see "Building from source")
-cargo yb_amp init               # writes .yb_amp repo dir against config.toml
-cargo yb_amp start              # storage_broker, safekeeper, pageserver
-cargo yb_amp tenant create --set-default
-cargo yb_amp endpoint create main
-cargo yb_amp endpoint start main
+./build.sh                        # build patched PG + Rust daemons (see "Building from source")
+go build -C controller -o target/debug/yb_amp_local ./local/cmd/yb_amp_local
 ```
 
-`cargo yb_amp` rebuilds-then-runs the debug binary. Once it's built,
-the repo-root wrapper scripts skip cargo's build check and exec the
-binary directly — handy for fast, repeated invocations:
+The repo-root `./yb_amp_local` wrapper execs the debug binary and resolves the
+repo root from its own location, so it works from any working directory
+(`./yb_amp_local_release` execs the release build):
 
 ```sh
-./yb_amp_local init             # -> target/debug/yb_amp_local
-./yb_amp_local_release start    # -> target/release/yb_amp_local
+./yb_amp_local init                          # writes the .yb_amp repo dir
+./yb_amp_local start                         # controller, safekeeper, pageserver, endpoint_storage
+./yb_amp_local branch create --set-default
+./yb_amp_local endpoint create main --branch-name main
+./yb_amp_local endpoint start main
 ```
-
-Both pass all arguments straight through and resolve the repo root
-from their own location, so they work from any working directory.
 
 The compute expects to find a YB cluster reachable from the host;
 configure host_ports/user/dbname/sslmode in `config.toml` under the
@@ -220,9 +218,9 @@ Branches are a cheap timeline forks at a given LSN, served out of
 the same YB rows:
 
 ```sh
-cargo yb_amp timeline branch --branch-name migration_check
-cargo yb_amp endpoint create migration_check --branch-name migration_check
-cargo yb_amp endpoint start migration_check
+yb_amp_local branch create --branch-name migration_check --ancestor-branch-name main
+yb_amp_local endpoint create migration_check --branch-name migration_check
+yb_amp_local endpoint start migration_check
 ```
 
 
@@ -246,7 +244,7 @@ Notes:
   API (`/upcall/v1/`); its REST API lives at `/control/v1` and `/v1` on
   the same port.
 - `compute_ctl` exposes a per-endpoint HTTP control port assigned at
-  `endpoint create` time (see `cargo yb_amp endpoint` output).
+  `endpoint create` time (see `yb_amp_local endpoint` output).
 
 
 ## Building from source

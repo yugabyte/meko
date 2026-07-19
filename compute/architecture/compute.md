@@ -113,4 +113,4 @@ deployment using a local-FS or S3 backend.
   spec, and HTTP control API have their own page: [`compute_ctl.md`](compute_ctl.md).
 - Neon's PG extension (`yb_amp.so`, smgr hooks, walproposer): `compute/pgxn/yb_amp/`
   (top-level in this repo, NOT in the vendored postgres tree).
-- Endpoint creation in the dev wrapper: `control_plane/src/endpoint.rs`.
+- Endpoint creation in the dev wrapper: `controller/local/launch/endpoint.go`.

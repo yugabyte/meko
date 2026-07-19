@@ -47,7 +47,7 @@ pub struct BranchCreateResponse {
 /// table, and `yb_amp_local` drives it through the `/control/v1/endpoint` API.
 ///
 /// `spec` is an opaque JSON object (a serialized
-/// `control_plane::endpoint::EndpointConf`), stored in a JSONB column. The
+/// `controller/local` endpoint conf), stored in a JSONB column. The
 /// controller never parses it, so the endpoint config schema can
 /// evolve without touching the controller.
 #[derive(Serialize, Deserialize, Debug, Clone)]

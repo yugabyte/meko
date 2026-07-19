@@ -93,7 +93,7 @@ Restart the wedged process; state resumes from the durable watermark
 (`consistent_lsn` for the pageserver):
 
 ```sh
-cargo yb_amp <component> restart      # or: yb <component> restart
+yb_amp_local <component> restart      # or: yb <component> restart
 ```
 
 Always capture the task dump **before** restarting — it is the only artifact

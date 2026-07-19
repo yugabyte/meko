@@ -1,0 +1,17 @@
+pg_distrib_dir ='/net/dev-server-hsunder/share/code/amp/pg_install'
+safekeeper_pg_addr ='127.0.0.1:30100'
+control_plane_api ='http://127.0.0.1:30000/upcall/v1/'
+yb_storage_conn ={ host_ports = "127.0.0.1:5433", user = "yugabyte", dbname = "amp_golden" }
+listen_pg_addr = "127.0.0.1:30300"
+listen_http_addr = "127.0.0.1:30400"
+listen_grpc_addr = "127.0.0.1:30500"
+pg_auth_type = "Trust"
+http_auth_type = "Trust"
+grpc_auth_type = "Trust"
+no_sync = true
+branch_id = "9a57cdcafd663c91ab83654f21378725"
+generation = 2
+
+[timeline_init]
+mode = "bootstrap"
+pg_version = 18

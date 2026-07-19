@@ -129,7 +129,7 @@ docker run -d --name controller --hostname controller --network ybamp \
 ```
 
 `--user root` is the dev-simple way to give controller access to the mounted socket; the
-integration driver `test/integration/control_plane/run-controller.sh` wires all of this up. The Kubernetes
+integration driver `test/integration/controller/run-controller.sh` wires all of this up. The Kubernetes
 driver (`AMP_DEPLOY_DRIVER=kubernetes`) uses Helm + the cluster API instead and
 needs neither the socket nor this CLI.
 

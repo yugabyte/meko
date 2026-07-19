@@ -96,7 +96,6 @@ RUN  set -e \
       --bin yb-pageserver  \
       --bin yb-safekeeper  \
       --bin yb-endpoint-storage \
-      --bin yb_amp_local \
       --locked --release \
     && mold -run make -j $(nproc) -s yb-amp-pg-ext
 
@@ -133,7 +132,6 @@ RUN set -e \
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-pageserver       /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-safekeeper       /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-endpoint-storage /usr/local/bin
-COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb_amp_local      /usr/local/bin
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
 # Deprecated: Old deployment scripts use this tarball which contains all the Postgres binaries.

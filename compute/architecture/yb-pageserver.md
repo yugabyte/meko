@@ -760,7 +760,7 @@ where they differ from upstream:
 
 | Stage | GUC / location | Default | Notes |
 |---|---|---|---|
-| TCP connect | libpq, no explicit cap in `control_plane/src/endpoint.rs::local_pageserver_conf_to_conn_info` | **Unset** → OS TCP SYN-retry (~127 s on Linux) | Currently no `connect_timeout=` parameter is appended to the constructed connstring. |
+| TCP connect | libpq, no explicit cap in the pageserver connstring built by `controller/local/cfg` | **Unset** → OS TCP SYN-retry (~127 s on Linux) | Currently no `connect_timeout=` parameter is appended to the constructed connstring. |
 | First WARN log on stalled response | `yb_amp.pageserver_response_log_timeout` (`libpagestore.c:87`) | **10 s** | Cosmetic; request keeps waiting. |
 | Disconnect + reconnect on stalled response | `yb_amp.pageserver_response_disconnect_timeout` (`libpagestore.c:95`) | **30 s** *(was 150 s upstream)* | Lowered in yb-amp: yb-pageserver is a same-DC, low-latency hop, so a stuck request is far more likely a pageserver-side stall than transient packet loss — drop and reopen the socket fast, don't wait for TCP retry backoff. |
 | Reconnect attempts before erroring back to compute | `max_reconnect_attempts` (`libpagestore.c:83`) | **60** (1 s backoff each) | Combined with the disconnect timeout, a hard-down pageserver surfaces to the compute query in ~30 s + 60 × 1 s ≈ ~90 s. |
@@ -815,8 +815,7 @@ Per-phase task records live under [`../../tasks/`](../../tasks/). See
   — diesel-managed DDL for the `pageserver` schema (`pages`,
   `slru_pages`, `meta`, `timeline_state`) and the
   rest of `yb_storage` (#2). Replaces the earlier
-  `control_plane/src/controller.rs::ensure_yb_storage_schema`
-  bootstrap, which has been removed.
+  `ensure_yb_storage_schema` bootstrap, which has been removed.
 - `compute/architecture/yugabyte.md` — full DDL reference for
   `pageserver.pages`, `pageserver.slru_pages`, `pageserver.meta`,
   and `pageserver.timeline_state`.

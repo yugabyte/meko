@@ -5,7 +5,7 @@
 # lifecycle and validates that a created endpoint is a real, writable Postgres.
 #
 # It is the deployment-side companion to the controller-on-Docker integration in
-# test/integration/control_plane: that suite proves the control plane on Docker; this one
+# test/integration/controller: that suite proves the control plane on Docker; this one
 # proves an actual Kubernetes deployment, including the write-ahead task contract
 # (#113) and real data I/O through the compute -> safekeeper -> pageserver -> YB
 # storage path.

@@ -69,7 +69,6 @@ DIAG_TOOLS = ["yb-dump-pages", "yb-dump-wals", "yb-reset-consistent-lsn"]
 # Crates that produce the binaries above.
 BUILD_CRATES = [
     "pageserver",
-    "control_plane",
     "safekeeper",
     "compute_tools",
     "endpoint_storage",
@@ -368,6 +367,12 @@ def main():
     for crate in BUILD_CRATES:
         cargo += ["-p", crate]
     run(cargo)
+
+    # yb_amp_local is a Go binary (controller/local/), no longer a cargo crate.
+    # Build it into the cargo target dir so the DAEMON_BINS copy (and its own
+    # next-to-itself controller lookup) resolve it.
+    run(["go", "build", "-C", "controller", "-o", str(target_dir / "yb_amp_local"),
+         "./local/cmd/yb_amp_local"])
 
     # `yb_amp.so` + walredo/utils extensions are loaded by the compute postgres;
     # their wire protocol must match these binaries, and they link the Rust

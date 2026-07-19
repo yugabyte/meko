@@ -246,9 +246,9 @@ that talks to YB over the Postgres wire (this crate's `YbStore`, the
 safekeeper's `YbWalStorage`, the pageserver's `PageStore`). It was
 extracted from `remote_storage` into its own crate in commit `f399c049e`
 and is re-exported from `remote_storage::lib.rs:23` for compatibility.
-yb_amp_local's `ensure_external_database` does **not** go through
-`YsqlClient` — it issues raw one-shot `tokio_postgres::Config::connect`
-calls (`control_plane/src/controller.rs:320-350`).
+yb_amp_local's `yb_storage` bootstrap does **not** go through
+`YsqlClient` — it issues a raw one-shot Postgres connection
+(`controller/local/launch/provision.go`).
 
 - Owns the `tokio_postgres::Config` plus a reconnect closure baked at
   construction time (`connect_no_tls` or `connect_rustls`).
@@ -293,9 +293,10 @@ calls (`control_plane/src/controller.rs:320-350`).
 
 `build_yb_rustls_connector(sslrootcert: Option<&str>)` (in
 `compute/libs/ysql_client/src/lib.rs:679`, re-exported from
-`remote_storage::lib.rs:23`) is the shared constructor; the
-controller wrapper in `control_plane` reuses it for its own
-one-shot `CREATE DATABASE` / DDL connections (see
+`remote_storage::lib.rs:23`) is the shared constructor for the
+YB-facing Rust clients; the `yb_amp_local` launcher makes its own
+one-shot `CREATE DATABASE` / DDL connections in Go
+(`controller/local/launch/provision.go`) (see
 [`controller.md`](../../controller/architecture/sc-integration.md)). The rustls path was
 introduced in commit `7a424639e`.
 

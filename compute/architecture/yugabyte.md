@@ -16,7 +16,7 @@ All three subsystems share **one** database, `yb_storage`. Within it:
 | `controller` | 8 Diesel-managed tables (`branches`, `nodes`, `safekeepers`, `metadata_health`, `timelines`, `pending_timeline_inits`, `timeline_imports`, `endpoints`) | yugabyte | controller migrations |
 
 `yb_amp_local` only `CREATE DATABASE`s `yb_storage`
-(`control_plane/src/controller.rs::ensure_external_database`);
+(`controller/local/launch/provision.go`);
 every schema, ENUM, and table — across `public`, `pageserver`,
 `safekeeper`, and `controller` — is created by the storage
 controller binary's Diesel migrations on first start. The single
@@ -481,7 +481,7 @@ the signal that something is wrong upstream of the client.
 The authoritative provisioning DDL is a single Diesel migration:
 [`controller/migrations/0005_provision_yb_storage.up.sql`](../../controller/migrations/0005_provision_yb_storage.up.sql).
 `yb_amp_local` only `CREATE DATABASE`s `yb_storage` (see
-`control_plane/src/controller.rs::ensure_external_database`);
+`controller/local/launch/provision.go`);
 the controller binary applies the migration on first start, which
 creates every schema, ENUM, and table in one shot. Listed here for
 reference / disaster-recovery; you do **not** need to run any of it

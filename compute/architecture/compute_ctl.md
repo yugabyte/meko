@@ -13,14 +13,10 @@ manages the Postgres / safekeeper / pageserver processes directly. See
 ("Per-endpoint services"), where `compute_ctl` is exactly this contact point.
 
 > **Scope note.** [`compute.md`](compute.md) covers the *compute itself* — Postgres
-> 17.8, the `neon` smgr hooks, LFC, walproposer. This doc covers the *supervisor* that
-> brings that compute up and keeps it configured. `compute_ctl` is upstream Neon code;
-> the YB-specific story is short and lives under "Changes in yb-amp" below.
+> 17.8, the `yb_amp` extension's smgr hooks, LFC, walproposer. This doc covers the
+> *supervisor* that brings that compute up and keeps it configured.
 
-## Inherited from Neon
-
-`compute/compute_tools/` is upstream Neon, essentially unmodified (see "Changes in yb-amp").
-Everything in this section is Neon behavior that yb-amp relies on as-is.
+## Supervisor behavior
 
 ### What it supervises
 
@@ -29,7 +25,7 @@ A compute is Postgres plus a few optional sidecars, all under one `compute_ctl`:
 - **Postgres** — the user-facing backend, started as a child process.
 - **pgbouncer** — connection pooler, tuned from spec when `pgbouncer_settings` is set
   (`pgbouncer.rs`, `compute.rs`).
-- **local_proxy** — JWT-validating proxy for Neon's managed-auth feature, configured
+- **local_proxy** — JWT-validating proxy for the managed-auth feature, configured
   via `/etc/local_proxy/config.json` + SIGHUP when `local_proxy_config` is set
   (`local_proxy.rs`).
 - **rsyslog** — audit-log (pgaudit) and Postgres-log export relays (`rsyslog.rs`).
@@ -100,9 +96,7 @@ yb-amp runs a single safekeeper, which reports `commit_lsn == flush_lsn` (a quor
 one — every flush is durably committed). The startup LSN therefore comes straight from the
 `TIMELINE_STATUS` query in `check_safekeepers_synced()`; there is no multi-safekeeper
 consensus to drive, so compute_ctl never spawns `postgres --sync-safekeepers` at startup or
-shutdown. (Upstream Neon ran a full `sync_safekeepers()` walproposer pass here; that spawned
-a second postgres binding the client port and racing the next compute on shutdown — see
-[#58].) `cleanup_after_postgres_exit()` no longer reports a `terminate_flush_lsn`.
+shutdown, and `cleanup_after_postgres_exit()` reports no `terminate_flush_lsn` (see [#58]).
 
 [#58]: https://github.com/yugabyte/amp/issues/58
 
@@ -115,7 +109,7 @@ flags, audit level, LFC/prewarm knobs, pgbouncer/local_proxy config, and the
 `compute_ctl_config` (TLS + JWKS for API auth). It is acquired two ways:
 
 - **From a file** — `--config <path>` (a `config.json`). This is how `yb_amp_local`
-  drives it: `control_plane/src/endpoint.rs` writes `config.json` into the endpoint dir
+  drives it: `controller/local/cfg` writes `config.json` into the endpoint dir
   and passes `--config`.
 - **From the control plane** — `--control-plane-uri <base> --compute-id <id>`, which
   GETs `{base}/compute/api/v2/computes/{id}/spec` with retries (`spec.rs`). The two
@@ -146,7 +140,7 @@ ordered, partly per-database-parallel set of phases, each idempotent:
 2. drop / rename databases marked for deletion via `delta_operations`;
 3. create/alter the privileged role and all cluster roles;
 4. create/alter all cluster databases (owner, options, connlimit);
-5. per-database work (rename/drop roles, create extensions, `neon` schema + grants,
+5. per-database work (rename/drop roles, create extensions, `yb_amp` schema + grants,
    pgaudit / pg_session_jwt, JWKS roles for local_proxy) — parallelized up to a
    connection cap;
 6. create the `public.health_check` table used by `/check_writability`.
@@ -187,7 +181,7 @@ behind JWT auth except for metrics:
 | Route | Purpose |
 |---|---|
 | `POST /extension_server/{*filename}` | download a remote extension file |
-| `POST /extensions` | install an extension (called by the `neon` ext) |
+| `POST /extensions` | install an extension (called by the `yb_amp` ext) |
 | `POST /grants` | add a grant |
 | `POST /failpoints` | chaos hooks (`testing` builds only) |
 
@@ -235,25 +229,15 @@ installed-extensions gauge. Tracing is OpenTelemetry: `init_tracing_and_logging(
 sets up an OTLP provider and propagates trace context across HTTP requests and via
 `OTEL_*` env vars (`logger.rs`, `compute.rs`).
 
-## Changes in yb-amp
-
-**There is no functional yb-amp fork of `compute_tools`.** The only commits that have
-touched the crate are fork-wide mechanical refactors, not behavior changes:
-
-- the `neon_local` → `yb_amp_local` / `cargo neon` → `cargo yb_amp` rename;
-- removal of the "Hadron" code;
-- the removal of sharding entirely (the `ShardIdentity` / `ShardIndex` /
-  `ShardCount` / … types and `TenantShardId` are gone — yb-amp is single-shard);
-- the collapse of `(tenant_id, timeline_id)` into a single `branch_id` (the
-  `TenantId` / `TenantTimelineId` types are gone; `TimelineId` became `BranchId`);
-- the strip of S3/Azure/GCS backends from `compute/libs/remote_storage`.
+## Storage-agnostic by design
 
 `compute_ctl` does not know YugabyteDB exists, by design (mirroring
 [`compute.md`](compute.md)). It speaks the same getpage-RPC / libpq / replication wire
-protocols to a pageserver and safekeeper that *happen* to be YB-backed underneath. The
-only operationally visible effects are the ones noted in `compute.md`: slightly higher
-commit and cold-read latency from the YB-backed storage tier. Remote-extension download
-is unaffected by the `remote_storage` strip — it goes through the `--remote-ext-base-url`
+protocols to a pageserver and safekeeper that *happen* to be YB-backed underneath. It is
+single-shard and branch-scoped: storage is addressed by a single `branch_id`, with no
+shard or tenant/timeline identifiers in play. The only operationally visible effects are
+the ones noted in `compute.md`: slightly higher commit and cold-read latency from the
+YB-backed storage tier. Remote-extension download goes through the `--remote-ext-base-url`
 HTTP gateway, not a cloud-storage backend.
 
 ## How it fits amp-controller
@@ -280,12 +264,12 @@ The [amp-controller design](../../controller/architecture/amp-controller.md) lea
 
 ## Run / configure
 
-In the dev cluster, `yb_amp_local` launches it (`control_plane/src/endpoint.rs`):
+In the dev cluster, `yb_amp_local` launches it (`controller/local/launch/endpoint.go`):
 
 ```
 compute_ctl \
     --external-http-port <port> \      # control-plane API (default 3080)
-    --internal-http-port <port> \      # loopback API for neon ext / local_proxy (default 3081)
+    --internal-http-port <port> \      # loopback API for yb_amp ext / local_proxy (default 3081)
     --pgdata <endpoint>/pgdata \
     --connstr 'postgresql://cloud_admin@.../postgres' \
     --config  <endpoint>/config.json \ # the spec (file mode)
@@ -312,5 +296,6 @@ mode, conflicts with `--config`), `--installed-extensions-collection-interval`,
   subsystems.
 - `compute/libs/compute_api/src/{spec,responses}.rs` — `ComputeSpec` / `ComputeMode` /
   `ComputeStatus`, shared with the control plane.
-- `control_plane/src/endpoint.rs` — the `yb_amp_local` wrapper that writes
-  `config.json` and launches the binary.
+- `controller/local/launch/endpoint.go` — the `yb_amp_local` endpoint
+  lifecycle that launches the binary; the `config.json` spec is written by
+  `controller/local/cfg`.
