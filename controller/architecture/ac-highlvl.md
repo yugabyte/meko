@@ -335,19 +335,19 @@ CREATE TABLE task (                            -- one per operation; status is e
     kind         text        NOT NULL,         -- 'create_project', 'branch', 'scale', ...
     status       text        NOT NULL DEFAULT 'pending',
     params       jsonb       NOT NULL,         -- the originating request
+    step_ids     uuid[]      NOT NULL DEFAULT '{}',  -- its steps, in execution order
     error        text,                          -- set when status = 'failed'
     owner        text,                          -- which instance holds it (crash recovery)
     lease_expiry timestamptz                    -- lease expiry => another instance may reclaim
 );
 
 CREATE TABLE task_step (                        -- the write-ahead steps of one task
+    id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),  -- referenced by task.step_ids
     task_id    uuid        NOT NULL REFERENCES task(id),
-    ordinal    int         NOT NULL,            -- execution order within the task
     kind       text        NOT NULL,            -- which re-usable step
     status     text        NOT NULL DEFAULT 'pending',
     args       jsonb       NOT NULL,            -- inputs, written when the task is planned
-    result     jsonb,                            -- outputs, written when the step succeeds
-    PRIMARY KEY (task_id, ordinal)              -- steps are ordered, unique within a task
+    result     jsonb                             -- outputs, written when the step succeeds
 );
 ```
 

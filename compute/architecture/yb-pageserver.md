@@ -213,7 +213,7 @@ two-phase commit, repl origins), and `timeline_state` (per-branch
 state row). Per-branch config is NOT in YB: the effective config is
 the `[tenant_config]` section of `pageserver.toml`.
 DDL is owned by the diesel migration at
-`controller/migrations/0005_provision_yb_storage.up.sql`
+`controller/migrations/0002_compute_storage.up.sql`
 (lines 163-250). See [`yugabyte.md`](yugabyte.md) for the full DDL.
 
 ### `pageserver.pages`
@@ -811,7 +811,7 @@ Per-phase task records live under [`../../tasks/`](../../tasks/). See
 - `compute/pageserver/src/page_server/timeline.rs` — `get_vectored_via_page_writer`
   drives the row-store read path; `chain_to_value_reconstruct_state`
   converts a chain into walredo inputs.
-- `controller/migrations/0005_provision_yb_storage.up.sql`
+- `controller/migrations/0002_compute_storage.up.sql`
   — diesel-managed DDL for the `pageserver` schema (`pages`,
   `slru_pages`, `meta`, `timeline_state`) and the
   rest of `yb_storage` (#2). Replaces the earlier

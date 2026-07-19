@@ -93,6 +93,10 @@ jobs:
               - 'test/integration/compute/**'
               # The compute integration suite runs the yb_amp_local launcher.
               - 'controller/local/**'
+              # The controller migrations provision the schema the pageserver /
+              # safekeeper / endpoint_storage daemons bind to, so a migration
+              # change must run the integration suite.
+              - 'controller/migrations/**'
               - 'compute/vendor/postgres-v18'
               - 'Makefile'
               - 'postgres.mk'

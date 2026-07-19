@@ -99,7 +99,10 @@ CREATE TABLE endpoint (
     branch_id    uuid          NOT NULL,
     role         endpoint_role NOT NULL,
 
-    address      text,         -- connection details returned to users
+    address         text,      -- connection details returned to users
+    tailnet_address text,      -- optional second address: the Tailscale (tailnet)
+                               --   URL, populated alongside the LoadBalancer address
+                               --   when the endpoint is tailnet-exposed; NULL otherwise
     config       jsonb,        -- the spec used to (re)create the endpoint
 
     created_at   timestamptz   NOT NULL DEFAULT now(),
@@ -118,15 +121,18 @@ CREATE UNIQUE INDEX one_writer_per_branch
 CREATE TYPE task_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
 CREATE TYPE step_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
 
--- One row per initiated operation; the user-visible, API-monitorable unit.
+-- One row per initiated operation; the user-visible, API-monitorable unit. It
+-- carries its steps as an ordered list of step ids (step_ids); the steps
+-- themselves live in task_step.
 CREATE TABLE task (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    kind         text        NOT NULL,  -- e.g. 'create_project', 'branch', 'scale'
+    kind         text        NOT NULL,  -- e.g. 'create_project', 'branch', 'create_endpoint'
     status       task_status NOT NULL DEFAULT 'pending',
     project_id   uuid,                   -- target resource (for API monitoring); a
                                          --   task may create its own target, so no FK
     target_ref   text,
     params       jsonb       NOT NULL DEFAULT '{}'::jsonb,  -- the originating request
+    step_ids     uuid[]      NOT NULL DEFAULT '{}',         -- steps in execution order
     error        text,                   -- set when status = 'failed'
     owner        text,                   -- which instance holds the task (§8.2)
     lease_expiry timestamptz,            -- ownership lease; expiry => reclaimable
@@ -134,18 +140,27 @@ CREATE TABLE task (
     updated_at   timestamptz NOT NULL DEFAULT now()
 );
 
--- The ordered, idempotent steps of one task; written write-ahead, marked as run.
+-- The idempotent steps of one task; written write-ahead, marked as they run. Each
+-- has its own id (referenced by task.step_ids, which fixes execution order); the
+-- task_id backref keeps "the steps of this task" a cheap, indexed lookup.
 CREATE TABLE task_step (
+    id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     task_id    uuid        NOT NULL REFERENCES task (id),
-    ordinal    int         NOT NULL,  -- execution order within the task
     kind       text        NOT NULL,  -- which re-usable step
     status     step_status NOT NULL DEFAULT 'pending',
     args       jsonb       NOT NULL DEFAULT '{}'::jsonb,  -- inputs, written when planned
     result     jsonb,                  -- outputs, written when the step succeeds
     error      text,
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (task_id, ordinal)
+    updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE INDEX task_step_by_task ON task_step (task_id);
 
 -- The claim/resume query only ever scans unfinished tasks.
 CREATE INDEX task_runnable ON task (status) WHERE status IN ('pending', 'running');
+
+-- Indexes backing the task list endpoint (GET /api/v1/tasks): the list is ordered
+-- by created_at DESC and optionally filtered by project_id and status.
+CREATE INDEX task_by_created_at ON task (created_at);
+CREATE INDEX task_by_project ON task (project_id);
+CREATE INDEX task_by_status ON task (status);

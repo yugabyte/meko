@@ -21,7 +21,7 @@ every schema, ENUM, and table — across `public`, `pageserver`,
 `safekeeper`, and `controller` — is created by the storage
 controller binary's Diesel migrations on first start. The single
 authoritative migration is
-`controller/migrations/0005_provision_yb_storage.up.sql`,
+`controller/migrations/0002_compute_storage.up.sql`,
 which `CREATE SCHEMA IF NOT EXISTS`'s the `controller`,
 `pageserver`, and `safekeeper` schemas (`public` is built-in) and
 creates every table referenced below. The controller's connections use
@@ -479,7 +479,7 @@ the signal that something is wrong upstream of the client.
 ## Provisioning DDL — full reference
 
 The authoritative provisioning DDL is a single Diesel migration:
-[`controller/migrations/0005_provision_yb_storage.up.sql`](../../controller/migrations/0005_provision_yb_storage.up.sql).
+[`controller/migrations/0002_compute_storage.up.sql`](../../controller/migrations/0002_compute_storage.up.sql).
 `yb_amp_local` only `CREATE DATABASE`s `yb_storage` (see
 `controller/local/launch/provision.go`);
 the controller binary applies the migration on first start, which

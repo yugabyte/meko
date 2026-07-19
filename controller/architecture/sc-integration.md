@@ -24,7 +24,7 @@ schema it uses, and the HTTP surface it serves.
 ## Schema
 
 State lives in the **`registry` schema** of the shared `yb_storage` DB, provisioned
-by `controller/migrations/0006_registry.up.sql`. Five branch-keyed tables:
+by `controller/migrations/0003_registry.up.sql`. Five branch-keyed tables:
 `branches` (generation authority + placement), `nodes`, `timelines` (start_lsn +
 branch_name), `pending_timeline_inits`, `endpoints`. It is kept separate from the
 controller **product** model (`project`/`branch`/`endpoint` by UUID, in the

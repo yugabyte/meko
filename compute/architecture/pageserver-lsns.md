@@ -457,5 +457,5 @@ persisted timeline_state.consistent_lsn  ≤  consistent_lsn_observed
 - [`safekeeper-lsns.md`](safekeeper-lsns.md) — SK-side LSN inventory; the
   pair to this doc.
 - `compute/libs/utils/src/pageserver_feedback.rs` — feedback wire format.
-- `controller/migrations/0005_provision_yb_storage.up.sql` —
+- `controller/migrations/0002_compute_storage.up.sql` —
   `pageserver.timeline_state.consistent_lsn` column.

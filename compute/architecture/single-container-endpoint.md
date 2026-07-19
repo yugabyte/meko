@@ -44,7 +44,7 @@ Two consequences follow.
 Every yb-amp schema (`controller.*`, `pageserver.*`, `safekeeper.*`,
 `public.blobs`, the `blob_namespace` ENUM) is created by the
 controller's diesel migrations
-(`controller/migrations/0005_provision_yb_storage.up.sql`). No service self-creates its
+(`controller/migrations/0002_compute_storage.up.sql`). No service self-creates its
 tables. So the `yb_storage` database + schema must already exist before the pod
 starts; in production AMP provisions it. For standalone testing the supervisor
 can do it itself (`DEV_PROVISION_SCHEMA=true` — creates the database and applies

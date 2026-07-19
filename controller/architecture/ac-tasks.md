@@ -50,9 +50,8 @@ operations on `core.PgBackend`:
 
 ## 2. Execution model (as built)
 
-A task is two kinds of row (schema in migrations `0001_init.up.sql` +
-`0002_task_step_ids.up.sql`, plus `0003_task_list_indexes.up.sql` for the task
-list endpoint — §4.1; DDL sketch in §8.1 of the high-level doc):
+A task is two kinds of row (schema in migration `0001_init.up.sql` — §4.1; DDL
+sketch in §8.1 of the high-level doc):
 
 - **`task`** — one per operation, the user-visible unit (`GET /tasks/{id}`). Holds
   the kind, a coarse status, the target project/ref (for monitoring), the
@@ -212,10 +211,10 @@ limit, offset)` returns a page of tasks newest-first (`created_at` DESC) plus th
 total matching count for the **`listTasks`** endpoint (`GET /tasks`). The filter
 (`TaskFilter`: `status`, `kind`, `project_id`, any of which may be zero-valued =
 unfiltered) maps straight from the spec's query parameters. `List` is backed by
-`Store.List`, whose scan is kept cheap by migration `0003_task_list_indexes`
+`Store.List`, whose scan is kept cheap by the task-list indexes in `0001_init`
 (§2): `task_by_created_at` (the DESC order), `task_by_project`, and
 `task_by_status` (the optional filters). These are distinct from the
-`task_runnable` partial index (0001/0002), which serves the worker's claim path,
+`task_runnable` partial index (also `0001_init`), which serves the worker's claim path,
 not the list path.
 
 ## 5. Dependency ports

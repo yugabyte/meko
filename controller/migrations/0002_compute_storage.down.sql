@@ -1,4 +1,4 @@
--- 0005 down: drop the compute-facing (data-plane) schemas of `yb_storage`.
+-- 0002 down: drop the compute-facing (data-plane) schemas of `yb_storage`.
 
 DROP TABLE IF EXISTS safekeeper.wals;
 DROP TABLE IF EXISTS safekeeper.timeline_state;

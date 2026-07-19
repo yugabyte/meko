@@ -74,4 +74,4 @@ upstream Neon can skim) and **changes in yb-amp**.
 What's on local FS in yb-amp: the pageserver's layer-file cache, the
 compute's `pgdata`, and operational files (logs, pidfiles). Everything
 that has to *survive a wipe of that disk* lives in YB. Authoritative
-schema is `controller/migrations/0005_provision_yb_storage.up.sql`.
+schema is `controller/migrations/0002_compute_storage.up.sql`.

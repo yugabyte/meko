@@ -1,4 +1,4 @@
--- 0006: the `registry` schema — the controller's storage-layer bookkeeping:
+-- 0003: the `registry` schema — the controller's storage-layer bookkeeping:
 -- generation authority (the fencing counter) plus the node / branch / endpoint /
 -- pending-init registries behind the HTTP surface the controller serves to
 -- yb_amp_local and the integration harness.

@@ -506,7 +506,7 @@ def provision_schema():
         return
     # The pageserver/safekeeper/public schemas the daemons bind are provisioned
     # by the single schema-qualified provisioning migration.
-    for mig in sorted(MIGRATIONS_DIR.glob("*_provision_yb_storage.up.sql")):
+    for mig in sorted(MIGRATIONS_DIR.glob("*_compute_storage.up.sql")):
         log(f"applying migration {mig.name}")
         psql(YB_DBNAME, file=mig)
 

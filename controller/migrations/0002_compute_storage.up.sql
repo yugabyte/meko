@@ -1,4 +1,4 @@
--- 0005: provision the compute-facing (data-plane) schemas of the shared
+-- 0002: provision the compute-facing (data-plane) schemas of the shared
 -- `yb_storage` database: `public.blobs` + its enum, the `pageserver.*` page-store
 -- tables, and the `safekeeper.*` WAL/control tables.
 --
@@ -9,7 +9,7 @@
 -- their own schema. So this migration must run before those daemons start.
 --
 -- The controller's own registry (generation authority + node/branch/endpoint
--- records) lives in the `registry` schema, provisioned by 0006. Every statement
+-- records) lives in the `registry` schema, provisioned by 0003. Every statement
 -- is IF-NOT-EXISTS so the migration is idempotent. Objects are schema-qualified
 -- (the migrator's search_path is `controller`).
 
