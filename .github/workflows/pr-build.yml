@@ -70,6 +70,10 @@ jobs:
       controller: ${{ steps.filter.outputs.controller }}
       ui: ${{ steps.filter.outputs.ui }}
       deploy: ${{ steps.filter.outputs.deploy }}
+      # true iff at least one changed file is not a markdown doc (see the `code`
+      # filter step) — the compute/controller build+test jobs gate on it so a
+      # docs-only PR skips them.
+      code: ${{ steps.code.outputs.code }}
     steps:
       # paths-filter uses the GitHub API for pull_request events, but for
       # push events it diffs locally and needs the repo checked out. On a
@@ -113,10 +117,24 @@ jobs:
               - 'deploy/**'
               - '.github/workflows/pr-build.yml'
 
+      # A change counts as "code" if at least one changed file is not a markdown
+      # doc. dorny's default `some` quantifier OR-matches, so a bare `!**/*.md`
+      # can't subtract from a positive glob; `every` makes a file count only when
+      # it matches BOTH `**` and `!**/*.md` (i.e. is non-doc). compute + controller
+      # gate on this so a docs-only PR skips their build/test.
+      - uses: dorny/paths-filter@v4
+        id: code
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+
   compute:
     name: Compute — build, lint & unit tests
     needs: changes
-    if: needs.changes.outputs.compute == 'true' && github.actor != 'dependabot[bot]'
+    if: needs.changes.outputs.compute == 'true' && needs.changes.outputs.code == 'true' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -225,7 +243,7 @@ jobs:
   integration:
     name: Compute — integration tests
     needs: changes
-    if: needs.changes.outputs.compute == 'true' && github.actor != 'dependabot[bot]'
+    if: needs.changes.outputs.compute == 'true' && needs.changes.outputs.code == 'true' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -343,7 +361,7 @@ jobs:
   controller:
     name: Controller — build & tests
     needs: changes
-    if: needs.changes.outputs.controller == 'true'
+    if: needs.changes.outputs.controller == 'true' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

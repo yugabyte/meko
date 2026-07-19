@@ -70,3 +70,24 @@ DTOs in `controller/local/client`. In dev/local the surface is unauthenticated
   the same store **in-process** (not over HTTP) — the `RecipeStore` port in
   `controller/internal/task` is satisfied by an in-process adapter over the registry
   store.
+
+## Why the generation is minted per spawn (not injected at deploy)
+
+The generation is granted on the **pageserver-spawn path**: the endpoint pod calls
+`attach-hook` at boot, which bumps the counter and returns the value the pod bakes into
+`pageserver.toml` before starting the pageserver. This is deliberate and load-bearing for
+fencing — the generation must advance on **every** pageserver incarnation so that a
+restarted or rescheduled pod fences its predecessor. Kubernetes restarts-in-place and
+node-failure reschedules happen **outside** the controller's deploy flow (kubelet drives
+them), so the pod pulling a fresh generation on every boot is exactly what keeps those
+safe: a lingering old instance holds a lower generation and its next generation-checked
+write aborts (see [yb-pageserver.md](../../compute/architecture/yb-pageserver.md)
+§ "Generation fencing").
+
+Rejected alternative (closed #206 / #207 / #212 / #213): have amp mint the generation once
+at deploy time and inject it into the pod (a `GENERATION` env value), with the pod no
+longer calling `attach-hook`. A kubelet restart would then **reuse** the injected
+generation and fail to fence the still-live old instance — a split-brain / corruption
+risk. For the same reason, pageserver-node registration stays pod-driven rather than
+moving in-process, and there is no liveness heartbeater (nothing consumes node
+availability — the `nodes` registry is bookkeeping only).
