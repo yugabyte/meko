@@ -1776,40 +1776,71 @@ async fn hot_block_chain_reads_complete_under_writes() {
             .targets(&table, &["lsn", "is_image", "will_init", "payload"])
             .unwrap()
             .limit(32);
-            let mut got = 0usize;
-            let mut pages = 0u64;
-            let mut paging = None;
-            loop {
-                pages += 1;
-                let page = match tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    client.read_page(&table, &read, paging.take()),
-                )
-                .await
-                {
-                    Err(_) => return Err(format!("blk {blk}: HANG after {pages} pages")),
-                    Ok(Err(e)) => return Err(format!("blk {blk}: after {pages} pages: {e}")),
-                    Ok(Ok(page)) => page,
+            // Restart the WHOLE scan on a continuation read-restart, exactly
+            // as production does: chain reads run through
+            // `TsClient::read_scan`, never a bare `read_page` loop. A
+            // `restart_read_time` on a pinned continuation can't heal in
+            // place (it would replay the same read point forever — see
+            // error.rs), so the only remedy is a fresh scan on a fresh,
+            // clamped read point, which converges. A lone read-restart is
+            // therefore expected under sustained writes; surfacing it as a
+            // failure made this test stricter than every real caller (#297).
+            const MAX_SCAN_RESTARTS: usize = 5;
+            let mut last_restart: Option<yb_tsclient::YbError> = None;
+            for attempt in 1..=MAX_SCAN_RESTARTS {
+                let mut got = 0usize;
+                let mut pages = 0u64;
+                let mut paging = None;
+                let restart = loop {
+                    pages += 1;
+                    let page = match tokio::time::timeout(
+                        std::time::Duration::from_secs(30),
+                        client.read_page(&table, &read, paging.take()),
+                    )
+                    .await
+                    {
+                        Err(_) => return Err(format!("blk {blk}: HANG after {pages} pages")),
+                        // Restart the scan (mirrors `read_scan`); any other
+                        // error is a real failure.
+                        Ok(Err(e)) if e.is_read_restart() => break Some(e),
+                        Ok(Err(e)) => return Err(format!("blk {blk}: after {pages} pages: {e}")),
+                        Ok(Ok(page)) => page,
+                    };
+                    got += page.rows.len();
+                    if page.rows.iter().any(|r| r[2].as_bool().unwrap()) {
+                        return Err(format!("blk {blk}: unexpected anchor"));
+                    }
+                    if pages > 1000 {
+                        return Err(format!("blk {blk}: runaway paging ({got} rows)"));
+                    }
+                    match page.paging_state {
+                        Some(next) => paging = Some(next),
+                        None => break None,
+                    }
                 };
-                got += page.rows.len();
-                if page.rows.iter().any(|r| r[2].as_bool().unwrap()) {
-                    return Err(format!("blk {blk}: unexpected anchor"));
-                }
-                if pages > 1000 {
-                    return Err(format!("blk {blk}: runaway paging ({got} rows)"));
-                }
-                match page.paging_state {
-                    Some(next) => paging = Some(next),
-                    None => break,
+                match restart {
+                    None => {
+                        // The scan's snapshot covers at least the
+                        // pre-existing chain (writer rows may or may not be
+                        // visible depending on when the read point landed).
+                        if got < CHAIN as usize {
+                            return Err(format!("blk {blk}: short chain: {got} rows"));
+                        }
+                        return Ok(());
+                    }
+                    Some(e) => {
+                        last_restart = Some(e);
+                        if attempt < MAX_SCAN_RESTARTS {
+                            let backoff = 50u64 << (attempt - 1);
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+                        }
+                    }
                 }
             }
-            // The scan's snapshot covers at least the pre-existing chain
-            // (writer rows may or may not be visible depending on when
-            // the read point landed).
-            if got < CHAIN as usize {
-                return Err(format!("blk {blk}: short chain: {got} rows"));
-            }
-            Ok(())
+            Err(format!(
+                "blk {blk}: read-restart survived {MAX_SCAN_RESTARTS} scan restarts: {}",
+                last_restart.expect("loop exits here only with a stored read-restart")
+            ))
         }));
     }
     let mut failures = Vec::new();
