@@ -26,10 +26,16 @@ import (
 const (
 	ContextKeyAccount    = "account"
 	ContextKeyCognitoSub = "cognito_sub"
-	ContextKeyDatapack   = "datapack"
-	ContextKeyAuthMethod = "auth_method"
-	ContextKeyPATID      = "pat_id"
-	ContextKeyPATScopes  = "pat_scopes"
+	// ContextKeyCognitoUsername holds the Cognito "username" claim from the
+	// access token. It is "<provider>_<sub>" for auto-created federated users
+	// and a non-prefixed value (UUID/email) for native users. Used to derive
+	// has_email_password_login (see AuthHandler.Me / HasEmailPasswordLogin).
+	// Empty on the PAT path.
+	ContextKeyCognitoUsername = "cognito_username"
+	ContextKeyDatapack        = "datapack"
+	ContextKeyAuthMethod      = "auth_method"
+	ContextKeyPATID           = "pat_id"
+	ContextKeyPATScopes       = "pat_scopes"
 )
 
 // Auth method values stored at ContextKeyAuthMethod.
@@ -237,6 +243,7 @@ func authViaJWT(
 
 	c.Set(ContextKeyAccount, account)
 	c.Set(ContextKeyCognitoSub, claims.Sub)
+	c.Set(ContextKeyCognitoUsername, claims.Username)
 	c.Set(ContextKeyAuthMethod, AuthMethodCognito)
 	c.Set(ContextKeyPATScopes, []string{"*"})
 
@@ -629,6 +636,7 @@ func DevAuth(accounts AccountLookup) echo.MiddlewareFunc {
 			}
 			c.Set(ContextKeyAccount, account)
 			c.Set(ContextKeyCognitoSub, devSub)
+			c.Set(ContextKeyCognitoUsername, devSub)
 			c.Set(ContextKeyAuthMethod, AuthMethodCognito)
 			c.Set(ContextKeyPATScopes, []string{"*"})
 			slog.Debug("dev auth injected", "account_id", account.ID)

@@ -179,6 +179,40 @@ const (
 	UserStatusExternalProvider    = UserStatus(types.UserStatusTypeExternalProvider)
 )
 
+// federatedUsernamePrefixes are the "<provider>_" prefixes Cognito assigns to
+// the username of auto-created federated users (e.g. "Google_1234",
+// "LinkedIn_abcd"). Compared case-insensitively. Kept in sync with the IdPs
+// wired into the user pool and the presignup account-link Lambda (Google,
+// LinkedIn, GitHub).
+var federatedUsernamePrefixes = []string{"google_", "linkedin_", "github_"}
+
+// HasFederatedUsernamePrefix reports whether a Cognito username looks like an
+// auto-created federated user ("<provider>_<sub>"). Native users keep their
+// non-prefixed username even after they link a social IdP (Meko links the
+// social identity INTO the native user). Used by HasEmailPasswordLogin to
+// decide whether Settings should offer "Update password".
+func HasFederatedUsernamePrefix(username string) bool {
+	u := strings.ToLower(strings.TrimSpace(username))
+	for _, p := range federatedUsernamePrefixes {
+		if strings.HasPrefix(u, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasEmailPasswordLogin reports whether the Cognito username implies a native
+// email/password credential exists (so the user can change that password).
+// Federated-origin usernames (Google_ / LinkedIn_ / GitHub_) return false.
+// Empty username (e.g. PAT auth) fails open to true — callers that must deny
+// password changes should treat that separately.
+func HasEmailPasswordLogin(cognitoUsername string) bool {
+	if strings.TrimSpace(cognitoUsername) == "" {
+		return true
+	}
+	return !HasFederatedUsernamePrefix(cognitoUsername)
+}
+
 // Result holds the tokens returned by a successful login. When
 // Cognito responds to InitiateAuth with a challenge instead of tokens
 // (e.g. NEW_PASSWORD_REQUIRED for users in FORCE_CHANGE_PASSWORD

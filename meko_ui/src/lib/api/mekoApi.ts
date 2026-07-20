@@ -219,6 +219,14 @@ export type CurrentUser = {
   email_verified?: boolean;
   has_completed_onboarding: boolean;
   /**
+   * Whether the account can sign in with email + password (and thus can use
+   * Settings → Update password). False for federated-origin Cognito usernames
+   * (Google_ / LinkedIn_ / GitHub_), who authenticate via IdP only. Optional so
+   * older BE deploys that don't emit it are treated as having a password
+   * (form shown) — the pre-existing behavior.
+   */
+  has_email_password_login?: boolean;
+  /**
    * Billing tier from `meko_system.users.user_type`. Optional because the
    * BE may not return it yet on older deploys — UI falls back to "free".
    * Values mirror the planned PlanId enum: free | starter | growth | scale

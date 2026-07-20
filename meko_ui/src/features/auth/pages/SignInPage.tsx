@@ -26,8 +26,6 @@ import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
 import { GoogleIcon } from "@/components/icons/GoogleIcon";
 import { LinkedInIcon } from "@/components/icons/LinkedInIcon";
 
-const MEKO_REQUEST_ACCESS_URL = "https://info.yugabyte.com/meko-request-access" as const;
-
 // Base for app-driven OAuth redirects. Defaults to the same-origin /api/v1 the
 // rest of the SPA uses, so the Google sign-in redirect targets the api_server.
 const API_BASE = (import.meta.env.VITE_MEKO_API_BASE_URL || "/api/v1").replace(/\/$/, "");

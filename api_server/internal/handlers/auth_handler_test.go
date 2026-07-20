@@ -220,6 +220,12 @@ func (m *handlerMockAccountStore) UpdateProfile(
 	return nil
 }
 
+func (m *handlerMockAccountStore) EmailInUse(
+	_ context.Context, _, _ string,
+) (bool, error) {
+	return false, nil
+}
+
 func (m *handlerMockAccountStore) UpdateEmail(
 	_ context.Context, _, _ string,
 ) error {
@@ -232,10 +238,65 @@ func (m *handlerMockAccountStore) MarkEmailVerified(
 	return nil
 }
 
-func (m *handlerMockAccountStore) EmailInUse(
-	_ context.Context, _, _ string,
-) (bool, error) {
-	return false, nil
+// TestAuth_Me_HasEmailPasswordLogin verifies GET /auth/me derives
+// has_email_password_login from the access-token username claim only
+// ("<provider>_" => federated / no native password). Missing username
+// (e.g. PAT path) fails open to true.
+func TestAuth_Me_HasEmailPasswordLogin(t *testing.T) {
+	cases := []struct {
+		name            string
+		cognitoUsername string
+		want            bool
+	}{
+		{"google username hides form", "Google_103162326666714296584", false},
+		{"linkedin username hides form", "LinkedIn_abc", false},
+		{"github username hides form", "GitHub_42", false},
+		{"native username shows form", "c2205626-8c83-4777-80cd-90f8dbd66ad6", true},
+		{"email username shows form", "user@example.com", true},
+		{"missing username fails open", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			authH := handlers.NewAuthHandler(
+				service.NewAuthService(&handlerMockCognito{}, &handlerMockAccountStore{}),
+				nil,
+			)
+
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.Set(auth.ContextKeyAccount, &models.Account{
+				ID:    "acct-1",
+				Email: "user@example.com",
+			})
+			c.Set(auth.ContextKeyCognitoUsername, tc.cognitoUsername)
+
+			if err := authH.Me(c); err != nil {
+				t.Fatalf("Me returned error: %v", err)
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+
+			var apiResp handlers.APIResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &apiResp); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+			data, ok := apiResp.Data.(map[string]any)
+			if !ok {
+				t.Fatalf("data is not an object: %T", apiResp.Data)
+			}
+			got, ok := data["has_email_password_login"].(bool)
+			if !ok {
+				t.Fatalf("has_email_password_login missing or not a bool: %v",
+					data["has_email_password_login"])
+			}
+			if got != tc.want {
+				t.Errorf("has_email_password_login = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
 
 // setupAuthTestServer creates an Echo instance with auth routes wired

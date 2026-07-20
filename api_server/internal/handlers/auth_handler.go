@@ -183,6 +183,15 @@ func (h *AuthHandler) ChangePassword(c echo.Context) error {
 		return err
 	}
 
+	// Same signal as GET /auth/me has_email_password_login: federated-origin
+	// usernames have no native Cognito password to change.
+	cognitoUsername, ok := c.Get(auth.ContextKeyCognitoUsername).(string)
+	if ok && !auth.HasEmailPasswordLogin(cognitoUsername) {
+		return apiError(c, http.StatusBadRequest,
+			"PASSWORD_NOT_AVAILABLE",
+			"this account signs in with a social provider and has no password to change")
+	}
+
 	var req service.ChangePasswordRequest
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest,
@@ -361,6 +370,20 @@ func (h *AuthHandler) Me(c echo.Context) error {
 			"UNAUTHORIZED", "missing account context")
 	}
 
+	// has_email_password_login lets the settings UI hide the change-password
+	// form for federated-origin users (Google / LinkedIn / GitHub). Derived
+	// from the access-token username claim via auth.HasEmailPasswordLogin:
+	// Cognito auto-created federated usernames are "<provider>_<sub>", while
+	// native users (including natives who later linked a social IdP) keep a
+	// non-prefixed username. No Cognito Admin call on this hot path.
+	//
+	// Missing username (e.g. PAT) fails open to true inside HasEmailPasswordLogin.
+	cognitoUsername, ok := c.Get(auth.ContextKeyCognitoUsername).(string)
+	if !ok {
+		cognitoUsername = ""
+	}
+	hasEmailPasswordLogin := auth.HasEmailPasswordLogin(cognitoUsername)
+
 	return ok(c, http.StatusOK, map[string]any{
 		"account_id": account.ID,
 		"email":      account.Email,
@@ -372,6 +395,9 @@ func (h *AuthHandler) Me(c echo.Context) error {
 		// supply + OTP-verify a real address before using the app.
 		"email_verified":           account.EmailVerifiedAt != nil,
 		"has_completed_onboarding": account.HasCompletedOnboarding,
+		// has_email_password_login is false for federated-origin usernames.
+		// Settings hides change-password when this is false.
+		"has_email_password_login": hasEmailPasswordLogin,
 		// Billing tier from meko_system.users.user_type. UI uses this to
 		// pick the active plan card / metric denominators on the Plans &
 		// billing page. Kept in sync by BillingService webhook handler.

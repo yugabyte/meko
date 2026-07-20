@@ -115,27 +115,33 @@ export default function SettingsPage() {
 
               {/* Security section — password + API keys. The tokens
                   subsection is its own component so the create/list
-                  lifecycle and the plaintext-reveal state are isolated. */}
-              <section className="rounded-xl border border-border bg-card p-5">
-                <header className="mb-4 flex items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-sm font-semibold text-foreground">Password</h2>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      Change the password for this account.
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPasswordDialogOpen(true)}
-                    className="shrink-0 gap-1.5"
-                  >
-                    <KeyRound className="h-3.5 w-3.5" aria-hidden />
-                    Update password
-                  </Button>
-                </header>
-              </section>
+                  lifecycle and the plaintext-reveal state are isolated.
+
+                  The password subsection is gated on has_email_password_login
+                  from GET /auth/me (false for Google_ / LinkedIn_ / GitHub_
+                  usernames). Optional on older BE deploys → show the form. */}
+              {user.has_email_password_login !== false ? (
+                <section className="rounded-xl border border-border bg-card p-5">
+                  <header className="mb-4 flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-sm font-semibold text-foreground">Password</h2>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Change the password for this account.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPasswordDialogOpen(true)}
+                      className="shrink-0 gap-1.5"
+                    >
+                      <KeyRound className="h-3.5 w-3.5" aria-hidden />
+                      Update password
+                    </Button>
+                  </header>
+                </section>
+              ) : null}
 
               <SecurityTokensSection />
 

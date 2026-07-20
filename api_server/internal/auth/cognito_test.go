@@ -795,3 +795,58 @@ func TestCognitoClient_Login_WrongPasswordNotExpired(t *testing.T) {
 		t.Error("a wrong password must not be classified as expired")
 	}
 }
+
+// TestHasFederatedUsernamePrefix covers the signal used to decide
+// has_email_password_login from the access-token username claim: a
+// "<provider>_" prefix marks an auto-created federated user (no native
+// password), while any non-prefixed value — including a UUID native user who
+// later linked a social IdP — is treated as password-capable.
+func TestHasFederatedUsernamePrefix(t *testing.T) {
+	cases := []struct {
+		name     string
+		username string
+		want     bool
+	}{
+		{"google federated", "Google_103162326666714296584", true},
+		{"linkedin federated", "LinkedIn_abcd1234", true},
+		{"github federated", "GitHub_9999", true},
+		{"lowercase provider prefix", "google_123", true},
+		{"native uuid", "c2205626-8c83-4777-80cd-90f8dbd66ad6", false},
+		{"native email-shaped", "user@example.com", false},
+		{"empty (e.g. PAT path) fails open", "", false},
+		{"whitespace only", "   ", false},
+		{"provider name without underscore", "GoogleUser", false},
+		{"prefix with surrounding whitespace", "  Google_123  ", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := auth.HasFederatedUsernamePrefix(tc.username); got != tc.want {
+				t.Errorf("HasFederatedUsernamePrefix(%q) = %v, want %v",
+					tc.username, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHasEmailPasswordLogin(t *testing.T) {
+	cases := []struct {
+		name     string
+		username string
+		want     bool
+	}{
+		{"google hides password UI", "Google_103162326666714296584", false},
+		{"linkedin hides password UI", "LinkedIn_abcd", false},
+		{"github hides password UI", "GitHub_42", false},
+		{"native uuid shows password UI", "c2205626-8c83-4777-80cd-90f8dbd66ad6", true},
+		{"email shows password UI", "user@example.com", true},
+		{"empty fails open", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := auth.HasEmailPasswordLogin(tc.username); got != tc.want {
+				t.Errorf("HasEmailPasswordLogin(%q) = %v, want %v",
+					tc.username, got, tc.want)
+			}
+		})
+	}
+}
