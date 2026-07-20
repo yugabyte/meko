@@ -113,7 +113,7 @@ export function useCreateStoragePool() {
   });
 }
 
-/* ---- Projects (databases) ---- */
+/* ---- Projects (clusters) ---- */
 
 export function useProjects(poolId: string | undefined) {
   return useQuery({
@@ -128,7 +128,7 @@ export function useProjects(poolId: string | undefined) {
  *  table renders. */
 export type FleetRow = { project: Project; pool: StoragePool };
 
-/** Fan out across every pool to assemble the org-wide database fleet. */
+/** Fan out across every pool to assemble the org-wide cluster fleet. */
 export function useFleet(pools: StoragePool[] | undefined) {
   const list = pools ?? [];
   return useQueries({

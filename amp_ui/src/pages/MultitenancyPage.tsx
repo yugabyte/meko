@@ -1,5 +1,5 @@
 // Multitenancy = the data-branching workflow. Pick a shared pool, then a
-// database (project) in it, then view that project's branch tree and fork
+// cluster (project) in it, then view that cluster's branch tree and fork
 // sub-branches off any branch. (Tenant/user management is bootstrapped
 // elsewhere — see useCurrentUser — so it isn't surfaced here.)
 
@@ -93,7 +93,7 @@ export default function MultitenancyPage() {
       <PageHeader
         eyebrow="Cluster"
         title="Data branching"
-        description="Pick a shared pool and one of its databases to see the branch tree, then fork zero-copy sub-branches off any branch."
+        description="Pick a shared pool and one of its clusters to see the branch tree, then fork zero-copy sub-branches off any branch."
         action={
           <Button
             onClick={() => setNewBranchOpen(true)}
@@ -135,7 +135,7 @@ export default function MultitenancyPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Database</Label>
+              <Label>Cluster</Label>
               <Select
                 value={dbName}
                 onValueChange={selectDb}
@@ -147,12 +147,12 @@ export default function MultitenancyPage() {
                       !poolId
                         ? "Pick a pool first"
                         : projects.error
-                          ? "Error loading databases"
+                          ? "Error loading clusters"
                           : projects.isLoading
-                            ? "Loading databases…"
+                            ? "Loading clusters…"
                             : projects.data?.length
-                              ? "Select a database"
-                              : "No databases in this pool"
+                              ? "Select a cluster"
+                              : "No clusters in this pool"
                     }
                   />
                 </SelectTrigger>
@@ -175,7 +175,7 @@ export default function MultitenancyPage() {
           <div className="rounded-xl border bg-card p-5 text-card-foreground shadow">
             {!projectId ? (
               <p className="py-8 text-center text-sm text-muted-foreground">
-                Select a pool and database to view its branch tree.
+                Select a pool and cluster to view its branch tree.
               </p>
             ) : branches.error ? (
               <ErrorState error={branches.error} />
@@ -226,7 +226,7 @@ function BranchTree({
   if (branches.length === 0) {
     return (
       <p className="py-6 text-center text-sm text-muted-foreground">
-        No branches found for this database.
+        No branches found for this cluster.
       </p>
     );
   }
@@ -436,7 +436,7 @@ function EndpointsSection({
 
 // One provisioned compute instance: its address, role, and a copyable psql
 // connect string. The controller returns `address` (host:port) once the
-// instance is deployed; it connects as user `cloud_admin`, database `postgres`.
+// instance is deployed; it connects as user `cloud_admin`, cluster `postgres`.
 function ComputeInstance({ ep }: { ep: Endpoint }) {
   const [copied, setCopied] = useState(false);
   const connStr = ep.address

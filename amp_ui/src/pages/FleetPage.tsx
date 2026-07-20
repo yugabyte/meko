@@ -1,5 +1,5 @@
-// Fleet = every database (project) across the current user's shared pools.
-// Stat cards + a table, and a "New database" dialog that creates a project in
+// Fleet = every cluster (project) across the current user's shared pools.
+// Stat cards + a table, and a "New cluster" dialog that creates a cluster in
 // a chosen pool. Mock-only columns (topology / region / model / quota / RPO /
 // status) are dropped — the controller doesn't expose them.
 
@@ -56,7 +56,7 @@ export default function FleetPage() {
   const myPools = useMemo(() => {
     if (!pools.data || !currentUser.data) return [];
     // ADMIN "all pools" view (temporary): show every pool, not just the current
-    // user's, so meko-provisioned databases are visible in the fleet.
+    // user's, so meko-provisioned clusters are visible in the fleet.
     // TODO: replace with a proper admin/all-pools toggle rather than dropping
     // the owner filter outright.
     // return pools.data.filter((p) => p.owner_user_id === currentUser.data.id);
@@ -85,18 +85,18 @@ export default function FleetPage() {
   const error =
     currentUser.error ??
     pools.error ??
-    (fleet.isError ? new Error("Failed to load database fleet") : null);
+    (fleet.isError ? new Error("Failed to load cluster fleet") : null);
 
   return (
     <PageContainer>
       <PageHeader
         eyebrow="Fleet management"
-        title="Your database fleet"
+        title="Your cluster fleet"
         description={
           <>
-            {fleet.rows.length} database{fleet.rows.length === 1 ? "" : "s"}{" "}
+            {fleet.rows.length} cluster{fleet.rows.length === 1 ? "" : "s"}{" "}
             across {myPools.length} shared pool
-            {myPools.length === 1 ? "" : "s"} — every project provisioned inside
+            {myPools.length === 1 ? "" : "s"} — every cluster provisioned inside
             your pools.
           </>
         }
@@ -107,7 +107,7 @@ export default function FleetPage() {
             variant="brand"
           >
             <Plus className="h-4 w-4" />
-            New database
+            New cluster
           </Button>
         }
       />
@@ -119,7 +119,7 @@ export default function FleetPage() {
       ) : (
         <>
           <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <StatCard label="Databases" value={fleet.rows.length} />
+            <StatCard label="Clusters" value={fleet.rows.length} />
             <StatCard label="Shared pools" value={myPools.length} />
           </div>
 
@@ -143,7 +143,7 @@ export default function FleetPage() {
 
           <div className="rounded-xl border bg-card text-card-foreground shadow">
             <div className="flex items-center gap-2 border-b border-border px-5 py-4">
-              <h2 className="font-semibold">Databases</h2>
+              <h2 className="font-semibold">Clusters</h2>
               <span className="text-sm text-muted-foreground">
                 {rows.length} {activePool ? `in ${activePool}` : "total"}
               </span>
@@ -151,14 +151,14 @@ export default function FleetPage() {
             {rows.length === 0 ? (
               <div className="px-5 py-12 text-center text-sm text-muted-foreground">
                 {activePool
-                  ? `No databases in ${activePool} yet.`
-                  : "No databases yet. Create one to get started."}
+                  ? `No clusters in ${activePool} yet.`
+                  : "No clusters yet. Create one to get started."}
               </div>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Database</TableHead>
+                    <TableHead>Cluster</TableHead>
                     <TableHead>Shared pool</TableHead>
                     <TableHead>PG version</TableHead>
                     <TableHead>Default branch</TableHead>
@@ -216,7 +216,7 @@ export default function FleetPage() {
         </>
       )}
 
-      <CreateDatabaseDialog
+      <CreateClusterDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         pools={myPools}
@@ -236,7 +236,7 @@ function StatCard({ label, value }: { label: string; value: number }) {
   );
 }
 
-function CreateDatabaseDialog({
+function CreateClusterDialog({
   open,
   onOpenChange,
   pools,
@@ -257,14 +257,14 @@ function CreateDatabaseDialog({
       { poolId, name: trimmed },
       {
         onSuccess: (project) => {
-          toast.success(`Database "${project.name}" created`);
+          toast.success(`Cluster "${project.name}" created`);
           setName("");
           setPoolId("");
           onOpenChange(false);
         },
         onError: (err) =>
           toast.error(
-            err instanceof Error ? err.message : "Failed to create database",
+            err instanceof Error ? err.message : "Failed to create cluster",
           ),
       },
     );
@@ -275,9 +275,9 @@ function CreateDatabaseDialog({
       <DialogContent>
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>New database</DialogTitle>
+            <DialogTitle>New cluster</DialogTitle>
             <DialogDescription>
-              Creates a project (database) inside a shared pool, with a default{" "}
+              Creates a cluster inside a shared pool, with a default{" "}
               <code>main</code> branch.
             </DialogDescription>
           </DialogHeader>
@@ -298,7 +298,7 @@ function CreateDatabaseDialog({
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="db-name">Database name</Label>
+              <Label htmlFor="db-name">Cluster name</Label>
               <Input
                 id="db-name"
                 placeholder="e.g. orders"
@@ -320,7 +320,7 @@ function CreateDatabaseDialog({
               disabled={!name.trim() || !poolId || createProject.isPending}
               variant="brand"
             >
-              {createProject.isPending ? "Creating…" : "Create database"}
+              {createProject.isPending ? "Creating…" : "Create cluster"}
             </Button>
           </DialogFooter>
         </form>

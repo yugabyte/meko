@@ -1,7 +1,7 @@
 // Home / landing page. Three stacked sections:
 //   1. Hero — the platform pitch + an (illustrative) Architect prompt box.
-//   2. Platform model cascade — Databases → Shared pools → Foundations, the
-//      same three tiers as the sidebar legend. The two counts (databases,
+//   2. Platform model cascade — Clusters → Shared pools → Foundations, the
+//      same three tiers as the sidebar legend. The two counts (clusters,
 //      shared pools) are live from the controller, scoped to the current user;
 //      the workload/foundation chips are illustrative (no per-tenant API).
 //   3. The agents — Voyager / Perf Advisor / Nexus cards (Architect lives in
@@ -68,7 +68,7 @@ export default function WelcomePage() {
             shared pool
           </span>{" "}
           for your team, then let the agents spin up, migrate and tune a whole
-          fleet of <span className="font-medium text-brand">databases</span>.
+          fleet of <span className="font-medium text-brand">clusters</span>.
         </p>
 
         {/* Illustrative Architect prompt box */}
@@ -78,7 +78,7 @@ export default function WelcomePage() {
             Architect agent
           </div>
           <p className="mt-3 text-sm text-muted-foreground">
-            e.g. In the Payments pool, create 24 tenant databases multi-region
+            e.g. In the Payments pool, create 24 tenant clusters multi-region
             sync with pgvector enabled…
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -106,7 +106,7 @@ export default function WelcomePage() {
       <section className="space-y-2">
         <CascadeRow
           dotClass="bg-brand"
-          title="Databases"
+          title="Clusters"
           sublabel="Workloads"
           meta="many per pool"
           count={dbCount}

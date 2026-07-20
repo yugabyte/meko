@@ -48,7 +48,7 @@ export default function SharedPoolsPage() {
     return pools.data;
   }, [pools.data, currentUser.data]);
 
-  // Database (project) counts per pool — reuse the fleet fan-out.
+  // Cluster (project) counts per pool — reuse the fleet fan-out.
   const fleet = useFleet(myPools);
   const dbCountByPool = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -69,7 +69,7 @@ export default function SharedPoolsPage() {
         eyebrow="Multitenancy"
         eyebrowBadge="Tenant admin"
         title="Shared pools"
-        description="A shared pool is a team or business unit sitting on a foundation. Databases are created inside a pool, which owns its projects and branches."
+        description="A shared pool is a team or business unit sitting on a foundation. Clusters are created inside a pool, which owns its clusters and branches."
         action={
           <Button
             onClick={() => setDialogOpen(true)}
@@ -153,7 +153,7 @@ function PoolCard({
       <div className="mt-5 flex items-center justify-between border-t border-border pt-4 text-sm">
         <span className="flex items-center gap-2 text-muted-foreground">
           <Database className="h-4 w-4" />
-          Databases
+          Clusters
         </span>
         <span className="font-semibold text-foreground">
           {dbCountLoading && dbCount === undefined ? "…" : (dbCount ?? 0)}
@@ -203,7 +203,7 @@ function CreatePoolDialog({
           <DialogHeader>
             <DialogTitle>New shared pool</DialogTitle>
             <DialogDescription>
-              A pool groups databases for a team or business unit. It&apos;s
+              A pool groups clusters for a team or business unit. It&apos;s
               owned by the current tenant.
             </DialogDescription>
           </DialogHeader>

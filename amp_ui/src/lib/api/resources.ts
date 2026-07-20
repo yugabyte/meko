@@ -117,7 +117,7 @@ export function createStoragePool(
   });
 }
 
-/* ---- Projects (databases) ---- */
+/* ---- Projects (clusters) ---- */
 
 export function listProjects(poolId: string): Promise<ProjectList> {
   return apiRequest<ProjectList>(`/storage-pools/${poolId}/projects`, {

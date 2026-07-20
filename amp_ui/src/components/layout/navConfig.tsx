@@ -153,5 +153,5 @@ export type PlatformModelItem = {
 export const PLATFORM_MODEL: PlatformModelItem[] = [
   { label: "Foundation", meta: "storage + topology", swatch: "bg-blue-500" },
   { label: "Shared pool", meta: "team / BU", swatch: "bg-teal-400" },
-  { label: "Database", meta: "workload", swatch: "bg-brand" },
+  { label: "Cluster", meta: "workload", swatch: "bg-brand" },
 ];

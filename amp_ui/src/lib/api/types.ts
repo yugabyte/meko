@@ -1,8 +1,8 @@
 // Domain types for the Meko Controller REST API (the `:8080` control plane).
 // These mirror the JSON the controller returns 1:1 — see api_server's
 // storage-pools / projects / branches handlers. The platform-model mapping
-// onto AMP's nav is: storage pool = "Shared pool", project = "Database",
-// branch = a timeline/fork of a database, user = a "Tenant".
+// onto AMP's nav is: storage pool = "Shared pool", project = "Cluster",
+// branch = a timeline/fork of a cluster, user = a "Tenant".
 
 /** A tenant. `is_admin` distinguishes platform admins from regular tenants. */
 export type User = {
@@ -32,7 +32,7 @@ export type Branch = {
   created_at: string;
 };
 
-/** A project — AMP's "Database". Created inside a pool; ships with a
+/** A project — AMP's "Cluster". Created inside a pool; ships with a
  *  default branch (`main`). */
 export type Project = {
   id: string;

@@ -117,7 +117,7 @@ export default function TasksPage() {
                   <TableRow>
                     <TableHead>Status</TableHead>
                     <TableHead>Task</TableHead>
-                    <TableHead>Project</TableHead>
+                    <TableHead>Cluster</TableHead>
                     <TableHead>Created</TableHead>
                     <TableHead>Updated</TableHead>
                     <TableHead>Error</TableHead>
@@ -132,7 +132,7 @@ export default function TasksPage() {
                       <TableCell title={task.kind}>
                         {taskKindLabel(task.kind)}
                       </TableCell>
-                      <TableCell>{projectLabel(task)}</TableCell>
+                      <TableCell>{clusterLabel(task)}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {formatDateTime(task.created_at)}
                       </TableCell>
@@ -198,13 +198,14 @@ export default function TasksPage() {
   );
 }
 
-/** Human labels for controller task kinds (project = database, endpoint =
- *  cluster in product terms). Unknown kinds fall back to a prettified form. */
+/** Human labels for controller task kinds. Creating or deleting a cluster spans
+ *  a project task and an endpoint task, so both surface as "Create"/"Delete
+ *  cluster". Unknown kinds fall back to a prettified form. */
 const TASK_KIND_LABELS: Record<string, string> = {
-  create_project: "Create database",
+  create_project: "Create cluster",
   branch: "Branch",
   create_endpoint: "Create cluster",
-  delete_project: "Delete database",
+  delete_project: "Delete cluster",
   delete_branch: "Delete branch",
   delete_endpoint: "Delete cluster",
 };
@@ -213,8 +214,8 @@ function taskKindLabel(kind: string): string {
   return TASK_KIND_LABELS[kind] ?? kind.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 }
 
-/** Project column: the short project id, else the target ref, else a dash. */
-function projectLabel(task: Task): string {
+/** Cluster column: the short cluster id, else the target ref, else a dash. */
+function clusterLabel(task: Task): string {
   if (task.project_id) return shortId(task.project_id);
   if (task.target_ref) return shortId(task.target_ref);
   return "—";
