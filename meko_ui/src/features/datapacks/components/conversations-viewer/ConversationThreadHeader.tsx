@@ -17,6 +17,11 @@ import { formatRelativeTime } from "@/lib/relativeTime";
 import { Chip } from "./Chip";
 import { IndexConversationButton } from "./IndexConversationButton";
 
+// Gates the "Index conversation" (backfill) button. Need to address the 
+// gaps in backfilling conversations embedding in case of agentic chats
+// needs more discussion
+const ENABLE_CONVERSATION_INDEXING = false;
+
 type Props = {
   detail: DatapackConversationDetail;
   conversationId: string;
@@ -111,7 +116,8 @@ export function ConversationThreadHeader({
               <span>Observe</span>
             </a>
           ) : null}
-          {detail.can_index && datapackId ? (
+          {/* TODO: Set to true or remove this gate when the conversation cache feature ships to prod */}
+          {ENABLE_CONVERSATION_INDEXING && detail.can_index && datapackId ? (
             <IndexConversationButton
               datapackId={datapackId}
               conversationId={conversationId}
