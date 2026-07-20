@@ -259,15 +259,17 @@ export function KnowledgeFilesTab({
         uploadOpen={uploadOpen}
       />
 
-      {uploadOpen ? (
-        <section className="rounded-xl border border-border bg-card p-6">
-          <FileUpload
-            datapackName={datapackName}
-            datapackId={datapackId}
-            onKnowledgeBaseCreated={onKnowledgeBaseCreated}
-          />
-        </section>
-      ) : null}
+      {/* Always mounted, hidden via CSS -- collapsing used to unmount
+          FileUpload and lose staged files. `key` still remounts on
+          datapack switch so state doesn't leak across datapacks. */}
+      <section className={cn("rounded-xl border border-border bg-card p-6", !uploadOpen && "hidden")}>
+        <FileUpload
+          key={datapackId}
+          datapackName={datapackName}
+          datapackId={datapackId}
+          onKnowledgeBaseCreated={onKnowledgeBaseCreated}
+        />
+      </section>
 
       <FilterRow
         typeFilter={typeFilter}

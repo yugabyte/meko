@@ -293,7 +293,7 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 	}
 	if req.Size > maxFileSizeBytes {
 		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", "file too large; maximum 5 MB")
+			"VALIDATION_ERROR", service.FreeTierUpgradeMessageFileSize)
 	}
 	if req.ContentType == "" {
 		req.ContentType = "application/octet-stream"

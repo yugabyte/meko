@@ -43,6 +43,7 @@ import { TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { trackEvent } from "@/lib/telemetry/rudderstack";
 import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
+  dedupNote,
   filterFilesForKnowledgeUploadBatch,
 } from "@/lib/knowledgeFileUploadRules";
 import { startKnowledgeBaseImport } from "@/lib/knowledgeBaseImportJob";
@@ -242,9 +243,6 @@ export default function DatapackConfigureWizardPage({
     setKnowledgeItems((prev) => {
       const staging = prev.filter((it) => it.kind === "file" && it.uploadStatus !== KNOWLEDGE_UPLOAD_STATUS.DONE)
         .length;
-      // No filename/metadata dedupe here: same-name, different-content files
-      // must reach the upload flow. True duplicates are caught server-side by
-      // content hash, which reports already-uploaded back to the UI.
       const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(Array.from(files), staging);
       if (warningParts.length > 0) {
         setTimeout(() => showSyncWarning(warningParts.join(". ")), 0);
@@ -308,10 +306,7 @@ export default function DatapackConfigureWizardPage({
             // Identical content already exists server-side: nothing uploaded or
             // added. Mark it skipped (not "uploaded"); the user can remove the
             // row. It still counts as settled so the import gate isn't blocked.
-            const uploadNote =
-              existing_filename && existing_filename !== file.name
-                ? `Identical content already exists as "${existing_filename}" — skipped re-upload.`
-                : "Already exists (identical content) — skipped re-upload.";
+            const uploadNote = dedupNote(file.name, existing_filename, false);
             setKnowledgeItems((prev) =>
               prev.map((x) =>
                 x.id === item.id

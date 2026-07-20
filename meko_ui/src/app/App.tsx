@@ -9,6 +9,7 @@ import { queryClient } from "@/lib/queryClient";
 import { TrackPageViews } from "@/lib/telemetry/TrackPageViews";
 import PublicRoutes from "@/app/routes/PublicRoutes";
 import ProtectedRoutes from "@/app/routes/ProtectedRoutes";
+import { KnowledgeUploadCacheProvider } from "@/features/datapacks/knowledgeUploadCache";
 import { isAuthRoute, isOnboardingRoute, isProtectedRoute } from "@/app/routes/guards";
 import { ROUTES } from "@/app/routes/paths";
 import { useOnboardingGuard } from "@/app/routes/OnboardingGuard";
@@ -161,7 +162,14 @@ function AppRouter() {
     return <Navigate to={hasCompletedOnboarding ? ROUTES.datapacks : ROUTES.onboarding} replace />;
   }
 
-  return <ProtectedRoutes isOnboardingRoute={isOnboardingRoute(location.pathname)} />;
+  // Scoped to the authenticated tree so the KB upload/status caches (which
+  // retain File blobs) are dropped when this subtree unmounts on logout,
+  // rather than lingering in module-level maps across sessions.
+  return (
+    <KnowledgeUploadCacheProvider>
+      <ProtectedRoutes isOnboardingRoute={isOnboardingRoute(location.pathname)} />
+    </KnowledgeUploadCacheProvider>
+  );
 }
 
 export default function App() {

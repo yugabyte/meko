@@ -39,6 +39,12 @@ var (
 const (
 	FreeTierUpgradeMessageDatapack = "Upgrade to Pro to create a new datapack."
 	FreeTierUpgradeMessageKBUpload = "Upgrade to Pro to upload new documents."
+	// FreeTierUpgradeMessageFileSize is shown when a single file exceeds the
+	// 5 MB per-file cap. The cap itself is currently the same for every
+	// tier (see maxFileSizeBytes in knowledge_base_handler.go) -- this copy
+	// steers the user toward upgrading without promising a bigger limit
+	// today, since Pro doesn't get a higher cap yet.
+	FreeTierUpgradeMessageFileSize = "File too large; maximum 5 MB per file. Upgrade to Pro for larger file uploads."
 )
 
 // envInt64 reads an int64 from env; falls back to def when unset, empty,
