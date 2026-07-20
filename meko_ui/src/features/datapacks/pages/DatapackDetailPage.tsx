@@ -60,8 +60,8 @@ import { DatapackTokenBurnTile } from "@/features/datapacks/components/efficienc
 import { CONTEXTUAL_PROMINENCE_SEARCH_ENABLED } from "@/lib/tokenSavings";
 import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailAgentsTile";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
-import { DatapackDetailDatabasesTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailDatabasesTile";
-import { CreateDatabaseDialog } from "@/features/datapacks/components/datapack-detail/dialogs/CreateDatabaseDialog";
+import { DatapackDetailClustersTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailClustersTile";
+import { CreateClusterDialog } from "@/features/datapacks/components/datapack-detail/dialogs/CreateClusterDialog";
 import { isAmpEnabled } from "@/lib/amp";
 import {
   DatapackDetailKnowledgeTile,
@@ -153,8 +153,8 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
 
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-  const [isCreateDatabaseOpen, setIsCreateDatabaseOpen] = useState(false);
-  const [databasesReloadToken, setDatabasesReloadToken] = useState(0);
+  const [isCreateClusterOpen, setIsCreateClusterOpen] = useState(false);
+  const [clustersReloadToken, setClustersReloadToken] = useState(0);
 
   // const [knowledgeBaseCount, setKnowledgeBaseCount] = useState(0);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeBaseDocument[]>([]);
@@ -469,11 +469,11 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                 onConfirm={handleDeleteConfirm}
               />
               {isAmpEnabled() ? (
-                <CreateDatabaseDialog
-                  open={isCreateDatabaseOpen}
-                  onOpenChange={setIsCreateDatabaseOpen}
+                <CreateClusterDialog
+                  open={isCreateClusterOpen}
+                  onOpenChange={setIsCreateClusterOpen}
                   datapackId={routeDatapackId}
-                  onCreated={() => setDatabasesReloadToken((t) => t + 1)}
+                  onCreated={() => setClustersReloadToken((t) => t + 1)}
                 />
               ) : null}
               {showDatapackActionsDropdown ? (
@@ -562,8 +562,8 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
           knowledgeFileAndPromotedCount={knowledgeTotalCount ?? undefined}
           onSelectSection={handlePipelineSelect}
           onUploadKnowledgeFiles={() => setIsUploadOpen(true)}
-          onCreateDatabase={
-            isAmpEnabled() ? () => setIsCreateDatabaseOpen(true) : undefined
+          onCreateCluster={
+            isAmpEnabled() ? () => setIsCreateClusterOpen(true) : undefined
           }
           statusLoading={statusLoading}
         />
@@ -595,9 +595,9 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
             onOpenConnect={() => setIsConnectOpen(true)}
           />
           {isAmpEnabled() ? (
-            <DatapackDetailDatabasesTile
+            <DatapackDetailClustersTile
               datapackId={routeDatapackId}
-              reloadToken={databasesReloadToken}
+              reloadToken={clustersReloadToken}
             />
           ) : null}
         </div>

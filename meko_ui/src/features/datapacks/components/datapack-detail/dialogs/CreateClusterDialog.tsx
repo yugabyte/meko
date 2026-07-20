@@ -17,35 +17,35 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { createDatabase } from "@/lib/api/ampApi";
+import { createCluster } from "@/lib/api/ampApi";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { toast } from "@/hooks/use-toast";
 
-// Postgres major versions offered when creating a database. AMP's supported set
+// Postgres major versions offered when creating a cluster. AMP's supported set
 // has been shifting (storage controller vs controller), so this is selectable
 // and defaults to the currently-supported 18 rather than hardcoding one value.
 const PG_VERSIONS = ["18", "17"] as const;
 const DEFAULT_PG_VERSION = "18";
 
-export type CreateDatabaseDialogProps = {
+export type CreateClusterDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   datapackId: string;
-  /** Called after a database is created so the caller can refresh its list. */
+  /** Called after a cluster is created so the caller can refresh its list. */
   onCreated: () => void;
 };
 
 /**
- * Spins up an AMP Postgres database inside this datapack. The first database
+ * Spins up an AMP Postgres cluster inside this datapack. The first cluster
  * also provisions the datapack's shared pool (handled server-side). Compute to
- * connect is provisioned separately, from the database's detail view.
+ * connect is provisioned separately, from the cluster's detail view.
  */
-export function CreateDatabaseDialog({
+export function CreateClusterDialog({
   open,
   onOpenChange,
   datapackId,
   onCreated,
-}: CreateDatabaseDialogProps) {
+}: CreateClusterDialogProps) {
   const [name, setName] = useState("");
   const [pgVersion, setPgVersion] = useState<string>(DEFAULT_PG_VERSION);
   const [submitting, setSubmitting] = useState(false);
@@ -68,15 +68,15 @@ export function CreateDatabaseDialog({
     setSubmitting(true);
     setError(null);
     try {
-      const db = await createDatabase(datapackId, {
+      const cluster = await createCluster(datapackId, {
         name: trimmed,
         pg_version: Number(pgVersion),
       });
-      toast({ title: `Database "${db.name}" created` });
+      toast({ title: `Cluster "${cluster.name}" created` });
       onCreated();
       onOpenChange(false);
     } catch (e) {
-      setError(getApiErrorMessage(e, "Could not create the database."));
+      setError(getApiErrorMessage(e, "Could not create the cluster."));
     } finally {
       setSubmitting(false);
     }
@@ -92,18 +92,18 @@ export function CreateDatabaseDialog({
           }}
         >
           <DialogHeader>
-            <DialogTitle className="text-xl text-foreground">Create database</DialogTitle>
+            <DialogTitle className="text-xl text-foreground">Create cluster</DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              Creates a Postgres database in this datapack. You can provision
+              Creates a Postgres cluster in this datapack. You can provision
               compute to connect to it afterwards.
             </DialogDescription>
           </DialogHeader>
 
           <div className="my-4 space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="amp-database-name">Database name</Label>
+              <Label htmlFor="amp-cluster-name">Cluster name</Label>
               <Input
-                id="amp-database-name"
+                id="amp-cluster-name"
                 autoFocus
                 placeholder="e.g. orders"
                 value={name}
@@ -147,7 +147,7 @@ export function CreateDatabaseDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={submitting || !name.trim()}>
-              {submitting ? "Creating…" : "Create database"}
+              {submitting ? "Creating…" : "Create cluster"}
             </Button>
           </DialogFooter>
         </form>

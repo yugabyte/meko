@@ -15,7 +15,7 @@ import (
 // controller via AMPClient. The controller endpoint is resolved at request time
 // from the admin-registered row (meko_system.amp_registration) — not from an
 // env var — so operators register AMP dynamically. AMP is the system of record
-// for pools/databases; Meko only records the datapack link.
+// for pools/clusters; Meko only records the datapack link.
 type AMPService struct {
 	repo       *repository.AMPRepo
 	reg        *repository.AMPRegistrationRepo
@@ -44,10 +44,11 @@ func (s *AMPService) client(ctx context.Context) (*AMPClient, error) {
 	return NewAMPClient(reg.BaseURL, s.httpClient), nil
 }
 
-/* ---- databases ---- */
+/* ---- clusters ---- */
 
-// CreateDatabaseInput is the request to create an AMP database in a datapack.
-type CreateDatabaseInput struct {
+// CreateClusterInput is the request to create an AMP cluster (a Postgres
+// database — an AMP "project") in a datapack.
+type CreateClusterInput struct {
 	DatapackID   string
 	DatapackName string // human-readable datapack name; used to name the AMP pool
 	UserID       string // Meko user id (also the AMP user id)
@@ -72,13 +73,13 @@ func ampPoolName(datapackName, datapackID string) string {
 	return "meko-" + datapackID
 }
 
-// CreateDatabase ensures the datapack's AMP shared pool exists (first-time,
-// idempotent) and then creates a database in it. The pool id is the datapack id
+// CreateCluster ensures the datapack's AMP shared pool exists (first-time,
+// idempotent) and then creates a cluster in it. The pool id is the datapack id
 // by construction, so there is nothing to reconcile.
-func (s *AMPService) CreateDatabase(ctx context.Context, in CreateDatabaseInput) (AMPProject, error) {
+func (s *AMPService) CreateCluster(ctx context.Context, in CreateClusterInput) (AMPProject, error) {
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
-		return AMPProject{}, fmt.Errorf("database name is required")
+		return AMPProject{}, fmt.Errorf("cluster name is required")
 	}
 	c, err := s.client(ctx)
 	if err != nil {
@@ -98,13 +99,13 @@ func (s *AMPService) CreateDatabase(ctx context.Context, in CreateDatabaseInput)
 		return AMPProject{}, err
 	}
 
-	// Step 2 — create the database (project) in the pool.
+	// Step 2 — create the cluster (an AMP project) in the pool.
 	return c.CreateProject(ctx, pool.ID, name, in.PgVersion)
 }
 
-// ListDatabases returns the databases in a datapack's AMP pool. If no pool has
+// ListClusters returns the clusters in a datapack's AMP pool. If no pool has
 // been provisioned yet, it returns an empty slice (no AMP call).
-func (s *AMPService) ListDatabases(ctx context.Context, datapackID string) ([]AMPProject, error) {
+func (s *AMPService) ListClusters(ctx context.Context, datapackID string) ([]AMPProject, error) {
 	mapping, err := s.repo.GetByDatapack(ctx, datapackID)
 	if err != nil {
 		return nil, err

@@ -10,8 +10,9 @@ import (
 	"meko/api_server/internal/service"
 )
 
-// AMPHandler holds Echo handlers for the AMP (Postgres databases) endpoints
-// scoped to a datapack. Registered only when the AMP feature is enabled.
+// AMPHandler holds Echo handlers for the AMP cluster endpoints scoped to a
+// datapack. A "cluster" is Meko's user-facing name for an AMP project (a
+// Postgres database). Registered only when the AMP feature is enabled.
 type AMPHandler struct {
 	svc *service.AMPService
 }
@@ -20,24 +21,24 @@ func NewAMPHandler(svc *service.AMPService) *AMPHandler {
 	return &AMPHandler{svc: svc}
 }
 
-type createDatabaseRequest struct {
+type createClusterRequest struct {
 	Name      string `json:"name"`
 	PgVersion *int   `json:"pg_version,omitempty"`
 }
 
-// CreateDatabase handles POST /api/v1/datapacks/:datapack_id/databases.
-// Ensures the datapack's AMP shared pool (first time) then creates a database.
-func (h *AMPHandler) CreateDatabase(c echo.Context) error {
+// CreateCluster handles POST /api/v1/datapacks/:datapack_id/clusters.
+// Ensures the datapack's AMP shared pool (first time) then creates a cluster.
+func (h *AMPHandler) CreateCluster(c echo.Context) error {
 	datapackID := c.Param("datapack_id")
 	if datapackID == "" {
 		return apiError(c, http.StatusBadRequest, "INVALID_REQUEST", "datapack_id is required")
 	}
-	var req createDatabaseRequest
+	var req createClusterRequest
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
 	if strings.TrimSpace(req.Name) == "" {
-		return apiError(c, http.StatusBadRequest, "INVALID_REQUEST", "database name is required")
+		return apiError(c, http.StatusBadRequest, "INVALID_REQUEST", "cluster name is required")
 	}
 	account, err := auth.GetAccount(c)
 	if err != nil || account == nil {
@@ -51,7 +52,7 @@ func (h *AMPHandler) CreateDatabase(c echo.Context) error {
 		datapackName = dp.Name
 	}
 
-	project, err := h.svc.CreateDatabase(c.Request().Context(), service.CreateDatabaseInput{
+	cluster, err := h.svc.CreateCluster(c.Request().Context(), service.CreateClusterInput{
 		DatapackID:   datapackID,
 		DatapackName: datapackName,
 		UserID:       account.ID,
@@ -61,25 +62,25 @@ func (h *AMPHandler) CreateDatabase(c echo.Context) error {
 	if err != nil {
 		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
 	}
-	return ok(c, http.StatusCreated, project)
+	return ok(c, http.StatusCreated, cluster)
 }
 
-// ListDatabases handles GET /api/v1/datapacks/:datapack_id/databases.
-func (h *AMPHandler) ListDatabases(c echo.Context) error {
+// ListClusters handles GET /api/v1/datapacks/:datapack_id/clusters.
+func (h *AMPHandler) ListClusters(c echo.Context) error {
 	datapackID := c.Param("datapack_id")
 	if datapackID == "" {
 		return apiError(c, http.StatusBadRequest, "INVALID_REQUEST", "datapack_id is required")
 	}
-	projects, err := h.svc.ListDatabases(c.Request().Context(), datapackID)
+	clusters, err := h.svc.ListClusters(c.Request().Context(), datapackID)
 	if err != nil {
 		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
 	}
-	return ok(c, http.StatusOK, projects)
+	return ok(c, http.StatusOK, clusters)
 }
 
-// ListBranches handles GET .../databases/:project_id/branches.
+// ListBranches handles GET .../clusters/:cluster_id/branches.
 func (h *AMPHandler) ListBranches(c echo.Context) error {
-	branches, err := h.svc.ListBranches(c.Request().Context(), c.Param("datapack_id"), c.Param("project_id"))
+	branches, err := h.svc.ListBranches(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"))
 	if err != nil {
 		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
 	}
@@ -92,7 +93,7 @@ type createBranchRequest struct {
 	ForkPointLSN string `json:"fork_point_lsn,omitempty"`
 }
 
-// CreateBranch handles POST .../databases/:project_id/branches.
+// CreateBranch handles POST .../clusters/:cluster_id/branches.
 func (h *AMPHandler) CreateBranch(c echo.Context) error {
 	var req createBranchRequest
 	if err := c.Bind(&req); err != nil {
@@ -101,7 +102,7 @@ func (h *AMPHandler) CreateBranch(c echo.Context) error {
 	if strings.TrimSpace(req.Name) == "" {
 		return apiError(c, http.StatusBadRequest, "INVALID_REQUEST", "branch name is required")
 	}
-	branch, err := h.svc.CreateBranch(c.Request().Context(), c.Param("datapack_id"), c.Param("project_id"),
+	branch, err := h.svc.CreateBranch(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"),
 		service.CreateBranchInput{Name: req.Name, ParentBranch: req.ParentBranch, ForkPointLSN: req.ForkPointLSN})
 	if err != nil {
 		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
@@ -111,7 +112,7 @@ func (h *AMPHandler) CreateBranch(c echo.Context) error {
 
 // ListCompute handles GET .../branches/:branch_id/compute.
 func (h *AMPHandler) ListCompute(c echo.Context) error {
-	instances, err := h.svc.ListCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("project_id"), c.Param("branch_id"))
+	instances, err := h.svc.ListCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"))
 	if err != nil {
 		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
 	}
@@ -132,7 +133,7 @@ func (h *AMPHandler) CreateCompute(c echo.Context) error {
 	if role == "" {
 		role = "read_write"
 	}
-	instance, err := h.svc.CreateCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("project_id"), c.Param("branch_id"), role)
+	instance, err := h.svc.CreateCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), role)
 	if err != nil {
 		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
 	}

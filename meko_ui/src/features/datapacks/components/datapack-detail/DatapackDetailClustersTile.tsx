@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Database } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { datapackDatabasesPath } from "@/app/routes/paths";
+import { datapackClustersPath } from "@/app/routes/paths";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
-import { listDatabases, type AmpDatabase } from "@/lib/api/ampApi";
+import { listClusters, type AmpCluster } from "@/lib/api/ampApi";
 
 // Preview cap; the rest is reached via the "View all" footer. Matches the
 // Members/Knowledge tiles so the tiles read consistently.
@@ -12,27 +12,27 @@ const PREVIEW_LIMIT = 3;
 
 type Props = {
   datapackId: string;
-  /** Bump to force a refetch (e.g. after "Create database" elsewhere). */
+  /** Bump to force a refetch (e.g. after "Create cluster" elsewhere). */
   reloadToken?: number;
   className?: string;
 };
 
 /**
- * Compact tile listing the datapack's AMP databases (names only). No search
- * here — the "View all" footer opens the full databases page. Gated by
+ * Compact tile listing the datapack's AMP clusters (names only). No search
+ * here — the "View all" footer opens the full clusters page. Gated by
  * SHOW_PG_AMP at the call site.
  */
-export function DatapackDetailDatabasesTile({ datapackId, reloadToken = 0, className }: Props) {
-  const [databases, setDatabases] = useState<AmpDatabase[]>([]);
+export function DatapackDetailClustersTile({ datapackId, reloadToken = 0, className }: Props) {
+  const [clusters, setClusters] = useState<AmpCluster[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
   useEffect(() => {
     let cancelled = false;
     setStatus("loading");
-    listDatabases(datapackId)
+    listClusters(datapackId)
       .then((rows) => {
         if (cancelled) return;
-        setDatabases(rows);
+        setClusters(rows);
         setStatus("ready");
       })
       .catch(() => {
@@ -43,9 +43,9 @@ export function DatapackDetailDatabasesTile({ datapackId, reloadToken = 0, class
     };
   }, [datapackId, reloadToken]);
 
-  const preview = databases.slice(0, PREVIEW_LIMIT);
-  const count = status === "loading" ? "…" : String(databases.length);
-  const viewAllEnabled = status === "ready" && databases.length > 0;
+  const preview = clusters.slice(0, PREVIEW_LIMIT);
+  const count = status === "loading" ? "…" : String(clusters.length);
+  const viewAllEnabled = status === "ready" && clusters.length > 0;
 
   return (
     <aside
@@ -57,7 +57,7 @@ export function DatapackDetailDatabasesTile({ datapackId, reloadToken = 0, class
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
           <Database className="h-4 w-4 shrink-0 text-orange-400" aria-hidden />
-          <span className="truncate text-sm font-semibold text-foreground">Databases</span>
+          <span className="truncate text-sm font-semibold text-foreground">Clusters</span>
           <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
             {count}
           </span>
@@ -66,14 +66,14 @@ export function DatapackDetailDatabasesTile({ datapackId, reloadToken = 0, class
 
       <ul className="flex flex-col divide-y divide-border px-2 py-1">
         {status === "loading" ? (
-          <li className="px-2 py-4 text-center text-xs text-muted-foreground">Loading databases…</li>
+          <li className="px-2 py-4 text-center text-xs text-muted-foreground">Loading clusters…</li>
         ) : status === "error" ? (
           <li className="px-2 py-4 text-center text-xs text-muted-foreground">
-            Could not load databases.
+            Could not load clusters.
           </li>
-        ) : databases.length === 0 ? (
+        ) : clusters.length === 0 ? (
           <li className="px-2 py-4 text-center text-xs leading-relaxed text-muted-foreground">
-            No databases yet. Use “Create database” above to spin one up.
+            No clusters yet. Use “Create cluster” above to spin one up.
           </li>
         ) : (
           preview.map((db) => (
@@ -100,7 +100,7 @@ export function DatapackDetailDatabasesTile({ datapackId, reloadToken = 0, class
       <div className="mt-auto border-t border-border">
         {viewAllEnabled ? (
           <Link
-            to={datapackDatabasesPath(datapackId)}
+            to={datapackClustersPath(datapackId)}
             className="block w-full py-3 text-center text-sm font-normal text-foreground/90 transition-colors hover:text-foreground"
           >
             View all →

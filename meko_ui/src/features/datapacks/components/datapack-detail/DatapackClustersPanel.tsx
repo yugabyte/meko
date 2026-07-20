@@ -29,22 +29,22 @@ import {
   createCompute,
   listBranches,
   listCompute,
-  listDatabases,
+  listClusters,
   type AmpBranch,
   type AmpCompute,
-  type AmpDatabase,
+  type AmpCluster,
 } from "@/lib/api/ampApi";
-import { CreateDatabaseDialog } from "./dialogs/CreateDatabaseDialog";
+import { CreateClusterDialog } from "./dialogs/CreateClusterDialog";
 
 type Props = { datapackId: string; className?: string };
 
 /**
- * Full-width datapack panel for AMP Postgres databases: search the datapack's
- * databases and expand one inline to see its branch tree and provision compute.
+ * Full-width datapack panel for AMP Postgres clusters: search the datapack's
+ * clusters and expand one inline to see its branch tree and provision compute.
  * Gated by SHOW_PG_AMP at the call site.
  */
-export function DatapackDatabasesPanel({ datapackId, className }: Props) {
-  const [databases, setDatabases] = useState<AmpDatabase[]>([]);
+export function DatapackClustersPanel({ datapackId, className }: Props) {
+  const [clusters, setClusters] = useState<AmpCluster[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -55,9 +55,9 @@ export function DatapackDatabasesPanel({ datapackId, className }: Props) {
     setLoading(true);
     setError(null);
     try {
-      setDatabases(await listDatabases(datapackId));
+      setClusters(await listClusters(datapackId));
     } catch (e) {
-      setError(getApiErrorMessage(e, "Failed to load databases."));
+      setError(getApiErrorMessage(e, "Failed to load clusters."));
     } finally {
       setLoading(false);
     }
@@ -69,9 +69,9 @@ export function DatapackDatabasesPanel({ datapackId, className }: Props) {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return databases;
-    return databases.filter((d) => d.name.toLowerCase().includes(q));
-  }, [databases, search]);
+    if (!q) return clusters;
+    return clusters.filter((d) => d.name.toLowerCase().includes(q));
+  }, [clusters, search]);
 
   return (
     <section
@@ -82,9 +82,9 @@ export function DatapackDatabasesPanel({ datapackId, className }: Props) {
     >
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
         <Database className="h-4 w-4 shrink-0 text-orange-400" aria-hidden />
-        <span className="text-sm font-semibold text-foreground">Databases</span>
+        <span className="text-sm font-semibold text-foreground">Clusters</span>
         {!loading && !error ? (
-          <span className="text-xs text-muted-foreground">{databases.length}</span>
+          <span className="text-xs text-muted-foreground">{clusters.length}</span>
         ) : null}
         <Button
           type="button"
@@ -94,7 +94,7 @@ export function DatapackDatabasesPanel({ datapackId, className }: Props) {
           onClick={() => setCreateOpen(true)}
         >
           <Plus className="h-4 w-4" aria-hidden />
-          Create database
+          Create cluster
         </Button>
       </div>
 
@@ -107,28 +107,28 @@ export function DatapackDatabasesPanel({ datapackId, className }: Props) {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search databases…"
+            placeholder="Search clusters…"
             className="border border-border bg-background pl-9"
-            aria-label="Search databases"
+            aria-label="Search clusters"
           />
         </div>
 
         {loading ? (
-          <p className="text-sm text-muted-foreground">Loading databases…</p>
+          <p className="text-sm text-muted-foreground">Loading clusters…</p>
         ) : error ? (
           <p className="text-sm text-red-700 dark:text-red-300" role="alert">
             {error}
           </p>
-        ) : databases.length === 0 ? (
+        ) : clusters.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No databases yet. Create one to spin up a Postgres database in this datapack.
+            No clusters yet. Create one to spin up a Postgres cluster in this datapack.
           </p>
         ) : filtered.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No databases match “{search}”.</p>
+          <p className="text-sm text-muted-foreground">No clusters match “{search}”.</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {filtered.map((db) => (
-              <DatabaseRow
+              <ClusterRow
                 key={db.id}
                 datapackId={datapackId}
                 db={db}
@@ -140,7 +140,7 @@ export function DatapackDatabasesPanel({ datapackId, className }: Props) {
         )}
       </div>
 
-      <CreateDatabaseDialog
+      <CreateClusterDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
         datapackId={datapackId}
@@ -150,14 +150,14 @@ export function DatapackDatabasesPanel({ datapackId, className }: Props) {
   );
 }
 
-function DatabaseRow({
+function ClusterRow({
   datapackId,
   db,
   expanded,
   onToggle,
 }: {
   datapackId: string;
-  db: AmpDatabase;
+  db: AmpCluster;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -184,14 +184,14 @@ function DatabaseRow({
       </button>
       {expanded ? (
         <div className="border-t border-border px-3 py-3">
-          <DatabaseBranches datapackId={datapackId} projectId={db.id} />
+          <ClusterBranches datapackId={datapackId} clusterId={db.id} />
         </div>
       ) : null}
     </li>
   );
 }
 
-function DatabaseBranches({ datapackId, projectId }: { datapackId: string; projectId: string }) {
+function ClusterBranches({ datapackId, clusterId }: { datapackId: string; clusterId: string }) {
   const [branches, setBranches] = useState<AmpBranch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -201,13 +201,13 @@ function DatabaseBranches({ datapackId, projectId }: { datapackId: string; proje
     setLoading(true);
     setError(null);
     try {
-      setBranches(await listBranches(datapackId, projectId));
+      setBranches(await listBranches(datapackId, clusterId));
     } catch (e) {
       setError(getApiErrorMessage(e, "Failed to load branches."));
     } finally {
       setLoading(false);
     }
-  }, [datapackId, projectId]);
+  }, [datapackId, clusterId]);
 
   useEffect(() => {
     void load();
@@ -248,7 +248,7 @@ function DatabaseBranches({ datapackId, projectId }: { datapackId: string; proje
       ) : (
         <div className="flex flex-col gap-2">
           {ordered.map((branch) => (
-            <BranchCard key={branch.branch_id} datapackId={datapackId} projectId={projectId} branch={branch} />
+            <BranchCard key={branch.branch_id} datapackId={datapackId} clusterId={clusterId} branch={branch} />
           ))}
         </div>
       )}
@@ -257,7 +257,7 @@ function DatabaseBranches({ datapackId, projectId }: { datapackId: string; proje
         open={newBranchOpen}
         onOpenChange={setNewBranchOpen}
         datapackId={datapackId}
-        projectId={projectId}
+        clusterId={clusterId}
         branches={branches}
         onCreated={() => void load()}
       />
@@ -267,11 +267,11 @@ function DatabaseBranches({ datapackId, projectId }: { datapackId: string; proje
 
 function BranchCard({
   datapackId,
-  projectId,
+  clusterId,
   branch,
 }: {
   datapackId: string;
-  projectId: string;
+  clusterId: string;
   branch: AmpBranch;
 }) {
   return (
@@ -296,18 +296,18 @@ function BranchCard({
           <span className="font-mono text-xs text-muted-foreground">@ {branch.fork_lsn}</span>
         ) : null}
       </div>
-      <BranchCompute datapackId={datapackId} projectId={projectId} branchId={branch.branch_id} />
+      <BranchCompute datapackId={datapackId} clusterId={clusterId} branchId={branch.branch_id} />
     </div>
   );
 }
 
 function BranchCompute({
   datapackId,
-  projectId,
+  clusterId,
   branchId,
 }: {
   datapackId: string;
-  projectId: string;
+  clusterId: string;
   branchId: string;
 }) {
   const [instances, setInstances] = useState<AmpCompute[]>([]);
@@ -320,13 +320,13 @@ function BranchCompute({
     setLoading(true);
     setError(null);
     try {
-      setInstances(await listCompute(datapackId, projectId, branchId));
+      setInstances(await listCompute(datapackId, clusterId, branchId));
     } catch (e) {
       setError(getApiErrorMessage(e, "Failed to load compute."));
     } finally {
       setLoading(false);
     }
-  }, [datapackId, projectId, branchId]);
+  }, [datapackId, clusterId, branchId]);
 
   useEffect(() => {
     void load();
@@ -336,7 +336,7 @@ function BranchCompute({
     setProvisioning(true);
     setError(null);
     try {
-      await createCompute(datapackId, projectId, branchId, role);
+      await createCompute(datapackId, clusterId, branchId, role);
       await load();
     } catch (e) {
       setError(getApiErrorMessage(e, "Failed to provision compute."));
@@ -437,14 +437,14 @@ function NewBranchDialog({
   open,
   onOpenChange,
   datapackId,
-  projectId,
+  clusterId,
   branches,
   onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   datapackId: string;
-  projectId: string;
+  clusterId: string;
   branches: AmpBranch[];
   onCreated: () => void;
 }) {
@@ -471,7 +471,7 @@ function NewBranchDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await createBranch(datapackId, projectId, {
+      await createBranch(datapackId, clusterId, {
         name: trimmed,
         parent_branch_id: parentId,
         fork_point_lsn: forkLsn,

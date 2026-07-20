@@ -9,7 +9,7 @@ import DatapackMemorySummaryPage from "@/features/datapacks/pages/DatapackMemory
 import DatapackCollectiveMemorySummaryPage from "@/features/datapacks/pages/DatapackCollectiveMemorySummaryPage";
 import DatapackKnowledgeSummaryPage from "@/features/datapacks/pages/DatapackKnowledgeSummaryPage";
 import DatapackMembersListPage from "@/features/datapacks/pages/DatapackMembersListPage";
-import DatapackDatabasesPage from "@/features/datapacks/pages/DatapackDatabasesPage";
+import DatapackClustersPage from "@/features/datapacks/pages/DatapackClustersPage";
 import DatapackSharePage from "@/features/datapacks/pages/DatapackSharePage";
 import DatapacksOverviewPage from "@/features/datapacks/pages/DatapacksOverviewPage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -74,8 +74,8 @@ export default function DatapacksPage() {
       if (segments[1] === DATAPACK_SUB_ROUTE.members && segments.length === 2) {
         return <DatapackMembersListPage datapackId={datapackId} />;
       }
-      if (segments[1] === DATAPACK_SUB_ROUTE.databases && segments.length === 2) {
-        return <DatapackDatabasesPage datapackId={datapackId} />;
+      if (segments[1] === DATAPACK_SUB_ROUTE.clusters && segments.length === 2) {
+        return <DatapackClustersPage datapackId={datapackId} />;
       }
       if (segments[1] === DATAPACK_SUB_ROUTE.learnings && segments.length === 2) {
         return <DatapackLearningsPage datapackId={datapackId} />;
