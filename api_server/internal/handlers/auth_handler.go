@@ -185,8 +185,8 @@ func (h *AuthHandler) ChangePassword(c echo.Context) error {
 
 	// Same signal as GET /auth/me has_email_password_login: federated-origin
 	// usernames have no native Cognito password to change.
-	cognitoUsername, ok := c.Get(auth.ContextKeyCognitoUsername).(string)
-	if ok && !auth.HasEmailPasswordLogin(cognitoUsername) {
+	cognitoUsername, hasUsername := c.Get(auth.ContextKeyCognitoUsername).(string)
+	if hasUsername && !auth.HasEmailPasswordLogin(cognitoUsername) {
 		return apiError(c, http.StatusBadRequest,
 			"PASSWORD_NOT_AVAILABLE",
 			"this account signs in with a social provider and has no password to change")
@@ -378,10 +378,7 @@ func (h *AuthHandler) Me(c echo.Context) error {
 	// non-prefixed username. No Cognito Admin call on this hot path.
 	//
 	// Missing username (e.g. PAT) fails open to true inside HasEmailPasswordLogin.
-	cognitoUsername, ok := c.Get(auth.ContextKeyCognitoUsername).(string)
-	if !ok {
-		cognitoUsername = ""
-	}
+	cognitoUsername, _ := c.Get(auth.ContextKeyCognitoUsername).(string)
 	hasEmailPasswordLogin := auth.HasEmailPasswordLogin(cognitoUsername)
 
 	return ok(c, http.StatusOK, map[string]any{
