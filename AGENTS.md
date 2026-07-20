@@ -113,6 +113,35 @@ In `meko-provisioner/`: `config/crd/bases/*.yaml`, `config/rbac/role.yaml`, `**/
 
 In `api_server/`: Swagger comments at the top of `main.go` are the source for generated docs; don't hand-edit anything in a generated `docs/` if one appears.
 
+## Per-component guides
+
+Component-specific conventions (folder layout, naming, data/API patterns, best
+practices) live in each component's own `AGENTS.md` — read the one for the code
+you're touching:
+
+- `meko_ui/AGENTS.md` — web app (React/Vite/Tailwind/shadcn/TanStack Query).
+- `meko_admin/AGENTS.md` — operator console (SPA + Express BFF that proxies to api_server).
+- `api_server/AGENTS.md` — Go REST API (handler → service → repository layering).
+- `meko-provisioner/AGENTS.md` — kubebuilder operator.
+
+## Pull requests
+
+**Title** must carry the tracking ticket / JIRA number so the change is traceable
+— e.g. `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`.
+
+Write PR descriptions with these sections (drop one only when it truly doesn't
+apply, and say so):
+
+- **Summary** — 1–3 sentences: what changed and the user-facing effect, not the diff.
+- **Files changed** — one bullet per file, 1–2 lines each (group by component when the PR spans several).
+- **Testing** — what you ran (`go build`/`go vet`/`golangci-lint`, `npm run check`) and what still needs manual verification.
+- **Config / env vars** — any new/required env var or flag, where it's set, and the default/degraded behavior when unset.
+- **Math / derivation** — only when the PR computes something: the formula, where the numbers come from, a tiny worked example, and what's measured vs modeled.
+- **Deploy notes** — only when runtime setup changes: migrations, required env, ordering.
+
+Keep it crisp; link related PRs/issues with full URLs, never bare `#123`. See
+the Git Commit Guidelines below (no AI attribution in commits or PR descriptions).
+
 ## Git Commit Guidelines
 
 - Do not mention any AI assistant in commit messages, PR descriptions, or code comments.
