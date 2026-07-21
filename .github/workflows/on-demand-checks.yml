@@ -21,6 +21,12 @@ name: On-demand checks
 #   * a new commit is pushed (`synchronize`) or the PR opens/reopens — every
 #     directive currently in the body applies, so a persisted `/ci` line
 #     re-runs its suite on each push;
+#   * a PR opens/reopens or a commit is pushed (`synchronize`) AND the diff adds
+#     or modifies files under test/integration/compute/slow/ — integration_slow
+#     then runs automatically, no `/ci` line needed (the slow suite is what
+#     exercises those scenarios, so a change to them should always be run). This
+#     is NOT evaluated on `edited`: a description edit changes no files, and
+#     re-running the suite on a body tweak would defeat the added-only rule below;
 #   * the description is `edited` to ADD a directive — only the newly-added
 #     suites run. Editing the description WITHOUT changing the `/ci` lines
 #     runs nothing (the decide gate returns an empty set and every job is
@@ -64,6 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       integration_slow: ${{ steps.p.outputs.integration_slow }}
       generate_image: ${{ steps.p.outputs.generate_image }}
@@ -108,11 +115,34 @@ jobs:
               effective = now;
             }
 
-            core.setOutput('integration_slow', String(effective.has('integration_slow')));
+            // Auto-run the slow suite when the PR adds or modifies slow-suite
+            // files, so `integration_slow` fires without an explicit `/ci` line.
+            // Only on code-changing events (opened/reopened/synchronize) — an
+            // `edited` event changes no files, and evaluating it there would
+            // re-trigger the suite on every description tweak, defeating the
+            // added-only rule above.
+            let slowFilesTouched = false;
+            if (action !== 'edited') {
+              const SLOW_DIR = 'test/integration/compute/slow/';
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100,
+              });
+              slowFilesTouched = files.some(
+                (f) => f.status !== 'removed' && f.filename.startsWith(SLOW_DIR),
+              );
+              if (slowFilesTouched) {
+                core.notice('Slow-suite files changed → running integration_slow automatically');
+              }
+            }
+
+            core.setOutput('integration_slow', String(effective.has('integration_slow') || slowFilesTouched));
             core.setOutput('generate_image', String(effective.has('generate_image')));
 
             const picked = [...effective].sort().join(', ') || '(none)';
-            core.notice(`On-demand suites this run: ${picked}`);
+            core.notice(`On-demand suites this run (directives): ${picked}`);
 
   integration:
     name: On-demand — integration (slow)

@@ -11,6 +11,11 @@ parses the body and runs the matching jobs.
   to the description runs the newly-added suite immediately; editing the
   description **without** changing the `/ci` lines runs nothing.
 
+`integration_slow` also runs **automatically** — no `/ci` line needed — on any
+PR whose diff adds or modifies files under `test/integration/compute/slow/`
+(evaluated when the PR opens/reopens or a commit is pushed). The slow suite is
+what exercises those scenarios, so changing them always runs it.
+
 ## Suites
 
 | Directive | Runs | Request it when the diff… |
