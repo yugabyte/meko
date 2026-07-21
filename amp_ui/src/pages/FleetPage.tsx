@@ -46,7 +46,8 @@ import {
   useFleet,
   useStoragePools,
 } from "@/lib/api/queries";
-import type { StoragePool } from "@/lib/api/types";
+import { useCreateEndpoint } from "@/hooks/useEndpoints";
+import { DEFAULT_ENDPOINT_CPU, type StoragePool } from "@/lib/api/types";
 import { formatDateTime, shortId } from "@/lib/format";
 
 export default function FleetPage() {
@@ -247,20 +248,55 @@ function CreateClusterDialog({
 }) {
   const [name, setName] = useState("");
   const [poolId, setPoolId] = useState<string>("");
+  const [vcores, setVcores] = useState(DEFAULT_ENDPOINT_CPU);
   const createProject = useCreateProject();
+  const createEndpoint = useCreateEndpoint();
+  const pending = createProject.isPending || createEndpoint.isPending;
+
+  function reset() {
+    setName("");
+    setPoolId("");
+    setVcores(DEFAULT_ENDPOINT_CPU);
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = name.trim();
-    if (!trimmed || !poolId) return;
+    const cpu = vcores.trim();
+    if (!trimmed || !poolId || !cpu) return;
+    // Create the cluster (a project + its default `main` branch), then a
+    // read_write (write) endpoint on that branch sized to the requested vCores.
     createProject.mutate(
       { poolId, name: trimmed },
       {
         onSuccess: (project) => {
-          toast.success(`Cluster "${project.name}" created`);
-          setName("");
-          setPoolId("");
-          onOpenChange(false);
+          createEndpoint.mutate(
+            {
+              poolId,
+              projectId: project.id,
+              branchId: project.default_branch.branch_id,
+              role: "read_write",
+              cpu,
+            },
+            {
+              onSuccess: () => {
+                toast.success(
+                  `Cluster "${project.name}" created with a ${cpu}-vCore write endpoint`,
+                );
+                reset();
+                onOpenChange(false);
+              },
+              onError: (err) => {
+                toast.error(
+                  `Cluster "${project.name}" created, but its write endpoint failed: ${
+                    err instanceof Error ? err.message : "unknown error"
+                  }`,
+                );
+                reset();
+                onOpenChange(false);
+              },
+            },
+          );
         },
         onError: (err) =>
           toast.error(
@@ -278,7 +314,7 @@ function CreateClusterDialog({
             <DialogTitle>New cluster</DialogTitle>
             <DialogDescription>
               Creates a cluster inside a shared pool, with a default{" "}
-              <code>main</code> branch.
+              <code>main</code> branch and a write endpoint.
             </DialogDescription>
           </DialogHeader>
           <div className="my-4 space-y-4">
@@ -306,6 +342,21 @@ function CreateClusterDialog({
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="cluster-vcores">vCores</Label>
+              <Input
+                id="cluster-vcores"
+                type="number"
+                min={1}
+                step={1}
+                placeholder={DEFAULT_ENDPOINT_CPU}
+                value={vcores}
+                onChange={(e) => setVcores(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                vCores for the cluster's write endpoint.
+              </p>
+            </div>
           </div>
           <DialogFooter>
             <Button
@@ -317,10 +368,10 @@ function CreateClusterDialog({
             </Button>
             <Button
               type="submit"
-              disabled={!name.trim() || !poolId || createProject.isPending}
+              disabled={!name.trim() || !poolId || !vcores.trim() || pending}
               variant="brand"
             >
-              {createProject.isPending ? "Creating…" : "Create cluster"}
+              {pending ? "Creating…" : "Create cluster"}
             </Button>
           </DialogFooter>
         </form>
