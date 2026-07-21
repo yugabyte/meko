@@ -1,5 +1,5 @@
 //! Safekeeper communication endpoint to WAL proposer (compute node).
-//! Gets messages from the network, passes them down to consensus module and
+//! Gets messages from the network, passes them down to the safekeeper and
 //! sends replies back.
 
 use std::future;
@@ -70,7 +70,7 @@ impl WalReceivers {
         let slots = &mut shared.slots;
         let walreceiver = WalReceiverState {
             conn_id,
-            status: WalReceiverStatus::Voting,
+            status: WalReceiverStatus::Connecting,
         };
         // find empty slot or create new one
         let pos = if let Some(pos) = slots.iter().position(|s| s.is_none()) {
@@ -609,7 +609,7 @@ impl WalAcceptor {
         // `changed()` would fire IMMEDIATELY, and the unbiased select
         // below could emit an AppendResponse ('a') before the
         // AcceptorGreeting ('g'). The walproposer kills the connection on
-        // an 'a' during handshake/voting and reconnects into the same
+        // an 'a' during the handshake and reconnects into the same
         // poisoned race forever: a permanent reconnect storm (observed
         // under TPC-C as ~175 reconnects/s with "unexpected message tag a
         // ... in state handshake" in the compute log; reproduced by the

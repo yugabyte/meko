@@ -151,11 +151,12 @@ pub struct WalReceiverState {
     pub status: WalReceiverStatus,
 }
 
-/// Walreceiver status. Currently only whether it passed voting stage and
-/// started receiving the stream, but it is easy to add more if needed.
+/// Walreceiver status. Currently only whether it is still connecting or
+/// has started receiving the stream, but it is easy to add more if needed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WalReceiverStatus {
-    Voting,
+    #[serde(alias = "Voting")]
+    Connecting,
     Streaming,
 }
 

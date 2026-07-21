@@ -1,4 +1,4 @@
-//! Acceptor part of proposer-acceptor consensus algorithm.
+//! Acceptor part of the proposer–acceptor WAL streaming protocol.
 
 use std::cmp::max;
 use std::str::FromStr;
@@ -294,7 +294,7 @@ impl AcceptorProposerMessage {
     }
 }
 
-/// Safekeeper implements consensus to reliably persist WAL across nodes.
+/// Safekeeper reliably persists WAL received from the walproposer.
 /// It controls all WAL disk writes and updates of control file.
 ///
 /// Currently safekeeper processes:
@@ -370,8 +370,8 @@ where
         res
     }
 
-    /// Handle initial message from proposer: check its sanity and send my
-    /// current term.
+    /// Handle initial message from proposer: check its sanity and reply
+    /// with our node id and flush LSN.
     async fn handle_greeting(
         &mut self,
         msg: &ProposerGreeting,
@@ -497,8 +497,8 @@ where
             let mut state = self.state.start_change();
 
             // Here we learn the initial LSN for the first time. On the very
-            // first election `start_streaming_at` is the timeline's WAL start
-            // (previously carried as `term_history[0].lsn`).
+            // first ProposerElected message `start_streaming_at` is the
+            // timeline's WAL start.
             if state.timeline_start_lsn == Lsn(0) {
                 state.timeline_start_lsn = msg.start_streaming_at;
                 info!(
@@ -522,7 +522,6 @@ where
 
         // Force a control-file sync at the truncation/resume point so
         // `postgres --sync-safekeepers` polls a durable, aligned LSN.
-        // (Replaces the old term-crossing fsync trigger.)
         self.state.flush().await?;
 
         info!("start receiving WAL since {:?}", msg.start_streaming_at);

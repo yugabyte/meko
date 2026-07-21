@@ -65,7 +65,7 @@ static void BroadcastAppendRequest(WalProposer *wp);
 static void HandleActiveState(Safekeeper *sk, uint32 events);
 static bool SendAppendRequests(Safekeeper *sk);
 static bool RecvAppendResponses(Safekeeper *sk);
-static XLogRecPtr GetAcknowledgedByQuorumWALPosition(WalProposer *wp);
+static XLogRecPtr GetAcknowledgedWALPosition(WalProposer *wp);
 static void PAMessageSerialize(WalProposer *wp, ProposerAcceptorMessage *msg, StringInfo buf, int proto_version);
 static void HandleSafekeeperResponse(WalProposer *wp, Safekeeper *sk);
 static bool AsyncRead(Safekeeper *sk, char **buf, int *buf_size);
@@ -90,7 +90,7 @@ WalProposerCreate(WalProposerConfig *config, walproposer_api api)
 	wp->config = config;
 	wp->api = api;
 	wp->localTimeLineID = config->pgTimeline;
-	wp->state = WPS_COLLECTING_TERMS;
+	wp->state = WPS_CONNECTING;
 
 	wp_log(LOG, "yb_amp.safekeepers=%s", wp->config->safekeepers_list);
 
@@ -253,8 +253,8 @@ WalProposerPoll(WalProposer *wp)
 		if (rc == 0 || TimeToReconnect(wp, now) <= 0)
 		{
 			/*
-			 * If no WAL was generated during timeout (and we have already
-			 * collected the quorum), then send empty keepalive message
+			 * If no WAL was generated during timeout (and we are already
+			 * elected), then send empty keepalive message
 			 */
 			if (wp->availableLsn != InvalidXLogRecPtr)
 			{
@@ -696,7 +696,7 @@ RecvAcceptorGreeting(Safekeeper *sk)
 	 * the safekeeper's end-of-WAL (which it truncates to on ProposerElected).
 	 */
 	wp->donor = sk;
-	wp->propTermStartLsn = sk->greetResponse.flushLsn;
+	wp->propStartLsn = sk->greetResponse.flushLsn;
 	wp->state = WPS_ELECTED;
 	HandleElectedProposer(wp);
 }
@@ -710,7 +710,7 @@ static void
 HandleElectedProposer(WalProposer *wp)
 {
 	ProcessPropStartPos(wp);
-	Assert(wp->propTermStartLsn != InvalidXLogRecPtr);
+	Assert(wp->propStartLsn != InvalidXLogRecPtr);
 
 	/*
 	 * Synchronously download WAL from the safekeeper. We do that only for
@@ -728,13 +728,13 @@ HandleElectedProposer(WalProposer *wp)
 		 * yb-mode: sync-safekeepers is trivially satisfied after election
 		 * because there are no peers to sync to.
 		 */
-		wp->api.finish_sync_safekeepers(wp, wp->propTermStartLsn);
+		wp->api.finish_sync_safekeepers(wp, wp->propStartLsn);
 		/* unreachable */
 	}
 
 	SendProposerElected(wp->donor);
 
-	wp->api.start_streaming(wp, wp->propTermStartLsn);
+	wp->api.start_streaming(wp, wp->propStartLsn);
 	/* Should not return here */
 }
 
@@ -768,35 +768,35 @@ ProcessPropStartPos(WalProposer *wp)
 	Assert(wp->state == WPS_ELECTED);
 
 	/*
-	 * If propTermStartLsn is 0 the safekeeper has no WAL yet: we are
+	 * If propStartLsn is 0 the safekeeper has no WAL yet: we are
 	 * bootstrapping and nothing was committed. Start streaming from the
 	 * basebackup LSN then.
 	 *
 	 * In case of sync-safekeepers just exit: there is nothing to sync.
 	 */
-	if (wp->propTermStartLsn == InvalidXLogRecPtr)
+	if (wp->propStartLsn == InvalidXLogRecPtr)
 	{
 		if (!wp->config->syncSafekeepers)
 		{
-			wp->propTermStartLsn = wp->api.get_redo_start_lsn(wp);
-			wp_log(LOG, "bumped epochStartLsn to the first record %X/%X", LSN_FORMAT_ARGS(wp->propTermStartLsn));
+			wp->propStartLsn = wp->api.get_redo_start_lsn(wp);
+			wp_log(LOG, "bumped propStartLsn to the first record %X/%X", LSN_FORMAT_ARGS(wp->propStartLsn));
 		}
 		else
 		{
-			wp_log(LOG, "elected with zero propTermStartLsn in sync-safekeepers, exiting");
-			wp->api.finish_sync_safekeepers(wp, wp->propTermStartLsn);
+			wp_log(LOG, "elected with zero propStartLsn in sync-safekeepers, exiting");
+			wp->api.finish_sync_safekeepers(wp, wp->propStartLsn);
 		}
 	}
-	pg_atomic_write_u64(&wp->api.get_shmem_state(wp)->propEpochStartLsn, wp->propTermStartLsn);
+	pg_atomic_write_u64(&wp->api.get_shmem_state(wp)->propStartLsn, wp->propStartLsn);
 
 	/*
-	 * We will be generating WAL since propTermStartLsn, so we should set
+	 * We will be generating WAL since propStartLsn, so we should set
 	 * availableLsn to mark this LSN as the latest available position.
 	 */
-	wp->availableLsn = wp->propTermStartLsn;
+	wp->availableLsn = wp->propStartLsn;
 
-	wp_log(LOG, "walproposer elected, epochStartLsn %X/%X, donor %s:%s",
-		   LSN_FORMAT_ARGS(wp->propTermStartLsn),
+	wp_log(LOG, "walproposer elected, propStartLsn %X/%X, donor %s:%s",
+		   LSN_FORMAT_ARGS(wp->propStartLsn),
 		   wp->donor->host, wp->donor->port);
 
 	/*
@@ -808,7 +808,7 @@ ProcessPropStartPos(WalProposer *wp)
 	 * The safekeeper being *ahead* is the normal reconnect/restart case: yb-amp
 	 * has a single safekeeper and thus a single compute lineage (no competing
 	 * proposer), so resuming from a point past the basebackup is a legitimate
-	 * continuation — the compute replays [redo_start, propTermStartLsn) from the
+	 * continuation — the compute replays [redo_start, propStartLsn) from the
 	 * safekeeper before writing new WAL. (This replaces the old term-based
 	 * "was this my term?" escape hatch, which is always true for a single SK.)
 	 */
@@ -821,7 +821,7 @@ ProcessPropStartPos(WalProposer *wp)
 		 * Safekeepers don't skip header as they need continious stream of
 		 * data, so correct LSN for comparison.
 		 */
-		if (SkipXLogPageHeader(wp, wp->propTermStartLsn) < wp->api.get_redo_start_lsn(wp))
+		if (SkipXLogPageHeader(wp, wp->propStartLsn) < wp->api.get_redo_start_lsn(wp))
 		{
 			/*
 			 * Panic to restart PG as we need to retake basebackup. However,
@@ -830,7 +830,7 @@ ProcessPropStartPos(WalProposer *wp)
 			disable_core_dump();
 			wp_log(PANIC,
 				   "safekeeper end-of-WAL %X/%X is behind basebackup LSN %X/%X",
-				   LSN_FORMAT_ARGS(wp->propTermStartLsn),
+				   LSN_FORMAT_ARGS(wp->propStartLsn),
 				   LSN_FORMAT_ARGS(wp->api.get_redo_start_lsn(wp)));
 		}
 	}
@@ -852,7 +852,7 @@ SendProposerElected(Safekeeper *sk)
 	wp->api.wal_reader_allocate(sk);
 
 	/* Single safekeeper: resume streaming at its reported end-of-WAL. */
-	sk->startStreamingAt = wp->propTermStartLsn;
+	sk->startStreamingAt = wp->propStartLsn;
 
 	Assert(sk->startStreamingAt <= wp->availableLsn);
 
@@ -1233,15 +1233,15 @@ ParsePageserverFeedbackMessage(WalProposer *wp, StringInfo reply_message, Pagese
  * flushLsn (once it has caught up to our streaming start point).
  */
 static XLogRecPtr
-GetAcknowledgedByQuorumWALPosition(WalProposer *wp)
+GetAcknowledgedWALPosition(WalProposer *wp)
 {
 	Safekeeper *sk = &wp->safekeeper[0];
 
 	/*
-	 * Ignore reported LSN until it reaches propTermStartLsn: before the first
+	 * Ignore reported LSN until it reaches propStartLsn: before the first
 	 * ack flushLsn is 0, and we don't commit anything before our start point.
 	 */
-	return sk->appendResponse.flushLsn >= wp->propTermStartLsn
+	return sk->appendResponse.flushLsn >= wp->propStartLsn
 		? sk->appendResponse.flushLsn
 		: 0;
 }
@@ -1272,7 +1272,7 @@ UpdateDonorShmem(WalProposer *wp)
 	if (wp->donor->state >= SS_ACTIVE)
 	{
 		donor = wp->donor;
-		donor_lsn = wp->propTermStartLsn;
+		donor_lsn = wp->propStartLsn;
 	}
 
 	/*
@@ -1307,7 +1307,7 @@ HandleSafekeeperResponse(WalProposer *wp, Safekeeper *fromsk)
 {
 	XLogRecPtr	newCommitLsn;
 
-	newCommitLsn = GetAcknowledgedByQuorumWALPosition(wp);
+	newCommitLsn = GetAcknowledgedWALPosition(wp);
 	if (newCommitLsn > wp->commitLsn)
 	{
 		wp->commitLsn = newCommitLsn;
@@ -1318,7 +1318,7 @@ HandleSafekeeperResponse(WalProposer *wp, Safekeeper *fromsk)
 	/*
 	 * Unlock syncrep waiters, update ps_feedback, CheckGracefulShutdown().
 	 * The last one will terminate the process if the shutdown is requested
-	 * and WAL is committed by the quorum. BroadcastAppendRequest() should be
+	 * and WAL is committed. BroadcastAppendRequest() should be
 	 * called to notify safekeepers about the new commitLsn.
 	 */
 	wp->api.process_safekeeper_feedback(wp, fromsk);
@@ -1326,33 +1326,26 @@ HandleSafekeeperResponse(WalProposer *wp, Safekeeper *fromsk)
 	/* yb-mode: truncateLsn removed — no peer recovery to gate. */
 
 	/*
-	 * Generally sync is done when majority reached propTermStartLsn so we
-	 * committed it and made the majority aware of it, ensuring they are ready
-	 * to give all WAL to pageserver. It would mean whichever majority is
-	 * alive, there will be at least one safekeeper who is able to stream WAL
-	 * to pageserver to make basebackup possible. However, since at the moment
-	 * we don't have any good mechanism of defining the healthy and most
-	 * advanced safekeeper who should push the wal into pageserver and
-	 * basically the random one gets connected, to prevent hanging basebackup
-	 * (due to pageserver connecting to not-synced-safekeeper) we currently
-	 * wait for all seemingly alive safekeepers to get synced.
+	 * Sync is done once the safekeeper has reached propStartLsn: it is
+	 * committed and the safekeeper is ready to stream all WAL to the
+	 * pageserver, making basebackup possible.
 	 */
 	if (wp->config->syncSafekeepers)
 	{
 		for (int i = 0; i < wp->n_safekeepers; i++)
 		{
 			Safekeeper *sk = &wp->safekeeper[i];
-			/* yb-mode: commitLsn ≡ flushLsn (single-SK quorum). */
-			bool		synced = sk->appendResponse.flushLsn >= wp->propTermStartLsn;
+			/* yb-mode: commitLsn ≡ flushLsn (single safekeeper). */
+			bool		synced = sk->appendResponse.flushLsn >= wp->propStartLsn;
 
 			/* alive safekeeper which is not synced yet; wait for it */
 			if (sk->state != SS_OFFLINE && !synced)
 				return;
 		}
 
-		if (newCommitLsn >= wp->propTermStartLsn)
+		if (newCommitLsn >= wp->propStartLsn)
 		{
-			/* A quorum of safekeepers has been synced! */
+			/* The safekeeper has been synced! */
 
 			/*
 			 * Send empty message to broadcast latest truncateLsn to all
@@ -1365,7 +1358,7 @@ HandleSafekeeperResponse(WalProposer *wp, Safekeeper *fromsk)
 			 */
 			BroadcastAppendRequest(wp);
 
-			wp->api.finish_sync_safekeepers(wp, wp->propTermStartLsn);
+			wp->api.finish_sync_safekeepers(wp, wp->propStartLsn);
 			/* unreachable */
 		}
 	}
@@ -1455,7 +1448,7 @@ AsyncRead(Safekeeper *sk, char **buf, int *buf_size)
  * unmodified, waiting until it becomes read-ready to try again. If it fully
  * failed, a warning is emitted and the connection is reset.
  *
- * Note: it pallocs if needed, i.e. for AcceptorGreeting and VoteResponse fields.
+ * Note: it pallocs if needed, i.e. for AcceptorGreeting and AppendResponse fields.
  */
 static bool
 AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)

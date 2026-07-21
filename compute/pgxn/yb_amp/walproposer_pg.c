@@ -526,7 +526,7 @@ WalproposerShmemInit(void)
 	{
 		memset(walprop_shared, 0, WalproposerShmemSize());
 		SpinLockInit(&walprop_shared->mutex);
-		pg_atomic_init_u64(&walprop_shared->propEpochStartLsn, 0);
+		pg_atomic_init_u64(&walprop_shared->propStartLsn, 0);
 		pg_atomic_init_u64(&walprop_shared->mineLastElectedTerm, 0);
 		pg_atomic_init_u64(&walprop_shared->backpressureThrottlingTime, 0);
 		pg_atomic_init_u64(&walprop_shared->currentClusterSize, 0);
@@ -545,7 +545,7 @@ WalproposerShmemInit_SyncSafekeeper(void)
 	walprop_shared = palloc(WalproposerShmemSize());
 	memset(walprop_shared, 0, WalproposerShmemSize());
 	SpinLockInit(&walprop_shared->mutex);
-	pg_atomic_init_u64(&walprop_shared->propEpochStartLsn, 0);
+	pg_atomic_init_u64(&walprop_shared->propStartLsn, 0);
 	pg_atomic_init_u64(&walprop_shared->mineLastElectedTerm, 0);
 	pg_atomic_init_u64(&walprop_shared->backpressureThrottlingTime, 0);
 	/* BEGIN_HADRON */
@@ -1629,7 +1629,7 @@ walprop_pg_wal_reader_allocate(Safekeeper *sk)
 
 	snprintf(log_prefix, sizeof(log_prefix), WP_LOG_PREFIX "sk %s:%s nwr: ", sk->host, sk->port);
 	Assert(!sk->xlogreader);
-	sk->xlogreader = YbAmpWALReaderAllocate(wal_segment_size, sk->wp->propTermStartLsn, log_prefix, sk->wp->localTimeLineID);
+	sk->xlogreader = YbAmpWALReaderAllocate(wal_segment_size, sk->wp->propStartLsn, log_prefix, sk->wp->localTimeLineID);
 	if (sk->xlogreader == NULL)
 		wpg_log(FATAL, "failed to allocate xlog reader");
 }
@@ -1980,7 +1980,7 @@ walprop_pg_finish_sync_safekeepers(WalProposer *wp, XLogRecPtr lsn)
  * Like vanilla walsender, on sigusr2 send all remaining WAL and exit.
  *
  * Note that unlike sync-safekeepers waiting here is not reliable: we
- * don't check that majority of safekeepers received and persisted
+ * don't check that the safekeeper received and persisted
  * commit_lsn -- only that walproposer reached it (which immediately
  * broadcasts new value). Doing that without incurring redundant control
  * file syncing would need wp -> sk protocol change. OTOH unlike
@@ -2094,9 +2094,9 @@ walprop_pg_process_safekeeper_feedback(WalProposer *wp, Safekeeper *sk)
 		 * Also wakes up syncrep waiters.
 		 */
 		ProcessStandbyReply(
-		/* write_lsn -  This is what durably stored in safekeepers quorum. */
+		/* write_lsn -  This is what is durably stored in the safekeeper. */
 							standby_flush_lsn,
-		/* flush_lsn - This is what durably stored in safekeepers quorum. */
+		/* flush_lsn - This is what is durably stored in the safekeeper. */
 							standby_flush_lsn,
 
 		/*

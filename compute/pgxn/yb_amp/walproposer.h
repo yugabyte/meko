@@ -246,7 +246,7 @@ typedef struct WalRateLimiter
 
 typedef struct WalproposerShmemState
 {
-	pg_atomic_uint64 propEpochStartLsn;
+	pg_atomic_uint64 propStartLsn;
 	char		donor_name[64];
 	char		donor_conninfo[MAXCONNINFO];
 	XLogRecPtr	donor_lsn;
@@ -291,7 +291,6 @@ typedef struct AppendResponse
 
 /*  PageserverFeedback is extensible part of the message that is parsed separately */
 /*  Other fields are fixed part: flushLsn(8) + hs{ts,xmin,catalog_xmin}(24) */
-#define APPENDRESPONSE_FIXEDPART_SIZE 32
 
 struct WalProposer;
 typedef struct WalProposer WalProposer;
@@ -548,7 +547,7 @@ typedef struct walproposer_api
 	/*
 	 * Called after every AppendResponse from the safekeeper. Used to
 	 * propagate backpressure feedback and to confirm WAL persistence (has
-	 * been commited on the quorum of safekeepers).
+	 * been committed on the safekeeper).
 	 */
 	void		(*process_safekeeper_feedback) (WalProposer *wp, Safekeeper *sk);
 
@@ -616,7 +615,7 @@ typedef struct WalProposerConfig
 
 	/*
 	 * If safekeeper was started in sync mode, walproposer will not subscribe
-	 * for new WAL and will exit when quorum of safekeepers will be synced to
+	 * for new WAL and will exit when the safekeeper is synced to
 	 * the latest available LSN.
 	 */
 	bool		syncSafekeepers;
@@ -637,7 +636,7 @@ typedef struct WalProposerConfig
 typedef enum
 {
 	/* connecting / handshaking, not yet elected */
-	WPS_COLLECTING_TERMS,
+	WPS_CONNECTING,
 	/* successfully elected (single-SK: immediately after the greeting) */
 	WPS_ELECTED,
 } WalProposerState;
@@ -672,7 +671,7 @@ typedef struct WalProposer
 	ProposerGreeting greetRequest;
 
 	/* point from which the proposer resumes streaming (= the SK's flush_lsn) */
-	XLogRecPtr	propTermStartLsn;
+	XLogRecPtr	propStartLsn;
 
 	/* The (sole) safekeeper we stream to. */
 	Safekeeper *donor;

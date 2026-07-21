@@ -398,7 +398,7 @@ impl Manager {
         num_computes: usize,
         state: &StateSnapshot,
     ) {
-        // yb-amp: commit_lsn ≡ flush_lsn (single-SK quorum).
+        // yb-amp: commit_lsn ≡ flush_lsn (single safekeeper).
         let is_active = is_wal_backup_required
             || num_computes > 0
             || state.remote_consistent_lsn < state.flush_lsn;
@@ -432,7 +432,7 @@ impl Manager {
     /// `UpdateControlFile`). Only `remote_consistent_lsn` needs this
     /// periodic persist; it goes through a monotonic single-column
     /// UPDATE that is safe to land concurrently with the full-row
-    /// consensus persists (see [`AdvisoryPersist`]).
+    /// persists (see [`AdvisoryPersist`]).
     fn update_control_file_save(
         &mut self,
         state: &StateSnapshot,

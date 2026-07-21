@@ -347,7 +347,7 @@ pub struct Timeline {
 
     /// Safekeeper and other state, that should remain consistent and
     /// synchronized with the disk. This is tokio mutex as we write WAL to disk
-    /// while holding it, ensuring that consensus checks are in order.
+    /// while holding it, so WAL writes and state updates stay correctly ordered.
     mutex: RwLock<SharedState>,
     walsenders: Arc<WalSenders>,
     walreceivers: Arc<WalReceivers>,

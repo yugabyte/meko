@@ -379,9 +379,6 @@ def render_compute_spec(specfile):
         "storage_branch_id": BRANCH_ID,
         "pageserver_connstring": f"host={LISTEN_HOST} port={PAGESERVER_PG_PORT}",
         "safekeeper_connstrings": [f"{LISTEN_HOST}:{SAFEKEEPER_PG_PORT}"],
-        # Membership generation of the safekeeper timeline (created with
-        # mconf generation=1). Emitted as the `g#1:` prefix on yb_amp.safekeepers.
-        "safekeepers_generation": 1,
     }
     config = {
         "spec": spec,
@@ -639,14 +636,9 @@ def main():
     start_lsn = tl.get("last_record_lsn", "0/0")
     log(f"pageserver branch Active at LSN {start_lsn}")
 
-    # Create the branch on the safekeeper (single-member membership).
+    # Create the branch on the safekeeper.
     sk_create = {
         "branch_id": BRANCH_ID,
-        "mconf": {
-            "generation": 1,
-            "members": [{"id": NODE_ID, "host": LISTEN_HOST, "pg_port": SAFEKEEPER_PG_PORT}],
-            "new_members": None,
-        },
         "pg_version": int(PG_VERSION) * 10000,
         "start_lsn": start_lsn,
     }

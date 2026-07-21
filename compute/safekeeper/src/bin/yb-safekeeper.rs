@@ -72,9 +72,8 @@ fn version() -> String {
 }
 
 const ABOUT: &str = r#"
-A fleet of safekeepers is responsible for reliably storing WAL received from
-compute, passing it through consensus (mitigating potential computes brain
-split), and serving the hardened part further downstream to pageserver(s).
+A safekeeper reliably stores WAL received from a compute and serves the
+hardened part further downstream to pageserver(s).
 "#;
 
 #[derive(Parser)]

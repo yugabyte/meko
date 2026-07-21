@@ -68,8 +68,8 @@
 //! emits an `AppendResponse` per advance — so the ingest loop never blocks on
 //! the YB round trip. The blocking barrier — `flush_wal`
 //! (`yb_flush(YbFlush::NotifyAndWait)`), which records `submitted_max_lsn` and
-//! awaits the watermark — is kept only where consensus needs a synchronous
-//! point (elections / `handle_vote`). A crash between `write_wal()` returning
+//! awaits the watermark — is kept only where a synchronous durable point is
+//! needed (`handle_elected` / sync-safekeepers). A crash between `write_wal()` returning
 //! and the batch landing in YB is a no-op for the compute (no commit ack was
 //! sent).
 //!
@@ -83,7 +83,7 @@
 //! the consumer publishes [`DurableState::Failed`] onto the watermark
 //! and exits. The producer's next `tx.send()` then fails (rx dropped),
 //! `write_wal` returns the captured error, the walproposer reconnects,
-//! and the safekeeper handles the rest via the consensus state machine.
+//! and the safekeeper handles the rest on that reconnect handshake.
 //! Both durability paths surface the failure: blocking `flush_wal` waiters
 //! propagate it, and the WAL acceptor's durable-watch arm bails on `Failed`
 //! (or on the watch channel closing) so the connection terminates rather
@@ -431,7 +431,7 @@ pub enum DurableState {
 pub enum YbFlush {
     /// Wake the consumer, wait for the batch to be durable in `safekeeper.wals`,
     /// then advance the local watermark. The synchronous durable-commit
-    /// boundary used by elections / `handle_vote`.
+    /// boundary used by `handle_elected` / sync-safekeepers.
     NotifyAndWait,
     /// Wake the consumer, then advance the local watermark without waiting.
     /// Steady-state commit; durability is acked later off the ingest path.
@@ -928,8 +928,8 @@ impl Storage for YbWalStorage {
     fn flush_lsn(&self) -> Lsn {
         // Cap at YB-confirmed durability. `inner.flush_lsn()` can be ahead
         // when `truncate_wal(end_pos)` ran with `end_pos > durable_lsn`
-        // (election with `start_streaming_at` past the persisted tail);
-        // returning the uncapped value to walproposer or to a Raft vote
+        // (ProposerElected with `start_streaming_at` past the persisted tail);
+        // returning the uncapped value to the walproposer
         // is what creates the WAL gap forensic / 2026-05-29.
         let inner_lsn = self.inner.flush_lsn();
         let durable = Lsn(self.durable_lsn.load(Ordering::Acquire));
@@ -995,7 +995,8 @@ impl Storage for YbWalStorage {
         // `durable_lsn` would advertise WAL the row store can't return —
         // exactly the forensic gap (2026-05-29). The walproposer should
         // reissue ProposerElected with a corrected `start_streaming_at`
-        // after seeing our capped `flush_lsn()` on the next VoteResponse.
+        // after seeing our capped `flush_lsn()` in the greeting on the
+        // next reconnect.
         let durable = Lsn(self.durable_lsn.load(Ordering::Acquire));
         if end_pos > durable {
             anyhow::bail!(
@@ -1023,8 +1024,8 @@ impl Storage for YbWalStorage {
         // Drop any cached chunks past `end_pos`. Without this the in-memory
         // `WalCache` keeps the pre-truncation (now-torn) bytes for that
         // region, and `YbSegmentReader` would serve them to a reader even
-        // after the YB rows were deleted above — so when the next term
-        // rewrites WAL forward from `end_pos`, the interpreted-WAL reader
+        // after the YB rows were deleted above — so when the walproposer
+        // next rewrites WAL forward from `end_pos`, the interpreted-WAL reader
         // decodes a stale page and trips `critical_timeline!` (the
         // `invalid xlog page header` going_away flake). Done after the YB
         // delete so a concurrent reader re-populating on a cache miss reads
@@ -1054,7 +1055,7 @@ impl Storage for YbWalStorage {
         self.inner.flush_wal().await
     }
 
-    /// Durability sync point (elections / `handle_vote`): notify, wait, advance.
+    /// Durability sync point (`handle_elected` / sync-safekeepers): notify, wait, advance.
     /// The walproposer treats this as the durable-commit boundary, so it
     /// completes or errors before returning.
     async fn flush_wal(&mut self) -> Result<()> {
@@ -1245,7 +1246,7 @@ fn coalesce_runs(chunks: &[PendingChunk]) -> Vec<std::ops::Range<usize>> {
 /// After this, `max(chunk_offset + chunk_size)` for the timeline is
 /// exactly `end_pos` — the YB equivalent of truncating a local WAL
 /// segment file. Used to discard a torn tail on safekeeper restart and to
-/// honor a walproposer truncation on election. Both statements are
+/// honor a walproposer truncation on ProposerElected. Both statements are
 /// idempotent (keyed DELETE; absolute-`SET` UPDATE whose predicate stops
 /// matching once the chunk has been truncated).
 ///
@@ -2510,7 +2511,7 @@ mod tests {
     /// timeline shared_state WRITE lock. When the durability target can
     /// outrun what the consumer will ever publish (YB stalled by a
     /// splitting `safekeeper.wals` tablet, walproposer churn re-entering
-    /// vote/elected waits), an unbounded wait froze the lock forever:
+    /// the reconnect/elected handshake), an unbounded wait froze the lock forever:
     /// the manager blocked in `state_snapshot`, every WAL receiver died
     /// on residence-guard timeouts, `flush_lsn` froze, and all commits
     /// hung. The wait must instead time out — dropping the connection
@@ -2629,7 +2630,7 @@ mod tests {
     async fn truncate_wal_invalidates_cache_past_end_pos() {
         let table = scratch_table("wals_test_trunc_cache");
         // start == durable tail; segno 1, offset 0. truncate back to it is
-        // the "election truncates to the durable tail" case.
+        // the "ProposerElected truncates to the durable tail" case.
         let start = Lsn(SEG_SIZE);
         let (mut storage, _tmp) = make_storage_with_cache(&table, start).await;
 
@@ -2676,7 +2677,7 @@ mod tests {
     /// `Healthy(write_lsn)`, and `durable_lsn` is initialised from the
     /// same value. So `submitted_max_lsn == durable_lsn == write_lsn ==
     /// start_lsn` at t=0. We then ask to truncate to `start_lsn + 4 KiB`
-    /// — exactly the "election with start_streaming_at past the
+    /// — exactly the "ProposerElected with start_streaming_at past the
     /// persisted tail" pattern. With Fix 2 we bail; without it,
     /// `inner.truncate_wal(end_pos)` advances `flush_record_lsn` past
     /// `durable_lsn` and opens the gap.
