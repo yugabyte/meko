@@ -527,7 +527,6 @@ WalproposerShmemInit(void)
 		memset(walprop_shared, 0, WalproposerShmemSize());
 		SpinLockInit(&walprop_shared->mutex);
 		pg_atomic_init_u64(&walprop_shared->propStartLsn, 0);
-		pg_atomic_init_u64(&walprop_shared->mineLastElectedTerm, 0);
 		pg_atomic_init_u64(&walprop_shared->backpressureThrottlingTime, 0);
 		pg_atomic_init_u64(&walprop_shared->currentClusterSize, 0);
 		/* BEGIN_HADRON */
@@ -546,7 +545,6 @@ WalproposerShmemInit_SyncSafekeeper(void)
 	memset(walprop_shared, 0, WalproposerShmemSize());
 	SpinLockInit(&walprop_shared->mutex);
 	pg_atomic_init_u64(&walprop_shared->propStartLsn, 0);
-	pg_atomic_init_u64(&walprop_shared->mineLastElectedTerm, 0);
 	pg_atomic_init_u64(&walprop_shared->backpressureThrottlingTime, 0);
 	/* BEGIN_HADRON */
 	pg_atomic_init_u32(&walprop_shared->wal_rate_limiter.effective_max_wal_bytes_per_second, -1);

@@ -248,22 +248,15 @@ YbAmpWALReadRemote(YbAmpWALReader *state, char *buf, XLogRecPtr startptr, Size c
 				{
 					/* connection successfully established */
 					char		start_repl_query[128];
-					term_t		term = pg_atomic_read_u64(&GetWalpropShmemState()->mineLastElectedTerm);
 
 					/*
-					 * Set elected walproposer's term to pull only data from
-					 * its history. Note: for logical walsender it means we
-					 * might stream WAL not yet committed by safekeepers. It
-					 * would be cleaner to fix this.
-					 *
-					 * mineLastElectedTerm shouldn't be 0 at this point
-					 * because we checked above that donor exists and it
-					 * appears only after successfull election.
+					 * yb-amp: the safekeeper consensus term was removed, so the
+					 * donor read carries no term — the safekeeper serves WAL from
+					 * `startptr` on its single linear history.
 					 */
-					Assert(term > 0);
 					snprintf(start_repl_query, sizeof(start_repl_query),
-							 "START_REPLICATION PHYSICAL %X/%X (term='" UINT64_FORMAT "')",
-							 LSN_FORMAT_ARGS(startptr), term);
+							 "START_REPLICATION PHYSICAL %X/%X",
+							 LSN_FORMAT_ARGS(startptr));
 					nwr_log(LOG, "connection to %s to fetch WAL succeeded, running %s",
 							state->donor_name, start_repl_query);
 					if (!libpqwp_send_query(state->wp_conn, start_repl_query))

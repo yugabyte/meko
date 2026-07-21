@@ -110,9 +110,6 @@ typedef enum
 	SS_ACTIVE_FLUSH,
 } SafekeeperActiveState;
 
-/* Consensus logical timestamp. */
-typedef uint64 term_t;
-
 /* yb_amp storage node id */
 typedef uint64 NNodeId;
 
@@ -252,7 +249,6 @@ typedef struct WalproposerShmemState
 	XLogRecPtr	donor_lsn;
 
 	slock_t		mutex;
-	pg_atomic_uint64 mineLastElectedTerm;
 	pg_atomic_uint64 backpressureThrottlingTime;
 	pg_atomic_uint64 currentClusterSize;
 
