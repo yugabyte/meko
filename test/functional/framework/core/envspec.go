@@ -55,4 +55,9 @@ type EnvSpec struct {
 	Sharing Sharing
 	Shape   Shape
 	Weight  int // lease units; 0 → shape default
+	// PreferredYBDeploy is a test's HINT for which YugabyteDB deployment it would
+	// like (e.g. "yb_k8s"). It is opaque to the engine — carried, never
+	// interpreted here — and read only by the deploy selector (apps/ybdeploy).
+	// The run-level env.yb_deploy knob OVERRIDES it: the knob always wins.
+	PreferredYBDeploy string
 }

@@ -56,8 +56,13 @@ import (
 
 // Defaults.
 const (
-	DefaultPullSecretName      = "pull-secret"
-	DefaultYBImage             = "yugabytedb/yugabyte:latest"
+	DefaultPullSecretName = "pull-secret"
+	DefaultYBImage        = "yugabytedb/yugabyte:latest"
+	// DefaultYBImageRegistry is the registry+repo the built-in yugabyted image
+	// is derived from (as "<registry>:<version>") when env.ampstack.yb_image is
+	// unset. Preview trains (odd 2.N) live at quay.io/yugabyte/yugabyte-itest —
+	// point this there (plus quay creds) to run a preview build.
+	DefaultYBImageRegistry     = "yugabytedb/yugabyte"
 	DefaultYBStorage           = "20Gi"
 	DefaultControllerService   = "amp-controller"
 	DefaultControllerName      = "amp-controller"
@@ -83,9 +88,13 @@ const (
 	DefaultControllerImage = "amp/controller:tailnet-mig0010"
 	DefaultEndpointImage   = "amp/endpoint:phase1-20260703-154251"
 	// Default pins for the flat-named registries (quay/ghcr). Bumped as new
-	// builds are published; custom-4f1ca53 is the first verified quay build.
-	DefaultQuayControllerImage = "amp-controller:custom-4f1ca53"
-	DefaultQuayEndpointImage   = "amp-endpoint:custom-4f1ca53"
+	// builds are published; custom-7f195e43e51f is the current build whose
+	// controller folds the storage-controller in-process (#280) and so matches
+	// the shipped chart. Earlier tags (custom-4f1ca53, custom-0e2131d) predate
+	// #280 and crash-loop on "Insecure config" (separate storage_controller
+	// subprocess), so the controller never reaches Available.
+	DefaultQuayControllerImage = "amp-controller:custom-7f195e43e51f"
+	DefaultQuayEndpointImage   = "amp-endpoint:custom-7f195e43e51f"
 	DefaultEndpointServiceType = "ClusterIP"
 	DefaultControllerExpose    = "none"
 	DefaultBackingUser         = "yugabyte"
@@ -313,7 +322,7 @@ func FromConfig(get Getter) Config {
 		MCPImage:        image("mcp", "mcp_image", ""),
 		UIImage:         image("ui", "ui_image", ""),
 		ControllerChart: get.GetString("env.ampstack.controller_chart", ""),
-		YBImage:         get.GetString("env.ampstack.yb_image", DefaultYBImage),
+		YBImage:         resolveYBImage(get),
 		YBStorage:       get.GetString("env.ampstack.yb_storage", DefaultYBStorage),
 		YBMasterGflags: joinGflags(get.GetString("env.ampstack.yb_gflags", ""),
 			get.GetString("env.ampstack.yb_master_gflags", "")),
@@ -354,6 +363,26 @@ func FromConfig(get Getter) Config {
 		YBReadyTimeout:            get.GetDuration("env.ampstack.yb_ready_timeout", 15*time.Minute),
 		ControllerReadyTimeout:    get.GetDuration("env.ampstack.controller_ready_timeout", 5*time.Minute),
 	}
+}
+
+// resolveYBImage picks the built-in yugabyted image. A fully-qualified
+// env.ampstack.yb_image always wins. Otherwise it is derived version-aware as
+// "<env.ampstack.yb_image_registry>:<version>", where version is versions.yb
+// (the run-level override) or versions.yugabytedb. When neither an explicit
+// image nor a registry+version is available it falls back to DefaultYBImage.
+func resolveYBImage(get Getter) string {
+	if img := get.GetString("env.ampstack.yb_image", ""); img != "" {
+		return img
+	}
+	registry := get.GetString("env.ampstack.yb_image_registry", DefaultYBImageRegistry)
+	version := get.GetString("versions.yb", "")
+	if version == "" {
+		version = get.GetString("versions.yugabytedb", "")
+	}
+	if registry != "" && version != "" {
+		return registry + ":" + version
+	}
+	return DefaultYBImage
 }
 
 // Getter is the minimal typed-config surface FromConfig needs; *core.Config
@@ -574,18 +603,22 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 	}
 
 	// 2. ECR image-pull secret.
-	if err := a.ensurePullSecret(ctx); err != nil {
+	pullSecretApplied, err := a.ensurePullSecret(ctx)
+	if err != nil {
 		return StackInfo{}, err
 	}
 
 	// 3+4. YB backing store: either deploy a built-in yugabyted and create
-	// yb_storage in-cluster, or ensure yb_storage on the external cluster.
+	// yb_storage in-cluster, or ensure yb_storage on the external cluster. The
+	// StatefulSet references the pull secret when one was applied so a private
+	// YB image (e.g. a quay.io/yugabyte/yugabyte-itest preview build) pulls; a
+	// pull secret on a public image is harmless.
 	if a.externalBacking() {
 		if err := a.ensureExternalStorageDB(ctx); err != nil {
 			return StackInfo{}, err
 		}
 	} else {
-		if err := a.kube.Apply(ctx, yugabytedManifest(a.cfg.Namespace, a.cfg.YBImage, a.cfg.YBStorage, a.cfg.StorageClass, a.cfg.YBMasterGflags, a.cfg.YBTserverGflags)); err != nil {
+		if err := a.kube.Apply(ctx, yugabytedManifest(a.cfg.Namespace, a.cfg.YBImage, a.cfg.YBStorage, a.cfg.StorageClass, a.cfg.YBMasterGflags, a.cfg.YBTserverGflags, pullSecretNameIf(pullSecretApplied, a.cfg.PullSecretName))); err != nil {
 			return StackInfo{}, fmt.Errorf("apply yugabyted: %w", err)
 		}
 		if err := a.kube.WaitFor(ctx, "statefulset/"+yugabytedStatefulSet, "jsonpath={.status.readyReplicas}=1", a.cfg.YBReadyTimeout); err != nil {
@@ -610,7 +643,7 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 
 	// 7. wait controller Available.
 	if err := a.kube.WaitFor(ctx, "deployment/"+a.cfg.ControllerName, "condition=Available", a.cfg.ControllerReadyTimeout); err != nil {
-		return StackInfo{}, fmt.Errorf("controller deployment never became available: %w", err)
+		return StackInfo{}, fmt.Errorf("controller deployment never became available: %w%s", err, a.controllerWaitDiagnostics(ctx))
 	}
 
 	// 8. reach the controller (tailnet: resolve its direct address; portforward:
@@ -644,6 +677,34 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 		PortForwardCmd:    pfCmd,
 		Backing:           a.backingDescribe(),
 	}, nil
+}
+
+// controllerWaitDiagnostics gathers, best-effort, WHY the controller Deployment
+// never went Available — its status conditions (ProgressDeadlineExceeded,
+// MinimumReplicasUnavailable, …) and each controller pod's phase + container
+// waiting/terminated reason (CrashLoopBackOff, ImagePullBackOff, …). This is the
+// only capture: the pods are torn down right after the failure. It reads via
+// jsonpath (NOT `kubectl describe`/`logs`), so it can NEVER echo the backing
+// DSN password the controller carries as an env value (AGENTS.md §7). Runs on a
+// short independent deadline so a cancelled/expired parent ctx still yields
+// evidence; returns "" (never an error) when nothing could be read.
+func (a *App) controllerWaitDiagnostics(ctx context.Context) string {
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	var b strings.Builder
+	if conds, err := a.kube.Get(dctx, "deployment", a.cfg.ControllerName,
+		`{range .status.conditions[*]}{.type}={.status} ({.reason}) {.message}{"\n"}{end}`); err == nil {
+		if conds = strings.TrimSpace(conds); conds != "" {
+			b.WriteString("\ndeployment conditions:\n" + conds)
+		}
+	}
+	if pods, err := a.kube.GetSelector(dctx, "pods", "app="+a.cfg.ControllerName,
+		`{range .items[*]}{.metadata.name} phase={.status.phase}{range .status.containerStatuses[*]} {.name}: ready={.ready} restarts={.restartCount} state={.state}{end}{"\n"}{end}`); err == nil {
+		if pods = strings.TrimSpace(pods); pods != "" {
+			b.WriteString("\ncontroller pods:\n" + pods)
+		}
+	}
+	return b.String()
 }
 
 // reachController establishes how the controller will be reached for the rest
@@ -723,8 +784,10 @@ func (a *App) portForwardCmd() string {
 // ensurePullSecret applies the docker-registry pull secret, sourcing the
 // dockerconfigjson from PullSecretDockerConfigB64 when given, else minting a
 // fresh ECR login token (deploy/ecr-creds.sh). No registry configured and no
-// pre-encoded value → skip (no secret needed, e.g. public images).
-func (a *App) ensurePullSecret(ctx context.Context) error {
+// pre-encoded value → skip (no secret needed, e.g. public images). Returns
+// whether a secret was actually applied, so the caller can wire it into the
+// built-in yugabyted StatefulSet's imagePullSecrets when the YB image is private.
+func (a *App) ensurePullSecret(ctx context.Context) (bool, error) {
 	b64 := a.cfg.PullSecretDockerConfigB64
 	if b64 == "" {
 		auths := map[string]registryAuth{}
@@ -739,7 +802,7 @@ func (a *App) ensurePullSecret(ctx context.Context) error {
 			if token == "" {
 				t, err := a.ghcrToken(ctx)
 				if err != nil {
-					return fmt.Errorf("resolve ghcr token: set env.ampstack.ghcr_token or log in with `gh auth login`: %w", err)
+					return false, fmt.Errorf("resolve ghcr token: set env.ampstack.ghcr_token or log in with `gh auth login`: %w", err)
 				}
 				token = t
 			}
@@ -754,19 +817,19 @@ func (a *App) ensurePullSecret(ctx context.Context) error {
 		if a.cfg.ECRRegistry != "" && a.needsECR() {
 			token, err := a.ecrToken(ctx, a.cfg.ECRRegistry, a.cfg.Region)
 			if err != nil {
-				return fmt.Errorf("resolve ECR token: %w", err)
+				return false, fmt.Errorf("resolve ECR token: %w", err)
 			}
 			auths[a.cfg.ECRRegistry] = registryAuth{User: "AWS", Password: token}
 		}
 		if len(auths) == 0 {
-			return nil
+			return false, nil
 		}
 		b64 = dockerConfigJSONB64(auths)
 	}
 	if err := a.kube.Apply(ctx, pullSecretManifest(a.cfg.Namespace, a.cfg.PullSecretName, b64)); err != nil {
-		return fmt.Errorf("apply pull secret: %w", err)
+		return false, fmt.Errorf("apply pull secret: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // RefreshPullSecret re-mints the ECR docker-registry pull secret and re-applies
@@ -788,7 +851,7 @@ func (a *App) RefreshPullSecret(ctx context.Context, roll bool) error {
 		return fmt.Errorf("refusing to touch namespace %s: not ampqa-managed (%s=%q, want %q)",
 			a.cfg.Namespace, ManagedByLabel, label, ManagedByValue)
 	}
-	if err := a.ensurePullSecret(ctx); err != nil {
+	if _, err := a.ensurePullSecret(ctx); err != nil {
 		return err
 	}
 	if roll {
@@ -1310,6 +1373,16 @@ func withRegistry(ref, registry string) string {
 // labelPath escapes dots in a label key for a kubectl jsonpath segment.
 func labelPath(key string) string {
 	return strings.ReplaceAll(key, ".", `\.`)
+}
+
+// pullSecretNameIf returns name when applied is true, else "" — so the built-in
+// yugabyted StatefulSet only carries imagePullSecrets when a secret was actually
+// applied to the namespace.
+func pullSecretNameIf(applied bool, name string) string {
+	if applied {
+		return name
+	}
+	return ""
 }
 
 func boolStr(b bool) string {

@@ -45,6 +45,28 @@ func TestConfigMultiFileMergePrecedence(t *testing.T) {
 	}
 }
 
+func TestConfigHas(t *testing.T) {
+	dir := t.TempDir()
+	f := writeFile(t, dir, "base.yaml", "present: value\nempty: \"\"\nnested:\n  key: 1\n")
+	cfg, err := core.LoadConfig([]string{f}, nil, nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	cases := map[string]bool{
+		"present":     true,
+		"empty":       true, // present-but-empty counts as present
+		"nested.key":  true,
+		"nested":      true,
+		"absent":      false,
+		"nested.gone": false,
+	}
+	for key, want := range cases {
+		if got := cfg.Has(key); got != want {
+			t.Errorf("Has(%q) = %v, want %v", key, got, want)
+		}
+	}
+}
+
 func TestConfigJSONMergedAfterYAML(t *testing.T) {
 	dir := t.TempDir()
 	y := writeFile(t, dir, "base.yaml", "a: 1\nb: 2\n")

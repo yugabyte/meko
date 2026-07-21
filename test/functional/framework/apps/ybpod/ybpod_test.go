@@ -39,7 +39,10 @@ func TestExtractedDirNameDropsBuildAndArch(t *testing.T) {
 }
 
 func TestTarballSpecIsCoordinatorFetchedS3(t *testing.T) {
-	spec := tarballSpec("2025.2.1.0-b141", "x86_64")
+	spec, err := tarballSpec("2025.2.1.0-b141", "x86_64", "", "")
+	if err != nil {
+		t.Fatalf("tarballSpec: %v", err)
+	}
 	if spec.Type != artifact.TypeS3 {
 		t.Errorf("spec type = %q, want s3", spec.Type)
 	}
@@ -54,6 +57,37 @@ func TestTarballSpecIsCoordinatorFetchedS3(t *testing.T) {
 	}
 	if !strings.HasPrefix(spec.URL, "s3://releases.yugabyte.com/") {
 		t.Errorf("URL = %q, want an S3 release-bucket URL", spec.URL)
+	}
+	if spec.GlobPath != "yugabyte-2025.2.1.0-b141-centos-x86_64.tar.gz" {
+		t.Errorf("GlobPath = %q, want the S3 tarball filename", spec.GlobPath)
+	}
+}
+
+// TestTarballSpecURLOverride: a configured tarball_url template substitutes the
+// {yugabytedb}/{yugabytedb_base}/{osarch} placeholders, an http source flips the
+// type to http, the glob follows the URL basename, and the secret name is carried.
+func TestTarballSpecURLOverride(t *testing.T) {
+	tmpl := "https://mirror.example/{yugabytedb_base}/yugabyte-{yugabytedb}-{osarch}.tar.gz"
+	spec, err := tarballSpec("2025.2.1.0-b141", "aarch64", tmpl, "tarball_token")
+	if err != nil {
+		t.Fatalf("tarballSpec: %v", err)
+	}
+	want := "https://mirror.example/2025.2.1.0/yugabyte-2025.2.1.0-b141-almalinux8-aarch64.tar.gz"
+	if spec.URL != want {
+		t.Errorf("URL = %q, want %q", spec.URL, want)
+	}
+	if spec.Type != artifact.TypeHTTP {
+		t.Errorf("Type = %q, want http for an https source", spec.Type)
+	}
+	if spec.GlobPath != "yugabyte-2025.2.1.0-b141-almalinux8-aarch64.tar.gz" {
+		t.Errorf("GlobPath = %q, want the URL basename", spec.GlobPath)
+	}
+	if spec.Secret != "tarball_token" {
+		t.Errorf("Secret = %q, want tarball_token", spec.Secret)
+	}
+	// An unknown placeholder is a hard error (no silent leftover in the URL).
+	if _, err := tarballSpec("2025.2.1.0-b141", "x86_64", "https://x/{bogus}.tgz", ""); err == nil {
+		t.Error("tarballSpec with an unknown placeholder = nil error, want an error")
 	}
 }
 

@@ -27,6 +27,8 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybdeploy"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
@@ -166,6 +168,13 @@ type Provider struct {
 	ampCfg ampstack.Config
 	newApp func(cfg ampstack.Config) *ampstack.App
 	app    *ampstack.App
+
+	// Run-scoped deploy selection (deploy mode). ybDeployCfg is the raw config the
+	// selector reads (env.yb_deploy, knob only — a shared control plane cannot vary
+	// its backing per test); ybDeployTeardown reaps what Prepare provisioned, run
+	// in Close AFTER the control plane (LIFO).
+	ybDeployCfg      *core.Config
+	ybDeployTeardown func(context.Context) error
 
 	ctrl controllerConn // one long-lived controller forward shared by all tests
 
@@ -337,6 +346,14 @@ func New(cfg Config) *Provider {
 	return p
 }
 
+// WithYBDeployConfig injects the raw framework config the run-scoped deploy
+// selector reads (env.yb_deploy plus the yb_k8s/yba sub-app knobs), used in deploy
+// mode only. Without it the control plane uses ampstack's built-in yugabyted.
+func (p *Provider) WithYBDeployConfig(c *core.Config) *Provider {
+	p.ybDeployCfg = c
+	return p
+}
+
 // Prepare eagerly deploys the run-scoped control plane (deploy mode) so it is up
 // BEFORE the scheduler starts provisioning per-test projects — otherwise the
 // first test's short provision deadline would have to absorb the whole
@@ -346,8 +363,39 @@ func (p *Provider) Prepare(ctx context.Context) error {
 	if !p.deploy {
 		return nil
 	}
+	if err := p.prepareYBDeploy(); err != nil {
+		return err
+	}
 	_, _, err := p.ctrl.get(ctx)
 	return err
+}
+
+// prepareYBDeploy provisions the run-scoped external deployment (deploy mode) before
+// the control plane deploys, pointing ampCfg at it. Resolution is KNOB-ONLY: a
+// shared control plane serves every test off one YugabyteDB, so a per-test
+// preference cannot apply — only env.yb_deploy does. Like the control-plane
+// bring-up (ensureAppLocked), it roots the work in context.Background() bounded
+// by DeployTimeout, NOT any per-test provision ctx, since the backing must
+// outlive every Provision (AGENTS.md §5); ybDeployTeardown releases it in Close.
+func (p *Provider) prepareYBDeploy() error {
+	if p.ybDeployCfg == nil {
+		return nil
+	}
+	mode := ybdeploy.Resolve(p.ybDeployCfg, core.EnvSpec{})
+	if mode == ybdeploy.ModeBuiltin {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), p.cfg.DeployTimeout)
+	defer cancel()
+	store, td, err := ybdeploy.Provision(ctx, p.ybDeployCfg, mode, p.ampCfg.Namespace, p.logf)
+	if err != nil {
+		return fmt.Errorf("sharedk8s: provision %s deployment: %w", mode, err)
+	}
+	p.ybDeployTeardown = td
+	if store != nil {
+		p.ampCfg.Backing = ybbacking.ExternalBacking(store)
+	}
+	return nil
 }
 
 // StandingEnv reports the run-scoped control plane as a standing environment to
@@ -389,13 +437,30 @@ func (p *Provider) StandingEnv() (*core.StandingEnv, bool) {
 // namespace). In attach mode it only frees the shared controller port-forward,
 // leaving the standing control plane intact.
 func (p *Provider) Close() error {
-	if p.deploy && p.app != nil {
-		bg := context.Background()
-		_ = p.app.Close(bg)
-		return p.app.Teardown(bg)
+	if !p.deploy {
+		p.ctrl.close()
+		return nil
 	}
-	p.ctrl.close()
-	return nil
+	bg := context.Background()
+	var firstErr error
+	// LIFO: the control plane tears down first, then its backing. The backing is
+	// reaped even if the control plane never came up (Prepare provisioned it, then
+	// the app deploy failed) — p.app may be nil while ybDeployTeardown is set.
+	if p.app != nil {
+		_ = p.app.Close(bg)
+		if err := p.app.Teardown(bg); err != nil {
+			firstErr = err
+		}
+	}
+	if p.ybDeployTeardown != nil {
+		if err := p.ybDeployTeardown(bg); err != nil {
+			p.log("sharedk8s: teardown backing failed: %v", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
 }
 
 func defaultNewClient(url string) *controller.Client {
@@ -839,6 +904,17 @@ func (p *Provider) resolvePG(ctx context.Context, ep controller.Endpoint) (pg.Co
 	if p.kube == nil {
 		ci.Host, ci.Port = host, port
 		return ci, nil, nil
+	}
+	// Assert the compute actually came up before port-forwarding to it. The
+	// controller's CreateEndpoint returns once the endpoint RECORD exists, but
+	// its Deployment's pod may not be Ready yet — and `kubectl port-forward
+	// svc/...` exits 1 the instant the Service has no ready backing pod. Waiting
+	// on the Deployment turns a transient start-up race into a bounded wait, and
+	// a genuinely never-Ready compute into a clear failure instead of an opaque
+	// "port-forward not ready". Same assertion the restart path already makes.
+	deploy := "deployment/yb-ep-" + ep.ID
+	if err := p.kube.WaitFor(ctx, deploy, "condition=Available", computeRestartReadyTimeout); err != nil {
+		return pg.ConnInfo{}, nil, fmt.Errorf("endpoint %s compute never became ready (%s): %w", ep.ID, deploy, err)
 	}
 	local := p.nextLocalPort()
 	pf, err := p.kube.PortForward(ctx, "svc/yb-ep-"+ep.ID, local, port)

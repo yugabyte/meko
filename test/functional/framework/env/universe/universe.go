@@ -766,12 +766,18 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	if err != nil {
 		return failure(fmt.Errorf("provision_yba: %w", err))
 	}
+	var inClusterAddrs []string
 	if k8s {
 		// YBA reports a k8s universe node's private_ip as an in-cluster address
 		// (pod DNS / ClusterIP) the operator can't reach over the tailnet; only
 		// the framework's OPERATOR-side layer-1 path is affected (amp's own deploy
 		// reaches the same universe via in-cluster DNS and is fine). Re-target the
-		// backing endpoint at the tserver POD IPs, which ARE tailnet-routable.
+		// backing endpoint at the tserver POD IPs, which ARE tailnet-routable, but
+		// KEEP the in-cluster private_ip addrs: an amp control plane co-located in
+		// this cluster dials the universe over those, not the pod IPs (the split
+		// ybbacking.Colocated draws — controller via in-cluster DNS, coordinator
+		// create via tailnet pod IPs).
+		inClusterAddrs = addrs
 		podAddrs, perr := p.resolveK8sYSQLAddrs(ctx, kubeContext, kubeconfig, universeName, ci.Port)
 		if perr != nil {
 			return failure(fmt.Errorf("provision_yba: resolve k8s universe tserver pod IPs: %w", perr))
@@ -787,6 +793,7 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 		mode:            ModeProvisionYBA,
 		pg:              ci,
 		nodeAddrs:       addrs,
+		inClusterAddrs:  inClusterAddrs,
 		versions:        core.DetectedVersions{YB: version, Product: p.cfg.Product},
 		provStack:       stack,
 		provClient:      cl,
@@ -1100,8 +1107,14 @@ type Env struct {
 	mode      string
 	pg        pg.ConnInfo
 	nodeAddrs []string
-	versions  core.DetectedVersions
-	handles   core.EnvHandles
+	// inClusterAddrs is set for a kubernetes provision_yba universe only: the
+	// tserver in-cluster addresses (YBA's private_ip — pod DNS / ClusterIP) that
+	// an amp control plane co-located in this cluster dials, distinct from the
+	// tailnet pod IPs in pg/nodeAddrs the operator uses. Empty for VM universes,
+	// whose addresses are reachable both ways.
+	inClusterAddrs []string
+	versions       core.DetectedVersions
+	handles        core.EnvHandles
 
 	// attach_yba
 	yba        *yba.Client
@@ -1180,6 +1193,14 @@ func (e *Env) PGEndpoint() pg.ConnInfo { return e.pg }
 
 // NodeAddrs lists every tserver host:port the target exposes.
 func (e *Env) NodeAddrs() []string { return e.nodeAddrs }
+
+// InClusterAddrs lists the tserver in-cluster host:port addresses for a
+// kubernetes provision_yba universe — the co-located path an amp control plane
+// running in the SAME cluster dials (YBA's private_ip / pod DNS), as opposed to
+// the tailnet pod IPs NodeAddrs exposes for the operator. It is nil for VM
+// universes (whose addresses are reachable both ways) and every attach mode, so
+// a caller reads a non-empty slice as "this backing needs the co-located split".
+func (e *Env) InClusterAddrs() []string { return e.inClusterAddrs }
 
 // ControllerURL is "": the target is a YB cluster, not an amp control plane.
 func (e *Env) ControllerURL() string           { return "" }

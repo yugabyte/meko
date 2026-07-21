@@ -27,11 +27,11 @@ const (
 
 // yugabytedManifest is a single-node yugabyted StatefulSet + headless Service,
 // mirroring deploy/up.sh step 3 (parameterized by namespace, image, storage
-// size, and — when non-empty — a storage class for the data PVC and extra
-// master/tserver gflags as CSV flag=value lists). The `$(hostname -f)`
-// expressions are evaluated by the container's bash at runtime and must stay
-// literal in the YAML.
-func yugabytedManifest(namespace, image, storage, storageClass, masterGflags, tserverGflags string) string {
+// size, and — when non-empty — a storage class for the data PVC, extra
+// master/tserver gflags as CSV flag=value lists, and an image-pull secret name
+// for a private YB image). The `$(hostname -f)` expressions are evaluated by
+// the container's bash at runtime and must stay literal in the YAML.
+func yugabytedManifest(namespace, image, storage, storageClass, masterGflags, tserverGflags, pullSecretName string) string {
 	sc := ""
 	if storageClass != "" {
 		sc = fmt.Sprintf("\n        storageClassName: %s", storageClass)
@@ -43,6 +43,10 @@ func yugabytedManifest(namespace, image, storage, storageClass, masterGflags, ts
 	mflags := ""
 	if masterGflags != "" {
 		mflags = fmt.Sprintf(" --master_flags=%q", masterGflags)
+	}
+	ips := ""
+	if pullSecretName != "" {
+		ips = fmt.Sprintf("\n      imagePullSecrets:\n        - name: %s", pullSecretName)
 	}
 	return fmt.Sprintf(`apiVersion: v1
 kind: Service
@@ -77,7 +81,7 @@ spec:
     spec:
       terminationGracePeriodSeconds: 60
       securityContext:
-        fsGroup: 1000
+        fsGroup: 1000%[7]s
       containers:
         - name: yugabyted
           image: %[2]s
@@ -111,7 +115,7 @@ spec:
         resources:
           requests:
             storage: %[3]s
-`, namespace, image, storage, sc, tflags, mflags)
+`, namespace, image, storage, sc, tflags, mflags, ips)
 }
 
 // joinGflags merges CSV flag=value lists, dropping empty parts.

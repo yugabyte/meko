@@ -29,6 +29,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/sampleapp"
 	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybastack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybdeploy"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybpod"
 	"github.com/yugabyte/amp/test/functional/framework/artifact"
@@ -107,6 +108,14 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		t.Errorf("ResolveCollectTimeout = %s, want %s", got, core.DefaultCollectTimeout)
 	}
 
+	// --- env.yb_deploy (run-level YugabyteDB deployment selector) ---
+	if got := cfg.GetString("env.yb_deploy", "__MISSING__"); got != "" {
+		t.Errorf("env.yb_deploy = %q, want present and empty (built-in default until overridden)", got)
+	}
+	if got := ybdeploy.Resolve(cfg, core.EnvSpec{}); got != ybdeploy.ModeBuiltin {
+		t.Errorf("ybdeploy.Resolve(defaults, no-pref) = %q, want %q", got, ybdeploy.ModeBuiltin)
+	}
+
 	// --- env.docker ---
 	dcfg := docker.FromConfig(cfg)
 	if dcfg.YBImage != docker.DefaultYBImage {
@@ -154,8 +163,16 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if acfg.EndpointImage != ampstack.DefaultQuayEndpointImage {
 		t.Errorf("ampstack EndpointImage = %q, want %q", acfg.EndpointImage, ampstack.DefaultQuayEndpointImage)
 	}
-	if acfg.YBImage != ampstack.DefaultYBImage {
-		t.Errorf("ampstack YBImage = %q, want %q", acfg.YBImage, ampstack.DefaultYBImage)
+	// yb_image is documented-empty → derived version-aware as
+	// "<yb_image_registry>:<versions.yugabytedb>" (a pinned build, not :latest).
+	if want := ampstack.DefaultYBImageRegistry + ":" + cfg.GetString("versions.yugabytedb", ""); acfg.YBImage != want {
+		t.Errorf("ampstack YBImage = %q, want derived %q", acfg.YBImage, want)
+	}
+	if got := cfg.GetString("env.ampstack.yb_image", "__MISSING__"); got != "" {
+		t.Errorf("env.ampstack.yb_image = %q, want present and empty", got)
+	}
+	if got := cfg.GetString("env.ampstack.yb_image_registry", "__MISSING__"); got != ampstack.DefaultYBImageRegistry {
+		t.Errorf("env.ampstack.yb_image_registry = %q, want %q", got, ampstack.DefaultYBImageRegistry)
 	}
 	if acfg.YBStorage != ampstack.DefaultYBStorage {
 		t.Errorf("ampstack YBStorage = %q, want %q", acfg.YBStorage, ampstack.DefaultYBStorage)
@@ -755,7 +772,7 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	for _, key := range []string{
 		"apps.ybpod.kubecontext", "apps.ybpod.kubeconfig", "apps.ybpod.version",
-		"apps.ybpod.base_image_pull_secret",
+		"apps.ybpod.base_image_pull_secret", "apps.ybpod.tarball_url", "apps.ybpod.tarball_secret",
 	} {
 		if got := cfg.GetString(key, "__MISSING__"); got != "" {
 			t.Errorf("%s = %q, want present and empty", key, got)

@@ -1015,3 +1015,56 @@ func assertOrder(t *testing.T, got []call, want ...string) {
 		t.Errorf("commands not in expected order; matched %d/%d\ngot:  %v\nwant: %v", idx, len(want), argvs, want)
 	}
 }
+
+// mapGetter is a minimal Getter backed by a string map, for resolveYBImage's
+// precedence table (only string keys matter here).
+type mapGetter map[string]string
+
+func (g mapGetter) GetString(key, def string) string {
+	if v, ok := g[key]; ok {
+		return v
+	}
+	return def
+}
+func (g mapGetter) GetInt(_ string, def int) int                          { return def }
+func (g mapGetter) GetBool(_ string, def bool) bool                       { return def }
+func (g mapGetter) GetDuration(_ string, def time.Duration) time.Duration { return def }
+
+// TestResolveYBImagePrecedence: a fully-qualified yb_image wins; else the
+// registry+version derivation ({registry}:{versions.yb||versions.yugabytedb});
+// else the DefaultYBImage fallback when neither an image nor a version exists.
+func TestResolveYBImagePrecedence(t *testing.T) {
+	cases := []struct {
+		name string
+		m    mapGetter
+		want string
+	}{
+		{
+			"explicit yb_image wins over registry+version",
+			mapGetter{"env.ampstack.yb_image": "quay.io/x/yb:custom", "env.ampstack.yb_image_registry": "yugabytedb/yugabyte", "versions.yugabytedb": "2025.2.1.0-b141"},
+			"quay.io/x/yb:custom",
+		},
+		{
+			"derive from default registry + versions.yugabytedb",
+			mapGetter{"env.ampstack.yb_image_registry": "yugabytedb/yugabyte", "versions.yugabytedb": "2025.2.1.0-b141"},
+			"yugabytedb/yugabyte:2025.2.1.0-b141",
+		},
+		{
+			"versions.yb override beats versions.yugabytedb (preview registry)",
+			mapGetter{"env.ampstack.yb_image_registry": "quay.io/yugabyte/yugabyte-itest", "versions.yb": "2.25.1.0-b99", "versions.yugabytedb": "2025.2.1.0-b141"},
+			"quay.io/yugabyte/yugabyte-itest:2.25.1.0-b99",
+		},
+		{
+			"no image and no version → DefaultYBImage",
+			mapGetter{"env.ampstack.yb_image_registry": "yugabytedb/yugabyte"},
+			DefaultYBImage,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveYBImage(tc.m); got != tc.want {
+				t.Errorf("resolveYBImage = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

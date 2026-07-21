@@ -523,6 +523,11 @@ func TestModeDispatchSelectsGCPProvider(t *testing.T) {
 	if e.mode != ModeProvisionYBA || !e.owned {
 		t.Errorf("mode/owned = %q/%v", e.mode, e.owned)
 	}
+	// A VM universe exposes NO in-cluster addrs: its node IPs are reachable both
+	// ways, so the backing stays a plain Static (no co-located split).
+	if len(e.InClusterAddrs()) != 0 {
+		t.Errorf("VM InClusterAddrs = %v, want empty", e.InClusterAddrs())
+	}
 	if pr.gcpEnsures != 1 {
 		t.Errorf("gcp provider ensures = %d, want 1", pr.gcpEnsures)
 	}
@@ -692,6 +697,13 @@ func TestProvisionK8sBackingUsesPodIPs(t *testing.T) {
 	want := []string{"100.64.0.1:5433", "100.64.0.2:5433"}
 	if strings.Join(e.nodeAddrs, ",") != strings.Join(want, ",") {
 		t.Errorf("k8s nodeAddrs = %v, want the pod IPs %v", e.nodeAddrs, want)
+	}
+	// The in-cluster private_ip addrs are preserved for a co-located amp control
+	// plane (which dials the universe over in-cluster DNS, not the tailnet pod
+	// IPs) — the split ybbacking.Colocated draws.
+	wantInCluster := []string{"10.2.0.1:5433", "10.2.0.2:5433"}
+	if strings.Join(e.InClusterAddrs(), ",") != strings.Join(wantInCluster, ",") {
+		t.Errorf("k8s InClusterAddrs = %v, want the private_ip addrs %v", e.InClusterAddrs(), wantInCluster)
 	}
 }
 

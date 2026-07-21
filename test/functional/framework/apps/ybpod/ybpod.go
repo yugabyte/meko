@@ -123,6 +123,15 @@ type Config struct {
 	Version string
 	Arch    string
 
+	// TarballURL is the release-tarball source, a template over the
+	// {yugabytedb}/{yugabytedb_base}/{osarch} placeholders (see tarballSpec).
+	// "" (the default) → the built-in S3 release-bucket form. TarballSecret names
+	// a declared config secret (secrets: section) authenticating the fetch — only
+	// needed for a private/authenticated http source; "" → the fetch is anonymous
+	// (the default S3 form is ambient-authed on the coordinator).
+	TarballURL    string
+	TarballSecret string
+
 	InstallDir string
 	BaseDir    string
 
@@ -157,6 +166,8 @@ func FromConfig(get Getter) Config {
 		BaseImagePullSecret: get.GetString("apps.ybpod.base_image_pull_secret", ""),
 		Version:             version,
 		Arch:                get.GetString("apps.ybpod.arch", DefaultArch),
+		TarballURL:          get.GetString("apps.ybpod.tarball_url", ""),
+		TarballSecret:       get.GetString("apps.ybpod.tarball_secret", ""),
 		InstallDir:          get.GetString("apps.ybpod.install_dir", DefaultInstallDir),
 		BaseDir:             get.GetString("apps.ybpod.base_dir", DefaultBaseDir),
 		ServiceName:         get.GetString("apps.ybpod.service_name", DefaultServiceName),
@@ -236,8 +247,9 @@ type Deployer struct {
 	logf    func(format string, args ...any)
 
 	// Injected in tests / by composition; nil → apps/yugabyted's real defaults.
-	ybDeployer artifactDeployer
-	waitPG     func(ctx context.Context, ci pg.ConnInfo, timeout time.Duration) error
+	ybDeployer    artifactDeployer
+	waitPG        func(ctx context.Context, ci pg.ConnInfo, timeout time.Duration) error
+	resolveSecret SecretResolver
 
 	// Live handles after Deploy, for Collect (best-effort log pull).
 	pod *clientpod.K8s
@@ -293,6 +305,16 @@ func (d *Deployer) WithWaitPG(f func(context.Context, pg.ConnInfo, time.Duration
 	return d
 }
 
+// SecretResolver maps a secret NAME to its resolved value (matches
+// core.Secrets.Value; a func keeps this package free of a core import). Needed
+// only when apps.ybpod.tarball_secret names an authenticated-fetch credential.
+type SecretResolver func(name string) (string, error)
+
+// WithSecretResolver wires the resolver used to look up apps.ybpod.tarball_secret
+// (production callers pass core.Secrets.Value). Unset → a configured
+// tarball_secret is a Deploy error.
+func (d *Deployer) WithSecretResolver(f SecretResolver) *Deployer { d.resolveSecret = f; return d }
+
 // WithLogf overrides the logger (nil silences).
 func (d *Deployer) WithLogf(f func(format string, args ...any)) *Deployer { d.logf = f; return d }
 
@@ -345,7 +367,11 @@ func (d *Deployer) Deploy(ctx context.Context) (Info, error) {
 
 	// 4. yugabyted over the pod executor: deliver the el8 tarball (coordinator
 	// fetch + kubectl cp), then `yugabyted start` a single-node (RF1) cluster.
-	d.yb = d.newYugabyted(podIP)
+	yb, err := d.newYugabyted(podIP)
+	if err != nil {
+		return Info{}, err
+	}
+	d.yb = yb
 	if err := d.yb.Start(ctx); err != nil {
 		return Info{}, fmt.Errorf("start yugabyted in pod: %w", err)
 	}
@@ -376,7 +402,24 @@ func (d *Deployer) Deploy(ctx context.Context) (Info, error) {
 
 // newYugabyted builds the yugabyted App over the pod executor, with the el8
 // tarball Spec.Deploy and the pod-appropriate base/install dirs + python setup.
-func (d *Deployer) newYugabyted(podIP string) *yugabyted.App {
+// It resolves a configured tarball_secret to its value here (apps/yugabyted's
+// deployer takes the resolved credential, not the name).
+func (d *Deployer) newYugabyted(podIP string) (*yugabyted.App, error) {
+	artSpec, err := tarballSpec(d.cfg.Version, d.cfg.Arch, d.cfg.TarballURL, d.cfg.TarballSecret)
+	if err != nil {
+		return nil, err
+	}
+	secretVal := ""
+	if d.cfg.TarballSecret != "" {
+		if d.resolveSecret == nil {
+			return nil, fmt.Errorf("ybpod: tarball_secret %q set but no secret resolver available (WithSecretResolver)", d.cfg.TarballSecret)
+		}
+		v, err := d.resolveSecret(d.cfg.TarballSecret)
+		if err != nil {
+			return nil, fmt.Errorf("resolve tarball_secret %q: %w", d.cfg.TarballSecret, err)
+		}
+		secretVal = v
+	}
 	spec := yugabyted.Spec{
 		InstallDir:   d.ybInstallDir(),
 		BaseDir:      d.cfg.BaseDir,
@@ -384,8 +427,9 @@ func (d *Deployer) newYugabyted(podIP string) *yugabyted.App {
 		YSQLPort:     d.cfg.YSQLPort,
 		ReadyTimeout: d.cfg.ReadyTimeout,
 		Deploy: &yugabyted.DeploySpec{
-			Artifact:  tarballSpec(d.cfg.Version, d.cfg.Arch),
+			Artifact:  artSpec,
 			RemoteDir: d.cfg.InstallDir,
+			Secret:    secretVal,
 		},
 	}
 	node := yugabyted.Node{Exec: d.pod.Exec(), Advertise: podIP}
@@ -399,7 +443,7 @@ func (d *Deployer) newYugabyted(podIP string) *yugabyted.App {
 	if d.waitPG != nil {
 		opts = append(opts, yugabyted.WithWaitPG(d.waitPG))
 	}
-	return yugabyted.New([]yugabyted.Node{node}, spec, opts...)
+	return yugabyted.New([]yugabyted.Node{node}, spec, opts...), nil
 }
 
 // ybInstallDir is the yugabyted install root: the tarball unpacks to a directory
@@ -495,20 +539,42 @@ func extractedDirName(version string) string {
 	return "yugabyte-" + base
 }
 
-// tarballSpec builds the artifact.Spec apps/yugabyted delivers: an S3 tarball
-// fetched on the COORDINATOR (RemoteDownload false → aws s3 cp locally, then
-// kubectl cp into the pod — so the pod needs no AWS creds) and untarred on the
-// pod (RemoteUnzip).
-func tarballSpec(version, arch string) artifact.Spec {
+// tarballSpec builds the artifact.Spec apps/yugabyted delivers. By default an S3
+// tarball fetched on the COORDINATOR (RemoteDownload false → aws s3 cp locally,
+// then kubectl cp into the pod — so the pod needs no AWS creds) and untarred on
+// the pod (RemoteUnzip). urlTemplate overrides the source: a template over the
+// {yugabytedb} (full build), {yugabytedb_base} (build suffix dropped) and
+// {osarch} (the tarball os/arch label) placeholders, substituted via the shared
+// artifact grammar. The delivery model is unchanged for an http source too —
+// fetched coordinator-side and pushed in — so the pod never needs fetch creds;
+// secretName (an authenticated http source) flows through Deploy's resolver.
+func tarballSpec(version, arch, urlTemplate, secretName string) (artifact.Spec, error) {
+	url := tarballS3URL(version, arch)
+	if urlTemplate != "" {
+		subst, err := artifact.Substitute(urlTemplate, map[string]string{
+			"yugabytedb":      version,
+			"yugabytedb_base": core.BaseVersion(version),
+			"osarch":          osArch(arch),
+		})
+		if err != nil {
+			return artifact.Spec{}, fmt.Errorf("ybpod tarball_url: %w", err)
+		}
+		url = subst
+	}
+	typ := artifact.TypeHTTP
+	if strings.HasPrefix(url, "s3://") {
+		typ = artifact.TypeS3
+	}
 	return artifact.Spec{
 		Name:        "ybpod-yugabytedb",
 		Version:     extractedDirName(version),
-		GlobPath:    tarballFilename(version, arch),
-		URL:         tarballS3URL(version, arch),
-		Type:        artifact.TypeS3,
+		GlobPath:    path.Base(url),
+		URL:         url,
+		Type:        typ,
 		RemoteUnzip: true,
 		Target:      "server",
-	}
+		Secret:      secretName,
+	}, nil
 }
 
 // serviceManifest is a ClusterIP Service exposing the YSQL port and selecting the

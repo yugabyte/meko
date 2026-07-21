@@ -23,6 +23,8 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybdeploy"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
@@ -108,8 +110,21 @@ type Provider struct {
 	readManifest func(path string) (string, error)
 	detectYB     func(ctx context.Context, ci pg.ConnInfo) string
 
+	// ybDeployCfg is the raw framework config, injected via WithYBDeployConfig so
+	// the per-test deploy selector (apps/ybdeploy) can read env.yb_deploy and
+	// the sub-app configs. nil → the built-in yugabyted (no external backing).
+	ybDeployCfg *core.Config
+
 	portCounter atomic.Int64
 	nsCounter   atomic.Int64
+}
+
+// WithYBDeployConfig injects the raw framework config the per-test deploy
+// selector reads (env.yb_deploy plus the yb_k8s/yba sub-app knobs). Without it the
+// provider always uses ampstack's built-in yugabyted.
+func (p *Provider) WithYBDeployConfig(c *core.Config) *Provider {
+	p.ybDeployCfg = c
+	return p
 }
 
 // New builds a Provider from cfg.
@@ -185,6 +200,26 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 	if err != nil {
 		return nil, err
 	}
+
+	// Per-test deploy selection: the env.yb_deploy knob (or the test's preference)
+	// may swap ampstack's built-in yugabyted for an external cluster this call
+	// provisions. Its teardown chains into the env's Teardown (amp first, backing
+	// after — LIFO).
+	var ybDeployTeardown func(context.Context) error
+	if p.ybDeployCfg != nil {
+		mode := ybdeploy.Resolve(p.ybDeployCfg, spec)
+		if mode != ybdeploy.ModeBuiltin {
+			store, td, berr := ybdeploy.Provision(ctx, p.ybDeployCfg, mode, ns, p.logf)
+			if berr != nil {
+				return nil, fmt.Errorf("provision %s deployment: %w", mode, berr)
+			}
+			if store != nil {
+				ampCfg.Backing = ybbacking.ExternalBacking(store)
+			}
+			ybDeployTeardown = td
+		}
+	}
+
 	app := ampstack.New(ampCfg).
 		WithKube(nsKube).
 		WithHelmRunner(p.helmRun).
@@ -197,6 +232,9 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 	info, err := app.Deploy(ctx)
 	if err != nil {
 		_ = app.Teardown(context.Background())
+		if ybDeployTeardown != nil {
+			_ = ybDeployTeardown(context.Background())
+		}
 		return nil, err
 	}
 
@@ -208,12 +246,13 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 	p.log("exclusivek8s: namespace %s backing YB version detected=%q (live=%v)", ns, yb, yb != "")
 
 	return &Env{
-		app:           app,
-		controllerURL: info.ControllerURL,
-		versions:      core.DetectedVersions{Product: p.cfg.Product, YB: yb},
-		namespace:     ns,
-		handles:       core.EnvHandles{Namespace: ns},
-		logf:          p.logf,
+		app:              app,
+		controllerURL:    info.ControllerURL,
+		versions:         core.DetectedVersions{Product: p.cfg.Product, YB: yb},
+		namespace:        ns,
+		handles:          core.EnvHandles{Namespace: ns},
+		logf:             p.logf,
+		ybDeployTeardown: ybDeployTeardown,
 	}, nil
 }
 
@@ -264,11 +303,20 @@ func (p *Provider) Teardown(ctx context.Context, env core.Environment) error {
 		return fmt.Errorf("exclusivek8s teardown: unexpected environment type %T", env)
 	}
 	_ = e.app.Close(ctx)
-	if err := e.app.Teardown(ctx); err != nil {
-		p.log("exclusivek8s: teardown namespace %s failed: %v", e.namespace, err)
-		return err
+	// LIFO: the amp stack (provisioned last) tears down first, then its backing.
+	ampErr := e.app.Teardown(ctx)
+	if ampErr != nil {
+		p.log("exclusivek8s: teardown namespace %s failed: %v", e.namespace, ampErr)
 	}
-	return nil
+	if e.ybDeployTeardown != nil {
+		if berr := e.ybDeployTeardown(ctx); berr != nil {
+			p.log("exclusivek8s: teardown backing for %s failed: %v", e.namespace, berr)
+			if ampErr == nil {
+				ampErr = berr
+			}
+		}
+	}
+	return ampErr
 }
 
 // Attach is not supported: a dedicated stack is provisioned per test, and remote
@@ -285,6 +333,9 @@ type Env struct {
 	namespace     string
 	handles       core.EnvHandles
 	logf          func(format string, args ...any)
+	// ybDeployTeardown reaps an externally-provisioned deployment (nil for the
+	// built-in yugabyted); run AFTER the amp stack in Teardown (LIFO).
+	ybDeployTeardown func(context.Context) error
 }
 
 func (e *Env) ControllerURL() string           { return e.controllerURL }

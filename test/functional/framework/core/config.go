@@ -280,6 +280,13 @@ func (c *Config) lookup(dottedKey string) (any, bool) {
 	return cur, true
 }
 
+// Has reports whether a value is present at the dotted key (regardless of its
+// value — an explicit empty string counts as present).
+func (c *Config) Has(key string) bool {
+	_, ok := c.lookup(key)
+	return ok
+}
+
 // GetString returns the string at key, or def.
 func (c *Config) GetString(key, def string) string {
 	v, ok := c.lookup(key)

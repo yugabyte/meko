@@ -91,12 +91,12 @@ func buildProvider(name string, cfg *core.Config, secrets *core.Secrets, masker 
 			}
 		}
 		if scfg.Configured() {
-			return sharedk8s.New(scfg), "", nil
+			return sharedk8s.New(scfg).WithYBDeployConfig(cfg), "", nil
 		}
 		return nil, "env.sharedk8s not configured (need controller_url or context)", nil
 	case "exclusivek8s":
 		if xcfg := exclusivek8s.FromConfig(cfg); xcfg.Configured() {
-			return exclusivek8s.New(xcfg), "", nil
+			return exclusivek8s.New(xcfg).WithYBDeployConfig(cfg), "", nil
 		}
 		return nil, "env.exclusivek8s not configured (need context)", nil
 	case "universe":

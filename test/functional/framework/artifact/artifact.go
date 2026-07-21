@@ -144,6 +144,13 @@ func resolveOne(name string, decl map[string]any, versions map[string]string) (S
 	}, nil
 }
 
+// Substitute replaces every {key} in s with vars[key], then errors if any
+// {...} token remains unresolved — the same {placeholder} grammar Resolve
+// applies to artifact declarations, exported so callers that build an
+// artifact.Spec directly (e.g. apps/ybpod's tarball URL) reuse it instead of
+// inventing their own templating.
+func Substitute(s string, vars map[string]string) (string, error) { return substitute(s, vars) }
+
 // substitute replaces every {key} in s with versions[key], then errors if any
 // {...} token remains unresolved.
 func substitute(s string, versions map[string]string) (string, error) {

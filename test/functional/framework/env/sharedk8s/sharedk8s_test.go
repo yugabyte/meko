@@ -332,6 +332,28 @@ func TestSplitAddr(t *testing.T) {
 	}
 }
 
+// TestProvisionWaitsForEndpointDeployment: provisioning must assert the
+// endpoint's compute Deployment is Available BEFORE port-forwarding to it — a
+// never-Ready compute should fail as "compute never became ready", not as an
+// opaque port-forward exit. Mirrors the RestartCompute assertion.
+func TestProvisionWaitsForEndpointDeployment(t *testing.T) {
+	f := newFakeCtl()
+	defer f.close()
+	p := testProvider(f)
+	st := &autoStarter{}
+	rec := &kubeRec{}
+	p.kube = k8s.New(k8s.Config{Context: "x"}).WithStarter(st.start).WithRunner(rec.run)
+
+	env, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(1, true))
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	defer p.Teardown(context.Background(), env)
+	if !hasSub(rec.recorded(), "wait deployment/yb-ep-ep-1 --for=condition=Available") {
+		t.Errorf("provision must wait for the endpoint Deployment to be Available before port-forward, got: %v", rec.recorded())
+	}
+}
+
 // TestProvisionAutoPortsUnique: with the default (auto) local-port scheme,
 // parallel provisions each get a distinct kubectl-allocated local port for their
 // pg forward — no fixed base, no collision.
@@ -340,7 +362,7 @@ func TestProvisionAutoPortsUnique(t *testing.T) {
 	defer f.close()
 	p := testProvider(f) // controller reached by direct URL
 	st := &autoStarter{}
-	p.kube = k8s.New(k8s.Config{Context: "x"}).WithStarter(st.start)
+	p.kube = k8s.New(k8s.Config{Context: "x"}).WithStarter(st.start).WithRunner((&kubeRec{}).run)
 
 	const N = 8
 	var wg sync.WaitGroup
@@ -391,7 +413,7 @@ func TestPgForwardSurvivesProvisionCtxCancel(t *testing.T) {
 	defer f.close()
 	p := testProvider(f)
 	st := &autoStarter{}
-	p.kube = k8s.New(k8s.Config{Context: "x"}).WithStarter(st.start)
+	p.kube = k8s.New(k8s.Config{Context: "x"}).WithStarter(st.start).WithRunner((&kubeRec{}).run)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	env, err := p.Provision(ctx, core.EnvSpec{}, core.NewRunSeed(1, true))
@@ -436,7 +458,7 @@ func TestTeardownReconnectsOnConnRefused(t *testing.T) {
 		fmt.Sprintf("Forwarding from 127.0.0.1:%d -> 8080\n", deadPort), // first: dead
 		fmt.Sprintf("Forwarding from 127.0.0.1:%d -> 8080\n", livePort), // after reconnect: live
 	}}
-	p.kube = k8s.New(k8s.Config{Context: "x"}).WithStarter(st.start)
+	p.kube = k8s.New(k8s.Config{Context: "x"}).WithStarter(st.start).WithRunner((&kubeRec{}).run)
 
 	e := &Env{ownProject: true, prov: p, poolID: "pool", projectID: "proj-x"}
 	if err := p.Teardown(context.Background(), e); err != nil {

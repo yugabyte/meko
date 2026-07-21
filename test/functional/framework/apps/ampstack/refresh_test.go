@@ -114,7 +114,7 @@ func TestPullSecretSkipsECRForQuayOnlyImages(t *testing.T) {
 		minted = true
 		return "tok", nil
 	})
-	if err := a.ensurePullSecret(context.Background()); err != nil {
+	if _, err := a.ensurePullSecret(context.Background()); err != nil {
 		t.Fatalf("ensurePullSecret: %v", err)
 	}
 	if minted {
@@ -135,7 +135,7 @@ func TestPullSecretMintsECRForECRImages(t *testing.T) {
 		minted = true
 		return "tok", nil
 	})
-	if err := a.ensurePullSecret(context.Background()); err != nil {
+	if _, err := a.ensurePullSecret(context.Background()); err != nil {
 		t.Fatalf("ensurePullSecret: %v", err)
 	}
 	if !minted {
@@ -181,7 +181,7 @@ func TestPullSecretGHCRTokenFromGHCLI(t *testing.T) {
 		minted = true
 		return "tok", nil
 	})
-	if err := a.ensurePullSecret(context.Background()); err != nil {
+	if _, err := a.ensurePullSecret(context.Background()); err != nil {
 		t.Fatalf("ensurePullSecret: %v", err)
 	}
 	if !ghCalled {
@@ -205,7 +205,7 @@ func TestPullSecretGHCRExplicitToken(t *testing.T) {
 		t.Fatal("gh CLI must not be consulted when ghcr_token is set")
 		return "", nil
 	})
-	if err := a.ensurePullSecret(context.Background()); err != nil {
+	if _, err := a.ensurePullSecret(context.Background()); err != nil {
 		t.Fatalf("ensurePullSecret: %v", err)
 	}
 }

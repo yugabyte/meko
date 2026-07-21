@@ -51,6 +51,23 @@ timeouts:
 
 # --- Environment providers ---
 env:
+  # yb_deploy: the run-level selector for the YugabyteDB the amp control plane sits
+  # on, applied by the sharedk8s/exclusivek8s providers via apps/ybdeploy.
+  # Precedence: this knob (when non-empty) OVERRIDES a test's PreferredYBDeploy
+  # hint, which overrides the built-in default. Empty → honour the test's
+  # preference, else builtin_yugabyted. Values:
+  #   "" / builtin_yugabyted → ampstack deploys its own single-node yugabyted.
+  #   external        → a cluster owned elsewhere, from env.ampstack.backing.*.
+  #   yb_k8s          → a YugabyteDB deployed into k8s (apps.ybk8s.*), co-located.
+  #   yb_pod          → a yugabyted-in-pod from the release TARBALL (apps.ybpod.*),
+  #                     co-located; image-promotion-independent (unlike yb_k8s).
+  #   yba_universe    → attach env.universe.yba.universe, else create from
+  #                     functional.yba.create_spec (apps/yba).
+  #   yba_provisioned → stand up an owned YBA + universe (env.universe provision_yba).
+  # A shared control plane (sharedk8s deploy mode) serves every test off one
+  # deployment, so its selection is knob-only — a per-test preference cannot apply.
+  yb_deploy: ""
+
   # env/docker: single-container amp on a remote docker host.
   # host/ssh_user/ssh_key/ssh_port/endpoint_image/name_token: no default —
   # Configured() is true only once host is set.
@@ -103,11 +120,15 @@ env:
     # ghcr (ghcr.io/yugabyte/amp-*; token from ghcr_token or the local
     # `gh auth token`). Fully-qualified refs always win over this knob.
     registry: "quay"
-    # Pinned to known-good tags; bump as new builds publish. custom-4f1ca53 is
-    # the first verified quay build. The ecr flavor's equivalents are
+    # Pinned to known-good tags; bump as new builds publish. custom-7f195e43e51f
+    # is the current build whose controller folds the storage-controller
+    # in-process (#280) and so matches this chart. Earlier tags (custom-4f1ca53,
+    # custom-0e2131d) predate #280: their separate storage_controller subprocess
+    # crash-loops on "Insecure config! One or more secrets is not set", so the
+    # controller never reaches Available. The ecr flavor's equivalents are
     # amp/controller:tailnet-mig0010 / amp/endpoint:phase1-20260703-154251.
-    controller_image: "amp-controller:custom-4f1ca53"
-    endpoint_image: "amp-endpoint:custom-4f1ca53"
+    controller_image: "amp-controller:custom-7f195e43e51f"
+    endpoint_image: "amp-endpoint:custom-7f195e43e51f"
     # quay.io robot credentials for the pull secret (custom/release builds
     # pushed by the amp build pipeline live there). Empty -> no quay auth.
     quay_user: ""
@@ -116,7 +137,17 @@ env:
     # when a ghcr image needs pulling. User empty -> "oauth".
     ghcr_user: ""
     ghcr_token: ""
-    yb_image: "yugabytedb/yugabyte:latest"
+    # yb_image: the built-in yugabyted image. A fully-qualified ref always wins.
+    # Empty (default) → derived version-aware as "<yb_image_registry>:<version>"
+    # where version is versions.yb (run override) or versions.yugabytedb — so a
+    # plain run pins yugabytedb/yugabyte to the versions{} build instead of :latest.
+    # yb_image_registry: the registry+repo the derived image uses. PREVIEW trains
+    # (odd 2.N builds) live at the PRIVATE quay.io/yugabyte/yugabyte-itest — to run
+    # a preview build set yb_image_registry there, versions.yb to the -bNNN build,
+    # and quay_user/quay_token (the pull secret then lands on the StatefulSet).
+    # (No auto-switch by train parity — the registry is always explicit.)
+    yb_image: ""
+    yb_image_registry: "yugabytedb/yugabyte"
     yb_storage: "20Gi"
     db_name: "yb_storage"
     # backing: where the control plane's YugabyteDB lives.
@@ -614,6 +645,16 @@ apps:
     # The k8s node the pod lands on MUST match arch.
     version: ""
     arch: "x86_64"
+    # tarball_url: release-tarball source. Empty (default) → the S3 release-bucket
+    # form (s3://releases.yugabyte.com/<ver>/yugabyte-<ver>-<osarch>.tar.gz). A
+    # template over {yugabytedb}/{yugabytedb_base}/{osarch} placeholders — e.g.
+    # "https://mirror/{yugabytedb_base}/yugabyte-{yugabytedb}-{osarch}.tar.gz" for
+    # an http mirror. tarball_secret: NAME of a declared secret authenticating the
+    # fetch (private/authenticated http only); "" → anonymous (S3 is ambient-authed
+    # on the coordinator). Either way the tarball is fetched coordinator-side and
+    # pushed into the pod, so the pod never needs fetch credentials.
+    tarball_url: ""
+    tarball_secret: ""
     # install_dir: pod dir the tarball lands in + unpacks under (install root is
     # <install_dir>/yugabyte-<base>). base_dir: yugabyted --base_dir. Both under
     # /root (the pod runs as root, unlike the awsvm ec2-user default).
