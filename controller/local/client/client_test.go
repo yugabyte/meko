@@ -358,14 +358,11 @@ func TestSafekeeperCreateTimelineAndStatus(t *testing.T) {
 		t.Fatalf("unexpected flush_lsn: %q", got.FlushLSN)
 	}
 
-	stt := recordingServer(t, &cap, http.StatusOK, `{"id":5}`)
+	stt := recordingServer(t, &cap, http.StatusOK, `{}`)
 	s3 := NewSafekeeper(stt.URL, nil)
-	st, err := s3.Status(context.Background())
+	_, err = s3.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status: %v", err)
-	}
-	if st.ID != 5 {
-		t.Fatalf("unexpected id: %d", st.ID)
 	}
 }
 

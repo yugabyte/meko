@@ -34,10 +34,8 @@ type SafekeeperTimelineCreateRequest struct {
 }
 
 // SafekeeperStatus is the GET /v1/status body (safekeeper_api::models::
-// SafekeeperStatus). NodeId serializes as a bare number.
-type SafekeeperStatus struct {
-	ID uint64 `json:"id"`
-}
+// SafekeeperStatus) — an empty object; the endpoint is a liveness check.
+type SafekeeperStatus struct{}
 
 // SafekeeperTimelineStatus is the minimal slice of safekeeper_api::models::
 // TimelineStatus the launcher reads.
@@ -45,7 +43,7 @@ type SafekeeperTimelineStatus struct {
 	FlushLSN string `json:"flush_lsn"`
 }
 
-// Status hits GET /v1/status and returns the safekeeper's node id.
+// Status hits GET /v1/status as a liveness check.
 func (s *Safekeeper) Status(ctx context.Context) (SafekeeperStatus, error) {
 	var st SafekeeperStatus
 	err := s.t.do(ctx, http.MethodGet, "/v1/status", nil, &st)

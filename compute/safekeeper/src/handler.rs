@@ -156,11 +156,6 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
                                 format!("Failed to parse {value} as branch id")
                             })?);
                         }
-                        Some(("availability_zone", client_az)) => {
-                            if let Some(metrics) = self.io_metrics.as_ref() {
-                                metrics.set_client_az(client_az)
-                            }
-                        }
                         // Unknown startup options are ignored.
                         _ => continue,
                     }

@@ -83,9 +83,6 @@ async fn handle_socket(
     let socket = std::pin::pin!(socket);
 
     let traffic_metrics = TrafficMetrics::new();
-    if let Some(current_az) = conf.availability_zone.as_deref() {
-        traffic_metrics.set_sk_az(current_az);
-    }
 
     let socket = MeasuredStream::new(
         socket,

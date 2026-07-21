@@ -296,11 +296,9 @@ def write_pageserver_config(datadir, bootstrap, ancestor_branch_id=None, ancesto
 def write_safekeeper_config(datadir):
     datadir.mkdir(parents=True, exist_ok=True)
     lines = [
-        f"id = {NODE_ID}",
         f"branch_id = {_toml_quote(BRANCH_ID)}",
         f"listen_pg = {_toml_quote(f'{BIND_HOST}:{SAFEKEEPER_PG_PORT}')}",
         f"listen_http = {_toml_quote(f'{BIND_HOST}:{SAFEKEEPER_HTTP_PORT}')}",
-        f"availability_zone = {_toml_quote(f'sk-{NODE_ID}')}",
         f"yb_storage_conn = {_toml_quote(yb_conn_inline_toml())}",
     ]
     (datadir / "safekeeper.toml").write_text("\n".join(lines) + "\n")

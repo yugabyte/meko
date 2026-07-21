@@ -666,8 +666,8 @@ SendProposerGreeting(Safekeeper *sk)
 /*
  * Receive the acceptor greeting from the (single) safekeeper.
  *
- * yb-amp has no elections: the greeting carries the safekeeper's node id and
- * its end-of-WAL (flushLsn). We immediately treat this proposer as elected,
+ * yb-amp has no elections: the greeting carries the safekeeper's end-of-WAL
+ * (flushLsn). We immediately treat this proposer as elected,
  * resume streaming from that point, and send the ProposerElected message which
  * truncates the safekeeper's WAL to it.
  */
@@ -685,8 +685,8 @@ RecvAcceptorGreeting(Safekeeper *sk)
 	if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->greetResponse))
 		return;
 
-	wp_log(LOG, "received AcceptorGreeting from safekeeper %s:%s, node_id = %lu, flushLsn=%X/%X",
-		   sk->host, sk->port, sk->greetResponse.nodeId,
+	wp_log(LOG, "received AcceptorGreeting from safekeeper %s:%s, flushLsn=%X/%X",
+		   sk->host, sk->port,
 		   LSN_FORMAT_ARGS(sk->greetResponse.flushLsn));
 
 	++wp->n_connected;
@@ -860,8 +860,8 @@ SendProposerElected(Safekeeper *sk)
 	msg.startStreamingAt = sk->startStreamingAt;
 
 	wp_log(LOG,
-		   "sending elected msg to node " UINT64_FORMAT ", startStreamingAt=%X/%X to %s:%s",
-		   sk->greetResponse.nodeId, LSN_FORMAT_ARGS(msg.startStreamingAt),
+		   "sending elected msg, startStreamingAt=%X/%X to %s:%s",
+		   LSN_FORMAT_ARGS(msg.startStreamingAt),
 		   sk->host, sk->port);
 
 	PAMessageSerialize(wp, (ProposerAcceptorMessage *) &msg, &sk->outbuf, wp->config->proto_version);
@@ -1491,7 +1491,6 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 			{
 				AcceptorGreeting *msg = (AcceptorGreeting *) anymsg;
 
-				msg->nodeId = pq_getmsgint64(&s);
 				msg->flushLsn = pq_getmsgint64(&s);
 				pq_getmsgend(&s);
 				return true;

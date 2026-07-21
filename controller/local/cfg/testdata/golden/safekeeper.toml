@@ -1,8 +1,6 @@
-id = 1
 branch_id = "9a57cdcafd663c91ab83654f21378725"
 listen_pg = "127.0.0.1:30100"
 listen_http = "127.0.0.1:30200"
-availability_zone = "sk-1"
 heartbeat_timeout = "5s"
 yb_storage_conn = '{ host_ports = "127.0.0.1:5433", user = "yugabyte", dbname = "amp_golden" }'
 scale_factor = 1.0

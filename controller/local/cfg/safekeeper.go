@@ -32,7 +32,6 @@ const (
 // config.HumantimeDuration so they render in humantime form
 // ("5s"/"1m"/"5m"), matching the Rust `#[serde(with = "humantime_serde")]`.
 type safekeeperConfigToml struct {
-	ID       config.NodeID    `toml:"id"`
 	BranchID *config.BranchID `toml:"branch_id,omitempty"`
 
 	ListenPg           string  `toml:"listen_pg"`
@@ -40,7 +39,6 @@ type safekeeperConfigToml struct {
 	ListenHTTP         string  `toml:"listen_http"`
 	ListenHTTPS        *string `toml:"listen_https,omitempty"`
 	AdvertisePg        *string `toml:"advertise_pg,omitempty"`
-	AvailabilityZone   *string `toml:"availability_zone,omitempty"`
 
 	HeartbeatTimeout config.HumantimeDuration `toml:"heartbeat_timeout"`
 
@@ -77,7 +75,6 @@ type safekeeperConfigToml struct {
 // defaultSafekeeperConfigToml reproduces SafekeeperConfigToml::default.
 func defaultSafekeeperConfigToml() safekeeperConfigToml {
 	return safekeeperConfigToml{
-		ID:                            0,
 		ListenPg:                      skDefaultListenPgAddr,
 		ListenHTTP:                    skDefaultListenHTTPAddr,
 		HeartbeatTimeout:              config.HumantimeDuration(skDefaultHeartbeatTimeout),
@@ -100,11 +97,9 @@ func defaultSafekeeperConfigToml() safekeeperConfigToml {
 }
 
 // SafekeeperParams is the input to WriteSafekeeperToml — the per-node bits
-// the Rust `SafekeeperNode::start` assembles into a SafekeeperConfigToml
-// (control_plane/src/safekeeper.rs ~187-210). The listen addresses are built
-// from ListenAddr + the ports; availability_zone is derived as "sk-<id>".
+// assembled into a SafekeeperConfigToml. The listen addresses are built from
+// ListenAddr + the ports.
 type SafekeeperParams struct {
-	ID       config.NodeID
 	BranchID *config.BranchID
 	// ListenAddr is the bind host (Rust defaults to "127.0.0.1" when the
 	// conf's listen_addr is unset); listen_pg/listen_http/… are
@@ -138,7 +133,6 @@ type SafekeeperParams struct {
 // per-node overrides) and serializes it with `toml::to_string_pretty`.
 func WriteSafekeeperToml(path string, p SafekeeperParams) error {
 	cfg := defaultSafekeeperConfigToml()
-	cfg.ID = p.ID
 	cfg.BranchID = p.BranchID
 	listenAddr := p.ListenAddr
 	if listenAddr == "" {
@@ -154,8 +148,6 @@ func WriteSafekeeperToml(path string, p SafekeeperParams) error {
 		s := fmt.Sprintf("%s:%d", listenAddr, *p.HTTPSPort)
 		cfg.ListenHTTPS = &s
 	}
-	az := fmt.Sprintf("sk-%d", p.ID)
-	cfg.AvailabilityZone = &az
 	cfg.YbStorageConn = p.YbStorageConn
 	if p.WalCacheSizeMib != nil {
 		v := uint64(*p.WalCacheSizeMib)

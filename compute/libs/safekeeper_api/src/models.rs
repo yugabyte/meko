@@ -13,9 +13,7 @@ use utils::pageserver_feedback::PageserverFeedback;
 use crate::ServerInfo;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SafekeeperStatus {
-    pub id: NodeId,
-}
+pub struct SafekeeperStatus {}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TimelineCreateRequest {

@@ -219,11 +219,7 @@ impl SharedState {
     }
 
     /// Restore SharedState from control file. If file doesn't exist, bails out.
-    pub async fn restore(
-        conf: &SafeKeeperConf,
-        branch_id: &BranchId,
-        yb_wal: Option<&Arc<YbWalConn>>,
-    ) -> Result<Self> {
+    pub async fn restore(branch_id: &BranchId, yb_wal: Option<&Arc<YbWalConn>>) -> Result<Self> {
         let yb_wal = yb_wal
             .cloned()
             .context("control-file restore requires yb_storage_conn")?;
@@ -238,7 +234,6 @@ impl SharedState {
         let sk = StateSK::Loaded(SafeKeeper::new(
             TimelineState::new(control_store),
             wal_store,
-            conf.my_id,
         )?);
 
         Ok(Self::new(sk))
@@ -426,8 +421,7 @@ impl Timeline {
         use tracing::Instrument;
         let span = info_span!("load_timeline", branch_id = %branch_id);
         async move {
-            let shared_state =
-                SharedState::restore(conf.as_ref(), &branch_id, yb_wal.as_ref()).await?;
+            let shared_state = SharedState::restore(&branch_id, yb_wal.as_ref()).await?;
             let timeline_dir = get_timeline_dir(conf.as_ref(), &branch_id);
 
             Ok(Timeline::new(

@@ -33,8 +33,7 @@ use serde_json::json;
 /// Healthcheck handler.
 async fn status_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
     check_permission(&request, None)?;
-    let conf = get_conf(&request);
-    let status = SafekeeperStatus { id: conf.my_id };
+    let status = SafekeeperStatus {};
     json_response(StatusCode::OK, status)
 }
 

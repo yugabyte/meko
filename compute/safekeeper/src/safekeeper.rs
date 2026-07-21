@@ -11,7 +11,7 @@ use pq_proto::SystemId;
 use safekeeper_api::models::HotStandbyFeedback;
 use serde::{Deserialize, Serialize};
 use tracing::*;
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
 
@@ -40,12 +40,11 @@ pub struct ProposerGreeting {
     pub wal_seg_size: u32,
 }
 
-/// Acceptor -> Proposer initial response. Carries the safekeeper's node id and
-/// its current end-of-WAL (`flush_lsn`), from which the walproposer derives the
-/// point at which it resumes streaming (and which the safekeeper truncates to).
+/// Acceptor -> Proposer initial response. Carries the safekeeper's current
+/// end-of-WAL (`flush_lsn`), from which the walproposer derives the point at
+/// which it resumes streaming (and which the safekeeper truncates to).
 #[derive(Debug, Serialize)]
 pub struct AcceptorGreeting {
-    node_id: NodeId,
     flush_lsn: Lsn,
 }
 
@@ -272,7 +271,6 @@ impl AcceptorProposerMessage {
             match self {
                 AcceptorProposerMessage::Greeting(msg) => {
                     buf.put_u8(b'g');
-                    buf.put_u64(msg.node_id.0);
                     buf.put_u64(msg.flush_lsn.into());
                 }
                 AcceptorProposerMessage::AppendResponse(msg) => {
@@ -303,8 +301,6 @@ impl AcceptorProposerMessage {
 pub struct SafeKeeper<CTRL: control_file::Storage, WAL: wal_storage::Storage> {
     pub state: TimelineState<CTRL>, // persistent state storage
     pub wal_store: WAL,
-
-    node_id: NodeId, // safekeeper's node id
 }
 
 impl<CTRL, WAL> SafeKeeper<CTRL, WAL>
@@ -315,11 +311,7 @@ where
     /// Accepts a control file storage containing the safekeeper state.
     /// State must be initialized, i.e. contain filled `branch_id`
     /// and `server` (`wal_seg_size` inside it) fields.
-    pub fn new(
-        state: TimelineState<CTRL>,
-        wal_store: WAL,
-        node_id: NodeId,
-    ) -> Result<SafeKeeper<CTRL, WAL>> {
+    pub fn new(state: TimelineState<CTRL>, wal_store: WAL) -> Result<SafeKeeper<CTRL, WAL>> {
         if state.branch_id == BranchId::from([0u8; 16]) {
             bail!(
                 "Calling SafeKeeper::new with empty branch_id ({})",
@@ -327,11 +319,7 @@ where
             );
         }
 
-        Ok(SafeKeeper {
-            state,
-            wal_store,
-            node_id,
-        })
+        Ok(SafeKeeper { state, wal_store })
     }
 
     /// wal_store wrapper avoiding flush_lsn < timeline_start_lsn when we don't
@@ -430,7 +418,6 @@ where
         self.wal_store.flush_wal().await?;
 
         let apg = AcceptorGreeting {
-            node_id: self.node_id,
             flush_lsn: self.flush_lsn(),
         };
         info!(
@@ -707,7 +694,7 @@ mod tests {
         };
         let wal_store = DummyWalStore { lsn: Lsn(0) };
 
-        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store, NodeId(0)).unwrap();
+        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store).unwrap();
 
         let pem = ProposerElected {
             start_streaming_at: Lsn(1),

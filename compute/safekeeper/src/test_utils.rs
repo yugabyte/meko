@@ -33,7 +33,6 @@ impl Env {
     /// Constructs a Safekeeper config for the given node ID.
     fn make_conf(&self, node_id: NodeId) -> SafeKeeperConf {
         let mut conf = SafeKeeperConf::dummy();
-        conf.my_id = node_id;
         conf.workdir = self.tempdir.path().join(format!("safekeeper-{node_id}"));
         conf
     }

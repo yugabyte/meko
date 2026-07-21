@@ -138,7 +138,7 @@ pub static PG_IO_BYTES: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "safekeeper_pg_io_bytes_total",
         "Bytes read from or written to any PostgreSQL connection",
-        &["client_az", "sk_az", "app_name", "dir", "same_az"]
+        &["app_name", "dir"]
     )
     .expect("Failed to register safekeeper_pg_io_bytes gauge")
 });
@@ -426,10 +426,6 @@ pub const LABEL_UNKNOWN: &str = "unknown";
 /// Labels for traffic metrics.
 #[derive(Clone)]
 struct ConnectionLabels {
-    /// Availability zone of the connection origin.
-    client_az: String,
-    /// Availability zone of the current safekeeper.
-    sk_az: String,
     /// Client application name.
     app_name: String,
 }
@@ -437,8 +433,6 @@ struct ConnectionLabels {
 impl ConnectionLabels {
     fn new() -> Self {
         Self {
-            client_az: LABEL_UNKNOWN.to_string(),
-            sk_az: LABEL_UNKNOWN.to_string(),
             app_name: LABEL_UNKNOWN.to_string(),
         }
     }
@@ -449,31 +443,8 @@ impl ConnectionLabels {
         GenericCounter<metrics::core::AtomicU64>,
         GenericCounter<metrics::core::AtomicU64>,
     ) {
-        let same_az = match (self.client_az.as_str(), self.sk_az.as_str()) {
-            (LABEL_UNKNOWN, _) | (_, LABEL_UNKNOWN) => LABEL_UNKNOWN,
-            (client_az, sk_az) => {
-                if client_az == sk_az {
-                    "true"
-                } else {
-                    "false"
-                }
-            }
-        };
-
-        let read = PG_IO_BYTES.with_label_values(&[
-            &self.client_az,
-            &self.sk_az,
-            &self.app_name,
-            "read",
-            same_az,
-        ]);
-        let write = PG_IO_BYTES.with_label_values(&[
-            &self.client_az,
-            &self.sk_az,
-            &self.app_name,
-            "write",
-            same_az,
-        ]);
+        let read = PG_IO_BYTES.with_label_values(&[&self.app_name, "read"]);
+        let write = PG_IO_BYTES.with_label_values(&[&self.app_name, "write"]);
         (read, write)
     }
 }
@@ -511,18 +482,6 @@ impl TrafficMetrics {
         Self {
             state: Arc::new(RwLock::new(state)),
         }
-    }
-
-    pub fn set_client_az(&self, value: &str) {
-        let mut state = self.state.write().unwrap();
-        state.labels.client_az = value.to_string();
-        (state.read, state.write) = state.labels.build_metrics();
-    }
-
-    pub fn set_sk_az(&self, value: &str) {
-        let mut state = self.state.write().unwrap();
-        state.labels.sk_az = value.to_string();
-        (state.read, state.write) = state.labels.build_metrics();
     }
 
     pub fn set_app_name(&self, value: &str) {

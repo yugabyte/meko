@@ -63,7 +63,7 @@ yb-amp-specific.
 | `safekeeper_wal_receiver_queue_depth` | Histogram | — | Queued messages per WAL receiver (sampled every 5s). |
 | `safekeeper_wal_receiver_queue_depth_total` | IntGauge | — | Total queued messages across all WAL receivers. |
 | `safekeeper_wal_receiver_queue_size_total` | IntGauge | — | Total byte size of queued messages across all WAL receivers. |
-| `safekeeper_pg_io_bytes_total` | IntCounterVec | `client_az`, `sk_az`, `app_name`, `dir`, `same_az` | Bytes read/written over any PostgreSQL connection. |
+| `safekeeper_pg_io_bytes_total` | IntCounterVec | `app_name`, `dir` | Bytes read/written over any PostgreSQL connection. |
 | `safekeeper_pg_queries_received_total` / `safekeeper_pg_queries_finished_total` | IntCounterPairVec | `query` | Queries received vs finished over the pg protocol. |
 | `safekeeper_received_ps_feedbacks_total` | IntCounter | — | Pageserver feedbacks received. |
 

@@ -11,7 +11,7 @@ use camino_tempfile::Utf8TempDir;
 use safekeeper_api::ServerInfo;
 use safekeeper_api::models::{SafekeeperUtilization, TimelineDeleteResult};
 use tracing::*;
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::state::TimelinePersistentState;
@@ -437,10 +437,6 @@ impl GlobalTimelines {
         {
             state.timeline_tombstone = None;
         }
-    }
-
-    pub fn get_sk_id(&self) -> NodeId {
-        self.state.lock().unwrap().conf.my_id
     }
 }
 

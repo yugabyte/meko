@@ -13,7 +13,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 
 pub mod defaults {
     pub use crate::{DEFAULT_HTTP_LISTEN_ADDR, DEFAULT_PG_LISTEN_ADDR};
@@ -50,8 +50,6 @@ pub mod defaults {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SafekeeperConfigToml {
-    /// Safekeeper node id. Must be stable across restarts of this instance.
-    pub id: NodeId,
     /// The single branch this process serves for its lifetime
     /// (single-branch-per-process). Required in YB-WAL mode.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,8 +63,6 @@ pub struct SafekeeperConfigToml {
     pub listen_https: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub advertise_pg: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub availability_zone: Option<String>,
 
     #[serde(with = "humantime_serde")]
     pub heartbeat_timeout: Duration,
@@ -125,14 +121,12 @@ impl Default for SafekeeperConfigToml {
     fn default() -> Self {
         use defaults::*;
         Self {
-            id: NodeId(0),
             branch_id: None,
             listen_pg: DEFAULT_PG_LISTEN_ADDR.to_string(),
             listen_pg_tenant_only: None,
             listen_http: DEFAULT_HTTP_LISTEN_ADDR.to_string(),
             listen_https: None,
             advertise_pg: None,
-            availability_zone: None,
             heartbeat_timeout: Duration::from_millis(5000),
             yb_storage_conn: None,
             wal_cache_size_mib: None,
@@ -182,7 +176,6 @@ mod tests {
     #[test]
     fn round_trips() {
         let cfg = SafekeeperConfigToml {
-            id: NodeId(7),
             branch_id: Some(BranchId::generate()),
             listen_pg: "127.0.0.1:5474".to_string(),
             listen_http: "127.0.0.1:7686".to_string(),
@@ -190,7 +183,6 @@ mod tests {
                 "{ host_ports = '127.0.0.1:5433', dbname = 'yb_storage' }".to_string(),
             ),
             wal_cache_size_mib: Some(128),
-            availability_zone: Some("sk-7".to_string()),
             ..Default::default()
         };
         let s = cfg.to_toml_string().unwrap();
@@ -201,9 +193,7 @@ mod tests {
     #[test]
     fn partial_toml_fills_defaults() {
         // A minimal file: missing keys take their defaults.
-        let cfg =
-            SafekeeperConfigToml::from_toml_str("id = 3\nlisten_pg = '127.0.0.1:5474'\n").unwrap();
-        assert_eq!(cfg.id, NodeId(3));
+        let cfg = SafekeeperConfigToml::from_toml_str("listen_pg = '127.0.0.1:5474'\n").unwrap();
         assert_eq!(cfg.listen_pg, "127.0.0.1:5474");
         assert_eq!(cfg.heartbeat_timeout, Duration::from_millis(5000));
         assert_eq!(cfg.control_file_save_interval, Duration::from_secs(300));
@@ -215,7 +205,7 @@ mod tests {
         // An unknown/misspelled key fails the safekeeper at startup rather
         // than being silently ignored (deny_unknown_fields).
         let err = SafekeeperConfigToml::from_toml_str(
-            "id = 3\nlisten_pg = '127.0.0.1:5474'\nfuture_key = 'oops'\n",
+            "listen_pg = '127.0.0.1:5474'\nfuture_key = 'oops'\n",
         )
         .unwrap_err();
         assert!(

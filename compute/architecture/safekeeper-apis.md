@@ -31,7 +31,7 @@ below.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/v1/status` | Healthcheck. Returns `SafekeeperStatus { id }` (the SK node id). Auth-exempt. |
+| GET | `/v1/status` | Healthcheck. Returns an empty `SafekeeperStatus {}` (liveness only). Auth-exempt. |
 | GET | `/metrics` | Prometheus metrics exposition (see [`safekeeper-metrics.md`](safekeeper-metrics.md)). Auth-exempt. Honors `force_metric_collection_on_scrape`. |
 | GET | `/profile/cpu` | CPU profile (pprof). Auth-exempt. |
 | GET | `/profile/heap` | Heap profile. Auth-exempt. |

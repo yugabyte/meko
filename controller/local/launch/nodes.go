@@ -170,7 +170,6 @@ func startSafekeeper(env *config.LocalEnv, conf *config.SafekeeperConf, timeout 
 		return err
 	}
 	params := cfg.SafekeeperParams{
-		ID:                      conf.ID,
 		BranchID:                conf.BranchID,
 		ListenAddr:              listenAddr,
 		PgPort:                  conf.PgPort,

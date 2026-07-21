@@ -171,8 +171,6 @@ async fn main() -> anyhow::Result<()> {
     // we need to release the lock file only when the current process is gone
     std::mem::forget(lock_file);
 
-    let id = cfg.id;
-    info!("safekeeper ID {}", id);
     if args.init {
         return Ok(());
     }
@@ -249,13 +247,11 @@ async fn main() -> anyhow::Result<()> {
 
     let conf = Arc::new(SafeKeeperConf {
         workdir,
-        my_id: id,
         listen_pg_addr: cfg.listen_pg,
         listen_pg_addr_tenant_only: cfg.listen_pg_tenant_only,
         listen_http_addr: cfg.listen_http,
         listen_https_addr: cfg.listen_https,
         advertise_pg_addr: cfg.advertise_pg,
-        availability_zone: cfg.availability_zone,
         heartbeat_timeout: cfg.heartbeat_timeout,
         yb_storage_conn,
         branch_id: cfg.branch_id,

@@ -9,7 +9,7 @@ use once_cell::sync::Lazy;
 use pem::Pem;
 use tokio::runtime::Runtime;
 use utils::auth::SwappableJwtAuth;
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 use utils::logging::SecretString;
 
 mod auth;
@@ -71,13 +71,11 @@ pub struct SafeKeeperConf {
     // to the process but different unit tests work on different
     // data directories to avoid clashing with each other.
     pub workdir: Utf8PathBuf,
-    pub my_id: NodeId,
     pub listen_pg_addr: String,
     pub listen_pg_addr_tenant_only: Option<String>,
     pub listen_http_addr: String,
     pub listen_https_addr: Option<String>,
     pub advertise_pg_addr: Option<String>,
-    pub availability_zone: Option<String>,
     pub heartbeat_timeout: Duration,
     /// Optional YB connection for mirroring live WAL writes. When `Some`,
     /// every `write_wal` is INSERT'd into the (hardcoded) `safekeeper.wals`
@@ -149,11 +147,9 @@ impl SafeKeeperConf {
             listen_http_addr: defaults::DEFAULT_HTTP_LISTEN_ADDR.to_string(),
             listen_https_addr: None,
             advertise_pg_addr: None,
-            availability_zone: None,
             yb_storage_conn: None,
             branch_id: None,
             wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
-            my_id: NodeId(0),
             pg_auth: None,
             pg_tenant_only_auth: None,
             http_auth: None,

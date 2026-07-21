@@ -14,7 +14,7 @@ use postgres_ffi::{MAX_SEND_SIZE, XLogSegNo};
 use safekeeper_api::models::WalSenderState;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::state::{TimelineMemState, TimelinePersistentState};
@@ -128,7 +128,6 @@ async fn build_from_tli_dump(
 /// Safekeeper configuration.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
-    pub id: NodeId,
     pub workdir: PathBuf,
     pub listen_pg_addr: String,
     pub listen_http_addr: String,
@@ -311,7 +310,6 @@ fn get_wal_last_modified(path: &Utf8Path) -> Result<Option<DateTime<Utc>>> {
 /// supposed to be exposed.
 fn build_config(config: Arc<SafeKeeperConf>) -> Config {
     Config {
-        id: config.my_id,
         workdir: config.workdir.clone().into(),
         listen_pg_addr: config.listen_pg_addr.clone(),
         listen_http_addr: config.listen_http_addr.clone(),

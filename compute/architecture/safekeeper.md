@@ -426,7 +426,7 @@ handshake:
 
 - `ProposerGreeting` (P→A): `branch_id`, `pg_version`, `system_id`,
   `wal_seg_size`.
-- `AcceptorGreeting` (A→P): `node_id` + **`flush_lsn`** — the safekeeper's
+- `AcceptorGreeting` (A→P): just **`flush_lsn`** — the safekeeper's
   end-of-WAL. There is no voting round; the greeting alone "elects" the
   walproposer, which resumes streaming at `flush_lsn`.
 - `ProposerElected` (P→A): just `start_streaming_at`. `handle_elected`
@@ -469,16 +469,15 @@ branch from everyone else's. Two consequences:
   before it can touch the registry, so a misrouted walproposer can't create
   or mutate a foreign branch in this process.
 
-### 6. Node id from config, not from `safekeeper.id` (commit `8027e06c4`)
+### 6. No safekeeper node id
 
-The 50-line `set_id()` helper that read/wrote `<workdir>/safekeeper.id` is
-gone. The id now comes from the `id` key in `safekeeper.toml` (originally a
-`--id` CLI flag; folded into the config file when the safekeeper's whole CLI
-surface moved to `safekeeper.toml`). The id file is no longer created.
-
-This removed the last *durable* byte the safekeeper wrote to local FS in
-YB-backed mode. A freshly-wiped workdir works fine on restart as long as the
-launcher rewrites `safekeeper.toml` (it does, on every `SafekeeperNode::start`).
+yb-amp runs a single safekeeper per branch, so the inherited Neon node id — a
+consensus/membership identity — carried no routing or fencing role and survived
+only as a label (on the `AcceptorGreeting`, `/v1/status`, and config). It was
+removed entirely: the greeting no longer carries a node id and `safekeeper.toml`
+has no `id` key. There is likewise no on-disk `safekeeper.id` file — that (the
+last durable byte the safekeeper wrote to local FS in YB-backed mode) was
+already gone, back when the id still came from the `id` config key.
 
 ### 7. WAL acceptor batching ticker (commit `95088ba54`)
 
@@ -629,11 +628,9 @@ yb-safekeeper -D <datadir> [--init] [--dump-control-file <path>]
 A representative `<datadir>/safekeeper.toml`:
 
 ```toml
-id = 1
 branch_id = "77ffde89..."
 listen_pg = "127.0.0.1:5474"
 listen_http = "127.0.0.1:7686"
-availability_zone = "sk-1"
 yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage', sslmode = 'require' }"
 # … tuning knobs (heartbeat_timeout, control_file_save_interval, ssl_*, …)
 # fall back to defaults when omitted; unknown keys are ignored.

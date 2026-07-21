@@ -110,9 +110,6 @@ typedef enum
 	SS_ACTIVE_FLUSH,
 } SafekeeperActiveState;
 
-/* yb_amp storage node id */
-typedef uint64 NNodeId;
-
 /*
  * Proposer <-> Acceptor messaging.
  */
@@ -150,7 +147,7 @@ typedef struct AcceptorProposerMessage
 } AcceptorProposerMessage;
 
 /*
- * Acceptor -> Proposer initial response: its node id and current end-of-WAL.
+ * Acceptor -> Proposer initial response: its current end-of-WAL.
  * yb-amp runs a single safekeeper per branch with WAL durability provided by
  * YugabyteDB, so the inherited Neon consensus (terms/voting) and membership
  * are gone. The walproposer resumes streaming at `flushLsn` (which the
@@ -159,7 +156,6 @@ typedef struct AcceptorProposerMessage
 typedef struct AcceptorGreeting
 {
 	AcceptorProposerMessage apm;
-	NNodeId		nodeId;
 	XLogRecPtr	flushLsn;
 } AcceptorGreeting;
 

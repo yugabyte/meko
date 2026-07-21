@@ -194,7 +194,6 @@ func TestSafekeeperTomlGolden(t *testing.T) {
 	branch := config.BranchID(goldBranchID)
 	yb := goldYbInlineConn
 	p := SafekeeperParams{
-		ID:            1,
 		BranchID:      &branch,
 		ListenAddr:    "127.0.0.1",
 		PgPort:        30100,
@@ -338,7 +337,6 @@ func TestSafekeeperTomlRoundTrip(t *testing.T) {
 	yb := goldYbInlineConn
 	authKey := "/keys/auth_public_key.pem"
 	p := SafekeeperParams{
-		ID:                7,
 		BranchID:          &branch,
 		ListenAddr:        "127.0.0.1",
 		PgPort:            30100,
@@ -360,12 +358,6 @@ func TestSafekeeperTomlRoundTrip(t *testing.T) {
 		if _, ok := m[k]; !ok {
 			t.Errorf("expected key %q present", k)
 		}
-	}
-	if m["id"].(int64) != 7 {
-		t.Errorf("id = %v", m["id"])
-	}
-	if m["availability_zone"] != "sk-7" {
-		t.Errorf("availability_zone = %v", m["availability_zone"])
 	}
 }
 
