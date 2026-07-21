@@ -174,11 +174,36 @@ pub struct YbConnConfig {
     /// (`deny_unknown_fields`) — intentional, not silently ignored.
     #[serde(default, skip_serializing_if = "HotPath::is_default")]
     pub hot_path: HotPath,
-    /// yb-tserver RPC endpoints for the `tsclient` hot path, CSV. When unset,
-    /// the `host_ports` hosts on port 9100; set explicitly to reach every
-    /// tserver when `host_ports` is only a subset (e.g. a single YSQL VIP).
+    /// yb-tserver RPC endpoints for the `tsclient` hot path, CSV. When
+    /// unset, the `host_ports` hosts on port 9100; set explicitly to reach
+    /// every tserver when `host_ports` is only a subset (e.g. a single YSQL
+    /// VIP, or a K8s service that load-balances across the tserver pods).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tserver_rpc_addrs: Option<HostPorts>,
+    /// Read-*session* count for the `tsclient` hot-path pool. Sets read
+    /// concurrency (each session is a serial Perform queue); the sessions are
+    /// packed onto shared connections (see [`Self::tsclient_sessions_per_conn`]),
+    /// so this sets concurrency, not the connection count. Used verbatim (no
+    /// scale-factor multiplication). When unset, each daemon applies its own
+    /// default: the pageserver `scale_count(4, scale_factor)`, the safekeeper
+    /// WAL lane a fixed 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tsclient_read_sessions: Option<usize>,
+    /// Dedicated write-*session* count for the `tsclient` hot-path pool
+    /// (server sessions, packed onto shared connections). Used verbatim when
+    /// set. When unset: the pageserver `scale_count(4, scale_factor)`, the
+    /// safekeeper WAL lane a fixed 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tsclient_write_sessions: Option<usize>,
+    /// How many `tsclient` sessions ride each TCP connection. The pool opens
+    /// `ceil((read_sessions + write_sessions) / sessions_per_conn)`
+    /// connections and packs the sessions across them (reads and writes
+    /// sharing connections); the connection count is what spreads load
+    /// across tserver nodes (behind a single ClusterIP VIP, more connections
+    /// = more nodes the VIP fans traffic to). Used verbatim when set; when
+    /// unset, defaults to 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tsclient_sessions_per_conn: Option<usize>,
 }
 
 /// See [`YbConnConfig::hot_path`].
@@ -203,8 +228,9 @@ impl HotPath {
 pub const DEFAULT_YB_TSERVER_RPC_PORT: u16 = 9100;
 
 impl YbConnConfig {
-    /// yb-tserver RPC endpoints: `tserver_rpc_addrs` if set, else the
-    /// `host_ports` hosts on [`DEFAULT_YB_TSERVER_RPC_PORT`].
+    /// yb-tserver RPC endpoints the `tsclient` hot path connects to:
+    /// `tserver_rpc_addrs` if set, else the `host_ports` hosts on
+    /// [`DEFAULT_YB_TSERVER_RPC_PORT`].
     pub fn effective_tserver_rpc_addrs(&self) -> Vec<String> {
         if let Some(hp) = &self.tserver_rpc_addrs {
             return hp
@@ -213,11 +239,7 @@ impl YbConnConfig {
                 .map(|h| format!("{}:{}", h.host, h.port))
                 .collect();
         }
-        self.host_ports
-            .0
-            .iter()
-            .map(|h| format!("{}:{}", h.host, DEFAULT_YB_TSERVER_RPC_PORT))
-            .collect()
+        rpc_addrs_from_hosts(self.host_ports.0.iter().map(|h| h.host.clone()))
     }
     /// Render this connection config as a libpq/diesel `postgresql://` URL.
     ///
@@ -294,8 +316,27 @@ impl YbConnConfig {
         if let Some(t) = &self.tserver_rpc_addrs {
             parts.push(format!("tserver_rpc_addrs = {}", q(&t.to_string())));
         }
+        if let Some(n) = self.tsclient_read_sessions {
+            parts.push(format!("tsclient_read_sessions = {n}"));
+        }
+        if let Some(n) = self.tsclient_write_sessions {
+            parts.push(format!("tsclient_write_sessions = {n}"));
+        }
         format!("{{ {} }}", parts.join(", "))
     }
+}
+
+/// Build tserver RPC endpoint strings from bare hostnames on the default
+/// RPC port ([`DEFAULT_YB_TSERVER_RPC_PORT`]), deduplicated and ordered so
+/// the session pool has a stable layout.
+fn rpc_addrs_from_hosts(hosts: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut addrs: Vec<String> = hosts
+        .into_iter()
+        .map(|h| format!("{h}:{DEFAULT_YB_TSERVER_RPC_PORT}"))
+        .collect();
+    addrs.sort_unstable();
+    addrs.dedup();
+    addrs
 }
 
 /// One-time catalog lookup for the `tsclient` hot path: the database OID
@@ -420,6 +461,9 @@ impl YbConnArgs {
             // Diagnostic tools always use YSQL.
             hot_path: HotPath::Ysql,
             tserver_rpc_addrs: None,
+            tsclient_read_sessions: None,
+            tsclient_write_sessions: None,
+            tsclient_sessions_per_conn: None,
         }
     }
 }
@@ -480,7 +524,7 @@ mod cli_tests {
 
 #[cfg(test)]
 mod database_url_tests {
-    use super::YbConnConfig;
+    use super::{YbConnConfig, rpc_addrs_from_hosts};
 
     fn cfg(host_ports: &str) -> YbConnConfig {
         YbConnConfig {
@@ -493,6 +537,9 @@ mod database_url_tests {
             disable_transactional_writes: false,
             hot_path: super::HotPath::default(),
             tserver_rpc_addrs: None,
+            tsclient_read_sessions: None,
+            tsclient_write_sessions: None,
+            tsclient_sessions_per_conn: None,
         }
     }
 
@@ -625,6 +672,15 @@ mod database_url_tests {
         let mut c = cfg("ysql-vip:5433");
         c.tserver_rpc_addrs = Some("t1:9100,t2:9200".parse().unwrap());
         assert_eq!(c.effective_tserver_rpc_addrs(), ["t1:9100", "t2:9200"]);
+    }
+
+    #[test]
+    fn rpc_addrs_from_hosts_maps_dedups_and_sorts() {
+        // Bare hosts map to the RPC port, deduped and ordered for a stable
+        // pool layout (a VIP can appear alongside the hosts it fronts).
+        let addrs =
+            rpc_addrs_from_hosts(["ts2", "ts1", "ts2", "ts3"].iter().map(|s| s.to_string()));
+        assert_eq!(addrs, ["ts1:9100", "ts2:9100", "ts3:9100"]);
     }
 }
 

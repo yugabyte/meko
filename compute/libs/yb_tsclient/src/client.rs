@@ -12,23 +12,26 @@
 //! re-validates every cached table (refreshing schema versions), and
 //! restarts the per-session Perform `serial_no` at 0.
 //!
-//! The client holds a pool of sessions spread ACROSS all tserver
-//! endpoints (see [`SessionPool`]): one read session per endpoint, plus
-//! [`TsClientConfig::write_sessions`] dedicated write sessions
-//! distributed round-robin over the endpoints, each its own TCP
-//! connection + server session. Reads, table opens, and the first page
-//! of a scan round-robin the read sessions so single-page reads (the
-//! getpage hot path) fan out over every node; `upsert_batch` round-robins
-//! the write sessions. Writes are stateless per Perform (fresh
-//! `txn_serial_no`, no continuations), so any session on any node serves
-//! any write; spreading them keeps multi-megabyte bulk-flush Performs from
-//! serializing on one connection and one server session, and keeps one
-//! tserver from taking all the traffic. A paged scan's continuations
+//! The client holds a pool of sessions (see [`SessionPool`]): a fixed
+//! number of read sessions ([`TsClientConfig::read_sessions`], or one per
+//! endpoint when 0) plus [`TsClientConfig::write_sessions`] dedicated write
+//! sessions. Sessions give request *concurrency* — the server queues a
+//! session's Performs by strictly increasing serial, so one session
+//! serializes its Performs — and they are packed onto shared TCP
+//! connections, [`TsClientConfig::sessions_per_conn`] per connection (reads
+//! and writes share the same connections). It is the *connection* count,
+//! `ceil(total_sessions / sessions_per_conn)`, that spreads load across
+//! tserver nodes: behind a single ClusterIP VIP every connection dials the
+//! one VIP address and the VIP lands each on a (possibly different) tserver.
+//! Reads, table opens, and the first page of a scan round-robin the read
+//! sessions; `upsert_batch` round-robins the write sessions. Writes are
+//! stateless per Perform (fresh `txn_serial_no`, no continuations), so any
+//! session serves any write; spreading them keeps multi-megabyte bulk-flush
+//! Performs from serializing on one session. A paged scan's continuations
 //! must return to the read session that pinned page 1 (server read-point
 //! history is per session), so continuations re-pin to that session while
-//! only the first page round-robins. Recovery and heartbeats treat the
-//! pool as one epoch/failure unit, but each new session reconnects its
-//! predecessor's endpoint so the pool stays spread.
+//! only the first page round-robins. Recovery and heartbeats treat the pool
+//! as one epoch/failure unit; recovery rebuilds it at the same shape.
 //!
 //! ## Read-time pinning and Perform serial numbers
 //!
@@ -111,7 +114,7 @@ use crate::pb::yb::tserver::{
 };
 use crate::pb::yb::{PgsqlPagingStatePb, PgsqlResponsePb, ReadHybridTimePb};
 use crate::rows::{Row, ValueType};
-use crate::session::{ConnState, Endpoints, SessionCore, SessionMeta, SessionPool};
+use crate::session::{ConnState, Endpoints, PoolConn, SessionCore, SessionMeta, SessionPool};
 use crate::table::{TableHandle, columns_from_schema, pgsql_table_id};
 
 const SERVICE: &str = "yb.tserver.PgClientService";
@@ -140,38 +143,55 @@ pub struct TsClientConfig {
     pub tserver_addrs: Vec<String>,
     /// Endpoint to prefer as the pool's lead (e.g. the co-located
     /// tserver). Must match one of `tserver_addrs` textually; when unset,
-    /// a loopback address in the list leads, else the first entry. The
-    /// pool opens a read session on EVERY endpoint regardless — this only
-    /// picks which one leads (reported by `connected_addr`, used to
-    /// re-validate tables on recovery) and the per-session failover order.
+    /// a loopback address in the list leads, else the first entry. This
+    /// picks which endpoint connection 0 dials (its first read session is
+    /// what `connected_addr` reports) and the failover order when a
+    /// connection reconnects.
     pub preferred_addr: Option<String>,
     /// Per-RPC deadline (also bounds connect attempts).
     pub rpc_timeout: Duration,
-    /// Dedicated write sessions (each its own TCP connection + server
-    /// session), distributed round-robin across the endpoints, that
-    /// [`TsClient::upsert_batch`] round-robins over — on top of the
-    /// one-read-session-per-endpoint that serves everything else. 0 (the
-    /// default) routes writes over the read sessions instead (still one
-    /// per endpoint, so still spread across nodes).
+    /// Dedicated write *sessions* (server sessions, NOT connections) that
+    /// [`TsClient::upsert_batch`] round-robins over — on top of the read
+    /// sessions that serve everything else. 0 (the default) routes writes
+    /// over the read sessions instead.
     ///
-    /// Why: multi-megabyte write Performs serialize on a single
-    /// connection — frame encode/write on the client, frame read +
-    /// protobuf decode on the server's one reactor thread for that
-    /// connection, and Perform-start sequencing on the one server-side
-    /// session — so concurrent bulk-flush chunks barely overlap, and
-    /// reads sharing the connection queue behind the write frames.
-    /// Callers that fan out bulk writes (the pageserver pagewriter) set
-    /// this to their chunk-fanout width; one-batch-at-a-time callers
-    /// (the safekeeper WAL flush) leave it 0.
+    /// Why more than one session: the server queues a session's Performs by
+    /// strictly increasing serial, so a single session effectively
+    /// serializes its Performs — concurrent bulk-flush chunks barely overlap
+    /// on one session. Extra sessions give that concurrency; they are packed
+    /// onto the shared connections (see [`Self::sessions_per_conn`]) and
+    /// multiplex over them (the RPC layer demuxes responses by `call_id`).
+    /// Callers that fan out bulk writes (the pageserver pagewriter) set this
+    /// to their chunk-fanout width; one-batch-at-a-time callers (the
+    /// safekeeper WAL flush) keep it small.
     pub write_sessions: usize,
-    /// Close a session's TCP connection (and let its server-side session
+    /// Number of read *sessions* (server sessions, NOT connections) that
+    /// reads / `OpenTable` / first-page scans pick over round-robin. **0
+    /// (the default) opens one read session per endpoint.** This sets read
+    /// concurrency (each session is a serial Perform queue); the sessions
+    /// are packed onto the shared connections (see
+    /// [`Self::sessions_per_conn`]). Callers set it config / scale-factor
+    /// derived.
+    pub read_sessions: usize,
+    /// How many sessions ride each TCP connection. The pool opens
+    /// `ceil((read_sessions + write_sessions) / sessions_per_conn)`
+    /// connections and packs the sessions across them round-robin, reads and
+    /// writes sharing the same connections. The connection count is what
+    /// spreads load across tserver nodes: behind a single ClusterIP VIP
+    /// every connection dials the one VIP address and the VIP lands each on
+    /// a (possibly different) tserver, so more sessions ⇒ more connections ⇒
+    /// more nodes. A serial Perform queue is per-*session*, so packing many
+    /// sessions onto one connection keeps their concurrency while bounding
+    /// the socket + reactor count. Clamped to at least 1; default 4.
+    pub sessions_per_conn: usize,
+    /// Close a connection's socket (and let its server-side sessions
     /// expire) once it has been idle this long, reopening transparently on
-    /// the next use. Keeping every session warm forever holds a
+    /// the next use. Keeping every connection warm forever holds a
     /// fleet-wide fan of tserver connections + sessions + 10s heartbeat
     /// chatter on branches that go quiet (one pageserver was seen holding
     /// 131 connections to a single tserver); idle-close bounds that.
     ///
-    /// `Some(d)`: sweep idle sessions closed after `d` (default 60s).
+    /// `Some(d)`: sweep idle connections closed after `d` (default 60s).
     /// `None`: never close — the previous always-warm behavior.
     ///
     /// The reopen is just reconnect + `Heartbeat` (fresh server session
@@ -188,6 +208,8 @@ impl Default for TsClientConfig {
             preferred_addr: None,
             rpc_timeout: Duration::from_secs(10),
             write_sessions: 0,
+            read_sessions: 0,
+            sessions_per_conn: 4,
             idle_timeout: Some(Duration::from_secs(60)),
         }
     }
@@ -231,17 +253,24 @@ pub struct ReadPage {
 
 /// Pure-Rust direct-to-tserver YB client speaking the pggate RPC
 /// protocol (`yb.tserver.PgClientService`). One instance per component.
-/// The session pool spans every tserver endpoint; reads round-robin the
-/// per-endpoint read sessions (paged-scan continuations re-pin to their
-/// scan's session) and `upsert_batch` round-robins the write sessions
-/// ([`TsClientConfig::write_sessions`]), so both reads and writes spread
-/// across nodes and bulk write chunks truly overlap.
+/// Sessions are packed onto shared connections
+/// ([`TsClientConfig::sessions_per_conn`]); reads round-robin the read
+/// sessions (paged-scan continuations re-pin to their scan's session) and
+/// `upsert_batch` round-robins the write sessions
+/// ([`TsClientConfig::write_sessions`]), so read and write Performs overlap,
+/// and the connection count is what spreads them across tserver nodes.
 pub struct TsClient {
     rpc_timeout: Duration,
     endpoints: Endpoints,
     /// See [`TsClientConfig::write_sessions`]; recovery re-creates the
     /// pool at this size.
     write_sessions: usize,
+    /// See [`TsClientConfig::read_sessions`]; recovery re-creates the pool
+    /// with this many read sessions (0 = one per endpoint).
+    read_sessions: usize,
+    /// See [`TsClientConfig::sessions_per_conn`]; recovery re-creates the
+    /// pool packing this many sessions per connection.
+    sessions_per_conn: usize,
     /// See [`TsClientConfig::idle_timeout`]; `None` = never idle-close.
     idle_timeout: Option<Duration>,
     /// Current session pool; replaced wholesale by recovery.
@@ -265,9 +294,9 @@ pub struct TsClient {
 
 /// Which session an operation's attempt runs on.
 ///
-/// - `Read`: round-robin across the per-endpoint read sessions. First
-///   pages of scans, single-page reads, and table opens — the spread that
-///   stops one tserver from taking all read traffic.
+/// - `Read`: round-robin across the read sessions. First pages of scans,
+///   single-page reads, and table opens — the concurrency that stops one
+///   session from serializing all read traffic.
 /// - `PinnedRead(session_id)`: the exact read session that created a
 ///   paged scan. A continuation MUST return to it (the server keeps the
 ///   scan's read point in that session's read-point history), so once
@@ -275,8 +304,8 @@ pub struct TsClient {
 ///   that session id. Resolves to `None` after a recovery replaced the
 ///   pool — the continuation then fails loudly (its snapshot is gone).
 /// - `Write`: round-robin across the dedicated write sessions (or the
-///   read sessions when none are configured), spread across endpoints.
-///   Writes are stateless per Perform, so any session serves any write.
+///   read sessions when none are configured). Writes are stateless per
+///   Perform, so any session serves any write.
 #[derive(Clone, Copy)]
 enum SessionSel {
     Read,
@@ -295,11 +324,21 @@ impl Drop for TsClient {
 impl TsClient {
     pub async fn connect(config: TsClientConfig) -> Result<Arc<TsClient>, YbError> {
         let endpoints = Endpoints::new(config.tserver_addrs, config.preferred_addr.as_deref())?;
-        let pool = establish_pool(&endpoints, config.rpc_timeout, 0, config.write_sessions).await?;
+        let pool = establish_pool(
+            &endpoints,
+            config.rpc_timeout,
+            0,
+            config.read_sessions,
+            config.write_sessions,
+            config.sessions_per_conn,
+        )
+        .await?;
         let client = Arc::new(TsClient {
             rpc_timeout: config.rpc_timeout,
             endpoints,
             write_sessions: config.write_sessions,
+            read_sessions: config.read_sessions,
+            sessions_per_conn: config.sessions_per_conn,
             idle_timeout: config.idle_timeout,
             state: std::sync::RwLock::new(Arc::new(pool)),
             recovery_lock: tokio::sync::Mutex::new(()),
@@ -669,6 +708,32 @@ impl TsClient {
         )
     }
 
+    /// Number of read *sessions* in the current pool — the configured cap,
+    /// or one per endpoint when uncapped. A test hook for the
+    /// read-session-cap assertions. Note this is the session count, NOT the
+    /// connection count (see [`Self::connection_count_for_test`]).
+    #[doc(hidden)]
+    pub fn read_session_count(&self) -> usize {
+        self.current_pool().read_sessions.len()
+    }
+
+    /// Number of distinct shared connections the pool's sessions ride (by
+    /// [`PoolConn`] identity) — `ceil(total_sessions / sessions_per_conn)`,
+    /// proving that up to `sessions_per_conn` sessions share one connection.
+    #[doc(hidden)]
+    pub fn connection_count_for_test(&self) -> usize {
+        let pool = self.current_pool();
+        let mut conns: Vec<*const PoolConn> = pool
+            .read_sessions
+            .iter()
+            .chain(&pool.write_sessions)
+            .map(|s| Arc::as_ptr(&s.conn))
+            .collect();
+        conns.sort_unstable();
+        conns.dedup();
+        conns.len()
+    }
+
     /// The current server-side session id of the first read session
     /// (changes on recovery). Kept for the existing recovery tests; the
     /// pool now holds one session id per endpoint.
@@ -713,13 +778,13 @@ impl TsClient {
         self.warm_session_count_for_test().await
     }
 
-    /// Test hook: how many pool sessions currently hold a warm connection.
+    /// Test hook: how many pool sessions sit on a warm connection.
     #[doc(hidden)]
     pub async fn warm_session_count_for_test(&self) -> usize {
         let pool = self.current_pool();
         let mut warm = 0;
         for session in pool.all() {
-            if matches!(&*session.conn.lock().await, ConnState::Warm(_)) {
+            if matches!(&*session.conn.state.lock().await, ConnState::Warm(_)) {
                 warm += 1;
             }
         }
@@ -749,20 +814,23 @@ impl TsClient {
         }
     }
 
-    /// Return a warm connection for `session`, reopening it if the idle
-    /// sweeper had closed it (Cold → Warm), and mark it used. Under the
-    /// session's async connection lock, so a concurrent burst of callers
-    /// on the same Cold session re-establishes EXACTLY ONCE — the first
-    /// waiter reconnects, the rest observe Warm and reuse it (no
-    /// thundering herd of reconnects) — and the sweeper (which takes the
-    /// same lock to go Warm → Cold) can never close a connection out from
-    /// under an in-flight caller.
+    /// Return a warm socket for `session`, reopening its connection if the
+    /// idle sweeper had closed it (Cold → Warm), and mark it used. Runs under
+    /// the shared connection's lock, so a concurrent burst of callers across
+    /// all the sessions on that connection re-establishes the socket EXACTLY
+    /// ONCE — the first waiter reconnects, the rest observe Warm and reuse it
+    /// (no thundering herd of reconnects) — and the sweeper (which takes the
+    /// same lock to go Warm → Cold) can never close a socket out from under
+    /// an in-flight caller.
     ///
-    /// The reopen is [`establish_session_conn`] — connect + `Heartbeat`,
-    /// **no `OpenTable`** (schema is immutable; the cached `TableHandle`
-    /// stays valid). The new server session id replaces the old in
-    /// `session.meta` and its Perform serials restart at 0. A reopen fires
-    /// the `on_session_recovery` observer hook (see [`ClientObserver`]).
+    /// Two steps under the lock: (1) reconnect the shared socket if Cold
+    /// (`dial`, bumping the connection `generation`); (2) if this session's
+    /// server session died in that reconnect (its `conn_gen_seen` lags the
+    /// connection generation), re-`Heartbeat{0}` a fresh one — **no
+    /// `OpenTable`** (schema is immutable; the cached `TableHandle` stays
+    /// valid). The new server session id replaces the old in `session.meta`
+    /// and its Perform serials restart at 0. A re-establish fires the
+    /// `on_session_recovery` observer hook (see [`ClientObserver`]).
     ///
     /// `reopen == false` forbids reopening a Cold session and fails loudly
     /// instead: a paged-scan continuation is pinned to the server session
@@ -776,68 +844,100 @@ impl TsClient {
         session: &SessionCore,
         reopen: bool,
     ) -> Result<Arc<Connection>, YbError> {
-        session.touch();
-        let mut guard = session.conn.lock().await;
-        if let ConnState::Warm(conn) = &*guard {
-            return Ok(Arc::clone(conn));
-        }
-        if !reopen {
-            return Err(YbError::other(format!(
-                "paging continuation's session (id {}) on {} was idle-closed; its \
-                 read-point history is gone — restart the scan",
-                session.meta.session_id(),
+        let pc = &session.conn;
+        pc.touch();
+        let mut guard = pc.state.lock().await;
+        // 1. Ensure the shared socket is warm — reconnect if the sweeper
+        //    closed it (Cold → Warm), bumping the generation so every
+        //    session on this connection re-Heartbeats a fresh server session.
+        let conn = match &*guard {
+            ConnState::Warm(conn) => Arc::clone(conn),
+            ConnState::Cold => {
+                if !reopen {
+                    return Err(YbError::other(format!(
+                        "paging continuation's connection to {} was idle-closed; its \
+                         read-point history is gone — restart the scan",
+                        session.peer(),
+                    )));
+                }
+                let (new_conn, _idx, _addr) =
+                    dial(&self.endpoints, pc.endpoint_idx, self.rpc_timeout).await?;
+                pc.bump_generation();
+                *guard = ConnState::Warm(Arc::clone(&new_conn));
+                tracing::info!("yb_tsclient: reconnected to {}", session.peer());
+                new_conn
+            }
+        };
+        // 2. Re-Heartbeat this session if the connection reconnected since it
+        //    was last established (its server session died with the old
+        //    socket). NO OpenTable — the cached TableHandle stays valid.
+        let generation = pc.generation();
+        if session.conn_gen_seen() != generation {
+            if !reopen {
+                return Err(YbError::other(format!(
+                    "paging continuation's session (id {}) on {} lost its server session \
+                     across a reconnect — restart the scan",
+                    session.meta.session_id(),
+                    session.peer(),
+                )));
+            }
+            let resp = heartbeat(&conn, 0, self.rpc_timeout).await?;
+            if resp.session_id == 0 {
+                return Err(YbError::other("Heartbeat returned no session_id"));
+            }
+            session.meta.reopened_with(resp.session_id);
+            session.set_conn_gen_seen(generation);
+            self.observe(ClientObserver::on_session_recovery);
+            tracing::info!(
+                "yb_tsclient: re-established session on {} (new session id {}, no OpenTable)",
                 session.peer(),
-            )));
+                resp.session_id,
+            );
         }
-        // Cold: this task won the lock, so it reconnects; others awaiting
-        // the lock will see Warm below and reuse the connection.
-        let established =
-            establish_session_conn(&self.endpoints, session.endpoint_idx, self.rpc_timeout).await?;
-        let conn = Arc::clone(&established.conn);
-        session.meta.reopened_with(established.session_id);
-        *guard = ConnState::Warm(established.conn);
-        drop(guard);
-        self.observe(ClientObserver::on_session_recovery);
-        tracing::info!(
-            "yb_tsclient: reopened idle session on {} (new session id {}, no OpenTable)",
-            session.peer(),
-            established.session_id,
-        );
         Ok(conn)
     }
 
-    /// One sweep tick for a single session (see [`spawn_heartbeat`]):
-    /// close it if Warm-and-idle, heartbeat it if Warm-and-active, skip if
-    /// Cold. Takes the session's connection lock so it can't race a
-    /// concurrent user's reopen; a `Network` error from the heartbeat
-    /// propagates to trigger pool recovery.
+    /// One sweep tick for a single session (see [`spawn_heartbeat`]). Idle
+    /// close and heartbeat are at different granularities because the socket
+    /// is shared by every session on the connection:
+    /// - if the session's **connection** is Warm-and-idle, close it
+    ///   (dropping every session on it — they re-establish on next use);
+    /// - else keep THIS session's server session alive with a
+    ///   `Heartbeat{session_id}` over the shared socket — but only if it
+    ///   is current on the connection's generation (a session whose server
+    ///   session died in a reconnect and hasn't re-established yet is
+    ///   skipped; it re-Heartbeats on next Perform).
+    ///
+    /// Takes the connection lock so it can't race a concurrent reopen; a
+    /// `Network` error from the heartbeat propagates to trigger recovery.
     async fn heartbeat_or_close_idle(&self, session: &SessionCore) -> Result<(), YbError> {
-        let mut guard = session.conn.lock().await;
+        let pc = &session.conn;
+        let mut guard = pc.state.lock().await;
         let ConnState::Warm(conn) = &*guard else {
-            return Ok(()); // Cold: nothing to keep alive.
+            return Ok(()); // connection Cold: nothing to keep alive.
         };
-        // Idle-close: only if a timeout is configured AND still idle under
-        // the lock (a user that reopened/used it just now refreshed
-        // last_used, so it won't be idle and we keep it warm).
         if let Some(idle_timeout) = self.idle_timeout
-            && session.idle_for_at_least(idle_timeout)
+            && pc.idle_for_at_least(idle_timeout)
         {
-            let session_id = session.meta.session_id();
-            *guard = ConnState::Cold; // drops the Connection (aborts its tasks)
+            *guard = ConnState::Cold; // drops the shared Connection (aborts its tasks)
             drop(guard);
-            tracing::info!(
-                "yb_tsclient: closing idle session on {} (was session id {session_id})",
-                session.peer(),
-            );
+            tracing::info!("yb_tsclient: closing idle connection to {}", session.peer());
             return Ok(());
         }
-        // Warm and active: keep-alive as before. Clone the Arc so the
-        // heartbeat RPC doesn't hold the connection lock (a concurrent
-        // user must still be able to warm/use it).
+        // A session whose server session is stale (connection reconnected, not
+        // yet re-Heartbeated) must not be kept alive under its dead id.
+        if session.conn_gen_seen() != pc.generation() {
+            return Ok(());
+        }
+        // Connection warm + this session current: keep-alive. Clone the Arc so
+        // the heartbeat RPC doesn't hold the connection lock.
         let conn = Arc::clone(conn);
         drop(guard);
         heartbeat(&conn, session.meta.session_id(), self.rpc_timeout).await?;
-        session.touch();
+        // Deliberately do NOT touch() here: the idle clock measures real
+        // user activity (Performs, via warm_conn), not our own keep-alives.
+        // Touching on every keep-alive would reset last_used each sweep tick
+        // and the connection could never reach idle_timeout to be closed.
         Ok(())
     }
 
@@ -1150,7 +1250,9 @@ impl TsClient {
             &self.endpoints,
             self.rpc_timeout,
             current_epoch + 1,
+            self.read_sessions,
             self.write_sessions,
+            self.sessions_per_conn,
         )
         .await?;
 
@@ -1180,91 +1282,83 @@ impl TsClient {
     }
 }
 
-/// Builds a pool spread across ALL tserver endpoints: one read session
-/// per endpoint, plus `write_sessions` dedicated write sessions
-/// distributed round-robin across the endpoints — each session its own
-/// connection + server-side session.
+/// Builds the session pool: `read_sessions` read sessions (or one per
+/// endpoint when 0) plus `write_sessions` write sessions, packed onto
+/// `ceil(total / sessions_per_conn)` shared [`PoolConn`]s (at least one).
+/// Sessions are distributed round-robin over the connections — reads take
+/// global indices `0..read_count`, writes `read_count..total` — so each
+/// connection carries at most `sessions_per_conn` sessions and reads/writes
+/// share the same connections. Connection `c` dials endpoint `c % n`: behind
+/// a single VIP they all dial it (the VIP spreads them across nodes); an
+/// explicit multi-endpoint list fans them out directly.
 ///
-/// Every session targets a specific endpoint index. If that endpoint is
-/// down at open time, the session falls over to the next live endpoint
-/// (walking the candidate order), and its `endpoint_idx` records where it
-/// actually landed — so a later recovery reconnects the endpoint it's on
-/// now, and the pool self-heals back toward full spread as nodes return
-/// (each endpoint's own read session reconnects it). The whole pool
-/// fails to establish only if NO endpoint is usable.
+/// A connection's socket connect walks the endpoint list on failure (the
+/// whole pool fails to establish only if NO endpoint is usable); each
+/// session is then minted with its own `Heartbeat{0}` over its connection.
 async fn establish_pool(
     endpoints: &Endpoints,
     rpc_timeout: Duration,
     epoch: u64,
+    read_sessions: usize,
     write_sessions: usize,
+    sessions_per_conn: usize,
 ) -> Result<SessionPool, YbError> {
     let n = endpoints.addrs().len();
-    let mut read_slots = Vec::with_capacity(n);
-    for idx in 0..n {
-        read_slots.push(Arc::new(
-            open_session_preferring(endpoints, idx, rpc_timeout, epoch).await?,
-        ));
+    // 0 = one read session per endpoint; otherwise a fixed count.
+    let read_count = if read_sessions == 0 { n } else { read_sessions };
+    let total = read_count + write_sessions;
+    // Pack up to `sessions_per_conn` sessions per connection; open as many
+    // connections as that needs (>= 1). Each dials endpoint `c % n`.
+    let spc = sessions_per_conn.max(1);
+    let n_conns = total.div_ceil(spc).max(1);
+    let mut conns = Vec::with_capacity(n_conns);
+    for c in 0..n_conns {
+        let (conn, landed_idx, landed_addr) = dial(endpoints, c % n, rpc_timeout).await?;
+        conns.push(Arc::new(PoolConn::new(conn, landed_idx, landed_addr)));
     }
-    // Write sessions round-robin across endpoints so bulk writes both
-    // parallelize and hit every node.
-    let mut write_slots = Vec::with_capacity(write_sessions);
-    for w in 0..write_sessions {
-        write_slots.push(Arc::new(
-            open_session_preferring(endpoints, w % n, rpc_timeout, epoch).await?,
-        ));
-    }
+    // Distribute sessions round-robin over the connections (`g % n_conns`),
+    // reads first then writes, so both fan out evenly across every
+    // connection. Each mints its own server session over its connection.
+    // Mint concurrently: the sessions multiplex over their (already
+    // connected) shared connections, so N `Heartbeat{0}`s cost ~1 RTT rather
+    // than N — this is also the recovery latency, so it matters on the
+    // failure path. `try_join_all` preserves order, so slot `i` still lands
+    // on connection `i % n_conns`.
+    let read_futures = (0..read_count).map(|i| {
+        let conn = Arc::clone(&conns[i % n_conns]);
+        async move { mint_session(&conn, rpc_timeout, epoch).await.map(Arc::new) }
+    });
+    let write_futures = (0..write_sessions).map(|w| {
+        let conn = Arc::clone(&conns[(read_count + w) % n_conns]);
+        async move { mint_session(&conn, rpc_timeout, epoch).await.map(Arc::new) }
+    });
+    let (read_slots, write_slots) = futures::future::try_join(
+        futures::future::try_join_all(read_futures),
+        futures::future::try_join_all(write_futures),
+    )
+    .await?;
     Ok(SessionPool::new(read_slots, write_slots))
 }
 
-/// One freshly established connection + server-side session, ready to
-/// wrap in a [`SessionCore`] or install into a Cold one.
-struct EstablishedConn {
-    conn: Arc<Connection>,
-    session_id: u64,
-    instance_id: Vec<u8>,
-    /// Which [`Endpoints`] entry the connection actually landed on (it may
-    /// have walked past a down node) and that entry's address.
-    endpoint_idx: usize,
-    endpoint_addr: String,
-}
-
-/// The single establish primitive — **connect + `Heartbeat` only, NO
-/// `OpenTable`** — shared by the initial pool build, pool recovery, and
-/// idle-close reopen. It prefers endpoint `preferred_idx` and walks the
-/// rest of the list round-robin on connect failure, returning the
-/// endpoint it landed on. Errors only if every endpoint refused.
-///
-/// Reopen deliberately skips `OpenTable`: the hot tables
-/// (`pageserver.{pages,slru_pages,meta}`, `safekeeper.wals`) are created
-/// once and never altered, so their `schema_version` is immutable and the
-/// already-cached [`TableHandle`] (table id + schema version + column
-/// ids) stays valid across any reconnect. Perform uses that handle
-/// directly; a fresh server session only needs its id, which the
-/// `Heartbeat` returns.
-async fn establish_session_conn(
+/// Open one connection, dialing endpoint `preferred_idx` and walking the
+/// endpoint list on failure — socket + preamble only, NO `Heartbeat`/session.
+/// Returns the connection and the endpoint it landed on. Errors only if
+/// every endpoint refused.
+async fn dial(
     endpoints: &Endpoints,
     preferred_idx: usize,
     rpc_timeout: Duration,
-) -> Result<EstablishedConn, YbError> {
+) -> Result<(Arc<Connection>, usize, String), YbError> {
     let addrs = endpoints.addrs();
     let n = addrs.len();
     let mut failures = Vec::new();
     for i in 0..n {
         let idx = (preferred_idx + i) % n;
-        match connect_and_open_session(&addrs[idx], rpc_timeout).await {
-            Ok((conn, session_id, instance_id)) => {
-                return Ok(EstablishedConn {
-                    conn,
-                    session_id,
-                    instance_id,
-                    endpoint_idx: idx,
-                    endpoint_addr: addrs[idx].clone(),
-                });
-            }
+        match Connection::connect(&addrs[idx], rpc_timeout).await {
+            Ok(conn) => return Ok((Arc::new(conn), idx, addrs[idx].clone())),
             Err(e) => {
                 tracing::warn!(
-                    "yb_tsclient: session open on {} (endpoint {idx}) failed, \
-                     trying next endpoint: {e}",
+                    "yb_tsclient: connect to {} (endpoint {idx}) failed, trying next: {e}",
                     addrs[idx]
                 );
                 failures.push(format!("{} (endpoint {idx}): {e}", addrs[idx]));
@@ -1278,37 +1372,30 @@ async fn establish_session_conn(
     )))
 }
 
-/// [`establish_session_conn`] wrapped into a fresh [`SessionCore`] for the
-/// pool build / recovery paths (where a new epoch's slots are created).
-async fn open_session_preferring(
-    endpoints: &Endpoints,
-    preferred_idx: usize,
+/// Mint a fresh server session (`Heartbeat{0}`, NO `OpenTable` — the hot
+/// tables' schema is immutable so the cached handle stays valid) on `pc`'s
+/// current warm socket, recording the connection generation it was
+/// established on.
+async fn mint_session(
+    pc: &Arc<PoolConn>,
     rpc_timeout: Duration,
     epoch: u64,
 ) -> Result<SessionCore, YbError> {
-    let e = establish_session_conn(endpoints, preferred_idx, rpc_timeout).await?;
-    Ok(SessionCore::new(
-        e.conn,
-        e.session_id,
-        e.instance_id,
-        e.endpoint_idx,
-        e.endpoint_addr,
-        epoch,
-    ))
-}
-
-/// One connection + one server-side session on `addr` (connect + preamble
-/// + a `Heartbeat{session_id:0}` that mints the session). No `OpenTable`.
-async fn connect_and_open_session(
-    addr: &str,
-    rpc_timeout: Duration,
-) -> Result<(Arc<Connection>, u64, Vec<u8>), YbError> {
-    let conn = Arc::new(Connection::connect(addr, rpc_timeout).await?);
+    let conn = match &*pc.state.lock().await {
+        ConnState::Warm(c) => Arc::clone(c),
+        ConnState::Cold => return Err(YbError::other("mint_session: connection is cold")),
+    };
     let resp = heartbeat(&conn, 0, rpc_timeout).await?;
     if resp.session_id == 0 {
         return Err(YbError::other("Heartbeat returned no session_id"));
     }
-    Ok((conn, resp.session_id, resp.instance_id))
+    Ok(SessionCore::new(
+        Arc::clone(pc),
+        resp.session_id,
+        resp.instance_id,
+        pc.generation(),
+        epoch,
+    ))
 }
 
 async fn heartbeat(

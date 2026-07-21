@@ -52,6 +52,9 @@ async fn ysql() -> YsqlClient {
         disable_transactional_writes: false,
         hot_path: ysql_client::HotPath::Ysql,
         tserver_rpc_addrs: None,
+        tsclient_read_sessions: None,
+        tsclient_write_sessions: None,
+        tsclient_sessions_per_conn: None,
     };
     YsqlClient::from_yb_config(&conf, "yb_tsclient_live_test", false)
         .await
@@ -655,6 +658,82 @@ async fn endpoint_failover_skips_dead_tserver() {
     let got = read_branch_one_page(&client, &table, "f").await;
     assert_eq!(got.len(), 1);
 
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
+}
+
+// ---------------------------------------------------------------------
+// 4b. Read-session count: a fixed `read_sessions` sets the number of
+//     server sessions (round-robin over the endpoints); 0 keeps
+//     one-per-endpoint.
+// ---------------------------------------------------------------------
+#[tokio::test]
+#[ignore = "requires a live YugabyteDB cluster"]
+async fn read_sessions_caps_pool_size() {
+    // A fixed count is honored even against a single tserver: the pool opens
+    // exactly that many read sessions, round-robin over the one endpoint.
+    let capped = TsClient::connect(TsClientConfig {
+        tserver_addrs: tserver_addrs(),
+        read_sessions: 3,
+        ..Default::default()
+    })
+    .await
+    .expect("connect with a capped read pool");
+    assert_eq!(
+        capped.read_session_count(),
+        3,
+        "read_sessions sets the pool's session count"
+    );
+
+    // 0 (the default) falls back to one read session per endpoint.
+    let per_endpoint = connect().await;
+    assert_eq!(
+        per_endpoint.read_session_count(),
+        tserver_addrs().len(),
+        "read_sessions = 0 opens one read session per endpoint"
+    );
+}
+
+// ---------------------------------------------------------------------
+// 4c. Sessions pack onto shared connections: the pool opens
+//     ceil(total_sessions / sessions_per_conn) connections and rides many
+//     sessions over each, so the connection count tracks the session count
+//     and the packing factor, NOT the endpoint count.
+// ---------------------------------------------------------------------
+#[tokio::test]
+#[ignore = "requires a live YugabyteDB cluster"]
+async fn sessions_pack_onto_shared_connections() {
+    // 4 read + 2 write = 6 sessions, packed 2 per connection => 3 shared
+    // connections, independent of how many tservers were configured. Reads
+    // and writes share the same connections.
+    let client = TsClient::connect(TsClientConfig {
+        tserver_addrs: tserver_addrs(),
+        read_sessions: 4,
+        write_sessions: 2,
+        sessions_per_conn: 2,
+        ..Default::default()
+    })
+    .await
+    .expect("connect");
+    assert_eq!(client.read_session_count(), 4, "4 read sessions");
+    assert_eq!(
+        client.connection_count_for_test(),
+        3,
+        "6 sessions packed 2/conn => 3 shared connections"
+    );
+
+    // Sanity: the shared connections actually serve reads + writes.
+    const TABLE: &str = "tsclient_live_share";
+    let ysql = ysql().await;
+    let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
+    let table = client.open_table(db_oid, table_oid).await.expect("open");
+    client
+        .upsert_batch(&table, &[upsert_row(&table, "s", 1, 1, b"x")])
+        .await
+        .expect("upsert");
+    let got = read_branch_one_page(&client, &table, "s").await;
+    assert_eq!(got.len(), 1);
     ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
         .await
         .unwrap();
@@ -2038,6 +2117,63 @@ async fn idle_timeout_none_never_closes() {
     assert_eq!(
         warm, total,
         "idle_timeout=None must keep every session warm"
+    );
+
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
+}
+
+// ---------------------------------------------------------------------
+// Keep-alive heartbeats must NOT reset the idle clock: a connection that
+// sees only its own periodic keep-alives (no real Performs) still crosses
+// idle_timeout and closes. Regression for the bug where the sweep touched
+// the connection on every successful keep-alive, so with
+// idle_timeout > heartbeat interval it could never go idle.
+// ---------------------------------------------------------------------
+#[tokio::test]
+#[ignore = "requires a live YugabyteDB cluster"]
+async fn keepalive_does_not_reset_idle_clock() {
+    const TABLE: &str = "tsclient_live_keepalive";
+    let ysql = ysql().await;
+    let (db_oid, table_oid) = create_table(&ysql, TABLE).await;
+
+    // idle_timeout longer than a sweep gap, so a keep-alive sweep fires
+    // BEFORE the connection is idle (the pre-fix touch would land here).
+    let client = TsClient::connect(TsClientConfig {
+        tserver_addrs: tserver_addrs(),
+        idle_timeout: Some(std::time::Duration::from_millis(500)),
+        ..Default::default()
+    })
+    .await
+    .expect("tsclient connect");
+    let table = client.open_table(db_oid, table_oid).await.expect("open");
+    client
+        .upsert_batch(&table, &[upsert_row(&table, "ka", 1, 1, b"v")])
+        .await
+        .expect("upsert"); // last real use — starts the idle clock
+
+    let total = client.connected_peers().len();
+
+    // First sweep at ~300ms (< 500ms): not idle yet, so this keeps the
+    // sessions alive with a heartbeat. Pre-fix this ALSO touched, resetting
+    // the idle clock and pinning the connection warm forever.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let warm = client.sweep_idle_for_test().await;
+    assert_eq!(
+        warm, total,
+        "keep-alive sweep must not close a not-yet-idle connection"
+    );
+
+    // Second sweep at ~600ms from the last real use (> 500ms): with the
+    // keep-alive no longer touching, the clock reflects real quiescence and
+    // the connection closes. Pre-fix it would still read <500ms idle here
+    // (clock reset at 300ms) and stay warm.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let warm = client.sweep_idle_for_test().await;
+    assert_eq!(
+        warm, 0,
+        "connection idle past idle_timeout must close despite keep-alives"
     );
 
     ysql.execute(&format!("DROP TABLE {TABLE}"), &[])

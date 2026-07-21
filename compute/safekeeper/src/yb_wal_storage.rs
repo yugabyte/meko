@@ -318,12 +318,23 @@ impl YbWalConn {
     /// layout in one shot. Fail-fast at startup.
     async fn connect_tsclient(
         yb: &ysql_client::YbConnConfig,
-        system_client: &ysql_client::YsqlClient,
+        system_client: &Arc<ysql_client::YsqlClient>,
     ) -> anyhow::Result<Arc<YbTsClient>> {
         use anyhow::Context;
         let (db_oid, wals_oid) = Self::lookup_wals_oids(system_client).await?;
+        // WAL lane: one read + one write session by default (low-concurrency —
+        // one-batch-at-a-time flush + segment reads), round-robin across the
+        // configured tservers. `yb_storage_conn` can pin both counts.
+        let read_sessions = yb.tsclient_read_sessions.unwrap_or(1);
+        let write_sessions = yb.tsclient_write_sessions.unwrap_or(1);
+        let sessions_per_conn = yb.tsclient_sessions_per_conn.unwrap_or(4);
+        let tserver_addrs = yb.effective_tserver_rpc_addrs();
+        let tserver_count = tserver_addrs.len();
         let client = yb_tsclient::TsClient::connect(yb_tsclient::TsClientConfig {
-            tserver_addrs: yb.effective_tserver_rpc_addrs(),
+            tserver_addrs,
+            read_sessions,
+            write_sessions,
+            sessions_per_conn,
             ..Default::default()
         })
         .await
@@ -334,7 +345,9 @@ impl YbWalConn {
             .await
             .with_context(|| format!("opening {WALS_TABLE} via the tsclient lane"))?;
         tracing::info!(
-            "thin-RPC (tsclient) hot path ready: {WALS_TABLE} opened (table_id {}) on {}",
+            "thin-RPC (tsclient) hot path ready: {WALS_TABLE} opened (table_id {}) on {} \
+             ({read_sessions} read + {write_sessions} write sessions, {sessions_per_conn} per \
+             connection, across {tserver_count} configured tserver(s))",
             wals.table_id,
             client.connected_addr(),
         );

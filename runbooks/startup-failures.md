@@ -267,7 +267,15 @@ limit (`ulimit -u`, and/or the user slice's cgroup `pids.max`), so tokio (or
 the tsclient RPC reactors) couldn't spawn a worker. Seen when many endpoint
 PS+SK pairs run on one host: with `hot_path = "tsclient"` each daemon also
 opens pggate RPC connections to the tserver RPC port, adding worker/reactor
-threads per daemon (daemons sharing a process share one client).
+threads per daemon (daemons sharing a process share one client). The pool
+packs `tsclient_sessions_per_conn` server sessions (default 4) onto each TCP
+connection and opens
+`ceil((read_sessions + write_sessions) / sessions_per_conn)` connections, so
+the connection/thread cost scales with the session counts / packing density
+— NOT one-per-session. To cut connections without losing much concurrency,
+raise `tsclient_sessions_per_conn`; to cut them harder, lower
+`tsclient_read_sessions` / `tsclient_write_sessions`. Each daemon logs the
+effective counts in its `thin-RPC (tsclient) hot path ready …` line.
 
 Check and raise:
 ```sh

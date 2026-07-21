@@ -13,15 +13,15 @@ use crate::error::YbError;
 /// preferred endpoint (the configured `preferred_addr` if present, else a
 /// loopback address, else the original first entry) sits at index 0.
 ///
-/// The pool opens one read session per endpoint and write sessions
-/// round-robin over them, so EVERY endpoint carries traffic regardless of
-/// order. The ordering only sets which endpoint each positional session
-/// prefers: read session `i` (and write session `i % n`) targets endpoint
-/// `i`, failing over to the next only if that node is down. Putting the
-/// preferred/loopback endpoint at index 0 means the first read session —
-/// the one `connected_addr()`/`session_id()` report and the one used to
-/// re-validate tables on recovery — is the co-located node when there is
-/// one.
+/// The pool opens `ceil(total_sessions / sessions_per_conn)` connections,
+/// each dialing endpoint `c % n` (`c` the connection index), so EVERY
+/// endpoint carries connections regardless of order — and behind a single
+/// VIP there is only one entry, which the VIP fans across nodes. The
+/// ordering only sets which endpoint each connection prefers, failing over
+/// to the next only if that node is down. Putting the preferred/loopback
+/// endpoint at index 0 means connection 0 — whose first read session
+/// `connected_addr()`/`session_id()` report — is the co-located node when
+/// there is one.
 pub(crate) struct Endpoints {
     addrs: Vec<String>,
 }
@@ -120,94 +120,144 @@ impl SessionMeta {
     }
 }
 
-/// A session's connection, which is dropped when the session goes idle
-/// and re-established on next use (idle-connection closing). `Cold` holds
-/// no `Connection`, so its reader/writer tasks and its TCP socket +
-/// server-side session are gone; the next user reconnects.
+/// A pooled connection's socket, dropped when the connection goes idle and
+/// re-established on next use (idle-connection closing). `Cold` holds no
+/// `Connection`, so its reader/writer tasks and its TCP socket +
+/// server-side sessions are gone; the next user reconnects.
 pub(crate) enum ConnState {
     Warm(Arc<Connection>),
     Cold,
 }
 
-/// One PgClientService session slot: a re-establishable connection plus
-/// its [`SessionMeta`]. Perform submission (serial allocation + frame
-/// enqueue) happens under `perform_lock` so the on-wire order always
-/// matches the serial order even with concurrent callers.
+/// One pooled TCP connection, **shared by up to `sessions_per_conn`
+/// sessions** that multiplex their Performs over it (the RPC layer demuxes
+/// responses by `call_id`). The pool opens `ceil(total_sessions /
+/// sessions_per_conn)` of these; each dials one tserver endpoint. Behind a
+/// single ClusterIP VIP every connection dials the same address and the VIP
+/// spreads them across tserver nodes — so more connections means more nodes
+/// carry the load — while an explicit multi-endpoint list fans them out
+/// directly.
 ///
-/// **Idle-close / reopen.** The connection lives behind `conn`, a
-/// `tokio::sync::Mutex<ConnState>`. When the session sits idle longer than
-/// the configured idle timeout, the heartbeat/sweep task takes that lock
-/// and transitions [`ConnState::Warm`] → [`ConnState::Cold`], dropping the
+/// **Idle-close / reopen.** The socket lives behind `state`, a
+/// `tokio::sync::Mutex<ConnState>`. When the connection sits idle longer than
+/// the configured idle timeout, the sweep task takes that lock and
+/// transitions [`ConnState::Warm`] → [`ConnState::Cold`], dropping the
 /// `Connection` (its reader/writer abort, the TCP socket closes, and the
-/// server's idle session eventually expires). The next user takes the
-/// same lock and re-establishes: reconnect + a `Heartbeat{session_id:0}`
-/// yields a fresh server session id which lands in `meta`
-/// ([`SessionMeta::reopened_with`]) — but NO `OpenTable`, because the hot
-/// tables' schema is immutable (the cached [`crate::table::TableHandle`]
-/// stays valid across the reopen). The async mutex serializes both the
-/// Warm→Cold sweep and any Cold→Warm reopen, so a concurrent burst of
-/// users re-establishes exactly once (the rest await and reuse the warmed
-/// connection) and the sweeper can never close a connection out from
-/// under an in-flight caller.
+/// server's idle sessions eventually expire). The next user takes the same
+/// lock and reconnects. The async mutex serializes the Warm→Cold sweep and
+/// any Cold→Warm reopen, so a concurrent burst re-establishes exactly once
+/// and the sweeper can never close a socket out from under an in-flight
+/// caller.
 ///
-/// `last_used` (epoch millis) is refreshed on every use and drives the
-/// idle decision; a session with an in-flight call has a fresh
-/// `last_used` by construction, so the sweeper won't pick it.
+/// **`generation`** bumps on every (re)connect. Every server session on this
+/// connection dies when the socket drops, so a session whose `conn_gen_seen`
+/// lags `generation` must re-`Heartbeat` a fresh server session before its
+/// next Perform (see [`SessionCore`]).
 ///
-/// `endpoint_idx`/`endpoint_addr` record which [`Endpoints`] entry this
-/// session's connection landed on, so recovery can reconnect the SAME
-/// tserver first (falling back to the next only if that node is down) —
-/// this is what keeps the pool spread across nodes after a single
-/// session's recovery instead of collapsing everything onto one — and so
-/// diagnostics (`connected_peers`, `endpoint_spread`) can report the peer
-/// even while the session is Cold.
-pub(crate) struct SessionCore {
-    pub(crate) conn: tokio::sync::Mutex<ConnState>,
-    pub(crate) meta: SessionMeta,
-    #[allow(dead_code)] // kept for diagnostics; reported by Heartbeat
-    pub(crate) instance_id: Vec<u8>,
+/// `last_used` (epoch millis) is refreshed on every use of any of the
+/// connection's sessions and drives the idle decision. `endpoint_idx`/`_addr`
+/// record which [`Endpoints`] entry this connection dialed, so a reconnect
+/// prefers the SAME endpoint and diagnostics can report the peer even while
+/// Cold.
+pub(crate) struct PoolConn {
+    pub(crate) state: tokio::sync::Mutex<ConnState>,
     pub(crate) endpoint_idx: usize,
     pub(crate) endpoint_addr: String,
-    pub(crate) perform_lock: std::sync::Mutex<()>,
+    pub(crate) generation: AtomicU64,
     last_used: AtomicU64,
 }
 
-impl SessionCore {
-    pub(crate) fn new(
-        conn: Arc<Connection>,
-        session_id: u64,
-        instance_id: Vec<u8>,
-        endpoint_idx: usize,
-        endpoint_addr: String,
-        epoch: u64,
-    ) -> Self {
-        SessionCore {
-            conn: tokio::sync::Mutex::new(ConnState::Warm(conn)),
-            meta: SessionMeta::new(session_id, epoch),
-            instance_id,
+impl PoolConn {
+    pub(crate) fn new(conn: Arc<Connection>, endpoint_idx: usize, endpoint_addr: String) -> Self {
+        PoolConn {
+            state: tokio::sync::Mutex::new(ConnState::Warm(conn)),
             endpoint_idx,
             endpoint_addr,
-            perform_lock: std::sync::Mutex::new(()),
+            generation: AtomicU64::new(0),
             last_used: AtomicU64::new(now_millis()),
         }
     }
 
-    /// The tserver this session is bound to. Available while Cold (unlike
-    /// the connection's `peer`), so diagnostics never need a warm socket.
+    /// The tserver endpoint this connection dialed (available while Cold).
     pub(crate) fn peer(&self) -> &str {
         &self.endpoint_addr
     }
 
-    /// Mark the session used *now* — called on every Perform and on every
-    /// successful heartbeat, so the idle clock measures real quiescence.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+
+    /// Bump on a (re)connect; returns the new generation.
+    pub(crate) fn bump_generation(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Mark the connection used *now* — called on every Perform / heartbeat
+    /// over any of its sessions, so the idle clock measures real quiescence.
     pub(crate) fn touch(&self) {
         self.last_used.store(now_millis(), Ordering::Relaxed);
     }
 
-    /// Whether the session has been idle for at least `idle_timeout`.
+    /// Whether the connection has been idle for at least `idle_timeout`.
     pub(crate) fn idle_for_at_least(&self, idle_timeout: Duration) -> bool {
         let idle = now_millis().saturating_sub(self.last_used.load(Ordering::Relaxed));
         idle >= idle_timeout.as_millis() as u64
+    }
+}
+
+/// One PgClientService server session, multiplexed over its shared
+/// [`PoolConn`] (up to `sessions_per_conn` sessions ride one connection).
+/// Perform submission (serial allocation + frame enqueue) happens under
+/// `perform_lock` so on-wire order matches serial order even with concurrent
+/// callers on this session.
+///
+/// `conn_gen_seen` is the [`PoolConn::generation`] this session's server
+/// session was established on. When the connection reconnects (generation
+/// bumps), the next Perform re-`Heartbeat`s a fresh server session id into
+/// `meta` (serials restart at 0) — NO `OpenTable`, since the hot tables'
+/// schema is immutable and the cached [`crate::table::TableHandle`] stays
+/// valid.
+pub(crate) struct SessionCore {
+    pub(crate) meta: SessionMeta,
+    #[allow(dead_code)] // kept for diagnostics; reported by Heartbeat
+    pub(crate) instance_id: Vec<u8>,
+    pub(crate) perform_lock: std::sync::Mutex<()>,
+    pub(crate) conn: Arc<PoolConn>,
+    pub(crate) conn_gen_seen: AtomicU64,
+}
+
+impl SessionCore {
+    pub(crate) fn new(
+        conn: Arc<PoolConn>,
+        session_id: u64,
+        instance_id: Vec<u8>,
+        conn_gen_seen: u64,
+        epoch: u64,
+    ) -> Self {
+        SessionCore {
+            meta: SessionMeta::new(session_id, epoch),
+            instance_id,
+            perform_lock: std::sync::Mutex::new(()),
+            conn,
+            conn_gen_seen: AtomicU64::new(conn_gen_seen),
+        }
+    }
+
+    /// The tserver endpoint this session's connection dialed.
+    pub(crate) fn peer(&self) -> &str {
+        self.conn.peer()
+    }
+
+    /// The [`PoolConn::generation`] this session's server session was
+    /// established on.
+    pub(crate) fn conn_gen_seen(&self) -> u64 {
+        self.conn_gen_seen.load(Ordering::Relaxed)
+    }
+
+    /// Record that this session's server session is now established on the
+    /// node's `generation` (after a re-`Heartbeat`).
+    pub(crate) fn set_conn_gen_seen(&self, generation: u64) {
+        self.conn_gen_seen.store(generation, Ordering::Relaxed);
     }
 }
 
@@ -222,26 +272,24 @@ fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
-/// The installed session set, spread ACROSS all tserver endpoints so both
-/// reads and writes hit every node.
+/// The installed session set. Sessions give request *concurrency* (each is
+/// a serial Perform queue on the server); they are packed onto shared
+/// [`PoolConn`]s (`sessions_per_conn` per connection), and it is the
+/// *connections* that spread load across tserver nodes (a fresh connection
+/// to the VIP lands on a fresh node).
 ///
-/// - `read_sessions`: one session per endpoint. Reads, table opens, and
-///   paging continuations run here; `read()` round-robins across them so
-///   single-page reads (the getpage hot path) spread over all tservers.
-///   A paged scan's continuations must return to the session that pinned
-///   their snapshot (server read-point history is per-session), so the
-///   client pins a scan to one read session via [`Self::by_session_id`]
+/// - `read_sessions`: reads, table opens, and paging continuations run here;
+///   `read()` round-robins across them so single-page reads (the getpage hot
+///   path) overlap. A paged scan's continuations must return to the session
+///   that pinned their snapshot (server read-point history is per-session),
+///   so the client pins a scan to one read session via [`Self::by_session_id`]
 ///   after page 1 — the round-robin only picks the FIRST page's session.
 /// - `write_sessions`: [`TsClientConfig::write_sessions`] dedicated
-///   write-only sessions, distributed round-robin across the endpoints
-///   at establish time; `write()` round-robins over them so bulk write
-///   Performs both parallelize and land on different nodes. Empty when
-///   `write_sessions == 0`, in which case writes fall back to the read
-///   sessions (still spread, one per endpoint).
+///   write-only sessions that `write()` round-robins over, so bulk write
+///   Performs overlap. Empty when `write_sessions == 0`, in which case
+///   writes fall back to the read sessions.
 ///
-/// Every session shares one epoch; recovery replaces the whole pool but
-/// each new session reconnects its predecessor's endpoint (see
-/// [`SessionCore::endpoint_idx`]).
+/// Every session shares one epoch; recovery replaces the whole pool.
 pub(crate) struct SessionPool {
     pub(crate) read_sessions: Vec<Arc<SessionCore>>,
     pub(crate) write_sessions: Vec<Arc<SessionCore>>,
@@ -264,18 +312,17 @@ impl SessionPool {
         }
     }
 
-    /// A read session, round-robin across endpoints. Used for the first
-    /// page of a scan and for single-page reads; continuations re-pin via
-    /// [`Self::by_session_id`].
+    /// A read session, round-robin across the read sessions. Used for the
+    /// first page of a scan and for single-page reads; continuations re-pin
+    /// via [`Self::by_session_id`].
     pub(crate) fn read(&self) -> &Arc<SessionCore> {
         let n = self.read_sessions.len();
         let i = self.read_cursor.fetch_add(1, Ordering::Relaxed) % n;
         &self.read_sessions[i]
     }
 
-    /// Write session for round-robin ticket `ticket`, spread across
-    /// endpoints. With no dedicated write sessions, writes round-robin
-    /// the read sessions instead (still one per endpoint).
+    /// Write session for round-robin ticket `ticket`. With no dedicated
+    /// write sessions, writes round-robin the read sessions instead.
     pub(crate) fn write(&self, ticket: usize) -> &Arc<SessionCore> {
         if self.write_sessions.is_empty() {
             let n = self.read_sessions.len();
@@ -382,10 +429,12 @@ mod tests {
         assert_ne!(s.session_id(), 55);
     }
 
-    /// Opens `n` throwaway loopback connections (a listener absorbs the
-    /// preambles); returns them as [`SessionCore`]s with session ids
-    /// `base, base+1, ...`, endpoint index `i % endpoints`, epoch 7.
-    async fn test_sessions(n: usize, base: u64, endpoints: usize) -> Vec<Arc<SessionCore>> {
+    /// Opens `conns` throwaway loopback connections (a listener absorbs the
+    /// preambles); returns `n` [`SessionCore`]s with session ids
+    /// `base, base+1, ...` packed round-robin across those connections
+    /// (`i % conns`), epoch 7 — mirroring how the pool build distributes
+    /// sessions over its `PoolConn`s.
+    async fn test_sessions(n: usize, base: u64, conns: usize) -> Vec<Arc<SessionCore>> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         tokio::spawn(async move {
@@ -394,17 +443,21 @@ mod tests {
                 held.push(stream);
             }
         });
-        let mut out = Vec::new();
-        for i in 0..n {
+        let mut pool_conns: Vec<Arc<PoolConn>> = Vec::new();
+        for c in 0..conns {
             let conn = Connection::connect(&addr, std::time::Duration::from_secs(5))
                 .await
                 .unwrap();
+            pool_conns.push(Arc::new(PoolConn::new(Arc::new(conn), c, addr.clone())));
+        }
+        let mut out = Vec::new();
+        for i in 0..n {
+            let conn = Arc::clone(&pool_conns[i % conns]);
             out.push(Arc::new(SessionCore::new(
-                Arc::new(conn),
+                conn,
                 base + i as u64,
                 vec![],
-                i % endpoints,
-                addr.clone(),
+                0,
                 7,
             )));
         }
@@ -412,8 +465,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pool_single_endpoint_no_write_sessions() {
-        // One endpoint, no dedicated write sessions: reads and writes both
+    async fn pool_single_conn_no_write_sessions() {
+        // One connection, no dedicated write sessions: reads and writes both
         // land on the single read session.
         let reads = test_sessions(1, 100, 1).await;
         let pool = SessionPool::new(reads, Vec::new());
@@ -425,8 +478,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pool_reads_round_robin_across_endpoints() {
-        // Three endpoints => three read sessions; read() cycles them.
+    async fn pool_reads_round_robin() {
+        // Three read sessions; read() cycles them.
         let reads = test_sessions(3, 100, 3).await;
         let pool = SessionPool::new(reads, Vec::new());
         let picks: Vec<u64> = (0..7).map(|_| pool.read().meta.session_id()).collect();
@@ -438,26 +491,27 @@ mod tests {
 
     #[tokio::test]
     async fn idle_state_machine_touch_and_sweep_decision() {
-        // A fresh session is Warm and NOT idle.
+        // A fresh session's connection is Warm and NOT idle.
         let s = &test_sessions(1, 100, 1).await[0];
-        assert!(matches!(&*s.conn.lock().await, ConnState::Warm(_)));
-        assert!(!s.idle_for_at_least(Duration::from_secs(60)));
+        assert!(matches!(&*s.conn.state.lock().await, ConnState::Warm(_)));
+        assert!(!s.conn.idle_for_at_least(Duration::from_secs(60)));
 
         // A zero idle_timeout means "always idle" — the boundary the
         // sweeper uses to decide Warm→Cold.
-        assert!(s.idle_for_at_least(Duration::ZERO));
+        assert!(s.conn.idle_for_at_least(Duration::ZERO));
 
         // Let real (monotonic) time elapse past a short timeout: now idle.
         // touch() resets last_used to the present, clearing it.
         tokio::time::sleep(Duration::from_millis(40)).await;
-        assert!(s.idle_for_at_least(Duration::from_millis(20)));
-        s.touch();
-        assert!(!s.idle_for_at_least(Duration::from_millis(20)));
+        assert!(s.conn.idle_for_at_least(Duration::from_millis(20)));
+        s.conn.touch();
+        assert!(!s.conn.idle_for_at_least(Duration::from_millis(20)));
 
-        // Transition Warm→Cold (as the sweeper does) and back to Warm (as
-        // a reopen does), driving a fresh server session id + serial reset.
-        *s.conn.lock().await = ConnState::Cold;
-        assert!(matches!(&*s.conn.lock().await, ConnState::Cold));
+        // Transition the connection Warm→Cold (as the sweeper does) and back
+        // (as a reopen does), driving a fresh server session id + serial
+        // reset.
+        *s.conn.state.lock().await = ConnState::Cold;
+        assert!(matches!(&*s.conn.state.lock().await, ConnState::Cold));
         s.meta.reopened_with(555);
         assert_eq!(s.meta.session_id(), 555);
         assert_eq!(s.meta.take_serial_no(), 0, "reopen restarts serials");
@@ -466,7 +520,7 @@ mod tests {
     #[tokio::test]
     async fn pool_writes_round_robin_over_dedicated_sessions() {
         // 3 read sessions (ids 100..103) + 4 write sessions (200..204)
-        // spread over 3 endpoints; write tickets cycle the write set.
+        // packed over 3 connections; write tickets cycle the write set.
         let reads = test_sessions(3, 100, 3).await;
         let writes = test_sessions(4, 200, 3).await;
         let pool = SessionPool::new(reads, writes);

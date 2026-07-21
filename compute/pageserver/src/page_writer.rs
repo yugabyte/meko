@@ -2457,6 +2457,9 @@ mod tests {
             disable_transactional_writes: false,
             hot_path: ysql_client::HotPath::Ysql,
             tserver_rpc_addrs: None,
+            tsclient_read_sessions: None,
+            tsclient_write_sessions: None,
+            tsclient_sessions_per_conn: None,
         }
     }
 

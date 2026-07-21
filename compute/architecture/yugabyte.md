@@ -383,10 +383,10 @@ controller's transactional updates to behave as expected.
 
 ## Direct-to-tserver hot path (`hot_path = "tsclient"`)
 
-The shared `yb_storage_conn` block accepts two optional keys:
+The shared `yb_storage_conn` block accepts several optional keys:
 
 ```toml
-yb_storage_conn = { host_ports = "...", hot_path = "tsclient", tserver_rpc_addrs = "host:9100,..." }
+yb_storage_conn = { host_ports = "...", hot_path = "tsclient", tserver_rpc_addrs = "host:9100,...", tsclient_read_sessions = 4, tsclient_write_sessions = 4 }
 ```
 
 - `hot_path` — `"tsclient"` (default) runs the hot paths over a pure-Rust
@@ -404,7 +404,26 @@ yb_storage_conn = { host_ports = "...", hot_path = "tsclient", tserver_rpc_addrs
 - `tserver_rpc_addrs` — yb-tserver RPC endpoints for the `tsclient`
   transport. When unset, the `host_ports` hosts on port 9100; set it
   explicitly to reach every tserver when `host_ports` is only a subset
-  (e.g. a single YSQL VIP).
+  (e.g. a single YSQL VIP, or a K8s service that load-balances across the
+  tserver pods).
+- `tsclient_read_sessions` / `tsclient_write_sessions` — server-*session*
+  counts for the `tsclient` pool. They set request *concurrency* (each
+  server session is a serial Perform queue). Used verbatim when set (no
+  scale-factor multiplication). When unset, each daemon applies its own
+  default: the **pageserver** `scale_count(4, scale_factor)` for both
+  (getpage + put_pages fan-out); the **safekeeper** a fixed **1 read / 1
+  write** (the WAL lane is low-concurrency — one-batch-at-a-time flush +
+  segment reads).
+- `tsclient_sessions_per_conn` — how many `tsclient` sessions ride each TCP
+  connection (default **4**). The pool opens
+  `ceil((read_sessions + write_sessions) / sessions_per_conn)` connections
+  and packs the sessions across them (reads and writes sharing connections),
+  so the **connection count grows with the session count**, and it is the
+  connections — not the sessions — that spread load across tserver nodes:
+  behind a single ClusterIP VIP every connection dials the one VIP and the
+  VIP lands each on a (possibly different) tserver, so more connections =
+  more nodes carrying traffic. Each daemon logs the effective counts in its
+  `thin-RPC (tsclient) hot path ready …` line at startup.
 
 ## Client-side retry contract — every YB query must be idempotent
 

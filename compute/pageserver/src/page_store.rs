@@ -725,15 +725,21 @@ impl TsClientTables {
     async fn connect(
         yb: &YbConnConfig,
         schema: &str,
-        ysql_client: &YsqlClient,
+        ysql_client: &Arc<YsqlClient>,
+        read_sessions: usize,
         write_sessions: usize,
+        sessions_per_conn: usize,
     ) -> Result<Arc<TsClientTables>> {
         let (db_oid, oids) =
             ysql_client::lookup_table_oids(ysql_client, schema, &["pages", "slru_pages", "meta"])
                 .await?;
+        let tserver_addrs = yb.effective_tserver_rpc_addrs();
+        let tserver_count = tserver_addrs.len();
         let client = yb_tsclient::TsClient::connect(yb_tsclient::TsClientConfig {
-            tserver_addrs: yb.effective_tserver_rpc_addrs(),
+            tserver_addrs,
+            read_sessions,
             write_sessions,
+            sessions_per_conn,
             ..Default::default()
         })
         .await
@@ -753,7 +759,8 @@ impl TsClientTables {
         });
         tracing::info!(
             "thin-RPC (tsclient) hot path ready: {schema}.pages/slru_pages/meta opened \
-             (pages table_id {}) on {}",
+             (pages table_id {}) on {} ({read_sessions} read + {write_sessions} write sessions, \
+             {sessions_per_conn} per connection, across {tserver_count} configured tserver(s))",
             tables.pages.table_id,
             tables.client.connected_addr(),
         );
@@ -1065,33 +1072,42 @@ impl PageStore {
         pool_size: usize,
         set_fast_path_upsert: bool,
     ) -> Result<Self> {
-        let ysql_client = ysql_client::YsqlClient::from_yb_config_pooled(
-            &config.yb,
-            application_name,
-            pool_size,
-            set_fast_path_upsert,
-        )
-        .await
-        .context("opening PageStore connection")?;
+        let ysql_client = Arc::new(
+            ysql_client::YsqlClient::from_yb_config_pooled(
+                &config.yb,
+                application_name,
+                pool_size,
+                set_fast_path_upsert,
+            )
+            .await
+            .context("opening PageStore connection")?,
+        );
         let tsclient = match config.yb.hot_path {
             ysql_client::HotPath::Ysql => None,
             ysql_client::HotPath::TsClient => Some(
-                // Write sessions match put_pages' chunk fan-out so
-                // concurrent bulk-flush chunks each get their own
-                // connection + server session (see
-                // `TsClientConfig::write_sessions`).
+                // Read/write session (connection) counts cap the getpage +
+                // put_pages lane fan-out across the discovered tservers. The
+                // `yb_storage_conn` config can pin them; otherwise both
+                // default to `scale_count(4, scale_factor)` (see
+                // `TsClientConfig::{read,write}_sessions`).
                 TsClientTables::connect(
                     &config.yb,
                     &config.schema,
                     &ysql_client,
-                    pageserver_api::config::scale_count(4, config.scale_factor),
+                    config.yb.tsclient_read_sessions.unwrap_or_else(|| {
+                        pageserver_api::config::scale_count(4, config.scale_factor)
+                    }),
+                    config.yb.tsclient_write_sessions.unwrap_or_else(|| {
+                        pageserver_api::config::scale_count(4, config.scale_factor)
+                    }),
+                    config.yb.tsclient_sessions_per_conn.unwrap_or(4),
                 )
                 .await
                 .context("thin-RPC hot path init (hot_path = \"tsclient\")")?,
             ),
         };
         Ok(Self {
-            ysql_client: Arc::new(ysql_client),
+            ysql_client,
             schema: Arc::from(config.schema),
             scale_factor: config.scale_factor,
             baked: Arc::new(DashMap::new()),
@@ -3563,6 +3579,9 @@ mod tests {
             disable_transactional_writes: false,
             hot_path: ysql_client::HotPath::Ysql,
             tserver_rpc_addrs: None,
+            tsclient_read_sessions: None,
+            tsclient_write_sessions: None,
+            tsclient_sessions_per_conn: None,
         }
     }
 

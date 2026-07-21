@@ -84,25 +84,50 @@ tables. Every endpoint still carries traffic (see the pool below);
 ordering only decides which endpoint each positional session prefers and
 the fallback order when a session must fail over.
 
-### Session pool — spread across all tservers
+### Session pool — sessions packed onto shared connections
 
-The pool holds sessions distributed across EVERY tserver endpoint, and
-both reads and writes round-robin over them so no single tserver takes
-all the traffic:
+Sessions give request *concurrency*; **connections** spread that load
+across tserver nodes. The pool opens
+`ceil((read_sessions + write_sessions) / sessions_per_conn)` shared TCP
+connections ([`PoolConn`]) and packs the sessions across them, reads and
+writes sharing the same connections:
 
-- **one read session per endpoint.** Reads, `OpenTable`, and the first
-  page of every scan pick a read session round-robin, so single-page
-  reads — the getpage hot path — fan out over all nodes.
-- **`TsClientConfig::write_sessions` write sessions** (default 0),
-  distributed round-robin across the endpoints at establish time, each
-  its own TCP connection + server session; `upsert_batch` round-robins
-  over them (falling back to the read sessions when 0). Writes are
-  stateless per Perform (fresh `txn_serial_no`, no continuations, no
-  read point), so any session on any node serves any write.
+- **`TsClientConfig::read_sessions` read sessions** (server sessions), or
+  one per endpoint when it is 0. Reads, `OpenTable`, and the first page of
+  every scan pick a read session round-robin, so single-page reads — the
+  getpage hot path — overlap. `read_sessions` sets read *concurrency* (the
+  pageserver and safekeeper set it config / scale-factor derived, like their
+  YSQL pool size).
+- **`TsClientConfig::write_sessions` write sessions** (default 0);
+  `upsert_batch` round-robins over them (falling back to the read sessions
+  when 0). Writes are stateless per Perform (fresh `txn_serial_no`, no
+  continuations, no read point), so any session serves any write.
+- **`TsClientConfig::sessions_per_conn`** (default 4) is the packing
+  density: how many sessions ride each TCP connection.
 
-Each session is its own `Connection` to a specific endpoint index: read
-session `i` (and write session `i mod n`) targets endpoint `i`, failing
-over to the next only if that node is down at open time.
+Why packing, and why connections are the spread unit: a single server
+session serializes its Performs (strictly increasing serial), so
+*concurrency* needs multiple **sessions** — but many sessions can multiplex
+one connection (the RPC layer demuxes responses by `call_id`), and the
+server assigns each connection to one of a fixed pool of reactors (default
+4) and multiplexes many connections per reactor, so extra connections *to
+one node* buy no server parallelism. What DOES spread load is hitting
+different **nodes**: distinct tservers mean distinct reactor pools and
+distinct tablet leaders. With the deployment behind a single ClusterIP VIP
+the client only ever sees one address, so the way to reach more nodes is to
+open more connections — each new connection to the VIP lands on a (possibly
+different) tserver. Hence: pack `sessions_per_conn` sessions per connection
+to bound the socket + reactor count, and let the connection count (which
+grows with the session count) drive the node spread. Connection `c` dials
+endpoint `c mod n`; behind a VIP `n == 1` and the VIP does the spreading,
+while an explicit multi-endpoint list fans the connections out directly.
+Tablet routing is server-side (a read to any tserver proxies to the
+leader), so hitting fewer nodes than tablets still balances load.
+
+When a connection's socket drops (idle-close or a Network failure), its
+`generation` bumps on the next reconnect; every session on that connection
+lazily re-`Heartbeat`s a fresh server session (serials restart at 0, NO
+`OpenTable`) on its next Perform — see `warm_conn`.
 
 **Paged scans pin to their session.** The server keeps read-point
 history per session, so a scan's continuations must return to the
@@ -116,54 +141,58 @@ that is the win. On a recovered pool the pinned session id is gone, so
 the continuation surfaces a read-restart (`YbError::is_read_restart`) and
 `read_scan` restarts the whole scan on a fresh read point (see below).
 
-Why spread writes at all (the earlier M4 bulk-ingest finding still
-holds): concurrent multi-megabyte write Performs on ONE connection
-barely overlap — the frame encode/enqueue serializes under the client's
-perform lock, the server reads and protobuf-decodes all of that
-connection's frames on one reactor thread, and Perform starts are
-sequenced per session — and reads sharing the connection queue behind
-the write frames. Spreading over sessions AND nodes fixes both the
-serialization and the single-tserver hotspot (a TPC-C parity run showed
-one tserver saturated at 0.7% idle while the other two sat idle when the
-pool pinned everything to one node).
+Why spread writes over sessions AND nodes (the earlier M4 bulk-ingest
+finding still holds): concurrent multi-megabyte write Performs on ONE
+*session* barely overlap — the server queues a session's Performs by
+strictly increasing serial, and the client's per-session perform lock
+serializes frame enqueue — so extra *sessions* give the concurrency. And
+spreading across *nodes* avoids a single-tserver hotspot (a TPC-C parity
+run showed one tserver saturated at 0.7% idle while the other two sat idle
+when everything pinned to one node): distinct tservers mean distinct
+reactor pools and distinct tablet leaders. Extra *connections to one node*
+buy nothing — the server multiplexes them over its fixed reactor pool — so
+the pool packs `sessions_per_conn` sessions per connection and lets the
+connection COUNT (which the VIP fans across nodes) do the node spread.
 
 The pool is one failure unit: every session shares one epoch, so a
 Network-class failure on any session recovers the WHOLE pool (heartbeats
-keep every session alive and trigger eager recovery between calls). But
-each new session prefers its predecessor's endpoint index, so a recovery
-triggered by one dead node keeps the healthy nodes' sessions on those
-nodes and the pool re-spreads as nodes return.
+keep every session alive and trigger eager recovery between calls).
+Recovery rebuilds the pool at the same shape — same session counts, same
+packing — reconnecting each connection (behind a VIP the VIP re-spreads
+them as nodes return).
 
 ### Idle-connection closing & reopen-without-OpenTable
 
-Keeping every session warm forever means a branch that goes quiet still
-holds a fan of tserver TCP connections + server-side sessions and pays
-10s heartbeat chatter on each — fleet-wide that adds up (one pageserver
-was seen holding 131 connections to a single tserver). So each session's
-connection is **re-establishable**: it lives behind a per-session
-`tokio::sync::Mutex<ConnState>` that is either `Warm(Connection)` or
-`Cold`, and the client tracks each session's `last_used` timestamp
-(refreshed on every Perform and every keep-alive).
+Keeping every connection warm forever means a branch that goes quiet still
+holds a fan of tserver TCP connections and pays 10s heartbeat chatter —
+fleet-wide that adds up (one pageserver was seen holding 131 connections to
+a single tserver). So each **connection** is **re-establishable**: it lives
+behind a `tokio::sync::Mutex<ConnState>` that is either `Warm(Connection)`
+or `Cold`, and the client tracks each connection's `last_used` (refreshed on
+any of its sessions' Performs / keep-alives).
 
 - **Config knob**: `TsClientConfig::idle_timeout: Option<Duration>`,
   default `Some(60s)`. `None` = never close = the previous always-warm
   behavior.
-- **Idle sweep**: the heartbeat task, each tick, per session — if `Cold`,
-  skip; if `Warm` and idle ≥ `idle_timeout`, transition `Warm → Cold`
-  (drop the `Connection`, which aborts its reader/writer and closes the
-  socket; the server-side session then lapses on its own expiry) instead
-  of heartbeating; if `Warm` and recently used, heartbeat as before.
-- **Reopen on use**: before a `Perform` on a `Cold` session, the caller
-  takes the session lock and re-establishes via the single
-  `establish_session_conn` primitive — **connect + `Heartbeat` only, NO
-  `OpenTable`**. The fresh server session id replaces the old
-  (`SessionMeta::reopened_with`, restarting Perform serials at 0). If
-  another task already re-warmed it, the caller just reuses that
-  connection. The async mutex funnels a concurrent burst so exactly one
-  task reconnects (no thundering herd), and it is the same lock the
-  sweeper takes to go `Warm → Cold`, so the sweeper can never close a
-  connection out from under an in-flight caller (and re-checks idle under
-  the lock — a caller that just touched `last_used` is no longer idle).
+- **Idle sweep**: the heartbeat task, each tick, per session — if the
+  session's **connection** is `Cold`, skip; if it is `Warm` and idle ≥
+  `idle_timeout`, transition it `Warm → Cold` (drop the shared `Connection`,
+  closing the socket; every server session on it lapses on its own expiry);
+  else keep THIS session's server session alive with a
+  `Heartbeat{session_id}` over the shared socket — but only if it is current
+  on the connection's generation (a session whose server session died in a
+  reconnect re-Heartbeats on next use, not from the sweep).
+- **Reopen on use**: before a `Perform`, `warm_conn` takes the connection's
+  lock; if `Cold`, it reconnects it (`dial`) and **bumps the connection's
+  `generation`**. Then, if this session's `conn_gen_seen` lags the
+  generation (its server session died with the old socket), it
+  re-`Heartbeat`s a fresh server session — **connect nothing, `Heartbeat`
+  only, NO `OpenTable`** — replacing the old id
+  (`SessionMeta::reopened_with`, restarting serials at 0). The async mutex
+  funnels a concurrent burst so exactly one task reconnects the socket (no
+  thundering herd), and it is the same lock the sweeper takes to go
+  `Warm → Cold`, so the sweeper can never close a socket out from under an
+  in-flight caller.
 
 **Why reopen skips OpenTable (schema-immutable rationale).** The hot
 tables (`pageserver.{pages,slru_pages,meta}`, `safekeeper.wals`) are
@@ -173,8 +202,9 @@ therefore stays valid across any reconnect, and `Perform` uses it
 directly — a reopen (and, now, a recovery) needs only a fresh server
 session id, which the `Heartbeat` returns. The old recovery path re-ran
 `OpenTable` on every cached table purely to refresh an unchanging schema;
-that loop is gone. `establish_session_conn` is the one primitive shared
-by initial pool build, recovery, and idle-reopen.
+that loop is gone. The pool build, recovery, and idle-reopen all share the
+same primitives: `dial` (socket only) plus a per-session `Heartbeat{0}` to
+mint / re-establish a server session.
 
 **Observability**: an idle-reopen fires the same
 `ClientObserver::on_session_recovery` hook as a pool recovery (both mint
