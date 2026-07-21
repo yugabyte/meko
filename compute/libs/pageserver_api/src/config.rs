@@ -1019,7 +1019,7 @@ pub mod tenant_conf_defaults {
     pub const DEFAULT_GC_PERIOD: &str = "30 s";
     pub const DEFAULT_GC_DRAIN_LIMIT: usize = 10_000;
     pub const DEFAULT_GC_CANDIDATE_EVERY_N_BASES: u32 = 10;
-    pub const DEFAULT_PITR_INTERVAL: &str = "7 days";
+    pub const DEFAULT_PITR_INTERVAL: &str = "1 day";
     pub const DEFAULT_WALRECEIVER_CONNECT_TIMEOUT: &str = "10 seconds";
     pub const DEFAULT_WALRECEIVER_LAGGING_WAL_TIMEOUT: &str = "10 seconds";
     // The default limit on WAL lag should be set to avoid causing
