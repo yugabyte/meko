@@ -234,6 +234,77 @@ pub(crate) static MATERIALIZER_QUEUE_DEPTH: Lazy<UIntGauge> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+/// Residual due span a budget-capped drain tick couldn't reach;
+/// 0 while keeping up. Growth = insert rate > drain rate. (Docs:
+/// yb-pageserver-metrics.md §GC.)
+pub(crate) static GC_DRAIN_LAG_BYTES: Lazy<UIntGauge> = Lazy::new(|| {
+    register_uint_gauge!(
+        "pageserver_yb_gc_drain_lag_bytes",
+        "GC cutoff minus the oldest due pending_gc candidate's due_lsn (bytes; 0 = caught up)",
+    )
+    .expect("failed to define a metric")
+});
+
+/// One increment per drain iteration, by outcome: drained / capped /
+/// empty / lease_grace / disabled / error (exactly one per tick).
+pub(crate) static GC_DRAIN_TICKS: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "pageserver_yb_gc_drain_ticks_total",
+        "GC drain-loop iterations, by outcome",
+        &["outcome"]
+    )
+    .expect("failed to define a metric")
+});
+
+/// Current GC cutoff, sampled per tick. `last_record_lsn − this` =
+/// retained-history window.
+pub(crate) static GC_APPLIED_CUTOFF_LSN: Lazy<UIntGauge> = Lazy::new(|| {
+    register_uint_gauge!(
+        "pageserver_yb_gc_applied_cutoff_lsn",
+        "Current GC cutoff (applied_gc_cutoff_lsn); reads below it are rejected",
+    )
+    .expect("failed to define a metric")
+});
+
+/// Trim candidates emitted (post every-n sampling), by producer
+/// path: ingest | materialiser.
+pub(crate) static GC_CANDIDATES_EMITTED: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "pageserver_yb_gc_candidates_emitted_total",
+        "GC trim candidates emitted into pending_gc, by producer path",
+        &["path"]
+    )
+    .expect("failed to define a metric")
+});
+
+/// Rows the drain's select returned per tick (pre-routing).
+pub(crate) static GC_CANDIDATES_READ: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "pageserver_yb_gc_candidates_read_total",
+        "Rows returned by the GC drain's pending_gc select (per tick)",
+    )
+    .expect("failed to define a metric")
+});
+
+/// Rows the dequeue actually deleted (may exceed read under
+/// collapse). rate(emitted) − rate(removed) = queue growth.
+pub(crate) static GC_CANDIDATES_REMOVED: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "pageserver_yb_gc_candidates_removed_total",
+        "Rows deleted from pending_gc by the drain dequeue (true queue-shrink count)",
+    )
+    .expect("failed to define a metric")
+});
+
+/// `pages` rows deleted by the GC drain (trims today; drop/shrink later).
+pub(crate) static GC_PAGES_ROWS_DELETED: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "pageserver_yb_gc_pages_rows_deleted_total",
+        "pageserver.pages rows deleted by the GC drain",
+    )
+    .expect("failed to define a metric")
+});
+
 /// Counter of read-path materialise-job dispatches. Fires when
 /// `PageWriter::read_chain` / `scan_range` returns a chain longer
 /// than `count_limit` — the write-side trigger should have fired but

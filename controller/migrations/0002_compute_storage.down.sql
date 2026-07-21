@@ -4,6 +4,7 @@ DROP TABLE IF EXISTS safekeeper.wals;
 DROP TABLE IF EXISTS safekeeper.timeline_state;
 DROP SCHEMA IF EXISTS safekeeper;
 
+DROP TABLE IF EXISTS pageserver.pending_gc;
 DROP TABLE IF EXISTS pageserver.timeline_state;
 DROP TABLE IF EXISTS pageserver.meta;
 DROP TABLE IF EXISTS pageserver.slru_pages;

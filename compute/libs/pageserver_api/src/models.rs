@@ -521,6 +521,14 @@ pub struct BranchConfigPatch {
     pub relsize_snapshot_cache_capacity: FieldPatch<usize>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub basebackup_cache_enabled: FieldPatch<bool>,
+    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
+    pub test_enable_gc_drain: FieldPatch<bool>,
+    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
+    pub gc_drain_limit: FieldPatch<usize>,
+    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
+    pub enable_gc: FieldPatch<bool>,
+    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
+    pub gc_candidate_every_n_bases: FieldPatch<u32>,
 }
 
 /// Like [`crate::config::BranchConfigToml`], but preserves the information
@@ -577,6 +585,18 @@ pub struct BranchConfig {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub basebackup_cache_enabled: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_enable_gc_drain: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gc_drain_limit: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_gc: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gc_candidate_every_n_bases: Option<u32>,
 }
 
 impl BranchConfig {
@@ -599,6 +619,10 @@ impl BranchConfig {
             mut sampling_ratio,
             mut relsize_snapshot_cache_capacity,
             mut basebackup_cache_enabled,
+            mut test_enable_gc_drain,
+            mut gc_drain_limit,
+            mut enable_gc,
+            mut gc_candidate_every_n_bases,
         } = self;
 
         patch.gc_horizon.apply(&mut gc_horizon);
@@ -639,6 +663,12 @@ impl BranchConfig {
         patch
             .basebackup_cache_enabled
             .apply(&mut basebackup_cache_enabled);
+        patch.test_enable_gc_drain.apply(&mut test_enable_gc_drain);
+        patch.gc_drain_limit.apply(&mut gc_drain_limit);
+        patch.enable_gc.apply(&mut enable_gc);
+        patch
+            .gc_candidate_every_n_bases
+            .apply(&mut gc_candidate_every_n_bases);
 
         Ok(Self {
             gc_horizon,
@@ -655,6 +685,10 @@ impl BranchConfig {
             sampling_ratio,
             relsize_snapshot_cache_capacity,
             basebackup_cache_enabled,
+            test_enable_gc_drain,
+            gc_drain_limit,
+            enable_gc,
+            gc_candidate_every_n_bases,
         })
     }
 
@@ -696,6 +730,14 @@ impl BranchConfig {
             basebackup_cache_enabled: self
                 .basebackup_cache_enabled
                 .unwrap_or(global_conf.basebackup_cache_enabled),
+            test_enable_gc_drain: self
+                .test_enable_gc_drain
+                .unwrap_or(global_conf.test_enable_gc_drain),
+            gc_drain_limit: self.gc_drain_limit.unwrap_or(global_conf.gc_drain_limit),
+            enable_gc: self.enable_gc.unwrap_or(global_conf.enable_gc),
+            gc_candidate_every_n_bases: self
+                .gc_candidate_every_n_bases
+                .unwrap_or(global_conf.gc_candidate_every_n_bases),
         }
     }
 }

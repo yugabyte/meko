@@ -31,6 +31,24 @@ fn progress_cell() -> &'static Mutex<Instant> {
     LAST_PROGRESS.get_or_init(|| Mutex::new(Instant::now()))
 }
 
+/// Merge bare `key = value` lines into the toml's existing `[section]`
+/// table (inserted right after the header) if present, else append the
+/// section. A PS-config test must NOT append a second `[section]`: the
+/// harness boots every pageserver with a `[yb_page_writer]` block
+/// (enable_gc, via YB_PAGESERVER_TEST_EXTRA_TOML), and a duplicate table
+/// header fails the pageserver's toml parse. `keys` must be disjoint
+/// from the keys already in that section.
+pub fn merge_toml_section(original: &str, section: &str, keys: &str) -> String {
+    let header = format!("[{section}]\n");
+    match original.find(&header) {
+        Some(pos) => {
+            let at = pos + header.len();
+            format!("{}{keys}{}", &original[..at], &original[at..])
+        }
+        None => format!("{}\n{header}{keys}", original.trim_end()),
+    }
+}
+
 /// Record forward progress now. Called from [`tee_line`]; also call
 /// directly to reset the wedge clock at a scenario boundary.
 pub fn mark_progress() {
@@ -356,6 +374,32 @@ impl Cluster {
             .env(
                 "YB_PS_VERIFY_WAL_ROUNDTRIP",
                 env_or(&["YB_PS_VERIFY_WAL_ROUNDTRIP"], "1"),
+            )
+            // Every pageserver the launcher provisions is BORN with GC
+            // on: this fragment is merged into its pageserver.toml at
+            // generation (see control_plane::pageserver's
+            // `YB_PAGESERVER_TEST_EXTRA_TOML` seam). The whole integration suite runs
+            // with GC active — a live check that it stays invisible.
+            // pitr_interval=0s + a tiny gc_horizon are what let the
+            // cutoff track the frontier so GC actually reclaims on small
+            // test workloads; gc_period=1s makes drains prompt.
+            // every_n_bases=1 (vs the prod default of 10): the every-n
+            // counter advances once per materialiser FOLD of a key, and
+            // short test workloads fold each key only a handful of times
+            // — at 10 the threshold is never crossed and nothing is ever
+            // queued. 1 emits a candidate on every fold so GC actually
+            // exercises on test-sized workloads.
+            .env(
+                "YB_PAGESERVER_TEST_EXTRA_TOML",
+                "[tenant_config]\n\
+                 enable_gc = true\n\
+                 gc_candidate_every_n_bases = 1\n\
+                 test_enable_gc_drain = true\n\
+                 gc_drain_limit = 10000\n\
+                 gc_period = \"1s\"\n\
+                 pitr_interval = \"0s\"\n\
+                 gc_horizon = 1024\n\
+                 lsn_lease_length = \"2s\"\n",
             );
         cmd
     }
@@ -461,6 +505,132 @@ impl Cluster {
             .unwrap_or("")
             .to_string();
         Ok(branch)
+    }
+
+    /// Create a named child branch off `ancestor` and return its branch
+    /// id (parsed from the "branch <id> successfully created" line). Like
+    /// [`Self::branch_create`] but names the branch and its ancestor, which
+    /// the GC scenarios need so they can address the child's rows in YB.
+    pub fn branch_create_named(&self, name: &str, ancestor: &str) -> anyhow::Result<String> {
+        let out = self
+            .yb_command()
+            .args([
+                "branch",
+                "create",
+                "--branch-name",
+                name,
+                "--ancestor-branch-name",
+                ancestor,
+                "--pg-version",
+                "18",
+            ])
+            .output()
+            .context("spawning yb_amp_local branch create")?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let branch = text
+            .lines()
+            .find(|l| l.contains("successfully created"))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .unwrap_or("")
+            .to_string();
+        if branch.is_empty() {
+            bail!("branch create --branch-name {name} produced no id:\n{text}");
+        }
+        Ok(branch)
+    }
+
+    /// Create + start an endpoint on `branch_name` at `pg_port`, and
+    /// return the pageserver node id provisioned for it (parsed from the
+    /// "Provisioning pageserver N" line). The GC kill scenario needs the
+    /// id so it can SIGKILL and restart that specific branch pageserver
+    /// rather than `main`'s.
+    pub fn endpoint_create_on_branch(
+        &self,
+        ep_name: &str,
+        branch_name: &str,
+        pg_port: u16,
+    ) -> anyhow::Result<u16> {
+        let out = self
+            .yb_command()
+            .args([
+                "endpoint",
+                "create",
+                ep_name,
+                "--branch-name",
+                branch_name,
+                "--pg-version",
+                "18",
+                "--pg-port",
+                &pg_port.to_string(),
+            ])
+            .output()
+            .with_context(|| format!("spawning endpoint create {ep_name}"))?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if !out.status.success() {
+            bail!("endpoint create {ep_name} failed:\n{text}");
+        }
+        let ps_id = text
+            .lines()
+            .find(|l| l.contains("Provisioning pageserver"))
+            .and_then(|l| {
+                l.split_whitespace()
+                    .skip_while(|t| *t != "pageserver")
+                    .nth(1)
+                    .and_then(|t| t.parse::<u16>().ok())
+            })
+            .ok_or_else(|| anyhow::anyhow!("no 'Provisioning pageserver N' line:\n{text}"))?;
+        self.yb(&["endpoint", "start", ep_name])?;
+        Ok(ps_id)
+    }
+
+    /// The HTTP (management/metrics) port of the pageserver a branch
+    /// endpoint was provisioned with, read from its generated
+    /// `pageserver.toml` (`listen_http_addr`). Robust against the
+    /// node-id→port arithmetic; used to scrape a branch PS's GC metrics.
+    pub fn endpoint_ps_http_port(&self, ep_name: &str) -> anyhow::Result<u16> {
+        let toml = self
+            .repo_dir
+            .join("endpoints")
+            .join(ep_name)
+            .join("pageserver/pageserver.toml");
+        let text = std::fs::read_to_string(&toml)
+            .with_context(|| format!("reading {}", toml.display()))?;
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix("listen_http_addr"))
+            .and_then(|rest| rest.rsplit(':').next())
+            .and_then(|p| p.trim().trim_matches(['"', '\'', ' ']).parse::<u16>().ok())
+            .ok_or_else(|| anyhow::anyhow!("no listen_http_addr in {}", toml.display()))
+    }
+
+    /// Sum the values of every exported Prometheus series whose line
+    /// starts with `name` (i.e. across all label sets) from the pageserver
+    /// metrics endpoint on `http_port`. Returns 0.0 when the metric has no
+    /// series (a counter only appears once first touched). Used by the GC
+    /// scenarios to read `pageserver_yb_gc_*` counters/gauges.
+    pub async fn metric_sum(&self, http_port: u16, name: &str) -> anyhow::Result<f64> {
+        let body = reqwest::get(format!("http://127.0.0.1:{http_port}/metrics"))
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        let mut sum = 0.0;
+        for line in body.lines() {
+            if line.starts_with('#') || !line.starts_with(name) {
+                continue;
+            }
+            if let Some(val) = line.rsplit(' ').next().and_then(|v| v.parse::<f64>().ok()) {
+                sum += val;
+            }
+        }
+        Ok(sum)
     }
 
     /// Run a diagnostic tool binary (built next to `yb_amp_local` in

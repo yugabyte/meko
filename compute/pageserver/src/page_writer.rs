@@ -42,7 +42,7 @@ use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 use pageserver_api::reltag::SlruKind;
 
 use crate::page_store::{
-    LineageSegment, MetaRow, PageRow, PageStore, SlruPageRow, dedup_page_chain_by_lsn,
+    LineageSegment, MetaRow, PageRow, PageStore, PendingGcRow, SlruPageRow, dedup_page_chain_by_lsn,
 };
 
 /// Flush triggers (whichever fires first). Override via
@@ -256,6 +256,17 @@ pub struct PageWriter {
     /// stale entries, so a spurious member is harmless.
     delta_ready: DashSet<Key>,
     materializer: Option<MaterializerHandle>,
+    /// GC candidate collection: `None` = off; `Some(n)` = one trim
+    /// candidate per n base writes per block
+    /// ([`Self::gc_candidate_should_emit`]).
+    gc_candidate_every_n: Option<u32>,
+    /// Per-block base counter for every-n sampling; entries removed
+    /// on emission. In-memory: resets on restart. Hot blocks self-clean
+    /// on emission, but a block going cold after 1..n-1 bases leaks its
+    /// entry — a slow creep under a large random-update workload, not
+    /// strictly bounded. TODO(gc_base_counts_cap): periodic sweep or
+    /// size cap if it ever grows to matter.
+    gc_base_counts: DashMap<Key, u32>,
     /// Highest LSN successfully reported as durable to
     /// `pageserver.timeline_state.consistent_lsn`. Advances only
     /// after `try_write_rows` succeeds AND the subsequent
@@ -384,9 +395,18 @@ pub struct PageWriter {
 struct AuxBuffers {
     slru_buffer: Vec<SlruPageRow>,
     meta_buffer: Vec<MetaRow>,
-    /// Bytes pending durability for SLRU + meta only. Rel-page
-    /// unflushed bytes live on `pages.unflushed_bytes()`. Drives the
-    /// non-rel side of the size-based flush trigger.
+    /// GC trim candidates collected from base writes in this flush
+    /// window. Flushed to `pageserver.pending_gc` alongside the rows
+    /// whose bases produced them; `consistent_lsn` advances only after
+    /// the whole flush succeeds, so a lost candidate means its window
+    /// (base included) is replayed. Harmless either way: a candidate is
+    /// just a trim trigger, and trims are cumulative — the block's next
+    /// candidate covers the same span.
+    pending_gc_buffer: Vec<PendingGcRow>,
+    /// Bytes pending durability for the aux buffers — SLRU + meta +
+    /// pending_gc candidates. Rel-page unflushed bytes live on
+    /// `pages.unflushed_bytes()`. Drives the non-rel side of the
+    /// size-based flush trigger.
     bytes_in_aux_buffers: usize,
     /// Wall-clock of the first row appended after the most-recent
     /// flush. Drives the age-based flush trigger; reset to `None`
@@ -429,9 +449,12 @@ impl PageWriter {
             aux: PlMutex::new(AuxBuffers {
                 slru_buffer: Vec::new(),
                 meta_buffer: Vec::new(),
+                pending_gc_buffer: Vec::new(),
                 bytes_in_aux_buffers: 0,
                 opened_at: None,
             }),
+            gc_candidate_every_n: None,
+            gc_base_counts: DashMap::new(),
             rows_written: AtomicU64::new(0),
             meta_cache_hits: AtomicU64::new(0),
             delta_counts: DashMap::new(),
@@ -559,6 +582,47 @@ impl PageWriter {
 
     pub fn set_materializer(&mut self, handle: MaterializerHandle) {
         self.materializer = Some(handle);
+    }
+
+    /// Enable GC candidate collection: one `pending_gc` trim candidate
+    /// per `every_n_bases` base writes to a block (n=1: every base).
+    /// Same wiring window as [`Self::set_materializer`]. A zero is
+    /// clamped to 1 — "insert never" is expressed by not calling this.
+    pub fn set_gc_candidate_every_n(&mut self, every_n_bases: u32) {
+        self.gc_candidate_every_n = Some(every_n_bases.max(1));
+    }
+
+    /// Every-n gate for one base write to `key` (shared per-block
+    /// counter across both producer paths; false when collection is
+    /// off). TRIM ONLY: never route drop/shrink candidates through
+    /// this — sampling a one-shot event away loses it permanently.
+    pub(crate) fn gc_candidate_should_emit(&self, key: Key) -> bool {
+        let Some(every_n) = self.gc_candidate_every_n else {
+            return false;
+        };
+        if every_n <= 1 {
+            return true;
+        }
+        // Single lock acquisition for the increment + conditional
+        // removal (the prior entry()+remove() pair took the shard lock
+        // twice and left a TOCTOU gap between them).
+        use dashmap::mapref::entry::Entry;
+        match self.gc_base_counts.entry(key) {
+            Entry::Occupied(mut occupied) => {
+                let count = occupied.get_mut();
+                *count += 1;
+                if *count >= every_n {
+                    occupied.remove();
+                    true
+                } else {
+                    false
+                }
+            }
+            Entry::Vacant(vacant) => {
+                vacant.insert(1);
+                false
+            }
+        }
     }
 
     pub fn branch_id(&self) -> BranchId {
@@ -741,12 +805,30 @@ impl PageWriter {
             .map(|m| (m.count_limit, m.payload_bytes_limit))
             .filter(|(c, b)| *c > 0 || *b > 0);
         // Rel rows: per-key DashMap shards; no global lock.
+        let mut gc_candidates: Vec<PendingGcRow> = Vec::new();
         for row in rel_rows {
             let key = row.key;
             let lsn = row.lsn;
             let resets_chain = row.is_image || row.will_init;
             let payload_len = row.payload.len() as u32;
             pageserver_api::write_trace::trace_stage("put", &key, lsn);
+            // GC candidate per n-th base; buffered here, durable with
+            // this window's flush (see `pending_gc_buffer` for why a
+            // lost one is harmless).
+            if row.will_init && self.gc_candidate_should_emit(key) {
+                crate::metrics::GC_CANDIDATES_EMITTED
+                    .with_label_values(&["ingest"])
+                    .inc();
+                gc_candidates.push(PendingGcRow {
+                    bucket_id: 0, // computed by put_pending_gc on insert
+                    spcnode: key.field2 as i64,
+                    dbnode: key.field3 as i64,
+                    relnode: key.field4 as i64,
+                    forknum: key.field5 as i16,
+                    blknum: key.field6 as i64,
+                    due_lsn: lsn,
+                });
+            }
             self.pages.push(row);
             self.rows_written.fetch_add(1, Ordering::Relaxed);
             if let Some((count_limit, payload_bytes_limit)) = rel_limits {
@@ -778,10 +860,10 @@ impl PageWriter {
                 self.record_delta_for_materialize(key, *lsn, *resets_chain, 0, slru_count_limit, 0);
             }
         }
-        // Aux (slru + meta) buffers under one small mutex. Holds
-        // are O(rows-in-this-batch); read paths blend buffered with
-        // persisted but only briefly snapshot here too.
-        if !slru_rows.is_empty() || !meta_rows.is_empty() {
+        // Aux (slru + meta + gc-candidate) buffers under one small
+        // mutex. Holds are O(rows-in-this-batch); read paths blend
+        // buffered with persisted but only briefly snapshot here too.
+        if !slru_rows.is_empty() || !meta_rows.is_empty() || !gc_candidates.is_empty() {
             {
                 let mut aux = self.aux.lock();
                 if aux.opened_at.is_none() {
@@ -796,6 +878,10 @@ impl PageWriter {
                     aux.bytes_in_aux_buffers += meta_row_size(row);
                     aux.meta_buffer.push(row.clone());
                     self.rows_written.fetch_add(1, Ordering::Relaxed);
+                }
+                for row in gc_candidates {
+                    aux.bytes_in_aux_buffers += std::mem::size_of::<PendingGcRow>();
+                    aux.pending_gc_buffer.push(row);
                 }
             }
             // Write-through: populate the meta cache outside the aux lock so
@@ -1475,14 +1561,19 @@ impl PageWriter {
         for row in &rel_rows {
             pageserver_api::write_trace::trace_stage("snapshot", &row.key, row.lsn);
         }
-        let (slru_rows, meta_rows) = {
+        let (slru_rows, meta_rows, pending_gc_rows) = {
             let aux = self.aux.lock();
-            (aux.slru_buffer.clone(), aux.meta_buffer.clone())
+            (
+                aux.slru_buffer.clone(),
+                aux.meta_buffer.clone(),
+                aux.pending_gc_buffer.clone(),
+            )
         };
         let rel_count = rel_rows.len();
         let slru_count = slru_rows.len();
         let meta_count = meta_rows.len();
-        if rel_count == 0 && slru_count == 0 && meta_count == 0 {
+        let pending_gc_count = pending_gc_rows.len();
+        if rel_count == 0 && slru_count == 0 && meta_count == 0 && pending_gc_count == 0 {
             // Nothing to flush. Cold-key residue (tallies whose
             // threshold-crossing happened in past flushes but
             // haven't dispatched — e.g. blocked by in_flight that
@@ -1498,7 +1589,9 @@ impl PageWriter {
 
         // INSERT to YB outside any lock so concurrent puts and reads
         // aren't blocked by the round-trip.
-        let res = self.try_write_rows(&rel_rows, &slru_rows, &meta_rows).await;
+        let res = self
+            .try_write_rows(&rel_rows, &slru_rows, &meta_rows, &pending_gc_rows)
+            .await;
 
         if res.is_ok() {
             // Everything at lsn ≤ ingest_frontier is now durable: rows
@@ -1665,9 +1758,12 @@ impl PageWriter {
                         .take(meta_count)
                         .map(meta_row_size)
                         .sum::<usize>();
-                aux.bytes_in_aux_buffers = aux.bytes_in_aux_buffers.saturating_sub(aux_drop_bytes);
+                aux.bytes_in_aux_buffers = aux.bytes_in_aux_buffers.saturating_sub(
+                    aux_drop_bytes + pending_gc_count * std::mem::size_of::<PendingGcRow>(),
+                );
                 aux.slru_buffer.drain(0..slru_count);
                 aux.meta_buffer.drain(0..meta_count);
+                aux.pending_gc_buffer.drain(0..pending_gc_count);
                 // NB (#57 part 2): as on the rel FIFO above, a
                 // meta/SLRU row ≤ frontier remaining after the drain is the
                 // benign reconnect-replay re-push of an already-durable row,
@@ -1676,6 +1772,7 @@ impl PageWriter {
                 if self.pages.unflushed_count() == 0
                     && aux.slru_buffer.is_empty()
                     && aux.meta_buffer.is_empty()
+                    && aux.pending_gc_buffer.is_empty()
                 {
                     aux.opened_at = None;
                 }
@@ -1788,6 +1885,7 @@ impl PageWriter {
         rel_rows: &[Arc<PageRow>],
         slru_rows: &[SlruPageRow],
         meta_rows: &[MetaRow],
+        pending_gc_rows: &[PendingGcRow],
     ) -> Result<()> {
         // All flush writes go via the internal conn. Compute getPage
         // never queues behind a 25 MiB INSERT.
@@ -1804,6 +1902,11 @@ impl PageWriter {
         if !meta_rows.is_empty() {
             self.fpu_page_store
                 .put_meta(self.branch_id, meta_rows)
+                .await?;
+        }
+        if !pending_gc_rows.is_empty() {
+            self.fpu_page_store
+                .put_pending_gc(self.branch_id, pending_gc_rows)
                 .await?;
         }
         Ok(())
@@ -4627,6 +4730,85 @@ mod tests {
         assert!(
             chain.last().unwrap().1,
             "oldest entry must be the image anchor"
+        );
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// GC candidate collection at the ingest hook. Scenarios:
+    ///
+    /// 1. Collection disabled (no `set_gc_candidate_every_n`): base writes
+    ///    produce no `pending_gc` rows.
+    /// 2. n = 1: every base — image or plain `Value::Image` — inserts
+    ///    one candidate at the base's LSN; plain deltas insert none.
+    ///    Candidates ride the flush (nothing durable before it).
+    /// 3. n = 3: only every third base OF A GIVEN BLOCK emits, and the
+    ///    per-block counters are independent — an interleaved block
+    ///    that only ever reaches 2 bases emits nothing (the doc's
+    ///    bounded-leak trade for sampling).
+    #[tokio::test]
+    async fn gc_candidates_every_n_bases() {
+        let all_pending = |store: Arc<PageStore>, branch: BranchId| async move {
+            let mut rows = store
+                .select_due_pending_gc(branch, Lsn(i64::MAX as u64), 100_000)
+                .await
+                .unwrap();
+            rows.sort_by_key(|r| (r.blknum, r.due_lsn));
+            rows.iter()
+                .map(|r| (r.blknum, r.due_lsn.0))
+                .collect::<Vec<_>>()
+        };
+
+        let (store, schema) = make_store("gc_cand").await;
+
+        // 1. Disabled: bases leave no candidates behind.
+        let (w, branch) = writer(store.clone(), FlushPolicy::default());
+        w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
+        w.flush().await.unwrap();
+        assert!(
+            all_pending(store.clone(), branch).await.is_empty(),
+            "disabled collection must insert nothing"
+        );
+
+        // 2. n = 1: every base, only bases, durable at flush.
+        let (mut w, branch) = writer(store.clone(), FlushPolicy::default());
+        w.set_gc_candidate_every_n(1);
+        let w = Arc::new(w);
+        w.put(&[
+            (k(1), Lsn(10), image()),
+            (k(1), Lsn(20), delta()), // plain delta: no candidate
+            (k(1), Lsn(30), image()),
+            (k(2), Lsn(15), image()),
+        ])
+        .await
+        .unwrap();
+        // Pre-flush: buffered only, nothing in YB yet.
+        assert!(all_pending(store.clone(), branch).await.is_empty());
+        w.flush().await.unwrap();
+        assert_eq!(
+            all_pending(store.clone(), branch).await,
+            vec![(1, 10), (1, 30), (2, 15)],
+            "one candidate per base, none for the delta"
+        );
+
+        // 3. n = 3: per-block counting; the 2-base block never emits.
+        let (mut w, branch) = writer(store.clone(), FlushPolicy::default());
+        w.set_gc_candidate_every_n(3);
+        let w = Arc::new(w);
+        let mut entries: Vec<(Key, Lsn, Value)> = Vec::new();
+        // block 5: 7 bases at lsns 10..=70 → emits at the 3rd and 6th.
+        for i in 1..=7u64 {
+            entries.push((k(5), Lsn(i * 10), image()));
+        }
+        // block 6 interleaved: 2 bases → below n, never emits.
+        entries.push((k(6), Lsn(15), image()));
+        entries.push((k(6), Lsn(25), image()));
+        w.put(&entries).await.unwrap();
+        w.flush().await.unwrap();
+        assert_eq!(
+            all_pending(store.clone(), branch).await,
+            vec![(5, 30), (5, 60)],
+            "every 3rd base per block; independent per-block counters"
         );
 
         drop_schema(&store, &schema).await;

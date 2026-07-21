@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -118,6 +119,22 @@ func pageserverTomlMap(p PageserverParams) (map[string]any, error) {
 	}
 	for k, v := range c.Other {
 		m[k] = v
+	}
+	// Boot-time config seam: a TOML fragment from YB_PAGESERVER_TEST_EXTRA_TOML
+	// merged (top-level keys) into the generated pageserver.toml, so a
+	// pageserver can be BORN with extra config — the integration harness
+	// sets GC on here (editing the toml after boot would need a restart,
+	// which bumps the generation and fences the RW compute). Mirrors the
+	// Rust control_plane seam (`config_toml.insert(key, item)` per fragment
+	// top-level key). Unset in production.
+	if extra := strings.TrimSpace(os.Getenv("YB_PAGESERVER_TEST_EXTRA_TOML")); extra != "" {
+		var frag map[string]any
+		if err := toml.Unmarshal([]byte(extra), &frag); err != nil {
+			return nil, fmt.Errorf("parse YB_PAGESERVER_TEST_EXTRA_TOML: %w", err)
+		}
+		for k, v := range frag {
+			m[k] = v
+		}
 	}
 	return m, nil
 }

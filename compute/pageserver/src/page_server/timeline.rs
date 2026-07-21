@@ -1,3 +1,4 @@
+mod gc;
 pub(crate) mod handle;
 pub(crate) mod logical_size;
 pub(crate) mod remote_state;
@@ -76,6 +77,9 @@ pub struct TimelineResources {
     /// Internal-traffic `PageStore` (see
     /// `TenantSharedResources::fpu_page_store`).
     pub fpu_page_store: Arc<crate::page_store::PageStore>,
+    /// GC-drain `PageStore` (see
+    /// `TenantSharedResources::gc_page_store`).
+    pub gc_page_store: Arc<crate::page_store::PageStore>,
     /// Ancestry lineage for lineage-aware PageStore reads, built by
     /// `PageStore::load_lineage` from the timeline_state row chain.
     /// `None` → the trivial single-segment lineage (fresh bootstrap,
@@ -279,6 +283,10 @@ pub struct Timeline {
     /// A channel to send async requests to prepare a basebackup for the basebackup cache.
     basebackup_cache: Arc<BasebackupCache>,
 
+    /// Dedicated GC-drain `PageStore` (see
+    /// `TenantSharedResources::gc_page_store`).
+    gc_page_store: Arc<crate::page_store::PageStore>,
+
     /// Basebackup will collect the count and store it here. Used for reldirv2 rollout.
     pub(crate) db_rel_count: ArcSwapOption<(usize, usize)>,
 }
@@ -298,6 +306,13 @@ pub(crate) struct GcInfo {
     /// Currently, this includes all points where child branches have
     /// been forked off from. In the future, could also include
     /// explicit user-defined snapshot points.
+    ///
+    /// TODO(cleanup): vestigial in yb-amp — child fork points are
+    /// protected by the drain's `min_children_fork_lsn` (from YB
+    /// `timeline_state`); `refresh_gc_info` zeroes this and the cutoff
+    /// (`min_cutoff`) never reads it. The `insert_child` /
+    /// `remove_child_not_offloaded` machinery can go once no other
+    /// consumer remains.
     pub(crate) retain_lsns: Vec<(Lsn, BranchId)>,
 
     /// The cutoff coordinates, which are combined by selecting the minimum.
@@ -2013,6 +2028,23 @@ impl Timeline {
                 .unwrap_or(conf.default_tenant_conf.relsize_snapshot_cache_capacity)
         };
 
+        // Read once at writer construction, so a runtime patch takes
+        // effect only on the next PS restart (the drain knobs, by
+        // contrast, are re-read each tick).
+        let (enable_gc, gc_candidate_every_n_bases) = {
+            let loaded_tenant_conf = tenant_conf.load();
+            (
+                loaded_tenant_conf
+                    .tenant_conf
+                    .enable_gc
+                    .unwrap_or(conf.default_tenant_conf.enable_gc),
+                loaded_tenant_conf
+                    .tenant_conf
+                    .gc_candidate_every_n_bases
+                    .unwrap_or(conf.default_tenant_conf.gc_candidate_every_n_bases),
+            )
+        };
+
         // PageWriter routes reads through `compute_page_store` and writes
         // through `fpu_page_store` so compute getPage stays off the
         // walreceiver/materialiser write conn.
@@ -2049,6 +2081,9 @@ impl Timeline {
             // the writer is shared (set_lineage takes &mut).
             if let Some(lineage) = resources.lineage.clone() {
                 writer.set_lineage(lineage);
+            }
+            if enable_gc {
+                writer.set_gc_candidate_every_n(gc_candidate_every_n_bases);
             }
 
             // Materialiser channel: established BEFORE we wrap the writer
@@ -2093,6 +2128,7 @@ impl Timeline {
                         rx,
                         in_flight,
                         conf.scale_factor,
+                        enable_gc,
                     ))
                 }
                 _ => None,
@@ -2210,6 +2246,8 @@ impl Timeline {
                 wait_lsn_log_slow: tokio::sync::Semaphore::new(1),
 
                 basebackup_cache: resources.basebackup_cache,
+
+                gc_page_store: resources.gc_page_store,
 
                 db_rel_count: ArcSwapOption::from_pointee(None),
             };
@@ -3013,12 +3051,6 @@ impl Timeline {
                 }
             }
         })
-    }
-    /// yb-amp: GC of layer files is meaningless; old page versions
-    /// are pruned inside the row store by `PageWriter`. Returning an
-    /// empty result preserves the gc_loop's telemetry shape.
-    pub(super) async fn gc(&self) -> Result<GcResult, GcError> {
-        Ok(GcResult::default())
     }
 
     /// Reconstruct a value, using the given base image and WAL records in 'data'.

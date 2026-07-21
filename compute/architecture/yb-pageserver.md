@@ -685,9 +685,13 @@ keys with long chains keep reading via the slow path until 20 more
 deltas (or 4 KiB combined delta payload) trigger materialisation. A
 periodic backstop scan could close that gap later; not in v1.
 
-GC of the superseded deltas in YB is Phase 6 — until then, the row
-count grows. The materialiser pays only for read-latency wins; size
-on disk grows monotonically.
+The superseded rows below a materialised image are reclaimed by GC
+(§GC below) when `enable_gc` is on: the materialiser records a
+`pending_gc` trim candidate per image (buffered, best-effort — see
+§GC), and the drain later deletes everything below the block's newest
+base at or below the GC cutoff. With `enable_gc` off (the default),
+the row count grows monotonically — the materialiser pays only for
+read-latency wins.
 
 ## Generation fencing
 
@@ -717,6 +721,13 @@ on disk grows monotonically.
 This collapses the upstream "every layer file carries its gen in the
 name + every delete is gen-checked" machinery into one column.
 
+## Pageserver GC
+
+The pageserver reclaims superseded page versions, truncated blocks, and
+dropped relfilenodes from `pageserver.pages` via a `pending_gc` candidate
+queue plus a periodic drain (separate from the safekeeper's WAL GC). Full
+design, config, and metrics: [`yb-pageserver-gc.md`](yb-pageserver-gc.md).
+
 ## What yb-pageserver does NOT do
 
 - **Compaction** — none. Image-layer creation moves from synchronous
@@ -730,10 +741,6 @@ name + every delete is gen-checked" machinery into one column.
   to evict.
 - **Layer-file generations** — gone. Only the `current_generation`
   column on the branch row matters.
-- **GC** — not implemented yet. The plan is a separate cron that
-  prunes `pageserver.pages` rows older than `applied_gc_cutoff_lsn`
-  per key, retaining at least one image per chain. Until that lands,
-  rows accumulate indefinitely.
 - **S3 object-versioning time-travel recovery** — the upstream
   `time_travel_recover_tenant` path that walked an S3 bucket's
   versioned objects to roll a branch back to a wall-clock timestamp

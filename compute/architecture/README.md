@@ -21,6 +21,7 @@ upstream Neon can skim) and **changes in yb-amp**.
 | [`safekeeper-lsns.md`](safekeeper-lsns.md) | SK-side LSN inventory + flows |
 | [`yb-pageserver.md`](yb-pageserver.md) | The pageserver: row-per-page store, materialiser, write path, and the upstream-inherited concepts |
 | [`pageserver-lsns.md`](pageserver-lsns.md) | PS-side LSN inventory + flows |
+| [`yb-pageserver-gc.md`](yb-pageserver-gc.md) | PageServer garbage collection: candidate queue, drain, cutoff, config, metrics |
 | [`remote-storage.md`](remote-storage.md) | The `RemoteStorage` abstraction + `YbStore` |
 | [`yugabyte.md`](yugabyte.md) | What lives in YB: databases, schemas, tables |
 | [`single-container-endpoint.md`](single-container-endpoint.md) | Packaging an endpoint as one pod (`deploy/`): the supervisor, SC-free bootstrap |

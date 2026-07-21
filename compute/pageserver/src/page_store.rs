@@ -335,6 +335,26 @@ pub enum UpdateTimelineStateOutcome {
     StaleGeneration,
 }
 
+/// Result of [`PageStore::publish_gc_cutoff`]. Same generation-fence
+/// semantics as [`AdvanceConsistentLsnOutcome`]: a stale pageserver's
+/// publish matches no row, and it must not proceed to the GC drain —
+/// its in-memory lease set is not the live one, so deleting anything
+/// based on its cutoff could trim under a lease granted by the
+/// current-generation pageserver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishGcCutoffOutcome {
+    /// The fence held. `applied` is the post-UPDATE column value —
+    /// `GREATEST(existing, requested)`, i.e. the monotone read floor
+    /// the drain may delete below (it can exceed the requested value
+    /// when inputs regressed, e.g. a raised pitr_interval).
+    Published {
+        applied: Lsn,
+    },
+    StaleGeneration {
+        live_generation: u32,
+    },
+}
+
 /// Result of `PageStore::cas_bump_generation_on_attach`. Called once
 /// per attach to push the controller-issued generation through to the
 /// YB column before any flushes run, so the flush path's
@@ -811,6 +831,63 @@ fn columns_to_key_bytes(sp: i64, db: i64, rel: i64, fork: i16, blk: i64) -> Byte
 /// Chunks dispatch in parallel — tokio-postgres pipelines them on the
 /// shared connection so YB absorbs them concurrently.
 const ROWS_PER_INSERT: usize = 500;
+
+/// Placement buckets in `pageserver.pending_gc`'s hash key; must match
+/// the drain's per-bucket fan-out.
+pub const GC_BUCKETS: i32 = 10;
+
+/// Concurrent GC action DELETEs per drain tick (scaled); the dedicated
+/// `yb-pageserver:gc` pool is sized to this.
+pub const GC_ACTION_PARALLELISM: usize = 2;
+
+/// Placement bucket for a candidate block. FROZEN: must stay a fixed,
+/// deterministic function of the identity columns (golden-value test) —
+/// changing it strands existing candidates in their old buckets and
+/// breaks crash-replay dedup. Deliberately not `std::hash` (unstable
+/// across Rust versions) and not a YB generated column (the yb-client
+/// write path bypasses the YSQL layer).
+pub fn gc_bucket_id(spcnode: i64, dbnode: i64, relnode: i64, forknum: i16, blknum: i64) -> i32 {
+    // FNV-1a over the identity columns' little-endian bytes.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for v in [
+        spcnode as u64,
+        dbnode as u64,
+        relnode as u64,
+        forknum as u64,
+        blknum as u64,
+    ] {
+        for b in v.to_le_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    (h % GC_BUCKETS as u64) as i32
+}
+
+/// Block identity: (spcnode, dbnode, relnode, forknum, blknum);
+/// sentinel blknums can never collide with a real block's. Its fork
+/// prefix (minus blknum) is [`GcForkIdent`].
+pub(crate) type GcBlockIdent = (i64, i64, i64, i16, i64);
+
+/// Fork identity — a [`GcBlockIdent`] without its blknum; the grouping
+/// key for per-fork trims.
+pub(crate) type GcForkIdent = (i64, i64, i64, i16);
+
+/// One GC candidate: "visit this key once the cutoff reaches
+/// `due_lsn`". `blknum` doubles as the kind: >= 0 trim, -2 drop,
+/// -1 shrink (ascending = intended action order, Part 2 -> 3 -> 1).
+/// `bucket_id` is ignored on insert (computed there) and populated by
+/// the select so the dequeue can address the stored placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingGcRow {
+    pub bucket_id: i32,
+    pub spcnode: i64,
+    pub dbnode: i64,
+    pub relnode: i64,
+    pub forknum: i16,
+    pub blknum: i64,
+    pub due_lsn: Lsn,
+}
 
 const PAGES_COLUMNS: &str =
     "branch_id, spcnode, dbnode, relnode, forknum, blknum, lsn, is_image, will_init, payload";
@@ -2378,17 +2455,464 @@ impl PageStore {
     /// `Err` and the caller may retry — partial deletion is
     /// idempotent so a re-run safely catches up.
     pub async fn delete_all_for_timeline(&self, branch_id: BranchId) -> Result<()> {
-        let (a, b, c, d) = tokio::join!(
+        let (a, b, c, d, e) = tokio::join!(
             self.delete_all_pages(branch_id),
             self.delete_all_slru_pages(branch_id),
             self.delete_all_meta(branch_id),
             self.delete_timeline(branch_id),
+            self.delete_all_pending_gc(branch_id),
         );
         a?;
         b?;
         c?;
         d?;
+        e?;
         Ok(())
+    }
+
+    // ------------------- GC candidate queue --------------------------------
+
+    /// Insert GC candidates (the single insert path — `bucket_id` is
+    /// computed here, input values ignored). Replayed duplicates dedup:
+    /// every stored column is in the PK and the connection runs upsert
+    /// mode, so a re-insert is a byte-identical overwrite.
+    pub async fn put_pending_gc(&self, branch_id: BranchId, rows: &[PendingGcRow]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        const COLS: usize = 8;
+        let branch_s = branch_id.to_string();
+        // Sequential by design: candidate volume is tiny (a buffered
+        // flush is ~one ≤500-row chunk); only the GC action deletes
+        // get parallelism (`GC_ACTION_PARALLELISM`, own pool).
+        let parallelism = 1;
+
+        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
+        for chunk in rows.chunks(ROWS_PER_INSERT) {
+            let mut sql = format!(
+                "INSERT INTO \"{}\".pending_gc \
+                 (branch_id, bucket_id, spcnode, dbnode, relnode, forknum, blknum, due_lsn) \
+                 VALUES ",
+                self.schema
+            );
+            let mut params: Vec<Box<dyn ToSql + Sync + Send + 'static>> =
+                Vec::with_capacity(chunk.len() * COLS);
+            for (i, row) in chunk.iter().enumerate() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                let base = i * COLS + 1;
+                sql.push_str(&format!(
+                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                    base,
+                    base + 1,
+                    base + 2,
+                    base + 3,
+                    base + 4,
+                    base + 5,
+                    base + 6,
+                    base + 7,
+                ));
+                let bucket = gc_bucket_id(
+                    row.spcnode,
+                    row.dbnode,
+                    row.relnode,
+                    row.forknum,
+                    row.blknum,
+                );
+                params.push(Box::new(branch_s.clone()));
+                params.push(Box::new(bucket));
+                params.push(Box::new(row.spcnode));
+                params.push(Box::new(row.dbnode));
+                params.push(Box::new(row.relnode));
+                params.push(Box::new(row.forknum));
+                params.push(Box::new(row.blknum));
+                params.push(Box::new(row.due_lsn.0 as i64));
+            }
+            let chunk_rows = chunk.len();
+            let ysql_client = Arc::clone(&self.ysql_client);
+            futs.push(Box::pin(async move {
+                let params_ref: Vec<&(dyn ToSql + Sync)> = params
+                    .iter()
+                    .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+                    .collect();
+                ysql_client
+                    .execute(&sql, &params_ref)
+                    .await
+                    .with_context(|| {
+                        format!("put_pending_gc branch={branch_id} chunk_rows={chunk_rows}")
+                    })?;
+                Ok(())
+            }));
+        }
+
+        futures::stream::iter(futs)
+            .buffer_unordered(parallelism)
+            .try_collect::<Vec<_>>()
+            .await?;
+        Ok(())
+    }
+
+    /// Fetch up to `limit` due candidates (`due_lsn <= cutoff`),
+    /// globally oldest-first.
+    ///
+    /// TODO(gc_completed_lsn): add a persisted low-watermark lower
+    /// bound so the scan seeks past drained-candidate tombstones. Needs
+    /// an insert-side floor: a historical image (a read-side materialise
+    /// under a lease) can carry a due_lsn below the watermark and be
+    /// skipped forever, so emitters must clamp due_lsn to the watermark
+    /// once it exists.
+    pub async fn select_due_pending_gc(
+        &self,
+        branch_id: BranchId,
+        cutoff: Lsn,
+        limit: usize,
+    ) -> Result<Vec<PendingGcRow>> {
+        let branch_s = branch_id.to_string();
+        let cutoff_i = cutoff.0 as i64;
+        let limit_i = limit as i64;
+
+        // Per-bucket UNION ALL: YB plans it as an early-terminating
+        // Merge Append over PK index scans (verified by EXPLAIN); the
+        // inner ORDER BY + LIMIT per branch are what make it
+        // merge-appendable. NB: a pending_gc query WITHOUT bucket_id
+        // equality seq-scans and sorts — the hash key is
+        // (branch_id, bucket_id).
+        let sql = {
+            use std::fmt::Write as _;
+            let mut s = String::with_capacity(GC_BUCKETS as usize * 220 + 96);
+            s.push_str("SELECT * FROM (");
+            for bucket in 0..GC_BUCKETS {
+                if bucket > 0 {
+                    s.push_str(" UNION ALL ");
+                }
+                write!(
+                    s,
+                    "(SELECT bucket_id, spcnode, dbnode, relnode, forknum, blknum, due_lsn \
+                      FROM \"{}\".pending_gc \
+                      WHERE branch_id = $1 AND bucket_id = {bucket} AND due_lsn <= $2 \
+                      ORDER BY due_lsn LIMIT $3)",
+                    self.schema
+                )
+                .unwrap();
+            }
+            s.push_str(") u ORDER BY due_lsn LIMIT $3");
+            s
+        };
+
+        let rows = self
+            .ysql_client
+            .query(&sql, &[&branch_s, &cutoff_i, &limit_i])
+            .await
+            .context("select_due_pending_gc")?;
+        rows.iter()
+            .map(|r| {
+                Ok(PendingGcRow {
+                    bucket_id: r.get(0),
+                    spcnode: r.get(1),
+                    dbnode: r.get(2),
+                    relnode: r.get(3),
+                    forknum: r.get(4),
+                    blknum: r.get(5),
+                    due_lsn: Lsn(r.get::<_, i64>(6) as u64),
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+    }
+
+    /// Collapse-on-visit dequeue. Invariant: discard only what the
+    /// tick's actions provably covered — a trim anchors at the CUTOFF,
+    /// so all of a visited block's candidates <= cutoff are covered,
+    /// including ones the capped select never returned. Two modes:
+    /// `all_due_visited` sweeps `due_lsn <= cutoff AND blknum >= 0`
+    /// per visited bucket (the guard keeps unacted sentinel rows
+    /// queued — a drop's future action covers <= drop_lsn, never
+    /// <= cutoff); capped mode collapses per VISITED block only.
+    /// Race exception: a materialiser candidate at due_lsn <= cutoff
+    /// (stamped at a folded delta's LSN) for a block this tick never
+    /// trimmed, landing in a visited bucket between the select and the
+    /// sweep, is swept too — that block waits for its next
+    /// materialisation. Bounded, best-effort; see TODO(gc_completed_lsn).
+    /// Must run strictly after the actions succeed (crash in between
+    /// re-drains; trims are idempotent). Returns rows actually deleted
+    /// (can exceed `rows.len()` under collapse).
+    pub async fn dequeue_pending_gc(
+        &self,
+        branch_id: BranchId,
+        rows: &[PendingGcRow],
+        cutoff: Lsn,
+        all_due_visited: bool,
+    ) -> Result<u64> {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let branch_s = branch_id.to_string();
+        let mut removed: u64 = 0;
+        let cutoff_i = cutoff.0 as i64;
+
+        // Distinct visited blocks, grouped by bucket. (Also the bucket
+        // set for sweep mode — a bucket with no visited row has no due
+        // trim rows when `all_due_visited`.)
+        let mut by_bucket: std::collections::HashMap<i32, Vec<GcBlockIdent>> =
+            std::collections::HashMap::new();
+        {
+            let mut seen: std::collections::HashSet<GcBlockIdent> =
+                std::collections::HashSet::with_capacity(rows.len());
+            for row in rows {
+                debug_assert!(row.blknum >= 0, "dequeue visited rows are trim rows");
+                let block = (
+                    row.spcnode,
+                    row.dbnode,
+                    row.relnode,
+                    row.forknum,
+                    row.blknum,
+                );
+                if seen.insert(block) {
+                    by_bucket.entry(row.bucket_id).or_default().push(block);
+                }
+            }
+        }
+
+        if all_due_visited {
+            // Sweep: everything due (blknum >= 0) in these buckets was
+            // trimmed this tick.
+            let sql = format!(
+                "DELETE FROM \"{}\".pending_gc \
+                 WHERE branch_id = $1 AND bucket_id = $2 \
+                   AND due_lsn <= $3 AND blknum >= 0",
+                self.schema
+            );
+            for bucket in by_bucket.keys() {
+                removed += self
+                    .ysql_client
+                    .execute(&sql, &[&branch_s, bucket, &cutoff_i])
+                    .await
+                    .with_context(|| {
+                        format!("dequeue_pending_gc sweep branch={branch_id} bucket={bucket}")
+                    })?;
+            }
+            return Ok(removed);
+        }
+
+        // Capped: collapse per visited block. `unnest` with per-column
+        // arrays keeps the statement STATIC — 8 bound params regardless
+        // of block count — so YB parses/plans it once instead of eating
+        // the planning cost of a freshly-built ~5-params-per-block IN
+        // list every drain tick.
+        let sql = format!(
+            "DELETE FROM \"{}\".pending_gc \
+             WHERE branch_id = $1 AND bucket_id = $2 AND due_lsn <= $3 \
+               AND (spcnode, dbnode, relnode, forknum, blknum) IN ( \
+                   SELECT * FROM unnest($4::bigint[], $5::bigint[], $6::bigint[], \
+                                        $7::smallint[], $8::bigint[]))",
+            self.schema
+        );
+        for (bucket, blocks) in by_bucket {
+            let mut spcnodes = Vec::with_capacity(blocks.len());
+            let mut dbnodes = Vec::with_capacity(blocks.len());
+            let mut relnodes = Vec::with_capacity(blocks.len());
+            let mut forknums = Vec::with_capacity(blocks.len());
+            let mut blknums = Vec::with_capacity(blocks.len());
+            for b in &blocks {
+                spcnodes.push(b.0);
+                dbnodes.push(b.1);
+                relnodes.push(b.2);
+                forknums.push(b.3);
+                blknums.push(b.4);
+            }
+            removed += self
+                .ysql_client
+                .execute(
+                    &sql,
+                    &[
+                        &branch_s, &bucket, &cutoff_i, &spcnodes, &dbnodes, &relnodes, &forknums,
+                        &blknums,
+                    ],
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "dequeue_pending_gc collapse branch={branch_id} bucket={bucket} \
+                         blocks={}",
+                        blocks.len()
+                    )
+                })?;
+        }
+        Ok(removed)
+    }
+
+    pub async fn delete_all_pending_gc(&self, branch_id: BranchId) -> Result<()> {
+        let sql = format!(
+            "DELETE FROM \"{}\".pending_gc WHERE branch_id = $1",
+            self.schema
+        );
+        self.ysql_client
+            .execute(&sql, &[&branch_id.to_string()])
+            .await
+            .context("delete_all_pending_gc")?;
+        Ok(())
+    }
+
+    /// Trim one fork's listed blocks: per block, keep the newest base
+    /// (`will_init`) <= CUTOFF plus everything above; delete below,
+    /// incl. same-LSN non-base twins. Greedy to the cutoff (not
+    /// due_lsn); no base <= cutoff = block untouched. Returns rows
+    /// deleted.
+    ///
+    /// Anchoring on `will_init` matches the read base (`is_image OR
+    /// will_init`) because an image initializes the page (is_image =>
+    /// will_init, true for all current writers). If that broke, the
+    /// trim would under-delete (keep the image) — safe, never over.
+    ///
+    /// Deletes YB rows only — the in-RAM `UnifiedPages` read cache is
+    /// NOT invalidated. Safe: trimmed rows are below the cutoff/anchor
+    /// and admitted reads are >= cutoff, so reconstruction never reads
+    /// them; they just linger in RAM until the key is evicted.
+    /// TODO(gc_cache_invalidation): evict trimmed keys from
+    /// `UnifiedPages` at the drain to reclaim that RAM promptly.
+    ///
+    /// TODO(gc_whole_fork_threshold): above a per-fork block count,
+    /// switch to a whole-fork variant in blknum-range batches.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn gc_trim_blocks(
+        &self,
+        branch_id: BranchId,
+        spcnode: i64,
+        dbnode: i64,
+        relnode: i64,
+        forknum: i16,
+        blknums: &[i64],
+        cutoff: Lsn,
+    ) -> Result<u64> {
+        if blknums.is_empty() {
+            return Ok(0);
+        }
+        let sql = format!(
+            "WITH anchor AS ( \
+                 SELECT blknum, MAX(lsn) AS lsn \
+                 FROM \"{schema}\".pages \
+                 WHERE branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
+                   AND relnode=$4 AND forknum=$5 \
+                   AND blknum = ANY($6) \
+                   AND lsn <= $7 AND will_init \
+                 GROUP BY blknum \
+             ) \
+             DELETE FROM \"{schema}\".pages p \
+             USING anchor a \
+             WHERE p.branch_id=$1 AND p.spcnode=$2 AND p.dbnode=$3 \
+               AND p.relnode=$4 AND p.forknum=$5 \
+               AND p.blknum = a.blknum \
+               AND (p.lsn < a.lsn \
+                 OR (p.lsn = a.lsn AND NOT p.will_init))",
+            schema = self.schema
+        );
+        let deleted = self
+            .ysql_client
+            .execute(
+                &sql,
+                &[
+                    &branch_id.to_string(),
+                    &spcnode,
+                    &dbnode,
+                    &relnode,
+                    &forknum,
+                    &blknums,
+                    &(cutoff.0 as i64),
+                ],
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "gc_trim_blocks branch={branch_id} rel={relnode} fork={forknum} \
+                     blocks={}",
+                    blknums.len()
+                )
+            })?;
+        Ok(deleted)
+    }
+
+    /// Minimum branch point over live children of `branch_id` — the
+    /// child pin folded into the GC cutoff. Seq scan over
+    /// `timeline_state` (one row per branch; small by construction).
+    pub async fn min_children_fork_lsn(&self, branch_id: BranchId) -> Result<Option<Lsn>> {
+        let sql = format!(
+            "SELECT min(ancestor_lsn) FROM \"{}\".timeline_state \
+             WHERE ancestor_branch_id = $1 AND deleted_at IS NULL",
+            self.schema
+        );
+        let row = self
+            .ysql_client
+            .query_opt(&sql, &[&branch_id.to_string()])
+            .await
+            .context("min_children_fork_lsn")?;
+        let min: Option<i64> = row.and_then(|r| r.get(0));
+        Ok(min.map(|l| Lsn(l as u64)))
+    }
+
+    /// Persist the GC read floor, monotonically and generation-fenced,
+    /// BEFORE any drain deletes. `GREATEST` keeps the column monotone
+    /// even if the freshly-computed cutoff regressed (inputs can move
+    /// backwards — e.g. a raised pitr_interval — while deletion can't).
+    /// The fence makes a superseded pageserver stop before draining:
+    /// its in-memory lease set is stale, so its cutoff must not be
+    /// allowed to delete anything.
+    pub async fn publish_gc_cutoff(
+        &self,
+        branch_id: BranchId,
+        generation: utils::generation::Generation,
+        cutoff: Lsn,
+    ) -> Result<PublishGcCutoffOutcome> {
+        let sql = format!(
+            "UPDATE \"{}\".timeline_state \
+             SET applied_gc_cutoff_lsn = GREATEST(applied_gc_cutoff_lsn, $2) \
+             WHERE branch_id = $1 \
+               AND current_generation = $3 \
+             RETURNING applied_gc_cutoff_lsn",
+            self.schema
+        );
+        let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
+        let row = self
+            .ysql_client
+            .query_opt(
+                &sql,
+                &[&branch_id.to_string(), &(cutoff.0 as i64), &gen_i32],
+            )
+            .await
+            .context("publish_gc_cutoff")?;
+        match row {
+            Some(r) => Ok(PublishGcCutoffOutcome::Published {
+                applied: Lsn(r.get::<_, i64>(0) as u64),
+            }),
+            None => {
+                // Fenced UPDATE matched no row ⇒ our generation is
+                // stale. Probe the live generation for the caller's log.
+                // Best-effort: current_generation can change again
+                // between the UPDATE and this SELECT, so the reported
+                // value is informational, not authoritative.
+                let probe_sql = format!(
+                    "SELECT current_generation FROM \"{}\".timeline_state \
+                     WHERE branch_id = $1",
+                    self.schema
+                );
+                let row = self
+                    .ysql_client
+                    .query_opt(&probe_sql, &[&branch_id.to_string()])
+                    .await
+                    .context("publish_gc_cutoff probe")?;
+                match row {
+                    None => anyhow::bail!(
+                        "no timeline row for {branch_id} — \
+                         publish_gc_cutoff called before timeline_create wrote the row"
+                    ),
+                    Some(r) => {
+                        let live_gen: i32 = r.get(0);
+                        Ok(PublishGcCutoffOutcome::StaleGeneration {
+                            live_generation: live_gen as u32,
+                        })
+                    }
+                }
+            }
+        }
     }
 
     // ------------------- lineage-aware reads -------------------------------
@@ -5465,5 +5989,726 @@ mod tests {
         assert!(err.to_string().contains("no timeline_state row"), "{err}");
 
         drop_schema(&store, &schema).await;
+    }
+
+    // ===================== GC: pending_gc queue + trim ==================
+
+    const GC_SPC: i64 = 1663;
+    const GC_DB: i64 = 5;
+
+    impl super::PageStore {
+        /// Test-only: every stored version of one block, unfiltered —
+        /// `(lsn, is_image, will_init)` ascending. The production read
+        /// paths anchor-trim their results, which hides exactly the rows
+        /// GC tests must assert about (deleted sub-anchor versions).
+        async fn test_raw_block_versions(
+            &self,
+            branch_id: BranchId,
+            spcnode: i64,
+            dbnode: i64,
+            relnode: i64,
+            forknum: i16,
+            blknum: i64,
+        ) -> Result<Vec<(u64, bool, bool)>> {
+            let sql = format!(
+                "SELECT lsn, is_image, will_init FROM \"{}\".pages \
+                 WHERE branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
+                   AND relnode=$4 AND forknum=$5 AND blknum=$6 \
+                 ORDER BY lsn, is_image",
+                self.schema
+            );
+            let rows = self
+                .ysql_client
+                .query(
+                    &sql,
+                    &[
+                        &branch_id.to_string(),
+                        &spcnode,
+                        &dbnode,
+                        &relnode,
+                        &forknum,
+                        &blknum,
+                    ],
+                )
+                .await
+                .context("test_raw_block_versions")?;
+            Ok(rows
+                .iter()
+                .map(|r| (r.get::<_, i64>(0) as u64, r.get(1), r.get(2)))
+                .collect())
+        }
+    }
+
+    fn gc_cand(relnode: i64, forknum: i16, blknum: i64, due: u64) -> PendingGcRow {
+        PendingGcRow {
+            bucket_id: 0, // computed by put_pending_gc on insert
+            spcnode: GC_SPC,
+            dbnode: GC_DB,
+            relnode,
+            forknum,
+            blknum,
+            due_lsn: Lsn(due),
+        }
+    }
+
+    /// `gc_bucket_id` is the client-side placement hash that replaced the
+    /// YB `GENERATED ALWAYS AS (yb_hash_code(...) % N)` column. It must
+    /// stay **frozen** — a change would strand a block's older candidates
+    /// in their old bucket and defeat crash-replay dedup — so these are
+    /// golden values, not just property checks. No DB needed (pure fn).
+    #[test]
+    fn gc_bucket_id_is_frozen_and_bounded() {
+        // Golden values (change ⇒ you broke the frozen hash — intended?).
+        assert_eq!(gc_bucket_id(1663, 5, 16400, 0, 1), 6);
+        assert_eq!(gc_bucket_id(1663, 5, 16400, 0, 2), 7);
+        assert_eq!(gc_bucket_id(1663, 5, 16401, 0, 0), 6);
+        assert_eq!(gc_bucket_id(1663, 5, 16400, 0, 999), 7);
+        assert_eq!(gc_bucket_id(0, 0, 0, 0, 0), 5);
+
+        // Deterministic + in range over a spread of blocks.
+        let mut counts = [0usize; GC_BUCKETS as usize];
+        for g in 0..10_000i64 {
+            let b = gc_bucket_id(1663, 5, 16400 + (g % 50), 0, g);
+            assert_eq!(b, gc_bucket_id(1663, 5, 16400 + (g % 50), 0, g), "stable");
+            assert!((0..GC_BUCKETS).contains(&b), "in range");
+            counts[b as usize] += 1;
+        }
+        // No bucket is starved or dominant (even spread ⇒ no tablet hotspot).
+        assert!(
+            counts.iter().all(|&c| (700..1300).contains(&c)),
+            "uneven bucket distribution: {counts:?}"
+        );
+    }
+
+    /// Everything queued for `branch`, regardless of due-ness.
+    /// (Not `Lsn::MAX` — the cutoff crosses through i64 in SQL.)
+    async fn all_pending(store: &PageStore, branch: BranchId) -> Vec<PendingGcRow> {
+        store
+            .select_due_pending_gc(branch, Lsn(i64::MAX as u64), 1_000_000)
+            .await
+            .unwrap()
+    }
+
+    /// Scenario: the same candidates are inserted twice — as crash +
+    /// WAL replay does — and must dedup to one row each: every stored
+    /// column is in the PK and the writers run upsert-mode. Also
+    /// verifies the YB-generated `bucket_id` is stable (the replayed
+    /// insert can't land in a different bucket) and within range.
+    #[tokio::test]
+    async fn pending_gc_replay_dedups_on_pk() {
+        let (store, _schema) = make_store("gc_dedup").await;
+        let branch = rand_branch();
+
+        let batch = vec![
+            gc_cand(16401, 0, 42, 100),
+            gc_cand(16401, 0, 43, 100),
+            gc_cand(16402, 1, 0, 200),
+        ];
+        store.put_pending_gc(branch, &batch).await.unwrap();
+        // Replay: byte-identical re-insert.
+        store.put_pending_gc(branch, &batch).await.unwrap();
+
+        let rows = all_pending(&store, branch).await;
+        assert_eq!(rows.len(), 3, "replayed inserts must dedup: {rows:?}");
+        for r in &rows {
+            assert!(
+                (0..GC_BUCKETS).contains(&r.bucket_id),
+                "generated bucket out of range: {r:?}"
+            );
+        }
+    }
+
+    /// Scenario: candidates with due_lsns 1..=20; the drain must see
+    /// exactly the due ones (due_lsn ≤ cutoff — the "collectable once
+    /// the cutoff reaches it" gate), oldest-first, and a limit must
+    /// keep the OLDEST candidates (nothing starves: per-bucket LIMIT
+    /// then a merge-sort truncate can only drop the newest).
+    #[tokio::test]
+    async fn pending_gc_select_gates_orders_and_limits() {
+        let (store, _schema) = make_store("gc_select").await;
+        let branch = rand_branch();
+
+        let batch: Vec<PendingGcRow> = (1..=20u64)
+            .map(|i| gc_cand(16401, 0, i as i64, i))
+            .collect();
+        store.put_pending_gc(branch, &batch).await.unwrap();
+
+        // Gate: only due_lsn ≤ 10.
+        let due = store
+            .select_due_pending_gc(branch, Lsn(10), 1000)
+            .await
+            .unwrap();
+        let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
+        assert_eq!(dues, (1..=10).collect::<Vec<_>>(), "gating/order wrong");
+
+        // Limit keeps the oldest.
+        let due = store
+            .select_due_pending_gc(branch, Lsn(20), 5)
+            .await
+            .unwrap();
+        let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
+        assert_eq!(dues, vec![1, 2, 3, 4, 5], "limit must keep oldest");
+    }
+
+    /// Scenario: an under-cap drain (sweep mode) removes the due rows
+    /// and ONLY the due rows — not-yet-due candidates stay queued for
+    /// their own tick.
+    #[tokio::test]
+    async fn pending_gc_dequeue_removes_exactly_drained() {
+        let (store, _schema) = make_store("gc_dequeue").await;
+        let branch = rand_branch();
+
+        let batch: Vec<PendingGcRow> = (1..=6u64)
+            .map(|i| gc_cand(16401, 0, i as i64, i * 10))
+            .collect();
+        store.put_pending_gc(branch, &batch).await.unwrap();
+
+        let drained = store
+            .select_due_pending_gc(branch, Lsn(30), 1000)
+            .await
+            .unwrap();
+        assert_eq!(drained.len(), 3);
+        // 3 < limit ⇒ all due rows visited ⇒ sweep mode.
+        store
+            .dequeue_pending_gc(branch, &drained, Lsn(30), true)
+            .await
+            .unwrap();
+
+        let left: Vec<u64> = all_pending(&store, branch)
+            .await
+            .iter()
+            .map(|r| r.due_lsn.0)
+            .collect();
+        assert_eq!(left, vec![40, 50, 60], "exactly the due rows must go");
+    }
+
+    /// Scenario: a budget-capped drain visits a block through ONE of
+    /// its queued candidates; collapse-on-visit must also dequeue the
+    /// block's other due candidates (work already covered — the trim
+    /// anchors at the cutoff, not at the selected row's due_lsn),
+    /// while (a) the block's above-cutoff candidate and (b) an
+    /// unvisited block's due candidate both survive.
+    #[tokio::test]
+    async fn pending_gc_dequeue_collapses_visited_blocks() {
+        let (store, _schema) = make_store("gc_collapse").await;
+        let branch = rand_branch();
+
+        store
+            .put_pending_gc(
+                branch,
+                &[
+                    gc_cand(16401, 0, 7, 5),  // visited (selected)
+                    gc_cand(16401, 0, 7, 15), // duplicate, due — must collapse
+                    gc_cand(16401, 0, 7, 25), // duplicate, due — must collapse
+                    gc_cand(16401, 0, 7, 45), // above cutoff — must survive
+                    gc_cand(16401, 0, 8, 12), // other block, due, NOT selected
+                ],
+            )
+            .await
+            .unwrap();
+
+        // limit 1: the tick only selects (5, blk 7) — capped.
+        let drained = store
+            .select_due_pending_gc(branch, Lsn(30), 1)
+            .await
+            .unwrap();
+        assert_eq!(drained.len(), 1);
+        assert_eq!((drained[0].blknum, drained[0].due_lsn.0), (7, 5));
+        store
+            .dequeue_pending_gc(branch, &drained, Lsn(30), false)
+            .await
+            .unwrap();
+
+        let left: Vec<(i64, u64)> = all_pending(&store, branch)
+            .await
+            .iter()
+            .map(|r| (r.blknum, r.due_lsn.0))
+            .collect();
+        assert_eq!(
+            left,
+            vec![(8, 12), (7, 45)],
+            "visited block collapses ≤ cutoff; unvisited + above-cutoff survive"
+        );
+    }
+
+    /// Scenario: sweep mode must not discard sentinel rows (drop −2 /
+    /// shrink −1) — the drain skips them unacted, so dequeueing them
+    /// would silently drop future Part 2/3 work. The `blknum >= 0`
+    /// guard keeps them queued through a sweep of the same due range.
+    #[tokio::test]
+    async fn pending_gc_dequeue_sweep_preserves_sentinels() {
+        let (store, _schema) = make_store("gc_sentinel").await;
+        let branch = rand_branch();
+
+        store
+            .put_pending_gc(
+                branch,
+                &[
+                    gc_cand(16401, 0, 1, 10), // trim, due
+                    gc_cand(16401, 0, 2, 20), // trim, due
+                    gc_cand(16401, 0, -2, 8), // drop sentinel, due — must survive
+                ],
+            )
+            .await
+            .unwrap();
+
+        let due = store
+            .select_due_pending_gc(branch, Lsn(30), 1000)
+            .await
+            .unwrap();
+        assert_eq!(due.len(), 3, "select returns sentinels too");
+        // The drain's caller filters sentinels out of the visited set.
+        let visited: Vec<PendingGcRow> = due.into_iter().filter(|r| r.blknum >= 0).collect();
+        store
+            .dequeue_pending_gc(branch, &visited, Lsn(30), true)
+            .await
+            .unwrap();
+
+        let left: Vec<(i64, u64)> = all_pending(&store, branch)
+            .await
+            .iter()
+            .map(|r| (r.blknum, r.due_lsn.0))
+            .collect();
+        assert_eq!(
+            left,
+            vec![(-2, 8)],
+            "sweep clears due trim rows; the unacted drop sentinel (-2) stays queued"
+        );
+    }
+
+    /// Scenario: the trim's keep-rule on a block whose history has all
+    /// the interesting shapes at once (cutoff = 100):
+    ///
+    ///   lsn 10  init delta   (base)      → deleted (below anchor)
+    ///   lsn 15  plain delta              → deleted
+    ///   lsn 40  image        (base)      → deleted (superseded base)
+    ///   lsn 55  plain delta              → deleted
+    ///   lsn 70  image        (base)      → KEPT — the anchor
+    ///   lsn 70  plain delta  (twin)      → deleted (same-LSN non-base:
+    ///                                      the materialiser stamps its
+    ///                                      image at the folded delta's
+    ///                                      LSN, shadowing it)
+    ///   lsn 90  plain delta              → kept (above anchor)
+    ///   lsn 120 plain delta              → kept (above cutoff)
+    ///
+    /// Plus: a block with NO base ≤ cutoff is untouched (no anchor —
+    /// nothing below it is provably unreachable), and an unlisted
+    /// block is untouched (the trim only visits what it's told to).
+    #[tokio::test]
+    async fn gc_trim_anchor_keep_delete_semantics() {
+        let (store, _schema) = make_store("gc_trim").await;
+        let branch = rand_branch();
+        let rel = 16410u32;
+        let (blk_a, blk_b, blk_c) = (1u32, 2u32, 3u32);
+
+        let rows = vec![
+            // block A: the full scenario
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                10,
+                false,
+                true,
+                b"d10i",
+            ),
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                15,
+                false,
+                false,
+                b"d15",
+            ),
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                40,
+                true,
+                true,
+                b"i40",
+            ),
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                55,
+                false,
+                false,
+                b"d55",
+            ),
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                70,
+                true,
+                true,
+                b"i70",
+            ),
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                70,
+                false,
+                false,
+                b"d70",
+            ),
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                90,
+                false,
+                false,
+                b"d90",
+            ),
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_a),
+                120,
+                false,
+                false,
+                b"d120",
+            ),
+            // block B: no base at all — must be untouched
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_b),
+                20,
+                false,
+                false,
+                b"d20",
+            ),
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_b),
+                30,
+                false,
+                false,
+                b"d30",
+            ),
+            // block C: has garbage but is NOT in the visit list
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_c),
+                10,
+                true,
+                true,
+                b"i10",
+            ),
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk_c),
+                50,
+                true,
+                true,
+                b"i50",
+            ),
+        ];
+        store.put_pages(branch, &rows).await.unwrap();
+
+        let deleted = store
+            .gc_trim_blocks(
+                branch,
+                GC_SPC,
+                GC_DB,
+                rel as i64,
+                0,
+                &[blk_a as i64, blk_b as i64],
+                Lsn(100),
+            )
+            .await
+            .unwrap();
+        assert_eq!(deleted, 5, "10,15,40,55 and the 70-delta twin");
+
+        let a = store
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_a as i64)
+            .await
+            .unwrap();
+        assert_eq!(
+            a,
+            vec![(70, true, true), (90, false, false), (120, false, false)],
+            "block A must keep anchor + everything above"
+        );
+        let b = store
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_b as i64)
+            .await
+            .unwrap();
+        assert_eq!(b.len(), 2, "no-anchor block must be untouched");
+        let c = store
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_c as i64)
+            .await
+            .unwrap();
+        assert_eq!(c.len(), 2, "unlisted block must be untouched");
+
+        store.delete_all_pages(branch).await.unwrap();
+    }
+
+    /// Scenario: greed. The trim boundary is the CUTOFF's anchor, not
+    /// any candidate's due_lsn — one visit collects garbage from ALL
+    /// bases ≤ cutoff, and a `will_init` DELTA (not only an image)
+    /// anchors: an all-COPY chain has no image at all.
+    #[tokio::test]
+    async fn gc_trim_is_greedy_and_init_delta_anchors() {
+        let (store, _schema) = make_store("gc_greedy").await;
+        let branch = rand_branch();
+        let rel = 16420u32;
+        let blk = 7u32;
+
+        let rows = vec![
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk),
+                30,
+                true,
+                true,
+                b"i30",
+            ),
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk),
+                40,
+                false,
+                false,
+                b"d40",
+            ),
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk),
+                55,
+                false,
+                false,
+                b"d55",
+            ),
+            // newest base ≤ cutoff is an init DELTA, not an image
+            page_row(
+                page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk),
+                70,
+                false,
+                true,
+                b"d70i",
+            ),
+        ];
+        store.put_pages(branch, &rows).await.unwrap();
+
+        // A drain triggered by the (oldest) candidate at due=30 still
+        // trims to the cutoff's anchor at 70.
+        let deleted = store
+            .gc_trim_blocks(
+                branch,
+                GC_SPC,
+                GC_DB,
+                rel as i64,
+                0,
+                &[blk as i64],
+                Lsn(100),
+            )
+            .await
+            .unwrap();
+        assert_eq!(deleted, 3, "30, 40, 55 all collected in one visit");
+
+        let left = store
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
+            .await
+            .unwrap();
+        assert_eq!(left, vec![(70, false, true)], "init delta is the anchor");
+
+        store.delete_all_pages(branch).await.unwrap();
+    }
+
+    /// Scenario: the persisted read floor is monotone (GREATEST — a
+    /// recomputed cutoff can regress when inputs move backwards, the
+    /// column must not) and generation-fenced (a superseded pageserver
+    /// must stop before draining — its in-memory lease set is stale).
+    #[tokio::test]
+    async fn publish_gc_cutoff_monotone_and_generation_fenced() {
+        use utils::generation::Generation;
+
+        let (store, _schema) = make_store("gc_publish").await;
+        let branch = rand_branch();
+        let mut row = sample_timeline_row(branch);
+        row.current_generation = 5;
+        row.applied_gc_cutoff_lsn = Lsn(50);
+        store.insert_timeline_at_creation(&row).await.unwrap();
+
+        // Advance.
+        let out = store
+            .publish_gc_cutoff(branch, Generation::new(5), Lsn(80))
+            .await
+            .unwrap();
+        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: Lsn(80) });
+
+        // Regressing input → floor holds (GREATEST).
+        let out = store
+            .publish_gc_cutoff(branch, Generation::new(5), Lsn(60))
+            .await
+            .unwrap();
+        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: Lsn(80) });
+
+        // Stale generation → fenced, floor untouched.
+        let out = store
+            .publish_gc_cutoff(branch, Generation::new(4), Lsn(200))
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            PublishGcCutoffOutcome::StaleGeneration { live_generation: 5 }
+        );
+        let reread = store.get_timeline(branch).await.unwrap().unwrap();
+        assert_eq!(reread.applied_gc_cutoff_lsn, Lsn(80));
+
+        // Missing row → hard error (wiring bug, not a fence).
+        assert!(
+            store
+                .publish_gc_cutoff(rand_branch(), Generation::new(1), Lsn(10))
+                .await
+                .is_err()
+        );
+
+        store.delete_timeline(branch).await.unwrap();
+    }
+
+    /// Scenario: the child pin. The cutoff folds in min(ancestor_lsn)
+    /// over LIVE children only — a deleted child must release its pin,
+    /// and a branch with no children pins nothing.
+    #[tokio::test]
+    async fn min_children_fork_lsn_live_children_only() {
+        let (store, _schema) = make_store("gc_children").await;
+        let parent = rand_branch();
+
+        assert_eq!(store.min_children_fork_lsn(parent).await.unwrap(), None);
+
+        let mut child_hi = sample_timeline_row(rand_branch());
+        child_hi.ancestor_branch_id = Some(parent);
+        child_hi.ancestor_lsn = Some(Lsn(150));
+        store.insert_timeline_at_creation(&child_hi).await.unwrap();
+
+        let mut child_lo = sample_timeline_row(rand_branch());
+        child_lo.ancestor_branch_id = Some(parent);
+        child_lo.ancestor_lsn = Some(Lsn(110));
+        store.insert_timeline_at_creation(&child_lo).await.unwrap();
+
+        let mut child_deleted = sample_timeline_row(rand_branch());
+        child_deleted.ancestor_branch_id = Some(parent);
+        child_deleted.ancestor_lsn = Some(Lsn(90));
+        child_deleted.deleted_at = Some(chrono::Utc::now().naive_utc());
+        store
+            .insert_timeline_at_creation(&child_deleted)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.min_children_fork_lsn(parent).await.unwrap(),
+            Some(Lsn(110)),
+            "deleted child's 90 must not pin; live min is 110"
+        );
+
+        for b in [
+            child_hi.branch_id,
+            child_lo.branch_id,
+            child_deleted.branch_id,
+        ] {
+            store.delete_timeline(b).await.unwrap();
+        }
+    }
+
+    /// Randomized model check of the trim, fixed seeds (reproducible).
+    ///
+    /// Per seed: 6 blocks get random version histories (1..=8 versions
+    /// at distinct random LSNs; the oldest version of a block is
+    /// always a base for physical validity; later versions are plain
+    /// deltas / init deltas / images at random; one random plain delta
+    /// may gain a same-LSN image twin — the materialiser pattern).
+    /// A random cutoff is drawn, all blocks are trimmed, and the
+    /// surviving `(lsn, is_image, will_init)` set of every block must
+    /// equal a 5-line model:
+    ///
+    ///   anchor = max lsn with will_init && lsn ≤ cutoff
+    ///   no anchor → everything survives
+    ///   else survive ⇔ lsn > anchor, or lsn == anchor && will_init
+    #[tokio::test]
+    async fn gc_trim_randomized_model_check() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let (store, _schema) = make_store("gc_random").await;
+
+        for seed in [1u64, 7, 42, 1337] {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let branch = rand_branch();
+            let rel = 30000 + seed as u32;
+            let nblocks = 6u32;
+
+            // ---- generate ------------------------------------------
+            let mut rows: Vec<Arc<PageRow>> = Vec::new();
+            // (blk → Vec<(lsn, is_image, will_init)>)
+            let mut model: Vec<Vec<(u64, bool, bool)>> = Vec::new();
+            for blk in 0..nblocks {
+                let nversions = rng.random_range(1..=8usize);
+                let mut lsns: Vec<u64> = Vec::new();
+                while lsns.len() < nversions {
+                    let l = rng.random_range(1..=300u64);
+                    if !lsns.contains(&l) {
+                        lsns.push(l);
+                    }
+                }
+                lsns.sort_unstable();
+                let mut versions: Vec<(u64, bool, bool)> = Vec::new();
+                for (i, &lsn) in lsns.iter().enumerate() {
+                    let (is_image, will_init) = if i == 0 {
+                        // A chain's first version must be a base.
+                        if rng.random_bool(0.5) {
+                            (true, true)
+                        } else {
+                            (false, true)
+                        }
+                    } else {
+                        match rng.random_range(0..100u32) {
+                            0..=54 => (false, false), // plain delta
+                            55..=69 => (false, true), // init delta
+                            _ => (true, true),        // image
+                        }
+                    };
+                    versions.push((lsn, is_image, will_init));
+                }
+                // Materialiser twin: image stamped at a plain delta's LSN.
+                if let Some(&(lsn, _, _)) = versions
+                    .iter()
+                    .find(|(_, im, wi)| !im && !wi)
+                    .filter(|_| rng.random_bool(0.5))
+                {
+                    versions.push((lsn, true, true));
+                }
+                for &(lsn, is_image, will_init) in &versions {
+                    rows.push(page_row(
+                        page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk),
+                        lsn,
+                        is_image,
+                        will_init,
+                        format!("s{seed}b{blk}l{lsn}").as_bytes(),
+                    ));
+                }
+                model.push(versions);
+            }
+            store.put_pages(branch, &rows).await.unwrap();
+
+            // ---- trim ----------------------------------------------
+            let cutoff = Lsn(rng.random_range(0..=350u64));
+            let blks: Vec<i64> = (0..nblocks as i64).collect();
+            store
+                .gc_trim_blocks(branch, GC_SPC, GC_DB, rel as i64, 0, &blks, cutoff)
+                .await
+                .unwrap();
+
+            // ---- compare against the model -------------------------
+            for (blk, versions) in model.iter().enumerate() {
+                let anchor = versions
+                    .iter()
+                    .filter(|(lsn, _, wi)| *wi && *lsn <= cutoff.0)
+                    .map(|(lsn, _, _)| *lsn)
+                    .max();
+                let mut expected: Vec<(u64, bool, bool)> = match anchor {
+                    None => versions.clone(),
+                    Some(a) => versions
+                        .iter()
+                        .copied()
+                        .filter(|(lsn, _, wi)| *lsn > a || (*lsn == a && *wi))
+                        .collect(),
+                };
+                expected.sort_by_key(|(lsn, im, _)| (*lsn, *im));
+                let got = store
+                    .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    got, expected,
+                    "seed={seed} blk={blk} cutoff={cutoff} versions={versions:?}"
+                );
+            }
+
+            store.delete_all_pages(branch).await.unwrap();
+        }
     }
 }

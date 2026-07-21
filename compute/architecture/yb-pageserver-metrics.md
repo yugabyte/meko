@@ -110,6 +110,10 @@ variants add `branch_id`.
 | `pageserver_yb_unified_pages_by_key_entries` | UIntGauge | — | Entries in `UnifiedPages.by_key` (write buffer + durable cache index). |
 | `pageserver_yb_correctness_errors_total` | IntCounter | `kind` | Correctness-fatal errors. **Any non-zero value is a corruption signal.** Kinds include `materializer_redo`, `materializer_setup`, `materializer_commit`, `set_yb_upsert_mode`, `write_path_roundtrip`, `pagewriter_flush`, `tenant_task_panic`. |
 
+## PageServer garbage collection
+
+GC metrics live with the GC docs — see [`yb-pageserver-gc.md` §Metrics](yb-pageserver-gc.md#metrics).
+
 ## walredo
 
 | Metric | Type | Labels | Meaning |

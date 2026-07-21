@@ -187,6 +187,9 @@ async fn gc_loop(tenant: Arc<PageServer>, cancel: CancellationToken) {
         if period == Duration::ZERO || gc_horizon == 0 {
             #[cfg(not(feature = "testing"))]
             info!("automatic GC is disabled");
+            crate::metrics::GC_DRAIN_TICKS
+                .with_label_values(&["disabled"])
+                .inc();
             // check again in 10 seconds, in case it's been enabled again.
             sleep_duration = Duration::from_secs(10);
         } else {
@@ -215,6 +218,9 @@ async fn gc_loop(tenant: Arc<PageServer>, cancel: CancellationToken) {
                 }
                 Err(e) => {
                     error_run += 1;
+                    crate::metrics::GC_DRAIN_TICKS
+                        .with_label_values(&["error"])
+                        .inc();
                     let wait_duration =
                         exponential_backoff_duration(error_run, 1.0, MAX_BACKOFF_SECS);
 

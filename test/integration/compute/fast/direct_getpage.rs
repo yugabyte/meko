@@ -53,15 +53,17 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         .repo_dir()
         .join("endpoints/main/pageserver/pageserver.toml");
     let original = std::fs::read_to_string(&toml).context("read pageserver.toml")?;
-    let stressed = format!(
-        "{original}\n\
-         [yb_page_writer]\n\
-         image_chain_limit = 2\n\
+    // Merge into the existing [yb_page_writer] (the harness boots one with
+    // enable_gc) — a duplicate table header fails the pageserver's toml parse.
+    let stressed = crate::cluster::merge_toml_section(
+        &original,
+        "yb_page_writer",
+        "image_chain_limit = 2\n\
          image_chain_limit_slru = 4\n\
          image_chain_payload_bytes_limit = 64\n\
          materialize_queue_capacity = 4\n\
          read_cache_bytes = 65536\n\
-         backpressure_bytes = 1048576\n"
+         backpressure_bytes = 1048576\n",
     );
     std::fs::write(&toml, &stressed).context("write stressed pageserver.toml")?;
     step("restart PS under tiny limits (image_chain_limit=2, read_cache_bytes=64KiB)");

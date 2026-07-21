@@ -200,16 +200,23 @@ value, the truncation bound is correct by construction.
 `check_lsn_is_in_scope()` and `effective_request_lsn()` reject
 `lsn < applied_gc_cutoff_lsn` (unless an LSN lease covers it).
 
-**Written to YB by:** `insert_timeline_at_creation` at timeline creation
-only. `PageStore::update_timeline_state` can write it back but has **zero
-call sites** — dead code.
+**Written to YB by:** `insert_timeline_at_creation` at timeline
+creation, and by each GC tick (`Timeline::gc_iteration`,
+yb-pageserver.md §GC): the tick persists
+`applied_gc_cutoff_lsn = max(old, fresh cutoff)` to `timeline_state`
+(generation-fenced, monotone) **before** publishing it to the
+in-memory `Rcu` and deleting anything — the read floor is durable
+before any delete.
 
 **Updated in memory by:**
 - Load at attach (`synth_timeline_metadata_from_row`).
+- The GC tick's `Rcu` publish (after the persist above).
 - HTTP `timeline_patch` (`routes.rs`) — **does not persist to YB**.
 
-**GC:** `Timeline::gc()` returns `GcResult::default()` immediately — a
-no-op. No row deletion, no post-GC advance of this LSN.
+**GC:** with `enable_gc` on, the tick drains due `pending_gc` candidates
+and deletes the superseded / truncated / dropped `pages` rows they name.
+Default off — then no row deletion and no post-creation advance of this
+LSN.
 
 Enforcement exists at read time; the value effectively **freezes** after
 creation unless an operator HTTP-patches it (and that patch won't survive
@@ -413,8 +420,10 @@ persisted timeline_state.consistent_lsn  ≤  consistent_lsn_observed
    (UPSERT throttle) — extra WAL retained on SK, recoverable; shutdown
    catch-up via `force_upsert_consistent_lsn_if_advanced` closes most of
    the gap on clean exit.
-2. GC is cosmetic — `gc()` no-op; no row deletion; `applied_gc_cutoff_lsn`
-   frozen after creation.
+2. GC is off by default — with `enable_gc` unset, `gc()` drains
+   nothing, no rows are deleted, and `applied_gc_cutoff_lsn` stays at
+   its creation value. With GC on, the tick advances and persists the
+   cutoff before each drain (see above).
 3. Detach-ancestor unsupported — the `LineageSegment` chain is built once at
    attach and is immutable for the process lifetime. Inherited reads work
    (via the lineage walk), but a branch cannot be detached from its ancestor.

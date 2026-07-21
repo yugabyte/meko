@@ -477,6 +477,7 @@ fn start_pageserver(
     // / materialiser writes pile onto, and vice versa.
     let compute_page_store = BACKGROUND_RUNTIME.block_on(create_compute_page_store(conf))?;
     let fpu_page_store = BACKGROUND_RUNTIME.block_on(create_fpu_page_store(conf))?;
+    let gc_page_store = BACKGROUND_RUNTIME.block_on(create_gc_page_store(conf))?;
 
     // Up to this point no significant I/O has been done: this should have been fast.  Record
     // duration prior to starting I/O intensive phase of startup.
@@ -500,6 +501,7 @@ fn start_pageserver(
             basebackup_cache: Arc::clone(&basebackup_cache),
             compute_page_store: compute_page_store.clone(),
             fpu_page_store: fpu_page_store.clone(),
+            gc_page_store: gc_page_store.clone(),
         },
         shutdown_pageserver.clone(),
     ))?);
@@ -785,6 +787,21 @@ async fn create_fpu_page_store(
     // read-before-write on partial-chunk retries.
     let store = create_page_store_with_app_name(conf, "yb-pageserver:fpu", pool_size, true).await?;
     info!(pool_size, "Internal PageStore connected");
+    Ok(store)
+}
+
+/// Dedicated GC-drain pool (select + parallel trim DELETEs +
+/// dequeue), sized to `GC_ACTION_PARALLELISM`, isolated from the fpu
+/// pool. No `yb_enable_upsert_mode` — the drain never INSERTs.
+async fn create_gc_page_store(
+    conf: &'static PageServerConf,
+) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
+    let pool_size = pageserver_api::config::scale_count(
+        pageserver::page_store::GC_ACTION_PARALLELISM,
+        conf.scale_factor,
+    );
+    let store = create_page_store_with_app_name(conf, "yb-pageserver:gc", pool_size, false).await?;
+    info!(pool_size, "GC PageStore connected");
     Ok(store)
 }
 

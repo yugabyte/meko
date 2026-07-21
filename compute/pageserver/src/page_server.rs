@@ -101,6 +101,10 @@ pub struct TenantSharedResources {
     /// writes and materialiser work off the compute getPage path so
     /// reads stay isolated from internal load.
     pub fpu_page_store: Arc<crate::page_store::PageStore>,
+    /// `PageStore` for the GC drain, with its own connections to
+    /// isolate drain load from `fpu_page_store`. Candidate INSERTs stay
+    /// on `fpu_page_store` (its `yb_enable_upsert_mode` fast path).
+    pub gc_page_store: Arc<crate::page_store::PageStore>,
 }
 
 /// The tenant's effective configuration: the `[tenant_config]` section
@@ -248,6 +252,9 @@ pub struct PageServer {
     /// Internal-traffic `PageStore` (see
     /// `TenantSharedResources::fpu_page_store`).
     pub(crate) fpu_page_store: Arc<crate::page_store::PageStore>,
+    /// GC-drain `PageStore` (see
+    /// `TenantSharedResources::gc_page_store`).
+    pub(crate) gc_page_store: Arc<crate::page_store::PageStore>,
 }
 impl std::fmt::Debug for PageServer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -461,6 +468,18 @@ pub(crate) enum GcError {
     // If GC was invoked for a particular timeline, this error means it didn't exist
     #[error("timeline not found")]
     TimelineNotFound,
+
+    // A YB read/write in the GC pipeline (cutoff publish, candidate
+    // select/dequeue, trim delete) failed. Next tick retries; nothing
+    // was dequeued without its action having succeeded.
+    #[error("gc persistence: {0:#}")]
+    Persistence(anyhow::Error),
+
+    // The generation-fenced cutoff publish matched no row: a newer
+    // pageserver owns the branch. This pageserver's in-memory lease
+    // set is stale, so it must not drain.
+    #[error("gc fenced by newer generation {live_generation}")]
+    StaleGeneration { live_generation: u32 },
 }
 
 impl From<PageReconstructError> for GcError {
@@ -593,6 +612,7 @@ impl PageServer {
             basebackup_cache,
             compute_page_store,
             fpu_page_store,
+            gc_page_store,
         } = resources;
 
         let generation = attached_conf.generation;
@@ -606,6 +626,7 @@ impl PageServer {
             basebackup_cache,
             compute_page_store,
             fpu_page_store,
+            gc_page_store,
         ));
 
         let ctx = ctx.detached_child(TaskKind::Attach, DownloadBehavior::Warn);
@@ -1023,12 +1044,28 @@ impl PageServer {
             return Ok(GcResult::default());
         }
 
+        // Gate BEFORE refresh_gc_info_internal: with the drain off, the
+        // tick must cost nothing — no cutoff computation (the
+        // timestamp→LSN lookup reads SLRU pages), no publish. Keeps the
+        // enable_gc-only perf configuration (candidate collection
+        // without drain) free of tick noise.
+        if !self.get_test_enable_gc_drain() {
+            debug!("Skipping GC: test_enable_gc_drain is off");
+            crate::metrics::GC_DRAIN_TICKS
+                .with_label_values(&["disabled"])
+                .inc();
+            return Ok(GcResult::default());
+        }
+
         if self
             .tenant_conf
             .load()
             .is_gc_blocked_by_lsn_lease_deadline()
         {
             info!("Skipping GC because lsn lease deadline is not reached");
+            crate::metrics::GC_DRAIN_TICKS
+                .with_label_values(&["lease_grace"])
+                .inc();
             return Ok(GcResult::default());
         }
 
@@ -1146,6 +1183,13 @@ impl PageServer {
             .unwrap_or(self.conf.default_tenant_conf.gc_horizon)
     }
 
+    pub fn get_test_enable_gc_drain(&self) -> bool {
+        let tenant_conf = self.tenant_conf.load().tenant_conf.clone();
+        tenant_conf
+            .test_enable_gc_drain
+            .unwrap_or(self.conf.default_tenant_conf.test_enable_gc_drain)
+    }
+
     pub fn get_gc_period(&self) -> Duration {
         let tenant_conf = self.tenant_conf.load().tenant_conf.clone();
         tenant_conf
@@ -1260,6 +1304,7 @@ impl PageServer {
         basebackup_cache: Arc<BasebackupCache>,
         compute_page_store: Arc<crate::page_store::PageStore>,
         fpu_page_store: Arc<crate::page_store::PageStore>,
+        gc_page_store: Arc<crate::page_store::PageStore>,
     ) -> PageServer {
         assert!(!attached_conf.generation.is_none());
 
@@ -1286,6 +1331,7 @@ impl PageServer {
             basebackup_cache,
             compute_page_store,
             fpu_page_store,
+            gc_page_store,
         }
     }
 
@@ -1769,6 +1815,7 @@ impl PageServer {
             basebackup_cache: self.basebackup_cache.clone(),
             compute_page_store: self.compute_page_store.clone(),
             fpu_page_store: self.fpu_page_store.clone(),
+            gc_page_store: self.gc_page_store.clone(),
             lineage: None,
         }
     }

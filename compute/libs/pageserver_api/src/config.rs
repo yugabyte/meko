@@ -995,12 +995,30 @@ pub struct BranchConfigToml {
     pub relsize_snapshot_cache_capacity: usize,
     /// Enable the basebackup cache for this tenant.
     pub basebackup_cache_enabled: bool,
+    /// TEST-ONLY: run the GC drain (off = candidate collection only),
+    /// so the insert-side cost can be A/B-measured without drain cost.
+    /// Default false.
+    pub test_enable_gc_drain: bool,
+    /// Max candidates one GC tick drains (oldest-first); leftover
+    /// carries to the next tick. Bounds per-tick memory and delete
+    /// burst size. Default 10_000 (~1 MiB of candidates in memory).
+    pub gc_drain_limit: usize,
+    /// Master switch for garbage collection. Read once at `Timeline::new`
+    /// (a runtime patch applies on next PS restart). Default false.
+    pub enable_gc: bool,
+    /// Insert one trim candidate per this many base writes to a block;
+    /// ingest and the materialiser share one per-block counter. Read once
+    /// at activation (see `enable_gc`). Default 10.
+    pub gc_candidate_every_n_bases: u32,
 }
 
 pub mod tenant_conf_defaults {
     pub const DEFAULT_GC_HORIZON: u64 = 64 * 1024 * 1024;
-    // Large DEFAULT_GC_PERIOD is fine as long as PITR_INTERVAL is larger.
-    pub const DEFAULT_GC_PERIOD: &str = "1 hr";
+    // Short period so the drain proactively reclaims garbage as it
+    // becomes due; work per tick scales with garbage, not data size.
+    pub const DEFAULT_GC_PERIOD: &str = "30 s";
+    pub const DEFAULT_GC_DRAIN_LIMIT: usize = 10_000;
+    pub const DEFAULT_GC_CANDIDATE_EVERY_N_BASES: u32 = 10;
     pub const DEFAULT_PITR_INTERVAL: &str = "7 days";
     pub const DEFAULT_WALRECEIVER_CONNECT_TIMEOUT: &str = "10 seconds";
     pub const DEFAULT_WALRECEIVER_LAGGING_WAL_TIMEOUT: &str = "10 seconds";
@@ -1036,6 +1054,10 @@ impl Default for BranchConfigToml {
             sampling_ratio: None,
             relsize_snapshot_cache_capacity: DEFAULT_RELSIZE_SNAPSHOT_CACHE_CAPACITY,
             basebackup_cache_enabled: false,
+            test_enable_gc_drain: false,
+            gc_drain_limit: DEFAULT_GC_DRAIN_LIMIT,
+            enable_gc: false,
+            gc_candidate_every_n_bases: DEFAULT_GC_CANDIDATE_EVERY_N_BASES,
         }
     }
 }

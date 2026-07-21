@@ -26,11 +26,13 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         .repo_dir()
         .join("endpoints/main/pageserver/pageserver.toml");
     let original = std::fs::read_to_string(&toml).context("read pageserver.toml")?;
-    let forced = format!(
-        "{original}\n\
-         [yb_page_writer]\n\
-         ingest_parallelism = 4\n\
-         ingest_parallelism_min_batch = 1\n"
+    // Merge into [yb_page_writer], creating it if absent — a duplicate
+    // table header would fail the pageserver's toml parse.
+    let forced = crate::cluster::merge_toml_section(
+        &original,
+        "yb_page_writer",
+        "ingest_parallelism = 4\n\
+         ingest_parallelism_min_batch = 1\n",
     );
     std::fs::write(&toml, &forced).context("write parallel pageserver.toml")?;
     step("restart PS with parallel apply forced on every batch (ingest_parallelism=4, min_batch=1)");

@@ -123,6 +123,30 @@ CREATE TABLE IF NOT EXISTS pageserver.timeline_state (
     PRIMARY KEY ((branch_id) HASH)
 );
 
+-- GC candidate queue: one row per garbage-producing event, drained once
+-- the branch's cutoff passes `due_lsn`. `blknum` doubles as the kind:
+-- >= 0 trim, -2 drop, -1 shrink. Every column is in the PK (replayed
+-- duplicates dedup via upsert-mode INSERTs). `bucket_id` is placement
+-- only, WRITER-computed (page_store::gc_bucket_id, frozen hash, modulus
+-- = GC_BUCKETS) — deliberately not a generated column (the yb-client
+-- write path bypasses the YSQL layer). NB: queries must bind bucket_id
+-- as a VALUE; without bucket_id equality a query seq-scans.
+-- Explicit SPLIT into 3 tablets: this queue is expected to stay small
+-- (it is continuously drained), so 3 tablets is sufficient. tablets (3)
+-- < buckets (10) bounds a statement's distributed-txn fan-out.
+CREATE TABLE IF NOT EXISTS pageserver.pending_gc (
+    branch_id  TEXT     NOT NULL,
+    bucket_id  INT      NOT NULL,
+    spcnode    BIGINT   NOT NULL,
+    dbnode     BIGINT   NOT NULL,
+    relnode    BIGINT   NOT NULL,
+    forknum    SMALLINT NOT NULL,
+    blknum     BIGINT   NOT NULL,
+    due_lsn    BIGINT   NOT NULL,
+    PRIMARY KEY ((branch_id, bucket_id) HASH,
+                 due_lsn, spcnode, dbnode, relnode, forknum, blknum)
+) SPLIT INTO 3 TABLETS;
+
 -- =====================================================================
 -- safekeeper.* — yb-safekeeper persistent state.
 -- =====================================================================

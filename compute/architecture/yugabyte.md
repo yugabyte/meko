@@ -304,6 +304,53 @@ CREATE TABLE pageserver.timeline_state (
 See [`yb-pageserver.md`](yb-pageserver.md) for the design, the
 image-anchored read path, and the implementation roadmap.
 
+### `pageserver.pending_gc`
+
+GC candidate queue (yb-pageserver.md §GC): one row per
+garbage-producing event, inserted when the event is applied, drained
+once the branch's GC cutoff passes `due_lsn`. `blknum` doubles as the
+candidate kind: ≥ 0 per-block trim, −2 whole-fork drop, −1 rel-size
+shrink (only trim has writers in this cut). Every stored column is in
+the PK, so a candidate re-inserted by crash + WAL replay (or a chunk
+retry) is a byte-identical upsert — no `ON CONFLICT` needed under
+`yb_enable_upsert_mode`.
+
+```sql
+CREATE TABLE pageserver.pending_gc (
+    branch_id  TEXT     NOT NULL,
+    bucket_id  INT      NOT NULL,  -- writer-computed: page_store::gc_bucket_id(identity) % GC_BUCKETS
+    spcnode    BIGINT   NOT NULL,
+    dbnode     BIGINT   NOT NULL,
+    relnode    BIGINT   NOT NULL,
+    forknum    SMALLINT NOT NULL,
+    blknum     BIGINT   NOT NULL,
+    due_lsn    BIGINT   NOT NULL,
+    PRIMARY KEY ((branch_id, bucket_id) HASH,
+                 due_lsn, spcnode, dbnode, relnode, forknum, blknum)
+) SPLIT INTO 3 TABLETS;
+```
+
+`bucket_id` is placement only, never identity: it spreads a branch's
+candidate inserts across tablets instead of hot-spotting the single
+`(branch_id)`-hashed tablet. The **writer computes it** — a fixed,
+deterministic FNV-1a hash of the identity columns mod `GC_BUCKETS`
+(`pageserver::page_store::gc_bucket_id`) — and supplies it in the
+INSERT. It is deliberately **not** a `GENERATED ALWAYS AS
+(yb_hash_code(...) % N)` column: the planned yb-client write path
+bypasses the YSQL query layer, which would never evaluate a generated
+expression, so the bucket must be client-supplied. Determinism (same
+block → same bucket) is what lets a crash-replayed candidate land on
+the same PK and dedup; the modulus must equal `GC_BUCKETS`. The drain
+issues one `due_lsn` range scan per bucket (via a UNION-ALL that YB
+plans as an early-terminating Merge Append — verified unaffected by
+the plain vs generated column, since the read is plain `bucket_id = N`
+hash-key equality, not `yb_hash_code()` in a predicate). The tablet
+count (3) is deliberately below the bucket count (10): a multi-row
+insert's distributed-txn fan-out is bounded by tablets touched, while
+10 buckets still hash-spread evenly across them; the SPLIT is explicit
+because size-based auto-splitting never triggers on a small,
+write-hot, continuously-drained queue.
+
 ## `registry` schema
 
 Diesel-managed schema living inside `yb_storage`; do **not** edit by

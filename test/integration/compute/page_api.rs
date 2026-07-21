@@ -164,11 +164,11 @@ pub fn pd_lsn(page: &[u8]) -> Lsn {
     Lsn(((xlogid as u64) << 32) | xrecoff as u64)
 }
 
-/// The `[yb_page_writer]` block that forces the materialiser + cache into
+/// The `[yb_page_writer]` keys that force the materialiser + cache into
 /// constant fold/evict/reconstruct churn: a 2-delta image trigger and a
-/// 64 KiB read cache. Appended to `pageserver.toml` by [`stress_ps`].
-const STRESS_PAGE_WRITER: &str = "\n\
-     [yb_page_writer]\n\
+/// 64 KiB read cache. Merged into the toml's existing `[yb_page_writer]`
+/// table by [`stress_ps`] / [`restart_with_pipeline_depth`].
+const STRESS_PAGE_WRITER_KEYS: &str = "\
      image_chain_limit = 2\n\
      image_chain_limit_slru = 4\n\
      image_chain_payload_bytes_limit = 64\n\
@@ -185,8 +185,11 @@ pub fn stress_ps(c: &Cluster) -> anyhow::Result<String> {
         .repo_dir()
         .join("endpoints/main/pageserver/pageserver.toml");
     let original = std::fs::read_to_string(&toml).context("read pageserver.toml")?;
-    std::fs::write(&toml, format!("{original}{STRESS_PAGE_WRITER}"))
-        .context("write stressed pageserver.toml")?;
+    std::fs::write(
+        &toml,
+        crate::cluster::merge_toml_section(&original, "yb_page_writer", STRESS_PAGE_WRITER_KEYS),
+    )
+    .context("write stressed pageserver.toml")?;
     step("restart PS under tiny limits (image_chain_limit=2, read_cache_bytes=64KiB)");
     c.yb_logged(&["pageserver", "restart"])?;
     Ok(original)
@@ -229,7 +232,7 @@ pub fn restart_with_pipeline_depth(
         .repo_dir()
         .join("endpoints/main/pageserver/pageserver.toml");
     // Drop any pre-existing top-level pipelining key, then set our own at the
-    // top (top-level keys must precede the [yb_page_writer] section we append).
+    // top (top-level keys must precede the [yb_page_writer] table we merge into).
     let stripped: String = original
         .lines()
         .filter(|l| !l.trim_start().starts_with("page_service_pipelining"))
@@ -240,8 +243,16 @@ pub fn restart_with_pipeline_depth(
          execution = \"concurrent-futures\", batching = \"scattered-lsn\", \
          pipeline_depth = {depth} }}\n"
     );
-    std::fs::write(&toml, format!("{pipelining}{stripped}{STRESS_PAGE_WRITER}"))
-        .context("write pipeline_depth pageserver.toml")?;
+    let with_pipeline = format!("{pipelining}{stripped}");
+    std::fs::write(
+        &toml,
+        crate::cluster::merge_toml_section(
+            &with_pipeline,
+            "yb_page_writer",
+            STRESS_PAGE_WRITER_KEYS,
+        ),
+    )
+    .context("write pipeline_depth pageserver.toml")?;
     // Immediate stop + start rather than a graceful `restart`: this is setup
     // (we just want the PS back on the new toml with a cold cache), and a
     // graceful stop can exceed yb_amp's timeout while draining a fresh WAL

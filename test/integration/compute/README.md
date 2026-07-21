@@ -205,6 +205,19 @@ test/integration/
 (drop matching tests from the run — e.g. a known-flaky one — printing
 what was skipped).
 
+**Garbage collection:** every pageserver the suite provisions is *born*
+with GC enabled and tuned for prompt reclaim on small test workloads
+(`enable_gc`, `test_enable_gc_drain`, `gc_period="1s"`,
+`pitr_interval="0s"`, a small `gc_horizon`, `gc_candidate_every_n_bases=1`),
+injected into each generated `pageserver.toml` via the
+`YB_PAGESERVER_TEST_EXTRA_TOML` boot seam (set in `cluster.rs`; born-with
+because `enable_gc` is read once at attach and a restart to change it
+would bump the generation and fence the RW compute). So GC runs under
+*every* scenario — the whole suite doubles as a live check that trimming
+stays invisible to reads — and the `gc_*` scenarios exercise it directly
+(reclaim, branch-point pinning, teardown, crash recovery). GC scenarios
+run on their own child branches so their reclaim signal is isolated.
+
 **Concurrency:** every run is isolated by construction — it synthesizes
 its own config on a free port block (auto-picked in 20000..60000, pin
 with `INTEGRATION_PORT_BASE=<n>`), uses an ephemeral DB
