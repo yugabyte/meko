@@ -1806,15 +1806,6 @@ impl PageStore {
         group_page_rows_by_key(rows, "scan_scattered_set")
     }
 
-    pub async fn delete_all_pages(&self, branch_id: BranchId) -> Result<()> {
-        let sql = format!("DELETE FROM \"{}\".pages WHERE branch_id = $1", self.schema);
-        self.ysql_client
-            .execute(&sql, &[&branch_id.to_string()])
-            .await
-            .context("delete_all_pages")?;
-        Ok(())
-    }
-
     // ------------------- slru_pages ---------------------------------------
 
     pub async fn put_slru_pages(&self, branch_id: BranchId, rows: &[SlruPageRow]) -> Result<()> {
@@ -2424,52 +2415,6 @@ impl PageStore {
         Ok(out)
     }
 
-    pub async fn delete_all_meta(&self, branch_id: BranchId) -> Result<()> {
-        let sql = format!("DELETE FROM \"{}\".meta WHERE branch_id = $1", self.schema);
-        self.ysql_client
-            .execute(&sql, &[&branch_id.to_string()])
-            .await
-            .context("delete_all_meta")?;
-        Ok(())
-    }
-
-    pub async fn delete_all_slru_pages(&self, branch_id: BranchId) -> Result<()> {
-        let sql = format!(
-            "DELETE FROM \"{}\".slru_pages WHERE branch_id = $1",
-            self.schema
-        );
-        self.ysql_client
-            .execute(&sql, &[&branch_id.to_string()])
-            .await
-            .context("delete_all_slru_pages")?;
-        Ok(())
-    }
-
-    /// Drop every row for `branch_id` across all four
-    /// pageserver tables (`pages`, `slru_pages`, `meta`,
-    /// `timeline_state`). Used by the timeline-delete flow to
-    /// reclaim space and erase persisted state in one go.
-    ///
-    /// Deletes are dispatched concurrently; YB commits each one
-    /// independently. If any DELETE fails the whole call returns
-    /// `Err` and the caller may retry — partial deletion is
-    /// idempotent so a re-run safely catches up.
-    pub async fn delete_all_for_timeline(&self, branch_id: BranchId) -> Result<()> {
-        let (a, b, c, d, e) = tokio::join!(
-            self.delete_all_pages(branch_id),
-            self.delete_all_slru_pages(branch_id),
-            self.delete_all_meta(branch_id),
-            self.delete_timeline(branch_id),
-            self.delete_all_pending_gc(branch_id),
-        );
-        a?;
-        b?;
-        c?;
-        d?;
-        e?;
-        Ok(())
-    }
-
     // ------------------- GC candidate queue --------------------------------
 
     /// Insert GC candidates (the single insert path — `bucket_id` is
@@ -2739,18 +2684,6 @@ impl PageStore {
                 })?;
         }
         Ok(removed)
-    }
-
-    pub async fn delete_all_pending_gc(&self, branch_id: BranchId) -> Result<()> {
-        let sql = format!(
-            "DELETE FROM \"{}\".pending_gc WHERE branch_id = $1",
-            self.schema
-        );
-        self.ysql_client
-            .execute(&sql, &[&branch_id.to_string()])
-            .await
-            .context("delete_all_pending_gc")?;
-        Ok(())
     }
 
     /// Trim one fork's listed blocks: per block, keep the newest base
@@ -3442,18 +3375,6 @@ impl PageStore {
         };
         self.insert_timeline_at_creation(&row).await?;
         Ok(row)
-    }
-
-    pub async fn delete_timeline(&self, branch_id: BranchId) -> Result<()> {
-        let sql = format!(
-            "DELETE FROM \"{}\".timeline_state WHERE branch_id = $1",
-            self.schema
-        );
-        self.ysql_client
-            .execute(&sql, &[&branch_id.to_string()])
-            .await
-            .context("delete_timeline")?;
-        Ok(())
     }
 
     /// Column-scoped UPDATE of `consistent_lsn`. Caller guards
@@ -6425,8 +6346,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(c.len(), 2, "unlisted block must be untouched");
-
-        store.delete_all_pages(branch).await.unwrap();
     }
 
     /// Scenario: greed. The trim boundary is the CUTOFF's anchor, not
@@ -6494,8 +6413,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, vec![(70, false, true)], "init delta is the anchor");
-
-        store.delete_all_pages(branch).await.unwrap();
     }
 
     /// Scenario: the persisted read floor is monotone (GREATEST — a
@@ -6546,8 +6463,6 @@ mod tests {
                 .await
                 .is_err()
         );
-
-        store.delete_timeline(branch).await.unwrap();
     }
 
     /// Scenario: the child pin. The cutoff folds in min(ancestor_lsn)
@@ -6584,14 +6499,6 @@ mod tests {
             Some(Lsn(110)),
             "deleted child's 90 must not pin; live min is 110"
         );
-
-        for b in [
-            child_hi.branch_id,
-            child_lo.branch_id,
-            child_deleted.branch_id,
-        ] {
-            store.delete_timeline(b).await.unwrap();
-        }
     }
 
     /// Randomized model check of the trim, fixed seeds (reproducible).
@@ -6707,8 +6614,6 @@ mod tests {
                     "seed={seed} blk={blk} cutoff={cutoff} versions={versions:?}"
                 );
             }
-
-            store.delete_all_pages(branch).await.unwrap();
         }
     }
 }

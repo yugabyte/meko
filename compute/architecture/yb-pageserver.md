@@ -143,7 +143,7 @@ copies an anchor image up into the descendant's own branch_id. A
 chain that crossed a segment boundary force-dispatches a read-side
 materialise job, so each cold branch key converges to local after one
 slow read. Writes (`put_*`, materialiser installs,
-`advance_consistent_lsn`, `delete_all_for_timeline`) always target the
+`advance_consistent_lsn`) always target the
 own branch_id, never an ancestor.
 
 **Boundary.** The per-segment `branch_id` binding (the read SQL's
