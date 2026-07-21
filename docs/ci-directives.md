@@ -2,8 +2,9 @@
 
 Some CI suites are too slow or heavy to run on every PR. Request them per-PR by
 adding a `/ci <suite>` line to the **PR description** (body); the
-[`on-demand-checks.yml`](../.github/workflows/on-demand-checks.yml) workflow
-parses the body and runs the matching jobs.
+[`on-demand-checks.yml`](../.github/workflows/on-demand-checks.yml) and
+[`control-plane-gke.yml`](../.github/workflows/control-plane-gke.yml) workflows
+parse the body and run the matching jobs.
 
 - One or more suites per line, space/comma separated:
   `/ci integration_slow generate_image`.
@@ -22,6 +23,7 @@ what exercises those scenarios, so changing them always runs it.
 |---|---|---|
 | `integration_slow` | slow integration scenario suite (`test/integration/compute/run.sh slow`) | is correctness-sensitive (see below) |
 | `generate_image` | controller container image build (`deploy/controller/Dockerfile`) | changes the `controller/` deploy surface or `deploy/controller/Dockerfile` |
+| `deploy_gke` | build + push the four images to Quay and deploy to the itest-dev GKE cluster + smoke test ([`control-plane-gke.yml`](../.github/workflows/control-plane-gke.yml)) | changes the `deploy/` k8s surface (Helm charts, `up-gke.sh`, Dockerfiles) or the control-plane deploy path. Also runs nightly on `main`. |
 
 ## When a change is correctness-sensitive (`integration_slow`)
 

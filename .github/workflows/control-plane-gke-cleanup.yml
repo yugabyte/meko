@@ -1,0 +1,56 @@
+name: control-plane GKE cleanup (itest-dev)
+
+# Sweeps stale per-PR namespaces (ci-pr-*) left on itest-dev when a
+# control-plane-gke.yml run was hard-cancelled before its teardown step ran.
+# Age-based: deletes any ci-pr-* namespace older than CI_NS_MAX_AGE_HOURS.
+on:
+  schedule:
+    - cron: '0 */6 * * *'    # every 6 hours
+  workflow_dispatch:
+    inputs:
+      max_age_hours:
+        description: Delete ci-pr-* namespaces older than this many hours
+        required: false
+        default: '6'
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI_NS_MAX_AGE_HOURS: ${{ github.event.inputs.max_age_hours || '6' }}
+    steps:
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.18.6
+
+      - name: Write kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo '${{ secrets.KUBECONFIG_ITEST_DEV }}' | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          kubectl config current-context
+
+      - name: Delete stale ci-pr-* namespaces
+        run: |
+          now=$(date +%s)
+          threshold=$(( CI_NS_MAX_AGE_HOURS * 3600 ))
+          deleted=0
+          # name<space>creationTimestamp, one namespace per line.
+          kubectl get ns -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.creationTimestamp}{"\n"}{end}' \
+            | grep '^ci-pr-' | while read -r name ts; do
+                created=$(date -d "$ts" +%s)
+                age=$(( now - created ))
+                if [ "$age" -ge "$threshold" ]; then
+                  echo "deleting $name (age $(( age / 3600 ))h)"
+                  helm -n "$name" uninstall yb-amp-controller >/dev/null 2>&1 || true
+                  kubectl delete ns "$name" --wait=false || true
+                  deleted=$(( deleted + 1 ))
+                else
+                  echo "keeping  $name (age $(( age / 3600 ))h < ${CI_NS_MAX_AGE_HOURS}h)"
+                fi
+              done
+          echo "sweep complete"

@@ -6,7 +6,8 @@ Helm chart to run it on Kubernetes. It implements
 
 ```
 deploy/
-  up.sh             # one-shot bring-up: namespace + pull secret + YugabyteDB + controller (see below)
+  up.sh             # one-shot bring-up on ECR: namespace + pull secret + YugabyteDB + controller (see below)
+  up-gke.sh         # the GKE/GCR-native sibling of up.sh (no aws/ECR; see "GKE / GCR bring-up")
   endpoint/
     Dockerfile      # builds the single-container endpoint image
     supervisor.py   # PID-1 (under tini) process manager for the 5 services
@@ -82,6 +83,137 @@ API as MCP tools for AI agents; see
 its own pod, gated by `mcp.enabled` (default on), and the **[`amp_ui`](../amp_ui/README.md)
 web UI** (the React SPA served by nginx, reverse-proxying `/api/` to the
 controller) as its own pod, gated by `ui.enabled` (default on).
+
+## GKE / GCR bring-up — `up-gke.sh`
+
+[`up-gke.sh`](up-gke.sh) is the **Google-Cloud-native** sibling of `up.sh`: it
+stands the same stack up on GKE but pulls (and optionally builds/pushes) images
+from **GCR / Artifact Registry** instead of ECR — so it needs **no `aws`, no
+`dshubin_bot`, and no ~12 h ECR pull-secret refresh**. It runs the same steps
+(namespace → YugabyteDB → `yb_storage` → the `yb-amp-controller` Helm chart) and
+is likewise idempotent and non-destructive to YugabyteDB data.
+
+The two GKE clusters are already kubectl contexts:
+`gke_yugabyte_us-west1_itest-dev` and `gke_yugabyte_us-central1_itest-release`.
+
+```sh
+# prereqs: kubectl (target GKE cluster), helm, gcloud, docker
+
+# deploy-only (images already in GCR), onto itest-dev:
+CLUSTER=gke_yugabyte_us-west1_itest-dev NS=amp TAG=<tag> deploy/up-gke.sh
+
+# build + push all four images to GCR, then deploy, onto itest-release:
+CLUSTER=gke_yugabyte_us-central1_itest-release NS=amp BUILD=1 deploy/up-gke.sh
+
+# Artifact Registry instead of classic gcr.io:
+REGISTRY=us-west1-docker.pkg.dev/yugabyte/amp BUILD=1 deploy/up-gke.sh
+```
+
+**Pull auth** — four modes, selected by `PULL_SECRET` / `GCR_KEY_FILE` /
+`PULL_SECRET_DOCKERCONFIGJSON` (checked in that order when `PULL_SECRET` is set):
+
+- **none (default)** — `PULL_SECRET` unset. A same-project GKE cluster pulls from
+  GCR via its **node service account**, which needs `roles/artifactregistry.reader`
+  (Artifact Registry) or `storage.objectViewer` (classic `gcr.io` bucket).
+- **mint from a GCP SA key** — hand it a GCP service-account key and it (re)creates
+  the secret:
+  ```sh
+  PULL_SECRET=gcr-pull-secret GCR_KEY_FILE=./gcr-sa-key.json deploy/up-gke.sh
+  ```
+- **mint from a docker `config.json`** — hand it a raw docker config.json
+  (`{"auths":{...}}`, e.g. a Quay robot cred straight from a CI secret) and it
+  (re)creates the `kubernetes.io/dockerconfigjson` secret **in the namespace it just
+  created** — nothing needs to exist beforehand, which is what CI uses:
+  ```sh
+  PULL_SECRET=quay-pull-secret PULL_SECRET_DOCKERCONFIGJSON="$(cat cfg.json)" deploy/up-gke.sh
+  ```
+- **bring your own** — you already have a pull secret in the namespace; pass its
+  name and the script wires it into every pod (and into the endpoints the
+  controller deploys) without creating it:
+  ```sh
+  PULL_SECRET=my-gcr-secret deploy/up-gke.sh
+  ```
+  (It fails fast if that secret isn't present in the namespace.)
+
+**Building/pushing manually** (what `BUILD=1` automates) — after
+`gcloud auth configure-docker <host>`:
+
+```sh
+G=gcr.io/yugabyte
+make controller-bundle BUILD_TYPE=release
+docker build -t $G/amp/controller:<tag> -f deploy/controller/Dockerfile . && docker push $G/amp/controller:<tag>
+docker build -t $G/amp/endpoint:<tag>   -f deploy/endpoint/Dockerfile   . && docker push $G/amp/endpoint:<tag>
+docker build -t $G/amp/controller-ui:<tag> amp_ui                         && docker push $G/amp/controller-ui:<tag>
+docker build -t $G/amp/mcp:<tag> -f controller/mcp/Dockerfile controller/mcp && docker push $G/amp/mcp:<tag>
+```
+
+Key overrides: `REGISTRY` (base registry+path, default `gcr.io/yugabyte`), `TAG`
+(default `latest`, or a timestamp when `BUILD=1`), `CONTROLLER_EXPOSE`
+(`internal-lb` default), `ENDPOINT_SERVICE_TYPE`, `ENDPOINT_STORAGE_CLASS`
+(e.g. `standard-rwo` for a PD-backed `/data`), `MCP_ENABLED`, `UI_ENABLED`,
+`PULL_SECRET` / `GCR_KEY_FILE` (pull auth, see above).
+
+### Running in CI (itest-dev)
+
+The [`control-plane GKE (itest-dev)`](../.github/workflows/control-plane-gke.yml)
+workflow runs `up-gke.sh` + [`smoke-test.sh`](#smoke-test--smoke-testsh) against
+the **itest-dev** cluster — the "k8s" half of the control-plane deploy integration
+(the docker-driver half is [`test/e2e/control_plane`](../test/e2e/control_plane)).
+
+Because a cold run is expensive (~30-min endpoint build + a live GKE deploy) it is
+**not** a per-PR check. It runs only: **nightly** on `main` (07:17 UTC, the same
+slot as the slow integration suite), on **manual dispatch**, or on a PR you
+explicitly opt in by adding a **`/ci deploy_gke`** line to the PR description — the
+same on-demand directive mechanism the slow suite uses (see
+[`docs/ci-directives.md`](../docs/ci-directives.md)); the line re-runs the deploy on
+every push while it is present. Fork PRs are always skipped (no secrets). It:
+
+- builds + pushes the four images to **Quay** (`quay.io/yugabyte/amp-{controller,endpoint,controller-ui,mcp}`),
+  tagged **`custom-<short-sha>`**; the ~30-min endpoint build uses a
+  registry layer cache (`:buildcache`) so unchanged inputs finish in minutes;
+- authenticates to itest-dev with a **static kubeconfig**, mints the Quay pull
+  secret in a per-PR namespace (`ci-pr-<n>`), deploys with `CONTROLLER_EXPOSE=none`
+  / `ENDPOINT_SERVICE_TYPE=ClusterIP`, runs the smoke test (which port-forwards),
+  and **always** tears the namespace down.
+
+Stale `ci-pr-*` namespaces (from a run cancelled before teardown) are swept every
+6 h by [`control-plane-gke-cleanup.yml`](../.github/workflows/control-plane-gke-cleanup.yml).
+
+Required repo secrets (both workflows):
+
+- **`KUBECONFIG_ITEST_DEV`** — a **base64-encoded static kubeconfig** for itest-dev.
+  It must be a **ServiceAccount-token** kubeconfig (self-contained), *not* the one
+  `gcloud container clusters get-credentials` writes — that uses the
+  `gke-gcloud-auth-plugin` exec plugin, which needs GCP creds at runtime and won't
+  work in CI. Mint one against itest-dev (run with your own admin `kubectl`
+  context pointed at itest-dev):
+  ```sh
+  kubectl create serviceaccount amp-ci -n kube-system
+  # CI creates/deletes namespaces and (via the chart) cluster-scoped RBAC, so it
+  # needs broad rights; scope this ClusterRole down if you prefer.
+  kubectl create clusterrolebinding amp-ci --clusterrole=cluster-admin \
+    --serviceaccount=kube-system:amp-ci
+
+  SERVER=$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.server}')
+  CA=$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
+  TOKEN=$(kubectl create token amp-ci -n kube-system --duration=8760h)   # k8s >= 1.24
+
+  cat > kubeconfig.ci <<EOF
+  apiVersion: v1
+  kind: Config
+  clusters: [{name: itest-dev, cluster: {server: $SERVER, certificate-authority-data: $CA}}]
+  users: [{name: amp-ci, user: {token: $TOKEN}}]
+  contexts: [{name: itest-dev, context: {cluster: itest-dev, user: amp-ci}}]
+  current-context: itest-dev
+  EOF
+  base64 -w0 kubeconfig.ci   # paste this as the KUBECONFIG_ITEST_DEV secret
+  ```
+- **`QUAY_TOKEN`** — a Quay robot credential as a **`robot-user:token`** string.
+  CI splits it to `docker login quay.io` (push) and derives the in-namespace pull
+  secret from it (the `.dockerconfigjson` auth is `base64(QUAY_TOKEN)`). The robot
+  needs **push + pull** on the four `amp-*` repos.
+
+Fork PRs are skipped (secrets aren't exposed to them).
 
 ## ECR access & the pull secret
 
