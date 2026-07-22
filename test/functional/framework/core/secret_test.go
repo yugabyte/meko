@@ -265,3 +265,53 @@ func flatten(v any) string {
 	walk(v)
 	return b.String()
 }
+
+func TestSecretsStringShorthand(t *testing.T) {
+	// The -o form: `-o secrets.<name>=<variant>:<ref>` lands as a string leaf.
+	cfg := secretsConfig(t, map[string]any{
+		"tok":  "token:s3cr3t:with:colons",
+		"envs": "env:AMPQA_SHORTHAND_ENV",
+		"keyf": "file:/tmp/does-not-matter",
+	})
+	s, err := NewSecrets(cfg)
+	if err != nil {
+		t.Fatalf("NewSecrets: %v", err)
+	}
+	// token: everything after the first colon is the literal (colons preserved).
+	if v, err := s.Value("tok"); err != nil || v != "s3cr3t:with:colons" {
+		t.Errorf("Value(tok) = %q, %v; want the literal with colons intact", v, err)
+	}
+	// env: reads the named env var at resolve time.
+	t.Setenv("AMPQA_SHORTHAND_ENV", "from-env")
+	if v, err := s.Value("envs"); err != nil || v != "from-env" {
+		t.Errorf("Value(envs) = %q, %v; want from-env", v, err)
+	}
+	// file: Path returns the (home-expanded) path.
+	if p, err := s.Path("keyf"); err != nil || p != "/tmp/does-not-matter" {
+		t.Errorf("Path(keyf) = %q, %v; want the file path", p, err)
+	}
+}
+
+func TestSecretsStringShorthandErrors(t *testing.T) {
+	for name, decl := range map[string]any{
+		"no_colon":     "justavalue",
+		"unknown_kind": "secret:MY_VAR",
+		"empty_ref":    "env:",
+	} {
+		cfg := secretsConfig(t, map[string]any{"x": decl})
+		if _, err := NewSecrets(cfg); err == nil {
+			t.Errorf("%s: NewSecrets(%q) should error", name, decl)
+		}
+	}
+}
+
+func TestSecretsShorthandRedaction(t *testing.T) {
+	// A token: shorthand carries the literal inline — the snapshot must show the
+	// variant name only, never the literal.
+	root := map[string]any{"secrets": map[string]any{"tok": "token:leak-me"}}
+	sanitizeConfigSnapshot(root, NewMasker("leak-me"))
+	red, _ := root["secrets"].(map[string]any)
+	if red["tok"] != "token" {
+		t.Errorf("redacted secrets = %v; want tok->\"token\" (no literal)", root["secrets"])
+	}
+}

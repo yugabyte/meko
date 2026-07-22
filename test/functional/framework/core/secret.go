@@ -54,9 +54,11 @@ type Secrets struct {
 }
 
 // NewSecrets parses and validates the config `secrets:` section. An absent or
-// empty section yields an empty resolver (not an error). Each entry must be a
-// map with EXACTLY ONE of token/file/env populated; anything else is a clear
-// configuration error surfaced here rather than at point of use.
+// empty section yields an empty resolver (not an error). Each entry is either
+// the string shorthand "<variant>:<ref>" (e.g. env:QUAY_TOKEN, file:/path,
+// token:literal) — the natural -o form, `-o secrets.foo=env:BAR` — or a map with
+// EXACTLY ONE of token/file/env populated (the YAML-file form). Anything else is
+// a clear configuration error surfaced here rather than at point of use.
 func NewSecrets(cfg *Config) (*Secrets, error) {
 	s := &Secrets{byName: map[string]Secret{}}
 	if cfg == nil {
@@ -81,9 +83,16 @@ func NewSecrets(cfg *Config) (*Secrets, error) {
 }
 
 func parseSecret(name string, decl any) (Secret, error) {
+	// String shorthand: "<variant>:<ref>" — e.g. env:QUAY_TOKEN, file:/path/key.json,
+	// token:literal. This is the -o form (a nested map can't be expressed on the
+	// CLI): `-o secrets.foo=env:BAR` is far cleaner than the json_text hack. The
+	// map form below stays valid for YAML config files.
+	if str, ok := decl.(string); ok {
+		return parseSecretShorthand(name, str)
+	}
 	d, ok := decl.(map[string]any)
 	if !ok {
-		return Secret{}, fmt.Errorf("secret %q: expected a map with one of token/file/env, got %T", name, decl)
+		return Secret{}, fmt.Errorf("secret %q: expected \"<variant>:<ref>\" (e.g. env:MY_VAR) or a map with one of token/file/env, got %T", name, decl)
 	}
 	var set []SecretVariant
 	var ref string
@@ -108,6 +117,27 @@ func parseSecret(name string, decl any) (Secret, error) {
 	default:
 		return Secret{}, fmt.Errorf("secret %q: exactly one of token/file/env must be set (got %v)", name, set)
 	}
+}
+
+// parseSecretShorthand parses the "<variant>:<ref>" string form. The variant is
+// the part before the FIRST colon (so a token/ref value may itself contain
+// colons); the ref is everything after it.
+func parseSecretShorthand(name, s string) (Secret, error) {
+	i := strings.IndexByte(s, ':')
+	if i < 0 {
+		return Secret{}, fmt.Errorf("secret %q: shorthand must be \"<variant>:<ref>\" with variant token/file/env (e.g. env:MY_VAR), got %q", name, s)
+	}
+	variant := SecretVariant(s[:i])
+	ref := s[i+1:]
+	switch variant {
+	case SecretToken, SecretFile, SecretEnv:
+	default:
+		return Secret{}, fmt.Errorf("secret %q: unknown source %q — want token:, file:, or env:", name, s[:i])
+	}
+	if ref == "" {
+		return Secret{}, fmt.Errorf("secret %q: %s: has an empty value", name, variant)
+	}
+	return Secret{Name: name, Variant: variant, ref: ref}, nil
 }
 
 // Names lists the declared secret names, sorted.
@@ -347,6 +377,17 @@ func redactSecretsSubtree(root map[string]any) {
 // declaredVariant reports a declaration's variant name without exposing any
 // value — for the redacted snapshot ("gh_package": "env").
 func declaredVariant(decl any) string {
+	// String shorthand "<variant>:<ref>": report the variant only, never the ref
+	// (a token: shorthand carries the literal inline).
+	if s, ok := decl.(string); ok {
+		if i := strings.IndexByte(s, ':'); i >= 0 {
+			switch v := SecretVariant(s[:i]); v {
+			case SecretToken, SecretFile, SecretEnv:
+				return string(v)
+			}
+		}
+		return "redacted"
+	}
 	d, ok := decl.(map[string]any)
 	if !ok {
 		return "redacted"
