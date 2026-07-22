@@ -1,149 +1,248 @@
 # Safekeeper LSNs
 
-Updated: 2026-06-08
+Authoritative inventory of every LSN the safekeeper tracks: name, where it
+lives, what advances it, what reads it, and the invariants between them.
+Grounded in the Rust sources (`compute/safekeeper/`, `compute/libs/utils`,
+`compute/libs/safekeeper_api`), the walproposer C sources
+(`compute/pgxn/yb_amp/`), and the controller schema
+(`controller/migrations/0002_compute_storage.up.sql`).
 
-Inventory of every LSN the safekeeper uses, derived from the Rust sources
-only (`compute/safekeeper/`, `compute/libs/utils`, `compute/libs/safekeeper_api`). Do not treat
-other architecture docs as authoritative — upstream Neon described local
-segment files, `backup_lsn`, multi-SK quorum `commit_lsn`, and S3
-offload paths that are gone or collapsed in yb-amp.
+**System framing.** Durability and resilience come from YugabyteDB, the
+underlying store. The safekeeper mirrors every WAL byte into the YB table
+`safekeeper.wals` and persists its per-branch control state in
+`safekeeper.timeline_state`; it keeps no durable local state. Throughout
+this doc, "flushed" means **persisted to YB** — `flush_lsn` is the frontier
+of WAL confirmed durable in `safekeeper.wals`, and a commit is acked to the
+compute only once its bytes are there.
 
 See [`pageserver-lsns.md`](pageserver-lsns.md) for the pageserver side of
-the replication link (what LSN the pageserver sends in
-`START_REPLICATION`, what it reports back in `PageserverFeedback`).
+the replication link (how the `START_REPLICATION` position is chosen, what
+`PageserverFeedback` reports back).
 
-## Overview: four layers
-
-1. **Timeline control state** — consensus metadata + truncation horizon
-   (`safekeeper.timeline_state` in YB).
-2. **WAL storage watermarks** — in-memory bookkeeping + YB mirror
-   (`safekeeper.wals` chunks).
-3. **Streaming protocol** — walsender positions, interpreted-WAL batch
-   bounds, standby feedback.
-4. **Ephemeral / derived** — GC horizon, broker activity.
+## Flow overview
 
 ```mermaid
 flowchart LR
-    COMP[Compute / walproposer] -->|AppendRequest + flush| SK_ING[SafeKeeper ingest]
-    SK_ING -->|write_wal| YB_WAL[(safekeeper.wals)]
-    SK_ING -->|flush_wal| FL[flush_lsn]
-    FL -->|yb-amp: ≡ commit_lsn| COMM[commit_lsn watch]
-    PS[Pageserver] -->|START_REPLICATION start_pos| WS[walsender]
-    WS -->|read WAL| YB_WAL
+    COMP[Compute / walproposer] -->|AppendRequest| SK_ING[WAL acceptor ingest]
+    SK_ING -->|write_wal producer| CHAN[chunk channel]
+    CHAN -->|consumer batches| YB_WAL[(safekeeper.wals)]
+    YB_WAL -->|DurableState watch| DUR[durable_lsn]
+    DUR -->|caps| FL["flush_lsn = min(flush_record_lsn, durable_lsn)"]
+    FL -->|AppendResponse.flush_lsn| COMP
+    FL -->|commit_lsn watch| WS[walsender]
+    PS[Pageserver] -->|START_REPLICATION start_pos| WS
     WS -->|InterpretedWalRecords| PS
-    PS -->|PageserverFeedback remote_consistent_lsn| SK_FB[update_remote_consistent_lsn]
-    SK_FB -->|inmem then persist| RCS[remote_consistent_lsn]
+    PS -->|PageserverFeedback ps_applylsn| SK_FB[update_remote_consistent_lsn]
+    SK_FB -->|inmem, then advisory persist| RCS[remote_consistent_lsn]
     RCS -->|calc_horizon_lsn| GC[remove_up_to WAL GC]
 ```
 
 ---
 
-## yb-amp collapse: `commit_lsn ≡ flush_lsn`
+## Commit semantics: the commit frontier IS the flush frontier
 
-Upstream Neon maintained separate `commit_lsn` (quorum-committed) and
-`flush_lsn` (locally durable). In yb-amp with a **single safekeeper**
-and YB-mirrored WAL, every successful `flush_wal()` is treated as
-committed:
+One safekeeper serves each branch, and its WAL is durable in YugabyteDB the
+moment the INSERT commits — so there is a single acknowledgement frontier.
+`commit_lsn` everywhere in the safekeeper is defined as `flush_lsn`:
 
 ```rust
-// timeline.rs WriteGuardSharedState::drop
+// timeline.rs — WriteGuardSharedState::drop
 let commit_lsn = self.guard.sk.flush_lsn();
+let _ = self.tli.commit_lsn_watch_tx.send_if_modified(...);
 ```
 
-HTTP status, metrics, and `AppendResponse` all report `commit_lsn =
-flush_lsn`. The walproposer's `msg.h.commit_lsn` / `truncate_lsn`
-headers are ignored on append (`safekeeper.rs`).
+Every release of the shared-state write guard re-derives `commit_lsn` from
+`flush_lsn` and broadcasts it on `commit_lsn_watch_tx`; walsenders and the
+manager subscribe to that watch. HTTP status and metrics report
+`commit_lsn = flush_lsn`. The compute's walproposer applies the same rule:
+`GetAcknowledgedWALPosition` returns the safekeeper's reported
+`flushLsn` (once it has reached `propStartLsn`), and that becomes
+`wp->commitLsn` — the position at which synchronous-commit waiters are
+released. There is no LSN at which WAL is "flushed but not committed";
+if `flush_lsn` covers a record, YB durably holds it.
+
+`AppendRequestHeader` carries exactly `begin_lsn` and `end_lsn` — the WAL
+byte range being appended. No commit or truncate positions travel on the
+append path; truncation happens only via `ProposerElected`.
 
 ---
 
 ## Timeline control LSNs (`safekeeper.timeline_state`)
 
-Persisted in YB (`control_file::YbControlFileStorage`). Loaded at timeline
-attach; updated via `TimelineState::finish_change` / `flush`.
-
-Authoritative current column list is `COLUMNS` in
-`compute/safekeeper/src/control_file.rs`.
+Persisted in YB via `control_file::YbControlFileStorage`. Loaded at
+timeline attach; written by `TimelineState::finish_change` (full row) and
+the advisory single-column path (below). The current column list is
+`COLUMNS` in `compute/safekeeper/src/control_file.rs`:
 
 | Column | Meaning |
 |--------|---------|
-| `timeline_start_lsn` | Earliest LSN this timeline conceptually covers (branch/bootstrap point). Set on first `ProposerElected` if still zero. |
-| `local_start_lsn` | Earliest LSN this **safekeeper node** has contiguous WAL from. Set to `start_streaming_at` on election. |
-| `remote_consistent_lsn` | Oldest checkpoint the pageserver has durably ingested — **do not delete WAL at or above this** from the pageserver's perspective. Fed by `PageserverFeedback.remote_consistent_lsn`. |
-| `pg_version`, `system_id`, `wal_seg_size` | Server info, set at timeline create; immutable thereafter. |
-| `creation_ts` (TIMESTAMPTZ) | When the row was first inserted. |
+| `timeline_start_lsn` | Earliest LSN the timeline conceptually covers (branch/bootstrap point). Set on the first `ProposerElected` if still zero. |
+| `local_start_lsn` | Earliest LSN this safekeeper has contiguous WAL from. Set to `start_streaming_at` on the first election. Floors the restart record-boundary back-walk (below). |
+| `remote_consistent_lsn` | Oldest checkpoint the pageserver has durably ingested into YB page storage — WAL at or above this must be retained. Fed by `PageserverFeedback.remote_consistent_lsn`. Seeded to `max(current, timeline_start_lsn)` at election so a fresh timeline doesn't pin the horizon at 0. |
+| `pg_version`, `system_id`, `wal_seg_size` | Server info, set at creation; immutable. |
+| `creation_ts` | Row insert time. |
 
-**In-memory overlay** (`TimelineMemState`):
-- `remote_consistent_lsn` — updated immediately on pageserver feedback;
-  persisted copy lags until the manager's periodic advisory save (a
-  lock-free monotonic `UPDATE`, default interval
-  `control_file_save_interval`, 300 s) or another `finish_change`.
-
-`has_unflushed_inmem_state` is true when
+**In-memory overlay** (`TimelineMemState`): a single field,
+`remote_consistent_lsn`, updated immediately on pageserver feedback
+(`Timeline::update_remote_consistent_lsn`, monotonic max). The persisted
+copy lags until the manager's periodic advisory save.
+`has_unflushed_inmem_state()` is exactly
 `inmem.remote_consistent_lsn > pers.remote_consistent_lsn`.
 
-**Not persisted as separate columns** (gone or in-memory only):
-- `commit_lsn` — alias of `flush_lsn` in yb-amp.
-- `backup_lsn`, `peer_horizon_lsn` — removed with S3 offloader.
-- `term` / `term_history` / `proposer_uuid` / `mconf` — removed with the
-  consensus + membership layer (single safekeeper per branch; see
-  `safekeeper.md` §5).
+**Advisory persistence path:** the manager
+(`timeline_manager.rs::update_control_file_save`) spawns a background task
+— holding no shared-state lock — at most once per
+`control_file_save_interval` (default 300 s,
+`SafekeeperConfigToml::default`). The task runs
+`AdvisoryPersist::persist_remote_consistent_lsn`:
+
+```sql
+UPDATE safekeeper.timeline_state
+SET remote_consistent_lsn = GREATEST(remote_consistent_lsn, $2)
+WHERE branch_id = $1
+```
+
+The `GREATEST` makes the write monotonic, so a late-landing advisory UPDATE
+can never regress a concurrent full-row persist. Retries are gated on both
+the persisted clock and a last-*attempt* clock, so a failing YB never
+causes a per-tick retry storm. Why the lock-free design matters: this loop
+is the sole servicer of walsender residence-guard requests, and WAL appends
+need the shared-state write lock — an in-loop UPDATE under lock would
+freeze commits whenever the `timeline_state` UPDATE stalls.
+
+**Consensus/membership columns do not exist** in this schema: one
+safekeeper serves each branch and YugabyteDB provides the durability
+quorum, so the control row carries only the three LSNs plus server info.
 
 ---
 
 ## WAL storage watermarks
 
-### `WalBookkeeping` (in-memory bookkeeping)
+### `WalBookkeeping` — in-memory bookkeeping (`wal_storage.rs`)
 
-Used by `YbWalStorage`. No local pg_wal files in yb-amp.
+Pure bookkeeping used by `YbWalStorage`: LSN watermarks plus the
+`WalStreamDecoder` that finds record boundaries. No filesystem interaction.
 
 | LSN | Meaning |
 |-----|---------|
-| `write_lsn` | End of buffered byte stream (may be mid-record). |
-| `write_record_lsn` | End of last **fully parsed** WAL record written. |
-| `flush_lsn` | Durability watermark after `flush_wal()` (may be mid-record). |
-| `flush_record_lsn` | End of last **fully flushed** WAL record. |
+| `write_lsn` | End of the byte stream accepted so far (may be mid-record). |
+| `write_record_lsn` | End of the last **fully parsed** WAL record. |
+| `flush_lsn` | Byte-level flush watermark; `write_wal` keeps it aligned with `write_lsn` (there is no per-segment fsync barrier — durability is tracked separately by `durable_lsn`). |
+| `flush_record_lsn` | End of the last fully flushed record; what `Storage::flush_lsn()` returns. |
 
-Invariant documented in code:
-`write_lsn ≥ write_record_lsn ≥ flush_record_lsn` (with `flush_lsn`
-alongside).
+Documented invariant: `write_lsn ≥ write_record_lsn ≥ flush_record_lsn`.
+`write_wal` rejects rewrites (`startpos < write_lsn`) and gaps
+(`startpos > write_lsn` when nonzero) — sequential append only; moving the
+pointer requires a `ProposerElected` truncation first.
 
-**`SafeKeeper::flush_lsn()`** wrapper:
+### `YbWalStorage` — durability tracking (`yb_wal_storage.rs`)
+
+`write_wal()` is a **producer**: it splits the byte range into per-segment
+`PendingChunk`s (each stamped with its `end_lsn`) and pushes them onto a
+bounded channel without waiting for YB. A background **consumer** task
+drains the channel into batches, coalesces contiguous chunks into single
+rows, INSERTs them into `safekeeper.wals`, and publishes the batch's
+highest `end_lsn` onto a `watch` channel as
+`DurableState::Healthy(lsn)` — or `DurableState::Failed(msg)` on a
+non-recoverable error, which fails both durability paths and terminates
+the connection instead of freezing the watermark.
+
+| LSN | Where | Meaning |
+|-----|-------|---------|
+| `durable_lsn` | `Arc<AtomicU64>` mirrored from the watch | Highest `end_lsn` confirmed durable in `safekeeper.wals`. |
+| `submitted_max_lsn` | field | Highest `end_lsn` handed to the consumer; the target a blocking flush waits for. |
+
+**The externally reported flush frontier is durability-capped:**
+
+```rust
+fn flush_lsn(&self) -> Lsn {
+    std::cmp::min(self.inner.flush_lsn(), Lsn(self.durable_lsn.load(...)))
+}
+```
+
+Nothing is ever advertised past what YB holds. Flush modes (`YbFlush`):
+
+| Mode | Behavior | Used by |
+|------|----------|---------|
+| `NotifyAndWait` | wake consumer, `wait_for_durable(submitted_max_lsn)`, advance bookkeeping | `flush_wal()` — the synchronous barrier (timeline init, truncation preludes) |
+| `Notify` | wake consumer, return immediately | `handle_flush` (`FlushWAL` message) — steady-state; the ack follows via the durable watch |
+| `LocalAdvanceOnly` | advance bookkeeping to current `durable_lsn` | `yb_emit_append_response` — the durability-ack path |
+
+**Ack pipeline** (`receive_wal.rs`): the WalAcceptor converts every
+`AppendRequest` to `NoFlushAppendRequest` (ingest never blocks on YB), a
+`flush_ticker` periodically issues `FlushWAL`, and a dedicated select arm
+on `yb_durable_watch()` fires each time the consumer publishes a new
+durable LSN — emitting an `AppendResponse` with the advanced,
+durability-capped `flush_lsn` so the walproposer releases waiting
+synchronous commits. A crash between `write_wal()` returning and the batch
+landing in YB is a no-op for the compute: no ack was sent, so no commit
+was acknowledged.
+
+`wait_for_durable` is bounded (`YB_DURABLE_WAIT_MAX`, 60 s): callers hold
+the timeline write lock, and an unbounded wait would wedge the whole
+timeline; timing out drops the connection instead.
+
+**`truncate_wal(end_pos)`** first drains in-flight durability
+(`wait_for_durable(submitted_max_lsn)`) so a buffered chunk past `end_pos`
+can't land after the DELETE, then **refuses `end_pos > durable_lsn`** —
+accepting it would set `flush_record_lsn = end_pos` and advertise WAL the
+row store can't return. It deletes YB rows lying entirely past the cut,
+drops cached chunks past the cut (so a reader can't be served stale bytes
+that a subsequent write rewrites), and resets all four bookkeeping
+watermarks to `end_pos`. Rows straddling the cut stay; reads are capped at
+the flush frontier so the over-kept tail is never served.
+
+### `SafeKeeper::flush_lsn()` wrapper (`safekeeper.rs`)
 
 ```rust
 max(self.wal_store.flush_lsn(), self.state.timeline_start_lsn)
 ```
 
-Avoids reporting zero before timeline is initialized.
+Avoids reporting zero before the first segment exists on a branch whose
+timeline starts at a nonzero LSN.
 
-### YB mirror (`safekeeper.wals`)
+### Restart rehydration (`YbWalStorage::new`)
 
-Each `write_wal()` chunk gets an `end_lsn`. Durability sync point is
-`flush_wal()` — waits for the background consumer's watermark to catch
-the highest submitted `end_lsn`.
-
-**On restart:** `load_write_lsn` scans YB for
-`max(segno, chunk_offset + chunk_size)`; falls back to `commit_lsn`
-(= `flush_lsn`) if the table is empty. That raw maximum is then refined to
-the last complete record boundary by replaying the decoder
-(`find_anchor` + `find_end_of_wal`, the back-walk floored at
-`local_start_lsn`): a torn trailing page truncates `write_lsn` *back*,
-while a trailing `XLOG_SWITCH` advances it *forward* to the next segment
-(past padding the compute never streamed). See
-[`safekeeper.md`](safekeeper.md) §"Restart" — clamping the switch case back
-to the raw max, or letting the anchor walk overshoot a mid-page
-`local_start_lsn`, wedges the safekeeper (#181).
+1. `load_write_lsn` scans `safekeeper.wals` for
+   `max(segno_base + chunk_offset + chunk_size)` across all buckets;
+   falls back to `timeline_start_lsn` when the table has no rows. Because
+   `write_wal` is gap-free and `truncate_wal` deletes above the cut, the
+   durable row set is a contiguous prefix — the max end is the end of WAL.
+2. That raw byte offset can point inside a torn record or a torn trailing
+   page (#61), so it is refined to a record boundary by replaying the
+   decoder: `find_anchor` walks back (floored at `local_start_lsn`), then
+   `find_end_of_wal` scans forward. A torn tail truncates `write_lsn`
+   *back*; a trailing `XLOG_SWITCH` advances it *forward* to the next
+   segment boundary, past padding the compute never streamed. Clamping the
+   switch case back to the raw max — or letting the anchor walk overshoot a
+   mid-page `local_start_lsn` — wedges the safekeeper (#181); see
+   [`safekeeper.md`](safekeeper.md) §"Restart".
+3. Rows past the refined `write_lsn` are deleted (best-effort; a failed
+   cleanup is absorbed on the next restart), and `durable_lsn` +
+   `DurableState::Healthy` are seeded at `write_lsn` so an immediate
+   `flush_wal()` returns at once.
 
 ---
 
-## Proposer resume LSN
+## Walproposer link (compute ⇄ safekeeper)
 
-Consensus (terms/voting) and membership were removed — yb-amp runs a single
-safekeeper per branch (see `safekeeper.md` §5). The only proposer-side LSN left
-is the resume point.
+| LSN | Carried in | Semantics |
+|-----|-----------|-----------|
+| `AcceptorGreeting.flush_lsn` | greeting reply | The safekeeper's end-of-WAL. The walproposer stores it as `propStartLsn` and derives its resume point from it; on bootstrap (`flushLsn == 0`) the compute starts from the basebackup redo LSN (`GetRedoStartLsn`). |
+| `ProposerElected.start_streaming_at` | election message | Where the walproposer resumes appending; the safekeeper truncates its WAL to exactly this point. **Invariant (asserted in `handle_elected`): `start_streaming_at ≥ flush_lsn()`** — truncating below the durable frontier would discard acknowledged WAL. Because the walproposer derives it from the greeting's `flush_lsn`, the assert holds in steady state; a violation means the two sides disagree about durable history. First election also latches `timeline_start_lsn` / `local_start_lsn` and seeds `remote_consistent_lsn`. |
+| `AppendRequestHeader.begin_lsn` / `end_lsn` | each append | Byte range of the WAL chunk. `handle_append_request` enforces gap-free, rewrite-free sequencing against `write_lsn`. |
+| `AppendResponse.flush_lsn` | acks | The durability-capped flush frontier. Drives `wp->commitLsn` (syncrep release) and `CheckGracefulShutdown`. |
+| `AppendResponse.hs_feedback` | acks | Aggregated hot-standby feedback (xmin/catalog_xmin), injected by `Timeline::process_msg` / `yb_emit_append_response` from `WalSenders::get_hotstandby`. |
+| `AppendResponse.pageserver_feedback` | acks (optional) | The latest `PageserverFeedback` — the WalAcceptor clones the last `AppendResponse` and injects each incoming feedback so the compute sees pageserver progress promptly. |
 
-| LSN | Storage | Role |
-|-----|---------|------|
-| `start_streaming_at` | Message only (`ProposerElected`) | Where the walproposer resumes appending; the SK truncates WAL here. Derived from the SK's `flush_lsn` (reported in the `AcceptorGreeting`), so in steady state it equals the SK's end-of-WAL. Must be `≥ flush_lsn` (yb-amp: don't truncate durable tail). |
+On receiving feedback, `walprop_pg_process_safekeeper_feedback` advances
+the compute's replication slot via `ProcessStandbyReply(standby_flush_lsn,
+standby_flush_lsn, standby_apply_lsn, ...)` where `standby_flush_lsn =
+wp->commitLsn` (durable in the safekeeper ⇒ in YB) and `standby_apply_lsn =
+ps_feedback.disk_consistent_lsn` (processed and durable at the pageserver).
+Backpressure LSN handling is covered in
+[`pageserver-lsns.md`](pageserver-lsns.md) §"Walreceiver LSNs and the
+feedback wire format".
 
 ---
 
@@ -151,66 +250,66 @@ is the resume point.
 
 ### `START_REPLICATION PHYSICAL <start_pos>`
 
-The **pageserver chooses `start_pos`**, not the safekeeper. See
-[`pageserver-lsns.md`](pageserver-lsns.md): the pageserver passes
-`normalize_lsn(consistent_lsn + padding, WAL_SEGMENT_SIZE)` where
-`consistent_lsn` is the durable, gap-free watermark from
-`pageserver.timeline_state.consistent_lsn`. The pageserver does NOT
-use its eager `applied_lsn` here, because on a (re)connect after an
-in-flight buffer flush, `applied_lsn` would point past records not
-yet in YB — and a subsequent crash would lose them.
+The **pageserver chooses `start_pos`** — the safekeeper does not pick a
+resume point for it. The pageserver passes its durable `consistent_lsn`
+(plus record padding and `normalize_lsn` page-header normalization), NOT
+its eager applied frontier: after a reconnect mid-flush, the applied
+frontier can point past records not yet in YB page storage, and a
+subsequent pageserver crash would lose them if the safekeeper had already
+trimmed that WAL.
 
-Safekeeper accepts the requested LSN and streams forward:
-
-```rust
-// send_wal.rs — single commit-frontier watch (yb-amp)
-let end_watch = EndWatch::new(tli.get_commit_lsn_watch_rx());
-// end_pos = commit_lsn = flush_lsn (yb-amp)
-```
-
-If `start_pos > end_pos`, streaming starts anyway (logged as info) —
-pageserver may be slightly ahead during catch-up races.
-
-### Interpreted WAL message LSNs (pageserver protocol)
-
-Per batch from `send_interpreted_wal.rs` / `wal_reader_stream.rs`:
-
-| Wire field | Source | Meaning |
-|------------|--------|---------|
-| `streaming_lsn` | `batch.wal_end_lsn` | End of the WAL **chunk** in this message. |
-| `commit_lsn` | `batch.available_wal_end_lsn` | End of WAL **available** on SK for this reader (= `commit_lsn` watch = `flush_lsn` for pageserver). |
-
-Pageserver maps these to `streaming_lsn` / `commit_lsn` in walreceiver
-connection status.
-
-### Pageserver feedback (inbound)
-
-`NEON_STATUS_UPDATE` (`PageserverFeedback`):
-
-| Field | SK uses it for |
-|-------|----------------|
-| `remote_consistent_lsn` | **Yes** — `update_remote_consistent_lsn`, WAL GC horizon, broker activity. |
-| `last_received_lsn` | Metrics only (`safekeeper_ps_last_received_lsn`). |
-| `disk_consistent_lsn` | Metrics only — **not** used for truncation. yb-amp pageserver populates this with the same value as `remote_consistent_lsn` (both come from `Timeline::get_consistent_lsn()`, the durable gap-free watermark); the two wire fields are semantically identical and one will be dropped in a future protocol bump. |
+The walsender streams from `start_pos` toward the commit frontier:
 
 ```rust
 // send_wal.rs
-self.tli.update_remote_consistent_lsn(ps_feedback.remote_consistent_lsn).await;
+let end_watch = EndWatch::new(tli.get_commit_lsn_watch_rx());
+let end_pos = end_watch.get();
 ```
 
----
+If `start_pos > end_pos` the walsender logs it (info) and proceeds — the
+pageserver may be momentarily ahead during catch-up races; it simply waits
+for the watch to advance. Every WAL read path (`WalReader` →
+`YbSegmentReader`) is capped at the live flush frontier, so bytes that are
+written but not yet durable — which a reconnecting walproposer may rewrite
+— are never served (#139).
 
-## Compute / walproposer streaming
+### Interpreted WAL batch LSNs (pageserver protocol)
 
-All consumers (pageserver, walproposer, replicas) use a single `end_watch`
-over the commit-frontier watch; there is no term-gated recovery variant.
+Per batch (`wal_reader_stream.rs` → `send_interpreted_wal.rs`):
 
-| Mode | `end_watch` | `available_wal_end_lsn` |
-|------|-------------|-------------------------|
-| All consumers | `EndWatch` (commit_lsn watch) | `commit_lsn` (= `flush_lsn`) |
+| Wire field | Source | Meaning |
+|------------|--------|---------|
+| `streaming_lsn` | `batch.wal_end_lsn` | End of the WAL chunk this message covers. |
+| `commit_lsn` | `batch.available_wal_end_lsn` | End of WAL available on the safekeeper (the commit/flush frontier at read time). |
 
-Walproposer receives `AppendResponse` with `flush_lsn` and `hs_feedback`
-(hot-standby xmin hints aggregated from standby replicas).
+The pageserver maps these into its `WalReceiverConnectionStatus`
+(`streaming_lsn` / `commit_lsn`).
+
+### Pageserver feedback (inbound)
+
+The pageserver sends `PageserverFeedback` as a CopyData message tagged
+`NEON_STATUS_UPDATE_TAG_BYTE` (`b'z'`, `send_wal.rs`), distinguishing it
+from standard standby status updates and hot-standby feedback. The reply
+reader skips the tag and length bytes, parses the key/value payload
+(`PageserverFeedback::parse`,
+`compute/libs/utils/src/pageserver_feedback.rs`), records it in the
+walsender slot, and applies exactly one field to retention:
+
+| Field (wire key) | Safekeeper use |
+|------------------|----------------|
+| `remote_consistent_lsn` (`ps_applylsn`) | **`update_remote_consistent_lsn`** — the WAL retention bound. |
+| `last_received_lsn` (`ps_writelsn`) | `laggard_lsn()` clamp for WAL removal (min across pageserver walsenders); `safekeeper_ps_last_received_lsn` metric. |
+| `disk_consistent_lsn` (`ps_flushlsn`) | Relayed to the compute (slot apply position, backpressure); metrics. Not a truncation input. |
+| `current_timeline_size`, `replytime`, `corruption_detected` | Relayed to the compute via `AppendResponse.pageserver_feedback`. |
+
+The pageserver populates both `remote_consistent_lsn` and
+`disk_consistent_lsn` from its single durable watermark
+(`Timeline::get_consistent_lsn()`), so the two wire fields carry the same
+value and the truncation bound is durable by construction.
+
+`should_walsender_stop(reported_remote_consistent_lsn)` terminates an
+inactive walsender once the reported value reaches `flush_lsn` — nothing
+left to stream, nothing left to wait for.
 
 ---
 
@@ -218,10 +317,10 @@ Walproposer receives `AppendResponse` with `flush_lsn` and `hs_feedback`
 
 | LSN | Where | Role |
 |-----|-------|------|
-| `StandbyReply.apply_lsn` | Per walsender | Fed into `get_safekeeper_info`; aggregated across senders. |
-| `HotStandbyFeedback.xmin` / `catalog_xmin` | `WalSenders.agg_standby_feedback` | Forwarded to compute in `AppendResponse.hs_feedback`. |
+| `StandbyReply.apply_lsn` | Per walsender slot (`record_standby_reply`) | Aggregated (min across senders) in `update_reply_feedback`; observability. |
+| `HotStandbyFeedback.xmin` / `catalog_xmin` | `WalSenders.agg_standby_feedback` | Min-aggregated across standby senders; injected into `AppendResponse.hs_feedback` for the compute's `ProcessStandbyHSFeedback`. |
 
-Not persisted. Not used for WAL truncation in yb-amp.
+Not persisted. Not inputs to WAL truncation.
 
 ---
 
@@ -231,110 +330,108 @@ Not persisted. Not used for WAL truncation in yb-amp.
 
 ```rust
 horizon_lsn = min(
-    cfile_remote_consistent_lsn,  // persisted remote_consistent_lsn
-    flush_lsn,
-    optional_laggard_walsender_lsn,
+    state.cfile_remote_consistent_lsn,  // PERSISTED remote_consistent_lsn
+    state.flush_lsn,                    // never trim past durable end-of-WAL
+    extra_horizon_lsn,                  // slowest active walsender (laggard)
 )
 ```
 
-Segments with `segno < horizon.segment_number() - 1` are deleted from
-**both** local bookkeeping and `safekeeper.wals` (`YbWalStorage::remove_up_to`).
+The manager (`update_wal_removal`) computes
+`removal_horizon_segno = horizon.segment_number() - 1` (saturating) and,
+when it exceeds `last_removed_segno`, spawns
+`YbWalStorage::remove_up_to(segno)` — dropping cached chunks first, then
+DELETEing all `safekeeper.wals` rows with `segno < segno_up_to` (bounded on
+both sides by the last-removed segno for a tight index range).
 
-**Critical:** `remote_consistent_lsn` in the horizon uses the
-**persisted** control-file value (`cfile_remote_consistent_lsn`), not
-the in-memory copy. A pageserver feedback bump that hasn't been flushed
-to YB yet does **not** immediately allow WAL deletion.
+**Why each term is in the min:**
+- *Persisted* `remote_consistent_lsn`, not the in-memory copy: a feedback
+  bump that hasn't reached `safekeeper.timeline_state` yet must not license
+  deletion — after a safekeeper restart the horizon recomputes from the
+  persisted row, and WAL deleted on the strength of a lost in-memory value
+  would be gone while the row still claims it is needed.
+- `flush_lsn`: a stale or corrupt `remote_consistent_lsn` past end-of-WAL
+  must not trim beyond durability.
+- Laggard clamp (`WalSenders::laggard_lsn`, min of pageserver walsenders'
+  `last_received_lsn`): WAL lives only in `safekeeper.wals` rows — there is
+  no secondary copy for an active pageserver connection to re-fetch from,
+  so deleting bytes a walsender still needs is one-way data loss.
 
-Walsender laggard clamp prevents deleting bytes an active pageserver
-connection still reads — in yb-amp there is no local-disk WAL fallback.
+**Timeline activity** (`update_is_active`): the timeline counts as active
+while computes are attached or
+`remote_consistent_lsn < flush_lsn` (the pageserver hasn't durably ingested
+everything). Drives the `broker_active` flag and the
+`safekeeper_timeline_active` gauge.
 
 ---
 
 ## LSN ordering (steady state)
 
 ```
-remote_consistent_lsn (inmem) ≥ remote_consistent_lsn (persisted)
+remote_consistent_lsn (inmem)  ≥  remote_consistent_lsn (persisted)
+                                   (advisory save lags by ≤ save interval)
 
-remote_consistent_lsn ≤ flush_lsn (= commit_lsn)
+remote_consistent_lsn  ≤  flush_lsn (= commit_lsn)
 
-timeline_start_lsn ≤ local_start_lsn ≤ flush_lsn
+timeline_start_lsn  ≤  local_start_lsn  ≤  flush_lsn
 
-write_lsn ≥ flush_lsn (after flush; may be equal at record boundary)
+write_lsn  ≥  write_record_lsn  ≥  flush_record_lsn
+
+reported flush_lsn  =  min(flush_record_lsn, durable_lsn)
+                       (never past confirmed YB durability)
+
+start_streaming_at  ≥  flush_lsn      (asserted on ProposerElected)
+truncate_wal end_pos ≤ durable_lsn    (refused otherwise)
 ```
 
-**Truncation safety:** WAL before `remote_consistent_lsn` can be GC'd
-(subject to walsender laggard). Pageserver must keep
-`remote_consistent_lsn` honest — that is the only pageserver feedback
-field that affects SK retention.
+**Why they hold / what breaks:**
+- *Durability cap on `flush_lsn`*: the ack the compute releases
+  synchronous commits on. If it ever exceeded `durable_lsn`, a safekeeper
+  crash after the ack but before the YB INSERT would lose an acknowledged
+  commit — the exact failure the producer/consumer split is designed to
+  make impossible.
+- *`remote_consistent_lsn ≤ flush_lsn`*: feedback describes ingested WAL,
+  which the safekeeper streamed, which is ≤ its durable end. The horizon
+  min() enforces it even against a misbehaving peer.
+- *Truncation floor*: `start_streaming_at < flush_lsn` would delete WAL
+  already acked to the compute (and possibly already streamed to the
+  pageserver); the assert makes the disagreement loud instead of silent.
 
 ---
 
-## Cross-link: pageserver restart → SK stream start
+## Cross-link: pageserver restart → stream → feedback loop
 
-1. PS loads `consistent_lsn` from `pageserver.timeline_state`.
-2. PS seeds both the eager `Timeline::applied_lsn` (for in-RAM
-   `wait_lsn`) AND the durable `Timeline::remote_state.consistent_lsn`
-   slot (for SK feedback / restart resume) from that value.
-3. PS walreceiver reads `Timeline::get_consistent_lsn()` and sends
-   `START_REPLICATION PHYSICAL {startpoint}` with padding/page-header
-   normalization.
-4. SK walsender reads from `start_pos` up to `commit_lsn` (= `flush_lsn`).
-5. PS ingests; the eager `applied_lsn` races ahead at WAL speed so
-   GetPage@LSN reads don't stall. The slot stays put until a flush.
-6. After each successful `advance_consistent_lsn` UPSERT, PS bumps
-   the slot, which feeds `PageserverFeedback.remote_consistent_lsn`.
-7. SK advances inmem `remote_consistent_lsn`; periodic flush persists it.
+1. Pageserver loads `consistent_lsn` from `pageserver.timeline_state` and
+   seeds both its eager applied frontier and its durable slot from it.
+2. Pageserver sends `START_REPLICATION PHYSICAL {startpoint}` with
+   `startpoint` derived from `get_consistent_lsn()`.
+3. Walsender streams from `startpoint` toward the commit-frontier watch
+   (`= flush_lsn`).
+4. Pageserver ingests; its applied frontier races ahead at WAL speed while
+   its durable slot waits for flushes.
+5. After each successful gen-fenced `advance_consistent_lsn`, the
+   pageserver's next `PageserverFeedback.remote_consistent_lsn` advances.
+6. Safekeeper bumps inmem `remote_consistent_lsn` immediately; the advisory
+   save persists it within the save interval; `calc_horizon_lsn` then
+   allows WAL removal up to it.
 
-If PS persisted `consistent_lsn` lags actual YB pages (gen-fenced
-UPSERT throttle), step 3–4 **re-stream WAL already in YB** — safe
-(UPSERT-idempotent on PS side), wasteful.
-
-If SK `remote_consistent_lsn` lags PS feedback (control-file flush
-interval), SK retains extra WAL — safe, not data loss.
-
----
-
-## Correctness summary
-
-**Holds:**
-- Single-SK `commit_lsn ≡ flush_lsn` is consistent with YB write-through
-  mirror (`flush_wal` waits for YB INSERT).
-- Truncation on `ProposerElected` refuses `start_streaming_at < flush_lsn`.
-- WAL GC clamped by persisted `remote_consistent_lsn` + active walsender
-  position.
-- `load_write_lsn` rehydrates from YB on restart; no local segment scan.
-
-**Sharp edges / gaps:**
-1. **Persisted `remote_consistent_lsn` lags feedback** by up to
-   `control_file_save_interval` (default 300 s) — extra WAL retained;
-   crash loses recent feedback bumps (SK may GC less aggressively after
-   restart, never more aggressively than persisted value).
-2. **`commit_lsn` name survives** in metrics/API but equals `flush_lsn` —
-   misleading when reading upstream Neon docs.
-3. **Pageserver `disk_consistent_lsn` in feedback is ignored for
-   truncation** — only `remote_consistent_lsn` matters. Both fields
-   now carry the same durable, gap-free value from
-   `Timeline::get_consistent_lsn()`; the duplicate wire field is
-   kept for SK protocol back-compat.
-4. **Consensus + membership are gone.** yb-amp runs a single safekeeper
-   per branch, so terms/voting, term-history reconciliation, and membership
-   were removed from both the walproposer and the safekeeper (see
-   `safekeeper.md` §5). The surviving handshake just resumes streaming at the
-   SK's `flush_lsn`.
+Both lags in this loop degrade toward *extra retention*, not loss: a
+lagging pageserver column means WAL gets re-streamed into idempotent
+UPSERTs; a lagging safekeeper column means segments are trimmed later.
 
 ---
 
 ## Persistence cheat sheet
 
 | Field | YB `safekeeper.timeline_state` | YB `safekeeper.wals` | In memory only |
-|-------|-------------------------------|------------------|----------------|
+|-------|-------------------------------|----------------------|----------------|
 | `timeline_start_lsn` | Yes | — | — |
 | `local_start_lsn` | Yes | — | — |
-| `remote_consistent_lsn` | Yes (lagging) | — | `TimelineMemState` (live) |
-| `flush_lsn` / `commit_lsn` | — | implied by chunk ends | `WalBookkeeping` |
-| WAL bytes | — | Yes (per chunk) | `WalCache` optional |
-| Walsender positions | — | — | per-connection state |
-| Standby `apply_lsn` | — | — | `WalSenders` |
+| `remote_consistent_lsn` | Yes (advisory, lagging) | — | `TimelineMemState` (live) |
+| `flush_lsn` / `commit_lsn` | — | implied by max chunk end (rehydrated by `load_write_lsn` + boundary walk) | `WalBookkeeping` + `durable_lsn` |
+| `write_lsn` / `write_record_lsn` | — | same rehydration | `WalBookkeeping` |
+| WAL bytes | — | Yes (coalesced chunk rows) | `WalCache` (hot cache) |
+| Walsender positions / feedback | — | — | `WalSenders` slots |
+| Standby `apply_lsn` / hs feedback | — | — | `WalSenders` aggregation |
 
 ---
 
@@ -342,18 +439,37 @@ interval), SK retains extra WAL — safe, not data loss.
 
 - `compute/safekeeper/src/state.rs` — `TimelinePersistentState`,
   `TimelineMemState`, `start_change` / `finish_change`.
-- `compute/safekeeper/src/control_file.rs` — YB row read/write.
-- `compute/safekeeper/src/safekeeper.rs` — consensus, `flush_lsn()`,
-  `handle_elected`, `handle_append_request`.
-- `compute/safekeeper/src/wal_storage.rs` — `WalBookkeeping` watermarks,
-  `Storage` trait.
-- `compute/safekeeper/src/yb_wal_storage.rs` — YB mirror, `load_write_lsn`,
-  `flush_wal` durability.
-- `compute/safekeeper/src/send_wal.rs` — `START_REPLICATION`, pageserver
-  feedback handling.
-- `compute/safekeeper/src/send_interpreted_wal.rs` — interpreted batch LSNs.
-- `compute/safekeeper/src/wal_reader_stream.rs` — `WalBytes.available_wal_end_lsn`.
+- `compute/safekeeper/src/control_file.rs` — `COLUMNS`, row read/write,
+  `AdvisoryPersist::persist_remote_consistent_lsn`,
+  `note_advisory_persisted`.
+- `compute/safekeeper/src/safekeeper.rs` — `AcceptorGreeting`,
+  `ProposerElected`, `AppendRequest{,Header}`, `AppendResponse`,
+  `flush_lsn()` wrapper, `handle_elected`, `handle_append_request`,
+  `handle_flush`, `yb_emit_append_response`.
+- `compute/safekeeper/src/wal_storage.rs` — `Storage` trait,
+  `WalBookkeeping` watermarks, `WalReader`.
+- `compute/safekeeper/src/yb_wal_storage.rs` — producer/consumer batching,
+  `DurableState`, `YbFlush`, `durable_lsn` cap, `load_write_lsn`,
+  `truncate_wal`, `remove_up_to`, `YbSegmentReader`.
+- `compute/safekeeper/src/receive_wal.rs` — WalAcceptor loop:
+  `NoFlushAppendRequest` conversion, `FlushWAL` ticker, durable-watch ack
+  arm, feedback injection into `AppendResponse`.
+- `compute/safekeeper/src/timeline.rs` — `WriteGuardSharedState::drop`
+  (commit watch), `update_remote_consistent_lsn`,
+  `should_walsender_stop`, hs-feedback injection.
+- `compute/safekeeper/src/send_wal.rs` — `NEON_STATUS_UPDATE_TAG_BYTE`,
+  feedback intake, `laggard_lsn`, standby aggregation, `EndWatch`.
+- `compute/safekeeper/src/send_interpreted_wal.rs` /
+  `wal_reader_stream.rs` — `wal_end_lsn` / `available_wal_end_lsn` batch
+  bounds.
 - `compute/safekeeper/src/remove_wal.rs` — `calc_horizon_lsn`.
-- `compute/safekeeper/src/timeline_manager.rs` — control-file flush, WAL removal,
-  broker `is_active`.
+- `compute/safekeeper/src/timeline_manager.rs` — advisory save scheduling,
+  `update_wal_removal`, `update_is_active`.
+- `compute/pgxn/yb_amp/walproposer.c` / `walproposer_pg.c` — greeting →
+  `propStartLsn`, `GetAcknowledgedWALPosition`, slot advance,
+  feedback shared-memory relay.
 - `compute/libs/utils/src/pageserver_feedback.rs` — feedback wire format.
+- `controller/migrations/0002_compute_storage.up.sql` —
+  `safekeeper.timeline_state` + `safekeeper.wals` schemas.
+- [`pageserver-lsns.md`](pageserver-lsns.md) — the pageserver side of the
+  link.

@@ -6,82 +6,98 @@ Source: `compute/endpoint_storage/src/app.rs` (router + handlers),
 `compute/endpoint_storage/src/claims.rs` (JWT claim shapes),
 `compute/endpoint_storage/src/openapi_spec.yml` (hand-maintained OpenAPI).
 
-`endpoint_storage` is a small axum service that stores per-endpoint blobs
-(LFC prewarm caches, etc.) as objects in the YB-backed object store. It is
-used by compute (`compute_ctl`) and the control plane to upload/download
-LFC prewarm data; it deploys either standalone or baked into the compute
-image for large computes (`main.rs:1-4`). In yb-amp one instance runs per
-endpoint — `yb_amp_local` co-locates an instance with each endpoint and
-stamps it a per-endpoint listen address (`controller/local/cfg`).
+`endpoint_storage` is a small axum service that stores per-endpoint blobs (LFC
+prewarm state, and any other per-endpoint auxiliary data) as objects in a
+YB-backed blob store. Durability comes from YugabyteDB: the service itself is
+stateless, writing every object through the `remote_storage` `YbStore` backend
+into the `blobs` YB table (see [`remote-storage.md`](remote-storage.md)), so an
+instance can be killed and replaced without losing anything. Its clients are
+`compute_ctl` (LFC prewarm/offload — `compute/compute_tools/src/compute_prewarm.rs`)
+and the control plane (prefix deletes when an endpoint or branch is deleted).
+
+In the dev cluster one instance runs per endpoint: `yb_amp_local` provisions an
+instance alongside each endpoint, writing its config and datadir under
+`endpoints/<endpoint_id>/endpoint_storage`
+(`controller/local/launch/endpoint.go`, `controller/local/config/localenv.go`).
 
 ## Binary and configuration
 
-The binary takes a single JSON config, either as a positional file path or
-via `--config=<inline-json>` (k8s helm mode) — `main.rs:21-61`. The config
-struct (`main.rs:30-41`):
+The crate builds the `yb-endpoint-storage` binary (`Cargo.toml [[bin]]`; the lib
+crate stays `endpoint_storage`). It takes a single JSON config, either as a
+positional file path or inline via `--config=<inline-json>` (the k8s helm mode) —
+the two are mutually exclusive and one is required (`main.rs`). The config struct
+rejects unknown fields:
 
 | Field | Required | Default | Meaning |
 |---|---|---|---|
 | `listen` | no | `0.0.0.0:51243` | `SocketAddr` to bind |
-| `pemfile` | yes | — | path to the Ed25519 public-key PEM used to verify JWTs |
+| `pemfile` | yes | — | path to the Ed25519 public-key PEM that verifies JWTs |
 | `yb_storage_conn` | yes | — | `TypedRemoteStorageKind` (tagged `type: "YbStore"`) — the YB connection backing the blobs |
 | `max_upload_file_limit` | no | `100 MiB` (`100*1024*1024`) | max accepted `PUT` body size |
 
 The service builds its backend with
-`GenericRemoteStorage::from_storage_kind(yb_storage_conn)`
-(`main.rs:71-72`). `TypedRemoteStorageKind` has only one variant, `YbStore`,
-carrying a `ysql_client::YbConnConfig` connection block
-(`compute/libs/remote_storage/src/config.rs:82-89`). The `blobs` table name is
-hardcoded in `yb_store` — the config carries connection info only. See
-[`remote-storage.md`](remote-storage.md) for the `YbStore` backend and the
-`public.blobs` schema.
+`GenericRemoteStorage::from_storage_kind(yb_storage_conn)`. `TypedRemoteStorageKind`
+has exactly one variant, `YbStore`, carrying a `ysql_client::YbConnConfig`
+connection block (`compute/libs/remote_storage/src/config.rs`); there is no
+S3/Azure/GCS/LocalFs path. The blobs table name is hardcoded in `yb_store`
+(`BLOBS_TABLE = "blobs"`) — the config carries connection info only.
 
-### Default listen addresses
+Shutdown is graceful: a signal handler cancels a `CancellationToken` that both
+stops the axum server and aborts in-flight storage retries. `SIGUSR2` dumps
+suspended tokio tasks (`utils::tokio_dump`).
+
+### Listen addresses in practice
 
 Two different defaults exist, depending on launch path:
 
-- **The binary itself** defaults to `0.0.0.0:51243` when `listen` is omitted
-  from the config (`main.rs:17-19`).
-- **`yb_amp_local`** does not rely on that default. It templates each
-  instance off `ENDPOINT_STORAGE_DEFAULT_ADDR` = `127.0.0.1:9993` and
-  offsets the port per endpoint / per port-base (`controller/local/config`),
-  writing an explicit `listen` into each instance's `endpoint_storage.json`
-  (`controller/local/cfg`).
+- **The binary itself** defaults to `0.0.0.0:51243` when `listen` is omitted from
+  the config (`main.rs`).
+- **`yb_amp_local`** always writes an explicit `listen`. It templates each
+  instance off the default addr `127.0.0.1:9993`
+  (`controller/local/config/config.go`, mirroring the Rust
+  `ENDPOINT_STORAGE_DEFAULT_ADDR`) and offsets the port per endpoint, writing
+  `endpoint_storage.json` as `{"listen", "pemfile", "yb_storage_conn"}` via
+  `controller/local/cfg/endpointstorage.go`. When the operator supplies no
+  `remote_storage_json` override, the `yb_storage_conn` block is derived from the
+  controller's own `[*.yb]` connection (the same YugabyteDB the pageserver and
+  safekeeper persist into), with the `type: "YbStore"` discriminator injected.
+
+The address each compute should use arrives in its spec
+(`endpoint_storage_addr` + `endpoint_storage_token`, or the
+`yb_amp.endpoint_storage_addr`/`_token` GUC fallbacks).
 
 ## Authentication
 
-Every object route and every prefix-delete route requires a
-`Authorization: Bearer <JWT>` header. The token is an EdDSA (Ed25519) JWT
-verified against the `pemfile` public key (`lib.rs:21-38`,
-`VALIDATION_ALGO = EdDSA`). The decoded claims must match the route, else
-the request is rejected.
+Every object route and prefix-delete route requires
+`Authorization: Bearer <JWT>`. The token is an **EdDSA (Ed25519)** JWT verified
+against the `pemfile` public key (`lib.rs`, `VALIDATION_ALGO = EdDSA`), and the
+decoded claims must match the route.
 
 Two claim shapes (`claims.rs`):
 
-- `EndpointStorageClaims { branch_id, endpoint_id, exp }` —
-  used by `compute_ctl` for object GET/PUT/DELETE.
-- `DeletePrefixClaims { branch_id, endpoint_id: Option, exp }`
-  — used by the control plane for prefix deletes (branch / endpoint
-  scope, with the trailing endpoint level `None` for a whole-branch delete).
+- `EndpointStorageClaims { branch_id, endpoint_id, exp }` — used by `compute_ctl`
+  for object GET/PUT/DELETE.
+- `DeletePrefixClaims { branch_id, endpoint_id: Option, exp }` — used by the
+  control plane for prefix deletes (`endpoint_id: None` scopes the delete to the
+  whole branch).
 
-Authorization checks (`lib.rs:140-227`):
+Authorization checks (`lib.rs`):
 
-- For object routes, the claim's `(branch_id, endpoint_id, exp)`
-  must equal the route's. **Exception**: for `GET`, the `endpoint_id` is
-  taken from the *claim* rather than the path, so a read-only replica can
-  read another endpoint's data during readonly→readwrite prewarming
-  (`lib.rs:161-165`).
-- For prefix deletes, the claim's `(branch_id, endpoint_id, exp)`
-  must equal the route's, with the `Option` endpoint level matching exactly.
+- For object routes, the claim's `(branch_id, endpoint_id)` must equal the
+  route's. **Exception**: for `GET`, the `endpoint_id` is taken from the *claim*
+  rather than the path — so a token scoped to endpoint A can read (but not write)
+  objects under any endpoint of the same branch. This is what lets a read-only
+  replica prewarm its LFC from the read-write endpoint's saved state during
+  readonly→readwrite promotion (`/lfc/prewarm?from_endpoint=`).
+- For prefix deletes, the claim must equal the route exactly, including the
+  `Option` endpoint level.
 
-A failed claim/route match returns `401 Unauthorized` (`lib.rs:120-123`); a
-malformed token or missing header returns `400 Bad Request`.
-
-`/status` and `/metrics` are unauthenticated.
+A claim/route mismatch returns `401 Unauthorized`; a malformed token or missing
+header returns `400 Bad Request`. `/status` and `/metrics` are unauthenticated.
 
 ## Routes
 
-Defined in `app()` (`app.rs:12-27`):
+Defined in `app()` (`app.rs`):
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
@@ -95,50 +111,37 @@ Defined in `app()` (`app.rs:12-27`):
 
 Notes:
 
-- The `{*path}` segment is a wildcard capturing the rest of the URL as the
-  object key. It is sanitized by `normalize_key` (`lib.rs:40-49`): the key
-  is path-cleaned, leading `/` stripped, and any key resolving to `..`,
-  `.`, or `/` is rejected with `400` — preventing path traversal outside
-  the `{branch_id}/{endpoint_id}` prefix.
-- The object's storage path (the `RemotePath` handed to `YbStore`) is
-  `{branch_id}/{endpoint_id}/{normalized-key}`
-  (`lib.rs:102-115`). The prefix-delete path drops the absent trailing
-  endpoint level (`lib.rs:186-197`).
-- `/metrics` is implemented in code (`app.rs:28`, `:41-46`) but is **not**
-  listed in `openapi_spec.yml`; the spec documents `/status` and the
-  object/prefix routes only.
+- The `{*path}` wildcard captures the rest of the URL as the object key. It is
+  sanitized by `normalize_key` (`lib.rs`): the key is path-cleaned, a leading `/`
+  is stripped, and any key resolving to `..`, `.`, or `/` is rejected with `400` —
+  preventing traversal outside the `{branch_id}/{endpoint_id}` prefix.
+- The storage path (the `RemotePath` handed to `YbStore`) is
+  `{branch_id}/{endpoint_id}/{normalized-key}`; prefix deletes use
+  `{branch_id}[/{endpoint_id}]`.
+- `compute_ctl` stores LFC state under the key `lfc_state`, i.e. at
+  `/{branch_id}/{endpoint_id}/lfc_state`.
+- `/metrics` is implemented in code but is **not** listed in `openapi_spec.yml`;
+  the spec documents `/status` and the object/prefix routes only. (The spec also
+  documents auth failures as 403, while the implementation returns 401 — code
+  wins.)
 
 ## Handler behavior
 
-All four storage handlers (`app.rs:48-151`) wrap the underlying
-`RemoteStorage` call in `utils::backoff::retry` with `WARN_THRESHOLD = 3`
-and `MAX_RETRIES = 10` (`app.rs:38-39`), bailing on cancellation
-(graceful-shutdown token).
+All four storage handlers wrap the underlying `RemoteStorage` call in
+`utils::backoff::retry` with `WARN_THRESHOLD = 3` and `MAX_RETRIES = 10`, bailing
+early on the graceful-shutdown cancellation token.
 
-- **`GET` / `get`** (`app.rs:48-78`): `storage.download(...)`, streams the
-  body. A `DownloadError::NotFound` becomes `404 Not Found` (logged at info,
-  "not an issue of _this_ service"); other errors become `500`.
-- **`PUT` / `set`** (`app.rs:86-117`): rejects bodies larger than
-  `max_upload_file_limit` with `400`, then buffers the body in memory and
-  `storage.upload(...)`s it as a single stream. (remote_storage has no
-  multipart upload, so the body is read fully into memory with the size cap
-  as the guard — see the comment at `app.rs:80-85`.) Overwrites any existing
+- **`GET` / `get`**: `storage.download(...)` and stream the body.
+  `DownloadError::NotFound` becomes `404 Not Found` (logged at info — a missing
+  key is the caller's condition to handle, e.g. first-ever prewarm); other errors
+  become `500`.
+- **`PUT` / `set`**: rejects bodies larger than `max_upload_file_limit` with
+  `400`, then buffers the whole body in memory and `storage.upload(...)`s it as a
+  single stream. `remote_storage` has no multipart upload, and a streamed HTTP
+  body has no guaranteed length up front, so the tradeoff is an in-memory copy
+  with the size cap as the guard (comment in `app.rs`). Overwrites any existing
   object. Returns `200`.
-- **`DELETE` (object) / `delete`** (`app.rs:119-134`): `storage.delete(...)`.
-  Returns `200` (delete of a missing object is not an error).
-- **`DELETE` (prefix) / `delete_prefix`** (`app.rs:136-151`):
-  `storage.delete_prefix(...)`. Returns `200`.
-
-## yb-amp specifics
-
-- The only storage backend is `YbStore`; objects are rows in the
-  `public.blobs` YB table (`compute/libs/remote_storage/src/yb_store.rs`,
-  [`remote-storage.md`](remote-storage.md)). There is no S3/Azure/GCS/LocalFs
-  path.
-- One instance per endpoint, co-located with the endpoint, addressed via the
-  `yb_amp_local`-stamped per-endpoint listen address rather than a single
-  shared service.
-- In `yb_amp_local`, when `endpoint_storage.remote_storage_json` is unset,
-  the `yb_storage_conn` block is derived from `controller.yb` (the
-  same `[*.yb]` connection the pageserver/safekeeper use), with a `type:
-  "YbStore"` discriminator injected (`controller/local/cfg`).
+- **`DELETE` (object) / `delete`**: `storage.delete(...)`; returns `200` (deleting
+  a missing object is not an error).
+- **`DELETE` (prefix) / `delete_prefix`**: `storage.delete_prefix(...)`; returns
+  `200`.

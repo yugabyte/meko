@@ -129,7 +129,7 @@ per-branch is also per-instance today.
 ## Metrics
 
 Prometheus, from `pageserver/src/metrics.rs`. (Listed here rather than in
-[`yb-pageserver-metrics.md`](yb-pageserver-metrics.md) so the GC story is
+[`pageserver-metrics.md`](pageserver-metrics.md) so the GC story is
 one doc.)
 
 | Metric | Type | Labels | Meaning |

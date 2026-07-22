@@ -27,14 +27,10 @@ Read in this order:
    `blob_namespace` ENUM, the `rpc_max_message_size` chunking story.
 3. `compute/architecture/remote-storage.md` — `YbStore` design, `parse_key` /
    `reconstruct_key`, the round-trip-lossless path mapping.
-4. `compute/architecture/yb-pageserver.md` — the row-per-page YugabyteDB
-   storage design that REPLACES upstream Neon's layer-file path:
-   image-anchored reads, background image materialiser, what's gone vs
-   upstream, implementation phases. The upstream source is gone (lane H,
-   2026-06-01) and its standalone design doc with it; the inherited
-   concepts (Key encoding, walredo, getpage RPC, generation handshake)
-   trace back to upstream Neon's `pageserver/`. Sharding was removed
-   entirely — yb-amp is single-shard.
+4. `compute/architecture/pageserver.md` — the row-per-page YugabyteDB
+   storage design: image-anchored reads, the background image materialiser,
+   the getpage RPC, Key encoding, walredo, WAL ingest, the generation
+   handshake, and the implementation phases. yb-amp is single-shard.
 5. `compute/architecture/safekeeper.md` — `ControlFileStorage::Yb`,
    `YbWalStorage`, the `WalReader` fallback chain, the single-safekeeper
    constraint in YB-WAL mode.
@@ -76,10 +72,11 @@ Code anchors:
   (pageserver.toml / safekeeper.toml / compute config.json);
   `controller/local/cmd/yb_amp_local` — the CLI assembly.
 - `compute/pageserver/src/page_store.rs` — `PageStore` row store for the
-  fork's row-per-page YB layout (`pageserver.pages` +
-  `pageserver.timelines`).
-- `compute/pageserver/src/image_rule.rs` — 10-delta image rule that bounds
-  the read-chain length.
+  row-per-page YB layout (`pageserver.pages` +
+  `pageserver.timeline_state`).
+- `compute/pageserver/src/image_materializer.rs` — the background image
+  materialiser; `image_chain_limit` (default 20 deltas, or 4 KiB of
+  payload) bounds the read-chain length.
 
 ## Project conventions
 

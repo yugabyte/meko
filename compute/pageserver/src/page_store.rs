@@ -416,7 +416,7 @@ pub struct PageStore {
 }
 
 /// Opened thin-RPC (`yb_tsclient`) table handles. See
-/// [`PageStore::tsclient`] and `architecture/yb-pageserver.md`.
+/// [`PageStore::tsclient`] and `architecture/pageserver.md`.
 pub struct TsClientTables {
     pub client: Arc<yb_tsclient::TsClient>,
     pub pages: Arc<yb_tsclient::TableHandle>,

@@ -71,15 +71,15 @@ you must read the doc on the right and decide if it needs updating.
 | Code area (staged path matches) | Arch doc(s) to recheck |
 |---|---|
 | `compute/safekeeper/**`, `compute/libs/safekeeper_api/**`, `compute/libs/walproposer/**` | `compute/architecture/safekeeper.md`, `compute/architecture/safekeeper-lsns.md` |
-| `compute/pageserver/**` (excluding `compute/pageserver/pagebench/**`) | `compute/architecture/pageserver.md`, `compute/architecture/pageserver-lsns.md`, `compute/architecture/yb-pageserver.md` |
+| `compute/pageserver/**` (excluding `compute/pageserver/pagebench/**`) | `compute/architecture/pageserver.md`, `compute/architecture/pageserver-lsns.md`, `compute/architecture/pageserver-gc.md` |
 | `controller/internal/registry/**`, `controller/internal/core/**` (generation authority + registries) | `controller/architecture/sc-integration.md` |
 | `compute/endpoint_storage/**` | `compute/architecture/remote-storage.md` (YbStore backend) |
 | `compute/libs/remote_storage/**` | `compute/architecture/remote-storage.md` |
 | `compute/pgxn/**`, `compute/compute_tools/**`, `compute/image/**` | `compute/architecture/compute.md`, `compute/architecture/compute_ctl.md` |
 | Schema files: `controller/migrations/**/*.sql`, anything creating/altering tables in `yb_storage` | `compute/architecture/yugabyte.md` + the per-subsystem doc that owns the table |
 | Anything that changes a binary's CLI surface (clap `Args` structs in `*/src/bin/*.rs`) | The "Run / configure" block in the matching subsystem doc |
-| **HTTP router** (`compute/pageserver/src/http/routes.rs`, `compute/safekeeper/src/http/routes.rs`, `controller/internal/registry/handlers.go`, `compute/compute_tools/src/http/**`, `compute/endpoint_storage/src/app.rs`) — a route added/removed/renamed, a method/path/auth/body change | The matching `-apis.md` (`compute/architecture/yb-pageserver-apis.md` / `compute/architecture/safekeeper-apis.md` / `controller/architecture/sc-integration.md` / `compute/architecture/compute_ctl-apis.md` / `compute/architecture/endpoint-storage-apis.md`) |
-| **Metrics module** (`*/src/metrics.rs`, `compute/compute_tools/src/compute_metrics.rs`) — a metric added/removed/renamed, or a label/type change | The matching `-metrics.md` (`compute/architecture/yb-pageserver-metrics.md` / `compute/architecture/safekeeper-metrics.md` / `controller/architecture/sc-integration.md` / `compute/architecture/compute_ctl-metrics.md` / `compute/architecture/endpoint-storage-metrics.md`) |
+| **HTTP router** (`compute/pageserver/src/http/routes.rs`, `compute/safekeeper/src/http/routes.rs`, `controller/internal/registry/handlers.go`, `compute/compute_tools/src/http/**`, `compute/endpoint_storage/src/app.rs`) — a route added/removed/renamed, a method/path/auth/body change | The matching `-apis.md` (`compute/architecture/pageserver-apis.md` / `compute/architecture/safekeeper-apis.md` / `controller/architecture/sc-integration.md` / `compute/architecture/compute_ctl-apis.md` / `compute/architecture/endpoint-storage-apis.md`) |
+| **Metrics module** (`*/src/metrics.rs`, `compute/compute_tools/src/compute_metrics.rs`) — a metric added/removed/renamed, or a label/type change | The matching `-metrics.md` (`compute/architecture/pageserver-metrics.md` / `compute/architecture/safekeeper-metrics.md` / `controller/architecture/sc-integration.md` / `compute/architecture/compute_ctl-metrics.md` / `compute/architecture/endpoint-storage-metrics.md`) |
 | Top-level topology (new binary, new wire link, removed component) | `compute/architecture/high-level.md` + `compute/architecture/README.md` |
 
 The doc needs an update if the change invalidates **any** of these:

@@ -236,7 +236,7 @@ pub(crate) static MATERIALIZER_QUEUE_DEPTH: Lazy<UIntGauge> = Lazy::new(|| {
 
 /// Residual due span a budget-capped drain tick couldn't reach;
 /// 0 while keeping up. Growth = insert rate > drain rate. (Docs:
-/// yb-pageserver-metrics.md §GC.)
+/// pageserver-metrics.md §GC.)
 pub(crate) static GC_DRAIN_LAG_BYTES: Lazy<UIntGauge> = Lazy::new(|| {
     register_uint_gauge!(
         "pageserver_yb_gc_drain_lag_bytes",

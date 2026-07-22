@@ -2,6 +2,13 @@
 
 ## System overview
 
+Durability and resilience live in exactly one place: **YugabyteDB**.
+The pageserver and safekeeper are stateless gateways that persist
+everything they own as YB rows; the compute is stateless Postgres; the
+controller keeps its registries in YB too. Any daemon can be killed and
+restarted on another host without data loss — recovery is "reconnect to
+YB and read your state back".
+
 ```mermaid
 flowchart LR
     subgraph clients["Postgres clients"]
@@ -14,75 +21,83 @@ flowchart LR
     end
 
     subgraph sk["Safekeeper (stateless)"]
-        sks["interpreted-WAL sender"]
         skp["WAL ingress<br/>(walproposer push)"]
+        sks["interpreted-WAL sender"]
     end
 
     subgraph ps["Pageserver (stateless)"]
         cps["compute_page_store<br/>(reads + chain reconstruct)"]
-        fps["fpu_page_store<br/>(walreceiver + materialiser)"]
+        fps["fpu_page_store<br/>(walreceiver ingest)"]
         mat["image materialiser"]
     end
 
     subgraph sc["Controller (stateless)"]
-        sct["tenant placement<br/>generation fencing"]
+        sct["generation fencing<br/>node/branch/endpoint registries"]
     end
 
     subgraph yb["YugabyteDB cluster (stateful)"]
         direction LR
         tblPages[("pageserver.pages<br/>pageserver.slru_pages<br/>pageserver.meta")]
-        tblConf[("pageserver.tenant_config<br/>pageserver.timeline_state")]
-        tblWal[("safekeeper.wals<br/>safekeeper WAL rows")]
-        tblBlob[("blobs<br/>basebackup tar, initdb")]
-        tblSc[("registry schema")]
+        tblState[("pageserver.timeline_state<br/>safekeeper.timeline_state")]
+        tblWal[("safekeeper.wals")]
+        tblBlob[("public.blobs<br/>initdb archives, LFC scratch")]
+        tblSc[("registry + controller schemas")]
     end
 
     app -- "SQL: SELECT / INSERT / UPDATE" --> pg
     pg -- "GetPage @ LSN" --> cps
     wp -- "WAL stream<br/>(START_WAL_PUSH)" --> skp
-    skp -- "INSERT each WAL chunk" --> tblWal
+    skp -- "batched INSERTs<br/>(WAL chunks)" --> tblWal
     fps -- "START_REPLICATION<br/>(walreceiver)" --> sks
     sks -- "interpreted WAL" --> fps
-    cps -- "SELECT page rows" --> tblPages
-    fps -- "INSERT page rows<br/>(write path)" --> tblPages
+    cps -- "chain reads" --> tblPages
+    fps -- "page-row writes" --> tblPages
     mat -- "compact long chains<br/>(materialised images)" --> tblPages
-    cps -- "tenant_config R/W" --> tblConf
+    cps -- "gen-fenced flush" --> tblState
     sct -- "attach + generation" --> cps
     sct -- "state R/W" --> tblSc
-    cps -- "basebackup tar" --> tblBlob
+    cps -- "initdb tar" --> tblBlob
     pg -- "basebackup fetch" --> cps
 ```
 
-A ybAmp install is:
+A yb-amp install is:
 
-- **Compute nodes**: patched PostgreSQL, stateless, configured against a
-  pageserver endpoint and a safekeeper set. The `yb_amp` smgr extension
-  routes every `smgr_read` to a gRPC `GetPage` and every WAL flush to
-  the safekeepers.
+- **Compute nodes**: patched PostgreSQL, stateless, configured
+  against a pageserver endpoint and a safekeeper. The `yb_amp` smgr
+  extension routes every `smgr_read` to a pageserver GetPage request
+  and every WAL flush to the safekeeper via the walproposer.
 - **Pageserver (`yb-pageserver`)**: the row-store gateway. Two YSQL
-  connection pools per pageserver:
-  - `compute_page_store` (pool_size = 4 × `scale_factor`): serves
-    compute reads, runs LSN-chain reconstruction over
-    `pageserver.pages`.
-  - `fpu_page_store` (pool_size = 4 × `scale_factor`): walreceiver
-    WAL ingestion path + image materialiser writes. Image
-    materialisation runs as a background task that compacts long
-    delta chains into walredo-applied images so subsequent reads
-    don't re-walk the chain.
-- **Safekeeper**: stateless WAL ingress. Receives the WAL stream from
-  the compute, `INSERT`s each record into a YB row, returns ack the
-  moment the row is durable. No local disk, no quorum, no leader
-  election. Run one for low-load deployments, run several behind a
-  load balancer for connection-spread on heavy workloads — but every
-  instance is independent and interchangeable. HA comes from YB.
-- **Controller**: tenant/timeline placement & generation
-  management. Backs its own state in YB too — its schema lives
-  alongside the pageserver tables in the same YB database.
-- **YugabyteDB cluster**: holds `pageserver.pages`, `pageserver.slru_pages`,
-  `pageserver.meta`, `pageserver.tenant_config`,
-  `pageserver.timeline_state`, the safekeeper WAL rows
-  (`safekeeper.wals`), the registry schema, and the blob
-  table. This is the durable storage tier.
+  connection pools:
+  - `compute_page_store`: serves compute reads, running image-anchored
+    LSN-chain reconstruction over `pageserver.pages` /
+    `pageserver.slru_pages` / `pageserver.meta`.
+  - `fpu_page_store`: the walreceiver ingestion path + image
+    materialiser writes. Image materialisation runs as a background
+    task that compacts long delta chains into walredo-applied images so
+    subsequent reads don't re-walk the chain.
+  With `hot_path = "tsclient"` (the default) the page read/write hot
+  paths run over the direct-to-tserver RPC client instead of YSQL; the
+  YSQL pools carry the cold paths.
+- **Safekeeper (`yb-safekeeper`)**: stateless WAL ingress. Receives
+  the WAL stream from the compute, batches it into
+  `safekeeper.wals` rows, and ACKs a commit only once its bytes are
+  durable in YB. No local WAL, no quorum, no leader election —
+  **exactly one safekeeper per branch**. YB's own replication provides
+  the quorum durability, so stacking a second consensus protocol on
+  top of it would add latency and failure modes without adding safety;
+  configurations that try are rejected at boot and at runtime (see
+  [`safekeeper.md`](safekeeper.md) §5).
+- **Controller** (`controller`, Go): the control plane — generation
+  authority (attach-hook fencing), the node/branch/endpoint
+  registries, endpoint provisioning, and the product API. Its state
+  lives in the same YB database (`registry` + `controller` schemas),
+  and it applies all schema migrations on startup. Documented under
+  [`../../controller/architecture/`](../../controller/architecture/).
+- **Endpoint storage (`yb-endpoint-storage`)**: a small per-endpoint
+  HTTP service for endpoint-scoped scratch blobs (LFC prewarm state),
+  backed by `public.blobs`.
+- **YugabyteDB cluster**: the durable storage tier for everything
+  above.
 
 > **YB query contract**: every SQL statement issued through
 > `YsqlClient` must be idempotent. The client retries connection drops
@@ -97,13 +112,13 @@ A ybAmp install is:
 
 | Component | Role | Process binary |
 |---|---|---|
-| Compute | User-facing Postgres backend. Speaks Postgres wire protocol to clients. | `pg_install/v18/bin/postgres` (with Neon smgr patches) |
-| `compute_ctl` | Supervisor for the compute: applies config, starts/stops PG, runs catalog migrations. | `target/debug/yb-compute-ctl` |
-| Safekeeper | Raft acceptor for WAL. Receives WAL from compute, durably stores it, streams to pageserver. **Limited to one instance per cluster in YB WAL mode** — YB's own Raft already provides quorum durability. | `target/debug/yb-safekeeper` |
-| Pageserver | Materializes pages from WAL and serves them to compute on demand. Holds the only durable copy of relfiles (via `remote_storage`). | `target/debug/yb-pageserver` |
-| Controller | Tracks cluster topology: which branches are on which pageservers, which safekeepers hold which branches, generations, etc. | `target/debug/controller` |
-| Endpoint storage | Small auxiliary service for endpoint-scoped scratch data (LFC pre-warm hints, etc.). One instance **per endpoint**, co-located under `endpoints/<name>/endpoint_storage`. | `target/debug/yb-endpoint-storage` |
-| YugabyteDB | Durable storage backend for everything yb-amp-internal. Replaces S3/Azure/GCS *and* the controller's local Postgres. | external (`yugabyted`) |
+| Compute | User-facing Postgres backend. Speaks the Postgres wire protocol to clients. | `pg_install/v18/bin/postgres` (with smgr patches) |
+| `compute_ctl` | Supervisor for the compute: applies the spec, starts/stops PG, runs catalog migrations. | `target/debug/yb-compute-ctl` |
+| Safekeeper | WAL durability gateway: receives WAL from the compute, persists it to `safekeeper.wals`, streams interpreted WAL to the pageserver. **One instance per branch** — YB provides the replication. | `target/debug/yb-safekeeper` |
+| Pageserver | Materializes pages from WAL into `pageserver.*` rows and serves them to the compute on demand. | `target/debug/yb-pageserver` |
+| Controller | Control plane: generation fencing, node/branch/endpoint registries, endpoint provisioning, schema migrations. | `controller` (Go, `controller/cmd/controller`) |
+| Endpoint storage | Per-endpoint scratch-blob service (LFC prewarm state). One instance **per endpoint**. | `target/debug/yb-endpoint-storage` |
+| YugabyteDB | Durable storage backend for everything yb-amp-internal. | external (`yugabyted`) |
 
 ## Write path (one INSERT from a client)
 
@@ -114,18 +129,27 @@ client
 Compute (PG backend)
   |  WAL record buffer-flushed by walwriter / commit
   v
-walproposer  ────────────►  single Safekeeper
-                              |  write_wal()  →  INSERT into safekeeper.wals
-                              |                  (synchronous, one row per call)
-                              |  flush_wal()  → mark flush_lsn (YB is durable)
+walproposer  ────────────►  the branch's Safekeeper
+                              |  write_wal()  → chunks onto the consumer queue
+                              |  consumer     → batched INSERT into safekeeper.wals
+                              |                 (≤ 50 chunks / 4 MiB per batch,
+                              |                  one placement bucket per batch)
+                              |  durable watermark advances when the batch lands
                               v
-                            ACK to walproposer  (compute can return commit to client)
+                            ACK to walproposer  (compute returns commit to client)
 ```
 
-The compute's commit latency is bounded by the safekeeper's `flush_wal()`,
-which on yb-amp's YB-backed safekeeper is a YB INSERT round-trip (~ms over
-local YB; more on the network). This is the headline performance cost of
-moving WAL into YB.
+Commit latency is bounded by the YB write round-trip for the batch
+containing the commit record (~ms against local YB; more over a real
+network). That round-trip is the headline cost of YB-backed WAL — and
+the ingest loop never blocks on it: the producer keeps queueing the
+next batch while the previous one is in flight, and ACKs ride the
+durability watermark.
+
+In parallel, the pageserver's walreceiver streams interpreted WAL from
+the safekeeper (`START_REPLICATION`) and writes page rows into
+`pageserver.pages` / `slru_pages` / `meta`; its flushes advance
+`pageserver.timeline_state.consistent_lsn` under a generation fence.
 
 ## Read path (a page miss in the compute)
 
@@ -133,146 +157,132 @@ moving WAL into YB.
 client
   |  SELECT
   v
-Compute backend  --(cache miss)-->  shared_buffers  --(miss)-->  LFC  --(miss)-->
-                                                                          |
-                                                                  getpage RPC
-                                                                          v
-                                                                    Pageserver
-                                                                          |
-                          local layer file?  ────yes────►  reconstruct page from WAL records
-                                          \
-                                           no
-                                            \
-                                             v
-                                       fetch layer from YbStore
-                                         (yb_storage public.blobs, namespace='pageserver')
-                                             |
-                                       write to local layer cache
-                                             v
-                                       reconstruct page
-                                             v
-                                       return page bytes to compute
+Compute backend --(miss)--> shared_buffers --(miss)--> LFC --(miss)-->
+                                                                |
+                                                        GetPage@LSN request
+                                                                v
+                                                          Pageserver
+                                                                |
+                                                  image-anchored chain read on
+                                                  pageserver.pages (one anchor
+                                                  seek + range scan above it)
+                                                                |
+                                          one image row?  ──yes──►  return page bytes
+                                                  |
+                                                  no (image + deltas)
+                                                  v
+                                          walredo applies the delta chain
+                                                  v
+                                          return page bytes to compute
 ```
 
-If the pageserver has been restarted with an empty layer cache, the first read
-of each layer is a YB SELECT of multiple chunks; subsequent reads hit local
-disk. See [`yb-pageserver.md`](yb-pageserver.md) for details.
+There is no per-page local cache on the pageserver: every miss in the
+compute's own caches is answered from YB rows. The image materialiser
+keeps chains short so the common case is a single image row (no
+walredo). See [`pageserver.md`](pageserver.md).
 
 ## What's durable where
 
-(The `Path / key` column below describes the **logical** RemoteStorage
-key the pageserver/safekeeper use. In YB the path is split across the
-`namespace` / `branch_id` / `key` columns — see
-[`yugabyte.md`](yugabyte.md). The mapping is round-trip lossless.)
-
-| Subsystem state | yb-amp backend | Path / key |
+| State | Where | Key / shape |
 |---|---|---|
-| Pageserver layer files | YB `yb_storage.blobs` | `pageserver-yb/branches/<branch_id>/<layer>` (one BYTEA chunk per row, ≤ 100 MiB each); PK `((branch_id, key) HASH, namespace, chunk_idx)` |
-| Pageserver `index_part.json` | YB `yb_storage.blobs` | `pageserver-yb/branches/<branch_id>/index_part.json-<gen>` |
-| Pageserver `initdb.tar.zst` | YB `yb_storage.blobs` | `pageserver-yb/branches/<branch_id>/initdb.tar.zst` |
-| Pageserver branch manifest | YB `yb_storage.blobs` | `pageserver-yb/branches/<branch_id>/tenant-manifest-<gen>.json` |
-| Safekeeper control file | YB `safekeeper.timeline_state` schema | one row per branch, typed columns |
-| Safekeeper live WAL | YB `safekeeper.wals` | `((branch_id, bucket_id) HASH, segno, chunk_offset)` |
-| Controller relational state | YB `yb_storage` DB, `registry` schema | 8 Diesel-managed tables (alongside pageserver/safekeeper/public schemas) |
-| Compute endpoint registry | YB `yb_storage` DB, `registry.endpoints` | one row per endpoint: endpoint_id, branch_id + opaque `EndpointConf` JSON (`spec`). Replaces the old per-endpoint `endpoint.json` folder |
-| Pageserver local FS | local FS | `.yb_amp/endpoints/<endpoint>/pageserver/` — `pageserver.toml`, `identity.toml`, `metadata.json`, log + pidfile (no layer files; pages live in YB) |
-| Safekeeper local FS | local FS | `.yb_amp/endpoints/<endpoint>/safekeeper/` — only logs + pidfile (no WAL, no control file, no id) |
-| Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`), plus the branch's co-located `pageserver/` + `safekeeper/`; created on `endpoint create`, removed on destroy |
+| Relation pages | YB `pageserver.pages` | one row per (block, LSN); images + deltas |
+| SLRU blocks | YB `pageserver.slru_pages` | one row per (block, LSN) |
+| Metadata blobs (relsizes, dir listings, aux files, …) | YB `pageserver.meta` | latest row ≤ LSN wins |
+| Per-branch pageserver state (LSNs, generation, ancestry) | YB `pageserver.timeline_state` | one generation-fenced row per branch |
+| Safekeeper control file | YB `safekeeper.timeline_state` | one row per branch, typed columns |
+| Live WAL | YB `safekeeper.wals` | `((branch_id, bucket_id) HASH, segno, chunk_offset)` |
+| initdb archives | YB `public.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
+| Endpoint scratch (LFC prewarm) | YB `public.blobs` | written via endpoint_storage's HTTP API |
+| Controller registries | YB `registry` schema | branches, nodes, timelines, pending inits, endpoints |
+| Controller product model | YB `controller` schema | users, pools, projects, grants, branches, endpoints, tasks |
+| Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`); created on `endpoint create`, removed on destroy |
+| Pageserver / safekeeper local FS | local FS | `.yb_amp/endpoints/<endpoint>/{pageserver,safekeeper}/` — configs (`pageserver.toml`, `identity.toml`, `metadata.json`, `safekeeper.toml`), logs, pidfiles. No pages, no WAL, no control file. |
 
-## What did *not* change from upstream Neon
+Everything in the local-FS rows is reconstructible; everything that
+must survive a disk wipe is a YB row.
 
-These subsystems run unmodified upstream Neon code in yb-amp:
+## Topology in the dev cluster (`yb_amp_local`)
 
-- The Postgres compute itself (`pg_install/v18/bin/postgres` with Neon smgr
-  patches from `compute/vendor/postgres-v18`).
-- `compute_ctl` and the compute spec. (The endpoint *registry* — what
-  `yb_amp_local` persists per endpoint — moved out of `endpoint.json` folders
-  into the `registry.endpoints` table; `compute_ctl` itself is
-  unchanged.)
-- The pageserver's `RemoteStorage` *trait* — we added `YbStore` as the
-  primary backend (with `Unreliable` retained for tests); the upstream
-  S3, Azure, GCS, and LocalFs variants have been removed, and yb-pageserver
-  rejects non-YbStore configs.
-- The pageserver's getpage RPC, WAL receiver, layer-file format, compaction,
-  GC, and branch attach logic.
-- The safekeeper's Raft acceptor logic, WAL stream decoder, walproposer wire
-  protocol.
-- The controller's Rust code: nearly untouched when we pointed it
-  at YB. The only addition is a `--yb-config` flag that takes the shared
-  `YbConnConfig` block and builds the DB connection URL internally via
-  `YbConnConfig::to_database_url()`; everything else (diesel, migrations,
-  queries) runs unchanged against YB's Postgres-compatible YSQL frontend.
+The launcher is `yb_amp_local`
+([`controller/local/cmd/yb_amp_local`](../../controller/local/cmd/yb_amp_local)),
+a Go CLI that materializes a `.yb_amp/` repo (`init`) and drives the
+local environment (`start`, `branch`, `endpoint`, `pageserver`,
+`safekeeper`, `endpoint_storage`, `controller` subcommands). It targets
+an external YugabyteDB (`controller.yb` config block) — external YB is
+the only supported path — and `CREATE DATABASE`s `yb_storage` before
+starting the controller, which then applies every schema migration.
 
-## Topology in our current dev cluster
-
-Single host, single YB instance, one pageserver + one safekeeper **per
-branch**, co-located under the endpoint that owns the branch, plus one
-endpoint_storage **per endpoint**. The PS+SK pair is provisioned at
-`endpoint create` — `branch create` only records the
-branch's init recipe (branch id, branch name, pending init) in the storage
-controller's `pending_timeline_inits` table in YB; the PS+SK processes come
-up under `endpoints/<endpoint>/{pageserver,safekeeper}` when the first
-endpoint for that branch is created, which reads the recipe back and then
-deletes the pending row. The endpoint_storage instance comes up under
-`endpoints/<endpoint>/endpoint_storage` for **every** endpoint (siblings
-share the PS+SK pair but each gets its own endpoint_storage); the compute
-talks to its own instance.
+Topology: single host, single YB instance, one controller, one
+pageserver + one safekeeper **per branch**, co-located under the
+endpoint that owns the branch, plus one endpoint_storage **per
+endpoint**. The PS+SK pair is provisioned at `endpoint create` —
+`branch create` only records the branch's init recipe (branch id,
+branch name, pg version, optional ancestor + start LSN) in the
+controller's `registry.pending_timeline_inits` table; the pair comes up
+under `endpoints/<endpoint>/{pageserver,safekeeper}` when the first
+endpoint for that branch is created, which reads the recipe back and
+deletes the pending row. Sibling endpoints on the same branch share the
+PS+SK pair but each gets its own endpoint_storage.
 
 ```
-yugabyted                       :7100 (master), :5433 (ysql)
+yugabyted                        :7100 (master), :5433 (ysql), :9100 (tserver RPC)
   +-- db `yb_storage`
-        +-- schema `public`
-        |     +-- type `blob_namespace` ENUM ('pageserver', 'safekeeper')
-        |     +-- table `blobs`        chunked BYTEA + denormalized metadata,
-        |                              PK ((branch_id, key) HASH,
-        |                                  namespace, chunk_idx)
-        |                              key column holds the bare filename — the
-        |                              branches/ literal + the branch id value are
-        |                              not stored, they live in their own columns
-        +-- schema `controller`  Diesel-managed; 7 tables
-        +-- schema `pageserver`
-        +-- schema `safekeeper`          `timeline_state` (typed control-file rows)
-                                         + `wals` (per-write WAL chunks,
-                                         PK ((branch_id) HASH, segno, chunk_offset))
+        +-- schema `public`      blobs (chunked BYTEA) + blob_namespace ENUM
+        +-- schema `pageserver`  pages, slru_pages, meta, timeline_state
+        +-- schema `safekeeper`  timeline_state (control-file rows)
+        |                        + wals (WAL chunks, 10 tablets)
+        +-- schema `registry`    branches, nodes, timelines,
+        |                        pending_timeline_inits, endpoints
+        +-- schema `controller`  product model + task framework
 
-yb-amp binaries (target/debug/)
-  controller --yb-config "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage' }" --listen 127.0.0.1:<port>
-  yb-pageserver   (config from on-disk pageserver.toml; yb_amp_local defaults :64100 pg, :9988 http, :51151 grpc — base ports 64000/9898/51051 + i offset)
-  yb-safekeeper --id 1   (config from on-disk safekeeper.toml: yb_storage_conn; yb_amp_local defaults :5474 pg, :7686 http — base ports 5454/7676 + 20 offset)
-  yb-endpoint-storage   (config from endpoints/<name>/compute/endpoint_storage/endpoint_storage.json; one per endpoint, base port 9993 + 2*k)
-  yb-compute-ctl --pgdata .yb_amp/endpoints/main/pgdata --connstr postgresql://cloud_admin@127.0.0.1:55440/postgres
-    +-- postgres (18.2 + Neon/yb_amp patches)  :55440
+yb-amp processes
+  controller --dev --database-url postgresql://yugabyte@127.0.0.1:5433/yb_storage \
+             --listen 127.0.0.1:1234           (control_plane_api http://127.0.0.1:1234/upcall/v1/)
+  yb-pageserver      (endpoints/<ep>/pageserver/pageserver.toml;
+                      defaults :64000 pg, :9898 http, :51051 grpc — +2 per extra node)
+  yb-safekeeper      (endpoints/<ep>/safekeeper/safekeeper.toml;
+                      defaults :5454 pg, :7676 http — +2 per extra node)
+  yb-endpoint-storage (endpoints/<ep>/endpoint_storage/endpoint_storage.json;
+                      one per endpoint, ports 9993 + 2k)
+  yb-compute-ctl --pgdata .yb_amp/endpoints/main/pgdata ...
+    +-- postgres (+ yb_amp patches)      ports allocated from 55432 up
 ```
 
-A production deployment would have M pageservers partitioned by branch
-(one branch per pageserver — yb-amp has no sharding) and a YB cluster
-that's actually distributed. **The safekeeper count stays at 1**
-when `yb_storage_conn` is configured — YB already provides the quorum durability
-that a multi-safekeeper Raft would. Running two protocols (YB's Raft + the
-safekeeper's Paxos) on top of each other is rejected at boot and at
-runtime; see [`safekeeper.md`](safekeeper.md) §5.
+(`yb_amp_local init --port-base N` moves all the port lanes off their
+defaults for parallel environments.)
+
+A production deployment has M pageservers partitioned by branch (one
+branch per pageserver — the pageserver does not shard a branch; YB
+tablet-shards the keyspace underneath) and a YB cluster that is
+actually distributed. The safekeeper count per branch stays at 1 — YB
+provides the quorum durability that a safekeeper group would otherwise
+exist to provide, and running two consensus protocols stacked on each
+other is rejected at boot and at runtime (see
+[`safekeeper.md`](safekeeper.md) §5).
 
 ### PS/SK co-location is NOT an invariant
 
-The dev cluster above co-locates each branch's pageserver and safekeeper
-on one host, same build, provisioned together — but that is a dev-cluster
-convenience, **not** something the design or the wire protocol may assume. A
-pageserver and the safekeeper it streams WAL from can run on **different
-nodes** and at **different versions** (e.g. during a rolling upgrade). This
-is most visible with **read endpoints**: a read-only / hot-standby replica
-can be served by a *separate* pageserver — potentially on another node and a
-different build — that streams interpreted WAL from a safekeeper elsewhere.
-A given safekeeper may also fan its WAL out to more than one such
-pageserver. (The current `yb_amp_local` launcher happens to point a read
-endpoint at the primary's pair via `127.0.0.1`, but nothing downstream may
-rely on that.)
+The dev cluster co-locates each branch's pageserver and safekeeper on
+one host, same build, provisioned together — but that is a dev-cluster
+convenience, **not** something the design or the wire protocol may
+assume. A pageserver and the safekeeper it streams WAL from can run on
+**different nodes** and at **different versions** (e.g. during a
+rolling upgrade). This is most visible with **read endpoints**: a
+read-only / hot-standby replica can be served by a *separate*
+pageserver — potentially on another node and a different build — that
+streams interpreted WAL from a safekeeper elsewhere. A given safekeeper
+may also fan its WAL out to more than one such pageserver. (The current
+`yb_amp_local` launcher happens to point a read endpoint at the
+primary's pair via `127.0.0.1`, but nothing downstream may rely on
+that.)
 
 Consequence: the **SK→PS interpreted-WAL wire format must stay
-version-portable** — no encoding fast-path may assume the two ends are the
-same build or the same host. There is currently no version/capability
-handshake on that link beyond the `protocol=` format selector, so any
-leaner-but-version-sensitive framing (see #69) must be negotiated, with the
-portable protobuf encoding remaining the default/fallback.
+version-portable** — no encoding fast-path may assume the two ends are
+the same build or the same host. There is currently no
+version/capability handshake on that link beyond the `protocol=` format
+selector, so any leaner-but-version-sensitive framing (see #69) must be
+negotiated, with the portable protobuf encoding remaining the
+default/fallback.
 
 ### The hot path needs direct tserver RPC access
 
@@ -280,19 +290,16 @@ With `hot_path = "tsclient"` (the default), the safekeeper (WAL
 write/read on `safekeeper.wals`) and the pageserver (page read/write on
 `pages`/`slru_pages`/`meta`) speak YB's native pggate RPC **straight to
 the yb-tserver RPC port** (9100), not through the YSQL frontend (5433).
-The topology diagram above lists only `:7100`/`:5433` because that is
-what `yugabyted` advertises, but the tserver RPC port is just as
-load-bearing.
 
-**Deployment invariant** — every host running a safekeeper or pageserver
-must reach the RPC port of the tservers it targets: the endpoints in
-`tserver_rpc_addrs`, or the `host_ports` hosts on 9100 when that is
-unset. (Tablet routing is server-side, so the client needs only those
-configured endpoints, not every tserver.) A firewall / security group /
-network policy that opens only 5433 (YSQL) and 7100 (master) lets the
-control plane and cold paths keep working while breaking the hot path —
-it surfaces as `hot_path = "tsclient"` startup health-check failures
-(each daemon opens its table handles at boot) or terminal getpage/WAL
-errors. Keep 9100 (and any ports named in `tserver_rpc_addrs`) reachable
-from every SK/PS host. See [`yugabyte.md`](yugabyte.md)
-§"Direct-to-tserver hot path".
+**Deployment invariant** — every host running a safekeeper or
+pageserver must reach the RPC port of the tservers it targets: the
+endpoints in `tserver_rpc_addrs`, or the `host_ports` hosts on 9100
+when that is unset. (Tablet routing is server-side, so the client needs
+only those configured endpoints, not every tserver.) A firewall /
+security group / network policy that opens only 5433 (YSQL) and 7100
+(master) lets the control plane and cold paths keep working while
+breaking the hot path — it surfaces as `hot_path = "tsclient"` startup
+health-check failures (each daemon opens its table handles at boot) or
+terminal getpage/WAL errors. Keep 9100 (and any ports named in
+`tserver_rpc_addrs`) reachable from every SK/PS host. See
+[`yugabyte.md`](yugabyte.md) §"Direct-to-tserver hot path".

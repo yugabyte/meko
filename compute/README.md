@@ -11,14 +11,14 @@ extension, and their supporting Rust libraries. The control plane lives in
 |---|---|
 | [`pageserver/`](pageserver/) | `yb-pageserver` — serves pages from YugabyteDB; LSN-chain reconstruction + image materialiser |
 | [`safekeeper/`](safekeeper/) | `yb-safekeeper` — stateless WAL ingress backed by YugabyteDB |
-| [`compute_tools/`](compute_tools/) | `compute_ctl` — compute supervisor (config, start/stop, catalog migrations) |
-| [`endpoint_storage/`](endpoint_storage/) | per-endpoint scratch-data service (`yb-endpoint-storage`) |
-| [`pgxn/`](pgxn/) | Postgres extensions, including the `yb_amp` smgr extension |
-| [`libs/`](libs/) | shared Rust crates (`pageserver_api`, `safekeeper_api`, `remote_storage`, …) |
-| [`image/`](image/) | compute image build — patches and vm-image specs |
-| [`vendor/`](vendor/) | vendored patched PostgreSQL (submodule) |
+| [`tools/`](tools/) | operator diagnostic bins (`yb-dump-pages`, `yb-dump-wals`, `yb-reset-consistent-lsn`, below) |
+| [`compute_tools/`](compute_tools/) | `yb-compute-ctl` — compute supervisor (config, start/stop, catalog migrations) |
+| [`endpoint_storage/`](endpoint_storage/) | `yb-endpoint-storage` — per-endpoint scratch-blob service (LFC prewarm state) |
+| [`pgxn/`](pgxn/) | Postgres extensions, including the `yb_amp` smgr extension and its walredo/rmgr/test helpers |
+| [`libs/`](libs/) | shared Rust crates (`ysql_client`, `yb_tsclient`, `remote_storage`, `pageserver_api`, `safekeeper_api`, …) |
+| [`image/`](image/) | compute image build — Dockerfile, patches, vm-image specs |
+| [`vendor/`](vendor/) | vendored patched PostgreSQL (`postgres` submodule) |
 | [`architecture/`](architecture/) | design docs |
-| [`old_neon_docs/`](old_neon_docs/) | archived upstream Neon docs, kept for reference |
 
 ## Docs
 
@@ -33,31 +33,30 @@ Start here:
 Per-component deep dives:
 
 - [`architecture/compute.md`](architecture/compute.md) — the patched
-  Postgres compute (unchanged in yb-amp); how the `yb_amp` smgr
-  extension wires page reads and WAL writes through the gateway.
-- [`architecture/yb-pageserver.md`](architecture/yb-pageserver.md) —
+  Postgres compute; how the `yb_amp` smgr extension wires page reads
+  and WAL writes through the storage layer.
+- [`architecture/pageserver.md`](architecture/pageserver.md) —
   the row-store gateway design: schema, chain reconstruction,
   `UnifiedPages` buffer, image materialiser semantics, and write batching.
-- [`architecture/safekeeper.md`](architecture/safekeeper.md) — the WAL-in-YB
-  reduction in AMP is described inline in
-  [`architecture/yugabyte.md`](architecture/yugabyte.md) and in
-  the safekeeper module docs.
+- [`architecture/safekeeper.md`](architecture/safekeeper.md) — the
+  single-safekeeper WAL design: ingest, batching into
+  `safekeeper.wals`, the control file, and the durability ack model.
 - [`../controller/architecture/sc-integration.md`](../controller/architecture/sc-integration.md)
   — cluster control in the controller: generation authority (attach-hook), the
   node/branch/endpoint registries, and `yb_storage` provisioning.
 - [`architecture/remote-storage.md`](architecture/remote-storage.md)
-  — the `RemoteStorage` abstraction and the `YbStore` backend that
-  replaced S3/GCS/Azure (blob/basebackup tar/initdb layer).
+  — the `RemoteStorage` abstraction and its `YbStore` backend
+  (chunked blobs in `public.blobs`: initdb archives, endpoint scratch).
 - [`architecture/yugabyte.md`](architecture/yugabyte.md) — what the
-  YB cluster looks like from AMP's perspective: databases,
-  tables, prefixes, idempotency contract, and the DDL the operator
-  must provision.
+  YB cluster looks like from AMP's perspective: the `yb_storage`
+  database, every schema and table, connection paths, the idempotency
+  contract, and how provisioning runs.
 
 Per-service HTTP API + Prometheus metrics reference (one `-apis.md` and
 one `-metrics.md` per service): the compute-engine services (pageserver,
 safekeeper, compute_ctl, endpoint_storage) are indexed in
 [`architecture/README.md`](architecture/README.md) — e.g.
-[`architecture/yb-pageserver-apis.md`](architecture/yb-pageserver-apis.md),
+[`architecture/pageserver-apis.md`](architecture/pageserver-apis.md),
 [`architecture/safekeeper-metrics.md`](architecture/safekeeper-metrics.md);
 the controller's are under
 [`../controller/architecture/`](../controller/architecture/).
@@ -96,7 +95,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   max+1 — the signature of a chain walredo can't fold and of a base image
   too small for the deltas above it (see issue #22).
 - [`yb-dump-wals`](tools/src/bin/yb-dump-wals.rs) — dump `safekeeper.wals`
-  rows (the safekeeper's WAL-in-YB chunks). Required hash columns:
+  rows (the safekeeper's WAL chunks in YB). Required hash columns:
   `--tenant --timeline`. Range filters: `--segno` (or
   `--segno-from/--segno-to`), `--chunk-offset` (or its `-from/-to`
   variants), `--lsn-from`/`--lsn-to` (mapped to segno+offset via
@@ -158,3 +157,8 @@ incident.
 - [`../runbooks/perf-investigation.md`](../runbooks/perf-investigation.md) —
   broader performance investigation: memory growth, pageserver
   internals, WAL backlog, materialiser pacing.
+- [`../runbooks/process-dump.md`](../runbooks/process-dump.md) —
+  diagnosing async hangs with a tokio task dump: a daemon stops making
+  progress without crashing, spinning, or blocking on YB/network.
+- [`../runbooks/controller_runbook.md`](../runbooks/controller_runbook.md) —
+  control-plane (amp controller) incidents.

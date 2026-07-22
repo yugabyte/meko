@@ -1,58 +1,56 @@
 # `endpoint_storage` Prometheus metrics
 
-Source: `compute/endpoint_storage/src/app.rs:28,41-46` (the `/metrics` route and
-handler), `compute/endpoint_storage/src/main.rs:43-49` (`logging::init`),
-`compute/libs/utils/src/logging.rs:84-119` (the only metrics forced into the
-registry at startup), `compute/libs/remote_storage/src/metrics.rs` (confirms the
-backend registers none).
+Source: `compute/endpoint_storage/src/app.rs` (the `/metrics` route and handler),
+`compute/endpoint_storage/src/main.rs` (`logging::init`),
+`compute/libs/utils/src/logging.rs` (the only metrics present in the registry),
+`compute/libs/remote_storage/src/metrics.rs` (confirms the backend registers none).
 
 ## Summary: no service-specific metrics
 
-`endpoint_storage` defines **no custom metrics of its own**. It does not
-register any counters, gauges, or histograms for uploads, downloads,
-deletes, request latency, body sizes, or storage errors. The `YbStore`
-backend it writes to also registers no metrics: the S3-era bucket-request
-metrics were removed when YB became the sole backend, and
-`remote_storage::metrics` now contains only the `RequestKind` enum used to
-pick a concurrency semaphore — no metric types
-(`compute/libs/remote_storage/src/metrics.rs:1-14`).
+`endpoint_storage` defines **no custom metrics of its own**: no counters, gauges,
+or histograms for uploads, downloads, deletes, request latency, body sizes, or
+storage errors. The `YbStore` backend it writes through also registers no metrics —
+`remote_storage::metrics` contains only the `RequestKind` enum, which exists to
+select a read-vs-write concurrency semaphore, not to record anything. This is a
+deliberately thin service: reads and writes are single blob operations against
+YugabyteDB (which carries the durability and has its own observability), and the
+one caller that matters (`compute_ctl`) already counts prewarm/offload outcomes on
+its side (`compute_ctl_lfc_*`, see
+[`compute_ctl-metrics.md`](compute_ctl-metrics.md)).
 
 ## The `/metrics` endpoint
 
-`GET /metrics` (unauthenticated) returns the Prometheus text exposition of
-the process-global default registry:
+`GET /metrics` (unauthenticated) returns the Prometheus text exposition of the
+process-global default registry:
 
 ```rust
 prometheus::TextEncoder::new()
     .encode_to_string(&prometheus::gather())
 ```
 
-(`app.rs:41-46`). `prometheus::gather()` reads the default global registry,
-so whatever any linked crate registers there is exposed. In this binary that
-is limited to the logging counters set up by `utils::logging::init(...)`
-(`main.rs:45-49`).
+(`app.rs`). `prometheus::gather()` reads the default global registry, so whatever
+any linked crate registers there is exposed. In this binary that is limited to the
+logging counters installed by `utils::logging::init(...)` (`main.rs`).
 
 ## Metrics actually exposed
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `libmetrics_tracing_event_count` | counter (IntCounterVec) | `level` (`critical`, `error`, `warn`, `info`, `debug`, `trace`) | Count of emitted tracing/log events by level. Registered eagerly: `logging::init` references `TRACING_EVENT_COUNT_METRIC` to install the counting layer (`logging.rs:111-119,216-218`). |
-| `critical_storage_event_count` | counter (IntCounterVec) | `branch_id` | Count of "critical storage events" (`logging.rs:88-108`). Registered lazily on first use of the `critical!` path; absent from the exposition until then. |
+| `libmetrics_tracing_event_count` | counter (IntCounterVec) | `level` (`critical`, `error`, `warn`, `info`, `debug`, `trace`) | Count of emitted tracing/log events by level. Registered eagerly: `logging::init` forces `TRACING_EVENT_COUNT_METRIC` to install the counting layer, so this family is present from the first scrape. |
+| `critical_storage_event_count` | counter (IntCounterVec) | `branch_id` | Count of "critical storage events" (the `critical!` logging path in `utils::logging`). Registered lazily on first use; absent from the exposition until then. |
 
-There are **no** process/runtime collectors (no
-`process_cpu_seconds_total`, `process_resident_memory_bytes`, Go-style
-runtime metrics, etc.) — no process collector is registered anywhere in the
-dependency chain (`compute/libs/utils/src/` has no `ProcessCollector` /
-`process_collector` registration).
+There are **no** process/runtime collectors (no `process_cpu_seconds_total`,
+`process_resident_memory_bytes`, etc.) — nothing in the binary's dependency chain
+registers a process collector.
 
 ## Operational notes
 
-- `yb_amp_local` uses `GET /metrics` as the service liveness probe — a
-  `200` response means the service is up (the `endpoint_storage` start
-  path in `controller/local/launch`). It does not parse any
-  metric values.
-- Because the only reliably-present series is
-  `libmetrics_tracing_event_count`, `/metrics` is useful for log-volume /
-  error-rate alerting on this service, not for request- or storage-level
-  observability. There is currently no metric to alert on upload/download
-  failures directly.
+- `yb_amp_local` uses `GET /metrics` as the service readiness/liveness probe — a
+  `200` response means the service is up (`controller/local/launch/nodes.go`). It
+  does not parse any metric values; `GET /status` would serve equally well.
+- Because the only reliably-present series is `libmetrics_tracing_event_count`,
+  `/metrics` supports log-volume / error-rate alerting on this service, not
+  request- or storage-level observability. There is no metric that directly counts
+  upload/download failures — those surface as `error`-level log events (and as
+  `compute_ctl_lfc_prewarm_errors_total` / `compute_ctl_lfc_offload_errors_total`
+  on the calling compute), or in YugabyteDB's own metrics underneath.

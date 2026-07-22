@@ -1852,7 +1852,7 @@ impl PageWriter {
                             // or actively wrong (stale dc_lsn would
                             // shrink the safekeeper truncation
                             // horizon). See compute/architecture/
-                            // yb-pageserver.md "Generation fencing".
+                            // pageserver.md "Generation fencing".
                             crate::task_mgr::shutdown_for_stale_generation(
                                 self.branch_id,
                                 self.generation,

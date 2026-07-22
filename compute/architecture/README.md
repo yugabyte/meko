@@ -1,30 +1,30 @@
 # yb-amp architecture
 
-`yb-amp` is a fork of [Neon](https://github.com/neondatabase/neon) that pushes
-every Neon-internal durable byte into [YugabyteDB](https://github.com/yugabyte/yugabyte-db)
-instead of an external object store and a local filesystem. The Postgres
-compute layer is untouched; the storage layer underneath it is the one that
-changed.
+`yb-amp` is a PostgreSQL storage/compute engine that keeps every
+durable byte in [YugabyteDB](https://github.com/yugabyte/yugabyte-db).
+The compute is stateless PostgreSQL; the pageserver and safekeeper are
+stateless gateways that persist pages, WAL, and control state as YB
+rows — durability, replication, and fault tolerance come from YB's own
+storage layer.
 
-These docs describe what the system looks like end-to-end. Each subsystem has
-its own page with two sections: **inherited from Neon** (so a reader who knows
-upstream Neon can skim) and **changes in yb-amp**.
+These docs describe what the system looks like end-to-end. Each
+subsystem has its own page.
 
 ## Contents
 
 | File | Scope |
 |---|---|
 | [`high-level.md`](high-level.md) | Cluster topology, components, end-to-end data flows |
-| [`compute.md`](compute.md) | The user-facing Postgres + Neon smgr hooks |
+| [`compute.md`](compute.md) | The user-facing Postgres + smgr hooks |
 | [`compute_ctl.md`](compute_ctl.md) | The per-endpoint supervisor: spec, lifecycle, control API |
 | [`safekeeper.md`](safekeeper.md) | Single-SK WAL durability, control file, WAL storage |
 | [`safekeeper-lsns.md`](safekeeper-lsns.md) | SK-side LSN inventory + flows |
-| [`yb-pageserver.md`](yb-pageserver.md) | The pageserver: row-per-page store, materialiser, write path, and the upstream-inherited concepts |
+| [`pageserver.md`](pageserver.md) | The pageserver: row-per-page store, materialiser, and write path |
 | [`pageserver-lsns.md`](pageserver-lsns.md) | PS-side LSN inventory + flows |
-| [`yb-pageserver-gc.md`](yb-pageserver-gc.md) | PageServer garbage collection: candidate queue, drain, cutoff, config, metrics |
+| [`pageserver-gc.md`](pageserver-gc.md) | PageServer garbage collection: candidate queue, drain, cutoff, config, metrics |
 | [`remote-storage.md`](remote-storage.md) | The `RemoteStorage` abstraction + `YbStore` |
-| [`yugabyte.md`](yugabyte.md) | What lives in YB: databases, schemas, tables |
-| [`single-container-endpoint.md`](single-container-endpoint.md) | Packaging an endpoint as one pod (`deploy/`): the supervisor, SC-free bootstrap |
+| [`yugabyte.md`](yugabyte.md) | What lives in YB: schemas, tables, connection paths, the retry contract |
+| [`single-container-endpoint.md`](single-container-endpoint.md) | Packaging an endpoint as one pod (`deploy/`): the supervisor, bootstrap |
 
 > **Control plane docs live outside `compute/`.** These pages cover the
 > storage/compute engine only. The **amp controller** (the Go control plane,
@@ -39,7 +39,7 @@ upstream Neon can skim) and **changes in yb-amp**.
 
 | Service | HTTP API | Metrics |
 |---|---|---|
-| Pageserver | [`yb-pageserver-apis.md`](yb-pageserver-apis.md) | [`yb-pageserver-metrics.md`](yb-pageserver-metrics.md) |
+| Pageserver | [`pageserver-apis.md`](pageserver-apis.md) | [`pageserver-metrics.md`](pageserver-metrics.md) |
 | Safekeeper | [`safekeeper-apis.md`](safekeeper-apis.md) | [`safekeeper-metrics.md`](safekeeper-metrics.md) |
 | compute_ctl | [`compute_ctl-apis.md`](compute_ctl-apis.md) | [`compute_ctl-metrics.md`](compute_ctl-metrics.md) |
 | Endpoint storage | [`endpoint-storage-apis.md`](endpoint-storage-apis.md) | [`endpoint-storage-metrics.md`](endpoint-storage-metrics.md) |
@@ -48,31 +48,33 @@ upstream Neon can skim) and **changes in yb-amp**.
 
 ```
                      +---------------------------+
-                     |  Compute (Postgres 18.2)  |   user-facing PG;
-                     |     NEON_SMGR + LFC       |   unchanged in yb-amp
+                     |  Compute (Postgres)    |   user-facing PG;
+                     |     NEON_SMGR + LFC       |   stateless
                      +---------------------------+
                         |               |
-                   WAL  |               |  getpage RPC
+                   WAL  |               |  getpage
                   push  v               v
               +----------------+   +----------------+
               |   Safekeeper   |   |   Pageserver   |
-              |   (single)     |-->|  (per-branch)  |
+              | (1 per branch) |-->| (1 per branch) |
               +----------------+   +----------------+
                         \                 |
-                         \                |  YsqlClient
-                          \               |  (tokio_postgres)
+                         \                |  YsqlClient (cold paths)
+                          \               |  yb_tsclient (hot paths, :9100)
                            \              |
                             v             v
-              +-----------------------------------------+
-              |          YugabyteDB (db: yb_storage)    |
-              |   schema  registry (5 tables)  |
-              |   schema  pageserver (5 tables)         |
-              |   schema  safekeeper (timeline_state, wals) |
-              |   schema  public (blobs)                |
-              +-----------------------------------------+
+              +---------------------------------------------------+
+              |            YugabyteDB (db: yb_storage)            |
+              |   schema  public      (blobs + blob_namespace)    |
+              |   schema  pageserver  (pages, slru_pages, meta,   |
+              |                        timeline_state)            |
+              |   schema  safekeeper  (timeline_state, wals)      |
+              +---------------------------------------------------+
 ```
 
-What's on local FS in yb-amp: the pageserver's layer-file cache, the
-compute's `pgdata`, and operational files (logs, pidfiles). Everything
-that has to *survive a wipe of that disk* lives in YB. Authoritative
-schema is `controller/migrations/0002_compute_storage.up.sql`.
+What's on local FS: the compute's `pgdata` and operational files
+(configs, logs, pidfiles). Everything that has to *survive a wipe of
+that disk* lives in YB. The authoritative data-plane schema is
+[`controller/migrations/0002_compute_storage.up.sql`](../../controller/migrations/0002_compute_storage.up.sql)
+(registries in
+[`0003_registry.up.sql`](../../controller/migrations/0003_registry.up.sql)).

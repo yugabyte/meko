@@ -81,7 +81,7 @@ restarted or rescheduled pod fences its predecessor. Kubernetes restarts-in-plac
 node-failure reschedules happen **outside** the controller's deploy flow (kubelet drives
 them), so the pod pulling a fresh generation on every boot is exactly what keeps those
 safe: a lingering old instance holds a lower generation and its next generation-checked
-write aborts (see [yb-pageserver.md](../../compute/architecture/yb-pageserver.md)
+write aborts (see [pageserver.md](../../compute/architecture/pageserver.md)
 § "Generation fencing").
 
 Rejected alternative (closed #206 / #207 / #212 / #213): have amp mint the generation once
