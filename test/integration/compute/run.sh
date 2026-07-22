@@ -190,7 +190,7 @@ fi
 EXT_SO=$REPO/pg_install/v18/lib/postgresql/yb_amp.so
 EXT_STAMP=$REPO/build/.yb_amp_ext.stamp
 if [[ ! -f $EXT_SO ]] || [[ ! -f $EXT_STAMP ]] \
-    || [[ -n "$(find "$REPO/pgxn" -type f \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) -newer "$EXT_STAMP" -print -quit)" ]]; then
+    || [[ -n "$(find "$REPO/compute/pgxn" -type f \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) -newer "$EXT_STAMP" -print -quit)" ]]; then
     echo "run.sh: yb_amp extension is stale (C sources changed or not yet built) — clean-rebuilding" >&2
     rm -rf "$REPO/build/pgxn-v18"
     # `env -u PROFILE`: our `$PROFILE` (debug|release build type) collides with

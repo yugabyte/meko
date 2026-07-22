@@ -449,8 +449,7 @@ func pageserverConnInfo(conf *config.PageServerConf, grpc, useTLS bool) (cfg.Pag
 		sslmode = ""
 	}
 	libpq := fmt.Sprintf("postgres://no_user@%s:%d%s", host, port, sslmode)
-	id := conf.ID
-	item := cfg.PageserverConnectionItem{ID: &id, LibpqURL: &libpq}
+	item := cfg.PageserverConnectionItem{LibpqURL: &libpq}
 	if conf.ListenGRPCAddr != nil {
 		gh, err := hostOf(*conf.ListenGRPCAddr)
 		if err != nil {
@@ -686,7 +685,7 @@ func deprovisionColocatedStorage(env *config.LocalEnv, endpointID string) error 
 		ps := &env.Pageservers[i]
 		if strings.HasPrefix(ps.DataDir, endpointPath) {
 			if err := proc.StopProcess("pageserver", ps.DataDir, proc.StopImmediate); err != nil {
-				fmt.Fprintf(os.Stderr, "pageserver %d stop failed: %v\n", ps.ID, err)
+				fmt.Fprintf(os.Stderr, "pageserver at %s stop failed: %v\n", ps.DataDir, err)
 			}
 		}
 	}
@@ -695,7 +694,7 @@ func deprovisionColocatedStorage(env *config.LocalEnv, endpointID string) error 
 	for _, sk := range env.Safekeepers {
 		if sk.EndpointID == endpointID {
 			if err := proc.StopProcess("safekeeper", env.SafekeeperDataDir(sk.EndpointID), proc.StopImmediate); err != nil {
-				fmt.Fprintf(os.Stderr, "safekeeper %d stop failed: %v\n", sk.ID, err)
+				fmt.Fprintf(os.Stderr, "safekeeper for endpoint %s stop failed: %v\n", sk.EndpointID, err)
 			}
 			continue
 		}

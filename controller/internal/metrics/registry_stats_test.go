@@ -12,23 +12,20 @@ import (
 )
 
 type fakeStatsSource struct {
-	branches, nodes int64
-	err             error
+	branches int64
+	err      error
 }
 
-func (f fakeStatsSource) RegistryCounts(context.Context) (int64, int64, error) {
-	return f.branches, f.nodes, f.err
+func (f fakeStatsSource) RegistryCounts(context.Context) (int64, error) {
+	return f.branches, f.err
 }
 
 func TestRegistryCollector_EmitsGauges(t *testing.T) {
-	c := newRegistryCollector(fakeStatsSource{branches: 3, nodes: 2}, discardLogger())
+	c := newRegistryCollector(fakeStatsSource{branches: 3}, discardLogger())
 	want := `
 # HELP amp_controller_registry_branches Branches currently recorded in the registry.
 # TYPE amp_controller_registry_branches gauge
 amp_controller_registry_branches 3
-# HELP amp_controller_registry_nodes Pageserver nodes currently registered.
-# TYPE amp_controller_registry_nodes gauge
-amp_controller_registry_nodes 2
 `
 	if err := testutil.CollectAndCompare(c, strings.NewReader(want)); err != nil {
 		t.Fatalf("unexpected metrics: %v", err)

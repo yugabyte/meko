@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::serde_as;
 pub use utilization::PageserverUtilization;
 
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::{completion, serde_system_time};
 
@@ -939,30 +939,13 @@ pub struct LocationConfigListResponse {
 }
 
 #[derive(Serialize)]
-pub struct StatusResponse {
-    pub id: NodeId,
-}
+pub struct StatusResponse {}
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct BranchLocationConfigRequest {
     #[serde(flatten)]
     pub config: LocationConfig, // as we have a flattened field, we should reject all unknown fields in it
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct BranchLocation {
-    pub branch_id: BranchId,
-    pub node_id: NodeId,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct BranchLocationConfigResponse {
-    pub shards: Vec<BranchLocation>,
-    // Vestigial: yb-amp is single-shard, so this is always None.
-    pub stripe_size: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

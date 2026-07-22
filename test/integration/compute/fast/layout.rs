@@ -9,7 +9,6 @@
 use std::path::Path;
 
 use anyhow::bail;
-use regex::Regex;
 
 use crate::cluster::{Cluster, step};
 
@@ -23,16 +22,6 @@ fn must_exist(p: &Path, what: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Parse `id = <n>` out of an identity.toml.
-fn identity_id(path: &Path) -> anyhow::Result<String> {
-    let text = std::fs::read_to_string(path)?;
-    let re = Regex::new(r"id\s*=\s*([0-9]+)").expect("static regex");
-    re.captures(&text)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().to_string())
-        .ok_or_else(|| anyhow::anyhow!("no id in {}", path.display()))
-}
-
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // Layout-test endpoint sits in the compute lane, above `main`.
     let layout_pg_port = c.compute_port() + 128;
@@ -43,10 +32,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         &r.join("endpoints/main/pageserver/pageserver.toml"),
         "endpoints/main/pageserver/pageserver.toml",
     )?;
-    must_exist(
-        &r.join("endpoints/main/pageserver/identity.toml"),
-        "endpoints/main/pageserver/identity.toml",
-    )?;
+    // The pageserver has no node id, so no identity.toml is written.
+    if r.join("endpoints/main/pageserver/identity.toml").exists() {
+        bail!("endpoints/main/pageserver/identity.toml should not exist (no node id)");
+    }
     must_exist(
         &r.join("endpoints/main/pageserver/pageserver.pid"),
         "endpoints/main/pageserver/pageserver.pid",
@@ -104,12 +93,6 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // pgdata is only laid down on `endpoint start`, not at create time.
     if ep_dir.join("pgdata").exists() {
         bail!("pgdata should not exist before endpoint start");
-    }
-    // The branch's pageserver got a distinct id from main's.
-    let main_id = identity_id(&r.join("endpoints/main/pageserver/identity.toml"))?;
-    let br_id = identity_id(&ep_dir.join("pageserver/identity.toml"))?;
-    if main_id == br_id {
-        bail!("branch pageserver id {br_id} collides with main's");
     }
 
     step("endpoint stop --destroy tears the pair down (deprovision)");

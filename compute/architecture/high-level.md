@@ -193,10 +193,10 @@ walredo). See [`pageserver.md`](pageserver.md).
 | Live WAL | YB `safekeeper.wals` | `((branch_id, bucket_id) HASH, segno, chunk_offset)` |
 | initdb archives | YB `public.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
 | Endpoint scratch (LFC prewarm) | YB `public.blobs` | written via endpoint_storage's HTTP API |
-| Controller registries | YB `registry` schema | branches, nodes, timelines, pending inits, endpoints |
+| Controller registries | YB `registry` schema | branches, timelines, pending inits, endpoints |
 | Controller product model | YB `controller` schema | users, pools, projects, grants, branches, endpoints, tasks |
 | Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`); created on `endpoint create`, removed on destroy |
-| Pageserver / safekeeper local FS | local FS | `.yb_amp/endpoints/<endpoint>/{pageserver,safekeeper}/` — configs (`pageserver.toml`, `identity.toml`, `metadata.json`, `safekeeper.toml`), logs, pidfiles. No pages, no WAL, no control file. |
+| Pageserver / safekeeper local FS | local FS | `.yb_amp/endpoints/<endpoint>/{pageserver,safekeeper}/` — configs (`pageserver.toml`, `metadata.json`, `safekeeper.toml`), logs, pidfiles. No pages, no WAL, no control file. |
 
 Everything in the local-FS rows is reconstructible; everything that
 must survive a disk wipe is a YB row.

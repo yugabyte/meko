@@ -169,7 +169,7 @@ A few invariants worth calling out:
   the step still succeeds.
 - **Direction (planned).** `create_endpoint` is the landing site for the SC
   integration: it will additionally mint the pageserver `generation` (attach-hook)
-  and register the node itself — moving that work out of the pod — and evolve
+  — moving that work out of the pod — and evolve
   toward a create-then-configure model (create an unassigned pod, then push a
   `configure` binding it to a branch). See
   [`sc-integration.md`](sc-integration.md).

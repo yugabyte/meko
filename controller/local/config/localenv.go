@@ -262,16 +262,12 @@ type pageserverConfigTomlSubset struct {
 	BranchID        *BranchID `toml:"branch_id"`
 }
 
-type identityTomlSubset struct {
-	ID NodeID `toml:"id"`
-}
-
 // DiscoverPageservers scans endpoints/*/pageserver/ for provisioned
 // pageservers, reconstructing each PageServerConf from its pageserver.toml
-// (listen addrs, auth, branch id) and identity.toml (node id). The DataDir
-// is the discovered endpoints/<name>/pageserver path. Endpoint dirs
-// without a pageserver/ subdir are skipped. Mirrors Rust
-// `discover_pageservers`.
+// (listen addrs, auth, branch id). The DataDir is the discovered
+// endpoints/<name>/pageserver path (which is how a pageserver is
+// addressed). Endpoint dirs without a pageserver/ subdir are skipped.
+// Mirrors Rust `discover_pageservers`.
 func DiscoverPageservers(endpointsPath string) ([]PageServerConf, error) {
 	var pageservers []PageServerConf
 	entries, err := os.ReadDir(endpointsPath)
@@ -299,17 +295,7 @@ func DiscoverPageservers(endpointsPath string) ([]PageServerConf, error) {
 		if err := toml.Unmarshal(configBytes, &configToml); err != nil {
 			return nil, fmt.Errorf("parse pageserver.toml %q: %w", configTomlPath, err)
 		}
-		identityTomlPath := filepath.Join(dataDir, "identity.toml")
-		identityBytes, err := os.ReadFile(identityTomlPath)
-		if err != nil {
-			return nil, fmt.Errorf("read %q: %w", identityTomlPath, err)
-		}
-		var identityToml identityTomlSubset
-		if err := toml.Unmarshal(identityBytes, &identityToml); err != nil {
-			return nil, fmt.Errorf("parse identity.toml %q: %w", identityTomlPath, err)
-		}
 		pageservers = append(pageservers, PageServerConf{
-			ID:              identityToml.ID,
 			ListenPgAddr:    configToml.ListenPgAddr,
 			ListenHTTPAddr:  configToml.ListenHTTPAddr,
 			ListenHTTPSAddr: configToml.ListenHTTPSAddr,
@@ -337,11 +323,12 @@ func (e *LocalEnv) PageserverConfForBranch(branchID BranchID) *PageServerConf {
 	return nil
 }
 
-// GetPageserverConf returns the pageserver with the given id, mirroring
-// Rust `get_pageserver_conf`.
-func (e *LocalEnv) GetPageserverConf(id NodeID) (*PageServerConf, error) {
+// PageserverConfForEndpoint returns the pageserver co-located under
+// endpointID (one pageserver process per endpoint, keyed by its datadir).
+func (e *LocalEnv) PageserverConfForEndpoint(endpointID string) (*PageServerConf, error) {
+	want := e.PageserverDataDir(endpointID)
 	for i := range e.Pageservers {
-		if e.Pageservers[i].ID == id {
+		if e.Pageservers[i].DataDir == want {
 			return &e.Pageservers[i], nil
 		}
 	}
@@ -350,7 +337,7 @@ func (e *LocalEnv) GetPageserverConf(id NodeID) (*PageServerConf, error) {
 		if i > 0 {
 			have.WriteByte(',')
 		}
-		fmt.Fprintf(&have, "%d:%s", ps.ID, ps.ListenHTTPAddr)
+		have.WriteString(ps.DataDir)
 	}
-	return nil, fmt.Errorf("could not find pageserver %d, have ids %s", id, have.String())
+	return nil, fmt.Errorf("could not find pageserver for endpoint %q, have %s", endpointID, have.String())
 }

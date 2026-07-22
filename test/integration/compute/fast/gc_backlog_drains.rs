@@ -19,7 +19,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Dedicated branch + endpoint");
     let b = c.branch_create_named("gc_backlog", "main")?;
-    let ps_id = c.endpoint_create_on_branch("ep_gc_backlog", "gc_backlog", branch_pg_port)?;
+    c.endpoint_create_on_branch("ep_gc_backlog", "gc_backlog", branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
     let pages = format!("SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b}'");
     let queue = format!("SELECT count(*) FROM pageserver.pending_gc WHERE branch_id = '{b}'");
@@ -66,7 +66,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     )
     .await;
     let _ = c.yb(&["branch", "drop", "--branch-id", &b]);
-    c.yb_quiet(&["pageserver", "stop", "--id", &ps_id.to_string(), "-m", "immediate"]);
+    c.yb_quiet(&["pageserver", "stop", "ep_gc_backlog", "-m", "immediate"]);
     if got_sum? != want_sum {
         bail!("checksum changed after backlog drain (a needed version was trimmed)");
     }

@@ -83,4 +83,4 @@ can read, but the name is deterministic.
 - Exposure is **HTTP** on the Service port (no MagicDNS TLS today); reachability
   is gated entirely by the tailnet ACL for `tag:k8s-meko`.
 - One proxy device per exposed Service; endpoints follow the one-endpoint-per-
-  branch rule (`NODE_ID` is derived from the branch id).
+  branch rule.

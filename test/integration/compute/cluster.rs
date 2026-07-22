@@ -543,17 +543,15 @@ impl Cluster {
         Ok(branch)
     }
 
-    /// Create + start an endpoint on `branch_name` at `pg_port`, and
-    /// return the pageserver node id provisioned for it (parsed from the
-    /// "Provisioning pageserver N" line). The GC kill scenario needs the
-    /// id so it can SIGKILL and restart that specific branch pageserver
-    /// rather than `main`'s.
+    /// Create + start an endpoint on `branch_name` at `pg_port`. Scenarios
+    /// that need to stop/restart this branch's pageserver or safekeeper
+    /// (rather than `main`'s) address it by `ep_name`.
     pub fn endpoint_create_on_branch(
         &self,
         ep_name: &str,
         branch_name: &str,
         pg_port: u16,
-    ) -> anyhow::Result<u16> {
+    ) -> anyhow::Result<()> {
         let out = self
             .yb_command()
             .args([
@@ -577,18 +575,8 @@ impl Cluster {
         if !out.status.success() {
             bail!("endpoint create {ep_name} failed:\n{text}");
         }
-        let ps_id = text
-            .lines()
-            .find(|l| l.contains("Provisioning pageserver"))
-            .and_then(|l| {
-                l.split_whitespace()
-                    .skip_while(|t| *t != "pageserver")
-                    .nth(1)
-                    .and_then(|t| t.parse::<u16>().ok())
-            })
-            .ok_or_else(|| anyhow::anyhow!("no 'Provisioning pageserver N' line:\n{text}"))?;
         self.yb(&["endpoint", "start", ep_name])?;
-        Ok(ps_id)
+        Ok(())
     }
 
     /// The HTTP (management/metrics) port of the pageserver a branch

@@ -8,29 +8,30 @@ import (
 	"github.com/yugabyte/amp/controller/local/config"
 )
 
-// PageserverStart starts the pageserver with the given id (register+attach,
-// then spawn). Mirrors the `PageserverCmd::Start` arm of Rust
-// `handle_pageserver`.
-func PageserverStart(ctx context.Context, env *config.LocalEnv, id config.NodeID, timeout time.Duration) error {
-	conf, err := env.GetPageserverConf(id)
+// PageserverStart starts the pageserver serving the given endpoint
+// (register+attach, then spawn). Mirrors the `PageserverCmd::Start` arm of
+// Rust `handle_pageserver`.
+func PageserverStart(ctx context.Context, env *config.LocalEnv, endpointID string, timeout time.Duration) error {
+	conf, err := env.PageserverConfForEndpoint(endpointID)
 	if err != nil {
 		return err
 	}
 	return startPageserver(ctx, env, conf, timeout)
 }
 
-// PageserverStop stops the pageserver with the given id.
-func PageserverStop(env *config.LocalEnv, id config.NodeID, immediate bool) error {
-	conf, err := env.GetPageserverConf(id)
+// PageserverStop stops the pageserver serving the given endpoint.
+func PageserverStop(env *config.LocalEnv, endpointID string, immediate bool) error {
+	conf, err := env.PageserverConfForEndpoint(endpointID)
 	if err != nil {
 		return err
 	}
 	return stopPageserver(conf, immediate)
 }
 
-// PageserverRestart stops then starts the pageserver with the given id.
-func PageserverRestart(ctx context.Context, env *config.LocalEnv, id config.NodeID, timeout time.Duration) error {
-	conf, err := env.GetPageserverConf(id)
+// PageserverRestart stops then starts the pageserver serving the given
+// endpoint.
+func PageserverRestart(ctx context.Context, env *config.LocalEnv, endpointID string, timeout time.Duration) error {
+	conf, err := env.PageserverConfForEndpoint(endpointID)
 	if err != nil {
 		return err
 	}
@@ -40,38 +41,40 @@ func PageserverRestart(ctx context.Context, env *config.LocalEnv, id config.Node
 	return startPageserver(ctx, env, conf, timeout)
 }
 
-// SafekeeperStart starts the safekeeper with the given id (write toml, spawn).
-// Mirrors the `SafekeeperCmd::Start` arm of Rust `handle_safekeeper`.
-func SafekeeperStart(env *config.LocalEnv, id config.NodeID, timeout time.Duration) error {
+// SafekeeperStart starts the safekeeper serving the given endpoint (write
+// toml, spawn). Mirrors the `SafekeeperCmd::Start` arm of Rust
+// `handle_safekeeper`.
+func SafekeeperStart(env *config.LocalEnv, endpointID string, timeout time.Duration) error {
 	for i := range env.Safekeepers {
-		if env.Safekeepers[i].ID == id {
+		if env.Safekeepers[i].EndpointID == endpointID {
 			return startSafekeeper(env, &env.Safekeepers[i], timeout)
 		}
 	}
-	return fmt.Errorf("could not find safekeeper %d", id)
+	return fmt.Errorf("could not find safekeeper for endpoint %q", endpointID)
 }
 
-// SafekeeperStop stops the safekeeper with the given id.
-func SafekeeperStop(env *config.LocalEnv, id config.NodeID, immediate bool) error {
+// SafekeeperStop stops the safekeeper serving the given endpoint.
+func SafekeeperStop(env *config.LocalEnv, endpointID string, immediate bool) error {
 	for i := range env.Safekeepers {
-		if env.Safekeepers[i].ID == id {
+		if env.Safekeepers[i].EndpointID == endpointID {
 			return stopSafekeeper(env, &env.Safekeepers[i], immediate)
 		}
 	}
-	return fmt.Errorf("could not find safekeeper %d", id)
+	return fmt.Errorf("could not find safekeeper for endpoint %q", endpointID)
 }
 
-// SafekeeperRestart stops then starts the safekeeper with the given id.
-func SafekeeperRestart(env *config.LocalEnv, id config.NodeID, immediate bool, timeout time.Duration) error {
+// SafekeeperRestart stops then starts the safekeeper serving the given
+// endpoint.
+func SafekeeperRestart(env *config.LocalEnv, endpointID string, immediate bool, timeout time.Duration) error {
 	for i := range env.Safekeepers {
-		if env.Safekeepers[i].ID == id {
+		if env.Safekeepers[i].EndpointID == endpointID {
 			if err := stopSafekeeper(env, &env.Safekeepers[i], immediate); err != nil {
 				return err
 			}
 			return startSafekeeper(env, &env.Safekeepers[i], timeout)
 		}
 	}
-	return fmt.Errorf("could not find safekeeper %d", id)
+	return fmt.Errorf("could not find safekeeper for endpoint %q", endpointID)
 }
 
 // EndpointStorageStart starts every provisioned endpoint_storage instance.

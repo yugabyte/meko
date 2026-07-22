@@ -46,12 +46,12 @@ for durability).
 ## Why the controller is not in the pod
 
 The controller is a **shared, cluster-level control plane**: it owns
-the pageserver node registry, generation/attach fencing, and the
-endpoint registry in YugabyteDB's `registry` schema. One controller per
-endpoint pod would mean N uncoordinated controllers racing on that
-shared state, so the controller runs once, in the AMP layer (the
-`yb-amp-controller` chart). The pod itself talks only to YugabyteDB —
-plus, optionally, to that external controller (below).
+generation/attach fencing and the endpoint registry in YugabyteDB's
+`registry` schema. One controller per endpoint pod would mean N
+uncoordinated controllers racing on that shared state, so the controller
+runs once, in the AMP layer (the `yb-amp-controller` chart). The pod
+itself talks only to YugabyteDB — plus, optionally, to that external
+controller (below).
 
 Two consequences follow.
 
@@ -105,39 +105,24 @@ The supervisor materializes the branch itself:
   applied by `compute_ctl` itself); the controller's Docker deployer
   waits for that log line as the readiness signal.
 
-## GENERATION and NODE_ID
+## GENERATION
 
 Two coordination modes, selected by whether `CONTROLLER_URL` is set:
 
 - **Controller-free (default).** `GENERATION` comes from the
   environment, default `1`, and stays pinned. Safe because each
   endpoint pod is the sole attacher of its branch — there is no
-  concurrent pageserver to fence. `NODE_ID` defaults to `1` when no
-  branch id is supplied.
+  concurrent pageserver to fence.
 - **Controller-coordinated (`CONTROLLER_URL` set).** Before writing the
-  pageserver config, the supervisor registers the pod's pageserver as a
-  node (`POST /control/v1/node`) and calls the attach-hook
-  (`POST /debug/v1/attach-hook`) — the controller is the generation
-  authority, and the returned generation is what gets baked into
-  `pageserver.toml`. After the safekeeper timeline exists, the branch
-  is also registered with the controller (best-effort bookkeeping:
-  start LSN + name; a failure logs a warning rather than crashing the
-  pod). The controller heartbeats the nodes it knows, so it must be
-  able to reach the pod: `CONTROLLER_REACHABLE_HOST` plus the
-  `PAGESERVER_*_PUB_PORT` values are the address it uses, and the
-  pageserver/safekeeper bind `0.0.0.0` in this mode so published ports
-  route in. The controller does not track safekeepers; it reaches the
-  pod's SK for fork-point reads at the fixed HTTP port.
-
-`NODE_ID` (when not set explicitly) is derived from the branch id: a
-31-bit hash of its first 8 hex digits. Rationale: every endpoint pod
-runs its own pageserver + safekeeper, and when many pods register with
-one shared controller a fixed id collides — the controller rejects
-re-registering node 1 at a new address with 409, so every endpoint
-after the first would crash-loop. Deriving the id from the branch id
-(one endpoint per branch) makes it stable across pod restarts and
-distinct per branch with overwhelming probability. An explicit
-`NODE_ID` env (e.g. from an allocator) overrides.
+  pageserver config, the supervisor calls the attach-hook
+  (`POST /debug/v1/attach-hook` with `{"attach": true}`) — the
+  controller is the generation authority, and the returned generation is
+  what gets baked into `pageserver.toml`. After the safekeeper timeline
+  exists, the branch is also registered with the controller (best-effort
+  bookkeeping: start LSN + name; a failure logs a warning rather than
+  crashing the pod). The controller tracks neither safekeepers nor
+  pageserver nodes; it reaches the pod's SK for fork-point reads at the
+  fixed HTTP port.
 
 One more config knot: the pageserver requires `control_plane_api` to be
 present in its config, but does not call back to it at runtime — so in

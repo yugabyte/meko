@@ -19,9 +19,8 @@ import (
 // a full pageserver_api::config::ConfigToml; the daemon fills every other
 // field from its own defaults.
 type PageserverParams struct {
-	// Conf is the init-time template (id, listen addrs, auth types, no_sync,
-	// yb_storage_conn, and any passthrough Other keys). Its `id` is written
-	// to identity.toml, NOT pageserver.toml (the Rust code removes it).
+	// Conf is the init-time template (listen addrs, auth types, no_sync,
+	// yb_storage_conn, and any passthrough Other keys).
 	Conf config.YbAmpLocalInitPageserverConf
 
 	// PgDistribDir is written as `pg_distrib_dir` (the Postgres install root).
@@ -48,7 +47,7 @@ type PageserverParams struct {
 // `pageserver_init`: the file it produces is the set of override fragments
 // (pg_distrib_dir / safekeeper_pg_addr / control_plane_api / optional JWT +
 // TLS keys / verbatim yb_storage_conn) plus the serialized init conf with
-// `id` and `yb_storage_conn` removed. The single-branch identity
+// `yb_storage_conn` removed. The single-branch identity
 // (branch_id / generation / [timeline_init]) is baked in afterwards by
 // SetPageserverIdentity, matching the Rust two-step (init then
 // set_timeline_identity).
@@ -92,7 +91,7 @@ func pageserverTomlMap(p PageserverParams) (map[string]any, error) {
 		"safekeeper_pg_addr": p.SafekeeperPgAddr,
 		"control_plane_api":  p.ControlPlaneAPI,
 		"yb_storage_conn":    ybConn,
-		// Serialized init conf, minus `id` and `yb_storage_conn`.
+		// Serialized init conf, minus `yb_storage_conn`.
 		"listen_pg_addr":   c.ListenPgAddr,
 		"listen_http_addr": c.ListenHTTPAddr,
 		"pg_auth_type":     string(c.PgAuthType),
@@ -222,14 +221,6 @@ func SetPageserverIdentity(path string, branchID config.BranchID, generation uin
 		return fmt.Errorf("serialize %q: %w", path, err)
 	}
 	return writeFile(path, out)
-}
-
-// WriteIdentityToml writes identity.toml (`id = <NodeId>`). Mirrors Rust
-// `pageserver_make_identity_toml`.
-func WriteIdentityToml(path string, id config.NodeID) error {
-	// Rust emits `id=<n>` via toml_edit; a plain `id = <n>` parses
-	// identically. Format by hand to keep it a bare integer.
-	return writeFile(path, []byte(fmt.Sprintf("id = %d\n", id)))
 }
 
 // NodeMetadata is the metadata.json the pageserver reads on startup to

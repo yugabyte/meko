@@ -88,55 +88,19 @@ ENDPOINT_STORAGE_HTTP_PORT = env_int("ENDPOINT_STORAGE_HTTP_PORT", 9993)
 LISTEN_HOST = "127.0.0.1"
 
 
-def _derive_node_id(branch_id):
-    """Each endpoint pod runs its own pageserver + safekeeper. When many
-    endpoints register with one shared controller, a fixed id collides:
-    the controller rejects re-registering node 1 at a new address with 409, so
-    every endpoint after the first crash-loops. Derive a stable id from the
-    branch id (one endpoint per branch) — a 31-bit hash of its first 8 hex
-    digits, so distinct per branch with overwhelming probability — so the
-    controller tracks each endpoint's PS/SK as distinct nodes. Masked positive,
-    comfortably within the controller's NodeId (i64) and any i32 column. An
-    explicit NODE_ID env (e.g. an allocator) overrides; controller-free pods keep 1.
-    Falls back to 1 for a missing or non-hex id (ids are 32-hex in practice)."""
-    if not branch_id:
-        return 1
-    try:
-        return (int(branch_id[:8], 16) & 0x7FFFFFFF) or 1
-    except ValueError:
-        return 1
-
-
-# one pageserver + one safekeeper per endpoint pod; unique per endpoint so a
-# shared controller can tell co-located endpoints apart (see above).
-NODE_ID = env_int("NODE_ID", _derive_node_id(BRANCH_ID))
-
 # The pageserver requires `control_plane_api` to be set ("pageservers cannot
 # run in isolation"), but this fork's pageserver no longer calls back to it at
 # runtime (controller_upcall_client was removed), so a placeholder is fine in
 # the controller-free pod. Point it at the controller's surface if you have one.
 CONTROL_PLANE_API = env("CONTROL_PLANE_API", "http://localhost:6666")
 
-# Controller coordination (opt-in). When CONTROLLER_URL is set,
-# this endpoint registers its pageserver node + safekeeper with that controller
-# and takes its pageserver generation from the controller's attach-hook (instead
-# of the standalone GENERATION default) — the faithful controller topology, where the
-# controller is the tenant/node registry + generation-fencing authority. The
-# controller heartbeats and reconciles the nodes it knows about, so it must be
-# able to reach them: CONTROLLER_REACHABLE_HOST + the *PUB ports are the host:port the
-# controller uses (e.g. a Docker published port via the host gateway), and the
-# pageserver/safekeeper bind 0.0.0.0 so those published ports reach them. Left
-# unset, the endpoint stays controller-free and self-manages (the default).
+# Controller coordination (opt-in). When CONTROLLER_URL is set, this endpoint
+# takes its pageserver generation from the controller's attach-hook (instead of
+# the standalone GENERATION default) — the controller is the generation-fencing
+# authority. Left unset, the endpoint stays controller-free and self-manages
+# (the default).
 CONTROLLER_URL = env("CONTROLLER_URL")
 USE_CONTROLLER = CONTROLLER_URL is not None
-CONTROLLER_REACHABLE_HOST = env("CONTROLLER_REACHABLE_HOST", "host.docker.internal")
-# How the controller reaches this endpoint's pageserver (default to the
-# in-container ports, i.e. the single-host case where no port remapping happens).
-# Used for node registration + the attach-hook. The safekeeper's published port
-# is no longer declared here: since #171 the controller doesn't track safekeepers,
-# and it reaches this endpoint's SK for fork-point reads at the fixed HTTP port.
-PAGESERVER_HTTP_PUB_PORT = env_int("PAGESERVER_HTTP_PUB_PORT", PAGESERVER_HTTP_PORT)
-PAGESERVER_PG_PUB_PORT = env_int("PAGESERVER_PG_PUB_PORT", PAGESERVER_PG_PORT)
 # Listen address for the pageserver/safekeeper: 0.0.0.0 under controller
 # coordination (so published host ports route in), loopback otherwise. Internal
 # callers (compute, the supervisor's own probes) keep using 127.0.0.1, which a
@@ -262,7 +226,6 @@ def psql(dbname, sql=None, file=None, ignore_errors=False):
 
 def write_pageserver_config(datadir, bootstrap, ancestor_branch_id=None, ancestor_lsn=None):
     datadir.mkdir(parents=True, exist_ok=True)
-    (datadir / "identity.toml").write_text(f"id={NODE_ID}\n")
 
     lines = [
         f"pg_distrib_dir='{PG_DISTRIB_DIR}'",
@@ -507,33 +470,21 @@ def provision_schema():
 
 
 def register_and_attach():
-    """Register this endpoint's pageserver node with the controller and
-    take the pageserver generation from its attach-hook. Mirrors control_plane's
-    register_and_attach (control_plane/src/pageserver.rs); returns the granted
-    generation. The controller reaches the node at CONTROLLER_REACHABLE_HOST + the *PUB
-    ports, so they must be published and bound on 0.0.0.0 (see BIND_HOST).
+    """Take this endpoint's pageserver generation from the controller's
+    attach-hook; returns the granted generation. The controller is the
+    generation-fencing authority.
 
-    The controller no longer tracks safekeepers (#171): in the co-located
-    topology each endpoint owns its single safekeeper and creates the branch on it
-    directly, so there is nothing to register."""
+    The controller tracks neither safekeepers (#171) nor pageserver nodes: in
+    the co-located topology each endpoint owns its single pageserver+safekeeper
+    and only needs the branch's next generation from the attach-hook."""
     base = CONTROLLER_URL.rstrip("/")
 
-    # Pageserver node registration is required: the controller assigns the
-    # pageserver's generation against this node via the attach-hook.
-    http_request("POST", f"{base}/control/v1/node", body={
-        "node_id": NODE_ID,
-        "listen_pg_addr": CONTROLLER_REACHABLE_HOST,
-        "listen_pg_port": PAGESERVER_PG_PUB_PORT,
-        "listen_http_addr": CONTROLLER_REACHABLE_HOST,
-        "listen_http_port": PAGESERVER_HTTP_PUB_PORT,
-    })
     _, resp = http_request("POST", f"{base}/debug/v1/attach-hook",
-                           body={"branch_id": BRANCH_ID, "node_id": NODE_ID})
+                           body={"branch_id": BRANCH_ID, "attach": True})
     gen = (resp or {}).get("gen")
     if gen is None:
         raise RuntimeError(f"attach-hook did not return a generation: {resp}")
-    log(f"controller granted pageserver generation {gen} "
-        f"for branch {BRANCH_ID} on node {NODE_ID}")
+    log(f"controller granted pageserver generation {gen} for branch {BRANCH_ID}")
     return gen
 
 

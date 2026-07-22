@@ -1,5 +1,5 @@
 -- 0003: the `registry` schema — the controller's storage-layer bookkeeping:
--- generation authority (the fencing counter) plus the node / branch / endpoint /
+-- generation authority (the fencing counter) plus the branch / endpoint /
 -- pending-init registries behind the HTTP surface the controller serves to
 -- yb_amp_local and the integration harness.
 --
@@ -19,25 +19,10 @@ CREATE SCHEMA IF NOT EXISTS registry;
 CREATE TABLE IF NOT EXISTS registry.branches (
     branch_id              VARCHAR NOT NULL,
     generation             INTEGER,
-    generation_pageserver  BIGINT,
     placement_policy       VARCHAR NOT NULL,
     config                 JSONB NOT NULL,
     scheduling_policy      VARCHAR NOT NULL DEFAULT '"Active"',
     PRIMARY KEY (branch_id)
-);
-
--- Pageserver registry (bookkeeping/observability; nothing gates on it).
-CREATE TABLE IF NOT EXISTS registry.nodes (
-    node_id              BIGINT NOT NULL,
-    listen_http_addr     VARCHAR NOT NULL,
-    listen_http_port     INTEGER NOT NULL,
-    listen_pg_addr       VARCHAR NOT NULL,
-    listen_pg_port       INTEGER NOT NULL,
-    listen_https_port    INTEGER,
-    lifecycle            VARCHAR NOT NULL DEFAULT 'active',
-    listen_grpc_addr     VARCHAR,
-    listen_grpc_port     INTEGER,
-    PRIMARY KEY (node_id)
 );
 
 -- Per-branch WAL start LSN + generation tracking. (The branch's single

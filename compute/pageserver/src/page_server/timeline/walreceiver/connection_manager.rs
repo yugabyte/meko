@@ -11,7 +11,6 @@ use pageserver_api::models::TimelineState;
 use postgres_connection::PgConnectionConfig;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
-use utils::id::NodeId;
 use utils::postgres_client::{ConnectionConfigArgs, wal_stream_connection_config};
 
 use super::walreceiver_connection::{WalConnectionStatus, WalReceiverError};
@@ -22,11 +21,6 @@ use crate::page_server::{Timeline, debug_assert_current_span_has_branch_id};
 use crate::task_mgr::TaskKind;
 
 pub(crate) struct Cancelled;
-
-/// `NodeId` used to label the safekeeper in metrics and logs. Single-SK
-/// mode has no real node-id selection happening, so we synthesize a
-/// fixed one.
-const SAFEKEEPER_NODE_ID: NodeId = NodeId(1);
 
 const RECONNECT_MIN_BACKOFF_SECONDS: f64 = 0.1;
 const RECONNECT_MAX_BACKOFF_SECONDS: f64 = 15.0;
@@ -176,9 +170,8 @@ impl ConnectionManagerStatus {
             Some(connection) => {
                 if connection.has_processed_wal {
                     resulting_string.push_str(&format!(
-                        " (update {}): streaming WAL from node {}, ",
+                        " (update {}): streaming WAL, ",
                         connection.latest_wal_update.format("%Y-%m-%d %H:%M:%S"),
-                        connection.node,
                     ));
 
                     match (connection.streaming_lsn, connection.commit_lsn) {
@@ -195,19 +188,17 @@ impl ConnectionManagerStatus {
                     }
                 } else if connection.is_connected {
                     resulting_string.push_str(&format!(
-                        " (update {}): connecting to node {}",
+                        " (update {}): connecting",
                         connection
                             .latest_connection_update
                             .format("%Y-%m-%d %H:%M:%S"),
-                        connection.node,
                     ));
                 } else {
                     resulting_string.push_str(&format!(
-                        " (update {}): initializing node {} connection",
+                        " (update {}): initializing connection",
                         connection
                             .latest_connection_update
                             .format("%Y-%m-%d %H:%M:%S"),
-                        connection.node,
                     ));
                 }
             }
@@ -336,8 +327,7 @@ impl ConnectionManagerState {
             TaskKind::WalReceiverConnectionHandler,
             DownloadBehavior::Download,
         );
-        let sk_id = SAFEKEEPER_NODE_ID;
-        let span = info_span!("connection", node_id = %sk_id);
+        let span = info_span!("connection");
 
         let connection_handle =
             TaskHandle::spawn(&self.cancel, move |events_sender, cancellation| {
@@ -352,7 +342,6 @@ impl ConnectionManagerState {
                         cancellation.clone(),
                         connect_timeout,
                         ctx,
-                        sk_id,
                         ingest_batch_size,
                         validate_wal_contiguity,
                     )
@@ -397,7 +386,6 @@ impl ConnectionManagerState {
                 latest_wal_update: started_at,
                 streaming_lsn: None,
                 commit_lsn: None,
-                node: sk_id,
             },
             connection_task: connection_handle,
         });

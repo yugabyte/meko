@@ -40,18 +40,6 @@ func (c *Controller) AttachHook(ctx context.Context, req registry.AttachHookRequ
 	return resp, err
 }
 
-// NodeRegister self-registers a pageserver via POST /control/v1/node.
-func (c *Controller) NodeRegister(ctx context.Context, req registry.NodeRegisterRequest) error {
-	return c.t.do(ctx, http.MethodPost, "/control/v1/node", req, nil)
-}
-
-// NodeList returns the registered nodes via GET /control/v1/node.
-func (c *Controller) NodeList(ctx context.Context) ([]registry.NodeDescribeResponse, error) {
-	var out []registry.NodeDescribeResponse
-	err := c.t.do(ctx, http.MethodGet, "/control/v1/node", nil, &out)
-	return out, err
-}
-
 // BranchRegister records a launcher-created branch via POST
 // /control/v1/branch/{branchID}/register.
 func (c *Controller) BranchRegister(ctx context.Context, branchID string, req registry.BranchRegisterRequest) error {

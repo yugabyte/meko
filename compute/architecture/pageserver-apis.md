@@ -63,7 +63,7 @@ Routes exempt from auth even when JWT is enabled
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| GET | `/v1/status` | Health check. Returns `{ "id": <node_id> }` (`StatusResponse`). Instance-wide scope. |
+| GET | `/v1/status` | Health check. Returns an empty `{}` (`StatusResponse`). Instance-wide scope. |
 | GET | `/metrics` | Prometheus text exposition (`prometheus_metrics_handler`). Honors `force_metric_collection_on_scrape`. See [`pageserver-metrics.md`](pageserver-metrics.md). |
 | GET | `/v1/doc` | Swagger UI HTML for the embedded OpenAPI spec. |
 | GET | `/swagger.yml` | Raw OpenAPI spec (`openapi_spec.yml`, embedded at compile time). |

@@ -13,53 +13,49 @@ import (
 	"github.com/yugabyte/amp/controller/local/config"
 )
 
-// lowestIDPageserverTemplate returns the min-id pageserver template.
-func lowestIDPageserverTemplate(env *config.LocalEnv) (*config.YbAmpLocalInitPageserverConf, error) {
+// firstPageserverTemplate returns the sole pageserver template (the launcher
+// configures exactly one).
+func firstPageserverTemplate(env *config.LocalEnv) (*config.YbAmpLocalInitPageserverConf, error) {
 	if len(env.PageserverTemplates) == 0 {
 		return nil, fmt.Errorf("no pageserver template configured")
 	}
-	best := &env.PageserverTemplates[0]
-	for i := 1; i < len(env.PageserverTemplates); i++ {
-		if env.PageserverTemplates[i].ID < best.ID {
-			best = &env.PageserverTemplates[i]
-		}
-	}
-	return best, nil
+	return &env.PageserverTemplates[0], nil
 }
 
-// lowestIDSafekeeperTemplate returns the min-id safekeeper template.
-func lowestIDSafekeeperTemplate(env *config.LocalEnv) (*config.SafekeeperConf, error) {
+// firstSafekeeperTemplate returns the sole safekeeper template.
+func firstSafekeeperTemplate(env *config.LocalEnv) (*config.SafekeeperConf, error) {
 	if len(env.SafekeeperTemplates) == 0 {
 		return nil, fmt.Errorf("no safekeeper template configured")
 	}
-	best := &env.SafekeeperTemplates[0]
-	for i := 1; i < len(env.SafekeeperTemplates); i++ {
-		if env.SafekeeperTemplates[i].ID < best.ID {
-			best = &env.SafekeeperTemplates[i]
-		}
-	}
-	return best, nil
+	return &env.SafekeeperTemplates[0], nil
 }
 
 // allocatePageserverConf allocates the conf for a pageserver provisioned under
-// endpointID: the next free id (the template's id when none are provisioned,
-// so the first pageserver reuses it) with a per-id port delta. Mirrors Rust
+// endpointID: the template ports bumped by the lowest free even delta (0 when
+// none are provisioned, so the first pageserver reuses the template ports;
+// freed deltas are reused after deprovisioning). Mirrors Rust
 // `allocate_pageserver_conf`.
 func allocatePageserverConf(env *config.LocalEnv, endpointID string) (config.PageServerConf, error) {
-	template, err := lowestIDPageserverTemplate(env)
+	template, err := firstPageserverTemplate(env)
 	if err != nil {
 		return config.PageServerConf{}, err
 	}
-	newID := template.ID
+	basePg, err := portOf(template.ListenPgAddr)
+	if err != nil {
+		return config.PageServerConf{}, err
+	}
+	used := map[uint16]bool{}
 	for _, p := range env.Pageservers {
-		if p.ID >= newID {
-			newID = p.ID + 1
+		port, err := portOf(p.ListenPgAddr)
+		if err != nil {
+			return config.PageServerConf{}, err
 		}
+		used[port] = true
 	}
-	if len(env.Pageservers) == 0 {
-		newID = template.ID
+	var delta uint16
+	for used[basePg+delta] {
+		delta += 2
 	}
-	delta := uint16((newID - template.ID) * 2)
 
 	pgAddr, err := bumpAddrPort(template.ListenPgAddr, delta)
 	if err != nil {
@@ -70,7 +66,6 @@ func allocatePageserverConf(env *config.LocalEnv, endpointID string) (config.Pag
 		return config.PageServerConf{}, err
 	}
 	conf := config.PageServerConf{
-		ID:             newID,
 		ListenPgAddr:   pgAddr,
 		ListenHTTPAddr: httpAddr,
 		PgAuthType:     template.PgAuthType,
@@ -101,12 +96,11 @@ func allocatePageserverConf(env *config.LocalEnv, endpointID string) (config.Pag
 // stamping in the allocated id/ports/auth. Mirrors Rust
 // `pageserver_init_conf_for`.
 func pageserverInitConfFor(env *config.LocalEnv, allocated *config.PageServerConf) (config.YbAmpLocalInitPageserverConf, error) {
-	template, err := lowestIDPageserverTemplate(env)
+	template, err := firstPageserverTemplate(env)
 	if err != nil {
 		return config.YbAmpLocalInitPageserverConf{}, err
 	}
 	conf := config.YbAmpLocalInitPageserverConf{
-		ID:              allocated.ID,
 		ListenPgAddr:    allocated.ListenPgAddr,
 		ListenHTTPAddr:  allocated.ListenHTTPAddr,
 		ListenHTTPSAddr: allocated.ListenHTTPSAddr,
@@ -124,24 +118,21 @@ func pageserverInitConfFor(env *config.LocalEnv, allocated *config.PageServerCon
 // allocateSafekeeperConf allocates the conf for a safekeeper provisioned under
 // endpointID, dedicated to branchID. Mirrors Rust `allocate_safekeeper_conf`.
 func allocateSafekeeperConf(env *config.LocalEnv, endpointID string, branchID config.BranchID) (config.SafekeeperConf, error) {
-	template, err := lowestIDSafekeeperTemplate(env)
+	template, err := firstSafekeeperTemplate(env)
 	if err != nil {
 		return config.SafekeeperConf{}, err
 	}
-	newID := template.ID
+	used := map[uint16]bool{}
 	for _, s := range env.Safekeepers {
-		if s.ID >= newID {
-			newID = s.ID + 1
-		}
+		used[s.PgPort] = true
 	}
-	if len(env.Safekeepers) == 0 {
-		newID = template.ID
+	var delta uint16
+	for used[template.PgPort+delta] {
+		delta += 2
 	}
-	delta := uint16((newID - template.ID) * 2)
 
 	bid := branchID
 	conf := config.SafekeeperConf{
-		ID:              newID,
 		PgPort:          template.PgPort + delta,
 		HTTPPort:        template.HTTPPort + delta,
 		BackupThreads:   template.BackupThreads,
@@ -317,7 +308,7 @@ func provisionBootstrap(ctx context.Context, env *config.LocalEnv, endpointID st
 	}
 	env.Safekeepers = append(env.Safekeepers, skConf)
 
-	fmt.Printf("Provisioning safekeeper %d (pg port %d) for endpoint '%s'\n", skConf.ID, skConf.PgPort, endpointID)
+	fmt.Printf("Provisioning safekeeper (pg port %d) for endpoint '%s'\n", skConf.PgPort, endpointID)
 	if err := startSafekeeper(env, &skConf, 30*time.Second); err != nil {
 		return fmt.Errorf("start main safekeeper: %w", err)
 	}
@@ -333,7 +324,7 @@ func provisionBootstrap(ctx context.Context, env *config.LocalEnv, endpointID st
 		}
 	}()
 
-	fmt.Printf("Provisioning pageserver %d (pg %s) for endpoint '%s'\n", psConf.ID, psConf.ListenPgAddr, endpointID)
+	fmt.Printf("Provisioning pageserver (pg %s) for endpoint '%s'\n", psConf.ListenPgAddr, endpointID)
 	if err := os.MkdirAll(psConf.DataDir, 0o755); err != nil {
 		return err
 	}
@@ -396,7 +387,7 @@ func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID strin
 	}
 	env.Safekeepers = append(env.Safekeepers, skConf)
 
-	fmt.Printf("Provisioning safekeeper %d (pg port %d) for endpoint '%s'\n", skConf.ID, skConf.PgPort, endpointID)
+	fmt.Printf("Provisioning safekeeper (pg port %d) for endpoint '%s'\n", skConf.PgPort, endpointID)
 	if err := startSafekeeper(env, &skConf, 30*time.Second); err != nil {
 		return fmt.Errorf("start branch safekeeper: %w", err)
 	}
@@ -416,7 +407,7 @@ func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID strin
 		return fmt.Errorf("create branch timeline on safekeeper: %w", err)
 	}
 
-	fmt.Printf("Provisioning pageserver %d (pg %s) for endpoint '%s'\n", psConf.ID, psConf.ListenPgAddr, endpointID)
+	fmt.Printf("Provisioning pageserver (pg %s) for endpoint '%s'\n", psConf.ListenPgAddr, endpointID)
 	if err := os.MkdirAll(psConf.DataDir, 0o755); err != nil {
 		return err
 	}
@@ -462,8 +453,8 @@ func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID strin
 	return nil
 }
 
-// writePageserverFiles writes a fresh pageserver.toml + identity.toml +
-// metadata.json for a bootstrap pageserver. Mirrors Rust `pageserver_init`.
+// writePageserverFiles writes a fresh pageserver.toml + metadata.json for a
+// bootstrap pageserver. Mirrors Rust `pageserver_init`.
 func writePageserverFiles(env *config.LocalEnv, psConf *config.PageServerConf, skConf *config.SafekeeperConf) error {
 	initConf, err := pageserverInitConfFor(env, psConf)
 	if err != nil {
@@ -480,9 +471,6 @@ func writePageserverFiles(env *config.LocalEnv, psConf *config.PageServerConf, s
 		ControlPlaneAPI:  env.ControlPlaneAPI,
 	}
 	if err := cfg.WritePageserverToml(filepath.Join(psConf.DataDir, "pageserver.toml"), params); err != nil {
-		return err
-	}
-	if err := cfg.WriteIdentityToml(filepath.Join(psConf.DataDir, "identity.toml"), psConf.ID); err != nil {
 		return err
 	}
 	return writePageserverMetadata(psConf)
@@ -527,9 +515,8 @@ func writePageserverMetadata(psConf *config.PageServerConf) error {
 
 // clonePageserverFromTemplate provisions a branch pageserver's datadir by
 // cloning the ancestor's pageserver.toml and patching the per-node listen
-// addresses + safekeeper address, then writes identity.toml. The branch
-// identity is baked afterwards by the caller. Mirrors Rust
-// `PageServerNode::initialize_from_template`.
+// addresses + safekeeper address. The branch identity is baked afterwards by
+// the caller. Mirrors Rust `PageServerNode::initialize_from_template`.
 func clonePageserverFromTemplate(env *config.LocalEnv, psConf, ancestorConf *config.PageServerConf, safekeeperPgAddr string) error {
 	templateTOML := filepath.Join(ancestorConf.DataDir, "pageserver.toml")
 	data, err := os.ReadFile(templateTOML)
@@ -566,5 +553,5 @@ func clonePageserverFromTemplate(env *config.LocalEnv, psConf, ancestorConf *con
 	if err := os.WriteFile(tomlPath, out, 0o644); err != nil {
 		return fmt.Errorf("write %q: %w", tomlPath, err)
 	}
-	return cfg.WriteIdentityToml(filepath.Join(psConf.DataDir, "identity.toml"), psConf.ID)
+	return nil
 }

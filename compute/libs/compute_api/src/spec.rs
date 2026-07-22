@@ -12,7 +12,7 @@ use regex::Regex;
 use remote_storage::RemotePath;
 use serde::{Deserialize, Serialize};
 use url::Url;
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::responses::TlsConfig;
@@ -244,7 +244,6 @@ impl PageserverConnectionInfo {
         let pageservers: Vec<_> = connstr
             .split(',')
             .map(|connstr| PageserverConnectionItem {
-                id: None,
                 libpq_url: Some(connstr.to_string()),
                 grpc_url: None,
             })
@@ -284,7 +283,6 @@ impl PageserverConnectionInfo {
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct PageserverConnectionItem {
-    pub id: Option<NodeId>,
     pub libpq_url: Option<String>,
     pub grpc_url: Option<String>,
 }

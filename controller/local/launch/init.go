@@ -133,7 +133,6 @@ func Init(args InitArgs) error {
 	grpcAddr := fmt.Sprintf("127.0.0.1:%d", psGrpc)
 	inlineCopyP := inline
 	psTemplate := config.YbAmpLocalInitPageserverConf{
-		ID:             defaultPageserverID,
 		ListenPgAddr:   fmt.Sprintf("127.0.0.1:%d", psPg),
 		ListenHTTPAddr: fmt.Sprintf("127.0.0.1:%d", psHTTP),
 		ListenGRPCAddr: &grpcAddr,
@@ -146,7 +145,6 @@ func Init(args InitArgs) error {
 
 	inlineCopyS := inline
 	skTemplate := config.SafekeeperConf{
-		ID:            defaultSafekeeperID,
 		PgPort:        skPg,
 		HTTPPort:      skHTTP,
 		YbStorageConn: &inlineCopyS,

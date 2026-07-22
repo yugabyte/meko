@@ -1,19 +1,19 @@
 // Package registry serves the storage-layer control API that yb_amp_local and
 // the integration harness drive: generation authority (attach-hook) plus the
-// branch / node / endpoint / pending-init registries, backed by the
+// branch / endpoint / pending-init registries, backed by the
 // `registry` schema in the shared yb_storage database. The wire types
-// here are JSON-compatible with the launcher's client (control_plane) and with
-// pageserver_api::controller_api.
+// here are JSON-compatible with the launcher's client.
 package registry
 
 import "encoding/json"
 
-// AttachHookRequest bumps (or, for a detach, clears) a branch's generation.
-// node_id present = attach to that pageserver and increment; absent = detach.
+// AttachHookRequest bumps (attach) or clears (detach) a branch's generation.
+// attach = true increments the generation; false detaches (the generation
+// counter is preserved, staying monotonic across the branch's lifecycle).
 // generation_override / config apply only when the branch row is first created.
 type AttachHookRequest struct {
 	BranchID           string          `json:"branch_id"`
-	NodeID             *int64          `json:"node_id"`
+	Attach             bool            `json:"attach"`
 	GenerationOverride *int32          `json:"generation_override"`
 	Config             json.RawMessage `json:"config"`
 }
@@ -29,43 +29,10 @@ type InspectRequest struct {
 	BranchID string `json:"branch_id"`
 }
 
-// InspectResponse reports the current (generation, node_id) attachment as a
-// two-element array, or null when the branch is unattached.
+// InspectResponse reports the branch's current generation, or null when the
+// branch is unattached.
 type InspectResponse struct {
-	Attachment *[2]uint64 `json:"attachment"`
-}
-
-// NodeRegisterRequest self-registers a pageserver into the node registry.
-type NodeRegisterRequest struct {
-	NodeID          int64   `json:"node_id"`
-	ListenPgAddr    string  `json:"listen_pg_addr"`
-	ListenPgPort    uint16  `json:"listen_pg_port"`
-	ListenGrpcAddr  *string `json:"listen_grpc_addr"`
-	ListenGrpcPort  *uint16 `json:"listen_grpc_port"`
-	ListenHTTPAddr  string  `json:"listen_http_addr"`
-	ListenHTTPPort  uint16  `json:"listen_http_port"`
-	ListenHTTPSPort *uint16 `json:"listen_https_port"`
-	NodeIPAddr      *string `json:"node_ip_addr"`
-}
-
-// NodeConfigureRequest updates a node's availability. availability is one of
-// "Active" / "WarmingUp" / "Offline", or null to leave it unchanged.
-type NodeConfigureRequest struct {
-	NodeID       int64   `json:"node_id"`
-	Availability *string `json:"availability"`
-}
-
-// NodeDescribeResponse is one entry in the node-list response.
-type NodeDescribeResponse struct {
-	ID              int64   `json:"id"`
-	Availability    string  `json:"availability"`
-	ListenHTTPAddr  string  `json:"listen_http_addr"`
-	ListenHTTPPort  uint16  `json:"listen_http_port"`
-	ListenHTTPSPort *uint16 `json:"listen_https_port"`
-	ListenPgAddr    string  `json:"listen_pg_addr"`
-	ListenPgPort    uint16  `json:"listen_pg_port"`
-	ListenGrpcAddr  *string `json:"listen_grpc_addr"`
-	ListenGrpcPort  *uint16 `json:"listen_grpc_port"`
+	Generation *uint32 `json:"generation"`
 }
 
 // BranchRegisterRequest records a launcher-created branch's start LSN, and
@@ -112,11 +79,9 @@ type ComputeEndpoint struct {
 	Spec       json.RawMessage `json:"spec"`
 }
 
-// BranchCreateResponseShard describes a branch's attachment (its owning node and
-// current generation).
+// BranchCreateResponseShard describes a branch's current generation.
 type BranchCreateResponseShard struct {
 	BranchID   string `json:"branch_id"`
-	NodeID     int64  `json:"node_id"`
 	Generation uint32 `json:"generation"`
 }
 

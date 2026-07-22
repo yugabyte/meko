@@ -37,7 +37,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Branch off main and start the child endpoint (pins the parent's cutoff)");
     let b1 = c.branch_create_named("gc_pin_b1", "main")?;
-    let ps_id = c.endpoint_create_on_branch("ep_gc_pin", "gc_pin_b1", branch_pg_port)?;
+    c.endpoint_create_on_branch("ep_gc_pin", "gc_pin_b1", branch_pg_port)?;
     let bconn = db::compute_conn(branch_pg_port);
 
     step("Parent overwrites those same blocks hard and its drain runs");
@@ -69,7 +69,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // running. NB: the drop does NOT unpin main — nothing marks the
     // child's timeline_state deleted yet — so the pin outlives this test.
     let _ = c.yb(&["branch", "drop", "--branch-id", &b1]);
-    c.yb_quiet(&["pageserver", "stop", "--id", &ps_id.to_string(), "-m", "immediate"]);
+    c.yb_quiet(&["pageserver", "stop", "ep_gc_pin", "-m", "immediate"]);
 
     let child_sum = child_sum?;
     if child_sum != want_sum {

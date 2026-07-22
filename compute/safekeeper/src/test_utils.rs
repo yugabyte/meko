@@ -1,9 +1,11 @@
 use std::ffi::CStr;
 use std::sync::Arc;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use camino_tempfile::Utf8TempDir;
 use postgres_ffi::v18::wal_generator::{LogicalMessageGenerator, WalGenerator};
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::receive_wal::WalAcceptor;
@@ -30,14 +32,16 @@ impl Env {
         Ok(Self { tempdir })
     }
 
-    /// Constructs a Safekeeper config for the given node ID.
-    fn make_conf(&self, node_id: NodeId) -> SafeKeeperConf {
+    /// Constructs a Safekeeper config with a unique workdir.
+    fn make_conf(&self) -> SafeKeeperConf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let mut conf = SafeKeeperConf::dummy();
-        conf.workdir = self.tempdir.path().join(format!("safekeeper-{node_id}"));
+        conf.workdir = self.tempdir.path().join(format!("safekeeper-{n}"));
         conf
     }
 
-    /// Constructs a Safekeeper with the given node and branch ID.
+    /// Constructs a Safekeeper with the given branch ID.
     ///
     /// The bench harness still builds a synthetic safekeeper backed by
     /// `YbWalStorage`, which in this environment is **not** wired to a
@@ -46,12 +50,10 @@ impl Env {
     /// real cluster via the integration-test harness.
     pub async fn make_safekeeper(
         &self,
-        node_id: NodeId,
         branch_id: BranchId,
         _start_lsn: Lsn,
     ) -> anyhow::Result<SafeKeeper<control_file::ControlFileStorage, yb_wal_storage::WalStore>>
     {
-        let _ = node_id;
         let _ = branch_id;
         anyhow::bail!(
             "test_utils::Env::make_safekeeper is unsupported in YB-only mode — \
@@ -59,18 +61,17 @@ impl Env {
         )
     }
 
-    /// Constructs a timeline, including a new Safekeeper with the given node ID, and spawns its
+    /// Constructs a timeline, including a new Safekeeper, and spawns its
     /// manager task.
     pub async fn make_timeline(
         &self,
-        node_id: NodeId,
         branch_id: BranchId,
         start_lsn: Lsn,
     ) -> anyhow::Result<Arc<Timeline>> {
-        let conf = Arc::new(self.make_conf(node_id));
+        let conf = Arc::new(self.make_conf());
         let timeline_dir = get_timeline_dir(&conf, &branch_id);
 
-        let safekeeper = self.make_safekeeper(node_id, branch_id, start_lsn).await?;
+        let safekeeper = self.make_safekeeper(branch_id, start_lsn).await?;
         let shared_state = SharedState::new(StateSK::Loaded(safekeeper));
 
         let yb_wal = YbWalConn::from_conf(&conf).await?;

@@ -16,10 +16,6 @@ func Register(e *echo.Echo, store *Store) {
 
 	e.GET("/ready", h.ready)
 
-	e.POST("/control/v1/node", h.nodeRegister)
-	e.GET("/control/v1/node", h.nodeList)
-	e.PUT("/control/v1/node/:node_id/config", h.nodeConfigure)
-
 	e.POST("/debug/v1/attach-hook", h.attachHook)
 	e.POST("/debug/v1/inspect", h.inspect)
 	e.POST("/debug/v1/branch/:branch_id/import", h.branchImport)
@@ -66,11 +62,11 @@ func (h *handlers) inspect(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	att, err := h.store.Inspect(c.Request().Context(), req.BranchID)
+	gen, err := h.store.Inspect(c.Request().Context(), req.BranchID)
 	if err != nil {
 		return mapErr(err)
 	}
-	return c.JSON(http.StatusOK, InspectResponse{Attachment: att})
+	return c.JSON(http.StatusOK, InspectResponse{Generation: gen})
 }
 
 func (h *handlers) branchImport(c echo.Context) error {
@@ -79,36 +75,6 @@ func (h *handlers) branchImport(c echo.Context) error {
 		return mapErr(err)
 	}
 	return c.JSON(http.StatusOK, resp)
-}
-
-func (h *handlers) nodeRegister(c echo.Context) error {
-	var req NodeRegisterRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-	if err := h.store.NodeRegister(c.Request().Context(), req); err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, nil)
-}
-
-func (h *handlers) nodeList(c echo.Context) error {
-	nodes, err := h.store.NodeList(c.Request().Context())
-	if err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, nodes)
-}
-
-func (h *handlers) nodeConfigure(c echo.Context) error {
-	var req NodeConfigureRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-	if err := h.store.NodeConfigure(c.Request().Context(), req); err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, nil)
 }
 
 func (h *handlers) branchRegister(c echo.Context) error {

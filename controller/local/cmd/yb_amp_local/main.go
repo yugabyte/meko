@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -266,6 +265,16 @@ func endpointStopCmd() *cobra.Command {
 
 // --- pageserver ---
 
+// endpointOrMain returns the positional endpoint id, defaulting to "main" (the
+// primary endpoint) when omitted — so a bare `pageserver start` addresses the
+// main endpoint's pageserver, and `pageserver start <endpoint_id>` a specific one.
+func endpointOrMain(posArgs []string) string {
+	if len(posArgs) == 1 {
+		return posArgs[0]
+	}
+	return "main"
+}
+
 func pageserverCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "pageserver", Short: "Manage pageservers"}
 	cmd.AddCommand(pageserverStartCmd(), pageserverStopCmd(), pageserverRestartCmd())
@@ -273,52 +282,49 @@ func pageserverCmd() *cobra.Command {
 }
 
 func pageserverStartCmd() *cobra.Command {
-	var id int64
 	var timeout time.Duration
 	cmd := &cobra.Command{
-		Use:   "start",
-		Short: "Start a pageserver",
-		RunE: func(_ *cobra.Command, _ []string) error {
+		Use:   "start [endpoint_id]",
+		Short: "Start a pageserver (addressed by the endpoint it serves; default main)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, posArgs []string) error {
 			return withEnv(func(ctx context.Context, env *config.LocalEnv) error {
-				return launch.PageserverStart(ctx, env, id, timeout)
+				return launch.PageserverStart(ctx, env, endpointOrMain(posArgs), timeout)
 			})
 		},
 	}
-	cmd.Flags().Int64Var(&id, "id", 1, "pageserver id")
 	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", 10*time.Second, "start timeout")
 	return cmd
 }
 
 func pageserverStopCmd() *cobra.Command {
-	var id int64
 	var mode string
 	cmd := &cobra.Command{
-		Use:   "stop",
-		Short: "Stop a pageserver",
-		RunE: func(_ *cobra.Command, _ []string) error {
+		Use:   "stop [endpoint_id]",
+		Short: "Stop a pageserver (addressed by the endpoint it serves; default main)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, posArgs []string) error {
 			return withEnv(func(_ context.Context, env *config.LocalEnv) error {
-				return launch.PageserverStop(env, id, mode == "immediate")
+				return launch.PageserverStop(env, endpointOrMain(posArgs), mode == "immediate")
 			})
 		},
 	}
-	cmd.Flags().Int64Var(&id, "id", 1, "pageserver id")
 	cmd.Flags().StringVarP(&mode, "mode", "m", "fast", "stop mode: fast | immediate")
 	return cmd
 }
 
 func pageserverRestartCmd() *cobra.Command {
-	var id int64
 	var timeout time.Duration
 	cmd := &cobra.Command{
-		Use:   "restart",
-		Short: "Restart a pageserver",
-		RunE: func(_ *cobra.Command, _ []string) error {
+		Use:   "restart [endpoint_id]",
+		Short: "Restart a pageserver (addressed by the endpoint it serves; default main)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, posArgs []string) error {
 			return withEnv(func(ctx context.Context, env *config.LocalEnv) error {
-				return launch.PageserverRestart(ctx, env, id, timeout)
+				return launch.PageserverRestart(ctx, env, endpointOrMain(posArgs), timeout)
 			})
 		},
 	}
-	cmd.Flags().Int64Var(&id, "id", 1, "pageserver id")
 	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", 10*time.Second, "start timeout")
 	return cmd
 }
@@ -334,12 +340,12 @@ func safekeeperCmd() *cobra.Command {
 func safekeeperStopCmd() *cobra.Command {
 	var mode string
 	cmd := &cobra.Command{
-		Use:   "stop [id]",
-		Short: "Stop a safekeeper",
+		Use:   "stop [endpoint_id]",
+		Short: "Stop a safekeeper (addressed by the endpoint it serves; default main)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, posArgs []string) error {
 			return withEnv(func(_ context.Context, env *config.LocalEnv) error {
-				return launch.SafekeeperStop(env, safekeeperID(posArgs), mode == "immediate")
+				return launch.SafekeeperStop(env, endpointOrMain(posArgs), mode == "immediate")
 			})
 		},
 	}
@@ -351,12 +357,12 @@ func safekeeperRestartCmd() *cobra.Command {
 	var mode string
 	var timeout time.Duration
 	cmd := &cobra.Command{
-		Use:   "restart [id]",
-		Short: "Restart a safekeeper",
+		Use:   "restart [endpoint_id]",
+		Short: "Restart a safekeeper (addressed by the endpoint it serves; default main)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, posArgs []string) error {
 			return withEnv(func(_ context.Context, env *config.LocalEnv) error {
-				return launch.SafekeeperRestart(env, safekeeperID(posArgs), mode == "immediate", timeout)
+				return launch.SafekeeperRestart(env, endpointOrMain(posArgs), mode == "immediate", timeout)
 			})
 		},
 	}
@@ -365,33 +371,15 @@ func safekeeperRestartCmd() *cobra.Command {
 	return cmd
 }
 
-// safekeeperID parses the optional positional safekeeper id (default 1).
-func safekeeperID(posArgs []string) config.NodeID {
-	if len(posArgs) == 1 {
-		if v, err := strconv.ParseInt(posArgs[0], 10, 64); err == nil {
-			return config.NodeID(v)
-		}
-	}
-	return 1
-}
-
 func safekeeperStartCmd() *cobra.Command {
 	var timeout time.Duration
 	cmd := &cobra.Command{
-		Use:   "start [id]",
-		Short: "Start a safekeeper",
+		Use:   "start [endpoint_id]",
+		Short: "Start a safekeeper (addressed by the endpoint it serves; default main)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, posArgs []string) error {
-			id := int64(1)
-			if len(posArgs) == 1 {
-				parsed, err := parseInt64(posArgs[0])
-				if err != nil {
-					return fmt.Errorf("invalid safekeeper id %q: %w", posArgs[0], err)
-				}
-				id = parsed
-			}
 			return withEnv(func(_ context.Context, env *config.LocalEnv) error {
-				return launch.SafekeeperStart(env, id, timeout)
+				return launch.SafekeeperStart(env, endpointOrMain(posArgs), timeout)
 			})
 		},
 	}
@@ -462,18 +450,4 @@ func controllerStopCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&mode, "mode", "m", "fast", "stop mode: fast | immediate")
 	cmd.Flags().Uint8Var(&instanceID, "instance-id", 1, "controller instance id")
 	return cmd
-}
-
-func parseInt64(s string) (int64, error) {
-	var n int64
-	if s == "" {
-		return 0, fmt.Errorf("empty")
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("not a number")
-		}
-		n = n*10 + int64(r-'0')
-	}
-	return n, nil
 }

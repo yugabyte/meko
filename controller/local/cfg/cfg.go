@@ -3,7 +3,7 @@
 // daemon. It is the Go port of the file-writing halves of the Rust
 // `control_plane` launcher:
 //
-//   - pageserver.toml / identity.toml / metadata.json
+//   - pageserver.toml / metadata.json
 //     (control_plane/src/pageserver.rs)
 //   - safekeeper.toml (control_plane/src/safekeeper.rs, whose shape is
 //     safekeeper_api::config::SafekeeperConfigToml)

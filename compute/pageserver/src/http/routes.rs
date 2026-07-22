@@ -261,8 +261,7 @@ async fn status_handler(
     _cancel: CancellationToken,
 ) -> Result<Response<Body>, ApiError> {
     check_permission(&request, None)?;
-    let config = get_config(&request);
-    json_response(StatusCode::OK, StatusResponse { id: config.id })
+    json_response(StatusCode::OK, StatusResponse {})
 }
 
 async fn reload_auth_validation_keys_handler(

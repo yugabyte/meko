@@ -25,11 +25,6 @@ import (
 // formats such as TOML).
 type BranchID = string
 
-// NodeID is a storage-node id (Rust `utils::id::NodeId`, a `u64` newtype
-// serialized transparently as a bare integer). Modeled as int64 here; the
-// launcher never uses ids beyond the int64 range.
-type NodeID = int64
-
 // Lsn is a Postgres log sequence number in the "X/Y" upper/lower hex form
 // (Rust `utils::lsn::Lsn`).
 type Lsn = string

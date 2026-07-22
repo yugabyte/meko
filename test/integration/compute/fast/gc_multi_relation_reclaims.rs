@@ -21,7 +21,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Dedicated branch + endpoint");
     let b = c.branch_create_named("gc_mr", "main")?;
-    let ps_id = c.endpoint_create_on_branch("ep_gc_mr", "gc_mr", branch_pg_port)?;
+    c.endpoint_create_on_branch("ep_gc_mr", "gc_mr", branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
     let pages = format!("SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b}'");
     let queue = format!("SELECT count(*) FROM pageserver.pending_gc WHERE branch_id = '{b}'");
@@ -84,7 +84,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         );
     }
     let _ = c.yb(&["branch", "drop", "--branch-id", &b]);
-    c.yb_quiet(&["pageserver", "stop", "--id", &ps_id.to_string(), "-m", "immediate"]);
+    c.yb_quiet(&["pageserver", "stop", "ep_gc_mr", "-m", "immediate"]);
     for t in 0..TABLES {
         if got[t] != want[t] {
             bail!("table gc_mr_{t} checksum changed after GC");

@@ -22,9 +22,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Dedicated branch + endpoint");
     let b = c.branch_create_named("gc_invis", "main")?;
-    let ps_id = c.endpoint_create_on_branch("ep_gc_invis", "gc_invis", branch_pg_port)?;
+    c.endpoint_create_on_branch("ep_gc_invis", "gc_invis", branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
-    let id = ps_id.to_string();
     let pages = format!("SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b}'");
     let queue = format!("SELECT count(*) FROM pageserver.pending_gc WHERE branch_id = '{b}'");
 
@@ -70,8 +69,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // doesn't evict the PS's in-memory pages cache, so a running PS
     // could serve the still-cached pre-GC chain and mask an over-delete.
     c.yb(&["endpoint", "stop", "ep_gc_invis"])?;
-    c.yb(&["pageserver", "stop", "--id", &id])?;
-    c.yb(&["pageserver", "start", "--id", &id])?;
+    c.yb(&["pageserver", "stop", "ep_gc_invis"])?;
+    c.yb(&["pageserver", "start", "ep_gc_invis"])?;
     c.yb(&["endpoint", "start", "ep_gc_invis"])?;
     let mut ready = false;
     for _ in 0..30 {
@@ -93,7 +92,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let got_cnt = db::query_i64(&conn, "SELECT count(*) FROM gc_invisible").await;
 
     let _ = c.yb(&["branch", "drop", "--branch-id", &b]);
-    c.yb_quiet(&["pageserver", "stop", "--id", &id, "-m", "immediate"]);
+    c.yb_quiet(&["pageserver", "stop", "ep_gc_invis", "-m", "immediate"]);
 
     let (got_sum, got_cnt) = (got_sum?, got_cnt?);
     if got_cnt != want_cnt {

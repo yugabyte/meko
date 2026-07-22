@@ -42,7 +42,6 @@ func recordingServer(t *testing.T, cap *capture, status int, respBody string) *h
 }
 
 func ptrStr(s string) *string { return &s }
-func ptrI64(v int64) *int64   { return &v }
 
 func TestControllerAttachHook(t *testing.T) {
 	var cap capture
@@ -51,7 +50,7 @@ func TestControllerAttachHook(t *testing.T) {
 
 	resp, err := c.AttachHook(context.Background(), registry.AttachHookRequest{
 		BranchID: "0102030405060708090a0b0c0d0e0f10",
-		NodeID:   ptrI64(3),
+		Attach:   true,
 	})
 	if err != nil {
 		t.Fatalf("AttachHook: %v", err)
@@ -64,52 +63,11 @@ func TestControllerAttachHook(t *testing.T) {
 	if err := json.Unmarshal(cap.body, &sent); err != nil {
 		t.Fatalf("request body not valid AttachHookRequest: %v", err)
 	}
-	if sent.BranchID != "0102030405060708090a0b0c0d0e0f10" || sent.NodeID == nil || *sent.NodeID != 3 {
+	if sent.BranchID != "0102030405060708090a0b0c0d0e0f10" || !sent.Attach {
 		t.Fatalf("unexpected request body: %+v", sent)
 	}
 	if resp.Generation == nil || *resp.Generation != 7 {
 		t.Fatalf("unexpected generation: %+v", resp.Generation)
-	}
-}
-
-func TestControllerNodeRegisterAndList(t *testing.T) {
-	var cap capture
-	srv := recordingServer(t, &cap, http.StatusOK, `null`)
-	c := NewController(srv.URL, nil)
-
-	err := c.NodeRegister(context.Background(), registry.NodeRegisterRequest{
-		NodeID:         1,
-		ListenPgAddr:   "127.0.0.1",
-		ListenPgPort:   6400,
-		ListenHTTPAddr: "127.0.0.1",
-		ListenHTTPPort: 9898,
-	})
-	if err != nil {
-		t.Fatalf("NodeRegister: %v", err)
-	}
-	if cap.method != http.MethodPost || cap.path != "/control/v1/node" {
-		t.Fatalf("register hit %s %s", cap.method, cap.path)
-	}
-	var sent registry.NodeRegisterRequest
-	if err := json.Unmarshal(cap.body, &sent); err != nil {
-		t.Fatalf("bad register body: %v", err)
-	}
-	if sent.NodeID != 1 || sent.ListenHTTPPort != 9898 {
-		t.Fatalf("unexpected register body: %+v", sent)
-	}
-
-	list := recordingServer(t, &cap, http.StatusOK,
-		`[{"id":1,"availability":"Active","listen_http_addr":"127.0.0.1","listen_http_port":9898,"listen_pg_addr":"127.0.0.1","listen_pg_port":6400}]`)
-	c2 := NewController(list.URL, nil)
-	nodes, err := c2.NodeList(context.Background())
-	if err != nil {
-		t.Fatalf("NodeList: %v", err)
-	}
-	if cap.method != http.MethodGet || cap.path != "/control/v1/node" {
-		t.Fatalf("list hit %s %s", cap.method, cap.path)
-	}
-	if len(nodes) != 1 || nodes[0].ID != 1 || nodes[0].Availability != "Active" || nodes[0].ListenHTTPPort != 9898 {
-		t.Fatalf("unexpected nodes: %+v", nodes)
 	}
 }
 
@@ -253,7 +211,7 @@ func TestControllerHTTPError(t *testing.T) {
 	var cap capture
 	srv := recordingServer(t, &cap, http.StatusConflict, `{"message":"nope"}`)
 	c := NewController(srv.URL, nil)
-	_, err := c.NodeList(context.Background())
+	_, err := c.EndpointList(context.Background())
 	if err == nil {
 		t.Fatal("expected error on 409")
 	}

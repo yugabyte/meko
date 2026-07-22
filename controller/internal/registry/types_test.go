@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// These tests pin the JSON wire shapes to what the launcher's Rust client
-// (control_plane) and pageserver_api::controller_api serialize/expect. A field
+// These tests pin the JSON wire shapes the launcher's client expects. A field
 // rename that silently broke the contract would fail here.
 
 func TestAttachHookResponseWire(t *testing.T) {
@@ -21,22 +20,22 @@ func TestAttachHookResponseWire(t *testing.T) {
 }
 
 func TestInspectResponseWire(t *testing.T) {
-	att := [2]uint64{3, 7}
-	if got := mustMarshal(t, InspectResponse{Attachment: &att}); got != `{"attachment":[3,7]}` {
-		t.Fatalf("inspect response = %s, want {\"attachment\":[3,7]}", got)
+	g := uint32(7)
+	if got := mustMarshal(t, InspectResponse{Generation: &g}); got != `{"generation":7}` {
+		t.Fatalf("inspect response = %s, want {\"generation\":7}", got)
 	}
-	if got := mustMarshal(t, InspectResponse{}); got != `{"attachment":null}` {
-		t.Fatalf("unattached inspect = %s, want {\"attachment\":null}", got)
+	if got := mustMarshal(t, InspectResponse{}); got != `{"generation":null}` {
+		t.Fatalf("unattached inspect = %s, want {\"generation\":null}", got)
 	}
 }
 
 func TestAttachHookRequestParse(t *testing.T) {
 	var req AttachHookRequest
-	body := `{"branch_id":"abc","node_id":1,"generation_override":null,"config":null}`
+	body := `{"branch_id":"abc","attach":true,"generation_override":null,"config":null}`
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.BranchID != "abc" || req.NodeID == nil || *req.NodeID != 1 {
+	if req.BranchID != "abc" || !req.Attach {
 		t.Fatalf("parsed attach-hook request = %+v", req)
 	}
 	if req.GenerationOverride != nil {
@@ -46,9 +45,9 @@ func TestAttachHookRequestParse(t *testing.T) {
 
 func TestBranchCreateResponseWire(t *testing.T) {
 	got := mustMarshal(t, BranchCreateResponse{Shards: []BranchCreateResponseShard{
-		{BranchID: "b", NodeID: 2, Generation: 4},
+		{BranchID: "b", Generation: 4},
 	}})
-	want := `{"shards":[{"branch_id":"b","node_id":2,"generation":4}]}`
+	want := `{"shards":[{"branch_id":"b","generation":4}]}`
 	if got != want {
 		t.Fatalf("branch-create response = %s, want %s", got, want)
 	}

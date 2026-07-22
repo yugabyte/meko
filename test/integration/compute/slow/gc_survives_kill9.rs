@@ -19,12 +19,11 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Dedicated branch + endpoint");
     let b = c.branch_create_named("gc_kill", "main")?;
-    let ps_id = c.endpoint_create_on_branch("ep_gc_kill", "gc_kill", branch_pg_port)?;
+    c.endpoint_create_on_branch("ep_gc_kill", "gc_kill", branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
     let ps_pid = "endpoints/ep_gc_kill/pageserver/pageserver.pid";
     let pages = format!("SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b}'");
     let queue = format!("SELECT count(*) FROM pageserver.pending_gc WHERE branch_id = '{b}'");
-    let id = ps_id.to_string();
 
     step("Seed + churn to queue a backlog, capture the pre-crash checksum");
     db::batch(
@@ -45,12 +44,12 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     .await?;
     let peak_pages = db::query_i64(&yb, &pages).await?;
 
-    step(&format!("SIGKILL the branch pageserver (node {ps_id}) mid-drain"));
+    step("SIGKILL the branch pageserver mid-drain");
     kill9(c, ps_pid, "pageserver")?;
 
     step("Restart the branch pageserver and recycle its compute");
-    c.yb_quiet(&["pageserver", "stop", "--id", &id, "-m", "immediate"]);
-    c.yb(&["pageserver", "start", "--id", &id])?;
+    c.yb_quiet(&["pageserver", "stop", "ep_gc_kill", "-m", "immediate"]);
+    c.yb(&["pageserver", "start", "ep_gc_kill"])?;
     c.yb_quiet(&["endpoint", "stop", "ep_gc_kill", "--mode", "immediate"]);
     c.yb(&["endpoint", "start", "ep_gc_kill"])?;
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
@@ -86,7 +85,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     )
     .await;
     let _ = c.yb(&["branch", "drop", "--branch-id", &b]);
-    c.yb_quiet(&["pageserver", "stop", "--id", &id, "-m", "immediate"]);
+    c.yb_quiet(&["pageserver", "stop", "ep_gc_kill", "-m", "immediate"]);
     if got_sum? != want_sum {
         bail!("checksum changed across kill/restart+GC");
     }

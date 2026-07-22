@@ -18,7 +18,6 @@ func envWithTemplates() *config.LocalEnv {
 		PgDistribDir:    "/pg",
 		YbAmpDistribDir: "/yb_amp",
 		PageserverTemplates: []config.YbAmpLocalInitPageserverConf{{
-			ID:             1,
 			ListenPgAddr:   "127.0.0.1:64000",
 			ListenHTTPAddr: "127.0.0.1:9898",
 			ListenGRPCAddr: ptrStr("127.0.0.1:51051"),
@@ -29,7 +28,6 @@ func envWithTemplates() *config.LocalEnv {
 			YbStorageConn:  ptrStr("{ host = 'h' }"),
 		}},
 		SafekeeperTemplates: []config.SafekeeperConf{{
-			ID:            1,
 			PgPort:        5454,
 			HTTPPort:      7676,
 			YbStorageConn: ptrStr("{ host = 'h' }"),
@@ -39,14 +37,11 @@ func envWithTemplates() *config.LocalEnv {
 	}
 }
 
-func TestFirstPageserverReusesTemplateIDAndPorts(t *testing.T) {
+func TestFirstPageserverReusesTemplatePorts(t *testing.T) {
 	env := envWithTemplates()
 	conf, err := allocatePageserverConf(env, "main")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if conf.ID != 1 {
-		t.Errorf("id = %d, want 1", conf.ID)
 	}
 	if conf.ListenPgAddr != "127.0.0.1:64000" {
 		t.Errorf("listen_pg_addr = %q, want 127.0.0.1:64000", conf.ListenPgAddr)
@@ -59,7 +54,7 @@ func TestFirstPageserverReusesTemplateIDAndPorts(t *testing.T) {
 	}
 }
 
-func TestSecondPageserverGetsNextIDAndPortDelta(t *testing.T) {
+func TestSecondPageserverGetsNextPortDelta(t *testing.T) {
 	env := envWithTemplates()
 	first, err := allocatePageserverConf(env, "main")
 	if err != nil {
@@ -70,10 +65,7 @@ func TestSecondPageserverGetsNextIDAndPortDelta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// id 2, delta = (2-1)*2 = 2.
-	if conf.ID != 2 {
-		t.Errorf("id = %d, want 2", conf.ID)
-	}
+	// The template port (64000) is taken, so delta = 2.
 	if conf.ListenPgAddr != "127.0.0.1:64002" {
 		t.Errorf("listen_pg_addr = %q, want 127.0.0.1:64002", conf.ListenPgAddr)
 	}
@@ -82,14 +74,14 @@ func TestSecondPageserverGetsNextIDAndPortDelta(t *testing.T) {
 	}
 }
 
-func TestFirstSafekeeperReusesTemplateIDAndPorts(t *testing.T) {
+func TestFirstSafekeeperReusesTemplatePorts(t *testing.T) {
 	env := envWithTemplates()
 	conf, err := allocateSafekeeperConf(env, "main", "aa")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if conf.ID != 1 || conf.PgPort != 5454 || conf.HTTPPort != 7676 {
-		t.Errorf("got id=%d pg=%d http=%d, want 1/5454/7676", conf.ID, conf.PgPort, conf.HTTPPort)
+	if conf.PgPort != 5454 || conf.HTTPPort != 7676 {
+		t.Errorf("got pg=%d http=%d, want 5454/7676", conf.PgPort, conf.HTTPPort)
 	}
 	if conf.BranchID == nil || *conf.BranchID != "aa" {
 		t.Errorf("branch_id = %v, want aa", conf.BranchID)
@@ -102,7 +94,7 @@ func TestFirstSafekeeperReusesTemplateIDAndPorts(t *testing.T) {
 	}
 }
 
-func TestSecondSafekeeperGetsNextIDAndPortDelta(t *testing.T) {
+func TestSecondSafekeeperGetsNextPortDelta(t *testing.T) {
 	env := envWithTemplates()
 	first, err := allocateSafekeeperConf(env, "main", "aa")
 	if err != nil {
@@ -113,9 +105,9 @@ func TestSecondSafekeeperGetsNextIDAndPortDelta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// id 2, delta = 2.
-	if conf.ID != 2 || conf.PgPort != 5456 || conf.HTTPPort != 7678 {
-		t.Errorf("got id=%d pg=%d http=%d, want 2/5456/7678", conf.ID, conf.PgPort, conf.HTTPPort)
+	// The template pg port (5454) is taken, so delta = 2.
+	if conf.PgPort != 5456 || conf.HTTPPort != 7678 {
+		t.Errorf("got pg=%d http=%d, want 5456/7678", conf.PgPort, conf.HTTPPort)
 	}
 	if conf.EndpointID != "ep_b1" {
 		t.Errorf("endpoint_id = %q, want ep_b1", conf.EndpointID)
@@ -186,9 +178,6 @@ func TestPageserverInitConfPreservesTemplateYbStorageConn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if initConf.ID != allocated.ID {
-		t.Errorf("id = %d, want %d", initConf.ID, allocated.ID)
-	}
 	if initConf.ListenPgAddr != allocated.ListenPgAddr {
 		t.Errorf("listen_pg_addr = %q, want %q", initConf.ListenPgAddr, allocated.ListenPgAddr)
 	}
@@ -243,7 +232,7 @@ func TestMutableChanged(t *testing.T) {
 		t.Error("no mutation should report unchanged")
 	}
 	// Appending a safekeeper is a persisted mutation.
-	env.Safekeepers = append(env.Safekeepers, config.SafekeeperConf{ID: 1, EndpointID: "main"})
+	env.Safekeepers = append(env.Safekeepers, config.SafekeeperConf{EndpointID: "main"})
 	if !MutableChanged(before, env) {
 		t.Error("appending a safekeeper should report changed")
 	}

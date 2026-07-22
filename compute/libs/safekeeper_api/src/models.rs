@@ -6,7 +6,7 @@ use postgres_ffi_types::TimestampTz;
 use postgres_versioninfo::PgVersionId;
 use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
 
@@ -33,7 +33,6 @@ pub struct TimelineCreateRequest {
 /// Used as both model and internally.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerInfo {
-    pub sk_id: NodeId,
     /// LSN of the last record.
     pub flush_lsn: Lsn,
     pub commit_lsn: Lsn,

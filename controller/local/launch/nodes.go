@@ -20,48 +20,10 @@ import (
 
 // --- pageserver ---
 
-// nodeRegisterRequest builds the controller node-registration payload for a
-// pageserver, mirroring Rust `PageServerNode::node_register_request`. Ports
-// come from the listen addresses; the advertised host is always "localhost".
-func nodeRegisterRequest(conf *config.PageServerConf) (registry.NodeRegisterRequest, error) {
-	pgPort, err := portOf(conf.ListenPgAddr)
-	if err != nil {
-		return registry.NodeRegisterRequest{}, err
-	}
-	httpPort, err := portOf(conf.ListenHTTPAddr)
-	if err != nil {
-		return registry.NodeRegisterRequest{}, err
-	}
-	req := registry.NodeRegisterRequest{
-		NodeID:         conf.ID,
-		ListenPgAddr:   "localhost",
-		ListenPgPort:   pgPort,
-		ListenHTTPAddr: "localhost",
-		ListenHTTPPort: httpPort,
-	}
-	if conf.ListenHTTPSAddr != nil {
-		hp, err := portOf(*conf.ListenHTTPSAddr)
-		if err != nil {
-			return registry.NodeRegisterRequest{}, err
-		}
-		req.ListenHTTPSPort = &hp
-	}
-	if conf.ListenGRPCAddr != nil {
-		gp, err := portOf(*conf.ListenGRPCAddr)
-		if err != nil {
-			return registry.NodeRegisterRequest{}, err
-		}
-		host := "localhost"
-		req.ListenGrpcAddr = &host
-		req.ListenGrpcPort = &gp
-	}
-	return req, nil
-}
-
-// registerAndAttach registers the pageserver with the controller, bumps the
-// branch's generation via the attach-hook, and persists the fresh generation
-// into pageserver.toml. No-op when the pageserver has no baked branch
-// identity. Mirrors Rust `PageServerNode::register_and_attach`.
+// registerAndAttach bumps the branch's generation via the attach-hook and
+// persists the fresh generation into pageserver.toml. No-op when the
+// pageserver has no baked branch identity. Mirrors Rust
+// `PageServerNode::register_and_attach`.
 func registerAndAttach(ctx context.Context, env *config.LocalEnv, conf *config.PageServerConf) error {
 	if conf.BranchID == nil {
 		return nil
@@ -71,17 +33,9 @@ func registerAndAttach(ctx context.Context, env *config.LocalEnv, conf *config.P
 		return err
 	}
 	ctrl := client.NewController(base, httpClient())
-	req, err := nodeRegisterRequest(conf)
-	if err != nil {
-		return err
-	}
-	if err := ctrl.NodeRegister(ctx, req); err != nil {
-		return fmt.Errorf("register pageserver node with controller: %w", err)
-	}
-	nodeID := conf.ID
 	resp, err := ctrl.AttachHook(ctx, registry.AttachHookRequest{
 		BranchID: *conf.BranchID,
-		NodeID:   &nodeID,
+		Attach:   true,
 	})
 	if err != nil {
 		return err
@@ -93,7 +47,7 @@ func registerAndAttach(ctx context.Context, env *config.LocalEnv, conf *config.P
 	if err := cfg.SetPageserverIdentity(tomlPath, *conf.BranchID, *resp.Generation, nil); err != nil {
 		return err
 	}
-	fmt.Printf("pageserver %d serves %s at generation %d\n", conf.ID, *conf.BranchID, *resp.Generation)
+	fmt.Printf("pageserver serves %s at generation %d\n", *conf.BranchID, *resp.Generation)
 	return nil
 }
 

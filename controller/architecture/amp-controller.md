@@ -229,7 +229,7 @@ Exactly one of each runs per placement group (§1):
   everything below it and exposes the API (§3) that an agent layer (§12) will consume.
 - **storage-layer registry** — the generation-fencing authority for the
   pageserver (it issues generations via the attach-hook the launcher calls; the
-  safekeeper is endpoint-owned and not registered with it) plus the node/branch/
+  safekeeper is endpoint-owned and not registered with it) plus the branch/
   endpoint registries. amp-controller owns this **in-process** (§11.1) in a dedicated
   `registry` schema — never amp-controller's product state store, never exposed to
   users. See [`sc-integration.md`](sc-integration.md).
@@ -762,7 +762,6 @@ the upstream multi-tenant machinery is dropped.
 
 | API surface | What it does | amp posture |
 |---|---|---|
-| Node registry (`/control/v1/node*`) | Register/describe pageservers (bookkeeping/observability; nothing gates on it) | **Kept** |
 | ~~Safekeeper registry~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly | **Removed** |
 | Branch bookkeeping (`/control/v1/branch/*`) | Branch register/drop, branch-name mappings, pending-init recipes | **Kept** |
 | Generation authority (`/debug/v1/attach-hook`, `/inspect`) | Issue/inspect the per-branch fencing generation | **Kept** |
@@ -772,7 +771,6 @@ the upstream multi-tenant machinery is dropped.
 | API surface | What it does | Used by yb-amp today | amp-controller posture |
 |---|---|---|---|
 | Upcalls (`/upcall/v1/*`) | Timeline-import status reporting only — the `re-attach`/`validate` generation-fencing upcalls were removed (the yb pageserver never called them; fencing is via the launcher's attach-hook) | Import flows only | **Reuse** (import only) |
-| Node registry (`/control/v1/node*`) | Register/describe/configure pageservers (config sets availability only; the node scheduling-policy machinery was removed) | Yes | **Reuse** |
 | ~~Safekeeper registry (`/control/v1/safekeeper*`)~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly, so the controller never contacts a safekeeper | No longer exists | **Removed** |
 | Branch bookkeeping | Branch create/register/delete, branch-name mappings | Yes | **Reuse** |
 | Generation debug ops (`attach-hook`, `inspect`) | Issue/inspect generations | Yes | **Reuse** (internal/ops only) |

@@ -75,14 +75,13 @@ All under the `amp_controller_` namespace, following the Prometheus
 | `amp_controller_task_duration_seconds` | histogram | `kind` | Task execution time (terminal outcomes only; an interrupted task did partial work and stays reclaimable, so its partial time is not observed). |
 | `amp_controller_tasks_inflight` | gauge | — | Tasks currently executing. |
 | `amp_controller_registry_branches` | gauge | — | Branches currently recorded in the registry. |
-| `amp_controller_registry_nodes` | gauge | — | Pageserver nodes currently registered. |
 | `amp_controller_build_info` | gauge | `version`, `commit`, `build_date` | Constant 1; carries the build identity (from [`internal/version`](../internal/version), see `ac-versioning.md`) for joining onto other series. |
 
 Plus the standard Go runtime (`go_*`) and process (`process_*`) collectors.
 
-The two `registry_*` gauges are **collected at scrape time**: a
+The `registry_branches` gauge is **collected at scrape time**: a
 `prometheus.Collector` ([`internal/metrics/registry_stats.go`](../internal/metrics/registry_stats.go))
-runs `count(*)` over `registry.branches` / `registry.nodes` when `/metrics` is
+runs `count(*)` over `registry.branches` when `/metrics` is
 scraped, so there is no cached value to go stale and no background poller. If the
 count query fails it logs and emits nothing for that scrape rather than a wrong
 value. Everything else is recorded inline by the HTTP middleware and the task

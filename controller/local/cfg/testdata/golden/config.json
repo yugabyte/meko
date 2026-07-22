@@ -21,7 +21,6 @@
     "pageserver_connection_info": {
       "pageservers": [
         {
-          "id": 1,
           "libpq_url": "postgres://no_user@127.0.0.1:30300?sslmode=disable",
           "grpc_url": "grpc://no_user@127.0.0.1:30500"
         }

@@ -16,7 +16,7 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::sync::gate::Gate;
 
@@ -49,21 +49,6 @@ pub struct LocalSkInfo {
 // need.
 #[derive(Debug, Clone, Default)]
 pub struct PeersInfo(pub Vec<PeerInfo>);
-
-impl PeersInfo {
-    #[allow(dead_code)]
-    fn get(&mut self, id: NodeId) -> Option<&mut PeerInfo> {
-        self.0.iter_mut().find(|p| p.sk_id == id)
-    }
-
-    #[allow(dead_code)]
-    fn upsert(&mut self, p: &PeerInfo) {
-        match self.get(p.sk_id) {
-            Some(rp) => *rp = p.clone(),
-            None => self.0.push(p.clone()),
-        }
-    }
-}
 
 pub type ReadGuardSharedState<'a> = RwLockReadGuard<'a, SharedState>;
 

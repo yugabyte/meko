@@ -46,9 +46,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Dedicated branch + endpoint");
     let b = c.branch_create_named("gc_race", "main")?;
-    let ps_id = c.endpoint_create_on_branch("ep_gc_race", "gc_race", branch_pg_port)?;
+    c.endpoint_create_on_branch("ep_gc_race", "gc_race", branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
-    let id = ps_id.to_string();
     let read_pages = format!("SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b}'");
 
     step("Seed race_read + stack deep version chains, capture the stable checksum");
@@ -197,7 +196,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     let total_reads = reads_done.load(Ordering::Relaxed);
     let _ = c.yb(&["branch", "drop", "--branch-id", &b]);
-    c.yb_quiet(&["pageserver", "stop", "--id", &id, "-m", "immediate"]);
+    c.yb_quiet(&["pageserver", "stop", "ep_gc_race", "-m", "immediate"]);
 
     if let Some(e) = reader_err {
         return Err(e);

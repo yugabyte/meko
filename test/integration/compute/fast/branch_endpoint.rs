@@ -98,8 +98,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 
     step("Branch survives a pageserver restart (open-existing + lineage rebuild)");
-    c.yb(&["pageserver", "stop", "--id", "2"])?;
-    c.yb(&["pageserver", "start", "--id", "2"])?;
+    c.yb(&["pageserver", "stop", "ep_b1"])?;
+    c.yb(&["pageserver", "start", "ep_b1"])?;
     let after_restart = db::query_i64(&branch, "SELECT count(*) FROM branch_seed").await?;
     if after_restart != 1100 {
         bail!("branch sees {after_restart} rows after PS restart, want 1100 (1000 pre + 100 own)");

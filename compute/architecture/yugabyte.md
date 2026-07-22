@@ -528,7 +528,6 @@ pool.
 | Table | Purpose |
 |---|---|
 | `registry.branches` | Per-branch placement + generation record. Keyed by `branch_id` alone — branches are not sharded across pageservers (YB tablet-shards the keyspace itself). The `generation` counter, bumped by the attach-hook, is the fencing primitive; monotonic across the branch's lifecycle, NULL until first attach. |
-| `registry.nodes` | Pageserver registry (bookkeeping / observability; nothing gates on it). |
 | `registry.timelines` | Per-branch WAL start LSN + generation tracking. The branch's single co-located safekeeper is owned by the launcher, not tracked here. |
 | `registry.pending_timeline_inits` | Init recipe for a branch whose id + name were allocated at `branch create` but whose pageserver + safekeeper are not provisioned yet; `endpoint create` reads it back to materialize the branch, then deletes the row. NULL `ancestor_branch_id` = Bootstrap recipe (initdb + import on first start); non-NULL = fork off that ancestor at `start_lsn`. |
 | `registry.endpoints` | Durable registry of compute endpoints, keyed by endpoint id. `spec` is opaque JSONB the controller never interprets (it round-trips through `yb_amp_local`'s serde model). |

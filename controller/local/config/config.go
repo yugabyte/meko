@@ -73,10 +73,9 @@ func DefaultEndpointStorageConf() EndpointStorageConf {
 // config the launcher tracks. It is never serialized into `.yb_amp/config`
 // (the OnDiskConfig `pageservers` field is skip-serializing and rejected
 // on load); it is reconstructed by discovery from each pageserver's
-// `pageserver.toml` + `identity.toml`. DataDir is where those files were
-// found and is not part of any on-disk table.
+// `pageserver.toml`. DataDir is where that file was found (and keyed by the
+// endpoint) and is not part of any on-disk table.
 type PageServerConf struct {
-	ID              NodeID   `toml:"id"`
 	ListenPgAddr    string   `toml:"listen_pg_addr"`
 	ListenHTTPAddr  string   `toml:"listen_http_addr"`
 	ListenHTTPSAddr *string  `toml:"listen_https_addr,omitempty"`
@@ -94,11 +93,10 @@ type PageServerConf struct {
 }
 
 // SafekeeperConf mirrors Rust `SafekeeperConf`. It is `#[serde(default)]`
-// with no per-field skip rules, so id/pg_port/http_port/auth_enabled/
+// with no per-field skip rules, so pg_port/http_port/auth_enabled/
 // endpoint_id are always emitted; the optional fields are omitted when
 // nil.
 type SafekeeperConf struct {
-	ID               NodeID  `toml:"id"`
 	PgPort           uint16  `toml:"pg_port"`
 	PgTenantOnlyPort *uint16 `toml:"pg_tenant_only_port,omitempty"`
 	HTTPPort         uint16  `toml:"http_port"`
@@ -135,7 +133,6 @@ func (s *SafekeeperConf) GetComputePort() uint16 {
 // so the flatten works; Load/Persist enable those interfaces on their
 // encoder/decoder.
 type YbAmpLocalInitPageserverConf struct {
-	ID              NodeID
 	ListenPgAddr    string
 	ListenHTTPAddr  string
 	ListenHTTPSAddr *string
@@ -155,7 +152,6 @@ type YbAmpLocalInitPageserverConf struct {
 // fields (applying the skip rules) plus the flattened Other keys.
 func (c YbAmpLocalInitPageserverConf) MarshalTOML() ([]byte, error) {
 	m := map[string]any{
-		"id":               c.ID,
 		"listen_pg_addr":   c.ListenPgAddr,
 		"listen_http_addr": c.ListenHTTPAddr,
 		"pg_auth_type":     string(c.PgAuthType),
@@ -194,12 +190,6 @@ func (c *YbAmpLocalInitPageserverConf) UnmarshalTOML(data []byte) error {
 	other := map[string]any{}
 	for k, v := range m {
 		switch k {
-		case "id":
-			n, err := toInt64(v)
-			if err != nil {
-				return fmt.Errorf("pageserver template `id`: %w", err)
-			}
-			c.ID = n
 		case "listen_pg_addr":
 			c.ListenPgAddr, _ = v.(string)
 		case "listen_http_addr":
@@ -232,19 +222,6 @@ func (c *YbAmpLocalInitPageserverConf) UnmarshalTOML(data []byte) error {
 		c.Other = other
 	}
 	return nil
-}
-
-func toInt64(v any) (int64, error) {
-	switch n := v.(type) {
-	case int64:
-		return n, nil
-	case int:
-		return int64(n), nil
-	case uint64:
-		return int64(n), nil
-	default:
-		return 0, fmt.Errorf("expected integer, got %T", v)
-	}
 }
 
 // OnDiskConfig is the on-disk state stored in `.yb_amp/config` (TOML). It

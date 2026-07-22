@@ -1,7 +1,6 @@
 #![deny(unsafe_code)]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
-pub mod controller_api;
 pub mod key;
 pub mod keyspace;
 pub mod models;

@@ -257,7 +257,7 @@ mod tests {
 
     use futures::StreamExt;
     use postgres_ffi::MAX_SEND_SIZE;
-    use utils::id::{BranchId, NodeId};
+    use utils::id::BranchId;
     use utils::lsn::Lsn;
 
     use crate::test_utils::Env;
@@ -274,7 +274,7 @@ mod tests {
         let start_lsn = Lsn::from_str("0/149FD18").unwrap();
         let env = Env::new(true).unwrap();
         let tli = env
-            .make_timeline(NodeId(1), BranchId::generate(), start_lsn)
+            .make_timeline(BranchId::generate(), start_lsn)
             .await
             .unwrap();
 

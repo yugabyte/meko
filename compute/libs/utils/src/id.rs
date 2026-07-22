@@ -1,5 +1,4 @@
 use std::fmt;
-use std::num::ParseIntError;
 use std::str::FromStr;
 
 use anyhow::Context;
@@ -289,25 +288,6 @@ impl TryFrom<Option<&str>> for BranchId {
 
 /// If needed, reuse small string from proxy/src/types.rc
 pub type EndpointId = String;
-
-// Unique ID of a storage node (safekeeper or pageserver). Supposed to be issued
-// by the console.
-#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Hash, Debug, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct NodeId(pub u64);
-
-impl fmt::Display for NodeId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl FromStr for NodeId {
-    type Err = ParseIntError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(NodeId(u64::from_str(s)?))
-    }
-}
 
 #[cfg(test)]
 mod tests {

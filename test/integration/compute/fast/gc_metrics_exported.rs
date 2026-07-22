@@ -18,7 +18,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Dedicated branch + endpoint");
     let b = c.branch_create_named("gc_metrics", "main")?;
-    let ps_id = c.endpoint_create_on_branch("ep_gc_metrics", "gc_metrics", branch_pg_port)?;
+    c.endpoint_create_on_branch("ep_gc_metrics", "gc_metrics", branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
     let http = c.endpoint_ps_http_port("ep_gc_metrics")?;
 
@@ -54,7 +54,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         .await?;
 
     let _ = c.yb(&["branch", "drop", "--branch-id", &b]);
-    c.yb_quiet(&["pageserver", "stop", "--id", &ps_id.to_string(), "-m", "immediate"]);
+    c.yb_quiet(&["pageserver", "stop", "ep_gc_metrics", "-m", "immediate"]);
 
     if emitted <= 0.0 {
         bail!("no GC candidates emitted (metric absent/zero)");

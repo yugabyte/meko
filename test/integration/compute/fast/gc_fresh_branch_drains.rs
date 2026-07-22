@@ -17,7 +17,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Create a child branch off main and start its endpoint");
     let b1 = c.branch_create_named("gc_fresh", "main")?;
-    let ps_id = c.endpoint_create_on_branch("ep_gc_fresh", "gc_fresh", branch_pg_port)?;
+    c.endpoint_create_on_branch("ep_gc_fresh", "gc_fresh", branch_pg_port)?;
     let bconn = db::compute_conn(branch_pg_port);
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
     let pages = format!("SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b1}'");
@@ -78,6 +78,6 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // main's cutoff and doesn't accumulate idle branch PSes for later
     // scenarios.
     let _ = c.yb(&["branch", "drop", "--branch-id", &b1]);
-    c.yb_quiet(&["pageserver", "stop", "--id", &ps_id.to_string(), "-m", "immediate"]);
+    c.yb_quiet(&["pageserver", "stop", "ep_gc_fresh", "-m", "immediate"]);
     Ok(())
 }

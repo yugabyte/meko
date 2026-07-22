@@ -67,9 +67,8 @@ type Cluster struct {
 
 // PageserverConnectionItem mirrors compute_api::spec::PageserverConnectionItem.
 type PageserverConnectionItem struct {
-	ID       *config.NodeID `json:"id"`
-	LibpqURL *string        `json:"libpq_url"`
-	GrpcURL  *string        `json:"grpc_url"`
+	LibpqURL *string `json:"libpq_url"`
+	GrpcURL  *string `json:"grpc_url"`
 }
 
 // PageserverConnectionInfo mirrors compute_api::spec::PageserverConnectionInfo.

@@ -35,15 +35,6 @@ import (
 // DEFAULT_BRANCH_NAME).
 const DefaultBranchName = "main"
 
-// defaultPageserverID is the id of the first pageserver (Rust
-// DEFAULT_PAGESERVER_ID); it is the fallback the port-allocator reuses for
-// the main branch's pageserver.
-const defaultPageserverID config.NodeID = 1
-
-// defaultSafekeeperID is the id of the first safekeeper (Rust
-// DEFAULT_SAFEKEEPER_ID).
-const defaultSafekeeperID config.NodeID = 1
-
 // httpClient is the shared HTTP client for all controller / daemon calls. A
 // generous timeout matches the launcher's blocking, one-shot usage.
 func httpClient() *http.Client {

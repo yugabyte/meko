@@ -26,7 +26,6 @@ use tokio_postgres::{Client, SimpleQueryMessage, SimpleQueryRow};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info, trace, warn};
 use utils::critical_timeline;
-use utils::id::NodeId;
 use utils::lsn::Lsn;
 use utils::pageserver_feedback::PageserverFeedback;
 use utils::postgres_client::PostgresClientProtocol;
@@ -58,8 +57,6 @@ pub(super) struct WalConnectionStatus {
     pub streaming_lsn: Option<Lsn>,
     /// Latest commit_lsn received from the safekeeper. Can be zero if no message has been received yet.
     pub commit_lsn: Option<Lsn>,
-    /// The node it is connected to
-    pub node: NodeId,
 }
 
 pub(super) enum WalReceiverError {
@@ -119,7 +116,6 @@ pub(super) async fn handle_walreceiver_connection(
     cancellation: CancellationToken,
     connect_timeout: Duration,
     ctx: RequestContext,
-    safekeeper_node: NodeId,
     ingest_batch_size: u64,
     validate_wal_contiguity: bool,
 ) -> Result<(), WalReceiverError> {
@@ -142,7 +138,7 @@ pub(super) async fn handle_walreceiver_connection(
 
     let (replication_client, connection) = {
         let mut config = wal_source_connconf.to_tokio_postgres_config();
-        config.application_name(format!("pageserver-{}", timeline.conf.id.0).as_str());
+        config.application_name("pageserver");
         config.replication_mode(tokio_postgres::config::ReplicationMode::Physical);
         match time::timeout(connect_timeout, config.connect(tokio_postgres::NoTls)).await {
             Ok(client_and_conn) => client_and_conn?,
@@ -166,7 +162,6 @@ pub(super) async fn handle_walreceiver_connection(
         latest_wal_update: Utc::now().naive_utc(),
         streaming_lsn: None,
         commit_lsn: None,
-        node: safekeeper_node,
     };
     if let Err(e) = events_sender.send(TaskStateUpdate::Progress(connection_status)) {
         warn!(

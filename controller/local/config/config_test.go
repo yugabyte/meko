@@ -37,11 +37,10 @@ func fullConfig() OnDiskConfig {
 		PublicKeyPath:   "auth_public_key.pem",
 		Controller:      ctrl,
 		Safekeepers: []SafekeeperConf{{
-			ID: 1, PgPort: 5454, HTTPPort: 7676, YbStorageConn: strPtr(ybConn),
+			PgPort: 5454, HTTPPort: 7676, YbStorageConn: strPtr(ybConn),
 			BranchID: &branch, EndpointID: "main",
 		}},
 		PageserverTemplates: []YbAmpLocalInitPageserverConf{{
-			ID:             1,
 			ListenPgAddr:   "127.0.0.1:64000",
 			ListenHTTPAddr: "127.0.0.1:9898",
 			ListenGRPCAddr: strPtr("127.0.0.1:51051"),
@@ -52,7 +51,7 @@ func fullConfig() OnDiskConfig {
 			Other:          map[string]any{"extra_pageserver_key": "value123"},
 		}},
 		SafekeeperTemplates: []SafekeeperConf{{
-			ID: 1, PgPort: 5454, HTTPPort: 7676, EndpointID: "",
+			PgPort: 5454, HTTPPort: 7676, EndpointID: "",
 		}},
 		EndpointStorage: DefaultEndpointStorageConf(),
 		ControlPlaneAPI: strPtr("http://127.0.0.1:1234/upcall/v1/"),
@@ -313,7 +312,7 @@ func TestDataDirHelpers(t *testing.T) {
 	}
 }
 
-func writePageserverDir(t *testing.T, endpoints, name string, id int64, pgPort int) {
+func writePageserverDir(t *testing.T, endpoints, name string, pgPort int) {
 	t.Helper()
 	dir := filepath.Join(endpoints, name, "pageserver")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -327,16 +326,13 @@ func writePageserverDir(t *testing.T, endpoints, name string, id int64, pgPort i
 	if err := os.WriteFile(filepath.Join(dir, "pageserver.toml"), []byte(psToml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "identity.toml"), []byte("id = "+strconv.FormatInt(id, 10)+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestDiscoverPageservers(t *testing.T) {
 	tmp := t.TempDir()
 	endpoints := filepath.Join(tmp, "endpoints")
-	writePageserverDir(t, endpoints, "main", 1, 64000)
-	writePageserverDir(t, endpoints, "ep_b1", 2, 64002)
+	writePageserverDir(t, endpoints, "main", 64000)
+	writePageserverDir(t, endpoints, "ep_b1", 64002)
 	// An endpoint without a pageserver/ subdir is skipped.
 	if err := os.MkdirAll(filepath.Join(endpoints, "ro", "pgdata"), 0o755); err != nil {
 		t.Fatal(err)
@@ -349,21 +345,20 @@ func TestDiscoverPageservers(t *testing.T) {
 	if len(found) != 2 {
 		t.Fatalf("want 2, got %d", len(found))
 	}
-	byID := map[int64]PageServerConf{}
+	// Pageservers are keyed by their datadir (endpoint), not a node id.
+	byDir := map[string]PageServerConf{}
 	for _, p := range found {
-		byID[p.ID] = p
+		byDir[p.DataDir] = p
 	}
-	if byID[1].ListenPgAddr != "127.0.0.1:64000" {
-		t.Errorf("ps1 listen_pg_addr: %q", byID[1].ListenPgAddr)
+	main := byDir[filepath.Join(endpoints, "main", "pageserver")]
+	if main.ListenPgAddr != "127.0.0.1:64000" {
+		t.Errorf("main listen_pg_addr: %q", main.ListenPgAddr)
 	}
-	if byID[1].DataDir != filepath.Join(endpoints, "main", "pageserver") {
-		t.Errorf("ps1 data_dir: %q", byID[1].DataDir)
+	if main.PgAuthType != AuthTrust {
+		t.Errorf("main pg_auth_type: %q", main.PgAuthType)
 	}
-	if byID[1].PgAuthType != AuthTrust {
-		t.Errorf("ps1 pg_auth_type: %q", byID[1].PgAuthType)
-	}
-	if byID[2].DataDir != filepath.Join(endpoints, "ep_b1", "pageserver") {
-		t.Errorf("ps2 data_dir: %q", byID[2].DataDir)
+	if _, ok := byDir[filepath.Join(endpoints, "ep_b1", "pageserver")]; !ok {
+		t.Errorf("ep_b1 pageserver not discovered: %+v", found)
 	}
 }
 
@@ -386,7 +381,6 @@ func TestDiscoverPageserversErrorsOnMalformedToml(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(dir, "pageserver.toml"), []byte("this is not = valid = toml"), 0o644)
-	os.WriteFile(filepath.Join(dir, "identity.toml"), []byte("id = 1\n"), 0o644)
 	if _, err := DiscoverPageservers(endpoints); err == nil {
 		t.Fatal("expected error on malformed pageserver.toml")
 	}
@@ -399,7 +393,7 @@ func TestLoadPersistConfigRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Provision a pageserver so discovery finds it.
-	writePageserverDir(t, filepath.Join(tmp, "endpoints"), "main", 7, 64000)
+	writePageserverDir(t, filepath.Join(tmp, "endpoints"), "main", 64000)
 
 	env, err := LoadConfig(tmp)
 	if err != nil {
@@ -408,7 +402,7 @@ func TestLoadPersistConfigRoundTrip(t *testing.T) {
 	if env.ControlPlaneAPI != "http://127.0.0.1:1234/upcall/v1/" {
 		t.Errorf("control_plane_api: %q", env.ControlPlaneAPI)
 	}
-	if len(env.Pageservers) != 1 || env.Pageservers[0].ID != 7 {
+	if len(env.Pageservers) != 1 || env.Pageservers[0].ListenPgAddr != "127.0.0.1:64000" {
 		t.Errorf("discovered pageservers: %+v", env.Pageservers)
 	}
 	if env.Controller.MaxOffline.Duration() != 10*time.Second {

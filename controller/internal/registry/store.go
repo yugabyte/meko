@@ -15,13 +15,12 @@ import (
 var (
 	// ErrNotFound is returned when an addressed row does not exist.
 	ErrNotFound = errors.New("registry: not found")
-	// ErrConflict is returned when a request collides with existing state (e.g.
-	// re-registering a node id with different listen addresses).
+	// ErrConflict is returned when a request collides with existing state.
 	ErrConflict = errors.New("registry: conflict")
 )
 
 // Store persists the storage-layer control state (generation authority + the
-// branch/node/endpoint/pending-init registries) in the `registry` schema of the
+// branch/endpoint/pending-init registries) in the `registry` schema of the
 // shared yb_storage database. All statements are schema-qualified so they resolve
 // regardless of the pool's search_path (`controller`).
 type Store struct {
@@ -38,34 +37,30 @@ func (s *Store) Ready(ctx context.Context) error {
 	return s.pool.Healthy(ctx)
 }
 
-// RegistryCounts returns the live inventory sizes the metrics collector exports
-// as gauges: the number of branches known to the registry and the number of
-// registered pageserver nodes. Queried on each scrape, so it must stay cheap
-// (count(*) over two small tables).
-func (s *Store) RegistryCounts(ctx context.Context) (branches, nodes int64, err error) {
+// RegistryCounts returns the live inventory size the metrics collector exports
+// as a gauge: the number of branches known to the registry. Queried on each
+// scrape, so it must stay cheap (count(*) over one small table).
+func (s *Store) RegistryCounts(ctx context.Context) (branches int64, err error) {
 	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM registry.branches`).Scan(&branches); err != nil {
-		return 0, 0, fmt.Errorf("count branches: %w", err)
+		return 0, fmt.Errorf("count branches: %w", err)
 	}
-	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM registry.nodes`).Scan(&nodes); err != nil {
-		return 0, 0, fmt.Errorf("count nodes: %w", err)
-	}
-	return branches, nodes, nil
+	return branches, nil
 }
 
 // --- generation authority -------------------------------------------------
 
-// AttachHook issues a branch's next generation. With a node id it attaches the
-// branch to that pageserver and returns the incremented generation, creating the
-// branch row on first attach; without one it detaches the branch and returns
-// nil. The generation is a monotonic per-branch counter — the fencing primitive.
+// AttachHook issues a branch's next generation. On attach it increments and
+// returns the generation, creating the branch row on first attach; on detach it
+// clears the attachment and returns nil. The generation is a monotonic per-branch
+// counter — the fencing primitive.
 func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32, error) {
-	if req.NodeID == nil {
+	if !req.Attach {
 		// Detach clears the attachment but PRESERVES the generation counter: it
 		// must stay monotonic across the branch's lifecycle so a later reattach
 		// fences any stale pageserver from a prior generation.
 		if _, err := s.pool.Exec(ctx,
 			`UPDATE registry.branches
-			   SET generation_pageserver = NULL, placement_policy = '"Detached"'
+			   SET placement_policy = '"Detached"'
 			 WHERE branch_id = $1`, req.BranchID); err != nil {
 			return nil, fmt.Errorf("detach branch: %w", err)
 		}
@@ -90,8 +85,8 @@ func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32,
 	// Create the branch on first attach; a concurrent creator is a no-op.
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO registry.branches
-		   (branch_id, generation, generation_pageserver, placement_policy, config, scheduling_policy)
-		 VALUES ($1, $2, NULL, '{"Attached":0}', $3::jsonb, '"Active"')
+		   (branch_id, generation, placement_policy, config, scheduling_policy)
+		 VALUES ($1, $2, '{"Attached":0}', $3::jsonb, '"Active"')
 		 ON CONFLICT (branch_id) DO NOTHING`,
 		req.BranchID, initialGen, []byte(config)); err != nil {
 		return nil, fmt.Errorf("insert branch: %w", err)
@@ -100,10 +95,10 @@ func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32,
 	var gen *int32
 	err = tx.QueryRow(ctx,
 		`UPDATE registry.branches
-		    SET generation = generation + 1, generation_pageserver = $2, placement_policy = '{"Attached":0}'
+		    SET generation = generation + 1, placement_policy = '{"Attached":0}'
 		  WHERE branch_id = $1
 		  RETURNING generation`,
-		req.BranchID, *req.NodeID).Scan(&gen)
+		req.BranchID).Scan(&gen)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -120,116 +115,41 @@ func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32,
 	return &g, nil
 }
 
-// Inspect returns a branch's current (generation, node) attachment, or nil when
-// the branch is unattached or unknown.
-func (s *Store) Inspect(ctx context.Context, branchID string) (*[2]uint64, error) {
+// Inspect returns a branch's current generation, or nil when the branch is
+// unattached (detached or never attached) or unknown.
+func (s *Store) Inspect(ctx context.Context, branchID string) (*uint32, error) {
 	var gen *int32
-	var node *int64
+	var policy string
 	err := s.pool.QueryRow(ctx,
-		`SELECT generation, generation_pageserver FROM registry.branches WHERE branch_id = $1`,
-		branchID).Scan(&gen, &node)
+		`SELECT generation, placement_policy FROM registry.branches WHERE branch_id = $1`,
+		branchID).Scan(&gen, &policy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("inspect branch: %w", err)
 	}
-	if gen == nil || node == nil {
+	if gen == nil || policy == `"Detached"` {
 		return nil, nil
 	}
-	return &[2]uint64{uint64(uint32(*gen)), uint64(*node)}, nil
+	g := uint32(*gen)
+	return &g, nil
 }
 
 // BranchImport returns the branch's current attachment as a single shard. The
 // branch must already be attached (via AttachHook).
 func (s *Store) BranchImport(ctx context.Context, branchID string) (BranchCreateResponse, error) {
-	att, err := s.Inspect(ctx, branchID)
+	gen, err := s.Inspect(ctx, branchID)
 	if err != nil {
 		return BranchCreateResponse{}, err
 	}
-	if att == nil {
+	if gen == nil {
 		return BranchCreateResponse{}, ErrNotFound
 	}
 	return BranchCreateResponse{Shards: []BranchCreateResponseShard{{
 		BranchID:   branchID,
-		NodeID:     int64(att[1]),
-		Generation: uint32(att[0]),
+		Generation: *gen,
 	}}}, nil
-}
-
-// --- node registry --------------------------------------------------------
-
-// NodeRegister records a pageserver in the node registry. Re-registering the
-// same id with the same listen addresses is idempotent; a different address set
-// is a conflict.
-func (s *Store) NodeRegister(ctx context.Context, req NodeRegisterRequest) error {
-	// Insert first: `ON CONFLICT DO NOTHING` makes concurrent registrations
-	// race-free (a lost insert affects zero rows) and saves a round-trip on the
-	// fresh-registration path.
-	tag, err := s.pool.Exec(ctx,
-		`INSERT INTO registry.nodes
-		   (node_id, listen_http_addr, listen_http_port, listen_pg_addr, listen_pg_port,
-		    listen_https_port, listen_grpc_addr, listen_grpc_port)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		 ON CONFLICT (node_id) DO NOTHING`,
-		req.NodeID, req.ListenHTTPAddr, int32(req.ListenHTTPPort), req.ListenPgAddr, int32(req.ListenPgPort),
-		u16ToInt(req.ListenHTTPSPort), req.ListenGrpcAddr, u16ToInt(req.ListenGrpcPort))
-	if err != nil {
-		return fmt.Errorf("insert node: %w", err)
-	}
-	if tag.RowsAffected() > 0 {
-		return nil // freshly registered
-	}
-
-	// The row already existed: idempotent only if the listen addresses match;
-	// a different address set for the same id is a conflict.
-	var hAddr, pAddr string
-	var hPort, pPort int32
-	if err := s.pool.QueryRow(ctx,
-		`SELECT listen_http_addr, listen_http_port, listen_pg_addr, listen_pg_port
-		   FROM registry.nodes WHERE node_id = $1`,
-		req.NodeID).Scan(&hAddr, &hPort, &pAddr, &pPort); err != nil {
-		return fmt.Errorf("lookup node: %w", err)
-	}
-	if hAddr != req.ListenHTTPAddr || hPort != int32(req.ListenHTTPPort) ||
-		pAddr != req.ListenPgAddr || pPort != int32(req.ListenPgPort) {
-		return ErrConflict
-	}
-	return nil
-}
-
-// NodeList returns every registered node. Availability is reported as "Active":
-// the registry is bookkeeping only, with no liveness tracking.
-func (s *Store) NodeList(ctx context.Context) ([]NodeDescribeResponse, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT node_id, listen_http_addr, listen_http_port, listen_https_port,
-		        listen_pg_addr, listen_pg_port, listen_grpc_addr, listen_grpc_port
-		   FROM registry.nodes ORDER BY node_id`)
-	if err != nil {
-		return nil, fmt.Errorf("list nodes: %w", err)
-	}
-	defer rows.Close()
-
-	out := []NodeDescribeResponse{}
-	for rows.Next() {
-		var n NodeDescribeResponse
-		var httpsPort, grpcPort *int32
-		if err := rows.Scan(&n.ID, &n.ListenHTTPAddr, &n.ListenHTTPPort, &httpsPort,
-			&n.ListenPgAddr, &n.ListenPgPort, &n.ListenGrpcAddr, &grpcPort); err != nil {
-			return nil, fmt.Errorf("scan node: %w", err)
-		}
-		n.Availability = "Active"
-		n.ListenHTTPSPort = intToU16(httpsPort)
-		n.ListenGrpcPort = intToU16(grpcPort)
-		out = append(out, n)
-	}
-	return out, rows.Err()
-}
-
-// NodeConfigure accepts an availability update. Availability is not tracked
-// (no liveness heartbeat), so this is a no-op retained for wire compatibility.
-func (s *Store) NodeConfigure(ctx context.Context, req NodeConfigureRequest) error {
-	return nil
 }
 
 // --- timeline / branch-name registry --------------------------------------
@@ -396,23 +316,4 @@ func (s *Store) EndpointDelete(ctx context.Context, endpointID string) error {
 		return fmt.Errorf("delete endpoint: %w", err)
 	}
 	return nil
-}
-
-// u16ToInt widens an optional uint16 to an optional int32 for the INTEGER port
-// columns (nil stays NULL).
-func u16ToInt(p *uint16) *int32 {
-	if p == nil {
-		return nil
-	}
-	v := int32(*p)
-	return &v
-}
-
-// intToU16 narrows an optional INTEGER port column back to an optional uint16.
-func intToU16(p *int32) *uint16 {
-	if p == nil {
-		return nil
-	}
-	v := uint16(*p)
-	return &v
 }

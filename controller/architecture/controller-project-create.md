@@ -21,7 +21,7 @@ expressed in cAmp's resource model. **Precondition:** the storage pool already e
   its *own* pageserver and safekeeper — deployed by cAmp's provisioner
   (`internal/deploy`).
 - The **controller** — which cAmp runs as a managed subprocess; client in
-  `internal/registry` — is the branch/node registry and the
+  `internal/registry` — is the branch registry and the
   generation-fencing authority. cAmp drives it over the flat
   `/v1/branch/{branch_id}` surface.
 
@@ -66,10 +66,9 @@ endpoint materializes the branch, and cAmp finalizes.
   `BOOTSTRAP=true`.
 
 **The endpoint materializes** (its supervisor, during bring-up):
-1. Registers its pageserver node with the controller and runs the
-   attach-hook; the controller attaches the branch to this pageserver
-   and grants its **generation**. (The safekeeper is not registered with the
-   controller — the endpoint owns it; see #171.)
+1. Runs the attach-hook; the controller attaches the branch and grants
+   its **generation**. (Neither the pageserver node nor the safekeeper is
+   registered with the controller — the endpoint owns them.)
 2. Runs **`initdb`** (`BOOTSTRAP=true`) — the pageserver bootstraps the branch.
 3. Once the branch is `Active`, reads its `start_lsn`, creates the branch on
    its safekeeper (single-member membership, generation 1), and **registers it
@@ -151,14 +150,14 @@ writes are synchronous today and move onto the task framework under #113.
   endpoint attaches; it is never pinned.
 - **Controller calls used:** record / delete pending init, keyed by
   `branch_id` (`POST`/`DELETE /control/v1/branch/{branch_id}/pending_init`, by
-  cAmp); pageserver-node register, attach-hook, and the
-  branch `register` route (`POST /control/v1/branch/{branch_id}/register`, by the
-  endpoint). (No safekeeper register — the safekeeper is endpoint-owned; see #171.)
+  cAmp); attach-hook and the branch `register` route
+  (`POST /control/v1/branch/{branch_id}/register`, by the endpoint). (No node or
+  safekeeper register — both are endpoint-owned; see #171.)
 - **Direction (planned).** The SC is being integrated into amp-controller and the
   create flow is moving to *create-then-configure*: endpoints created unassigned
   and bound to a branch on demand (a pre-warm pool, for faster turnaround). amp
   mints `branch_id` + `generation` (the data plane only enforces the generation)
-  and pushes a `configure` to the pod; node-register + attach-hook move into amp's
+  and pushes a `configure` to the pod; the attach-hook moves into amp's
   deploy code; the pod's branch `register` folds into the configure response
   (`start_lsn` is the pod's lone output). See
   [`sc-integration.md`](sc-integration.md).

@@ -4,7 +4,6 @@
 
 use std::env;
 use std::env::{VarError, var};
-use std::io::Read;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -16,7 +15,7 @@ use metrics::launch_timestamp::{LaunchTimestamp, set_launch_timestamp_metric};
 use metrics::set_build_info_metric;
 use nix::sys::socket::{setsockopt, sockopt};
 use pageserver::basebackup_cache::BasebackupCache;
-use pageserver::config::{PageServerConf, PageserverIdentity, ignored_fields};
+use pageserver::config::{PageServerConf, ignored_fields};
 use pageserver::metrics::{STARTUP_DURATION, STARTUP_IS_LOADING};
 use pageserver::page_server::{TenantSharedResources, mgr};
 use pageserver::page_service::GrpcPageServiceHandler;
@@ -102,13 +101,12 @@ fn main() -> anyhow::Result<()> {
         .with_context(|| format!("Error opening workdir '{workdir}'"))?;
 
     let cfg_file_path = workdir.join("pageserver.toml");
-    let identity_file_path = workdir.join("identity.toml");
 
     // Set CWD to workdir for non-daemon modes
     env::set_current_dir(&workdir)
         .with_context(|| format!("Failed to set application's current dir to '{workdir}'"))?;
 
-    let (conf, ignored) = initialize_config(&identity_file_path, &cfg_file_path, &workdir)?;
+    let (conf, ignored) = initialize_config(&cfg_file_path, &workdir)?;
 
     // Initialize logging.
     //
@@ -224,36 +222,9 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn initialize_config(
-    identity_file_path: &Utf8Path,
     cfg_file_path: &Utf8Path,
     workdir: &Utf8Path,
 ) -> anyhow::Result<(&'static PageServerConf, ignored_fields::Paths)> {
-    // The deployment orchestrator writes out an indentity file containing the node id
-    // for all pageservers. This file is the source of truth for the node id. In order
-    // to allow for rolling back pageserver releases, the node id is also included in
-    // the pageserver config that the deployment orchestrator writes to disk for the pageserver.
-    // A rolled back version of the pageserver will get the node id from the pageserver.toml
-    // config file.
-    let identity = match std::fs::File::open(identity_file_path) {
-        Ok(mut f) => {
-            let md = f.metadata().context("stat config file")?;
-            if !md.is_file() {
-                anyhow::bail!(
-                    "Pageserver found identity file but it is a dir entry: {identity_file_path}. Aborting start up ..."
-                );
-            }
-
-            let mut s = String::new();
-            f.read_to_string(&mut s).context("read identity file")?;
-            toml_edit::de::from_str::<PageserverIdentity>(&s)?
-        }
-        Err(e) => {
-            anyhow::bail!(
-                "Pageserver could not read identity file: {identity_file_path}: {e}. Aborting start up ..."
-            );
-        }
-    };
-
     let config_file_contents =
         std::fs::read_to_string(cfg_file_path).context("read config file from filesystem")?;
 
@@ -281,7 +252,7 @@ fn initialize_config(
     };
 
     // Construct the runtime god object (it's called PageServerConf but actually is just global shared state).
-    let conf = PageServerConf::parse_and_validate(identity.id, config_toml, workdir)
+    let conf = PageServerConf::parse_and_validate(config_toml, workdir)
         .context("runtime-validation of config toml")?;
     let conf = Box::leak(Box::new(conf));
 

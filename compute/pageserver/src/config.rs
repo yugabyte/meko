@@ -25,7 +25,7 @@ use postgres_ffi::PgMajorVersion;
 use remote_storage::{RemotePath, RemoteStorageConfig};
 use reqwest::Url;
 use utils::generation::Generation;
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 use utils::logging::{LogFormat, SecretString};
 
 use crate::page_server::BRANCHES_SEGMENT_NAME;
@@ -57,10 +57,6 @@ pub struct TimelineIdentity {
 
 #[derive(Debug, Clone)]
 pub struct PageServerConf {
-    // Identifier of that particular pageserver so e g safekeepers
-    // can safely distinguish different pageservers
-    pub id: NodeId,
-
     /// yb-amp single-timeline identity. `None` only during the
     /// transition while the control plane still attaches tenants
     /// dynamically; once the single-timeline startup lands this is
@@ -318,7 +314,6 @@ impl PageServerConf {
     ///
     /// This leaves any options not present in the file in the built-in defaults.
     pub fn parse_and_validate(
-        id: NodeId,
         config_toml: pageserver_api::config::ConfigToml,
         workdir: &Utf8Path,
     ) -> anyhow::Result<Self> {
@@ -472,7 +467,6 @@ impl PageServerConf {
                     .expect("current_dir() is not a valid Utf8Path")
             }),
             control_plane_api_token: control_plane_api_token.map(SecretString::from),
-            id,
             default_tenant_conf: tenant_config,
             no_sync: no_sync.unwrap_or(false),
             enable_read_path_debugging: enable_read_path_debugging.unwrap_or(false),
@@ -581,13 +575,8 @@ impl PageServerConf {
         // Cf https://databricks.atlassian.net/browse/LKB-92?focusedCommentId=6722329
         config_toml.tenant_config.lsn_lease_length = Duration::from_secs(0);
 
-        PageServerConf::parse_and_validate(NodeId(0), config_toml, &repo_dir).unwrap()
+        PageServerConf::parse_and_validate(config_toml, &repo_dir).unwrap()
     }
-}
-
-#[derive(serde::Deserialize, serde::Serialize)]
-pub struct PageserverIdentity {
-    pub id: NodeId,
 }
 
 #[cfg(test)]
@@ -599,7 +588,7 @@ mod tests {
     use camino::Utf8PathBuf;
     use pageserver_api::config::{DiskUsageEvictionTaskConfig, EvictionOrder};
     use rstest::rstest;
-    use utils::{id::NodeId, serde_percent::Percent};
+    use utils::serde_percent::Percent;
 
     use super::PageServerConf;
 
@@ -614,8 +603,7 @@ mod tests {
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("empty config is valid");
         let workdir = Utf8PathBuf::from("/nonexistent");
-        PageServerConf::parse_and_validate(NodeId(0), config_toml, &workdir)
-            .expect("parse_and_validate");
+        PageServerConf::parse_and_validate(config_toml, &workdir).expect("parse_and_validate");
     }
 
     #[test]
@@ -632,7 +620,7 @@ mod tests {
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("identity config is valid");
         let workdir = Utf8PathBuf::from("/nonexistent");
-        let conf = PageServerConf::parse_and_validate(NodeId(0), config_toml.clone(), &workdir)
+        let conf = PageServerConf::parse_and_validate(config_toml.clone(), &workdir)
             .expect("parse_and_validate");
         let ident = conf.timeline_identity.expect("identity parsed");
         assert_eq!(
@@ -650,7 +638,7 @@ mod tests {
         let serialized = toml_edit::ser::to_string_pretty(&config_toml).expect("serializes");
         let reparsed = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(&serialized)
             .expect("round-trips");
-        let conf2 = PageServerConf::parse_and_validate(NodeId(0), reparsed, &workdir)
+        let conf2 = PageServerConf::parse_and_validate(reparsed, &workdir)
             .expect("parse_and_validate round trip");
         assert_eq!(conf2.timeline_identity, conf.timeline_identity);
         assert_eq!(conf2.timeline_init, conf.timeline_init);
@@ -671,8 +659,8 @@ mod tests {
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("branch config is valid");
         let workdir = Utf8PathBuf::from("/nonexistent");
-        let conf = PageServerConf::parse_and_validate(NodeId(0), config_toml, &workdir)
-            .expect("parse_and_validate");
+        let conf =
+            PageServerConf::parse_and_validate(config_toml, &workdir).expect("parse_and_validate");
         match conf.timeline_init {
             Some(pageserver_api::config::TimelineInitConfig::Branch {
                 ancestor_branch_id,
@@ -701,7 +689,7 @@ mod tests {
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("fields parse");
         let workdir = Utf8PathBuf::from("/nonexistent");
-        PageServerConf::parse_and_validate(NodeId(0), config_toml, &workdir)
+        PageServerConf::parse_and_validate(config_toml, &workdir)
             .expect_err("partial identity must be rejected");
 
         // [timeline_init] without identity must fail validation
@@ -714,7 +702,7 @@ mod tests {
         "#;
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("fields parse");
-        PageServerConf::parse_and_validate(NodeId(0), config_toml, &workdir)
+        PageServerConf::parse_and_validate(config_toml, &workdir)
             .expect_err("timeline_init without identity must be rejected");
     }
 
@@ -735,7 +723,7 @@ mod tests {
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("config has valid fields");
         let workdir = Utf8PathBuf::from("/nonexistent");
-        PageServerConf::parse_and_validate(NodeId(0), config_toml, &workdir)
+        PageServerConf::parse_and_validate(config_toml, &workdir)
             .expect_err("parse_and_validate should fail for endpoint without scheme");
     }
 
@@ -759,7 +747,7 @@ mod tests {
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(&input)
             .expect("config has valid fields");
         let workdir = Utf8PathBuf::from("/nonexistent");
-        let result = PageServerConf::parse_and_validate(NodeId(0), config_toml, &workdir);
+        let result = PageServerConf::parse_and_validate(config_toml, &workdir);
         assert_eq!(result.is_ok(), is_valid);
     }
 
@@ -821,7 +809,7 @@ mod tests {
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("disk_usage_based_eviction is valid");
         let workdir = Utf8PathBuf::from("/nonexistent");
-        let config = PageServerConf::parse_and_validate(NodeId(0), config_toml, &workdir).unwrap();
+        let config = PageServerConf::parse_and_validate(config_toml, &workdir).unwrap();
         let disk_usage_based_eviction = config.disk_usage_based_eviction;
         assert_eq!(
             expected_disk_usage_based_eviction,

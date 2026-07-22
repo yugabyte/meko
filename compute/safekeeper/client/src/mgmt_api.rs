@@ -10,7 +10,7 @@ use reqwest::{IntoUrl, Method, Response, StatusCode};
 use safekeeper_api::models::{
     self, SafekeeperStatus, SafekeeperUtilization, TimelineCreateRequest,
 };
-use utils::id::{BranchId, NodeId};
+use utils::id::BranchId;
 use utils::logging::SecretString;
 
 #[derive(Debug, Clone)]
@@ -98,18 +98,6 @@ impl Client {
 
     pub async fn timeline_status(&self, branch_id: BranchId) -> Result<Response> {
         let uri = format!("{}/v1/branch/{}", self.mgmt_api_endpoint, branch_id);
-        self.get(&uri).await
-    }
-
-    pub async fn snapshot(
-        &self,
-        branch_id: BranchId,
-        stream_to: NodeId,
-    ) -> Result<reqwest::Response> {
-        let uri = format!(
-            "{}/v1/branch/{}/snapshot/{}",
-            self.mgmt_api_endpoint, branch_id, stream_to.0
-        );
         self.get(&uri).await
     }
 

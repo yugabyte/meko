@@ -74,13 +74,12 @@ func assertEqualTree(t *testing.T, what string, got, want any) {
 func strPtr(s string) *string { return &s }
 func u16Ptr(v uint16) *uint16 { return &v }
 
-// --- pageserver.toml + identity + set-identity ---
+// --- pageserver.toml + set-identity ---
 
 func goldPageserverParams() PageserverParams {
 	yb := goldYbInlineConn
 	return PageserverParams{
 		Conf: config.YbAmpLocalInitPageserverConf{
-			ID:             1,
 			ListenPgAddr:   "127.0.0.1:30300",
 			ListenHTTPAddr: "127.0.0.1:30400",
 			ListenGRPCAddr: strPtr("127.0.0.1:30500"),
@@ -121,18 +120,6 @@ func TestPageserverTomlRequiresYbStorageConn(t *testing.T) {
 	if err := WritePageserverToml(filepath.Join(t.TempDir(), "x.toml"), p); err == nil {
 		t.Fatal("expected error when yb_storage_conn is nil")
 	}
-}
-
-func TestIdentityTomlGolden(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "identity.toml")
-	if err := WriteIdentityToml(path, 1); err != nil {
-		t.Fatalf("WriteIdentityToml: %v", err)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertEqualTree(t, "identity.toml", decodeTOML(t, got), decodeTOML(t, readGolden(t, "identity.toml")))
 }
 
 func TestTimelineInitBranchShape(t *testing.T) {
@@ -288,7 +275,6 @@ func TestConfigJSONGolden(t *testing.T) {
 
 	pub := readEd25519PublicKeyPEM(t, goldenPath("auth_public_key.pem"))
 
-	nodeID := config.NodeID(1)
 	cfg, err := BuildComputeConfig(ComputeSpecParams{
 		PostgresqlConf:  pgConf,
 		CreateTestUser:  false,
@@ -297,7 +283,6 @@ func TestConfigJSONGolden(t *testing.T) {
 		Mode:            ComputeModePrimary,
 		PageserverConnInfo: PageserverConnectionInfo{
 			Pageservers: []PageserverConnectionItem{{
-				ID:       &nodeID,
 				LibpqURL: strPtr("postgres://no_user@127.0.0.1:30300?sslmode=disable"),
 				GrpcURL:  strPtr("grpc://no_user@127.0.0.1:30500"),
 			}},
