@@ -181,6 +181,32 @@ func TestKubernetesValuesServiceType(t *testing.T) {
 	}
 }
 
+func TestKubernetesValuesNodeSelector(t *testing.T) {
+	cfg := testKubernetesConfig()
+	cfg.NodeSelector = map[string]string{"cloud.google.com/gke-ephemeral-storage-local-ssd": "true"}
+	k := NewKubernetesDeployer(cfg, nil)
+
+	v := k.values(testEndpointSpec(), "yb-ep-rel")
+	if v.NodeSelector["cloud.google.com/gke-ephemeral-storage-local-ssd"] != "true" {
+		t.Errorf("NodeSelector = %v, want the local-NVMe-SSD label", v.NodeSelector)
+	}
+
+	// When unset it must be omitted from the marshaled values entirely, so the
+	// endpoint chart's own default (schedule anywhere) applies.
+	v2 := NewKubernetesDeployer(testKubernetesConfig(), nil).values(testEndpointSpec(), "yb-ep-rel")
+	data, err := json.Marshal(v2)
+	if err != nil {
+		t.Fatalf("marshal values: %v", err)
+	}
+	var asMap map[string]any
+	if err := json.Unmarshal(data, &asMap); err != nil {
+		t.Fatalf("unmarshal values: %v", err)
+	}
+	if _, present := asMap["nodeSelector"]; present {
+		t.Errorf("nodeSelector should be omitted when unset, got %s", data)
+	}
+}
+
 func TestKubernetesValuesPersistence(t *testing.T) {
 	cfg := testKubernetesConfig()
 	cfg.StorageClass = "yb-standard"

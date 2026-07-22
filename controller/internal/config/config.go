@@ -61,6 +61,7 @@ type DeployConfig struct {
 	ComputePort        int               // compute Postgres port the endpoint Service publishes
 	ServiceType        string            // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
 	ServiceAnnotations map[string]string // annotations on the endpoint Service (e.g. GKE internal-LB)
+	NodeSelector       map[string]string // node labels endpoint pods must match (e.g. a local-NVMe-SSD pool)
 	TailnetSuffix      string            // Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") for deriving endpoint tailnet addresses; empty = disabled
 
 	// StorageClass provisions the endpoint's data volume (/data: pgdata, LFC,
@@ -114,14 +115,14 @@ const (
 
 // Config is the fully-resolved controller configuration.
 type Config struct {
-	ListenAddr        string
-	SigningKeyPath    string // optional; controller generates an ephemeral key if unset
-	Metrics           bool   // expose Prometheus /metrics and record instrumentation
-	Dev               bool   // serve the storage-layer control surface (attach-hook + registries), unauthenticated
-	Log               LogConfig
-	DB                DBConfig
-	Task              TaskConfig
-	Deploy            DeployConfig
+	ListenAddr     string
+	SigningKeyPath string // optional; controller generates an ephemeral key if unset
+	Metrics        bool   // expose Prometheus /metrics and record instrumentation
+	Dev            bool   // serve the storage-layer control surface (attach-hook + registries), unauthenticated
+	Log            LogConfig
+	DB             DBConfig
+	Task           TaskConfig
+	Deploy         DeployConfig
 }
 
 var schemaRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -162,6 +163,8 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.ServiceType, "deploy-service-type", env("AMP_DEPLOY_SERVICE_TYPE", "ClusterIP"), "k8s: endpoint Service type — ClusterIP (default), NodePort, or LoadBalancer")
 	var serviceAnnotationsRaw string
 	fs.StringVar(&serviceAnnotationsRaw, "deploy-service-annotations", env("AMP_DEPLOY_SERVICE_ANNOTATIONS", ""), "k8s: comma-separated key=value annotations for the endpoint Service, e.g. internal-LB annotations (values cannot contain commas)")
+	var nodeSelectorRaw string
+	fs.StringVar(&nodeSelectorRaw, "deploy-node-selector", env("AMP_DEPLOY_NODE_SELECTOR", ""), "k8s: comma-separated key=value node labels endpoint pods must schedule onto, e.g. a local-NVMe-SSD ephemeral pool (values cannot contain commas)")
 	fs.StringVar(&d.TailnetSuffix, "deploy-tailnet-suffix", env("AMP_DEPLOY_TAILNET_SUFFIX", ""), "k8s: Tailscale MagicDNS suffix (e.g. tail5955.ts.net) for deriving each endpoint's tailnet address when its Service is tailnet-exposed (tailscale.com/expose=true); empty = disabled")
 	fs.StringVar(&d.StorageClass, "deploy-storage-class", env("AMP_DEPLOY_STORAGE_CLASS", ""), "k8s: storage class for the endpoint data volume — provisions a PersistentVolumeClaim (EBS/PD). Empty = ephemeral emptyDir (no persistent volume)")
 	fs.StringVar(&d.DiskSize, "deploy-disk-size", env("AMP_DEPLOY_DISK_SIZE", "10Gi"), "k8s: requested size of the endpoint data volume when --deploy-storage-class is set")
@@ -184,6 +187,7 @@ func Load(args []string) (*Config, error) {
 		return nil, err
 	}
 	d.ServiceAnnotations = parseKeyValueList(serviceAnnotationsRaw)
+	d.NodeSelector = parseKeyValueList(nodeSelectorRaw)
 
 	// The universe connection is required configuration: the controller refuses
 	// to start without it (amp-controller.md §9).

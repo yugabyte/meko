@@ -33,12 +33,16 @@
 #
 # Exposure (avoid slow cloud LBs):
 #   CONTROLLER_EXPOSE   nodeport | internal-lb | external-lb | none   (default: internal-lb)
+#   ENDPOINT_EXPOSE     clusterip | nodeport | internal-lb | external-lb (wrapper)
 #   ENDPOINT_SERVICE_TYPE  ClusterIP | NodePort | LoadBalancer        (default: ClusterIP)
 #
 # Endpoint data volume:
 #   ENDPOINT_STORAGE_CLASS  storage class for each endpoint's /data PVC (EBS/PD);
 #                           empty (default) => an ephemeral emptyDir
 #   ENDPOINT_DISK_SIZE      PVC size when ENDPOINT_STORAGE_CLASS is set (default: 10Gi)
+#   ENDPOINT_NODE_SELECTOR  "k=v,k=v" node labels endpoint pods must schedule onto;
+#                           leave ENDPOINT_STORAGE_CLASS empty and point this at a
+#                           local-NVMe-SSD ephemeral pool to put /data on NVMe
 # The in-cluster ClusterIP Service (amp-controller, API + SC port) is always
 # created. ClusterIP endpoints avoid a per-endpoint cloud LB entirely (reach via
 # Service DNS in-cluster, or `kubectl port-forward` from outside).
@@ -91,12 +95,21 @@ CONTROLLER_EXPOSE="${CONTROLLER_EXPOSE:-internal-lb}"
 # Fixed nodePort for CONTROLLER_EXPOSE=nodeport (30000–32767; empty = auto-assign).
 CONTROLLER_NODEPORT="${CONTROLLER_NODEPORT:-}"
 
-# Endpoint Service exposure: ClusterIP (default) | NodePort | LoadBalancer.
+# Endpoint Service exposure. ENDPOINT_EXPOSE is a friendly wrapper (mirrors
+# CONTROLLER_EXPOSE): clusterip (default) | nodeport | internal-lb | external-lb.
+# Unset => honor an explicit ENDPOINT_SERVICE_TYPE (ClusterIP|NodePort|LoadBalancer).
 # ClusterIP/NodePort avoid a per-endpoint cloud LB (CreateEndpoint returns at once);
-# NodePort reports <nodeIP>:<nodePort> as the endpoint's client address.
-ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE:-ClusterIP}"
-# Annotations for a LoadBalancer endpoint Service (e.g. internal-LB); empty for ClusterIP.
-ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
+# NodePort reports <nodeIP>:<nodePort> as the endpoint's client address; internal-lb
+# gives each endpoint a private VPC LB IP (uses LB_ANNOTATIONS).
+ENDPOINT_EXPOSE="${ENDPOINT_EXPOSE:-}"
+case "${ENDPOINT_EXPOSE}" in
+  clusterip)   ENDPOINT_SERVICE_TYPE="ClusterIP";    ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
+  nodeport)    ENDPOINT_SERVICE_TYPE="NodePort";     ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
+  internal-lb) ENDPOINT_SERVICE_TYPE="LoadBalancer"; ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-${LB_ANNOTATIONS}}" ;;
+  external-lb) ENDPOINT_SERVICE_TYPE="LoadBalancer"; ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
+  "")          ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE:-ClusterIP}"; ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
+  *) echo "ERROR: ENDPOINT_EXPOSE must be clusterip|nodeport|internal-lb|external-lb, got '${ENDPOINT_EXPOSE}'" >&2; exit 1 ;;
+esac
 
 # Endpoint data volume: the storage class each endpoint's /data PVC is
 # provisioned from (a network block volume — EBS on AWS, Persistent Disk on GCP),
@@ -104,6 +117,11 @@ ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
 # volume). The class must exist in the cluster (`kubectl get storageclass`).
 ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS:-}"
 ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
+# Node labels endpoint pods must schedule onto, as a "k=v,k=v" CSV. Leave
+# ENDPOINT_STORAGE_CLASS empty and set this to a local-NVMe-SSD ephemeral pool
+# (e.g. "cloud.google.com/gke-ephemeral-storage-local-ssd=true") to put each
+# endpoint's emptyDir /data on NVMe. Empty => no selector (schedules anywhere).
+ENDPOINT_NODE_SELECTOR="${ENDPOINT_NODE_SELECTOR:-}"
 
 # Image repo paths within the registry; the canonical repos are amp/controller +
 # amp/endpoint. Override via CONTROLLER_IMAGE_REPO / ENDPOINT_IMAGE_REPO if needed.
@@ -201,7 +219,7 @@ emit_csv_list() {
 
 CTRL_ANNOTATIONS=""
 [ "${CONTROLLER_EXPOSE}" = "internal-lb" ] && CTRL_ANNOTATIONS="${LB_ANNOTATIONS}"
-if [ -n "${CTRL_ANNOTATIONS}" ] || [ -n "${ENDPOINT_SERVICE_ANNOTATIONS}" ]; then
+if [ -n "${CTRL_ANNOTATIONS}" ] || [ -n "${ENDPOINT_SERVICE_ANNOTATIONS}" ] || [ -n "${ENDPOINT_NODE_SELECTOR}" ]; then
   HELM_VALUES_FILE="$(mktemp)"
   {
     echo "controller:"
@@ -210,11 +228,17 @@ if [ -n "${CTRL_ANNOTATIONS}" ] || [ -n "${ENDPOINT_SERVICE_ANNOTATIONS}" ]; the
       echo "    annotations:"
       emit_csv_list "      " "${CTRL_ANNOTATIONS}"
     fi
-    if [ -n "${ENDPOINT_SERVICE_ANNOTATIONS}" ]; then
+    if [ -n "${ENDPOINT_SERVICE_ANNOTATIONS}" ] || [ -n "${ENDPOINT_NODE_SELECTOR}" ]; then
       echo "  endpoint:"
-      echo "    service:"
-      echo "      annotations:"
-      emit_csv_list "        " "${ENDPOINT_SERVICE_ANNOTATIONS}"
+      if [ -n "${ENDPOINT_SERVICE_ANNOTATIONS}" ]; then
+        echo "    service:"
+        echo "      annotations:"
+        emit_csv_list "        " "${ENDPOINT_SERVICE_ANNOTATIONS}"
+      fi
+      if [ -n "${ENDPOINT_NODE_SELECTOR}" ]; then
+        echo "    nodeSelector:"
+        emit_csv_list "      " "${ENDPOINT_NODE_SELECTOR}"
+      fi
     fi
   } >"${HELM_VALUES_FILE}"
 fi

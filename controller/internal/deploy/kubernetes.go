@@ -63,6 +63,10 @@ type KubernetesConfig struct {
 	ServiceType       string // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
 	// ServiceAnnotations are set on the endpoint Service (e.g. GKE internal-LB annotations).
 	ServiceAnnotations map[string]string
+	// NodeSelector, when non-empty, pins endpoint pods to nodes carrying these
+	// labels — e.g. a node pool with local-NVMe-SSD ephemeral storage, so the
+	// endpoint's emptyDir /data lands on NVMe instead of the node boot disk.
+	NodeSelector map[string]string
 
 	// TailnetSuffix, when non-empty AND the endpoint Service is exposed on the
 	// tailnet (ServiceAnnotations has "tailscale.com/expose"="true"), is the
@@ -432,6 +436,10 @@ type chartValues struct {
 	// Persistence is nil (omitted) for the chart's emptyDir default; set to
 	// provision the endpoint's data volume as a PVC of a storage class.
 	Persistence *persistenceValues `json:"persistence,omitempty"`
+	// NodeSelector pins the endpoint pod to nodes with these labels (e.g. a
+	// local-NVMe-SSD ephemeral pool); omitted leaves the chart's default (no
+	// selector — schedules anywhere).
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
 type persistenceValues struct {
@@ -548,6 +556,11 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 	// (EBS/PD); without one the chart keeps its ephemeral emptyDir default.
 	if k.cfg.StorageClass != "" {
 		v.Persistence = &persistenceValues{StorageClass: k.cfg.StorageClass, Size: k.cfg.DiskSize}
+	}
+	// Pin endpoint pods to a labelled node pool (e.g. local-NVMe-SSD ephemeral),
+	// so their emptyDir /data lands on NVMe. Omitted = schedules anywhere.
+	if len(k.cfg.NodeSelector) > 0 {
+		v.NodeSelector = k.cfg.NodeSelector
 	}
 	return v
 }

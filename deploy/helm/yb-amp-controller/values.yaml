@@ -79,6 +79,12 @@ controller:
     storageClass: ""
     # -- Size of each endpoint's /data PVC when storageClass is set (AMP_DEPLOY_DISK_SIZE).
     diskSize: "10Gi"
+    # -- Node labels endpoint pods must schedule onto, as a list of "key=value"
+    # strings (joined into the AMP_DEPLOY_NODE_SELECTOR CSV). Leave storageClass
+    # empty and point this at a local-NVMe-SSD ephemeral node pool (GKE:
+    # "cloud.google.com/gke-ephemeral-storage-local-ssd=true") to put each
+    # endpoint's emptyDir /data on NVMe. Empty => no selector (schedules anywhere).
+    nodeSelector: []
     # -- Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") used to derive each
     # endpoint's tailnet address when its Service is tailnet-exposed
     # (tailscale.com/expose=true in service.annotations). Empty disables tailnet

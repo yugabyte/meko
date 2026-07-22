@@ -191,6 +191,10 @@ readinessProbe:
 
 podAnnotations: {}
 podLabels: {}
+# -- Node labels the endpoint pod must schedule onto. The controller sets this
+# per-deployment (from AMP_DEPLOY_NODE_SELECTOR); override here for a standalone
+# install — e.g. {cloud.google.com/gke-ephemeral-storage-local-ssd: "true"} to
+# pin the pod (and its emptyDir /data) to a local-NVMe-SSD pool. {} = anywhere.
 nodeSelector: {}
 tolerations: []
 affinity: {}

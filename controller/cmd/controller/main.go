@@ -128,6 +128,7 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				ComputePort:                cfg.Deploy.ComputePort,
 				ServiceType:                cfg.Deploy.ServiceType,
 				ServiceAnnotations:         cfg.Deploy.ServiceAnnotations,
+				NodeSelector:               cfg.Deploy.NodeSelector,
 				TailnetSuffix:              cfg.Deploy.TailnetSuffix,
 				StorageClass:               cfg.Deploy.StorageClass,
 				DiskSize:                   cfg.Deploy.DiskSize,

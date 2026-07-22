@@ -50,8 +50,31 @@ NS=amp deploy/up.sh
 CONTROLLER_TAG=<tag> ENDPOINT_TAG=<tag> deploy/up.sh        # else: most-recent ECR tag
 CONTROLLER_EXPOSE=internal-lb deploy/up.sh                  # controller via internal LB instead of NodePort
 ENDPOINT_SERVICE_TYPE=LoadBalancer deploy/up.sh            # per-endpoint LB instead of ClusterIP
+ENDPOINT_EXPOSE=internal-lb deploy/up.sh                    # each endpoint gets a private VPC LoadBalancer (mirrors CONTROLLER_EXPOSE)
 ENDPOINT_STORAGE_CLASS=yb-standard deploy/up.sh            # endpoints get a /data PVC (EBS/PD) instead of emptyDir
+ENDPOINT_NODE_SELECTOR=cloud.google.com/gke-ephemeral-storage-local-ssd=true deploy/up.sh  # endpoints' emptyDir /data on local NVMe SSD
 ```
+
+**NVMe-ephemeral endpoints.** Each endpoint's `/data` (pgdata, LFC, logs) defaults to
+an `emptyDir` — all durable state is in YugabyteDB, so it's throwaway scratch. To put
+that scratch on **local NVMe SSD** for speed, leave `ENDPOINT_STORAGE_CLASS` empty
+(keep the `emptyDir`) and set `ENDPOINT_NODE_SELECTOR` (a `k=v,k=v` CSV of node labels)
+to a node pool created with local-SSD ephemeral storage — on GKE:
+
+```sh
+gcloud container node-pools create nvme-ephemeral --cluster <cluster> --region <region> \
+  --machine-type n1-standard-8 --ephemeral-storage-local-ssd count=1 \
+  --num-nodes 1 --enable-autoscaling --min-nodes 0 --max-nodes 2
+# GKE auto-labels those nodes cloud.google.com/gke-ephemeral-storage-local-ssd=true,
+# which backs each pod's emptyDir with the local NVMe. Then:
+ENDPOINT_NODE_SELECTOR=cloud.google.com/gke-ephemeral-storage-local-ssd=true deploy/up.sh
+```
+
+The selector threads through to the controller (`AMP_DEPLOY_NODE_SELECTOR`), which pins
+every endpoint pod (`nodeSelector`) onto that pool. NVMe here is **ephemeral** — a
+rescheduled pod gets a fresh empty `/data`; that's fine because the durable copy lives
+in YugabyteDB. Don't combine it with `ENDPOINT_STORAGE_CLASS` (a PVC would override the
+`emptyDir`).
 
 ### Exposure
 

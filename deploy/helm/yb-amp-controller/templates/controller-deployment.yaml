@@ -84,6 +84,10 @@ spec:
               value: {{ .Values.controller.endpoint.storageClass | quote }}
             - name: AMP_DEPLOY_DISK_SIZE
               value: {{ .Values.controller.endpoint.diskSize | quote }}
+            # Node labels endpoint pods must match (e.g. a local-NVMe-SSD ephemeral
+            # pool). The controller parses this as a "k=v,k=v" CSV.
+            - name: AMP_DEPLOY_NODE_SELECTOR
+              value: {{ join "," (.Values.controller.endpoint.nodeSelector | default (list)) | quote }}
           readinessProbe:
             httpGet:
               path: /readyz

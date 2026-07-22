@@ -63,22 +63,40 @@ YB_STORAGE_SIZE="${YB_STORAGE_SIZE:-20Gi}"
 YB_FQDN="yugabyted-0.yugabyted.${NS}.svc.cluster.local"
 
 # Exposure — defaults avoid slow cloud LBs (see redeploy.sh for the full menu):
-#   CONTROLLER_EXPOSE     nodeport (default) | internal-lb | external-lb | none
-#   ENDPOINT_SERVICE_TYPE ClusterIP (default) | NodePort | LoadBalancer
+#   CONTROLLER_EXPOSE  nodeport (default) | internal-lb | external-lb | none
+#   ENDPOINT_EXPOSE    clusterip (default) | nodeport | internal-lb | external-lb
+#                      — friendly wrapper over ENDPOINT_SERVICE_TYPE + annotations,
+#                      mirroring CONTROLLER_EXPOSE. Unset => honor ENDPOINT_SERVICE_TYPE.
 CONTROLLER_EXPOSE="${CONTROLLER_EXPOSE:-nodeport}"
-ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE:-ClusterIP}"
+ENDPOINT_EXPOSE="${ENDPOINT_EXPOSE:-}"
 # Endpoint data volume: a storage class backs each endpoint's /data with a PVC
 # (EBS/PD); empty (default) => an ephemeral emptyDir. ENDPOINT_DISK_SIZE sizes the PVC.
 ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS:-}"
 ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
+# Node labels endpoint pods must schedule onto ("k=v,k=v"). Leave ENDPOINT_STORAGE_CLASS
+# empty and set this to a local-NVMe-SSD ephemeral pool (e.g.
+# "cloud.google.com/gke-ephemeral-storage-local-ssd=true") to put each endpoint's
+# emptyDir /data on NVMe. Empty (default) => no selector (schedules anywhere).
+ENDPOINT_NODE_SELECTOR="${ENDPOINT_NODE_SELECTOR:-}"
 # Internal-LB annotations (used only for *-lb / LoadBalancer modes).
 LB_ANNOTATIONS="${LB_ANNOTATIONS:-networking.gke.io/load-balancer-type=Internal,networking.gke.io/internal-load-balancer-allow-global-access=true}"
-# Endpoint LB annotations default to LB_ANNOTATIONS only when endpoints use a LoadBalancer.
-if [ "${ENDPOINT_SERVICE_TYPE}" = "LoadBalancer" ]; then
-  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-${LB_ANNOTATIONS}}"
-else
-  ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
-fi
+# Resolve ENDPOINT_EXPOSE (friendly wrapper) into the endpoint Service type +
+# annotations. Unset => honor an explicit ENDPOINT_SERVICE_TYPE (back-compat).
+case "${ENDPOINT_EXPOSE}" in
+  clusterip)   ENDPOINT_SERVICE_TYPE="ClusterIP";    ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
+  nodeport)    ENDPOINT_SERVICE_TYPE="NodePort";     ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
+  internal-lb) ENDPOINT_SERVICE_TYPE="LoadBalancer"; ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-${LB_ANNOTATIONS}}" ;;
+  external-lb) ENDPOINT_SERVICE_TYPE="LoadBalancer"; ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}" ;;
+  "")
+    ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE:-ClusterIP}"
+    if [ "${ENDPOINT_SERVICE_TYPE}" = "LoadBalancer" ]; then
+      ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-${LB_ANNOTATIONS}}"
+    else
+      ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS:-}"
+    fi
+    ;;
+  *) die "ENDPOINT_EXPOSE must be clusterip|nodeport|internal-lb|external-lb, got '${ENDPOINT_EXPOSE}'" ;;
+esac
 
 say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -258,6 +276,7 @@ ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE}" \
 ENDPOINT_SERVICE_ANNOTATIONS="${ENDPOINT_SERVICE_ANNOTATIONS}" \
 ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS}" \
 ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE}" \
+ENDPOINT_NODE_SELECTOR="${ENDPOINT_NODE_SELECTOR}" \
 LB_ANNOTATIONS="${LB_ANNOTATIONS}" \
   "${SCRIPT_DIR}/controller/redeploy.sh"
 
