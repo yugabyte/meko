@@ -159,7 +159,10 @@ func FromConfig(get Getter) Config {
 		imageTag = chartVersion
 	}
 	return Config{
-		KubeContext:         get.GetString("apps.ybk8s.kubecontext", ""),
+		// Fall back to the k8s context the run already provides (sharedk8s /
+		// ampstack) so a self-provisioning test needs no ybk8s-specific context.
+		KubeContext: get.GetString("apps.ybk8s.kubecontext",
+			get.GetString("env.sharedk8s.context", get.GetString("env.ampstack.context", ""))),
 		Kubeconfig:          get.GetString("apps.ybk8s.kubeconfig", ""),
 		NamespacePrefix:     get.GetString("apps.ybk8s.namespace_prefix", DefaultNamespacePrefix),
 		ChartVersion:        chartVersion,

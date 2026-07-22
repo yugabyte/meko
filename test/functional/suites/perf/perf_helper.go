@@ -42,7 +42,6 @@ const (
 
 // perfConfig is the resolved perf.* configuration.
 type perfConfig struct {
-	Enabled           bool
 	RF                int
 	Warehouses        int
 	Terminals         int
@@ -65,7 +64,6 @@ type perfConfig struct {
 // perfFromConfig reads perf.* into a perfConfig.
 func perfFromConfig(c *core.Config) perfConfig {
 	return perfConfig{
-		Enabled:           c.GetBool("perf.enabled", false),
 		RF:                c.GetInt("perf.rf", DefaultRF),
 		Warehouses:        c.GetInt("perf.warehouses", DefaultWarehouses),
 		Terminals:         c.GetInt("perf.terminals", DefaultTerminals),
@@ -88,31 +86,34 @@ func (c perfConfig) thresholds() baseline.Thresholds {
 	return baseline.Thresholds{DropPct: c.ThroughputDropPct, RisePct: c.LatencyRisePct}
 }
 
-// perfGate returns a skip reason (and false) unless the perf tier may run:
-// enabled, a k8s cluster to deploy into, and a resolvable chart version. Unlike
-// the combined stress gate it needs NO private jar secret — BenchBase is public.
+// perfGate returns a skip reason (and false) only when the ENVIRONMENT can't run
+// the perf tier: no k8s cluster to deploy into, or no resolvable YB version.
+// Selecting a perf test is the intent — there is no separate perf.enabled opt-in.
+// Needs NO private jar secret — BenchBase is public.
 func perfGate(c *core.Config, cfg perfConfig) (string, bool) {
-	if !cfg.Enabled {
-		return "perf.enabled is not set (self-provisioning; needs a k8s cluster + a YB chart)", false
-	}
 	if c.GetString("apps.ybk8s.kubecontext", "") == "" &&
 		c.GetString("apps.ybk8s.kubeconfig", "") == "" &&
+		c.GetString("env.sharedk8s.context", "") == "" &&
 		c.GetString("env.ampstack.context", "") == "" {
-		return "perf needs a k8s cluster: set apps.ybk8s.kubecontext or apps.ybk8s.kubeconfig (or env.ampstack.context)", false
+		return "perf needs a k8s cluster: set apps.ybk8s.kubecontext/kubeconfig (or env.sharedk8s.context / env.ampstack.context)", false
 	}
 	if chartVersion(c) == "" {
-		return "perf needs a YB chart version: set apps.ybk8s.chart_version or versions.yugabytedb", false
+		return "perf needs a YB version: set versions.yb / versions.yugabytedb or apps.ybk8s.chart_version", false
 	}
 	return "", true
 }
 
-// chartVersion resolves the YB chart/version key both the gate and the baseline
-// version keying use: the explicit chart_version, else versions.yugabytedb.
+// chartVersion resolves the YB version key the gate and baseline keying use:
+// the explicit chart_version, else whichever YB version the run already sets
+// (versions.yugabytedb or versions.yb) — no perf-specific parameter needed.
 func chartVersion(c *core.Config) string {
 	if v := c.GetString("apps.ybk8s.chart_version", ""); v != "" {
 		return v
 	}
-	return c.GetString("versions.yugabytedb", "")
+	if v := c.GetString("versions.yugabytedb", ""); v != "" {
+		return v
+	}
+	return c.GetString("versions.yb", "")
 }
 
 // modeReporter is implemented by env providers that expose their resolved

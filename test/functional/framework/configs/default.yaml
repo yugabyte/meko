@@ -40,7 +40,7 @@ timeouts:
   # Category default test-body timeout (when a Test sets none).
   functional: 10m
   stress: 60m
-  perf: 30m
+  perf: 60m
   long_running: 24h
   # EnvProvider.Provision deadline.
   provision: 5m
@@ -1005,7 +1005,7 @@ perf:
     discard_first: true
     # sample_interval requests periodic in-run progress (for the time series);
     # a workload whose tool cannot report progress leaves the series empty.
-    sample_interval: "10s"
+    sample_interval: "1s"
     # min_iterations is the aggregation floor: fewer kept iterations than this
     # (iterations minus the discarded first) fails fast before any provisioning.
     min_iterations: 1

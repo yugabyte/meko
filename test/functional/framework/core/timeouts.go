@@ -9,7 +9,7 @@ import (
 const (
 	DefaultFunctionalTimeout  = 10 * time.Minute
 	DefaultStressTimeout      = 60 * time.Minute
-	DefaultPerfTimeout        = 30 * time.Minute
+	DefaultPerfTimeout        = 60 * time.Minute
 	DefaultLongRunningTimeout = 24 * time.Hour
 	DefaultTeardownTimeout    = 5 * time.Minute
 	DefaultProvisionTimeout   = 5 * time.Minute

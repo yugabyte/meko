@@ -28,7 +28,7 @@ const (
 	DefaultBenchMeasurementDuration = 60 * time.Second
 	DefaultBenchCooldown            = 0 * time.Second
 	DefaultBenchDiscardFirst        = true
-	DefaultBenchSampleInterval      = 10 * time.Second
+	DefaultBenchSampleInterval      = 1 * time.Second
 	DefaultBenchMinIterations       = 1
 )
 
