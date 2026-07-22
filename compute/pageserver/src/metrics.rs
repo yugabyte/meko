@@ -266,13 +266,26 @@ pub(crate) static GC_APPLIED_CUTOFF_LSN: Lazy<UIntGauge> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-/// Trim candidates emitted (post every-n sampling), by producer
-/// path: ingest | materialiser.
+/// Candidates emitted into `pending_gc`, by producer path: trim from
+/// ingest | materialiser (post every-n sampling), plus the unsampled
+/// drop | shrink events.
 pub(crate) static GC_CANDIDATES_EMITTED: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "pageserver_yb_gc_candidates_emitted_total",
-        "GC trim candidates emitted into pending_gc, by producer path",
+        "GC candidates emitted into pending_gc, by producer path",
         &["path"]
+    )
+    .expect("failed to define a metric")
+});
+
+/// Drop events a drain tick left queued because their fork had a
+/// materialise job pending (acting would race the job's back-dated
+/// image INSERT). Occasional increments are normal; sustained growth
+/// for the same fork means a wedged job is pinning its reclamation.
+pub(crate) static GC_DROP_DEFERRED: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "pageserver_yb_gc_drop_deferred_total",
+        "GC drop events deferred: fork had a pending materialise job"
     )
     .expect("failed to define a metric")
 });
@@ -296,7 +309,7 @@ pub(crate) static GC_CANDIDATES_REMOVED: Lazy<IntCounter> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-/// `pages` rows deleted by the GC drain (trims today; drop/shrink later).
+/// `pages` rows deleted by the GC drain (trim / drop / shrink).
 pub(crate) static GC_PAGES_ROWS_DELETED: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "pageserver_yb_gc_pages_rows_deleted_total",
@@ -408,6 +421,11 @@ pub(crate) static YB_STORE_CALL_TIMEOUTS: Lazy<IntCounter> = Lazy::new(|| {
 ///   periodic or shutdown tick; rows may not have made it to YB.
 /// - `tenant_task_panic` — a tenant background task ended via
 ///   panic (`JoinError::is_panic()`).
+/// - `gc_shrink_relsize_malformed` — a rel-size meta payload shorter
+///   than 4 bytes (every writer stamps exactly 4). The shrink skips
+///   the fork rather than wedging the drain on persistent state.
+/// - `gc_unknown_candidate_kind` — a `pending_gc` row with an unknown
+///   `blknum` kind. The drain skips it; it stays queued.
 pub(crate) static CORRECTNESS_ERRORS: Lazy<metrics::IntCounterVec> = Lazy::new(|| {
     metrics::register_int_counter_vec!(
         "pageserver_yb_correctness_errors_total",

@@ -204,6 +204,7 @@ impl Timeline {
             pending_deletions: Vec::new(),
             pending_nblocks: 0,
             pending_directory_entries: Vec::new(),
+            pending_gc_drop_shrink_events: Vec::new(),
             pending_metadata_bytes: 0,
             is_importing_pgdata: false,
             lsn,
@@ -222,6 +223,7 @@ impl Timeline {
             pending_deletions: Vec::new(),
             pending_nblocks: 0,
             pending_directory_entries: Vec::new(),
+            pending_gc_drop_shrink_events: Vec::new(),
             pending_metadata_bytes: 0,
             is_importing_pgdata: true,
             lsn,
@@ -1530,6 +1532,12 @@ pub struct DatadirModification<'a> {
     /// if it was updated in this modification.
     pending_directory_entries: Vec<(DirectoryKind, MetricsUpdate)>,
 
+    /// Drop/shrink GC event candidates recorded by this
+    /// modification's rel drops / truncations, handed to the
+    /// `PageWriter`'s candidate buffer on commit. Empty unless the
+    /// writer collects GC candidates (`enable_gc`).
+    pending_gc_drop_shrink_events: Vec<crate::page_store::PendingGcRow>,
+
     /// An **approximation** of how many metadata bytes will be written to the EphemeralFile.
     pending_metadata_bytes: usize,
 
@@ -2059,6 +2067,39 @@ impl DatadirModification<'_> {
         Ok(())
     }
 
+    /// Whether GC is on (`enable_gc`) for the timeline being modified —
+    /// the layering bridge to the writer's frozen master switch. Gates
+    /// drop/shrink event recording and, for `DROP DATABASE`, the per-rel
+    /// enumeration feeding it.
+    fn gc_enabled(&self) -> bool {
+        self.tline
+            .page_writer
+            .as_ref()
+            .is_some_and(|w| w.gc_enabled())
+    }
+
+    /// Record a drop (`GC_KIND_DROP`) / shrink (`GC_KIND_SHRINK`) GC
+    /// event for `rel` at the modification's current LSN — the
+    /// drop/truncation record being ingested. Buffered on the
+    /// modification and handed to the writer at commit; not sampled
+    /// (drop/shrink are one-shot events, unlike per-base trims).
+    /// No-op unless GC is on (`enable_gc`).
+    fn record_gc_drop_shrink_event(&mut self, rel: RelTag, kind: i64) {
+        if !self.gc_enabled() {
+            return;
+        }
+        self.pending_gc_drop_shrink_events
+            .push(crate::page_store::PendingGcRow {
+                bucket_id: 0, // computed by put_pending_gc on insert
+                spcnode: rel.spcnode as i64,
+                dbnode: rel.dbnode as i64,
+                relnode: rel.relnode as i64,
+                forknum: rel.forknum as i16,
+                blknum: kind,
+                due_lsn: self.lsn,
+            });
+    }
+
     pub async fn drop_dbdir(
         &mut self,
         spcnode: Oid,
@@ -2069,6 +2110,19 @@ impl DatadirModification<'_> {
             .tline
             .get_db_size(spcnode, dbnode, Version::Modified(self), ctx)
             .await?;
+
+        // Record a GC drop event per rel fork while the reldir can
+        // still be enumerated (the entry is removed just below). Gate the
+        // enumeration on GC being on so it costs nothing when off.
+        if self.gc_enabled() {
+            let rels = self
+                .tline
+                .list_rels(spcnode, dbnode, Version::Modified(self), ctx)
+                .await?;
+            for rel in rels {
+                self.record_gc_drop_shrink_event(rel, crate::page_store::GC_KIND_DROP);
+            }
+        }
 
         // Remove entry from dbdir
         let buf = self.get(DBDIR_KEY, ctx).await?;
@@ -2313,6 +2367,10 @@ impl DatadirModification<'_> {
 
             // Update logical database size.
             self.pending_nblocks -= old_size as i64 - nblocks as i64;
+
+            // GC shrink event: the tail past `nblocks` becomes
+            // collectable once the cutoff passes this truncation.
+            self.record_gc_drop_shrink_event(rel, crate::page_store::GC_KIND_SHRINK);
         }
         Ok(())
     }
@@ -2454,10 +2512,8 @@ impl DatadirModification<'_> {
         let v2_mode = self
             .maybe_enable_rel_size_v2(false)
             .map_err(WalIngestErrorKind::MaybeRelSizeV2Error)?;
-        match v2_mode.current_status {
-            RelSizeMigration::Legacy => {
-                self.put_rel_drop_v1(drop_relations, ctx).await?;
-            }
+        let dropped_rels = match v2_mode.current_status {
+            RelSizeMigration::Legacy => self.put_rel_drop_v1(drop_relations, ctx).await?,
             RelSizeMigration::Migrating => {
                 let dropped_rels_v1 = self.put_rel_drop_v1(drop_relations.clone(), ctx).await?;
                 let dropped_rels_v2_res = self.put_rel_drop_v2(drop_relations, ctx).await;
@@ -2475,10 +2531,14 @@ impl DatadirModification<'_> {
                         tracing::warn!("error dropping rels: {}", e);
                     }
                 }
+                dropped_rels_v1
             }
-            RelSizeMigration::Migrated => {
-                self.put_rel_drop_v2(drop_relations, ctx).await?;
-            }
+            RelSizeMigration::Migrated => self.put_rel_drop_v2(drop_relations, ctx).await?,
+        };
+        // Queue GC drop events for the forks that actually existed (the
+        // incoming map is speculative — every fork of every xnode).
+        for rel in dropped_rels {
+            self.record_gc_drop_shrink_event(rel, crate::page_store::GC_KIND_DROP);
         }
         Ok(())
     }
@@ -2787,6 +2847,17 @@ impl DatadirModification<'_> {
         if !self.pending_deletions.is_empty() {
             writer.delete_batch(&self.pending_deletions, ctx).await?;
             self.pending_deletions.clear();
+        }
+
+        // Drop/shrink GC events ride the writer's candidate buffer,
+        // durable with a window flush like ingest trim candidates: a
+        // buffer lost to a crash implies consistent_lsn didn't advance,
+        // so the producing record replays and re-emits (PK dedup).
+        if !self.pending_gc_drop_shrink_events.is_empty() {
+            if let Some(pw) = self.tline.page_writer.as_ref() {
+                pw.push_gc_drop_shrink_events(&self.pending_gc_drop_shrink_events);
+            }
+            self.pending_gc_drop_shrink_events.clear();
         }
 
         self.pending_lsns.push(self.lsn);

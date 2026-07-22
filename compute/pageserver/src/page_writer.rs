@@ -625,6 +625,78 @@ impl PageWriter {
         }
     }
 
+    /// Whether GC is on for this writer — the `enable_gc` master
+    /// switch, frozen at activation as `gc_candidate_every_n` (wired via
+    /// [`Self::set_gc_candidate_every_n`]).
+    pub(crate) fn gc_enabled(&self) -> bool {
+        self.gc_candidate_every_n.is_some()
+    }
+
+    /// Buffer drop/shrink event candidates (`GC_KIND_*` blknums)
+    /// for the next window flush; no-op when GC is off. Unsampled — see
+    /// `gc_candidate_should_emit` for why they must never be.
+    pub(crate) fn push_gc_drop_shrink_events(&self, rows: &[PendingGcRow]) {
+        if self.gc_candidate_every_n.is_none() || rows.is_empty() {
+            return;
+        }
+        for row in rows {
+            debug_assert!(row.blknum < 0, "trim candidates go through push_rows");
+            let path = if row.blknum == crate::page_store::GC_KIND_DROP {
+                "drop"
+            } else {
+                "shrink"
+            };
+            crate::metrics::GC_CANDIDATES_EMITTED
+                .with_label_values(&[path])
+                .inc();
+        }
+        let mut aux = self.aux.lock();
+        if aux.opened_at.is_none() {
+            aux.opened_at = Some(Instant::now());
+        }
+        for row in rows {
+            aux.bytes_in_aux_buffers += std::mem::size_of::<PendingGcRow>();
+            aux.pending_gc_buffer.push(*row);
+        }
+    }
+
+    /// Fork identities that could still receive a back-dated
+    /// materialised image (why that matters: `defer_busy_drop_events`).
+    /// The set is complete with exactly two sources: `in_flight`
+    /// covers queued + running jobs (registered at dispatch BEFORE
+    /// enqueue, cleared after the batch's INSERT lands) and
+    /// `delta_ready` covers threshold-crossed keys a later flush may
+    /// yet dispatch. Both sets also hold SLRU block keys (clog /
+    /// multixact jobs); those aren't relation forks and are filtered
+    /// out — no drop event can name them.
+    ///
+    /// Sub-threshold tallies (`delta_counts`) are deliberately NOT
+    /// included: they can't dispatch without new deltas, and including
+    /// them would defer a dropped fork's drop event forever behind
+    /// counters that can never cross.
+    pub(crate) fn forks_with_pending_materialise(
+        &self,
+    ) -> std::collections::HashSet<crate::page_store::GcForkIdent> {
+        let Some(m) = self.materializer.as_ref() else {
+            return Default::default();
+        };
+        let to_fork = |key: &Key| -> Option<crate::page_store::GcForkIdent> {
+            key.is_rel_block_key().then_some((
+                key.field2 as i64,
+                key.field3 as i64,
+                key.field4 as i64,
+                key.field5 as i16,
+            ))
+        };
+        let mut forks: std::collections::HashSet<crate::page_store::GcForkIdent> = self
+            .delta_ready
+            .iter()
+            .filter_map(|k| to_fork(&k))
+            .collect();
+        forks.extend(m.in_flight.lock().unwrap().iter().filter_map(to_fork));
+        forks
+    }
+
     pub fn branch_id(&self) -> BranchId {
         self.branch_id
     }
@@ -3179,7 +3251,7 @@ mod tests {
     /// the lock. During the round-trip the just-buffered rows were in
     /// NEITHER the buffer NOR YB. Any concurrent read in that window
     /// returned no data — walreceiver's read-modify-write on rel-size
-    /// sentinels then hit MissingKey, propagated corruption to compute,
+    /// fork events then hit MissingKey, propagated corruption to compute,
     /// and we'd lose the workload.
     ///
     /// Now flush clones the buffer, INSERTs from the clone, and drains
@@ -3303,6 +3375,76 @@ mod tests {
         w.put(&[(k(1), Lsn(200), delta_non_init())]).await.unwrap();
         w.flush().await.unwrap();
         let _ = rx.try_recv().expect("dispatch on second threshold");
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// The GC drain's deferral input. `forks_with_pending_materialise`
+    /// must report a fork while a job is pending (`in_flight`, from
+    /// dispatch until the batch completes) AND while a
+    /// threshold-crossed key sits undispatched in `delta_ready` (cold
+    /// residue a later flush may still dispatch) — and go quiet once
+    /// both clear. Guards the drop deferral against the
+    /// residue-dispatch race: a drop event acted while either
+    /// population held its fork could race a back-dated image INSERT.
+    #[tokio::test]
+    async fn pending_materialise_forks_cover_inflight_and_residue() {
+        let (store, schema) = make_store("mat_forks").await;
+        const LIMIT: u32 = 10;
+        let (w, _t, mut rx, in_flight) =
+            writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
+        let fork = (1663i64, 5i64, 16384i64, 0i16);
+
+        assert!(
+            w.forks_with_pending_materialise().is_empty(),
+            "quiescent writer reports no busy forks"
+        );
+
+        // Cross the threshold + flush: job dispatched → in_flight.
+        for i in 0..LIMIT {
+            w.put(&[(k(2), Lsn(10 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        w.flush().await.unwrap();
+        let job1 = rx.try_recv().expect("dispatched at threshold");
+        assert!(
+            w.forks_with_pending_materialise().contains(&fork),
+            "queued/running job must mark its fork busy"
+        );
+
+        // Cross again while job1 is still in flight: the re-crossed key
+        // is blocked from dispatch and parks in delta_ready (residue).
+        for i in 0..LIMIT {
+            w.put(&[(k(2), Lsn(100 + i as u64), delta_non_init())])
+                .await
+                .unwrap();
+        }
+        // Note the record frontier so the flush advances the horizon —
+        // the residue path only dispatches once its last_lsn is durable.
+        w.note_record_lsn(Lsn(100 + LIMIT as u64), Lsn(100));
+        w.flush().await.unwrap();
+        assert!(rx.try_recv().is_err(), "in_flight blocks the re-dispatch");
+
+        // job1's batch completes — but the residue must keep the fork
+        // busy: a later flush can still dispatch it.
+        in_flight.lock().unwrap().remove(&job1.key);
+        assert!(
+            w.forks_with_pending_materialise().contains(&fork),
+            "undispatched delta_ready residue must keep the fork busy"
+        );
+
+        // An (empty) flush drains the residue into a real dispatch.
+        w.flush().await.unwrap();
+        let job2 = rx.try_recv().expect("residue dispatches once unblocked");
+        assert!(w.forks_with_pending_materialise().contains(&fork));
+
+        // Second batch completes: nothing pending anywhere → free.
+        in_flight.lock().unwrap().remove(&job2.key);
+        assert!(
+            !w.forks_with_pending_materialise().contains(&fork),
+            "fork frees once in_flight and residue are both clear"
+        );
 
         drop_schema(&store, &schema).await;
     }

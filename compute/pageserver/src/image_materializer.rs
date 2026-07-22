@@ -715,6 +715,11 @@ impl ImageMaterializer {
     /// - `None` to drop the job (nothing durable yet, or already image-anchored),
     /// - `Err` to log and skip.
     async fn redo_one(&self, job: &MaterializeJob) -> Result<Option<(PageRow, usize, usize)>> {
+        // Test-only: hold the job in flight (its key stays in
+        // `in_flight`) so scenarios can pin a fork busy across a GC
+        // drop action and exercise the deferral. Inert in production
+        // (compiled under `testing`, no action configured).
+        utils::failpoint_support::sleep_millis_async!("ps::materialise-redo-one");
         // target_lsn is durable by construction (post-flush trigger
         // uses max snapshot LSN per key; read-side trigger uses the
         // caller's bound). Fetch via `read_chain_durable` — the cache

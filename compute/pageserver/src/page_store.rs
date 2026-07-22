@@ -49,9 +49,9 @@ use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use dashmap::DashMap;
 use futures::stream::{StreamExt, TryStreamExt};
-use pageserver_api::key::{KEY_SIZE, Key};
+use pageserver_api::key::{KEY_SIZE, Key, rel_size_to_key};
 use pageserver_api::models::RelSizeMigration;
-use pageserver_api::reltag::SlruKind;
+use pageserver_api::reltag::{RelTag, SlruKind};
 
 use crate::page_server::metadata::Lineage;
 use remote_storage::{YbConnConfig, YsqlClient};
@@ -864,6 +864,29 @@ pub fn gc_bucket_id(spcnode: i64, dbnode: i64, relnode: i64, forknum: i16, blknu
     (h % GC_BUCKETS as u64) as i32
 }
 
+/// The `meta` key bytes of a fork's rel-size entry (`rel_size_to_key`),
+/// from the queue row's i64/i16 identity columns.
+fn rel_size_key_bytes(spcnode: i64, dbnode: i64, relnode: i64, forknum: i16) -> Vec<u8> {
+    let rel = RelTag {
+        spcnode: spcnode as u32,
+        dbnode: dbnode as u32,
+        relnode: relnode as u32,
+        forknum: forknum as u8,
+    };
+    let mut key = vec![0u8; KEY_SIZE];
+    rel_size_to_key(rel).write_to_byte_slice(&mut key);
+    key
+}
+
+/// Sentinel `blknum` marking a shrink event (relation
+/// truncation): reclaim blocks at/past the fork's size as of the
+/// cutoff.
+pub const GC_KIND_SHRINK: i64 = -1;
+
+/// Sentinel `blknum` marking a drop event (relfilenode dropped):
+/// reclaim the whole fork's pages `<= due_lsn`.
+pub const GC_KIND_DROP: i64 = -2;
+
 /// Block identity: (spcnode, dbnode, relnode, forknum, blknum);
 /// sentinel blknums can never collide with a real block's. Its fork
 /// prefix (minus blknum) is [`GcForkIdent`].
@@ -874,8 +897,9 @@ pub(crate) type GcBlockIdent = (i64, i64, i64, i16, i64);
 pub(crate) type GcForkIdent = (i64, i64, i64, i16);
 
 /// One GC candidate: "visit this key once the cutoff reaches
-/// `due_lsn`". `blknum` doubles as the kind: >= 0 trim, -2 drop,
-/// -1 shrink (ascending = intended action order, Part 2 -> 3 -> 1).
+/// `due_lsn`". `blknum` doubles as the kind: >= 0 trim,
+/// [`GC_KIND_DROP`] (-2), [`GC_KIND_SHRINK`] (-1) — ascending =
+/// the drain's action order, drop → shrink → trim.
 /// `bucket_id` is ignored on insert (computed there) and populated by
 /// the select so the dequeue can address the stored placement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2570,7 +2594,7 @@ impl PageStore {
     /// so all of a visited block's candidates <= cutoff are covered,
     /// including ones the capped select never returned. Two modes:
     /// `all_due_visited` sweeps `due_lsn <= cutoff AND blknum >= 0`
-    /// per visited bucket (the guard keeps unacted sentinel rows
+    /// per visited bucket (the guard keeps unacted drop/shrink event rows
     /// queued — a drop's future action covers <= drop_lsn, never
     /// <= cutoff); capped mode collapses per VISITED block only.
     /// Race exception: a materialiser candidate at due_lsn <= cutoff
@@ -2581,7 +2605,7 @@ impl PageStore {
     /// Must run strictly after the actions succeed (crash in between
     /// re-drains; trims are idempotent). Returns rows actually deleted
     /// (can exceed `rows.len()` under collapse).
-    pub async fn dequeue_pending_gc(
+    pub async fn dequeue_gc_trim_rows(
         &self,
         branch_id: BranchId,
         rows: &[PendingGcRow],
@@ -2633,7 +2657,7 @@ impl PageStore {
                     .execute(&sql, &[&branch_s, bucket, &cutoff_i])
                     .await
                     .with_context(|| {
-                        format!("dequeue_pending_gc sweep branch={branch_id} bucket={bucket}")
+                        format!("dequeue_gc_trim_rows sweep branch={branch_id} bucket={bucket}")
                     })?;
             }
             return Ok(removed);
@@ -2677,9 +2701,72 @@ impl PageStore {
                 .await
                 .with_context(|| {
                     format!(
-                        "dequeue_pending_gc collapse branch={branch_id} bucket={bucket} \
+                        "dequeue_gc_trim_rows collapse branch={branch_id} bucket={bucket} \
                          blocks={}",
                         blocks.len()
+                    )
+                })?;
+        }
+        Ok(removed)
+    }
+
+    /// Dequeue drop/shrink event rows by their EXACT PK (bucket,
+    /// identity, kind, due_lsn), strictly after their action succeeded —
+    /// never a range/collapse sweep: a drop's action only covers
+    /// `<= its due_lsn`, so a second event for the same fork (e.g. a
+    /// relnode reused and re-dropped) that this tick didn't act on must
+    /// stay queued for its own tick. Returns rows removed. `unnest`
+    /// keeps the statement static (one prepared shape per bucket).
+    pub async fn dequeue_gc_drop_shrink_events(
+        &self,
+        branch_id: BranchId,
+        drop_shrink_events: &[PendingGcRow],
+    ) -> Result<u64> {
+        if drop_shrink_events.is_empty() {
+            return Ok(0);
+        }
+        let branch_s = branch_id.to_string();
+        let mut by_bucket: std::collections::HashMap<i32, Vec<&PendingGcRow>> =
+            std::collections::HashMap::new();
+        for r in drop_shrink_events {
+            debug_assert!(r.blknum < 0, "drop/shrink dequeue got a trim row");
+            by_bucket.entry(r.bucket_id).or_default().push(r);
+        }
+        let sql = format!(
+            "DELETE FROM \"{}\".pending_gc \
+             WHERE branch_id = $1 AND bucket_id = $2 \
+               AND (due_lsn, spcnode, dbnode, relnode, forknum, blknum) IN ( \
+                   SELECT * FROM unnest($3::bigint[], $4::bigint[], $5::bigint[], \
+                                        $6::bigint[], $7::smallint[], $8::bigint[]))",
+            self.schema
+        );
+        let mut removed = 0u64;
+        for (bucket, rows) in by_bucket {
+            let mut due = Vec::with_capacity(rows.len());
+            let mut spc = Vec::with_capacity(rows.len());
+            let mut db = Vec::with_capacity(rows.len());
+            let mut rel = Vec::with_capacity(rows.len());
+            let mut fork = Vec::with_capacity(rows.len());
+            let mut blk = Vec::with_capacity(rows.len());
+            for r in &rows {
+                due.push(r.due_lsn.0 as i64);
+                spc.push(r.spcnode);
+                db.push(r.dbnode);
+                rel.push(r.relnode);
+                fork.push(r.forknum);
+                blk.push(r.blknum);
+            }
+            removed += self
+                .ysql_client
+                .execute(
+                    &sql,
+                    &[&branch_s, &bucket, &due, &spc, &db, &rel, &fork, &blk],
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "dequeue_gc_drop_shrink_events branch={branch_id} bucket={bucket} n={}",
+                        rows.len()
                     )
                 })?;
         }
@@ -2762,6 +2849,133 @@ impl PageStore {
                 )
             })?;
         Ok(deleted)
+    }
+
+    /// Drop action ([`GC_KIND_DROP`]): reclaim a dropped fork. Delete
+    /// every `pages` row with `lsn <= due_lsn` (= the drop's LSN) plus
+    /// the fork's rel-size `meta` rows up to the same LSN. Scoped to
+    /// `due_lsn`, NOT the cutoff, so a relnode reused above the drop
+    /// keeps its newer versions/size. Idempotent. Returns `pages` rows
+    /// deleted.
+    ///
+    /// Deliberately leaves the v2 sparse-reldir tombstone: under
+    /// copy-on-write child reads an absent sparse key falls through to
+    /// the ancestor, so the `Removed` marker is load-bearing (it shadows
+    /// a parent's `Exists`) — deleting it could resurrect the rel in a
+    /// child.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn gc_drop_fork(
+        &self,
+        branch_id: BranchId,
+        spcnode: i64,
+        dbnode: i64,
+        relnode: i64,
+        forknum: i16,
+        due_lsn: Lsn,
+    ) -> Result<u64> {
+        let branch_s = branch_id.to_string();
+        let due = due_lsn.0 as i64;
+        let pages_sql = format!(
+            "DELETE FROM \"{schema}\".pages \
+             WHERE branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
+               AND relnode=$4 AND forknum=$5 AND lsn <= $6",
+            schema = self.schema
+        );
+        let deleted = self
+            .ysql_client
+            .execute(
+                &pages_sql,
+                &[&branch_s, &spcnode, &dbnode, &relnode, &forknum, &due],
+            )
+            .await
+            .with_context(|| {
+                format!("gc_drop_fork pages branch={branch_id} rel={relnode} fork={forknum}")
+            })?;
+
+        // The fork's own rel-size meta key (<= due_lsn).
+        let key_bytes = rel_size_key_bytes(spcnode, dbnode, relnode, forknum);
+        let meta_sql = format!(
+            "DELETE FROM \"{schema}\".meta \
+             WHERE branch_id=$1 AND key=$2 AND lsn <= $3",
+            schema = self.schema
+        );
+        self.ysql_client
+            .execute(&meta_sql, &[&branch_s, &key_bytes, &due])
+            .await
+            .with_context(|| {
+                format!("gc_drop_fork meta branch={branch_id} rel={relnode} fork={forknum}")
+            })?;
+        Ok(deleted)
+    }
+
+    /// Shrink action ([`GC_KIND_SHRINK`]): reclaim the tail of a
+    /// truncated fork — delete `pages` rows with `blknum >= relsize AND
+    /// lsn <= cutoff`, where `relsize` is the fork's size AS OF the
+    /// cutoff (its rel-size `meta` value at `lsn <= cutoff`). Reading
+    /// the size at the cutoff rather than the truncation LSN makes this
+    /// re-extension-safe: a rel re-extended above the truncation keeps
+    /// its new tail. Returns `pages` rows deleted.
+    ///
+    /// Size-row scenarios:
+    /// - missing at the cutoff: the fork didn't exist then (e.g. an
+    ///   earlier drop reclaimed it) — no-op.
+    /// - malformed (< 4 LE bytes ⇒ corruption): skip + alarm via
+    ///   `correctness_errors_total`. Erroring would retry the corrupt
+    ///   row every tick and wedge the drain.
+    pub async fn gc_shrink_fork(
+        &self,
+        branch_id: BranchId,
+        spcnode: i64,
+        dbnode: i64,
+        relnode: i64,
+        forknum: i16,
+        cutoff: Lsn,
+    ) -> Result<u64> {
+        let key_bytes = rel_size_key_bytes(spcnode, dbnode, relnode, forknum);
+        let Some(meta) = self.read_meta(branch_id, &key_bytes, cutoff).await? else {
+            return Ok(0);
+        };
+        let p = meta.payload.as_ref();
+        if p.len() < 4 {
+            tracing::error!(
+                relnode,
+                forknum,
+                len = p.len(),
+                "gc_shrink_fork: malformed rel-size payload; skipping the shrink \
+                 (corruption signal)"
+            );
+            crate::metrics::CORRECTNESS_ERRORS
+                .with_label_values(&["gc_shrink_relsize_malformed"])
+                .inc();
+            return Ok(0);
+        }
+        let relsize = u32::from_le_bytes([p[0], p[1], p[2], p[3]]) as i64;
+        let sql = format!(
+            "DELETE FROM \"{schema}\".pages \
+             WHERE branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
+               AND relnode=$4 AND forknum=$5 AND blknum >= $6 AND lsn <= $7",
+            schema = self.schema
+        );
+        self.ysql_client
+            .execute(
+                &sql,
+                &[
+                    &branch_id.to_string(),
+                    &spcnode,
+                    &dbnode,
+                    &relnode,
+                    &forknum,
+                    &relsize,
+                    &(cutoff.0 as i64),
+                ],
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "gc_shrink_fork branch={branch_id} rel={relnode} fork={forknum} \
+                     relsize={relsize}"
+                )
+            })
     }
 
     /// Minimum branch point over live children of `branch_id` — the
@@ -6091,7 +6305,7 @@ mod tests {
         assert_eq!(drained.len(), 3);
         // 3 < limit ⇒ all due rows visited ⇒ sweep mode.
         store
-            .dequeue_pending_gc(branch, &drained, Lsn(30), true)
+            .dequeue_gc_trim_rows(branch, &drained, Lsn(30), true)
             .await
             .unwrap();
 
@@ -6136,7 +6350,7 @@ mod tests {
         assert_eq!(drained.len(), 1);
         assert_eq!((drained[0].blknum, drained[0].due_lsn.0), (7, 5));
         store
-            .dequeue_pending_gc(branch, &drained, Lsn(30), false)
+            .dequeue_gc_trim_rows(branch, &drained, Lsn(30), false)
             .await
             .unwrap();
 
@@ -6152,13 +6366,13 @@ mod tests {
         );
     }
 
-    /// Scenario: sweep mode must not discard sentinel rows (drop −2 /
+    /// Scenario: sweep mode must not discard drop/shrink event rows (drop −2 /
     /// shrink −1) — the drain skips them unacted, so dequeueing them
     /// would silently drop future Part 2/3 work. The `blknum >= 0`
     /// guard keeps them queued through a sweep of the same due range.
     #[tokio::test]
-    async fn pending_gc_dequeue_sweep_preserves_sentinels() {
-        let (store, _schema) = make_store("gc_sentinel").await;
+    async fn pending_gc_dequeue_sweep_preserves_drop_shrink_events() {
+        let (store, _schema) = make_store("gc_drop_shrink_event").await;
         let branch = rand_branch();
 
         store
@@ -6167,7 +6381,7 @@ mod tests {
                 &[
                     gc_cand(16401, 0, 1, 10), // trim, due
                     gc_cand(16401, 0, 2, 20), // trim, due
-                    gc_cand(16401, 0, -2, 8), // drop sentinel, due — must survive
+                    gc_cand(16401, 0, -2, 8), // drop event, due — must survive
                 ],
             )
             .await
@@ -6177,11 +6391,11 @@ mod tests {
             .select_due_pending_gc(branch, Lsn(30), 1000)
             .await
             .unwrap();
-        assert_eq!(due.len(), 3, "select returns sentinels too");
-        // The drain's caller filters sentinels out of the visited set.
+        assert_eq!(due.len(), 3, "select returns drop/shrink events too");
+        // The drain's caller filters drop/shrink events out of the visited set.
         let visited: Vec<PendingGcRow> = due.into_iter().filter(|r| r.blknum >= 0).collect();
         store
-            .dequeue_pending_gc(branch, &visited, Lsn(30), true)
+            .dequeue_gc_trim_rows(branch, &visited, Lsn(30), true)
             .await
             .unwrap();
 
@@ -6193,7 +6407,57 @@ mod tests {
         assert_eq!(
             left,
             vec![(-2, 8)],
-            "sweep clears due trim rows; the unacted drop sentinel (-2) stays queued"
+            "sweep clears due trim rows; the unacted drop event (-2) stays queued"
+        );
+    }
+
+    /// Scenario: drop/shrink events dequeue by EXACT PK, never by cutoff range.
+    /// A fork has an acted drop (due 10) + shrink (due 20) and a second
+    /// drop event at due 300 (relnode reused and re-dropped later —
+    /// not yet due, not acted): dequeueing the two acted rows must
+    /// leave the future drop event AND an unrelated trim row queued.
+    #[tokio::test]
+    async fn pending_gc_drop_shrink_dequeue_exact_pk() {
+        let (store, _schema) = make_store("gc_drop_shrink_event_pk").await;
+        let branch = rand_branch();
+
+        store
+            .put_pending_gc(
+                branch,
+                &[
+                    gc_cand(16401, 0, GC_KIND_DROP, 10),   // acted this tick
+                    gc_cand(16401, 0, GC_KIND_SHRINK, 20), // acted this tick
+                    gc_cand(16401, 0, GC_KIND_DROP, 300),  // future re-drop — must survive
+                    gc_cand(16401, 0, 7, 15),              // trim row — not a drop/shrink event
+                ],
+            )
+            .await
+            .unwrap();
+
+        // The drain dequeues the rows the select returned (bucket_id
+        // populated), filtered to drop/shrink events.
+        let due = store
+            .select_due_pending_gc(branch, Lsn(100), 1000)
+            .await
+            .unwrap();
+        let drop_shrink_events: Vec<PendingGcRow> =
+            due.into_iter().filter(|r| r.blknum < 0).collect();
+        assert_eq!(drop_shrink_events.len(), 2);
+        let removed = store
+            .dequeue_gc_drop_shrink_events(branch, &drop_shrink_events)
+            .await
+            .unwrap();
+        assert_eq!(removed, 2, "exactly the acted drop/shrink events go");
+
+        let left: Vec<(i64, u64)> = all_pending(&store, branch)
+            .await
+            .iter()
+            .map(|r| (r.blknum, r.due_lsn.0))
+            .collect();
+        assert_eq!(
+            left,
+            vec![(7, 15), (GC_KIND_DROP, 300)],
+            "the not-yet-due drop event and the trim row must survive"
         );
     }
 
@@ -6413,6 +6677,244 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, vec![(70, false, true)], "init delta is the anchor");
+    }
+
+    /// Rel-size meta row (LE u32 payload) for the drop/shrink tests.
+    fn rel_size_row(relnode: u32, forknum: u8, lsn: u64, nblocks: u32) -> MetaRow {
+        MetaRow {
+            key: Bytes::from(rel_size_key_bytes(
+                GC_SPC,
+                GC_DB,
+                relnode as i64,
+                forknum as i16,
+            )),
+            lsn: Lsn(lsn),
+            payload: Bytes::copy_from_slice(&nblocks.to_le_bytes()),
+        }
+    }
+
+    /// Scenario: drop reclaims the whole fork `<= due_lsn` — pages AND
+    /// the rel-size meta key — while (a) the same relnode's rows ABOVE
+    /// the drop LSN (relfilenode reused after the drop) and (b) an
+    /// unrelated rel survive. Idempotent: a re-run deletes nothing.
+    #[tokio::test]
+    async fn gc_drop_fork_scoped_to_due_lsn() {
+        let (store, _schema) = make_store("gc_drop").await;
+        let branch = rand_branch();
+        let (rel, other) = (16420u32, 16421u32);
+
+        let key = |r: u32, blk: u32| page_key(GC_SPC as u32, GC_DB as u32, r, 0, blk);
+        store
+            .put_pages(
+                branch,
+                &[
+                    // dropped incarnation: everything <= due (100) must go
+                    page_row(key(rel, 0), 10, true, true, b"i10"),
+                    page_row(key(rel, 0), 30, false, false, b"d30"),
+                    page_row(key(rel, 1), 20, true, true, b"i20"),
+                    // relnode reused above the drop: must survive
+                    page_row(key(rel, 0), 200, true, true, b"i200"),
+                    // unrelated rel: must survive
+                    page_row(key(other, 0), 10, true, true, b"i10"),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_meta(
+                branch,
+                &[
+                    rel_size_row(rel, 0, 10, 1),
+                    rel_size_row(rel, 0, 20, 2),
+                    // reused incarnation's size: must survive
+                    rel_size_row(rel, 0, 200, 1),
+                    rel_size_row(other, 0, 10, 1),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let deleted = store
+            .gc_drop_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(deleted, 3, "both blocks' rows <= due go, lsn-200 stays");
+
+        let b0 = store
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, 0)
+            .await
+            .unwrap();
+        assert_eq!(b0, vec![(200, true, true)], "reused relnode's row survives");
+        let b1 = store
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, 1)
+            .await
+            .unwrap();
+        assert!(b1.is_empty(), "dropped incarnation fully reclaimed");
+        let o = store
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, other as i64, 0, 0)
+            .await
+            .unwrap();
+        assert_eq!(o.len(), 1, "unrelated rel untouched");
+
+        // Rel-size meta: versions <= due gone, the reuse's kept.
+        let size_key = rel_size_key_bytes(GC_SPC, GC_DB, rel as i64, 0);
+        let below = store.read_meta(branch, &size_key, Lsn(199)).await.unwrap();
+        assert!(below.is_none(), "dropped incarnation's size rows gone");
+        let above = store.read_meta(branch, &size_key, Lsn(1000)).await.unwrap();
+        assert_eq!(above.unwrap().lsn, Lsn(200), "reused size row survives");
+        let other_key = rel_size_key_bytes(GC_SPC, GC_DB, other as i64, 0);
+        assert!(
+            store
+                .read_meta(branch, &other_key, Lsn(1000))
+                .await
+                .unwrap()
+                .is_some(),
+            "unrelated rel's size untouched"
+        );
+
+        // Idempotent.
+        let again = store
+            .gc_drop_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(again, 0);
+    }
+
+    /// Scenario: shrink deletes `blknum >= size-as-of-cutoff` at
+    /// `lsn <= cutoff` — the truncated tail — while (a) blocks under
+    /// the size, (b) tail rows ABOVE the cutoff (a later re-extension's
+    /// writes), and (c) a fork with no size row at the cutoff (already
+    /// dropped / never existed) are all left alone. Reading the size at
+    /// the CUTOFF (not the truncation LSN) is what makes a re-extension
+    /// under the cutoff keep its new tail.
+    #[tokio::test]
+    async fn gc_shrink_fork_tail_as_of_cutoff() {
+        let (store, _schema) = make_store("gc_shrink").await;
+        let branch = rand_branch();
+        let rel = 16430u32;
+
+        let key = |blk: u32| page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
+        store
+            .put_pages(
+                branch,
+                &[
+                    // 4 blocks created at lsn 10, block 1 churned at 30.
+                    page_row(key(0), 10, true, true, b"i10"),
+                    page_row(key(1), 10, true, true, b"i10"),
+                    page_row(key(1), 30, false, false, b"d30"),
+                    page_row(key(2), 10, true, true, b"i10"),
+                    page_row(key(3), 10, true, true, b"i10"),
+                    // block 2 re-created ABOVE the cutoff: must survive.
+                    page_row(key(2), 120, true, true, b"i120"),
+                ],
+            )
+            .await
+            .unwrap();
+        // Size 4 at creation, truncated to 2 at lsn 50.
+        store
+            .put_meta(
+                branch,
+                &[rel_size_row(rel, 0, 10, 4), rel_size_row(rel, 0, 50, 2)],
+            )
+            .await
+            .unwrap();
+
+        let deleted = store
+            .gc_shrink_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(deleted, 2, "blocks 2 and 3's lsn-10 rows");
+
+        for blk in [0u32, 1] {
+            let rows = store
+                .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
+                .await
+                .unwrap();
+            assert!(!rows.is_empty(), "block {blk} under the size untouched");
+        }
+        let b2 = store
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            b2,
+            vec![(120, true, true)],
+            "above-cutoff re-extension row survives, lsn-10 tail row gone"
+        );
+        let b3 = store
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, 3)
+            .await
+            .unwrap();
+        assert!(b3.is_empty(), "tail block fully reclaimed");
+
+        // Re-extension UNDER the cutoff: size back to 4 at lsn 80 —
+        // the as-of-cutoff size is 4, so nothing past it is deleted.
+        store
+            .put_meta(branch, &[rel_size_row(rel, 0, 80, 4)])
+            .await
+            .unwrap();
+        let deleted = store
+            .gc_shrink_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(deleted, 0, "re-extended tail is live — nothing to shrink");
+
+        // No size row at the cutoff ⇒ no-op (e.g. fork already dropped).
+        let none = store
+            .gc_shrink_fork(branch, GC_SPC, GC_DB, 16431, 0, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(none, 0);
+    }
+
+    /// Scenario: a MALFORMED rel-size payload (corruption — every
+    /// writer stamps exactly 4 LE bytes) must skip-and-alarm, never
+    /// error: an Err here aborts the drain tick, and since the corrupt
+    /// value is persistent state, retrying forever wedges all GC on
+    /// the branch. Pins Ok(0) + the pages left untouched + the
+    /// `correctness_errors_total` corruption signal firing.
+    #[tokio::test]
+    async fn gc_shrink_fork_malformed_size_skips_and_alarms() {
+        let (store, _schema) = make_store("gc_shrink_bad").await;
+        let branch = rand_branch();
+        let rel = 16440u32;
+
+        let key = |blk: u32| page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
+        store
+            .put_pages(branch, &[page_row(key(0), 10, true, true, b"i10")])
+            .await
+            .unwrap();
+        // Corrupt rel-size row: 2 bytes instead of 4.
+        store
+            .put_meta(
+                branch,
+                &[MetaRow {
+                    key: Bytes::from(rel_size_key_bytes(GC_SPC, GC_DB, rel as i64, 0)),
+                    lsn: Lsn(10),
+                    payload: Bytes::from_static(&[0u8, 1u8]),
+                }],
+            )
+            .await
+            .unwrap();
+
+        let alarms = || {
+            crate::metrics::CORRECTNESS_ERRORS
+                .with_label_values(&["gc_shrink_relsize_malformed"])
+                .get()
+        };
+        let before = alarms();
+        let deleted = store
+            .gc_shrink_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
+            .await
+            .expect("malformed size must not error — an Err would wedge the drain");
+        assert_eq!(deleted, 0, "skip: nothing deleted on corrupt size");
+        assert_eq!(alarms(), before + 1, "corruption signal must fire");
+
+        let rows = store
+            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, 0)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "the fork's pages are left untouched");
     }
 
     /// Scenario: the persisted read floor is monotone (GREATEST — a
