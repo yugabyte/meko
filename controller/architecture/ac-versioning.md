@@ -1,7 +1,7 @@
 # ac — Versioning
 
 **Status:** Draft
-**Last updated:** 2026-07-22
+**Last updated:** 2026-07-23
 
 How the amp controller bundle is versioned: one version, from a single source,
 reported by every component (`ac-apis.md`, `ac-k8s-deploy.md`). Covers both the
@@ -21,25 +21,28 @@ The version is a **hybrid CalVer/SemVer**: `MAJOR.YYMMDD.PATCH` (e.g.
   same day).
 
 Every **build** appends the short commit: the CI image/binary version is
-`<VERSION>-<short-commit>` (e.g. `0.260722.0-1bc8b3d`) — dashes only, so it drops
-straight into an image tag / URL. The `VERSION` file holds **only the base**
-`MAJOR.YYMMDD.PATCH`; the commit id lives on the build, not in the file. It stays
-SemVer-shaped, so the image tag and sorting work normally.
+`<VERSION>-<short-commit>` (e.g. `0.260723.0-71fe562d7`) — dashes only, so it
+drops straight into an image tag / URL. It stays SemVer-shaped, so the image tag
+and sorting work normally.
 
-## Single source of truth
+## Single source of truth — git tags
 
-The repo-root **`VERSION`** file (e.g. `0.260714.0`) is the only place the
-release number lives. [`scripts/version.sh`](../../scripts/version.sh) reads it
-and derives every other form; the Makefile and deploy scripts call it, so the
-binary, image tag, Helm chart, and `controller` never drift.
+Releases are **git tags** (`0.YYMMDD.PATCH`, e.g. `0.260723.0`), minted by CI —
+there is **no version file to bump and no release commit on `main`**. The tag
+sits on the exact commit the images were built from, so:
 
-```
-scripts/version.sh                 # 0.260722.0            (base version from VERSION)
-scripts/version.sh binary-version  # 0.260722.0-1bc8b3d    (-ldflags value)
-scripts/version.sh image-tag       # 0.260722.0-1bc8b3d   (container tag)
-scripts/version.sh sync            # stamp Chart.yaml + controller Cargo.toml/Cargo.lock
-scripts/version.sh bump date       # 0.260714.0 -> 0.260722.0 (today), then sync
-```
+- the release list = the repo's tag list;
+- `git checkout 0.260723.0` = the exact released source;
+- the same-day `PATCH` counter = the existing `0.YYMMDD.*` tags (no other state).
+
+The repo-root `VERSION` file is **not a version source** and is never bumped or
+committed to. It survives only as the build-time delivery mechanism: CI stamps
+the computed base into the *workspace* copy before building, and
+[`scripts/version.sh`](../../scripts/version.sh) / the Makefile read it from
+there, so the binary, image tag, Helm chart, and `controller` all report the
+computed release version. (For local dev builds it is a placeholder base;
+`version.sh` still appends `-<short-commit>[-dirty]` so any local build is
+uniquely identifiable.)
 
 ## Build identity
 
@@ -101,30 +104,53 @@ Because these binaries are Neon-derived, this is the same
 `project_git_version!`/`project_build_tag!` machinery the `controller` uses — the
 `utils` `build.rs` just adds the `VERSION`-file semver on top.
 
-## Releasing — human-triggered, CI-performed
+## Releasing — automatic, tag-driven (Jenkins `amp-build`)
 
-A version is minted **only when someone decides to release** — not on every
-merge. Most days that is zero times, some days more than once. The bump is done
-by CI, never by hand.
+Every merge to `main` that changes **product code** mints a release, fully
+automatically — no manual runs, no PRs, no GitHub permissions. The whole flow
+lives in the `amp-build` Jenkins job
+(`qa-services/amp-report-service/jenkins/pipelines/pipeline_amp_build.groovy`):
 
-Trigger the **`Release — bump VERSION`** workflow
-(`.github/workflows/version-bump.yml`, `workflow_dispatch`) with a bump part:
+```
+merge to main
+  → pollSCM (≤15 min)
+  → gate: product code changed since the last release tag?
+      compute/**, controller/**, the postgres submodule, Cargo.lock,
+      rust-toolchain.toml, Makefile, postgres.mk, build.sh, scripts/build.py
+      — excluding *.md, *_test.go, tests/ dirs, testdata/
+      (docs/test-only merges are a ~1-min no-op, no version minted)
+  → version computed on the fly: 0.YYMMDD.PATCH
+      YYMMDD = HEAD commit date · PATCH = next free among the 0.YYMMDD.* tags
+  → build → push quay.io/yugabyte/amp-{controller,endpoint,pg}:<version>-<short-commit>
+  → push the git tag 0.YYMMDD.PATCH onto the built commit
+```
 
-- **`date`** (default) — the normal release: rolls `YYMMDD` to today and resets
-  `PATCH` to `0`. If `VERSION` is already dated today, it rolls `PATCH` instead
-  (`0.260722.0` → `0.260722.1`), so a second release the same day moves forward.
-- **`patch`** — re-cut the current date (a hotfix on an existing release).
-- **`major`** — bump the epoch; reserved for a deliberate reset.
+Properties:
 
-The workflow runs `scripts/version.sh bump <part>` (which also syncs the chart +
-`controller` Cargo.toml/Cargo.lock; `make version-bump-*` are thin wrappers) on a
-`release/<version>` branch, **opens a PR to `main`, and enables auto-merge** — so
-main's "require a pull request" rule is honoured with no branch-protection bypass
-(needs "Allow auto-merge" enabled). **The merge commit is the release commit.**
-The `amp-build` job (SCM polling on `main`) builds it and pushes
-`<VERSION>-<short-commit>` to quay — the Makefile stamps the commit, so the
-released tag identifies the exact code. (amp-build should build the exact commit
-it triggered on, not a moving `main` head.)
+- **The tag is pushed only after all images land** on quay — a failed build
+  never burns a version; the tag and the images always exist as a pair (a re-run
+  repairs a missing tag idempotently).
+- **No double builds**: polling fires only on new commits (the tag push doesn't
+  move the branch head), the gate diffs against the tag on HEAD, the quay probe
+  skips already-published deterministic tags, and builds are serialized.
+- **First release** under this scheme: `0.260723.0` → images
+  `…:0.260723.0-71fe562d7` + tag `0.260723.0` on `71fe562d7`.
+- Old-date hotfixes fit without redesign: branch from the tag and build that
+  branch with an explicit version.
+- Test-run builds are separate: `custom-<short-commit>`, deterministic per
+  commit, deduped the same way.
 
-Between releases nothing new is published; a local/dev build off the current
-`VERSION` is still `<VERSION>-<short-commit>[-dirty]`, uniquely identifiable.
+## Target: the release status page
+
+This pipeline is the **foundation for a release status page**: every release is
+a stable, machine-readable triple — **git tag** (source), **quay images**
+(artifacts), and, next, **test results** attached to that same version. The
+status page's row is "release `0.260723.0` — images ✓ — regression ✓/✗ — perf
+✓/✗", built from:
+
+- **releases** — the repo's `0.*` tags (GitHub API) or quay tag list;
+- **artifacts** — quay `amp-*:<version>-<short-commit>` manifests;
+- **test status** — the amp report portal's runs for that version (the portal
+  already records `versions.product` per run and groups report pages by it), and
+  a GitHub commit status posted back onto the tagged commit so the status is
+  visible on the GitHub side too.
