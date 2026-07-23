@@ -1,0 +1,77 @@
+# Release version bump — human-triggered, CI-performed. A maintainer runs this
+# workflow ("release this code"); CI rolls the CalVer VERSION file and commits
+# it to main. That bump commit is the release commit: the amp-build job (SCM
+# polling on main) then builds/pushes the images off it, and the Makefile stamps
+# the short commit id, so the released image tag is <VERSION>-<short-commit>
+# (e.g. 0.260722.0-1bc8b3d). The VERSION file itself holds only the base
+# MAJOR.YYMMDD.PATCH — the commit id lives on the build, not in the file.
+#
+#   date  (default) — roll YYMMDD to today, PATCH -> 0 (or +1 PATCH if VERSION
+#                     is already dated today, so a second release the same day
+#                     moves forward: 0.260722.0 -> 0.260722.1).
+#   patch           — re-cut the current date (a hotfix on an existing release).
+#   major           — bump the epoch; reserved for a deliberate reset.
+#
+# Not automatic on every merge: a version is minted only when someone decides to
+# release, matching "we release when we have to" — most days none, some days
+# more than one.
+#
+# Requires: branch protection on main must allow github-actions[bot] to push the
+# single VERSION/Chart bump commit (or swap the checkout token for a GitHub App
+# / PAT with bypass rights).
+name: Release — bump VERSION
+
+on:
+  workflow_dispatch:
+    inputs:
+      part:
+        description: 'Which part to bump'
+        type: choice
+        default: date
+        options: [date, patch, major]
+
+permissions:
+  contents: write
+
+# One release bump at a time; never cancel one mid-push.
+concurrency:
+  group: release-version-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          # Full history so the rebase-before-push has real ancestry.
+          fetch-depth: 0
+
+      - name: Bump VERSION and push
+        env:
+          PART: ${{ inputs.part }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          OLD="$(scripts/version.sh)"
+          scripts/version.sh bump "${PART}"
+          NEW="$(scripts/version.sh)"
+          if [ "${OLD}" = "${NEW}" ]; then
+            echo "VERSION unchanged (${OLD}); nothing to release." >&2
+            exit 1
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION deploy/helm/yb-amp-controller/Chart.yaml
+          git commit -m "release: ${NEW} (${PART} bump, triggered by ${ACTOR})"
+          # Tolerate a commit landing between checkout and push.
+          git pull --rebase origin main
+          git push origin main
+          {
+            echo "### Release ${NEW}"
+            echo ""
+            echo "- \`VERSION\`: ${OLD} → **${NEW}**"
+            echo "- Image tag the build will publish: \`v${NEW}-<short-commit>\`"
+            echo "- amp-build (SCM polling on main) builds this commit and pushes the images."
+          } >> "${GITHUB_STEP_SUMMARY}"

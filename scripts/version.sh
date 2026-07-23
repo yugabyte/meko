@@ -10,21 +10,21 @@
 #
 # The repo-root VERSION file (e.g. "0.260714.0") drives everything:
 #   - the controller binary (stamped via -ldflags; see the Makefile),
-#   - the container image tag ("v<VERSION>"),
+#   - the container image tag ("<VERSION>-<short-commit>"),
 #   - the yb-amp-controller Helm chart (version + appVersion).
 #
-# By default a build is a pre-release: the binary version / image tag carry a
-# "-dev.<short-commit>" suffix (plus "-dirty" for an unclean tree), so dev builds
-# are uniquely identifiable and never clobber a release on the same tag. Set
-# RELEASE=1 for the clean release version.
+# The VERSION file holds only the base MAJOR.YYMMDD.PATCH; the binary version
+# and image tag append "-<short-commit>" (plus "-dirty" for an unclean local
+# tree) so every build is uniquely identifiable and traceable to its exact
+# commit — e.g. 0.260722.0-1bc8b3d. RELEASE=1 asserts a clean tree (omits the
+# "-dirty" marker; the commit id is always present).
 #
 # Usage:
-#   scripts/version.sh                 # release version from VERSION (e.g. 0.260714.0)
-#   scripts/version.sh binary-version  # -ldflags version, e.g. 0.260714.0-dev.abc1234-dirty
-#   scripts/version.sh image-tag       # image tag, e.g. v0.260714.0-dev.abc1234-dirty (v0.260714.0 with RELEASE=1)
+#   scripts/version.sh                 # base version from VERSION (e.g. 0.260722.0)
+#   scripts/version.sh binary-version  # -ldflags version, e.g. 0.260722.0-1bc8b3d
+#   scripts/version.sh image-tag       # image tag, e.g. 0.260722.0-1bc8b3d
 #   scripts/version.sh sync            # stamp Chart.yaml from VERSION
 #   scripts/version.sh bump <part>     # bump date|patch|major in VERSION, then sync
-#   RELEASE=1 scripts/version.sh image-tag   # clean release tag
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -75,24 +75,28 @@ bump() {
   sync_chart "${new}"
 }
 
-# --- dev vs release identity ------------------------------------------------
-# Unless RELEASE is set, a build is a pre-release: the version carries a
-# "-dev.<short-commit>" suffix (plus "-dirty" when the working tree has
-# uncommitted changes), so dev builds are uniquely identifiable and never
-# collide with a release on the same image tag. RELEASE=1 → the clean version.
+# --- build identity ---------------------------------------------------------
+# Every build appends "-<short-commit>" to the VERSION-file base, so the CI
+# release version is "<VERSION>-<short-commit>" (e.g. 0.260722.0-1bc8b3d): the
+# VERSION file carries only the base MAJOR.YYMMDD.PATCH, and the commit id
+# (stamped here / by the Makefile) identifies the exact tree — dashes only, so
+# it drops straight into an image tag / URL. A "-dirty" marker is added for an
+# unclean local tree; RELEASE=1 asserts a clean build and omits it (CI trees
+# are clean, so it is a no-op there).
 _git_commit() { git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown; }
 _dirty()      { [ -n "$(git -C "${ROOT}" status --porcelain 2>/dev/null)" ] && printf -- '-dirty' || true; }
-_dev_suffix() {
-  if [ -n "${RELEASE:-}" ]; then return 0; fi
-  printf -- '-dev.%s%s' "$(_git_commit)" "$(_dirty)"
+_commit_suffix() {
+  local dirty=""
+  [ -z "${RELEASE:-}" ] && dirty="$(_dirty)"
+  printf -- '-%s%s' "$(_git_commit)" "${dirty}"
 }
 # lenient read (no strict-semver validation) for the tag/binary forms.
 _base() { local v; v="$( { tr -d '[:space:]' < "${VERSION_FILE}"; } 2>/dev/null || true)"; printf '%s' "${v}"; }
 
-# binary_version: "<VERSION>[-dev.<commit>[-dirty]]" (no "v"), for -ldflags.
-binary_version() { local v; v="$(_base)"; [ -n "${v}" ] || v="0.0.0"; printf '%s%s' "${v}" "$(_dev_suffix)"; }
-# image_tag: "v<VERSION>[-dev.<commit>[-dirty]]", or "latest" when VERSION is absent.
-image_tag() { local v; v="$(_base)"; [ -n "${v}" ] || { printf 'latest'; return; }; printf 'v%s%s' "${v}" "$(_dev_suffix)"; }
+# binary_version: "<VERSION>-<commit>[-dirty]" (no "v"), for -ldflags. e.g. 0.260722.0-1bc8b3d
+binary_version() { local v; v="$(_base)"; [ -n "${v}" ] || v="0.0.0"; printf '%s%s' "${v}" "$(_commit_suffix)"; }
+# image_tag: "<VERSION>-<commit>[-dirty]", or "latest" when VERSION is absent. e.g. 0.260722.0-1bc8b3d
+image_tag() { local v; v="$(_base)"; [ -n "${v}" ] || { printf 'latest'; return; }; printf '%s%s' "${v}" "$(_commit_suffix)"; }
 
 case "${1:-print}" in
   print)          read_version; echo ;;

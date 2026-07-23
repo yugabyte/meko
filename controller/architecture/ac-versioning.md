@@ -1,7 +1,7 @@
 # ac — Versioning
 
 **Status:** Draft
-**Last updated:** 2026-07-14
+**Last updated:** 2026-07-22
 
 How the amp controller bundle is versioned: one version, from a single source,
 reported by every component (`ac-apis.md`, `ac-k8s-deploy.md`). Covers both the
@@ -17,10 +17,14 @@ The version is a **hybrid CalVer/SemVer**: `MAJOR.YYMMDD.PATCH` (e.g.
   *minor* slot, so the string is still a valid three-part SemVer that
   parses/sorts normally.
 - **`PATCH`** — a same-day counter: `0` for the day's first release, `+1` for
-  each re-cut on that date.
+  each re-cut on that date (`0.260722.0` → `0.260722.1` for a second release the
+  same day).
 
-Because it stays SemVer-shaped, the `-dev.<commit>` pre-release suffix and the
-`v<...>` image tag work exactly as before.
+Every **build** appends the short commit: the CI image/binary version is
+`<VERSION>-<short-commit>` (e.g. `0.260722.0-1bc8b3d`) — dashes only, so it drops
+straight into an image tag / URL. The `VERSION` file holds **only the base**
+`MAJOR.YYMMDD.PATCH`; the commit id lives on the build, not in the file. It stays
+SemVer-shaped, so the image tag and sorting work normally.
 
 ## Single source of truth
 
@@ -30,21 +34,21 @@ and derives every other form; the Makefile and deploy scripts call it, so the
 binary, image tag, Helm chart, and `controller` never drift.
 
 ```
-scripts/version.sh                 # 0.260714.0            (release version)
-scripts/version.sh binary-version  # 0.260714.0-dev.abc1234-dirty  (-ldflags value)
-scripts/version.sh image-tag       # v0.260714.0-dev.abc1234-dirty (container tag)
+scripts/version.sh                 # 0.260722.0            (base version from VERSION)
+scripts/version.sh binary-version  # 0.260722.0-1bc8b3d    (-ldflags value)
+scripts/version.sh image-tag       # 0.260722.0-1bc8b3d   (container tag)
 scripts/version.sh sync            # stamp Chart.yaml + controller Cargo.toml/Cargo.lock
-scripts/version.sh bump patch      # 0.260714.0 -> 0.260714.1, then sync
+scripts/version.sh bump date       # 0.260714.0 -> 0.260722.0 (today), then sync
 ```
 
-## Dev vs release
+## Build identity
 
-A build is a **pre-release by default**: `binary-version` / `image-tag` append
-`-dev.<short-commit>` (plus `-dirty` when the working tree is unclean), so dev
-builds are uniquely identifiable in `/version`, logs, and image tags, and never
-clobber a release on the same `v0.260714.0` tag. **`RELEASE=1`** yields the clean
-release version. The suffix is a SemVer-2.0 pre-release (sorts below the
-release) and is Docker-tag-safe (`.`/`-`, no `+`).
+`binary-version` / `image-tag` always append `-<short-commit>`, so every build
+is uniquely identifiable in `/version`, logs, and image tags and traces straight
+to its exact commit — `0.260722.0-1bc8b3d`. A `-dirty` marker is added for an
+unclean **local** tree; `RELEASE=1` asserts a clean build and omits it (CI trees
+are clean, so it is a no-op there — the commit id is always present). The suffix
+is Docker-tag-safe (`.`/`-`, no `+`).
 
 ## Where the version shows up
 
@@ -57,9 +61,9 @@ release) and is Docker-tag-safe (`.`/`-`, no `+`).
   at startup (empty when no managed controller runs).
 - **UI** — the `AppLayout` footer shows `amp v<version>`; its tooltip carries the
   commit, build date, and controller version.
-- **Container image** — built and pushed as `v<VERSION>` (release) or
-  `v<VERSION>-dev.<commit>` (dev). Deploy scripts default the controller/endpoint
-  tags to `scripts/version.sh image-tag`.
+- **Container image** — built and pushed as `<VERSION>-<short-commit>` (e.g.
+  `0.260722.0-1bc8b3d`). Deploy scripts default the controller/endpoint tags to
+  `scripts/version.sh image-tag`.
 - **Helm chart** — `Chart.yaml` `version`/`appVersion` are stamped from `VERSION`
   by `version.sh sync`.
 
@@ -74,21 +78,28 @@ stamped `BUILD_TAG` — so `controller --version` reports the same release
 identity as the controller, and that string is what the controller surfaces in
 the `controller` field of the `GET /api/v1/version` response.
 
-## Releasing
+## Releasing — human-triggered, CI-performed
 
-1. `scripts/version.sh bump <part>` — bumps `VERSION` and syncs the chart +
-   `controller` Cargo.toml/Cargo.lock (the `make version-bump-*` targets
-   are thin wrappers). Under the CalVer scheme:
-   - **`date`** (alias **`minor`**, `make version-bump-minor`) — the normal way
-     to cut a release: rolls `YYMMDD` to today and resets `PATCH` to `0`. If
-     `VERSION` is already dated today, it rolls `PATCH` instead, so the version
-     always moves forward.
-   - **`patch`** (`make version-bump-patch`) — re-cut the current date (a hotfix
-     on top of an existing release).
-   - **`major`** (`make version-bump-major`) — bump the epoch; re-stamps the
-     date and resets `PATCH`. Reserved for a deliberate reset.
-2. Commit the bump.
-3. Build/push images with `RELEASE=1` so they tag `v<VERSION>` (clean, no `-dev`).
+A version is minted **only when someone decides to release** — not on every
+merge. Most days that is zero times, some days more than once. The bump is done
+by CI, never by hand.
 
-Between releases, every build is a `-dev.<commit>` pre-release off the current
-`VERSION`.
+Trigger the **`Release — bump VERSION`** workflow
+(`.github/workflows/version-bump.yml`, `workflow_dispatch`) with a bump part:
+
+- **`date`** (default) — the normal release: rolls `YYMMDD` to today and resets
+  `PATCH` to `0`. If `VERSION` is already dated today, it rolls `PATCH` instead
+  (`0.260722.0` → `0.260722.1`), so a second release the same day moves forward.
+- **`patch`** — re-cut the current date (a hotfix on an existing release).
+- **`major`** — bump the epoch; reserved for a deliberate reset.
+
+The workflow runs `scripts/version.sh bump <part>` (which also syncs the chart +
+`controller` Cargo.toml/Cargo.lock; `make version-bump-*` are thin wrappers) and
+commits the single `VERSION`/`Chart.yaml` change to `main`. **That bump commit is
+the release commit.** The `amp-build` job (SCM polling on `main`) builds it and
+pushes `<VERSION>-<short-commit>` to quay — the Makefile stamps the commit, so
+the released tag identifies the exact code. (amp-build should build the exact
+commit it triggered on, not a moving `main` head.)
+
+Between releases nothing new is published; a local/dev build off the current
+`VERSION` is still `<VERSION>-<short-commit>[-dirty]`, uniquely identifiable.
