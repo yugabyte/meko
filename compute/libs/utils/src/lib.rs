@@ -182,10 +182,82 @@ macro_rules! project_build_tag {
 #[doc(hidden)]
 pub use const_format as __const_format;
 
+/// The product's semantic version, stamped at build time from the repo-root
+/// `VERSION` file (hybrid CalVer, e.g. `0.260714.0`) — the same single source
+/// of truth the Go controller reads. See this crate's `build.rs`. Shared by
+/// every compute binary so they report the same version as the controller.
+pub const AMP_VERSION: &str = env!("AMP_VERSION");
+
+// The build's git commit, embedded via the same macro the binaries use. Its
+// `.git` `include_bytes!` dependency makes `utils` recompile when the commit
+// changes, so `amp_version()` below never goes stale through a build cache.
+project_git_version!(GIT_COMMIT);
+
+/// The full product version every compute binary reports: the `VERSION`-file
+/// semver with the build's short git commit appended (`-dirty` for a modified
+/// tree), e.g. `0.260714.0-9d2c3eea5`. Mirrors the Go controller's
+/// `<version>-<commit>` stamp so both control-plane and compute agree.
+pub fn amp_version() -> String {
+    format_version(AMP_VERSION, GIT_COMMIT)
+}
+
+/// Combine the semver with the raw `project_git_version!` string. Kept separate
+/// from [`amp_version`] (which feeds it the build-time consts) so the parsing is
+/// unit-testable. `git_raw` is `"git-env:<40-char sha>"` for CI/Docker builds
+/// that pass the `GIT_VERSION` env, or `"git:<sha>[-modified]"` for a local
+/// `.git` build; the `-modified` suffix becomes `-dirty`.
+fn format_version(semver: &str, git_raw: &str) -> String {
+    let raw = git_raw
+        .split_once(':')
+        .map(|(_, sha)| sha)
+        .unwrap_or(git_raw);
+    let dirty = raw.ends_with("-modified") || raw.ends_with("-dirty");
+    let sha = raw.trim_end_matches("-modified").trim_end_matches("-dirty");
+    let short = &sha[..sha.len().min(9)];
+    format!("{semver}-{short}{}", if dirty { "-dirty" } else { "" })
+}
+
 /// Same as `assert!`, but evaluated during compilation and gets optimized out in runtime.
 #[macro_export]
 macro_rules! const_assert {
     ($($args:tt)*) => {
         const _: () = assert!($($args)*);
     };
+}
+
+#[cfg(test)]
+mod amp_version_tests {
+    use super::format_version;
+
+    #[test]
+    fn ci_env_full_sha_is_shortened() {
+        assert_eq!(
+            format_version(
+                "0.260714.0",
+                "git-env:9d2c3eea5d3de8912d0cac9f66547b045f2b5eb5"
+            ),
+            "0.260714.0-9d2c3eea5"
+        );
+    }
+
+    #[test]
+    fn local_modified_tree_is_marked_dirty() {
+        assert_eq!(
+            format_version("0.260714.0", "git:9d2c3eea5d3de8912-modified"),
+            "0.260714.0-9d2c3eea5-dirty"
+        );
+    }
+
+    #[test]
+    fn missing_git_falls_back_to_unknown() {
+        assert_eq!(
+            format_version("0.260714.0", "git:unknown"),
+            "0.260714.0-unknown"
+        );
+    }
+
+    #[test]
+    fn handles_raw_sha_without_prefix() {
+        assert_eq!(format_version("1.2.3", "abcdef1234567"), "1.2.3-abcdef123");
+    }
 }

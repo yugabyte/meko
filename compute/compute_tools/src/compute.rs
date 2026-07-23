@@ -73,6 +73,21 @@ pub static BUILD_TAG: Lazy<String> = Lazy::new(|| {
         .unwrap_or(BUILD_TAG_DEFAULT)
         .to_string()
 });
+
+// Embed the git commit via the same macro the pageserver/safekeeper use. Its
+// `include_bytes!` on `.git` makes this crate's compile fingerprint depend on
+// the checked-out commit, so a new commit recompiles the crate — which forces
+// the `option_env!("BUILD_TAG")` above to be re-read from the build
+// environment. Without this dependency the endpoint image's BuildKit `target`
+// cache mount can serve a stale object compiled before BUILD_TAG was set,
+// leaving compute-ctl stamped with the `latest` default instead of the image
+// tag (unlike pageserver/safekeeper, which pull the macro in already).
+use utils::project_git_version;
+project_git_version!(GIT_VERSION_INNER);
+/// Git commit the compute binaries were built from (`git-env:<sha>` for
+/// CI/Docker builds that pass `GIT_VERSION`, `git:<sha>` for local `.git`
+/// builds).
+pub static GIT_VERSION: &str = GIT_VERSION_INNER;
 const DEFAULT_INSTALLED_EXTENSIONS_COLLECTION_INTERVAL: u64 = 3600;
 
 /// Static configuration params that don't change after startup. These mostly

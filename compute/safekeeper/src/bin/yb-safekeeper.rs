@@ -65,7 +65,8 @@ const FEATURES: &[&str] = &[
 
 fn version() -> String {
     format!(
-        "{GIT_VERSION} failpoints: {}, features: {:?}",
+        "{} failpoints: {}, features: {:?}",
+        utils::amp_version(),
         fail::has_failpoints(),
         FEATURES,
     )
@@ -156,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
         logging::Output::Stdout,
     )?;
     logging::replace_panic_hook_with_tracing_panic_hook().forget();
-    info!("version: {GIT_VERSION}");
+    info!("version: {}", utils::amp_version());
     info!("buld_tag: {BUILD_TAG}");
 
     // Change into the data directory.

@@ -305,7 +305,11 @@ fn init(
         }
     });
 
-    info!("compute build_tag: {}", &BUILD_TAG.to_string());
+    info!(
+        "compute version: {}, build_tag: {}",
+        utils::amp_version(),
+        &BUILD_TAG.to_string()
+    );
 
     Ok((provider, file_logs_guard))
 }

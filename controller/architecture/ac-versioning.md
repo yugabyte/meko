@@ -53,8 +53,10 @@ is Docker-tag-safe (`.`/`-`, no `+`).
 ## Where the version shows up
 
 - **Controller binary** — `controller/internal/version` (`Version`, `Commit`,
-  `BuildDate`), stamped via `-ldflags -X` from the Makefile
-  (`controller-bundle{,-only}`). Logged at startup (`amp controller starting`).
+  `BuildDate`), stamped via `-ldflags -X` from the Makefile (`controller-bundle{,-only}`,
+  and the plain `controller` dev target). Any out-of-Makefile build (e.g. a manual
+  cross-compile) should reuse `make print-controller-ldflags` so it stamps from the
+  same source. Logged at startup (`amp controller starting`).
 - **REST API** — `GET /api/v1/version` returns
   `{version, git_commit, build_date, controller?}`. The
   `controller` field is the bundled binary's `--version`, captured once
@@ -77,6 +79,27 @@ these from the same `VERSION` file (Makefile: `BUILD_TAG=v<VERSION>`,
 stamped `BUILD_TAG` — so `controller --version` reports the same release
 identity as the controller, and that string is what the controller surfaces in
 the `controller` field of the `GET /api/v1/version` response.
+
+## Compute / endpoint binaries
+
+The compute image's Rust binaries — `yb-pageserver`, `yb-safekeeper`,
+`yb-compute-ctl`, `yb-endpoint-storage` — report the **same** version from the
+same `VERSION` file, so the endpoint image and the controller never disagree. A
+`build.rs` in the shared `utils` crate stamps the `VERSION` semver into the
+`AMP_VERSION` compile-time constant (via `cargo:rustc-env` +
+`cargo:rerun-if-changed`, so it can't go stale through the endpoint image's
+BuildKit `target` cache mount), and `utils::amp_version()` combines it with the
+build's git commit into `<VERSION>-<short-commit>` (e.g. `0.260722.0-1bc8b3d`,
+with `-dirty` for a modified tree) — the same shape as the controller stamp
+above. Every binary logs it at startup; `yb-pageserver`/`yb-safekeeper` also
+surface it through `--version`.
+
+The commit still comes from the `GIT_VERSION` env (passed by the image build)
+via `project_git_version!`; the operational `BUILD_TAG` (the image tag, used for
+the extension-download S3 paths and the `build_tag` metric label) is unchanged.
+Because these binaries are Neon-derived, this is the same
+`project_git_version!`/`project_build_tag!` machinery the `controller` uses — the
+`utils` `build.rs` just adds the `VERSION`-file semver on top.
 
 ## Releasing — human-triggered, CI-performed
 

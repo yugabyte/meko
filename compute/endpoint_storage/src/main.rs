@@ -49,6 +49,8 @@ async fn main() -> anyhow::Result<()> {
         logging::Output::Stdout,
     )?;
 
+    info!("yb-endpoint-storage version: {}", utils::amp_version());
+
     // Suspended-task dump on SIGUSR2 (`kill -USR2 <pid>`). See `utils::tokio_dump`.
     utils::tokio_dump::spawn_sigusr2_dumper(vec![(
         "endpoint_storage".to_string(),

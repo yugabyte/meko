@@ -4,6 +4,10 @@
 !Cargo.lock
 !Cargo.toml
 !Makefile
+# The repo-root VERSION file: utils/build.rs reads it during the in-container
+# cargo build to stamp AMP_VERSION. Without this re-include the `*` above drops
+# it from the build context and every compute binary ships AMP_VERSION=0.0.0.
+!VERSION
 !postgres.mk
 !rust-toolchain.toml
 !scripts/ninstall.sh

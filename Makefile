@@ -188,7 +188,7 @@ yb-amp-pg-ext: $(foreach pg_version,$(POSTGRES_VERSIONS),yb-amp-pg-ext-$(pg_vers
 .PHONY: controller
 controller:
 	+@echo "Building amp controller"
-	go -C controller build ./...
+	go -C controller build -ldflags "$(CONTROLLER_LDFLAGS)" ./...
 
 .PHONY: controller-test
 controller-test:
@@ -249,6 +249,16 @@ version-bump-minor: ## roll the CalVer date (YYMMDD) to today and reset PATCH, t
 	@$(ROOT_PROJECT_DIR)/scripts/version.sh bump date
 version-bump-major: ## bump the MAJOR epoch (re-stamps the date, resets PATCH) and sync the chart
 	@$(ROOT_PROJECT_DIR)/scripts/version.sh bump major
+
+# Print the controller version -ldflags, so out-of-Makefile builds (e.g. a
+# manual cross-compile of ./cmd/controller) stamp the binary from the SAME
+# source of truth as `make controller-bundle`. Without this, a hand-rolled
+# `go build` produces an unstamped binary (Version=dev, Commit/BuildDate=unknown)
+# even though its image ships under a real tag. Use as:
+#   go build -ldflags "$(make -s print-controller-ldflags)" -o controller ./cmd/controller
+.PHONY: print-controller-ldflags
+print-controller-ldflags:  ## print the controller -ldflags (single source of truth for version stamping)
+	@printf '%s' "$(CONTROLLER_LDFLAGS)"
 
 .PHONY: controller-bundle
 controller-bundle:
