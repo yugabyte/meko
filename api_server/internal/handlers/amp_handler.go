@@ -121,6 +121,10 @@ func (h *AMPHandler) ListCompute(c echo.Context) error {
 
 type createComputeRequest struct {
 	Role string `json:"role"`
+	// CPU / Memory are optional Kubernetes quantities (e.g. "2", "4Gi") passed
+	// straight through to AMP's endpoint `resources`. Empty = AMP defaults.
+	CPU    string `json:"cpu"`
+	Memory string `json:"memory"`
 }
 
 // CreateCompute handles POST .../branches/:branch_id/compute.
@@ -133,7 +137,7 @@ func (h *AMPHandler) CreateCompute(c echo.Context) error {
 	if role == "" {
 		role = "read_write"
 	}
-	instance, err := h.svc.CreateCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), role)
+	instance, err := h.svc.CreateCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), role, strings.TrimSpace(req.CPU), strings.TrimSpace(req.Memory))
 	if err != nil {
 		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
 	}

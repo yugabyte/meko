@@ -95,7 +95,7 @@ export function ChatInput({
             type="submit"
             size="icon"
             disabled={disabled || value.trim().length === 0}
-            className="h-9 w-9 shrink-0 bg-blue-600 hover:bg-blue-700 text-white disabled:bg-blue-600/40"
+            className="h-9 w-9 shrink-0"
             aria-label="Send"
           >
             {sending ? (

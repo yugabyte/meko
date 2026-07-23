@@ -313,6 +313,10 @@ function BranchCompute({
   const [instances, setInstances] = useState<AmpCompute[]>([]);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<"read_write" | "read_only">("read_write");
+  // CPU / memory as Kubernetes quantities, mirroring AMP's endpoint `resources`
+  // (prefilled with AMP's defaults so the user sees + can override them).
+  const [cpu, setCpu] = useState("2");
+  const [memory, setMemory] = useState("4Gi");
   const [provisioning, setProvisioning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -336,7 +340,7 @@ function BranchCompute({
     setProvisioning(true);
     setError(null);
     try {
-      await createCompute(datapackId, clusterId, branchId, role);
+      await createCompute(datapackId, clusterId, branchId, role, { cpu, memory });
       await load();
     } catch (e) {
       setError(getApiErrorMessage(e, "Failed to provision compute."));
@@ -376,6 +380,22 @@ function BranchCompute({
           <option value="read_write">read-write</option>
           <option value="read_only">read-only</option>
         </select>
+        <input
+          value={cpu}
+          onChange={(e) => setCpu(e.target.value)}
+          className="h-8 w-16 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+          aria-label="Compute CPU"
+          placeholder="CPU"
+          title="CPU as a Kubernetes quantity (e.g. 2, 1500m). Blank = AMP default (2)."
+        />
+        <input
+          value={memory}
+          onChange={(e) => setMemory(e.target.value)}
+          className="h-8 w-20 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+          aria-label="Compute memory"
+          placeholder="Memory"
+          title="Memory as a Kubernetes quantity (e.g. 4Gi, 512Mi). Blank = AMP default (4Gi)."
+        />
         <Button
           type="button"
           variant="outline"
@@ -405,12 +425,31 @@ function ComputeInstance({ ep }: { ep: AmpCompute }) {
 
   return (
     <li className="rounded-md border border-border bg-card p-2">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <Server className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <span className="font-mono text-xs">{ep.address || "provisioning…"}</span>
-        <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-          {ep.role.replace("_", "-")}
-        </span>
+      <div className="flex items-start gap-2">
+        <Server className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="min-w-0 flex-1 space-y-0.5">
+          {/* primary (public) address + role badge; matches AMP's endpoint card. */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="w-12 shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              primary
+            </span>
+            <span className="min-w-0 break-all font-mono text-xs">{ep.address || "provisioning…"}</span>
+            <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+              {ep.role.replace("_", "-")}
+            </span>
+          </div>
+          {/* tailnet address — only when AMP exposed the endpoint on the tailnet. */}
+          {ep.tailnet_address ? (
+            <div className="flex flex-wrap items-center gap-x-2">
+              <span className="w-12 shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                tailnet
+              </span>
+              <span className="min-w-0 break-all font-mono text-xs text-muted-foreground">
+                {ep.tailnet_address}
+              </span>
+            </div>
+          ) : null}
+        </div>
       </div>
       {ep.address ? (
         <div className="mt-1.5 flex items-center gap-2">

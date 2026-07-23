@@ -92,7 +92,7 @@ export function DatapackDetailMembersTile({
     >
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Users className="h-4 w-4 shrink-0 text-blue-400" aria-hidden />
+          <Users className="h-4 w-4 shrink-0 text-brand" aria-hidden />
           <span className="truncate text-sm font-semibold text-foreground">Members</span>
           <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
             {count}
@@ -100,7 +100,7 @@ export function DatapackDetailMembersTile({
         </div>
         {canShare && <Link
           to={datapackSharePath(datapackId)}
-          className="shrink-0 text-xs font-medium text-blue-400 hover:underline"
+          className="shrink-0 text-xs font-medium text-brand hover:underline"
         >
           Share →
         </Link>}

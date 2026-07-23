@@ -398,7 +398,7 @@ export function CollectiveLearningPipeline({
             </h2>
             <p className="text-sm leading-normal text-muted-foreground text-pretty">
               How memory from individual agents flows into shared knowledge everyone can read. Each
-              promotion populates <span className="font-semibold text-sky-400/95">both</span>{" "}
+              promotion populates <span className="font-semibold text-brand">both</span>{" "}
               destinations; Shared Knowledge can also receive files directly.
             </p>
           </div>

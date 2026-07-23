@@ -15,6 +15,10 @@ const buttonVariants = cva(
            "bg-primary text-primary-foreground border border-primary-border",
         destructive:
           "bg-destructive text-destructive-foreground shadow-sm border-destructive-border",
+        // Positive / "go" actions (upgrade, confirm-and-proceed). Emerald is
+        // baked in ONCE here so callsites use variant="success" instead of
+        // inline bg-emerald-* classes; hover comes from the shared elevate system.
+        success: "bg-emerald-600 text-white border border-emerald-600",
         outline:
           // @replit Shows the background color of whatever card / sidebar / accent background it is inside of.
           // Inherits the current text color. Uses shadow-xs. no shadow on active

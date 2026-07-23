@@ -148,12 +148,12 @@ export function CollectiveMemoryPanel({
           nothing pending) so the tab keeps a stable visual anchor;
           the right-side CTA only appears when there is real work to
           review. */}
-      <section className="rounded-xl border border-purple-500/25 bg-purple-500/[0.04] p-4">
+      <section className="rounded-xl border border-sky-500/25 bg-sky-500/[0.04] p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="mb-1 flex items-center gap-1.5">
-              <Sparkles className="h-3.5 w-3.5 text-purple-700 dark:text-purple-300" aria-hidden />
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-purple-700 dark:text-purple-200/95">
+              <Sparkles className="h-3.5 w-3.5 text-sky-700 dark:text-sky-300" aria-hidden />
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-200/95">
                 Promoted memories summary · auto
               </span>
             </div>
@@ -168,7 +168,7 @@ export function CollectiveMemoryPanel({
                   .{" "}
                   {hasPending ? (
                     <>
-                      <span className="text-amber-700 dark:text-amber-200">
+                      <span className="text-sky-700 dark:text-sky-300">
                         {pendingCount} additional candidate
                         {pendingCount === 1 ? "" : "s"}
                       </span>{" "}
@@ -195,7 +195,7 @@ export function CollectiveMemoryPanel({
             <Button
               variant="outline"
               type="button"
-              className="gap-2 border-amber-500/40 bg-amber-500/15 text-amber-700 dark:text-amber-100 hover:bg-amber-500/25 hover:text-amber-50"
+              className="gap-2"
               onClick={() =>
                 navigate(
                   datapackLearningsPathFrom(

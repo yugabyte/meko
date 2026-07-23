@@ -82,7 +82,7 @@ export function KnowledgeActivityLog({ datapackId, refreshKey, pageSize = DEFAUL
   return (
     <section className="rounded-xl border border-border bg-card p-6">
       <header className="mb-4 flex items-center gap-2">
-        <History className="h-4 w-4 text-purple-700 dark:text-purple-300" aria-hidden />
+        <History className="h-4 w-4 text-muted-foreground" aria-hidden />
         <h2 className="text-base font-semibold text-foreground">Activity log</h2>
       </header>
 
@@ -178,7 +178,7 @@ function ActivityRow({ item }: { item: KBActivityLogItem }) {
   const snippet = content.length > 160 ? `${content.slice(0, 157)}…` : content || "(empty)";
   return (
     <li className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
-      <RowIcon tone="purple">
+      <RowIcon tone="sky">
         <Sparkles className="h-3.5 w-3.5" aria-hidden />
       </RowIcon>
       <div className="min-w-0 flex-1">
@@ -196,20 +196,20 @@ function ActivityRow({ item }: { item: KBActivityLogItem }) {
   );
 }
 
-/** Leading 32×32 icon square. Tone determines the background and
- *  glyph color — emerald for file uploads, purple for promotions —
- *  matching the design spec. */
+/** Leading 32×32 icon square. Tone determines the background and glyph color —
+ *  emerald for file uploads (knowledge), sky for promotions (collective
+ *  memory) — matching the semantic color system. */
 function RowIcon({
   tone,
   children,
 }: {
-  tone: "emerald" | "purple";
+  tone: "emerald" | "sky";
   children: React.ReactNode;
 }) {
   const toneClass =
     tone === "emerald"
       ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-      : "border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-300";
+      : "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300";
   return (
     <span
       className={cn(

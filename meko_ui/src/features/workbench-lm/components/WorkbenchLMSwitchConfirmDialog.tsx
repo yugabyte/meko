@@ -39,7 +39,7 @@ export function WorkbenchLMSwitchConfirmDialog({
       <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md bg-card border-border text-foreground">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-xl text-foreground">
-            <ArrowRightLeft className="h-5 w-5 text-blue-400" aria-hidden />
+            <ArrowRightLeft className="h-5 w-5 text-brand" aria-hidden />
             Switch datapack?
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
@@ -56,7 +56,6 @@ export function WorkbenchLMSwitchConfirmDialog({
           <Button
             type="button"
             onClick={onConfirm}
-            className="bg-blue-600 hover:bg-blue-700 text-white"
           >
             Switch datapack
           </Button>

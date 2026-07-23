@@ -82,9 +82,9 @@ export function PromotedMemoryCard({
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           {/* "Me → Ko" identity pill. Me = mem0 (raw memory), Ko = the
-              KnowledgeObject for this datapack. Purple-tinted to match
-              the Sparkles accent the rest of the tab uses. */}
-          <span className="inline-flex items-center gap-1 rounded-full border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-[11px] font-medium text-purple-700 dark:text-purple-200">
+              KnowledgeObject for this datapack. Sky-tinted to match the
+              collective-memory accent this surface uses. */}
+          <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:text-sky-300">
             Me <span aria-hidden>→</span> Ko
           </span>
           {agent ? (
@@ -175,7 +175,7 @@ export function PromotedMemoryCard({
             // scrubbing, etc.) when they land.
             <div className="space-y-3 border-t border-border/60 px-3 py-3 text-[11px] text-muted-foreground">
               <div>
-                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-purple-700 dark:text-purple-200/95">
+                <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-200/95">
                   Original memory (Me)
                 </div>
                 <p className="text-sm italic leading-relaxed text-foreground/90 break-words">
@@ -234,12 +234,12 @@ export function PromotedMemoryCard({
             promoted memory; an N+1 correlated COUNT on every list page
             isn't worth a value that's a constant. */}
         <span className="inline-flex items-center gap-1.5">
-          <Layers className="h-3.5 w-3.5 text-sky-700 dark:text-sky-300" aria-hidden />
+          <Layers className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
           <span className="text-foreground/85">1</span> vector entry
         </span>
         {embeddingDimensions !== null && embeddingDimensions !== undefined ? (
           <span className="inline-flex items-center gap-1.5">
-            <Hash className="h-3.5 w-3.5 text-purple-700 dark:text-purple-300" aria-hidden />
+            <Hash className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
             <span className="text-foreground/85">{embeddingDimensions}-dim</span>
           </span>
         ) : null}
@@ -248,7 +248,7 @@ export function PromotedMemoryCard({
             className="inline-flex items-center gap-1.5"
             title={aiProvider ? `Provider: ${aiProvider}` : undefined}
           >
-            <Cpu className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" aria-hidden />
+            <Cpu className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
             <span className="text-foreground/85">{embeddingModel}</span>
           </span>
         ) : null}
@@ -256,7 +256,7 @@ export function PromotedMemoryCard({
           <Link
             to={conversationHref}
             title="Open conversation"
-            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-[11px] font-medium text-sky-700 transition-colors hover:bg-sky-500/15 hover:border-sky-500/45 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-400/50 dark:text-sky-300"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <MessageSquare className="h-3.5 w-3.5" aria-hidden />
             Open conversation

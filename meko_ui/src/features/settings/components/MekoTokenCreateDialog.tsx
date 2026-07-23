@@ -235,7 +235,7 @@ function FormPhase({
         <Button
           type="submit"
           disabled={!canSubmit}
-          className="gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
+          className="gap-1.5"
         >
           {submitting ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
@@ -303,7 +303,7 @@ function RevealPhase({
             onClick={onClose}
             disabled={!saved}
             title={saved ? undefined : "Copy or download the token before closing."}
-            className="gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
+            className="gap-1.5"
           >
             Close
           </Button>

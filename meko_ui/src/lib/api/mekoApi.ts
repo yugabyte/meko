@@ -327,7 +327,14 @@ export async function request<T>(
       const apiErr = err.response.data?.error;
       const apiMessage = apiErr?.message;
       if (status === 401) {
-        if (AUTH_PUBLIC_ENDPOINTS.has(path)) {
+        // `/admin/*` authenticates with a server-injected shared secret
+        // (X-Meko-Admin-Secret), NOT the user's session — see meko_ui's Express
+        // proxy. A 401 there means the admin secret is missing/mismatched
+        // between meko_ui and api_server, so it must be surfaced as a normal
+        // error (the Admin pages show a "check ADMIN_API_KEY" alert) rather than
+        // triggering the user-session-expired logout.
+        const isSharedSecretPath = path.startsWith("/admin");
+        if (AUTH_PUBLIC_ENDPOINTS.has(path) || isSharedSecretPath) {
           throw new MekoApiRequestError(apiMessage || "Unauthorized", {
             code: apiErr?.code,
             httpStatus: status,

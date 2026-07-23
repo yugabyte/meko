@@ -18,7 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -381,7 +381,7 @@ export function MemoryReadOnlySummaryPanel({ datapackName, datapackId }: Props) 
                 }
               }}
               disabled={deletingId !== null}
-              className="gap-1.5 bg-red-600 text-white hover:bg-red-700"
+              className={cn(buttonVariants({ variant: "destructive" }), "gap-1.5")}
             >
               {deletingId !== null ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />

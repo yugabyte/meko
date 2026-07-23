@@ -243,8 +243,8 @@ function PlanCTA({
   return (
     <Button
       type="button"
-      variant="default"
-      className="w-full bg-emerald-500 text-emerald-950 hover:bg-emerald-400 dark:bg-emerald-500/90 dark:text-emerald-950"
+      variant="success"
+      className="w-full"
       onClick={onUpgrade}
       disabled={busy || !onUpgrade}
       title={

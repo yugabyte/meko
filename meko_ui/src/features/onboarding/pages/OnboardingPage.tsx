@@ -277,10 +277,10 @@ export default function OnboardingPage() {
           <>
             <div
               className={cn(
-                "mb-8 inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-4 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-300",
+                "mb-8 inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-4 py-1.5 text-xs font-medium text-foreground",
               )}
             >
-              <Sparkles className="h-3.5 w-3.5 shrink-0 text-blue-400" aria-hidden />
+              <Sparkles className="h-3.5 w-3.5 shrink-0 text-brand" aria-hidden />
               {serverOnboardingDone
                 ? "Welcome back — pick where to go next"
                 : "Your workspace is ready · 1 default datapack created"}
@@ -424,32 +424,30 @@ export default function OnboardingPage() {
                   </span>
                 </button>
 
-                {/* Primary CTA. Previously this was solid `bg-blue-600` +
-                    white text — fine in dark mode but visually shouting
-                    in light mode. Switched to a tinted-fill treatment
-                    that uses opacity over a single base hue, so the same
-                    classes adapt to both modes: light → soft blue panel
-                    with deep-blue text; dark → translucent blue panel
-                    with light-blue text. Still clearly the "this is the
-                    primary action" lane, just not yelling. */}
+                {/* Primary CTA. Tinted-fill treatment over the brand hue —
+                    a soft orange panel in both modes (opacity does the
+                    light/dark adaptation) with a brand-orange icon and
+                    neutral, readable text. Uses the same brand accent as the
+                    rest of the app so it clearly reads as "the primary action"
+                    lane without shouting. */}
                 <button
                   type="button"
                   onClick={() => void finishAndGo("datapacks")}
                   disabled={chooseToolDisabled}
-                  className="group flex items-center gap-4 rounded-xl border border-blue-500/30 bg-blue-500/10 p-5 text-left transition-colors hover:border-blue-500/50 hover:bg-blue-500/20 dark:border-blue-500/40 dark:bg-blue-500/15 dark:hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="group flex items-center gap-4 rounded-xl border border-brand/30 bg-brand/5 p-5 text-left transition-colors hover:border-brand/50 hover:bg-brand/15 dark:border-brand/40 dark:bg-brand/10 dark:hover:bg-brand/20 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-blue-500/40 bg-blue-500/15 dark:border-blue-400/40 dark:bg-blue-500/25">
-                    <Terminal className="h-5 w-5 text-blue-700 dark:text-blue-200" aria-hidden />
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-brand/40 bg-brand/15 dark:border-brand/40 dark:bg-brand/25">
+                    <Terminal className="h-5 w-5 text-brand" aria-hidden />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-2 text-base font-semibold text-blue-900 dark:text-blue-100">
+                    <span className="flex items-center gap-2 text-base font-semibold text-foreground">
                       {action === "datapacks" ? "Loading…" : "Connect Meko to your agent"}
                       <ArrowRight
                         className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5"
                         aria-hidden
                       />
                     </span>
-                    <span className="mt-0.5 block text-xs text-blue-900/70 dark:text-blue-200/80">
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
                       Claude Code · Cursor · custom
                     </span>
                   </span>

@@ -26,8 +26,8 @@ type Props = {
 export function EmptyState({ disabled, onPick, showSamplePrompts }: Props) {
   return (
     <div className="mx-auto flex h-full w-full max-w-3xl flex-col items-center justify-center px-6 py-10">
-      <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-xs text-blue-700 dark:text-blue-200">
-        <Sparkles className="h-3.5 w-3.5" aria-hidden />
+      <div className="inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-xs text-foreground">
+        <Sparkles className="h-3.5 w-3.5 text-brand" aria-hidden />
         Try asking about your knowledge base
       </div>
       {showSamplePrompts ? (
@@ -38,7 +38,7 @@ export function EmptyState({ disabled, onPick, showSamplePrompts }: Props) {
               type="button"
               onClick={() => onPick(prompt)}
               disabled={disabled}
-              className="rounded-xl border border-border bg-card px-4 py-3 text-left text-sm text-foreground transition-colors hover:border-blue-400/60 hover:bg-blue-500/5 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-xl border border-border bg-card px-4 py-3 text-left text-sm text-foreground transition-colors hover:border-brand/50 hover:bg-brand/5 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {prompt}
             </button>

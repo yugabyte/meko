@@ -49,7 +49,7 @@ export default function HomePage() {
       <main className="flex-1 space-y-8 p-8 pb-16 max-w-6xl mx-auto w-full">
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-3">
-            <Download className="w-6 h-6 text-blue-400 shrink-0" aria-hidden />
+            <Download className="w-6 h-6 text-brand shrink-0" aria-hidden />
             <h1 className="text-2xl font-semibold tracking-tight">Connect</h1>
           </div>
           <p className="pl-9 text-sm text-muted-foreground max-w-2xl leading-relaxed">

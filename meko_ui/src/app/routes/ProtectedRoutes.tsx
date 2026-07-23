@@ -9,6 +9,7 @@ import OnboardingPage from "@/features/onboarding/pages/OnboardingPage";
 import WorkbenchLMPage from "@/features/workbench-lm/pages/WorkbenchLMPage";
 import SettingsPage from "@/features/settings/pages/SettingsPage";
 import BillingPage from "@/features/billing/pages/BillingPage";
+import AdminPage from "@/features/admin/pages/AdminPage";
 
 type Props = {
   isOnboardingRoute: boolean;
@@ -46,9 +47,17 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const isSettings = pathname === ROUTES.settings || pathname.startsWith(`${ROUTES.settings}/`);
 
   const isBilling = pathname === ROUTES.billing || pathname.startsWith(`${ROUTES.billing}/`);
+  // Admin console (flag-gated). Conditionally mounted like WorkbenchLM so its
+  // /admin/* data fetches never tick while the user is elsewhere.
+  // Mount AdminPage for ANY /admin route (not gated by the flag here): AdminPage
+  // self-guards and redirects to Datapacks when the view is disabled, so a
+  // direct URL to /admin with the flag/opt-in off actually bounces — rather than
+  // rendering Datapacks content under a stale /admin URL.
+  const onAdminRoute = pathname === ROUTES.admin || pathname.startsWith(`${ROUTES.admin}/`);
 
-  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings. */
-  const isDatapacks = !isObserve && !isConnect && !isWorkbenchLM && !isSettings && !isBilling;
+  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings, admin. */
+  const isDatapacks =
+    !isObserve && !isConnect && !isWorkbenchLM && !isSettings && !isBilling && !onAdminRoute;
 
   // See onboarding-shell comment above re: h-dvh for iOS keyboard.
   return (
@@ -84,6 +93,9 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
             to the bottom).
           */}
           {isWorkbenchLM ? <WorkbenchLMPage isRouteActive={true} /> : null}
+          {/* Admin console — conditionally mounted (not display-toggled) so it
+              only fetches /admin/* data while actually being viewed. */}
+          {onAdminRoute ? <AdminPage /> : null}
           <div
             className="min-h-0 flex-1 overflow-hidden"
             style={{ display: isSettings ? "contents" : "none" }}

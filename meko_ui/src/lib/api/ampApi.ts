@@ -59,6 +59,8 @@ export type AmpCompute = {
   branch_id: string;
   role: string;
   address: string;
+  /** Tailscale (host:port) address; empty unless the endpoint is tailnet-exposed. */
+  tailnet_address?: string;
   created_at: string;
 };
 
@@ -103,16 +105,22 @@ export async function listCompute(
   );
 }
 
-/** POST to provision a compute instance on a branch. */
+/** POST to provision a compute instance on a branch. `cpu`/`memory` are
+ *  optional Kubernetes quantities (e.g. "2", "4Gi") mirroring AMP's endpoint
+ *  `resources`; omit either to take AMP's defaults (2 cores / 4Gi). */
 export async function createCompute(
   datapackId: string,
   clusterId: string,
   branchId: string,
   role: "read_write" | "read_only",
+  resources: { cpu?: string; memory?: string } = {},
 ) {
+  const body: Record<string, unknown> = { role };
+  if (resources.cpu?.trim()) body.cpu = resources.cpu.trim();
+  if (resources.memory?.trim()) body.memory = resources.memory.trim();
   return request<AmpCompute>(
     `${clusterRoute(datapackId, clusterId)}/branches/${encodeURIComponent(branchId)}/compute`,
     "POST",
-    { role },
+    body,
   );
 }

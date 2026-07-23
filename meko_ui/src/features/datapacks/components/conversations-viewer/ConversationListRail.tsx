@@ -170,7 +170,7 @@ export function ConversationListRail({
       )}
     >
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
-        <MessageSquare className="h-4 w-4 text-purple-700 dark:text-purple-300" aria-hidden />
+        <MessageSquare className="h-4 w-4 text-foreground" aria-hidden />
         <span className="text-sm font-medium text-foreground">Conversations</span>
         {firstLoadDone ? (
           <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
@@ -220,7 +220,7 @@ export function ConversationListRail({
                     "block w-full cursor-pointer border-b border-border/60 px-4 py-3 text-left transition-colors",
                     "border-l-2",
                     active
-                      ? "bg-input border-l-purple-400"
+                      ? "bg-input border-l-brand"
                       : "border-l-transparent hover:bg-input",
                   )}
                   // Announce the conversation by its headline so screen-reader
@@ -262,7 +262,7 @@ export function ConversationListRail({
                       // so it themes — `text-white` for the active row
                       // collapsed to invisible white-on-light-grey in
                       // light mode. The active row already stands out via
-                      // its `bg-input` fill + `border-l-purple-400` rail.
+                      // its `bg-input` fill + `border-l-brand` rail.
                       active ? "text-foreground" : "text-foreground/85",
                     )}
                     title={headline}

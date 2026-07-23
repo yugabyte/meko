@@ -265,7 +265,7 @@ export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
                 value="promoted-memories"
                 className={UNDERLINE_TAB_TRIGGER_CLASS}
               >
-                <Sparkles className="h-3.5 w-3.5 text-purple-700 dark:text-purple-300" aria-hidden />
+                <Sparkles className="h-3.5 w-3.5 text-sky-700 dark:text-sky-300" aria-hidden />
                 Promoted memories
                 <span className="rounded-full bg-background/40 px-1.5 py-0.5 text-[10px] tabular-nums">
                   {promotedCount}

@@ -334,8 +334,8 @@ function SummaryCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <Sparkles className="h-3.5 w-3.5 text-purple-700 dark:text-purple-300" aria-hidden />
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-purple-700 dark:text-purple-200/95">
+            <Sparkles className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-300" aria-hidden />
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-200/95">
               Files summary · auto
             </span>
           </div>
@@ -363,9 +363,10 @@ function SummaryCard({
               <span className="inline-flex shrink-0">
                 <Button
                   type="button"
+                  variant="outline"
                   onClick={onUploadClick}
                   disabled
-                  className="shrink-0 gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
+                  className="shrink-0 gap-1.5"
                 >
                   <Upload className="h-3.5 w-3.5" aria-hidden />
                   Upload file
@@ -379,8 +380,9 @@ function SummaryCard({
         ) : (
           <Button
             type="button"
+            variant="outline"
             onClick={onUploadClick}
-            className="shrink-0 gap-1.5 bg-blue-600 text-white hover:bg-blue-700"
+            className="shrink-0 gap-1.5"
           >
             <Upload className="h-3.5 w-3.5" aria-hidden />
             Upload file
@@ -436,7 +438,7 @@ function FilterRow({
             className={cn(
               "rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
               active
-                ? "border-blue-500/50 bg-blue-500/15 text-blue-700 dark:text-blue-200"
+                ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-700 dark:text-emerald-200"
                 : "border-border bg-input text-muted-foreground hover:text-foreground",
             )}
           >
@@ -711,8 +713,8 @@ function FileExpandPanel({
       <div className="ml-9 grid grid-cols-1 gap-3 lg:grid-cols-[2fr_4fr]">
         <section>
           <header className="mb-2 flex items-center gap-1.5">
-            <Sparkles className="h-3 w-3 text-purple-700 dark:text-purple-300" aria-hidden />
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-purple-700 dark:text-purple-200/95">
+            <Sparkles className="h-3 w-3 text-emerald-700 dark:text-emerald-300" aria-hidden />
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-200/95">
               Auto-summary
             </span>
           </header>

@@ -277,10 +277,10 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-3">
                 <div
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-500/15 ring-1 ring-blue-500/20"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand/15 ring-1 ring-brand/20"
                   aria-hidden
                 >
-                  <Database className="h-5 w-5 text-blue-400" />
+                  <Database className="h-5 w-5 text-brand" />
                 </div>
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground">Datapacks</h1>
               </div>
@@ -379,7 +379,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
               onClick={() => setIsExplanationExpanded(!isExplanationExpanded)}
             >
               <div className="flex items-center gap-3">
-                <Sparkles className="w-5 h-5 text-blue-400" />
+                <Sparkles className="w-5 h-5 text-brand" />
                 <h2 className="text-xl font-semibold text-foreground">What is a Datapack?</h2>
               </div>
               <Button
@@ -419,7 +419,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                     </Button>
                     <Button
                       variant="ghost"
-                      className="gap-2 text-sm text-blue-400 hover:text-blue-700 dark:text-blue-300 hover:bg-blue-500/10"
+                      className="gap-2 text-sm text-brand hover:bg-brand/10"
                       onClick={() => window.open("https://docs.mekodata.ai/examples/", "_blank")}
                     >
                       View Examples
@@ -435,8 +435,8 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                     Mapping → Via YugabyteDB" framing inverted that and
                     read as if we ran on Postgres. */}
                 <div className="hidden md:flex w-48 h-38 border border-border bg-input rounded-xl flex-col items-center justify-center gap-4 relative overflow-hidden group">
-                  <div className="absolute inset-0 bg-gradient-to-tr from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                  <Database className="w-10 h-10 text-blue-400" />
+                  <div className="absolute inset-0 bg-gradient-to-tr from-brand/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <Database className="w-10 h-10 text-brand" />
                   <div className="text-center">
                     <div className="text-sm font-medium text-foreground">YugabyteDB</div>
                     <div className="text-xs text-muted-foreground mt-1">Multi-tenant storage</div>

@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DatapackKnowledgeUploadDialog } from "@/features/datapacks/components/datapack-detail/dialogs";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   buildSampleKnowledgeFile,
@@ -292,9 +293,9 @@ export function WorkbenchLMKnowledgePanel({
                       type="button"
                       onClick={openOwnUpload}
                       disabled
-                      className="group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 bg-card px-3 py-3 text-sm font-medium text-foreground transition-colors hover:border-blue-400/70 hover:bg-blue-500/5 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 bg-card px-3 py-3 text-sm font-medium text-foreground transition-colors hover:border-muted-foreground/40 hover:bg-muted/30 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <Upload className="h-4 w-4 text-blue-400" aria-hidden />
+                      <Upload className="h-4 w-4 text-foreground" aria-hidden />
                       File
                     </button>
                   </span>
@@ -308,9 +309,9 @@ export function WorkbenchLMKnowledgePanel({
                 type="button"
                 onClick={openOwnUpload}
                 disabled={!datapackId}
-                className="group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 bg-card px-3 py-3 text-sm font-medium text-foreground transition-colors hover:border-blue-400/70 hover:bg-blue-500/5 disabled:cursor-not-allowed disabled:opacity-50"
+                className="group flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 bg-card px-3 py-3 text-sm font-medium text-foreground transition-colors hover:border-muted-foreground/40 hover:bg-muted/30 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Upload className="h-4 w-4 text-blue-400" aria-hidden />
+                <Upload className="h-4 w-4 text-foreground" aria-hidden />
                 File
               </button>
             )}
@@ -383,19 +384,21 @@ export function WorkbenchLMKnowledgePanel({
                 </SelectContent>
               </Select>
             </span>
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               onClick={onNewChat}
               disabled={!datapackName}
-              className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-2.5 py-2 text-xs font-medium text-purple-700 dark:text-purple-200 transition-colors hover:bg-purple-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-2 w-full gap-1.5"
             >
               {sessionsLoading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                <Loader2 className="animate-spin" aria-hidden />
               ) : (
-                <Plus className="h-3.5 w-3.5" aria-hidden />
+                <Plus aria-hidden />
               )}
               New chat
-            </button>
+            </Button>
           </section>
         </div>
 

@@ -136,7 +136,7 @@ function StatsTile({
           value={fmt(summary?.total_files)}
         />
         <StatCell
-          icon={<Sparkles className="h-3.5 w-3.5 text-purple-700 dark:text-purple-300" aria-hidden />}
+          icon={<Sparkles className="h-3.5 w-3.5 text-sky-700 dark:text-sky-300" aria-hidden />}
           label="Promoted memories"
           value={fmt(summary?.promoted_memories_count)}
         />

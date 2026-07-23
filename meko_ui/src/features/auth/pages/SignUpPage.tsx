@@ -250,7 +250,7 @@ export default function SignUpPage() {
           <>
             <p className="mt-5 text-center text-sm text-muted-foreground">
               Already have an account?{" "}
-              <Link to={ROUTES.login} className="font-medium text-blue-400">
+              <Link to={ROUTES.login} className="font-medium text-brand hover:underline">
                 Sign in
               </Link>
             </p>

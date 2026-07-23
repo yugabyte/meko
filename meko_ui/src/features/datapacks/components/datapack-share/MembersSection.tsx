@@ -164,8 +164,8 @@ function MemberRow({
             <span className="truncate text-sm font-medium text-foreground">{member.user_name || member.user_email_id}</span>
             {isYou ? (
               <Badge
-                variant="outline"
-                className="shrink-0 border-blue-500/35 bg-blue-500/10 px-2 py-0 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-200"
+                variant="brand"
+                className="shrink-0 px-2 py-0 text-[10px] font-semibold uppercase tracking-wide"
               >
                 you
               </Badge>
@@ -266,11 +266,11 @@ export function MembersSection({ currentUser, datapackName, datapackId, members,
       <Card className="border-border bg-card/50 shadow-sm">
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-4">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <Users className="h-5 w-5 shrink-0 text-emerald-400" aria-hidden />
+            <Users className="h-5 w-5 shrink-0 text-brand" aria-hidden />
             <h2 className="text-base font-semibold tracking-tight text-foreground">Members</h2>
             <Badge
-              variant="outline"
-              className="shrink-0 border-emerald-500/45 bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold tabular-nums text-emerald-700 dark:text-emerald-200"
+              variant="brand"
+              className="shrink-0 px-2 py-0.5 text-xs font-semibold tabular-nums"
             >
               {humanCount}
             </Badge>

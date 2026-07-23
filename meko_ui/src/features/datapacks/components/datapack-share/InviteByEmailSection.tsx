@@ -171,12 +171,12 @@ export function InviteByEmailSection({
               className={cn(
                 "flex flex-col gap-2 rounded-xl border p-4 text-left transition-colors",
                 selected
-                  ? "border-blue-500/60 bg-blue-500/10 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.35)]"
+                  ? "border-brand/60 bg-brand/10 shadow-[inset_0_0_0_1px_hsl(var(--brand)/0.35)]"
                   : "border-border bg-muted/20 hover:border-muted-foreground/30 hover:bg-muted/30",
                 submitting && "pointer-events-none opacity-60",
               )}
             >
-              <Icon className={cn("h-5 w-5", selected ? "text-blue-400" : "text-muted-foreground")} aria-hidden />
+              <Icon className={cn("h-5 w-5", selected ? "text-brand" : "text-muted-foreground")} aria-hidden />
               <span className="text-sm font-semibold text-foreground">{r.label}</span>
               <span className="text-xs leading-snug text-muted-foreground">{r.description}</span>
             </button>

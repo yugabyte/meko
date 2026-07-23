@@ -180,7 +180,7 @@ func (s *AMPService) ListCompute(ctx context.Context, datapackID, projectID, bra
 }
 
 // CreateCompute provisions a compute instance on a branch.
-func (s *AMPService) CreateCompute(ctx context.Context, datapackID, projectID, branchID, role string) (AMPEndpoint, error) {
+func (s *AMPService) CreateCompute(ctx context.Context, datapackID, projectID, branchID, role, cpu, memory string) (AMPEndpoint, error) {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return AMPEndpoint{}, err
@@ -189,5 +189,5 @@ func (s *AMPService) CreateCompute(ctx context.Context, datapackID, projectID, b
 	if err != nil {
 		return AMPEndpoint{}, err
 	}
-	return c.CreateEndpoint(ctx, poolID, projectID, branchID, role)
+	return c.CreateEndpoint(ctx, poolID, projectID, branchID, role, cpu, memory)
 }

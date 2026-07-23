@@ -15,7 +15,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -50,7 +50,7 @@ import {
 import { MekoTokenCreateDialog } from "./MekoTokenCreateDialog";
 
 const STATUS_TONE: Record<MekoTokenStatus, string> = {
-  [MEKO_TOKEN_STATUS.active]: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200",
+  [MEKO_TOKEN_STATUS.active]: "border-brand/40 bg-brand/10 text-foreground",
   [MEKO_TOKEN_STATUS.expired]: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200",
   [MEKO_TOKEN_STATUS.revoked]: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-200",
 };
@@ -238,7 +238,7 @@ export function SecurityTokensSection() {
                 void confirmRevoke();
               }}
               disabled={revokingId !== null}
-              className="bg-red-600 text-white hover:bg-red-700"
+              className={buttonVariants({ variant: "destructive" })}
             >
               {revokingId !== null ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />

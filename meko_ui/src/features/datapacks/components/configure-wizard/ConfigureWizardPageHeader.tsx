@@ -69,10 +69,10 @@ export function ConfigureWizardPageHeader({
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-5">
       <div
-        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border-2 border-emerald-500/45 bg-input/90 shadow-sm"
+        className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border-2 border-brand/45 bg-input/90 shadow-sm"
         aria-hidden
       >
-        <Folder className="h-6 w-6 text-emerald-400" strokeWidth={1.5} />
+        <Folder className="h-6 w-6 text-brand" strokeWidth={1.5} />
       </div>
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">

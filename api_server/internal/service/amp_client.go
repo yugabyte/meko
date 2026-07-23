@@ -181,7 +181,10 @@ type AMPEndpoint struct {
 	BranchID  string `json:"branch_id"`
 	Role      string `json:"role"`
 	Address   string `json:"address"`
-	CreatedAt string `json:"created_at"`
+	// TailnetAddress is AMP's Tailscale (host:port) address, empty unless the
+	// endpoint Service is tailnet-exposed. Part of AMP's Endpoint contract.
+	TailnetAddress string `json:"tailnet_address"`
+	CreatedAt      string `json:"created_at"`
 }
 
 type ampEndpointList struct {
@@ -197,10 +200,24 @@ func (c *AMPClient) ListEndpoints(ctx context.Context, poolID, projectID, branch
 
 // CreateEndpoint provisions compute on a branch (task-based: poll, then read
 // back via target_ref).
-func (c *AMPClient) CreateEndpoint(ctx context.Context, poolID, projectID, branchID, role string) (AMPEndpoint, error) {
+func (c *AMPClient) CreateEndpoint(ctx context.Context, poolID, projectID, branchID, role, cpu, memory string) (AMPEndpoint, error) {
 	base := "/storage-pools/" + poolID + "/projects/" + projectID + "/branches/" + branchID + "/endpoints"
+	body := map[string]any{"role": role}
+	// AMP nests compute sizing under `resources` as Kubernetes quantities
+	// (cpu e.g. "2"/"1500m", memory e.g. "4Gi"). Only send fields we have so
+	// AMP applies its own defaults (2 cores / 4Gi) for anything omitted.
+	if cpu != "" || memory != "" {
+		res := map[string]any{}
+		if cpu != "" {
+			res["cpu"] = cpu
+		}
+		if memory != "" {
+			res["memory"] = memory
+		}
+		body["resources"] = res
+	}
 	var task ampTask
-	if err := c.do(ctx, http.MethodPost, base, map[string]any{"role": role}, &task); err != nil {
+	if err := c.do(ctx, http.MethodPost, base, body, &task); err != nil {
 		return AMPEndpoint{}, err
 	}
 	done, err := c.pollTask(ctx, task.ID)

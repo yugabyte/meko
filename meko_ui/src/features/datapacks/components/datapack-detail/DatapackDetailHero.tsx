@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, Copy, Database, Sparkles } from "lucide-react";
 import { ROUTES } from "@/app/routes/paths";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { copyToClipboard } from "@/lib/clipboard";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { formatDatapackShareGrantCamelCase } from "@/lib/datapackShareGrants";
@@ -42,10 +43,10 @@ function ActiveStatusPill() {
 
 function NewDatapackPill() {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/45 bg-blue-500/10 dark:bg-blue-950/40 px-2 py-0.5 text-[11px] font-semibold tracking-wide text-blue-700 dark:text-blue-100/95">
-      <Sparkles className="size-3 shrink-0 text-blue-700 dark:text-blue-300/95" aria-hidden />
+    <Badge variant="brand" className="gap-1 rounded-full px-2 py-0.5 text-[11px] tracking-wide">
+      <Sparkles className="size-3 shrink-0" aria-hidden />
       new
-    </span>
+    </Badge>
   );
 }
 
@@ -111,10 +112,10 @@ export function DatapackDetailHero({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between lg:gap-6">
         <div className="flex min-w-0 flex-1 gap-4 sm:gap-5">
           <div
-            className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border border-blue-500/35 bg-muted/15 shadow-sm"
+            className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border border-brand/35 bg-muted/15 shadow-sm"
             aria-hidden
           >
-            <Database className="h-7 w-7 text-blue-400" />
+            <Database className="h-7 w-7 text-brand" />
           </div>
 
           <div className="min-w-0 flex-1 space-y-1">
@@ -140,7 +141,7 @@ export function DatapackDetailHero({
                 {descriptionOverflows || descExpanded ? (
                   <button
                     type="button"
-                    className="text-xs font-medium text-blue-400 underline underline-offset-2 hover:text-blue-700 dark:text-blue-300"
+                    className="text-xs font-medium text-brand underline underline-offset-2 hover:text-brand/80"
                     onClick={() => setDescExpanded((v) => !v)}
                   >
                     {descExpanded ? "Show less" : "Show more"}

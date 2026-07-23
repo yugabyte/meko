@@ -202,14 +202,13 @@ export function ConfigureSyncKnowledgePanel({
                         <Checkbox
                           checked={checked}
                           onCheckedChange={() => toggleInclude(it.id)}
-                          className="border-emerald-500/55 data-[state=checked]:border-emerald-500 data-[state=checked]:bg-emerald-600"
                           aria-label={`Include ${it.label}`}
                         />
                       ) : (
                         <Checkbox
                           checked
                           disabled
-                          className="border-emerald-500/40 opacity-70 data-[state=checked]:bg-emerald-600"
+                          className="opacity-70"
                           aria-label={`${it.label} locked`}
                         />
                       )}
@@ -296,7 +295,8 @@ export function ConfigureSyncKnowledgePanel({
           {showUploadCta ? (
             <Button
               type="button"
-              className="w-full bg-emerald-100 font-semibold text-emerald-700 shadow-sm hover:bg-emerald-200 dark:bg-emerald-600 dark:text-white dark:hover:bg-emerald-500 disabled:opacity-60"
+              variant="success"
+              className="w-full font-semibold shadow-sm disabled:opacity-60"
               disabled={knowledgeUploading || pendingForUpload.length === 0}
               onClick={() => onUploadKnowledgeFiles(new Set(includedIds))}
             >

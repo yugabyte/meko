@@ -74,7 +74,7 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
 
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-3">
-            <Share2 className="h-8 w-8 shrink-0 text-blue-400" aria-hidden />
+            <Share2 className="h-8 w-8 shrink-0 text-brand" aria-hidden />
             <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-foreground truncate">
               Share {datapackName}
             </h1>
@@ -116,12 +116,12 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
                       // Soft blue tint in light mode, deep blue glow in
                       // dark — `blue-950/25` on a white page rendered
                       // as a washed-out dark-grey block.
-                      "data-[state=active]:border-b-blue-500 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-950/25 data-[state=active]:text-foreground",
+                      "data-[state=active]:border-b-brand data-[state=active]:bg-brand/10 data-[state=active]:text-foreground",
                     )}
                   >
                     <span className="inline-flex max-w-full items-center justify-center gap-2.5">
                       <Mail
-                        className="block size-4 shrink-0 text-muted-foreground group-data-[state=active]:text-blue-400"
+                        className="block size-4 shrink-0 text-muted-foreground group-data-[state=active]:text-brand"
                         aria-hidden
                       />
                       <span className="inline-flex min-h-[1.25rem] max-w-full flex-wrap items-baseline justify-center gap-x-0 text-center whitespace-normal">
@@ -148,7 +148,7 @@ export default function DatapackSharePage({ datapackId, currentUser }: Props) {
                   >
                     <span className="inline-flex max-w-full items-center justify-center gap-2 sm:gap-2.5">
                       <Bot
-                        className="block size-4 shrink-0 text-muted-foreground group-data-[state=active]:text-violet-700 dark:text-violet-300"
+                        className="block size-4 shrink-0 text-muted-foreground group-data-[state=active]:text-brand"
                         aria-hidden
                       />
                       <span className="inline-flex min-h-[1.25rem] max-w-full flex-wrap items-baseline justify-center gap-x-0 text-center whitespace-normal">

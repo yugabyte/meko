@@ -22,6 +22,11 @@ const badgeVariants = cva(
           "border-transparent bg-destructive text-destructive-foreground shadow-xs",
           // @replit shadow-xs" - use badge outline variable
         outline: "text-foreground border [border-color:var(--badge-outline)]",
+        // Brand accent tag ("new", "Current", …): orange tint + border,
+        // foreground (white) text, and a brand-coloured icon via [&_svg].
+        // One recipe — change it here and every <Badge variant="brand">
+        // follows, instead of hand-tuning each tag's classes per file.
+        brand: "border-brand/40 bg-brand/10 text-foreground [&_svg]:text-brand",
       },
     },
     defaultVariants: {

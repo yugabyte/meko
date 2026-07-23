@@ -131,9 +131,9 @@ function ActiveApiKeysHint({ keys }: { keys: MekoToken[] }) {
   return (
     <div
       role="status"
-      className="flex flex-wrap items-start gap-3 rounded-md border border-blue-500/30 bg-blue-500/[0.06] px-4 py-3 text-sm leading-relaxed text-foreground/90"
+      className="flex flex-wrap items-start gap-3 rounded-md border border-brand/30 bg-brand/[0.06] px-4 py-3 text-sm leading-relaxed text-foreground/90"
     >
-      <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-blue-700 dark:text-blue-300" aria-hidden />
+      <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-brand" aria-hidden />
       <div className="min-w-0 flex-1 space-y-2">
         <p>
           You have <span className="font-medium text-foreground">{count}</span> active API key
@@ -147,13 +147,13 @@ function ActiveApiKeysHint({ keys }: { keys: MekoToken[] }) {
           {keys.map((k) => (
             <li key={k.id}>
               <Badge
-                variant="outline"
-                className="gap-1.5 border-blue-500/35 bg-blue-500/10 text-blue-700 dark:text-blue-100"
+                variant="brand"
+                className="gap-1.5"
                 title={`API key: ${k.name} (prefix ${k.token_prefix}…)`}
               >
-                <KeyRound className="h-3 w-3 text-blue-700 dark:text-blue-300" aria-hidden />
+                <KeyRound className="h-3 w-3" aria-hidden />
                 <span className="font-medium">{k.name}</span>
-                <code className="font-mono text-blue-700 dark:text-blue-200/85">
+                <code className="font-mono text-foreground/85">
                   {k.token_prefix}…
                 </code>
               </Badge>
@@ -164,7 +164,7 @@ function ActiveApiKeysHint({ keys }: { keys: MekoToken[] }) {
           Lost the plaintext?{" "}
           <Link
             to={ROUTES.settings}
-            className="inline-flex items-center gap-0.5 font-medium text-blue-700 dark:text-blue-300 hover:text-blue-700 dark:text-blue-200"
+            className="inline-flex items-center gap-0.5 font-medium text-brand hover:text-brand/80"
           >
             Manage in Settings → Security
             <ExternalLink className="h-3 w-3" aria-hidden />

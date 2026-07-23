@@ -648,8 +648,8 @@ export default function FileUpload({
             the button up against the description. */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-500/10">
-              <Upload className="w-5 h-5 text-blue-400" />
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
+              <Upload className="w-5 h-5 text-emerald-400" />
             </div>
             <div className="min-w-0">
               <h3 className="text-sm font-medium text-foreground">
@@ -664,7 +664,7 @@ export default function FileUpload({
           </div>
           {pendingCount > 0 && (
             <Button
-              className="shrink-0 gap-2 bg-blue-600 hover:bg-blue-700 text-white"
+              className="shrink-0 gap-2"
               onClick={handleUpload}
               disabled={isUploading}
             >
@@ -687,8 +687,8 @@ export default function FileUpload({
             batchFull
               ? "border-border/60 opacity-50 cursor-not-allowed"
               : isDragOver
-                ? "border-blue-400 bg-blue-500/10 cursor-pointer"
-                : "border-blue-500/50 bg-blue-500/[0.04] hover:border-blue-400 hover:bg-blue-500/10 cursor-pointer",
+                ? "border-emerald-400 bg-emerald-500/10 cursor-pointer"
+                : "border-emerald-500/50 bg-emerald-500/[0.04] hover:border-emerald-400 hover:bg-emerald-500/10 cursor-pointer",
           )}
           onDragOver={(e) => {
             e.preventDefault();
@@ -707,7 +707,7 @@ export default function FileUpload({
               `${KNOWLEDGE_UPLOAD_MAX_BATCH} files in progress — wait for one to finish or remove a pending file to add more`
             ) : (
               <>
-                Drag & drop files here, or <span className="text-blue-400 underline">browse</span>
+                Drag & drop files here, or <span className="text-emerald-400 underline">browse</span>
               </>
             )}
           </p>
@@ -769,12 +769,12 @@ export default function FileUpload({
                   <div className="flex items-center gap-2 shrink-0">
                     {entry.status === KNOWLEDGE_UPLOAD_STATUS.UPLOADING &&
                       (entry.progress > 0 ? (
-                        <span className="text-xs text-blue-700 dark:text-blue-400 tabular-nums">
+                        <span className="text-xs text-emerald-700 dark:text-emerald-300 tabular-nums">
                           {entry.progress}%
                         </span>
                       ) : (
                         // 0% while hashing/presigning, before S3 reports bytes.
-                        <span className="flex items-center gap-1.5 text-xs text-blue-700 dark:text-blue-400">
+                        <span className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300">
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
                           Preparing…
                         </span>
@@ -818,7 +818,7 @@ export default function FileUpload({
                   </p>
                 ) : null}
                 {entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED && entry.note ? (
-                  <p className="mt-1.5 break-words text-xs text-blue-700 dark:text-blue-400">
+                  <p className="mt-1.5 break-words text-xs text-emerald-700 dark:text-emerald-300">
                     {entry.note}
                   </p>
                 ) : null}
@@ -826,7 +826,7 @@ export default function FileUpload({
                   <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
                     <div
                       className={cn(
-                        "h-full rounded-full bg-blue-500 transition-all duration-200",
+                        "h-full rounded-full bg-emerald-500 transition-all duration-200",
                         // Pulse at 0% so the bar doesn't look frozen while presigning.
                         entry.progress > 0 ? "w-full" : "w-1/4 animate-pulse",
                       )}

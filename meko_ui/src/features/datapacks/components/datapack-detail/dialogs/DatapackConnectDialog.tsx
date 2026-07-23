@@ -67,7 +67,7 @@ function InstallerCommandRow({
         {needsToggle ? (
           <button
             type="button"
-            className="self-start text-sm font-medium text-blue-400 hover:text-blue-700 dark:text-blue-300"
+            className="self-start text-sm font-medium text-brand hover:text-brand/80"
             onClick={toggleExpanded}
           >
             {expanded ? "Show less" : "Show more"}
@@ -177,7 +177,7 @@ export function DatapackConnectDialog({
       <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-xl max-h-[calc(100vh-4rem)] bg-card border-border text-foreground p-0 flex flex-col">
         <DialogHeader className="px-6 pt-6 pb-3 shrink-0">
           <div className="flex items-center gap-2">
-            <LinkIcon className="h-5 w-5 shrink-0 text-blue-400" aria-hidden />
+            <LinkIcon className="h-5 w-5 shrink-0 text-brand" aria-hidden />
             <DialogTitle className="text-xl text-foreground">Connect to Datapack</DialogTitle>
           </div>
           <DialogDescription className="text-muted-foreground">
@@ -265,22 +265,22 @@ export function DatapackConnectDialog({
                 in the command with the API key you saved when generating it.
               </p>
               <Tabs defaultValue="claude-code" className="w-full">
-                <TabsList className="h-9 w-full justify-start bg-input p-1 border border-border">
+                <TabsList variant="segmented" className="w-full justify-start">
                   <TabsTrigger
                     value="claude-code"
-                    className="flex-1 data-[state=active]:bg-blue-600 data-[state=active]:text-white data-[state=inactive]:text-muted-foreground"
+                    variant="segmented" className="flex-1"
                   >
                     Claude Code
                   </TabsTrigger>
                   <TabsTrigger
                     value="claude-desktop"
-                    className="flex-1 data-[state=active]:bg-blue-600 data-[state=active]:text-white data-[state=inactive]:text-muted-foreground"
+                    variant="segmented" className="flex-1"
                   >
                     Claude Desktop
                   </TabsTrigger>
                   <TabsTrigger
                     value="cursor"
-                    className="flex-1 data-[state=active]:bg-blue-600 data-[state=active]:text-white data-[state=inactive]:text-muted-foreground"
+                    variant="segmented" className="flex-1"
                   >
                     Cursor
                   </TabsTrigger>

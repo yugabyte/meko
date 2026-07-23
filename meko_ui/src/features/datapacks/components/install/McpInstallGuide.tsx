@@ -316,7 +316,7 @@ function ToolPicker({
             className={cn(
               "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
               isActive
-                ? "border-blue-500/50 bg-blue-500/10 text-blue-700 dark:border-blue-400/60 dark:bg-blue-500/15 dark:text-blue-200"
+                ? "border-brand/50 bg-brand/10 text-brand dark:border-brand/60 dark:bg-brand/15"
                 : "border-border bg-card/40 text-muted-foreground hover:border-border/80 hover:bg-card/70 hover:text-foreground",
             )}
           >

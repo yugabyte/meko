@@ -58,14 +58,6 @@ type TileVariant = "owned" | "shared";
 type ScopeTab = "all" | "owned" | "shared";
 
 /** Overrides default TabsTrigger active ring/shadow so the pill sits evenly inside the list padding. */
-const scopeTabsTriggerClassName = cn(
-  "inline-flex h-7 shrink-0 items-center justify-center rounded-md px-3 text-sm font-medium transition-colors",
-  "text-muted-foreground hover:text-foreground",
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2",
-  "data-[state=active]:bg-white/10 data-[state=active]:text-foreground",
-  "data-[state=active]:shadow-none data-[state=active]:ring-0 data-[state=active]:ring-offset-0",
-);
-
 function emptyCopy(scope: ScopeTab, searchActive: boolean): string {
   if (searchActive) {
     if (scope === "owned") return "No owned datapacks match your search.";
@@ -132,7 +124,7 @@ function DatapackTile({
     <Card
       className={cn(
         "group flex h-full min-h-0 flex-col overflow-hidden border-border bg-card p-0 shadow-sm transition-colors",
-        "hover:border-blue-500/40 hover:bg-card/90",
+        "hover:border-brand/40 hover:bg-card/90",
         variant === SHARED && "hover:border-violet-500/35",
       )}
     >
@@ -140,7 +132,7 @@ function DatapackTile({
         role="button"
         tabIndex={0}
         className={cn(
-          "flex min-h-0 flex-1 cursor-pointer flex-col px-4 pb-4 pt-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset sm:px-5 sm:pb-4 sm:pt-5",
+          "flex min-h-0 flex-1 cursor-pointer flex-col px-4 pb-4 pt-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-inset sm:px-5 sm:pb-4 sm:pt-5",
         )}
         onClick={() => onOpenDatapack(dp)}
         onKeyDown={(e) => {
@@ -247,7 +239,7 @@ function DatapackTile({
         >
           <button
             type="button"
-            className="flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-semibold text-foreground transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+            className="flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-semibold text-foreground transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
             onClick={() => onOpenDatapack(dp)}
           >
             Open
@@ -256,7 +248,7 @@ function DatapackTile({
           <div className="w-px shrink-0 self-stretch bg-foreground/10" aria-hidden />
           <button
             type="button"
-            className="flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-medium text-foreground/95 transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500"
+            className="flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-medium text-foreground/95 transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
             onClick={() => onConnectDatapack(dp)}
           >
             <Terminal className="h-4 w-4 shrink-0 opacity-90" aria-hidden />
@@ -268,7 +260,7 @@ function DatapackTile({
             disabled={!canShare}
             title={canShare ? "Share this datapack" : "Owner or Maintainer access required to share"}
             className={cn(
-              "flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500",
+              "flex flex-1 items-center justify-center gap-1.5 px-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand",
               canShare
                 ? "text-foreground/95 hover:bg-foreground/5"
                 : "cursor-not-allowed text-foreground/35 hover:bg-transparent",
@@ -295,7 +287,7 @@ function NewDatapackPlaceholderCard({ onClick }: { onClick: () => void }) {
       className={cn(
         "flex min-h-[12rem] flex-col items-center justify-center gap-3 border border-dashed border-border/70 bg-transparent p-6 shadow-none transition-colors",
         "cursor-pointer hover:border-muted-foreground/45 hover:bg-white/[0.03]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-card",
       )}
       onClick={onClick}
       onKeyDown={(e) => {
@@ -377,14 +369,14 @@ export default function DatapacksTilesSection({
 
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end lg:shrink-0">
           <Tabs value={scopeTab} onValueChange={(v) => setScopeTab(v as ScopeTab)} className="w-full sm:w-auto">
-            <TabsList className="flex min-h-9 w-full flex-wrap items-center justify-start gap-1 rounded-lg border border-border bg-input/90 p-1 sm:inline-flex sm:w-auto sm:flex-nowrap">
-              <TabsTrigger value="all" className={scopeTabsTriggerClassName}>
+            <TabsList variant="segmented" className="w-full flex-wrap justify-start sm:w-auto sm:flex-nowrap">
+              <TabsTrigger value="all" variant="segmented">
                 All
               </TabsTrigger>
-              <TabsTrigger value="owned" className={scopeTabsTriggerClassName}>
+              <TabsTrigger value="owned" variant="segmented">
                 Mine
               </TabsTrigger>
-              <TabsTrigger value="shared" className={scopeTabsTriggerClassName}>
+              <TabsTrigger value="shared" variant="segmented">
                 Shared with me
               </TabsTrigger>
             </TabsList>

@@ -263,7 +263,7 @@ export default function CompleteNewPasswordPage() {
         {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
 
         <p className="mt-5 text-center text-sm text-muted-foreground">
-          <Link to={ROUTES.signin} className="font-medium text-blue-400 hover:underline">
+          <Link to={ROUTES.signin} className="font-medium text-brand hover:underline">
             Back to sign in
           </Link>
         </p>

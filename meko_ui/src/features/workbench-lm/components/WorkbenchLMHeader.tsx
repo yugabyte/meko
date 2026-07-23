@@ -90,7 +90,7 @@ export function WorkbenchLMHeader({
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex min-w-0 items-center gap-2.5">
-        <PlayCircle className="h-4 w-4 shrink-0 text-purple-400" aria-hidden />
+        <PlayCircle className="h-4 w-4 shrink-0 text-brand" aria-hidden />
         <h1 className="text-lg font-semibold text-foreground">WorkbenchLM</h1>
         <Select
           value={selectedDatapackId ?? undefined}

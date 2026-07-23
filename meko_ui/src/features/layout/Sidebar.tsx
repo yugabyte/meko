@@ -17,6 +17,7 @@ import {
   Users,
   Settings as SettingsIcon,
   CreditCard,
+  Shield,
 } from "lucide-react";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
 import { cn } from "@/lib/utils";
@@ -41,6 +42,7 @@ import { resetTelemetry, trackEvent } from "@/lib/telemetry/rudderstack";
 import { FeedbackDialog } from "@/features/layout/FeedbackDialog";
 import { useBillingNavFlag } from "@/features/billing/hooks/useBillingNavFlag";
 import { SignOutConfirmDialog } from "@/features/layout/SignOutConfirmDialog";
+import { isAdminViewEnabled } from "@/lib/admin";
 
 /**
  * Cap the nested "Datapacks" list at this many rows before it starts to
@@ -82,6 +84,11 @@ export default function Sidebar() {
   // /billing?showPaymentOptions=true (persisted in localStorage).
   // See useBillingNavFlag for the gate logic.
   const showBillingNav = useBillingNavFlag();
+  // Admin console tab — gated by the SHOW_ADMIN_VIEW runtime flag (off by
+  // default). Interim gate until a per-user admin role lands; see `@/lib/admin`.
+  const showAdminNav = isAdminViewEnabled();
+  const onAdminRoute =
+    location.pathname === ROUTES.admin || location.pathname.startsWith(`${ROUTES.admin}/`);
   const [signOutOpen, setSignOutOpen] = useState(false);
   // Shared react-query cache — every other surface (HomePage, ObservePage,
   // WorkbenchLM, DatapacksOverviewPage) subscribes to the same key, so
@@ -521,6 +528,26 @@ export default function Sidebar() {
             isCollapsed ? "items-center" : "",
           )}
         >
+          {/* Admin console — sits BEFORE Settings. Hidden unless SHOW_ADMIN_VIEW
+              is on; the route also bounces to Datapacks when the flag is off. */}
+          {showAdminNav ? (
+            <NavLink
+              to={ROUTES.admin}
+              onClick={expandSidebar}
+              className={cn(
+                "flex items-center rounded-md text-sm font-medium transition-colors",
+                isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+                onAdminRoute
+                  ? "bg-foreground/10 text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+              )}
+              title={isCollapsed ? "Admin" : undefined}
+            >
+              <Shield className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+              {!isCollapsed && <span className="animate-in fade-in truncate">Admin</span>}
+            </NavLink>
+          ) : null}
+
           <NavLink
             to={ROUTES.settings}
             onClick={expandSidebar}
@@ -596,7 +623,7 @@ export default function Sidebar() {
         <button
           type="button"
           className={cn(
-            "mt-2 flex items-center rounded-md text-sm font-medium text-blue-700 dark:text-blue-300 ring-1 ring-blue-500/30 bg-blue-500/5 hover:bg-blue-500/15 hover:text-blue-700 dark:text-blue-100 transition-colors",
+            "mt-2 flex items-center rounded-md text-sm font-medium text-muted-foreground hover:bg-foreground/5 hover:text-foreground transition-colors",
             isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
           )}
           onClick={() => setFeedbackOpen(true)}

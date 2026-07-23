@@ -72,7 +72,7 @@ export function DatapackDetailKnowledgeTile({
         </span>
         <Link
           to={datapackKnowledgePath(datapackId)}
-          className="ml-auto shrink-0 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+          className="ml-auto shrink-0 text-xs text-brand hover:text-brand/80 transition-colors"
         >
           View all →
         </Link>

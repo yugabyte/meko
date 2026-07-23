@@ -46,7 +46,7 @@ export function DatapackDetailConnectTile({
       )}
     >
       <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-        <LinkIcon className="h-4 w-4 shrink-0 text-blue-400" aria-hidden />
+        <LinkIcon className="h-4 w-4 shrink-0 text-brand" aria-hidden />
         <span className="text-sm font-semibold text-foreground">Connect</span>
       </div>
       <div className="flex flex-col gap-3 px-3 py-3">
@@ -76,7 +76,7 @@ export function DatapackDetailConnectTile({
               with a Meko API key from{" "}
               <button
                 type="button"
-                className="font-medium text-blue-400 underline underline-offset-2 hover:text-blue-700 dark:text-blue-300"
+                className="font-medium text-brand underline underline-offset-2 hover:text-brand/80"
                 onClick={onOpenConnect}
               >
                 Connect
@@ -89,7 +89,7 @@ export function DatapackDetailConnectTile({
             Open{" "}
             <button
               type="button"
-              className="font-medium text-blue-400 underline underline-offset-2 hover:text-blue-700 dark:text-blue-300"
+              className="font-medium text-brand underline underline-offset-2 hover:text-brand/80"
               onClick={onOpenConnect}
             >
               Connect

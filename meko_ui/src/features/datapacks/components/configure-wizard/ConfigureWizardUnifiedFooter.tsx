@@ -125,7 +125,7 @@ export function ConfigureWizardUnifiedFooter({
     <Button
       type="button"
       disabled={!canProceedFromConfigure || configureSubmitting}
-      className="bg-emerald-100 font-semibold text-emerald-700 shadow-sm hover:bg-emerald-200 dark:bg-emerald-600 dark:text-white dark:hover:bg-emerald-500 disabled:opacity-60"
+      variant="default" className="font-semibold shadow-sm disabled:opacity-60"
       onClick={onConfigureSubmit}
     >
       {configureSubmitting ? (
@@ -157,7 +157,7 @@ export function ConfigureWizardUnifiedFooter({
   const syncCtaButton = (
     <Button
       type="button"
-      className="bg-emerald-100 font-semibold text-emerald-700 shadow-sm hover:bg-emerald-200 dark:bg-emerald-600 dark:text-white dark:hover:bg-emerald-500"
+      variant="default" className="font-semibold shadow-sm"
       onClick={syncCtaOnClick}
     >
       {syncCtaLabel}
@@ -171,7 +171,7 @@ export function ConfigureWizardUnifiedFooter({
   const installNextButton = (
     <Button
       type="button"
-      className="bg-emerald-100 font-semibold text-emerald-700 shadow-sm hover:bg-emerald-200 dark:bg-emerald-600 dark:text-white dark:hover:bg-emerald-500"
+      variant="default" className="font-semibold shadow-sm"
       onClick={onSkipForward}
     >
       Next
@@ -183,7 +183,7 @@ export function ConfigureWizardUnifiedFooter({
     <Button
       type="button"
       disabled={finishBusy}
-      className="bg-emerald-100 font-semibold text-emerald-700 shadow-sm hover:bg-emerald-200 dark:bg-emerald-600 dark:text-white dark:hover:bg-emerald-500 disabled:opacity-50"
+      variant="default" className="font-semibold shadow-sm disabled:opacity-50"
       onClick={onFinish}
     >
       {finishBusy ? "Finishing…" : "Finish"}

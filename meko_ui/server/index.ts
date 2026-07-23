@@ -26,7 +26,33 @@ declare module "http" {
 }
 
 const apiUpstream = mekoApiUpstream();
+
+// Admin console BFF gate. api_server's /api/v1/admin/* endpoints require the
+// shared X-Meko-Admin-Secret header, which the browser must never hold. We
+// inject it here, server-side, on admin requests — but ONLY when the Admin view
+// is enabled (SHOW_ADMIN_VIEW) AND the secret (ADMIN_API_KEY, the same var
+// meko_admin uses) is configured. When either is unset, admin requests forward
+// without the header and api_server rejects them — the safe default that keeps
+// admin data unreachable until an operator opts in.
+//
+// SECURITY — interim posture: there is NO per-user admin role yet. When this is
+// enabled, the secret is injected for EVERY authenticated request to
+// /api/v1/admin/*, and api_server authorizes those routes on the shared secret
+// alone. So ANY signed-in user who reaches /api/v1/admin/* gets full admin
+// access (all users' PII, tier changes, AMP credential read/replace/delete) —
+// the client-side flag/localStorage only hides the UI, it does NOT gate the API.
+// Therefore: enable SHOW_ADMIN_VIEW ONLY in trusted/dev/single-operator
+// environments. Do NOT set it in a shared/multi-tenant/production deployment
+// until per-user admin-role gating lands (which must gate BOTH the sidebar and
+// this proxy). Tracked as the follow-up to this integration.
+const adminSecret = (process.env.ADMIN_API_KEY ?? "").trim();
+const adminViewEnabled = (process.env.SHOW_ADMIN_VIEW ?? "").trim().toLowerCase() === "true";
+const adminProxyEnabled = adminViewEnabled && adminSecret !== "";
+
 if (apiUpstream) {
+  if (adminProxyEnabled) {
+    log("admin proxy enabled: injecting X-Meko-Admin-Secret on /api/v1/admin/*");
+  }
   // Do not mount at "/api/v1" — Express strips the mount from req.url and the
   // proxy would forward paths without the /api/v1 prefix.
   app.use(
@@ -34,6 +60,13 @@ if (apiUpstream) {
       target: apiUpstream,
       changeOrigin: true,
       pathFilter: "/api/v1",
+      on: {
+        proxyReq: (proxyReq, req) => {
+          if (adminProxyEnabled && (req.url ?? "").startsWith("/api/v1/admin")) {
+            proxyReq.setHeader("X-Meko-Admin-Secret", adminSecret);
+          }
+        },
+      },
     }),
   );
 }
@@ -112,6 +145,11 @@ app.use((req, res, next) => {
     // the same name so the tiles only show where contextual prominence search
     // (which produces the token-savings data) is enabled. Default off.
     "MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH",
+    // Gates the in-app Admin console (Data Plane / Metrics / Executive / Users /
+    // AMP) and its left-nav tab. Off by default. When on, the server also
+    // injects the admin secret on /api/v1/admin/* (see adminProxyEnabled above),
+    // so ADMIN_API_KEY must be set too for the console to load data.
+    "SHOW_ADMIN_VIEW",
   ];
   app.get("/runtime-config.js", (_req, res) => {
     const cfg: Record<string, string> = {};

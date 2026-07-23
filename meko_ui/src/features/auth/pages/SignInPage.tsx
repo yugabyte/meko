@@ -356,12 +356,12 @@ export default function SignInPage() {
         ) : null}
 
         <div className="mt-5 flex flex-col gap-2 text-center text-sm text-muted-foreground">
-          <Link to={ROUTES.forgotPassword} className="font-medium text-blue-400 hover:underline">
+          <Link to={ROUTES.forgotPassword} className="font-medium text-brand hover:underline">
             Forgot password?
           </Link>
           <p>
             New to Meko?{" "}
-            <Link to={ROUTES.signup} className="font-medium text-blue-400 hover:underline">
+            <Link to={ROUTES.signup} className="font-medium text-brand hover:underline">
               Sign up
             </Link>
           </p>

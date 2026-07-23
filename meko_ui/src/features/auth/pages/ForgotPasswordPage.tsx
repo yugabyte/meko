@@ -267,7 +267,7 @@ export default function ForgotPasswordPage() {
         ) : null}
 
         <p className="mt-6 text-center text-sm text-muted-foreground">
-          <Link to={ROUTES.signin} className="font-medium text-blue-400">
+          <Link to={ROUTES.signin} className="font-medium text-brand hover:underline">
             Back to sign in
           </Link>
         </p>

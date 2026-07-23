@@ -117,7 +117,7 @@ export function FeedbackDialog({
       <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-xl bg-card border-border text-foreground p-0 gap-0">
         <DialogHeader className="px-6 pt-6 pb-3 border-b border-border">
           <DialogTitle className="flex items-center gap-2 text-xl text-foreground">
-            <MessageSquare className="h-5 w-5 text-blue-400" aria-hidden />
+            <MessageSquare className="h-5 w-5 text-brand" aria-hidden />
             Send feedback
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
@@ -143,7 +143,7 @@ export function FeedbackDialog({
                     className={cn(
                       "rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors",
                       active
-                        ? "border-blue-500/60 bg-blue-500/15 text-blue-700 dark:text-blue-100"
+                        ? "border-brand/60 bg-brand/15 text-foreground"
                         : "border-border bg-background/60 text-muted-foreground hover:border-border/80 hover:text-foreground",
                       submitting && "cursor-not-allowed opacity-50",
                     )}
@@ -222,7 +222,7 @@ export function FeedbackDialog({
               type="button"
               onClick={() => void handleSubmit()}
               disabled={!canSubmit}
-              className="gap-2 bg-blue-600 hover:bg-blue-700 text-white disabled:bg-blue-600/40"
+              className="gap-2"
             >
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
               {submitting ? "Sending…" : "Send feedback"}

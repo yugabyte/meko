@@ -131,8 +131,8 @@ export function CurrentPlanCard({
         <div className="flex flex-col gap-2 lg:w-[200px]">
           <Button
             type="button"
-            variant="default"
-            className="gap-1.5 bg-emerald-500 text-emerald-950 hover:bg-emerald-400 dark:bg-emerald-500/90 dark:text-emerald-950"
+            variant="success"
+            className="gap-1.5"
             onClick={onUpgrade}
             // Disabled when the upgrade flow isn't available:
             //   - Scale: already at the top self-serve tier.

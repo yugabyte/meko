@@ -20,6 +20,7 @@
 // on it and highlight the active tier — out of scope for this PR.
 
 import { ArrowUpRight, Check } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -102,13 +103,14 @@ function FreeCard() {
           across columns. */}
       <header className="mb-3 flex min-h-7 items-center justify-between gap-2">
         <h3 className="text-base font-semibold text-foreground">Free</h3>
-        <span
-          className="inline-flex items-center gap-1 rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-blue-700 dark:text-blue-300"
+        <Badge
+          variant="brand"
+          className="gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider"
           aria-label="Your current plan"
         >
           <Check className="h-3 w-3" aria-hidden />
           Current
-        </span>
+        </Badge>
       </header>
 
       <dl className="divide-y divide-border/60 text-sm">
@@ -133,7 +135,7 @@ function FreeCard() {
 
 function ProCard() {
   return (
-    <article className="rounded-lg border border-blue-500/30 bg-blue-500/[0.04] p-4">
+    <article className="rounded-lg border border-brand/30 bg-brand/[0.06] p-4">
       {/* Same min-h-7 as the Free header — locks both first-rows to
           the same Y so "Datapacks" lines up across columns. */}
       <header className="mb-3 flex min-h-7 items-center justify-between gap-2">
@@ -142,7 +144,7 @@ function ProCard() {
           asChild
           variant="link"
           size="sm"
-          className="h-auto gap-1 p-0 text-xs font-medium text-blue-600 dark:text-blue-400"
+          className="h-auto gap-1 p-0 text-xs font-medium text-brand"
         >
           <a href={SALES_CONTACT_URL} target="_blank" rel="noopener noreferrer">
             Talk to our team
