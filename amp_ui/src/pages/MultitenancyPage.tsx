@@ -57,10 +57,14 @@ export default function MultitenancyPage() {
   const currentUser = useCurrentUser();
   const pools = useStoragePools();
 
-  // Only the current user's pools (owner_user_id) — matches Shared pools / Fleet.
+  // ADMIN "all pools" view (temporary): show every pool, not just the current
+  // user's, so the Shared pool dropdown matches Shared pools / Fleet.
+  // TODO: replace with a proper admin/all-pools toggle rather than dropping the
+  // owner filter outright.
+  // return pools.data.filter((p) => p.owner_user_id === currentUser.data.id);
   const myPools = useMemo(() => {
     if (!pools.data || !currentUser.data) return [];
-    return pools.data.filter((p) => p.owner_user_id === currentUser.data.id);
+    return pools.data;
   }, [pools.data, currentUser.data]);
 
   // Selection lives in the URL (?pool=<name>&db=<name>) so it's shareable and
