@@ -350,7 +350,13 @@ func (d *Deployer) WithDownload(f func(ctx context.Context, s3URL, destDir strin
 func (d *Deployer) WithSecretResolver(f SecretResolver) *Deployer { d.resolveSecret = f; return d }
 
 // WithLogf overrides the logger (nil silences).
-func (d *Deployer) WithLogf(f func(format string, args ...any)) *Deployer { d.logf = f; return d }
+func (d *Deployer) WithLogf(f func(format string, args ...any)) *Deployer {
+	d.logf = f
+	if d.kube != nil {
+		d.kube.WithLogf(f)
+	}
+	return d
+}
 
 func (d *Deployer) log(format string, args ...any) {
 	if d.logf != nil {
@@ -514,7 +520,14 @@ func (d *Deployer) helmInstallArgs(chartDir string) []string {
 }
 
 func (d *Deployer) helmInstall(ctx context.Context, chartDir string) error {
-	res, err := d.helmRun(ctx, nil, d.helmInstallArgs(chartDir))
+	argv := d.helmInstallArgs(chartDir)
+	if d.logf != nil {
+		d.logf("exec: %s", k8s.CmdString(argv))
+	}
+	res, err := d.helmRun(ctx, nil, argv)
+	if d.logf != nil {
+		d.logf("exec done (exit %d):%s%s", res.ExitCode, k8s.LogTail("out", res.Stdout), k8s.LogTail("err", res.Stderr))
+	}
 	if err != nil {
 		return fmt.Errorf("helm install: %w", err)
 	}

@@ -17,7 +17,8 @@ package features
 import (
 	"context"
 	"fmt"
-	"log"
+	"strings"
+	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -47,7 +48,9 @@ type ampCtl interface {
 	ListProjects(context.Context, string, int, int) (controller.ProjectList, error)
 	DeleteProjectAndWait(context.Context, string, string) (controller.Task, error)
 	CreateBranchAndWait(context.Context, string, string, controller.CreateBranchRequest) (controller.Task, error)
+	DeleteBranchAndWait(context.Context, string, string, string) (controller.Task, error)
 	ListBranches(context.Context, string, string, int, int) (controller.BranchList, error)
+	ListTasks(context.Context, controller.ListTasksOptions) (controller.TaskList, error)
 	CreateEndpointAndWait(context.Context, string, string, string, controller.CreateEndpointRequest) (controller.Task, error)
 	ListAllEndpoints(context.Context, string, string, string) ([]controller.Endpoint, error)
 	DeleteEndpointAndWait(context.Context, string, string, string, string) (controller.Task, error)
@@ -82,7 +85,8 @@ type ampFeatureRun struct {
 // project handles.
 func runAmpFeature(t *core.T, feature func(a *ampFeatureRun) []phase) error {
 	cfg := FromConfig(t.Options)
-	f := &flow{t: t, cfg: cfg, td: &teardownStack{}, logf: runFlowLogf(t.Masker(), log.Printf)}
+	flowLogf, rlog := newFlowLog(t.Masker())
+	f := &flow{t: t, cfg: cfg, td: &teardownStack{}, logf: flowLogf, rlog: rlog}
 	a := &ampFeatureRun{f: f}
 	step := func(name string, fn func() error) error {
 		return t.Step(name, func(*core.StepHandle) error { return fn() })
@@ -98,18 +102,27 @@ func runAmpFeature(t *core.T, feature func(a *ampFeatureRun) []phase) error {
 		phases = []phase{{"create_project", a.createProject}}
 	} else {
 		// SELF-PROVISION (today's path): a fake/none/universe env exposes no amp
-		// control plane, so stand our own up. Gated exactly as the foundation tests
-		// are — this gate MUST NOT skip an attached run (handled above, before the
-		// gate), only a run that would have to self-provision without an amp env.
-		if reason, ok := cfg.gateYBK8s(t.Options); !ok {
-			t.Skip(reason)
+		// control plane, so stand our own up. Default to a YBA-provisioned
+		// universe; fall back to the co-located ybk8s backing where YBA can't be
+		// stood up (no quay/provider creds). Skip only
+		// when neither backing is available. This gate MUST NOT skip an attached
+		// run (handled above, before the gate).
+		ybaReason, ybaOK := cfg.gateYBAProvisioned(t.Options)
+		k8sReason, k8sOK := cfg.gateYBK8s(t.Options)
+		switch {
+		case ybaOK:
+			f.prov = cfg.provisionYBAProvisioned
+		case k8sOK:
+			f.logf("YBA-provisioned backing unavailable (%s); using co-located ybk8s backing", ybaReason)
+			f.prov = cfg.provisionYBK8s
+		default:
+			t.Skip(ybaReason + "; ybk8s fallback also unavailable: " + k8sReason)
 			return nil
 		}
 		if reason, ok := gateNoDoubleProvision(t.Env); !ok {
 			t.Skip(reason)
 			return nil
 		}
-		f.prov = cfg.provisionYBK8s
 		f.reg = openRunReapRegistry(f.logf)
 		phases = []phase{
 			{"provision_backing", f.provisionBacking},
@@ -185,23 +198,54 @@ func createProjectOnPool(ctx context.Context, cl ampCtl, poolID, name string, pg
 }
 
 // createEndpoint deploys a read_write endpoint on the addressed branch and
-// returns it. The endpoint create is async (202 + Task); the *AndWait helper polls
-// it to success, then the endpoint (with its resolved address) is read from the
-// branch's endpoint list.
+// returns it, converging on the controller's non-idempotent create: a failed
+// helm deploy ("services yb-ep-… not found") can leave a partial record whose
+// deploy finishes moments later, so on that transient we back off and REUSE the
+// branch's now-present endpoint instead of re-creating (the same pattern
+// sharedk8s.createEndpoint uses).
 func createEndpoint(ctx context.Context, cl ampCtl, poolID, projID, branchID string) (controller.Endpoint, error) {
-	if _, err := cl.CreateEndpointAndWait(ctx, poolID, projID, branchID, controller.CreateEndpointRequest{Role: roleReadWrite}); err != nil {
-		return controller.Endpoint{}, fmt.Errorf("create endpoint on branch %s: %w", branchID, err)
-	}
-	eps, err := cl.ListAllEndpoints(ctx, poolID, projID, branchID)
-	if err != nil {
-		return controller.Endpoint{}, fmt.Errorf("list endpoints on branch %s: %w", branchID, err)
-	}
-	if len(eps) == 0 {
+	var lastErr error
+	for attempt := 0; attempt <= 4; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return controller.Endpoint{}, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 3 * time.Second):
+			}
+			if ep, ok := lastEndpoint(ctx, cl, poolID, projID, branchID); ok {
+				return ep, nil
+			}
+		}
+		if _, err := cl.CreateEndpointAndWait(ctx, poolID, projID, branchID, controller.CreateEndpointRequest{Role: roleReadWrite}); err != nil {
+			lastErr = fmt.Errorf("create endpoint on branch %s: %w", branchID, err)
+			if transientEndpointDeploy(err) {
+				continue
+			}
+			return controller.Endpoint{}, lastErr
+		}
+		if ep, ok := lastEndpoint(ctx, cl, poolID, projID, branchID); ok {
+			return ep, nil
+		}
 		return controller.Endpoint{}, fmt.Errorf("endpoint create returned no endpoint on branch %s", branchID)
 	}
-	// The newest endpoint (a branch admits one read_write endpoint; after a
-	// delete+recreate the retired one is already gone from the list).
-	return eps[len(eps)-1], nil
+	return controller.Endpoint{}, fmt.Errorf("create endpoint failed after retries: %w", lastErr)
+}
+
+// lastEndpoint returns the branch's newest endpoint (a branch admits one
+// read_write endpoint; after a delete+recreate the retired one is gone).
+func lastEndpoint(ctx context.Context, cl ampCtl, poolID, projID, branchID string) (controller.Endpoint, bool) {
+	eps, err := cl.ListAllEndpoints(ctx, poolID, projID, branchID)
+	if err != nil || len(eps) == 0 {
+		return controller.Endpoint{}, false
+	}
+	return eps[len(eps)-1], true
+}
+
+// transientEndpointDeploy reports the non-idempotent helm-deploy race that
+// clears once the racing deploy finishes.
+func transientEndpointDeploy(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "services") && strings.Contains(s, "not found")
 }
 
 // findProjectCtl resolves an asynchronously-created project by name (its id is not

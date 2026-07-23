@@ -141,14 +141,14 @@ func runMutations(t *core.T) error {
 			return err
 		}
 		if int(count) != wantCount {
-			return fmt.Errorf("post-mutation count = %d, want %d", count, wantCount)
+			return fmt.Errorf("after UPDATE-ing even ids and DELETE-ing multiples of 5 on %s, count = %d, want %d (the UPDATE/DELETE WAL did not apply as expected)", table, count, wantCount)
 		}
 		gotSum, err := client.QueryInt(t, "SELECT coalesce(sum(v),0) FROM "+table)
 		if err != nil {
 			return err
 		}
 		if gotSum != wantSum {
-			return fmt.Errorf("post-mutation sum = %d, want %d", gotSum, wantSum)
+			return fmt.Errorf("after the UPDATE/DELETE mutations on %s, sum(v) = %d, want %d", table, gotSum, wantSum)
 		}
 		s.Set("count", wantCount)
 		s.Set("sum", wantSum)
@@ -198,7 +198,7 @@ func runTransaction(t *core.T) error {
 			return err
 		}
 		if int(count) != k {
-			return fmt.Errorf("after commit count = %d, want %d", count, k)
+			return fmt.Errorf("after COMMIT, %s has %d of the %d inserted rows visible, want all %d (a committed transaction must be fully durable)", table, count, k, k)
 		}
 		return nil
 	}); err != nil {
@@ -225,7 +225,7 @@ func runTransaction(t *core.T) error {
 			return err
 		}
 		if count != 0 {
-			return fmt.Errorf("after rollback %d rolled-back rows are visible, want 0", count)
+			return fmt.Errorf("after ROLLBACK, %d of the rolled-back rows are still visible on %s, want 0 (a rolled-back transaction must leave nothing durable)", count, table)
 		}
 		return nil
 	}); err != nil {
@@ -246,7 +246,7 @@ func runTransaction(t *core.T) error {
 		}
 		if _, dupErr := tx.Exec(t, fmt.Sprintf("INSERT INTO %s (id, v) VALUES ($1, $2)", table), badID, int64(2)); dupErr == nil {
 			_ = tx.Rollback(t)
-			return fmt.Errorf("expected duplicate-PK insert to error, got nil")
+			return fmt.Errorf("inserting a duplicate primary key (id=%d) into %s succeeded inside the transaction, want it to reject the duplicate (PK uniqueness must be enforced)", badID, table)
 		}
 		if err := tx.Rollback(t); err != nil {
 			return err
@@ -256,7 +256,7 @@ func runTransaction(t *core.T) error {
 			return err
 		}
 		if count != 0 {
-			return fmt.Errorf("after aborted tx the valid row is present (%d), want 0", count)
+			return fmt.Errorf("after the duplicate-PK error aborted the transaction and it was rolled back, id=%d is still present on %s (count=%d), want 0 (a statement error must abort the WHOLE transaction, including the earlier valid insert)", badID, table, count)
 		}
 		return nil
 	})
@@ -301,7 +301,7 @@ func runIndex(t *core.T) error {
 			return err
 		}
 		if int(gotID) != want.id {
-			return fmt.Errorf("point lookup v=%d returned id %d, want %d", want.v, gotID, want.id)
+			return fmt.Errorf("index point lookup on %s WHERE v=%d returned id %d, want %d (the secondary index resolved to the wrong row)", table, want.v, gotID, want.id)
 		}
 
 		// Range count over v.
@@ -318,7 +318,7 @@ func runIndex(t *core.T) error {
 			return err
 		}
 		if int(gotRange) != wantRange {
-			return fmt.Errorf("range count [%d,%d] = %d, want %d", lo, hi, gotRange, wantRange)
+			return fmt.Errorf("index range count on %s WHERE v BETWEEN %d AND %d = %d, want %d", table, lo, hi, gotRange, wantRange)
 		}
 		s.Set("range_count", wantRange)
 		return nil
@@ -377,14 +377,14 @@ func runReadColdCache(t *core.T) error {
 			return err
 		}
 		if int(count) != len(rows) {
-			return fmt.Errorf("cold read count = %d, want %d", count, len(rows))
+			return fmt.Errorf("cold read after CHECKPOINT on a fresh Local File Cache: table %s has %d rows, want %d (Pageserver page reconstruction lost or duplicated rows)", table, count, len(rows))
 		}
 		gotSum, err := cold.QueryInt(t, "SELECT coalesce(sum(v),0) FROM "+table)
 		if err != nil {
 			return err
 		}
 		if gotSum != wantSum {
-			return fmt.Errorf("cold read sum = %d, want %d", gotSum, wantSum)
+			return fmt.Errorf("cold read after CHECKPOINT: sum(v) over %s = %d, want %d", table, gotSum, wantSum)
 		}
 
 		knownID := coldRows / 2
@@ -393,7 +393,7 @@ func runReadColdCache(t *core.T) error {
 			return err
 		}
 		if gotV != rows[knownID] {
-			return fmt.Errorf("cold point lookup id=%d returned v %d, want %d", knownID, gotV, rows[knownID])
+			return fmt.Errorf("cold point lookup on %s id=%d returned v=%d, want %d (Pageserver GetPage reconstructed the wrong value)", table, knownID, gotV, rows[knownID])
 		}
 		s.Set("checksum", gotSum)
 		return nil
@@ -461,14 +461,14 @@ func runDDLSurvivesRestart(t *core.T) error {
 			return err
 		}
 		if tblCount != 1 {
-			return fmt.Errorf("after restart table %s not found in pg_class (count %d)", table, tblCount)
+			return fmt.Errorf("after restarting the endpoint, table %s is missing from pg_class (found %d matching rows, want 1) — DDL did not survive the crash boundary", table, tblCount)
 		}
 		idxCount, err := client.QueryInt(t, "SELECT count(*) FROM pg_indexes WHERE indexname = $1", index)
 		if err != nil {
 			return err
 		}
 		if idxCount != 1 {
-			return fmt.Errorf("after restart index %s not found in pg_indexes (count %d)", index, idxCount)
+			return fmt.Errorf("after restarting the endpoint, index %s is missing from pg_indexes (found %d matching rows, want 1) — DDL did not survive the crash boundary", index, idxCount)
 		}
 
 		// Index-backed lookup: distinct v → exactly one id.
@@ -478,7 +478,7 @@ func runDDLSurvivesRestart(t *core.T) error {
 			return err
 		}
 		if int(gotID) != want.id {
-			return fmt.Errorf("after restart lookup v=%d returned id %d, want %d", want.v, gotID, want.id)
+			return fmt.Errorf("after restarting the endpoint, index-backed lookup on %s WHERE v=%d returned id %d, want %d", table, want.v, gotID, want.id)
 		}
 
 		count, err := client.QueryInt(t, "SELECT count(*) FROM "+table)
@@ -486,14 +486,14 @@ func runDDLSurvivesRestart(t *core.T) error {
 			return err
 		}
 		if int(count) != len(rows) {
-			return fmt.Errorf("after restart row count = %d, want %d", count, len(rows))
+			return fmt.Errorf("after restarting the endpoint, table %s has %d rows, want %d — data did not survive the crash boundary", table, count, len(rows))
 		}
 		gotSum, err := client.QueryInt(t, "SELECT coalesce(sum(v),0) FROM "+table)
 		if err != nil {
 			return err
 		}
 		if gotSum != wantSum {
-			return fmt.Errorf("after restart checksum = %d, want %d", gotSum, wantSum)
+			return fmt.Errorf("after restarting the endpoint, sum(v) over %s = %d, want %d", table, gotSum, wantSum)
 		}
 		return nil
 	})
@@ -574,14 +574,14 @@ func runMultiDBWorkload(t *core.T) error {
 					return err
 				}
 				if int(count) != len(rows) {
-					return fmt.Errorf("db %s count = %d, want %d", db, count, len(rows))
+					return fmt.Errorf("database %s: table %s has %d rows, want %d", db, table, count, len(rows))
 				}
 				gotSum, err := client.QueryInt(t, "SELECT coalesce(sum(v),0) FROM "+table)
 				if err != nil {
 					return err
 				}
 				if gotSum != wantSum {
-					return fmt.Errorf("db %s sum = %d, want %d", db, gotSum, wantSum)
+					return fmt.Errorf("database %s: sum(v) over %s = %d, want %d", db, table, gotSum, wantSum)
 				}
 				checksums[i] = gotSum
 				return nil
@@ -595,7 +595,7 @@ func runMultiDBWorkload(t *core.T) error {
 		for i := 0; i < k; i++ {
 			for j := i + 1; j < k; j++ {
 				if checksums[i] == checksums[j] {
-					return fmt.Errorf("db %s and %s produced identical checksum %d, want distinct", dbs[i], dbs[j], checksums[i])
+					return fmt.Errorf("databases %s and %s produced identical checksum %d, want distinct sums (their per-db value offsets should have made the data unique per database)", dbs[i], dbs[j], checksums[i])
 				}
 			}
 		}
@@ -619,7 +619,7 @@ func runMultiDBWorkload(t *core.T) error {
 					return err
 				}
 				if own != 1 {
-					return fmt.Errorf("db %s is missing its own table %s (count %d)", db, tableFor(i), own)
+					return fmt.Errorf("database %s is missing its own table %s in pg_class (found %d matching rows, want 1)", db, tableFor(i), own)
 				}
 				for j := range dbs {
 					if j == i {
@@ -630,7 +630,7 @@ func runMultiDBWorkload(t *core.T) error {
 						return err
 					}
 					if foreign != 0 {
-						return fmt.Errorf("db %s sees foreign table %s (count %d), want 0", db, tableFor(j), foreign)
+						return fmt.Errorf("database %s can see another database's table %s in pg_class (found %d, want 0) — cross-database isolation broken", db, tableFor(j), foreign)
 					}
 				}
 				return nil

@@ -210,6 +210,14 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 		mode := ybdeploy.Resolve(p.ybDeployCfg, spec)
 		if mode != ybdeploy.ModeBuiltin {
 			store, td, berr := ybdeploy.Provision(ctx, p.ybDeployCfg, mode, ns, p.logf)
+			if berr != nil && mode == ybdeploy.ModeYBAProvisioned {
+				// yba_provisioned is the default but needs a deployable YBA
+				// (quay + provider creds); fall back to the built-in single-node
+				// yugabyted (the proven default) so the env still comes up.
+				p.logf("exclusivek8s: yba_provisioned backing failed (%v); falling back to built-in yugabyted", berr)
+				mode = ybdeploy.ModeBuiltin
+				store, td, berr = ybdeploy.Provision(ctx, p.ybDeployCfg, mode, ns, p.logf)
+			}
 			if berr != nil {
 				return nil, fmt.Errorf("provision %s deployment: %w", mode, berr)
 			}

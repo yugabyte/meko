@@ -33,7 +33,7 @@ func init() {
 		Tags:        []string{"nightly"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Storage/compute separation: restart an endpoint's compute pod and assert the checksummed dataset survived.",
-		Params:      []string{"functional", "env.ampstack", "apps.ybk8s"},
+		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpComputeRestart,
 	})
 }
@@ -114,7 +114,7 @@ func computeRestartSteps(ctx context.Context, cl ampCtl, proj ampProject, connec
 		return fmt.Errorf("checksum before restart: %w", err)
 	}
 	if before != restartRows {
-		return fmt.Errorf("seeded %d rows, expected %d", before, restartRows)
+		return fmt.Errorf("after seeding, table %s has %d rows, want %d (the generate_series seed insert did not produce the expected row count)", restartTable, before, restartRows)
 	}
 
 	// Restart the compute: roll the endpoint pod; its Deployment reschedules one.

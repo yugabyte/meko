@@ -3,7 +3,6 @@ package features
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -190,7 +189,8 @@ func runFoundation(t *core.T, cfg Config, prov backingProvisioner) error {
 		t.Skip(reason)
 		return nil
 	}
-	f := &flow{t: t, cfg: cfg, prov: prov, td: &teardownStack{}, logf: runFlowLogf(t.Masker(), log.Printf)}
+	flowLogf, rlog := newFlowLog(t.Masker())
+	f := &flow{t: t, cfg: cfg, prov: prov, td: &teardownStack{}, logf: flowLogf, rlog: rlog}
 	// A run tears its own infra down in-process on the happy path, but a killed
 	// (SIGKILL) or hung run never reaches that teardown. Recording the same
 	// reap.Plan `ampqa setup` records makes such a run recoverable via `ampqa env
@@ -305,6 +305,7 @@ type flow struct {
 	prov backingProvisioner
 	td   *teardownStack
 	logf func(string, ...any)
+	rlog *runLog // backs logf; its bytes are attached as the framework log
 
 	// ampEnv is the standing amp control plane the run attaches to (nil in the
 	// self-provision path). When set, the flow sources its controller / pool /
@@ -323,15 +324,6 @@ type flow struct {
 	regID string
 
 	ampApp *ampstack.App
-}
-
-// runFlowLogf is the one place a foundation flow's logger is built (§7): it
-// wraps base in the run's secret masker so a resolved credential (DSN password,
-// token, kubeconfig contents) the lifecycle or a provisioner logs through
-// f.logf is scrubbed before it reaches stdout/CI logs. Every entrypoint routes
-// through here so masking can never be forgotten at one call site.
-func runFlowLogf(m *core.Masker, base func(string, ...any)) func(string, ...any) {
-	return m.Logf(base)
 }
 
 func (f *flow) register(name string, fn func(context.Context) error) { f.td.push(name, fn) }
@@ -592,7 +584,7 @@ func (f *flow) workloadAmp(ctx context.Context) error {
 		return fmt.Errorf("list amp endpoints: %w", err)
 	}
 	if len(eps) == 0 {
-		return fmt.Errorf("amp endpoint create returned no endpoint")
+		return fmt.Errorf("create amp endpoint reported success but the branch lists no endpoint afterwards")
 	}
 	ci, err := f.endpointConnInfo(eps[0])
 	if err != nil {
@@ -647,11 +639,11 @@ func (f *flow) crossLayer(ctx context.Context) error {
 		return fmt.Errorf("check amp storage db on backing: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("amp storage database %q not found on backing cluster (deploy did not use the external store)", storageDB)
+		return fmt.Errorf("amp storage database %q not found on the backing cluster (deploy did not use the external store)", storageDB)
 	}
 
 	if len(f.native.DBs) == 0 {
-		return fmt.Errorf("no layer-1 databases to re-verify")
+		return fmt.Errorf("no layer-1 databases were recorded to re-verify (workload_yb_native should have populated at least one)")
 	}
 	db := f.native.DBs[0]
 	q, closeFn, err := f.connector(base)(ctx, db.DBName)

@@ -22,7 +22,7 @@ func init() {
 		Tags:        []string{"nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Prove copy-on-write branch isolation: a forked child sees base data but writes diverge on each side.",
-		Params:      []string{"functional", "env.ampstack", "apps.ybk8s"},
+		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpBranchIsolation,
 	})
 }

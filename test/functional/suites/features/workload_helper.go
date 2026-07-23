@@ -247,7 +247,7 @@ func ddlDMLExercise(ctx context.Context, q Querier, table string, tablets int, s
 		return err
 	}
 	if count != 0 {
-		return fmt.Errorf("scratch %s count after truncate = %d, want 0", table, count)
+		return fmt.Errorf("scratch table %s has %d rows after TRUNCATE TABLE, want 0", table, count)
 	}
 	if _, err := q.Exec(ctx, fmt.Sprintf("ALTER TABLE %s DROP COLUMN note", table)); err != nil {
 		return fmt.Errorf("drop column: %w", err)
@@ -361,7 +361,7 @@ func oneSchemaExercise(ctx context.Context, pool Querier, spec AmpSpec, i int) e
 		return err
 	}
 	if int(count) != n {
-		return fmt.Errorf("schema %s count = %d, want %d", schema, count, n)
+		return fmt.Errorf("table %s has %d rows after inserting %d, want %d (concurrent per-schema exercise lost or duplicated rows)", table, count, n, n)
 	}
 	if _, err := pool.Exec(ctx, "DROP SCHEMA IF EXISTS "+quoteIdent(schema)+" CASCADE"); err != nil {
 		return fmt.Errorf("drop schema %s: %w", schema, err)

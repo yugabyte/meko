@@ -130,15 +130,23 @@ type Getter interface {
 type SecretResolver func(name string) (string, error)
 
 // FromConfig reads apps.ybastack.* into a Config. ChartVersion falls back to
-// versions.yugabytedb when apps.ybastack.chart_version is empty.
+// versions.yugabytedb when apps.ybastack.chart_version is empty. KubeContext
+// falls back to env.ampstack.context (when neither ybastack kubecontext nor
+// kubeconfig is set) so a YBA-provisioned backing co-locates in the same
+// cluster as amp without duplicate config — mirroring ybk8s.
 func FromConfig(get Getter) Config {
 	chartVersion := get.GetString("apps.ybastack.chart_version", "")
 	if chartVersion == "" {
 		chartVersion = get.GetString("versions.yugabytedb", "")
 	}
+	kubeContext := get.GetString("apps.ybastack.kubecontext", "")
+	kubeconfig := get.GetString("apps.ybastack.kubeconfig", "")
+	if kubeContext == "" && kubeconfig == "" {
+		kubeContext = get.GetString("env.ampstack.context", "")
+	}
 	return Config{
-		KubeContext:       get.GetString("apps.ybastack.kubecontext", ""),
-		Kubeconfig:        get.GetString("apps.ybastack.kubeconfig", ""),
+		KubeContext:       kubeContext,
+		Kubeconfig:        kubeconfig,
 		NamespacePrefix:   get.GetString("apps.ybastack.namespace_prefix", DefaultNamespacePrefix),
 		ChartVersion:      chartVersion,
 		ImageRegistry:     get.GetString("apps.ybastack.image_registry", DefaultImageRegistry),
@@ -327,7 +335,13 @@ func (d *Deployer) WithBootstrap(f func(ctx context.Context, cl *yba.Client, cre
 
 // WithLogf overrides the logger (nil silences). Pass a masked sink so a resolved
 // secret never survives into a log line.
-func (d *Deployer) WithLogf(f func(format string, args ...any)) *Deployer { d.logf = f; return d }
+func (d *Deployer) WithLogf(f func(format string, args ...any)) *Deployer {
+	d.logf = f
+	if d.kube != nil {
+		d.kube.WithLogf(f)
+	}
+	return d
+}
 
 // Namespace is the deploy's namespace.
 func (d *Deployer) Namespace() string { return d.ns }
@@ -522,7 +536,14 @@ func (d *Deployer) helmInstallArgs(chartDir string) []string {
 }
 
 func (d *Deployer) helmInstall(ctx context.Context, chartDir string) error {
-	res, err := d.helmRun(ctx, nil, d.helmInstallArgs(chartDir))
+	argv := d.helmInstallArgs(chartDir)
+	if d.logf != nil {
+		d.logf("exec: %s", k8s.CmdString(argv))
+	}
+	res, err := d.helmRun(ctx, nil, argv)
+	if d.logf != nil {
+		d.logf("exec done (exit %d):%s%s", res.ExitCode, k8s.LogTail("out", res.Stdout), k8s.LogTail("err", res.Stderr))
+	}
 	if err != nil {
 		return fmt.Errorf("helm install: %w", err)
 	}

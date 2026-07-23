@@ -203,8 +203,10 @@ func (cfg Config) gateYBAProvisioned(c *core.Config) (string, bool) {
 	if r, ok := cfg.gateAWS(c); !ok {
 		return r, false
 	}
-	if c.GetString("apps.ybastack.kubecontext", "") == "" && c.GetString("apps.ybastack.kubeconfig", "") == "" {
-		return "yba deploy needs a k8s cluster: set apps.ybastack.kubecontext or apps.ybastack.kubeconfig", false
+	if c.GetString("apps.ybastack.kubecontext", "") == "" &&
+		c.GetString("apps.ybastack.kubeconfig", "") == "" &&
+		c.GetString("env.ampstack.context", "") == "" {
+		return "yba deploy needs a k8s cluster: set apps.ybastack.kubecontext or apps.ybastack.kubeconfig (or env.ampstack.context)", false
 	}
 	secrets, err := core.NewSecrets(c)
 	if err != nil {

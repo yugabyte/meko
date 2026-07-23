@@ -47,8 +47,10 @@ const (
 )
 
 // DefaultCollectDiagnostics is the default report.collect_diagnostics mode:
-// gather k8s failure diagnostics before teardown only when the test failed.
-const DefaultCollectDiagnostics = "on_failure"
+// gather k8s diagnostics (amp + backing pod logs, describes, events) before
+// teardown on EVERY run, pass or fail, so every test result carries its logs.
+// Set report.collect_diagnostics=on_failure to collect only on failure.
+const DefaultCollectDiagnostics = "always"
 
 // newT builds a test context. emit may be nil (no reporter).
 func newT(ctx context.Context, env Environment, seed *Seed, opts *Config, masker *Masker, result *Result, emit emitter) *T {

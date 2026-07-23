@@ -36,11 +36,12 @@ import (
 type Workload string
 
 const (
-	SqlInserts        Workload = "SqlInserts"
-	SqlDataLoad       Workload = "SqlDataLoad"
-	SqlBankTransfer   Workload = "SqlBankTransfer"
-	SqlTransactions   Workload = "SqlTransactions"
-	CassandraKeyValue Workload = "CassandraKeyValue"
+	SqlInserts         Workload = "SqlInserts"
+	SqlDataLoad        Workload = "SqlDataLoad"
+	SqlDataLoadWithDDL Workload = "SqlDataLoadWithDDL"
+	SqlBankTransfer    Workload = "SqlBankTransfer"
+	SqlTransactions    Workload = "SqlTransactions"
+	CassandraKeyValue  Workload = "CassandraKeyValue"
 )
 
 // isYCQL reports whether the workload targets YCQL (Cassandra* families) rather

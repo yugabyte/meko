@@ -30,8 +30,8 @@ func TestResolvePrecedence(t *testing.T) {
 		{"knob beats preference", []string{"env.yb_deploy=yb_k8s"}, core.EnvSpec{PreferredYBDeploy: ybdeploy.ModeExternal}, ybdeploy.ModeYBK8s},
 		{"knob beats no preference", []string{"env.yb_deploy=yba_universe"}, core.EnvSpec{}, ybdeploy.ModeYBAUniverse},
 		{"yb_pod knob", []string{"env.yb_deploy=yb_pod"}, core.EnvSpec{}, ybdeploy.ModeYBPod},
-		{"empty knob honours preference", nil, core.EnvSpec{PreferredYBDeploy: ybdeploy.ModeExternal}, ybdeploy.ModeExternal},
-		{"neither set → builtin", nil, core.EnvSpec{}, ybdeploy.ModeBuiltin},
+		{"empty knob honours preference", []string{"env.yb_deploy="}, core.EnvSpec{PreferredYBDeploy: ybdeploy.ModeExternal}, ybdeploy.ModeExternal},
+		{"empty knob, no preference → builtin", []string{"env.yb_deploy="}, core.EnvSpec{}, ybdeploy.ModeBuiltin},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

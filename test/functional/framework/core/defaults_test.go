@@ -109,8 +109,10 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 
 	// --- env.yb_deploy (run-level YugabyteDB deployment selector) ---
+	// Empty by default: the built-in yugabyted, unless a caller sets the knob
+	// (the run pipeline sets yba_provisioned for its default yba backing).
 	if got := cfg.GetString("env.yb_deploy", "__MISSING__"); got != "" {
-		t.Errorf("env.yb_deploy = %q, want present and empty (built-in default until overridden)", got)
+		t.Errorf("env.yb_deploy = %q, want present and empty", got)
 	}
 	if got := ybdeploy.Resolve(cfg, core.EnvSpec{}); got != ybdeploy.ModeBuiltin {
 		t.Errorf("ybdeploy.Resolve(defaults, no-pref) = %q, want %q", got, ybdeploy.ModeBuiltin)
@@ -515,9 +517,10 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 			t.Errorf("%s = %q, want present and empty", key, got)
 		}
 	}
-	// provider_type defaults to aws (the AWS backing is the unchanged default).
-	if got := cfg.GetString("apps.yba.provider_type", "__MISSING__"); got != "aws" {
-		t.Errorf("apps.yba.provider_type = %q, want aws", got)
+	// provider_type defaults to kubernetes: amp feature/regression tests stand a
+	// YBA-provisioned RF=3 universe up co-located in the amp cluster.
+	if got := cfg.GetString("apps.yba.provider_type", "__MISSING__"); got != "kubernetes" {
+		t.Errorf("apps.yba.provider_type = %q, want kubernetes", got)
 	}
 
 	// --- apps.yba.k8s (kubernetes provider + universe spec) ---
@@ -1017,6 +1020,44 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if chCfg.WaitTimeout != chDefault.WaitTimeout || chCfg.RecoverTimeout != chDefault.RecoverTimeout {
 		t.Errorf("chaos wait/recover timeout = %s/%s, want %s/%s", chCfg.WaitTimeout, chCfg.RecoverTimeout, chDefault.WaitTimeout, chDefault.RecoverTimeout)
+	}
+
+	// --- global product health (features/amp_product_health) ---
+	healthInts := map[string]int{
+		"health.sample_tables":        2,
+		"health.sample_threads_read":  1,
+		"health.sample_threads_write": 2,
+		"health.verify_tables":        4,
+		"health.verify_rows":          500,
+	}
+	for key, want := range healthInts {
+		if got := cfg.GetInt(key, -1); got != want {
+			t.Errorf("%s = %d, want %d", key, got, want)
+		}
+	}
+	healthStrs := map[string]string{
+		"health.client_image": "eclipse-temurin:21-jdk",
+		"health.remote_dir":   "/opt/ampqa",
+		"health.jar_secret":   "gh_package",
+	}
+	for key, want := range healthStrs {
+		if got := cfg.GetString(key, "__MISSING__"); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	// client_pull_secret is documented-empty but must be PRESENT.
+	if got := cfg.GetString("health.client_pull_secret", "__MISSING__"); got != "" {
+		t.Errorf("health.client_pull_secret = %q, want present and empty", got)
+	}
+	healthDurs := map[string]time.Duration{
+		"health.run_time":       5 * time.Minute,
+		"health.ready_timeout":  5 * time.Minute,
+		"health.verify_timeout": 5 * time.Minute,
+	}
+	for key, want := range healthDurs {
+		if got := cfg.GetDuration(key, -1); got != want {
+			t.Errorf("%s = %s, want %s", key, got, want)
+		}
 	}
 
 	// --- stress suite (load_sustain + combined) ---

@@ -919,10 +919,11 @@ func (s attachSink) Add(name, kind string, content []byte) error {
 }
 
 // collectDiagnostics is the pre-teardown diagnostics hook: before the namespace
-// delete, gather the YB-namespace k8s failure evidence (tserver/master pod logs,
-// events, describe of unhealthy pods) into the persisting sink. Gated by
-// report.collect_diagnostics against the run outcome (runErr is the phase error;
-// a body may also have marked t failed). Best-effort; never blocks teardown.
+// delete, gather the YB-namespace k8s failure evidence (tserver/master pod logs
+// under "Universe logs/<pod>/<role>/", every pod's describe, events) into the
+// persisting sink. Gated by report.collect_diagnostics against the run outcome
+// (runErr is the phase error; a body may also have marked t failed).
+// Best-effort; never blocks teardown.
 func (r *combinedRun) collectDiagnostics(ctx context.Context, runErr error) {
 	mode := r.t.Options.GetString("report.collect_diagnostics", core.DefaultCollectDiagnostics)
 	failed := runErr != nil || r.t.Failed()
@@ -932,7 +933,7 @@ func (r *combinedRun) collectDiagnostics(ctx context.Context, runErr error) {
 	if r.kube == nil {
 		return // backing never provisioned; no namespace client to reach
 	}
-	diag.CollectK8sDiagnostics(ctx, r.kube, r.info.Namespace, r.sink, r.logf)
+	diag.CollectUniverseK8sDiagnostics(ctx, r.kube, r.info.Namespace, r.sink, r.logf)
 }
 
 // sleepCtx waits d, returning early (with ctx.Err) if the context is cancelled.

@@ -388,6 +388,15 @@ func (p *Provider) prepareYBDeploy() error {
 	ctx, cancel := context.WithTimeout(context.Background(), p.cfg.DeployTimeout)
 	defer cancel()
 	store, td, err := ybdeploy.Provision(ctx, p.ybDeployCfg, mode, p.ampCfg.Namespace, p.logf)
+	if err != nil && mode == ybdeploy.ModeYBAProvisioned {
+		// yba_provisioned is the default backing, but it needs a deployable YBA
+		// (quay pull secret + a k8s/cloud provider). Where that isn't available,
+		// fall back to ampstack's built-in single-node yugabyted (the proven
+		// default backing) so the run still proceeds instead of failing the env.
+		p.log("sharedk8s: yba_provisioned backing failed (%v); falling back to built-in yugabyted", err)
+		mode = ybdeploy.ModeBuiltin
+		store, td, err = ybdeploy.Provision(ctx, p.ybDeployCfg, mode, p.ampCfg.Namespace, p.logf)
+	}
 	if err != nil {
 		return fmt.Errorf("sharedk8s: provision %s deployment: %w", mode, err)
 	}

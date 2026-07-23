@@ -116,14 +116,14 @@ func runRoundtrip(t *core.T) error {
 			return err
 		}
 		if int(count) != len(rows) {
-			return fmt.Errorf("row count = %d, want %d", count, len(rows))
+			return fmt.Errorf("table %s has %d rows after inserting %d through amp compute, want %d", table, count, len(rows), len(rows))
 		}
 		gotSum, err := client.QueryInt(t, "SELECT coalesce(sum(v),0) FROM "+table)
 		if err != nil {
 			return err
 		}
 		if gotSum != wantSum {
-			return fmt.Errorf("checksum = %d, want %d", gotSum, wantSum)
+			return fmt.Errorf("sum(v) over %s = %d, want %d (checksum mismatch on the round-tripped values)", table, gotSum, wantSum)
 		}
 		s.Set("checksum", gotSum)
 		return nil
@@ -182,14 +182,14 @@ func runRestartCompute(t *core.T) error {
 			return err
 		}
 		if int(count) != len(rows) {
-			return fmt.Errorf("after restart row count = %d, want %d", count, len(rows))
+			return fmt.Errorf("after restarting the endpoint container, table %s has %d rows, want %d (WAL replay through the stack lost rows)", table, count, len(rows))
 		}
 		gotSum, err := client.QueryInt(t, "SELECT coalesce(sum(v),0) FROM "+table)
 		if err != nil {
 			return err
 		}
 		if gotSum != wantSum {
-			return fmt.Errorf("after restart checksum = %d, want %d", gotSum, wantSum)
+			return fmt.Errorf("after restarting the endpoint container, sum(v) over %s = %d, want %d", table, gotSum, wantSum)
 		}
 		_, _ = client.Exec(t, "DROP TABLE IF EXISTS "+table)
 		return nil
@@ -234,14 +234,14 @@ func isolationRun(tag string) func(*core.T) error {
 				return err
 			}
 			if int(count) != len(rows) {
-				return fmt.Errorf("own row count = %d, want %d", count, len(rows))
+				return fmt.Errorf("own schema %s.t has %d rows tagged %q, want %d", schema, count, tag, len(rows))
 			}
 			foreign, err := client.QueryInt(t, fmt.Sprintf("SELECT count(*) FROM %s.t WHERE tag <> $1", schema), tag)
 			if err != nil {
 				return err
 			}
 			if foreign != 0 {
-				return fmt.Errorf("cross-contamination: %d rows with a foreign tag", foreign)
+				return fmt.Errorf("co-tenant isolation broken: %s.t has %d rows tagged with a foreign schema's tag, want 0", schema, foreign)
 			}
 			return nil
 		})

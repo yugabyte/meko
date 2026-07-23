@@ -68,8 +68,8 @@ func runWorkloadgenVerify(t *core.T) error {
 		if !report.OK {
 			for _, tr := range report.Tables {
 				if !tr.OK {
-					return fmt.Errorf("table %s mismatch: count %d/%d (actual/expected) checksum %s/%s",
-						tr.Table, tr.ActualCount, tr.ExpectedCount, tr.ActualChecksum, tr.ExpectedChecksum)
+					return fmt.Errorf("workloadgen verify failed on table %s: got count=%d checksum=%s, want count=%d checksum=%s (the loaded rows do not match the deterministic seed-derived expectation)",
+						tr.Table, tr.ActualCount, tr.ActualChecksum, tr.ExpectedCount, tr.ExpectedChecksum)
 				}
 			}
 		}

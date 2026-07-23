@@ -185,3 +185,33 @@ func TestSinkAdoptsExistingRun(t *testing.T) {
 	}
 	fp.mu.Unlock()
 }
+
+// An attachment emitted AFTER the test's finish event (teardown/report-kill
+// blobs race the finish on the reporter queue) must still land on the test's
+// result — the sink keeps the result id past testFinished.
+func TestSinkAttachmentAfterTestFinished(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{})
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+
+	res := &core.Result{TestName: "features/x", Status: core.StatusFailed}
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "features/x", Result: res})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestFinished, TestName: "features/x", Result: res})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventAttachment, TestName: "features/x",
+		Attachment: &core.Attachment{Name: "late.log", Kind: "log", Size: 4}, Content: []byte("late")})
+
+	var att struct {
+		ParentID string `json:"parent_id"`
+		Source   string `json:"source"`
+	}
+	if err := json.Unmarshal(fp.has(t, "POST /api/v1/attachments"), &att); err != nil {
+		t.Fatal(err)
+	}
+	if att.ParentID != "res-1" {
+		t.Errorf("late attachment parent_id = %q, want res-1", att.ParentID)
+	}
+	if att.Source == "" {
+		t.Errorf("late attachment source empty — bytes were not uploaded")
+	}
+	fp.has(t, "POST /api/v1/files/add")
+}

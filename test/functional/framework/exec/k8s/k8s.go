@@ -64,6 +64,7 @@ type Kubectl struct {
 	cfg     Config
 	run     Runner
 	startPF Starter
+	logf    func(string, ...any) // nil → no command logging
 }
 
 // New builds a Kubectl using the real kubectl binary.
@@ -76,6 +77,30 @@ func New(cfg Config) *Kubectl {
 
 // WithRunner overrides the one-shot runner (tests inject a scripted recorder).
 func (k *Kubectl) WithRunner(r Runner) *Kubectl { k.run = r; return k }
+
+// WithLogf enables debug logging of every kubectl command and its (truncated)
+// output through f. nil (the default) logs nothing.
+func (k *Kubectl) WithLogf(f func(string, ...any)) *Kubectl { k.logf = f; return k }
+
+// maxLogTail bounds the per-stream output echoed into the debug log so a chatty
+// command can't flood it — the full output still reaches callers via Result.
+const maxLogTail = 2000
+
+// CmdString renders an argv for a log line.
+func CmdString(argv []string) string { return strings.Join(argv, " ") }
+
+// LogTail formats a labeled, length-capped view of one output stream for the
+// debug log; empty input yields "".
+func LogTail(label, s string) string {
+	s = strings.TrimRight(s, "\n")
+	if s == "" {
+		return ""
+	}
+	if len(s) > maxLogTail {
+		s = s[:maxLogTail] + fmt.Sprintf("…(+%d bytes)", len(s)-maxLogTail)
+	}
+	return fmt.Sprintf(" %s=%q", label, s)
+}
 
 // WithStarter overrides the long-lived starter (tests inject a fake).
 func (k *Kubectl) WithStarter(s Starter) *Kubectl { k.startPF = s; return k }
@@ -116,7 +141,13 @@ func (k *Kubectl) base() []string {
 // its result, erroring on a non-zero exit.
 func (k *Kubectl) exec(ctx context.Context, stdin io.Reader, extra ...string) (execpkg.Result, error) {
 	argv := append(k.base(), extra...)
+	if k.logf != nil {
+		k.logf("exec: %s", CmdString(argv))
+	}
 	res, err := k.run(ctx, stdin, argv)
+	if k.logf != nil {
+		k.logf("exec done (exit %d):%s%s", res.ExitCode, LogTail("out", res.Stdout), LogTail("err", res.Stderr))
+	}
 	if err != nil {
 		return res, fmt.Errorf("kubectl %s: %w", strings.Join(extra, " "), err)
 	}
@@ -282,6 +313,44 @@ func (k *Kubectl) LogsPrevious(ctx context.Context, target, container string, ta
 		return "", err
 	}
 	return res.Stdout + res.Stderr, nil
+}
+
+// LogsAll returns up to tail lines per container of ALL of a pod's containers
+// (`kubectl logs --all-containers --prefix`), so a multi-container pod's
+// sidecars are captured too.
+func (k *Kubectl) LogsAll(ctx context.Context, target string, tail int) (string, error) {
+	return k.logsAll(ctx, target, tail, false)
+}
+
+// LogsAllPrevious is LogsAll for the PREVIOUS container instances (crash-loop
+// evidence). It errors when no container of the pod ever restarted.
+func (k *Kubectl) LogsAllPrevious(ctx context.Context, target string, tail int) (string, error) {
+	return k.logsAll(ctx, target, tail, true)
+}
+
+func (k *Kubectl) logsAll(ctx context.Context, target string, tail int, previous bool) (string, error) {
+	extra := []string{"logs", target, "--all-containers", "--prefix"}
+	if previous {
+		extra = append(extra, "--previous")
+	}
+	if tail > 0 {
+		extra = append(extra, "--tail", strconv.Itoa(tail))
+	}
+	res, err := k.exec(ctx, nil, extra...)
+	if err != nil {
+		return "", err
+	}
+	return res.Stdout + res.Stderr, nil
+}
+
+// Wide returns `kubectl get <kind> -o wide` — the at-a-glance listing
+// (restarts, node, IP, images) diagnostics want alongside per-pod detail.
+func (k *Kubectl) Wide(ctx context.Context, kind string) (string, error) {
+	res, err := k.exec(ctx, nil, "get", kind, "-o", "wide")
+	if err != nil {
+		return "", err
+	}
+	return res.Stdout, nil
 }
 
 // Describe returns `kubectl describe <kind> <name>` — the events and status a

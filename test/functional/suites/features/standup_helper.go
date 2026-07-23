@@ -3,7 +3,6 @@ package features
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -66,7 +65,8 @@ func StandUp(t *core.T, shape string) (*core.SetupResult, error) {
 		return nil, nil
 	}
 
-	f := &flow{t: t, cfg: cfg, prov: prov, td: &teardownStack{}, logf: runFlowLogf(t.Masker(), log.Printf)}
+	flowLogf, rlog := newFlowLog(t.Masker())
+	f := &flow{t: t, cfg: cfg, prov: prov, td: &teardownStack{}, logf: flowLogf, rlog: rlog}
 	teardown := func(ctx context.Context) error { return f.td.run(ctx, f.logf) }
 
 	if err := f.provisionBacking(t.Context); err != nil {

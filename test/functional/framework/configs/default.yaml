@@ -66,6 +66,13 @@ env:
   #   yba_provisioned → stand up an owned YBA + universe (env.universe provision_yba).
   # A shared control plane (sharedk8s deploy mode) serves every test off one
   # deployment, so its selection is knob-only — a per-test preference cannot apply.
+  # Empty → the built-in single-node yugabyted, unless a caller sets the knob.
+  # The amp run pipeline selects the backing per YB_BACKING (default yba →
+  # a YBA-provisioned kubernetes universe — RF=1 while the path is validated,
+  # apps.yba.k8s.replication_factor to raise — wiring the kubeconfig + quay
+  # pull secrets that provisioning needs); it sets env.yb_deploy=yba_provisioned
+  # itself for that branch. A framework-wide yba_provisioned default is wrong
+  # here — it would force a doomed YBA attempt on runs that carry no YBA creds.
   yb_deploy: ""
 
   # env/docker: single-container amp on a remote docker host.
@@ -388,7 +395,9 @@ apps:
     #   kubernetes — universe ON the same k8s cluster the YBA runs in (cheapest,
     #     fully-in-cluster); reads apps.yba.k8s.*; needs kubecontext + quay.
     #   gcp — GCE VMs (apps.yba.gcp.*); needs the gcp_key SA-JSON secret.
-    provider_type: "aws"
+    # Default kubernetes: the amp feature/regression tests stand a YBA-provisioned
+    # RF=3 universe up co-located in the same cluster as amp (no cloud creds).
+    provider_type: "kubernetes"
     # release_url: DB-release tarball the provision_yba flow imports before
     # universe-create. Empty → derived from versions.yugabytedb + aws.arch as the
     # public software.yugabyte.com el8 tarball.
@@ -469,6 +478,9 @@ apps:
       kube_domain: ""
       # use_in_cluster true → YBA uses its OWN in-cluster service account (no
       # kubeconfig sent); false (default) → kubeconfig from kubeconfig_secret.
+      # On GKE the in-cluster namespace SA lacks universe-create RBAC, so the run
+      # pipeline hands YBA a cluster-admin ServiceAccount-token kubeconfig
+      # (apps.yba.k8s.kubeconfig_secret) — which requires use_in_cluster=false.
       # kubeconfig_secret/pull_secret_secret name secrets; kubeconfig required at
       # a live run unless use_in_cluster.
       use_in_cluster: false
@@ -478,7 +490,8 @@ apps:
       region: "us-west1"
       zones:
         - code: "us-west1-b"
-      # Universe shape (cheap RF1: 1 tserver). Set 3 for RF3.
+      # Universe shape (cheap RF1: 1 tserver) while the YBA-backed path is still
+      # being validated. Set 3 for a production-like RF3 universe.
       num_nodes: 1
       replication_factor: 1
       volume_count: 1
@@ -833,12 +846,12 @@ report:
   # oldest are dropped and a dropped-count is recorded. 0 → unbounded.
   max_steps_retained: 10000
   max_metrics_retained: 10000
-  # When to collect Kubernetes failure diagnostics (controller/endpoint/YB pod
-  # logs — current AND previous-instance — plus namespace events and a describe
-  # of unhealthy pods) into the run's artifacts BEFORE teardown deletes the
-  # namespace. on_failure (default) collects only when the test failed; always
-  # collects every run; never disables it.
-  collect_diagnostics: on_failure
+  # When to collect Kubernetes diagnostics (controller/endpoint/YB pod logs —
+  # current AND previous-instance — plus namespace events and pod describes)
+  # into the run's artifacts BEFORE teardown deletes the namespace. always
+  # (default) collects every run so every result carries its logs; on_failure
+  # collects only when the test failed; never disables it.
+  collect_diagnostics: always
 
 # task.* keys are per-invocation `ampqa task <name>` arguments (task.host,
 # task.artifact, ...), not framework defaults, so they are not declared here
@@ -879,6 +892,39 @@ chaos:
   # bounds each Recover's own background context so recovery survives cancellation.
   wait_timeout: "3m"
   recover_timeout: "2m"
+
+# --- Global product health (suites/features/amp_product_health.go) ---
+# One end-to-end scenario: sample-app workloads run in the background THROUGH an
+# amp compute endpoint (client pod in the control-plane namespace) while the
+# foreground exercises the control plane (LSN fork, endpoint delete+recreate),
+# gated by a workloadgen consistency oracle and controller health. No enabled
+# flag — selection (--tag health) is intent; it skips without a k8s cluster or
+# the private sample-app jar secret.
+health:
+  # run_time is how long the three background workloads run.
+  run_time: "5m"
+  # client_image is the client-pod image the workloads run in. It MUST carry
+  # java, sh, coreutils (tail/cat), procps (pgrep/pkill), curl and tar.
+  client_image: "eclipse-temurin:21-jdk"
+  # client_pull_secret names a PRE-EXISTING docker-registry Secret in the
+  # control-plane namespace for a private client_image ("" → public image).
+  client_pull_secret: ""
+  # remote_dir is where the sample-app jar lands in the client pod.
+  remote_dir: "/opt/ampqa"
+  # jar_secret is the config secret authenticating the PRIVATE sample-app jar
+  # fetch (github_release in yugabyte/yb-stress-test): GH_PACKAGE_TOKEN.
+  jar_secret: "gh_package"
+  # Background sample-app load shape (kept small; the endpoint is one compute pod).
+  sample_tables: 2
+  sample_threads_read: 1
+  sample_threads_write: 2
+  # workloadgen consistency-oracle dataset (loaded on base before the fork,
+  # verified on the child and again on base at the end).
+  verify_tables: 4
+  verify_rows: 500
+  # Timeouts.
+  ready_timeout: "5m"
+  verify_timeout: "5m"
 
 # --- Stress suite (suites/stress) ---
 stress:

@@ -481,7 +481,13 @@ func applyDefaults(cfg *Config) {
 // WithKube replaces the namespace-bound kubectl (carrying its runner + starter),
 // so a caller (env/exclusivek8s) or a test can drive the app through an injected
 // transport. The kube's namespace should match cfg.Namespace.
-func (a *App) WithKube(k *k8s.Kubectl) *App { a.kube = k; return a }
+func (a *App) WithKube(k *k8s.Kubectl) *App {
+	if k != nil && a.logf != nil {
+		k.WithLogf(a.logf)
+	}
+	a.kube = k
+	return a
+}
 
 // Kube returns the app's namespace-bound kubectl (carrying its runner + starter),
 // so a caller can gather failure diagnostics from the amp namespace before
@@ -523,7 +529,13 @@ func (a *App) WithEnsureDB(f func(ctx context.Context, ci pg.ConnInfo, dbName st
 }
 
 // WithLogf overrides the logger (nil silences).
-func (a *App) WithLogf(f func(format string, args ...any)) *App { a.logf = f; return a }
+func (a *App) WithLogf(f func(format string, args ...any)) *App {
+	a.logf = f
+	if a.kube != nil {
+		a.kube.WithLogf(f)
+	}
+	return a
+}
 
 func (a *App) log(format string, args ...any) {
 	if a.logf != nil {
@@ -913,7 +925,13 @@ func (a *App) deployController(ctx context.Context) error {
 // helmTemplate renders the controller chart to a manifest string.
 func (a *App) helmTemplate(ctx context.Context) (string, error) {
 	argv := a.helmTemplateArgs()
+	if a.logf != nil {
+		a.logf("exec: %s", k8s.CmdString(argv))
+	}
 	res, err := a.helmRun(ctx, nil, argv)
+	if a.logf != nil {
+		a.logf("exec done (exit %d):%s%s", res.ExitCode, k8s.LogTail("out", res.Stdout), k8s.LogTail("err", res.Stderr))
+	}
 	if err != nil {
 		return "", fmt.Errorf("helm template: %w", err)
 	}

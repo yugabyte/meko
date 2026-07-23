@@ -32,7 +32,7 @@ func init() {
 		Tags:        []string{"nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Prove storage/compute separation: delete an endpoint and recreate it on the same branch, asserting the dataset survives.",
-		Params:      []string{"functional", "env.ampstack", "apps.ybk8s"},
+		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpEndpointLifecycle,
 	})
 }
@@ -87,7 +87,7 @@ func endpointLifecycleSteps(ctx context.Context, cl ampCtl, proj ampProject, con
 		return fmt.Errorf("count seeded rows: %w", err)
 	}
 	if seeded != lifecycleRows {
-		return fmt.Errorf("seeded %d rows, expected %d", seeded, lifecycleRows)
+		return fmt.Errorf("after seeding, table %s has %d rows, want %d (the generate_series seed insert did not produce the expected row count)", lifecycleTable, seeded, lifecycleRows)
 	}
 
 	// Delete the endpoint: it must vanish from the list and refuse connections.
@@ -100,11 +100,11 @@ func endpointLifecycleSteps(ctx context.Context, cl ampCtl, proj ampProject, con
 	}
 	for _, e := range eps {
 		if e.ID == e1.ID {
-			return fmt.Errorf("deleted endpoint %s is still listed", e1.ID)
+			return fmt.Errorf("deleted endpoint %s is still listed among the branch's endpoints, want it gone", e1.ID)
 		}
 	}
 	if err := refused(ctx, e1); err == nil {
-		return fmt.Errorf("expected the retired endpoint to refuse connections, but it accepted one")
+		return fmt.Errorf("a connection to deleted endpoint %s succeeded, want it refused (a retired endpoint's compute is gone and must not accept connections)", e1.ID)
 	}
 
 	// Recreate an endpoint on the SAME branch: the data survives (shared storage).
