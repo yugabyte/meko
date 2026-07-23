@@ -220,6 +220,15 @@ jobs:
           # v3 defaults to the Actions run summary; keep the standalone
           # per-test PR check instead.
           use-actions-summary: false
+      - name: Upload unit-test JUnit
+        # The report portal's catalog job ingests this into per-test results.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-compute-unit
+          path: target/nextest/ci/junit.xml
+          retention-days: 14
+
 
   integration:
     name: Compute — integration tests
@@ -357,6 +366,15 @@ jobs:
           path: controller/junit.xml
           reporter: java-junit
           use-actions-summary: false
+      - name: Upload test JUnit
+        # The report portal's catalog job ingests this into per-test results.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-controller
+          path: controller/junit.xml
+          retention-days: 14
+
 
   ui:
     name: UI — typecheck & build
