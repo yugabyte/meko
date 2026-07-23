@@ -67,6 +67,21 @@ writer's candidate buffer, so they share its durability contract: flushed
 with the window, and a buffer lost to a crash implies `consistent_lsn`
 didn't advance, so the producing record replays and re-emits.
 
+**Insert invariant: no candidate lands at `due_lsn <=` the current
+cutoff**, so GC (which acts at `due_lsn <= cutoff`) never races a fresh
+insert and a later tick always selects it. WAL-driven candidates satisfy
+it structurally — at insert time `due_lsn > consistent_lsn >= cutoff`.
+The materialiser's images can be stamped at an old LSN (the folded
+delta's, possibly `<= cutoff` by flush time), so its candidate flush
+clamps each row to `due_lsn = max(image_lsn, applied_gc_cutoff_lsn + 1)`
+— safe for a trim candidate, which only sets when the block is next
+visited (the trim is greedy to the cutoff regardless). The flush reads
+the cutoff without locking it across the INSERT, so a concurrent tick
+can advance the cutoff past the clamped value and skip that one row; it
+waits for the periodic full rescan (or a restart), and the block's next
+base re-covers the garbage. Acceptable because the dequeue is exact-PK
+and never deletes anything un-acted, with or without the invariant.
+
 ## Drain
 
 Each `gc_period` tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`)
@@ -81,8 +96,33 @@ runs:
    the *old* cutoff before deleting anything they might need. Reads never
    wait for GC; GC waits for reads.
 3. **Select.** `select_due_pending_gc`: up to `gc_drain_limit`
-   (default 10 000) candidates with `due_lsn <= cutoff`, oldest-first,
-   one bounded range scan per placement bucket.
+   (default 10 000) candidates with
+   `gc_completed_lsn < due_lsn <= cutoff`, oldest-first, one bounded
+   range scan per placement bucket. `gc_completed_lsn` is the drain's
+   **progress floor**: every candidate at or below it has been handled —
+   dequeued, moved to the deferred list, or parked as unknown-kind — so
+   the scan seeks past those rows' YB delete tombstones instead of
+   re-skimming them from the queue head every tick (only a rare
+   clamp-race straggler can sit below it, which the periodic rescan
+   sweeps). The floor is in-memory only — 0 after a restart, so the first
+   ticks rescan from the head — and purely a seek hint, never a delete
+   bound: a too-low floor costs a redundant scan, nothing else.
+
+   **Periodic full rescan.** Every 240th tick (~2 h at the default
+   30 s period) the select floor is forced to 0, so the scan starts from
+   the queue head (still bounded by the cutoff). This reclaims a
+   candidate stranded *below* the floor — which
+   happens in exactly one way: the materialiser's `due_lsn` clamp (see
+   below) reads a cutoff that a concurrent tick then advances the floor
+   past before the candidate's INSERT lands. Such a row is invisible to
+   every seeking select, so on a pageserver that never restarts it (and
+   its garbage) would linger indefinitely; the periodic scan bounds that
+   to ~2 h. It is a pure re-skim — rows the normal ticks already drained
+   are gone, so it returns the same live rows plus any straggler, paying
+   only the tombstone-skip cost the floor normally avoids. It does **not**
+   catch a leak with *no* queue row (e.g. a materialiser buffer lost to a
+   crash before flushing); that class waits on a future full rel-directory
+   sweep (see the design doc's full-sweep alternative).
 4. **Act**, ordered **drop → shrink → trim** (coarser first — a dropped
    fork moots its own shrink/trim candidates):
    - **drop** (`gc_drop_fork`): delete the fork's `pages` rows
@@ -99,12 +139,20 @@ runs:
 
    Drop first consults the writer's pending-materialise set (jobs
    queued or in flight, plus threshold-crossed keys awaiting dispatch):
-   a drop event whose fork appears there is **deferred** — left queued
-   for a later tick — because a pending job back-dates its image INSERT
-   to the folded delta's LSN, so it could re-insert one folded image
-   per straggling block right after the DELETE — rows no future
-   candidate revisits on a dropped fork. A dropped fork gets no new
-   jobs or tallies, so deferral converges within a tick or two.
+   a drop event whose fork appears there is **deferred** — because a
+   pending job's image INSERT lands at the folded delta's LSN (below the
+   drop), so it could re-insert one folded image per straggling block
+   right after the DELETE — rows no future candidate revisits on a
+   dropped fork. A deferred event moves to an **in-memory deferred list** (the
+   full row: PK + `due_lsn`), re-checked each tick and acted once the
+   fork's pending work clears. The list — not re-selection — is its
+   retry path: the floor may pass a deferred row's `due_lsn` the moment
+   the tick succeeds (deferral never holds the floor back), making it
+   invisible to selects. The row itself stays on disk (nothing is
+   dequeued before it is acted), so a crash loses only the list: the
+   restart resets the floor to 0 and the row is re-selected, then
+   re-deferred or acted. A dropped fork gets no new jobs or tallies, so
+   deferral converges within a tick or two.
 
    The same race exists for shrink, but there it is left unhandled:
    the leaked image is bounded (at most one per tail block with a job
@@ -131,6 +179,15 @@ runs:
    The cost: a visited block's duplicate trim candidates outside the
    batch stay queued and no-op re-trim later, bounded by the every-n
    sampler and the materialiser buffer's same-block folding.
+6. **Advance the floor**, only now — after act and dequeue both
+   succeeded, so a failed tick leaves it and the failed batch
+   re-selects. An **uncapped** tick (everything due handled) advances
+   the floor to the cutoff; a **capped** tick only to `last selected
+   due_lsn − 1`, since the limit can split that group's ties and the −1
+   keeps them selectable. Unchanged on an empty select. Deferred drop
+   events don't hold the floor back (the list owns them); an unknown-kind
+   row is alarmed via `correctness_errors_total` and left on disk, never
+   dequeued.
 
 The whole drain (select, actions, dequeue) runs on a dedicated
 **`yb-pageserver:gc` connection pool** sized to the action width, so a
@@ -160,13 +217,13 @@ one doc.)
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `pageserver_yb_gc_drain_lag_bytes` | UIntGauge | — | Residual `cutoff − due.last().due_lsn` on a budget-capped tick (the due span the tick couldn't reach); 0 when it drained everything due. 0 baseline while keeping up; grows once inserts outrun the drain — **the backlog/starvation alarm**. |
+| `pageserver_yb_gc_drain_lag_bytes` | UIntGauge | — | Residual `cutoff − due.last().due_lsn` on a budget-capped tick (the due span the tick couldn't reach); 0 when it drained everything due. 0 baseline while keeping up; grows once inserts outrun the drain — **the backlog/starvation alarm**. NB: during a backlog the ~2 h periodic full rescan reads artificially high for one sample (it scans from the head, so `due.last()` is older); alert on a rate/smoothed value, not a raw sample. |
 | `pageserver_yb_gc_applied_cutoff_lsn` | UIntGauge | — | Current GC cutoff (`applied_gc_cutoff_lsn`), per tick. `pageserver_last_record_lsn − this` = retained-history window. Frozen while the queue grows ⇒ cutoff pinned (lease/child/`consistent_lsn`), not a slow drain. |
 | `pageserver_yb_gc_candidates_emitted_total` | IntCounter | `path` (`ingest`/`materialiser`/`drop`/`shrink`) | Candidates emitted into `pending_gc`: trim by producer path (post `gc_candidate_every_n_bases` sampling), drop/shrink events unsampled. `rate()` = candidate insert rate. |
 | `pageserver_yb_gc_candidates_read_total` | IntCounter | — | Rows the drain's `pending_gc` select returned per tick (pre-routing). `== gc_drain_limit` ⇒ capped; `≫ removed` ⇒ read but not cleared. |
 | `pageserver_yb_gc_candidates_removed_total` | IntCounter | — | Rows deleted from `pending_gc` by the dequeue (= the tick's acted rows; ≈ `read` at steady state). `rate(emitted) − rate(removed)` = queue growth. |
 | `pageserver_yb_gc_pages_rows_deleted_total` | IntCounter | — | `pageserver.pages` rows deleted by the drain (trim / drop / shrink). `rate()` = reclamation throughput. |
-| `pageserver_yb_gc_drop_deferred_total` | IntCounter | — | Drop events a tick left queued because their fork had a materialise job pending. Occasional increments are normal; sustained growth means a wedged job is pinning that fork's reclamation. |
+| `pageserver_yb_gc_drop_deferred_total` | IntCounter | — | Drop events a tick held on the in-memory deferred list because their fork had a materialise job pending (re-counted every tick they stay held). Occasional increments are normal; sustained growth means a wedged job is pinning that fork's reclamation. |
 | `pageserver_yb_gc_drain_ticks_total` | IntCounter | `outcome` (`drained`/`capped`/`empty`/`lease_grace`/`disabled`/`error`) | One increment per drain-loop iteration, by how it ended. `rate(capped)/rate(all)` = keep-up alarm; `lease_grace`/`disabled` moving = GC silently gated off; `rate(all)` = tick cadence. |
 
 ## Troubleshooting

@@ -278,10 +278,12 @@ pub(crate) static GC_CANDIDATES_EMITTED: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-/// Drop events a drain tick left queued because their fork had a
-/// materialise job pending (acting would race the job's back-dated
-/// image INSERT). Occasional increments are normal; sustained growth
-/// for the same fork means a wedged job is pinning its reclamation.
+/// Drop events a drain tick held on the in-memory deferred list because
+/// their fork had a materialise job pending (acting would race the
+/// job's later image INSERT, stamped at a folded LSN below the drop);
+/// re-counted every tick they stay held. Occasional increments are
+/// normal; sustained growth for the same fork means a wedged job is
+/// pinning its reclamation.
 pub(crate) static GC_DROP_DEFERRED: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "pageserver_yb_gc_drop_deferred_total",

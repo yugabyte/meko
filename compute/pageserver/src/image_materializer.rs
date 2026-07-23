@@ -35,6 +35,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, info, info_span};
 use utils::id::BranchId;
 use utils::lsn::Lsn;
+use utils::simple_rcu::Rcu;
 use wal_decoder::models::record::NeonWalRecord;
 
 use crate::page_server::WalRedoManager;
@@ -100,6 +101,31 @@ const GC_TRIM_CANDIDATE_BUFFER_FLUSH_ROWS: usize = 500;
 const GC_TRIM_CANDIDATE_BUFFER_FLUSH_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(5);
 
+/// Build `pending_gc` rows from buffered candidates, clamping each
+/// due_lsn to `cutoff + 1` (see [`PendingGcBuffer::flush_gc_candidates`]
+/// for why). Split out from the flush so the clamp is unit-testable
+/// without a `PageStore`.
+fn clamp_candidate_rows(
+    entries: impl IntoIterator<Item = (GcBlockIdent, Lsn)>,
+    cutoff: Lsn,
+) -> Vec<crate::page_store::PendingGcRow> {
+    let due_floor = Lsn(cutoff.0 + 1);
+    entries
+        .into_iter()
+        .map(|((spcnode, dbnode, relnode, forknum, blknum), due_lsn)| {
+            crate::page_store::PendingGcRow {
+                bucket_id: 0, // computed by put_pending_gc on insert
+                spcnode,
+                dbnode,
+                relnode,
+                forknum,
+                blknum,
+                due_lsn: due_lsn.max(due_floor),
+            }
+        })
+        .collect()
+}
+
 /// Buffered, **best-effort** writer for the materialiser's GC trim
 /// candidates: a crash or failed flush loses up to one buffer, by
 /// design — trims are cumulative, so the block's next candidate
@@ -109,6 +135,11 @@ const GC_TRIM_CANDIDATE_BUFFER_FLUSH_INTERVAL: std::time::Duration =
 pub(crate) struct PendingGcBuffer {
     branch_id: BranchId,
     page_store: Arc<PageStore>,
+    /// The timeline's published GC cutoff, shared with
+    /// `Timeline::applied_gc_cutoff_lsn`. Read (no guard held) at flush
+    /// to clamp each candidate's due_lsn above the cutoff — see
+    /// [`Self::flush_gc_candidates`].
+    applied_gc_cutoff: Arc<Rcu<Lsn>>,
     /// Block identity -> latest due_lsn seen.
     candidates: std::sync::Mutex<std::collections::HashMap<GcBlockIdent, Lsn>>,
     /// Signalled when the buffer crosses `GC_TRIM_CANDIDATE_BUFFER_FLUSH_ROWS`.
@@ -116,10 +147,15 @@ pub(crate) struct PendingGcBuffer {
 }
 
 impl PendingGcBuffer {
-    fn new(branch_id: BranchId, page_store: Arc<PageStore>) -> Self {
+    fn new(
+        branch_id: BranchId,
+        page_store: Arc<PageStore>,
+        applied_gc_cutoff: Arc<Rcu<Lsn>>,
+    ) -> Self {
         Self {
             branch_id,
             page_store,
+            applied_gc_cutoff,
             candidates: std::sync::Mutex::new(std::collections::HashMap::new()),
             flush_ready: tokio::sync::Notify::new(),
         }
@@ -157,23 +193,28 @@ impl PendingGcBuffer {
 
     /// Flush everything buffered. On error rows are dropped, not
     /// retried — best-effort by design (see the struct doc).
+    ///
+    /// Clamp each due_lsn up to `cutoff + 1` before insert, upholding the
+    /// GC invariant that new candidates land above the cutoff (GC acts
+    /// only at `due_lsn <= cutoff`), so a fresh candidate can't race an
+    /// in-flight drain and is guaranteed to be picked up by a later tick.
+    /// WAL candidates hold this structurally; a materialiser image is
+    /// stamped at its folded chain's LSN, which can be `<= cutoff` by
+    /// flush time, hence the clamp. Raising due_lsn is safe: it only sets
+    /// when the block is next visited — the trim deletes below the
+    /// block's newest base as of the cutoff regardless.
+    ///
+    /// The cutoff is read without locking it across the insert, so a
+    /// concurrent tick can advance it past the clamped value and skip the
+    /// row. Bounded: it waits for the periodic full rescan (or a
+    /// restart), and the block's next base re-covers the garbage. Locking
+    /// across the insert would avoid it but stall every GC tick behind
+    /// these flushes.
     async fn flush_gc_candidates(&self) {
-        let rows: Vec<crate::page_store::PendingGcRow> = {
+        let cutoff = Lsn(self.applied_gc_cutoff.read().0);
+        let rows = {
             let mut guard = self.candidates.lock().unwrap();
-            guard
-                .drain()
-                .map(|((spcnode, dbnode, relnode, forknum, blknum), due_lsn)| {
-                    crate::page_store::PendingGcRow {
-                        bucket_id: 0, // computed by put_pending_gc on insert
-                        spcnode,
-                        dbnode,
-                        relnode,
-                        forknum,
-                        blknum,
-                        due_lsn,
-                    }
-                })
-                .collect()
+            clamp_candidate_rows(guard.drain(), cutoff)
         };
         if rows.is_empty() {
             return;
@@ -285,6 +326,7 @@ impl ImageMaterializer {
         in_flight: Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
         scale_factor: f64,
         gc_candidates_enabled: bool,
+        applied_gc_cutoff: Arc<Rcu<Lsn>>,
     ) -> MaterializerTask {
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
@@ -300,7 +342,11 @@ impl ImageMaterializer {
             CancellationToken,
             tokio::task::JoinHandle<()>,
         )> = gc_candidates_enabled.then(|| {
-            let buffer = Arc::new(PendingGcBuffer::new(branch_id, Arc::clone(&fpu_page_store)));
+            let buffer = Arc::new(PendingGcBuffer::new(
+                branch_id,
+                Arc::clone(&fpu_page_store),
+                applied_gc_cutoff,
+            ));
             let flusher_cancel = CancellationToken::new();
             let handle = tokio::spawn(
                 Arc::clone(&buffer)
@@ -939,4 +985,30 @@ fn parse_chain(chain: &[std::sync::Arc<PageRow>]) -> Result<RedoChain> {
     // does the same reverse before its own walredo call).
     records.reverse();
     Ok((base_img, records))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The flush clamp lifts a candidate's due_lsn to `cutoff + 1` when
+    /// it sits at or below the cutoff (a materialiser image stamped at
+    /// an old folded LSN), and leaves an above-cutoff one untouched.
+    #[test]
+    fn clamp_lifts_due_lsn_to_above_cutoff() {
+        let cutoff = Lsn(100);
+        let ident = |blk: i64| (1663i64, 5i64, 16400i64, 0i16, blk);
+        let rows = clamp_candidate_rows(
+            [
+                (ident(7), Lsn(40)),  // below cutoff → lifted
+                (ident(8), Lsn(100)), // at cutoff → lifted
+                (ident(9), Lsn(500)), // above cutoff → unchanged
+            ],
+            cutoff,
+        );
+        let due = |blk: i64| rows.iter().find(|r| r.blknum == blk).unwrap().due_lsn;
+        assert_eq!(due(7), Lsn(101), "below cutoff → cutoff+1");
+        assert_eq!(due(8), Lsn(101), "at cutoff → cutoff+1");
+        assert_eq!(due(9), Lsn(500), "above cutoff → unchanged");
+    }
 }

@@ -2522,22 +2522,21 @@ impl PageStore {
         Ok(())
     }
 
-    /// Fetch up to `limit` due candidates (`due_lsn <= cutoff`),
+    /// Fetch up to `limit` due candidates (`floor < due_lsn <= cutoff`),
     /// globally oldest-first.
     ///
-    /// TODO(gc_completed_lsn): add a persisted low-watermark lower
-    /// bound so the scan seeks past drained-candidate tombstones. Needs
-    /// an insert-side floor: a historical image (a read-side materialise
-    /// under a lease) can carry a due_lsn below the watermark and be
-    /// skipped forever, so emitters must clamp due_lsn to the watermark
-    /// once it exists.
+    /// `floor` is the caller's drain progress — a seek hint that skips
+    /// the tombstones of already-drained rows; `Lsn(0)` scans from the
+    /// head.
     pub async fn select_due_pending_gc(
         &self,
         branch_id: BranchId,
+        floor: Lsn,
         cutoff: Lsn,
         limit: usize,
     ) -> Result<Vec<PendingGcRow>> {
         let branch_s = branch_id.to_string();
+        let floor_i = floor.0 as i64;
         let cutoff_i = cutoff.0 as i64;
         let limit_i = limit as i64;
 
@@ -2549,7 +2548,7 @@ impl PageStore {
         // (branch_id, bucket_id).
         let sql = {
             use std::fmt::Write as _;
-            let mut s = String::with_capacity(GC_BUCKETS as usize * 220 + 96);
+            let mut s = String::with_capacity(GC_BUCKETS as usize * 240 + 96);
             s.push_str("SELECT * FROM (");
             for bucket in 0..GC_BUCKETS {
                 if bucket > 0 {
@@ -2559,7 +2558,8 @@ impl PageStore {
                     s,
                     "(SELECT bucket_id, spcnode, dbnode, relnode, forknum, blknum, due_lsn \
                       FROM \"{}\".pending_gc \
-                      WHERE branch_id = $1 AND bucket_id = {bucket} AND due_lsn <= $2 \
+                      WHERE branch_id = $1 AND bucket_id = {bucket} \
+                        AND due_lsn > $4 AND due_lsn <= $2 \
                       ORDER BY due_lsn LIMIT $3)",
                     self.schema
                 )
@@ -2571,7 +2571,7 @@ impl PageStore {
 
         let rows = self
             .ysql_client
-            .query(&sql, &[&branch_s, &cutoff_i, &limit_i])
+            .query(&sql, &[&branch_s, &cutoff_i, &limit_i, &floor_i])
             .await
             .context("select_due_pending_gc")?;
         rows.iter()
@@ -6112,7 +6112,7 @@ mod tests {
     /// (Not `Lsn::MAX` — the cutoff crosses through i64 in SQL.)
     async fn all_pending(store: &PageStore, branch: BranchId) -> Vec<PendingGcRow> {
         store
-            .select_due_pending_gc(branch, Lsn(i64::MAX as u64), 1_000_000)
+            .select_due_pending_gc(branch, Lsn(0), Lsn(i64::MAX as u64), 1_000_000)
             .await
             .unwrap()
     }
@@ -6163,7 +6163,7 @@ mod tests {
 
         // Gate: only due_lsn ≤ 10.
         let due = store
-            .select_due_pending_gc(branch, Lsn(10), 1000)
+            .select_due_pending_gc(branch, Lsn(0), Lsn(10), 1000)
             .await
             .unwrap();
         let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
@@ -6171,11 +6171,59 @@ mod tests {
 
         // Limit keeps the oldest.
         let due = store
-            .select_due_pending_gc(branch, Lsn(20), 5)
+            .select_due_pending_gc(branch, Lsn(0), Lsn(20), 5)
             .await
             .unwrap();
         let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
         assert_eq!(dues, vec![1, 2, 3, 4, 5], "limit must keep oldest");
+    }
+
+    /// Scenario: the drain resumes from its progress floor
+    /// (`gc_completed_lsn`). The floor is exclusive (`due_lsn > floor`)
+    /// because it is set to `last drained due_lsn − 1`: a limit can
+    /// split a group of equal due_lsns mid-group, and the −1 keeps the
+    /// boundary group selectable on the next tick.
+    #[tokio::test]
+    async fn pending_gc_select_floor_gates_and_keeps_boundary_ties() {
+        let (store, _schema) = make_store("gc_floor").await;
+        let branch = rand_branch();
+
+        // Three blocks tied at due 10 (one per distinct blknum), plus
+        // singles at 5 and 15.
+        let batch = vec![
+            gc_cand(16401, 0, 1, 5),
+            gc_cand(16401, 0, 2, 10),
+            gc_cand(16401, 0, 3, 10),
+            gc_cand(16401, 0, 4, 10),
+            gc_cand(16401, 0, 5, 15),
+        ];
+        store.put_pending_gc(branch, &batch).await.unwrap();
+
+        // A capped tick drains {5, 10} — splitting the tie group at 10.
+        let due = store
+            .select_due_pending_gc(branch, Lsn(0), Lsn(20), 2)
+            .await
+            .unwrap();
+        assert_eq!(due.len(), 2);
+        assert_eq!(due.last().unwrap().due_lsn, Lsn(10));
+        store.dequeue_pending_gc_rows(branch, &due).await.unwrap();
+
+        // floor = last due − 1 = 9: the tie group's survivors at 10 must
+        // still be selectable (an exclusive floor at 10 would skip them).
+        let due = store
+            .select_due_pending_gc(branch, Lsn(9), Lsn(20), 1000)
+            .await
+            .unwrap();
+        let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
+        assert_eq!(dues, vec![10, 10, 15], "boundary ties must re-select");
+
+        // The floor gate itself is exclusive: floor = 10 skips the ties.
+        let due = store
+            .select_due_pending_gc(branch, Lsn(10), Lsn(20), 1000)
+            .await
+            .unwrap();
+        let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
+        assert_eq!(dues, vec![15], "floor is exclusive");
     }
 
     /// Scenario: the dequeue removes the selected due rows and ONLY
@@ -6191,7 +6239,7 @@ mod tests {
         store.put_pending_gc(branch, &batch).await.unwrap();
 
         let drained = store
-            .select_due_pending_gc(branch, Lsn(30), 1000)
+            .select_due_pending_gc(branch, Lsn(0), Lsn(30), 1000)
             .await
             .unwrap();
         assert_eq!(drained.len(), 3);
@@ -6235,7 +6283,7 @@ mod tests {
 
         // limit 1: the tick only selects (5, blk 7) — capped.
         let drained = store
-            .select_due_pending_gc(branch, Lsn(30), 1)
+            .select_due_pending_gc(branch, Lsn(0), Lsn(30), 1)
             .await
             .unwrap();
         assert_eq!(drained.len(), 1);
@@ -6253,7 +6301,7 @@ mod tests {
         assert_eq!(left, vec![(8, 12), (7, 15), (7, 25), (7, 45)]);
         // The leftovers re-select on the next tick — nothing is lost.
         let next = store
-            .select_due_pending_gc(branch, Lsn(30), 1000)
+            .select_due_pending_gc(branch, Lsn(0), Lsn(30), 1000)
             .await
             .unwrap();
         assert_eq!(next.len(), 3, "due leftovers re-select next tick");
@@ -6278,7 +6326,7 @@ mod tests {
         let mut ticks_used = 0;
         for _tick in 0..5 {
             let batch = store
-                .select_due_pending_gc(branch, Lsn(20), 2)
+                .select_due_pending_gc(branch, Lsn(0), Lsn(20), 2)
                 .await
                 .unwrap();
             if batch.is_empty() {
@@ -6322,7 +6370,7 @@ mod tests {
         // The drain dequeues the rows the select returned (bucket_id
         // populated) — all kinds in one call.
         let due = store
-            .select_due_pending_gc(branch, Lsn(100), 1000)
+            .select_due_pending_gc(branch, Lsn(0), Lsn(100), 1000)
             .await
             .unwrap();
         assert_eq!(due.len(), 3);

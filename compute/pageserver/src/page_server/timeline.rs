@@ -193,7 +193,12 @@ pub struct Timeline {
     // we _intend_ to GC (i.e. the PITR cutoff), this LSN records where we actually last did it.
     // Because PITR interval is mutable, it's possible for this LSN to be earlier or later than
     // the planned GC cutoff.
-    pub applied_gc_cutoff_lsn: Rcu<Lsn>,
+    // Arc'd so the materialiser's candidate flush can read it to clamp
+    // due_lsns above the cutoff (see `PendingGcBuffer`).
+    pub applied_gc_cutoff_lsn: Arc<Rcu<Lsn>>,
+
+    /// See [`GcDrain`].
+    pub(crate) gc_drain: GcDrain,
 
     // List of child timelines and their branch points. This is needed to avoid
     // garbage collecting data that is still needed by the child timelines.
@@ -283,10 +288,6 @@ pub struct Timeline {
     /// A channel to send async requests to prepare a basebackup for the basebackup cache.
     basebackup_cache: Arc<BasebackupCache>,
 
-    /// Dedicated GC-drain `PageStore` (see
-    /// `TenantSharedResources::gc_page_store`).
-    gc_page_store: Arc<crate::page_store::PageStore>,
-
     /// Basebackup will collect the count and store it here. Used for reldirv2 rollout.
     pub(crate) db_rel_count: ArcSwapOption<(usize, usize)>,
 }
@@ -353,6 +354,34 @@ impl GcInfo {
     pub(crate) fn lsn_covered_by_lease(&self, lsn: Lsn) -> bool {
         self.leases.contains_key(&lsn)
     }
+}
+
+/// The GC drain's in-memory progress. Reset to defaults on restart.
+#[derive(Default)]
+pub(crate) struct GcDrainProgress {
+    /// Select floor: everything at `due_lsn <= completed_lsn` has been
+    /// handled — dequeued, moved to the deferred list, or parked as
+    /// unknown-kind — so the select seeks past it; only a rare clamp-race
+    /// straggler can hide below (the rescan sweeps it). A seek hint,
+    /// never a delete bound. 0 on restart.
+    pub(crate) completed_lsn: Lsn,
+
+    /// Drop events deferred while their fork has a materialise job
+    /// pending, held until it clears. The row stays on disk while
+    /// deferred (dequeued only once acted), so a crash loses just this
+    /// list and the row re-selects after restart.
+    pub(crate) deferred_drops: Vec<crate::page_store::PendingGcRow>,
+
+    /// Drives the periodic full rescan.
+    pub(crate) tick_count: u64,
+}
+
+/// The GC drain's connection pool and in-memory progress.
+pub(crate) struct GcDrain {
+    /// Dedicated pool for the whole drain, off the ingest/materialiser
+    /// lanes and compute reads.
+    pub(crate) page_store: Arc<crate::page_store::PageStore>,
+    pub(crate) progress: std::sync::Mutex<GcDrainProgress>,
 }
 
 /// The `GcInfo` component describing which Lsns need to be retained.  Functionally, this
@@ -2057,6 +2086,11 @@ impl Timeline {
         // relation sizes into a compute permanently).
         let (replay_caught_up_tx, replay_caught_up_rx) = tokio::sync::watch::channel(false);
 
+        // Created before the writer/materialiser block: the materialiser's
+        // GC-candidate flush holds a clone to clamp due_lsns above the
+        // published cutoff.
+        let applied_gc_cutoff_lsn = Arc::new(Rcu::new(metadata.latest_gc_cutoff_lsn()));
+
         let (page_writer, page_writer_flush_task, image_materializer_task) = {
             let compute_ps = &resources.compute_page_store;
             let internal_ps = &resources.fpu_page_store;
@@ -2129,6 +2163,7 @@ impl Timeline {
                         in_flight,
                         conf.scale_factor,
                         enable_gc,
+                        applied_gc_cutoff_lsn.clone(),
                     ))
                 }
                 _ => None,
@@ -2198,7 +2233,11 @@ impl Timeline {
 
                 gc_info: std::sync::RwLock::new(GcInfo::default()),
 
-                applied_gc_cutoff_lsn: Rcu::new(metadata.latest_gc_cutoff_lsn()),
+                applied_gc_cutoff_lsn,
+                gc_drain: GcDrain {
+                    page_store: resources.gc_page_store,
+                    progress: std::sync::Mutex::new(GcDrainProgress::default()),
+                },
                 initdb_lsn: metadata.initdb_lsn(),
 
                 current_logical_size: if disk_consistent_lsn.is_valid() {
@@ -2246,8 +2285,6 @@ impl Timeline {
                 wait_lsn_log_slow: tokio::sync::Semaphore::new(1),
 
                 basebackup_cache: resources.basebackup_cache,
-
-                gc_page_store: resources.gc_page_store,
 
                 db_rel_count: ArcSwapOption::from_pointee(None),
             };

@@ -660,8 +660,9 @@ impl PageWriter {
         }
     }
 
-    /// Fork identities that could still receive a back-dated
-    /// materialised image (why that matters: `defer_busy_drop_events`).
+    /// Fork identities that could still receive a materialised image
+    /// stamped at an old (folded) LSN (why that matters:
+    /// `defer_busy_drop_events`).
     /// The set is complete with exactly two sources: `in_flight`
     /// covers queued + running jobs (registered at dispatch BEFORE
     /// enqueue, cleared after the batch's INSERT lands) and
@@ -3386,7 +3387,8 @@ mod tests {
     /// residue a later flush may still dispatch) — and go quiet once
     /// both clear. Guards the drop deferral against the
     /// residue-dispatch race: a drop event acted while either
-    /// population held its fork could race a back-dated image INSERT.
+    /// population held its fork could race an image INSERT at an old
+    /// (folded) LSN.
     #[tokio::test]
     async fn pending_materialise_forks_cover_inflight_and_residue() {
         let (store, schema) = make_store("mat_forks").await;
@@ -4892,7 +4894,7 @@ mod tests {
     async fn gc_candidates_every_n_bases() {
         let all_pending = |store: Arc<PageStore>, branch: BranchId| async move {
             let mut rows = store
-                .select_due_pending_gc(branch, Lsn(i64::MAX as u64), 100_000)
+                .select_due_pending_gc(branch, Lsn(0), Lsn(i64::MAX as u64), 100_000)
                 .await
                 .unwrap();
             rows.sort_by_key(|r| (r.blknum, r.due_lsn));
