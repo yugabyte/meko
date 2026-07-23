@@ -18,16 +18,18 @@ See `controller/architecture/ac-mcp.md` for the design.
   required argument.
 - **Storage pools:** `create_storage_pool` (requires `owner_user_id`),
   `list_storage_pools`, `get_storage_pool`.
-- **Projects:** `create_project`, `list_projects`, `get_project`,
-  `delete_project`.
+- **Projects:** `create_project` (optional `pg_version`, default 18 — only 18
+  is accepted today), `list_projects`, `get_project`, `delete_project`.
 - **Branches:** `create_branch`, `list_branches`, `get_branch`, `delete_branch`.
 - **Endpoints:** `create_endpoint`, `list_endpoints`, `get_endpoint`,
   `delete_endpoint`.
 - **Tasks:** `list_tasks`, `get_task`.
 
-Every `create_*` / `delete_*` tool is **asynchronous**: it returns a `Task`
-object immediately. Poll `get_task(task_id=<id>)` until the task's `status`
-reaches `succeeded` or `failed`, then read the resource to see its final state.
+`create_storage_pool` is **synchronous** — it returns the created storage pool
+directly. The `create_project` / `create_branch` / `create_endpoint` tools and
+every `delete_*` tool are **asynchronous**: they return a `Task` object
+immediately. Poll `get_task(task_id=<id>)` until the task's `status` reaches
+`succeeded` or `failed`, then read the resource to see its final state.
 
 ## Configuration
 

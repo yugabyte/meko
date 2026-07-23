@@ -42,8 +42,9 @@ resource. After calling one, take the Task's `id` and poll \
 `get_task(task_id=<id>)` until its `status` reaches a terminal value \
 (`succeeded` or `failed`). On success, read the resource (e.g. `get_project`, \
 `get_branch`, `get_endpoint`) to see its final state, such as a project's \
-`default_branch` or an endpoint's `address`. `list_tasks` lists tasks, \
-optionally filtered by `status`, `kind`, or `project_id`.
+`default_branch` or an endpoint's `address` (and `tailnet_address`, if the \
+endpoint is exposed on the tailnet). `list_tasks` lists tasks, optionally \
+filtered by `status`, `kind`, or `project_id`.
 
 ## Pagination
 

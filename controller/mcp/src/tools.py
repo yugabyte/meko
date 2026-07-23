@@ -51,7 +51,9 @@ def create_project(
 
     Returns a Task, not the finished project. Poll `get_task(task_id=<id>)`
     until `status` is `succeeded` or `failed`, then call `get_project` to read
-    the project and its `default_branch`. `pg_version` defaults to 17.
+    the project and its `default_branch`. `pg_version` defaults to 18; only 18
+    is currently accepted — any other value is rejected with 400, so omit it
+    unless you have a reason to set it.
     """
     return controller_client.create_project(pool_id, name, pg_version)
 
@@ -144,11 +146,13 @@ def create_endpoint(
     """Create and deploy an endpoint (compute) on a branch. ASYNCHRONOUS.
 
     `role` is `read_write` (default) or `read_only`; a branch admits at most one
-    `read_write` endpoint. `disk_type` defaults to `network`. `cpu` (e.g. "2",
-    "1500m") and `memory` (e.g. "4Gi") are the pod's compute reservation, applied
-    as request == limit (Guaranteed QoS); both default to 2 cores / 4Gi. Returns
-    a Task; poll `get_task(task_id=<id>)` until `status` is `succeeded` or
-    `failed`, then call `get_endpoint` to read its `address`.
+    `read_write` endpoint. `disk_type` defaults to `network` (`local` is not yet
+    supported and is rejected with 400). `cpu` (e.g. "2", "1500m") and `memory`
+    (e.g. "4Gi") are the pod's compute reservation, applied as request == limit
+    (Guaranteed QoS); both default to 2 cores / 4Gi. Returns a Task; poll
+    `get_task(task_id=<id>)` until `status` is `succeeded` or `failed`, then call
+    `get_endpoint` to read its `address` (and `tailnet_address`, if the endpoint
+    is exposed on the tailnet).
     """
     return controller_client.create_endpoint(
         pool_id, project_id, branch_id, role, disk_type, cpu, memory
