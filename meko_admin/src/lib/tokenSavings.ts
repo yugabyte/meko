@@ -20,6 +20,10 @@ export const BASELINE_TOKENS_PER_REQUEST = 10_000;
 // Blended $/1M-token rates. ILLUSTRATIVE placeholders — swap in real card
 // rates. GPT-OSS-20B is what inference actually runs; the rest are the premier
 // models we compare against, ordered most→least expensive so the bars descend.
+//
+// Real reference $/1M-token rates (input / output) to blend from when swapping:
+//   GPT-OSS-20B in 0.03–0.075 / out 0.13–0.20 · Opus 4.8 in 5 / out 25
+//   Fable 5 in 10 / out 50 · GPT-5.6 Sol in 5 / out 30, Terra in 2.50 / out 15
 export const OUR_INFERENCE_MODEL = {
   key: "gpt-oss-20b",
   label: "GPT-OSS-20B",

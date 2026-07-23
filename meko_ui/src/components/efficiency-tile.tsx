@@ -27,6 +27,25 @@ export type EfficiencyTileBar = {
   valueLabel: string;
 };
 
+/** One entry in the "why is the headline what it is" breakdown rendered
+ *  between the bars and the footer. Deliberately simple: label + a
+ *  primary count + a secondary hint (usually a percentage). No bar —
+ *  we don't want it to compete visually with the model-comparison bars. */
+export type EfficiencyTileBreakdownEntry = {
+  key: string;
+  label: string;
+  /** Primary value, e.g. "3.1M tokens". */
+  primary: string;
+  /** Secondary/right-aligned value, e.g. "45%". Optional. */
+  secondary?: string;
+};
+
+export type EfficiencyTileBreakdown = {
+  /** Small caption above the list, e.g. "How we saved". */
+  title: string;
+  entries: EfficiencyTileBreakdownEntry[];
+};
+
 export type EfficiencyTileProps = {
   icon?: ReactNode;
   title: string;
@@ -37,6 +56,11 @@ export type EfficiencyTileProps = {
   /** One line under the headline, e.g. "vs all-frontier baseline". */
   subtitle?: string;
   bars?: EfficiencyTileBar[];
+  /** Optional "how did we get to that headline" breakdown rendered
+   *  between the bars and the footer. Used to answer the user's
+   *  "why is this number what it is?" question without needing a
+   *  separate panel or a tooltip. */
+  breakdown?: EfficiencyTileBreakdown;
   accent?: EfficiencyTileAccent;
   /** Small muted note under the bars, e.g. a caveat or "shared with: 1 member". */
   footer?: ReactNode;
@@ -55,6 +79,7 @@ export function EfficiencyTile({
   headline,
   subtitle,
   bars = [],
+  breakdown,
   accent = "amber",
   footer,
   loading = false,
@@ -116,6 +141,28 @@ export function EfficiencyTile({
                       style={{ width: `${Math.max(0, Math.min(100, bar.value))}%` }}
                     />
                   </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {breakdown && breakdown.entries.length > 0 ? (
+            <div className="flex flex-col gap-1.5 border-t border-border/60 pt-3">
+              <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                {breakdown.title}
+              </span>
+              {breakdown.entries.map((entry) => (
+                <div
+                  key={entry.key}
+                  className="flex items-baseline justify-between gap-3 text-xs"
+                >
+                  <span className="truncate text-muted-foreground">{entry.label}</span>
+                  <span className="shrink-0 tabular-nums text-foreground">
+                    {entry.primary}
+                    {entry.secondary ? (
+                      <span className="ml-1.5 text-muted-foreground">{entry.secondary}</span>
+                    ) : null}
+                  </span>
                 </div>
               ))}
             </div>

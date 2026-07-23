@@ -6,11 +6,17 @@
 // source differs, so scope is passed in.
 
 import { Zap } from "lucide-react";
-import { EfficiencyTile, type EfficiencyTileBar } from "@/components/efficiency-tile";
+import {
+  EfficiencyTile,
+  type EfficiencyTileBar,
+  type EfficiencyTileBreakdown,
+} from "@/components/efficiency-tile";
 import { getApiErrorMessage, type TokenSavingsSummary } from "@/lib/api/mekoApi";
 import {
   dollarsSavedByModel,
+  formatTokens,
   OUR_INFERENCE_MODEL,
+  sourceBreakdown,
   tokenBurnPercent,
 } from "@/lib/tokenSavings";
 import { useAccountTokenSavings, useDatapackTokenSavings } from "@/features/datapacks/hooks/useTokenSavings";
@@ -31,6 +37,26 @@ function toBars(summary: TokenSavingsSummary): EfficiencyTileBar[] {
     value: max > 0 ? (s.dollars / max) * 100 : 0,
     valueLabel: usdFormatter.format(s.dollars),
   }));
+}
+
+// Turns `tokens_saved_by_source` into a compact "How we saved" list so the
+// tile answers "why is the headline what it is?" — the API already carries
+// the split (conversation / memory / knowledge_base+memory), we just need
+// to render it. Returns undefined when the API had no source data so
+// `EfficiencyTile` skips the section entirely instead of drawing an empty
+// header.
+function toBreakdown(summary: TokenSavingsSummary): EfficiencyTileBreakdown | undefined {
+  const rows = sourceBreakdown(summary);
+  if (rows.length === 0) return undefined;
+  return {
+    title: "How we saved",
+    entries: rows.map((r) => ({
+      key: r.key,
+      label: r.label,
+      primary: `${formatTokens(r.tokens)} tokens`,
+      secondary: `${Math.round(r.fraction * 100)}%`,
+    })),
+  };
 }
 
 function TokenBurnTileView({
@@ -56,6 +82,7 @@ function TokenBurnTileView({
       headline={summary ? `${tokenBurnPercent(summary)}% saved` : "—"}
       subtitle="vs all-frontier baseline"
       bars={summary ? toBars(summary) : []}
+      breakdown={summary ? toBreakdown(summary) : undefined}
       footer={`${OUR_INFERENCE_MODEL.label} vs premier models · illustrative rates`}
     />
   );

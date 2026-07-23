@@ -106,3 +106,72 @@ export function dollarsSavedByModel(summary: TokenSavingsSummary): ModelDollarsS
     dollars: Math.max(0, (raw * m.usdPerMTok - sent * OUR_INFERENCE_MODEL.usdPerMTok) / 1_000_000),
   }));
 }
+
+// Human-readable labels for the source keys `contextual_prominence_search`
+// writes into `tokens_saved_by_source` (see meko_system.token_savings_summary
+// migration `000007_token_savings.up.sql`). The API uses the raw enum values
+// straight from the MCP tool; the tile shouldn't render them verbatim (users
+// don't know what "knowledge_base+memory" means). Unknown source keys fall
+// back to the raw string so a new backend source doesn't silently disappear
+// from the breakdown.
+const SOURCE_LABELS: Record<string, string> = {
+  conversation: "Conversation history",
+  memory: "Memory",
+  "knowledge_base+memory": "Knowledge Base",
+};
+
+/** Ordered so the two biggest signals in a typical Meko turn (KB retrieval
+ *  and memory) surface at the top, with conversation history last. */
+const SOURCE_DISPLAY_ORDER = ["knowledge_base+memory", "memory", "conversation"];
+
+export type SourceBreakdown = {
+  /** Raw source key from the API — kept for keys/analytics; not shown. */
+  key: string;
+  /** Human-readable label the tile renders. */
+  label: string;
+  /** Tokens saved via this source. */
+  tokens: number;
+  /** Share of total tokens saved, 0..1 (rounded to whole percent by consumer). */
+  fraction: number;
+};
+
+/**
+ * Break the total tokens saved down by retrieval source so the tile can
+ * answer "how did we save?". Returns entries with a nonzero token count,
+ * ordered by the canonical display order (KB → Memory → Conversation), with
+ * any unknown source keys appended after in descending token order.
+ */
+export function sourceBreakdown(summary: TokenSavingsSummary): SourceBreakdown[] {
+  const bySource = summary.tokens_saved_by_source ?? {};
+  const total = num(summary.total_tokens_saved);
+  const entries = Object.entries(bySource)
+    .map(([key, tokens]) => ({
+      key,
+      label: SOURCE_LABELS[key] ?? key,
+      tokens: num(tokens),
+    }))
+    .filter((e) => e.tokens > 0);
+
+  const orderIndex = new Map(SOURCE_DISPLAY_ORDER.map((k, i) => [k, i]));
+  entries.sort((a, b) => {
+    const aIdx = orderIndex.get(a.key);
+    const bIdx = orderIndex.get(b.key);
+    if (aIdx != null && bIdx != null) return aIdx - bIdx;
+    if (aIdx != null) return -1;
+    if (bIdx != null) return 1;
+    return b.tokens - a.tokens;
+  });
+
+  return entries.map((e) => ({
+    ...e,
+    fraction: total > 0 ? clamp01(e.tokens / total) : 0,
+  }));
+}
+
+/** Compact token count for tile copy: 1_234 → "1.2K", 3_500_000 → "3.5M". */
+export function formatTokens(tokens: number): string {
+  const n = num(tokens);
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(Math.round(n));
+}
