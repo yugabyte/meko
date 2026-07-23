@@ -203,6 +203,12 @@ func (s *S3Service) GenerateDownloadURL(
 	const expiry = 5 * time.Minute
 	// Extract the basename from the key for the Content-Disposition filename.
 	filename := path.Base(key)
+	// SECURITY: force Content-Disposition=attachment on every download so the
+	// browser saves the file instead of rendering it inline. Knowledge bases
+	// accept HTML/HTM (and other text) uploads, and inline rendering of an
+	// attacker-supplied .html would execute its scripts in our origin — a
+	// stored XSS. attachment neutralizes that regardless of the object's
+	// stored Content-Type. Keep this unconditional; do not special-case types.
 	input := &s3.GetObjectInput{
 		Bucket:                     aws.String(s.bucket),
 		Key:                        aws.String(key),
@@ -299,7 +305,6 @@ var mimeTypeByExtension = map[string]string{
 	".htm":  "text/html",
 	".json": "application/json",
 	".pdf":  "application/pdf",
-	".mp4":  "video/mp4",
 }
 
 // mimeTypeFromKey derives the MIME type for an S3 key based on its extension.

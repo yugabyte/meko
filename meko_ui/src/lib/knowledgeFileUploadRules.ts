@@ -2,22 +2,24 @@
  * Shared rules for knowledge file staging (wizard + FileUpload).
  * Keep in sync with backend upload constraints.
  */
-export const KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS = ".pdf,.txt,.md,.json,.mp4";
+
+/**
+ * Single source of truth: accepted upload extensions (lowercase, dot-prefixed).
+ * The `accept` string and the human-readable hint below are both derived from
+ * this, so adding/removing a type only needs an edit here.
+ */
+const ACCEPTED_EXTENSION_LIST = [".pdf", ".txt", ".md", ".json", ".csv", ".html", ".htm"];
+
+/** Comma-joined form for a file input's `accept` attribute. */
+export const KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS = ACCEPTED_EXTENSION_LIST.join(",");
+
 export const KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB = 5;
 export const KNOWLEDGE_UPLOAD_MAX_BATCH = 10;
 
-/** Exact set of accepted extensions, derived from the comma-separated list
- *  above. Used for membership checks so we match whole extensions (`.md`)
- *  rather than substrings of the raw string (`.includes(".m")` would wrongly
- *  pass). */
-const KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSION_SET = new Set(
-  KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS.split(",").map((s) => s.trim().toLowerCase()),
-);
-
-/** Human-readable list for UI (matches `KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS`). */
-export const KNOWLEDGE_UPLOAD_EXTENSIONS_HINT = KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS.split(",")
-  .map((s) => s.replace(/^\./, "").trim())
-  .join(", ");
+/** Human-readable list for UI, e.g. "pdf, txt, md, json, html, htm". */
+export const KNOWLEDGE_UPLOAD_EXTENSIONS_HINT = ACCEPTED_EXTENSION_LIST.map((e) =>
+  e.startsWith(".") ? e.slice(1) : e,
+).join(", ");
 
 /** Mirrors the backend's check (api_server: `filepath.Ext` in
  *  knowledge_base_handler.go) so both sides accept/reject the same
@@ -62,10 +64,7 @@ export function dedupNote(
 }
 
 export function isAcceptedKnowledgeFile(filename: string): boolean {
-  const ext = knowledgeFileExtension(filename);
-  // `knowledgeFileExtension` returns "" when there's no extension; the Set
-  // never contains "", so that case is rejected without a special guard.
-  return KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSION_SET.has(ext);
+  return ACCEPTED_EXTENSION_LIST.includes(knowledgeFileExtension(filename));
 }
 
 export type KnowledgeBatchFilterResult = {

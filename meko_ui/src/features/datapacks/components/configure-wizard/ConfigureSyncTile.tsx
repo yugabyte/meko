@@ -135,7 +135,7 @@ export function ConfigureSyncTile({
   items,
   fileInputRef,
   accept,
-  knowledgeExtensionsHint = "pdf, txt, md, json, mp4",
+  knowledgeExtensionsHint = "pdf, txt, md, json, csv, html",
   onPickFiles,
   onRemove,
   knowledgeUploading = false,

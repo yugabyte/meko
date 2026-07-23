@@ -33,6 +33,7 @@ import { formatFileSize } from "@/lib/fileSize";
 import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
 import { uploadFileToS3 } from "@/lib/uploadFileToS3";
 import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
+import { KB_DOCUMENT_STATUS } from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentStatus";
 import { queryClient } from "@/lib/queryClient";
 import { Queue } from "@/lib/queue";
 import { ACCOUNT_USAGE_QUERY_KEY } from "@/hooks/useAccountUsage";
@@ -46,10 +47,18 @@ function nextFileEntryId(): string {
   return `f${fileEntryIdCounter}`;
 }
 
+/** Why a process run was queued: a fresh upload finished, or a leftover
+ *  S3 orphan was found. */
+const PROCESS_TRIGGER_REASON = {
+  UPLOAD: "upload",
+  ORPHAN: "orphan",
+} as const;
+type ProcessTriggerReason = (typeof PROCESS_TRIGGER_REASON)[keyof typeof PROCESS_TRIGGER_REASON];
+
 /** "A run is owed" signal -- upload finished or orphan found. `runProcess`
  *  always re-syncs everything outstanding, so this carries no file payload. */
 type ProcessTrigger = {
-  reason: "upload" | "orphan";
+  reason: ProcessTriggerReason;
   queuedAt: number;
 };
 
@@ -108,14 +117,19 @@ export default function FileUpload({
     statusCache.set(datapackId, { sourceStatuses, pipelineDetails, kbCreated });
   }, [datapackId, sourceStatuses, pipelineDetails, kbCreated]);
 
-  // Scrolls a doc into view and flashes it the moment it actually starts
-  // processing (document_status flips to PROCESSING) -- not just when it
-  // first shows up QUEUED. With one worker, that plays out as "previous
-  // doc finishes, next one lights up", one at a time; docs already
-  // PROCESSING/done from a prior fetch/session are the baseline and are
-  // seeded silently by fetchStatus's first call each mount, not here.
+  // Scrolls a doc into view and flashes it once, the first time it leaves
+  // QUEUED (shows up PROCESSING, COMPLETED or FAILED). Keying on the
+  // "left QUEUED" transition rather than strictly PROCESSING matters because a
+  // small file can go QUEUED -> PROCESSING -> COMPLETED entirely within one
+  // poll interval, so its PROCESSING snapshot is never observed -- keying only
+  // on PROCESSING would silently skip its flash (e.g. every upload after the
+  // first, once the source already exists and files index instantly). With one
+  // worker docs leave QUEUED one at a time, so this still plays out as
+  // "previous doc finishes, next one lights up". Docs already present on the
+  // first fetch each mount are the baseline (seeded silently by fetchStatus)
+  // and never flash.
   const docRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const flashedProcessingRef = useRef<Set<string>>(new Set());
+  const flashedDocsRef = useRef<Set<string>>(new Set());
   const initialStatusLoadedRef = useRef(false);
   const [flashingDocs, setFlashingDocs] = useState<Set<string>>(new Set());
   // Un-cleared timers would keep firing (and their closures alive) after
@@ -130,9 +144,9 @@ export default function FileUpload({
   }, []);
   useEffect(() => {
     if (!initialStatusLoadedRef.current) return;
-    const flashed = flashedProcessingRef.current;
+    const flashed = flashedDocsRef.current;
     const started = pipelineDetails.filter(
-      (d) => d.document_status === "PROCESSING" && !flashed.has(d.document_name),
+      (d) => d.document_status !== KB_DOCUMENT_STATUS.QUEUED && !flashed.has(d.document_name),
     );
     if (started.length === 0) return;
     for (const d of started) flashed.add(d.document_name);
@@ -232,7 +246,7 @@ export default function FileUpload({
   // Exclude orphans already in pipelineDetails so they aren't double-counted.
   const orphansAwaitingPipeline = pendingOrphans.filter((o) => !pipelineDocNames.has(o.filename));
   const pipelineInFlight = pipelineDetails.filter(
-    (d) => d.document_status !== "COMPLETED" && d.document_status !== "FAILED",
+    (d) => d.document_status !== KB_DOCUMENT_STATUS.COMPLETED && d.document_status !== KB_DOCUMENT_STATUS.FAILED,
   ).length;
   // Total non-terminal files: staged, uploaded-but-not-yet-in-pipeline,
   // orphans, and actively processing docs. Uploading is always allowed,
@@ -372,7 +386,7 @@ export default function FileUpload({
 
   // Single entry point for "something is ready to be processed". Only this
   // should ever push onto the queue.
-  const scheduleProcess = (reason: ProcessTrigger["reason"] = "upload") => {
+  const scheduleProcess = (reason: ProcessTrigger["reason"] = PROCESS_TRIGGER_REASON.UPLOAD) => {
     processQueueRef.current.enqueue({ reason, queuedAt: Date.now() });
     drainProcessQueue();
   };
@@ -460,7 +474,9 @@ export default function FileUpload({
     // directly-closed-over scheduleProcess would be stale by the time we get
     // here (matches the other async call sites below).
     if (uploaded > 0 || matchedOrphan) {
-      scheduleProcessRef.current(uploaded > 0 ? "upload" : "orphan");
+      scheduleProcessRef.current(
+        uploaded > 0 ? PROCESS_TRIGGER_REASON.UPLOAD : PROCESS_TRIGGER_REASON.ORPHAN,
+      );
     }
   };
 
@@ -472,7 +488,7 @@ export default function FileUpload({
       const hadDocsBefore = seen.size > 0;
       const totalDocs = details.length;
       details
-        .filter((d) => d.document_status === "COMPLETED" && !seen.has(d.document_name))
+        .filter((d) => d.document_status === KB_DOCUMENT_STATUS.COMPLETED && !seen.has(d.document_name))
         .forEach((d) => {
           seen.add(d.document_name);
           const name = pipelineDocumentDisplayName(d.document_name);
@@ -498,7 +514,7 @@ export default function FileUpload({
       const resp = await listPendingUploads(datapackId);
       setPendingOrphans(resp.items);
       // Auto-queue leftover orphans too, same as a fresh upload.
-      if (resp.items.length > 0) scheduleProcessRef.current("orphan");
+      if (resp.items.length > 0) scheduleProcessRef.current(PROCESS_TRIGGER_REASON.ORPHAN);
     } catch {
       // ignore
     }
@@ -544,14 +560,13 @@ export default function FileUpload({
       const sources = status.source_statuses ?? [];
       const details = status.pipeline_details ?? [];
       if (!initialStatusLoadedRef.current) {
-        // First status fetch this mount: a doc already PROCESSING at this
-        // point started before the modal opened, so it's baseline, not a
-        // fresh transition -- only docs that flip to PROCESSING *after*
-        // this point should flash.
+        // First status fetch this mount: every doc already present started
+        // before the modal opened, so it's baseline, not a fresh transition --
+        // only docs that show up *after* this point should flash. Seed all of
+        // them regardless of status; otherwise pre-existing COMPLETED docs
+        // would all flash on open, since the flash now keys on "not QUEUED".
         initialStatusLoadedRef.current = true;
-        flashedProcessingRef.current = new Set(
-          details.filter((d) => d.document_status === "PROCESSING").map((d) => d.document_name),
-        );
+        flashedDocsRef.current = new Set(details.map((d) => d.document_name));
       }
       setSourceStatuses(sources);
       setPipelineDetails(details);
@@ -563,10 +578,15 @@ export default function FileUpload({
         setKbCreated(true);
       }
 
-      const sourcesReady = sources.length > 0 && sources.every((s) => s.status === "COMPLETED");
+      const sourcesReady =
+        sources.length > 0 && sources.every((s) => s.status === KB_DOCUMENT_STATUS.COMPLETED);
       const allDocsDone =
         details.length > 0 &&
-        details.every((d) => d.document_status === "COMPLETED" || d.document_status === "FAILED");
+        details.every(
+          (d) =>
+            d.document_status === KB_DOCUMENT_STATUS.COMPLETED ||
+            d.document_status === KB_DOCUMENT_STATUS.FAILED,
+        );
 
       if (sources.length > 0 && !sourcesReady) {
         sourceWasDiscoveringRef.current = true;
@@ -574,11 +594,13 @@ export default function FileUpload({
         sourceWasDiscoveringRef.current = false;
         // Source just finished discovery -- re-trigger create for files
         // uploaded while it was still discovering.
-        scheduleProcessRef.current("upload");
+        scheduleProcessRef.current(PROCESS_TRIGGER_REASON.UPLOAD);
       }
 
       const hasInFlightDocs = details.some(
-        (d) => d.document_status === "PROCESSING" || d.document_status === "QUEUED",
+        (d) =>
+          d.document_status === KB_DOCUMENT_STATUS.PROCESSING ||
+          d.document_status === KB_DOCUMENT_STATUS.QUEUED,
       );
 
       if (pollGraceRef.current > 0) {
@@ -625,13 +647,19 @@ export default function FileUpload({
 
   // Phase computation
   const sourcesDiscovering =
-    sourceStatuses.length > 0 && sourceStatuses.some((s) => s.status !== "COMPLETED");
+    sourceStatuses.length > 0 &&
+    sourceStatuses.some((s) => s.status !== KB_DOCUMENT_STATUS.COMPLETED);
   const sourcesReady =
-    sourceStatuses.length > 0 && sourceStatuses.every((s) => s.status === "COMPLETED");
+    sourceStatuses.length > 0 &&
+    sourceStatuses.every((s) => s.status === KB_DOCUMENT_STATUS.COMPLETED);
 
   const docsTotal = pipelineDetails.length;
-  const docsCompleted = pipelineDetails.filter((d) => d.document_status === "COMPLETED").length;
-  const docsFailed = pipelineDetails.filter((d) => d.document_status === "FAILED").length;
+  const docsCompleted = pipelineDetails.filter(
+    (d) => d.document_status === KB_DOCUMENT_STATUS.COMPLETED,
+  ).length;
+  const docsFailed = pipelineDetails.filter(
+    (d) => d.document_status === KB_DOCUMENT_STATUS.FAILED,
+  ).length;
   const docsFinished = docsCompleted + docsFailed;
   const totalChunks = pipelineDetails.reduce((sum, d) => sum + (d.chunks_processed ?? 0), 0);
 
@@ -1017,11 +1045,11 @@ export default function FileUpload({
                           this is already correct if/when the worker pool
                           processes several documents in parallel: each one
                           genuinely PROCESSING gets its own spinner. */}
-                      {d.document_status === "COMPLETED" ? (
+                      {d.document_status === KB_DOCUMENT_STATUS.COMPLETED ? (
                         <CheckCircle2 className="w-3.5 h-3.5 text-green-600 dark:text-green-400 shrink-0" />
-                      ) : d.document_status === "FAILED" ? (
+                      ) : d.document_status === KB_DOCUMENT_STATUS.FAILED ? (
                         <AlertCircle className="w-3.5 h-3.5 text-red-600 dark:text-red-400 shrink-0" />
-                      ) : d.document_status === "QUEUED" ? (
+                      ) : d.document_status === KB_DOCUMENT_STATUS.QUEUED ? (
                         <Clock className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                       ) : (
                         <Loader2 className="w-3.5 h-3.5 text-yellow-600 dark:text-yellow-400 animate-spin shrink-0" />
@@ -1031,20 +1059,20 @@ export default function FileUpload({
                     <span
                       className={cn(
                         "text-xs font-medium shrink-0 ml-3",
-                        d.document_status === "COMPLETED"
+                        d.document_status === KB_DOCUMENT_STATUS.COMPLETED
                           ? "text-green-600 dark:text-green-400"
-                          : d.document_status === "FAILED"
+                          : d.document_status === KB_DOCUMENT_STATUS.FAILED
                             ? "text-red-600 dark:text-red-400"
-                            : d.document_status === "QUEUED"
+                            : d.document_status === KB_DOCUMENT_STATUS.QUEUED
                               ? "text-muted-foreground"
                               : "text-yellow-600 dark:text-yellow-400",
                       )}
                     >
-                      {d.document_status === "COMPLETED"
+                      {d.document_status === KB_DOCUMENT_STATUS.COMPLETED
                         ? `Ready${d.chunks_processed ? ` · ${d.chunks_processed} ${d.chunks_processed === 1 ? "chunk" : "chunks"}` : ""}`
-                        : d.document_status === "FAILED"
+                        : d.document_status === KB_DOCUMENT_STATUS.FAILED
                           ? "Failed"
-                          : d.document_status === "QUEUED"
+                          : d.document_status === KB_DOCUMENT_STATUS.QUEUED
                             ? "Queued"
                             : "Processing"}
                     </span>

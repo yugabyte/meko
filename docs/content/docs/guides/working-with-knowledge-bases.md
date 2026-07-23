@@ -44,7 +44,7 @@ Currently, you must upload knowledge via the Meko portal:
 1. Navigate to **Datapacks** and select your datapack.
 1. Click **Upload Knowledge Files** (or **Add to Knowledge Base**).
 
-Currently, Meko accepts PDF, TXT, MD, JSON, and CSV files up to 5MB each, up to 10 per batch.
+Currently, Meko accepts PDF, TXT, MD, JSON, CSV, and HTML files up to 5MB each, up to 10 per batch.
 
 > [!NOTE] Free tier
 >

@@ -25,7 +25,7 @@ type Props = {
   items: ListedSource[];
   fileInputRef: RefObject<HTMLInputElement | null>;
   accept: string;
-  /** Shown under drop zone, e.g. "pdf, txt, md, json, mp4" */
+  /** Shown under drop zone, e.g. "pdf, txt, md, json, csv, html" */
   extensionsHint: string;
   onPickFiles: (files: FileList | null) => void;
   onRemove: (id: string) => void;

@@ -209,7 +209,9 @@ var allowedExtensions = map[string]bool{
 	".txt":  true,
 	".md":   true,
 	".json": true,
-	".mp4":  true,
+	".csv":  true,
+	".html": true,
+	".htm":  true,
 }
 
 // isHexSHA256 reports whether s is exactly 64 hexadecimal characters, i.e. a
@@ -282,7 +284,7 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR",
 			"unsupported file type: "+ext+
-				"; allowed: .pdf, .txt, .md, .json, .mp4")
+				"; allowed: .pdf, .txt, .md, .json, .csv, .html, .htm")
 	}
 	// `size <= 0` is rejected explicitly: otherwise a negative payload
 	// could wrap the int64 free-tier-cap arithmetic below and let an

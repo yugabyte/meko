@@ -47,7 +47,7 @@ export function ConfigureWizardSyncStep({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Stage knowledge files for this datapack (PDF, TXT, MD, JSON, CSV — up to {KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}
+        Stage knowledge files for this datapack (PDF, TXT, MD, JSON, CSV, HTML — up to {KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}
         MB each, up to {KNOWLEDGE_UPLOAD_MAX_BATCH} per batch). Conversations and skills use the same layout below and
         will be available in a future release.
       </p>
