@@ -1,14 +1,14 @@
-# Release version bump — human-triggered, CI-performed. A maintainer runs this
-# workflow ("release this code"); CI rolls the CalVer VERSION file and commits
-# it to main. That bump commit is the release commit: the amp-build job (SCM
-# polling on main) then builds/pushes the images off it, and the Makefile stamps
-# the short commit id, so the released image tag is <VERSION>-<short-commit>
-# (e.g. 0.260722.0-1bc8b3d). The VERSION file itself holds only the base
-# MAJOR.YYMMDD.PATCH — the commit id lives on the build, not in the file.
+# Release version bump — human-triggered, CI-performed, merged via PR. A
+# maintainer runs this workflow ("release this code"); CI rolls the CalVer
+# VERSION file on a release/<version> branch, opens a PR to main, and turns on
+# auto-merge. When the PR merges, that commit is the release commit: the
+# amp-build job (SCM polling on main) builds/pushes the images off it, and the
+# Makefile stamps the short commit id, so the released image tag is
+# <VERSION>-<short-commit> (e.g. 0.260722.0-1bc8b3d). The VERSION file holds only
+# the base MAJOR.YYMMDD.PATCH — the commit id lives on the build, not the file.
 #
 #   date  (default) — roll YYMMDD to today, PATCH -> 0 (or +1 PATCH if VERSION
-#                     is already dated today, so a second release the same day
-#                     moves forward: 0.260722.0 -> 0.260722.1).
+#                     is already dated today: 0.260722.0 -> 0.260722.1).
 #   patch           — re-cut the current date (a hotfix on an existing release).
 #   major           — bump the epoch; reserved for a deliberate reset.
 #
@@ -16,9 +16,11 @@
 # release, matching "we release when we have to" — most days none, some days
 # more than one.
 #
-# Requires: branch protection on main must allow github-actions[bot] to push the
-# single VERSION/Chart bump commit (or swap the checkout token for a GitHub App
-# / PAT with bypass rights).
+# Goes through a PR (not a direct push to main), so main's "require a pull
+# request" rule is honoured — no branch-protection bypass or PAT needed. The PR
+# auto-merges once its required checks pass; if the ruleset requires an approval,
+# the PR waits for one. Needs "Allow auto-merge" enabled in repo settings and
+# workflow permissions = read and write.
 name: Release — bump VERSION
 
 on:
@@ -32,8 +34,9 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
-# One release bump at a time; never cancel one mid-push.
+# One release bump at a time.
 concurrency:
   group: release-version-bump
   cancel-in-progress: false
@@ -45,13 +48,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: main
-          # Full history so the rebase-before-push has real ancestry.
           fetch-depth: 0
 
-      - name: Bump VERSION and push
+      - name: Bump VERSION, open PR, enable auto-merge
         env:
           PART: ${{ inputs.part }}
           ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           OLD="$(scripts/version.sh)"
@@ -61,17 +64,29 @@ jobs:
             echo "VERSION unchanged (${OLD}); nothing to release." >&2
             exit 1
           fi
+          BRANCH="release/${NEW}"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
           git add VERSION deploy/helm/yb-amp-controller/Chart.yaml
           git commit -m "release: ${NEW} (${PART} bump, triggered by ${ACTOR})"
-          # Tolerate a commit landing between checkout and push.
-          git pull --rebase origin main
-          git push origin main
+          git push origin "${BRANCH}"
+
+          PR_URL="$(gh pr create --base main --head "${BRANCH}" \
+            --title "release: ${NEW}" \
+            --body "Automated release version bump: \`VERSION\` ${OLD} -> ${NEW} (${PART}, triggered by @${ACTOR}). On merge, amp-build builds and pushes ${NEW}-<short-commit>.")"
+          echo "opened ${PR_URL}"
+
+          # Auto-merge (squash) once required checks pass. Do not fail the run if
+          # auto-merge can't be enabled (e.g. the setting is off) — the PR stays
+          # open for a manual merge.
+          gh pr merge "${PR_URL}" --auto --squash --delete-branch \
+            || echo "could not enable auto-merge; merge ${PR_URL} manually"
+
           {
             echo "### Release ${NEW}"
             echo ""
-            echo "- \`VERSION\`: ${OLD} → **${NEW}**"
-            echo "- Image tag the build will publish: \`v${NEW}-<short-commit>\`"
-            echo "- amp-build (SCM polling on main) builds this commit and pushes the images."
+            echo "- \`VERSION\`: ${OLD} -> ${NEW}"
+            echo "- PR: ${PR_URL} (auto-merge enabled)"
+            echo "- On merge, amp-build publishes ${NEW}-<short-commit>."
           } >> "${GITHUB_STEP_SUMMARY}"

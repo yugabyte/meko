@@ -94,12 +94,14 @@ Trigger the **`Release — bump VERSION`** workflow
 - **`major`** — bump the epoch; reserved for a deliberate reset.
 
 The workflow runs `scripts/version.sh bump <part>` (which also syncs the chart +
-`controller` Cargo.toml/Cargo.lock; `make version-bump-*` are thin wrappers) and
-commits the single `VERSION`/`Chart.yaml` change to `main`. **That bump commit is
-the release commit.** The `amp-build` job (SCM polling on `main`) builds it and
-pushes `<VERSION>-<short-commit>` to quay — the Makefile stamps the commit, so
-the released tag identifies the exact code. (amp-build should build the exact
-commit it triggered on, not a moving `main` head.)
+`controller` Cargo.toml/Cargo.lock; `make version-bump-*` are thin wrappers) on a
+`release/<version>` branch, **opens a PR to `main`, and enables auto-merge** — so
+main's "require a pull request" rule is honoured with no branch-protection bypass
+(needs "Allow auto-merge" enabled). **The merge commit is the release commit.**
+The `amp-build` job (SCM polling on `main`) builds it and pushes
+`<VERSION>-<short-commit>` to quay — the Makefile stamps the commit, so the
+released tag identifies the exact code. (amp-build should build the exact commit
+it triggered on, not a moving `main` head.)
 
 Between releases nothing new is published; a local/dev build off the current
 `VERSION` is still `<VERSION>-<short-commit>[-dirty]`, uniquely identifiable.
