@@ -1,7 +1,7 @@
 import { MEKO_TOKEN_INSTALLER_PLACEHOLDER } from "@/lib/mekoTokens";
 
 /** `create-meko-setup.mjs --client` values from install docs. */
-export type MekoInstallerClient = "claude-desktop" | "claude-code" | "cursor";
+export type MekoInstallerClient = "claude-desktop" | "claude-code" | "cursor" | "codex";
 
 /**
  * One-line installer command for MCP setup (matches McpInstallGuide examples).

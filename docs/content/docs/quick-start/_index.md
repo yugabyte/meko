@@ -47,19 +47,21 @@ There are three ways to connect. Pick the one that fits your workflow.
 {{< tabpane text=true right=false >}}
 {{% tab header="Automated install" %}}
 
-_Recommended for Cursor, Claude Code, and Claude Desktop._
+_Recommended for Cursor, Claude Code, Claude Desktop, and Codex._
 
-The portal gives you a one-line `npx` command per client. It registers the Meko MCP server _and_ installs an agent behavioral skill that teaches your agent _when_ to use Meko tools automatically, saving conversations, capturing memories, and searching knowledge without you having to ask each time. In harnesses that support it (such as Claude Code), the skill also hooks into session lifecycle events to capture context at session start and end.
+The portal gives you a one-line `npx` command per client. It registers the Meko MCP server _and_ installs an agent behavioral skill that teaches your agent _when_ to use Meko tools automatically, saving conversations, capturing memories, and searching knowledge without you having to ask each time. In harnesses that support it (such as Claude Code and Codex), the skill also hooks into session lifecycle events to capture context at session start and end.
+
+Automatic capture writes to your **pinned datapack** by default (falling back to your account's default datapack if you haven't pinned one). See [Automatic capture and datapack pinning](../architecture/core-concepts/datapacks/#automatic-capture-and-datapack-pinning) to change it.
 
 1. Generate an API key from **Settings > API Keys**. Name it for the client that will use it (for example, `laptop/claude-desktop`). The key starts with `mko_tkn_` and is shown exactly once: copy or download it before closing.
-2. Open the **Connect** dialog on any datapack, or go to the **Connect** page in the sidebar. Select your client tab (Claude Code, Claude Desktop, or Cursor).
+2. Open the **Connect** dialog on any datapack, or go to the **Connect** page in the sidebar. Select your client tab (Claude Code, Claude Desktop, Cursor, or Codex).
 3. Run the install command shown. It looks like this:
 
     ```sh
     npx @yugabytedb/meko-mcp --client <client> --url "https://mcp.mekodata.ai/mcp" --api-key <paste-your-api-key>
     ```
 
-    Replace `<client>` with `claude-code`, `claude-desktop`, or `cursor`.
+    Replace `<client>` with `claude-code`, `claude-desktop`, `cursor`, or `codex`.
 
 4. Restart your client if the new MCP server doesn't show up automatically.
 

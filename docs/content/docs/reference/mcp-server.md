@@ -47,10 +47,14 @@ The Meko MCP Server provides the following tools.
 | `conversation_update` | Update a conversation title or metadata.<br>Use this when organizing or relabeling stored conversations.<br>Typical inputs: `scope, datapack_id, conversation_id, agent_id, title, metadata` |
 | `conversation_delete` | Permanently delete a stored conversation.<br>Use this to remove saved conversation history.<br>Typical inputs: `scope, datapack_id, conversation_id, agent_id` |
 | `conversation_search`<sup>*</sup> | Search the conversation history cache for a near-duplicate past turn and, on a hit, return its full thread.<br>Use this to check whether a query has effectively already been answered before falling back to `memory_search` or `knowledgebase_search`.<br>Typical inputs: `scope, query, conversation_id, agent_id, datapack_id, limit` |
-| `contextual_prominence_search`<sup>*</sup> | One retrieval call across the conversation cache, memory, and the knowledge base. Picks the cheapest source sufficient to answer the query and tags each result with its source.<br>Use this instead of calling `conversation_search`, `memory_search`, and `knowledgebase_search` separately.<br>Typical inputs: `scope, query, conversation_id, agent_id, datapack_id, limit` |
+| `contextual_prominence_search`<sup>‡</sup> | One retrieval call across the conversation cache, memory, and the knowledge base. Picks the cheapest source sufficient to answer the query and tags each result with its source.<br>Use this instead of calling `conversation_search`, `memory_search`, and `knowledgebase_search` separately.<br>Typical inputs: `scope, query, conversation_id, agent_id, datapack_id, limit` |
 | `track_token_usage` | Record a token-usage observation against a conversation trace, so that LLM, embedding, or extraction spend is attributed for free-tier accounting and dashboards.<br>Use this to pair a billable model call with a recorded usage entry.<br>Typical inputs: `scope, conversation_id, name, input_tokens, output_tokens, total_tokens, model, message_id, datapack_id` |
 
 <sup>*</sup> Not available by default; may not be enabled on every Meko deployment.
+
+<sup>†</sup> Kept for one release for backward compatibility; will be removed in a future release. Use `conversation_add_message` (or automatic capture) instead.
+
+<sup>‡</sup> Currently disabled on Meko Cloud — an authenticated call returns `feature_disabled`. It's listed here for forward reference; don't depend on it yet. Use `conversation_search`, `memory_search`, and `knowledgebase_search` individually in the meantime.
 
 ### Memory tools
 
@@ -63,6 +67,7 @@ The Meko MCP Server provides the following tools.
 | `memory_update` | Replace the text of an existing memory.<br>Use this to correct a remembered fact.<br>Typical inputs: `scope, datapack_id, agent_id, conversation_id, memory_id, text` |
 | `memory_delete_by_id` | Delete one memory.<br>Use this to remove a specific stored memory.<br>Typical inputs: `scope, datapack_id, agent_id, conversation_id, memory_id` |
 | `memory_delete_all` | Delete all memories in a scope.<br>Use this for a full reset or broad cleanup.<br>Typical inputs: `scope, datapack_id, agent_id, conversation_id, run_id` |
+| `flush_pending_memory_candidates`<sup>†</sup> | **Deprecated.** Returns a directive payload pointing agents at `conversation_add_message` instead. Saving a conversation turn now triggers the same fact-capture automatically on the server, so agents no longer need to proactively scan for memory candidates.<br>Typical inputs: `scope, datapack_id, agent_id, conversation_id` |
 | `memory_promote` | Promote memories into the datapack's shared knowledge base and Collective Memory; this also removes them from the agent's private store.<br>Use this to programmatically promote memories via MCP, rather than via the **Learnings** tab in the Meko portal. Only datapack owners and maintainers may promote. See [Learnings](../../architecture/core-concepts/learnings/).<br>Typical inputs: `scope, datapack_id, agent_id, conversation_id, memory_ids` |
 
 ### Knowledgebase tools

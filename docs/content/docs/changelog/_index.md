@@ -8,25 +8,19 @@ breadcrumb_disable: true
 notoc: true
 ---
 
-What's new in Meko.
+What's new in Meko. Meko ships on two independent tracks — the hosted portal/platform, and the `@yugabytedb/meko-mcp` installer, MCP server, and agent skills you connect it with — each with its own release cadence and version numbers.
 
 {{< card-group >}}
   {{< card
-    href="changelog/v0.9.2/"
-    title="v0.9.2 — June 29, 2026"
-    desc="Free tier usage limits and upgrade path via Meko pricing."
-    cta="View release notes &rarr;"
+    href="changelog/installer/"
+    title="Installer"
+    desc="Release notes for the @yugabytedb/meko-mcp installer, the Meko MCP server, and the Claude Code, Claude Desktop, Cursor, and Codex agent skills."
+    cta="View releases &rarr;"
   >}}
   {{< card
-    href="changelog/v0.9.1/"
-    title="v0.9.1 — June 5, 2026"
-    desc="Portal search, member role management, MCP installer v1.2 with Codex support, bug fixes."
-    cta="View release notes &rarr;"
-  >}}
-  {{< card
-    href="changelog/v0.9.0/"
-    title="v0.9.0 — March 17, 2026"
-    desc="Early Access launch. Memory, knowledge base, database, and conversation tools. Claude Desktop, Cursor, Claude Code, and Codex integrations."
-    cta="View release notes &rarr;"
+    href="changelog/meko/"
+    title="Meko"
+    desc="Release notes for the Meko portal, API, and platform."
+    cta="View releases &rarr;"
   >}}
 {{< /card-group >}}

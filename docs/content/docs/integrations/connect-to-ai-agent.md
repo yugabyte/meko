@@ -1,7 +1,7 @@
 ---
 title: Connect to an AI agent
 linkTitle: AI agents
-description: Integrate Meko with Cursor, Claude Desktop, Claude Code, and more
+description: Integrate Meko with Cursor, Claude Desktop, Claude Code, Codex, and more
 weight: 3010
 type: docs
 ---
@@ -181,6 +181,10 @@ In the Meko portal, select **Connect** and follow the steps.
     ```
 
 ## Open AI Codex Desktop
+
+##### Automated setup
+
+In the Meko portal, select **Connect** and follow the steps.
 
 ##### OAuth
 

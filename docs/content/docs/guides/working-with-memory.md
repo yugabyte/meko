@@ -34,6 +34,14 @@ Remember this coding preference: I prefer Python type hints and use pytest for t
 
 The MCP server calls `memory_add` behind the scenes, which uses an LLM to extract entities and relationships from your text.
 
+### Automatically, from saved conversations
+
+You don't have to explicitly ask your agent to "remember" something for it to become a memory. If your client has automatic capture enabled (the [Automated install](../../quick-start/#connect-your-ai-client)) or your agent otherwise saves the turn with `conversation_add_message`, Meko scans the saved turn server-side and creates memories from the durable facts it finds — no extra step required.
+
+> [!NOTE] Extraction is best-effort
+>
+> Conversation-driven extraction runs asynchronously after a turn is saved, and can occasionally miss an individual fact within a longer turn. For anything that must not be lost, explicitly say "remember this" (`memory_add`) rather than relying on automatic extraction alone.
+
 ## Search memories
 
 ### Via MCP (from your coding agent)

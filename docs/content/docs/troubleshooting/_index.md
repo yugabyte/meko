@@ -28,6 +28,14 @@ If you have problems with your setup, check the following common issues:
 
     Note that if you installed Meko using OAuth alone to authenticate (that is, you didn't use the automatic installer), your agent interacts with Meko _on demand_ only: you need to mention "Meko" in your prompt (for example, _"save this to Meko,"_ _"search my Meko knowledge base"_) for the agent to call the tools. The agent won't proactively save conversations or capture memories unless you ask. To get automatic behavior, use the [Automated install](../quick-start/#connect-your-ai-client), or write your own skills to teach your agent when to call Meko tools.
 
+- Claude Desktop recalls memories but doesn't save new ones automatically.
+
+    Claude Desktop has no session hooks, so automatic capture relies on the model deciding to call `conversation_add_message` on its own. This is model-dependent: some models capture proactively from the installed skill alone, but Sonnet- and Opus-class models typically need an extra, always-on nudge to do it for every turn.
+
+    Add an instruction along the lines of "save our conversation to Meko periodically" to **Claude > Settings > Profile > Instructions for Claude** (kept in mind across chats). This is the one channel on Desktop that's always injected with first-party authority, so it reliably closes the gap.
+
+    You can always work around this by explicitly asking your agent to save ("save this conversation to Meko") or remember ("remember this") — those requests are never best-effort.
+
 ## Report an issue
 
 The fastest way to get help and report bugs is the Meko Discord. Join the community, post in the relevant channel, and the team or other community members will respond.

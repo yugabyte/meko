@@ -284,6 +284,12 @@ export function DatapackConnectDialog({
                   >
                     Cursor
                   </TabsTrigger>
+                  <TabsTrigger
+                    value="codex"
+                    className="flex-1 data-[state=active]:bg-blue-600 data-[state=active]:text-white data-[state=inactive]:text-muted-foreground"
+                  >
+                    Codex
+                  </TabsTrigger>
                 </TabsList>
                 <TabsContent value="claude-desktop" className="mt-3 space-y-2 outline-none">
                   <InstallerCommandRow
@@ -308,6 +314,15 @@ export function DatapackConnectDialog({
                     dialogOpen={open}
                     command={buildMekoInstallerCommand("cursor", provisionStatus.mcp_server_url)}
                     copyField="mcpInstallCursor"
+                    copiedField={copiedField}
+                    onCopy={handleCopy}
+                  />
+                </TabsContent>
+                <TabsContent value="codex" className="mt-3 space-y-2 outline-none">
+                  <InstallerCommandRow
+                    dialogOpen={open}
+                    command={buildMekoInstallerCommand("codex", provisionStatus.mcp_server_url)}
+                    copyField="mcpInstallCodex"
                     copiedField={copiedField}
                     onCopy={handleCopy}
                   />
