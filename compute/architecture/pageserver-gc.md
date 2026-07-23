@@ -120,12 +120,17 @@ runs:
 5. **Dequeue**, strictly after the actions succeed: a candidate leaves
    the queue only once its garbage is gone, and idempotent actions make
    action-before-dequeue crash-safe without a cross-table transaction (a
-   crash in between re-runs the tick into a no-op). Trim rows dequeue
-   **collapse-on-visit** — a visited block's other trim candidates
-   `<= cutoff` are already-covered and go too (an under-cap tick sweeps
-   `due_lsn <= cutoff AND blknum >= 0` per bucket). Drop/shrink events
-   dequeue by **exact PK**, never by cutoff range — a drop only covers
-   `<= its due_lsn`.
+   crash in between re-runs the tick into a no-op). Every kind dequeues
+   by **exact PK** — one `unnest` DELETE per bucket naming exactly the
+   acted rows. Never a range sweep or a collapse: a row the select
+   never returned can't be touched (a materialiser candidate landing
+   mid-tick survives), an unacted drop/shrink event above the cutoff
+   survives to its own tick (a drop only covers `<= its due_lsn`), and
+   a tie group wider than the select cap — a `DROP DATABASE` fan-out
+   at one due_lsn — drains across ticks with no boundary arithmetic.
+   The cost: a visited block's duplicate trim candidates outside the
+   batch stay queued and no-op re-trim later, bounded by the every-n
+   sampler and the materialiser buffer's same-block folding.
 
 The whole drain (select, actions, dequeue) runs on a dedicated
 **`yb-pageserver:gc` connection pool** sized to the action width, so a
@@ -159,7 +164,7 @@ one doc.)
 | `pageserver_yb_gc_applied_cutoff_lsn` | UIntGauge | — | Current GC cutoff (`applied_gc_cutoff_lsn`), per tick. `pageserver_last_record_lsn − this` = retained-history window. Frozen while the queue grows ⇒ cutoff pinned (lease/child/`consistent_lsn`), not a slow drain. |
 | `pageserver_yb_gc_candidates_emitted_total` | IntCounter | `path` (`ingest`/`materialiser`/`drop`/`shrink`) | Candidates emitted into `pending_gc`: trim by producer path (post `gc_candidate_every_n_bases` sampling), drop/shrink events unsampled. `rate()` = candidate insert rate. |
 | `pageserver_yb_gc_candidates_read_total` | IntCounter | — | Rows the drain's `pending_gc` select returned per tick (pre-routing). `== gc_drain_limit` ⇒ capped; `≫ removed` ⇒ read but not cleared. |
-| `pageserver_yb_gc_candidates_removed_total` | IntCounter | — | Rows deleted from `pending_gc` by the dequeue (summed DELETE rowcounts; exceeds `read` under collapse). `rate(emitted) − rate(removed)` = queue growth. |
+| `pageserver_yb_gc_candidates_removed_total` | IntCounter | — | Rows deleted from `pending_gc` by the dequeue (= the tick's acted rows; ≈ `read` at steady state). `rate(emitted) − rate(removed)` = queue growth. |
 | `pageserver_yb_gc_pages_rows_deleted_total` | IntCounter | — | `pageserver.pages` rows deleted by the drain (trim / drop / shrink). `rate()` = reclamation throughput. |
 | `pageserver_yb_gc_drop_deferred_total` | IntCounter | — | Drop events a tick left queued because their fork had a materialise job pending. Occasional increments are normal; sustained growth means a wedged job is pinning that fork's reclamation. |
 | `pageserver_yb_gc_drain_ticks_total` | IntCounter | `outcome` (`drained`/`capped`/`empty`/`lease_grace`/`disabled`/`error`) | One increment per drain-loop iteration, by how it ended. `rate(capped)/rate(all)` = keep-up alarm; `lease_grace`/`disabled` moving = GC silently gated off; `rate(all)` = tick cadence. |

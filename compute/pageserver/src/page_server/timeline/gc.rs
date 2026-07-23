@@ -134,8 +134,8 @@ impl Timeline {
             .await
             .map_err(GcError::Persistence)?;
         crate::metrics::GC_APPLIED_CUTOFF_LSN.set(applied_cutoff.0);
-        // Under the limit ⇒ every due candidate was returned, so the
-        // dequeue may range-sweep instead of naming blocks.
+        // Under the limit ⇒ every due candidate was returned — the
+        // tick fully drains the due span (drained vs capped label).
         let all_due_visited = due.len() < drain_limit;
         // Residual drain lag: the due span a capped tick couldn't
         // reach; 0 when everything due was drained (incl. empty
@@ -186,23 +186,18 @@ impl Timeline {
 
         // Dequeue strictly after every action succeeded: a candidate
         // may only leave the queue once its garbage is gone. Failure
-        // above leaves everything queued for the next tick. Trim rows:
-        // collapse-on-visit / sweep — see `dequeue_gc_trim_rows` for the
-        // two modes + safety bounds. Drop/shrink events: by exact
-        // PK, never a cutoff-range sweep — a drop only covers <= its
-        // due_lsn, so a same-fork drop/shrink event still queued above the
-        // cutoff must survive to its own tick.
-        let mut removed = store
-            .dequeue_gc_trim_rows(self.branch_id, &trim_rows, applied_cutoff, all_due_visited)
+        // above leaves everything queued for the next tick. Exactly
+        // the acted rows go — deferred drop events are not in `acted`
+        // and stay queued (see `dequeue_pending_gc_rows` for why every
+        // kind dequeues by exact PK).
+        let mut acted = trim_rows;
+        acted.extend(drop_rows);
+        acted.extend(shrink_rows);
+        let removed = store
+            .dequeue_pending_gc_rows(self.branch_id, &acted)
             .await
             .map_err(GcError::Persistence)?;
-        let mut drop_shrink_events = drop_rows;
-        drop_shrink_events.extend(shrink_rows);
-        removed += store
-            .dequeue_gc_drop_shrink_events(self.branch_id, &drop_shrink_events)
-            .await
-            .map_err(GcError::Persistence)?;
-        result.candidates_drained = (trim_rows.len() + drop_shrink_events.len()) as u64;
+        result.candidates_drained = acted.len() as u64;
         crate::metrics::GC_CANDIDATES_REMOVED.inc_by(removed);
         crate::metrics::GC_PAGES_ROWS_DELETED.inc_by(result.pages_rows_deleted);
         crate::metrics::GC_DRAIN_TICKS

@@ -299,8 +299,8 @@ pub(crate) static GC_CANDIDATES_READ: Lazy<IntCounter> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-/// Rows the dequeue actually deleted (may exceed read under
-/// collapse). rate(emitted) − rate(removed) = queue growth.
+/// Rows the dequeue deleted (= the tick's acted rows; ≈ read at
+/// steady state). rate(emitted) − rate(removed) = queue growth.
 pub(crate) static GC_CANDIDATES_REMOVED: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "pageserver_yb_gc_candidates_removed_total",

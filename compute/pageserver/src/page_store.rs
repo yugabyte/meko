@@ -2589,147 +2589,35 @@ impl PageStore {
             .collect::<Result<Vec<_>>>()
     }
 
-    /// Collapse-on-visit dequeue. Invariant: discard only what the
-    /// tick's actions provably covered — a trim anchors at the CUTOFF,
-    /// so all of a visited block's candidates <= cutoff are covered,
-    /// including ones the capped select never returned. Two modes:
-    /// `all_due_visited` sweeps `due_lsn <= cutoff AND blknum >= 0`
-    /// per visited bucket (the guard keeps unacted drop/shrink event rows
-    /// queued — a drop's future action covers <= drop_lsn, never
-    /// <= cutoff); capped mode collapses per VISITED block only.
-    /// Race exception: a materialiser candidate at due_lsn <= cutoff
-    /// (stamped at a folded delta's LSN) for a block this tick never
-    /// trimmed, landing in a visited bucket between the select and the
-    /// sweep, is swept too — that block waits for its next
-    /// materialisation. Bounded, best-effort; see TODO(gc_completed_lsn).
-    /// Must run strictly after the actions succeed (crash in between
-    /// re-drains; trims are idempotent). Returns rows actually deleted
-    /// (can exceed `rows.len()` under collapse).
-    pub async fn dequeue_gc_trim_rows(
+    /// Delete the given candidates by their EXACT PK (bucket, due_lsn,
+    /// identity, kind) — one static `unnest` statement per bucket.
+    /// Because it only ever names rows the caller passed in:
+    /// - a row the select never returned can't be touched, so a
+    ///   materialiser candidate landing mid-tick survives to its own
+    ///   tick;
+    /// - an unacted same-fork drop/shrink event above the cutoff
+    ///   survives (a drop's action only covers `<= its due_lsn`,
+    ///   never `<= cutoff`);
+    /// - a tie group wider than the select cap (a DROP DATABASE
+    ///   fan-out at one due_lsn) drains across ticks with no boundary
+    ///   arithmetic — each tick deletes exactly its batch.
+    ///
+    /// Cost: a visited block's duplicate trim candidates outside the
+    /// batch stay queued and no-op re-trim on their own tick — bounded
+    /// by the every-n sampler and the materialiser buffer's folding.
+    /// Returns rows removed.
+    pub async fn dequeue_pending_gc_rows(
         &self,
         branch_id: BranchId,
         rows: &[PendingGcRow],
-        cutoff: Lsn,
-        all_due_visited: bool,
     ) -> Result<u64> {
         if rows.is_empty() {
             return Ok(0);
         }
         let branch_s = branch_id.to_string();
-        let mut removed: u64 = 0;
-        let cutoff_i = cutoff.0 as i64;
-
-        // Distinct visited blocks, grouped by bucket. (Also the bucket
-        // set for sweep mode — a bucket with no visited row has no due
-        // trim rows when `all_due_visited`.)
-        let mut by_bucket: std::collections::HashMap<i32, Vec<GcBlockIdent>> =
-            std::collections::HashMap::new();
-        {
-            let mut seen: std::collections::HashSet<GcBlockIdent> =
-                std::collections::HashSet::with_capacity(rows.len());
-            for row in rows {
-                debug_assert!(row.blknum >= 0, "dequeue visited rows are trim rows");
-                let block = (
-                    row.spcnode,
-                    row.dbnode,
-                    row.relnode,
-                    row.forknum,
-                    row.blknum,
-                );
-                if seen.insert(block) {
-                    by_bucket.entry(row.bucket_id).or_default().push(block);
-                }
-            }
-        }
-
-        if all_due_visited {
-            // Sweep: everything due (blknum >= 0) in these buckets was
-            // trimmed this tick.
-            let sql = format!(
-                "DELETE FROM \"{}\".pending_gc \
-                 WHERE branch_id = $1 AND bucket_id = $2 \
-                   AND due_lsn <= $3 AND blknum >= 0",
-                self.schema
-            );
-            for bucket in by_bucket.keys() {
-                removed += self
-                    .ysql_client
-                    .execute(&sql, &[&branch_s, bucket, &cutoff_i])
-                    .await
-                    .with_context(|| {
-                        format!("dequeue_gc_trim_rows sweep branch={branch_id} bucket={bucket}")
-                    })?;
-            }
-            return Ok(removed);
-        }
-
-        // Capped: collapse per visited block. `unnest` with per-column
-        // arrays keeps the statement STATIC — 8 bound params regardless
-        // of block count — so YB parses/plans it once instead of eating
-        // the planning cost of a freshly-built ~5-params-per-block IN
-        // list every drain tick.
-        let sql = format!(
-            "DELETE FROM \"{}\".pending_gc \
-             WHERE branch_id = $1 AND bucket_id = $2 AND due_lsn <= $3 \
-               AND (spcnode, dbnode, relnode, forknum, blknum) IN ( \
-                   SELECT * FROM unnest($4::bigint[], $5::bigint[], $6::bigint[], \
-                                        $7::smallint[], $8::bigint[]))",
-            self.schema
-        );
-        for (bucket, blocks) in by_bucket {
-            let mut spcnodes = Vec::with_capacity(blocks.len());
-            let mut dbnodes = Vec::with_capacity(blocks.len());
-            let mut relnodes = Vec::with_capacity(blocks.len());
-            let mut forknums = Vec::with_capacity(blocks.len());
-            let mut blknums = Vec::with_capacity(blocks.len());
-            for b in &blocks {
-                spcnodes.push(b.0);
-                dbnodes.push(b.1);
-                relnodes.push(b.2);
-                forknums.push(b.3);
-                blknums.push(b.4);
-            }
-            removed += self
-                .ysql_client
-                .execute(
-                    &sql,
-                    &[
-                        &branch_s, &bucket, &cutoff_i, &spcnodes, &dbnodes, &relnodes, &forknums,
-                        &blknums,
-                    ],
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "dequeue_gc_trim_rows collapse branch={branch_id} bucket={bucket} \
-                         blocks={}",
-                        blocks.len()
-                    )
-                })?;
-        }
-        Ok(removed)
-    }
-
-    /// Dequeue drop/shrink event rows by their EXACT PK (bucket,
-    /// identity, kind, due_lsn), strictly after their action succeeded —
-    /// never a range/collapse sweep: a drop's action only covers
-    /// `<= its due_lsn`, so a second event for the same fork (e.g. a
-    /// relnode reused and re-dropped) that this tick didn't act on must
-    /// stay queued for its own tick. Returns rows removed. `unnest`
-    /// keeps the statement static (one prepared shape per bucket).
-    pub async fn dequeue_gc_drop_shrink_events(
-        &self,
-        branch_id: BranchId,
-        drop_shrink_events: &[PendingGcRow],
-    ) -> Result<u64> {
-        if drop_shrink_events.is_empty() {
-            return Ok(0);
-        }
-        let branch_s = branch_id.to_string();
         let mut by_bucket: std::collections::HashMap<i32, Vec<&PendingGcRow>> =
             std::collections::HashMap::new();
-        for r in drop_shrink_events {
-            debug_assert!(r.blknum < 0, "drop/shrink dequeue got a trim row");
+        for r in rows {
             by_bucket.entry(r.bucket_id).or_default().push(r);
         }
         let sql = format!(
@@ -2765,7 +2653,7 @@ impl PageStore {
                 .await
                 .with_context(|| {
                     format!(
-                        "dequeue_gc_drop_shrink_events branch={branch_id} bucket={bucket} n={}",
+                        "dequeue_pending_gc_rows branch={branch_id} bucket={bucket} n={}",
                         rows.len()
                     )
                 })?;
@@ -4257,6 +4145,11 @@ mod tests {
     /// don't create the schema themselves; that's the migration's
     /// job and there's only one source of truth for it.
     static SHARED_STORE: tokio::sync::OnceCell<PageStore> = tokio::sync::OnceCell::const_new();
+    // Never assert exact DELETE rowcounts in these tests: ysql_client
+    // retries transient YB errors at-least-once, so a retry after a
+    // committed-but-unacked first attempt reports the SECOND
+    // execution's count (undercounts under load — seen in CI). Assert
+    // the surviving rows instead; `== 0` counts are retry-safe.
     const PROD_SCHEMA: &str = "pageserver";
 
     async fn make_store(_suffix: &str) -> (PageStore, String) {
@@ -6285,9 +6178,8 @@ mod tests {
         assert_eq!(dues, vec![1, 2, 3, 4, 5], "limit must keep oldest");
     }
 
-    /// Scenario: an under-cap drain (sweep mode) removes the due rows
-    /// and ONLY the due rows — not-yet-due candidates stay queued for
-    /// their own tick.
+    /// Scenario: the dequeue removes the selected due rows and ONLY
+    /// them — not-yet-due candidates stay queued for their own tick.
     #[tokio::test]
     async fn pending_gc_dequeue_removes_exactly_drained() {
         let (store, _schema) = make_store("gc_dequeue").await;
@@ -6303,9 +6195,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(drained.len(), 3);
-        // 3 < limit ⇒ all due rows visited ⇒ sweep mode.
         store
-            .dequeue_gc_trim_rows(branch, &drained, Lsn(30), true)
+            .dequeue_pending_gc_rows(branch, &drained)
             .await
             .unwrap();
 
@@ -6318,14 +6209,14 @@ mod tests {
     }
 
     /// Scenario: a budget-capped drain visits a block through ONE of
-    /// its queued candidates; collapse-on-visit must also dequeue the
-    /// block's other due candidates (work already covered — the trim
-    /// anchors at the cutoff, not at the selected row's due_lsn),
-    /// while (a) the block's above-cutoff candidate and (b) an
-    /// unvisited block's due candidate both survive.
+    /// its queued candidates. The exact-PK dequeue deletes just that
+    /// row; the block's other due candidates stay queued and re-select
+    /// on a later tick (where their trims no-op) — the accepted cost
+    /// of having no collapse. The block's above-cutoff candidate and
+    /// an unvisited block's due candidate also survive.
     #[tokio::test]
-    async fn pending_gc_dequeue_collapses_visited_blocks() {
-        let (store, _schema) = make_store("gc_collapse").await;
+    async fn pending_gc_dequeue_leaves_unselected_duplicates() {
+        let (store, _schema) = make_store("gc_no_collapse").await;
         let branch = rand_branch();
 
         store
@@ -6333,9 +6224,9 @@ mod tests {
                 branch,
                 &[
                     gc_cand(16401, 0, 7, 5),  // visited (selected)
-                    gc_cand(16401, 0, 7, 15), // duplicate, due — must collapse
-                    gc_cand(16401, 0, 7, 25), // duplicate, due — must collapse
-                    gc_cand(16401, 0, 7, 45), // above cutoff — must survive
+                    gc_cand(16401, 0, 7, 15), // duplicate, due — stays queued
+                    gc_cand(16401, 0, 7, 25), // duplicate, due — stays queued
+                    gc_cand(16401, 0, 7, 45), // above cutoff — survives
                     gc_cand(16401, 0, 8, 12), // other block, due, NOT selected
                 ],
             )
@@ -6350,7 +6241,7 @@ mod tests {
         assert_eq!(drained.len(), 1);
         assert_eq!((drained[0].blknum, drained[0].due_lsn.0), (7, 5));
         store
-            .dequeue_gc_trim_rows(branch, &drained, Lsn(30), false)
+            .dequeue_pending_gc_rows(branch, &drained)
             .await
             .unwrap();
 
@@ -6359,65 +6250,59 @@ mod tests {
             .iter()
             .map(|r| (r.blknum, r.due_lsn.0))
             .collect();
-        assert_eq!(
-            left,
-            vec![(8, 12), (7, 45)],
-            "visited block collapses ≤ cutoff; unvisited + above-cutoff survive"
-        );
-    }
-
-    /// Scenario: sweep mode must not discard drop/shrink event rows (drop −2 /
-    /// shrink −1) — the drain skips them unacted, so dequeueing them
-    /// would silently drop future Part 2/3 work. The `blknum >= 0`
-    /// guard keeps them queued through a sweep of the same due range.
-    #[tokio::test]
-    async fn pending_gc_dequeue_sweep_preserves_drop_shrink_events() {
-        let (store, _schema) = make_store("gc_drop_shrink_event").await;
-        let branch = rand_branch();
-
-        store
-            .put_pending_gc(
-                branch,
-                &[
-                    gc_cand(16401, 0, 1, 10), // trim, due
-                    gc_cand(16401, 0, 2, 20), // trim, due
-                    gc_cand(16401, 0, -2, 8), // drop event, due — must survive
-                ],
-            )
-            .await
-            .unwrap();
-
-        let due = store
+        assert_eq!(left, vec![(8, 12), (7, 15), (7, 25), (7, 45)]);
+        // The leftovers re-select on the next tick — nothing is lost.
+        let next = store
             .select_due_pending_gc(branch, Lsn(30), 1000)
             .await
             .unwrap();
-        assert_eq!(due.len(), 3, "select returns drop/shrink events too");
-        // The drain's caller filters drop/shrink events out of the visited set.
-        let visited: Vec<PendingGcRow> = due.into_iter().filter(|r| r.blknum >= 0).collect();
-        store
-            .dequeue_gc_trim_rows(branch, &visited, Lsn(30), true)
-            .await
-            .unwrap();
+        assert_eq!(next.len(), 3, "due leftovers re-select next tick");
+    }
 
-        let left: Vec<(i64, u64)> = all_pending(&store, branch)
-            .await
-            .iter()
-            .map(|r| (r.blknum, r.due_lsn.0))
+    /// Scenario: a tie group wider than the select cap — a DROP
+    /// DATABASE fan-out queues many drop events at ONE due_lsn (one
+    /// per fork). Each capped tick selects a batch, acts, and deletes
+    /// exactly that batch by PK; the remainder re-selects until the
+    /// group drains. No tick may wedge (select the same rows forever)
+    /// or over-delete (remove rows it didn't act).
+    #[tokio::test]
+    async fn pending_gc_dequeue_tie_group_drains_across_ticks() {
+        let (store, _schema) = make_store("gc_tie_group").await;
+        let branch = rand_branch();
+
+        let fanout: Vec<PendingGcRow> = (0..5)
+            .map(|i| gc_cand(16401 + i, 0, GC_KIND_DROP, 10)) // one due_lsn
             .collect();
-        assert_eq!(
-            left,
-            vec![(-2, 8)],
-            "sweep clears due trim rows; the unacted drop event (-2) stays queued"
+        store.put_pending_gc(branch, &fanout).await.unwrap();
+
+        let mut ticks_used = 0;
+        for _tick in 0..5 {
+            let batch = store
+                .select_due_pending_gc(branch, Lsn(20), 2)
+                .await
+                .unwrap();
+            if batch.is_empty() {
+                break;
+            }
+            assert!(batch.len() <= 2, "select respects the cap");
+            ticks_used += 1;
+            store.dequeue_pending_gc_rows(branch, &batch).await.unwrap();
+        }
+        // 5 rows at cap 2 need >= 3 ticks — a tick can't over-drain.
+        assert!(ticks_used >= 3, "drained in {ticks_used} ticks");
+        assert!(
+            all_pending(&store, branch).await.is_empty(),
+            "no stragglers"
         );
     }
 
-    /// Scenario: drop/shrink events dequeue by EXACT PK, never by cutoff range.
-    /// A fork has an acted drop (due 10) + shrink (due 20) and a second
-    /// drop event at due 300 (relnode reused and re-dropped later —
-    /// not yet due, not acted): dequeueing the two acted rows must
-    /// leave the future drop event AND an unrelated trim row queued.
+    /// Scenario: one dequeue call covers every kind by EXACT PK. A
+    /// fork has an acted drop (due 10), shrink (due 20), and trim
+    /// (due 15) plus a second drop event at due 300 (relnode reused
+    /// and re-dropped later — not yet due, not acted): dequeueing the
+    /// three acted rows must leave the future drop event queued.
     #[tokio::test]
-    async fn pending_gc_drop_shrink_dequeue_exact_pk() {
+    async fn pending_gc_dequeue_exact_pk_mixed_kinds() {
         let (store, _schema) = make_store("gc_drop_shrink_event_pk").await;
         let branch = rand_branch();
 
@@ -6428,26 +6313,20 @@ mod tests {
                     gc_cand(16401, 0, GC_KIND_DROP, 10),   // acted this tick
                     gc_cand(16401, 0, GC_KIND_SHRINK, 20), // acted this tick
                     gc_cand(16401, 0, GC_KIND_DROP, 300),  // future re-drop — must survive
-                    gc_cand(16401, 0, 7, 15),              // trim row — not a drop/shrink event
+                    gc_cand(16401, 0, 7, 15),              // trim row, acted this tick
                 ],
             )
             .await
             .unwrap();
 
         // The drain dequeues the rows the select returned (bucket_id
-        // populated), filtered to drop/shrink events.
+        // populated) — all kinds in one call.
         let due = store
             .select_due_pending_gc(branch, Lsn(100), 1000)
             .await
             .unwrap();
-        let drop_shrink_events: Vec<PendingGcRow> =
-            due.into_iter().filter(|r| r.blknum < 0).collect();
-        assert_eq!(drop_shrink_events.len(), 2);
-        let removed = store
-            .dequeue_gc_drop_shrink_events(branch, &drop_shrink_events)
-            .await
-            .unwrap();
-        assert_eq!(removed, 2, "exactly the acted drop/shrink events go");
+        assert_eq!(due.len(), 3);
+        store.dequeue_pending_gc_rows(branch, &due).await.unwrap();
 
         let left: Vec<(i64, u64)> = all_pending(&store, branch)
             .await
@@ -6456,8 +6335,8 @@ mod tests {
             .collect();
         assert_eq!(
             left,
-            vec![(7, 15), (GC_KIND_DROP, 300)],
-            "the not-yet-due drop event and the trim row must survive"
+            vec![(GC_KIND_DROP, 300)],
+            "the not-yet-due drop event must survive"
         );
     }
 
@@ -6577,7 +6456,7 @@ mod tests {
         ];
         store.put_pages(branch, &rows).await.unwrap();
 
-        let deleted = store
+        store
             .gc_trim_blocks(
                 branch,
                 GC_SPC,
@@ -6589,7 +6468,6 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(deleted, 5, "10,15,40,55 and the 70-delta twin");
 
         let a = store
             .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk_a as i64)
@@ -6658,7 +6536,7 @@ mod tests {
 
         // A drain triggered by the (oldest) candidate at due=30 still
         // trims to the cutoff's anchor at 70.
-        let deleted = store
+        store
             .gc_trim_blocks(
                 branch,
                 GC_SPC,
@@ -6670,7 +6548,6 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(deleted, 3, "30, 40, 55 all collected in one visit");
 
         let left = store
             .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, blk as i64)
@@ -6734,11 +6611,10 @@ mod tests {
             .await
             .unwrap();
 
-        let deleted = store
+        store
             .gc_drop_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
             .await
             .unwrap();
-        assert_eq!(deleted, 3, "both blocks' rows <= due go, lsn-200 stays");
 
         let b0 = store
             .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, 0)
@@ -6819,11 +6695,10 @@ mod tests {
             .await
             .unwrap();
 
-        let deleted = store
+        store
             .gc_shrink_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
             .await
             .unwrap();
-        assert_eq!(deleted, 2, "blocks 2 and 3's lsn-10 rows");
 
         for blk in [0u32, 1] {
             let rows = store
