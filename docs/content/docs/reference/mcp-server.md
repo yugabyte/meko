@@ -93,7 +93,7 @@ The Meko MCP Server provides the following tools.
 | `datapack_create` | Provision a new datapack with database and MCP details.<br>Use this to set up a new isolated Meko environment.<br>Typical inputs: `scope, conversation_id, datapack_id, name` |
 | `datapack_describe` | Return datapack details and optional status.<br>Use this to inspect an existing datapack.<br>Typical inputs: `scope, conversation_id, datapack_id, name, include_status` |
 | `datapack_list` | List available datapacks.<br>Use this to see all workspaces/environments.<br>Typical inputs: `scope, conversation_id, datapack_id, name` |
-| `datapack_update` | Update a datapack's database connection string.<br>Use this to point a datapack to a new database connection. Typically used when you have access to multiple datapacks. <br>Typical inputs: `scope, conversation_id, datapack_id, name, include_status, connection_string` |
+| `datapack_update` | Rename a datapack and/or update its description. Both `name` and `description` are optional; pass at least one. Returns `nothing_to_update` if neither is provided.<br>Typical inputs: `scope, conversation_id, datapack_id, name, description` |
 | `datapack_delete` | Permanently delete a datapack.<br>Use this to completely delete an environment.<br>Typical inputs: `scope, conversation_id, datapack_id, name` |
 
 ### Artifact tools
