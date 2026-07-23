@@ -59,6 +59,10 @@ PG_BUILD_TYPE = "release"
 DAEMON_BINS = [
     "yb-pageserver",
     "yb_amp_local",
+    # yb_amp_local execs a sibling `controller` binary (see
+    # local_env.rs::controller_bin / localenv.go::ControllerBin), so it must be
+    # staged next to it.
+    "controller",
     "yb-safekeeper",
     "yb-compute-ctl",
     "yb-endpoint-storage",
@@ -369,11 +373,13 @@ def main():
         cargo += ["-p", crate]
     run(cargo)
 
-    # yb_amp_local is a Go binary (controller/local/), no longer a cargo crate.
-    # Build it into the cargo target dir so the DAEMON_BINS copy (and its own
-    # next-to-itself controller lookup) resolve it.
+    # yb_amp_local and controller are Go binaries (controller/), no longer cargo
+    # crates. Build both into the cargo target dir so the DAEMON_BINS copy (and
+    # yb_amp_local's next-to-itself controller lookup) resolve them.
     run(["go", "build", "-C", "controller", "-o", str(target_dir / "yb_amp_local"),
          "./local/cmd/yb_amp_local"])
+    run(["go", "build", "-C", "controller", "-o", str(target_dir / "controller"),
+         "./cmd/controller"])
 
     # `yb_amp.so` + walredo/utils extensions are loaded by the compute postgres;
     # their wire protocol must match these binaries, and they link the Rust
