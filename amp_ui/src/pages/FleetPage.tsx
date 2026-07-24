@@ -64,7 +64,9 @@ export default function FleetPage() {
     return pools.data;
   }, [pools.data, currentUser.data]);
 
-  const fleet = useFleet(myPools);
+  // The fleet is the operator's management view: surface failed-creation orphans
+  // too, so they're visible to delete (other views — counts, pickers — omit them).
+  const fleet = useFleet(myPools, true);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const navigate = useNavigate();

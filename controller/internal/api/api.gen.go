@@ -333,6 +333,9 @@ type BranchId = openapi_types.UUID
 // EndpointId defines model for EndpointId.
 type EndpointId = openapi_types.UUID
 
+// IncludeFailed defines model for IncludeFailed.
+type IncludeFailed = bool
+
 // Limit defines model for Limit.
 type Limit = int
 
@@ -382,6 +385,9 @@ type ListProjectsParams struct {
 
 	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
 	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+
+	// IncludeFailed Whether to include projects whose creation failed (an orphan left behind when a `create_project` task failed mid-provisioning). Defaults to `false` — the list is scoped to usable clusters, which is what a picker, a count, or a client that operates on each result wants. Pass `true` (e.g. from an operator's fleet view) to also surface the failed orphans so they can be seen and deleted. Affects both the returned page and its total count, so pagination stays consistent.
+	IncludeFailed *IncludeFailed `form:"include_failed,omitempty" json:"include_failed,omitempty"`
 }
 
 // ListBranchesParams defines parameters for ListBranches.
@@ -1093,6 +1099,22 @@ func NewListProjectsRequest(server string, poolId PoolId, params *ListProjectsPa
 		if params.Offset != nil {
 
 			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "offset", runtime.ParamLocationQuery, *params.Offset); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.IncludeFailed != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "include_failed", runtime.ParamLocationQuery, *params.IncludeFailed); err != nil {
 				return nil, err
 			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
 				return nil, err
@@ -4010,6 +4032,13 @@ func (w *ServerInterfaceWrapper) ListProjects(ctx echo.Context) error {
 	err = runtime.BindQueryParameter("form", true, false, "offset", ctx.QueryParams(), &params.Offset)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter offset: %s", err))
+	}
+
+	// ------------- Optional query parameter "include_failed" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "include_failed", ctx.QueryParams(), &params.IncludeFailed)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter include_failed: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments

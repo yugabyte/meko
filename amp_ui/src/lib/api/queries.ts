@@ -115,9 +115,13 @@ export function useCreateStoragePool() {
 
 /* ---- Projects (clusters) ---- */
 
+// The cluster picker lists usable clusters only — the server default hides
+// failed-creation orphans. The key carries the include-failed flag so the
+// hidden-failed and show-all caches stay distinct (both share the qk.projects
+// prefix, which invalidations still match).
 export function useProjects(poolId: string | undefined) {
   return useQuery({
-    queryKey: qk.projects(poolId ?? ""),
+    queryKey: [...qk.projects(poolId ?? ""), false] as const,
     enabled: !!poolId,
     queryFn: () => listProjects(poolId!),
     select: (data) => data.projects,
@@ -128,13 +132,20 @@ export function useProjects(poolId: string | undefined) {
  *  table renders. */
 export type FleetRow = { project: Project; pool: StoragePool };
 
-/** Fan out across every pool to assemble the org-wide cluster fleet. */
-export function useFleet(pools: StoragePool[] | undefined) {
+/** Fan out across every pool to assemble the org-wide cluster fleet.
+ *  includeFailed surfaces failed-creation orphans (an operator's fleet view, so
+ *  they can be seen and deleted); the default keeps counts/pickers clean. */
+export function useFleet(
+  pools: StoragePool[] | undefined,
+  includeFailed = false,
+) {
   const list = pools ?? [];
   return useQueries({
     queries: list.map((pool) => ({
-      queryKey: qk.projects(pool.id),
-      queryFn: () => listProjects(pool.id),
+      // Key carries the flag so the show-all fleet cache stays distinct from the
+      // usable-only cache the picker/counts use.
+      queryKey: [...qk.projects(pool.id), includeFailed] as const,
+      queryFn: () => listProjects(pool.id, { includeFailed }),
       select: (data: { projects: Project[] }) => data.projects,
     })),
     combine: (results) => ({

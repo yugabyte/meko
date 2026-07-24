@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -362,4 +363,60 @@ func mustCreateProject(t *testing.T, client *api.ClientWithResponses, store *tas
 		t.Fatalf("GetProject(%q) status = %d, body = %s", name, gp.StatusCode(), gp.Body)
 	}
 	return *gp.JSON200
+}
+
+// recordingBackend wraps MemBackend to capture the includeFailed flag the
+// handler passes to ListProjects. MemBackend itself ignores the flag (it has no
+// failed-creation orphans), so this is how we assert the handler's default
+// (param omitted -> false, i.e. usable clusters only) and its opt-in wiring —
+// the logic the DB-backed pg_projects_test can't reach through the HTTP layer.
+type recordingBackend struct {
+	*core.MemBackend
+	mu                sync.Mutex
+	lastIncludeFailed bool
+}
+
+func (r *recordingBackend) ListProjects(ctx context.Context, poolID uuid.UUID, limit, offset int, includeFailed bool) ([]core.Project, int, error) {
+	r.mu.Lock()
+	r.lastIncludeFailed = includeFailed
+	r.mu.Unlock()
+	return r.MemBackend.ListProjects(ctx, poolID, limit, offset, includeFailed)
+}
+
+func (r *recordingBackend) got() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastIncludeFailed
+}
+
+// TestListProjectsIncludeFailedParam pins the handler's include_failed handling:
+// omitted defaults to false (scope to usable clusters), and an explicit value is
+// passed through verbatim.
+func TestListProjectsIncludeFailedParam(t *testing.T) {
+	rec := &recordingBackend{MemBackend: core.NewMemBackend()}
+	client, _ := newTestServerBackend(t, rec, api.Provisioning{})
+	ctx := context.Background()
+	u := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, u.Id, "pool")
+
+	f, tr := false, true
+	for _, tt := range []struct {
+		name  string
+		param *api.ListProjectsParams
+		want  bool
+	}{
+		{"omitted defaults to false", &api.ListProjectsParams{}, false},
+		{"explicit false", &api.ListProjectsParams{IncludeFailed: &f}, false},
+		{"explicit true", &api.ListProjectsParams{IncludeFailed: &tr}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := client.ListProjectsWithResponse(ctx, pool.Id, tt.param)
+			if err != nil || resp.StatusCode() != http.StatusOK {
+				t.Fatalf("ListProjects: status=%d err=%v", resp.StatusCode(), err)
+			}
+			if got := rec.got(); got != tt.want {
+				t.Errorf("handler passed includeFailed=%v, want %v", got, tt.want)
+			}
+		})
+	}
 }

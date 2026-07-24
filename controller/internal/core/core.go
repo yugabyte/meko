@@ -175,8 +175,10 @@ type Backend interface {
 	// ListProjects returns a page of the projects in the pool ordered by
 	// (created_at, id), each with DefaultBranch populated, and the total number
 	// of projects in the pool (ignoring limit/offset). Returns ErrNotFound if
-	// the pool does not exist.
-	ListProjects(ctx context.Context, poolID uuid.UUID, limit, offset int) ([]Project, int, error)
+	// the pool does not exist. When includeFailed is false, projects whose
+	// create_project task failed (orphans left mid-provisioning) are excluded
+	// from both the page and the total; when true they are included.
+	ListProjects(ctx context.Context, poolID uuid.UUID, limit, offset int, includeFailed bool) ([]Project, int, error)
 	// GetProject returns the project addressed by (poolID, projectID) with
 	// DefaultBranch populated, validating that the project belongs to the pool.
 	// Returns ErrNotFound if any link is missing.

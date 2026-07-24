@@ -193,6 +193,18 @@ const projectSelect = `SELECT p.id::text, p.storage_pool_id::text, p.name, p.cre
 	JOIN storage_pool sp ON sp.id = p.storage_pool_id
 	JOIN branch b ON b.project_id = p.id AND b.is_default`
 
+// projectCreateNotFailed excludes a project whose create_project task failed.
+// The project row is written mid-provisioning (the create_project step's
+// EnsureProject) before the later storage steps run, so a task that fails
+// afterward leaves an orphan project that should not surface as a real cluster.
+// Each project has exactly one create_project task — a retry mints a fresh
+// project id — so a single failed task is definitive. The failed task itself is
+// left intact so it still shows on the tasks page. Assumes the project table is
+// aliased `p`.
+const projectCreateNotFailed = ` AND NOT EXISTS (
+		SELECT 1 FROM task t
+		WHERE t.project_id = p.id AND t.kind = 'create_project' AND t.status = 'failed')`
+
 func (b *PgBackend) getProject(ctx context.Context, poolID, projectID uuid.UUID) (Project, error) {
 	row := b.pool.QueryRow(ctx,
 		projectSelect+` WHERE p.id = $1::uuid AND sp.id = $2::uuid`,
@@ -208,19 +220,32 @@ func (b *PgBackend) GetProject(ctx context.Context, poolID, projectID uuid.UUID)
 	return b.getProject(ctx, poolID, projectID)
 }
 
-func (b *PgBackend) ListProjects(ctx context.Context, poolID uuid.UUID, limit, offset int) ([]Project, int, error) {
+func (b *PgBackend) ListProjects(ctx context.Context, poolID uuid.UUID, limit, offset int, includeFailed bool) ([]Project, int, error) {
 	// A missing pool 404s rather than returning an empty page.
 	if _, err := b.GetStoragePool(ctx, poolID); err != nil {
 		return nil, 0, err
 	}
+	// Scope to usable clusters unless the caller opts in: exclude failed-creation
+	// orphans from both the page and its total. Included only when includeFailed
+	// is set (an operator's fleet view), so they can be seen and deleted.
+	filter := ""
+	if !includeFailed {
+		filter = projectCreateNotFailed
+	}
+	// The count must match the page: projectSelect INNER-JOINs the default branch,
+	// so a project with no is_default branch never appears in the page — require
+	// one in the count too, or total would over-report and a cluster would be
+	// "counted but never returned", breaking pagination.
 	total, err := b.count(ctx,
-		`SELECT count(*) FROM project WHERE storage_pool_id = $1::uuid`,
+		`SELECT count(*) FROM project p
+		 WHERE p.storage_pool_id = $1::uuid
+		   AND EXISTS (SELECT 1 FROM branch b WHERE b.project_id = p.id AND b.is_default)`+filter,
 		poolID.String())
 	if err != nil {
 		return nil, 0, fmt.Errorf("count projects: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
-		projectSelect+` WHERE sp.id = $1::uuid
+		projectSelect+` WHERE sp.id = $1::uuid`+filter+`
 		 ORDER BY p.created_at, p.id LIMIT $2 OFFSET $3`,
 		poolID.String(), limit, offset)
 	if err != nil {

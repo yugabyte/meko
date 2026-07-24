@@ -44,7 +44,7 @@ type RequestOptions = {
   method?: string;
   body?: unknown;
   /** Query params; undefined/null values are dropped. */
-  query?: Record<string, string | number | undefined | null>;
+  query?: Record<string, string | number | boolean | undefined | null>;
 };
 
 function buildUrl(path: string, query?: RequestOptions["query"]): string {

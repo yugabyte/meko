@@ -119,9 +119,16 @@ export function createStoragePool(
 
 /* ---- Projects (clusters) ---- */
 
-export function listProjects(poolId: string): Promise<ProjectList> {
+// include_failed defaults to true server-side (failed-creation orphans are listed
+// so they can be seen and deleted); pass includeFailed:false — e.g. from a cluster
+// picker — to hide them on read. undefined is dropped by apiRequest, keeping the
+// server default.
+export function listProjects(
+  poolId: string,
+  opts?: { includeFailed?: boolean },
+): Promise<ProjectList> {
   return apiRequest<ProjectList>(`/storage-pools/${poolId}/projects`, {
-    query: { limit: LIST_LIMIT },
+    query: { limit: LIST_LIMIT, include_failed: opts?.includeFailed },
   });
 }
 

@@ -99,7 +99,7 @@ local checks stay synchronous: `400` (malformed body / bad parameter), `404`
 | `GET /storage-pools` | listStoragePools | Paginated; lists **every** pool (no owner filter yet). |
 | `GET /storage-pools/{poolId}` | getStoragePool | By id; not owner-scoped. |
 | `POST /storage-pools/{poolId}/projects` | createProject | **Async** → `202` + `Task` + `Location: /api/v1/tasks/{id}`. Plans a task that creates a project + its default branch and records the controller pending-init recipe (keyed by the flat `branch_id`). Does **not** deploy an endpoint. Poll `getTask`, then `getProject`/`listProjects` to read the ids/`default_branch`. Cheap validation is still synchronous: `400` (bad body / unsupported `pg_version`) / `404` (unknown pool). A duplicate project name no longer `409`s — it surfaces as a `failed` task. |
-| `GET /storage-pools/{poolId}/projects` | listProjects | Paginated; the pool's projects, each with its `default_branch`. `404` if the pool is unknown. |
+| `GET /storage-pools/{poolId}/projects` | listProjects | Paginated; the pool's projects, each with its `default_branch`. Scoped to usable clusters by default — failed-creation projects (orphans left when a `create_project` task failed mid-provisioning) are excluded from both the page and its total; pass `include_failed=true` (e.g. from an operator's fleet view) to also surface them so they can be seen and deleted. `404` if the pool is unknown. |
 | `GET …/projects/{projectId}` | getProject | One project (with its `default_branch`). `404` if the pool/project is unknown. |
 | `DELETE …/projects/{projectId}` | deleteProject | **Async cascade** → `202` + `Task` + `Location`. Plans a `delete_project` task that retires every endpoint in the project, then drops its branches and the project row. Cheap pre-check: `404` if the pool/project is unknown. |
 | `POST …/projects/{projectId}/branches` | createBranch | **Async** → `202` + `Task` + `Location`. Plans a task that forks a parent branch (default: the project's default branch; override with `parent_branch_id` to branch off another branch) into a new branch under the same project, recording the controller recipe with the ancestor + fork LSN set (default: the parent's latest LSN; override with `fork_point_lsn`). Does **not** deploy an endpoint. Poll `getTask`, then `listBranches`/`getBranch` to read the branch. Cheap validation is synchronous: `400` (bad body / bad or unresolvable `fork_point_lsn`) / `404` (unknown pool/project/parent). A duplicate branch name surfaces as a `failed` task, not a `409`. |
@@ -219,7 +219,8 @@ only on `deleteBranch` with child forks), or a `failed` task. See [`ac-tasks.md`
 
 **`listProjects`, `listBranches`, and `listEndpoints` are read-only and
 paginated.** `listProjects` returns the pool's projects (each with its
-`default_branch`); `listBranches` returns a project's branches (default branch +
+`default_branch`), scoped to usable clusters unless `include_failed=true` is
+passed to also surface failed-creation orphans; `listBranches` returns a project's branches (default branch +
 forks); `listEndpoints` returns a branch's endpoints. The branch is addressed by
 `(poolId, projectId, branchId)`, so the backend first resolves the branch within
 the project — `branch_id` is a generated UUID, unique within a project — and a

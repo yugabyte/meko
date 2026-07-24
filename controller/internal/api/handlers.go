@@ -284,7 +284,11 @@ func endpointDeployName(endpointID uuid.UUID) string {
 
 func (c *Controllers) ListProjects(ctx context.Context, request ListProjectsRequestObject) (ListProjectsResponseObject, error) {
 	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
-	projects, total, err := c.backend.ListProjects(ctx, request.PoolId, limit, offset)
+	// Scope to usable clusters unless the caller opts in (include_failed=true);
+	// the default hides failed-creation orphans so pickers, counts, and clients
+	// that operate on each result don't trip over half-provisioned projects.
+	includeFailed := request.Params.IncludeFailed != nil && *request.Params.IncludeFailed
+	projects, total, err := c.backend.ListProjects(ctx, request.PoolId, limit, offset, includeFailed)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return ListProjects404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil

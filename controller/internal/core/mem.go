@@ -199,7 +199,10 @@ func (m *MemBackend) CreateProject(_ context.Context, poolID uuid.UUID, name str
 	return p, nil
 }
 
-func (m *MemBackend) ListProjects(_ context.Context, poolID uuid.UUID, limit, offset int) ([]Project, int, error) {
+// includeFailed is accepted for parity with PgBackend but ignored: the in-memory
+// backend has no create_project task history, so it has no failed-creation orphans
+// to filter.
+func (m *MemBackend) ListProjects(_ context.Context, poolID uuid.UUID, limit, offset int, _ bool) ([]Project, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.pools[poolID]; !ok {
