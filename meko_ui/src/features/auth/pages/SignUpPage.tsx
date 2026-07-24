@@ -244,6 +244,22 @@ export default function SignUpPage() {
                 ? "Sending code..."
                 : "Continue"}
           </Button>
+
+          {!awaitingCode ? (
+            <p className="text-center text-xs text-muted-foreground">
+              By clicking &ldquo;Continue&rdquo;, you are creating a Meko account, and you agree to
+              Yugabyte&apos;s{" "}
+              <a
+                href="https://mekodata.ai/early-access-terms-of-service/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-foreground"
+              >
+                Terms of Use
+              </a>
+              .
+            </p>
+          ) : null}
         </form>
 
         {!awaitingCode ? (
