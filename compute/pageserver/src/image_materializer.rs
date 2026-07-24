@@ -35,11 +35,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, info, info_span};
 use utils::id::BranchId;
 use utils::lsn::Lsn;
-use utils::simple_rcu::Rcu;
 use wal_decoder::models::record::NeonWalRecord;
 
 use crate::page_server::WalRedoManager;
-use crate::page_store::{GcBlockIdent, PageRow, PageStore, SlruPageRow};
+use crate::page_store::{PageRow, PageStore, SlruPageRow};
 use crate::page_writer::{MaterializeJob, PageWriter};
 use crate::walredo::RedoAttemptType;
 
@@ -92,170 +91,6 @@ const BASE_MAX_INFLIGHT_INSERTS: usize = 4;
 /// is parallelised. Scaled by `PageServerConf::scale_factor`.
 const BASE_REDO_CONCURRENCY: usize = 8;
 
-/// Flush the GC-candidate buffer at this many distinct blocks
-/// (= one full `ROWS_PER_INSERT` chunk) ...
-const GC_TRIM_CANDIDATE_BUFFER_FLUSH_ROWS: usize = 500;
-
-/// ... or after this long, whichever first. The row cap — not this —
-/// bounds crash loss.
-const GC_TRIM_CANDIDATE_BUFFER_FLUSH_INTERVAL: std::time::Duration =
-    std::time::Duration::from_secs(5);
-
-/// Build `pending_gc` rows from buffered candidates, clamping each
-/// due_lsn to `cutoff + 1` (see [`PendingGcBuffer::flush_gc_candidates`]
-/// for why). Split out from the flush so the clamp is unit-testable
-/// without a `PageStore`.
-fn clamp_candidate_rows(
-    entries: impl IntoIterator<Item = (GcBlockIdent, Lsn)>,
-    cutoff: Lsn,
-) -> Vec<crate::page_store::PendingGcRow> {
-    let due_floor = Lsn(cutoff.0 + 1);
-    entries
-        .into_iter()
-        .map(|((spcnode, dbnode, relnode, forknum, blknum), due_lsn)| {
-            crate::page_store::PendingGcRow {
-                spcnode,
-                dbnode,
-                relnode,
-                forknum,
-                blknum,
-                due_lsn: due_lsn.max(due_floor),
-            }
-        })
-        .collect()
-}
-
-/// Buffered, **best-effort** writer for the materialiser's GC trim
-/// candidates: a crash or failed flush loses up to one buffer, by
-/// design — trims are cumulative, so the block's next candidate
-/// re-covers the garbage. Same-block candidates fold to the LATEST
-/// due_lsn (the safe direction: a later trim covers an earlier one's
-/// garbage; folding to the earliest would not).
-pub(crate) struct PendingGcBuffer {
-    branch_id: BranchId,
-    page_store: Arc<PageStore>,
-    /// The timeline's published GC cutoff, shared with
-    /// `Timeline::applied_gc_cutoff_lsn`. Read (no guard held) at flush
-    /// to clamp each candidate's due_lsn above the cutoff — see
-    /// [`Self::flush_gc_candidates`].
-    applied_gc_cutoff: Arc<Rcu<Lsn>>,
-    /// Block identity -> latest due_lsn seen.
-    candidates: std::sync::Mutex<std::collections::HashMap<GcBlockIdent, Lsn>>,
-    /// Signalled when the buffer crosses `GC_TRIM_CANDIDATE_BUFFER_FLUSH_ROWS`.
-    flush_ready: tokio::sync::Notify,
-}
-
-impl PendingGcBuffer {
-    fn new(
-        branch_id: BranchId,
-        page_store: Arc<PageStore>,
-        applied_gc_cutoff: Arc<Rcu<Lsn>>,
-    ) -> Self {
-        Self {
-            branch_id,
-            page_store,
-            applied_gc_cutoff,
-            candidates: std::sync::Mutex::new(std::collections::HashMap::new()),
-            flush_ready: tokio::sync::Notify::new(),
-        }
-    }
-
-    /// In-memory append (mutex + map insert). The YB INSERT is deferred
-    /// to `flush_gc_candidates`, so recording adds no YB round-trip to
-    /// `commit_phase`'s image-INSERT path.
-    fn buffer_gc_candidates(
-        &self,
-        rows: impl IntoIterator<Item = crate::page_store::PendingGcRow>,
-    ) {
-        let mut guard = self.candidates.lock().unwrap();
-        for row in rows {
-            let due = guard
-                .entry((
-                    row.spcnode,
-                    row.dbnode,
-                    row.relnode,
-                    row.forknum,
-                    row.blknum,
-                ))
-                .or_insert(row.due_lsn);
-            if row.due_lsn > *due {
-                *due = row.due_lsn;
-            }
-        }
-        // Notify outside the lock so a woken flusher doesn't contend it.
-        let should_notify = guard.len() >= GC_TRIM_CANDIDATE_BUFFER_FLUSH_ROWS;
-        drop(guard);
-        if should_notify {
-            self.flush_ready.notify_one();
-        }
-    }
-
-    /// Flush everything buffered. On error rows are dropped, not
-    /// retried — best-effort by design (see the struct doc).
-    ///
-    /// Clamp each due_lsn up to `cutoff + 1` before insert, upholding the
-    /// GC invariant that new candidates land above the cutoff (GC acts
-    /// only at `due_lsn <= cutoff`), so a fresh candidate can't race an
-    /// in-flight drain and is guaranteed to be picked up by a later tick.
-    /// WAL candidates hold this structurally; a materialiser image is
-    /// stamped at its folded chain's LSN, which can be `<= cutoff` by
-    /// flush time, hence the clamp. Raising due_lsn is safe: it only sets
-    /// when the block is next visited — the trim deletes below the
-    /// block's newest base as of the cutoff regardless.
-    ///
-    /// The cutoff is read without locking it across the insert, so a
-    /// concurrent tick can advance it past the clamped value and skip the
-    /// row. Bounded: it waits for the periodic floor reset (or a
-    /// restart), and the block's next base re-covers the garbage. Locking
-    /// across the insert would avoid it but stall every GC tick behind
-    /// these flushes.
-    async fn flush_gc_candidates(&self) {
-        let cutoff = Lsn(self.applied_gc_cutoff.read().0);
-        let rows = {
-            let mut guard = self.candidates.lock().unwrap();
-            clamp_candidate_rows(guard.drain(), cutoff)
-        };
-        if rows.is_empty() {
-            return;
-        }
-        let t0 = std::time::Instant::now();
-        match self.page_store.put_pending_gc(self.branch_id, &rows).await {
-            Ok(()) => {
-                info!(
-                    tag = "pending_gc_flush",
-                    rows = rows.len(),
-                    flush_ms = t0.elapsed().as_millis() as u64,
-                    "perf",
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    branch_id = %self.branch_id,
-                    dropped_rows = rows.len(),
-                    "pending_gc flush failed — candidates dropped (best-effort by \
-                     design; affected blocks stay untrimmed until their next \
-                     materialisation): {e:#}"
-                );
-            }
-        }
-    }
-
-    /// Flusher loop: flush on the row-count signal or every
-    /// `GC_TRIM_CANDIDATE_BUFFER_FLUSH_INTERVAL`, and once more on cancellation so a
-    /// clean materialiser shutdown loses nothing.
-    async fn gc_candidate_flush_loop(self: Arc<Self>, cancel: CancellationToken) {
-        loop {
-            tokio::select! {
-                _ = cancel.cancelled() => break,
-                _ = self.flush_ready.notified() => {}
-                _ = tokio::time::sleep(GC_TRIM_CANDIDATE_BUFFER_FLUSH_INTERVAL) => {}
-            }
-            self.flush_gc_candidates().await;
-        }
-        self.flush_gc_candidates().await;
-    }
-}
-
 /// Output of [`ImageMaterializer::redo_phase`] — everything
 /// [`ImageMaterializer::commit_phase`] needs to bulk-INSERT a batch's
 /// rebuilt images into YB and install them into the in-RAM cache.
@@ -293,9 +128,6 @@ pub struct ImageMaterializer {
     redo_concurrency: usize,
     /// `BASE_MAX_INFLIGHT_INSERTS` scaled by `PageServerConf::scale_factor`.
     max_inflight_inserts: usize,
-    /// GC candidate buffer; `Some` iff `enable_gc`. Best-effort — see
-    /// [`PendingGcBuffer`].
-    gc_buffer: Option<Arc<PendingGcBuffer>>,
 }
 
 /// Handle returned by [`ImageMaterializer::spawn`]. Drop to leak; call
@@ -324,8 +156,6 @@ impl ImageMaterializer {
         mut rx: mpsc::Receiver<MaterializeJob>,
         in_flight: Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
         scale_factor: f64,
-        gc_candidates_enabled: bool,
-        applied_gc_cutoff: Arc<Rcu<Lsn>>,
     ) -> MaterializerTask {
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
@@ -333,27 +163,6 @@ impl ImageMaterializer {
             pageserver_api::config::scale_count(BASE_REDO_CONCURRENCY, scale_factor);
         let max_inflight_inserts =
             pageserver_api::config::scale_count(BASE_MAX_INFLIGHT_INSERTS, scale_factor);
-        // The flusher gets its own token, cancelled only AFTER the
-        // main loop has drained its in-flight commit_phases — so every
-        // pushed candidate is covered by the final flush.
-        let gc_flusher: Option<(
-            Arc<PendingGcBuffer>,
-            CancellationToken,
-            tokio::task::JoinHandle<()>,
-        )> = gc_candidates_enabled.then(|| {
-            let buffer = Arc::new(PendingGcBuffer::new(
-                branch_id,
-                Arc::clone(&fpu_page_store),
-                applied_gc_cutoff,
-            ));
-            let flusher_cancel = CancellationToken::new();
-            let handle = tokio::spawn(
-                Arc::clone(&buffer)
-                    .gc_candidate_flush_loop(flusher_cancel.clone())
-                    .instrument(info_span!("pending_gc_flusher", branch_id = %branch_id)),
-            );
-            (buffer, flusher_cancel, handle)
-        });
         let me = Arc::new(Self {
             branch_id,
             page_writer,
@@ -363,7 +172,6 @@ impl ImageMaterializer {
             in_flight,
             redo_concurrency,
             max_inflight_inserts,
-            gc_buffer: gc_flusher.as_ref().map(|(b, _, _)| Arc::clone(b)),
         });
         let span = info_span!(
             "image_materializer",
@@ -460,13 +268,6 @@ impl ImageMaterializer {
                 // in RAM that disappears when the task drops.
                 while let Some(h) = inflight_inserts.pop_front() {
                     let _ = h.await;
-                }
-                // All commit_phases are done pushing — stop the GC
-                // candidate flusher (it flushes once more on cancel),
-                // so a clean shutdown loses no buffered candidates.
-                if let Some((_, flusher_cancel, flusher_handle)) = gc_flusher {
-                    flusher_cancel.cancel();
-                    let _ = flusher_handle.await;
                 }
                 // Best-effort reset on exit so a dead task doesn't leave
                 // the gauge frozen at a stale value.
@@ -664,36 +465,16 @@ impl ImageMaterializer {
 
         let t_insert_start = std::time::Instant::now();
         if !rel_images.is_empty() {
-            // GC trim candidate per image (due_lsn = the image's LSN).
-            // Synchronous push, best-effort — deliberately NOT ordered
-            // against the image INSERT (see PendingGcBuffer).
-            if let Some(gc_buffer) = &self.gc_buffer {
-                gc_buffer.buffer_gc_candidates(
-                    rel_images
-                        .iter()
-                        // Same per-block every-n counter as the ingest
-                        // path (`gc_candidate_every_n_bases`): bases
-                        // count jointly whichever path writes them.
-                        .filter(|img| self.page_writer.gc_candidate_should_emit(img.key))
-                        .map(|img| {
-                            crate::metrics::GC_CANDIDATES_EMITTED
-                                .with_label_values(&["materialiser"])
-                                .inc();
-                            crate::page_store::PendingGcRow {
-                                spcnode: img.key.field2 as i64,
-                                dbnode: img.key.field3 as i64,
-                                relnode: img.key.field4 as i64,
-                                forknum: img.key.field5 as i16,
-                                blknum: img.key.field6 as i64,
-                                due_lsn: img.lsn,
-                            }
-                        }),
-                );
-            }
             self.fpu_page_store
                 .put_pages(self.branch_id, &rel_images)
                 .await
                 .context("put_pages")?;
+            // GC trim candidates, recorded only AFTER the INSERT lands
+            // — a candidate implies a durable image, same contract as
+            // the ingest window flush. A failed batch stays
+            // GC-invisible.
+            self.page_writer
+                .record_gc_trim_bases(rel_images.iter().map(|img| img.as_ref()), "materialiser");
         }
         if !slru_images.is_empty() {
             let slru_rows = slru_images
@@ -983,30 +764,4 @@ fn parse_chain(chain: &[std::sync::Arc<PageRow>]) -> Result<RedoChain> {
     // does the same reverse before its own walredo call).
     records.reverse();
     Ok((base_img, records))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The flush clamp lifts a candidate's due_lsn to `cutoff + 1` when
-    /// it sits at or below the cutoff (a materialiser image stamped at
-    /// an old folded LSN), and leaves an above-cutoff one untouched.
-    #[test]
-    fn clamp_lifts_due_lsn_to_above_cutoff() {
-        let cutoff = Lsn(100);
-        let ident = |blk: i64| (1663i64, 5i64, 16400i64, 0i16, blk);
-        let rows = clamp_candidate_rows(
-            [
-                (ident(7), Lsn(40)),  // below cutoff → lifted
-                (ident(8), Lsn(100)), // at cutoff → lifted
-                (ident(9), Lsn(500)), // above cutoff → unchanged
-            ],
-            cutoff,
-        );
-        let due = |blk: i64| rows.iter().find(|r| r.blknum == blk).unwrap().due_lsn;
-        assert_eq!(due(7), Lsn(101), "below cutoff → cutoff+1");
-        assert_eq!(due(8), Lsn(101), "at cutoff → cutoff+1");
-        assert_eq!(due(9), Lsn(500), "above cutoff → unchanged");
-    }
 }

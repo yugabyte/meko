@@ -18,6 +18,7 @@ pub use pageserver_api::keyspace;
 use tokio_util::sync::CancellationToken;
 mod assert_u64_eq_usize;
 pub mod aux_file;
+pub(crate) mod gc_trim_candidates;
 pub mod image_materializer;
 pub mod metrics;
 pub mod page_server;

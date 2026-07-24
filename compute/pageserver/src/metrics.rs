@@ -268,11 +268,14 @@ pub(crate) static GC_APPLIED_CUTOFF_LSN: Lazy<UIntGauge> = Lazy::new(|| {
 
 /// Candidates emitted into `pending_gc`, by producer path: trim from
 /// ingest | materialiser (post every-n sampling), plus the unsampled
-/// drop | shrink events.
+/// drop | shrink events. Trim counts SAMPLER FIRINGS: a block firing
+/// more than once within one emitter flush window folds into a single
+/// `pending_gc` row, so inserted rows can be fewer than this counter.
 pub(crate) static GC_CANDIDATES_EMITTED: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "pageserver_yb_gc_candidates_emitted_total",
-        "GC candidates emitted into pending_gc, by producer path",
+        "GC candidates emitted by producer path (trim: sampler firings; \
+         same-block firings within a flush window fold to one row)",
         &["path"]
     )
     .expect("failed to define a metric")

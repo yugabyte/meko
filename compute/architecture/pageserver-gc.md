@@ -31,7 +31,7 @@ doubles as the candidate **kind**:
 
 | `blknum` | kind | recorded when | becomes collectable |
 | --- | --- | --- | --- |
-| `>= 0` | **trim** | a block gets a new base (`is_image`/`will_init`) at `due_lsn` | that block's versions below its newest base, at/under the cutoff |
+| `>= 0` | **trim** | a block's every-n-th new base (`is_image`/`will_init`); `due_lsn` = the newest counted base's LSN | that block's versions below its newest base, at/under the cutoff |
 | `-1` | **shrink** | a relation is truncated at `due_lsn` | blocks at/above the post-truncation size |
 | `-2` | **drop** | a relfilenode is dropped (`DROP TABLE`/index, or every rel of a `DROP DATABASE`) at `due_lsn` | all of the fork's pages `<= due_lsn` |
 
@@ -40,46 +40,65 @@ is actionable only once the cutoff reaches its `due_lsn`.
 
 ## Candidate emission
 
-Two writers record **trim** candidates:
+Candidates split by **durability requirement**, not by producer:
 
-- **Ingest** (`PageWriter` flush): a `will_init` delta buffers a
-  candidate, flushed durably in the same window as the rows that
-  produced it. A lost candidate implies `consistent_lsn` didn't advance,
-  so its window (base included) replays — harmless, and trims are
-  cumulative so the block's next candidate re-covers the span.
-- **Materialiser**: records a candidate for each rel image it writes,
-  into an in-RAM buffer (`PendingGcBuffer`) flushed at 500 distinct
-  blocks or 5 s, whichever first (same-block candidates fold to the
-  latest `due_lsn`). **Best-effort by design**: a crash or failed flush
-  loses at most one buffer, healed by the block's next materialisation.
-  Only a block whose final-ever base fell in a lost buffer leaks
-  (bounded; reclaimable by a future backstop sweep).
+- **Trim candidates** (self-healing): both producers — the ingest
+  window flush (each `will_init` row it lands) and the materialiser
+  (one per rel image it writes) — feed one shared in-RAM buffer on the
+  `PageWriter` (`GcTrimCandidateEmitter`, `pageserver/src/gc_trim_candidates.rs`),
+  flushed by its own loop at 500
+  distinct blocks or 5 s, whichever first (same-block candidates fold
+  to the latest `due_lsn`). **Best-effort by design**: a crash or
+  failed flush loses at most one buffer, healed by the block's next
+  base — trims are cumulative, so the next candidate's greedy-to-cutoff
+  trim re-covers the lost span. Only a block whose final-ever base fell
+  in a lost buffer leaks (bounded; reclaimable by a future backstop
+  sweep). The flusher shuts down after both producers stop, with a
+  final flush, so a clean shutdown loses nothing.
+- **Shrink and drop events** (one-shot — a dropped fork gets no future
+  base to re-emit a candidate) stay **window-durable** on the ingest
+  path: buffered alongside the window's rows and flushed with them, so
+  a buffer lost to a crash implies `consistent_lsn` didn't advance and
+  the producing record (`put_rel_truncation`, `put_rel_drops`, per-rel
+  under `drop_dbdir` for `DROP DATABASE`) replays and re-emits.
 
-`gc_candidate_every_n_bases` (default 10) samples both paths through one
-shared per-block counter: one trim candidate per n bases per block. `n>1`
-trades queue volume for up to `n−1` bases of garbage retained on a block
-that goes cold mid-cycle (the next candidate's trim still collapses the
-skipped cycles). **Sampling is trim-only** — shrink and drop are discrete
-one-shot events and are always recorded, at the truncation / drop that
-causes them (`put_rel_truncation`, `put_rel_drops`, and per-rel under
-`drop_dbdir` for `DROP DATABASE`). These events ride the ingest
-writer's candidate buffer, so they share its durability contract: flushed
-with the window, and a buffer lost to a crash implies `consistent_lsn`
-didn't advance, so the producing record replays and re-emits.
+Best-effort is safe for trim because no single trim candidate is
+load-bearing (the block's next base heals it), and both producers
+record a candidate only after its base is durable — candidate flushed
+⇒ base flushed already.
+Window durability wasn't buying ingest trim a re-emission guarantee
+anyway: the sampling counter below is in-memory and resets on restart,
+so a replayed window may emit at a different base or not at all.
+
+`gc_candidate_every_n_bases` (default 10) samples both trim producers
+through one shared per-block counter: one trim candidate per n bases per
+block, stamped `due_lsn = max LSN among its n counted bases`. The
+max matters only cross-producer — a materialiser image lands at its
+fold point, below bases ingest has since counted, and stamping the
+n-th base's own LSN would make the drain visit (and dequeue) the
+candidate before the counted garbage is collectable, orphaning it
+until the block's next candidate. `n>1` trades queue volume for up to `n−1` bases of
+garbage retained on a block that goes cold mid-cycle (the next
+candidate's trim still collapses the skipped cycles). **Sampling is
+trim-only** — shrink and drop events are always recorded.
 
 **Insert invariant: no candidate lands at `due_lsn <=` the current
 cutoff**, so GC (which acts at `due_lsn <= cutoff`) never races a fresh
-insert and a later tick always selects it. WAL-driven candidates satisfy
-it structurally — at insert time `due_lsn > consistent_lsn >= cutoff`.
-The materialiser's images can be stamped at an old LSN (the folded
-delta's, possibly `<= cutoff` by flush time), so its candidate flush
-clamps each row to `due_lsn = max(image_lsn, applied_gc_cutoff_lsn + 1)`
-— safe for a trim candidate, which only sets when the block is next
-visited (the trim is greedy to the cutoff regardless). The flush reads
-the cutoff without locking it across the INSERT, so a concurrent tick
-can advance the cutoff past the clamped value and skip that one row; it
-waits for the periodic floor reset (or a restart), and the block's next
-base re-covers the garbage. This invariant is also what lets the dequeue
+insert and a later tick always selects it. Drop/shrink events satisfy
+it structurally — they flush with their window, so at insert time
+`due_lsn > consistent_lsn >= cutoff`. A trim candidate can sit in the
+emitter past that point — a materialiser image is stamped at an old
+LSN (the folded delta's), and an ingest candidate can sit in the
+candidate buffer while the cutoff advances past its just-landed base
+— so the
+emitter's flush clamps each row to
+`due_lsn = max(due_lsn, applied_gc_cutoff_lsn + 1)` — safe for a trim
+candidate, which only sets when the block is next visited (the trim is
+greedy to the cutoff regardless). The flush reads the cutoff without
+locking it across the INSERT, so a concurrent tick can advance the
+cutoff past the clamped value and skip that one row; it waits for the
+periodic floor reset (or a restart), and the block's next base
+re-covers the garbage. This invariant is also what lets the dequeue
 sweep by block-range instead of naming exact PKs (see Drain step 5): a
 base landing after a tick's trim anchor is clamped above the cutoff, so
 the `<= cutoff` sweep only removes a candidate whose garbage the trim
@@ -123,8 +142,8 @@ runs:
    clamp couldn't lift above a concurrently advancing cutoff). Without
    it, on a pageserver that never restarts those would linger
    indefinitely; the periodic reset bounds that to the interval. It does
-   **not** catch a leak with *no* queue row (e.g. a trim
-   buffer lost to a crash before flushing); that class waits on a future
+   **not** catch a leak with *no* queue row (e.g. an emitter candidate buffer
+   lost to a crash before flushing); that class waits on a future
    full rel-directory sweep (see the design doc's full-sweep alternative).
 4. **Act**, ordered **drop → shrink → trim** (coarser first — a dropped
    fork moots its own shrink/trim candidates):
@@ -204,7 +223,7 @@ one doc.)
 | --- | --- | --- | --- |
 | `pageserver_yb_gc_drain_lag_bytes` | UIntGauge | — | Residual `cutoff − due.last().due_lsn` on a budget-capped tick (the due span the tick couldn't reach); 0 when it drained everything due. 0 baseline while keeping up; grows once inserts outrun the drain — **the backlog/starvation alarm**. NB: during a backlog the periodic floor reset reads artificially high for one sample (it scans from the head, so `due.last()` is older); alert on a rate/smoothed value, not a raw sample. |
 | `pageserver_yb_gc_applied_cutoff_lsn` | UIntGauge | — | Current GC cutoff (`applied_gc_cutoff_lsn`), per tick. `pageserver_last_record_lsn − this` = retained-history window. Frozen while the queue grows ⇒ cutoff pinned (lease/child/`consistent_lsn`), not a slow drain. |
-| `pageserver_yb_gc_candidates_emitted_total` | IntCounter | `path` (`ingest`/`materialiser`/`drop`/`shrink`) | Candidates emitted into `pending_gc`: trim by producer path (post `gc_candidate_every_n_bases` sampling), drop/shrink events unsampled. `rate()` = candidate insert rate. |
+| `pageserver_yb_gc_candidates_emitted_total` | IntCounter | `path` (`ingest`/`materialiser`/`drop`/`shrink`) | Candidates emitted, by producer path. For trim this counts sampler firings: one per `gc_candidate_every_n_bases` bases per block — but if a block fires more than once within one emitter flush window, those firings fold into a single `pending_gc` row, so inserted rows ≤ emitted. Drop/shrink events unsampled, one row each. `rate()` = emission rate, an upper bound on the insert rate. |
 | `pageserver_yb_gc_candidates_read_total` | IntCounter | — | Rows the drain's `pending_gc` select returned per tick (pre-routing). `== gc_drain_limit` ⇒ capped; `≫ removed` ⇒ read but not cleared. |
 | `pageserver_yb_gc_candidates_dequeued_total` | IntCounter | — | Rows deleted from `pending_gc` by the dequeue: each visited block's whole `(floor, cutoff]` candidate set, so ≥ the tick's acted rows (collapses a block's duplicates/stragglers), ≈ `read` at steady state. `rate(emitted) − rate(dequeued)` = queue growth. |
 | `pageserver_yb_gc_pages_rows_deleted_total` | IntCounter | — | `pageserver.pages` rows deleted by the drain (trim / drop / shrink). `rate()` = reclamation throughput. |

@@ -127,6 +127,12 @@ pub struct Timeline {
     /// drained to PageStore before the pageserver exits.
     page_writer_flush_task: std::sync::Mutex<Option<crate::page_writer::FlushTask>>,
 
+    /// Handle for the shared GC trim-candidate flusher (`None` unless
+    /// `enable_gc`). Shut down LAST among the write-path tasks — after
+    /// the window flusher and the materialiser — so its cancel-time
+    /// final flush covers everything both producers buffered.
+    gc_trim_flush_task: std::sync::Mutex<Option<crate::page_writer::FlushTask>>,
+
     /// Handle for the background image materialiser task, when the
     /// timeline has both a `page_writer` and a walredo manager. Taken
     /// and `shutdown()`-ed during `Timeline::shutdown`. `None` when
@@ -194,7 +200,7 @@ pub struct Timeline {
     // Because PITR interval is mutable, it's possible for this LSN to be earlier or later than
     // the planned GC cutoff.
     // Arc'd so the materialiser's candidate flush can read it to clamp
-    // due_lsns above the cutoff (see `PendingGcBuffer`).
+    // due_lsns above the cutoff (see `GcTrimCandidateEmitter`).
     pub applied_gc_cutoff_lsn: Arc<Rcu<Lsn>>,
 
     /// See [`GcDrain`].
@@ -1771,6 +1777,17 @@ impl Timeline {
             }
         }
 
+        // Stop the GC trim-candidate flusher only now — after every
+        // producer of candidates, INCLUDING the force_flush above
+        // (whose successful window records ingest candidates into the
+        // emitter) — so its cancel-time final flush covers everything.
+        // Best-effort: a failed flush drops candidates, healed by the
+        // affected blocks' next bases.
+        let gc_flush_task = self.gc_trim_flush_task.lock().unwrap().take();
+        if let Some(task) = gc_flush_task {
+            task.shutdown().await;
+        }
+
         // Signal any subscribers to our cancellation token to drop out
         tracing::debug!("Cancelling CancellationToken");
         self.cancel.cancel();
@@ -2081,12 +2098,12 @@ impl Timeline {
         // relation sizes into a compute permanently).
         let (replay_caught_up_tx, replay_caught_up_rx) = tokio::sync::watch::channel(false);
 
-        // Created before the writer/materialiser block: the materialiser's
-        // GC-candidate flush holds a clone to clamp due_lsns above the
-        // published cutoff.
+        // Created before the writer/materialiser block: the writer's
+        // shared GC trim-candidate buffer holds a clone to clamp
+        // due_lsns above the published cutoff at flush.
         let applied_gc_cutoff_lsn = Arc::new(Rcu::new(metadata.latest_gc_cutoff_lsn()));
 
-        let (page_writer, page_writer_flush_task, image_materializer_task) = {
+        let (page_writer, page_writer_flush_task, gc_trim_flush_task, image_materializer_task) = {
             let compute_ps = &resources.compute_page_store;
             let internal_ps = &resources.fpu_page_store;
             let pw_cfg = &conf.yb_page_writer;
@@ -2112,7 +2129,10 @@ impl Timeline {
                 writer.set_lineage(lineage);
             }
             if enable_gc {
-                writer.set_gc_candidate_every_n(gc_candidate_every_n_bases);
+                writer.set_gc_candidate_every_n(
+                    gc_candidate_every_n_bases,
+                    applied_gc_cutoff_lsn.clone(),
+                );
             }
 
             // Materialiser channel: established BEFORE we wrap the writer
@@ -2144,6 +2164,8 @@ impl Timeline {
 
             let writer = Arc::new(writer);
             let flush_task = writer.spawn_flusher(pw_cfg.flush_poll_interval);
+            // `None` unless GC candidate collection is on.
+            let gc_trim_flush_task = writer.spawn_gc_trim_flusher();
 
             let materializer_task = match (mat_channel, walredo_mgr.clone()) {
                 (Some((rx, in_flight)), Some(wr)) => {
@@ -2157,14 +2179,17 @@ impl Timeline {
                         rx,
                         in_flight,
                         conf.scale_factor,
-                        enable_gc,
-                        applied_gc_cutoff_lsn.clone(),
                     ))
                 }
                 _ => None,
             };
 
-            (Some(writer), Some(flush_task), materializer_task)
+            (
+                Some(writer),
+                Some(flush_task),
+                gc_trim_flush_task,
+                materializer_task,
+            )
         };
 
         Arc::new_cyclic(|myself| {
@@ -2200,6 +2225,7 @@ impl Timeline {
 
                 page_writer: page_writer.clone(),
                 page_writer_flush_task: std::sync::Mutex::new(page_writer_flush_task),
+                gc_trim_flush_task: std::sync::Mutex::new(gc_trim_flush_task),
                 image_materializer_task: std::sync::Mutex::new(image_materializer_task),
 
                 // initialize the eager in-memory 'last_record_lsn' from the
