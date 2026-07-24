@@ -63,6 +63,7 @@ jobs:
     outputs:
       compute: ${{ steps.filter.outputs.compute }}
       controller: ${{ steps.filter.outputs.controller }}
+      mcp: ${{ steps.filter.outputs.mcp }}
       ui: ${{ steps.filter.outputs.ui }}
       deploy: ${{ steps.filter.outputs.deploy }}
       # the controller migrations or their Go runner changed — run the up/down
@@ -107,6 +108,9 @@ jobs:
               - '.github/workflows/pr-build.yml'
             controller:
               - 'controller/**'
+              - '.github/workflows/pr-build.yml'
+            mcp:
+              - 'controller/mcp/**'
               - '.github/workflows/pr-build.yml'
             ui:
               - 'amp_ui/**'
@@ -375,6 +379,35 @@ jobs:
           path: controller/junit.xml
           retention-days: 14
 
+
+  mcp:
+    name: Controller MCP — tests
+    needs: changes
+    if: needs.changes.outputs.mcp == 'true' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: controller/mcp
+    steps:
+      - uses: actions/checkout@v7
+
+      # uv reads the Python version from controller/mcp/.python-version (3.11)
+      # and installs deps from uv.lock; enable-cache speeds up repeat runs.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: controller/mcp/uv.lock
+
+      - name: Sync dependencies
+        run: uv sync --dev
+
+      # Mock-based (httpx.MockTransport + FastMCP in-memory Client) — no network
+      # and no real controller, so this runs standalone. The real-controller
+      # round-trip test self-skips unless AMP_CONTROLLER_URL is set.
+      - name: Tests
+        run: uv run pytest -q
 
   ui:
     name: UI — typecheck & build
