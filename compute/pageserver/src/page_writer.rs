@@ -893,7 +893,6 @@ impl PageWriter {
                     .with_label_values(&["ingest"])
                     .inc();
                 gc_candidates.push(PendingGcRow {
-                    bucket_id: 0, // computed by put_pending_gc on insert
                     spcnode: key.field2 as i64,
                     dbnode: key.field3 as i64,
                     relnode: key.field4 as i64,

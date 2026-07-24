@@ -17,10 +17,11 @@ pub struct GcResult {
     pub layers_not_updated: u64,
     pub layers_removed: u64, // # of layer files removed because they have been made obsolete by newer ondisk files.
 
-    /// yb-amp row-store GC: candidates drained from `pending_gc`
-    /// this iteration (and dequeued on success).
-    pub candidates_drained: u64,
-    /// yb-amp row-store GC: superseded version rows deleted from
+    /// yb-amp PageServer GC: candidate rows dequeued from `pending_gc`
+    /// this iteration. Can exceed the acted candidates — the block-range
+    /// delete also clears a visited block's duplicate/straggler rows.
+    pub candidates_dequeued: u64,
+    /// yb-amp PageServer GC: superseded version rows deleted from
     /// `pageserver.pages` by the trim.
     pub pages_rows_deleted: u64,
 
@@ -45,7 +46,7 @@ impl AddAssign for GcResult {
         self.layers_needed_by_leases += other.layers_needed_by_leases;
         self.layers_not_updated += other.layers_not_updated;
         self.layers_removed += other.layers_removed;
-        self.candidates_drained += other.candidates_drained;
+        self.candidates_dequeued += other.candidates_dequeued;
         self.pages_rows_deleted += other.pages_rows_deleted;
 
         self.elapsed += other.elapsed;

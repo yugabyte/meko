@@ -383,6 +383,9 @@ impl Cluster {
             // pitr_interval=0s + a tiny gc_horizon are what let the
             // cutoff track the frontier so GC actually reclaims on small
             // test workloads; gc_period=1s makes drains prompt.
+            // gc_queue_floor_reset_interval=5s (vs the prod 2h): the
+            // floor-reset is the retry path for a still-queued busy-fork
+            // drop, so tests must see one within their reclaim window.
             // every_n_bases=1 (vs the prod default of 10): the every-n
             // counter advances once per materialiser FOLD of a key, and
             // short test workloads fold each key only a handful of times
@@ -397,6 +400,7 @@ impl Cluster {
                  test_enable_gc_drain = true\n\
                  gc_drain_limit = 10000\n\
                  gc_period = \"1s\"\n\
+                 gc_queue_floor_reset_interval = \"5s\"\n\
                  pitr_interval = \"0s\"\n\
                  gc_horizon = 1024\n\
                  lsn_lease_length = \"2s\"\n",

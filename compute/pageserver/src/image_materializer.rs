@@ -114,7 +114,6 @@ fn clamp_candidate_rows(
         .into_iter()
         .map(|((spcnode, dbnode, relnode, forknum, blknum), due_lsn)| {
             crate::page_store::PendingGcRow {
-                bucket_id: 0, // computed by put_pending_gc on insert
                 spcnode,
                 dbnode,
                 relnode,
@@ -206,7 +205,7 @@ impl PendingGcBuffer {
     ///
     /// The cutoff is read without locking it across the insert, so a
     /// concurrent tick can advance it past the clamped value and skip the
-    /// row. Bounded: it waits for the periodic full rescan (or a
+    /// row. Bounded: it waits for the periodic floor reset (or a
     /// restart), and the block's next base re-covers the garbage. Locking
     /// across the insert would avoid it but stall every GC tick behind
     /// these flushes.
@@ -681,7 +680,6 @@ impl ImageMaterializer {
                                 .with_label_values(&["materialiser"])
                                 .inc();
                             crate::page_store::PendingGcRow {
-                                bucket_id: 0, // computed by put_pending_gc on insert
                                 spcnode: img.key.field2 as i64,
                                 dbnode: img.key.field3 as i64,
                                 relnode: img.key.field4 as i64,

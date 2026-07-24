@@ -278,20 +278,6 @@ pub(crate) static GC_CANDIDATES_EMITTED: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-/// Drop events a drain tick held on the in-memory deferred list because
-/// their fork had a materialise job pending (acting would race the
-/// job's later image INSERT, stamped at a folded LSN below the drop);
-/// re-counted every tick they stay held. Occasional increments are
-/// normal; sustained growth for the same fork means a wedged job is
-/// pinning its reclamation.
-pub(crate) static GC_DROP_DEFERRED: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "pageserver_yb_gc_drop_deferred_total",
-        "GC drop events deferred: fork had a pending materialise job"
-    )
-    .expect("failed to define a metric")
-});
-
 /// Rows the drain's select returned per tick (pre-routing).
 pub(crate) static GC_CANDIDATES_READ: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
@@ -301,11 +287,12 @@ pub(crate) static GC_CANDIDATES_READ: Lazy<IntCounter> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-/// Rows the dequeue deleted (= the tick's acted rows; ≈ read at
-/// steady state). rate(emitted) − rate(removed) = queue growth.
-pub(crate) static GC_CANDIDATES_REMOVED: Lazy<IntCounter> = Lazy::new(|| {
+/// Rows the dequeue deleted: each visited block's whole `(floor, cutoff]`
+/// candidate set, so >= the acted rows (it collapses a block's duplicates
+/// and stragglers). rate(emitted) − rate(dequeued) = queue growth.
+pub(crate) static GC_CANDIDATES_DEQUEUED: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
-        "pageserver_yb_gc_candidates_removed_total",
+        "pageserver_yb_gc_candidates_dequeued_total",
         "Rows deleted from pending_gc by the drain dequeue (true queue-shrink count)",
     )
     .expect("failed to define a metric")

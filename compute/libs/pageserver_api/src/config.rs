@@ -1003,6 +1003,11 @@ pub struct BranchConfigToml {
     /// carries to the next tick. Bounds per-tick memory and delete
     /// burst size. Default 10_000 (~1 MiB of candidates in memory).
     pub gc_drain_limit: usize,
+    /// How often a drain tick resets the select floor to 0, scanning the
+    /// pending_gc queue from the head instead of past the cursor.
+    /// Default 2 h.
+    #[serde(with = "humantime_serde")]
+    pub gc_queue_floor_reset_interval: Duration,
     /// Master switch for garbage collection. Read once at `Timeline::new`
     /// (a runtime patch applies on next PS restart). Default false.
     pub enable_gc: bool,
@@ -1018,6 +1023,7 @@ pub mod tenant_conf_defaults {
     // becomes due; work per tick scales with garbage, not data size.
     pub const DEFAULT_GC_PERIOD: &str = "30 s";
     pub const DEFAULT_GC_DRAIN_LIMIT: usize = 10_000;
+    pub const DEFAULT_GC_QUEUE_FLOOR_RESET_INTERVAL: &str = "2 h";
     pub const DEFAULT_GC_CANDIDATE_EVERY_N_BASES: u32 = 10;
     pub const DEFAULT_PITR_INTERVAL: &str = "1 day";
     pub const DEFAULT_WALRECEIVER_CONNECT_TIMEOUT: &str = "10 seconds";
@@ -1056,6 +1062,10 @@ impl Default for BranchConfigToml {
             basebackup_cache_enabled: false,
             test_enable_gc_drain: false,
             gc_drain_limit: DEFAULT_GC_DRAIN_LIMIT,
+            gc_queue_floor_reset_interval: humantime::parse_duration(
+                DEFAULT_GC_QUEUE_FLOOR_RESET_INTERVAL,
+            )
+            .expect("cannot parse default gc queue floor reset interval"),
             enable_gc: false,
             gc_candidate_every_n_bases: DEFAULT_GC_CANDIDATE_EVERY_N_BASES,
         }

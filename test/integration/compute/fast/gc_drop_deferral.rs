@@ -1,11 +1,13 @@
 //! Drop-vs-materialise deferral, end to end. A failpoint holds a
 //! materialise job in flight (its key pinned in `in_flight`) while
-//! the table is DROPPED and the cutoff passes the drop: the drop must
-//! be DEFERRED (`gc_drop_deferred_total` rises, the rel's pages
-//! survive), and once the job lands — fork quiet — the next ticks
-//! must reclaim everything, the job's back-dated image included.
-//! Guards the exact race the deferral exists for; without it that
-//! image would leak forever (a drop's fork is never revisited).
+//! the table is DROPPED and the cutoff passes the drop. The drop is
+//! eager-acted (its pages deleted) but its pending_gc row is DEFERRED
+//! (not dequeued) while the fork is busy — observed as pages=0 with the
+//! queue row still present. Once the job lands — fork quiet — a later
+//! tick re-acts and reclaims everything, the job's back-dated straggler
+//! image included. Guards the exact race the deferral exists for;
+//! without the re-act that image would leak forever (a drop's fork is
+//! otherwise never revisited).
 
 use std::time::Duration;
 
@@ -62,10 +64,15 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         bail!("seeded table produced no stored pages");
     }
 
-    step("DROP the table — the drop event must DEFER while the job is held");
+    step("DROP the table — the drop must be acted but DEFERRED (queued) while the job is held");
     db::batch(&conn, "DROP TABLE gc_dm").await?;
     db::batch(&conn, "CREATE TABLE gc_dm_churn (id INT PRIMARY KEY, n INT)").await?;
-    let mut deferred = 0.0;
+    // Deferral signature, no metric needed: the drop is eager-acted (its
+    // pages deleted) but its pending_gc row is NOT dequeued while the
+    // fork is busy — so pages reach 0 while the queue row lingers.
+    // Acted-and-dequeued (idle fork) would drain the queue to 0;
+    // not-yet-due would leave pages > 0.
+    let mut deferred = false;
     for i in 0..20 {
         db::batch(
             &conn,
@@ -73,16 +80,14 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         )
         .await?;
         sleep(Duration::from_secs(1)).await;
-        deferred = c
-            .metric_sum(http, "pageserver_yb_gc_drop_deferred_total")
-            .await?;
-        if deferred > 0.0 {
+        if db::query_i64(&yb, &rel_pages).await? == 0 && db::query_i64(&yb, &rel_queue).await? > 0 {
+            deferred = true;
             break;
         }
     }
-    if deferred == 0.0 {
+    if !deferred {
         let _ = set_failpoint(http, "off").await;
-        bail!("nothing was deferred — the held materialise job was not observed");
+        bail!("drop was not deferred — expected pages=0 with the queue row still present while the job was held");
     }
 
     step("Job lands → fork quiet → drop acts → everything reclaimed");
@@ -105,8 +110,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     c.yb_quiet(&["pageserver", "stop", "ep_gc_dm", "-m", "immediate"]);
     if pages != 0 || queue != 0 {
         bail!(
-            "deferred drop did not fully reclaim: pages_left={pages} queue_left={queue} \
-             (deferred={deferred})"
+            "deferred drop did not fully reclaim: pages_left={pages} queue_left={queue}"
         );
     }
     Ok(())

@@ -359,21 +359,16 @@ impl GcInfo {
 /// The GC drain's in-memory progress. Reset to defaults on restart.
 #[derive(Default)]
 pub(crate) struct GcDrainProgress {
-    /// Select floor: everything at `due_lsn <= completed_lsn` has been
-    /// handled — dequeued, moved to the deferred list, or parked as
-    /// unknown-kind — so the select seeks past it; only a rare clamp-race
-    /// straggler can hide below (the rescan sweeps it). A seek hint,
-    /// never a delete bound. 0 on restart.
-    pub(crate) completed_lsn: Lsn,
+    /// Select floor high-water mark: everything at `due_lsn <= floor`
+    /// has been handled (dequeued, or acted-but-requeued, or parked as
+    /// unknown-kind), so the tick scans `(floor, cutoff]` for both the
+    /// select and the dequeue. Not a correctness bound — too low re-scans,
+    /// too high defers rows to a later tick or the floor reset. 0 on
+    /// restart.
+    pub(crate) floor: Lsn,
 
-    /// Drop events deferred while their fork has a materialise job
-    /// pending, held until it clears. The row stays on disk while
-    /// deferred (dequeued only once acted), so a crash loses just this
-    /// list and the row re-selects after restart.
-    pub(crate) deferred_drops: Vec<crate::page_store::PendingGcRow>,
-
-    /// Drives the periodic full rescan.
-    pub(crate) tick_count: u64,
+    /// When the floor was last reset to 0.
+    pub(crate) last_floor_reset: Option<std::time::Instant>,
 }
 
 /// The GC drain's connection pool and in-memory progress.

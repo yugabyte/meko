@@ -2090,7 +2090,6 @@ impl DatadirModification<'_> {
         }
         self.pending_gc_drop_shrink_events
             .push(crate::page_store::PendingGcRow {
-                bucket_id: 0, // computed by put_pending_gc on insert
                 spcnode: rel.spcnode as i64,
                 dbnode: rel.dbnode as i64,
                 relnode: rel.relnode as i64,

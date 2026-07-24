@@ -526,6 +526,8 @@ pub struct BranchConfigPatch {
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub gc_drain_limit: FieldPatch<usize>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
+    pub gc_queue_floor_reset_interval: FieldPatch<String>,
+    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub enable_gc: FieldPatch<bool>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub gc_candidate_every_n_bases: FieldPatch<u32>,
@@ -593,6 +595,10 @@ pub struct BranchConfig {
     pub gc_drain_limit: Option<usize>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(with = "humantime_serde")]
+    pub gc_queue_floor_reset_interval: Option<Duration>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_gc: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -621,6 +627,7 @@ impl BranchConfig {
             mut basebackup_cache_enabled,
             mut test_enable_gc_drain,
             mut gc_drain_limit,
+            mut gc_queue_floor_reset_interval,
             mut enable_gc,
             mut gc_candidate_every_n_bases,
         } = self;
@@ -665,6 +672,10 @@ impl BranchConfig {
             .apply(&mut basebackup_cache_enabled);
         patch.test_enable_gc_drain.apply(&mut test_enable_gc_drain);
         patch.gc_drain_limit.apply(&mut gc_drain_limit);
+        patch
+            .gc_queue_floor_reset_interval
+            .map(|v| humantime::parse_duration(&v))?
+            .apply(&mut gc_queue_floor_reset_interval);
         patch.enable_gc.apply(&mut enable_gc);
         patch
             .gc_candidate_every_n_bases
@@ -687,6 +698,7 @@ impl BranchConfig {
             basebackup_cache_enabled,
             test_enable_gc_drain,
             gc_drain_limit,
+            gc_queue_floor_reset_interval,
             enable_gc,
             gc_candidate_every_n_bases,
         })
@@ -734,6 +746,9 @@ impl BranchConfig {
                 .test_enable_gc_drain
                 .unwrap_or(global_conf.test_enable_gc_drain),
             gc_drain_limit: self.gc_drain_limit.unwrap_or(global_conf.gc_drain_limit),
+            gc_queue_floor_reset_interval: self
+                .gc_queue_floor_reset_interval
+                .unwrap_or(global_conf.gc_queue_floor_reset_interval),
             enable_gc: self.enable_gc.unwrap_or(global_conf.enable_gc),
             gc_candidate_every_n_bases: self
                 .gc_candidate_every_n_bases

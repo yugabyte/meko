@@ -900,11 +900,8 @@ pub(crate) type GcForkIdent = (i64, i64, i64, i16);
 /// `due_lsn`". `blknum` doubles as the kind: >= 0 trim,
 /// [`GC_KIND_DROP`] (-2), [`GC_KIND_SHRINK`] (-1) — ascending =
 /// the drain's action order, drop → shrink → trim.
-/// `bucket_id` is ignored on insert (computed there) and populated by
-/// the select so the dequeue can address the stored placement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingGcRow {
-    pub bucket_id: i32,
     pub spcnode: i64,
     pub dbnode: i64,
     pub relnode: i64,
@@ -2556,7 +2553,7 @@ impl PageStore {
                 }
                 write!(
                     s,
-                    "(SELECT bucket_id, spcnode, dbnode, relnode, forknum, blknum, due_lsn \
+                    "(SELECT spcnode, dbnode, relnode, forknum, blknum, due_lsn \
                       FROM \"{}\".pending_gc \
                       WHERE branch_id = $1 AND bucket_id = {bucket} \
                         AND due_lsn > $4 AND due_lsn <= $2 \
@@ -2577,84 +2574,95 @@ impl PageStore {
         rows.iter()
             .map(|r| {
                 Ok(PendingGcRow {
-                    bucket_id: r.get(0),
-                    spcnode: r.get(1),
-                    dbnode: r.get(2),
-                    relnode: r.get(3),
-                    forknum: r.get(4),
-                    blknum: r.get(5),
-                    due_lsn: Lsn(r.get::<_, i64>(6) as u64),
+                    spcnode: r.get(0),
+                    dbnode: r.get(1),
+                    relnode: r.get(2),
+                    forknum: r.get(3),
+                    blknum: r.get(4),
+                    due_lsn: Lsn(r.get::<_, i64>(5) as u64),
                 })
             })
             .collect::<Result<Vec<_>>>()
     }
 
-    /// Delete the given candidates by their EXACT PK (bucket, due_lsn,
-    /// identity, kind) — one static `unnest` statement per bucket.
-    /// Because it only ever names rows the caller passed in:
-    /// - a row the select never returned can't be touched, so a
-    ///   materialiser candidate landing mid-tick survives to its own
-    ///   tick;
-    /// - an unacted same-fork drop/shrink event above the cutoff
-    ///   survives (a drop's action only covers `<= its due_lsn`,
-    ///   never `<= cutoff`);
-    /// - a tie group wider than the select cap (a DROP DATABASE
-    ///   fan-out at one due_lsn) drains across ticks with no boundary
-    ///   arithmetic — each tick deletes exactly its batch.
+    /// Dequeue the visited blocks' candidates in `(floor, cutoff]`: a
+    /// bucket-grouped range delete keyed on the exact blknum. Same window
+    /// as the select, so a block's duplicate/straggler candidates all go,
+    /// not just acted ones — safe because the caller acted each block to
+    /// the cutoff and the materialiser clamps a late base above it (see
+    /// `PendingGcBuffer`). A busy-fork drop isn't passed here (acted, left
+    /// queued). Returns rows removed.
     ///
-    /// Cost: a visited block's duplicate trim candidates outside the
-    /// batch stay queued and no-op re-trim on their own tick — bounded
-    /// by the every-n sampler and the materialiser buffer's folding.
-    /// Returns rows removed.
-    pub async fn dequeue_pending_gc_rows(
+    /// Benign corner: the drop `-2` sentinel is per-fork, so two drops of
+    /// the same relfilenode in one `(floor, cutoff]` collapse into one
+    /// delete. If one wasn't acted this tick — still owing a
+    /// straggler-sweep re-act, or left unselected by the drain limit — its
+    /// row clears unacted and that image leaks. Requires a relfilenode
+    /// reused and re-dropped inside a single window: practically
+    /// impossible.
+    ///
+    /// And the materialiser's due_lsn clamp only holds against the cutoff
+    /// as the flush read it: a flush that read it before this tick raised
+    /// it can insert a block's image just after the trim acted, clamped
+    /// below the now higher cutoff, so the dequeue clears that candidate
+    /// unacted. Also vanishingly rare, and the block's next base re-covers
+    /// the garbage.
+    pub async fn dequeue_pending_gc(
         &self,
         branch_id: BranchId,
-        rows: &[PendingGcRow],
+        blocks: &[GcBlockIdent],
+        floor: Lsn,
+        cutoff: Lsn,
     ) -> Result<u64> {
-        if rows.is_empty() {
+        if blocks.is_empty() {
             return Ok(0);
         }
         let branch_s = branch_id.to_string();
-        let mut by_bucket: std::collections::HashMap<i32, Vec<&PendingGcRow>> =
+        let floor_i = floor.0 as i64;
+        let cutoff_i = cutoff.0 as i64;
+        let mut by_bucket: std::collections::HashMap<i32, Vec<&GcBlockIdent>> =
             std::collections::HashMap::new();
-        for r in rows {
-            by_bucket.entry(r.bucket_id).or_default().push(r);
+        for b in blocks {
+            by_bucket
+                .entry(gc_bucket_id(b.0, b.1, b.2, b.3, b.4))
+                .or_default()
+                .push(b);
         }
         let sql = format!(
             "DELETE FROM \"{}\".pending_gc \
-             WHERE branch_id = $1 AND bucket_id = $2 \
-               AND (due_lsn, spcnode, dbnode, relnode, forknum, blknum) IN ( \
-                   SELECT * FROM unnest($3::bigint[], $4::bigint[], $5::bigint[], \
-                                        $6::bigint[], $7::smallint[], $8::bigint[]))",
+             WHERE branch_id = $1 AND bucket_id = $2 AND due_lsn > $9 AND due_lsn <= $3 \
+               AND (spcnode, dbnode, relnode, forknum, blknum) IN ( \
+                   SELECT * FROM unnest($4::bigint[], $5::bigint[], $6::bigint[], \
+                                        $7::smallint[], $8::bigint[]))",
             self.schema
         );
         let mut removed = 0u64;
-        for (bucket, rows) in by_bucket {
-            let mut due = Vec::with_capacity(rows.len());
-            let mut spc = Vec::with_capacity(rows.len());
-            let mut db = Vec::with_capacity(rows.len());
-            let mut rel = Vec::with_capacity(rows.len());
-            let mut fork = Vec::with_capacity(rows.len());
-            let mut blk = Vec::with_capacity(rows.len());
-            for r in &rows {
-                due.push(r.due_lsn.0 as i64);
-                spc.push(r.spcnode);
-                db.push(r.dbnode);
-                rel.push(r.relnode);
-                fork.push(r.forknum);
-                blk.push(r.blknum);
+        for (bucket, blks) in by_bucket {
+            let mut spc = Vec::with_capacity(blks.len());
+            let mut db = Vec::with_capacity(blks.len());
+            let mut rel = Vec::with_capacity(blks.len());
+            let mut fork = Vec::with_capacity(blks.len());
+            let mut blk = Vec::with_capacity(blks.len());
+            for b in &blks {
+                spc.push(b.0);
+                db.push(b.1);
+                rel.push(b.2);
+                fork.push(b.3);
+                blk.push(b.4);
             }
             removed += self
                 .ysql_client
                 .execute(
                     &sql,
-                    &[&branch_s, &bucket, &due, &spc, &db, &rel, &fork, &blk],
+                    &[
+                        &branch_s, &bucket, &cutoff_i, &spc, &db, &rel, &fork, &blk, &floor_i,
+                    ],
                 )
                 .await
                 .with_context(|| {
                     format!(
-                        "dequeue_pending_gc_rows branch={branch_id} bucket={bucket} n={}",
-                        rows.len()
+                        "dequeue_pending_gc branch={branch_id} bucket={bucket} n={}",
+                        blks.len()
                     )
                 })?;
         }
@@ -6069,7 +6077,6 @@ mod tests {
 
     fn gc_cand(relnode: i64, forknum: i16, blknum: i64, due: u64) -> PendingGcRow {
         PendingGcRow {
-            bucket_id: 0, // computed by put_pending_gc on insert
             spcnode: GC_SPC,
             dbnode: GC_DB,
             relnode,
@@ -6077,6 +6084,14 @@ mod tests {
             blknum,
             due_lsn: Lsn(due),
         }
+    }
+
+    /// The visited-block idents of a selected batch — what the drain
+    /// feeds [`PageStore::dequeue_pending_gc`].
+    fn blocks_of(rows: &[PendingGcRow]) -> Vec<GcBlockIdent> {
+        rows.iter()
+            .map(|r| (r.spcnode, r.dbnode, r.relnode, r.forknum, r.blknum))
+            .collect()
     }
 
     /// `gc_bucket_id` is the client-side placement hash that replaced the
@@ -6119,9 +6134,9 @@ mod tests {
 
     /// Scenario: the same candidates are inserted twice — as crash +
     /// WAL replay does — and must dedup to one row each: every stored
-    /// column is in the PK and the writers run upsert-mode. Also
-    /// verifies the YB-generated `bucket_id` is stable (the replayed
-    /// insert can't land in a different bucket) and within range.
+    /// column is in the PK and the writers run upsert-mode. (The
+    /// placement `bucket_id` is part of that PK; its stability and range
+    /// are covered by `gc_bucket_id_is_frozen_and_bounded`.)
     #[tokio::test]
     async fn pending_gc_replay_dedups_on_pk() {
         let (store, _schema) = make_store("gc_dedup").await;
@@ -6138,12 +6153,6 @@ mod tests {
 
         let rows = all_pending(&store, branch).await;
         assert_eq!(rows.len(), 3, "replayed inserts must dedup: {rows:?}");
-        for r in &rows {
-            assert!(
-                (0..GC_BUCKETS).contains(&r.bucket_id),
-                "generated bucket out of range: {r:?}"
-            );
-        }
     }
 
     /// Scenario: candidates with due_lsns 1..=20; the drain must see
@@ -6206,7 +6215,10 @@ mod tests {
             .unwrap();
         assert_eq!(due.len(), 2);
         assert_eq!(due.last().unwrap().due_lsn, Lsn(10));
-        store.dequeue_pending_gc_rows(branch, &due).await.unwrap();
+        store
+            .dequeue_pending_gc(branch, &blocks_of(&due), Lsn(0), Lsn(20))
+            .await
+            .unwrap();
 
         // floor = last due − 1 = 9: the tie group's survivors at 10 must
         // still be selectable (an exclusive floor at 10 would skip them).
@@ -6244,7 +6256,7 @@ mod tests {
             .unwrap();
         assert_eq!(drained.len(), 3);
         store
-            .dequeue_pending_gc_rows(branch, &drained)
+            .dequeue_pending_gc(branch, &blocks_of(&drained), Lsn(0), Lsn(30))
             .await
             .unwrap();
 
@@ -6256,15 +6268,94 @@ mod tests {
         assert_eq!(left, vec![40, 50, 60], "exactly the due rows must go");
     }
 
-    /// Scenario: a budget-capped drain visits a block through ONE of
-    /// its queued candidates. The exact-PK dequeue deletes just that
-    /// row; the block's other due candidates stay queued and re-select
-    /// on a later tick (where their trims no-op) — the accepted cost
-    /// of having no collapse. The block's above-cutoff candidate and
-    /// an unvisited block's due candidate also survive.
+    /// Scenario: the block-range dequeue sweeps ALL of a visited block's
+    /// candidates at/under the cutoff — duplicates and stragglers, not
+    /// just named PKs — while leaving that block's above-cutoff
+    /// candidate, other blocks, and a same-fork drop sentinel (keyed on
+    /// exact block identity, so blknum -2 is never matched).
     #[tokio::test]
-    async fn pending_gc_dequeue_leaves_unselected_duplicates() {
-        let (store, _schema) = make_store("gc_no_collapse").await;
+    async fn pending_gc_dequeue_sweeps_the_visited_block() {
+        let (store, _schema) = make_store("gc_trim_sweep").await;
+        let branch = rand_branch();
+
+        let batch = vec![
+            gc_cand(16401, 0, 7, 10),
+            gc_cand(16401, 0, 7, 20),
+            gc_cand(16401, 0, 7, 30),
+            gc_cand(16401, 0, 7, 200),           // above cutoff
+            gc_cand(16401, 0, 8, 25),            // other block
+            gc_cand(16401, 0, GC_KIND_DROP, 40), // drop sentinel, same fork
+        ];
+        store.put_pending_gc(branch, &batch).await.unwrap();
+
+        let block_a: GcBlockIdent = (GC_SPC, GC_DB, 16401, 0, 7);
+        store
+            .dequeue_pending_gc(branch, &[block_a], Lsn(0), Lsn(100))
+            .await
+            .unwrap();
+
+        let mut left: Vec<(i64, u64)> = all_pending(&store, branch)
+            .await
+            .iter()
+            .map(|r| (r.blknum, r.due_lsn.0))
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![(GC_KIND_DROP, 40), (7, 200), (8, 25)],
+            "block 7's <= cutoff candidates swept; its above-cutoff one, block 8, and the drop survive"
+        );
+    }
+
+    /// Scenario: the dequeue window is `(floor, cutoff]`, matching the
+    /// select — a visited block's below-floor candidate is left untouched
+    /// (already handled under an earlier floor), so the delete never
+    /// reaches rows outside the tick's own span.
+    #[tokio::test]
+    async fn pending_gc_dequeue_respects_floor() {
+        let (store, _schema) = make_store("gc_floor").await;
+        let branch = rand_branch();
+
+        store
+            .put_pending_gc(
+                branch,
+                &[
+                    gc_cand(16401, 0, 7, 10), // below floor — survives
+                    gc_cand(16401, 0, 7, 40), // in (floor, cutoff] — swept
+                    gc_cand(16401, 0, 7, 60), // in (floor, cutoff] — swept
+                ],
+            )
+            .await
+            .unwrap();
+
+        let block_a: GcBlockIdent = (GC_SPC, GC_DB, 16401, 0, 7);
+        store
+            .dequeue_pending_gc(branch, &[block_a], Lsn(20), Lsn(100))
+            .await
+            .unwrap();
+
+        let left: Vec<u64> = all_pending(&store, branch)
+            .await
+            .iter()
+            .map(|r| r.due_lsn.0)
+            .collect();
+        assert_eq!(
+            left,
+            vec![10],
+            "the below-floor candidate survives; (floor, cutoff] swept"
+        );
+    }
+
+    /// Scenario: a budget-capped drain visits a block through ONE of
+    /// its queued candidates, but the range dequeue collapses the whole
+    /// block: acting the block trimmed it to the cutoff, so every
+    /// candidate `<= cutoff` there is moot and swept in one delete — no
+    /// straggler duplicates to re-select on later ticks. The block's
+    /// above-cutoff candidate and an unvisited block's due candidate
+    /// survive.
+    #[tokio::test]
+    async fn pending_gc_dequeue_collapses_visited_block_duplicates() {
+        let (store, _schema) = make_store("gc_collapse").await;
         let branch = rand_branch();
 
         store
@@ -6272,10 +6363,10 @@ mod tests {
                 branch,
                 &[
                     gc_cand(16401, 0, 7, 5),  // visited (selected)
-                    gc_cand(16401, 0, 7, 15), // duplicate, due — stays queued
-                    gc_cand(16401, 0, 7, 25), // duplicate, due — stays queued
+                    gc_cand(16401, 0, 7, 15), // duplicate, due — swept too
+                    gc_cand(16401, 0, 7, 25), // duplicate, due — swept too
                     gc_cand(16401, 0, 7, 45), // above cutoff — survives
-                    gc_cand(16401, 0, 8, 12), // other block, due, NOT selected
+                    gc_cand(16401, 0, 8, 12), // other block, due, NOT visited
                 ],
             )
             .await
@@ -6289,7 +6380,7 @@ mod tests {
         assert_eq!(drained.len(), 1);
         assert_eq!((drained[0].blknum, drained[0].due_lsn.0), (7, 5));
         store
-            .dequeue_pending_gc_rows(branch, &drained)
+            .dequeue_pending_gc(branch, &blocks_of(&drained), Lsn(0), Lsn(30))
             .await
             .unwrap();
 
@@ -6298,21 +6389,26 @@ mod tests {
             .iter()
             .map(|r| (r.blknum, r.due_lsn.0))
             .collect();
-        assert_eq!(left, vec![(8, 12), (7, 15), (7, 25), (7, 45)]);
-        // The leftovers re-select on the next tick — nothing is lost.
+        assert_eq!(
+            left,
+            vec![(8, 12), (7, 45)],
+            "block 7's <= cutoff duplicates collapse; its above-cutoff one and block 8 survive"
+        );
+        // Only the unvisited block re-selects; block 7 is fully drained.
         let next = store
             .select_due_pending_gc(branch, Lsn(0), Lsn(30), 1000)
             .await
             .unwrap();
-        assert_eq!(next.len(), 3, "due leftovers re-select next tick");
+        assert_eq!(next.len(), 1, "only the unvisited block remains due");
     }
 
     /// Scenario: a tie group wider than the select cap — a DROP
     /// DATABASE fan-out queues many drop events at ONE due_lsn (one
-    /// per fork). Each capped tick selects a batch, acts, and deletes
-    /// exactly that batch by PK; the remainder re-selects until the
-    /// group drains. No tick may wedge (select the same rows forever)
-    /// or over-delete (remove rows it didn't act).
+    /// per fork). Each capped tick selects a batch, acts, and dequeues
+    /// exactly those forks' drop sentinels; the remainder re-selects
+    /// until the group drains. No tick may wedge (select the same rows
+    /// forever) or over-delete (remove a fork it didn't act — each fork
+    /// is a distinct block, so the cap still bounds the fan-out).
     #[tokio::test]
     async fn pending_gc_dequeue_tie_group_drains_across_ticks() {
         let (store, _schema) = make_store("gc_tie_group").await;
@@ -6334,7 +6430,10 @@ mod tests {
             }
             assert!(batch.len() <= 2, "select respects the cap");
             ticks_used += 1;
-            store.dequeue_pending_gc_rows(branch, &batch).await.unwrap();
+            store
+                .dequeue_pending_gc(branch, &blocks_of(&batch), Lsn(0), Lsn(20))
+                .await
+                .unwrap();
         }
         // 5 rows at cap 2 need >= 3 ticks — a tick can't over-drain.
         assert!(ticks_used >= 3, "drained in {ticks_used} ticks");
@@ -6344,13 +6443,16 @@ mod tests {
         );
     }
 
-    /// Scenario: one dequeue call covers every kind by EXACT PK. A
-    /// fork has an acted drop (due 10), shrink (due 20), and trim
-    /// (due 15) plus a second drop event at due 300 (relnode reused
-    /// and re-dropped later — not yet due, not acted): dequeueing the
-    /// three acted rows must leave the future drop event queued.
+    /// Scenario: one dequeue call covers every kind through the same
+    /// block-range delete. A fork has an acted drop (due 10), shrink
+    /// (due 20), and trim (due 15) plus a second drop event at due 300
+    /// (relnode reused and re-dropped later — not yet due, not acted).
+    /// The drop and its future re-drop share a block ident (both blknum
+    /// -2), so only the `due_lsn <= cutoff` bound separates them: the
+    /// re-drop at 300 is above the cutoff (the insert clamp keeps it
+    /// there) and survives, while the three acted rows go.
     #[tokio::test]
-    async fn pending_gc_dequeue_exact_pk_mixed_kinds() {
+    async fn pending_gc_dequeue_mixed_kinds_one_range_delete() {
         let (store, _schema) = make_store("gc_drop_shrink_event_pk").await;
         let branch = rand_branch();
 
@@ -6367,14 +6469,17 @@ mod tests {
             .await
             .unwrap();
 
-        // The drain dequeues the rows the select returned (bucket_id
-        // populated) — all kinds in one call.
+        // The drain dequeues every visited block — all kinds in one
+        // range delete.
         let due = store
             .select_due_pending_gc(branch, Lsn(0), Lsn(100), 1000)
             .await
             .unwrap();
         assert_eq!(due.len(), 3);
-        store.dequeue_pending_gc_rows(branch, &due).await.unwrap();
+        store
+            .dequeue_pending_gc(branch, &blocks_of(&due), Lsn(0), Lsn(100))
+            .await
+            .unwrap();
 
         let left: Vec<(i64, u64)> = all_pending(&store, branch)
             .await
