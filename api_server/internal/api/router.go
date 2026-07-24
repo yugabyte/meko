@@ -632,8 +632,15 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	g.GET("/me/token-savings", tokenSavingsH.GetForAccount)
 
 	promoteMemoriesH := handlers.NewPromoteMemoriesHandler(reg.promoteMemoriesSvc, reg.dpRepo)
-	g.POST("/promote-memories", promoteMemoriesH.Promote)
-	g.POST("/keep-as-memory", promoteMemoriesH.KeepAsMemory)
+	// On dpDirect (not the JWT-only group) so BOTH the UI (Cognito JWT) and the
+	// meko-mcp-server (PAT, mko_tkn_) can reach them — the JWT-only group rejects
+	// PATs, which is why memory_promote over a PAT returned 401. The handlers
+	// self-authorize the datapack (Promote requires owner/maintainer,
+	// KeepAsMemory requires access) off the account WithPAT resolves, so a write
+	// scope is the only added guard; JWT bearers carry pat_scopes=["*"], leaving
+	// the UI unchanged. Matches the read sibling /promoted-memories below.
+	dpDirect.POST("/promote-memories", promoteMemoriesH.Promote, auth.RequireScope(auth.ScopeWrite))
+	dpDirect.POST("/keep-as-memory", promoteMemoriesH.KeepAsMemory, auth.RequireScope(auth.ScopeWrite))
 	dpDirect.GET("/promoted-memories", promoteMemoriesH.ListGET, auth.RequireScope(auth.ScopeRead))
 
 	feedbackH := handlers.NewFeedbackHandler(reg.feedbackRepo)
