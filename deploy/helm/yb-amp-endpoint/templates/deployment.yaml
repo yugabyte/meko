@@ -126,6 +126,16 @@ spec:
               memory: {{ .memory | quote }}
           {{- end }}
           {{- end }}
+          {{- with .Values.endpoint.resizePolicy }}
+          # In-place vertical resize policy (k8s 1.33+ beta, InPlacePodVerticalScaling).
+          # Governs whether a live CPU/memory change (applied via the pod's `resize`
+          # subresource by the controller) needs a container restart. `NotRequired`
+          # lets the kubelet adjust the cgroup live with no restart. Resource
+          # request==limit is kept above so a resize never changes the pod's
+          # (Guaranteed) QoS class, which in-place resize forbids.
+          resizePolicy:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: run
               mountPath: /data
@@ -157,6 +167,12 @@ spec:
               protocol: TCP
           {{- with .Values.metrics.postgresExporter.resources }}
           resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.metrics.postgresExporter.resizePolicy }}
+          # Mirror the endpoint container's in-place resize policy so a pod resize
+          # never trips over this sidecar (QoS class is pod-wide).
+          resizePolicy:
             {{- toYaml . | nindent 12 }}
           {{- end }}
         {{- end }}

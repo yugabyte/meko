@@ -59,6 +59,12 @@ type StateStore interface {
 	// DeleteEndpoint removes an endpoint record (idempotent; absent row is a no-op).
 	DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) error
 
+	// UpdateEndpointResources merges the new cpu/memory into the endpoint's stored
+	// config (the (re)create spec), so a controller-driven redeploy keeps the new
+	// size. Idempotent; an absent endpoint is a no-op. The resize step's DB-side
+	// write, paired with the deployer's live pod resize.
+	UpdateEndpointResources(ctx context.Context, endpointID uuid.UUID, cpu, memory string) error
+
 	// EndpointIDsForBranch returns the ids of every endpoint on the
 	// (projectID, branchID) branch. It is the cascade-delete enumeration the
 	// delete_branch step runs at Execute time (so a concurrently-added endpoint is

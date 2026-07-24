@@ -194,6 +194,52 @@ Wired in `cmd/controller/main.go` (`buildProvisioning`): with `--deploy`, a
 to the API as `api.Provisioning.Deployer`. With `--deploy` off, the endpoint
 create/retire routes refuse with `501` (read routes stay).
 
+## Resizing an endpoint in place
+
+`resizeEndpoint` changes a running endpoint's CPU/memory **without a restart when
+the node has room**, via the `resize_endpoint` task → `deploy.ResizeEndpoint`.
+Kubernetes only does in-place resize through the **pod `resize` subresource** — it
+is a Pod-only operation; workload controllers are not resize-aware (through k8s
+1.35). So a resize is **two writes**, in order:
+
+1. **Database config** — `UpdateEndpointResources` merges the new cpu/memory into
+   the endpoint `config` jsonb (the (re)create spec). A controller-driven redeploy
+   re-renders from this, so the new size is durable across redeploys.
+2. **In-place resize** — a strategic-merge `PATCH` of the running pod's
+   `.../pods/{pod}/resize` subresource, so the current pod adopts the new size
+   live. The deployer reads back the pod's resize conditions and reports the
+   outcome (`completed` / `pending` / `infeasible` / `unsupported`) on the task
+   result; the API and UI surface it.
+
+**Why we do *not* patch the Deployment template.** Editing the Deployment's
+`spec.template` resources changes the pod-template-hash, which makes the
+Deployment controller start an ordinary **rollout and recreate the pod** — the
+exact opposite of an in-place resize. So the size lives on the pod (via the
+`resize` subresource) and in the DB `config` (the durable desired state), not on
+the Deployment template. **Known gap:** an *involuntary* recreate (node loss /
+eviction) before the next controller-driven redeploy brings the pod back at the
+**old** size — the size stays durable in the DB and converges on the next
+redeploy, but there is no periodic reconcile that closes the window automatically.
+Endpoints don't use Deployment rollouts (single replica, `Recreate` strategy), so
+the clean fix is to move the endpoint workload to a bare **ReplicaSet** (a
+template PATCH there doesn't roll) — tracked as a follow-up.
+
+A resize is **first-writer-wins**: a partial unique index on the task table
+(`task_one_active_resize_per_endpoint`) admits at most one in-flight
+`resize_endpoint` per endpoint, so a concurrent resize is rejected with `409`
+until the first reaches a terminal state (the lock self-releases; a crashed task
+is reclaimed by its lease). CPU/memory are set as request == limit, preserving
+the pod's **Guaranteed** QoS class (in-place resize cannot change QoS). The
+`resize` PATCH goes through the same raw in-cluster REST path as the read lookups
+(`k8sAPIPatch`, sibling of `k8sAPIGet`) — **no client-go dependency, no bundled
+`kubectl`**. The `pods/resize` subresource is a *separate* RBAC resource, granted
+explicitly in the controller Role (`resources: [pods/resize], verbs: [patch]`).
+The endpoint chart declares a per-container `resizePolicy`
+(`endpoint.resizePolicy`, default cpu+memory `NotRequired`) so the kubelet adjusts
+the cgroup without a container restart. Requires k8s ≥ 1.33 (in-place resize beta,
+on by default); on older clusters the subresource PATCH is rejected and the
+outcome surfaces as an error. The Docker deployer returns `unsupported`.
+
 ## Idempotency
 
 Deploy/retire converge on retry rather than duplicating or wedging:

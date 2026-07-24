@@ -26,6 +26,7 @@ const (
 	KindCreateProject  = "create_project"
 	KindBranch         = "branch"
 	KindCreateEndpoint = "create_endpoint"
+	KindResizeEndpoint = "resize_endpoint"
 	KindDeleteEndpoint = "delete_endpoint"
 	KindDeleteBranch   = "delete_branch"
 	KindDeleteProject  = "delete_project"
@@ -52,6 +53,22 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Task, error) {
 // matching count (for GET /tasks).
 func (s *Service) List(ctx context.Context, f TaskFilter, limit, offset int) ([]*Task, int, error) {
 	return s.store.List(ctx, f, limit, offset)
+}
+
+// Result returns the result payload of the task's final step that recorded one
+// — the task's user-facing outcome (e.g. a resize's in-place status), as opaque
+// JSON. Returns nil when the task has no steps or none recorded a result.
+func (s *Service) Result(ctx context.Context, id uuid.UUID) (json.RawMessage, error) {
+	steps, err := s.store.Steps(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	for i := len(steps) - 1; i >= 0; i-- {
+		if len(steps[i].Result) > 0 {
+			return steps[i].Result, nil
+		}
+	}
+	return nil, nil
 }
 
 // CreateProjectInput is the request for a create_project task: a new project (a
@@ -198,6 +215,30 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 		}),
 	}
 	return s.create(ctx, KindCreateEndpoint, in, in.ProjectID, endpointID.String(), steps)
+}
+
+// ResizeEndpointInput is the request for a resize_endpoint task: change an
+// existing endpoint's compute reservation. CPU/Memory are Kubernetes quantities
+// applied as request == limit (Guaranteed QoS preserved).
+type ResizeEndpointInput struct {
+	ProjectID  uuid.UUID `json:"project_id"`
+	EndpointID uuid.UUID `json:"endpoint_id"`
+	CPU        string    `json:"cpu"`
+	Memory     string    `json:"memory"`
+}
+
+// ResizeEndpoint records a resize_endpoint task: a single resize_endpoint step
+// that persists the new size to the endpoint's config (durable across redeploys)
+// and resizes the running pod in place.
+func (s *Service) ResizeEndpoint(ctx context.Context, in ResizeEndpointInput) (*Task, error) {
+	steps := []StepSpec{
+		stepSpec(StepResizeEndpoint, ResizeEndpointArgs{
+			EndpointID: in.EndpointID,
+			CPU:        in.CPU,
+			Memory:     in.Memory,
+		}),
+	}
+	return s.create(ctx, KindResizeEndpoint, in, in.ProjectID, in.EndpointID.String(), steps)
 }
 
 // DeleteEndpointInput is the request for a delete_endpoint (scale-down) task.

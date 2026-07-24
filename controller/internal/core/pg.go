@@ -441,7 +441,7 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, projectID, branchID uuid
 // endpointSelect projects an endpoint row; address is NULL until the endpoint
 // is deployed (SetEndpointAddress), so it is coalesced to the empty string to
 // match Endpoint.Address being a plain string.
-const endpointSelect = `SELECT e.id::text, e.project_id::text, e.branch_id::text, e.role::text, COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), e.created_at
+const endpointSelect = `SELECT e.id::text, e.project_id::text, e.branch_id::text, e.role::text, COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.created_at
 	FROM endpoint e`
 
 func (b *PgBackend) getEndpointByID(ctx context.Context, id uuid.UUID) (Endpoint, error) {
@@ -513,6 +513,23 @@ func (b *PgBackend) DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) er
 	_, err := b.pool.Exec(ctx, `DELETE FROM endpoint WHERE id = $1::uuid`, endpointID.String())
 	if err != nil {
 		return fmt.Errorf("delete endpoint: %w", err)
+	}
+	return nil
+}
+
+// UpdateEndpointResources merges the new cpu/memory into the endpoint's config
+// jsonb (the spec used to (re)create it), leaving the other config fields intact.
+// This is the durable, DB-side half of a resize: a controller-driven recreate
+// re-renders from this config, so the new size survives a redeploy. Idempotent;
+// an absent row is a no-op.
+func (b *PgBackend) UpdateEndpointResources(ctx context.Context, endpointID uuid.UUID, cpu, memory string) error {
+	_, err := b.pool.Exec(ctx,
+		`UPDATE endpoint
+		    SET config = COALESCE(config, '{}'::jsonb) || jsonb_build_object('cpu', $2::text, 'memory', $3::text)
+		  WHERE id = $1::uuid`,
+		endpointID.String(), cpu, memory)
+	if err != nil {
+		return fmt.Errorf("update endpoint resources: %w", err)
 	}
 	return nil
 }
@@ -657,7 +674,7 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 		branchStr  string
 		ep         Endpoint
 	)
-	if err := r.Scan(&idStr, &projectStr, &branchStr, &ep.Role, &ep.Address, &ep.TailnetAddress, &ep.CreatedAt); err != nil {
+	if err := r.Scan(&idStr, &projectStr, &branchStr, &ep.Role, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
 	}
 	id, err := uuid.Parse(idStr)

@@ -4,7 +4,12 @@
 
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/api/queries";
-import { createEndpoint, listEndpoints } from "@/lib/api/resources";
+import {
+  createEndpoint,
+  listEndpoints,
+  resizeEndpoint,
+  type ResizeResult,
+} from "@/lib/api/resources";
 import type { Branch, Endpoint, EndpointRole } from "@/lib/api/types";
 
 /** Fan out across branches to fetch each one's endpoints, keyed by branch id. */
@@ -49,6 +54,28 @@ export function useCreateEndpoint() {
         ...(input.cpu || input.memory
           ? { resources: { cpu: input.cpu, memory: input.memory } }
           : {}),
+      }),
+    onSuccess: (_data, input) => {
+      qc.invalidateQueries({
+        queryKey: qk.endpoints(input.poolId, input.projectId, input.branchId),
+      });
+    },
+  });
+}
+
+export function useResizeEndpoint() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      poolId: string;
+      projectId: string;
+      branchId: string;
+      endpointId: string;
+      cpu?: string;
+      memory?: string;
+    }): Promise<ResizeResult> =>
+      resizeEndpoint(input.poolId, input.projectId, input.branchId, input.endpointId, {
+        resources: { cpu: input.cpu, memory: input.memory },
       }),
     onSuccess: (_data, input) => {
       qc.invalidateQueries({

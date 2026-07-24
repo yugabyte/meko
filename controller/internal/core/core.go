@@ -108,7 +108,13 @@ type Endpoint struct {
 	// set alongside Address when the endpoint is exposed on the tailnet; empty
 	// otherwise.
 	TailnetAddress string
-	CreatedAt      time.Time
+	// CPU and Memory are the endpoint's current compute reservation (Kubernetes
+	// quantities), read from the stored config. Empty when the config predates
+	// resource tracking. Surfaced on the API so callers see the current size and
+	// can resize relative to it.
+	CPU       string
+	Memory    string
+	CreatedAt time.Time
 }
 
 // DefaultBranchName is the name given to a project's default (root) branch. The

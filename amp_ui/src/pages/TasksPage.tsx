@@ -205,6 +205,7 @@ const TASK_KIND_LABELS: Record<string, string> = {
   create_project: "Create cluster",
   branch: "Branch",
   create_endpoint: "Create cluster",
+  resize_endpoint: "Resize compute",
   delete_project: "Delete cluster",
   delete_branch: "Delete branch",
   delete_endpoint: "Delete cluster",

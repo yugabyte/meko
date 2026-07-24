@@ -67,6 +67,7 @@ func ProductionRegistry(deps Deps) *Registry {
 	r.Register(StepCreateBranch, buildCreateBranchStep)
 	r.Register(StepRecordBranchRecipe, buildRecordBranchRecipeStep)
 	r.Register(StepCreateEndpoint, buildCreateEndpointStep)
+	r.Register(StepResizeEndpoint, buildResizeEndpointStep)
 	r.Register(StepDeleteEndpoint, buildDeleteEndpointStep)
 	r.Register(StepDeleteBranch, buildDeleteBranchStep)
 	r.Register(StepDeleteProject, buildDeleteProjectStep)

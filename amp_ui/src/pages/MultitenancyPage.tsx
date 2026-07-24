@@ -5,7 +5,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Check, Copy, GitBranch, Loader2, Plus, Server } from "lucide-react";
+import { Check, Copy, Cpu, GitBranch, Loader2, Plus, Server } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -40,7 +40,11 @@ import {
   useProjects,
   useStoragePools,
 } from "@/lib/api/queries";
-import { useBranchEndpoints, useCreateEndpoint } from "@/hooks/useEndpoints";
+import {
+  useBranchEndpoints,
+  useCreateEndpoint,
+  useResizeEndpoint,
+} from "@/hooks/useEndpoints";
 import type {
   Branch,
   CreateBranchInput,
@@ -384,7 +388,7 @@ function EndpointsSection({
       ) : endpoints.length ? (
         <ul className="space-y-2">
           {endpoints.map((ep) => (
-            <ComputeInstance key={ep.id} ep={ep} />
+            <ComputeInstance key={ep.id} ep={ep} poolId={poolId} />
           ))}
         </ul>
       ) : (
@@ -441,12 +445,61 @@ function EndpointsSection({
 // One provisioned compute instance: its address, role, and a copyable psql
 // connect string. The controller returns `address` (host:port) once the
 // instance is deployed; it connects as user `cloud_admin`, cluster `postgres`.
-function ComputeInstance({ ep }: { ep: Endpoint }) {
+function ComputeInstance({ ep, poolId }: { ep: Endpoint; poolId: string }) {
   const [copied, setCopied] = useState(false);
   const connStr = ep.address
     ? `postgresql://cloud_admin@${ep.address}/postgres`
     : "";
   const psql = connStr ? `psql "${connStr}"` : "";
+
+  // Per-endpoint in-place resize: pre-fill with the current reservation. The
+  // controller persists the new size, updates the Deployment, and resizes the
+  // running pod in place; the reported outcome says whether it applied live.
+  const resize = useResizeEndpoint();
+  const [showResize, setShowResize] = useState(false);
+  const [cpu, setCpu] = useState(ep.resources?.cpu || DEFAULT_ENDPOINT_CPU);
+  const [memory, setMemory] = useState(
+    ep.resources?.memory || DEFAULT_ENDPOINT_MEMORY,
+  );
+
+  function applyResize() {
+    resize.mutate(
+      {
+        poolId,
+        projectId: ep.project_id,
+        branchId: ep.branch_id,
+        endpointId: ep.id,
+        cpu: cpu.trim() || undefined,
+        memory: memory.trim() || undefined,
+      },
+      {
+        onSuccess: (res) => {
+          const size = `${res.endpoint.resources?.cpu ?? cpu} CPU / ${res.endpoint.resources?.memory ?? memory}`;
+          switch (res.outcome) {
+            case "completed":
+              toast.success(`Resized in place to ${size}`);
+              break;
+            case "pending":
+              toast.success(`Resize to ${size} accepted — applying shortly`);
+              break;
+            case "infeasible":
+              toast.warning(
+                `Saved ${size}, but the node can't resize in place now; it applies on the next redeploy`,
+              );
+              break;
+            case "unsupported":
+              toast.success(`Resized to ${size} (in-place n/a on this runtime)`);
+              break;
+          }
+          setShowResize(false);
+        },
+        onError: (err) =>
+          toast.error(
+            err instanceof Error ? err.message : "Failed to resize compute",
+          ),
+      },
+    );
+  }
 
   function copy() {
     if (!psql || !navigator.clipboard) return;
@@ -483,7 +536,55 @@ function ComputeInstance({ ep }: { ep: Endpoint }) {
         <Badge variant="secondary" className="font-mono text-[10px]">
           {ep.role.replace("_", "-")}
         </Badge>
+        {(ep.resources?.cpu || ep.resources?.memory) && (
+          <Badge variant="outline" className="font-mono text-[10px]">
+            {ep.resources?.cpu ?? "?"} CPU / {ep.resources?.memory ?? "?"}
+          </Badge>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setShowResize((s) => !s)}
+          className="ml-auto h-7 gap-1 px-2 text-xs"
+        >
+          <Cpu className="h-3.5 w-3.5" />
+          Resize
+        </Button>
       </div>
+      {showResize && (
+        <div className="mt-2 flex flex-wrap items-end gap-2 rounded-md border border-border bg-muted/30 p-2">
+          <div className="flex flex-col gap-1">
+            <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              CPU
+            </Label>
+            <Input
+              value={cpu}
+              onChange={(e) => setCpu(e.target.value)}
+              placeholder={DEFAULT_ENDPOINT_CPU}
+              className="h-8 w-20 font-mono text-xs"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              Memory
+            </Label>
+            <Input
+              value={memory}
+              onChange={(e) => setMemory(e.target.value)}
+              placeholder={DEFAULT_ENDPOINT_MEMORY}
+              className="h-8 w-24 font-mono text-xs"
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={applyResize}
+            disabled={resize.isPending}
+          >
+            {resize.isPending ? "Resizing…" : "Apply resize"}
+          </Button>
+        </div>
+      )}
       {ep.address && (
         <div className="mt-2 flex items-center gap-2">
           <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">

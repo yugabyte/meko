@@ -49,6 +49,14 @@ tests:
             apiGroups: ["apps"]
             resources: [deployments, replicasets, statefulsets]
             verbs: ["*"]
+      # In-place pod resize is gated on the pods/resize subresource (separate
+      # from `pods`), granted explicitly so the controller can resize endpoints.
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [pods/resize]
+            verbs: [patch]
 
   - it: binds the ClusterRole to the controller ServiceAccount in the release namespace
     release:

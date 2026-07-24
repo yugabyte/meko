@@ -171,6 +171,13 @@ type Endpoint struct {
 
 	// ProjectId The project (control-plane grouping) this endpoint is bound to.
 	ProjectId openapi_types.UUID `json:"project_id"`
+
+	// Resources CPU + memory reserved for the endpoint's compute pod. Each value is a
+	// Kubernetes resource quantity and is applied as BOTH the request and the
+	// limit on the endpoint container, so the pod is scheduled with the
+	// **Guaranteed** QoS class. Omit the object (or either field) to take the
+	// defaults of 2 CPU cores and 4Gi of memory.
+	Resources *EndpointResources `json:"resources,omitempty"`
 	Role      EndpointRole       `json:"role"`
 
 	// TailnetAddress Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.
@@ -247,6 +254,18 @@ type ProjectList struct {
 	Total TotalCount `json:"total"`
 }
 
+// ResizeEndpointRequest Request to change an existing endpoint's compute reservation. cpu/memory
+// are applied as request == limit, so the pod keeps its Guaranteed QoS class
+// (a prerequisite for in-place resize).
+type ResizeEndpointRequest struct {
+	// Resources CPU + memory reserved for the endpoint's compute pod. Each value is a
+	// Kubernetes resource quantity and is applied as BOTH the request and the
+	// limit on the endpoint container, so the pod is scheduled with the
+	// **Guaranteed** QoS class. Omit the object (or either field) to take the
+	// defaults of 2 CPU cores and 4Gi of memory.
+	Resources EndpointResources `json:"resources"`
+}
+
 // StoragePool defines model for StoragePool.
 type StoragePool struct {
 	CreatedAt   time.Time          `json:"created_at"`
@@ -275,9 +294,16 @@ type Task struct {
 	// Params The originating request, as opaque JSON.
 	Params    *interface{}        `json:"params,omitempty"`
 	ProjectId *openapi_types.UUID `json:"project_id"`
-	Status    TaskStatus          `json:"status"`
-	TargetRef *string             `json:"target_ref"`
-	UpdatedAt time.Time           `json:"updated_at"`
+
+	// Result The task's final step result, as opaque JSON — the user-facing
+	// outcome once the task has run. For a `resize_endpoint` task it carries
+	// `in_place_resize` (`completed` | `pending` | `infeasible` |
+	// `unsupported`) and `in_place_message`. Absent until a step records a
+	// result.
+	Result    *interface{} `json:"result,omitempty"`
+	Status    TaskStatus   `json:"status"`
+	TargetRef *string      `json:"target_ref"`
+	UpdatedAt time.Time    `json:"updated_at"`
 }
 
 // TaskStatus defines model for Task.Status.
@@ -450,6 +476,9 @@ type CreateBranchJSONRequestBody = CreateBranchRequest
 // CreateEndpointJSONRequestBody defines body for CreateEndpoint for application/json ContentType.
 type CreateEndpointJSONRequestBody = CreateEndpointRequest
 
+// ResizeEndpointJSONRequestBody defines body for ResizeEndpoint for application/json ContentType.
+type ResizeEndpointJSONRequestBody = ResizeEndpointRequest
+
 // CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 type CreateUserJSONRequestBody = CreateUserRequest
 
@@ -578,6 +607,11 @@ type ClientInterface interface {
 
 	// GetEndpoint request
 	GetEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ResizeEndpointWithBody request with any body
+	ResizeEndpointWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ResizeEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListTasks request
 	ListTasks(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -818,6 +852,30 @@ func (c *Client) DeleteEndpoint(ctx context.Context, poolId PoolId, projectId Pr
 
 func (c *Client) GetEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetEndpointRequest(c.Server, poolId, projectId, branchId, endpointId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ResizeEndpointWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResizeEndpointRequestWithBody(c.Server, poolId, projectId, branchId, endpointId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ResizeEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResizeEndpointRequest(c.Server, poolId, projectId, branchId, endpointId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1754,6 +1812,74 @@ func NewGetEndpointRequest(server string, poolId PoolId, projectId ProjectId, br
 	return req, nil
 }
 
+// NewResizeEndpointRequest calls the generic ResizeEndpoint builder with application/json body
+func NewResizeEndpointRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewResizeEndpointRequestWithBody(server, poolId, projectId, branchId, endpointId, "application/json", bodyReader)
+}
+
+// NewResizeEndpointRequestWithBody generates requests for ResizeEndpoint with any type of body
+func NewResizeEndpointRequestWithBody(server string, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "poolId", runtime.ParamLocationPath, poolId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithLocation("simple", false, "projectId", runtime.ParamLocationPath, projectId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithLocation("simple", false, "branchId", runtime.ParamLocationPath, branchId)
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithLocation("simple", false, "endpointId", runtime.ParamLocationPath, endpointId)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s/endpoints/%s/resize", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewListTasksRequest generates requests for ListTasks
 func NewListTasksRequest(server string, params *ListTasksParams) (*http.Request, error) {
 	var err error
@@ -2163,6 +2289,11 @@ type ClientWithResponsesInterface interface {
 	// GetEndpointWithResponse request
 	GetEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error)
 
+	// ResizeEndpointWithBodyWithResponse request with any body
+	ResizeEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
+
+	ResizeEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
+
 	// ListTasksWithResponse request
 	ListTasksWithResponse(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*ListTasksResponse, error)
 
@@ -2560,6 +2691,32 @@ func (r GetEndpointResponse) StatusCode() int {
 	return 0
 }
 
+type ResizeEndpointResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r ResizeEndpointResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ResizeEndpointResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type ListTasksResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2869,6 +3026,23 @@ func (c *ClientWithResponses) GetEndpointWithResponse(ctx context.Context, poolI
 		return nil, err
 	}
 	return ParseGetEndpointResponse(rsp)
+}
+
+// ResizeEndpointWithBodyWithResponse request with arbitrary body returning *ResizeEndpointResponse
+func (c *ClientWithResponses) ResizeEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error) {
+	rsp, err := c.ResizeEndpointWithBody(ctx, poolId, projectId, branchId, endpointId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseResizeEndpointResponse(rsp)
+}
+
+func (c *ClientWithResponses) ResizeEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error) {
+	rsp, err := c.ResizeEndpoint(ctx, poolId, projectId, branchId, endpointId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseResizeEndpointResponse(rsp)
 }
 
 // ListTasksWithResponse request returning *ListTasksResponse
@@ -3645,6 +3819,60 @@ func ParseGetEndpointResponse(rsp *http.Response) (*GetEndpointResponse, error) 
 	return response, nil
 }
 
+// ParseResizeEndpointResponse parses an HTTP response from a ResizeEndpointWithResponse call
+func ParseResizeEndpointResponse(rsp *http.Response) (*ResizeEndpointResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ResizeEndpointResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListTasksResponse parses an HTTP response from a ListTasksWithResponse call
 func ParseListTasksResponse(rsp *http.Response) (*ListTasksResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -3932,6 +4160,9 @@ type ServerInterface interface {
 	// Get an endpoint
 	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
 	GetEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error
+	// Resize an endpoint's compute (in place)
+	// (POST /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId}/resize)
+	ResizeEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error
 	// List tasks
 	// (GET /tasks)
 	ListTasks(ctx echo.Context, params ListTasksParams) error
@@ -4398,6 +4629,46 @@ func (w *ServerInterfaceWrapper) GetEndpoint(ctx echo.Context) error {
 	return err
 }
 
+// ResizeEndpoint converts echo context to params.
+func (w *ServerInterfaceWrapper) ResizeEndpoint(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
+	}
+
+	// ------------- Path parameter "endpointId" -------------
+	var endpointId EndpointId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "endpointId", ctx.Param("endpointId"), &endpointId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter endpointId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.ResizeEndpoint(ctx, poolId, projectId, branchId, endpointId)
+	return err
+}
+
 // ListTasks converts echo context to params.
 func (w *ServerInterfaceWrapper) ListTasks(ctx echo.Context) error {
 	var err error
@@ -4562,6 +4833,7 @@ func RegisterHandlersWithBaseURL(router EchoRouter, si ServerInterface, baseURL 
 	router.POST(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints", wrapper.CreateEndpoint)
 	router.DELETE(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints/:endpointId", wrapper.DeleteEndpoint)
 	router.GET(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints/:endpointId", wrapper.GetEndpoint)
+	router.POST(baseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints/:endpointId/resize", wrapper.ResizeEndpoint)
 	router.GET(baseURL+"/tasks", wrapper.ListTasks)
 	router.GET(baseURL+"/tasks/:taskId", wrapper.GetTask)
 	router.GET(baseURL+"/users", wrapper.ListUsers)
@@ -5287,6 +5559,64 @@ func (response GetEndpoint500JSONResponse) VisitGetEndpointResponse(w http.Respo
 	return json.NewEncoder(w).Encode(response)
 }
 
+type ResizeEndpointRequestObject struct {
+	PoolId     PoolId     `json:"poolId"`
+	ProjectId  ProjectId  `json:"projectId"`
+	BranchId   BranchId   `json:"branchId"`
+	EndpointId EndpointId `json:"endpointId"`
+	Body       *ResizeEndpointJSONRequestBody
+}
+
+type ResizeEndpointResponseObject interface {
+	VisitResizeEndpointResponse(w http.ResponseWriter) error
+}
+
+type ResizeEndpoint202JSONResponse struct{ AcceptedJSONResponse }
+
+func (response ResizeEndpoint202JSONResponse) VisitResizeEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type ResizeEndpoint400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ResizeEndpoint400JSONResponse) VisitResizeEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ResizeEndpoint404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ResizeEndpoint404JSONResponse) VisitResizeEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ResizeEndpoint409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ResizeEndpoint409JSONResponse) VisitResizeEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ResizeEndpoint500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ResizeEndpoint500JSONResponse) VisitResizeEndpointResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type ListTasksRequestObject struct {
 	Params ListTasksParams
 }
@@ -5543,6 +5873,9 @@ type StrictServerInterface interface {
 	// Get an endpoint
 	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
 	GetEndpoint(ctx context.Context, request GetEndpointRequestObject) (GetEndpointResponseObject, error)
+	// Resize an endpoint's compute (in place)
+	// (POST /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId}/resize)
+	ResizeEndpoint(ctx context.Context, request ResizeEndpointRequestObject) (ResizeEndpointResponseObject, error)
 	// List tasks
 	// (GET /tasks)
 	ListTasks(ctx context.Context, request ListTasksRequestObject) (ListTasksResponseObject, error)
@@ -5987,6 +6320,40 @@ func (sh *strictHandler) GetEndpoint(ctx echo.Context, poolId PoolId, projectId 
 		return err
 	} else if validResponse, ok := response.(GetEndpointResponseObject); ok {
 		return validResponse.VisitGetEndpointResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// ResizeEndpoint operation middleware
+func (sh *strictHandler) ResizeEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error {
+	var request ResizeEndpointRequestObject
+
+	request.PoolId = poolId
+	request.ProjectId = projectId
+	request.BranchId = branchId
+	request.EndpointId = endpointId
+
+	var body ResizeEndpointJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ResizeEndpoint(ctx.Request().Context(), request.(ResizeEndpointRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResizeEndpoint")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(ResizeEndpointResponseObject); ok {
+		return validResponse.VisitResizeEndpointResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

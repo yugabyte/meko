@@ -2,13 +2,16 @@ package api_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/yugabyte/amp/controller/internal/api"
 	"github.com/yugabyte/amp/controller/internal/core"
+	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/task"
 )
 
@@ -289,6 +292,335 @@ func TestEndpointResources(t *testing.T) {
 		if resp.StatusCode() != http.StatusBadRequest {
 			t.Errorf("invalid resources %+v: status = %d, want 400; body = %s", res, resp.StatusCode(), resp.Body)
 		}
+	}
+}
+
+// TestEndpointResize drives the resize workflow: create an endpoint, then resize
+// it and confirm (a) the new size is persisted (GetEndpoint reports it), (b) the
+// deployer was asked to resize the right instance, (c) the task result reports
+// the in-place outcome, and (d) an unspecified dimension keeps its current value.
+// Also covers the 400 (bad quantity) and 404 (missing endpoint) error paths.
+func TestEndpointResize(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
+	ctx := context.Background()
+
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "resize-pool")
+	projectID := uuid.New()
+	branchID := uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+
+	rw := api.CreateEndpointRequestRoleReadWrite
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	drainTasks(t, store, backend, prov)
+	list, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	if list.JSON200 == nil || len(list.JSON200.Endpoints) != 1 {
+		t.Fatalf("expected one endpoint, body = %s", list.Body)
+	}
+	ep := list.JSON200.Endpoints[0]
+	// The created endpoint carries its (default) reservation on the API.
+	if ep.Resources == nil || ep.Resources.Cpu == nil || *ep.Resources.Cpu != "2" {
+		t.Fatalf("created endpoint resources = %+v, want cpu=2", ep.Resources)
+	}
+	_ = created
+
+	// Resize cpu+memory -> 202 + a resize_endpoint task.
+	cpu, mem := "4", "8Gi"
+	resized, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id, api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &cpu, Memory: &mem},
+	})
+	if err != nil {
+		t.Fatalf("ResizeEndpoint: %v", err)
+	}
+	if resized.StatusCode() != http.StatusAccepted {
+		t.Fatalf("ResizeEndpoint status = %d, want 202; body = %s", resized.StatusCode(), resized.Body)
+	}
+	assertTaskAccepted(t, resized.JSON202, resized.HTTPResponse.Header.Get("Location"), "resize_endpoint")
+	drainTasks(t, store, backend, prov)
+
+	// The deployer was asked to resize this instance to the new size.
+	if rs := dep.resizedSpecs(); len(rs) != 1 || rs[0].CPU != "4" || rs[0].Memory != "8Gi" {
+		t.Fatalf("deployer resize calls = %+v, want one {cpu:4, memory:8Gi}", rs)
+	}
+	// The persisted size now reflects the resize.
+	got, _ := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
+	if got.JSON200 == nil || got.JSON200.Resources == nil || *got.JSON200.Resources.Cpu != "4" || *got.JSON200.Resources.Memory != "8Gi" {
+		t.Fatalf("resized endpoint resources = %+v, want cpu=4 memory=8Gi", got.JSON200.Resources)
+	}
+	// The task result reports the in-place outcome.
+	taskResp, _ := client.GetTaskWithResponse(ctx, resized.JSON202.Id)
+	if taskResp.JSON200 == nil || taskResp.JSON200.Result == nil {
+		t.Fatalf("resize task result missing; body = %s", taskResp.Body)
+	}
+	if res, ok := (*taskResp.JSON200.Result).(map[string]any); !ok || res["in_place_resize"] != "completed" {
+		t.Errorf("task result = %v, want in_place_resize=completed", *taskResp.JSON200.Result)
+	}
+
+	// Resize only cpu -> memory keeps its current value (8Gi).
+	cpuOnly := "6"
+	partial, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id, api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &cpuOnly},
+	})
+	if err != nil || partial.StatusCode() != http.StatusAccepted {
+		t.Fatalf("ResizeEndpoint(cpu only): status = %d, err = %v", partial.StatusCode(), err)
+	}
+	drainTasks(t, store, backend, prov)
+	if rs := dep.resizedSpecs(); len(rs) == 0 || rs[len(rs)-1].CPU != "6" || rs[len(rs)-1].Memory != "8Gi" {
+		t.Errorf("partial resize spec = %+v, want last {6, 8Gi} (memory unchanged)", rs)
+	}
+
+	// A malformed quantity is rejected synchronously with 400.
+	badCPU := "4x"
+	bad, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id, api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &badCPU},
+	})
+	if err != nil {
+		t.Fatalf("ResizeEndpoint(bad cpu): %v", err)
+	}
+	if bad.StatusCode() != http.StatusBadRequest {
+		t.Errorf("bad cpu status = %d, want 400; body = %s", bad.StatusCode(), bad.Body)
+	}
+
+	// Resizing a missing endpoint -> 404.
+	missing, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, uuid.New(), api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &cpu},
+	})
+	if err != nil {
+		t.Fatalf("ResizeEndpoint(missing): %v", err)
+	}
+	if missing.StatusCode() != http.StatusNotFound {
+		t.Errorf("missing endpoint resize status = %d, want 404; body = %s", missing.StatusCode(), missing.Body)
+	}
+}
+
+// TestEndpointResizeParallel fires many concurrent resize requests at the SAME
+// endpoint. The resize is first-writer-wins with a lock: exactly ONE request is
+// accepted (202) and holds the endpoint; every other concurrent request is
+// rejected with 409 while that resize is in flight. Once the winner completes,
+// the lock releases and a fresh resize is accepted again. Run under `-race` this
+// also guards the concurrent task-creation path (the lock is enforced there).
+func TestEndpointResizeParallel(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
+	ctx := context.Background()
+
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "par-pool")
+	projectID := uuid.New()
+	branchID := uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+
+	rw := api.CreateEndpointRequestRoleReadWrite
+	if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	drainTasks(t, store, backend, prov)
+	list, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	if list.JSON200 == nil || len(list.JSON200.Endpoints) != 1 {
+		t.Fatalf("expected one endpoint, body = %s", list.Body)
+	}
+	epID := list.JSON200.Endpoints[0].Id
+
+	// Fire N concurrent resizes, each to a distinct size, WITHOUT draining — so
+	// the first-planned resize is still in flight (pending) when the rest arrive.
+	sizes := []struct{ cpu, mem string }{
+		{"1", "2Gi"}, {"2", "4Gi"}, {"3", "6Gi"}, {"4", "8Gi"},
+		{"5", "10Gi"}, {"6", "12Gi"}, {"7", "14Gi"}, {"8", "16Gi"},
+	}
+	type result struct {
+		code     int
+		cpu, mem string
+	}
+	results := make([]result, len(sizes))
+	var wg sync.WaitGroup
+	for i, s := range sizes {
+		wg.Add(1)
+		go func(i int, cpu, mem string) {
+			defer wg.Done()
+			resp, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, epID, api.ResizeEndpointRequest{
+				Resources: api.EndpointResources{Cpu: &cpu, Memory: &mem},
+			})
+			if err != nil {
+				t.Errorf("parallel resize (%s/%s): %v", cpu, mem, err)
+				return
+			}
+			results[i] = result{resp.StatusCode(), cpu, mem}
+		}(i, s.cpu, s.mem)
+	}
+	wg.Wait()
+
+	// Exactly one winner (202); everyone else is locked out with 409.
+	var winners []result
+	for _, r := range results {
+		switch r.code {
+		case http.StatusAccepted:
+			winners = append(winners, r)
+		case http.StatusConflict: // 409 — expected for the losers
+		default:
+			t.Errorf("parallel resize got status %d, want 202 or 409", r.code)
+		}
+	}
+	if len(winners) != 1 {
+		t.Fatalf("accepted resizes = %d, want exactly 1 (first-writer-wins)", len(winners))
+	}
+	// Exactly one resize task was planned (the losers never created one).
+	tasks, _, err := store.List(ctx, task.TaskFilter{Kind: "resize_endpoint"}, 1000, 0)
+	if err != nil {
+		t.Fatalf("list resize tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("resize tasks planned = %d, want 1 (only the winner)", len(tasks))
+	}
+
+	// Drive the winner; the endpoint lands at exactly the winner's size.
+	drainTasks(t, store, backend, prov)
+	if got := statusOfTask(t, store, tasks[0].ID); got != task.StatusSucceeded {
+		t.Errorf("winning resize task status = %v, want succeeded", got)
+	}
+	got, _ := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, epID)
+	if got.JSON200 == nil || got.JSON200.Resources == nil ||
+		*got.JSON200.Resources.Cpu != winners[0].cpu || *got.JSON200.Resources.Memory != winners[0].mem {
+		t.Errorf("final size = %+v, want the winner's (%s, %s)", got.JSON200.Resources, winners[0].cpu, winners[0].mem)
+	}
+
+	// The lock released: a fresh resize is accepted again.
+	nc, nm := "2", "4Gi"
+	again, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, epID, api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &nc, Memory: &nm},
+	})
+	if err != nil || again.StatusCode() != http.StatusAccepted {
+		t.Fatalf("resize after the in-flight one completed: status = %d, err = %v (lock should have released)", again.StatusCode(), err)
+	}
+}
+
+// statusOfTask fetches a task's status, failing the test on a read error / nil.
+func statusOfTask(t *testing.T, store *task.MemStore, id uuid.UUID) task.Status {
+	t.Helper()
+	tk, err := store.Get(context.Background(), id)
+	if err != nil || tk == nil {
+		t.Fatalf("get task %s: task=%v err=%v", id, tk, err)
+	}
+	return tk.Status
+}
+
+// TestEndpointResizeInPlaceOutcomes covers the non-completed in-place results.
+// A pending/infeasible in-place resize is NOT a task failure — the size was
+// persisted and the Deployment updated, so it converges on restart; the task
+// succeeds and its result carries the outcome. A deployer error IS a failure,
+// but the size was still persisted first (durable).
+func TestEndpointResizeInPlaceOutcomes(t *testing.T) {
+	type fixture struct {
+		client            *api.ClientWithResponses
+		backend           *core.MemBackend
+		store             *task.MemStore
+		prov              api.Provisioning
+		poolID            uuid.UUID
+		projectID, branch uuid.UUID
+		epID              uuid.UUID
+	}
+	seed := func(t *testing.T, dep *fakeDeployer) fixture {
+		t.Helper()
+		prov := api.Provisioning{Deployer: dep}
+		client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
+		ctx := context.Background()
+		user := mustCreateUser(t, client, false)
+		pool := mustCreatePool(t, client, user.Id, "outcome-pool")
+		projectID, branchID := uuid.New(), uuid.New()
+		backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+		rw := api.CreateEndpointRequestRoleReadWrite
+		if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {
+			t.Fatalf("CreateEndpoint: %v", err)
+		}
+		drainTasks(t, store, backend, prov)
+		list, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+		return fixture{client, backend, store, prov, pool.Id, projectID, branchID, list.JSON200.Endpoints[0].Id}
+	}
+
+	cpu, mem := "4", "8Gi"
+
+	// (a) infeasible: task succeeds, result reports infeasible, size still persisted.
+	t.Run("infeasible still succeeds and persists", func(t *testing.T) {
+		f := seed(t, &fakeDeployer{resizeOutcome: deploy.ResizeInfeasible})
+		ctx := context.Background()
+		resp, err := f.client.ResizeEndpointWithResponse(ctx, f.poolID, f.projectID, f.branch, f.epID, api.ResizeEndpointRequest{
+			Resources: api.EndpointResources{Cpu: &cpu, Memory: &mem},
+		})
+		if err != nil || resp.StatusCode() != http.StatusAccepted {
+			t.Fatalf("resize status = %d, err = %v", resp.StatusCode(), err)
+		}
+		drainTasks(t, f.store, f.backend, f.prov)
+		tk, _ := f.store.Get(ctx, resp.JSON202.Id)
+		if tk == nil || tk.Status != task.StatusSucceeded {
+			t.Fatalf("infeasible resize task status = %v, want succeeded (durable size set)", statusOf(tk))
+		}
+		taskResp, _ := f.client.GetTaskWithResponse(ctx, resp.JSON202.Id)
+		if res, ok := (*taskResp.JSON200.Result).(map[string]any); !ok || res["in_place_resize"] != "infeasible" {
+			t.Errorf("task result = %v, want in_place_resize=infeasible", *taskResp.JSON200.Result)
+		}
+		got, _ := f.client.GetEndpointWithResponse(ctx, f.poolID, f.projectID, f.branch, f.epID)
+		if *got.JSON200.Resources.Cpu != cpu || *got.JSON200.Resources.Memory != mem {
+			t.Errorf("persisted size = (%s,%s), want (%s,%s) despite infeasible in-place", *got.JSON200.Resources.Cpu, *got.JSON200.Resources.Memory, cpu, mem)
+		}
+	})
+
+	// (b) deployer error: task fails, and the rejected size is NOT persisted — the
+	// endpoint keeps its original (create-time) size, so GetEndpoint never reports
+	// a size the pod never adopted.
+	t.Run("deployer error fails the task and does not persist the size", func(t *testing.T) {
+		f := seed(t, &fakeDeployer{resizeErr: errors.New("kube-apiserver rejected the resize")})
+		ctx := context.Background()
+		resp, err := f.client.ResizeEndpointWithResponse(ctx, f.poolID, f.projectID, f.branch, f.epID, api.ResizeEndpointRequest{
+			Resources: api.EndpointResources{Cpu: &cpu, Memory: &mem},
+		})
+		if err != nil || resp.StatusCode() != http.StatusAccepted {
+			t.Fatalf("resize status = %d, err = %v", resp.StatusCode(), err)
+		}
+		drainTasks(t, f.store, f.backend, f.prov)
+		tk, _ := f.store.Get(ctx, resp.JSON202.Id)
+		if tk == nil || tk.Status != task.StatusFailed || tk.Error == nil {
+			t.Fatalf("errored resize task = %v, want failed with an error", statusOf(tk))
+		}
+		// Original create-time defaults (2 / 4Gi), unchanged by the rejected resize.
+		got, _ := f.client.GetEndpointWithResponse(ctx, f.poolID, f.projectID, f.branch, f.epID)
+		if *got.JSON200.Resources.Cpu != "2" || *got.JSON200.Resources.Memory != "4Gi" {
+			t.Errorf("size after a rejected resize = (%s,%s), want the unchanged original (2,4Gi) — a rejected size must not be persisted", *got.JSON200.Resources.Cpu, *got.JSON200.Resources.Memory)
+		}
+	})
+}
+
+// statusOf is a nil-safe task status for error messages.
+func statusOf(t *task.Task) any {
+	if t == nil {
+		return "<nil task>"
+	}
+	return t.Status
+}
+
+// TestEndpointResizeDeployDisabled: with the provisioner off, resize refuses with
+// 501 (like create/retire) rather than planning a task no worker can run.
+func TestEndpointResizeDeployDisabled(t *testing.T) {
+	client, backend, _ := newTestServerDeploy(t, false)
+	ctx := context.Background()
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "off-resize-pool")
+	projectID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+
+	cpu := "4"
+	resp, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, uuid.New(), api.ResizeEndpointRequest{
+		Resources: api.EndpointResources{Cpu: &cpu},
+	})
+	if err != nil {
+		t.Fatalf("ResizeEndpoint(deploy off): %v", err)
+	}
+	if resp.StatusCode() != http.StatusNotImplemented {
+		t.Fatalf("ResizeEndpoint(deploy off) status = %d, want 501; body = %s", resp.StatusCode(), resp.Body)
 	}
 }
 

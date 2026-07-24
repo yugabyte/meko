@@ -518,6 +518,49 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId}/resize:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/BranchId'
+      - $ref: '#/components/parameters/EndpointId'
+    post:
+      tags: [endpoints]
+      operationId: resizeEndpoint
+      summary: Resize an endpoint's compute (in place)
+      description: |
+        Plans an asynchronous `resize_endpoint` task that changes the endpoint's
+        CPU/memory reservation. It persists the new size (so a redeploy keeps it),
+        updates the workload's desired resources, and resizes the **running pod in
+        place** via the Kubernetes `resize` subresource (no restart when the node
+        has capacity). Returns `202` + the `Task` with a `Location` header; poll
+        the task, whose result reports whether the in-place resize completed
+        (`completed`), was deferred (`pending`), could not be satisfied
+        (`infeasible`), or is unsupported by the runtime (`unsupported`, e.g. the
+        Docker deployer). CPU/memory are applied as request == limit (Guaranteed
+        QoS preserved). **First-writer-wins**: while a resize of this endpoint is
+        in flight, a concurrent resize is rejected with `409` until the first
+        reaches a terminal state. Requires the endpoint deployer (`--deploy`);
+        returns `501` otherwise. `404` if the pool / project / branch / endpoint
+        does not exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResizeEndpointRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /tasks:
     get:
       tags: [tasks]
@@ -942,6 +985,12 @@ components:
         tailnet_address:
           type: string
           description: 'Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.'
+        resources:
+          $ref: '#/components/schemas/EndpointResources'
+          description: |
+            The endpoint's current compute reservation (cpu/memory), as stored in
+            its config. Fields are empty for endpoints created before resource
+            tracking. Use POST .../resize to change it.
         created_at:
           type: string
           format: date-time
@@ -1004,6 +1053,17 @@ components:
             Applied as both the request and the limit. Defaults to "4Gi" when
             omitted.
 
+    ResizeEndpointRequest:
+      type: object
+      required: [resources]
+      description: |
+        Request to change an existing endpoint's compute reservation. cpu/memory
+        are applied as request == limit, so the pod keeps its Guaranteed QoS class
+        (a prerequisite for in-place resize).
+      properties:
+        resources:
+          $ref: '#/components/schemas/EndpointResources'
+
     Task:
       type: object
       required: [id, kind, status, created_at, updated_at]
@@ -1025,6 +1085,13 @@ components:
           nullable: true
         params:
           description: The originating request, as opaque JSON.
+        result:
+          description: |
+            The task's final step result, as opaque JSON — the user-facing
+            outcome once the task has run. For a `resize_endpoint` task it carries
+            `in_place_resize` (`completed` | `pending` | `infeasible` |
+            `unsupported`) and `in_place_message`. Absent until a step records a
+            result.
         error:
           type: string
           nullable: true

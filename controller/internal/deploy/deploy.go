@@ -53,6 +53,47 @@ type EndpointSpec struct {
 	Memory string
 }
 
+// ResizeSpec is a request to change an existing endpoint's compute reservation.
+type ResizeSpec struct {
+	// Name is the endpoint's deploy/release name (Endpoint.ID / EndpointSpec.Name).
+	Name string
+	// CPU and Memory are the new Kubernetes resource quantities (e.g. "4", "8Gi"),
+	// applied as BOTH request and limit on the endpoint container so the pod keeps
+	// its Guaranteed QoS class (in-place resize cannot change QoS).
+	CPU    string
+	Memory string
+}
+
+// ResizeOutcome is the state of the in-place resize of the running pod.
+type ResizeOutcome string
+
+const (
+	// ResizeCompleted: the kubelet applied the new resources to the running pod
+	// with no restart.
+	ResizeCompleted ResizeOutcome = "completed"
+	// ResizePending: the resize was accepted but not yet applied (e.g. the node
+	// lacks spare capacity right now). The kubelet retries the in-place resize
+	// when capacity frees (no restart). The new size is also persisted to config,
+	// so a *controller-driven* redeploy lands it. NB: an involuntary pod recreate
+	// (node loss / eviction) does NOT — the Deployment template still holds the
+	// old size until a redeploy re-renders it (tracked: bare-ReplicaSet follow-up).
+	ResizePending ResizeOutcome = "pending"
+	// ResizeInfeasible: the kubelet cannot apply the resize on the current node.
+	ResizeInfeasible ResizeOutcome = "infeasible"
+	// ResizeUnsupported: the runtime does not support in-place resize (Docker).
+	ResizeUnsupported ResizeOutcome = "unsupported"
+)
+
+// ResizeResult reports the outcome of the in-place resize of the running pod.
+// It is best-effort status: even when the in-place step is Pending/Infeasible,
+// the new size is persisted to the endpoint config, so the endpoint converges to
+// it on the next *controller-driven* redeploy (not on an involuntary recreate —
+// see the ResizePending note above).
+type ResizeResult struct {
+	Outcome ResizeOutcome
+	Message string
+}
+
 // Endpoint is a running compute: an id (for teardown) and the address a client
 // connects to over the Postgres wire (user cloud_admin, database postgres).
 type Endpoint struct {
@@ -69,6 +110,14 @@ type Endpoint struct {
 type Deployer interface {
 	CreateEndpoint(ctx context.Context, spec EndpointSpec) (Endpoint, error)
 	DeleteEndpoint(ctx context.Context, id string) error
+	// ResizeEndpoint changes the compute reservation of an existing endpoint by
+	// resizing the running pod IN PLACE via the pod `resize` subresource (k8s
+	// 1.33+), returning whether that in-place step completed. It does NOT patch the
+	// workload template (that would trigger a rollout and recreate the pod);
+	// durability across a controller-driven redeploy is the caller's job (it
+	// persists the size to config). Idempotent. Runtimes without in-place support
+	// return ResizeUnsupported.
+	ResizeEndpoint(ctx context.Context, spec ResizeSpec) (ResizeResult, error)
 	// EndpointSafekeeperURL returns the base URL of the co-located safekeeper's
 	// HTTP API for the endpoint identified by id (the Endpoint.ID CreateEndpoint
 	// returned — the deploy/release name). The controller reaches it over the same

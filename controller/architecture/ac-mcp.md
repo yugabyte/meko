@@ -94,6 +94,7 @@ external service).
 | `create_endpoint` | `POST …/branches/{branchId}/endpoints` | write (async) |
 | `list_endpoints` | `GET …/branches/{branchId}/endpoints` | read-only |
 | `get_endpoint` | `GET …/endpoints/{endpointId}` | read-only |
+| `resize_endpoint` | `POST …/endpoints/{endpointId}/resize` | write (async) |
 | `delete_endpoint` | `DELETE …/endpoints/{endpointId}` | destructive (async) |
 | `list_tasks` | `GET /tasks` (`status`, `kind`, `project_id` filters) | read-only |
 | `get_task` | `GET /tasks/{taskId}` | read-only |
@@ -122,8 +123,9 @@ moves the owner onto an authenticated principal.
 
 ## Async tasks: tools return a Task, you poll `get_task`
 
-The six world-changing operations — `create_project`, `delete_project`,
-`create_branch`, `delete_branch`, `create_endpoint`, `delete_endpoint` — are
+The seven world-changing operations — `create_project`, `delete_project`,
+`create_branch`, `delete_branch`, `create_endpoint`, `resize_endpoint`,
+`delete_endpoint` — are
 **asynchronous** on the controller (`ac-apis.md` §The surface,
 [`ac-tasks.md`](ac-tasks.md)). The controller runs cheap synchronous validation,
 plans a write-ahead task, and returns `202 Accepted` with a **`Task`** object in

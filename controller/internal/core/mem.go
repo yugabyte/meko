@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"sync"
 	"time"
@@ -488,7 +489,7 @@ func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, projectID, 
 // (projectID, branchID) branch. A repeated id is a no-op; a *second* read_write
 // endpoint (a different id on a branch that already has one) is ErrConflict; a
 // missing branch is ErrNotFound.
-func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, projectID, branchID uuid.UUID, role string, _ []byte) error {
+func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, projectID, branchID uuid.UUID, role string, config []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.endpoints[endpointID]; ok {
@@ -505,12 +506,35 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, project
 		}
 		m.writers[k] = struct{}{}
 	}
+	// Mirror PgBackend, which reads cpu/memory back out of the config jsonb.
+	var cfg struct {
+		CPU    string `json:"cpu"`
+		Memory string `json:"memory"`
+	}
+	if len(config) > 0 {
+		_ = json.Unmarshal(config, &cfg)
+	}
 	m.endpoints[endpointID] = Endpoint{
 		ID:        endpointID,
 		ProjectID: projectID,
 		BranchID:  branchID,
 		Role:      role,
+		CPU:       cfg.CPU,
+		Memory:    cfg.Memory,
 		CreatedAt: m.now(),
+	}
+	return nil
+}
+
+// UpdateEndpointResources merges the new cpu/memory into the stored endpoint,
+// mirroring PgBackend's jsonb merge. Absent endpoint is a no-op.
+func (m *MemBackend) UpdateEndpointResources(_ context.Context, endpointID uuid.UUID, cpu, memory string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if ep, ok := m.endpoints[endpointID]; ok {
+		ep.CPU = cpu
+		ep.Memory = memory
+		m.endpoints[endpointID] = ep
 	}
 	return nil
 }

@@ -214,6 +214,45 @@ before redeploying.
 - **Stale endpoint Helm releases pile up** from failed `create_endpoint` tasks (left `pending-install`).
   Clean up: `for r in $(helm -n "$NS" list -aq | grep '^yb-ep-'); do helm -n "$NS" uninstall "$r"; done`.
 
+## Resize an endpoint's compute (in place)
+
+Change a running endpoint's CPU/memory without recreating it. The controller does
+two writes — persist the size to the endpoint `config`, then PATCH the pod's
+`resize` subresource — so the current pod adopts the new size live and a
+controller-driven redeploy keeps it. The Deployment template is **not** patched
+(that would trigger a rollout and recreate the pod). Caveat: an involuntary
+recreate (node loss / eviction) before the next redeploy brings the pod back at
+the old size until a redeploy re-renders from `config`. Needs k8s ≥ 1.33.
+
+```bash
+# resize -> 202 + a resize_endpoint Task (omit a field to keep its current value)
+curl -s -X POST "$BASE/storage-pools/$POOL/projects/$PROJ/branches/$BR/endpoints/$EP/resize" \
+  -H 'content-type: application/json' -d '{"resources":{"cpu":"4","memory":"8Gi"}}'
+# poll the task; its result reports the in-place outcome:
+curl -s "$BASE/tasks/$TASK" | jq '{status, result}'   # result.in_place_resize: completed|pending|infeasible|unsupported
+```
+
+Verify the live pod took it **without a restart** (same pod, RESTARTS unchanged):
+
+```bash
+kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
+  -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="endpoint")].resources}{"\n"}'
+kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
+  -o jsonpath='{.items[0].status.conditions[?(@.type=="PodResizePending")].message}{"\n"}'  # empty = applied
+```
+
+- **`in_place_resize: infeasible`** — the node can't fit the new size right now.
+  The size is still persisted in `config`, so a controller-driven redeploy lands
+  it; free capacity or let the pod reschedule, then redeploy.
+- **`409` on the resize call** — a resize of this endpoint is already in flight
+  (first-writer-wins lock). Wait for the in-flight task to finish (`GET
+  /tasks?kind=resize_endpoint` → its status) and retry.
+- **`in_place_resize: unsupported`** — the deployer is Docker (no in-place); only
+  the Kubernetes deployer resizes in place.
+- **`403` on the resize / `pods/resize` forbidden** — the controller Role is
+  missing the `pods/resize` subresource grant (older chart); re-deploy the
+  `yb-amp-controller` chart.
+
 ## Fast triage checklist
 
 ```bash

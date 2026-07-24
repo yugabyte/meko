@@ -52,6 +52,17 @@ func (s *MemStore) Seed(t *Task, steps []*StepRecord) {
 func (s *MemStore) Create(_ context.Context, spec TaskSpec) (*Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// First-writer-wins resize lock (mirrors the PgStore partial unique index):
+	// reject a resize_endpoint task while a non-terminal one exists for the same
+	// endpoint (target_ref). The lock releases when that task reaches terminal.
+	if spec.Kind == KindResizeEndpoint && spec.TargetRef != nil {
+		for _, t := range s.tasks {
+			if t.Kind == KindResizeEndpoint && t.TargetRef != nil && *t.TargetRef == *spec.TargetRef &&
+				(t.Status == StatusPending || t.Status == StatusRunning) {
+				return nil, ErrResizeInProgress
+			}
+		}
+	}
 	id := uuid.New()
 	now := s.now()
 	var stepIDs []uuid.UUID

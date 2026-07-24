@@ -135,6 +135,14 @@ func (d *DockerDeployer) DeleteEndpoint(_ context.Context, id string) error {
 	return nil
 }
 
+// ResizeEndpoint is not supported by the Docker runtime: the docker deployer
+// never applies CPU/memory reservations, and there is no in-place-resize analog.
+// It returns cleanly (not an error) so the resize flow can surface "unsupported"
+// rather than failing the task on a dev/docker deployment.
+func (d *DockerDeployer) ResizeEndpoint(_ context.Context, spec ResizeSpec) (ResizeResult, error) {
+	return ResizeResult{Outcome: ResizeUnsupported, Message: "in-place resize is only supported on the kubernetes deployer"}, nil
+}
+
 // EndpointSafekeeperURL: with a shared network the endpoint's safekeeper is
 // reachable by the container name (= id, the CONTROLLER_REACHABLE_HOST the endpoint
 // registered) at the fixed safekeeper HTTP port.

@@ -9,9 +9,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/yugabyte/amp/controller/internal/db"
 )
+
+// ErrResizeInProgress is returned by Create when a resize_endpoint task is
+// planned for an endpoint that already has a non-terminal one. It is the
+// first-writer-wins lock: the in-flight resize holds the endpoint until it
+// reaches a terminal status, and a concurrent resize gets this error (which the
+// API maps to 409 Conflict). Enforced atomically by the partial unique index
+// task_one_active_resize_per_endpoint (PgStore) / a guarded check (MemStore).
+var ErrResizeInProgress = errors.New("a resize is already in progress for this endpoint")
 
 // Store persists tasks and their steps. Every method is written to be
 // idempotent per the YB retry contract (AGENTS.md): absolute UPDATEs and
@@ -123,6 +132,13 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 		 VALUES ($1::uuid, $2, 'pending', $3::uuid, $4, $5::jsonb, $6::uuid[])
 		 ON CONFLICT (id) DO NOTHING`,
 		taskID.String(), spec.Kind, projectArg, spec.TargetRef, []byte(params), stepIDs); err != nil {
+		// The first-writer-wins resize lock: a second in-flight resize of the same
+		// endpoint violates the partial unique index, which we surface as a typed
+		// conflict for the API to turn into a 409.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "task_one_active_resize_per_endpoint" {
+			return nil, ErrResizeInProgress
+		}
 		return nil, fmt.Errorf("insert task: %w", err)
 	}
 

@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -416,14 +417,25 @@ func TestCreateProject(t *testing.T) {
 // without a real runtime. createErr, when set, makes CreateEndpoint fail (to
 // exercise the handler's compensating row delete).
 type fakeDeployer struct {
+	// mu guards the recorded-call slices: drainTasks runs the worker with
+	// MaxConcurrent > 1, so steps (hence these deployer methods) can be invoked
+	// from several goroutines at once. Without it, the parallel-resize test races.
+	mu        sync.Mutex
 	addr      string
 	skURL     string // safekeeper base URL EndpointSafekeeperURL returns (fork-point resolution)
 	created   []deploy.EndpointSpec
 	deleted   []string
+	resized   []deploy.ResizeSpec
 	createErr error
+	// resizeOutcome overrides the reported in-place outcome (default: completed);
+	// resizeErr, when set, makes ResizeEndpoint fail (exercises a failed task).
+	resizeOutcome deploy.ResizeOutcome
+	resizeErr     error
 }
 
 func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpec) (deploy.Endpoint, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.created = append(f.created, spec)
 	if f.createErr != nil {
 		return deploy.Endpoint{}, f.createErr
@@ -436,8 +448,32 @@ func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpe
 }
 
 func (f *fakeDeployer) DeleteEndpoint(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.deleted = append(f.deleted, id)
 	return nil
+}
+
+func (f *fakeDeployer) ResizeEndpoint(_ context.Context, spec deploy.ResizeSpec) (deploy.ResizeResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resized = append(f.resized, spec)
+	if f.resizeErr != nil {
+		return deploy.ResizeResult{}, f.resizeErr
+	}
+	outcome := f.resizeOutcome
+	if outcome == "" {
+		outcome = deploy.ResizeCompleted
+	}
+	return deploy.ResizeResult{Outcome: outcome, Message: string(outcome)}, nil
+}
+
+// resizedSpecs returns a copy of the recorded resize calls under the lock, so
+// tests can read them without racing the worker goroutines.
+func (f *fakeDeployer) resizedSpecs() []deploy.ResizeSpec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]deploy.ResizeSpec(nil), f.resized...)
 }
 
 func (f *fakeDeployer) EndpointSafekeeperURL(string) string {

@@ -34,6 +34,7 @@ type fakeStateStore struct {
 	createdBranches      map[uuid.UUID]struct{} // distinct branch ids created
 	createdEndpoints     map[uuid.UUID]string   // endpoint id -> role
 	endpointAddresses    map[uuid.UUID]string
+	endpointResources    map[uuid.UUID][2]string // endpoint id -> {cpu, memory} last resized to
 	deletedEndpoints     map[uuid.UUID]struct{}
 	existingWriterBranch map[uuid.UUID]uuid.UUID // branch id -> the writer endpoint id already present
 
@@ -181,6 +182,16 @@ func (f *fakeStateStore) DeleteEndpoint(_ context.Context, endpointID uuid.UUID)
 	return nil
 }
 
+func (f *fakeStateStore) UpdateEndpointResources(_ context.Context, endpointID uuid.UUID, cpu, memory string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.endpointResources == nil {
+		f.endpointResources = map[uuid.UUID][2]string{}
+	}
+	f.endpointResources[endpointID] = [2]string{cpu, memory}
+	return nil
+}
+
 func (f *fakeStateStore) EndpointIDsForBranch(_ context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -304,8 +315,10 @@ type fakeDeployer struct {
 	mu        sync.Mutex
 	created   []deploy.EndpointSpec
 	deleted   []string
+	resized   []deploy.ResizeSpec
 	createErr error
 	deleteErr error
+	resizeErr error
 }
 
 func (f *fakeDeployer) CreateEndpoint(_ context.Context, spec deploy.EndpointSpec) (deploy.Endpoint, error) {
@@ -323,6 +336,16 @@ func (f *fakeDeployer) DeleteEndpoint(_ context.Context, id string) error {
 	defer f.mu.Unlock()
 	f.deleted = append(f.deleted, id)
 	return f.deleteErr
+}
+
+func (f *fakeDeployer) ResizeEndpoint(_ context.Context, spec deploy.ResizeSpec) (deploy.ResizeResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resized = append(f.resized, spec)
+	if f.resizeErr != nil {
+		return deploy.ResizeResult{}, f.resizeErr
+	}
+	return deploy.ResizeResult{Outcome: deploy.ResizeCompleted, Message: "resized in place"}, nil
 }
 
 func (f *fakeDeployer) EndpointSafekeeperURL(id string) string {

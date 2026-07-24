@@ -18,6 +18,12 @@ rules:
   - apiGroups: [""]
     resources: [pods, services, configmaps, secrets, persistentvolumeclaims, endpoints, events, serviceaccounts]
     verbs: ["*"]
+  # In-place vertical pod resize (k8s 1.33+) is gated on the pods/resize
+  # SUBRESOURCE, which is separate from `pods` above — the controller PATCHes it
+  # to resize a running endpoint without a restart.
+  - apiGroups: [""]
+    resources: [pods/resize]
+    verbs: [patch]
   - apiGroups: ["apps"]
     resources: [deployments, replicasets, statefulsets]
     verbs: ["*"]

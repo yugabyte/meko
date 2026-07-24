@@ -761,6 +761,79 @@ func (c *Controllers) DeleteEndpoint(ctx context.Context, request DeleteEndpoint
 	}}, nil
 }
 
+func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpointRequestObject) (ResizeEndpointResponseObject, error) {
+	if c.prov.Deployer == nil {
+		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
+	}
+	if request.Body == nil {
+		return ResizeEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "a resources body is required"))}, nil
+	}
+
+	// The GetEndpoint doubles as the 404 check and the source of the endpoint's
+	// current reservation, so an unspecified dimension keeps its current value
+	// (a resize that sets only cpu leaves memory unchanged, and vice versa).
+	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ProjectId, request.BranchId, request.EndpointId)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		return ResizeEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "endpoint not found"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("get endpoint: %w", err)
+	}
+	cpu := ep.CPU
+	if cpu == "" {
+		cpu = defaultEndpointCPU
+	}
+	memory := ep.Memory
+	if memory == "" {
+		memory = defaultEndpointMemory
+	}
+	if request.Body.Resources.Cpu != nil {
+		if v := strings.TrimSpace(*request.Body.Resources.Cpu); v != "" {
+			if !cpuQuantityRE.MatchString(v) {
+				return ResizeEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", `resources.cpu must be a valid Kubernetes CPU quantity (e.g. "2", "500m")`))}, nil
+			}
+			cpu = v
+		}
+	}
+	if request.Body.Resources.Memory != nil {
+		if v := strings.TrimSpace(*request.Body.Resources.Memory); v != "" {
+			if !memoryQuantityRE.MatchString(v) {
+				return ResizeEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", `resources.memory must be a valid Kubernetes memory quantity (e.g. "4Gi", "512Mi")`))}, nil
+			}
+			memory = v
+		}
+	}
+
+	// Plan the work as an async task and return 202 + the Task. The worker's
+	// resize_endpoint step persists the new size, updates the workload's desired
+	// resources, and resizes the running pod in place; its result reports the
+	// in-place outcome.
+	t, err := c.tasks.ResizeEndpoint(ctx, task.ResizeEndpointInput{
+		ProjectID:  request.ProjectId,
+		EndpointID: request.EndpointId,
+		CPU:        cpu,
+		Memory:     memory,
+	})
+	switch {
+	case errors.Is(err, task.ErrResizeInProgress):
+		// First-writer-wins: another resize of this endpoint is already in flight.
+		return ResizeEndpoint409JSONResponse{ConflictJSONResponse(apiError("conflict", "a resize is already in progress for this endpoint"))}, nil
+	case err != nil:
+		return nil, fmt.Errorf("resize endpoint task: %w", err)
+	}
+
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "resize endpoint task accepted",
+		slog.String(applog.KeyEndpointID, request.EndpointId.String()),
+		slog.String(applog.KeyTaskID, t.ID.String()),
+		slog.String("cpu", cpu),
+		slog.String("memory", memory))
+
+	return ResizeEndpoint202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
+}
+
 // --- Tasks -----------------------------------------------------------------
 
 func (c *Controllers) GetTask(ctx context.Context, request GetTaskRequestObject) (GetTaskResponseObject, error) {
@@ -771,7 +844,17 @@ func (c *Controllers) GetTask(ctx context.Context, request GetTaskRequestObject)
 	if t == nil {
 		return GetTask404JSONResponse{NotFoundJSONResponse(apiError("not_found", "task not found"))}, nil
 	}
-	return GetTask200JSONResponse(taskToAPI(t)), nil
+	out := taskToAPI(t)
+	// Surface the final step's result (e.g. a resize's in-place outcome) on the
+	// poll target so clients can report it. Best-effort: a result-read failure
+	// doesn't fail the task fetch.
+	if res, err := c.tasks.Result(ctx, t.ID); err == nil && len(res) > 0 {
+		var v any
+		if json.Unmarshal(res, &v) == nil {
+			out.Result = &v
+		}
+	}
+	return GetTask200JSONResponse(out), nil
 }
 
 func (c *Controllers) ListTasks(ctx context.Context, request ListTasksRequestObject) (ListTasksResponseObject, error) {
@@ -846,6 +929,17 @@ func branchToAPI(b core.Branch) Branch {
 }
 
 func endpointToAPI(e core.Endpoint) Endpoint {
+	// Report the *effective* reservation: an endpoint created before resize
+	// existed has no cpu/memory in its config (stored as ""), but the pod still
+	// runs at the create-time defaults — so surface those rather than empty
+	// strings, which would misrepresent the pod's real size.
+	cpu, memory := e.CPU, e.Memory
+	if cpu == "" {
+		cpu = defaultEndpointCPU
+	}
+	if memory == "" {
+		memory = defaultEndpointMemory
+	}
 	return Endpoint{
 		Id:             e.ID,
 		ProjectId:      e.ProjectID,
@@ -853,6 +947,7 @@ func endpointToAPI(e core.Endpoint) Endpoint {
 		Role:           EndpointRole(e.Role),
 		Address:        e.Address,
 		TailnetAddress: e.TailnetAddress,
+		Resources:      &EndpointResources{Cpu: &cpu, Memory: &memory},
 		CreatedAt:      e.CreatedAt,
 	}
 }

@@ -52,6 +52,9 @@ export type Endpoint = {
   role: EndpointRole;
   address: string;
   tailnet_address: string;
+  /** Current compute reservation (cpu/memory). Fields may be empty for
+   *  endpoints created before resource tracking. */
+  resources?: EndpointResources;
   created_at: string;
 };
 
@@ -77,6 +80,9 @@ export type Task = {
   project_id: string | null;
   target_ref: string | null;
   error: string | null;
+  /** The final step's result, as opaque JSON (present once the task has run).
+   *  A resize_endpoint task carries { in_place_resize, in_place_message }. */
+  result?: unknown;
   created_at: string;
   updated_at: string;
 };
@@ -120,6 +126,15 @@ export type CreateEndpointInput = {
   disk_type?: "network" | "local";
   resources?: EndpointResources;
 };
+
+/** Change an existing endpoint's compute reservation. cpu/memory are applied
+ *  as request == limit; an omitted field keeps its current value. */
+export type ResizeEndpointInput = {
+  resources: EndpointResources;
+};
+
+/** The in-place resize outcome reported by the resize task result. */
+export type ResizeOutcome = "completed" | "pending" | "infeasible" | "unsupported";
 
 /** UI defaults, mirroring the controller's own 2-core / 4Gi default. */
 export const DEFAULT_ENDPOINT_CPU = "2";

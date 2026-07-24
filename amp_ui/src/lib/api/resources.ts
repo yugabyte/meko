@@ -15,6 +15,8 @@ import type {
   EndpointList,
   Project,
   ProjectList,
+  ResizeEndpointInput,
+  ResizeOutcome,
   StoragePool,
   StoragePoolList,
   Task,
@@ -234,4 +236,40 @@ export async function createEndpoint(
     throw new ApiError("create_endpoint task reported no endpoint id", 500);
   }
   return getEndpoint(poolId, projectId, branchId, done.target_ref);
+}
+
+/** The outcome of a resize: the endpoint at its new size, plus whether the live
+ *  pod took the change in place (vs. deferred/unsupported — still durable in the
+ *  endpoint config, so it applies on the next controller-driven redeploy). */
+export type ResizeResult = {
+  endpoint: Endpoint;
+  outcome: ResizeOutcome;
+  message: string;
+};
+
+// Async: POST records a resize_endpoint task (in-place-resize the running pod +
+// persist the new size to config); poll it, then read the endpoint back and
+// report the in-place outcome from the task result.
+export async function resizeEndpoint(
+  poolId: string,
+  projectId: string,
+  branchId: string,
+  endpointId: string,
+  input: ResizeEndpointInput,
+): Promise<ResizeResult> {
+  const task = await apiRequest<Task>(
+    `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints/${endpointId}/resize`,
+    { method: "POST", body: input },
+  );
+  const done = await pollTask(task.id);
+  const result = (done.result ?? {}) as {
+    in_place_resize?: ResizeOutcome;
+    in_place_message?: string;
+  };
+  const endpoint = await getEndpoint(poolId, projectId, branchId, endpointId);
+  return {
+    endpoint,
+    outcome: result.in_place_resize ?? "completed",
+    message: result.in_place_message ?? "",
+  };
 }

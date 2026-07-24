@@ -31,6 +31,29 @@ const (
 	defaultEndpointMemory = "4Gi"
 )
 
+// endpointContainerName is the compute container in the endpoint pod (the chart's
+// `- name: endpoint`). It is the container the controller resizes; the resize
+// PATCH bodies address it by this name (strategic-merge merge key).
+const endpointContainerName = "endpoint"
+
+// resizeSettleTimeout bounds how long ResizeEndpoint re-reads the pod waiting for
+// the kubelet to clear the transient PodResizeInProgress condition, so the
+// reported outcome is Completed rather than Pending in the common (node has
+// capacity) case. Short and best-effort — the durable size is already persisted.
+const resizeSettleTimeout = 10 * time.Second
+
+// resizeSettlePollInterval paces the settle-loop re-reads so it doesn't hammer
+// the apiserver with back-to-back GETs while the kubelet applies the change
+// (mirrors the paced polling in serviceLBAddress). Short, since the whole settle
+// budget is only resizeSettleTimeout and reporting Completed promptly matters.
+const resizeSettlePollInterval = 200 * time.Millisecond
+
+// resizeInProgressMsg marks a transient, still-settling resize (the kubelet is
+// applying it, or has not observed it yet). classifyResize returns it and the
+// settle loop re-polls on exactly this state — so it is a shared sentinel, not
+// just display text.
+const resizeInProgressMsg = "in progress"
+
 // serviceTypeLoadBalancer is the endpoint Service type that gets an external IP;
 // the deployer then reports that IP as the endpoint's client address.
 const serviceTypeLoadBalancer = "LoadBalancer"
@@ -230,6 +253,53 @@ func (k *KubernetesDeployer) k8sAPIGet(ctx context.Context, path string) ([]byte
 	return body, true
 }
 
+// k8sAPIPatch does an authenticated PATCH against the in-cluster Kubernetes API
+// with the given content type (e.g. strategic-merge-patch+json). It mirrors
+// k8sAPIGet's SA-token + CA setup but, unlike the best-effort GET, returns an
+// error so callers can distinguish "not in-cluster" and API rejections (a resize
+// must not silently no-op). On success returns the response body and 2xx status.
+func (k *KubernetesDeployer) k8sAPIPatch(ctx context.Context, path, contentType string, body []byte) ([]byte, int, error) {
+	host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
+	if host == "" || port == "" {
+		return nil, 0, fmt.Errorf("not running in-cluster (KUBERNETES_SERVICE_HOST unset)")
+	}
+	const saDir = "/var/run/secrets/kubernetes.io/serviceaccount"
+	token, err := os.ReadFile(saDir + "/token")
+	if err != nil {
+		return nil, 0, fmt.Errorf("read service-account token: %w", err)
+	}
+	caPEM, err := os.ReadFile(saDir + "/ca.crt")
+	if err != nil {
+		return nil, 0, fmt.Errorf("read service-account CA: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, 0, fmt.Errorf("parse service-account CA")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, fmt.Sprintf("https://%s:%s%s", host, port, path), strings.NewReader(string(body)))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Accept", "application/json")
+	client := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}},
+	}
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return respBody, resp.StatusCode, fmt.Errorf("k8s PATCH %s -> %s: %s", path, resp.Status, strings.TrimSpace(string(respBody)))
+	}
+	return respBody, resp.StatusCode, nil
+}
+
 // podClientAddress returns "<podIP>:<computePort>" for the endpoint's pod, or ""
 // when not in-cluster / on error. Best-effort: the pod IP is not stable across
 // pod restarts (the Service DNS is).
@@ -409,6 +479,177 @@ func (k *KubernetesDeployer) DeleteEndpoint(ctx context.Context, id string) erro
 	return k.helm.Uninstall(ctx, id, k.cfg.Namespace, true, k.cfg.Timeout)
 }
 
+// containerResourcesPatch is the strategic-merge fragment that sets one
+// container's resources (matched by Name, the strategic-merge merge key).
+type containerResourcesPatch struct {
+	Name      string `json:"name"`
+	Resources struct {
+		Requests map[string]string `json:"requests"`
+		Limits   map[string]string `json:"limits"`
+	} `json:"resources"`
+}
+
+// ResizeEndpoint changes an endpoint's compute reservation by resizing the
+// running pod in place (k8s 1.33+ `resize` subresource) and reports whether the
+// pod took the change without a restart. CPU/memory are set as both request and
+// limit, preserving Guaranteed QoS (a prerequisite for in-place resize).
+//
+// It deliberately does NOT patch the endpoint Deployment's pod template. Editing
+// `spec.template` resources changes the pod-template-hash, which makes the
+// Deployment controller start an ordinary rollout and *recreate* the pod — the
+// opposite of an in-place resize (in-place is a Pod-only operation; workload
+// controllers are not resize-aware through k8s 1.35). Durability instead rides on
+// the DB-side persistence of the new size (the resize task's first write): a
+// controller-driven redeploy re-renders the chart from that config. Known gap:
+// an *involuntary* recreate (node loss / eviction) before the next redeploy
+// brings the pod back at the old size until then; tracked as a follow-up.
+func (k *KubernetesDeployer) ResizeEndpoint(ctx context.Context, spec ResizeSpec) (ResizeResult, error) {
+	cpu, memory := spec.CPU, spec.Memory
+	if cpu == "" {
+		cpu = defaultEndpointCPU
+	}
+	if memory == "" {
+		memory = defaultEndpointMemory
+	}
+	var c containerResourcesPatch
+	c.Name = endpointContainerName
+	c.Resources.Requests = map[string]string{"cpu": cpu, "memory": memory}
+	c.Resources.Limits = map[string]string{"cpu": cpu, "memory": memory}
+	const smp = "application/strategic-merge-patch+json"
+
+	// In-place resize of the running pod via the resize subresource.
+	pod, err := k.podName(ctx, spec.Name)
+	if err != nil {
+		return ResizeResult{}, fmt.Errorf("find pod for endpoint %s: %w", spec.Name, err)
+	}
+	podPatch, err := json.Marshal(map[string]any{
+		"spec": map[string]any{"containers": []containerResourcesPatch{c}},
+	})
+	if err != nil {
+		return ResizeResult{}, err
+	}
+	resizePath := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/resize", k.cfg.Namespace, pod)
+	body, _, err := k.k8sAPIPatch(ctx, resizePath, smp, podPatch)
+	if err != nil {
+		return ResizeResult{}, fmt.Errorf("resize pod %s in place: %w", pod, err)
+	}
+	result := classifyResize(body, cpu, memory, endpointContainerName)
+	// The synchronous PATCH response rarely reflects the kubelet's outcome yet, so
+	// re-poll while the resize is still settling (in progress / not yet applied),
+	// up to the deadline, so the reported outcome is the kubelet's real verdict
+	// (Completed / Infeasible / Deferred) rather than a premature Completed. Paced
+	// so we don't hammer the apiserver.
+	deadline := time.Now().Add(resizeSettleTimeout)
+	for result.Outcome == ResizePending && result.Message == resizeInProgressMsg && time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return result, nil
+		case <-time.After(resizeSettlePollInterval):
+		}
+		podBody, ok := k.k8sAPIGet(ctx, fmt.Sprintf("/api/v1/namespaces/%s/pods/%s", k.cfg.Namespace, pod))
+		if !ok {
+			break
+		}
+		result = classifyResize(podBody, cpu, memory, endpointContainerName)
+	}
+	k.logger.Info("endpoint resized", "endpoint", spec.Name, "pod", pod, "cpu", cpu, "memory", memory, "in_place", result.Outcome)
+	return result, nil
+}
+
+// podName returns the name of the endpoint's (single) pod, found by the same
+// instance label podClientAddress uses.
+func (k *KubernetesDeployer) podName(ctx context.Context, release string) (string, error) {
+	q := url.Values{"labelSelector": {"app.kubernetes.io/instance=" + release}, "limit": {"1"}}
+	body, ok := k.k8sAPIGet(ctx, fmt.Sprintf("/api/v1/namespaces/%s/pods?%s", k.cfg.Namespace, q.Encode()))
+	if !ok {
+		return "", fmt.Errorf("list pods (not in-cluster or API error)")
+	}
+	var out struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", err
+	}
+	if len(out.Items) == 0 || out.Items[0].Metadata.Name == "" {
+		return "", fmt.Errorf("no pod found for instance %s", release)
+	}
+	return out.Items[0].Metadata.Name, nil
+}
+
+// classifyResize maps a Pod's resize conditions to a ResizeResult. In k8s 1.33
+// the kubelet sets a `PodResizePending` condition (reason `Infeasible` when it
+// can't be satisfied, `Deferred` when it will retry) and a transient
+// `PodResizeInProgress` condition while applying.
+//
+// The absence of a resize condition is NOT sufficient to call it Completed: on
+// the synchronous /resize PATCH response (and briefly after), the kubelet has
+// not yet observed the change, so no condition is set *yet* and the allocated
+// resources still show the old size. Reporting Completed there would falsely
+// succeed a resize the kubelet may later mark Infeasible. So Completed requires
+// the pod's actual allocated resources (status.containerStatuses[].resources) to
+// match the requested wantCPU/wantMem; until they do (and while no
+// pending/infeasible condition is set) it stays "in progress" so the caller
+// re-polls.
+func classifyResize(podBody []byte, wantCPU, wantMem, container string) ResizeResult {
+	var p struct {
+		Status struct {
+			Conditions []struct {
+				Type    string `json:"type"`
+				Status  string `json:"status"`
+				Reason  string `json:"reason"`
+				Message string `json:"message"`
+			} `json:"conditions"`
+			ContainerStatuses []struct {
+				Name      string `json:"name"`
+				Resources struct {
+					Requests map[string]string `json:"requests"`
+				} `json:"resources"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(podBody, &p); err != nil {
+		return ResizeResult{Outcome: ResizePending, Message: "could not read resize status"}
+	}
+	for _, cond := range p.Status.Conditions {
+		if cond.Status != "True" {
+			continue
+		}
+		switch cond.Type {
+		case "PodResizePending":
+			if cond.Reason == "Infeasible" {
+				msg := cond.Message
+				if msg == "" {
+					msg = "node cannot satisfy the requested resources"
+				}
+				return ResizeResult{Outcome: ResizeInfeasible, Message: msg}
+			}
+			return ResizeResult{Outcome: ResizePending, Message: "deferred; will apply when resources free up"}
+		case "PodResizeInProgress":
+			return ResizeResult{Outcome: ResizePending, Message: resizeInProgressMsg}
+		}
+	}
+	// No pending/infeasible/in-progress condition. Only Completed if the pod's
+	// actual allocated resources already match the request; otherwise the kubelet
+	// has not applied it yet — keep the caller polling rather than reporting a
+	// premature success.
+	for _, cs := range p.Status.ContainerStatuses {
+		if cs.Name != container {
+			continue
+		}
+		if strings.TrimSpace(cs.Resources.Requests["cpu"]) == strings.TrimSpace(wantCPU) &&
+			strings.TrimSpace(cs.Resources.Requests["memory"]) == strings.TrimSpace(wantMem) {
+			return ResizeResult{Outcome: ResizeCompleted, Message: "resized in place"}
+		}
+		return ResizeResult{Outcome: ResizePending, Message: resizeInProgressMsg}
+	}
+	// The endpoint container's status is not present yet — still settling.
+	return ResizeResult{Outcome: ResizePending, Message: resizeInProgressMsg}
+}
+
 // address is the in-cluster DNS name + port of an endpoint's compute Service.
 // The Service name equals the release's fullnameOverride (= the release name).
 func (k *KubernetesDeployer) address(release string) string {
@@ -426,13 +667,13 @@ func (k *KubernetesDeployer) EndpointSafekeeperURL(id string) string {
 // the controller drives. JSON tags match the chart keys; helm reads the
 // marshaled document as a values file.
 type chartValues struct {
-	FullnameOverride  string                  `json:"fullnameOverride"`
-	Image             imageValues             `json:"image"`
-	ImagePullSecrets  []map[string]string     `json:"imagePullSecrets,omitempty"`
-	Yugabyte          yugabyteValues          `json:"yugabyte"`
-	Endpoint          endpointValues          `json:"endpoint"`
-	Controller controllerValues `json:"controller"`
-	Service           serviceValues           `json:"service"`
+	FullnameOverride string              `json:"fullnameOverride"`
+	Image            imageValues         `json:"image"`
+	ImagePullSecrets []map[string]string `json:"imagePullSecrets,omitempty"`
+	Yugabyte         yugabyteValues      `json:"yugabyte"`
+	Endpoint         endpointValues      `json:"endpoint"`
+	Controller       controllerValues    `json:"controller"`
+	Service          serviceValues       `json:"service"`
 	// Persistence is nil (omitted) for the chart's emptyDir default; set to
 	// provision the endpoint's data volume as a PVC of a storage class.
 	Persistence *persistenceValues `json:"persistence,omitempty"`
@@ -539,7 +780,7 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Resources:        resourceValues{CPU: cpu, Memory: memory},
 		},
 		Controller: controllerValues{URL: spec.ControllerURL},
-		Service:           serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},
+		Service:    serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},
 	}
 	// Prefer a pre-existing Secret (keeps the plaintext password off the
 	// controller); fall back to the inline password for dev/test.

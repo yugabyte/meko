@@ -283,3 +283,41 @@ tests:
     asserts:
       - notExists:
           path: spec.template.spec.containers[0].resources
+
+  - it: sets an in-place resize policy on the endpoint container (cpu+memory NotRequired) by default
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].resizePolicy
+          content:
+            resourceName: cpu
+            restartPolicy: NotRequired
+      - contains:
+          path: spec.template.spec.containers[0].resizePolicy
+          content:
+            resourceName: memory
+            restartPolicy: NotRequired
+
+  - it: sets a matching resize policy on the postgres-exporter sidecar
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].resizePolicy
+          content:
+            resourceName: memory
+            restartPolicy: NotRequired
+
+  - it: honours a memory RestartContainer resize policy override
+    template: templates/deployment.yaml
+    set:
+      endpoint.resizePolicy:
+        - resourceName: cpu
+          restartPolicy: NotRequired
+        - resourceName: memory
+          restartPolicy: RestartContainer
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].resizePolicy
+          content:
+            resourceName: memory
+            restartPolicy: RestartContainer

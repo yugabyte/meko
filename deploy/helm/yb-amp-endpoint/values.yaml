@@ -69,6 +69,16 @@ endpoint:
     cpu: "2"
     # -- Memory (request == limit). e.g. "4Gi", "512Mi".
     memory: "4Gi"
+  # -- In-place vertical resize policy for the endpoint container (k8s 1.33+
+  # InPlacePodVerticalScaling). Per-resource `restartPolicy` for a live resize
+  # the controller applies via the pod's `resize` subresource. `NotRequired`
+  # (default) adjusts the cgroup with no container restart; set memory to
+  # `RestartContainer` if a Postgres restart is preferred on a memory change.
+  resizePolicy:
+    - resourceName: cpu
+      restartPolicy: NotRequired
+    - resourceName: memory
+      restartPolicy: NotRequired
 
 # Controller coordination. Empty url => the endpoint runs
 # controller-free with a pinned generation. Set => the endpoint
@@ -141,6 +151,13 @@ metrics:
       limits:
         cpu: "100m"
         memory: "128Mi"
+    # -- In-place resize policy for the sidecar, mirroring the endpoint
+    # container's so a pod-wide resize never trips over it (QoS is pod-level).
+    resizePolicy:
+      - resourceName: cpu
+        restartPolicy: NotRequired
+      - resourceName: memory
+        restartPolicy: NotRequired
     # -- Sidecar security context. The image already runs as nobody; keep it
     # non-root and drop privileges.
     securityContext:

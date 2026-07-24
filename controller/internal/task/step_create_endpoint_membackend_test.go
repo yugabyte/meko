@@ -76,4 +76,8 @@ func (d *memReplayDeployer) DeleteEndpoint(_ context.Context, id string) error {
 	return nil
 }
 
+func (d *memReplayDeployer) ResizeEndpoint(_ context.Context, _ deploy.ResizeSpec) (deploy.ResizeResult, error) {
+	return deploy.ResizeResult{Outcome: deploy.ResizeCompleted}, nil
+}
+
 func (d *memReplayDeployer) EndpointSafekeeperURL(id string) string { return "http://" + id + ":7676" }
