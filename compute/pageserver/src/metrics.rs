@@ -389,6 +389,20 @@ pub(crate) static YB_STORE_CALL_TIMEOUTS: Lazy<IntCounter> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+/// Thin-RPC lane: `yb_tsclient` calls shed because a connection's write
+/// budget was exhausted — a stalled tserver blocked the writer and the
+/// per-connection frame backlog hit its byte cap, so the client failed fast
+/// instead of buffering payloads without bound. A sustained rate means the
+/// write path can't drain; this is the condition that previously grew the
+/// pageserver heap unboundedly to OOM, now surfaced instead of hidden.
+pub(crate) static YB_STORE_WRITE_BACKPRESSURE: Lazy<IntCounter> = Lazy::new(|| {
+    metrics::register_int_counter!(
+        "pageserver_yb_store_write_backpressure_total",
+        "yb_tsclient calls shed on write-budget exhaustion on the pageserver's thin-RPC lane",
+    )
+    .expect("failed to define a metric")
+});
+
 /// Count of correctness-fatal errors observed across the pageserver
 /// hot path, broken down by `kind`. **Any non-zero value is a
 /// corruption signal**; this metric exists specifically so paging

@@ -220,6 +220,9 @@ impl yb_tsclient::ClientObserver for TsClientLaneObserver {
     fn on_call_timeout(&self) {
         crate::metrics::YB_WAL_CALL_TIMEOUTS.inc();
     }
+    fn on_write_backpressure(&self) {
+        crate::metrics::YB_WAL_WRITE_BACKPRESSURE.inc();
+    }
 }
 
 impl YbWalConn {

@@ -2179,6 +2179,7 @@ impl Timeline {
                         rx,
                         in_flight,
                         conf.scale_factor,
+                        pw_cfg.materialize_inflight_bytes_limit,
                     ))
                 }
                 _ => None,

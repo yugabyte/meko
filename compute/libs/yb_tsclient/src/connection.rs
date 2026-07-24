@@ -8,9 +8,14 @@
 //! Any transport failure — connect/read/write error, EOF, corrupt frame —
 //! closes the connection: every in-flight and future call on it fails
 //! with an [`ErrorClass::Network`](crate::ErrorClass::Network) error, and
-//! the session layer above reconnects. Per-call timeouts abandon the
-//! waiter but leave the connection open (the late response is dropped by
-//! the demux when no waiter is registered).
+//! the session layer above reconnects. Per-call timeouts remove the waiter
+//! and leave the connection open (a late response is dropped by the demux
+//! when no waiter is registered).
+//!
+//! Queued-but-unwritten frames are bounded by a per-connection byte budget
+//! ([`WRITE_BUDGET_BYTES`]): a stalled tserver blocks the writer task, and
+//! without the bound frames (each carrying row payloads) would pile up in
+//! the writer channel without limit.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -22,12 +27,22 @@ use prost::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedReadHalf;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 use crate::error::YbError;
 use crate::framing::{
     CONNECTION_PREAMBLE, MAX_FRAME_LEN, RpcResponse, decode_response_frame, encode_call,
 };
+
+/// Per-connection ceiling on queued-but-unwritten frame bytes. A slow or
+/// stalled tserver blocks the writer task on `write_all`; without a bound,
+/// frames — each carrying the request's row payloads — pile up in the
+/// writer channel without limit (the pageserver-side unbounded heap growth
+/// observed under YB write-path stalls). When the budget is exhausted,
+/// [`Connection::start_call`] fails fast with a `Network` error so the
+/// retry driver sheds to another session instead of buffering. Sized above
+/// [`MAX_FRAME_LEN`] so a single maximum-size frame can always be queued.
+const WRITE_BUDGET_BYTES: usize = 128 << 20;
 
 type CallResult = Result<RpcResponse, YbError>;
 
@@ -41,7 +56,12 @@ struct Pending {
 
 pub(crate) struct Connection {
     peer: String,
-    writer_tx: mpsc::UnboundedSender<Bytes>,
+    /// Each queued frame carries the byte-budget permit it acquired in
+    /// `start_call`; the writer task drops the permit once the frame is on
+    /// the socket, releasing the budget (RAII — no manual balance to drift).
+    writer_tx: mpsc::UnboundedSender<(Bytes, OwnedSemaphorePermit)>,
+    /// Byte budget for queued-but-unwritten frames. See [`WRITE_BUDGET_BYTES`].
+    write_budget: std::sync::Arc<Semaphore>,
     pending: std::sync::Arc<Mutex<Pending>>,
     next_call_id: AtomicI32,
     reader_task: tokio::task::JoinHandle<()>,
@@ -59,6 +79,16 @@ impl Connection {
     /// Connects, sends the `"YB\x01"` preamble, and spawns the demux
     /// tasks.
     pub(crate) async fn connect(addr: &str, timeout: Duration) -> Result<Self, YbError> {
+        Self::connect_with_budget(addr, timeout, WRITE_BUDGET_BYTES).await
+    }
+
+    /// [`Self::connect`] with an explicit write budget. Split out so tests
+    /// can drive the saturation path with a small, deterministic budget.
+    async fn connect_with_budget(
+        addr: &str,
+        timeout: Duration,
+        write_budget_bytes: usize,
+    ) -> Result<Self, YbError> {
         let mut stream = tokio::time::timeout(timeout, TcpStream::connect(addr))
             .await
             .map_err(|_| YbError::network(format!("connect {addr}: timed out")))?
@@ -73,17 +103,21 @@ impl Connection {
 
         let (read_half, mut write_half) = stream.into_split();
         let pending = std::sync::Arc::new(Mutex::new(Pending::default()));
-        let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<Bytes>();
+        let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<(Bytes, OwnedSemaphorePermit)>();
+        let write_budget = std::sync::Arc::new(Semaphore::new(write_budget_bytes));
 
         let writer_pending = pending.clone();
         let writer_peer = addr.to_string();
         let writer_task = tokio::spawn(async move {
-            while let Some(frame) = writer_rx.recv().await {
+            while let Some((frame, permit)) = writer_rx.recv().await {
                 let n = frame.len();
                 if let Err(e) = write_half.write_all(&frame).await {
                     close_all(&writer_pending, format!("write to {writer_peer}: {e}"));
                     return;
                 }
+                // Frame is on the socket — release its budget so a new call
+                // can queue. Dropping the permit is the release.
+                drop(permit);
                 tracing::trace!(target: "yb_tsclient::wire", peer = %writer_peer, bytes = n, "frame written to socket");
             }
             // Connection dropped; nothing to fail — Drop aborts us anyway.
@@ -99,6 +133,7 @@ impl Connection {
         Ok(Connection {
             peer: addr.to_string(),
             writer_tx,
+            write_budget,
             pending,
             next_call_id: AtomicI32::new(1),
             reader_task,
@@ -117,13 +152,32 @@ impl Connection {
         method: &str,
         timeout_millis: u32,
         request: &impl Message,
-    ) -> Result<oneshot::Receiver<CallResult>, YbError> {
+    ) -> Result<(i32, oneshot::Receiver<CallResult>), YbError> {
         let call_id = self.next_call_id.fetch_add(1, Ordering::Relaxed);
         let frame = encode_call(call_id, service, method, timeout_millis, request)?;
+        // Byte-budget backpressure (see WRITE_BUDGET_BYTES). `try_acquire`
+        // is synchronous, so start_call stays sync — callers can still hold
+        // a lock across it to serialize on-wire order. The permit rides the
+        // channel and the writer task releases it once the frame is on the
+        // socket; on a stalled connection the budget fills and we fail fast
+        // here instead of buffering payloads without bound.
+        let permit = match std::sync::Arc::clone(&self.write_budget)
+            .try_acquire_many_owned(frame.len() as u32)
+        {
+            Ok(permit) => permit,
+            Err(_) => {
+                return Err(YbError::network(format!(
+                    "connection to {} write queue saturated ({WRITE_BUDGET_BYTES} B budget); \
+                     shedding to another session",
+                    self.peer
+                )));
+            }
+        };
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending.lock().expect("pending lock poisoned");
             if let Some(reason) = &pending.closed {
+                // `permit` drops here, releasing the budget it reserved.
                 return Err(YbError::network(format!(
                     "connection to {} closed: {reason}",
                     self.peer
@@ -131,7 +185,9 @@ impl Connection {
             }
             pending.waiters.insert(call_id, tx);
         }
-        if self.writer_tx.send(frame).is_err() {
+        if self.writer_tx.send((frame, permit)).is_err() {
+            // Send failed: the (frame, permit) is returned in the error and
+            // dropped, releasing the budget. Undo the waiter registration.
             self.pending
                 .lock()
                 .expect("pending lock poisoned")
@@ -143,7 +199,7 @@ impl Connection {
             )));
         }
         tracing::trace!(target: "yb_tsclient::wire", peer = %self.peer, call_id, method, "call queued to writer");
-        Ok(rx)
+        Ok((call_id, rx))
     }
 
     /// Issues one call and waits for its response (or the timeout).
@@ -155,13 +211,15 @@ impl Connection {
         request: &impl Message,
     ) -> CallResult {
         let timeout_millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
-        let rx = self.start_call(service, method, timeout_millis, request)?;
-        self.await_response(rx, timeout, service, method).await
+        let (call_id, rx) = self.start_call(service, method, timeout_millis, request)?;
+        self.await_response(call_id, rx, timeout, service, method)
+            .await
     }
 
     /// Waits on a receiver from [`Self::start_call`] with a deadline.
     pub(crate) async fn await_response(
         &self,
+        call_id: i32,
         rx: oneshot::Receiver<CallResult>,
         timeout: Duration,
         service: &str,
@@ -176,10 +234,23 @@ impl Connection {
                 "connection to {} closed during {service}.{method}",
                 self.peer
             ))),
-            Err(_) => Err(YbError::network(format!(
-                "{service}.{method} to {} timed out after {timeout:?}",
-                self.peer
-            ))),
+            Err(_) => {
+                // Timed out. Remove our waiter so a response that never
+                // arrives (server silent, connection stays open) doesn't leak
+                // the oneshot entry in `pending` for the life of the
+                // connection. A racing late response either already removed it
+                // (read_loop) or now finds it gone — both drop the response,
+                // which is correct once we've given up on it.
+                self.pending
+                    .lock()
+                    .expect("pending lock poisoned")
+                    .waiters
+                    .remove(&call_id);
+                Err(YbError::network(format!(
+                    "{service}.{method} to {} timed out after {timeout:?}",
+                    self.peer
+                )))
+            }
         }
     }
 }
@@ -328,6 +399,51 @@ mod tests {
             .await
             .expect("call must survive an interleaved zero-length keepalive frame");
         let _ = resp.body; // reaching here (vs connection-drop error) is the assertion
+        server.abort();
+    }
+
+    /// A stalled tserver blocks the writer task; without a bound, frames
+    /// (with payloads) queue without limit. `start_call` must instead fail
+    /// fast once the per-connection byte budget is exhausted so the caller
+    /// sheds to another session — and recover once the budget is released.
+    #[tokio::test]
+    async fn start_call_sheds_when_write_budget_exhausted() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+
+        // Server reads the preamble, then stalls — never reads frames, never
+        // responds — holding the socket open so the connection stays warm.
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut preamble = [0u8; 3];
+            stream.read_exact(&mut preamble).await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        let conn = Connection::connect_with_budget(&addr, Duration::from_secs(5), 4096)
+            .await
+            .unwrap();
+
+        // Exhaust the whole budget (same-module access to the private field),
+        // simulating a writer blocked on a stalled socket with frames queued.
+        let hog = std::sync::Arc::clone(&conn.write_budget)
+            .try_acquire_many_owned(4096)
+            .expect("fresh budget must grant its full allotment");
+
+        let req = crate::pb::yb::tserver::PgHeartbeatRequestPb::default();
+        let err = conn
+            .start_call("yb.tserver.PgClientService", "Heartbeat", 5000, &req)
+            .expect_err("start_call must shed when the write budget is exhausted");
+        assert!(
+            err.to_string().contains("saturated"),
+            "expected a write-queue-saturated error, got: {err}"
+        );
+
+        // Releasing the budget lets calls proceed again.
+        drop(hog);
+        conn.start_call("yb.tserver.PgClientService", "Heartbeat", 5000, &req)
+            .expect("start_call must succeed once the budget is released");
+
         server.abort();
     }
 }

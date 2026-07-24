@@ -99,6 +99,20 @@ impl YbError {
         }
     }
 
+    /// True when a call was shed because its connection's write budget was
+    /// exhausted (a stalled tserver blocking the writer). Retryable like any
+    /// `Network` error — the retry driver round-robins to another session —
+    /// but counted separately so a run of these surfaces write-path
+    /// saturation (the signature of a tserver that can't drain writes).
+    pub fn is_write_saturation(&self) -> bool {
+        match self {
+            YbError::Call { class, message } => {
+                *class == ErrorClass::Network && message.contains("write queue saturated")
+            }
+            _ => false,
+        }
+    }
+
     /// True when the tserver rejected our `session_id` (e.g.
     /// "Connection terminated unexpectedly due to unknown session N"):
     /// the connection is healthy but the server-side session expired

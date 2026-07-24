@@ -41,16 +41,26 @@ Implementation: `src/framing.rs` (pure codec) + `src/connection.rs`
 One TCP connection carries everything. `Connection` splits the stream:
 
 - a writer task drains an mpsc of encoded frames (no interleaved
-  partial writes between concurrent callers);
+  partial writes between concurrent callers). Queued-but-unwritten frame
+  bytes are capped by a per-connection byte budget (`WRITE_BUDGET_BYTES`,
+  128 MiB — above `MAX_FRAME_LEN` so any single frame still fits): a
+  stalled tserver blocks the writer, and without the cap frames (each
+  carrying row payloads) would pile up in the channel without limit. When
+  the budget is exhausted, `start_call` fails fast with a `Network` error
+  so the caller sheds to another session instead of buffering. The budget
+  is a `Semaphore` acquired synchronously in `start_call` (preserving the
+  synchronous frame-enqueue that `serial_no` ordering relies on) and
+  released by the writer task once the frame reaches the socket;
 - a reader/demux task decodes each response frame and completes the
   in-flight call's oneshot, matched by `call_id`. Responses may arrive
   in any order.
 
-Per-call timeouts abandon the waiter (a late response for an unknown
-call_id is dropped); any transport failure — connect/read/write error,
-EOF, corrupt frame — closes the connection and fails every in-flight
-and future call with a `Network`-class error, which triggers session
-recovery in the layer above.
+Per-call timeouts remove the waiter (a late response for an unknown
+call_id is dropped), so a response that never arrives on a still-open
+connection does not leak the waiter entry; any transport failure —
+connect/read/write error, EOF, corrupt frame — closes the connection and
+fails every in-flight and future call with a `Network`-class error, which
+triggers session recovery in the layer above.
 
 ## Service, session, lifecycle
 

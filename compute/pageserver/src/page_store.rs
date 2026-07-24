@@ -435,6 +435,9 @@ impl yb_tsclient::ClientObserver for TsClientLaneObserver {
     fn on_call_timeout(&self) {
         crate::metrics::YB_STORE_CALL_TIMEOUTS.inc();
     }
+    fn on_write_backpressure(&self) {
+        crate::metrics::YB_STORE_WRITE_BACKPRESSURE.inc();
+    }
 }
 
 /// Per-block chain accumulation over a multi-block clustered range

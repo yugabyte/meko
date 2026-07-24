@@ -354,6 +354,8 @@ pub struct YbPageWriterConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub materialize_queue_capacity: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub materialize_inflight_bytes_limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub read_cache_bytes: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backpressure_bytes: Option<usize>,
@@ -438,6 +440,25 @@ pub struct YbPageWriterConfig {
     /// pool-slot contention, not the queue depth. Default 2000.
     pub materialize_queue_capacity: usize,
 
+    /// Hard ceiling on the bytes held by redone-but-not-yet-INSERTed
+    /// materialiser batches (the `pageserver_yb_materializer_inflight_bytes`
+    /// gauge). The count-based `materialize_queue_capacity` and the
+    /// internal `MAX_INFLIGHT_INSERTS` bound the *number* of jobs and
+    /// in-flight INSERT futures, but each batch's redone images vary
+    /// enormously in size (a rel batch of 500 8 KiB pages is ~4 MiB; a
+    /// run of deep SLRU chains is far more). When the YB write side
+    /// stalls, redone images pile up with nothing capping their bytes —
+    /// this is the pool that grew unbounded to OOM. When the gauge
+    /// reaches this limit the materialiser stops redoing new batches and
+    /// drains outstanding INSERTs first, which fills the job queue and
+    /// backpressures the walreceiver through the existing blocking send.
+    ///
+    /// NOT scaled by `scale_factor`: it is a memory safety ceiling, not a
+    /// throughput knob, so it should track container memory directly
+    /// rather than being multiplied on large boxes. 0 disables (legacy
+    /// unbounded behavior). Default 512 MiB.
+    pub materialize_inflight_bytes_limit: usize,
+
     /// Soft cap on the in-RAM `UnifiedPages` cache (pre-flush buffer +
     /// post-flush LRU-ish cache). When `total_bytes` exceeds this,
     /// durable entries are evicted FIFO. Pre-flush rows are pinned
@@ -490,6 +511,7 @@ impl YbPageWriterConfig {
             image_chain_limit_slru: 1000,
             image_chain_payload_bytes_limit: 4096,
             materialize_queue_capacity: 2000,
+            materialize_inflight_bytes_limit: 512 * 1024 * 1024,
             read_cache_bytes: 1024 * 1024 * 1024,
             backpressure_bytes: 50 * 1024 * 1024,
             meta_cache_entries: 8192,
@@ -527,6 +549,11 @@ impl YbPageWriterConfigToml {
             materialize_queue_capacity: self
                 .materialize_queue_capacity
                 .unwrap_or_else(|| scale_count(base.materialize_queue_capacity, scale_factor)),
+            // Memory safety ceiling, not a throughput knob — kept verbatim,
+            // never multiplied by scale_factor (see field doc).
+            materialize_inflight_bytes_limit: self
+                .materialize_inflight_bytes_limit
+                .unwrap_or(base.materialize_inflight_bytes_limit),
             read_cache_bytes: self
                 .read_cache_bytes
                 .unwrap_or_else(|| scale_count(base.read_cache_bytes, scale_factor)),

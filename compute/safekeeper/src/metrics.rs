@@ -276,6 +276,19 @@ pub static YB_WAL_CALL_TIMEOUTS: Lazy<IntCounter> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_yb_wal_call_timeouts_total counter")
 });
+/// Thin-RPC lane: `yb_tsclient` calls shed because a connection's write budget
+/// was exhausted (a stalled tserver blocked the writer and the per-connection
+/// frame backlog hit its byte cap), so the client failed fast instead of
+/// buffering payloads without bound. The safekeeper WAL-write lane is the most
+/// write-heavy tsclient lane, so a sustained rate here is the direct signal the
+/// YB write path can't drain.
+pub static YB_WAL_WRITE_BACKPRESSURE: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "safekeeper_yb_wal_write_backpressure_total",
+        "yb_tsclient calls shed on write-budget exhaustion on the safekeeper's thin-RPC lane"
+    )
+    .expect("Failed to register safekeeper_yb_wal_write_backpressure_total counter")
+});
 /// Rows (chunks) coalesced into each INSERT. ~1 = no batching (every commit
 /// pays its own round trip); near `FLUSH_ROWS_THRESHOLD` (50) = batches are
 /// saturating. The headline lever for #172 — decoupling ingest from durability

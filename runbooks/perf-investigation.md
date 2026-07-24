@@ -60,6 +60,10 @@ $M | grep -E '^pageserver_yb_pagewriter_delta_counts_entries|^pageserver_yb_mate
   drain < arrival (old-build bug, hit 8.4M; cold-residue case fixed in `6d7510942`, drained per flush).
 - The "falling behind" signals are `queue_depth`/`inflight_bytes` staying up and a heavy
   `deltas_per_read` tail. `queue_depth=0, inflight_bytes=0` = keeping up, regardless of entry count.
+  Note `inflight_bytes` is now a *process-global* gauge (summed across timelines); the per-timeline
+  redo pool is capped by `materialize_inflight_bytes_limit` (default 512 MiB), and a rising
+  `pageserver_yb_pagewriter_backpressure_waits_total{kind="materializer_inflight_bytes"}` is the direct
+  "a materializer hit that cap and is backpressuring ingest" signal.
 - `6d7510942`'s cold-key drain trims cold residue; it does NOT materialize continuously-hot pages,
   whose deep chains surface in `deltas_per_read`.
 - PS log: `perf tag="install_image" acquire_ms= held_ms=` — high `acquire_ms` with `held_ms=0` is

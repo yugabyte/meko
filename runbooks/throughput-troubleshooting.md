@@ -238,6 +238,9 @@ curl -s http://$PS_HOST:$PS_HTTP_PORT/metrics | grep -E \
 - The real "materializer falling behind" signal is `queue_depth` / `inflight_bytes` **rising and
   staying up**, plus a heavy **`deltas_per_read` tail** (a few continuously-*hot* pages with very
   deep chains → slow getpage). `queue_depth=0, inflight_bytes=0` = keeping up regardless of count.
+  The per-timeline redo pool is capped by `materialize_inflight_bytes_limit` (default 512 MiB, not
+  scaled); when a materializer hits it, `backpressure_waits_total{kind="materializer_inflight_bytes"}`
+  climbs and ingest is backpressured (bounded RSS rather than the old unbounded redo-pipeline growth).
 - `6d7510942`'s cold-key drain trims cold residue but does NOT materialize continuously-hot pages —
   those deep chains show up in `deltas_per_read`, not in the entry count.
 - PS log perf lines: `perf tag="materialise_batch" ... batch_size= images=` and

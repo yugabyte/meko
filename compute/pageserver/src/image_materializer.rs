@@ -128,6 +128,12 @@ pub struct ImageMaterializer {
     redo_concurrency: usize,
     /// `BASE_MAX_INFLIGHT_INSERTS` scaled by `PageServerConf::scale_factor`.
     max_inflight_inserts: usize,
+    /// Hard ceiling on this materialiser's local sum of outstanding
+    /// `commit_phase` image bytes before the outer loop stops redoing new
+    /// batches and drains outstanding INSERTs.
+    /// `YbPageWriterConfig::materialize_inflight_bytes_limit` verbatim
+    /// (NOT scaled). 0 disables the byte cap.
+    inflight_bytes_limit: usize,
 }
 
 /// Handle returned by [`ImageMaterializer::spawn`]. Drop to leak; call
@@ -156,6 +162,7 @@ impl ImageMaterializer {
         mut rx: mpsc::Receiver<MaterializeJob>,
         in_flight: Arc<std::sync::Mutex<std::collections::HashSet<Key>>>,
         scale_factor: f64,
+        inflight_bytes_limit: usize,
     ) -> MaterializerTask {
         let cancel = CancellationToken::new();
         let cancel_for_task = cancel.clone();
@@ -172,6 +179,7 @@ impl ImageMaterializer {
             in_flight,
             redo_concurrency,
             max_inflight_inserts,
+            inflight_bytes_limit,
         });
         let span = info_span!(
             "image_materializer",
@@ -192,8 +200,19 @@ impl ImageMaterializer {
                 // concurrently with batch N's INSERT round-trip while
                 // keeping YB-side write fan-out bounded.
                 let max_inflight_inserts = me.max_inflight_inserts;
-                let mut inflight_inserts: std::collections::VecDeque<tokio::task::JoinHandle<()>> =
-                    std::collections::VecDeque::with_capacity(max_inflight_inserts);
+                // Each entry pairs a spawned `commit_phase` with the image
+                // bytes it holds, so `inflight_bytes` is an exact running sum
+                // of redone-but-not-yet-INSERTed bytes for THIS materialiser
+                // — the local, always-balanced accounting the byte cap gates
+                // on (add on push, subtract on pop). Deliberately NOT the
+                // process-global `MATERIALIZER_INFLIGHT_BYTES` gauge: that
+                // sums across every timeline's materialiser, so gating a
+                // single loop on it throttles on unrelated work.
+                let mut inflight_inserts: std::collections::VecDeque<(
+                    tokio::task::JoinHandle<()>,
+                    u64,
+                )> = std::collections::VecDeque::with_capacity(max_inflight_inserts);
+                let mut inflight_bytes: u64 = 0;
                 loop {
                     tokio::select! {
                         biased;
@@ -213,6 +232,42 @@ impl ImageMaterializer {
                                 }
                             }
                             sample_queue_depth(&rx);
+                            // Byte-based backpressure. `max_inflight_inserts`
+                            // below bounds the NUMBER of outstanding INSERT
+                            // futures, but each redone batch holds a wildly
+                            // variable number of image bytes (a rel batch of
+                            // 500 8 KiB pages is ~4 MiB; deep SLRU chains far
+                            // more). When the YB write side stalls, the
+                            // redone-but-not-INSERTed images pile up with
+                            // nothing capping their bytes — the pool that grew
+                            // unbounded to OOM. Before redoing the next batch,
+                            // drain the oldest commits until this materialiser's
+                            // in-flight image bytes fall back under the limit;
+                            // each drained `commit_phase` runs its INSERT to
+                            // completion, so we subtract its bytes as it clears.
+                            // Blocking here stops draining `rx`, which fills the
+                            // job queue and backpressures the walreceiver via
+                            // the write-side blocking send. 0 disables (legacy
+                            // unbounded behavior). The `!is_empty()` guard makes
+                            // the wait strictly bounded by this task's own
+                            // outstanding INSERTs.
+                            if me.inflight_bytes_limit > 0 {
+                                let mut waited = false;
+                                while inflight_bytes >= me.inflight_bytes_limit as u64
+                                    && !inflight_inserts.is_empty()
+                                {
+                                    if !waited {
+                                        waited = true;
+                                        crate::metrics::PAGEWRITER_BACKPRESSURE_WAITS
+                                            .with_label_values(&["materializer_inflight_bytes"])
+                                            .inc();
+                                    }
+                                    if let Some((h, n)) = inflight_inserts.pop_front() {
+                                        let _ = h.await;
+                                        inflight_bytes -= n;
+                                    }
+                                }
+                            }
                             // Phase 1 (synchronous on this task): drive the
                             // batch's chain reads + walredo. Errors only
                             // come from setup; per-job redo errors are
@@ -245,10 +300,12 @@ impl ImageMaterializer {
                             // starts immediately. If we're already at
                             // `max_inflight_inserts`, await the oldest first.
                             while inflight_inserts.len() >= max_inflight_inserts {
-                                if let Some(h) = inflight_inserts.pop_front() {
+                                if let Some((h, n)) = inflight_inserts.pop_front() {
                                     let _ = h.await;
+                                    inflight_bytes -= n;
                                 }
                             }
+                            let held = outcome.held_image_bytes;
                             let me_for_commit = Arc::clone(&me);
                             let h = tokio::spawn(
                                 async move {
@@ -256,7 +313,8 @@ impl ImageMaterializer {
                                 }
                                 .in_current_span(),
                             );
-                            inflight_inserts.push_back(h);
+                            inflight_inserts.push_back((h, held));
+                            inflight_bytes += held;
                             sample_queue_depth(&rx);
                         }
                     }
@@ -266,7 +324,9 @@ impl ImageMaterializer {
                 // to YB before the task exits. Without this, a clean
                 // shutdown could leave a redone-but-not-INSERTed batch
                 // in RAM that disappears when the task drops.
-                while let Some(h) = inflight_inserts.pop_front() {
+                // Shutdown drain: no need to keep `inflight_bytes` current, the
+                // loop is exiting.
+                while let Some((h, _n)) = inflight_inserts.pop_front() {
                     let _ = h.await;
                 }
                 // Best-effort reset on exit so a dead task doesn't leave

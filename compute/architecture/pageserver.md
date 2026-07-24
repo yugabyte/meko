@@ -470,19 +470,28 @@ keeping heap usage bounded:
   buffer grows linearly with the YB backlog — multi-GiB RSS growth on
   co-located deployments under CPU pressure. `backpressure_bytes = 0`
   disables the cap (unbounded growth).
-- **Materialiser-side.** The write-time materialise dispatch does a
-  **blocking** `mpsc::send` into the materialiser channel (capacity
-  `materialize_queue_capacity`, default 2000). When the materialiser
-  cannot drain, the channel fills and the walreceiver blocks at the
-  send, bounding in-flight materialisation work. The read-side dispatch
-  uses `try_send` instead — GetPage latency must not depend on
+- **Materialiser-side (queue depth).** The write-time materialise
+  dispatch does a **blocking** `mpsc::send` into the materialiser channel
+  (capacity `materialize_queue_capacity`, default 2000). When the
+  materialiser cannot drain, the channel fills and the walreceiver blocks
+  at the send, bounding in-flight materialisation work. The read-side
+  dispatch uses `try_send` instead — GetPage latency must not depend on
   materialiser progress; a dropped hint re-fires on the next read of
   the same key.
+- **Materialiser-side (redo-pipeline bytes).** Before redoing each batch the
+  materialiser holds its outstanding `commit_phase` image bytes under
+  `materialize_inflight_bytes_limit` (default 512 MiB, not scaled; `0` disables)
+  by draining outstanding INSERTs first. This stops draining the job queue, so it
+  composes with the queue-depth path above to backpressure the walreceiver. (Those
+  images are fixed-size and already bounded by the count cap, so this gate is a
+  defence-in-depth ceiling — see the materialiser-RAM section for the two pools.)
 
-Both wait kinds are counted in
-`pageserver_yb_pagewriter_backpressure_waits_total{kind}`; buffer and
-queue depth are the `pageserver_yb_pagewriter_unflushed_bytes` and
-`pageserver_yb_materializer_queue_depth` gauges. When both counters are
+The wait kinds are counted in
+`pageserver_yb_pagewriter_backpressure_waits_total{kind}` (`flush`,
+`materializer`, `materializer_inflight_bytes`); buffer, queue, and
+redo-pipeline depth are the `pageserver_yb_pagewriter_unflushed_bytes`,
+`pageserver_yb_materializer_queue_depth`, and
+`pageserver_yb_materializer_inflight_bytes` gauges. When both counters are
 active, the flush path is almost always the root cause: a slow
 `put_pages` blocks the materialiser's own writes, which holds
 materialiser slots, which fills the channel.
@@ -575,6 +584,33 @@ two-phase pipeline:
    below the new anchor are later reclaimed by the GC drain; with it
    off (the default) the row count grows monotonically and
    materialisation pays only for read-latency wins.
+
+Materialiser RAM has two pools, bounded differently:
+
+- **Commit-pipeline images** (redone-but-not-yet-INSERTed): fixed-size (one
+  ~8 KiB image per job), so `max_inflight_inserts × BATCH_DRAIN_LIMIT` (the
+  count cap) already bounds this to tens of MiB. `materialize_inflight_bytes_limit`
+  (default 512 MiB, **not** scaled by `scale_factor` — a memory ceiling, `0`
+  disables) is a redundant defence-in-depth ceiling over it: before redoing each
+  batch the worker holds an exact **local** running sum of its own outstanding
+  `commit_phase` image bytes (paired with each queued INSERT future, `+=` on
+  spawn / `-=` on drain) under the limit, draining oldest commits first. The
+  gate uses this local counter, **not** the process-global
+  `pageserver_yb_materializer_inflight_bytes` gauge (which sums across every
+  timeline's materialiser and is observability only). At realistic
+  `scale_factor` the count cap binds first, so this gate rarely engages.
+- **Redo-input chains** (`read_chain_durable` payloads held during redo — the
+  pool that actually grows with deep SLRU chains): bounded by `redo_concurrency`
+  (a count) × chain depth, released by `chain_guard` before commit. This is the
+  variable pool, and it is **not** byte-gated today — #373 will extend the byte
+  cap to cover it (chain sizes are only known after the read, so the count cap is
+  the current bound).
+
+When the write side stalls, the local image-byte gate (or the count cap) blocking
+before redo stops draining the job queue, which fills it and backpressures the
+walreceiver through the write-side blocking send — the same end-to-end stall path
+as `backpressure_bytes`, keyed on materialiser RAM rather than the pre-flush
+buffer.
 
 Why durable-only reads: if the materialiser built an image from
 pre-flush rows and the process crashed, WAL replay would re-emit those
@@ -856,6 +892,7 @@ the global `scale_factor` (explicitly-set values are used verbatim):
 | `image_chain_limit_slru` | 1000 | Same, for SLRU (clog/multixact) blocks; the payload trigger does not apply to SLRU. `0` disables SLRU materialisation |
 | `image_chain_payload_bytes_limit` | 4 KiB | Combined-delta-payload trigger for relation-page materialisation (`0` disables the size trigger) |
 | `materialize_queue_capacity` | 2000 | Bounded mpsc depth (scaled); write-side dispatch **blocks** on it, read-side dispatch uses `try_send` |
+| `materialize_inflight_bytes_limit` | 512 MiB | Hard ceiling on redone-but-not-INSERTed materialiser image bytes (`pageserver_yb_materializer_inflight_bytes`); the worker drains outstanding INSERTs before redoing more, backpressuring the walreceiver. **Not scaled** (memory ceiling); `0` disables |
 | `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes` (scaled); whole cold keys are evicted LRU-order, keys with unflushed rows pinned |
 | `backpressure_bytes` | 50 MiB | Hard ceiling on the pre-flush buffer (scaled); `PageWriter::put` blocks above it; `0` disables |
 | `meta_cache_entries` | 8192 | In-process LRU for `pageserver.meta` point reads; `0` disables |

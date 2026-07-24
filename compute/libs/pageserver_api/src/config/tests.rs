@@ -87,3 +87,54 @@ fn lazy_slru_download_defaults_on() {
         "yb-amp default_tenant_conf must keep lazy_slru_download = true"
     );
 }
+
+/// `materialize_inflight_bytes_limit` is a memory safety ceiling, so it
+/// must resolve verbatim and NEVER be multiplied by `scale_factor` — the
+/// opposite of the read-cache / backpressure / queue budgets, which do
+/// scale. Scaling a per-instance memory cap on big boxes is exactly the
+/// mistake that let the materialiser heap run to OOM; this test pins the
+/// invariant so a future refactor can't quietly re-scale it.
+#[test]
+fn materialize_inflight_bytes_limit_is_not_scaled() {
+    let base = YbPageWriterConfig::unscaled_defaults();
+    let toml = YbPageWriterConfigToml::default(); // all fields absent
+    let scale = 4.0;
+    let resolved = toml.resolve(scale);
+
+    assert_eq!(
+        resolved.materialize_inflight_bytes_limit, base.materialize_inflight_bytes_limit,
+        "inflight-bytes ceiling must be scale-independent"
+    );
+    // Sanity: the budgets that SHOULD scale still do, so this test is
+    // actually exercising a resolve() that applies scale_factor.
+    assert_eq!(
+        resolved.read_cache_bytes,
+        scale_count(base.read_cache_bytes, scale),
+        "read_cache_bytes must scale with scale_factor"
+    );
+    assert_eq!(
+        resolved.backpressure_bytes,
+        scale_count(base.backpressure_bytes, scale),
+        "backpressure_bytes must scale with scale_factor"
+    );
+}
+
+/// `0` disables the byte cap, and an explicit value is honored verbatim
+/// (never scaled) — mirroring the `backpressure_bytes` "0 = off" convention.
+#[test]
+fn materialize_inflight_bytes_limit_explicit_value_is_verbatim() {
+    let toml = YbPageWriterConfigToml {
+        materialize_inflight_bytes_limit: Some(0),
+        ..Default::default()
+    };
+    assert_eq!(toml.resolve(4.0).materialize_inflight_bytes_limit, 0);
+
+    let toml = YbPageWriterConfigToml {
+        materialize_inflight_bytes_limit: Some(256 * 1024 * 1024),
+        ..Default::default()
+    };
+    assert_eq!(
+        toml.resolve(4.0).materialize_inflight_bytes_limit,
+        256 * 1024 * 1024
+    );
+}

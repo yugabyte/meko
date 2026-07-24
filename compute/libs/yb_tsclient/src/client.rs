@@ -234,6 +234,13 @@ pub trait ClientObserver: Send + Sync + 'static {
     /// One call attempt gave up waiting for its response
     /// ([`TsClientConfig::rpc_timeout`]); the transport was healthy.
     fn on_call_timeout(&self) {}
+    /// A call was shed because its connection's write budget was exhausted:
+    /// a stalled tserver blocked the writer and the per-connection frame
+    /// backlog hit its byte cap, so the client failed fast rather than
+    /// buffering payloads without bound. A sustained rate means the write
+    /// path can't drain — the same condition that previously grew the heap
+    /// unbounded, now surfaced instead of hidden.
+    fn on_write_backpressure(&self) {}
 }
 
 /// One fetched page of a range read.
@@ -1112,7 +1119,7 @@ impl TsClient {
         // while its call is in flight.
         let conn = self.warm_conn(session, reopen).await?;
         let timeout_millis = u32::try_from(self.rpc_timeout.as_millis()).unwrap_or(u32::MAX);
-        let rx = {
+        let (call_id, rx) = {
             let _order = session.perform_lock.lock().expect("perform lock");
             let req = PgPerformRequestPb {
                 session_id: session.meta.session_id(),
@@ -1124,7 +1131,7 @@ impl TsClient {
             conn.start_call(SERVICE, "Perform", timeout_millis, &req)?
         };
         let resp = conn
-            .await_response(rx, self.rpc_timeout, SERVICE, "Perform")
+            .await_response(call_id, rx, self.rpc_timeout, SERVICE, "Perform")
             .await?;
         let sidecars = resp.sidecars;
         let body = PgPerformResponsePb::decode(resp.body)
@@ -1180,6 +1187,9 @@ impl TsClient {
                 Err(e) => {
                     if e.is_timeout() {
                         self.observe(ClientObserver::on_call_timeout);
+                    }
+                    if e.is_write_saturation() {
+                        self.observe(ClientObserver::on_write_backpressure);
                     }
                     // A read-restart on a paged continuation can't be healed
                     // in place: the continuation must reuse its serial, so
